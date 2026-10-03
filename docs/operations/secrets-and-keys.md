@@ -195,17 +195,49 @@ Go's cryptographic module) with HKDF-SHA256 key derivation. Go's FIPS
 140-3 mode (`GODEBUG=fips140=on`) applies to it, and with the Go version
 in `go.mod` the envelope also runs under `GODEBUG=fips140=only`.
 
-Wardyn holds no FIPS 140-3 certification, and no Wardyn build pins a
-validated module snapshot yet.
+Two statements about FIPS 140-3, kept apart:
 
-That's a statement about this path only: the build does not pin a frozen
-module snapshot (`GOFIPS140`), and age (used once, to convert
-pre-envelope rows) is outside it. The `local` key's id is taken over the
-age key's public recipient, which is X25519, and
-`GODEBUG=fips140=only` forbids X25519. Under it wardynd refuses to start
-with a `WARDYN_AGE_KEY` (or an ephemeral one) and names store mode. Store
-mode (`WARDYN_SECRET_STORE=vaultkv`, below) needs no age key and boots
-under `GODEBUG=fips140=only`.
+- **The `-fips` image uses a FIPS 140-3 validated Go cryptographic module.**
+  Every release also publishes `ghcr.io/cjohnstoniv/wardynd-fips`, signed like
+  the other images. Its wardynd is built with `GOFIPS140=v1.0.0-c2097c7c`, the
+  frozen Go Cryptographic Module v1.0.0 snapshot. Go's FIPS 140-3 documentation
+  (<https://go.dev/doc/security/fips140>) gives that module's CMVP certificate
+  as #5247 and its CAVP certificate as A6650. The release job reads the setting
+  back out of the pushed image (`go version -m` must print exactly
+  `build GOFIPS140=v1.0.0-c2097c7c`, on both platforms) and fails if it does
+  not; `scripts/check-fips-image.sh <image-ref> v1.0.0-c2097c7c` runs the same
+  check by hand. That check is what makes the tag mean something:
+  `GODEBUG=fips140=only` at run time is a diagnostic that selects no module
+  snapshot, and passes for an ordinary build.
+- **Wardyn itself is not certified.** No part of Wardyn holds a FIPS 140-3
+  certification, and nothing here claims one, or that a deployment running this
+  image is compliant. Only the Go module is validated; the rest of wardynd is
+  ordinary code around it.
+
+The `-fips` build turns Go's FIPS mode on by default (`GODEBUG=fips140=on`);
+set `GODEBUG=fips140=only` (the chart's `env.GODEBUG`) to make a non-approved
+algorithm fail instead of run. Under `only` the age key cannot be used: the
+`local` key's id is taken over the age key's public recipient, which is X25519,
+and `only` forbids X25519. wardynd then refuses to start with a `WARDYN_AGE_KEY`
+(or an ephemeral one) and names store mode. Run the image with non-age custody
+instead: Vault Transit (`WARDYN_KEK=transit`), Azure Key Vault, or store mode
+(`WARDYN_SECRET_STORE=vaultkv`, below). None of them needs an age key. Age is
+used once, to convert pre-envelope rows, and is outside the module.
+
+Exercised under `GODEBUG=fips140=only` on a kind cluster, with Transit custody
+and no age key:
+
+- boot, with all four boot keys wrapped by Transit, and `/healthz`;
+- the Kubernetes runner substrate, and an interactive run reaching `RUNNING`
+  with its proxy sidecar;
+- the SSH gateway's handshake: it negotiates `ecdh-sha2-nistp256`, an
+  `ssh-ed25519` host key, `aes128-ctr` and `hmac-sha2-256-etm@openssh.com`, and
+  an unauthenticated client then gets the normal `Permission denied (publickey)`.
+
+That is not a coverage claim. These were not run under `only`, so nothing is
+claimed for them: SSO and OIDC sign-in, the built-in TLS listener, Azure Key
+Vault, store mode and session recording. The one path found to need an
+unapproved primitive is age's X25519, above.
 
 `wardynd -rotate-age-key <key-file>` is the supported rotation: a
 **maintenance mode, not a server start**. It mints a new identity and

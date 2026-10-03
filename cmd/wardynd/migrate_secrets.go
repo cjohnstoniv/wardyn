@@ -78,7 +78,7 @@ func secretStoreMaintenance(f *bootFlags) error {
 	defer pool.Close()
 
 	maskReg := secretmask.NewRegistry()
-	rec, fan, _, _, err := buildAuditChain(ctx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg)
+	rec, fan, _, _, err := buildAuditChain(ctx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg, newAuditSealSource(audit.SealOff))
 	if err != nil {
 		return err
 	}

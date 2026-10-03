@@ -520,6 +520,10 @@ spec:
             - name: WARDYN_SANDBOX_DEFAULT_MEMORY_MIB
               value: {{ .Values.runner.sandbox.defaultResources.memoryMiB | quote }}
             {{- end }}
+            {{- if and .Values.runner.sandbox.requestRatio (not (hasKey .Values.env "WARDYN_SANDBOX_REQUEST_RATIO")) }}
+            - name: WARDYN_SANDBOX_REQUEST_RATIO
+              value: {{ .Values.runner.sandbox.requestRatio | quote }}
+            {{- end }}
             {{- if not (hasKey .Values.env "WARDYN_PROXY_CPU_MILLIS") }}
             - name: WARDYN_PROXY_CPU_MILLIS
               value: {{ .Values.runner.sandbox.proxyResources.cpuMillis | quote }}
@@ -527,6 +531,10 @@ spec:
             {{- if not (hasKey .Values.env "WARDYN_PROXY_MEMORY_MIB") }}
             - name: WARDYN_PROXY_MEMORY_MIB
               value: {{ .Values.runner.sandbox.proxyResources.memoryMiB | quote }}
+            {{- end }}
+            {{- if and (gt (int .Values.maxConcurrentRuns) 0) (not (hasKey .Values.env "WARDYN_MAX_CONCURRENT_RUNS")) }}
+            - name: WARDYN_MAX_CONCURRENT_RUNS
+              value: {{ .Values.maxConcurrentRuns | int | quote }}
             {{- end }}
             {{- with .Values.extraEnv }}
             # Raw EnvVar entries, so secret-bearing WARDYN_* (OIDC client secret,
@@ -550,6 +558,23 @@ spec:
             {{- if .Values.k8s.imagePullSecret }}
             - name: WARDYN_K8S_IMAGE_PULL_SECRET
               value: {{ .Values.k8s.imagePullSecret | quote }}
+            {{- end }}
+            {{- $placement := dict -}}
+            {{- range $key := list "nodeSelector" "tolerations" "affinity" "priorityClassName" "podAnnotations" "podLabels" -}}
+            {{- with index $.Values.k8s.sandbox $key }}{{- $_ := set $placement $key . -}}{{- end -}}
+            {{- end }}
+            {{- /* A bare `--set key=true` is a YAML bool; annotation and label values are strings. */ -}}
+            {{- range $key := list "podAnnotations" "podLabels" -}}
+            {{- if hasKey $placement $key }}
+            {{- $strs := dict -}}
+            {{- range $k, $v := get $placement $key }}{{- $_ := set $strs $k (toString $v) -}}{{- end -}}
+            {{- $_ := set $placement $key $strs -}}
+            {{- end -}}
+            {{- end }}
+            {{- if $placement }}
+            # One JSON value for the agent, proxy and canary pods (internal/runner/k8s/placement.go).
+            - name: WARDYN_K8S_SANDBOX_PLACEMENT
+              value: {{ toJson $placement | quote }}
             {{- end }}
             {{- $rtc := list -}}
             {{- with .Values.k8s.runtimeClasses.CC2 }}{{- $rtc = append $rtc (printf "CC2=%s" .) -}}{{- end }}

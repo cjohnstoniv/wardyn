@@ -35,6 +35,11 @@
     "sentence": "\"run not found\""
   },
   {
+    "reason": "audit_export_partition_filter",
+    "target": "\"audit.export\"",
+    "sentence": "\"a partition export covers the whole partition; remove the other filter parameters\""
+  },
+  {
     "reason": "byoi_user",
     "target": "\"runs.image\"",
     "sentence": "\"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image\""
@@ -130,6 +135,16 @@
     "sentence": "fmt.Sprintf(\"too many open event streams (max %d) — close one and retry\", maxRunEventStreams)"
   },
   {
+    "reason": "governance_overlay_unsatisfiable",
+    "target": "\"governance.ceiling\"",
+    "sentence": "u.Error()"
+  },
+  {
+    "reason": "governance_overlay_unsatisfiable",
+    "target": "target",
+    "sentence": "u.Error()"
+  },
+  {
     "reason": "governance_profile",
     "target": "\"runs.agent\"",
     "sentence": "fmt.Sprintf(\"%s is not supported under your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), which routes an \" + \"unattended run's tool calls to a Wardyn approval, and this agent has no external tool-approval contract. Launch a different agent, or launch interactively.\", autonomyAgentLabel(req.Agent), name, level, bound)"
@@ -215,6 +230,16 @@
     "sentence": "fmt.Sprintf(\"The key domain %q is not declared in the deployment's key domains file, so nothing was changed. Declared: %s.\", c.Domain, declaredKeyDomains(svc))"
   },
   {
+    "reason": "kind.approver.reason",
+    "target": "govChangeTarget",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "mask_state_unavailable",
+    "target": "door",
+    "sentence": "maskStateSentence"
+  },
+  {
     "reason": "model_provider_unavailable",
     "target": "\"runs.model_provider\"",
     "sentence": "msg"
@@ -260,6 +285,11 @@
     "sentence": "(audit only)"
   },
   {
+    "reason": "role_stamp_stale",
+    "target": "\"api_token\"",
+    "sentence": "\"this token's role is out of date: its owner must sign in again to refresh it\" (registry)"
+  },
+  {
     "reason": "run_owner_only",
     "target": "run.ID.String()",
     "sentence": "\"only the person who started this run can open it interactively\" (registry)"
@@ -268,6 +298,11 @@
     "reason": "run_quota",
     "target": "\"runs.quota\"",
     "sentence": "fmt.Sprintf(\"too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.\", limit, ceiling.Profile.Name, active)"
+  },
+  {
+    "reason": "second_human_required",
+    "target": "govChangeTarget",
+    "sentence": "envGovernanceSecondHuman + \" is set: a second human must approve this — you proposed it, so someone else approves it (you may reject it)\""
   },
   {
     "reason": "second_human_required",

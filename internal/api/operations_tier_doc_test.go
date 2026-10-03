@@ -152,6 +152,10 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/governance/assignments", "`/governance` profile and assignment routes"},
 	{"DELETE /api/v1/governance/assignments/{id}", "`/governance` profile and assignment routes"},
 	{"POST /api/v1/governance/preview", "`/governance` profile and assignment routes"},
+	{"GET /api/v1/governance/changes", "`/governance` profile and assignment routes"},
+	{"GET /api/v1/governance/changes/{id}", "`/governance` profile and assignment routes"},
+	{"POST /api/v1/governance/changes/{id}/approve", "`/governance` profile and assignment routes"},
+	{"POST /api/v1/governance/changes/{id}/reject", "`/governance` profile and assignment routes"},
 	{"GET /api/v1/user-types", "the `/user-types` routes"},
 	{"POST /api/v1/user-types", "the `/user-types` routes"},
 	{"PUT /api/v1/user-types/{id}", "the `/user-types` routes"},
@@ -188,6 +192,7 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/admin/delegates", "`GET /admin/delegates` and `DELETE /admin/delegates/{id}`"},
 	{"DELETE /api/v1/admin/delegates/{id}", "`GET /admin/delegates` and `DELETE /admin/delegates/{id}`"},
 	{"DELETE /api/v1/people/{principal}/credentials", "`DELETE /people/{principal}/credentials`"},
+	{"POST /api/v1/people/{principal}/erasure", "`POST /people/{principal}/erasure`"},
 	{"GET /api/v1/model-providers/credentials", "`GET /model-providers/credentials`"},
 }
 

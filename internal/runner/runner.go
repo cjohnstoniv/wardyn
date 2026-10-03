@@ -89,7 +89,9 @@ type SandboxSpec struct {
 	Interactive bool
 	// ExecOutput, non-nil, receives a copy of the agent exec's combined
 	// stdout/stderr (GET /runs/{id}/output). Its Write must never block or
-	// fail: the driver drains the exec through it.
+	// fail: the driver drains the exec through it. A writer that also
+	// implements OutputDrainer, or io.Closer, is told when each copy into it
+	// ends (BeginOutputDrain), so its owner can wait for the last bytes.
 	ExecOutput io.Writer `json:"-"`
 }
 
@@ -164,7 +166,12 @@ type InjectionGrant struct {
 type Resources struct {
 	CPUMillis int64
 	MemoryMiB int64
-	PidsLimit int64 // fork-bomb guard; zero => driver default
+	// CPURequestMillis/MemoryRequestMiB are the k8s scheduling requests; 0 means
+	// "same as the limit". Never policy-authored: EffectiveRequests fills them from
+	// the deployment ratio. The Docker substrate ignores them.
+	CPURequestMillis int64
+	MemoryRequestMiB int64
+	PidsLimit        int64 // fork-bomb guard; zero => driver default
 	// DiskMiB caps writable storage; WHAT BINDS IT DIFFERS BY SUBSTRATE (see
 	// Capabilities.EphemeralDiskEnforcement): docker quotas only when
 	// supported, else uncapped; k8s enforces via kubelet EVICTION.
@@ -416,6 +423,29 @@ type DriveProber interface {
 	// uid, bounded by ctx. Called BEFORE a sandbox exists and MUST honour
 	// ctx's deadline.
 	ProbeDrive(ctx context.Context, mount types.DriveMount) (DriveProbe, error)
+}
+
+// SubstrateState is the closed set of answers a SubstrateProber gives about
+// whether the control plane can use its substrate right now. Three failure
+// classes, not one bool, because the remedies differ: a substrate that cannot
+// be reached is a network or daemon fault, a refused credential is a token to
+// renew, and a refused verb is a missing grant.
+type SubstrateState string
+
+const (
+	SubstrateOK           SubstrateState = "ok"
+	SubstrateUnreachable  SubstrateState = "unreachable"  // no answer, a transport error, or the probe's deadline
+	SubstrateUnauthorized SubstrateState = "unauthorized" // the substrate refused the credential (401)
+	SubstrateForbidden    SubstrateState = "forbidden"    // the credential is valid but may not do this (403, a permission error)
+)
+
+// SubstrateProber is an OPTIONAL Runner capability, in the shape of
+// DriveProber: a cheap read-only call that proves the control plane can reach
+// and use its substrate (Kubernetes: one namespaced pod list; Docker: a daemon
+// ping). It never creates anything. The implementation classifies its own
+// errors, and MUST honour ctx's deadline; a ctx that ended is SubstrateUnreachable.
+type SubstrateProber interface {
+	ProbeSubstrate(ctx context.Context) SubstrateState
 }
 
 // DriveReclaimOutcome is the closed set of answers a DriveReclaimer gives for

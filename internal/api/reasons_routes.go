@@ -208,10 +208,11 @@ const (
 // GET /runs/{id}/output (run_output.go).
 const (
 	reasonRunOutputTailInvalid = "run_output_tail_invalid" // ?tail= is not a positive number of bytes
-	reasonRunOutputInteractive = "run_output_interactive"  // the run is interactive; only a task_mode=exec run keeps its output
+	reasonRunOutputInteractive = "run_output_interactive"  // the run is interactive; an interactive run keeps no output here
 	reasonRunOutputOff         = "run_output_off"          // WARDYN_EXEC_OUTPUT_TAIL=off
-	reasonRunOutputNotKept     = "run_output_not_kept"     // no tail is held for the run (not exec, or started before a restart)
-	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL
+	reasonRunOutputNotKept     = "run_output_not_kept"     // no output is kept for the run (a sign-in run, one never captured, or one still being captured)
+	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL, or the run ended past WARDYN_RUN_OUTPUT_RETENTION_DAYS
+	reasonRunOutputErased      = "run_output_erased"       // the run's output was erased (404)
 )
 
 // POST /runs/{id}/resume (run_pause.go).
@@ -528,6 +529,9 @@ const (
 	reasonAuditInvalidTimestampParam       = "audit_invalid_timestamp_param"
 	reasonAuditInvalidActorType            = "audit_invalid_actor_type"
 	reasonAuditInvalidOrigin               = "audit_invalid_origin"
+	reasonAuditInvalidExportForm           = "audit_invalid_export_form"
+	reasonAuditPartitionNotFound           = "audit_partition_not_found"
+	reasonAuditPartitionOpen               = "audit_partition_open"
 )
 
 // POST /api/v1/sources/{id}/scan and the admin bulk scan (source_scan.go).
@@ -583,6 +587,19 @@ const (
 	// row the console cannot redeem with its own secret. Exported for the boot
 	// log in cmd/wardynd.
 	ReasonADOPATNeedsConsoleApp = "ado_pat_needs_console_app"
+)
+
+// GET /model-providers-entra/signin and the callback it shares with the Azure
+// DevOps sign-in (azure_foundry_entra.go): the per-row door of the Azure
+// Foundry capture. The callback answers a refusal the person can act on as a
+// redirect with a fixed code (the vocabulary of the Azure DevOps callback plus
+// row_changed) and an attack-shaped one in band.
+const (
+	reasonAzureSignInUnconfigured     = "azure_sign_in_unconfigured"     // no console Entra sign-in is configured
+	reasonAzureSignInUnknownRow       = "azure_sign_in_unknown_row"      // the uid is not an azure_foundry provider
+	reasonAzureSignInNoSession        = "azure_sign_in_no_session"       // no session subject to bind the capture to
+	reasonAzureCallbackCookiesInvalid = "azure_callback_cookies_invalid" // the one-time nonce or verifier cookie is missing, or the stamped row is malformed
+	reasonAzureCallbackMissingCode    = "azure_callback_missing_code"    // the authority redirected back with no code
 )
 
 // POST /workspace-providers/git/{id}/org-check (ado_pat_orgcheck.go).
@@ -674,6 +691,10 @@ const (
 	reasonDirectorySearchFailed        = "directory_search_failed"
 )
 
+// POST /api/v1/runs/preflight (preflight.go): an authorised caller at the
+// per-person rate limit, so not an authz.denied reason and not audited.
+const reasonPreflightRateLimited = "preflight_rate_limited"
+
 // /api/v1/base-images (base_images.go).
 const (
 	reasonBaseImageWriteInvalid = "base_image_write_invalid" // validateBaseImageWrite's own bucket
@@ -688,6 +709,18 @@ const (
 	// The Azure DevOps sign-in's configuration could not be read, so the erase
 	// could not take the sign-in's lock and refused (#1478).
 	reasonCredentialEraseSignInConfigUnreadable = "credential_erase_signin_config_unreadable"
+)
+
+// POST /people/{principal}/erasure (person_erasure.go).
+const (
+	// scopes is not a non-empty list of known scope names.
+	reasonErasureScopeUnknown = "erasure_scope_unknown"
+	// The person named is the caller, and a scope other than credentials was asked for.
+	reasonErasureSelfRefused = "erasure_self_refused"
+	// The principal names the operator namespace, which is no person's.
+	reasonErasureOperatorNamespace = "erasure_operator_namespace"
+	// A scope failed part way: the body names what is done and what is left.
+	reasonErasureIncomplete = "erasure_incomplete"
 )
 
 // GET /permissions/explain (capabilities_explain.go).
@@ -793,4 +826,20 @@ const (
 	// the portal was revoked or the grant expired, or the store could not say.
 	uiDeniedReasonDelegationEnded       = "delegation_ended"
 	uiDeniedReasonDelegationUnavailable = "delegation_unavailable"
+)
+
+// reasonLockUnavailable: a cross-replica lock the request needs could not be
+// taken (held elsewhere past its wait, the lock pool full, the database not
+// answering). Nothing was done; the request is safe to retry (locks.go).
+const reasonLockUnavailable = "lock_unavailable"
+
+// The governance four-eyes lane (WARDYN_GOVERNANCE_SECOND_HUMAN; governance_change_gate.go,
+// governance_changes.go).
+const (
+	reasonGovernanceSecondHumanLocalMode = "governance_second_human_local_mode" // WARDYN_GOVERNANCE_SECOND_HUMAN cannot be enforced with nobody authenticated (local mode)
+	reasonGovernanceChangePending        = "governance_change_pending"          // a live change already holds this target
+	reasonGovernanceChangeStale          = "governance_change_stale"            // the target, or the deployment default, changed since the proposal
+	reasonGovernanceChangeNotPending     = "governance_change_not_pending"      // the change was already applied, rejected, expired or marked stale
+	reasonGovernanceChangeNotFound       = "governance_change_not_found"        // a /governance/changes route named no change, or one of a kind the caller may not see
+	reasonGovernanceChangeStateInvalid   = "governance_change_state_invalid"    // ?state= is not one of the five change states
 )

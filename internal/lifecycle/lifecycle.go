@@ -21,12 +21,14 @@ package lifecycle
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -111,6 +113,10 @@ type Config struct {
 	// a Postgres try-advisory-lock; kept as a func so lifecycle has no DB
 	// dependency. Nil = ungated (single-process default; what tests use).
 	TickLock func(ctx context.Context) (release func(), ok bool)
+	// Sweeps, when non-nil, records each tick that does real work (the one that
+	// won TickLock) as the idle_reaper sweep: an attempt when it starts and a
+	// success only when it finishes without error. Nil records nothing.
+	Sweeps *sweephealth.Tracker
 }
 
 // Reaper is the idle-workspace garbage collector: a periodic loop that finds
@@ -124,6 +130,7 @@ type Reaper struct {
 	now      func() time.Time
 	interval time.Duration
 	tickLock func(ctx context.Context) (func(), bool)
+	sweeps   *sweephealth.Tracker
 	logger   *slog.Logger
 }
 
@@ -136,6 +143,7 @@ func New(store Store, stopper Stopper, recorder Recorder, cfg Config) *Reaper {
 		now:      cfg.Now,
 		interval: cfg.Interval,
 		tickLock: cfg.TickLock,
+		sweeps:   cfg.Sweeps,
 		logger:   slog.Default().With("component", "lifecycle.reaper"),
 	}
 	if r.now == nil {
@@ -164,13 +172,15 @@ func (r *Reaper) Run(ctx context.Context) {
 }
 
 // Tick is one reap scan, gated by Config.TickLock when wired. Exported for
-// integration callers/tests to drive directly; production code uses Run.
+// integration callers/tests to drive directly; production code uses Run. The
+// error is the tick's: the scan could not list runs, or a stop failed. A tick
+// another control plane holds the lock for is skipped, which is not an error.
 //
 // Deadline is Interval+defaultStopTimeout, not just Interval: a child
 // context.WithTimeout can only shorten its parent's deadline, so budgeting at
 // bare Interval would silently cap every per-stop deadline short of the full
 // defaultStopTimeout the constant promises.
-func (r *Reaper) Tick(ctx context.Context) {
+func (r *Reaper) Tick(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, r.interval+defaultStopTimeout)
 	defer cancel()
 	if r.tickLock != nil {
@@ -179,19 +189,22 @@ func (r *Reaper) Tick(ctx context.Context) {
 			// TRY lock semantics: skip rather than queue, since the scan is
 			// idempotent and the next tick is one Interval away.
 			r.logger.DebugContext(ctx, "lifecycle: tick skipped (reap lock held elsewhere)")
-			return
+			return nil
 		}
 		defer release()
 	}
-	r.reap(ctx)
+	return r.sweeps.Tick(ctx, sweephealth.IdleReaper, r.reap)
 }
 
-// reap is the tick body — the scan itself, with no locking of its own.
-func (r *Reaper) reap(ctx context.Context) {
+// reap is the tick body — the scan itself, with no locking of its own. It
+// returns the list failure, or the stops that failed outright: a run the reaper
+// cannot stop keeps its credentials live, which is what a stale idle_reaper
+// sweep should say.
+func (r *Reaper) reap(ctx context.Context) error {
 	runs, storeNow, err := r.store.ListRunningWithPolicy(ctx)
 	if err != nil {
 		r.logger.ErrorContext(ctx, "lifecycle: list running runs failed", "err", err)
-		return
+		return fmt.Errorf("lifecycle: list running runs: %w", err)
 	}
 
 	// Measure age against the store's clock, since UpdatedAt came from it; a
@@ -201,6 +214,7 @@ func (r *Reaper) reap(ctx context.Context) {
 		now = r.now()
 	}
 
+	var stopErrs []error
 	for _, run := range runs {
 		// AutoStopAfterSec <= 0 means never reap regardless of idle time (0 =
 		// disabled default; negative = explicit unbounded-attach escape hatch).
@@ -228,6 +242,7 @@ func (r *Reaper) reap(ctx context.Context) {
 				"threshold", threshold,
 				"err", err,
 			)
+			stopErrs = append(stopErrs, fmt.Errorf("lifecycle: stop run %s: %w", runID, err))
 			continue
 		}
 		if !out.Applied {
@@ -248,6 +263,7 @@ func (r *Reaper) reap(ctx context.Context) {
 			r.emitRevokeFailure(ctx, runID, out.Errors)
 		}
 	}
+	return errors.Join(stopErrs...)
 }
 
 // thresholdFor returns the idle threshold for a run: policy AutoStopAfterSec

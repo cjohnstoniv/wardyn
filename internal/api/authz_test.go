@@ -181,6 +181,9 @@ type classifiedRoute struct {
 	body string
 }
 
+// composedProfileProbeBody is a composed profile on the deployment default: no base, an empty overlay.
+const composedProfileProbeBody = `{"name":"composed-probe","overlay":{}}`
+
 // routeMatrix is keyed exactly as chi.Walk reports a route: "METHOD /pattern".
 // Built from the ground-truth dump of a maximally-configured server (every
 // conditional route mounted: OIDC, Secrets, RecordingStore all wired) — see
@@ -366,6 +369,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/people":                    {class: classSecurity},
 	"POST /api/v1/people/{principal}/tokens": {class: classSecurity},
 	"GET /api/v1/people/{principal}/tokens":  {class: classSecurity},
+	// 0.8.6: the person erasure (ar-l1.4). Security tier, like the credential erase
+	// it generalises: it removes reach and returns no record's content.
+	"POST /api/v1/people/{principal}/erasure": {class: classSecurity},
 	// Its companion (CS-6, design K5-A): who holds a credential for which model
 	// provider, added and last used. Metadata only, never a value.
 	"GET /api/v1/model-providers/credentials": {class: classSecurity},
@@ -422,13 +428,23 @@ var routeMatrix = map[string]classifiedRoute{
 	// is classSecurity for the reason the whole family is: the answer discloses
 	// how the org's ceilings are assigned. A member is refused here and reads
 	// their own ceiling from /policies/default instead, exactly as above.
-	"GET /api/v1/governance":                     {class: classSecurity},
-	"POST /api/v1/governance/profiles":           {class: classSecurity},
-	"PUT /api/v1/governance/profiles/{id}":       {class: classSecurity},
+	"GET /api/v1/governance": {class: classSecurity},
+	// The two profile writes probe with a COMPOSED body (an overlay on the deployment default): what
+	// the security tier admits is the composition members too, and a member is refused it by the
+	// tier before the body is read.
+	"POST /api/v1/governance/profiles":           {class: classSecurity, body: composedProfileProbeBody},
+	"PUT /api/v1/governance/profiles/{id}":       {class: classSecurity, body: composedProfileProbeBody},
 	"DELETE /api/v1/governance/profiles/{id}":    {class: classSecurity},
 	"POST /api/v1/governance/assignments":        {class: classSecurity},
 	"DELETE /api/v1/governance/assignments/{id}": {class: classSecurity},
 	"POST /api/v1/governance/preview":            {class: classSecurity},
+	// The four-eyes routes (gov4-b1): the queue, one change, and the two decisions. All security tier
+	// at the door; which kinds of change a caller may see or decide is the approver table's, inside
+	// the handler (governance_changes_pg_test.go).
+	"GET /api/v1/governance/changes":               {class: classSecurity},
+	"GET /api/v1/governance/changes/{id}":          {class: classSecurity},
+	"POST /api/v1/governance/changes/{id}/approve": {class: classSecurity},
+	"POST /api/v1/governance/changes/{id}/reject":  {class: classSecurity},
 	// User types (migration 0071_user_types): defining a type is the security
 	// tier's duty, like a profile. Who IS a type is the /access routes'
 	// (classAdmin). A member reads their own type from /me, never this list.
@@ -514,6 +530,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// route can reach anyone else's credential whatever tier the caller holds.
 	"GET /api/v1/scm/azure-devops/signin":   {class: classMember},
 	"GET /api/v1/scm/azure-devops/callback": {class: classMember},
+	// The Azure Foundry capture's start door (azure_foundry_entra.go): the same
+	// self-service shape. Its callback is the Azure DevOps callback above.
+	"GET /api/v1/model-providers-entra/signin": {class: classMember},
 	// The member's disconnect (ado_pat_console.go): the same self-service
 	// shape. It revokes and forgets the CALLER's own tokens and sign-in only,
 	// and a row the caller may not use answers as no row (D-6).
@@ -1422,11 +1441,13 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// table above would still pass every probe — it would just be enforcing the
 	// WRONG tier, exactly the drift the per-route loop cannot see. #1428 added
 	// the Azure DevOps organisation check beside the provider rows (= 48 SUPER).
-	// #1449 added the refusal read beside it (= 49 SUPER). 0.8.6's key domains
-	// add GET /key-domains and the assignment PUT and DELETE on the security tier
-	// (= 46 SEC).
-	if sec != 46 || super != 49 {
-		t.Errorf("tier split = %d security / %d admin, want 46 / 49 (the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect)", sec, super)
+	// #1449 added the refusal read beside it (= 49 SUPER). 0.8.6's person
+	// erasure joined the security tier beside the credential erase (= 44 SEC). GOV4's four
+	// /governance/changes routes joined it beside the profile and assignment writes they decide
+	// (= 48 SEC). 0.8.6's key domains add GET /key-domains and the assignment PUT and DELETE
+	// beside them (= 51 SEC).
+	if sec != 51 || super != 49 {
+		t.Errorf("tier split = %d security / %d admin, want 51 / 49 (the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + GOV4's 4 /governance/changes routes, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect)", sec, super)
 	}
 }
 

@@ -29,6 +29,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -285,8 +286,11 @@ func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request)
 	// integration handlers), which read and rewrite the SAME singleton document —
 	// see handlePutIntegration's SEAM-1 comment for why an unguarded RMW here
 	// silently erases a concurrent one.
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
 	ctx := r.Context()
 	existing, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {

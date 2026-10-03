@@ -17,29 +17,30 @@ import (
 type Reason string
 
 const (
-	ReasonAdminSurface                Reason = "admin_surface"
-	ReasonSecurityAdminSurface        Reason = "security_admin_surface"
-	ReasonNotOwner                    Reason = "not_owner"
-	ReasonAttachTicketForeignRun      Reason = "attach_ticket_foreign_run"
-	ReasonBYOIUser                    Reason = "byoi_user"
-	ReasonCapabilityAgent             Reason = "capability_agent"
-	ReasonCapabilityEgressHost        Reason = "capability_egress_host"
-	ReasonCapabilityFeature           Reason = "capability_feature"
-	ReasonCapabilityPolicy            Reason = "capability_policy"
-	ReasonCapabilitySecret            Reason = "capability_secret"
-	ReasonCapabilityWorkspace         Reason = "capability_workspace"
-	ReasonCapabilityWorkspaceProvider Reason = "capability_workspace_provider"
-	ReasonCapabilityModelProvider     Reason = "capability_model_provider"
-	ReasonGovernanceProfile           Reason = "governance_profile"
-	ReasonGrantPairingNotEligible     Reason = "grant_pairing_not_eligible"
-	ReasonGroupsSnapshotStale         Reason = "groups_snapshot_stale"
-	ReasonRunKept                     Reason = "run_kept"
-	ReasonRunNotFound                 Reason = "run_not_found"
-	ReasonRunTerminal                 Reason = "run_terminal"
-	ReasonSecondHumanRequired         Reason = "second_human_required"
-	ReasonRunQuota                    Reason = "run_quota"
-	ReasonUserTypeUnknown             Reason = "user_type_unknown"
-	ReasonUserViewTypeDeleted         Reason = "user_view_type_deleted"
+	ReasonAdminSurface                   Reason = "admin_surface"
+	ReasonSecurityAdminSurface           Reason = "security_admin_surface"
+	ReasonNotOwner                       Reason = "not_owner"
+	ReasonAttachTicketForeignRun         Reason = "attach_ticket_foreign_run"
+	ReasonBYOIUser                       Reason = "byoi_user"
+	ReasonCapabilityAgent                Reason = "capability_agent"
+	ReasonCapabilityEgressHost           Reason = "capability_egress_host"
+	ReasonCapabilityFeature              Reason = "capability_feature"
+	ReasonCapabilityPolicy               Reason = "capability_policy"
+	ReasonCapabilitySecret               Reason = "capability_secret"
+	ReasonCapabilityWorkspace            Reason = "capability_workspace"
+	ReasonCapabilityWorkspaceProvider    Reason = "capability_workspace_provider"
+	ReasonCapabilityModelProvider        Reason = "capability_model_provider"
+	ReasonGovernanceProfile              Reason = "governance_profile"
+	ReasonGovernanceOverlayUnsatisfiable Reason = "governance_overlay_unsatisfiable"
+	ReasonGrantPairingNotEligible        Reason = "grant_pairing_not_eligible"
+	ReasonGroupsSnapshotStale            Reason = "groups_snapshot_stale"
+	ReasonRunKept                        Reason = "run_kept"
+	ReasonRunNotFound                    Reason = "run_not_found"
+	ReasonRunTerminal                    Reason = "run_terminal"
+	ReasonSecondHumanRequired            Reason = "second_human_required"
+	ReasonRunQuota                       Reason = "run_quota"
+	ReasonUserTypeUnknown                Reason = "user_type_unknown"
+	ReasonUserViewTypeDeleted            Reason = "user_view_type_deleted"
 	// ReasonModelProviderUnavailable: a run's model provider cannot credential
 	// it — none by that name, off, not serving the agent, none chosen among
 	// several, no usable credential of the caller's for it, or a policy grant
@@ -67,6 +68,18 @@ const (
 	// groups are assigned to different domains, with no user assignment of
 	// their own, so their next principal key would be refused.
 	ReasonKeyDomainAmbiguous Reason = "key_domain_ambiguous_membership"
+	// ReasonMaskStateUnavailable: a door that relays or persists a run's output
+	// (recording upload, live attach, SSH shell, exec relay, live output read)
+	// cannot prove this run's masking corpus complete here, so it refuses with
+	// 503 instead of passing bytes through unmasked (ha-l2.0).
+	ReasonMaskStateUnavailable Reason = "mask_state_unavailable"
+	// ReasonRoleStampStale: an API token's role and group stamp is older than
+	// WARDYN_ROLE_STAMP_TTL. Its owner signs in again to re-stamp it.
+	ReasonRoleStampStale Reason = "role_stamp_stale"
+	// ReasonAuditExportPartitionFilter: a partition export (GET /audit/export?partition=) was asked
+	// to narrow the partition with another filter, so the digest in its footer would not cover the
+	// whole partition. Input shape, not a denial: not audited.
+	ReasonAuditExportPartitionFilter Reason = "audit_export_partition_filter"
 )
 
 // Refusal is one reason's registry row.
@@ -86,36 +99,40 @@ type Refusal struct {
 const requiresAdminRole = "requires admin role"
 
 var refusals = map[Reason]Refusal{
-	ReasonAdminSurface:                {Effect: EffectDeny, Audit: true, Sentence: requiresAdminRole},
-	ReasonSecurityAdminSurface:        {Effect: EffectDeny, Audit: true, Sentence: requiresAdminRole},
-	ReasonNotOwner:                    {Effect: EffectHidden, Audit: true},
-	ReasonAttachTicketForeignRun:      {Effect: EffectHidden, Audit: true},
-	ReasonBYOIUser:                    {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityAgent:             {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityEgressHost:        {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityFeature:           {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityPolicy:            {Effect: EffectDeny, Audit: true},
-	ReasonCapabilitySecret:            {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityWorkspace:         {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityWorkspaceProvider: {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityModelProvider:     {Effect: EffectDeny, Audit: true},
-	ReasonGovernanceProfile:           {Effect: EffectDeny, Audit: true},
-	ReasonGrantPairingNotEligible:     {Effect: EffectDeny, Audit: true},
-	ReasonGroupsSnapshotStale:         {Effect: EffectDeny, Audit: true},
-	ReasonRunKept:                     {Effect: EffectDeny, Audit: true},
-	ReasonRunNotFound:                 {Effect: EffectDeny, Audit: true},
-	ReasonRunOwnerOnly:                {Effect: EffectDeny, Audit: true, Sentence: "only the person who started this run can open it interactively"},
-	ReasonRunTerminal:                 {Effect: EffectDeny, Audit: true},
-	ReasonSecondHumanRequired:         {Effect: EffectDeny, Audit: true},
-	ReasonRunQuota:                    {Effect: EffectUnprocessable},
-	ReasonModelProviderUnavailable:    {Effect: EffectUnprocessable, Audit: true},
-	ReasonUserTypeUnknown:             {Effect: EffectDeny, Audit: true},
-	ReasonUserViewTypeDeleted:         {Effect: EffectDeny, Audit: true},
-	ReasonAdminView:                   {Effect: EffectConflict},
-	ReasonDelegationScope:             {Effect: EffectDeny, Audit: true},
-	ReasonEventStreamCap:              {Effect: EffectUnprocessable},
-	ReasonKeyDomainUnknown:            {Effect: EffectUnprocessable, Audit: true},
-	ReasonKeyDomainAmbiguous:          {Effect: EffectConflict, Audit: true},
+	ReasonAdminSurface:                   {Effect: EffectDeny, Audit: true, Sentence: requiresAdminRole},
+	ReasonSecurityAdminSurface:           {Effect: EffectDeny, Audit: true, Sentence: requiresAdminRole},
+	ReasonNotOwner:                       {Effect: EffectHidden, Audit: true},
+	ReasonAttachTicketForeignRun:         {Effect: EffectHidden, Audit: true},
+	ReasonBYOIUser:                       {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityAgent:                {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityEgressHost:           {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityFeature:              {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityPolicy:               {Effect: EffectDeny, Audit: true},
+	ReasonCapabilitySecret:               {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityWorkspace:            {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityWorkspaceProvider:    {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityModelProvider:        {Effect: EffectDeny, Audit: true},
+	ReasonGovernanceProfile:              {Effect: EffectDeny, Audit: true},
+	ReasonGovernanceOverlayUnsatisfiable: {Effect: EffectDeny, Audit: true},
+	ReasonGrantPairingNotEligible:        {Effect: EffectDeny, Audit: true},
+	ReasonGroupsSnapshotStale:            {Effect: EffectDeny, Audit: true},
+	ReasonRunKept:                        {Effect: EffectDeny, Audit: true},
+	ReasonRunNotFound:                    {Effect: EffectDeny, Audit: true},
+	ReasonRunOwnerOnly:                   {Effect: EffectDeny, Audit: true, Sentence: "only the person who started this run can open it interactively"},
+	ReasonRunTerminal:                    {Effect: EffectDeny, Audit: true},
+	ReasonSecondHumanRequired:            {Effect: EffectDeny, Audit: true},
+	ReasonRunQuota:                       {Effect: EffectUnprocessable},
+	ReasonModelProviderUnavailable:       {Effect: EffectUnprocessable, Audit: true},
+	ReasonUserTypeUnknown:                {Effect: EffectDeny, Audit: true},
+	ReasonUserViewTypeDeleted:            {Effect: EffectDeny, Audit: true},
+	ReasonAdminView:                      {Effect: EffectConflict},
+	ReasonDelegationScope:                {Effect: EffectDeny, Audit: true},
+	ReasonEventStreamCap:                 {Effect: EffectUnprocessable},
+	ReasonMaskStateUnavailable:           {Effect: EffectUnavailable, Audit: true},
+	ReasonRoleStampStale:                 {Effect: EffectUnauthenticated, Audit: true, Sentence: "this token's role is out of date: its owner must sign in again to refresh it"},
+	ReasonAuditExportPartitionFilter:     {Effect: EffectBadRequest},
+	ReasonKeyDomainUnknown:               {Effect: EffectUnprocessable, Audit: true},
+	ReasonKeyDomainAmbiguous:             {Effect: EffectConflict, Audit: true},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,

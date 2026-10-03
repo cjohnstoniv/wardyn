@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 )
 
 // GovernanceLimits carries the autonomy switches that BOUND A REQUEST rather
@@ -275,14 +277,16 @@ type AutonomyResolution struct {
 	BoundBy []string        `json:"bound_by,omitempty"`
 }
 
-// GovernanceProfile is one named, assignable ceiling (migration 0052's governance_profiles row).
+// GovernanceProfile is one named, assignable ceiling (the governance_profiles row of migrations 0052 and 0109).
 //
-// Ceiling is a full RunPolicySpec with REPLACEMENT semantics, not composition: an assigned
-// profile IS the principal's ceiling; with no assignment a principal falls through to
-// Config.DefaultPolicy byte for byte. composer.Clamp is NOT a lattice meet (drops
-// workspace_mounts unconditionally, is order-dependent through llm_inspection, defaults
-// unnamed tools to hold), so a "composed" ceiling would silently lose fields and couldn't
-// express an autonomous profile.
+// A STANDALONE profile (Overlay nil) is a full RunPolicySpec with replacement semantics: an
+// assigned profile IS the principal's ceiling; with no assignment a principal falls through to
+// Config.DefaultPolicy byte for byte. A COMPOSED profile (Overlay set) stores no raw Ceiling or
+// Limits, only a base (BaseProfileID, or the deployment default when nil) and an overlay that can
+// only narrow it; the effective ceiling is composer.ApplyOverlay over the resolved base, computed
+// whenever authority is read (internal/api/governance_compose.go is the only reader). composer.Clamp
+// is NOT that meet (it drops workspace_mounts unconditionally, is order-dependent through
+// llm_inspection and defaults unnamed tools to hold), so composition has its own function.
 //
 // Name is the UNIQUE human handle: what an admin assigns by, what the console lists, and the
 // resolver's last ORDER BY tie-break.
@@ -294,7 +298,25 @@ type GovernanceProfile struct {
 	CreatedAt time.Time        `json:"created_at"`
 	UpdatedAt time.Time        `json:"updated_at"`
 	CreatedBy string           `json:"created_by,omitempty"`
+	// Contact is who owns the profile and how to ask for a change; nil is none.
+	// Validated on write and re-validated on every read (internal/policyref).
+	// Never inherited from a base: disclosing a base's contact would disclose the base.
+	Contact *policyref.Contact `json:"contact,omitempty"`
+	// ContactSet is a write instruction, never stored or serialized: true makes an
+	// upsert write Contact (nil clears it), false keeps the stored value.
+	ContactSet bool `json:"-"`
+	// BaseProfileID is the profile this one composes on; nil with a non-nil Overlay means the
+	// deployment default. Only a composed profile has one.
+	BaseProfileID *uuid.UUID `json:"base_profile_id,omitempty"`
+	// Overlay marks the profile composed. A non-nil pointer to an empty overlay is valid: it is the
+	// base unchanged.
+	Overlay *CeilingOverlay `json:"overlay,omitempty"`
+	// OverlayLimits narrows the base's limits. Only with an Overlay; nil is no narrowing.
+	OverlayLimits *LimitsOverlay `json:"overlay_limits,omitempty"`
 }
+
+// Composed reports whether the profile is a base plus an overlay rather than a standalone ceiling.
+func (p GovernanceProfile) Composed() bool { return p.Overlay != nil }
 
 // GovernanceAssignment binds one profile to one subject (migration 0052's governance_assignments row).
 //

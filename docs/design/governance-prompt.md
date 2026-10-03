@@ -153,9 +153,12 @@ already grades) and `limits` is two booleans. It is stored in its own table, nev
 `run_policies` row — saved policies are selectable *content*, and making ceilings selectable
 would reproduce the conflation this campaign removes.
 
-An assigned profile **replaces** the deployment ceiling for its subjects; it is never composed
-with it. No assignment ⇒ `DefaultPolicy`, byte-for-byte today's behavior. That is the whole
-composition rule, and the console says it in `LEAD` (§7.2).
+An assigned standalone profile **replaces** the deployment ceiling for its subjects. Since 0.8.6 a
+profile may instead be **composed**: it names a base (another profile, or the deployment default) and carries an
+overlay that can only narrow it, and the ceiling that binds is the base narrowed by the overlay, computed
+whenever authority is read (`docs/design/0.8/0.8.6-comp.md`). No assignment ⇒ `DefaultPolicy`,
+byte-for-byte today's behavior, and a standalone profile resolves exactly as it always did. The console
+says it in `LEAD` (§7.2).
 
 ### 2.2 Assignment and precedence
 

@@ -422,25 +422,6 @@ func githubScopeRepos(scope json.RawMessage) []string {
 	return out
 }
 
-// gitPATScopeFields decodes a git_pat grant scope {host, secret_name, username?}.
-// host and secret_name are REQUIRED (fail closed); mirrors the broker's
-// gitPATScope shape. Used by policy validation, inline-secret checks, compose
-// grounding, and the sandbox env wiring so all agree on the scope contract.
-func gitPATScopeFields(scope json.RawMessage) (host, secretName, username string, err error) {
-	var sc struct {
-		Host       string `json:"host"`
-		SecretName string `json:"secret_name"`
-		Username   string `json:"username"`
-	}
-	if err = json.Unmarshal(scope, &sc); err != nil {
-		return "", "", "", err
-	}
-	if sc.Host == "" || sc.SecretName == "" {
-		return "", "", "", errors.New("git_pat scope requires host and secret_name")
-	}
-	return sc.Host, sc.SecretName, sc.Username, nil
-}
-
 // sshKeyScopeFields decodes an ssh_key grant scope
 // {host, key_secret_ref, username?, known_hosts_secret_ref?}. host and
 // key_secret_ref are REQUIRED (fail closed); mirrors the broker's sshKeyScope

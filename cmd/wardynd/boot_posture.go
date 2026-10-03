@@ -403,6 +403,12 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := refuseRetiredModelEnv(os.Environ()); err != nil {
 		return err
 	}
+	if *f.preflightRatePerMin < 0 {
+		return fmt.Errorf("refusing to start: WARDYN_PREFLIGHT_RATE_PER_MIN is %d; want 0 (off) or a positive number", *f.preflightRatePerMin)
+	}
+	if _, err := auditSealMode(f); err != nil {
+		return err
+	}
 	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, *f.uiStripCookies, posture, *f.allowPlaintextListen); err != nil {
 		return err
 	}
@@ -412,8 +418,33 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateHybridPosture(*f.orgURL, *f.orgEnrolToken, *f.memberMode, *f.allowPlaintextListen); err != nil {
 		return err
 	}
+	if err := validateRunOutputTailBytes(*f.runOutputTailBytes); err != nil {
+		return err
+	}
+	if err := validateRunOutputRetentionDays(*f.runOutputRetention); err != nil {
+		return err
+	}
 	for _, w := range bootPostureWarnings(f, posture) {
 		slog.Warn(w)
+	}
+	return nil
+}
+
+// validateRunOutputTailBytes refuses a WARDYN_RUN_OUTPUT_TAIL_BYTES outside
+// 1 KiB to 1 MiB: smaller keeps too little to be useful, larger lets one run
+// hold a megabyte-scale buffer for every run in the TTL window.
+func validateRunOutputTailBytes(n int) error {
+	if n < 1024 || n > 1<<20 {
+		return fmt.Errorf("WARDYN_RUN_OUTPUT_TAIL_BYTES is %d; it must be between 1024 and 1048576", n)
+	}
+	return nil
+}
+
+// validateRunOutputRetentionDays refuses a negative WARDYN_RUN_OUTPUT_RETENTION_DAYS:
+// 0 keeps persisted output forever, a positive number is the window in days.
+func validateRunOutputRetentionDays(n int) error {
+	if n < 0 {
+		return fmt.Errorf("WARDYN_RUN_OUTPUT_RETENTION_DAYS is %d; it must be 0 (keep forever) or a positive number of days", n)
 	}
 	return nil
 }
@@ -545,4 +576,16 @@ func parseMountCeilings(f *bootFlags) (runner.UserMountPolicy, []string, error) 
 		slog.Warn("wardynd: mount ceilings overlap — " + warn)
 	}
 	return memberMounts, driveHostRoots, nil
+}
+
+// warnGovernAdminRunsUnbound says at boot that WARDYN_GOVERN_ADMIN_RUNS binds
+// nobody when OIDC is not configured. Without OIDC (local mode, or admin-token-only
+// mode) no request carries a person, so every launch is the break-glass admin: it
+// is ungoverned and carries governance_exempt on run.create. The second-human
+// switches warn only in local mode because they fail closed in token mode; this
+// one fails open there, so it warns in both.
+func warnGovernAdminRunsUnbound(governAdminRuns, oidcConfigured bool) {
+	if governAdminRuns && !oidcConfigured {
+		slog.Warn("wardynd: WARDYN_GOVERN_ADMIN_RUNS is set but OIDC is not configured, so the switch binds nobody — every launch is the admin token or local mode, which stays ungoverned and carries governance_exempt on run.create. Configure SSO to govern admin runs, or unset it.")
+	}
 }

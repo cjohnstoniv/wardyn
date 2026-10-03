@@ -199,7 +199,7 @@ func TestSweepExpiredCredentials_EvictsTheCachedADOToken(t *testing.T) {
 
 	rf.srv.cfg.Secrets = &sweepSecrets{memSecrets: rf.srv.cfg.Secrets.(*memSecrets),
 		gone: []secretstore.Expired{{Owner: rf.subject, Name: adoEntraSecretName(rf.cfg.RowID), ExpiresAt: adoTestNow.Add(-time.Hour)}}}
-	if n := rf.srv.SweepExpiredCredentials(context.Background()); n != 1 {
+	if n, _ := rf.srv.SweepExpiredCredentials(context.Background()); n != 1 {
 		t.Fatalf("swept %d, want 1", n)
 	}
 

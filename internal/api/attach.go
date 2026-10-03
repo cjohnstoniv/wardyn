@@ -234,6 +234,11 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusConflict, reasonAttachNoSandbox, "run has no sandbox; cannot attach")
 		return
 	}
+	// Door 2 of five (mask_manifest.go): the terminal's recorded tail is masked
+	// against the run's corpus, which this server must be able to prove whole.
+	if s.refuseUncovered(w, r, run.ID, "runs.attach") {
+		return
+	}
 
 	// Initial PTY size from optional query params (?cols=&rows=); the client may
 	// also resize later via a control message. Defaults (0) let the driver pick.
@@ -397,12 +402,16 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// resets the idle clock.
 	_ = s.cfg.Store.TouchRun(pumpCtx, id)
 	go s.attachKeepalive(pumpCtx, id)
+	maskFenced := s.endAttachOnMaskFence(pumpCtx, id, c, cancel)
 
 	// Bidirectional pump. closeReason is filled by whichever side ends first.
 	// castTee (may be nil when no RecordingStore is wired) receives a copy of the
 	// masked PTY output for the asciicast. holder is nil for a read-only observer.
 	closeReason := s.attachPump(pumpCtx, c, sess, castTee, holder)
 	cancel()
+	if maskFenced() {
+		closeReason = maskFencedReason
+	}
 
 	// Free the slot HERE, before the recording persist + the session.detach
 	// audit below — not after them, which is where the deferred call above
@@ -744,7 +753,7 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 	// split-secret defense the brokered-upload path's MaskingWriter provides. The
 	// per-run secret set is tiny so per-write masking is cheap. A nil registry /
 	// empty snapshot is a pass-through (the asciicast is still well-formed).
-	mw := &liveMaskWriter{reg: s.cfg.MaskRegistry, runID: runID, dst: cast}
+	mw := &liveMaskWriter{reg: s.cfg.MaskRegistry, runID: runID, dst: cast, guard: s.maskGuard(runID)}
 
 	finish := func(ctx context.Context, principalType types.ActorType, principal string) {
 		// Take the masker lock across (a) flushing the retained tail
@@ -814,6 +823,14 @@ type liveMaskWriter struct {
 	runID uuid.UUID
 	dst   io.Writer
 	tail  []byte // withheld (already-masked) bytes carried to the next write
+	// guard, when non-nil, says whether the run's masking corpus is still
+	// proven whole (mask_manifest.go). While it is false a chunk is dropped
+	// instead of masked against a corpus that may be incomplete: the writer
+	// never forwards bytes it cannot vouch for.
+	guard func() bool
+	// capture is the run-output capture's seal and marks (run_output_final.go);
+	// the zero value, which an attach's recording keeps, seals nothing.
+	capture outputCapture
 }
 
 func (w *liveMaskWriter) Write(p []byte) (int, error) {
@@ -821,7 +838,25 @@ func (w *liveMaskWriter) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	n, late, err := w.writeLocked(p)
+	w.mu.Unlock()
+	if late != nil {
+		late()
+	}
+	return n, err
+}
+
+// writeLocked is Write under w.mu. late is the seal's one-time notice, for the
+// caller to call once the lock is released.
+func (w *liveMaskWriter) writeLocked(p []byte) (n int, late func(), err error) {
+	if late, sealed := w.capture.dropSealed(); sealed {
+		return len(p), late, nil
+	}
+	if w.guard != nil && !w.guard() {
+		w.tail = nil
+		w.capture.dropped, w.capture.uncovered = true, true
+		return len(p), nil, nil
+	}
 
 	// One CACHED masker per registry generation, not NewMasker(Snapshot(...)) per
 	// chunk: the pair cloned every secret twice and sorted the whole set on every
@@ -849,10 +884,10 @@ func (w *liveMaskWriter) Write(p []byte) (int, error) {
 
 	if len(forward) > 0 {
 		if _, err := w.dst.Write(forward); err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 	}
-	return len(p), nil
+	return len(p), nil, nil
 }
 
 // flushLocked emits any withheld tail (re-masked) so the trailing bytes held back
@@ -939,7 +974,7 @@ func (s *Server) refuseAttachEntry(w http.ResponseWriter, r *http.Request, run t
 		}
 		// The fall-through lane is operator-only, and a super admin's ticket
 		// is exempt the same way.
-		return !superAdmin && s.refuseInteractiveAttach(w, r, run)
+		return (!superAdmin || !s.adminDoorExempt(run)) && s.refuseInteractiveAttach(w, r, run)
 	}
 	if !mayEnterRun(run, principalFromRequest(r), s.isOperator(r.Context())) {
 		// The cookie lane: requireOperator and the origin check keep members
@@ -949,5 +984,5 @@ func (s *Server) refuseAttachEntry(w http.ResponseWriter, r *http.Request, run t
 		s.refuseRunOwnerOnly(w, r, run)
 		return true
 	}
-	return false
+	return s.refuseNoTicketAttach(w, r, run)
 }

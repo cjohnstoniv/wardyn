@@ -43,16 +43,27 @@ const secretsMaxPerOwner = 100
 // harnessCredSecretName in harnesscred.go carry that rationale), so there is no
 // list to keep in sync.
 var reservedSecretNames = map[string]bool{
-	"wardyn-signing-key":    true,
-	"wardyn-session-key":    true,
-	"wardyn-ssh-host-key":   true,
-	"wardyn-ui-session-key": true,
-	"wardyn-run-config-key": true,
-	"wardyn-internal-ca":    true,
+	"wardyn-signing-key":       true,
+	"wardyn-session-key":       true,
+	"wardyn-ssh-host-key":      true,
+	"wardyn-ui-session-key":    true,
+	"wardyn-run-config-key":    true,
+	"wardyn-audit-pending-key": true,
+	"wardyn-internal-ca":       true,
 	// The hybrid device credential (cmd/wardynd's bootHybrid): overwriting it
 	// would swap which organisation identity this laptop pushes its audit as.
 	"wardyn-org-device-credential": true,
+	// The value-less row writeProbeSecretName leaves for the instant between
+	// its Put and Delete: a crash in between must leave nothing the API lists
+	// or a sink resolves.
+	writeProbeSecretName: true,
 }
+
+// writeProbeSecretName is the one name a create-time store write probe uses
+// (probeSecretWrite): it proves the store accepts a write without touching
+// the credential row itself. It joins every reservation map so the generic
+// secrets API and the injection sink refuse it.
+const writeProbeSecretName = "wardyn-write-probe"
 
 // reservedSecret reports whether name is a platform-internal / managed-credential
 // key that the generic secrets API must not touch and the injection sink must not

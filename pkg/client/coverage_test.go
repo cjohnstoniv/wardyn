@@ -82,18 +82,20 @@ func routeFamilies() map[string][]string {
 		"policies":    {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},
 		"workspaces":  {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "ListWorkspacesPage", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask"},
 		"sources":     {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},
-		"audit":       {"AuditEvents", "AuditEventsPage", "RecentAuditEvents"},
+		"audit":       {"AuditEvents", "AuditEventsPage", "RecentAuditEvents", "ExportAuditPartition"},
 		"secrets":     {"ListSecrets", "ListSecretsPage", "ListSecretsScoped", "ListSecretsScopedPage", "SetSecret", "DeleteSecret"},
 		"site-config": {"GetSiteConfig", "PutSiteConfig", "PutSiteConfigResult"},
 		"drives":      {"GetDrives", "ApplyDrives"},
 		"presets":     {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
-		"governance":  {"GetGovernance", "ApplyGovernance"},
+		"governance":  {"GetGovernance", "ApplyGovernance", "ApplyGovernanceResult"},
+		"gov.changes": {"ListGovernanceChanges", "GetGovernanceChange", "ApproveGovernanceChange", "RejectGovernanceChange"},
 		"setup":       {"SetupStatus"},
 		"identity":    {"Me"},
 		"health":      {"Healthz"},
 		"sessions":    {"RevokeSessions"},
 		"ssh-keys":    {"ListSSHKeys", "ListSSHKeysPage", "AddSSHKey", "DeleteSSHKey"},
 		"devices":     {"MintDeviceEnrolmentToken", "ListDeviceEnrolmentTokens", "RevokeDeviceEnrolmentToken", "ListDevices", "RevokeDevice"},
+		"people":      {"ErasePerson"},
 	}
 }
 

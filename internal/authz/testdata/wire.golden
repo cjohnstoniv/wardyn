@@ -6,6 +6,9 @@ effect deny
 effect hidden
 effect unprocessable
 effect conflict
+effect unavailable
+effect unauthenticated
+effect bad_request
 obligationkind drop
 reason admin_surface
 reason security_admin_surface
@@ -37,3 +40,7 @@ reason event_stream_cap
 reason run_owner_only
 reason key_domain_unknown
 reason key_domain_ambiguous_membership
+reason mask_state_unavailable
+reason role_stamp_stale
+reason governance_overlay_unsatisfiable
+reason audit_export_partition_filter

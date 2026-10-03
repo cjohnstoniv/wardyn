@@ -108,7 +108,7 @@ func TestPG_AuditDDLProtectedFollowsMembershipToTheReplicationRoleGrant(t *testi
 		       bool_or(has_table_privilege(current_user, c.oid, 'TRIGGER')),
 		       bool_or(has_parameter_privilege(current_user, 'session_replication_role', 'SET')),
 		       bool_or(pg_has_role(current_user, '`+adm+`', 'MEMBER'))
-		FROM pg_class c WHERE c.relname = 'audit_events' AND c.relkind = 'r'`,
+		FROM pg_class c WHERE c.relname = 'audit_events' AND c.relkind IN ('r', 'p')`,
 	).Scan(&superLeg, &ownerLeg, &triggerLeg, &ownGrant, &memberOfAdm); err != nil {
 		t.Fatalf("read the four legs: %v", err)
 	}
@@ -155,8 +155,8 @@ func TestPG_AuditDDLProtectedFollowsMembershipToTheReplicationRoleGrant(t *testi
 				"not survive back to the app role", who, mode, app)
 		}
 		var rowHash *string
-		if err := tx.QueryRow(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
-			VALUES (gen_random_uuid(), 'human', 'forger@example.com', 'test.f330.replica', 'success')
+		if err := tx.QueryRow(ctx, `INSERT INTO audit_events (seq, id, actor_type, actor, action, outcome)
+			VALUES ((SELECT COALESCE(max(seq), 0) + 1 FROM audit_events), gen_random_uuid(), 'human', 'forger@example.com', 'test.f330.replica', 'success')
 			RETURNING row_hash`).Scan(&rowHash); err != nil {
 			t.Fatalf("INSERT under session_replication_role = replica: %v", err)
 		}

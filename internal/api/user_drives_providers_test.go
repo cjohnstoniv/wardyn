@@ -198,7 +198,7 @@ func TestDriveSizeIsClampedTheSameAtEveryDoor(t *testing.T) {
 	// 1. LAUNCH — the mount the runner executes.
 	srv, _ := driveRunServer(newStore(), "docker")
 	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil),
-		governanceCeiling{Profile: profile, Limits: profile.Limits}, driveMemberCtx([]string{"eng"}, false))
+		governanceCeiling{Profile: resolvedOf(profile), Limits: profile.Limits}, driveMemberCtx([]string{"eng"}, false))
 	if !ok || mount == nil {
 		t.Fatalf("launch: mount = %+v, ok = %v: %s", mount, ok, w.Body.String())
 	}

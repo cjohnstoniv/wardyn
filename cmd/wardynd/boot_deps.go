@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
@@ -99,6 +100,10 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 		// refusal rules: a chain that demonstrably does not chain refuses the
 		// boot; a canary that could not RUN (chain lock busy, statement
 		// cancelled) reports at ERROR and lets it continue.
+		if aerr := verifyAuditAppendPosture(connectCtx, rootCtx, pool); aerr != nil {
+			pool.Close()
+			return nil, aerr
+		}
 		if cerr := db.AuditChainCanary(connectCtx, pool); cerr != nil {
 			pool.Close()
 			return nil, fmt.Errorf("verify the audit chain on the app role: %w", cerr)
@@ -129,7 +134,42 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	slog.InfoContext(rootCtx, "wardynd: NOTICE single-DSN mode — wardynd's DB role owns audit_events, so DROP TRIGGER / ALTER TABLE ... DISABLE TRIGGER / DROP TABLE bypass the append-only guard. Set WARDYN_PG_MIGRATE_DSN to a separate owner/migrator role (wardynd then connects as a non-owner app role) for DDL protection.")
+	if aerr := verifyAuditAppendPosture(connectCtx, rootCtx, pool); aerr != nil {
+		pool.Close()
+		return nil, aerr
+	}
 	return pool, nil
+}
+
+// verifyAuditAppendPosture is the boot check for the one write path audit_events has had since 0111.
+// Every audit row is appended by the database function audit_append, so a serving role that cannot
+// EXECUTE it would start clean and then lose every audit write to the spool and refuse every
+// credential mint: that refuses the boot, naming the GRANT. The other two findings are postures to
+// report, not defects to refuse over: a role that can still INSERT directly (always true of the
+// owner, so of every single-DSN install), and an audit function any role may execute.
+func verifyAuditAppendPosture(connectCtx, rootCtx context.Context, pool *pgxpool.Pool) error {
+	p, err := db.AuditAppendPostureOf(connectCtx, pool)
+	if err != nil {
+		return fmt.Errorf("verify the audit append privileges: %w", err)
+	}
+	if !p.CanAppend {
+		return fmt.Errorf("the app role %q (the role in WARDYN_PG_DSN) cannot EXECUTE audit_append, the only function that appends to audit_events, so no "+
+			"audit row could be written and every credential mint would be refused; as the migrator/owner role run: "+
+			"GRANT EXECUTE ON FUNCTION audit_append(uuid, timestamptz, uuid, text, text, text, text, text, text, jsonb), "+
+			"audit_ensure_partitions(integer) TO %s (and ALTER DEFAULT PRIVILEGES ... GRANT EXECUTE ON FUNCTIONS TO %s "+
+			"so later releases' functions are callable too)", p.Role, pgx.Identifier{p.Role}.Sanitize(), pgx.Identifier{p.Role}.Sanitize())
+	}
+	if p.DirectInsert {
+		slog.InfoContext(rootCtx, "wardynd: NOTICE app role can INSERT directly into audit_events (it owns the table, or holds INSERT). "+
+			"The chain trigger refuses a row audit_append did not allocate, which binds a well-behaved or mistaken writer, not a hostile owner; "+
+			"to take direct INSERT away use WARDYN_PG_MIGRATE_DSN with a non-owner app role that holds SELECT on audit_events and EXECUTE on audit_append.",
+			slog.String("role", p.Role))
+	}
+	if len(p.PublicExecute) > 0 {
+		slog.WarnContext(rootCtx, "wardynd: every database role may EXECUTE an audit function (the PUBLIC default); fix with REVOKE ALL ON FUNCTION <name> FROM PUBLIC for each function named here, then GRANT EXECUTE to the app role",
+			slog.Any("functions", p.PublicExecute))
+	}
+	return nil
 }
 
 // warnAllowUnknownMigrations is the #1050 follow-up: WARN whenever the
@@ -149,8 +189,8 @@ func warnAllowUnknownMigrations(allow bool) {
 }
 
 // buildAuditChain assembles the audit recorder chain:
-// audit.DelegationRecorder → maskingRecorder → spoolingRecorder →
-// (fanoutRecorder →) store.Recorder.
+// audit.DelegationRecorder → maskingRecorder → sealingRecorder →
+// spoolingRecorder → (fanoutRecorder →) store.Recorder.
 //
 // The Postgres store is the source of truth. When audit sinks are configured,
 // every persisted event ALSO fans out to file/webhook/syslog; the store write is
@@ -162,12 +202,18 @@ func warnAllowUnknownMigrations(allow bool) {
 // log-only, never blocking startup. Extracted verbatim from run(); the returned
 // *sinks.Fanout (nil when unconfigured) must be Closed on shutdown.
 //
+// Sealing sits below masking and above the spool (WARDYN_AUDIT_SEAL): the row
+// hash, the spool, the store and every sink see a personal field only as
+// ciphertext. seal is armed with its keys once the secret store exists.
+//
 // It also returns the *api.AuditSpool and the RAW store.Recorder so the API
 // server can start the background drain that replays spooled events back into the
 // store once it recovers. The drain MUST target the raw store recorder —
 // NOT the returned masking/spooling chain — or a replay that hit a still-down
 // store would re-spool (and re-enter the spool lock) instead of retrying later.
-func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source string, pool *pgxpool.Pool, maskReg *secretmask.Registry) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
+// That recorder is wrapped in sealingRecorder's replay mode, which re-seals the
+// rows that waited under the pending key before the store sees them.
+func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source string, pool *pgxpool.Pool, maskReg *secretmask.Registry, seal *auditSealSource, scope ...*maskScope) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
 	// #10 WARDYN_AUDIT_SOURCE: set once, before any sink is constructed/starts
 	// emitting — see sinks.Source's doc comment. A no-op (empty) is
 	// byte-identical to before this field existed.
@@ -195,10 +241,14 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 			slog.Info("wardynd: audit fallback spool", slog.String("path", spoolPath))
 		}
 	}
-	masked := maskingRecorder{inner: spoolingRecorder{inner: auditRec, spool: auditFallback}, reg: maskReg}
+	sealed := sealingRecorder{inner: spoolingRecorder{inner: auditRec, spool: auditFallback}, src: seal, spool: auditFallback}
+	masked := maskingRecorder{inner: sealed, reg: maskReg}
+	if len(scope) > 0 {
+		masked.scope = scope[0] // the serving boot's; maintenance modes label nothing
+	}
 	// Outermost: a row any writer records under a portal's delegated request
 	// names the portal (data.via, #1142) before it is masked, spooled or stored.
-	return audit.DelegationRecorder{Inner: masked}, fan, auditFallback, storeRec, nil
+	return audit.DelegationRecorder{Inner: masked}, fan, auditFallback, sealingRecorder{inner: storeRec, src: seal, replay: true}, nil
 }
 
 // substrateDeps is the registration Deps every substrate constructor receives,
@@ -405,6 +455,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			RequireEmailVerified: *f.oidcRequireEmailVerified,
 			ExtraScopes:          splitCSV(*f.oidcExtraScopes),
 			SecureCookies:        secureCookies,
+			RoleStampTTL:         *f.roleStampTTL,
 			RoleMap:              roleMap,
 			DefaultRole:          defaultRole,
 			// Legacy source: a 0.4.5 deployment's WARDYN_OIDC_OPERATOR_EMAILS
@@ -430,16 +481,20 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// re-stamps role+role_checked_at on every ssh_public_keys row this
 			// principal owns — the bounded-stale re-check sshAuth's admin-override
 			// path reads (WARDYN_SSH_ROLE_TTL) — and role+user_type+groups+
-			// groups_truncated on every api_tokens row they hold. store.NewPG(pool) is a cheap value
+			// groups_truncated and identity_stamped_at (the age WARDYN_ROLE_STAMP_TTL reads, moved in
+			// that one UPDATE) on every api_tokens row they hold. store.NewPG(pool) is a cheap value
 			// wrapper (constructed the same way elsewhere in this file), not a
 			// connection of its own. Best-effort: a store hiccup here logs and
 			// the login still succeeds — see oidc.Config.OnLogin's own doc for
 			// why that contract lives on the callback side, not here.
-			OnLogin: func(ctx context.Context, sub, role, userType string, groups []string, groupsTruncated bool) {
-				refreshLoginStamps(ctx, store.NewPG(pool), sub, role, userType, groups, groupsTruncated, time.Now().UTC())
+			// It also records the sign-in's identity row (migration 0113) on every issuer.
+			OnLogin: func(ctx context.Context, f oidc.LoginFacts) {
+				now := time.Now().UTC()
+				refreshLoginStamps(ctx, store.NewPG(pool), f.Sub, f.Role, f.UserType, f.Groups, f.GroupsTruncated, now)
+				recordLoginIdentity(ctx, store.NewPG(pool), f, now)
 				// The groups of this verified login are what a key-domain
 				// group assignment reads for the person's next principal key.
-				stampLoginGroups(ctx, pool, sub, groups, groupsTruncated)
+				stampLoginGroups(ctx, pool, f.Sub, f.Groups, f.GroupsTruncated)
 			},
 		}, sessKey)
 		if err != nil {
@@ -855,6 +910,18 @@ func refreshLoginStamps(ctx context.Context, st loginStampStore, sub, role, user
 func stampLoginGroups(ctx context.Context, pool *pgxpool.Pool, sub string, groups []string, truncated bool) {
 	if err := keydomain.NewService(pool, nil).RecordLoginGroups(ctx, sub, groups, truncated); err != nil {
 		slog.Warn("wardynd: recording a login's groups for key-domain membership failed", slog.String("err", err.Error()))
+	}
+}
+
+// recordLoginIdentity writes the identity row an approved sign-in leaves, so a later removal of
+// this person has a row to act on even when no people row exists. Best-effort like the stamps
+// above: a store error logs and the login still succeeds.
+func recordLoginIdentity(ctx context.Context, st store.PrincipalIdentityStore, f oidc.LoginFacts, now time.Time) {
+	_, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{
+		Principal: f.Sub, Issuer: f.Issuer, TenantID: f.TenantID, ObjectID: f.ObjectID, Email: f.Email,
+	}, now)
+	if err != nil {
+		slog.Warn("wardynd: recording the sign-in identity failed", slog.String("err", err.Error()))
 	}
 }
 

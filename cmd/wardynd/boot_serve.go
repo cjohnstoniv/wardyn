@@ -21,12 +21,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
@@ -113,6 +115,13 @@ func resolveTLSPosture(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allow
 //     on a backoff and take over automatically when the leader's session ends.
 //     Not fencing — a lost session can leave two writers briefly, which is
 //     harmless because each write is an atomic rename of a stateless token.
+//   - Sweeper leader: the sweepers that must run once (approval expiry,
+//     recording retention, credential expiry, the always-egress reconcile and
+//     the run pause) run on one replica elected by a Postgres advisory lock
+//     (db.SweeperLeader), each started and stopped with that replica's term.
+//     The run-secret sweeper is NOT among them: it drops this replica's own
+//     in-memory cache, so every replica runs it. A nil leader (a test, or a
+//     deployment that never built one) runs every sweeper unconditionally.
 //   - Approval expiry sweeper: transition PENDING approvals older than the
 //     cutoff to EXPIRED so the queue does not grow unbounded.
 //   - Recording retention sweeper: delete stored session recordings past the
@@ -127,7 +136,20 @@ func resolveTLSPosture(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allow
 //     non-terminal by a previous process (crash/restart) so it is not stranded
 //     RUNNING forever with a live sandbox and un-revoked credentials.
 //     Best-effort; a reconciliation error never blocks startup.
-func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, idp identity.Provider, brk *broker.Broker, maskedRec audit.Recorder, recStore recording.Store) {
+func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, idp identity.Provider, brk *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker) {
+	if leader != nil {
+		go goSafe("sweeper.leader", func() { leader.Run(rootCtx) })
+	}
+	// Every replica registers every sweep this install runs, whether or not it
+	// ever holds the sweeper lock, so a follower can see a stopped leader.
+	_, recSweepable := recStore.(recordingSweepable)
+	registerSweepHealth(ticks, sweepInstall{
+		runner: run != nil, autoStop: *f.autoStopInterval, approvalExpiry: *f.approvalExpiryInterval,
+		recordingSweepable: recSweepable, recordingRetentionDays: *f.recordingRetention,
+		runOutputPersist: *f.runOutputPersist,
+		api:              srv.HealthSweeps(),
+	})
+
 	if run != nil && *f.autoStopInterval > 0 {
 		reaper := lifecycle.New(
 			lifecycleStore{pool: pool},
@@ -138,25 +160,27 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 				// the one method is smaller than giving the reaper its own approval
 				// store and its own copy of the reason derivation.
 				cancelApprovals: srv.CancelTerminalRunApprovals,
+				finishOutput:    srv.FinishRunOutput,
 			},
 			maskedRec,
-			lifecycle.Config{Interval: *f.autoStopInterval, TickLock: reapTickLock(pool)},
+			lifecycle.Config{Interval: *f.autoStopInterval, TickLock: reapTickLock(pool), Sweeps: ticks},
 		)
 		go goSafe("lifecycle.reaper", func() { reaper.Run(rootCtx) })
 		slog.Info("wardynd: lifecycle reaper started", slog.Duration("interval", *f.autoStopInterval))
 	}
 
 	if gtFile := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")); gtFile != "" {
-		// THREE connections are spoken for here: the single-instance boot lock
-		// and the rotator's leader lock each hold one for the whole process
-		// lifetime, and the reaper borrows another for the length of each tick —
-		// so a pool sized below 4 can leave request-serving queries with none,
+		// FOUR connections are spoken for here: the single-instance boot lock,
+		// the sweeper leader's lock and the rotator's leader lock each hold one
+		// for the whole process lifetime, and the reaper borrows another for the
+		// length of each tick — so a pool sized below 5 can leave request-serving
+		// queries with none,
 		// and pgxpool.Acquire BLOCKS until its context is done rather than
 		// erroring. That failure looks like a hang, not a misconfiguration, so
 		// say so at boot (docs/ENV.md, WARDYN_PG_DSN's pool_max_conns note).
 		// claimSingleInstance warns separately at the unconditional floor of 2.
-		if mc := pool.Config().MaxConns; mc < 4 {
-			slog.Warn("wardynd: pool_max_conns below 4 while the groundtruth rotator is enabled — the single-instance lock and the rotator each hold one connection for the process lifetime and the lifecycle reaper borrows one per tick; requests can block waiting for a connection",
+		if mc := pool.Config().MaxConns; mc < 5 {
+			slog.Warn("wardynd: pool_max_conns below 5 while the groundtruth rotator is enabled — the single-instance lock, the sweeper leader and the rotator each hold one connection for the process lifetime and the lifecycle reaper borrows one per tick; requests can block waiting for a connection",
 				slog.Int("pool_max_conns", int(mc)))
 		}
 		go goSafe("groundtruth.rotator", func() { runGroundtruthTokenRotatorLeader(rootCtx, groundtruthRotatorLock(pool), idp, gtFile) })
@@ -164,9 +188,9 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	}
 
 	if *f.approvalExpiryInterval > 0 {
-		go goSafe("approval.sweeper", func() {
+		leaderGo(rootCtx, leader, "approval.sweeper", func(ctx context.Context) {
 			// FIX #5: sweeper shares maskedRec so approval.expire events fan out to SIEM.
-			runApprovalSweeper(rootCtx, approvalStore{PG: store.NewPG(pool), rec: maskedRec}, *f.approvalExpiryInterval, *f.approvalExpiryAfter, srv)
+			runApprovalSweeper(ctx, approvalStore{PG: store.NewPG(pool), rec: maskedRec}, *f.approvalExpiryInterval, *f.approvalExpiryAfter, srv, ticks)
 		})
 		slog.Info("wardynd: approval expiry sweeper started",
 			slog.Duration("interval", *f.approvalExpiryInterval),
@@ -176,8 +200,8 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 
 	if rs, ok := recStore.(recordingSweepable); ok && *f.recordingRetention > 0 {
 		after := time.Duration(*f.recordingRetention) * 24 * time.Hour
-		go goSafe("recording.sweeper", func() {
-			runRecordingSweeper(rootCtx, rs, maskedRec, time.Hour, after)
+		leaderGo(rootCtx, leader, "recording.sweeper", func(ctx context.Context) {
+			runRecordingSweeper(ctx, rs, maskedRec, recordingSweepInterval, after, ticks)
 		})
 		slog.Info("wardynd: recording retention sweeper started", slog.Duration("after", after))
 	}
@@ -186,8 +210,9 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// runs terminal past api.RunSecretGrace, so a long-lived daemon stops
 	// holding credentials for every run it ever dispatched. Unconditional — a
 	// no-op without a mask registry, and there is nothing to configure.
-	go goSafe("secret.sweeper", func() { runSecretSweeper(rootCtx, srv, runSecretSweepInterval) })
-	go goSafe("credential.sweeper", func() { runCredentialSweeper(rootCtx, srv, credentialSweepInterval) })
+	go goSafe("secret.sweeper", func() { runSecretSweeper(rootCtx, srv, runSecretSweepInterval, ticks) })
+	startRunOutputSweeper(rootCtx, leader, srv, runOutputSweepInterval, ticks)
+	leaderGo(rootCtx, leader, "credential.sweeper", func(ctx context.Context) { runCredentialSweeper(ctx, srv, credentialSweepInterval, ticks) })
 
 	// NOT gated on run != nil, unlike the lifecycle reaper above: ReconcileOnBoot
 	// is independent of s.cfg.Runner (its own doc comment, internal/api/reconcile.go)
@@ -205,18 +230,18 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// moved back above). Gated the same as the lifecycle reaper above (nothing
 	// to probe with no Runner), independent of autoStopInterval.
 	if run != nil {
-		startTerminalSandboxSweeper(rootCtx, srv, terminalSandboxSweepTickLock(pool), terminalSandboxSweepInterval)
+		startTerminalSandboxSweeper(rootCtx, srv, terminalSandboxSweepTickLock(pool), terminalSandboxSweepInterval, ticks)
 	}
 
 	// D28: re-apply decided `always`-scoped egress decisions onto their
 	// workspaces, healing any allow/deny the non-atomic post-Decide write-back
 	// dropped on a PG blip. In a goroutine — it reads all decided egress
 	// approvals, which need not gate serving.
-	go goSafe("egress.reconcile", func() {
-		if n, rerr := srv.ReconcileWorkspaceEgressDecisions(rootCtx); rerr != nil {
-			slog.WarnContext(rootCtx, "wardynd: always-egress reconcile deferred", slog.Any("err", rerr))
+	leaderGo(rootCtx, leader, "egress.reconcile", func(ctx context.Context) {
+		if n, rerr := srv.ReconcileWorkspaceEgressDecisions(ctx); rerr != nil {
+			slog.WarnContext(ctx, "wardynd: always-egress reconcile deferred", slog.Any("err", rerr))
 		} else if n > 0 {
-			slog.InfoContext(rootCtx, "wardynd: reconciled always-egress decisions onto workspaces", slog.Int("decisions", n))
+			slog.InfoContext(ctx, "wardynd: reconciled always-egress decisions onto workspaces", slog.Int("decisions", n))
 		}
 	})
 }

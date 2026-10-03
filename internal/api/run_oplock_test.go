@@ -165,7 +165,10 @@ func TestReviveRun_StaleLeaseSnapshotCannotStopTheRevivedProxy(t *testing.T) {
 func TestRunOp_AHeldRunDoesNotDelayAnotherOrTheTokenSweep(t *testing.T) {
 	f := newReviveFixture(t)
 	other := uuid.New()
-	unlock := f.srv.lockRunOp(f.run.ID)
+	_, unlock, err := f.srv.lockRunOp(context.Background(), f.run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	stops, revokes := f.lr.proxyStopCount(), f.brk.count(f.run.ID)
 
 	done := make(chan struct{})
@@ -181,18 +184,21 @@ func TestRunOp_AHeldRunDoesNotDelayAnotherOrTheTokenSweep(t *testing.T) {
 	if f.lr.proxyStopCount() != stops || f.brk.count(f.run.ID) != revokes {
 		t.Error("a lease pass acted on a run whose lock was held")
 	}
-	if release, ok := f.srv.tryLockRunOp(other); !ok {
+	if _, release, ok := f.srv.tryLockRunOp(context.Background(), other); !ok {
 		t.Error("a held lock on one run blocked another run")
 	} else {
 		release()
 	}
-	if _, ok := f.srv.tryLockRunOp(f.run.ID); ok {
+	if _, _, ok := f.srv.tryLockRunOp(context.Background(), f.run.ID); ok {
 		t.Error("tryLockRunOp took a lock that was held")
 	}
 	// The lapsed-token sweep never takes the lock.
 	g := newLostFixture(t)
 	g.ls.lapsed = true
-	hold := g.srv.lockRunOp(g.run.ID)
+	_, hold, err := g.srv.lockRunOp(context.Background(), g.run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	g.sweepTokens(t)
 	hold()
 	if lostAt, _ := g.st.lost(); lostAt == nil {
@@ -218,7 +224,10 @@ func TestRunOp_AnExpiredKeptRunIsTornDownWhileItsReviveIsInFlight(t *testing.T) 
 	f.now = end.Add(8 * 24 * time.Hour)
 	run, _ := f.st.GetRun(context.Background(), f.run.ID)
 	f.srv.reviving.Store(run.ID, struct{}{})
-	unlock := f.srv.lockRunOp(run.ID)
+	_, unlock, err := f.srv.lockRunOp(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer unlock()
 	f.srv.leaseRun(context.Background(), f.ls, run)
 	if f.st.State() != types.RunStopped {
@@ -235,7 +244,7 @@ func TestRunOp_ReviveFailuresReleaseTheLock(t *testing.T) {
 		if code := f.revive(t); code != http.StatusBadGateway {
 			t.Fatalf("revive: code %d, want 502", code)
 		}
-		release, ok := f.srv.tryLockRunOp(f.run.ID)
+		_, release, ok := f.srv.tryLockRunOp(context.Background(), f.run.ID)
 		if !ok {
 			t.Fatal("the revive left the run's lock held")
 		}
@@ -247,7 +256,7 @@ func TestRunOp_ReviveFailuresReleaseTheLock(t *testing.T) {
 		if code := f.revive(t); code != http.StatusBadGateway {
 			t.Fatalf("revive: code %d, want 502", code)
 		}
-		release, ok := f.srv.tryLockRunOp(f.run.ID)
+		_, release, ok := f.srv.tryLockRunOp(context.Background(), f.run.ID)
 		if !ok {
 			t.Fatal("the revive left the run's lock held")
 		}

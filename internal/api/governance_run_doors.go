@@ -5,12 +5,13 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -27,25 +28,37 @@ import (
 // profile for an operator).
 
 // runProfile is the governance profile run was created under, as it stands
-// now. nil when the run captured none (an unassigned or super-admin owner) or
-// the profile has since been deleted, which leaves nothing to bind — the
-// run-limits reclamp reads a deleted profile the same way. A store error is
-// returned, never read as "no profile". ownerProfile (revive) refuses a
-// deleted profile instead, since a revive re-issues authority while a door only
-// narrows a session; the two are left apart on purpose.
-func (s *Server) runProfile(ctx context.Context, run types.AgentRun) (*types.GovernanceProfile, error) {
+// now and composed from its chain (governance_compose.go): a child sees what its base
+// carries today, so an edit to the base reaches runs already going. nil when the run captured none
+// (an unassigned or super-admin owner) or the profile has since been deleted, which leaves nothing
+// to bind — the run-limits reclamp reads a deleted profile the same way. An error is returned,
+// never read as "no profile": a base that cannot be read, a chain that loops or runs deeper than
+// three, and a composition nothing satisfies all close the door. ownerProfile (revive) refuses a
+// deleted profile instead, since a revive re-issues authority while a door only narrows a session;
+// the two are left apart on purpose.
+func (s *Server) runProfile(ctx context.Context, run types.AgentRun) (*ResolvedProfile, error) {
 	if run.GovernanceProfileID == nil {
 		return nil, nil
 	}
-	profiles, err := s.cfg.Store.ListGovernanceProfiles(ctx)
-	if err != nil {
+	p, err := s.resolveProfileByID(ctx, *run.GovernanceProfileID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return nil, nil
+	case err != nil:
 		return nil, fmt.Errorf("resolve the run's governance profile: %w", err)
 	}
-	i := slices.IndexFunc(profiles, func(p types.GovernanceProfile) bool { return p.ID == *run.GovernanceProfileID })
-	if i < 0 {
-		return nil, nil
+	return p, nil
+}
+
+// refuseRunProfileError answers a door whose profile read failed: a composition nothing satisfies is
+// the audited authz refusal governance_overlay_unsatisfiable (naming the run's own profile only),
+// anything else a 500, and either way the door stays shut. True when it has answered.
+func (s *Server) refuseRunProfileError(w http.ResponseWriter, r *http.Request, target, op string, run types.AgentRun, err error) bool {
+	if u, ok := isOverlayUnsatisfiable(err); ok {
+		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceOverlayUnsatisfiable, target, u.Error()).OnRun(run.ID))
 	}
-	return &profiles[i], nil
+	writeServerError(w, r, op, err)
+	return true
 }
 
 // interactiveDeniedProfile names the profile whose deny_interactive closes a
@@ -70,8 +83,7 @@ func (s *Server) interactiveDeniedProfile(ctx context.Context, run types.AgentRu
 func (s *Server) refuseInteractiveAttach(w http.ResponseWriter, r *http.Request, run types.AgentRun) bool {
 	name, err := s.interactiveDeniedProfile(r.Context(), run)
 	if err != nil {
-		writeServerError(w, r, "attach", err)
-		return true
+		return s.refuseRunProfileError(w, r, "runs.attach", "attach", run, err)
 	}
 	if name == "" {
 		return false
@@ -86,8 +98,7 @@ func (s *Server) refuseInteractiveAttach(w http.ResponseWriter, r *http.Request,
 func (s *Server) refuseUIAppsDenied(w http.ResponseWriter, r *http.Request, run types.AgentRun) bool {
 	p, err := s.runProfile(r.Context(), run)
 	if err != nil {
-		writeServerError(w, r, "ui gateway", err)
-		return true
+		return s.refuseRunProfileError(w, r, "runs.ui_apps", "ui gateway", run, err)
 	}
 	if p == nil || !p.Limits.DenyUIApps {
 		return false
@@ -101,7 +112,7 @@ func (s *Server) refuseUIAppsDenied(w http.ResponseWriter, r *http.Request, run 
 // arm's spec. It binds whoever the ceiling's limits bind: an assigned member or
 // security admin, never an operator. Audited as a drop unless dryRun.
 func (s *Server) boundUIApps(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, ceiling governanceCeiling, dryRun bool) []string {
-	if ceiling.Profile == nil || !ceiling.Limits.DenyUIApps || len(spec.UIApps) == 0 || s.isOperator(r.Context()) {
+	if ceiling.Profile == nil || !ceiling.Limits.DenyUIApps || len(spec.UIApps) == 0 || s.runUngoverned(r.Context()) {
 		return nil
 	}
 	dropped := make([]string, 0, len(spec.UIApps))

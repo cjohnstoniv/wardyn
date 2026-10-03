@@ -37,6 +37,21 @@ flowchart LR
 | ⛔ A pre-existing default-deny NetworkPolicy in `k8s.runsNamespace` refuses boot outright | Unless the canary pod actually ran and could not connect — see "The boot-time egress canary" below |
 | 🟡 `replicas` stays 1 on k8s exactly as everywhere else | See [One replica, by construction](../OPERATIONS.md#one-replica-by-construction); the masking registry is still in-process, per-pod |
 
+## Eviction, priority and PIDs
+
+- **Eviction and priority.** Sandbox pods take `k8s.sandbox.priorityClassName` and `k8s.sandbox.podAnnotations`
+  (`WARDYN_K8S_SANDBOX_PLACEMENT`, docs/ENV.md). Wardyn sets no
+  `cluster-autoscaler.kubernetes.io/safe-to-evict` annotation by default. Setting it to `"true"` lets the
+  cluster autoscaler evict a pod mid-run when it scales a node down, which ends a live run; setting it to
+  `"false"` keeps the node up while a run is on it. Placement metadata cannot override the reserved labels
+  (`wardyn.managed`, `wardyn.run-id`, `wardyn.component`) the run NetworkPolicies select on: wardynd refuses to
+  boot, naming the key.
+- **PIDs.** `ResourceLimits.PidsLimit` is not enforced on Kubernetes: the substrate logs a warning at pod
+  create and runs with no per-pod cap (`internal/runner/k8s/sandbox.go`). The backstop is the node-level
+  kubelet `podPidsLimit`.
+- **Run count.** `WARDYN_MAX_CONCURRENT_RUNS` caps how many non-terminal runs the deployment holds
+  (docs/ENV.md); it bounds the pods a deployment can ask for, not what a node can fit.
+
 ## `DiskMiB`: enforced by eviction, not a quota
 
 Since 0.7.5 (narrowed further by #164 in 0.8), `DiskMiB` reaches an

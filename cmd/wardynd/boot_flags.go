@@ -81,6 +81,10 @@ type bootFlags struct {
 	uiDir     *string
 	basePath  *string
 	runnerSel *string
+	// governAdminRuns is WARDYN_GOVERN_ADMIN_RUNS (flag -govern-admin-runs):
+	// govern every run an SSO admin or an admin-role personal token launches.
+	// The admin token and local mode stay break-glass (api.Server.runUngoverned).
+	governAdminRuns *bool
 	// runnerTargetOverride is WARDYN_RUNNER_TARGET, and it is a TEST-HARNESS
 	// knob: the substrate name STORED objects validate against while -runner is
 	// "none". A runner-less daemon resolves the target "none", which no drive
@@ -97,6 +101,9 @@ type bootFlags struct {
 	recordingSel         *string
 	execOutputTail       *bool
 	execOutputTailTTL    *time.Duration
+	runOutputTailBytes   *int
+	runOutputPersist     *bool
+	runOutputRetention   *int
 	confinementMap       *string
 	trustDomain          *string
 	controlURL           *string
@@ -148,6 +155,8 @@ type bootFlags struct {
 	auditSinks         *string
 	auditSpool         *string
 	auditSource        *string
+	// auditSeal is WARDYN_AUDIT_SEAL (off|fields|full): whether personal audit fields are stored sealed under the person's own key.
+	auditSeal *string
 
 	oidcIssuer       *string
 	oidcInternalIss  *string
@@ -244,6 +253,8 @@ type bootFlags struct {
 	sandboxDefaultMemoryMiB *int
 	proxyCPUMillis          *int
 	proxyMemoryMiB          *int
+	// sandboxRequestRatio is a string so "unset" and an explicit 0 differ: see parseRequestRatio.
+	sandboxRequestRatio *string
 
 	proxyURL *string
 
@@ -282,6 +293,8 @@ type bootFlags struct {
 
 	hostCapacity hostCapacityFlags
 
+	preflightRatePerMin *int
+
 	// allowMultiInstance is the runtime twin of the Helm chart's
 	// allowMultiReplica: it waives the single-instance boot lock
 	// (claimSingleInstance). Like rotateAgeKey it has NO WARDYN_* env pair — a
@@ -297,6 +310,15 @@ type bootFlags struct {
 	sshListen    *string
 	sshAdvertise *string
 	sshRoleTTL   *time.Duration
+	// apiTokenMaxTTL caps a newly minted API token's lifetime — see
+	// api.Config.APITokenMaxTTL.
+	apiTokenMaxTTL *time.Duration
+	// roleStampTTL bounds how old an API token's or console session's role
+	// stamp may be — see api.Config.RoleStampTTL. Zero is off.
+	roleStampTTL *time.Duration
+	// governanceChangeTTL is how long a governance change held for a second human waits — see
+	// api.Config.GovernanceChangeTTL.
+	governanceChangeTTL *time.Duration
 
 	// UI-sandbox gateway (pillar 4): uiListen empty = off = no listener, no new
 	// surface, exactly like sshListen. uiAdvertise/uiOriginTemplate are the
@@ -386,6 +408,7 @@ func parseBootFlags() *bootFlags {
 		orgURL:                 flagEnv("org-url", "WARDYN_ORG_URL", "", "org control plane this managed laptop belongs to (https://, or a plain http:// loopback URL for local testing). Empty (default) means no hybrid posture; requires -member-mode when set"),
 		orgEnrolToken:          flagEnv("org-enrolment-token", "WARDYN_ORG_ENROLMENT_TOKEN", "", "secret enrolment token this device presents to -org-url; requires -org-url to also be set"),
 		userDriveHostRoots:     flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a host_path user drive may be registered inside, typically the mount point of a share the operator mounted host-side. Empty (default) means no host_path drive may be registered; never $HOME or /"),
+		governAdminRuns:        flagBool("govern-admin-runs", "WARDYN_GOVERN_ADMIN_RUNS", false, "govern every run an SSO admin or an admin-role personal token launches, like a member's; the admin token and local mode stay ungoverned and are marked governance_exempt on run.create. With OIDC unset it binds nobody (default false)"),
 		ssoOnly:                flagBool("sso-only", "WARDYN_SSO_ONLY", false, "declare SSO the only way into the console; refuses to start unless OIDC is configured and the admin token, local mode, member mode and no-operator-list override are all unset (default false)"),
 		uiDir:                  flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
 		basePath:               flagEnv("base-path", "WARDYN_BASE_PATH", "", `sub-path the console, API, sign-in and /healthz are served under behind a reverse proxy, e.g. "/wardyn": a leading slash, no trailing slash. Empty (default) serves them at the host root`),
@@ -394,8 +417,11 @@ func parseBootFlags() *bootFlags {
 		identitySel:            flagEnv("identity", "WARDYN_IDENTITY", "embedded", "identity provider"),
 		secretStoreSel:         flagEnv("secret-store", "WARDYN_SECRET_STORE", "pg", "secret store"),
 		recordingSel:           flagEnv("recording-store", "WARDYN_RECORDING_STORE", "pg", `session recording store: "pg" (Postgres-backed, visible to every replica), "fs" (per-pod on-disk store) or "off" (no recording, no replay)`),
-		execOutputTail:         flagBool("exec-output-tail", "WARDYN_EXEC_OUTPUT_TAIL", true, `keep the last 8 KiB of each task_mode=exec run's output in memory for GET /runs/{id}/output, independent of the recording store; "off" keeps none`),
-		execOutputTailTTL:      flagDuration("exec-output-tail-ttl", "WARDYN_EXEC_OUTPUT_TAIL_TTL", 24*time.Hour, "how long an exec run's output tail is kept after its last output (duration)"),
+		execOutputTail:         flagBool("exec-output-tail", "WARDYN_EXEC_OUTPUT_TAIL", true, `keep the last -run-output-tail-bytes of each non-interactive run's output in memory for GET /runs/{id}/output, independent of the recording store; "off" keeps none`),
+		execOutputTailTTL:      flagDuration("exec-output-tail-ttl", "WARDYN_EXEC_OUTPUT_TAIL_TTL", 24*time.Hour, "how long a run's output tail is kept after its last output (duration)"),
+		runOutputTailBytes:     flagIntEnv("run-output-tail-bytes", "WARDYN_RUN_OUTPUT_TAIL_BYTES", 65536, "size of each non-interactive run's in-memory output tail and the cap on GET /runs/{id}/output?tail= (bytes, 1024 to 1048576)"),
+		runOutputPersist:       flagBool("run-output-persist", "WARDYN_RUN_OUTPUT_PERSIST", true, `persist each run's final masked output tail in Postgres so it outlives a restart and is readable from any replica; "off" keeps it in memory only`),
+		runOutputRetention:     flagIntEnv("run-output-retention-days", "WARDYN_RUN_OUTPUT_RETENTION_DAYS", 30, "delete persisted run output older than this many days (0 keeps it forever)"),
 		confinementMap:         flagEnv("confinement-map", "WARDYN_CONFINEMENT_MAP", "", `optional per-class substrate/runtime pins, e.g. "CC2=runsc;CC3=kata-qemu". Empty (default) uses the built-in defaults`),
 		trustDomain:            flagEnv("trust-domain", "WARDYN_TRUST_DOMAIN", embedded.DefaultTrustDomain, "SPIFFE trust domain"),
 		controlURL:             flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "https://wardynd:8443", "the URL every run's proxy dials to reach this daemon's internal TLS listener (-internal-listen); its host is the name wardynd's internal CA certifies. http:// is refused at boot unless the host is loopback (localhost, 127.0.0.0/8, ::1)"),
@@ -419,6 +445,7 @@ func parseBootFlags() *bootFlags {
 		auditSinks:         flagEnv("audit-sinks", "WARDYN_AUDIT_SINKS", "", "audit sink config JSON (file/webhook/syslog); empty disables fanout"),
 		auditSource:        flagEnv("audit-source", "WARDYN_AUDIT_SOURCE", "", `optional static string stamped as an extra "source" field on every audit event a sink serializes, so one SIEM index can tell multiple wardynd instances apart. Empty (default) adds no stamp`),
 		auditSpool:         flagEnv("audit-spool", "WARDYN_AUDIT_SPOOL", "./data/audit-spool.jsonl", "local append-only JSONL fallback for audit events whose Postgres write fails; empty disables"),
+		auditSeal:          flagEnv("audit-seal", "WARDYN_AUDIT_SEAL", "off", "off|fields: with fields, the personal fields of an audit row (docs/AUDIT-ACTIONS.md, Sealed fields) are stored, spooled and sent to sinks only as ciphertext under the person's own key, so erasing the person makes them unreadable everywhere they were copied. Rows written before it was turned on stay plaintext. full (also the actor) is not available yet and refuses to boot (default off)"),
 
 		oidcIssuer:       flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL, browser-facing, matches the id_token iss; enables human SSO when set"),
 		oidcInternalIss:  flagEnv("oidc-internal-issuer", "WARDYN_OIDC_INTERNAL_ISSUER", "", "OIDC issuer URL reachable from wardynd for server-side calls, e.g. http://dex:5556; defaults to the public issuer"),
@@ -485,6 +512,7 @@ func parseBootFlags() *bootFlags {
 		sandboxDefaultMemoryMiB: flagIntEnv("sandbox-default-memory-mib", "WARDYN_SANDBOX_DEFAULT_MEMORY_MIB", 0, "memory limit (MiB) for a sandbox whose policy sets none (default 0 = compiled-in 4096)"),
 		proxyCPUMillis:          flagIntEnv("proxy-cpu-millis", "WARDYN_PROXY_CPU_MILLIS", 0, "milli-CPU limit for each run's wardyn-proxy sidecar, on every substrate (default 0 = compiled-in 500)"),
 		proxyMemoryMiB:          flagIntEnv("proxy-memory-mib", "WARDYN_PROXY_MEMORY_MIB", 0, "memory limit (MiB) for each run's wardyn-proxy sidecar, on every substrate (default 0 = compiled-in 256)"),
+		sandboxRequestRatio:     flagEnv("sandbox-request-ratio", "WARDYN_SANDBOX_REQUEST_RATIO", "", "Kubernetes agent-pod CPU/memory requests as a fraction of the limits, in (0, 1]; unset = requests equal limits. The proxy pod is unaffected"),
 
 		// proxyURL overrides the WARDYN_PROXY_URL injected into sandbox env.
 		// Defaults to "http://wardyn-proxy:3128" (per-run sidecar docker alias).
@@ -538,9 +566,10 @@ func parseBootFlags() *bootFlags {
 		rewrapPrincipalKeys: flag.Bool("rewrap-principal-keys", false, "maintenance mode, safe while a daemon serves: move every person's stored credential from the credential key into an envelope under that person's own principal key (enc_version 3), "+
 			"one row at a time, then exit; idempotent and resumable, and values are never decrypted. Boot keys, the operator namespace and external-store pointers are untouched. "+
 			"Separate from -rewrap, which rotates the root key. See docs/operations/secrets-and-keys.md (default false)"),
-		vault:        registerVaultFlags(),
-		hostCapacity: registerHostCapacityFlags(),
-		azure:        registerAzureFlags(),
+		vault:               registerVaultFlags(),
+		hostCapacity:        registerHostCapacityFlags(),
+		azure:               registerAzureFlags(),
+		preflightRatePerMin: flagIntEnv("preflight-rate-per-min", "WARDYN_PREFLIGHT_RATE_PER_MIN", 20, "POST /runs/preflight calls one person may make per minute (burst 5); 0 turns the limit off. The admin token is exempt"),
 
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address, e.g. ":2222". Empty (default) disables the gateway entirely`),
 		uiListen:         flagEnv("ui-sandbox-listen", "WARDYN_UI_SANDBOX_LISTEN", "", `UI-sandbox gateway listen address, e.g. ":8081". Empty (default) disables the gateway entirely; must differ from -listen`),
@@ -550,7 +579,10 @@ func parseBootFlags() *bootFlags {
 		uiOriginTemplate: flagEnv("ui-sandbox-origin-template", "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE", "", `optional per-run origin for the UI-sandbox gateway, e.g. "https://run-{run}.ui.example.com" (needs wildcard DNS and certificate); must contain {run}. Empty (default) shares one origin across every run`),
 
 		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn run ssh" refuses`),
+		roleStampTTL:           flagDuration("role-stamp-ttl", "WARDYN_ROLE_STAMP_TTL", 0, "how old an API token's or console session's role stamp may be before its owner must sign in again (duration; 0 = off)"),
+		governanceChangeTTL:    flagDuration("governance-change-ttl", "WARDYN_GOVERNANCE_CHANGE_TTL", 72*time.Hour, "how long a governance change held for a second human (WARDYN_GOVERNANCE_SECOND_HUMAN) waits for approval before it expires (duration; must be positive)"),
 		sshRoleTTL:             flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration)"),
+		apiTokenMaxTTL:         flagDuration("api-token-max-ttl", "WARDYN_API_TOKEN_MAX_TTL", 0, "longest lifetime a newly minted API token may have; a mint that asks for none gets this, one that asks for more is clamped to it (duration; 0 = no cap)"),
 		allowUnknownMigrations: flagBool("allow-unknown-migrations", "WARDYN_ALLOW_UNKNOWN_MIGRATIONS", false, "BREAK-GLASS: boot even though the database records migrations this wardynd does not ship (a newer wardynd migrated it). Normally refused — a downgrade is unsupported; restore the pre-upgrade dump instead"),
 	}
 	flag.Parse()
@@ -577,6 +609,7 @@ func finalizeBootFlags(f *bootFlags) {
 	// flag.Parse does, with main's own fatal line (run() has no cyclomatic
 	// budget left for another early return).
 	exitOnBadSecretFiles(f)
+	exitOnGovernanceFlags(f)
 }
 
 // exitOnBadSecretFiles is parseBootFlags' <VAR>_FILE resolution, extracted
@@ -719,6 +752,13 @@ func resolveLocalMode(f *bootFlags) (localModeState, error) {
 	// control. The message names the consequence and the remedy.
 	if api.EgressSecondHumanEnabled() {
 		slog.Warn("wardynd: WARDYN_EGRESS_SECOND_HUMAN is set but LOCAL MODE authenticates nobody — the four-eyes gate cannot be enforced here, so EVERY egress_domain approval decision will be refused with 503. Configure SSO to use this switch, or unset it.",
+			slog.String("listen", *f.listen),
+		)
+	}
+	// The governance switch, once its boot refusal is lifted (exitOnGovernanceFlags): local mode cannot
+	// enforce it either, and every covered write and every approval is refused with a 503.
+	if api.GovernanceSecondHumanEnabled() {
+		slog.Warn("wardynd: WARDYN_GOVERNANCE_SECOND_HUMAN is set but LOCAL MODE authenticates nobody — the four-eyes gate cannot be enforced here, so EVERY governance write and approval will be refused with 503. Configure SSO to use this switch, or unset it.",
 			slog.String("listen", *f.listen),
 		)
 	}
