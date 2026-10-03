@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"reflect"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -406,9 +407,24 @@ type RunOutput struct {
 	Output string `json:"output"`
 	// Truncated: Output does not start at the run's first byte.
 	Truncated bool `json:"truncated"`
-	// Complete: the run has finished; bytes it printed in its last moments can
-	// land a moment later, so read once more after Complete if the end matters.
+	// Complete: the capture is final (a stored row, or a memory tail sealed after
+	// the run's last bytes), so a read never gains bytes after it. A run that
+	// has just finished is not Complete until then: read again.
 	Complete bool `json:"complete"`
+	// Source is where the bytes came from; "stdout" for a run's own output.
+	Source string `json:"source"`
+	// Incomplete: bytes may be missing (a copy did not end in time or failed, or
+	// a byte arrived after the capture was sealed).
+	Incomplete bool `json:"incomplete"`
+	// CaptureGap: the output could not be captured (no process held it), so
+	// Output is empty.
+	CaptureGap bool `json:"capture_gap"`
+	// MaskScope is "run" when the capture was masked against the run's complete
+	// manifest throughout, "globals_only" when it was not; empty when this
+	// deployment keeps no manifests.
+	MaskScope string `json:"mask_scope,omitempty"`
+	// CapturedAt is when the final row was written; nil while the run is live.
+	CapturedAt *time.Time `json:"captured_at,omitempty"`
 }
 
 // RunOutput reads the last tail bytes of a non-interactive run's output

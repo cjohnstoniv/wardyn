@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -663,5 +664,86 @@ func TestTickLockAcquiredReleasesExactlyOnce(t *testing.T) {
 
 	if got := lock.releaseCount(); got != 1 {
 		t.Errorf("release() called %d times, want exactly 1", got)
+	}
+}
+
+// sweepTicks is a Tracker over an in-memory shared record, for the idle_reaper
+// tick tests below.
+func sweepTicks(clk func() time.Time) (*sweephealth.Tracker, *sweephealth.MemStore) {
+	st := sweephealth.NewMemStore()
+	return sweephealth.New(st, "replica-1", clk), st
+}
+
+// A tick that won the lock and scanned cleanly is an attempt and a success; a
+// tick whose scan failed is an attempt and an error, with the success kept.
+func TestTick_RecordsIdleReaperHealth(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	now := base
+	tracker, ticks := sweepTicks(func() time.Time { return now })
+	store := &fakeStore{}
+	r := lifecycle.New(store, newFakeStopper(), &fakeRecorder{}, lifecycle.Config{
+		Interval: time.Hour, Now: func() time.Time { return now }, Sweeps: tracker,
+	})
+
+	if err := r.Tick(context.Background()); err != nil {
+		t.Fatalf("clean tick: %v", err)
+	}
+	got, _ := ticks.Ticks(context.Background())
+	if !got[sweephealth.IdleReaper].SucceededAt.Equal(base) {
+		t.Fatalf("clean tick: %+v, want a success at %s", got[sweephealth.IdleReaper], base)
+	}
+
+	now = base.Add(time.Minute)
+	store.err = errors.New("postgres unavailable")
+	if err := r.Tick(context.Background()); err == nil {
+		t.Fatal("a tick whose scan failed returned no error")
+	}
+	got, _ = ticks.Ticks(context.Background())
+	if tk := got[sweephealth.IdleReaper]; !tk.AttemptedAt.Equal(now) || !tk.SucceededAt.Equal(base) {
+		t.Fatalf("failed scan: %+v, want the attempt at %s and the success kept at %s", tk, now, base)
+	}
+}
+
+// A run the reaper cannot stop is a tick error, but the other runs are still
+// stopped.
+func TestTick_StopFailureIsATickError(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	tracker, ticks := sweepTicks(func() time.Time { return base })
+	stuck, fine := uuid.New(), uuid.New()
+	stopper := newFakeStopper()
+	stopper.errOn[stuck] = errors.New("container wedged")
+	idle := func(id uuid.UUID) lifecycle.RunSummary {
+		return lifecycle.RunSummary{ID: id, UpdatedAt: base.Add(-time.Hour), PolicyAutoStopAfterSec: 1800}
+	}
+	r := lifecycle.New(&fakeStore{rows: []lifecycle.RunSummary{idle(stuck), idle(fine)}}, stopper, &fakeRecorder{}, lifecycle.Config{
+		Interval: time.Hour, Now: func() time.Time { return base }, Sweeps: tracker,
+	})
+
+	if err := r.Tick(context.Background()); err == nil {
+		t.Fatal("a stop that failed outright returned no tick error")
+	}
+	if !stopper.wasStopped(fine) {
+		t.Error("the run that could be stopped was not")
+	}
+	got, _ := ticks.Ticks(context.Background())
+	if tk := got[sweephealth.IdleReaper]; tk.AttemptedAt.IsZero() || !tk.SucceededAt.IsZero() {
+		t.Fatalf("%+v, want an attempt and no success", tk)
+	}
+}
+
+// A tick another control plane holds the lock for did no work here, so it
+// records nothing: the replica that won the lock is the one that attempts.
+func TestTick_LockHeldElsewhereRecordsNothing(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	tracker, ticks := sweepTicks(func() time.Time { return base })
+	r := lifecycle.New(&fakeStore{}, newFakeStopper(), &fakeRecorder{}, lifecycle.Config{
+		Interval: time.Hour, Now: func() time.Time { return base }, Sweeps: tracker,
+		TickLock: (&fakeTickLock{held: true}).acquire,
+	})
+	if err := r.Tick(context.Background()); err != nil {
+		t.Fatalf("a skipped tick is not an error: %v", err)
+	}
+	if got, _ := ticks.Ticks(context.Background()); len(got) != 0 {
+		t.Fatalf("a skipped tick recorded %+v, want nothing", got)
 	}
 }

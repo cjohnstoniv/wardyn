@@ -828,6 +828,9 @@ type liveMaskWriter struct {
 	// instead of masked against a corpus that may be incomplete: the writer
 	// never forwards bytes it cannot vouch for.
 	guard func() bool
+	// capture is the run-output capture's seal and marks (run_output_final.go);
+	// the zero value, which an attach's recording keeps, seals nothing.
+	capture outputCapture
 }
 
 func (w *liveMaskWriter) Write(p []byte) (int, error) {
@@ -835,10 +838,24 @@ func (w *liveMaskWriter) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	n, late, err := w.writeLocked(p)
+	w.mu.Unlock()
+	if late != nil {
+		late()
+	}
+	return n, err
+}
+
+// writeLocked is Write under w.mu. late is the seal's one-time notice, for the
+// caller to call once the lock is released.
+func (w *liveMaskWriter) writeLocked(p []byte) (n int, late func(), err error) {
+	if late, sealed := w.capture.dropSealed(); sealed {
+		return len(p), late, nil
+	}
 	if w.guard != nil && !w.guard() {
 		w.tail = nil
-		return len(p), nil
+		w.capture.dropped, w.capture.uncovered = true, true
+		return len(p), nil, nil
 	}
 
 	// One CACHED masker per registry generation, not NewMasker(Snapshot(...)) per
@@ -867,10 +884,10 @@ func (w *liveMaskWriter) Write(p []byte) (int, error) {
 
 	if len(forward) > 0 {
 		if _, err := w.dst.Write(forward); err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 	}
-	return len(p), nil
+	return len(p), nil, nil
 }
 
 // flushLocked emits any withheld tail (re-masked) so the trailing bytes held back
