@@ -241,22 +241,30 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // container) so the PTY and xterm always agree — see the ptyCols doc.
   // refit(force) — measure the container, resize the local grid, tell the PTY.
   //
-  // `force` sends a ONE-COLUMN-SMALLER size first, then the real one. That looks
-  // pointless and is not: the session is tmux, tmux clamps a shared window to
-  // the SMALLEST attached client, and it re-evaluates on a client size CHANGE.
+  // A resize frame goes out only when {socket, cols, rows} differs from the last
+  // one sent, so a same-size refit is silent and a fresh socket still gets its
+  // first size. A zero-size box (hidden pane) is skipped, not measured.
+  //
+  // `force` bypasses that dedup and sends a ONE-COLUMN-SMALLER size first, then
+  // the real one. That looks pointless and is not: the session is tmux, and
+  // tmux (3.5a defaults to `window-size latest`) sizes the shared window from a
+  // client's most recent size, re-evaluating on a client size CHANGE.
   // So when a second client (a `wardyn run attach` from another terminal) attaches
   // small, the browser's grid fills with tmux's `·` filler — and when that
-  // client leaves, the filler STAYS, because the browser's own size never
+  // client leaves, the filler can STAY, because the browser's own size never
   // changed and a same-size resize frame is a no-op tmux ignores.
   //
   // Measured: 0 dots before a second client, 1001 while attached, still 1001
   // after it detached, and 0 again the moment the viewport actually changed
   // size. The nudge manufactures that change on demand.
+  const lastSentRef = React.useRef<{ ws: WebSocket; cols: number; rows: number } | null>(null);
   const refit = React.useCallback((force = false) => {
     const fit = fitAddonRef.current;
     const term = termRef.current;
     const ws = wsRef.current;
     if (!fit || !term) return;
+    const box = term.element?.parentElement;
+    if (box && (box.clientWidth === 0 || box.clientHeight === 0)) return;
     try {
       if (ptyColsRef.current) {
         const dims = fit.proposeDimensions();
@@ -273,10 +281,13 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     // the panel for nothing.
     setGeom((g) => (g && g.cols === term.cols && g.rows === term.rows ? g : { cols: term.cols, rows: term.rows }));
     if (ws && ws.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
+      const last = lastSentRef.current;
+      if (!force && last && last.ws === ws && last.cols === term.cols && last.rows === term.rows) return;
       if (force && term.cols > 1) {
         ws.send(JSON.stringify({ type: "resize", cols: term.cols - 1, rows: term.rows }));
       }
       ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+      lastSentRef.current = { ws, cols: term.cols, rows: term.rows };
     }
   }, []);
 
