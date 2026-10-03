@@ -30,6 +30,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/hostcapacity"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/nodump"
@@ -364,11 +365,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	leader := db.NewSweeperLeader(pool, sweeperHolder())
 	srv := api.New(api.Config{
-		Store:     st,
-		Identity:  idp,
-		Approvals: approvals,
-		Broker:    brk,
+		SweeperLease: leader,
+		Store:        st,
+		Identity:     idp,
+		Approvals:    approvals,
+		Broker:       brk,
 		// The wait ceiling a run's captured wait folds under; the approval
 		// sweeper (runApprovalSweeper) enforces the same value, and dispatch
 		// mirrors it onto a hold-mode run's sandbox (RL-1).
@@ -487,7 +490,7 @@ func run() error {
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
-	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore)
+	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore, leader)
 
 	// SSH gateway accept loop (own goroutine, like the periodic workers above,
 	// and extracted the same way — see startSSHGateway's own doc comment).
