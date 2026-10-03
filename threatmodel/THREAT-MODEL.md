@@ -112,7 +112,12 @@ invitation, not an embarrassment.
    for it, and dispatch's `api.dropBrokeredGrants` withholds any already-stored
    `ssh_key` **or** `git_pat` grant from the sandbox env (audited
    `run.ssh.drop`) on top of denying the endpoint — the key is never
-   resident, not merely unreachable. (This reverses an earlier decision recorded in
+   resident, not merely unreachable. With the PAT broker on, the proxy also
+   refuses a raw mint of every `git_pat` grant id of the run
+   (`isBrokeredPATGrant`, `brokered:mint`): the set is every `git_pat` row, since
+   a shadowed, vetoed or withheld grant is absent from the per-host allowlist yet
+   still mintable by id, and a revive recomputes it so a pre-upgrade run is
+   covered. (This reverses an earlier decision recorded in
    the same review; `confineGitBrokerEgress`,
    `internal/api/runs_dispatch_gitbroker.go`, says why deliberately.) An
    **unbrokered** SSH credential — an `ssh_key` for a forge holding no

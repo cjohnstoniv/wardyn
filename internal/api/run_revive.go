@@ -359,6 +359,14 @@ func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver,
 	if err != nil {
 		return nil, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad, "the run's proxy config does not load: "+err.Error())
 	}
+	// A config rendered under 0.8.5 has no brokered_pat_grant_ids, so the set is
+	// recomputed rather than trusted, whatever the stored value says.
+	ids, err := s.brokeredPATGrantIDs(ctx, run.ID, !s.cfg.DisableGitPATBroker)
+	if err != nil {
+		return nil, reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable,
+			"read the run's git_pat grants: "+err.Error())
+	}
+	cfg.BrokeredPATGrantIDs = ids
 	return cfg, nil
 }
 

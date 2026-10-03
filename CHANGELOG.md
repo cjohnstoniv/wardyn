@@ -8,6 +8,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Security
+
+- **The proxy refuses a raw mint of every `git_pat` grant id while the PAT broker is on.** The mint relay
+  now answers `403` (`brokered:mint`) for any `git_pat` grant of the run, including grants shadowed by a
+  same-host grant, vetoed, withheld for a brokered forge or Azure DevOps owner-only. Upgrade the proxy
+  image together with wardynd: an older proxy refuses the new `brokered_pat_grant_ids` config key at start.
+
 ## [0.8.5] — 2026-10-02
 
 ### Before you upgrade

@@ -448,6 +448,13 @@ func (r *probeFakeRunner) dispatched() (image string, class types.ConfinementCla
 // writer and the store that answers QueryAuditEvents are the same Postgres
 // table. Without sharing them, probeFailureDetail's read-back of its own
 // run.complete event would never see what s.recordAudit just wrote.
+// ListGrantsByRun is the grants the probe wrote, which brokeredPATGrantIDs reads.
+func (s *probeStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]types.CredentialGrant(nil), s.grants...), nil
+}
+
 type probeStore struct {
 	store.Store
 	mu     sync.Mutex

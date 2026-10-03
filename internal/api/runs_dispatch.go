@@ -251,6 +251,14 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// directly rather than through dispatchRun.
 	patKept, droppedPAT := dropBrokeredGrants(p.GitPATGrants, p.GitGrants, brokeredForgeHost)
 	p.GitPATGrants = patKept
+	// Every git_pat grant id, not just the ones kept above: see brokeredPATGrantIDs.
+	brokeredPATIDs, err := s.brokeredPATGrantIDs(ctx, run.ID, p.PATBroker)
+	if err != nil {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": "list the run's grants: " + err.Error()})))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "This run was not launched: its git_pat grants could not be read to keep their PATs out of the sandbox")
+		return
+	}
 	droppedSSH, _ := applyDispatchModeEnv(sandboxEnv, run, p)
 	s.auditBrokeredGrantDrop(ctx, run.ID, "ssh_key", "run.ssh.drop", droppedSSH,
 		"this run is brokered for a repo on this forge, so the git-broker route is its only route to it BY NAME "+
@@ -501,6 +509,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// not the caller's: a brokered forge's PAT is withheld from BOTH halves
 			// of dispatch or from neither.
 			PATGrants: patBrokerGrants(p.GitPATGrants, p.PATBroker),
+			// Every git_pat grant id of the run, which the proxy refuses at the
+			// raw mint relay (empty with the broker off).
+			BrokeredPATGrantIDs: brokeredPATIDs,
 			// The per-person Azure DevOps REST gate's grant (runs_dispatch_ado_inject.go).
 			// Nil for every run not on that lane, which leaves the gate off.
 			ADOGrant: ado.gate,

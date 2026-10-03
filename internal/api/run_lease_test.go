@@ -37,9 +37,11 @@ type leaseStore struct {
 	site       types.SiteConfig
 	siteErr    error
 	credGrants []types.CredentialGrant
-	casErr     error // returned once by UpdateRunStateIf or StopKeptRunIf
-	grantsErr  error // ListCapabilityGrants fails closed with this, never an implicit allow
-	restricted map[string]map[string]bool
+	// credGrantsErr, when set, fails ListGrantsByRun with it.
+	credGrantsErr error
+	casErr        error // returned once by UpdateRunStateIf or StopKeptRunIf
+	grantsErr     error // ListCapabilityGrants fails closed with this, never an implicit allow
+	restricted    map[string]map[string]bool
 	// beforeSetEnd, when set, runs at the top of SetRunEndAndWait.
 	beforeSetEnd func()
 }
@@ -75,7 +77,7 @@ func (s *leaseStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 }
 
 func (s *leaseStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
-	return s.credGrants, nil
+	return s.credGrants, s.credGrantsErr
 }
 
 // UpdateRunStateIf's own casErr branch is currently unexercised: the one test
