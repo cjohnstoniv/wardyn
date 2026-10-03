@@ -96,9 +96,28 @@ type Config struct {
 	// denies the login. nil means only "standard" exists.
 	UserTypes UserTypeSource
 
-	// OnLogin, when set, is called synchronously after an APPROVED login with the derived role/user
-	// type and group snapshot. A failure inside it must never fail the login; nil is a no-op.
-	OnLogin func(ctx context.Context, sub, role, userType string, groups []string, groupsTruncated bool)
+	// OnLogin, when set, is called synchronously after an APPROVED login with what that login
+	// established (LoginFacts). A failure inside it must never fail the login; nil is a no-op.
+	OnLogin func(ctx context.Context, facts LoginFacts)
+}
+
+// LoginFacts is what an approved sign-in established, handed to Config.OnLogin: who signed in as
+// whom, under which issuer, and the role, user type and group snapshot derived for the session.
+type LoginFacts struct {
+	// Sub is the principal the session carries.
+	Sub      string
+	Role     string
+	UserType string
+	Groups   []string
+	// GroupsTruncated reports Groups is a partial snapshot.
+	GroupsTruncated bool
+	// Issuer is the verified token's issuer.
+	Issuer string
+	// TenantID and ObjectID are Entra ID's tenant and object id, set together and only on an Entra
+	// sign-in whose token carries both; empty for every other issuer.
+	TenantID, ObjectID string
+	// Email is the token's email claim as sent, possibly empty.
+	Email string
 }
 
 // SessionRevocations is the store the revoke-a-human-now admin action reads and writes. Scoped to

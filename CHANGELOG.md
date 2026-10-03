@@ -14,6 +14,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   refuses with a message naming the version, and the database is left exactly as 0.8.5 left it. Upgrade
   the database server first. Take a dump before this upgrade: the audit conversion that follows in this
   release is one-way.
+- **Every sign-in now records an identity row.** Migration `0108_principal_identities` adds the
+  `principal_identities` and `principal_identity_aliases` tables, and each successful sign-in on any issuer
+  writes one row for the person and keeps every email it was seen under. Nothing reads them yet and no
+  authorisation decision changes; they are what removing a leaver's access will act on.
 - **`wardynd -migrate-only`** runs the schema migration alone and exits, for an upgrade that must run under
   stopped writers. It refuses (exit 3) while another wardynd holds the single-instance lock or any other
   client is connected to the database, and exits 1 when the migration fails. See "Stopped-writer upgrade"

@@ -28,7 +28,7 @@ func TestCallbackRefusesReservedSubject(t *testing.T) {
 			env := newIdPEnv(t)
 			var logins []string
 			auth := env.newRoleMappingAuth(t, nil, "", nil, nil, func(cfg *writoidc.Config) {
-				cfg.OnLogin = func(_ context.Context, sub, _, _ string, _ []string, _ bool) { logins = append(logins, sub) }
+				cfg.OnLogin = func(_ context.Context, f writoidc.LoginFacts) { logins = append(logins, f.Sub) }
 			})
 			var reported []string
 			env.buildIDTokenWithRoles(t, c.sub, "x@corp.example", nil, nil, roleCallbackNonce, time.Now().Add(time.Hour))
