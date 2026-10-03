@@ -2519,6 +2519,29 @@ hiding them would repeat the failure mode we are designed to avoid.
     Offboarding a person revokes their live PATs before their stored grant is
     deleted. None of the audit rows for this lane carries a token value.
 
+63. **A narrowed `git_pat` grant narrows the run, not the PAT, and three things stay
+    outside it (0.8.6).** With the PAT broker on, a `git_pat` grant's `repos` and
+    `access: read` bind at the broker route: a request for a repository outside
+    `repos`, and both doors of a push under `access: read`, are refused before the
+    push rules and before any mint, so a refusal spends nothing. The credential is
+    exactly as broad as its issuer made it everywhere outside Wardyn. The residuals:
+    - **Direct egress by name.** A run whose policy also allows the forge host
+      directly can reach it without the PAT, with whatever credential the sandbox
+      holds of its own. That is the standing "by name" caveat of every broker lane
+      (see `docs/POLICIES.md`), not a new one.
+    - **Branches and content are separate.** `repos` narrows which repositories, not
+      which branches. Branch confinement stays `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`'s
+      `pat` scope (off by default for this lane) and content stays `push_rules`.
+    - **Path tables can lag a forge.** A request form a forge's table does not list is
+      refused; a forge that later serves a new alias of an existing path is outside the
+      table until someone adds it. The failure is a refusal, not a pass. `generic` and
+      the named forges all compare the path exactly (no case-folding, no `.git`
+      stripping), because the compared string is the string the proxy forwards.
+    A narrowing the broker cannot enforce is refused at launch rather than carried as a
+    fiction: the broker off, a same-forge `ssh_key` (a second push path), and an Azure
+    DevOps or GitHub-brokered host (another lane serves it) each fail the run with a
+    named reason.
+
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
 Residual #46 above named what the proxy injects; this narrows WHICH requests it injects onto. Raised

@@ -189,11 +189,11 @@ func setupSecretItems(spec types.RunPolicySpec, presentSecrets map[string]bool) 
 				add(rule.SecretName, "an api_key grant ("+rule.Host+")", "proxy_injected")
 			}
 		case types.GrantGitPAT:
-			if host, name, _, err := gitPATScopeFields(g.Scope); err == nil {
+			if sc, err := types.DecodeGitPATScope(g.Scope); err == nil {
 				// git_pat's residency belongs to the repo_credential row (the grant
 				// that actually gets minted/delivered) — this row only answers
 				// whether the secret exists, so it carries no residency of its own.
-				add(name, "a git_pat grant ("+host+")", "")
+				add(sc.SecretName, "a git_pat grant ("+sc.Host+")", "")
 			}
 		}
 	}
@@ -392,10 +392,11 @@ func setupRepoCredentialItems(spec types.RunPolicySpec, presentSecrets map[strin
 				Residency:  "brokered_mint",
 			})
 		case types.GrantGitPAT:
-			host, name, _, err := gitPATScopeFields(g.Scope)
+			pat, err := types.DecodeGitPATScope(g.Scope)
 			if err != nil {
 				continue
 			}
+			host, name := pat.Host, pat.SecretName
 			status := "missing"
 			var fix *SetupFix
 			if presentSecrets[name] {

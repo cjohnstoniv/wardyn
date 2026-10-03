@@ -807,13 +807,6 @@ type apiKeyScope struct {
 	SecretName string `json:"secret_name"`
 }
 
-// gitPATScope is the JSON shape of a git_pat grant scope.
-type gitPATScope struct {
-	Host       string `json:"host"`
-	SecretName string `json:"secret_name"`
-	Username   string `json:"username"`
-}
-
 // reservedBrokerSecretNames is the reserved-name guard for the git_pat/ssh_key
 // mint paths (mintGitPAT/mintSSHKey below) — the ONLY broker lanes that hand a
 // stored secret's raw VALUE to the sandbox (Minted.Token / Minted.KnownHosts,

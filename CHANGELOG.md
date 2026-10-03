@@ -35,9 +35,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
   inherits the default policy's value, else the deployment default above. A profile that sets a size
   keeps it. Governance profiles also gain `limits.max_cpu_millis` and `limits.max_memory_mib` (0 is
   unlimited) to cap an assigned member's CPU and memory, and a negative `resources` field is now refused.
+- **A `git_pat` scope now carries `repos`, `access`, `api` and `forge`, and a stray key is refused at write.**
+  A stored scope that already used one of those four key names is enforced as that axis from this upgrade
+  on, and a downgrade runs a narrowed policy unnarrowed. Policy writes,
+  governance profiles, presets, inline run policies and the boot `--policy` file now answer `400` for an
+  unknown `git_pat` scope key, an out-of-enum `access` or `forge`, a malformed `repos` entry or `api: true`;
+  stored rows with a stray key still load and launch. A policy with two same-host `git_pat` grants where one is
+  narrowed is refused (`400` at write, `422` at launch).
 
 ### Security
 
+- **A narrowed `git_pat` grant now binds the run at the broker.** The PAT broker refuses, before any mint, a git
+  request for a repository outside the grant's `repos` (`brokered:git-pat:repo`) and, for `access: read`, both
+  doors of a push (`brokered:git-pat:read-only`). A request form a forge's path table does not list is refused.
+  A run whose narrowing cannot be enforced is refused at launch and by Review: `git_pat_narrowing_needs_broker`
+  (the PAT broker is off), `git_pat_narrowing_ssh_conflict` (a same-forge `ssh_key`, also refused at policy
+  write) and `git_pat_narrowing_unsupported_host` (an Azure DevOps host, or a GitHub-brokered forge). The PAT
+  itself is not narrowed. Upgrade the proxy image together with wardynd: an older proxy refuses the new
+  `pat_grants` keys at start.
 - **The proxy refuses a raw mint of every `git_pat` grant id while the PAT broker is on.** The mint relay
   now answers `403` (`brokered:mint`) for any `git_pat` grant of the run, including grants shadowed by a
   same-host grant, vetoed, withheld for a brokered forge or Azure DevOps owner-only. Upgrade the proxy

@@ -378,3 +378,11 @@ const (
 	// org-switch check (user_drives.go): the identical cause, one route apart.
 	driveRefusalDrivesDisabled = "drives_disabled"
 )
+
+// git_pat narrowing (runs_dispatch_pat_scope.go): a run is refused when a
+// narrowed git_pat grant's repos, access or api could not be enforced.
+const (
+	reasonGitPATNarrowingNeedsBroker     = "git_pat_narrowing_needs_broker"     // the PAT broker is off, so the PAT is resident and nothing narrows it
+	reasonGitPATNarrowingSSHConflict     = "git_pat_narrowing_ssh_conflict"     // a same-forge ssh_key is a second push path the broker cannot see
+	reasonGitPATNarrowingUnsupportedHost = "git_pat_narrowing_unsupported_host" // the host is served by a lane that ignores the narrowing axes
+)

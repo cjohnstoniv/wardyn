@@ -9,10 +9,11 @@ package proxy
 // proxy terminates the request, mints server-side, and sets Basic auth on
 // the outbound leg — the sandbox never holds the credential.
 //
-// This makes the credential NON-RESIDENT, not least-privilege: a PAT carries
-// whatever scope the operator issued it with and Wardyn can't narrow it, so
-// the allowlist here is per-HOST (a per-repo key would imply a confinement
-// the credential doesn't have).
+// This makes the credential NON-RESIDENT, and the RUN narrowable, not the PAT:
+// a PAT carries whatever scope the operator issued it with and Wardyn can't
+// narrow it. The allowlist is per-HOST, and a narrowed grant adds a repository
+// set and a read-only axis that this route enforces before it mints
+// (pat_scope.go), so a run reaches only what its grant names.
 
 import (
 	"cmp"
@@ -30,8 +31,10 @@ import (
 const routePATBroker = "/wardyn/git/"
 
 const (
-	ruleSourcePAT       = "brokered:git-pat"
-	ruleSourcePATDenied = "brokered:git-pat:denied"
+	ruleSourcePAT         = "brokered:git-pat"
+	ruleSourcePATDenied   = "brokered:git-pat:denied"
+	ruleSourcePATRepo     = "brokered:git-pat:repo"
+	ruleSourcePATReadOnly = "brokered:git-pat:read-only"
 )
 
 // parsePATBrokerPath splits /wardyn/git/<host>/<rest> into a lower-cased host
@@ -122,6 +125,12 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// (pat_broker_entra.go).
 	if adoLane {
 		p.serveADOGit(w, r, host, rest, verb, ado)
+		return
+	}
+	// The grant's own narrowing, past the hand-off (an Azure DevOps host may have
+	// no grant here) and before anything can spend the credential: the push rules
+	// below may read the forge or hold for review, and patToken mints.
+	if !p.patScopeAllows(w, r, host, rest, verb, grant) {
 		return
 	}
 
