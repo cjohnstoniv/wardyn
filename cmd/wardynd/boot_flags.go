@@ -261,6 +261,9 @@ type bootFlags struct {
 	migrateSecrets *bool
 	migrateTo      *string
 	reconcile      *bool
+	// migrateOnly is `wardynd -migrate-only` (migrate_only.go): no env pair, like
+	// the other modes, so a stray variable cannot turn every boot into a migration run.
+	migrateOnly *bool
 	// rewrap is `wardynd -rewrap` (rewrap.go): no env pair, like the above.
 	rewrap *bool
 	// rewrapRetirePlatformKey is `wardynd -rewrap -rewrap-retire-platform-key`:
@@ -517,7 +520,10 @@ func parseBootFlags() *bootFlags {
 		migrateSecrets: flag.Bool("migrate-secrets", false, "maintenance mode, safe while a daemon serves: move every stored secret to the store -to names, one row at a time, then exit; idempotent and resumable. See docs/operations/secrets-and-keys.md (default false)"),
 		migrateTo:      flag.String("to", "", `target of -migrate-secrets: "vaultkv", "azurekv" or "local"`),
 		reconcile:      flag.Bool("reconcile", false, "maintenance mode: list the pointer rows and the external store side by side, report pointers without values and values without pointers, then exit, non-zero on any; deletes nothing (default false)"),
-		rewrap:         flag.Bool("rewrap", false, "maintenance mode: in one transaction, rewrap every stored secret's data key onto the key a write uses today (its purpose's local key, or the WARDYN_KEK=transit or azurekv key at its latest version), then exit; values are never decrypted. See docs/operations/secrets-and-keys.md (default false)"),
+		migrateOnly: flag.Bool("migrate-only", false, "maintenance mode, every other wardynd must be stopped: run the schema migration alone on the connection that holds the single-instance lock, then exit without serving. "+
+			"Refuses (exit 3) while that lock is held or any other client is connected to the database; exit 1 when the migration fails. "+
+			"Connects with WARDYN_PG_MIGRATE_DSN when set, bounded by WARDYN_MIGRATE_TIMEOUT. See docs/OPERATIONS.md, \"Stopped-writer upgrade\" (default false)"),
+		rewrap: flag.Bool("rewrap", false, "maintenance mode: in one transaction, rewrap every stored secret's data key onto the key a write uses today (its purpose's local key, or the WARDYN_KEK=transit or azurekv key at its latest version), then exit; values are never decrypted. See docs/operations/secrets-and-keys.md (default false)"),
 		rewrapRetirePlatformKey: flag.Bool("rewrap-retire-platform-key", false, "with -rewrap only: move the signing, session and SSH host keys off the "+
 			"WARDYN_VAULT_TRANSIT_KEY_PLATFORM key (it must be named, and is read only) onto the key a write uses today, the "+
 			"WARDYN_KEK=transit key or the local key, then exit. Afterwards unset WARDYN_VAULT_TRANSIT_KEY_PLATFORM. "+

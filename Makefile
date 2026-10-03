@@ -726,6 +726,10 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -A1 "name: WARDYN_BASE_PATH" | grep -q 'value: "/wardyn"' || { echo "basePath did not reach wardynd as WARDYN_BASE_PATH"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'path: /wardyn/healthz')" = "2" ] || { echo "basePath: liveness + startup probes are not under it — wardynd 404s /healthz outside the base path"; exit 1; }; \
 	echo "$$out" | grep -q 'path: "/wardyn/readyz"' || { echo "basePath: readinessProbe is not under it"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
+	echo "$$out" | grep -A20 "startupProbe:" | grep -q 'failureThreshold: 90$$' || { echo "default startupProbe window is not 90 periods (30s connect + 5m WARDYN_MIGRATE_TIMEOUT + 120s slack, 5s each)"; exit 1; }; \
+	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_MIGRATE_TIMEOUT=30m); \
+	echo "$$out" | grep -A20 "startupProbe:" | grep -q 'failureThreshold: 390$$' || { echo "startupProbe window does not follow WARDYN_MIGRATE_TIMEOUT — a raised migrate budget would be killed mid-migration"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
 	echo "$$out" | grep -q "kind: PersistentVolumeClaim" || { echo "persistence.enabled rendered no PVC"; exit 1; }; \
 	echo "$$out" | grep -q "terminationGracePeriodSeconds: 90" || { echo "terminationGracePeriodSeconds is not carried into the pod spec"; exit 1; }; \

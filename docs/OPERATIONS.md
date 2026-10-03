@@ -5427,6 +5427,46 @@ reinstates is the unsupported combination named above. Use it for a bad *config*
 change (a wrong env var, a wrong image tag within one schema generation). For a
 bad *release*, the dump is the rollback.
 
+### Stopped-writer upgrade
+
+Some migrations convert existing rows and must not run beside a writer; 0.8.6's audit conversion is the first.
+**Take a dump first; the audit conversion is one-way.** Upgrading needs Postgres 13 or newer:
+`0107_pg13_floor` refuses an older server by name and records nothing, so the database stays as the previous
+release left it.
+
+The default path is already a stopped-writer path. The chart's `Recreate` strategy tears the old pod down, which
+releases its single-instance lock, before the new pod starts and migrates; compose does the same with
+`docker compose down` first. If you want the migration to finish before any new wardynd serves, run it alone with
+`wardynd -migrate-only`: it takes the single-instance lock on one connection, runs the same migration on that
+connection, and exits without serving.
+
+```sh
+# 1. Stop every writer. Under the chart, this is the step that matters:
+kubectl -n wardyn scale deploy/wardyn --replicas=0
+# 2. Run the migration once, from the NEW image, with the DSN the Deployment uses
+#    (WARDYN_PG_MIGRATE_DSN when you split roles). Any Job that runs
+#    `wardynd -migrate-only` in the new image works; wait for it to complete.
+# 3. Upgrade the release; the new pod finds nothing left to migrate.
+helm -n wardyn upgrade wardyn ./deploy/helm/wardyn -f your-values.yaml --set image.tag=<new-tag> --wait --timeout 5m
+```
+
+`-migrate-only` exits `0` after migrating, `1` when the migration fails (or no database is configured), and `3`
+when it refused to start. It refuses, naming the reason, in two cases:
+
+- another session holds the single-instance lock: a serving wardynd, or another `-migrate-only`; and
+- any other client is connected to the database, whether or not a lock is held. The lock is not enough on its
+  own, because a replica started with `-allow-multi-instance` never takes it. A migrator role sees other
+  roles' sessions by user and application name, so the check holds under a split `WARDYN_PG_MIGRATE_DSN`.
+
+A wardynd that boots while `-migrate-only` runs fails its own single-instance claim and exits, so a Job cannot be
+raced by a pod the scheduler restarts. The migration's time bound is `WARDYN_MIGRATE_TIMEOUT` (default 5 minutes),
+and the chart's startup probe window follows it: 30 seconds to connect, the timeout, and 120 seconds of slack.
+Raise it in `env` or `extraEnv` as `h`, `m` and `s` units only.
+
+**Under `allowMultiReplica`, no replica holds the lock**, so nothing the lock does stops writers there:
+`kubectl scale --replicas=0` is the only pre-step that does. `-migrate-only` will still refuse while any replica
+is connected, but it is the scale-down that makes the run possible.
+
 ### Backup: what `pg_dump` carries here, and what it does not
 
 The chart renders no database. `postgres.dsn` points at a Postgres you operate,

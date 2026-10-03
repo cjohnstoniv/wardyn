@@ -74,7 +74,7 @@ func main() {
 	}
 	if err := run(); err != nil {
 		slog.Error("wardynd: fatal", slog.Any("err", err))
-		os.Exit(1)
+		os.Exit(exitCodeOf(err))
 	}
 }
 
