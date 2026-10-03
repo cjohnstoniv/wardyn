@@ -609,6 +609,10 @@ type GovernanceProfileRequest struct {
 	Name    string           `json:"name"`
 	Ceiling RunPolicySpec    `json:"ceiling"`
 	Limits  GovernanceLimits `json:"limits"`
+	// Contact is who owns the profile and how a person it refuses asks for a
+	// change. nil leaves the stored contact unchanged (an older caller that
+	// never sets it cannot wipe it); a pointer to an empty Contact clears it.
+	Contact *PolicyContact `json:"contact,omitempty"`
 }
 
 // GovernanceProfileResponse is a profile write's body: the saved profile plus
@@ -659,7 +663,8 @@ func governanceAssignmentKey(subjectType CapabilitySubjectType, subject string) 
 // profile's content on every apply (#1108's stated no-op contract; stricter
 // than ApplyDrives, which always re-PUTs/re-POSTs).
 func governanceProfileUnchanged(existing, p GovernanceProfile) bool {
-	return reflect.DeepEqual(existing.Ceiling, p.Ceiling) && reflect.DeepEqual(existing.Limits, p.Limits)
+	return reflect.DeepEqual(existing.Ceiling, p.Ceiling) && reflect.DeepEqual(existing.Limits, p.Limits) &&
+		(p.Contact == nil || reflect.DeepEqual(existing.Contact, p.Contact))
 }
 
 // ApplyGovernance upserts every profile and assignment doc names, over the
@@ -733,7 +738,7 @@ func (c *Client) ApplyGovernance(ctx context.Context, doc GovernanceDocument, pr
 		if existing, ok := profileByName[p.Name]; ok && governanceProfileUnchanged(existing, p) {
 			saved = existing
 		} else {
-			req := GovernanceProfileRequest{Name: p.Name, Ceiling: p.Ceiling, Limits: p.Limits}
+			req := GovernanceProfileRequest{Name: p.Name, Ceiling: p.Ceiling, Limits: p.Limits, Contact: p.Contact}
 			var resp GovernanceProfileResponse
 			var werr error
 			if ok {
