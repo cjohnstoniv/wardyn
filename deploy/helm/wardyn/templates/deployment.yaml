@@ -498,6 +498,10 @@ spec:
             - name: WARDYN_PROXY_MEMORY_MIB
               value: {{ .Values.runner.sandbox.proxyResources.memoryMiB | quote }}
             {{- end }}
+            {{- if and (gt (int .Values.maxConcurrentRuns) 0) (not (hasKey .Values.env "WARDYN_MAX_CONCURRENT_RUNS")) }}
+            - name: WARDYN_MAX_CONCURRENT_RUNS
+              value: {{ .Values.maxConcurrentRuns | int | quote }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             # Raw EnvVar entries, so secret-bearing WARDYN_* (OIDC client secret,
             # composer API key, audit-sink JSON) ride a secretKeyRef instead of

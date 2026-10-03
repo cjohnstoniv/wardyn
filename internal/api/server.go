@@ -410,6 +410,10 @@ type Config struct {
 	// window folds the device routes' failure rows (device_audit_bounds.go).
 	AuditCoalesceWindow time.Duration
 	HostCapacityConfig
+	// MaxConcurrentRuns caps non-terminal runs across the whole deployment, every
+	// replica and every creation door (env WARDYN_MAX_CONCURRENT_RUNS); 0 or less
+	// is unlimited. Past it a create is a 422 with no audit row (createRun).
+	MaxConcurrentRuns int
 	// Now is overridable in tests; defaults to time.Now.
 	Now func() time.Time
 	// OrgFederation is the hybrid audit forwarder's status (cmd/wardynd's
