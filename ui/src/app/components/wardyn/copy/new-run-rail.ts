@@ -38,6 +38,14 @@ export const RAIL = {
   PREFLIGHT_ERROR_LABEL: "Preflight failed",
 } as const;
 
+// M1 (approved 2026-10-03) — preflight's setup rows. The row text is the
+// server's own (the same label and detail `wardyn run --dry-run` prints), so
+// only the heading and the Launch reason are written here.
+export const RAIL_SETUP = {
+  HEADING: "Setup",
+  BACKEND_BLOCK: "This host can't build the barrier this run needs.",
+} as const;
+
 export const RAIL_CREDENTIAL = {
   // residency "proxy": late-bound, swapped onto the wire, never resident.
   // U-15: "minted" was true of the Bedrock exchange this lane is NOT — a static

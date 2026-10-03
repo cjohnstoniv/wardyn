@@ -739,17 +739,14 @@ export interface SetupItem {
 // production credential). risk_assessment/overall_risk are the SAME
 // composer.Grade/OverallLevel output — optional for older-server tolerance:
 // an absent value renders no risk panel and no acknowledgment gate rather
-// than crashing. Advisory only, never a gate.
+// than crashing.
 //
-// Where these are read, honestly: the sole consumer is the new-run rail's
-// preflight block (new-run-rail.tsx's RunRail), which renders overall_risk,
-// enforced_confinement_class and warnings. `setup_items` has NO consumer — the
-// five-step wizard's Review step (step-review.tsx) that used to render it was
-// deleted with the wizard, and nothing replaced that surface. It is fetched on
-// every Review and discarded; the field and its SetupItem subtree stay declared
-// because they are a live server contract (compose_setup.go) and the mirror
-// rule forbids dropping a wire field the daemon still sends. Whether to
-// render it again is an open question, not decided here.
+// Where these are read: the new-run rail's preflight block
+// (new-run-rail.tsx's RunRail) renders overall_risk, enforced_confinement_class,
+// warnings and the `missing`/`unverified` setup_items rows; a `missing` backend
+// row also blocks Launch (new-run-launch-panel.tsx). The field is a live server
+// contract (compose_setup.go) read by the CLI and CI scripts too, and the
+// mirror rule forbids dropping a wire field the daemon still sends.
 export interface PreflightResult {
   setup_items: SetupItem[];
   enforced_confinement_class: ConfinementClass;
