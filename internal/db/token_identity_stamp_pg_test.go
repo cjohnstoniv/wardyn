@@ -11,11 +11,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestPG_TokenIdentityStampBackfillsCreatedAt applies 0109 over tokens that exist already: each
+// TestPG_TokenIdentityStampBackfillsCreatedAt applies 0115 over tokens that exist already: each
 // gets its created_at as its stamp, the one time known, so turning WARDYN_ROLE_STAMP_TTL on asks
 // a holder to sign in once rather than leaving an unstamped row.
 func TestPG_TokenIdentityStampBackfillsCreatedAt(t *testing.T) {
-	pool, schema := partialSchemaPool(t, "0109")
+	pool, schema := partialSchemaPool(t, "0115")
 	ctx := context.Background()
 
 	id := uuid.New()
@@ -26,7 +26,7 @@ func TestPG_TokenIdentityStampBackfillsCreatedAt(t *testing.T) {
 	}
 
 	if err := Migrate(ctx, pool); err != nil {
-		t.Fatalf("Migrate applying 0109+ over existing tokens: %v", err)
+		t.Fatalf("Migrate applying 0115+ over existing tokens: %v", err)
 	}
 
 	var stamped *time.Time

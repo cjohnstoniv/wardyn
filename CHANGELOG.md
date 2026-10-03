@@ -20,7 +20,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   authorisation decision changes; they are what removing a leaver's access will act on.
 - **`WARDYN_ROLE_STAMP_TTL`** (default off) makes an API token or console session whose role stamp is older
   than the TTL sign in again before it works, so a demotion made only at the identity provider reaches
-  them. Migration `0109_api_tokens_identity_stamped_at` backfills each token's stamp to its `created_at`,
+  them. Migration `0115_api_tokens_identity_stamped_at` backfills each token's stamp to its `created_at`,
   so turning the TTL on asks every token holder to sign in once. Unset, nothing changes.
 - **`wardynd -migrate-only`** runs the schema migration alone and exits, for an upgrade that must run under
   stopped writers. It refuses (exit 3) while another wardynd holds the single-instance lock or any other
