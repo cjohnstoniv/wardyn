@@ -410,6 +410,9 @@ type Config struct {
 	// window folds the device routes' failure rows (device_audit_bounds.go).
 	AuditCoalesceWindow time.Duration
 	HostCapacityConfig
+	// PreflightRatePerMin is WARDYN_PREFLIGHT_RATE_PER_MIN: the per-person
+	// POST /runs/preflight rate (burst 5). 0 turns the limit off.
+	PreflightRatePerMin int
 	// Now is overridable in tests; defaults to time.Now.
 	Now func() time.Time
 	// OrgFederation is the hybrid audit forwarder's status (cmd/wardynd's
@@ -731,7 +734,10 @@ type Server struct {
 	// dirLimiter rate-bounds GET /access/directory/search PER PRINCIPAL — it is
 	// hit once per keystroke, and each miss is an upstream Graph call
 	// (directory_search.go). Zero value is ready to use.
-	dirLimiter       principalLimiter
+	dirLimiter principalLimiter
+	// preflightLimiter rate-bounds POST /runs/preflight per person
+	// (preflight.go); nil when Config.PreflightRatePerMin is 0 (off).
+	preflightLimiter *principalLimiter
 	deviceRouteState // the device routes' process state (server_devices.go)
 	runLeaseState    // the run lease sweep's process state (run_lease_server.go)
 	// pause is the pause sweep's process-local state (run_pause.go).
@@ -817,6 +823,9 @@ func New(cfg Config) *Server {
 			enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
 			ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
 		},
+	}
+	if cfg.PreflightRatePerMin > 0 {
+		s.preflightLimiter = &principalLimiter{rate: float64(cfg.PreflightRatePerMin) / 60, burst: preflightBurst, max: preflightLimiterMaxPeople}
 	}
 	s.router = s.routes()
 	// drain the durable audit-fallback spool back into the store once it

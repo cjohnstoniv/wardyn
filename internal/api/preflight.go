@@ -70,6 +70,14 @@ type preflightResponse struct {
 	GitCredential *SCMAccess `json:"git_credential,omitempty"`
 }
 
+// preflightBurst and preflightLimiterMaxPeople size the per-person preflight
+// limiter: a burst of five, and a map cap for a deployment's people rather
+// than the directory limiter's admins.
+const (
+	preflightBurst            = 5
+	preflightLimiterMaxPeople = 16384
+)
+
 // handlePreflightRun is a DRY-RUN of handleCreateRun's resolution + gating: it
 // resolves the run policy through the EXACT same resolveRunPolicy chokepoint (so
 // an XOR violation, an unknown-secret 422, or an invalid inline spec surface as
@@ -112,6 +120,15 @@ type preflightResponse struct {
 // by gate instead of wrapper by wrapper.
 func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	// First, before the decode and every gate: a limited call costs no work and
+	// writes no row. A person only; the admin token is one shared actor name,
+	// so limiting it would pool every CI job into one bucket.
+	if s.preflightLimiter != nil {
+		if t, who := actorFromRequest(r); t == types.ActorHuman && !s.preflightLimiter.allow(who, s.cfg.Now()) {
+			writeErrorReason(w, http.StatusTooManyRequests, reasonPreflightRateLimited, "too many preflight checks; slow down")
+			return
+		}
+	}
 	if s.refuseAdminViewLaunch(w, r) {
 		return
 	}

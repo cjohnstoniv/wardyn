@@ -418,6 +418,7 @@ func run() error {
 		MaskRegistry:             maskReg,
 		ExecOutputTailOff:        !*f.execOutputTail,
 		ExecOutputTailTTL:        *f.execOutputTailTTL,
+		PreflightRatePerMin:      *f.preflightRatePerMin,
 		ADOEntra:                 adoEntraSourceFromFlags(st, f), // ado_entra_source.go
 		ADOEntraByRow:            adoEntraByRow(st, adoEntraLoginFromFlags(f)),
 		ADOLoginFacts:            adoLoginFactsFromFlags(f),

@@ -665,6 +665,10 @@ const (
 	reasonDirectorySearchFailed        = "directory_search_failed"
 )
 
+// POST /api/v1/runs/preflight (preflight.go): an authorised caller at the
+// per-person rate limit, so not an authz.denied reason and not audited.
+const reasonPreflightRateLimited = "preflight_rate_limited"
+
 // /api/v1/base-images (base_images.go).
 const (
 	reasonBaseImageWriteInvalid = "base_image_write_invalid" // validateBaseImageWrite's own bucket
