@@ -62,6 +62,9 @@ interface RunRailProps {
   cc: ConfinementClass;
   /** An agent run with no model path launches, then fails its first model call. */
   showModelWarning: boolean;
+  /** Launch is already blocked on the missing model: the block sentence speaks, so this
+   *  rail adds neither the no-provider advice nor "Resolved at launch.". */
+  modelBlocked?: boolean;
   /** What happens the moment this launches, in one sentence. */
   startup: string;
   /** Autonomous + held tool approvals: every call parks for a human. */
@@ -85,6 +88,8 @@ interface RunRailProps {
     inFlight: boolean;
     /** Why Launch cannot be pressed — a disabled button that won't say is a dead end. */
     problem: string | null;
+    /** An action that rides on the `problem` line (f-f5: "Connect →"). */
+    problemLink?: { to: string; label: string };
     /** #922 review F5: an ADDITIONAL disable with no text of its own — the
      *  workspace picker's own advisory line (workspace-card.tsx) already
      *  names the reason, so Launch disables without the rail repeating the
@@ -251,6 +256,7 @@ export function RunRail({
   savedPolicy,
   cc,
   showModelWarning,
+  modelBlocked,
   startup,
   showHoldNote,
   toolRules,
@@ -386,7 +392,7 @@ export function RunRail({
   // connected. This run launches; its first model call fails." Nothing
   // resolves at launch when there is nothing to resolve. A resolved credential
   // still states itself — that sentence is read off the verdict, not guessed.
-  const showCredentialFacts = !!cred || (!!agentRow && !showModelWarning);
+  const showCredentialFacts = !!cred || (!!agentRow && !showModelWarning && !modelBlocked);
   // #181 review finding 6 — pushRulesIsSet(pushRules) alone is true for a
   // policy that sets ONLY max_inspect_pack_mib (no deny_paths/
   // require_review_paths at all): there is nothing to say about PATHS in
@@ -497,7 +503,7 @@ export function RunRail({
               harnessLabel={modelProvider.harnessLabel}
             />
           )}
-          {!hasProviderCandidates && showModelWarning && (
+          {!hasProviderCandidates && showModelWarning && !modelBlocked && (
             <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
               {RAIL_MODEL_ACCESS.NO_PROVIDER}{" "}
               {/* The action that fills the gap rides next to the
@@ -638,6 +644,14 @@ export function RunRail({
                 {NO_BARRIER.CTA}
               </Link>
               .
+            </>
+          )}
+          {launch.problemLink && (
+            <>
+              {" "}
+              <Link to={launch.problemLink.to} className="font-medium text-info hover:underline">
+                {launch.problemLink.label}
+              </Link>
             </>
           )}
         </p>
