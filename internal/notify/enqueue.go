@@ -54,16 +54,30 @@ type Planned struct {
 }
 
 // Plan returns the rows to enqueue for a new approval, a pure function of the boot config. It is the
-// one planner both insertion seams call, so they cannot drift. In this build every channel is planned
-// at tier 0; kind and profileID are the inputs routing will read.
+// one planner both insertion seams call, so they cannot drift. With no routes every channel is planned
+// at tier 0; otherwise the first route matching kind and the run's leaf profileID plans one row per
+// channel per tier, due After the approval was raised, and no match plans nothing.
 func Plan(kind types.ApprovalKind, profileID *uuid.UUID) []Planned {
 	c := active.Load()
 	if c == nil {
 		return nil
 	}
-	out := make([]Planned, 0, len(c.Channels))
-	for _, ch := range c.Channels {
-		out = append(out, Planned{Tier: 0, Channel: ch.ID})
+	if len(c.Routes) == 0 {
+		out := make([]Planned, 0, len(c.Channels))
+		for _, ch := range c.Channels {
+			out = append(out, Planned{Tier: 0, Channel: ch.ID})
+		}
+		return out
+	}
+	r := c.route(kind, profileID)
+	if r == nil {
+		return nil
+	}
+	var out []Planned
+	for i, t := range r.Tiers {
+		for _, ch := range t.Channels {
+			out = append(out, Planned{Tier: int16(i), Channel: ch, After: t.after})
+		}
 	}
 	return out
 }

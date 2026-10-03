@@ -800,11 +800,12 @@ and, with `hmac_secret` set, `X-Wardyn-Signature`. Only these fields are ever se
 |---|---|
 | `schema` | the literal `wardyn.approval.v1` |
 | `delivery_id` | the outbox row's id, stable across retries |
-| `event`, `tier` | `raised` at tier 0 |
+| `event`, `tier` | `raised` at tier 0, `escalated` above it |
 | `approval.id`, `approval.kind`, `approval.requested_at` | the approval |
 | `run.id` | the run that raised it |
 | `profile.id`, `profile.name` | the run's governance profile, when it has one |
-| `requester.principal`, `requester.email` | the run's owner |
+| `requester.principal`, `requester.email` | the run's owner; omitted on a channel with `redact_requester` |
+| `recipients[]` | `{role, email}` for each `notify` target of the tier that resolved to an address |
 | `console_url` | `<console_url>/approvals`, when configured |
 
 The request scope (host, tool arguments, push paths), the reason text, the run title and any credential
@@ -817,6 +818,38 @@ HMAC-SHA256 of `<t>.<body>` (the timestamp, a dot, the exact bytes received) key
 Reject a `t` more than five minutes old. Test vector: key `whsec_test_vector`, `t` 1700000000, body
 `{"schema":"wardyn.approval.v1","delivery_id":"d"}` gives
 `v1=b851b43234ba1d1386179e9f8785cf6c37337c6dee0791f8479579e0eb1e097a`.
+
+**Routes, escalation tiers and recipients.** With `routes` absent, every approval goes to every channel
+at tier 0. With `routes` set, the first route that matches an approval chooses its channels and tiers:
+
+```json
+"routes": [
+  {"kinds": ["push_content"],
+   "tiers": [{"after": "0s",  "channels": ["sec-hook"]},
+             {"after": "30m", "channels": ["sec-hook", "mail"], "notify": ["profile_contact"]}]},
+  {"profiles": ["<governance profile id>"],
+   "tiers": [{"after": "0s", "channels": ["mail"], "notify": ["run_owner"]}]},
+  {"tiers": [{"after": "0s", "channels": ["sec-hook"]}]}
+]
+```
+
+- A route matches on `kinds` (`credential`, `egress_domain`, `tool_call`, `credential_reauth`,
+  `push_content`) and `profiles` (governance profile **ids**, never names, so a rename cannot re-route).
+  The profile is the run's leaf profile as bound at dispatch. An absent key matches anything; no match
+  means no notification.
+- A route has 1 to 5 tiers, and `after` (a duration such as `30m`) is zero or more and strictly
+  ascending. Every tier's rows are written when the approval is raised, due `after` past its request
+  time, and a tier is sent only while the approval is still pending: if it was decided first, the row is
+  cancelled unsent. A config change after a raise does not alter rows already scheduled. Boot logs a
+  warning for a tier whose `after` is at or beyond `WARDYN_APPROVAL_EXPIRY_AFTER`, because the approval
+  expires before that tier can send.
+- `notify` fills `recipients[]` (`{role, email}`) in the body: `run_owner` is the run owner's address,
+  `profile_contact` is the leaf profile's contact email after the same re-validation the console applies.
+  A target with no address is skipped.
+- A channel with `"redact_requester": true` omits `requester` from its body.
+- Boot refuses a route that names an unknown channel or kind, a profile that is not a uuid, a tier list
+  that is empty, longer than 5 or not strictly ascending, a channel listed twice in one tier, or
+  `notify: run_owner` on a channel with `redact_requester` (the owner is the requester).
 
 **At least once.** A crash between a successful send and recording it resends, so a receiver that cares
 drops duplicates on `delivery_id`. A row that is retried keeps its `delivery_id`.
