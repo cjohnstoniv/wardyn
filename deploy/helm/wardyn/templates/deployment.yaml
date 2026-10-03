@@ -346,6 +346,13 @@ spec:
             - name: WARDYN_KEK_REQUIRED
               value: "true"
             {{- end }}
+            {{- /* An unquoted on in a values file is YAML's boolean true: render it as on. */}}
+            {{- $pkeys := ($.Values.kek | default dict).principalKeys | default "off" }}
+            {{- if kindIs "bool" $pkeys }}{{ $pkeys = ternary "on" "off" $pkeys }}{{ end }}
+            {{- if ne (toString $pkeys) "off" }}
+            - name: WARDYN_PRINCIPAL_KEYS
+              value: {{ $pkeys | toString | quote }}
+            {{- end }}
             {{- with $.Values.kek }}
             {{- if eq .provider "transit" }}
             # Data keys wrapped by Vault Transit (docs/operations/secrets-and-keys.md "Key
