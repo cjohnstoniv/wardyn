@@ -45,7 +45,7 @@ const GroundTruthRotatorLockKey int64 = 0x5741524459_475452 // ASCII "WARDYGTR"
 // HONEST CEILING, as for GroundTruthRotatorLockKey: an advisory lock dies with
 // its SESSION, so a Postgres failover can release it under a still-running
 // leader. Unlike the rotator, this lock IS used for work that needs fencing, so
-// each acquisition bumps the durable epoch in sweeper_leader (0108) and a
+// each acquisition bumps the durable epoch in sweeper_leader (0110) and a
 // multi-step operation re-checks its epoch (SweeperLeader.Current) before it
 // writes.
 const SweeperLeaderLockKey int64 = 0x5741524459_53574C // ASCII "WARDYSWL"
