@@ -432,6 +432,7 @@ func run() error {
 		AgeKeyDurable:         secretsDurable(*f.ageKey, secrets),
 		SecretStoreExternal:   storesExternally(secrets),
 		SecretKeyService:      keyService(secrets),
+		KEKRequired:           *f.vault.kekRequired,
 		PlatformKeySeparate:   strings.TrimSpace(*f.platformKeyFile) != "",
 		LocalLoopback:         lm.loopback,
 		LocalTrustForwarder:   *f.localTrustFwd,

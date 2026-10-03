@@ -40,6 +40,9 @@ func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags, rec 
 	if err != nil {
 		return nil, err
 	}
+	if err := refuseKEKRequired(*f.vault.kekRequired, st); err != nil {
+		return nil, err
+	}
 	if err := sweepRetiredModelCredentials(ctx, st, rec); err != nil {
 		return nil, err
 	}
@@ -268,6 +271,17 @@ func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519
 	return refuseIdleAgeKey(ctx, ps)
 }
 
+// refuseKEKRequired refuses a serving boot when WARDYN_KEK_REQUIRED is set and
+// neither a key service wraps the credentials nor an external store holds them,
+// so the local key (set or ephemeral) would. It sits in the serving path, not in
+// newSecretStore, so `wardynd -rewrap`, the remedy, still runs.
+func refuseKEKRequired(required bool, s secretstore.Store) error {
+	if !required || keyService(s) != "" || storesExternally(s) != "" {
+		return nil
+	}
+	return fmt.Errorf("refusing to start: WARDYN_KEK_REQUIRED is set but credentials are wrapped by the local key — set WARDYN_KEK=transit|azurekv and run `wardynd -rewrap` to move them onto it")
+}
+
 // refuseIdleAgeKey refuses boot when a key service wraps every write
 // (WARDYN_KEK=transit or azurekv) and WARDYN_AGE_KEY is set with no stored row left under
 // it: the key then only lets whoever also holds the database forge a row the
@@ -298,6 +312,8 @@ type vaultFlags struct {
 	// kek is WARDYN_KEK; transitMount and transitKey name the Transit key it
 	// selects (or, with kek=local, reads).
 	kek, transitMount, transitKey *string
+	// kekRequired is WARDYN_KEK_REQUIRED: refuse a serving boot on the local key.
+	kekRequired *bool
 	// transitKeyPlatform is the second Transit key the boot keys alone are
 	// wrapped under, reached as rolePlatform.
 	transitKeyPlatform *string
@@ -319,6 +335,7 @@ func registerVaultFlags() vaultFlags {
 		maxVersions:        flagIntEnv("vault-kv-max-versions", "WARDYN_VAULT_KV_MAX_VERSIONS", 1, "max_versions set on each secret the vaultkv store creates (1: a replaced value does not linger)"),
 		timeout:            flagDuration("secret-store-timeout", "WARDYN_SECRET_STORE_TIMEOUT", 5*time.Second, "timeout of each call to an external secret store"),
 		kek:                flagEnv("kek", "WARDYN_KEK", kekLocal, `key that wraps each stored secret's data key: "local" (derived from WARDYN_AGE_KEY), "transit" (the Vault Transit key WARDYN_VAULT_TRANSIT_KEY names, over the WARDYN_VAULT_* client) or "azurekv" (the Key Vault keys WARDYN_AZURE_KEK_KEY and WARDYN_AZURE_KEK_SIGNING_KEY name, as the WARDYN_AZURE_* identity)`),
+		kekRequired:        flagBool("kek-required", "WARDYN_KEK_REQUIRED", false, "refuse to start while credentials are wrapped by the local key: a key service (WARDYN_KEK=transit|azurekv) or an external store must hold them. `wardynd -rewrap` still runs"),
 		transitMount:       flagEnv("vault-transit-mount", "WARDYN_VAULT_TRANSIT_MOUNT", "transit", "mount path of Vault's Transit engine"),
 		transitKey:         flagEnv("vault-transit-key", "WARDYN_VAULT_TRANSIT_KEY", "", "Transit key (type aes256-gcm96) that wraps data keys with WARDYN_KEK=transit; set with WARDYN_KEK=local it only reads the rows sealed under it, for `wardynd -rewrap` back to the local key"),
 		transitKeyPlatform: flagEnv("vault-transit-key-platform", "WARDYN_VAULT_TRANSIT_KEY_PLATFORM", "", "second Transit key (type aes256-gcm96, same mount) that wraps wardynd's own signing, session and SSH host keys, reached as WARDYN_VAULT_ROLE_PLATFORM; WARDYN_VAULT_TRANSIT_KEY then wraps only the credentials. Needs WARDYN_KEK=transit and WARDYN_VAULT_ROLE_PLATFORM; `wardynd -rewrap -rewrap-adopt-boot-keys` moves the boot keys onto it, once; `-rewrap -rewrap-retire-platform-key` moves them back off. Empty = one key for both. See docs/operations/secrets-and-keys.md"),

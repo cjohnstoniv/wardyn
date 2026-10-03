@@ -309,7 +309,7 @@ func ageKeyCheck(durable bool) SetupCheck {
 // service wraps every data key; else the age-key row, kek_local on a multi-user install (whoever holds the database and the local key
 // reads every credential), and platform_shared while no WARDYN_PLATFORM_KEY_FILE is set (§2.13 c: one leak of
 // the age key then also forges run identities and sessions).
-func secretStoreChecks(external, keyService string, durable, multiUser, platformSeparate bool) []SetupCheck {
+func secretStoreChecks(external, keyService string, durable, multiUser, platformSeparate, kekRequired bool) []SetupCheck {
 	if external != "" {
 		return []SetupCheck{{ID: "store_external", Label: "Credential storage", Status: "ok",
 			Detail: "Credentials are stored in " + external + ". Wardyn holds no key; every use is logged there."}}
@@ -324,6 +324,13 @@ func secretStoreChecks(external, keyService string, durable, multiUser, platform
 				" and never leaves it. Wardyn holds no copy; each unlock is " + unlock + "."}}
 	}
 	checks := []SetupCheck{ageKeyCheck(durable)}
+	if kekRequired {
+		checks = append(checks, SetupCheck{
+			ID: "kek_required_unmet", Label: "Credential key custody", Status: "fail",
+			Detail: "This deployment requires a key service, but credentials are wrapped by the local key. This reports the posture; wardynd refuses to start in it.",
+			Fix:    "Set WARDYN_KEK=transit or azurekv, then run `wardynd -rewrap`.",
+		})
+	}
 	if durable && multiUser {
 		checks = append(checks, SetupCheck{
 			ID: "kek_local", Label: "Credential key", Status: "warn",

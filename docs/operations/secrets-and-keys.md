@@ -448,6 +448,11 @@ that works, or the probe does not round-trip, **wardynd refuses to start**.
    do (and, the other way, refuses without it, naming `-rewrap`, while
    any row is still sealed under it).
 
+**Requiring it.** A deployment that mandates key custody sets
+`WARDYN_KEK_REQUIRED` (chart `kek.required`). wardynd then refuses to start while
+the local key wraps credentials, with or without `WARDYN_AGE_KEY`, and
+`wardynd -rewrap` still runs.
+
 **Back:** set `WARDYN_KEK=local` and `WARDYN_AGE_KEY`, keep
 `WARDYN_VAULT_TRANSIT_KEY` so Transit still reads its rows, restart, and
 run `wardynd -rewrap` again.
