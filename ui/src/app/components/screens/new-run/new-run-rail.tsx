@@ -85,6 +85,8 @@ interface RunRailProps {
     inFlight: boolean;
     /** Why Launch cannot be pressed — a disabled button that won't say is a dead end. */
     problem: string | null;
+    /** An action that rides on the `problem` line (f-f5: "Connect →"). */
+    problemLink?: { to: string; label: string };
     /** #922 review F5: an ADDITIONAL disable with no text of its own — the
      *  workspace picker's own advisory line (workspace-card.tsx) already
      *  names the reason, so Launch disables without the rail repeating the
@@ -638,6 +640,14 @@ export function RunRail({
                 {NO_BARRIER.CTA}
               </Link>
               .
+            </>
+          )}
+          {launch.problemLink && (
+            <>
+              {" "}
+              <Link to={launch.problemLink.to} className="font-medium text-info hover:underline">
+                {launch.problemLink.label}
+              </Link>
             </>
           )}
         </p>
