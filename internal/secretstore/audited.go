@@ -195,6 +195,17 @@ func (a *audited) DeleteEverywhere(ctx context.Context, names []string) (int, er
 	return a.inner.DeleteEverywhere(ctx, names)
 }
 
+// Revision forwards the wrapped store's row revision (Revisioned), or answers
+// ErrNoRevision. A guarded Put needs no forwarding: its context reaches the
+// wrapped Put unchanged. Not audited: it reads no value.
+func (a *audited) Revision(ctx context.Context, name string) (string, error) {
+	r, ok := a.inner.(Revisioned)
+	if !ok {
+		return "", ErrNoRevision
+	}
+	return r.Revision(ctx, name)
+}
+
 // Holders is not audited: it reads which namespaces hold a row, never a value.
 func (a *audited) Holders(ctx context.Context, names []string) (map[string][]string, error) {
 	return a.inner.Holders(ctx, names)
