@@ -71,6 +71,7 @@ func TestAdvisoryLockKeysAreDistinct(t *testing.T) {
 		"groundtruthRotator":   GroundTruthRotatorLockKey,
 		"secretRekey":          SecretRekeyLockKey,
 		"terminalSandboxSweep": TerminalSandboxSweepLockKey,
+		"sweeperLeader":        SweeperLeaderLockKey,
 	}
 	seen := map[int64]string{}
 	for name, key := range keys {
