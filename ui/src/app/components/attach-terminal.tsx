@@ -51,9 +51,9 @@ import { cn } from "./ui/utils";
 import { Button } from "./ui/button";
 import { TakeoverConfirmDialog } from "./attach-takeover-dialog";
 import { TerminalConnectionStatus } from "./attach-terminal-status";
-import { CopyNotice, CopyOfferToast } from "./attach-terminal-copy-offer";
-import type { CopyGate, CopyOffer } from "./attach-terminal-clipboard";
-import { RUN_COCKPIT, TERMINAL } from "./wardyn/copy";
+import { CopyBlockedNotice, CopyOfferToast } from "./attach-terminal-copy-offer";
+import { isMacPlatform, type CopyGate, type CopyOffer } from "./attach-terminal-clipboard";
+import { RUN_COCKPIT, TERMINAL, TERMINAL_COPY } from "./wardyn/copy";
 import { useOperator, useOperatorResolved, usePrincipal } from "./wardyn/operator-context";
 import { entryErrorMessage, mayEnterRun, RUN_OWNER_ONLY } from "../lib/run-entry";
 import { OPERATOR_ONLY_REASON } from "./wardyn/copy";
@@ -193,6 +193,13 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // The clipboard gate's verified copy offer and its quiet "blocked" notice.
   const [copyOffer, setCopyOffer] = React.useState<CopyOffer | null>(null);
   const [copyNotice, setCopyNotice] = React.useState<string | null>(null);
+  // The offer card takes focus; when it goes, the terminal gets it back.
+  const hadOffer = React.useRef(false);
+  React.useEffect(() => {
+    if (hadOffer.current && !copyOffer) termRef.current?.focus();
+    hadOffer.current = !!copyOffer;
+  }, [copyOffer]);
+  const selectHint =TERMINAL_COPY.SELECT_HINT(TERMINAL_COPY.NATIVE_CHORD(isMacPlatform()));
   const copyGateRef = React.useRef<CopyGate | null>(null);
 
   // Keep onClose in a ref so a fresh closure on every parent render does NOT
@@ -455,6 +462,9 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           <span className="hidden font-mono text-meta text-muted-foreground sm:inline">
             {TERMINAL.ESCAPE_CHORD_HINT}
           </span>
+          {/* M11 S1: the native-selection hint, for observers too. Below lg it
+              lives in the grid's aria-description only. */}
+          <span className="hidden font-mono text-meta text-muted-foreground lg:inline">· {selectHint}</span>
           {(connState === "connecting" || connState === "reconnecting") && (
             <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
           )}
@@ -531,13 +541,12 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
             // R4-F144: the same sentence the title bar shows, for the reader who
             // cannot see it — 2.1.2's "advised on entry" has to hold for a screen
             // reader landing in the grid, not only for a sighted user.
-            aria-description={TERMINAL.ESCAPE_CHORD_HINT}
+            aria-description={`${TERMINAL.ESCAPE_CHORD_HINT} · ${selectHint}`}
           />
         </div>
         {copyOffer ? (
           <CopyOfferToast key={copyOffer.id} offer={copyOffer} onDone={() => copyGateRef.current?.dismiss()} />
         ) : null}
-        {copyNotice && <CopyNotice message={copyNotice} />}
         {readOnly && (
           // pointer-events-none: this is a label, not a shield. The input it
           // describes is dropped SERVER-side; blocking clicks here would also
@@ -568,6 +577,8 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           onReconnect={() => manualReconnectRef.current()}
         />
       )}
+
+      {copyNotice && <CopyBlockedNotice onDismiss={() => setCopyNotice(null)} />}
 
       {/* Holder footer — only in the two states that have an action. A driving
           terminal keeps its existing chrome (every dialog embed depends on the

@@ -5,7 +5,7 @@
 
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { TERMINAL } from "../components/wardyn/copy/terminal";
+import { TERMINAL, TERMINAL_COPY } from "../components/wardyn/copy/terminal";
 import { parseFrozenTables, renderFromNamespaces, splitKey } from "./copy-doc-parity";
 
 // The mock round's whole value is that it stays CHECKABLE (the sign-in/
@@ -58,5 +58,36 @@ describe("terminal-escape-copy — terminal-escape-canon.md, #486", () => {
 
   it.each([...doc.keys()])("%s is byte-exact", (key) => {
     expect(render(key)).toBe(doc.get(key));
+  });
+});
+
+// M11 (term-t3b): the copy strings, parsed back out of the doc the same way.
+const copyDoc = new Map(
+  [...parseFrozenTables(DOC, /^## Copy strings/)].filter(([key]) => key !== "Constant"),
+);
+
+// `(pc)` / `(mac)` pick the platform; any other argument is a `{name}` placeholder.
+const renderCopy = (docKey: string): string => {
+  const [name, args] = splitKey(docKey);
+  const fn = TERMINAL_COPY[name as keyof typeof TERMINAL_COPY];
+  if (typeof fn !== "function") return String(fn);
+  const call = fn as (...a: unknown[]) => string;
+  return call(...args.map((a) => (a === "pc" ? false : a === "mac" ? true : `{${a}}`)));
+};
+
+describe("terminal-escape-copy — Copy strings, M11", () => {
+  it("finds every TERMINAL_COPY row in the doc", () => {
+    expect(copyDoc.size).toBe(15);
+    expect(new Set([...copyDoc.keys()].map((k) => splitKey(k)[0]))).toEqual(new Set(Object.keys(TERMINAL_COPY)));
+  });
+
+  it.each([...copyDoc.keys()])("%s is byte-exact", (key) => {
+    expect(renderCopy(key)).toBe(copyDoc.get(key));
+  });
+
+  it("counts take the singular at 1", () => {
+    expect(TERMINAL_COPY.OFFER_SIZE(1)).toBe("1 character");
+    expect(TERMINAL_COPY.OFFER_BREAKS(1)).toBe("1 line break");
+    expect(TERMINAL_COPY.OFFER_INVISIBLE(1)).toBe("1 invisible character");
   });
 });

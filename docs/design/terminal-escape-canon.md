@@ -23,6 +23,42 @@ Source: `ui/src/app/components/wardyn/copy/terminal.ts`.
 Render sites: the title-bar strip and the grid's `aria-description`, both in
 `ui/src/app/components/attach-terminal.tsx`.
 
+## Copy strings
+
+M11, approved 2026-10-03 (term-t3b). Source:
+`ui/src/app/components/wardyn/copy/terminal.ts`, `TERMINAL_COPY`. `(mac)` and
+`(pc)` name the platform: macOS reads Option and Cmd, every other platform
+Shift and Ctrl. Counts take the singular when `n` is 1 (`1 character`,
+`1 line break`, `1 invisible character`).
+
+| Constant | Value |
+|---|---|
+| `NATIVE_CHORD(pc)` | `Shift+drag` |
+| `NATIVE_CHORD(mac)` | `Option+drag` |
+| `SELECT_HINT(chord)` | `{chord} selects for right-click Copy` |
+| `OFFER_TITLE` | `Copy selection` |
+| `OFFER_SIZE(n)` | `{n} characters` |
+| `OFFER_BREAKS(n)` | `{n} line breaks` |
+| `OFFER_INVISIBLE(n)` | `{n} invisible characters` |
+| `OFFER_EXPIRES(s)` | `Closes in {s}s` |
+| `OFFER_KEYS(pc)` | `Ctrl+C copies` |
+| `OFFER_KEYS(mac)` | `Cmd+C copies` |
+| `COPY` | `Copy` |
+| `DISMISS` | `Dismiss` |
+| `COPIED` | `Copied` |
+| `WRITE_FAILED` | `The browser refused the clipboard write. Nothing was copied.` |
+| `BLOCKED` | `Copy blocked. The terminal sent different text than you selected, so nothing was copied.` |
+
+Render sites, all in `ui/src/app/components/`: the selection hint in the
+`attach-terminal.tsx` title bar (from `lg` up; always in the grid's
+`aria-description`), and, in the blocked notice, `SELECT_HINT` with a full
+stop as its second line; the offer card and the blocked notice in
+`attach-terminal-copy-offer.tsx`. `COPIED` is the success toast after Copy.
+
+Preview glyphs (D2) are literals: `↵` at a line end, `→` for a tab, and
+`⟨U+XXXX⟩` in the warning colour for each control, format (Unicode Cf) or
+U+FEFF code point. The text is never truncated.
+
 ## Decisions
 
 **Q133-1 — the advertised chord is Ctrl+Shift+Backspace.**

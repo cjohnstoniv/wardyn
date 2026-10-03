@@ -74,7 +74,7 @@ test("a mouse-tracking pane that answers a drag with different text is blocked, 
   const grid = await readGrid(page);
   const row = await rowOf(screen, /alpha beta gamma/);
   await dragCells(page, screen, grid, [0, row], [4, row]);
-  await expect(page.getByTestId("terminal-copy-notice")).toHaveText(/copy blocked: the terminal sent different text/);
+  await expect(page.getByTestId("terminal-copy-notice")).toHaveText(/Copy blocked. The terminal sent different text than you selected/);
   await expect(page.getByTestId("terminal-copy-offer")).toHaveCount(0);
   expect(await writes(page)).toEqual([]);
 });
