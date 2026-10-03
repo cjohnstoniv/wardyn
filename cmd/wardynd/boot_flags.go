@@ -525,11 +525,11 @@ func parseBootFlags() *bootFlags {
 			"Connects with WARDYN_PG_MIGRATE_DSN when set, bounded by WARDYN_MIGRATE_TIMEOUT. See docs/OPERATIONS.md, \"Stopped-writer upgrade\" (default false)"),
 		rewrap: flag.Bool("rewrap", false, "maintenance mode: in one transaction, rewrap every stored secret's data key onto the key a write uses today (its purpose's local key, or the WARDYN_KEK=transit or azurekv key at its latest version), then exit; values are never decrypted. See docs/operations/secrets-and-keys.md (default false)"),
 		rewrapRetirePlatformKey: flag.Bool("rewrap-retire-platform-key", false, "with -rewrap only: move the signing, session and SSH host keys off the "+
-			"WARDYN_VAULT_TRANSIT_KEY_PLATFORM key (it must be named, and is read only) onto the key a write uses today, the "+
-			"WARDYN_KEK=transit key or the local key, then exit. Afterwards unset WARDYN_VAULT_TRANSIT_KEY_PLATFORM. "+
+			"WARDYN_VAULT_TRANSIT_KEY_PLATFORM or WARDYN_AZURE_KEK_KEY_PLATFORM key (it must be named, and is read only) onto the key a write uses today, the "+
+			"WARDYN_KEK key service's key or the local key, then exit. Afterwards unset that platform setting. "+
 			"See docs/operations/secrets-and-keys.md (default false)"),
 		rewrapAdoptBootKeys: flag.Bool("rewrap-adopt-boot-keys", false, "with -rewrap only: you attest that no boot key has been adopted onto the platform key "+
-			"(WARDYN_VAULT_TRANSIT_KEY_PLATFORM or WARDYN_PLATFORM_KEY_FILE) yet, so the signing, session and SSH host keys still under "+
+			"(WARDYN_VAULT_TRANSIT_KEY_PLATFORM, WARDYN_AZURE_KEK_KEY_PLATFORM or WARDYN_PLATFORM_KEY_FILE) yet, so the signing, session and SSH host keys still under "+
 			"the credential key or the age key may be moved onto it. Run it once, when you first turn the platform key on. Without it, "+
 			"-rewrap refuses a boot key under any other key. See docs/operations/secrets-and-keys.md (default false)"),
 		vault:        registerVaultFlags(),
