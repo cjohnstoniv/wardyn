@@ -142,7 +142,7 @@
   {
     "reason": "governance_profile",
     "target": "\"runs.attach\"",
-    "sentence": "fmt.Sprintf(\"attaching is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.\", name)"
+    "sentence": "fmt.Sprintf(\"attaching is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.\", p.Name)"
   },
   {
     "reason": "governance_profile",

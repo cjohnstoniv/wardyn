@@ -2890,6 +2890,28 @@ reason — the `reason`, the status code and the body are unchanged, and the key
 is absent entirely for an ordinary member. A burst of denials carrying it is an
 admin walking the member path, not an incident.
 
+**A ceiling refusal names the policy that caused it.** A refusal made by the resolved
+ceiling (`governance_profile` and `run_quota`, plus the Record Mode and provider sign-in
+launches that answer `record_ceiling_limit`) carries a `policy` object beside `error` and
+`reason`: `source` (`profile` or `deployment`), the leaf profile's `name`, and the contact
+it published (`owner`, `email`, `request_url`, `request_text`, each present only when set
+and still valid). A member bound by the deployment is named as `deployment` with the
+site config's `policy_help`. An operator is never refused by a ceiling, so never gets one.
+The `error` text and the status are unchanged. The key is never on a hidden door (the
+`404` twin of a missing resource) and never on a decision whose wire reason was rewritten,
+so those stay byte-identical to a missing resource. An `authz.denied` row never carries
+the owner or email, only the `reason` and `target` it always had.
+
+- `GET /me` carries `governance_contact`: the caller's own `policy` object, or `null` for
+  an operator, when the ceiling cannot be resolved, and on a stale group snapshot. It
+  never fails the read, and for a member bound by the deployment it is `{"source":
+  "deployment"}` without a site-config read.
+- `GET /runs/{id}` carries `policy`: the profile the run was launched under, else the
+  deployment's `policy_help`, else the key is absent. A store failure omits it.
+- `wardyn` prints one `governed by …, to request a change: …` line after the error when the
+  refusal carries a `policy`. Exit codes are unchanged, and the Go SDK exposes it as
+  `APIError.Policy`.
+
 | `reason` | Raised when | Shape |
 |---|---|---|
 | `admin_surface` | a member requested an admin-only route (`requireOperator`) | ⛔ `403` |
