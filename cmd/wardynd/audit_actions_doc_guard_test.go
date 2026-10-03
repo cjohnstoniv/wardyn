@@ -605,6 +605,10 @@ var auditActionGrammarAllow = map[string]bool{
 	// records a conversion that already happened, once, at upgrade.
 	"workspace.llm_cred.migrated":  true,
 	"model_provider.not_converted": true,
+	// The key-custody and audit-retention designs fixed this name for the
+	// per-subject key's destroy before the lane that first emits it met this
+	// grammar. Past tense on purpose: it records the tombstone that was written.
+	"principal_key.destroyed": true,
 }
 
 // actionSegment is one dot-separated segment of an action name.

@@ -400,7 +400,7 @@ func (c *Client) RunFiles(ctx context.Context, runID uuid.UUID) (RunFiles, error
 	return out, err
 }
 
-// RunOutput is GET /runs/{id}/output's body: the end of a task_mode=exec run's
+// RunOutput is GET /runs/{id}/output's body: the end of a non-interactive run's
 // combined stdout/stderr.
 type RunOutput struct {
 	Output string `json:"output"`
@@ -411,8 +411,8 @@ type RunOutput struct {
 	Complete bool `json:"complete"`
 }
 
-// RunOutput reads the last tail bytes of a task_mode=exec run's output
-// (owner-or-admin); tail <= 0 asks for all the server keeps (8 KiB). 409 for
+// RunOutput reads the last tail bytes of a non-interactive run's output
+// (owner-or-admin); tail <= 0 asks for all the server keeps (WARDYN_RUN_OUTPUT_TAIL_BYTES, 64 KiB by default). 409 for
 // an interactive run, when none is kept, or when it is off; 410 once it has
 // expired. Each refusal carries a run_output_* reason.
 func (c *Client) RunOutput(ctx context.Context, runID uuid.UUID, tail int) (RunOutput, error) {

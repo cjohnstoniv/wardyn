@@ -166,7 +166,12 @@ type InjectionGrant struct {
 type Resources struct {
 	CPUMillis int64
 	MemoryMiB int64
-	PidsLimit int64 // fork-bomb guard; zero => driver default
+	// CPURequestMillis/MemoryRequestMiB are the k8s scheduling requests; 0 means
+	// "same as the limit". Never policy-authored: EffectiveRequests fills them from
+	// the deployment ratio. The Docker substrate ignores them.
+	CPURequestMillis int64
+	MemoryRequestMiB int64
+	PidsLimit        int64 // fork-bomb guard; zero => driver default
 	// DiskMiB caps writable storage; WHAT BINDS IT DIFFERS BY SUBSTRATE (see
 	// Capabilities.EphemeralDiskEnforcement): docker quotas only when
 	// supported, else uncapped; k8s enforces via kubelet EVICTION.

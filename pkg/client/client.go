@@ -72,6 +72,9 @@
 //     reason the SSO leg above is — it is a browser redirect dance whose whole
 //     point is a human at a keyboard consenting, and it binds to a browser
 //     session an SDK caller does not have.
+//   - /api/v1/model-providers-entra — the per-row Azure Foundry sign-in door (0.8.6):
+//     a browser redirect dance whose callback is the /api/v1/scm one above.
+//     Unwrapped for the same reason.
 //   - the attach lane under /api/v1/runs/{id} — attach, attach/ticket,
 //     attach/holder, attach/takeover, resources. A WebSocket and its ticket.
 //   - /api/v1/branding       — console branding (#1125): the sign-in page's anonymous

@@ -46,10 +46,14 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 		}
 	}
 	expiryish := regexp.MustCompile(`(?i)expir|valid_until|not_after|ttl`)
+	// expires_at is the one expiry column: nullable, NULL = never expires, set only
+	// by a mint that asked for a TTL or ran under WARDYN_API_TOKEN_MAX_TTL. It
+	// narrows the window for those tokens and for no others, which is what the
+	// docs now say ("A token can expire"); any other expiry-ish column is news.
 	for _, c := range cols {
-		if expiryish.MatchString(c) {
-			t.Errorf("%s now has an api_tokens.%s column: the window may no longer be unbounded, so the docs' "+
-				"\"no expiry column\" claim and residual #33 need re-reading, not deleting", file, c)
+		if c != "expires_at" && expiryish.MatchString(c) {
+			t.Errorf("%s now has an api_tokens.%s column: the window may be bounded some other way, so the docs' "+
+				"\"A token can expire\" claim and residual #38 need re-reading, not deleting", file, c)
 		}
 	}
 
@@ -66,7 +70,8 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 	// the group half stopped being refreshed again and the docs would overstate
 	// what is bounded.
 	// `user_type` joined with #611, re-stamped in the same UPDATE.
-	allowed := []string{"last_used_at", "revoked_at", "role", "user_type", "groups", "groups_truncated"}
+	// `identity_stamped_at` joined with WARDYN_ROLE_STAMP_TTL, moved in the same UPDATE.
+	allowed := []string{"last_used_at", "revoked_at", "role", "user_type", "groups", "groups_truncated", "identity_stamped_at"}
 	for _, c := range updated {
 		if !slices.Contains(allowed, c) {
 			t.Errorf("internal/store/store_apitokens.go now UPDATEs api_tokens.%s — an unexpected column is re-stamped; "+
@@ -109,7 +114,9 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 	for _, want := range []string{
 		"Both halves are stamps re-checked at login",
 		"re-stamps the role, the group snapshot, and the",
-		"**no expiry column**",
+		"**A token can expire.**",
+		"`WARDYN_API_TOKEN_MAX_TTL`",
+		"`WARDYN_ROLE_STAMP_TTL` (default off)",
 		"A human demoted out of `security_admin`",
 		"`DELETE /api/v1/tokens/{id}`",
 		"/api/v1/sessions/revoke",

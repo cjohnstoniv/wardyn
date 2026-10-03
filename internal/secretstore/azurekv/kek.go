@@ -5,6 +5,7 @@ package azurekv
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -37,6 +38,10 @@ type KEKConfig struct {
 	Key, SigningKey                                                         string
 	Auth, TenantID, ClientID, FederatedTokenFile, AuthorityHost, CACertFile string
 	Timeout                                                                 time.Duration
+	// KeySetting and SigningKeySetting name the settings Key and SigningKey
+	// came from, for the boot errors; empty = WARDYN_AZURE_KEK_KEY and
+	// WARDYN_AZURE_KEK_SIGNING_KEY. The platform pair sets its own.
+	KeySetting, SigningKeySetting string
 }
 
 // KEK is the Azure Key Vault KEK (WARDYN_KEK=azurekv). Each data key is
@@ -106,19 +111,20 @@ func NewKEK(ctx context.Context, cfg KEKConfig) (*KEK, error) {
 }
 
 func newKEK(cfg KEKConfig) (*KEK, error) {
-	wrapURL, wrapName, err := parseKeyID("WARDYN_AZURE_KEK_KEY", cfg.Key)
+	keySetting, sigSetting := cmp.Or(cfg.KeySetting, "WARDYN_AZURE_KEK_KEY"), cmp.Or(cfg.SigningKeySetting, "WARDYN_AZURE_KEK_SIGNING_KEY")
+	wrapURL, wrapName, err := parseKeyID(keySetting, cfg.Key)
 	if err != nil {
 		return nil, err
 	}
-	signURL, signName, err := parseKeyID("WARDYN_AZURE_KEK_SIGNING_KEY", cfg.SigningKey)
+	signURL, signName, err := parseKeyID(sigSetting, cfg.SigningKey)
 	if err != nil {
 		return nil, err
 	}
 	if wrapURL.Scheme != signURL.Scheme || !strings.EqualFold(wrapURL.Host, signURL.Host) {
-		return nil, fmt.Errorf("WARDYN_AZURE_KEK_SIGNING_KEY is in %s, WARDYN_AZURE_KEK_KEY in %s; both keys must be in the same vault", signURL.Host, wrapURL.Host)
+		return nil, fmt.Errorf("%s is in %s, %s in %s; both keys must be in the same vault", sigSetting, signURL.Host, keySetting, wrapURL.Host)
 	}
 	if wrapName == signName {
-		return nil, errors.New("WARDYN_AZURE_KEK_KEY and WARDYN_AZURE_KEK_SIGNING_KEY name the same key; the wrapping key and the signing key are two keys")
+		return nil, fmt.Errorf("%s and %s name the same key; the wrapping key and the signing key are two keys", keySetting, sigSetting)
 	}
 	c, err := newClient(Config{
 		VaultURL: wrapURL.Scheme + "://" + wrapURL.Host, Auth: cfg.Auth, TenantID: cfg.TenantID, ClientID: cfg.ClientID,
@@ -160,6 +166,19 @@ func parseKeyID(setting, raw string) (*url.URL, string, error) {
 		return nil, "", fmt.Errorf("%s %q: the key name must be 1-127 letters, digits and \"-\"", setting, raw)
 	}
 	return u, strings.ToLower(name), nil
+}
+
+// KeyIdentity is the normalised identity of a versionless key id: its
+// lowercase vault host and lowercase key name, which is how Key Vault tells
+// two keys apart. Two spellings that differ only by case name one key, so a
+// check that two settings name different keys compares these, never the raw
+// strings.
+func KeyIdentity(setting, raw string) (string, error) {
+	u, name, err := parseKeyID(setting, raw)
+	if err != nil {
+		return "", err
+	}
+	return strings.ToLower(u.Host) + "/" + name, nil
 }
 
 func (k *KEK) start(ctx context.Context) error {

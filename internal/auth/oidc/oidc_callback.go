@@ -281,10 +281,10 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 
 	// OnLogin fires once the login is approved but before the session cookie
 	// is written. Best-effort: nil is a no-op; the integrator's callback is
-	// responsible for not letting a backend hiccup fail the login. groups/
-	// groupsTruncated are the same values the session below carries.
+	// responsible for not letting a backend hiccup fail the login. The role,
+	// user type and groups are the same values the session below carries.
 	if a.cfg.OnLogin != nil {
-		a.cfg.OnLogin(r.Context(), sess.Sub, sess.Role, sess.UserType, sess.Groups, sess.GroupsTruncated)
+		a.cfg.OnLogin(r.Context(), a.loginFacts(sess, cc))
 	}
 	// The login-grant sink runs here for the same reason as OnLogin: a
 	// refused login never yields a downstream credential, and a credential
@@ -306,6 +306,23 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	a.RecordAttach(r, sess)
 	http.SetCookie(w, cookie)
 	http.Redirect(w, r, a.cfg.BasePath+"/", http.StatusFound)
+}
+
+// loginFacts is what an admitted sign-in hands OnLogin. Only an Entra token carrying a well-formed
+// object id and a tenant is keyed by them; any other sign-in leaves both empty.
+func (a *Authenticator) loginFacts(sess Session, cc callbackClaims) LoginFacts {
+	f := LoginFacts{
+		Sub: sess.Sub, Role: sess.Role, UserType: sess.UserType,
+		Groups: sess.Groups, GroupsTruncated: sess.GroupsTruncated,
+		Issuer: cc.issuer, Email: cc.email,
+	}
+	if f.Issuer == "" {
+		f.Issuer = a.cfg.IssuerURL
+	}
+	if a.entra && cc.tid != "" && sess.ObjectID != "" {
+		f.TenantID, f.ObjectID = cc.tid, sess.ObjectID
+	}
+	return f
 }
 
 // emailVerifiedEnv names the setting that put the email_verified gate in force,
