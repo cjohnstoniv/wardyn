@@ -219,6 +219,9 @@ type Config struct {
 	// runUngoverned in govern_admin.go). The admin token and local mode stay
 	// ungoverned either way.
 	GovernAdminRuns bool
+	// GovernAdminRunsExempt mirrors WARDYN_GOVERN_ADMIN_RUNS_EXEMPT: the lanes
+	// left ungoverned under the switch. The only value is "recording".
+	GovernAdminRunsExempt []string
 	// TrustDomain is surfaced in /healthz and used for run SPIFFE ids.
 	TrustDomain string
 	// DefaultPolicy is applied to runs created without an explicit policy_id.

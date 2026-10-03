@@ -825,3 +825,29 @@ func permissionsPostureCheck(enforcement map[string]bool) SetupCheck {
 			len(on), len(capabilityKinds), joined(on), joined(off)),
 	}
 }
+
+// governAdminRunsCheck is the Admin runs row (mock M10, SETUP_CHECK.GOVERN_ADMIN_RUNS),
+// shown only while WARDYN_GOVERN_ADMIN_RUNS is on. Info while it governs
+// someone; warn when no sign-in is configured, because then it governs no one
+// and every launch is the admin, marked governance_exempt.
+func governAdminRunsCheck(on, recordingExempt, oidcConfigured bool) (SetupCheck, bool) {
+	if !on {
+		return SetupCheck{}, false
+	}
+	if !oidcConfigured {
+		return SetupCheck{
+			ID: "govern_admin_runs", Label: "Admin runs", Status: "warn",
+			Detail: "`WARDYN_GOVERN_ADMIN_RUNS` is on, but nobody signs in to this deployment, so it governs no one: every run is launched as the admin and marked `governance_exempt`.",
+			Fix:    "Configure single sign-on, or unset `WARDYN_GOVERN_ADMIN_RUNS`.",
+		}, true
+	}
+	recording := "Record Mode is refused for them."
+	if recordingExempt {
+		recording = "Record Mode is exempt; each recording is marked `governance_exempt` in the audit trail."
+	}
+	return SetupCheck{
+		ID: "govern_admin_runs", Label: "Admin runs", Status: "info",
+		Detail: "Admins' own runs are governed: each is bounded by the governance profile and grants that apply to that person. " + recording +
+			" The admin token stays outside, as break-glass, and its runs are marked `governance_exempt` in the audit trail.",
+	}, true
+}

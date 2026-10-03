@@ -40,3 +40,4 @@ reason run_owner_only
 reason mask_state_unavailable
 reason role_stamp_stale
 reason user_view_preview
+reason recording_governed

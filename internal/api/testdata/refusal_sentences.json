@@ -255,6 +255,11 @@
     "sentence": "(audit only)"
   },
   {
+    "reason": "recording_governed",
+    "target": "\"workspaces.record\"",
+    "sentence": "recordingGovernedRefusal"
+  },
+  {
     "reason": "role_stamp_stale",
     "target": "\"api_token\"",
     "sentence": "\"this token's role is out of date: its owner must sign in again to refresh it\" (registry)"

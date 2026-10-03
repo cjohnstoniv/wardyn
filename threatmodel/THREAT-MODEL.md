@@ -3019,6 +3019,35 @@ Local mode carries the same shape under a different label — the injected opera
 IS a verified human, so a self-decision there is refused like any other, which is
 why this switch is not one to turn on for a single-dev machine.
 
+### Constrained-admin mode is not separation of duties, and its break-glass is the admin token
+
+`WARDYN_GOVERN_ADMIN_RUNS` (off by default) governs an SSO admin's and an
+admin-role personal token's own runs like a member's: the governance profile, the
+capability grants, the quotas and the run doors all apply to them. It changes who
+stands outside governance when a run launches, and nothing else. Two residuals
+stay, and the mode does not claim otherwise.
+
+**An admin still governs the governance.** Profiles, assignments, capability
+grants and role mappings are security-operator writes, and a super admin is a
+security operator. A constrained admin can widen their own profile and then launch
+inside it. Every such write is audited, but nothing stops it: the mode is not
+separation of duties on its own, and it needs a four-eyes rule on governance
+changes beside it. The same holds for the surfaces the mode leaves alone:
+site-config hosts, provider rows and a workspace's approved egress feed every
+run's egress, and a deployment's environment, which can turn the switch off, is
+the platform team's change control.
+
+**The admin token and local mode stay break-glass.** Neither carries a person to
+resolve a profile for, so whoever holds the admin token runs ungoverned. With the
+switch on, each such launch carries `governance_exempt: true` on `run.create`, so
+a SIEM rule can alert on one; that is disclosure, not prevention, exactly as for
+the four-eyes bypass above, and the gate is only as strong as the handling of the
+token (SSO configured, token held out of band). With no sign-in configured the
+switch binds nobody, and boot says so. `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` set to
+`recording` is the one deliberate exemption: Record Mode then runs for a governed
+admin with open egress and the operator's credential injections, and each
+recording is marked `governance_exempt` on `run.record.start`.
+
 ### Coalesced `auth.fail` rows: the peer address is not the bound
 
 Since 0.7.2 the control plane folds IDENTICAL consecutive `auth.fail` audit rows

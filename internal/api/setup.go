@@ -149,6 +149,12 @@ type SetupStatus struct {
 type SetupAuth struct {
 	Mode          string `json:"mode"`
 	LocalLoopback bool   `json:"local_loopback"`
+	// GovernAdminRuns is WARDYN_GOVERN_ADMIN_RUNS and GovernAdminRunsExempt the
+	// lanes WARDYN_GOVERN_ADMIN_RUNS_EXEMPT leaves ungoverned. Neither is a
+	// secret, and redactSetupStatusForUser leaves Auth alone, so every signed-in
+	// person can read the posture their own runs are under.
+	GovernAdminRuns       bool     `json:"govern_admin_runs"`
+	GovernAdminRunsExempt []string `json:"govern_admin_runs_exempt,omitempty"`
 }
 
 // SetupRunner echoes the runner name and the live confinement classes/substrates.
@@ -320,6 +326,9 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	if chk, ok := tlsCookiePostureCheck(oidcConfigured, s.cfg.OIDCRedirectURL, s.cfg.OIDCSecureCookies); ok {
 		checks = append(checks, chk)
 	}
+	if chk, ok := governAdminRunsCheck(s.cfg.GovernAdminRuns, s.governAdminRunsExempts("recording"), oidcConfigured); ok {
+		checks = append(checks, chk)
+	}
 
 	// Filled from the site-config read below, not a second one. A read failure
 	// leaves it false, which is the conservative direction: it opens the funnel
@@ -362,7 +371,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	resp := SetupStatus{
 		Ready:              ready,
 		Checks:             checks,
-		Auth:               SetupAuth{Mode: authMode, LocalLoopback: s.cfg.LocalLoopback},
+		Auth:               SetupAuth{Mode: authMode, LocalLoopback: s.cfg.LocalLoopback, GovernAdminRuns: s.cfg.GovernAdminRuns, GovernAdminRunsExempt: s.cfg.GovernAdminRunsExempt},
 		Runner:             rnr,
 		Providers:          providers,
 		Secrets:            sec,

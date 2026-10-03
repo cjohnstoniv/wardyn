@@ -72,6 +72,9 @@ const (
 	// ReasonRoleStampStale: an API token's role and group stamp is older than
 	// WARDYN_ROLE_STAMP_TTL. Its owner signs in again to re-stamp it.
 	ReasonRoleStampStale Reason = "role_stamp_stale"
+	// ReasonRecordingGoverned: Record Mode is refused for an admin whose runs are
+	// governed (WARDYN_GOVERN_ADMIN_RUNS) unless the deployment exempts recording.
+	ReasonRecordingGoverned Reason = "recording_governed"
 )
 
 // Refusal is one reason's registry row.
@@ -110,6 +113,7 @@ var refusals = map[Reason]Refusal{
 	ReasonRunKept:                     {Effect: EffectDeny, Audit: true},
 	ReasonRunNotFound:                 {Effect: EffectDeny, Audit: true},
 	ReasonRunOwnerOnly:                {Effect: EffectDeny, Audit: true, Sentence: "only the person who started this run can open it interactively"},
+	ReasonRecordingGoverned:           {Effect: EffectDeny, Audit: true},
 	ReasonRunTerminal:                 {Effect: EffectDeny, Audit: true},
 	ReasonSecondHumanRequired:         {Effect: EffectDeny, Audit: true},
 	ReasonRunQuota:                    {Effect: EffectUnprocessable},
