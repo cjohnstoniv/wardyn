@@ -41,6 +41,7 @@ const (
 const (
 	mp400AzureGate     = "model_providers: %q: the azure_foundry kind is not available in this release"
 	mp400AzureUnused   = "model_providers: %q: azure applies only to the azure_foundry kind"
+	mp400AzureFastKind = "model_providers: %q: fast_model applies only to the azure_foundry kind"
 	mp400AzureNeed     = "model_providers: %q: an azure_foundry provider needs azure.endpoint and azure.route"
 	mp400AzureOther    = "model_providers: %q: an azure_foundry provider's address is azure.endpoint — base_url, bedrock and auth do not apply"
 	mp400AzureEndpoint = "model_providers: %q: azure.endpoint %q must be https://<host> — no path, port, userinfo, query or fragment, and a lower-case host with no trailing dot"
@@ -116,6 +117,9 @@ func validateProviderAzure(mp types.ModelProvider, env providerWriteEnv) error {
 	if mp.Kind != types.ModelProviderAzureFoundry {
 		if mp.Azure != nil {
 			return fmt.Errorf(mp400AzureUnused, mp.ID)
+		}
+		if slices.ContainsFunc(mp.Harnesses, func(h types.ProviderHarness) bool { return h.FastModel != "" }) {
+			return fmt.Errorf(mp400AzureFastKind, mp.ID)
 		}
 		return nil
 	}

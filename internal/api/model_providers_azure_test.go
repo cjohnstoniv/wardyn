@@ -156,6 +156,8 @@ func TestValidateProviderAzure(t *testing.T) {
 		{name: "auth", p: with(azureProvider(), func(p *types.ModelProvider) { p.Auth = &types.ProviderAuth{Header: "api-key"} }), want: "do not apply"},
 		{name: "azure on another kind", p: with(keyProvider("a", "claude-code"), func(p *types.ModelProvider) { p.Azure = azureProvider().Azure }),
 			want: "azure applies only to the azure_foundry kind"},
+		{name: "fast_model on another kind", p: with(keyProvider("a", "claude-code"), func(p *types.ModelProvider) { p.Harnesses[0].FastModel = "h" }),
+			want: "fast_model applies only to the azure_foundry kind"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := azureEnv()
