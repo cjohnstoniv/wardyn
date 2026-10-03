@@ -70,7 +70,22 @@ func buildStoreClients(ctx context.Context, f *bootFlags) (storeClients, error) 
 	if err != nil {
 		return storeClients{}, err
 	}
-	return storeClients{ext: ext, kek: k, kekWrites: writes, platformKEK: pk, timeout: *f.vault.timeout}, nil
+	principal, err := parsePrincipalKeys(*f.vault.principalKeys)
+	if err != nil {
+		return storeClients{}, err
+	}
+	return storeClients{ext: ext, kek: k, kekWrites: writes, platformKEK: pk, principalKeys: principal, timeout: *f.vault.timeout}, nil
+}
+
+// parsePrincipalKeys reads WARDYN_PRINCIPAL_KEYS: "on" or "off" (empty is off).
+func parsePrincipalKeys(v string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "off":
+		return false, nil
+	case "on":
+		return true, nil
+	}
+	return false, fmt.Errorf("refusing to start: WARDYN_PRINCIPAL_KEYS is %q; it must be \"on\" or \"off\"", v)
 }
 
 // storeClients are the configured clients a secret store is built over.
@@ -85,6 +100,8 @@ type storeClients struct {
 	// platformKEK is the second key service that wraps the boot keys alone
 	// (WARDYN_VAULT_TRANSIT_KEY_PLATFORM or WARDYN_AZURE_KEK_KEY_PLATFORM), or nil.
 	platformKEK kek.KEK
+	// principalKeys is WARDYN_PRINCIPAL_KEYS=on.
+	principalKeys bool
 	// timeout bounds each call to ext.
 	timeout time.Duration
 }
@@ -183,7 +200,7 @@ func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, plat
 			return nil, fmt.Errorf("parse age identity: %w", err)
 		}
 	}
-	deps := secretstore.Deps{Pool: pool, External: c.ext, ExternalTimeout: c.timeout, KEK: c.kek, KEKWrites: c.kekWrites}
+	deps := secretstore.Deps{Pool: pool, External: c.ext, ExternalTimeout: c.timeout, KEK: c.kek, KEKWrites: c.kekWrites, PrincipalKeys: c.principalKeys}
 	// Only a platform key that is actually set: a typed nil reads as a key.
 	if c.platformKEK != nil {
 		deps.PlatformKEK, deps.PlatformKEKWrites = c.platformKEK, true
@@ -314,6 +331,9 @@ type vaultFlags struct {
 	kek, transitMount, transitKey *string
 	// kekRequired is WARDYN_KEK_REQUIRED: refuse a serving boot on the local key.
 	kekRequired *bool
+	// principalKeys is WARDYN_PRINCIPAL_KEYS, "off" or "on": whether a person's
+	// credential rows are written under that person's principal key.
+	principalKeys *string
 	// transitKeyPlatform is the second Transit key the boot keys alone are
 	// wrapped under, reached as rolePlatform.
 	transitKeyPlatform *string
@@ -336,6 +356,7 @@ func registerVaultFlags() vaultFlags {
 		timeout:            flagDuration("secret-store-timeout", "WARDYN_SECRET_STORE_TIMEOUT", 5*time.Second, "timeout of each call to an external secret store"),
 		kek:                flagEnv("kek", "WARDYN_KEK", kekLocal, `key that wraps each stored secret's data key: "local" (derived from WARDYN_AGE_KEY), "transit" (the Vault Transit key WARDYN_VAULT_TRANSIT_KEY names, over the WARDYN_VAULT_* client) or "azurekv" (the Key Vault keys WARDYN_AZURE_KEK_KEY and WARDYN_AZURE_KEK_SIGNING_KEY name, as the WARDYN_AZURE_* identity)`),
 		kekRequired:        flagBool("kek-required", "WARDYN_KEK_REQUIRED", false, "refuse to start while credentials are wrapped by the local key: a key service (WARDYN_KEK=transit|azurekv) or an external store must hold them. `wardynd -rewrap` still runs"),
+		principalKeys:      flagEnv("principal-keys", "WARDYN_PRINCIPAL_KEYS", "off", `"on" seals each person's stored credentials under a key of that person's own (envelope enc_version 3), which an erase destroys; "off" (default) keeps writing them under the credential key. Boot keys and the operator namespace never move, and store mode is unaffected. Turning it off still reads every row, but enabling it is one-way across a downgrade below 0.8.6; wardynd -rewrap-principal-keys moves existing rows. See docs/operations/secrets-and-keys.md`),
 		transitMount:       flagEnv("vault-transit-mount", "WARDYN_VAULT_TRANSIT_MOUNT", "transit", "mount path of Vault's Transit engine"),
 		transitKey:         flagEnv("vault-transit-key", "WARDYN_VAULT_TRANSIT_KEY", "", "Transit key (type aes256-gcm96) that wraps data keys with WARDYN_KEK=transit; set with WARDYN_KEK=local it only reads the rows sealed under it, for `wardynd -rewrap` back to the local key"),
 		transitKeyPlatform: flagEnv("vault-transit-key-platform", "WARDYN_VAULT_TRANSIT_KEY_PLATFORM", "", "second Transit key (type aes256-gcm96, same mount) that wraps wardynd's own signing, session and SSH host keys, reached as WARDYN_VAULT_ROLE_PLATFORM; WARDYN_VAULT_TRANSIT_KEY then wraps only the credentials. Needs WARDYN_KEK=transit and WARDYN_VAULT_ROLE_PLATFORM; `wardynd -rewrap -rewrap-adopt-boot-keys` moves the boot keys onto it, once; `-rewrap -rewrap-retire-platform-key` moves them back off. Empty = one key for both. See docs/operations/secrets-and-keys.md"),

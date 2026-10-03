@@ -35,6 +35,11 @@
     "sentence": "\"run not found\""
   },
   {
+    "reason": "audit_export_partition_filter",
+    "target": "\"audit.export\"",
+    "sentence": "\"a partition export covers the whole partition; remove the other filter parameters\""
+  },
+  {
     "reason": "byoi_user",
     "target": "\"runs.image\"",
     "sentence": "\"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image\""

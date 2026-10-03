@@ -528,6 +528,7 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 			"# TYPE wardyn_org_federation_lag gauge\nwardyn_org_federation_lag %d\n", s.cfg.OrgFederation().Lag())
 	}
 	s.writeSinkDrops(w)
+	s.writeSubstrateGauges(ctx, w)
 	// The eBPF sensor's cumulative counts, moved off the anonymous
 	// /healthz onto this gated scrape where every other volume series lives.
 	s.writeEbpfGroundtruthCounters(ctx, w)

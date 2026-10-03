@@ -132,6 +132,8 @@ var queryParamNotAnID = map[string]string{
 	"actor_type":                "audit filter; narrows an already-scoped feed",
 	"outcome":                   "audit filter; narrows an already-scoped feed",
 	"origin":                    "audit filter, enum device|organisation (parseAuditFilter 400s anything else); narrows an already-scoped feed",
+	"partition":                 "GET /audit/export (security tier): the name of one audit partition. Not a principal's entity: a session below the security tier gets the empty export before the value is read, so it names nothing a member can reach",
+	"form":                      "GET /audit/export?partition=: readable|raw projection of that partition (the same security-tier gate)",
 	"force":                     "operator confirmation flag",
 	"confirm":                   "operator confirmation flag",
 	"acknowledge_access_change": "operator confirmation flag",

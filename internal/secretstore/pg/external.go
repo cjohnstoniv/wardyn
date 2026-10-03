@@ -213,6 +213,12 @@ func (s *Store) deleteLocked(ctx context.Context, tx pgx.Tx, owner, name string)
 	if err != nil {
 		return false, fmt.Errorf("pg secretstore: delete %s: %w", ref, err)
 	}
+	// A principal-key row holds nothing outside the table: deleting it is a
+	// plain row delete, and a crypto-erasure only once the owner's key is
+	// destroyed after it (secretstore.EraseOwner).
+	if version == pkVersion {
+		secretstore.ReportDelete(ctx, secretstore.DeleteReport{PrincipalKey: true})
+	}
 	if version == extVersion {
 		store, loc := splitRef(kekID)
 		if !s.reachable(store) {
@@ -294,7 +300,7 @@ func (s *Store) Migrate(ctx context.Context, target string, onRead func(owner, n
 func (s *Store) atTarget(target string, e envelope) bool {
 	if target == MigrateLocal {
 		// Any local row: moving between local keys is -rewrap's, not this.
-		return e.version == encVersion
+		return e.version == encVersion || e.version == pkVersion
 	}
 	store, _ := splitRef(e.kekID)
 	return e.version == extVersion && store == target
@@ -358,12 +364,11 @@ func (s *Store) migrateRow(ctx context.Context, target, owner, name string, onRe
 		return true, false, nil
 	}
 
-	k := s.writer(owner, name)
-	wrapped, ct, err := seal(ctx, k, owner, name, plain)
+	r, err := s.sealRow(ctx, owner, name, plain)
 	if err != nil {
 		return false, false, err
 	}
-	if err := flipRow(ctx, tx, owner, name, encVersion, k.ID(), wrapped, ct); err != nil {
+	if err := flipRow(ctx, tx, owner, name, r.version, r.kekID, r.wrapped, r.ct); err != nil {
 		return false, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {

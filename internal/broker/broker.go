@@ -840,18 +840,19 @@ type apiKeyScope struct {
 // four extra names above are enforced ONLY here — the actual mint chokepoint a
 // git_pat/ssh_key value would otherwise cross into the sandbox.
 var reservedBrokerSecretNames = map[string]bool{
-	"wardyn-signing-key":    true,
-	"wardyn-session-key":    true,
-	"wardyn-ui-session-key": true,
-	"wardyn-run-config-key": true,
-	"aws-access-key-id":     true,
-	"aws-secret-access-key": true,
-	"aws-session-token":     true,
-	"github-app-id":         true,
-	"github-app-key":        true,
-	"wardyn-ssh-host-key":   true,
-	"wardyn-internal-ca":    true,
-	"bedrock-api-key":       true,
+	"wardyn-signing-key":       true,
+	"wardyn-session-key":       true,
+	"wardyn-ui-session-key":    true,
+	"wardyn-run-config-key":    true,
+	"wardyn-audit-pending-key": true,
+	"aws-access-key-id":        true,
+	"aws-secret-access-key":    true,
+	"aws-session-token":        true,
+	"github-app-id":            true,
+	"github-app-key":           true,
+	"wardyn-ssh-host-key":      true,
+	"wardyn-internal-ca":       true,
+	"bedrock-api-key":          true,
 	// The hybrid device credential: no grant may hand it into a sandbox.
 	"wardyn-org-device-credential": true,
 	// internal/api's writeProbeSecretName: a store write probe's row, never a grant's value.

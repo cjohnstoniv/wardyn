@@ -31,7 +31,8 @@
     "llm_provider",
     "platform_shared",
     "runner",
-    "scm_provider"
+    "scm_provider",
+    "substrate_health"
   ],
   "with_oidc": [
     "age_key",

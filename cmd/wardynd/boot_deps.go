@@ -188,8 +188,8 @@ func warnAllowUnknownMigrations(allow bool) {
 }
 
 // buildAuditChain assembles the audit recorder chain:
-// audit.DelegationRecorder → maskingRecorder → spoolingRecorder →
-// (fanoutRecorder →) store.Recorder.
+// audit.DelegationRecorder → maskingRecorder → sealingRecorder →
+// spoolingRecorder → (fanoutRecorder →) store.Recorder.
 //
 // The Postgres store is the source of truth. When audit sinks are configured,
 // every persisted event ALSO fans out to file/webhook/syslog; the store write is
@@ -201,12 +201,18 @@ func warnAllowUnknownMigrations(allow bool) {
 // log-only, never blocking startup. Extracted verbatim from run(); the returned
 // *sinks.Fanout (nil when unconfigured) must be Closed on shutdown.
 //
+// Sealing sits below masking and above the spool (WARDYN_AUDIT_SEAL): the row
+// hash, the spool, the store and every sink see a personal field only as
+// ciphertext. seal is armed with its keys once the secret store exists.
+//
 // It also returns the *api.AuditSpool and the RAW store.Recorder so the API
 // server can start the background drain that replays spooled events back into the
 // store once it recovers. The drain MUST target the raw store recorder —
 // NOT the returned masking/spooling chain — or a replay that hit a still-down
 // store would re-spool (and re-enter the spool lock) instead of retrying later.
-func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source string, pool *pgxpool.Pool, maskReg *secretmask.Registry, scope ...*maskScope) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
+// That recorder is wrapped in sealingRecorder's replay mode, which re-seals the
+// rows that waited under the pending key before the store sees them.
+func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source string, pool *pgxpool.Pool, maskReg *secretmask.Registry, seal *auditSealSource, scope ...*maskScope) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
 	// #10 WARDYN_AUDIT_SOURCE: set once, before any sink is constructed/starts
 	// emitting — see sinks.Source's doc comment. A no-op (empty) is
 	// byte-identical to before this field existed.
@@ -234,13 +240,14 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 			slog.Info("wardynd: audit fallback spool", slog.String("path", spoolPath))
 		}
 	}
-	masked := maskingRecorder{inner: spoolingRecorder{inner: auditRec, spool: auditFallback}, reg: maskReg}
+	sealed := sealingRecorder{inner: spoolingRecorder{inner: auditRec, spool: auditFallback}, src: seal, spool: auditFallback}
+	masked := maskingRecorder{inner: sealed, reg: maskReg}
 	if len(scope) > 0 {
 		masked.scope = scope[0] // the serving boot's; maintenance modes label nothing
 	}
 	// Outermost: a row any writer records under a portal's delegated request
 	// names the portal (data.via, #1142) before it is masked, spooled or stored.
-	return audit.DelegationRecorder{Inner: masked}, fan, auditFallback, storeRec, nil
+	return audit.DelegationRecorder{Inner: masked}, fan, auditFallback, sealingRecorder{inner: storeRec, src: seal, replay: true}, nil
 }
 
 // substrateDeps is the registration Deps every substrate constructor receives,

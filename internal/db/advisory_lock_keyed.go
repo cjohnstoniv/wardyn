@@ -38,6 +38,14 @@ const SecretRowLockClass int32 = 0x57534543 // ASCII "WSEC"
 // inserts serialize, so the per-run cap it counts is the cap it enforces.
 const PushPathListLockClass int32 = 0x57505054 // ASCII "WPPT"
 
+// RunOutputLockClass is the classid of the TRANSACTION-scoped two-argument
+// lock store.PG's run_outputs writers, readers and erasure take, keyed to one
+// run: an erasure's tombstone and a writer's tombstone check are serialized, so
+// no writer commits a row the erasure has already ruled out. A leaf: taken last
+// inside the one transaction and never held while taking another lock, so it
+// sits outside LockOrder.
+const RunOutputLockClass int32 = 0x57524F55 // ASCII "WROU"
+
 // RunCapLockClass is the classid of the TRANSACTION-scoped two-argument lock
 // store.PG.CreateRunUnderCap takes (second key 0): one capped run insert at a
 // time across replicas, so the count it checks is the cap it enforces.

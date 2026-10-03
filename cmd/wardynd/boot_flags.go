@@ -102,6 +102,8 @@ type bootFlags struct {
 	execOutputTail       *bool
 	execOutputTailTTL    *time.Duration
 	runOutputTailBytes   *int
+	runOutputPersist     *bool
+	runOutputRetention   *int
 	confinementMap       *string
 	trustDomain          *string
 	controlURL           *string
@@ -153,6 +155,8 @@ type bootFlags struct {
 	auditSinks         *string
 	auditSpool         *string
 	auditSource        *string
+	// auditSeal is WARDYN_AUDIT_SEAL (off|fields|full): whether personal audit fields are stored sealed under the person's own key.
+	auditSeal *string
 
 	oidcIssuer       *string
 	oidcInternalIss  *string
@@ -279,6 +283,9 @@ type bootFlags struct {
 	// rewrapAdoptBootKeys is `wardynd -rewrap -rewrap-adopt-boot-keys`: no
 	// env pair either, so a stray variable cannot arm an adoption.
 	rewrapAdoptBootKeys *bool
+	// rewrapPrincipalKeys is `wardynd -rewrap-principal-keys` (rewrap_principal_keys.go):
+	// no env pair, like -rewrap.
+	rewrapPrincipalKeys *bool
 	// vault configures the Vault KV v2 external store, azure the Azure Key
 	// Vault one (secret_store.go).
 	vault vaultFlags
@@ -410,6 +417,8 @@ func parseBootFlags() *bootFlags {
 		execOutputTail:         flagBool("exec-output-tail", "WARDYN_EXEC_OUTPUT_TAIL", true, `keep the last -run-output-tail-bytes of each non-interactive run's output in memory for GET /runs/{id}/output, independent of the recording store; "off" keeps none`),
 		execOutputTailTTL:      flagDuration("exec-output-tail-ttl", "WARDYN_EXEC_OUTPUT_TAIL_TTL", 24*time.Hour, "how long a run's output tail is kept after its last output (duration)"),
 		runOutputTailBytes:     flagIntEnv("run-output-tail-bytes", "WARDYN_RUN_OUTPUT_TAIL_BYTES", 65536, "size of each non-interactive run's in-memory output tail and the cap on GET /runs/{id}/output?tail= (bytes, 1024 to 1048576)"),
+		runOutputPersist:       flagBool("run-output-persist", "WARDYN_RUN_OUTPUT_PERSIST", true, `persist each run's final masked output tail in Postgres so it outlives a restart and is readable from any replica; "off" keeps it in memory only`),
+		runOutputRetention:     flagIntEnv("run-output-retention-days", "WARDYN_RUN_OUTPUT_RETENTION_DAYS", 30, "delete persisted run output older than this many days (0 keeps it forever)"),
 		confinementMap:         flagEnv("confinement-map", "WARDYN_CONFINEMENT_MAP", "", `optional per-class substrate/runtime pins, e.g. "CC2=runsc;CC3=kata-qemu". Empty (default) uses the built-in defaults`),
 		trustDomain:            flagEnv("trust-domain", "WARDYN_TRUST_DOMAIN", embedded.DefaultTrustDomain, "SPIFFE trust domain"),
 		controlURL:             flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "https://wardynd:8443", "the URL every run's proxy dials to reach this daemon's internal TLS listener (-internal-listen); its host is the name wardynd's internal CA certifies. http:// is refused at boot unless the host is loopback (localhost, 127.0.0.0/8, ::1)"),
@@ -433,6 +442,7 @@ func parseBootFlags() *bootFlags {
 		auditSinks:         flagEnv("audit-sinks", "WARDYN_AUDIT_SINKS", "", "audit sink config JSON (file/webhook/syslog); empty disables fanout"),
 		auditSource:        flagEnv("audit-source", "WARDYN_AUDIT_SOURCE", "", `optional static string stamped as an extra "source" field on every audit event a sink serializes, so one SIEM index can tell multiple wardynd instances apart. Empty (default) adds no stamp`),
 		auditSpool:         flagEnv("audit-spool", "WARDYN_AUDIT_SPOOL", "./data/audit-spool.jsonl", "local append-only JSONL fallback for audit events whose Postgres write fails; empty disables"),
+		auditSeal:          flagEnv("audit-seal", "WARDYN_AUDIT_SEAL", "off", "off|fields: with fields, the personal fields of an audit row (docs/AUDIT-ACTIONS.md, Sealed fields) are stored, spooled and sent to sinks only as ciphertext under the person's own key, so erasing the person makes them unreadable everywhere they were copied. Rows written before it was turned on stay plaintext. full (also the actor) is not available yet and refuses to boot (default off)"),
 
 		oidcIssuer:       flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL, browser-facing, matches the id_token iss; enables human SSO when set"),
 		oidcInternalIss:  flagEnv("oidc-internal-issuer", "WARDYN_OIDC_INTERNAL_ISSUER", "", "OIDC issuer URL reachable from wardynd for server-side calls, e.g. http://dex:5556; defaults to the public issuer"),
@@ -550,10 +560,13 @@ func parseBootFlags() *bootFlags {
 			"(WARDYN_VAULT_TRANSIT_KEY_PLATFORM, WARDYN_AZURE_KEK_KEY_PLATFORM or WARDYN_PLATFORM_KEY_FILE) yet, so the signing, session and SSH host keys still under "+
 			"the credential key or the age key may be moved onto it. Run it once, when you first turn the platform key on. Without it, "+
 			"-rewrap refuses a boot key under any other key. See docs/operations/secrets-and-keys.md (default false)"),
+		rewrapPrincipalKeys: flag.Bool("rewrap-principal-keys", false, "maintenance mode, safe while a daemon serves: move every person's stored credential from the credential key into an envelope under that person's own principal key (enc_version 3), "+
+			"one row at a time, then exit; idempotent and resumable, and values are never decrypted. Boot keys, the operator namespace and external-store pointers are untouched. "+
+			"Separate from -rewrap, which rotates the root key. See docs/operations/secrets-and-keys.md (default false)"),
 		vault:               registerVaultFlags(),
 		hostCapacity:        registerHostCapacityFlags(),
-		preflightRatePerMin: flagIntEnv("preflight-rate-per-min", "WARDYN_PREFLIGHT_RATE_PER_MIN", 20, "POST /runs/preflight calls one person may make per minute (burst 5); 0 turns the limit off. The admin token is exempt"),
 		azure:               registerAzureFlags(),
+		preflightRatePerMin: flagIntEnv("preflight-rate-per-min", "WARDYN_PREFLIGHT_RATE_PER_MIN", 20, "POST /runs/preflight calls one person may make per minute (burst 5); 0 turns the limit off. The admin token is exempt"),
 
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address, e.g. ":2222". Empty (default) disables the gateway entirely`),
 		uiListen:         flagEnv("ui-sandbox-listen", "WARDYN_UI_SANDBOX_LISTEN", "", `UI-sandbox gateway listen address, e.g. ":8081". Empty (default) disables the gateway entirely; must differ from -listen`),

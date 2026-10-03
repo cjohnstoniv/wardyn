@@ -39,6 +39,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -216,7 +217,8 @@ func run() error {
 	// The masked + fanned-out + spooling recorder chain shared by EVERY audit
 	// writer (API, broker, identity, approvals, sweeper) — see buildAuditChain.
 	maskScopes := &maskScope{}
-	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg, maskScopes)
+	sealSrc := newAuditSealSource(sealModeOf(f)) // validated by validateBootPosture above
+	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg, sealSrc, maskScopes)
 	if err != nil {
 		return err
 	}
@@ -231,10 +233,13 @@ func run() error {
 		return err
 	}
 
-	// Run masking manifests: what each run was given, sealed in Postgres, so a
-	// restarted or second wardynd masks it and the doors refuse a run they
-	// cannot prove masked. Over the secret store's per-subject keys.
-	maskManifests, err := buildMaskManifests(pool, secrets, maskReg, maskScopes)
+	// Boot keys: created under a lock that serializes replicas (#754).
+	bootKeys := newBootKeyStore(secrets, pool, *f.allowMultiInstance)
+	// What is sealed under the secret store's per-subject keys: the run masking
+	// manifests (what each run was given, so a restarted or second wardynd masks
+	// it and the doors refuse a run they cannot prove masked) and the audit
+	// fields WARDYN_AUDIT_SEAL seals, whose recorder was built before the store.
+	maskManifests, err := armSubjectKeyed(bootCtx, pool, secrets, maskReg, maskScopes, sealSrc, bootKeys)
 	if err != nil {
 		return err
 	}
@@ -242,8 +247,6 @@ func run() error {
 	// Embedded identity provider: signing key persisted in the secret store,
 	// generated on first boot. The pg-backed revocation store is the kill-switch
 	// denylist (identity_revocations).
-	// Boot keys: created under a lock that serializes replicas (#754).
-	bootKeys := newBootKeyStore(secrets, pool, *f.allowMultiInstance)
 	signKey, err := loadOrCreateSigningKey(bootCtx, bootKeys)
 	if err != nil {
 		return err
@@ -369,9 +372,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	leader := db.NewSweeperLeader(pool, sweeperHolder())
+	holder := sweeperHolder()
+	leader := db.NewSweeperLeader(pool, holder)
+	ticks := sweephealth.New(db.NewSweepTicks(pool), holder, nil)
 	srv := api.New(api.Config{
 		SweeperLease: leader,
+		SweepHealth:  ticks,
 		Store:        st,
 		Identity:     idp,
 		Approvals:    approvals,
@@ -434,9 +440,13 @@ func run() error {
 		Secrets:                  secrets,
 		MaskRegistry:             maskReg,
 		MaskManifests:            maskManifests,
+		AuditUnsealer:            sealSrc.unsealer(),
+		SubjectKeys:              subjectKeysOf(secrets),
 		ExecOutputTailOff:        !*f.execOutputTail,
 		ExecOutputTailTTL:        *f.execOutputTailTTL,
 		RunOutputTailBytes:       *f.runOutputTailBytes,
+		RunOutputPersistOff:      !*f.runOutputPersist,
+		RunOutputRetention:       time.Duration(*f.runOutputRetention) * 24 * time.Hour,
 		PreflightRatePerMin:      *f.preflightRatePerMin,
 		ADOEntra:                 adoEntraSourceFromFlags(st, f), // ado_entra_source.go
 		ADOEntraByRow:            adoEntraByRow(st, adoEntraLoginFromFlags(f)),
@@ -500,7 +510,7 @@ func run() error {
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
-	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore, leader)
+	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore, leader, ticks)
 
 	// SSH gateway accept loop (own goroutine, like the periodic workers above,
 	// and extracted the same way — see startSSHGateway's own doc comment).

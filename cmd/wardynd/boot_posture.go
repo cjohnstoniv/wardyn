@@ -406,6 +406,9 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if *f.preflightRatePerMin < 0 {
 		return fmt.Errorf("refusing to start: WARDYN_PREFLIGHT_RATE_PER_MIN is %d; want 0 (off) or a positive number", *f.preflightRatePerMin)
 	}
+	if _, err := auditSealMode(f); err != nil {
+		return err
+	}
 	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, *f.uiStripCookies, posture, *f.allowPlaintextListen); err != nil {
 		return err
 	}
@@ -416,6 +419,9 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 		return err
 	}
 	if err := validateRunOutputTailBytes(*f.runOutputTailBytes); err != nil {
+		return err
+	}
+	if err := validateRunOutputRetentionDays(*f.runOutputRetention); err != nil {
 		return err
 	}
 	for _, w := range bootPostureWarnings(f, posture) {
@@ -430,6 +436,15 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 func validateRunOutputTailBytes(n int) error {
 	if n < 1024 || n > 1<<20 {
 		return fmt.Errorf("WARDYN_RUN_OUTPUT_TAIL_BYTES is %d; it must be between 1024 and 1048576", n)
+	}
+	return nil
+}
+
+// validateRunOutputRetentionDays refuses a negative WARDYN_RUN_OUTPUT_RETENTION_DAYS:
+// 0 keeps persisted output forever, a positive number is the window in days.
+func validateRunOutputRetentionDays(n int) error {
+	if n < 0 {
+		return fmt.Errorf("WARDYN_RUN_OUTPUT_RETENTION_DAYS is %d; it must be 0 (keep forever) or a positive number of days", n)
 	}
 	return nil
 }

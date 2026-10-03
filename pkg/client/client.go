@@ -23,7 +23,8 @@
 //   - workspaces (/api/v1/workspaces):   CreateWorkspace, GetWorkspace, ListWorkspaces,
 //     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
-//   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents
+//   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
+//     ExportAuditPartition
 //   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, ListSecretsScoped,
 //     ListSecretsScopedPage, SetSecret, DeleteSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult
@@ -39,6 +40,8 @@
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
 //   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDeviceEnrolmentTokens, RevokeDeviceEnrolmentToken, ListDevices, RevokeDevice
+//   - people (/api/v1/people):           ErasePerson (a person's retained records, by scope, 0.8.6) — the rest of
+//     /api/v1/people is NOT wrapped: see below.
 //
 // NOT covered — drive these with the CLI or raw HTTP. This half is a CENSUS of
 // every registered route family the SDK does not wrap, not a list of
@@ -51,7 +54,7 @@
 //   - /api/v1/access         — directory search and group->role mappings (0.7)
 //   - /api/v1/tokens         — admin-tier API tokens (0.7); /api/v1/me/tokens is the
 //     self-service half, also unwrapped
-//   - /api/v1/people         — erasing a person's stored credentials (0.8, offboarding)
+//   - /api/v1/people         — creating a person, their tokens and erasing only their stored credentials (0.8, offboarding)
 //   - /api/v1/workspace-providers — the org's git-provider policy (allowed base
 //     URLs, credential lanes) and storage ceilings (0.7.2). Admin-only, and
 //     authored through the console's providers page rather than by tooling

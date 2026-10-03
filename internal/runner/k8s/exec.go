@@ -128,7 +128,8 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 		return "", fmt.Errorf("k8s: exec: add ephemeral container: %w", err)
 	}
 	if w, ok := d.execOutputs.Load(ref); ok {
-		go d.followExecOutput(ref, w.(io.Writer))
+		endDrain := runner.BeginOutputDrain(w.(io.Writer))
+		go func() { endDrain(d.followExecOutput(ref, w.(io.Writer))) }()
 	}
 	return execContainerName, nil
 }
@@ -137,34 +138,51 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 // output tail) once the kubelet has started it, until it exits or the pod is
 // deleted. Best-effort: a container that never starts, a pod that vanishes or
 // a refused log read leaves the tail as far as it got. The log read needs
-// `get` on pods/log in the runs namespace.
-func (d *Driver) followExecOutput(ref string, w io.Writer) {
+// `get` on pods/log in the runs namespace. It returns nil when the log was read
+// to its end, or when there was none to read (the container never starts, or
+// the pod is gone), and the error that cut the read short otherwise: the tail's
+// owner reads that as an incomplete capture.
+func (d *Driver) followExecOutput(ref string, w io.Writer) error {
 	ctx := context.Background()
 	pods := d.clientset.CoreV1().Pods(d.cfg.Namespace)
 	for errs := 0; ; time.Sleep(execWaitPollInterval) {
 		pod, err := pods.Get(ctx, ref, metav1.GetOptions{})
 		if err != nil {
 			if isNotFound(err) {
-				return
+				return nil
 			}
 			if errs++; errs >= execWaitMaxProbeErrors {
-				return
+				return err
 			}
 			continue
 		}
 		errs = 0
+		if execContainerNeverStarts(pod) {
+			return nil
+		}
 		if !execContainerStarted(pod) {
 			continue
 		}
 		rc, err := pods.GetLogs(ref, &corev1.PodLogOptions{Container: execContainerName, Follow: true}).Stream(ctx)
 		if err != nil {
 			slog.Warn("wardynd: exec output tail: could not follow the agent's log", slog.String("ref", ref), slog.Any("err", err))
-			return
+			return err
 		}
 		defer rc.Close()
-		_, _ = io.Copy(w, rc)
-		return
+		_, err = io.Copy(w, rc)
+		return err
 	}
+}
+
+// execContainerNeverStarts reports whether the agent exec container sits in a
+// Waiting reason that never resolves (execNeverStartedReasons): it has no log.
+func execContainerNeverStarts(pod *corev1.Pod) bool {
+	for _, cs := range pod.Status.EphemeralContainerStatuses {
+		if cs.Name == execContainerName {
+			return cs.State.Waiting != nil && execNeverStartedReasons[cs.State.Waiting.Reason]
+		}
+	}
+	return false
 }
 
 // execContainerStarted reports whether the agent exec container has a log to
