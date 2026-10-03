@@ -447,6 +447,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			RequireEmailVerified: *f.oidcRequireEmailVerified,
 			ExtraScopes:          splitCSV(*f.oidcExtraScopes),
 			SecureCookies:        secureCookies,
+			RoleStampTTL:         *f.roleStampTTL,
 			RoleMap:              roleMap,
 			DefaultRole:          defaultRole,
 			// Legacy source: a 0.4.5 deployment's WARDYN_OIDC_OPERATOR_EMAILS
@@ -472,7 +473,8 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// re-stamps role+role_checked_at on every ssh_public_keys row this
 			// principal owns — the bounded-stale re-check sshAuth's admin-override
 			// path reads (WARDYN_SSH_ROLE_TTL) — and role+user_type+groups+
-			// groups_truncated on every api_tokens row they hold. store.NewPG(pool) is a cheap value
+			// groups_truncated and identity_stamped_at (the age WARDYN_ROLE_STAMP_TTL reads, moved in
+			// that one UPDATE) on every api_tokens row they hold. store.NewPG(pool) is a cheap value
 			// wrapper (constructed the same way elsewhere in this file), not a
 			// connection of its own. Best-effort: a store hiccup here logs and
 			// the login still succeeds — see oidc.Config.OnLogin's own doc for

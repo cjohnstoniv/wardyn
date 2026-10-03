@@ -1776,13 +1776,14 @@ hiding them would repeat the failure mode we are designed to avoid.
     genuinely incomplete snapshot still reads as truncated downstream, never
     silently flipped to complete by the refresh itself.
 
-    What did NOT move: there is no TTL on the stamp the way
-    `WARDYN_SSH_ROLE_TTL` bounds a key, and a human who never signs in again is
-    re-stamped never. Since 0.8.6 a token can end on a clock instead
-    (`api_tokens.expires_at`, capped for new tokens by
-    `WARDYN_API_TOKEN_MAX_TTL`), but only one minted with a TTL or under a cap:
-    every earlier token, and every token on a deployment that sets no cap, never
-    expires. So a power that derives from a stale group snapshot — a
+    What did NOT move: unless the operator sets `WARDYN_ROLE_STAMP_TTL` (off by
+    default; it refuses a token whose stamp is older until its owner signs in
+    again) nothing bounds the stamp's age the way `WARDYN_SSH_ROLE_TTL` bounds a
+    key, and a human who never signs in again is re-stamped never. Since 0.8.6 a
+    token can end on a clock instead (`api_tokens.expires_at`, capped for new
+    tokens by `WARDYN_API_TOKEN_MAX_TTL`), but only one minted with a TTL or under
+    a cap: every earlier token, and every token on a deployment that sets no cap,
+    never expires. So a power that derives from a stale group snapshot — a
     capability grant or governance profile bound to a group they have left, or
     an admin/`security_admin` role they were demoted out of — survives exactly
     until that human's next login or the token's expiry, and for someone who has
@@ -1840,11 +1841,12 @@ hiding them would repeat the failure mode we are designed to avoid.
     `session.revoke` row's `tokens_revoked` count is the receipt that the
     identifier matched a person: sessions are stateless and cannot be counted, so
     a zero there against someone you believe holds tokens means you named them
-    wrong. Nothing ages a token out short of a sign-in, so offboarding — or any
-    change that must take effect before that human's next login — must revoke
-    explicitly (`docs/OPERATIONS.md`, "Per-user API tokens"). Closing this fully
-    means a TTL on the stamp itself, the same open half `WARDYN_SSH_ROLE_TTL`
-    narrows for the SSH lane; none is built for tokens.
+    wrong. Unless `WARDYN_ROLE_STAMP_TTL` is set, nothing ages a token out short of
+    a sign-in, so offboarding — or any change that must take effect before that
+    human's next login — must revoke explicitly (`docs/OPERATIONS.md`, "Per-user
+    API tokens"). The TTL bounds the stamp's age, not its freshness: a demotion made
+    only at the IdP still waits for the TTL or the next sign-in, and Wardyn holds no
+    IdP credential to re-derive a role sooner.
 
 39. **A group claim the IdP FILTERS is indistinguishable from a complete one, so
     a shrink-the-claim workaround loses grants silently.** Wardyn marks a group

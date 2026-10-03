@@ -65,6 +65,9 @@ const (
 	// cannot prove this run's masking corpus complete here, so it refuses with
 	// 503 instead of passing bytes through unmasked (ha-l2.0).
 	ReasonMaskStateUnavailable Reason = "mask_state_unavailable"
+	// ReasonRoleStampStale: an API token's role and group stamp is older than
+	// WARDYN_ROLE_STAMP_TTL. Its owner signs in again to re-stamp it.
+	ReasonRoleStampStale Reason = "role_stamp_stale"
 )
 
 // Refusal is one reason's registry row.
@@ -113,6 +116,7 @@ var refusals = map[Reason]Refusal{
 	ReasonDelegationScope:             {Effect: EffectDeny, Audit: true},
 	ReasonEventStreamCap:              {Effect: EffectUnprocessable},
 	ReasonMaskStateUnavailable:        {Effect: EffectUnavailable, Audit: true},
+	ReasonRoleStampStale:              {Effect: EffectUnauthenticated, Audit: true, Sentence: "this token's role is out of date: its owner must sign in again to refresh it"},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,

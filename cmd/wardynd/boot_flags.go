@@ -298,6 +298,9 @@ type bootFlags struct {
 	// apiTokenMaxTTL caps a newly minted API token's lifetime — see
 	// api.Config.APITokenMaxTTL.
 	apiTokenMaxTTL *time.Duration
+	// roleStampTTL bounds how old an API token's or console session's role
+	// stamp may be — see api.Config.RoleStampTTL. Zero is off.
+	roleStampTTL *time.Duration
 
 	// UI-sandbox gateway (pillar 4): uiListen empty = off = no listener, no new
 	// surface, exactly like sshListen. uiAdvertise/uiOriginTemplate are the
@@ -549,6 +552,7 @@ func parseBootFlags() *bootFlags {
 		uiOriginTemplate: flagEnv("ui-sandbox-origin-template", "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE", "", `optional per-run origin for the UI-sandbox gateway, e.g. "https://run-{run}.ui.example.com" (needs wildcard DNS and certificate); must contain {run}. Empty (default) shares one origin across every run`),
 
 		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn run ssh" refuses`),
+		roleStampTTL:           flagDuration("role-stamp-ttl", "WARDYN_ROLE_STAMP_TTL", 0, "how old an API token's or console session's role stamp may be before its owner must sign in again (duration; 0 = off)"),
 		sshRoleTTL:             flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration)"),
 		apiTokenMaxTTL:         flagDuration("api-token-max-ttl", "WARDYN_API_TOKEN_MAX_TTL", 0, "longest lifetime a newly minted API token may have; a mint that asks for none gets this, one that asks for more is clamped to it (duration; 0 = no cap)"),
 		allowUnknownMigrations: flagBool("allow-unknown-migrations", "WARDYN_ALLOW_UNKNOWN_MIGRATIONS", false, "BREAK-GLASS: boot even though the database records migrations this wardynd does not ship (a newer wardynd migrated it). Normally refused — a downgrade is unsupported; restore the pre-upgrade dump instead"),

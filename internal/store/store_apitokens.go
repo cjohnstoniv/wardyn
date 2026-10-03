@@ -78,10 +78,10 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 	// q is built, not const: the created_at expression (db.AppClockAgeSQL) is
 	// shared with the session-revocation read and a const can't call it.
 	q := `
-		INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, expires_at, minted_by)
+		INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, expires_at, minted_by, identity_stamped_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,` + db.AppClockAgeSQL("$10") + `,
 		        CASE WHEN $11::bigint IS NULL THEN NULL ELSE ` + db.AppClockAgeSQL("$10") + ` + $11::bigint * interval '1 microsecond' END,
-		        NULLIF($12, ''))
+		        NULLIF($12, ''), now())
 		RETURNING ` + apiTokenCols
 	out, err := scanAPIToken(s.Pool.QueryRow(ctx, q,
 		t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), age, lifetime, t.MintedBy))
@@ -161,6 +161,12 @@ func (s PG) ListAPITokens(ctx context.Context) ([]types.APIToken, error) {
 // all their groups" for a snapshot that isn't — the wrong direction for an
 // authorization decision.
 //
+// identity_stamped_at moves with the role in the SAME statement, so a login
+// that stamps a token's role stamps its age too, and a failed statement leaves
+// that principal's tokens stale rather than half-updated. WARDYN_ROLE_STAMP_TTL
+// reads it; `revoked_at IS NULL` stays in the WHERE, so a login never revives a
+// revoked token (an expired one keeps its own expiry, which this never writes).
+//
 // Still bounded-stale, not live: the ceiling is the owner's next login (see
 // docs/SSH.md §Bounds for the key lane's equivalent). No error when the
 // principal holds no tokens — a zero-row UPDATE is the ordinary case.
@@ -178,6 +184,7 @@ func (s PG) RefreshAPITokenIdentity(ctx context.Context, principal, role, userTy
 	}
 	_, err = s.Pool.Exec(ctx,
 		`UPDATE api_tokens SET role = $1, user_type = $2, groups = $3, groups_truncated = $4,
+		   identity_stamped_at = now(),
 		   revoked_at = CASE WHEN minted_by IS NOT NULL AND role <> $1 THEN now() END
 		 WHERE principal = $5 AND revoked_at IS NULL`,
 		role, userType, g, truncated, principal)
@@ -234,13 +241,13 @@ const apiTokenLive = `revoked_at IS NULL AND (expires_at IS NULL OR expires_at >
 // The INSERT list stays spelled out separately: it names token_sha256 (never
 // read back) and omits last_used_at/revoked_at (never inserted) — deriving
 // one list from the other would hide that difference.
-const apiTokenCols = `id, principal, email, role, user_type, groups, groups_truncated, name, created_at, last_used_at, revoked_at, expires_at, COALESCE(minted_by, '')`
+const apiTokenCols = `id, principal, email, role, user_type, groups, groups_truncated, name, created_at, last_used_at, revoked_at, expires_at, COALESCE(minted_by, ''), identity_stamped_at`
 
 func scanAPIToken(row pgx.Row) (types.APIToken, error) {
 	var t types.APIToken
 	var groups []byte
 	err := row.Scan(&t.ID, &t.Principal, &t.Email, &t.Role, &t.UserType, &groups, &t.GroupsTruncated, &t.Name,
-		&t.CreatedAt, &t.LastUsedAt, &t.RevokedAt, &t.ExpiresAt, &t.MintedBy)
+		&t.CreatedAt, &t.LastUsedAt, &t.RevokedAt, &t.ExpiresAt, &t.MintedBy, &t.IdentityStampedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.APIToken{}, ErrNotFound
 	}

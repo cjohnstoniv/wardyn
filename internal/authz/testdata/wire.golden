@@ -7,6 +7,7 @@ effect hidden
 effect unprocessable
 effect conflict
 effect unavailable
+effect unauthenticated
 obligationkind drop
 reason admin_surface
 reason security_admin_surface
@@ -37,3 +38,4 @@ reason delegation_scope
 reason event_stream_cap
 reason run_owner_only
 reason mask_state_unavailable
+reason role_stamp_stale
