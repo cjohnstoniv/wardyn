@@ -2262,13 +2262,20 @@ Their next successful sign-in **re-stamps the role, the group snapshot, and the
 snapshot's own completeness bit** on every unrevoked token they hold — the same
 `OnLogin` hook that has re-stamped their SSH keys since 0.6, now widened to
 carry groups too — so a demotion, or a group membership change, reaches
-outstanding tokens at that human's own next login rather than immediately. And
-nothing ages either half out on its own short of that sign-in: `api_tokens` has
-`created_at`, `last_used_at` and `revoked_at` and **no expiry column**, there is
-no TTL on the stamp the way `WARDYN_SSH_ROLE_TTL` bounds an SSH key, and a human
-who is demoted and never signs in again keeps the role and groups their tokens
-were minted with indefinitely. **Explicit revocation is the only thing that
-ends it on your schedule** rather than waiting for that next login.
+outstanding tokens at that human's own next login rather than immediately. A token's stamp is
+timed: `api_tokens.identity_stamped_at` is set at mint and again at every one of those re-stamps.
+By default nothing ages a stamp out on its own, so a human who is demoted in the identity provider
+and never signs in again keeps the role and groups their tokens were minted with. Set
+`WARDYN_ROLE_STAMP_TTL` (default off) to bound that: a token whose stamp is older than the TTL is
+refused with `401` and the reason `role_stamp_stale` (an `authz.denied` audit row) until its owner
+signs in again, which re-stamps it with their current role. A console session older than the TTL is
+sent back through sign-in, so a stamp you can tune is also the age of the longest role a session
+can carry (a session already ends at the ID token's own expiry, so the TTL only matters when it is
+shorter than that). Wardyn keeps no identity-provider token and cannot re-derive a role on a timer;
+re-login is the only refresh. Turning the TTL on asks every token holder to sign in once, because
+the backfill dated existing stamps at mint. A login never revives a revoked token, and a stamp is
+one statement, so a failed re-stamp leaves that person's tokens stale, never half-updated.
+**Explicit revocation is still the only thing that ends a token on your schedule** without the TTL.
 
 A demotion made on the People page is now one of those explicit revocations:
 when a role-mapping write or delete takes a tier away from a value, Wardyn
@@ -2805,6 +2812,7 @@ admin walking the member path, not an incident.
 | `run_kept` | 0.8 (#1176): the same gate, when the run the token names is still `RUNNING` but kept — ended by its lease, or lost to a reboot or an outage. Its proxy is stopped on purpose and its identity is not revoked (a revive mints a fresh token under it), so the token the stopped proxy still holds would otherwise verify until it lapses. The kept reason rides beside the reason as `lost_reason`. A kept run later killed or torn down is refused as `run_terminal` instead. The three tail-upload doors are exempt for five minutes after the run was kept. Token renew refuses the same runs on its own path (`identity.renew`, `run_lost:<lost_reason>`) | ⛔ `403` |
 | `user_type_unknown` | 0.8: the user type stamped on the caller's session no longer exists (it was deleted after they signed in). Every control that names a type refuses rather than resolving without it — the capability resolvers, the governance ceiling and the drive resolver — at target `user_type`, with the missing id as the `user_type` datum. Written once per request, however many of those controls refuse it, and not for a display read (`GET /me`). The body is the sentence `Your user type no longer exists…`, whose remedy is an admin's (give the person another type) and then the person's (sign in again) | ⛔ `403` |
 | `delegation_scope` | 0.8 (#1142): a portal's delegated token asked for a route outside the delegation allow-list ([Delegated run management](#delegated-run-management-portals)), or reached `PUT /secrets/{name}` or `POST /me/ssh-keys`, which refuse a delegated request themselves whatever the allow-list says (0.8.2, #1234). The row's actor is the person and its `data.via` names the portal | ⛔ `403` |
+| `role_stamp_stale` | 0.8.6: `WARDYN_ROLE_STAMP_TTL` is set and the `wdn_` API token presented carries a role and group stamp (`api_tokens.identity_stamped_at`) older than it, or never stamped. Checked by `apiTokenAuth` after the token resolves and before it counts as used; target `api_token`, and the row's actor is the token's owner. The body is `this token's role is out of date: its owner must sign in again to refresh it`; the owner's next sign-in re-stamps the token and it works again. A revoked token is not this refusal: it stays an ordinary `401` | ⛔ `401` |
 | `event_stream_cap` | 0.8.2 (#1407): the caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (`maxRunEventStreams`, `internal/api/run_events.go`; target the run id). A portal's streams count against its person, and every admin-token caller is one principal. Not audited — a caller who IS authorized and hit a limit, like `run_quota` | ⛔ `422` |
 | `user_view_type_deleted` | 0.8: an admin in the user view made a request after the user type the view looks through was deleted. The request is refused — never answered as the admin, because its tier was already read as `user` — and the session's view is turned off on the cookie, so the next request is in the Admin view. The body is `The <type> user type was removed, so you're back in the Admin view…`; `POST /runs` and `POST /runs/preflight` answer `409` with `reason` `admin_view` instead. The row carries `user_view: true` and the deleted `user_type`. `GET /me` is never refused: it drops back and says so (`user_view_dropped`) | ⛔ `403` |
 
@@ -5212,6 +5220,7 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 `0092` adds `agent_runs.ended_at`.
 `0094` adds `attach_tickets.via_delegate`/`via_grant` and `agent_runs.created_via`.
 `0106` adds `attach_tickets.authorized_at`/`email` (`0026`'s table).
+`0109` adds `api_tokens.identity_stamped_at` (`0045`'s table), backfilled to `created_at`.
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.

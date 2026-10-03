@@ -1770,9 +1770,10 @@ hiding them would repeat the failure mode we are designed to avoid.
     silently flipped to complete by the refresh itself.
 
     What did NOT move: the table still carries `created_at`, `last_used_at`
-    and `revoked_at` and **no expiry column**, there is no TTL the way
-    `WARDYN_SSH_ROLE_TTL` bounds a key, and a human who never signs in again is
-    re-stamped never. So a power that derives from a stale group snapshot — a
+    and `revoked_at`, and unless the operator sets `WARDYN_ROLE_STAMP_TTL` (off by
+    default; it refuses a token whose stamp is older until its owner signs in
+    again) nothing bounds the stamp's age the way `WARDYN_SSH_ROLE_TTL` bounds a
+    key, and a human who never signs in again is re-stamped never. So a power that derives from a stale group snapshot — a
     capability grant or governance profile bound to a group they have left, or
     an admin/`security_admin` role they were demoted out of — survives exactly
     until that human's next login, and for someone who has left the
@@ -1829,11 +1830,12 @@ hiding them would repeat the failure mode we are designed to avoid.
     `session.revoke` row's `tokens_revoked` count is the receipt that the
     identifier matched a person: sessions are stateless and cannot be counted, so
     a zero there against someone you believe holds tokens means you named them
-    wrong. Nothing ages a token out short of a sign-in, so offboarding — or any
-    change that must take effect before that human's next login — must revoke
-    explicitly (`docs/OPERATIONS.md`, "Per-user API tokens"). Closing this fully
-    means a TTL on the stamp itself, the same open half `WARDYN_SSH_ROLE_TTL`
-    narrows for the SSH lane; none is built for tokens.
+    wrong. Unless `WARDYN_ROLE_STAMP_TTL` is set, nothing ages a token out short of
+    a sign-in, so offboarding — or any change that must take effect before that
+    human's next login — must revoke explicitly (`docs/OPERATIONS.md`, "Per-user
+    API tokens"). The TTL bounds the stamp's age, not its freshness: a demotion made
+    only at the IdP still waits for the TTL or the next sign-in, and Wardyn holds no
+    IdP credential to re-derive a role sooner.
 
 39. **A group claim the IdP FILTERS is indistinguishable from a complete one, so
     a shrink-the-claim workaround loses grants silently.** Wardyn marks a group

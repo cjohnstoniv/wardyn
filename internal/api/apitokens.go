@@ -170,6 +170,9 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 				return
 			}
 		}
+		if s.refuseStaleRoleStamp(w, r, t) {
+			return
+		}
 		// Best effort by contract (see Store.TouchAPIToken): a failed touch must
 		// never fail an otherwise-valid request. "Last used" is an operator
 		// hygiene signal — which tokens are dead and can be revoked — not an

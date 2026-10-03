@@ -66,7 +66,8 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 	// the group half stopped being refreshed again and the docs would overstate
 	// what is bounded.
 	// `user_type` joined with #611, re-stamped in the same UPDATE.
-	allowed := []string{"last_used_at", "revoked_at", "role", "user_type", "groups", "groups_truncated"}
+	// `identity_stamped_at` joined with WARDYN_ROLE_STAMP_TTL, moved in the same UPDATE.
+	allowed := []string{"last_used_at", "revoked_at", "role", "user_type", "groups", "groups_truncated", "identity_stamped_at"}
 	for _, c := range updated {
 		if !slices.Contains(allowed, c) {
 			t.Errorf("internal/store/store_apitokens.go now UPDATEs api_tokens.%s — an unexpected column is re-stamped; "+
@@ -109,7 +110,7 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 	for _, want := range []string{
 		"Both halves are stamps re-checked at login",
 		"re-stamps the role, the group snapshot, and the",
-		"**no expiry column**",
+		"`WARDYN_ROLE_STAMP_TTL` (default off)",
 		"A human demoted out of `security_admin`",
 		"`DELETE /api/v1/tokens/{id}`",
 		"/api/v1/sessions/revoke",

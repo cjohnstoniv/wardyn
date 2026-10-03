@@ -96,6 +96,13 @@ type Config struct {
 	// denies the login. nil means only "standard" exists.
 	UserTypes UserTypeSource
 
+	// RoleStampTTL is WARDYN_ROLE_STAMP_TTL: the oldest a session's role stamp may be, measured from
+	// the session's IssuedAt (the cookie's role is fixed then; only a sign-in changes it). An older
+	// session is rejected as "role_stamp_stale" and its owner signs in again. A cookie without an
+	// IssuedAt is older than any TTL. Zero is off. A session also ends at Expiry, so this only
+	// matters when it is shorter than that.
+	RoleStampTTL time.Duration
+
 	// OnLogin, when set, is called synchronously after an APPROVED login with what that login
 	// established (LoginFacts). A failure inside it must never fail the login; nil is a no-op.
 	OnLogin func(ctx context.Context, facts LoginFacts)
@@ -470,6 +477,13 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		sess, err := a.decodeSession(r)
 		if err == nil {
 			if time.Now().UTC().Before(sess.Expiry) {
+				// A role stamp older than the TTL is not trusted: the role in the cookie is as old as
+				// IssuedAt, and a demotion made only at the IdP reaches it by a new sign-in.
+				if ttl := a.cfg.RoleStampTTL; ttl > 0 && (sess.IssuedAt.IsZero() || time.Now().UTC().Sub(sess.IssuedAt) > ttl) {
+					a.clearSessionCookie(w)
+					next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), SessionRoleStampStale)))
+					return
+				}
 				// A revoked session must stop working on its VERY NEXT request, not linger until Expiry.
 				if a.cfg.Revocations != nil {
 					revoked, rerr := a.cfg.Revocations.IsSessionRevoked(r.Context(), sess.Sub, sess.Email, sess.IssuedAt)

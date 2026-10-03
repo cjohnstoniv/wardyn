@@ -68,6 +68,9 @@ func (s *tokenMemStore) CreateAPIToken(_ context.Context, t types.APIToken, raw 
 		return types.APIToken{}, store.ErrConflict
 	}
 	t.Token = "" // the store never persists the plaintext
+	if now := time.Now().UTC(); t.IdentityStampedAt == nil {
+		t.IdentityStampedAt = &now // the PG store stamps the mint
+	}
 	s.byID[t.ID] = t
 	s.byHash[h] = t.ID
 	return t, nil

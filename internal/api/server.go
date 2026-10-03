@@ -553,6 +553,11 @@ type Config struct {
 	// same posture production does rather than an accidental zero-tolerance
 	// TTL that fails every override.
 	SSHRoleTTL time.Duration
+	// RoleStampTTL is WARDYN_ROLE_STAMP_TTL: the oldest an API token's role and
+	// group stamp (api_tokens.identity_stamped_at) may be before apiTokenAuth
+	// refuses it until its owner signs in again. Zero, the default, is off: no
+	// token is refused for the age of its stamp.
+	RoleStampTTL time.Duration
 	// UIListenAddr is WARDYN_UI_SANDBOX_LISTEN: the address the UI-sandbox
 	// gateway binds (e.g. ":8081"). Empty = off = no listener, no new surface,
 	// mirroring SSHListenAddr. It MUST NOT equal the console's -listen: relayed
