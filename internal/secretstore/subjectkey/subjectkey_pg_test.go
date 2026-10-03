@@ -30,7 +30,7 @@ func TestSubjectKeys_LocalContract(t *testing.T) {
 
 // The table refuses what the package never writes, for any other writer.
 func TestPrincipalKeysTableConstraints(t *testing.T) {
-	gone := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	gone := time.Now().UTC()
 	pool := subjectkeytest.ThrowawayDB(t)
 	ctx := t.Context()
 	const ins = `INSERT INTO principal_keys (owner, purpose, version, domain, kek_id, wrapped_key, destroyed_at) VALUES ($1, $2, $3, 'default', 'k', $4, $5)`

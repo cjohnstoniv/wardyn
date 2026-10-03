@@ -123,7 +123,7 @@ func TestAPITokenMint_NegativeTTLIsRefused(t *testing.T) {
 // byte, and a token with no expires_at never expires.
 func TestAPITokenAuth_ExpiryBoundary(t *testing.T) {
 	srv, st, _ := apiTokenTestServer(t)
-	expiresAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	expiresAt := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
 	seed := func(raw string, exp *time.Time) {
 		t.Helper()
 		if _, err := st.CreateAPIToken(t.Context(), types.APIToken{

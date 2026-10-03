@@ -64,7 +64,7 @@ import { AttachTerminal } from "./attach-terminal";
 import { COPY_TEXT } from "./attach-terminal-clipboard";
 
 const modeFrame = (readOnly: boolean) =>
-  JSON.stringify({ type: "attach-mode", read_only: readOnly, holder: { held: true, principal: "alice@example.com", since: "2026-09-21T12:00:00Z", cols: 80, rows: 24, source: "web" } });
+  JSON.stringify({ type: "attach-mode", read_only: readOnly, holder: { held: true, principal: "alice@example.com", since: new Date().toISOString(), cols: 80, rows: 24, source: "web" } });
 const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
 const tmuxCopy = (s: string) => `\x1b]52;;${b64(s)}\x07`;
 
