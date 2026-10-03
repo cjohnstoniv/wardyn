@@ -813,6 +813,7 @@ export function NewRunScreen() {
           caps={caps}
           modelProviders={modelProviders}
           noBarrier={policy.noBarrierOnHost}
+          runnerUnknown={!availableClasses}
           error={error}
           errorSeq={errorSeq}
           credentialRefused={credentialRefused}

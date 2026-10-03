@@ -68,6 +68,10 @@ export interface NewRunLaunchPanelProps {
   onPreflight: () => Promise<void>;
   preflightRefusal: { body: string; provider: string } | null;
   noBarrier: boolean;
+  /** The barrier probe read no class list: no runner is configured, or the
+   *  status read failed. Create-run skips its capability gate with no runner,
+   *  so a `missing` backend row then predicts no refusal and never blocks. */
+  runnerUnknown?: boolean;
 
   /** The screen's ONE validation rule (RunRail's `launch.problem`) and the
    *  #922 workspace-availability disable (`launch.workspaceUnavailable`) —
@@ -131,6 +135,7 @@ export function NewRunLaunchPanel({
   onPreflight,
   preflightRefusal,
   noBarrier,
+  runnerUnknown,
   mode,
   task,
   useSaved,
@@ -212,9 +217,11 @@ export function NewRunLaunchPanel({
   // CURRENT body's verdict counts, and only `missing` — an `unverified` row
   // (the capability probe failed) never blocks. Not when `noBarrier`: a host
   // with no barrier at all has its own host-wide line in the rail, so that
-  // stays the single sentence.
+  // stays the single sentence. Not when `runnerUnknown` either: with no runner
+  // configured Launch is not refused, so neither is it blocked here.
   const backendMissing =
     !noBarrier &&
+    !runnerUnknown &&
     preflightIsCurrent &&
     !!preflightResult?.setup_items?.some((i) => i.kind === "backend" && i.status === "missing");
   const problem = backendMissing
