@@ -147,19 +147,24 @@ func (s *Store) DestroyCredentialKey(ctx context.Context, owner string) ([]int, 
 
 // SealToPrincipalKeysResult is what SealToPrincipalKeys did.
 type SealToPrincipalKeysResult struct {
-	// Moved is how many credential rows moved from v1 into v3.
+	// Moved is how many credential rows moved into their owner's current
+	// generation, from v1 or from an older generation.
 	Moved int
-	// Remaining is how many person-owned v1 rows are left: a writer wrote one
-	// while the run was moving the rest. Run again until it is 0.
+	// Remaining is how many person-owned rows are still not under their
+	// owner's current generation: a writer wrote one while the run was moving
+	// the rest. Run again until it is 0.
 	Remaining int
 }
 
 // SealToPrincipalKeys is the body of `wardynd -rewrap-principal-keys`: it moves
-// every person's v1 credential row into a v3 envelope under its owner's
-// principal key, and returns what it did. It is not a root rotation (-rewrap
-// moves principal keys and rows onto a new root KEK): it changes which key a
-// row's data key is under. Boot keys, the operator namespace and pointer rows
-// are never touched.
+// every person's v1 credential row into a v3 envelope under its owner's current
+// principal key, and every v3 row under an older generation of it (one a key
+// domain reassignment left behind) into the current one, and returns what it
+// did. It is not a root rotation (-rewrap moves principal keys and rows onto a
+// new root KEK): it changes which key a row's data key is under, and an old
+// generation's key itself never moves. A v3 row whose key was destroyed is
+// already crypto-erased and is left. Boot keys, the operator namespace and
+// pointer rows are never touched.
 //
 // One row per transaction, under the row's write lock: a row that is no longer
 // v1 once locked (a concurrent Put under principal keys, a delete) is skipped,
@@ -170,7 +175,7 @@ type SealToPrincipalKeysResult struct {
 // caller holds db.SecretRekeyLockKey.
 func (s *Store) SealToPrincipalKeys(ctx context.Context) (SealToPrincipalKeysResult, error) {
 	var res SealToPrincipalKeysResult
-	rows, err := s.pool.Query(ctx, `SELECT owned_by, name FROM secrets WHERE owned_by <> '' AND enc_version=$1 ORDER BY owned_by, name`, encVersion)
+	rows, err := s.pool.Query(ctx, `SELECT owned_by, name FROM secrets WHERE owned_by <> '' AND enc_version IN ($1, $2) ORDER BY owned_by, name`, encVersion, pkVersion)
 	if err != nil {
 		return res, fmt.Errorf("pg secretstore: seal to principal keys select: %w", err)
 	}
@@ -188,14 +193,21 @@ func (s *Store) SealToPrincipalKeys(ctx context.Context) (SealToPrincipalKeysRes
 			res.Moved++
 		}
 	}
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM secrets WHERE owned_by <> '' AND enc_version=$1`, encVersion).Scan(&res.Remaining); err != nil {
-		return res, fmt.Errorf("pg secretstore: count the v1 rows left: %w", err)
+	// A v3 row counts only while its owner has a live current generation to move
+	// it into: a destroyed key leaves rows nothing can move.
+	if err := s.pool.QueryRow(ctx, `
+		SELECT count(*) FROM secrets s WHERE s.owned_by <> '' AND (s.enc_version=$1 OR (s.enc_version=$2 AND EXISTS (
+			SELECT 1 FROM principal_keys k WHERE k.owner=s.owned_by AND k.purpose=$3 AND k.destroyed_at IS NULL AND k.superseded_at IS NULL
+			AND s.kek_id <> $4 || k.version::text)))`,
+		encVersion, pkVersion, subjectkey.PurposeCred, pkKekPrefix).Scan(&res.Remaining); err != nil {
+		return res, fmt.Errorf("pg secretstore: count the rows left: %w", err)
 	}
 	return res, nil
 }
 
-// sealRowToPrincipal moves one row under its write lock; moved is false for a
-// row that is gone or no longer v1.
+// sealRowToPrincipal moves one row under its write lock into its owner's
+// current generation; moved is false for a row that is gone, already there, or
+// sealed under a key that was destroyed.
 func (s *Store) sealRowToPrincipal(ctx context.Context, owner, name string) (moved bool, err error) {
 	ctx, cancel := s.bounded(ctx)
 	defer cancel()
@@ -217,30 +229,22 @@ func (s *Store) sealRowToPrincipal(ctx context.Context, owner, name string) (mov
 	if err != nil {
 		return false, fmt.Errorf("lock: %w", err)
 	}
-	if e.version != encVersion {
+	var version int
+	var wrapped []byte
+	switch e.version {
+	case encVersion:
+		version, wrapped, err = s.sealV1ToPrincipal(ctx, e)
+	case pkVersion:
+		version, wrapped, err = s.resealToCurrent(ctx, e)
+	default:
 		return false, nil
 	}
-	from, err := s.reader(e)
-	if err != nil {
+	if err != nil || wrapped == nil {
 		return false, err
 	}
-	dek, err := from.Unwrap(ctx, e.wrapped, kek.Bind(owner, name))
-	if err != nil {
-		return false, fmt.Errorf("unwrap with the old key: %w", err)
-	}
-	defer clear(dek)
-	version, key, err := s.subjects.Current(ctx, owner, subjectkey.PurposeCred)
-	if err != nil {
-		return false, fmt.Errorf("the owner's principal key: %w", err)
-	}
-	defer clear(key)
-	wrapped, err := kek.Seal(key, dek, pkAAD(owner, name, version))
-	if err != nil {
-		return false, fmt.Errorf("wrap with the principal key: %w", err)
-	}
 	if _, err := tx.Exec(ctx,
-		`UPDATE secrets SET enc_version=$3, kek_id=$4, wrapped_dek=$5, updated_at=now() WHERE owned_by=$1 AND name=$2 AND enc_version=$6`,
-		owner, name, pkVersion, pkKekID(version), wrapped, encVersion,
+		`UPDATE secrets SET enc_version=$3, kek_id=$4, wrapped_dek=$5, updated_at=now() WHERE owned_by=$1 AND name=$2 AND enc_version=$6 AND kek_id=$7`,
+		owner, name, pkVersion, pkKekID(version), wrapped, e.version, e.kekID,
 	); err != nil {
 		return false, fmt.Errorf("update: %w", err)
 	}
@@ -248,4 +252,47 @@ func (s *Store) sealRowToPrincipal(ctx context.Context, owner, name string) (mov
 		return false, fmt.Errorf("commit: %w", err)
 	}
 	return true, nil
+}
+
+// sealV1ToPrincipal unwraps a v1 row's data key under its KEK and seals it
+// under the owner's current generation.
+func (s *Store) sealV1ToPrincipal(ctx context.Context, e envelope) (int, []byte, error) {
+	from, err := s.reader(e)
+	if err != nil {
+		return 0, nil, err
+	}
+	dek, err := from.Unwrap(ctx, e.wrapped, kek.Bind(e.ownedBy, e.name))
+	if err != nil {
+		return 0, nil, fmt.Errorf("unwrap with the old key: %w", err)
+	}
+	defer clear(dek)
+	version, key, err := s.subjects.Current(ctx, e.ownedBy, subjectkey.PurposeCred)
+	if err != nil {
+		return 0, nil, fmt.Errorf("the owner's principal key: %w", err)
+	}
+	defer clear(key)
+	wrapped, err := kek.Seal(key, dek, pkAAD(e.ownedBy, e.name, version))
+	if err != nil {
+		return 0, nil, fmt.Errorf("wrap with the principal key: %w", err)
+	}
+	return version, wrapped, nil
+}
+
+// resealToCurrent moves a v3 row's data key from an older generation of its
+// owner's key into the current one. A nil result is a row already current, or
+// one whose key was destroyed, which nothing can move.
+func (s *Store) resealToCurrent(ctx context.Context, e envelope) (int, []byte, error) {
+	old, ok := pkVersionOf(e.kekID)
+	if !ok {
+		return 0, nil, fmt.Errorf("names the principal key %q, which is not of the form %sN", e.kekID, pkKekPrefix)
+	}
+	version, wrapped, err := s.subjects.Reseal(ctx, e.ownedBy, subjectkey.PurposeCred, old, e.wrapped,
+		pkAAD(e.ownedBy, e.name, old), func(v int) []byte { return pkAAD(e.ownedBy, e.name, v) })
+	if errors.Is(err, subjectkey.ErrDataLoss) {
+		return 0, nil, nil // crypto-erased
+	}
+	if err != nil {
+		return 0, nil, fmt.Errorf("re-seal under the owner's current principal key: %w", err)
+	}
+	return version, wrapped, nil
 }

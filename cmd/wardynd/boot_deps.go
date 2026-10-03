@@ -31,6 +31,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
@@ -436,6 +437,9 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// why that contract lives on the callback side, not here.
 			OnLogin: func(ctx context.Context, sub, role, userType string, groups []string, groupsTruncated bool) {
 				refreshLoginStamps(ctx, store.NewPG(pool), sub, role, userType, groups, groupsTruncated, time.Now().UTC())
+				// The groups of this verified login are what a key-domain
+				// group assignment reads for the person's next principal key.
+				stampLoginGroups(ctx, pool, sub, groups, groupsTruncated)
 			},
 		}, sessKey)
 		if err != nil {
@@ -841,6 +845,16 @@ func refreshLoginStamps(ctx context.Context, st loginStampStore, sub, role, user
 	// admin keyed by this sub records that its person has now signed in.
 	if err := st.MarkPersonSignedIn(ctx, sub, now); err != nil {
 		slog.Warn("wardynd: marking a pre-created person signed in failed", slog.String("err", err.Error()))
+	}
+}
+
+// stampLoginGroups records the groups a verified login carried, which a key
+// domain's group assignment reads (migration 0109). Best-effort, like
+// refreshLoginStamps: a hiccup logs and the login still succeeds, leaving the
+// person's earlier groups in force until their next sign-in.
+func stampLoginGroups(ctx context.Context, pool *pgxpool.Pool, sub string, groups []string, truncated bool) {
+	if err := keydomain.NewService(pool, nil).RecordLoginGroups(ctx, sub, groups, truncated); err != nil {
+		slog.Warn("wardynd: recording a login's groups for key-domain membership failed", slog.String("err", err.Error()))
 	}
 }
 

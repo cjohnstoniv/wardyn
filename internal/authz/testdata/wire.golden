@@ -35,3 +35,5 @@ reason run_kept
 reason delegation_scope
 reason event_stream_cap
 reason run_owner_only
+reason key_domain_unknown
+reason key_domain_ambiguous_membership

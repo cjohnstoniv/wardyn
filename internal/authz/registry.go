@@ -60,6 +60,13 @@ const (
 	// needs the run's owner; a super admin is refused unless the run has no
 	// personal owner (#1476). Not hidden: the admin can already see the run.
 	ReasonRunOwnerOnly Reason = "run_owner_only"
+	// ReasonKeyDomainUnknown: a key-domain assignment named a domain the
+	// deployment's key domains file does not declare.
+	ReasonKeyDomainUnknown Reason = "key_domain_unknown"
+	// ReasonKeyDomainAmbiguous: a group assignment would leave people whose
+	// groups are assigned to different domains, with no user assignment of
+	// their own, so their next principal key would be refused.
+	ReasonKeyDomainAmbiguous Reason = "key_domain_ambiguous_membership"
 )
 
 // Refusal is one reason's registry row.
@@ -107,6 +114,8 @@ var refusals = map[Reason]Refusal{
 	ReasonAdminView:                   {Effect: EffectConflict},
 	ReasonDelegationScope:             {Effect: EffectDeny, Audit: true},
 	ReasonEventStreamCap:              {Effect: EffectUnprocessable},
+	ReasonKeyDomainUnknown:            {Effect: EffectUnprocessable, Audit: true},
+	ReasonKeyDomainAmbiguous:          {Effect: EffectConflict, Audit: true},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,

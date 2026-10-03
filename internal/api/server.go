@@ -35,6 +35,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
@@ -374,6 +375,9 @@ type Config struct {
 	// the internal injection-resolve endpoint the proxy calls at startup. Nil
 	// disables both surfaces.
 	Secrets secretstore.Store
+	// KeyDomains resolves, lists and writes the key-domain assignments behind
+	// /key-domains (migration 0109). Nil answers 501.
+	KeyDomains *keydomain.Service
 	// MaskRegistry, when non-nil, is used to mask verbatim secret values from
 	// PTY capture / asciicast uploads before they reach the RecordingStore.
 	// A nil registry disables masking (existing tests stay green).

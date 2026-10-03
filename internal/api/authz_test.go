@@ -436,6 +436,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/user-types":        {class: classSecurity},
 	"PUT /api/v1/user-types/{id}":    {class: classSecurity},
 	"DELETE /api/v1/user-types/{id}": {class: classSecurity},
+	// Key domains (migration 0109): the security tier, beside the credential erase.
+	"GET /api/v1/key-domains":                                         {class: classSecurity},
+	"PUT /api/v1/key-domains/assignments/{subject_type}/{subject}":    {class: classSecurity},
+	"DELETE /api/v1/key-domains/assignments/{subject_type}/{subject}": {class: classSecurity},
 	// User drives (migration 0054) — SPLIT (issue #168, 0.8). The four routes
 	// that NAME A HOST PATH (host_root) or a cluster storage class — creating,
 	// listing, updating, and removing the drive itself — stay classAdmin, and
@@ -1418,9 +1422,11 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// table above would still pass every probe — it would just be enforcing the
 	// WRONG tier, exactly the drift the per-route loop cannot see. #1428 added
 	// the Azure DevOps organisation check beside the provider rows (= 48 SUPER).
-	// #1449 added the refusal read beside it (= 49 SUPER).
-	if sec != 43 || super != 49 {
-		t.Errorf("tier split = %d security / %d admin, want 43 / 49 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect)", sec, super)
+	// #1449 added the refusal read beside it (= 49 SUPER). 0.8.6's key domains
+	// add GET /key-domains and the assignment PUT and DELETE on the security tier
+	// (= 46 SEC).
+	if sec != 46 || super != 49 {
+		t.Errorf("tier split = %d security / %d admin, want 46 / 49 (the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect)", sec, super)
 	}
 }
 

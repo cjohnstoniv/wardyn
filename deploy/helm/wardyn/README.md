@@ -87,6 +87,8 @@ install.
   [Console Ingress](#console-ingress).
 - **ConfigMap** (`defaultPolicy` only) — a baked default policy, mounted
   read-only; see [Default policy](#default-policy).
+- **ConfigMap** (`kek.domains` only) — the key domains file, mounted
+  read-only; see [Key domains](#key-domains).
 
 ## Prerequisites
 
@@ -881,6 +883,41 @@ policy) restricts pod-to-pod ports, allow the runs namespace to reach wardynd
 on this port. Details, the per-shape table and rotation:
 [docs/OPERATIONS.md § Control-plane to proxy TLS](../../../docs/OPERATIONS.md#control-plane-to-proxy-tls).
 
+## Key domains
+
+`kek.domains` declares key domains: tenants of the key service. Each is a name
+(`a-z`, `0-9` and `-`, never `default`, which is the credential key) mapped to
+a Transit key and an optional Vault role, or to a Key Vault key pair and an
+optional client id. The chart renders the map to a ConfigMap, mounts it
+read-only and sets `WARDYN_KEY_DOMAINS_FILE`; a render refuses a bad name or a
+value that is not exactly one `transit` or `azurekv`, and `wardynd` proves every
+key at boot.
+
+```yaml
+kek:
+  provider: transit
+  principalKeys: "on"
+  transit: {key: wardyn-credentials}
+  domains:
+    acme:
+      transit: {key: acme-keys, role: wardyn-acme}
+    beta:
+      azurekv:
+        key: https://beta.vault.azure.net/keys/wrap
+        signingKey: https://beta.vault.azure.net/keys/sign
+```
+
+The people in a domain are chosen by API, not by the chart: `PUT
+/api/v1/key-domains/assignments/{subject_type}/{subject}` (security tier) for a
+user, a group or everyone. A domain's Vault `role` needs `secretStore.vault.auth`
+set to `kubernetes` and must differ from `secretStore.vault.role` and
+`rolePlatform`; a domain with no role is reached as the credential role. A
+domain's Transit key must be its own, not the credential key or the platform
+key. Never remove a domain while a live key names it: boot refuses, and the
+remedy is in [docs/operations/secrets-and-keys.md "Offboarding a key
+domain"](../../../docs/operations/secrets-and-keys.md#offboarding-a-key-domain).
+A change to `kek.domains` rolls the pod.
+
 ## Corporate CA trust
 
 `trustedCA` bakes a PEM bundle of additional trusted roots into a ConfigMap
@@ -1156,6 +1193,11 @@ See `values.yaml` for all options. Key settings:
 - `trustedCA`: PEM text baking a corporate CA bundle into a ConfigMap,
   mounted read-only — see [Corporate CA trust](#corporate-ca-trust) above.
   Empty (default) => no ConfigMap, system roots only.
+- `kek.domains`: a map from key-domain name to `transit: {key, role}` or
+  `azurekv: {key, signingKey, clientId}`, rendered to a ConfigMap and mounted
+  read-only as `WARDYN_KEY_DOMAINS_FILE` — see [Key domains](#key-domains)
+  above. Empty (default) => no ConfigMap, every principal key under the
+  credential key.
 - `awsSSOProxyInject`: `"on"`/`"off"`, the Phase B kill switch — see
   [docs/OPERATIONS.md "Turning the lane
   off"](../../../docs/OPERATIONS.md#turning-the-lane-off). Empty (default) =>

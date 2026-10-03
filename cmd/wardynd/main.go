@@ -36,6 +36,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -228,6 +229,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// The key-domain service behind /key-domains: the domains the file
+	// declares (already built and proven by the store above), and the
+	// assignments that place a person's next principal key.
+	domainFile, err := keydomain.Load(*f.vault.keyDomainsFile)
+	if err != nil {
+		return err
+	}
+	keyDomains := keydomain.NewService(pool, domainFile.Names())
 
 	// Embedded identity provider: signing key persisted in the secret store,
 	// generated on first boot. The pg-backed revocation store is the kill-switch
@@ -415,6 +424,7 @@ func run() error {
 		HarnessLoginMemoryMiB:    *f.harnessLoginMemoryMiB,
 		ProxyURL:                 *f.proxyURL,
 		Secrets:                  secrets,
+		KeyDomains:               keyDomains,
 		MaskRegistry:             maskReg,
 		ExecOutputTailOff:        !*f.execOutputTail,
 		ExecOutputTailTTL:        *f.execOutputTailTTL,

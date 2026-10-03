@@ -54,6 +54,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `credential.erase` and its response now report `crypto_erased` and `deleted`, because a row written
   without it is only deleted, which holds to the backup horizon. **Turning it on is one-way across a
   downgrade:** 0.8.5 refuses `enc_version=3` rows by name, and there is no tool back.
+- **Key domains (`WARDYN_KEY_DOMAINS_FILE`, chart `kek.domains`; migration `0109_key_domains`).** A domain
+  is a tenant of the key service, declared in deploy configuration only: a Transit key and an optional
+  Vault role, or a Key Vault key pair and an optional client id. A security admin assigns a user, a group or
+  everyone to a domain (`PUT`/`DELETE /api/v1/key-domains/assignments/{subject_type}/{subject}`, `GET
+  /api/v1/key-domains`), and that person's principal keys are wrapped under the domain's key, so a database
+  dump plus one domain's key exposes only that domain. Resolution is user, then group, then everyone, then
+  `default`; two groups in different domains refuse the new key by name. A reassignment applies to the next
+  generation: old keys stay in their domain and are never re-wrapped into another, and `wardynd
+  -rewrap-principal-keys` re-seals a person's credentials into the new generation. Every domain is proven at
+  boot, and boot refuses a domain that shares a key with another domain, the platform key or the credential
+  key, a Vault role under token-file auth or shared with `WARDYN_VAULT_ROLE`/`WARDYN_VAULT_ROLE_PLATFORM`, a
+  domain named `default` or malformed, a live key naming an undeclared domain (with the count and the
+  remedy), and a live key its domain no longer reaches. `wardynd -rewrap` and `-rotate-age-key` read the file;
+  `-rewrap` moves only the rotated domain's keys and reports a retirable key version per domain. New audit
+  actions `key_domain.assignment.set` and `key_domain.assignment.delete`, and new refusal reasons
+  `key_domain_unknown` and `key_domain_ambiguous_membership`. The migration also adds `principal_keys.superseded_at`
+  (a generation that is still readable but is no longer the one a write uses) and the table that holds the
+  groups of each person's last sign-in. Offboarding a domain is documented in
+  `docs/operations/secrets-and-keys.md`.
 - **The proxy refuses a raw mint of every `git_pat` grant id while the PAT broker is on.** The mint relay
   now answers `403` (`brokered:mint`) for any `git_pat` grant of the run, including grants shadowed by a
   same-host grant, vetoed, withheld for a brokered forge or Azure DevOps owner-only. Upgrade the proxy

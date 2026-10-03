@@ -91,7 +91,8 @@ func (s *Server) routes() chi.Router {
 			//   mountPermissionRoutes  (this file)  securityOps
 			//   mountAccountRoutes     (this file)  securityOps
 			//   adminRoutes            (this file)  one per group, plus
-			//       mountUserTypeRoutes (user_types.go) securityOps
+			//       mountUserTypeRoutes (user_types.go) securityOps, and
+			//       mountKeyDomainRoutes (key_domains.go) securityOps
 			//   mountLibraryRoutes     (sources.go) operatorOnly (+ member reads on r)
 			//   mountSetupMutationRoutes            operatorOnly
 			//   mountAccessRoutes      (access.go)  operatorOnly
@@ -803,6 +804,9 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// security-tier duty as authoring a governance profile; deciding who IS a
 	// type stays on the operatorOnly /access routes.
 	s.mountUserTypeRoutes(securityOps)
+	// Key domains (migration 0109): which declared domain a person's next
+	// principal-key generation is wrapped under.
+	s.mountKeyDomainRoutes(securityOps)
 	// Sandbox sweep. SUPER, and the reason matters because an operator deciding
 	// who to trust with RoleSecurityAdmin reads exactly these lines: the sweep
 	// drives the RUNNER — Status then StopSandbox — across every run in the
