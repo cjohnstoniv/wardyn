@@ -279,6 +279,9 @@ type bootFlags struct {
 	// rewrapAdoptBootKeys is `wardynd -rewrap -rewrap-adopt-boot-keys`: no
 	// env pair either, so a stray variable cannot arm an adoption.
 	rewrapAdoptBootKeys *bool
+	// rewrapPrincipalKeys is `wardynd -rewrap-principal-keys` (rewrap_principal_keys.go):
+	// no env pair, like -rewrap.
+	rewrapPrincipalKeys *bool
 	// vault configures the Vault KV v2 external store, azure the Azure Key
 	// Vault one (secret_store.go).
 	vault vaultFlags
@@ -550,10 +553,13 @@ func parseBootFlags() *bootFlags {
 			"(WARDYN_VAULT_TRANSIT_KEY_PLATFORM, WARDYN_AZURE_KEK_KEY_PLATFORM or WARDYN_PLATFORM_KEY_FILE) yet, so the signing, session and SSH host keys still under "+
 			"the credential key or the age key may be moved onto it. Run it once, when you first turn the platform key on. Without it, "+
 			"-rewrap refuses a boot key under any other key. See docs/operations/secrets-and-keys.md (default false)"),
+		rewrapPrincipalKeys: flag.Bool("rewrap-principal-keys", false, "maintenance mode, safe while a daemon serves: move every person's stored credential from the credential key into an envelope under that person's own principal key (enc_version 3), "+
+			"one row at a time, then exit; idempotent and resumable, and values are never decrypted. Boot keys, the operator namespace and external-store pointers are untouched. "+
+			"Separate from -rewrap, which rotates the root key. See docs/operations/secrets-and-keys.md (default false)"),
 		vault:               registerVaultFlags(),
 		hostCapacity:        registerHostCapacityFlags(),
-		preflightRatePerMin: flagIntEnv("preflight-rate-per-min", "WARDYN_PREFLIGHT_RATE_PER_MIN", 20, "POST /runs/preflight calls one person may make per minute (burst 5); 0 turns the limit off. The admin token is exempt"),
 		azure:               registerAzureFlags(),
+		preflightRatePerMin: flagIntEnv("preflight-rate-per-min", "WARDYN_PREFLIGHT_RATE_PER_MIN", 20, "POST /runs/preflight calls one person may make per minute (burst 5); 0 turns the limit off. The admin token is exempt"),
 
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address, e.g. ":2222". Empty (default) disables the gateway entirely`),
 		uiListen:         flagEnv("ui-sandbox-listen", "WARDYN_UI_SANDBOX_LISTEN", "", `UI-sandbox gateway listen address, e.g. ":8081". Empty (default) disables the gateway entirely; must differ from -listen`),

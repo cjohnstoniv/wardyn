@@ -269,6 +269,15 @@ func (a *audited) MetadataEverywhere(ctx context.Context, names []string) ([]Met
 	return m.MetadataEverywhere(ctx, names)
 }
 
+// DestroyCredentialKey forwards to the wrapped store when it seals credentials
+// under per-person keys, and is a no-op otherwise: there is nothing to destroy.
+func (a *audited) DestroyCredentialKey(ctx context.Context, owner string) ([]int, error) {
+	if d, ok := a.inner.(CredentialKeyDestroyer); ok {
+		return d.DestroyCredentialKey(ctx, owner)
+	}
+	return nil, nil
+}
+
 // KeyService forwards the wrapped store's description of the key service that
 // wraps its writes (the pg store under WARDYN_KEK=transit), or "": metadata
 // for the setup row, never a value.

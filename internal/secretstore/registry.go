@@ -45,6 +45,11 @@ type Deps struct {
 	// `-rewrap` opens a boot key only under the key a boot opens it under.
 	AdoptBootKeys bool
 	External      External
+	// PrincipalKeys is WARDYN_PRINCIPAL_KEYS=on: a Put of a person's credential
+	// seals its data key under that person's principal key (enc_version 3)
+	// instead of the root KEK. Boot keys and the operator namespace never do,
+	// and in store mode a Put is unaffected.
+	PrincipalKeys bool
 	// ExternalTimeout is WARDYN_SECRET_STORE_TIMEOUT, the bound on each call
 	// to External (0: its 5s default); a store-mode write is bounded at 6x it.
 	ExternalTimeout time.Duration

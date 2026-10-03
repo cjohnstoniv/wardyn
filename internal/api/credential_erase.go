@@ -90,7 +90,10 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 		s.revokeOwnerRunPATs(r.Context(), owner, adoPATRevokeOffboarding)
 		return s.eraseLocked(r.Context(), owner, rowID, &rep)
 	}()
-	data["count"] = rep.Count
+	// crypto_erased are the rows under the person's destroyed principal key;
+	// deleted are the rest (v1 rows, rows written with principal keys off,
+	// external pointers), which are gone only to the backup horizon.
+	data["count"], data["crypto_erased"], data["deleted"] = rep.Count, rep.CryptoErased, rep.Count-rep.CryptoErased
 	if rep.Store != "" {
 		data["store"], data["purged"] = rep.Store, rep.Purged
 		if !rep.Purged && rep.RecoverableDays > 0 {

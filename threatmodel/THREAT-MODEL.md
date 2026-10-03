@@ -2124,7 +2124,24 @@ hiding them would repeat the failure mode we are designed to avoid.
     backup taken now could have its data keys unwrapped by a future adversary
     who can factor the public modulus; the local key and Transit (AES-256) do
     not have this exposure. (a) holds unchanged: a restored row opens until its
-    wrapping-key version is disabled in Key Vault.
+    wrapping-key version is disabled in Key Vault. (e) **Crypto-erasure
+    (`WARDYN_PRINCIPAL_KEYS=on`, envelope enc_version 3, 0.8.6)** narrows (b) for
+    the rows it covers, and for no others. A person's credential written with it
+    on has its data key under that person's own `cred` principal key, and an erase
+    destroys that key, so the row cannot be read on any replica at its next use,
+    whatever a backup holds of the row. **The scope is exactly the v3 rows:** a v1
+    row, a row written while the setting was off, an external-store pointer (the
+    value lives in the organisation's store), the operator namespace and the boot
+    keys are only deleted, and `credential.erase` reports the two apart
+    (`crypto_erased`, `deleted`). **The backup horizon moves, it does not vanish:** a
+    destroyed `principal_keys` row restored from a backup before the tombstone
+    unwraps while the wrapping key's version lives (the shape of (a)), so shredding
+    is complete only once backups taken before the erase expire or that
+    key-encryption-key version is retired. **Metadata stays in the clear:** who
+    held a credential, and when, is still in the table (c). **A live run keeps
+    what it already holds,** and whatever was sealed for it under the destroyed
+    key (its masking copies) is undecryptable after a restart: the run is
+    uncovered, which fails closed and is disclosed.
 
 49. **One age key guards every stored credential AND the daemon's own
     signing keys: one key, one shared blast radius.** `WARDYN_AGE_KEY` (or
