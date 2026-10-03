@@ -189,18 +189,18 @@ func gitBrokerManaged(entry string) bool {
 
 // egressEntryHost normalizes ONE egress-list entry to its bare host: lowercased,
 // ":port" qualifier and trailing dot stripped — the same normalization
-// proxy.classifyDomain applies to the WELL-FORMED entries ValidDomainEntry lets
+// domainmatch.Classify applies to the WELL-FORMED entries ValidDomainEntry lets
 // through, which is every entry that can reach here.
 //
-// It is NOT a general re-implementation of classifyDomain, and a new caller must
-// not assume it. classifyDomain splits with net.SplitHostPort and honours only
+// It is NOT a general re-implementation of domainmatch.Classify, and a new caller must
+// not assume it. domainmatch.Classify splits with net.SplitHostPort and honours only
 // ports 1..65535; this splits at the first ":". They diverge on "github.com:0"
-// (classifyDomain keeps the whole string as a host that matches nothing; this
+// (domainmatch.Classify keeps the whole string as a host that matches nothing; this
 // yields "github.com") and on a bracketed IPv6 literal ("[::1]:443" -> "[").
 // Neither is reachable today — the first is rejected at policy write by
 // proxy.ValidDomainEntry, the second is an address, not one of the broker's host
 // NAMES, and is caught by the proxy's private-IP guard — which is why this stays
-// a five-line local helper instead of a second copy of classifyDomain that could
+// a five-line local helper instead of a second copy of domainmatch.Classify that could
 // drift from the real matcher. Needing either case means calling the proxy.
 func egressEntryHost(entry string) string {
 	h := strings.ToLower(strings.TrimSpace(entry))

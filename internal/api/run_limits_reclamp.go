@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -57,7 +58,7 @@ func (s *Server) sweepRunLimits(ctx context.Context) error {
 // reclampRun takes the profile's current limits into one run wherever they are
 // tighter than what it captured, and cuts its end and wait to them.
 func (s *Server) reclampRun(ctx context.Context, rc store.RunLimitsReclamper, run types.AgentRun, profile types.RunLimits, now time.Time) {
-	limits := tightenRunLimits(run.RunLimits, profile)
+	limits := composer.TightenRunLimits(run.RunLimits, profile)
 	if limits == run.RunLimits {
 		return
 	}
@@ -91,27 +92,6 @@ func (s *Server) reclampRun(ctx context.Context, rc store.RunLimitsReclamper, ru
 				"max": waitCeilingSec(limits, s.cfg.ApprovalExpiryAfter), "profile_id": run.GovernanceProfileID,
 			})))
 	}
-}
-
-// tightenRunLimits is captured with each bound that binds a live run replaced
-// by the profile's current one wherever that is tighter, and only there. The
-// defaults are left alone: they shape a new run, not a live one.
-func tightenRunLimits(captured, profile types.RunLimits) types.RunLimits {
-	out := captured
-	out.MaxEndAheadSec = tighterSec(captured.MaxEndAheadSec, profile.MaxEndAheadSec)
-	out.MaxWaitSec = tighterSec(captured.MaxWaitSec, profile.MaxWaitSec)
-	out.PauseIdleAfterSec = tighterSec(captured.PauseIdleAfterSec, profile.PauseIdleAfterSec)
-	out.AllowNoEnd = captured.AllowNoEnd && profile.AllowNoEnd
-	out.UserChangesLimits = captured.UserChangesLimits && profile.UserChangesLimits
-	return out
-}
-
-// tighterSec is the tighter of two bounds where 0 is no bound.
-func tighterSec(a, b int) int {
-	if a == 0 || (b > 0 && b < a) {
-		return b
-	}
-	return a
 }
 
 // reclampEnd is the run's end under limits: no later than now + the max, and
