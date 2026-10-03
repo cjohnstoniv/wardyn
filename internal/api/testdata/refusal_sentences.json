@@ -220,6 +220,11 @@
     "sentence": "(audit only)"
   },
   {
+    "reason": "kind.approver.reason",
+    "target": "govChangeTarget",
+    "sentence": "(audit only)"
+  },
+  {
     "reason": "mask_state_unavailable",
     "target": "door",
     "sentence": "maskStateSentence"
@@ -283,6 +288,11 @@
     "reason": "run_quota",
     "target": "\"runs.quota\"",
     "sentence": "fmt.Sprintf(\"too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.\", limit, ceiling.Profile.Name, active)"
+  },
+  {
+    "reason": "second_human_required",
+    "target": "govChangeTarget",
+    "sentence": "envGovernanceSecondHuman + \" is set: a second human must approve this — you proposed it, so someone else approves it (you may reject it)\""
   },
   {
     "reason": "second_human_required",

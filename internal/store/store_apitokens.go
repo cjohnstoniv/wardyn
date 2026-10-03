@@ -110,6 +110,14 @@ func (s PG) GetAPITokenByRaw(ctx context.Context, raw string) (types.APIToken, e
 	return scanAPIToken(s.Pool.QueryRow(ctx, q, hashToken(raw)))
 }
 
+// GetLiveAPITokenQ re-reads one token by id on q (a caller's transaction), and only while it can still
+// authenticate: revoked and expired rows are ErrNotFound, as in GetAPITokenByRaw. A decision that must
+// still hold the authority of the token it was made with reads it again through this, not through the
+// context the request was authenticated with.
+func GetLiveAPITokenQ(ctx context.Context, q Querier, id uuid.UUID) (types.APIToken, error) {
+	return scanAPIToken(q.QueryRow(ctx, `SELECT `+apiTokenCols+` FROM api_tokens WHERE id = $1 AND `+apiTokenLive, id))
+}
+
 // TouchAPIToken records that id was just used. BEST EFFORT: the auth branch
 // ignores the error, since failing to record a touch must never fail an
 // otherwise-valid request.

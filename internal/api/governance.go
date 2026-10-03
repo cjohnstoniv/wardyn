@@ -60,6 +60,7 @@ func (s *Server) mountGovernanceRoutes(operatorOnly chi.Router) {
 	operatorOnly.Post("/governance/assignments", s.handleUpsertGovernanceAssignment)
 	operatorOnly.Delete("/governance/assignments/{id}", s.handleDeleteGovernanceAssignment)
 	operatorOnly.Post("/governance/preview", s.handlePreviewGovernanceProfile)
+	s.mountGovernanceChangeRoutes(operatorOnly)
 }
 
 // GET /governance
@@ -220,6 +221,10 @@ func validateGovernanceAssignment(a *types.GovernanceAssignment) error {
 // returns the EXISTING row's id on a conflict, never the candidate's).
 // operatorOnly (routes.go).
 func (s *Server) handleUpsertGovernanceAssignment(w http.ResponseWriter, r *http.Request) {
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
 	var req governanceAssignmentRequest
 	if !decodeStrict(w, r, &req) {
 		return
@@ -239,6 +244,12 @@ func (s *Server) handleUpsertGovernanceAssignment(w http.ResponseWriter, r *http
 	}
 	a.ID = uuid.New()
 	a.CreatedBy = principalFromRequest(r)
+	if mode == govQueue {
+		// Every assignment change is held: a repoint can widen its subjects, and nothing here is
+		// proven narrowing.
+		s.holdAssignmentUpsert(w, r, a)
+		return
+	}
 	saved, err := s.cfg.Store.UpsertGovernanceAssignment(r.Context(), a)
 	// ErrNotFound here is the FK refusing an unknown profile_id — a 404 naming
 	// the profile, not a 500, and not a silent no-op.
@@ -254,12 +265,10 @@ func (s *Server) handleUpsertGovernanceAssignment(w http.ResponseWriter, r *http
 		status = http.StatusOK
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"governance.assignment.write", saved.ID.String(), "success", mustJSON(map[string]any{
-			"subject_type": saved.SubjectType,
-			"subject":      saved.Subject,
-			"profile_id":   saved.ProfileID,
-			"priority":     saved.Priority,
-		})))
+		"governance.assignment.write", saved.ID.String(), "success", mustJSON(assignmentWriteAuditData(saved))))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindAssignment, saved.ID.String(), "success", nil)
+	}
 	writeJSON(w, status, saved)
 }
 
@@ -268,8 +277,17 @@ func (s *Server) handleUpsertGovernanceAssignment(w http.ResponseWriter, r *http
 // deployment ceiling, which is why it is audited on its own line rather than
 // riding a profile delete. operatorOnly (routes.go).
 func (s *Server) handleDeleteGovernanceAssignment(w http.ResponseWriter, r *http.Request) {
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
 	id, ok := parseIDParam(w, r, "id", "governance assignment")
 	if !ok {
+		return
+	}
+	if mode == govQueue {
+		// Deleting an assignment widens its subjects back to the deployment ceiling: never exempt.
+		s.holdAssignmentDelete(w, r, id)
 		return
 	}
 	err := s.cfg.Store.DeleteGovernanceAssignment(r.Context(), id)
@@ -282,6 +300,9 @@ func (s *Server) handleDeleteGovernanceAssignment(w http.ResponseWriter, r *http
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"governance.assignment.delete", id.String(), "success", nil))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindAssignment, id.String(), "success", nil)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

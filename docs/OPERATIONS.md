@@ -1032,7 +1032,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the agent roster — `GET /agent-providers` and `PUT /agent-providers`: which coding agents this deployment offers, whether each is on, and (0.8) each agent's `default_provider` — the model provider a new run uses unless the person chooses another, which must be enabled for that agent and may be turned off (its runs are then refused, never moved). Since 0.8 a row carries no model credential: model access is a model provider. Both verbs, for the sibling row's reason: the block names the org's model-provider choices. A member is served a narrower document instead — the `enabled` field on `GET /setup/status`'s harness rows | ⛔ admin only |
 | the model providers — `GET /model-providers` and `PUT /model-providers` (0.8): which kinds of model credential this deployment supports, where each sends requests (gateway addresses, Bedrock region and data plane), the AWS access portal and account pin a Bedrock SSO provider signs in against, and which agents each may serve. Configuration only — no credential lives on a record. `GET` also answers `connected_people`: per provider id, how many distinct people hold a credential of their own for it (a count, never who; 0 included), which `PUT` refuses. Both verbs, for the agent roster's reason. Removing a provider (or unticking the agent it is the default for) is refused while the roster names it as a default; turning it off is not. A person is served a narrower document instead — `model_providers` on `GET /setup/status`: the providers serving the agents they may launch, each with its kind, the agents it is the default for, and the one host their own credential would be sent to (the host only, never a path, start URL or pin). Members also receive `provider_access`: one row per granted provider (state, action, deadline, and — when they have stored one — `added_at` and `last_used_at` for their own credential, never anyone else's) graded against their OWN credential, whose pin-mismatch action names the pinned account and role, as `model_access`'s already does | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
-| the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
+| the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes (with the four `/governance/changes` routes that hold and decide their writes, see "Optional: four-eyes on governance writes"), `GET /access/directory/search` | ⛔ admin or `security_admin` |
 | the `/user-types` routes — listing, defining, editing and removing the org's user types (`GET`/`POST /user-types`, `PUT`/`DELETE /user-types/{id}`). Defining a type is the same duty as authoring a profile; deciding who IS a type stays with the admin-only People mappings above. A type is refused removal (`409`) while the chart's role map or default role, or a permission, profile or drive row, still names it, or a live API token carries it, and the built-in `standard` type is never removable | ⛔ admin or `security_admin` |
 | the `/sources` writes — `POST /sources`, `POST /sources/{id}/scan`, `DELETE /sources/{id}`: registering, rescanning, or removing a source touches the same repo/registry topology the operator-topology reads above expose | ⛔ admin only |
 | the `/base-images` writes — `POST /base-images`, `DELETE /base-images/{id}`: adding or removing a base image changes what every future onboarded workspace can run | ⛔ admin only |
@@ -1413,6 +1413,66 @@ break-glass, whose `approval.second_human.bypass` row names this switch in its
 `switch` field. Each switch governs only its own kind. A run's attention state
 follows the setting, as it does for egress: it stops naming the creator as the
 person who can act.
+
+**Optional: four-eyes on governance writes.** Set `WARDYN_GOVERNANCE_SECOND_HUMAN=1` and no
+single administrator can change a governance profile or an assignment alone. With it on, a
+human's write to `POST/PUT/DELETE /governance/profiles` or `POST/DELETE /governance/assignments`
+is decoded and validated exactly as before and then stored as a pending change, answered `202`
+with `Location: /api/v1/governance/changes/{id}` and
+`{"pending_change": {id, target_kind, op, target_key, state, proposed_by, proposed_at, expires_at, diff}}`.
+Nothing is applied. `diff` is rendered by the server, never by a client: the target's current row
+and the proposed one (every ceiling passes the same read-redaction as a read of it) plus the changed
+field paths; for an assignment, `diff.after` embeds the profile it points at as it stood at the
+proposal. A second human approves it with `POST /governance/changes/{id}/approve`, or any
+authorised human rejects it with `POST /governance/changes/{id}/reject` (an optional `reason`, at
+most 512 characters, no control characters, recorded on the change and its audit row only).
+`GET /governance/changes` lists the queue (`?state=` narrows it; pending by default) and
+`GET /governance/changes/{id}` reads one. A change nobody decides expires after
+`WARDYN_GOVERNANCE_CHANGE_TTL` (default `72h`). Nothing notifies anyone that a change is waiting:
+approvers find them through `wardyn governance changes list` or the API.
+
+- **Who may approve.** The approver must pass the predicate of the tier the write was proposed on,
+  never a weaker one. Profile and assignment changes are proposed on the security tier, so a
+  security admin or a super admin approves; a security admin may approve a super admin's change.
+  The predicate is evaluated again inside the approval transaction: an API token that was revoked
+  after it authenticated, one cut off by a session revocation, or one whose role no longer passes
+  is refused and the change stays pending.
+- **Distinct human.** An approval is refused (`403`, `authz.denied`, reason `second_human_required`,
+  target `governance.change`) when the approver's principal equals the proposer's, or when both
+  emails are non-empty and equal once case-folded. The proposer may reject their own change.
+- **What applies.** One transaction locks the change, requires it pending and unexpired, compares
+  the target (and, for an assignment, the profile it points at) and the deployment default with what
+  the proposal reviewed, applies the write, and moves the change to `applied`. A write to the target
+  in between (the break-glass included), a rename or ceiling change of the profile an assignment points
+  at, or a changed deployment default makes the change `stale` (`409` `governance_change_stale`):
+  it never overwrites. The write is re-validated against the current deployment default, so an
+  approval cannot apply what a direct write would refuse. Two approvals racing on one change apply it
+  once; the other is `409` `governance_change_not_pending`. A failure after the write rolls it back.
+- **Exemptions.** Only these apply directly, with no second human: a profile update whose new
+  effective profile is no more permissive than the current one (the same resolved comparison
+  composition uses, `Leq`), and a rename that changes nothing else. A profile update that changes the
+  contact is held even when it narrows. Everything else is held, deletes and every assignment write
+  included: deleting an assignment widens its subjects back to the deployment ceiling.
+- **Break-glass and local mode.** The `admin-token` principal applies a covered write directly and
+  approves a change, each writing `governance.change.bypass` beside the target's own row. A deployment
+  that wants this gate to bind holds the token out of band. Local mode authenticates nobody, so the
+  proposer and approver are both client-supplied: with the switch on it answers every covered write
+  and every approve or reject `503` (`governance_second_human_local_mode`).
+- **Audit.** `governance.change.propose`, `.approve`, `.reject`, `.expire` and `.bypass`
+  ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)). On approval the target's own row (`governance.profile.write`,
+  `governance.assignment.write`, ...) is written too, its actor the approver, carrying `change_id` and
+  `proposed_by`. The proposer, the approver and their emails are personal fields: the
+  `audit_personal_fields` erasure scope clears them from the change rows, and a pending change whose
+  proposer is erased expires, so a change with no recorded proposer can never be approved.
+- **Residual risks.** The `admin-token` is single-human by design. A database writer can change the
+  tables directly: the audit chain then shows a target row with no `propose`/`approve` pair, which is
+  detection, not prevention. Each change is reviewed alone: two separately approved changes can compose
+  into a widening neither diff shows. Not covered here: the rest of the governance-adjacent writes
+  (capability grants, enforcement, availability, user-type priority and role mappings arrive in the
+  next lane; workspace egress lists, `/policies`, `/site-config`, `/integrations` and the approval
+  `always` scope stay single-human).
+- **Availability.** A build that holds only the profile and assignment writes refuses to boot with the
+  switch set (exit 2), until the rest of the covered set and the console are pending-aware.
 
 **The `admin-token` principal BYPASSES it**, and you should plan around that. A
 bare `WARDYN_ADMIN_TOKEN` caller is attributed `system`/`admin-token` because a
@@ -2967,7 +3027,7 @@ admin walking the member path, not an incident.
 | `governance_overlay_unsatisfiable` | the governance profile that binds this person, or the run's own, is composed (0.8.6) and nothing satisfies it together with the profile or deployment default it builds on — the deployment default narrowed until an overlay's `allowed_methods` are disjoint with it, or an overlay and base that name different `llm_inspection` modes — so the launch (`governance.ceiling`, on create and preflight alike) and every live door refuse rather than guess: a terminal attach (`runs.attach`), a UI-gateway session (`runs.ui_apps`), a revive and an end extension (the `owner_profile_*` refusals' `403` sibling). A base or a chain that cannot be read is a `500` or `503`, never this reason, and is never read as the deployment's policy. The sentence names the person's own profile and never a base; an administrator sees which profile failed on `GET /governance` (`effective.error`). The SAME value is the `409` a profile write returns when a base change would leave a profile built on it in this state | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterUserGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_USER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Decided by one rule, `selectByTier` (`internal/api/select_by_tier.go`), and emitted ONCE per request at each of its two entrances: `ceilingWithUnusableGroups` (`internal/api/governance.go`) at target `governance.ceiling`, and `driveWithUnusableGroups` (`internal/api/user_drives_resolve.go`) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
-| `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval, or `WARDYN_CAPABILITY_SECOND_HUMAN` is set and the caller deciding an Azure DevOps capability escalation, is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
+| `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval, or `WARDYN_CAPABILITY_SECOND_HUMAN` is set and the caller deciding an Azure DevOps capability escalation, is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it. Also `WARDYN_GOVERNANCE_SECOND_HUMAN` (target `governance.change`, a new target and not a new reason): the approver of a held governance change is its proposer, by principal or by case-folded email | ⛔ `403` |
 | `model_provider_unavailable` | #987: at create and Review alike, and at the admin record door (`POST /workspaces/{id}/record`, the same writer) (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; target `runs.model_provider`), the run's model provider cannot credential it: no provider by that name, it is off, it does not serve the agent, several serve it and none is chosen or the default, the caller has no usable credential of their own for it (`remedy` `model_credential`, the one case a sign-in or a stored key repairs), or a policy grant would set a model-credential variable beside it. The row carries `provider` and `kind` when the refusal names one; the 422 body keeps its `provider`, `kind` and `reason` fields. A provider the member is not granted is `capability_model_provider` instead, one row, never both | ⛔ `422` |
 | `run_terminal` | 0.7.4: a RUN TOKEN, not a member — the run whose token authenticated an `/internal/*` call has gone terminal (`internalAuth`'s liveness gate). Token verification cannot catch this: the revoke cascade is best-effort, so a killed run whose revocation write failed still presents a token that verifies. `actor_type` is `agent`, the target is the request path, and the terminal state the run was found in rides beside the reason as its own `run_state` datum — the reason itself stays a closed value, because that is what a SIEM rule is written against. The three tail-upload doors — `/internal/recordings/`, `/internal/scan-results/`, `/internal/sso-token/` — are exempt for five minutes after the run went terminal, because those uploads race the watcher that ends it | ⛔ `403` |
 | `run_not_found` | 0.7.4: the same gate, when the run the token names has no row at all | ⛔ `403` |

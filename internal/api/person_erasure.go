@@ -178,15 +178,17 @@ func (s *Server) eraseRecordingsOf(ctx context.Context, person string) (any, err
 	return map[string]any{"recordings": total}, nil
 }
 
-// eraseAuditSealKeys destroys, in every version, the key the person's sealed
-// audit fields are under. The fields are sealed under the person's principal;
-// a name the directory did not yet know when a row was written is under its own
-// key, so the principal the asked-for name resolves to and every alias the
-// directory holds for it are destroyed too (a destroy that finds no live key
-// writes nothing).
+// eraseAuditSealKeys is the audit_personal_fields scope: it destroys, in every version, the key the
+// person's sealed audit fields are under, and clears the person from the governance changes they
+// proposed or decided (migration 0120). The fields are sealed under the person's principal; a name the
+// directory did not yet know when a row was written is under its own key, so the principal the
+// asked-for name resolves to and every alias the directory holds for it are destroyed too (a destroy
+// that finds no live key writes nothing). The same names match a governance change's recorded
+// principal or email.
 func (s *Server) eraseAuditSealKeys(ctx context.Context, person string) (any, error) {
 	names := []string{person}
-	if pe, err := s.personErasureStore(); err == nil {
+	pe, peErr := s.personErasureStore()
+	if peErr == nil {
 		principal, err := pe.PrincipalForName(ctx, person)
 		if err != nil {
 			return nil, err
@@ -209,7 +211,17 @@ func (s *Server) eraseAuditSealKeys(ctx context.Context, person string) (any, er
 		}
 		generations += len(gens)
 	}
-	return map[string]any{"generations": generations}, nil
+	detail := map[string]any{"generations": generations}
+	if peErr == nil {
+		// A pending change whose proposer is erased leaves pending in the same statement, so a change
+		// with no recorded proposer can never be approved.
+		n, err := pe.EraseGovernanceChangePersonalFields(ctx, names)
+		if err != nil {
+			return nil, err
+		}
+		detail["governance_changes"] = n
+	}
+	return detail, nil
 }
 
 // erasureSelfTarget reports whether the person an erasure names is the caller:

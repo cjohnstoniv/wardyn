@@ -99,6 +99,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Governance profile and assignment writes can require a second human.** With `WARDYN_GOVERNANCE_SECOND_HUMAN`
+  on, a human's write to `/governance/profiles` or `/governance/assignments` is stored as a pending change and
+  answered `202` with a `pending_change` body, and applies only when a different human with the authority to make
+  that write approves it (`POST /governance/changes/{id}/approve`, `/reject`, `GET /governance/changes`), in one
+  transaction and only against the state the approver reviewed. A change nobody decides expires after
+  `WARDYN_GOVERNANCE_CHANGE_TTL` (default `72h`). A profile update proven narrowing and a rename apply directly;
+  the `admin-token` principal is the break-glass (`governance.change.bypass`) and local mode answers `503`. Migration
+  `0120_governance_changes` adds one table and changes no existing row. With the switch unset every route answers as
+  before. Upgrade the CLI and SDK callers before turning it on: a client older than 0.8.6 reads the `202` as an empty
+  profile. This build refuses to boot with the switch set (exit 2) until the rest of the covered set and the console
+  ship; `audit_personal_fields` erasure clears the proposer and decider of a change.
+
 - **Sandbox pods can be placed on the nodes the operator names.** `k8s.sandbox.{nodeSelector,tolerations,affinity,priorityClassName,podAnnotations,podLabels}`
   (chart) render to `WARDYN_K8S_SANDBOX_PLACEMENT`, and the agent pod, the proxy pod and the boot-time
   NetworkPolicy canary all take it, so the canary proves enforcement on the nodes runs use. wardynd refuses

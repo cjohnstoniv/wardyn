@@ -57,6 +57,12 @@ const RunCapLockClass int32 = 0x57525243 // ASCII "WRRC"
 // stored graph keeps.
 const GovernanceGraphLockClass int32 = 0x57474750 // ASCII "WGGP"
 
+// GovernanceAssignmentLockClass is the classid of the TRANSACTION-scoped two-argument lock keyed to one
+// governance assignment's natural key (hashtext of subject_type and subject). The assignment upsert and
+// the approval of a held assignment change both take it, so a create that was absent when it was
+// proposed cannot be overwritten by an upsert that landed in between.
+const GovernanceAssignmentLockClass int32 = 0x57474153 // ASCII "WGAS"
+
 // LoginSupersedeLockWait is the TOTAL budget one caller spends trying to take
 // a keyed lock before being REFUSED (retry) rather than let through unlocked;
 // only ErrAdvisoryLockNoCapacity proceeds unlocked. Matches
