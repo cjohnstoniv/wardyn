@@ -442,7 +442,7 @@ that works, or the probe does not round-trip, **wardynd refuses to start**.
    ```sh
    wardynd -rewrap
    ```
-   Expected output: `every sealed secret is wrapped under
+   Expected output: `every sealed secret and principal key is wrapped under
    transit:transit/wardyn version 1; …`
 4. Unset `WARDYN_AGE_KEY` and restart. wardynd refuses to start until you
    do (and, the other way, refuses without it, naming `-rewrap`, while
@@ -464,7 +464,7 @@ old versions:
    vault write -f transit/keys/wardyn/rotate
    wardynd -rewrap
    ```
-   Expected output: `every sealed secret is wrapped under
+   Expected output: `every sealed secret and principal key is wrapped under
    transit:transit/wardyn version 2; raising the Transit key's
    min_decryption_version to 2 now retires the older versions`
 2. ```sh
@@ -576,7 +576,7 @@ row, or Key Vault is unreachable, **wardynd refuses to start**.
 2. Set `WARDYN_KEK=azurekv`, both key ids and the identity settings,
    keep `WARDYN_AGE_KEY`, and restart.
 3. Run `wardynd -rewrap` with the same settings. Expected output:
-   `every sealed secret is wrapped under azurekv-key:<vault-host>/wardyn-kek/wardyn-kek-sig at versions <wv>/<sv> (wrapping/signing); …`
+   `every sealed secret and principal key is wrapped under azurekv-key:<vault-host>/wardyn-kek/wardyn-kek-sig at versions <wv>/<sv> (wrapping/signing); …`
 4. Unset `WARDYN_AGE_KEY` and restart.
 
 **Back:** set `WARDYN_KEK=local` and `WARDYN_AGE_KEY`, keep both key ids

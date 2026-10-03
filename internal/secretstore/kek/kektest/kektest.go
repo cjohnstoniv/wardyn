@@ -88,6 +88,24 @@ func MustUnwrap(t *testing.T, k kek.KEK, w, dek []byte, bind map[string]string) 
 	}
 }
 
+// Open opens sealed under key and aad, failing the test on error.
+func Open(t *testing.T, key, sealed, aad []byte) []byte {
+	t.Helper()
+	plain, err := kek.Open(key, sealed, aad)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	return plain
+}
+
+// UnwrapRefused fails the test unless k refuses to unwrap w under bind with a
+// definitive error (see Definitive).
+func UnwrapRefused(t *testing.T, k kek.KEK, w []byte, bind map[string]string, what string) {
+	t.Helper()
+	_, err := k.Unwrap(t.Context(), w, bind)
+	Definitive(t, what, err)
+}
+
 // Definitive fails the test unless err is a refusal the sink drops the
 // credential on at once: not nil, not transient, never not-found.
 func Definitive(t *testing.T, what string, err error) {

@@ -134,7 +134,7 @@ func assertRewrapFailureAudit(t *testing.T, pool *pgxpool.Pool) {
 	if err := json.Unmarshal(raw, &data); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]any{"secrets": float64(0), "platform_key_separate": false, "key_service": "transit:transit/test", "reason": "aborted"}
+	want := map[string]any{"secrets": float64(0), "principal_keys": float64(0), "platform_key_separate": false, "key_service": "transit:transit/test", "reason": "aborted"}
 	if !reflect.DeepEqual(data, want) {
 		t.Fatalf("audit fields = %s; want committed count zero and no names, values, error text or uncommitted key_version", raw)
 	}
