@@ -68,6 +68,30 @@ interface RuleSourceLabel {
   tone: "neutral" | "info" | "danger";
 }
 
+// The refusals that name the governing policy (the egress proxy's
+// internal/egress/proxy/refusal_attribution.go and the broker refusals it
+// attributes). The Request access remedy renders beside a refused row only for
+// these: a builtin:* guard or policy:evaluator-error is a fault, and sending
+// someone to the policy owner for one costs that owner a ticket that is not theirs.
+export const ATTRIBUTED_RULE_SOURCES: ReadonlySet<string> = new Set([
+  "policy:denied",
+  "policy:default-deny",
+  "policy:method",
+  "approval:denied",
+  "brokered:git",
+  "brokered:git-pat:denied",
+  "brokered:git:branch-ns",
+  "brokered:git:push-rules",
+  "brokered:git:push-too-large",
+]);
+
+// True for a refusal row (an egress.deny) whose rule_source is in the set. The
+// action check matters: the broker sources also label ALLOW rows.
+export function isAttributedRefusal(event: AuditEvent): boolean {
+  const source = event.data?.rule_source;
+  return event.action === "egress.deny" && typeof source === "string" && ATTRIBUTED_RULE_SOURCES.has(source);
+}
+
 export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   if (!source || source.startsWith("policy:tool-")) return null; // toolRuleDecision's rows
   if (source === "policy:allowed") return { label: "Allowed by policy", tone: "neutral" };

@@ -28,9 +28,12 @@ import { savedPolicyGone } from "./policy-lane";
 import { workspaceUnavailableToCaller, type WizardState } from "./wizard-types";
 import { RunRail } from "./new-run-rail";
 import type { ProviderGate } from "./model-provider-lane";
+import type { PolicyRef } from "../../../lib/api/health";
 
 export interface NewRunLaunchPanelProps {
   governanceProfile: string | undefined;
+  /** GET /me's governance_contact, for the remedy beside the profile line. */
+  governanceContact?: PolicyRef;
   savedPolicy: { id: string; name: string; spec: RunPolicySpec } | undefined;
   cc: ConfinementClass;
   showModelWarning: boolean;
@@ -59,6 +62,8 @@ export interface NewRunLaunchPanelProps {
   launching: boolean;
   error: string | null;
   errorSeq: number;
+  /** The launch refusal's own `policy`, for the remedy under the alert. */
+  errorPolicy?: PolicyRef;
   credentialRefused: boolean;
   refusedProvider: string | undefined;
   /** The request Launch would send right now — see RunRailProps.launch.body. */
@@ -108,6 +113,7 @@ export interface NewRunLaunchPanelProps {
 
 export function NewRunLaunchPanel({
   governanceProfile,
+  governanceContact,
   savedPolicy,
   cc,
   showModelWarning,
@@ -124,6 +130,7 @@ export function NewRunLaunchPanel({
   launching,
   error,
   errorSeq,
+  errorPolicy,
   credentialRefused,
   refusedProvider,
   launchBody,
@@ -245,6 +252,7 @@ export function NewRunLaunchPanel({
   return (
     <RunRail
       governanceProfile={governanceProfile}
+      governanceContact={governanceContact}
       savedPolicy={savedPolicy}
       cc={cc}
       showModelWarning={showModelWarning}
@@ -267,6 +275,7 @@ export function NewRunLaunchPanel({
         noBarrier,
         error,
         errorSeq,
+        policy: errorPolicy,
         credentialRefused,
         refusedProvider,
         body: launchBody,

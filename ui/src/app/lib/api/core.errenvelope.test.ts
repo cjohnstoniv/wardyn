@@ -78,3 +78,26 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
     expect(new HttpError(404, "gone").reason).toBe("");
   });
 });
+
+// deny-f4: a governance refusal's `policy` rides the envelope into the HttpError.
+describe("errEnvelope / asJson — the envelope's policy reference", () => {
+  it("parses policy into the HttpError", async () => {
+    const policy = { source: "profile", name: "Contractors", owner: "Platform Security", request_url: "https://example.com/a" };
+    const res = new Response(JSON.stringify({ error: "x", reason: "governance_profile", policy }), { status: 403 });
+    const err = (await asJson(res).catch((e: unknown) => e)) as HttpError;
+    expect(err.policy).toEqual(policy);
+  });
+
+  it("is absent when the envelope has none, or carries a malformed one", async () => {
+    for (const body of [{ error: "x" }, { error: "x", policy: "nope" }, { error: "x", policy: { owner: "o" } }]) {
+      const err = (await asJson(new Response(JSON.stringify(body), { status: 403 })).catch((e: unknown) => e)) as HttpError;
+      expect(err.policy).toBeUndefined();
+    }
+  });
+
+  it("keeps only string contact fields", async () => {
+    const res = new Response(JSON.stringify({ error: "x", policy: { source: "deployment", owner: 7, email: "a@example.com" } }), { status: 403 });
+    const err = (await asJson(res).catch((e: unknown) => e)) as HttpError;
+    expect(err.policy).toEqual({ source: "deployment", email: "a@example.com" });
+  });
+});

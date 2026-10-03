@@ -42,6 +42,8 @@ import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled"
 import { useOperator, useUserViewSuperAdmin } from "../../wardyn/operator-context";
 import { useViewAccess } from "../../wardyn/console-view";
 import { RailSection } from "./new-run-primitives";
+import { PolicyRemedy } from "../../wardyn/policy-remedy";
+import type { PolicyRef } from "../../../lib/api/health";
 import { CredentialFacts, ModelProviderSection } from "./new-run-rail-credentials";
 import type { ProviderGate } from "./model-provider-lane";
 import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
@@ -56,6 +58,10 @@ interface RunRailProps {
    * unassigned member's rail is byte-for-byte what it was.
    */
   governanceProfile?: string;
+  /** GET /me's governance_contact: who owns the policy bounding this caller and
+   *  how to ask for a change. Rendered beside the profile line; absent or null
+   *  renders nothing. */
+  governanceContact?: PolicyRef | null;
   /** The stored policy this run launches by reference, when there is one. */
   savedPolicy?: { name: string; spec: RunPolicySpec };
   /** The barrier the run requests (a separate wire field from the spec floor). */
@@ -100,6 +106,9 @@ interface RunRailProps {
     /** Bumped on every failed launch (see use-launch.ts) so a repeated,
      *  identical failure remounts the alert region and is re-announced (#459). */
     errorSeq: number;
+    /** The launch refusal's `policy` (the error envelope), for the Request
+     *  access remedy under the alert. */
+    policy?: PolicyRef;
     /** The server refused this launch for the caller's own model credential (a
      *  422 carrying reason `model_credential`) — the one refusal a sign-in
      *  repairs, so the rail answers it with the door and launches again. */
@@ -248,6 +257,7 @@ export function pushRulesIsSet(s: PushRulesSpec | undefined): boolean {
 
 export function RunRail({
   governanceProfile,
+  governanceContact,
   savedPolicy,
   cc,
   showModelWarning,
@@ -467,6 +477,7 @@ export function RunRail({
                 {governanceProfile && (
                   <p className="mt-1 text-xs text-muted-foreground">{AUTONOMY_RAIL.PROFILE_LINE(governanceProfile)}</p>
                 )}
+                <PolicyRemedy policy={governanceContact} className="mt-1 block" />
               </>
             ) : (
               <p className="text-xs text-muted-foreground">
@@ -585,6 +596,7 @@ export function RunRail({
           </span>
         </p>
       )}
+      {launch.error && <PolicyRemedy policy={launch.policy} className="mt-1 block" />}
 
       {/* Preflight lives on the Policy panel, next to the document it checks —
           one button, not two competing ones. Its result stays here, beside

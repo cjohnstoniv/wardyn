@@ -337,7 +337,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     expect(omitted).toEqual([]);
   });
 
-  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, and the ended run's kept_until over AgentRun — " +
+  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the ended run's kept_until and the run's policy over AgentRun — " +
     "the fields only GET /runs/{id} sends (handleGetRun's anonymous wrapper struct, runs_policy.go)", () => {
     const runDetailOwnKeys = tsInterfaceKeys(runsTs, "RunDetail");
     expect(runDetailOwnKeys).toEqual([
@@ -347,6 +347,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       "model_provider_deleted",
       "created_via_name",
       "kept_until",
+      "policy",
     ]);
   });
 

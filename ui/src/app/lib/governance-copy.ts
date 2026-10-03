@@ -28,6 +28,7 @@
 // it is rendered inside.
 
 import { PEOPLE } from "./people-access-copy";
+import { SIGNIN_HELP_LINK_LABEL } from "./sign-in-copy";
 import {
   AUTONOMY_LEVEL_ORDER,
   AUTONOMY_RUBRIC_ROW_KEYS,
@@ -168,6 +169,19 @@ export const GOVERNANCE = {
   LIMIT_DRIVE_SIZE_HINT:
     "Clamps the drive size a person under this profile resolves to. On a share it bounds the number shown, not the share. Leave blank for no limit.",
   SAVE_ERROR: "Couldn't save this profile.",
+  // ---- deny-f4 (mock packet M3): the profile's contact, shown to the people it refuses ----
+  CONTACT_TITLE: "Access requests",
+  CONTACT_LEAD:
+    "Shown to the people this profile binds when it refuses them, and to their runs. Put nothing here they may not share. A base's contact is never used. With none set, they see the deployment's contact, if there is one.",
+  CONTACT_OWNER: "Owner",
+  CONTACT_OWNER_HINT: "Who owns this profile, such as a team name.",
+  CONTACT_EMAIL: "Email",
+  CONTACT_EMAIL_HINT: "One address, with no name and no list.",
+  CONTACT_URL: "Request link",
+  CONTACT_URL_HINT: "An https: page, or one mailto: address. Where the Request access link goes.",
+  CONTACT_TEXT: "Request instructions",
+  CONTACT_TEXT_HINT: "Shown when there is no link or email.",
+  CONTACT_URL_REFUSED: "Use an https: link or a single mailto: address, with nothing after it.",
 
   // ---- §7.3 assignments and the resolved preview ----
   ASSIGN_TITLE: "Assignments",
@@ -533,6 +547,15 @@ export function runLimitsChip(l: RunLimits | undefined): string | null {
   if (l.user_changes_limits) parts.push("people may change these");
   return parts.length ? parts.join(" · ") : null;
 }
+
+// ---- deny-f4 (mock packet M10 S4): the Request access remedy beside a policy refusal.
+// request_text is shown verbatim and has no key.
+export const POLICY_REMEDY = {
+  OWNER: (owner: string) => `Owned by ${owner}`,
+  LINK: SIGNIN_HELP_LINK_LABEL,
+  EMAIL: (address: string) => `Email ${address}`,
+  SEP: " · ",
+} as const;
 
 // ---- the New Run rail's Autonomy section + the run header (new-run-rail.tsx
 // / run-detail-summary-header.tsx) ----

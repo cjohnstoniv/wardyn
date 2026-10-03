@@ -17,7 +17,7 @@ vi.mock("../../../lib/api/setup", () => ({
   setup: { getSetupStatus: () => Promise.resolve({}) },
 }));
 vi.mock("../../../lib/api/health", () => ({
-  health: { health: () => Promise.resolve({ confinement_classes: ["CC1"] }) },
+  health: { health: () => Promise.resolve({ confinement_classes: ["CC1"] }), whoami: () => Promise.resolve(null) },
 }));
 const getDefaultPolicyMock = vi.fn();
 const listPoliciesMock = vi.fn();

@@ -530,3 +530,60 @@ describe("RunDetailScreen — the Policy tab", () => {
     expect(screen.getByRole("tab", { name: /policy/i })).toHaveAttribute("data-state", "active");
   });
 });
+
+// deny-f4: beside a refused decision the Audit tab shows who owns the run's
+// policy and how to ask for a change, from the RUN's own `policy`. Only the
+// refusals the policy decided carry it: a builtin guard, an evaluator error and an
+// allow row never do.
+describe("RunDetailScreen — Audit tab Request access remedy", () => {
+  const POLICY = {
+    source: "profile",
+    name: "Contractors",
+    owner: "Platform Security",
+    request_url: "https://example.com/access",
+  };
+  const row = (id: string, action: string, ruleSource: string) => ({
+    id,
+    time: new Date().toISOString(),
+    actor_type: "system",
+    actor: "proxy",
+    action,
+    outcome: "deny",
+    run_id: "run-1",
+    target: `${id}.example.com`,
+    data: { rule_source: ruleSource },
+  });
+  const open = async (run: Record<string, unknown>, rows: unknown[]) => {
+    listAuditMock.mockImplementation((_id: string, action?: unknown) => Promise.resolve(action ? [] : rows));
+    renderRun(run);
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(await screen.findByRole("tab", { name: /audit/i }));
+  };
+
+  it.each(["policy:denied", "policy:default-deny", "policy:method", "approval:denied", "brokered:git:push-rules"])(
+    "renders the remedy beside a refused %s row",
+    async (source) => {
+      await open({ ...RUN, policy: POLICY }, [row("a", "egress.deny", source)]);
+      expect(await screen.findByText(/Owned by Platform Security/)).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: /Request access/ })).toHaveAttribute("href", "https://example.com/access");
+    },
+  );
+
+  it.each(["policy:evaluator-error", "builtin:private-ip", "builtin:dial-failed"])(
+    "renders none beside a refused %s row",
+    async (source) => {
+      await open({ ...RUN, policy: POLICY }, [row("b", "egress.deny", source)]);
+      await screen.findByText("b.example.com");
+      expect(screen.queryByTestId("policy-remedy")).toBeNull();
+    },
+  );
+
+  it("renders none on an allow row that shares a broker rule source, or when the run has no policy", async () => {
+    await open({ ...RUN, policy: POLICY }, [row("c", "egress.allow", "brokered:git")]);
+    await screen.findByText("c.example.com");
+    expect(screen.queryByTestId("policy-remedy")).toBeNull();
+    cleanup();
+    await open(RUN, [row("d", "egress.deny", "policy:denied")]);
+    await screen.findByText("d.example.com");
+    expect(screen.queryByTestId("policy-remedy")).toBeNull();
+  });
+});

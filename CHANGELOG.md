@@ -99,6 +99,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   change: ..."). The line names the profile and the route, never the owner. Faults (`builtin:*`,
   `policy:evaluator-error`, an uninspectable push) and every decision-log row are unchanged. See the proxy
   image note under "Before you upgrade".
+- **The console shows who owns a refusing policy and a Request access link.** A refused launch, a refused egress
+  decision on the run detail, the attach panel's refusal and the New Run rail's profile line show the owner and
+  one link, mail address or sentence, from the server's `policy` reference. A link is built only for `https:` or one
+  `mailto:` address, re-checked in the browser. The governance profile editor gains the four contact fields.
 
 ### Added
 
