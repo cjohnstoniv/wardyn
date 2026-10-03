@@ -249,6 +249,8 @@ type bootFlags struct {
 	sandboxDefaultMemoryMiB *int
 	proxyCPUMillis          *int
 	proxyMemoryMiB          *int
+	// sandboxRequestRatio is a string so "unset" and an explicit 0 differ: see parseRequestRatio.
+	sandboxRequestRatio *string
 
 	proxyURL *string
 
@@ -495,6 +497,7 @@ func parseBootFlags() *bootFlags {
 		sandboxDefaultMemoryMiB: flagIntEnv("sandbox-default-memory-mib", "WARDYN_SANDBOX_DEFAULT_MEMORY_MIB", 0, "memory limit (MiB) for a sandbox whose policy sets none (default 0 = compiled-in 4096)"),
 		proxyCPUMillis:          flagIntEnv("proxy-cpu-millis", "WARDYN_PROXY_CPU_MILLIS", 0, "milli-CPU limit for each run's wardyn-proxy sidecar, on every substrate (default 0 = compiled-in 500)"),
 		proxyMemoryMiB:          flagIntEnv("proxy-memory-mib", "WARDYN_PROXY_MEMORY_MIB", 0, "memory limit (MiB) for each run's wardyn-proxy sidecar, on every substrate (default 0 = compiled-in 256)"),
+		sandboxRequestRatio:     flagEnv("sandbox-request-ratio", "WARDYN_SANDBOX_REQUEST_RATIO", "", "Kubernetes agent-pod CPU/memory requests as a fraction of the limits, in (0, 1]; unset = requests equal limits. The proxy pod is unaffected"),
 
 		// proxyURL overrides the WARDYN_PROXY_URL injected into sandbox env.
 		// Defaults to "http://wardyn-proxy:3128" (per-run sidecar docker alias).

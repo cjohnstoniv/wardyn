@@ -150,9 +150,11 @@ func int64Ptr(i int64) *int64 { return &i }
 // the pod silently Pending. 256Mi fits any node that can pull the agent image; a limit smaller than the floor uses the limit instead.
 const ephemeralStorageRequestFloorMiB int64 = 256
 
-// resourceRequirements maps runner.Resources onto a k8s ResourceRequirements. CPU and memory are
-// requests == limits (a hard cap, matching the docker driver's "every sandbox is capped" posture),
-// with the same conservative platform defaults docker uses for any zero field.
+// resourceRequirements maps runner.Resources onto a k8s ResourceRequirements. CPU and memory limits are
+// the hard cap (matching the docker driver's "every sandbox is capped" posture), with the same
+// conservative platform defaults docker uses for any zero field. Requests equal the limits unless
+// the deployment sets a request ratio (runner.EffectiveRequests), which makes the pod Burstable.
+// The proxy sidecar never takes the ratio (proxyResources): it stays Guaranteed.
 //
 // DiskMiB is limits[ephemeral-storage] plus an explicit small request (ephemeralStorageRequestFloorMiB)
 // — asymmetric on purpose, see that const. It covers the pod's writable layers + logs + local-ephemeral
@@ -170,13 +172,14 @@ func resourceRequirements(res runner.Resources) corev1.ResourceRequirements {
 	if memMiB <= 0 {
 		memMiB = runner.EffectiveLimits().MemoryMiB
 	}
-	shared := func() corev1.ResourceList { // two lists, not one aliased into both: a shared map would put the limit in the requests too
+	reqCPU, reqMem := runner.EffectiveRequests(res)
+	list := func(cpu, mem int64) corev1.ResourceList { // two lists, not one aliased into both: a shared map would put the limit in the requests too
 		return corev1.ResourceList{
-			corev1.ResourceCPU:    *resource.NewMilliQuantity(cpuMillis, resource.DecimalSI),
-			corev1.ResourceMemory: *resource.NewQuantity(memMiB*1024*1024, resource.BinarySI),
+			corev1.ResourceCPU:    *resource.NewMilliQuantity(cpu, resource.DecimalSI),
+			corev1.ResourceMemory: *resource.NewQuantity(mem*1024*1024, resource.BinarySI),
 		}
 	}
-	requests, limits := shared(), shared()
+	requests, limits := list(reqCPU, reqMem), list(cpuMillis, memMiB)
 	if res.DiskMiB > 0 {
 		limits[corev1.ResourceEphemeralStorage] = *resource.NewQuantity(res.DiskMiB*1024*1024, resource.BinarySI)
 		floor := min(res.DiskMiB, ephemeralStorageRequestFloorMiB)
