@@ -19,7 +19,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   client is connected to the database, and exits 1 when the migration fails. See "Stopped-writer upgrade"
   in `docs/OPERATIONS.md`.
 - **The audit log becomes a monthly-partitioned table, and every audit write goes through the database
-  function `audit_append`** (`0108_audit_partitioned`, `0109_audit_chain_partitioned`). The conversion is
+  function `audit_append`** (`0111_audit_partitioned`, `0112_audit_chain_partitioned`). The conversion is
   one-way and needs stopped writers: a 0.8.5 binary's direct `INSERT` is refused afterwards, and 0.8.5 will not
   start against the converted schema. History and hashes are untouched and verify as before. A split-role app
   role that held `INSERT` on `audit_events` is granted `EXECUTE` on `audit_append` and `audit_ensure_partitions`

@@ -409,7 +409,7 @@ func TestFederation_OneAuditStream(t *testing.T) {
 		return
 	}
 
-	// resetLaptopAudit is the reset that also restarts the laptop's seq. Since 0108 seq comes from a
+	// resetLaptopAudit is the reset that also restarts the laptop's seq. Since 0111 seq comes from a
 	// standalone sequence and the chain's high-water mark lives in audit_partition_meta, so TRUNCATE ...
 	// RESTART IDENTITY restarts neither; a laptop restored from a backup (the case this models) gets the
 	// sequence and the high-water row back along with the table, which is what the three statements do.

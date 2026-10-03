@@ -23,7 +23,7 @@ package db
 // executor below cancels the run at the moment migrateOn asks whether the file
 // AFTER the last trigger-defining migration is applied, which is the instant the
 // hardening has just been reverted and nothing has yet restored it. When the
-// last trigger-defining migration is also the last migration (0109 is, today),
+// last trigger-defining migration is also the last migration (0112 was, when this was written),
 // there is no such file, and the cancel fires on the first statement of the
 // post-loop trigger check instead: the same instant.
 

@@ -115,7 +115,7 @@ const AuditChainLockKey int64 = 0x5741524459_434841 // ASCII "WARDYCHA"
 // AuditPartitionLockKey serializes the creators of audit_events partitions: two replicas booting at
 // once, or a boot beside the daily sweeper, would otherwise both create the same month.
 // audit_ensure_partitions takes it inside the database as a transaction lock; the literal in
-// 0108_audit_partitioned.sql must equal this. It is deliberately NOT AuditChainLockKey: creating a
+// 0111_audit_partitioned.sql must equal this. It is deliberately NOT AuditChainLockKey: creating a
 // month must not queue behind (or hold up) an append.
 const AuditPartitionLockKey int64 = 0x5741524459_415054 // ASCII "WARDYAPT"
 

@@ -951,7 +951,7 @@ func (b *Broker) auditMint(ctx context.Context, caller *identity.Claims, grantID
 // that helper (it takes *pgxpool.Pool, not the Querier seam this package is built
 // on), the same reason the grant/approval SQL is inlined here.
 //
-// The row goes in through audit_append (migration 0108), the only way a row enters
+// The row goes in through audit_append (migration 0111), the only way a row enters
 // audit_events: the function allocates seq and recorded_at under the chain lock, and
 // the chain trigger fills prev_hash/row_hash. The lock is still taken here, before the
 // call, on this same tx; advisory locks are re-entrant within a transaction, so

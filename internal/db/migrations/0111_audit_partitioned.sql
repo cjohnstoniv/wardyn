@@ -15,19 +15,19 @@
 -- the new month). So the position is decided in chain order, under the chain lock, by
 -- audit_append(): it allocates seq, sets recorded_at := greatest(clock_timestamp(),
 -- high-water recorded_at), and inserts with those explicit values. The chain trigger
--- (audit_events_chain, defined again in 0109 as the replayable definition) VERIFIES them.
+-- (audit_events_chain, defined again in 0112 as the replayable definition) VERIFIES them.
 --
 -- ONE TRANSACTION, WITH WORKING GUARDS BEFORE COMMIT. The migrator commits each file on
 -- its own and only runs ensureAuditTriggers after all of them, so a conversion split
 -- over two files (drop the guards in one, create them in the next) would leave a crash
 -- window with an unprotected table. This file drops the old triggers and installs the
--- new ones in the same transaction; 0109 is only the idempotent, replayable definition.
+-- new ones in the same transaction; 0112 is only the idempotent, replayable definition.
 --
 -- THE TRIGGER'S NAME IS NEVER WRITTEN HERE AS DDL. db.replayTriggerMigrations re-runs
 -- every migration whose text contains "TRIGGER" followed by the chain trigger's name, to
 -- restore a trigger an owner dropped. Re-running THIS file would re-run the conversion
 -- and refuse boot. So the three old triggers are dropped, and the new ones created, with
--- EXECUTE format('... TRIGGER %I ...') and the name passed as a parameter, and 0109 (which
+-- EXECUTE format('... TRIGGER %I ...') and the name passed as a parameter, and 0112 (which
 -- is safe to replay) is the only file that spells it out. A test pins this.
 --
 -- STOPPED WRITERS. 0.8.5 inserts directly into audit_events with no seq or recorded_at;
@@ -223,7 +223,7 @@ $body$
 $fn$, '@ns@', nsq);
 
     -- audit_events_chain: the chain trigger. Defined here so the guards work at commit, and
-    -- again, identically, in 0109 (a test compares the two bodies). It VERIFIES the position
+    -- again, identically, in 0112 (a test compares the two bodies). It VERIFIES the position
     -- audit_append() allocated; it never allocates, and it never calls
     -- pg_get_serial_sequence(TG_RELID) (NULL on a partition).
     EXECUTE replace($fn$

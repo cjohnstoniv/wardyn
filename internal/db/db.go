@@ -262,7 +262,7 @@ func auditChainCanary(ctx context.Context, db migrationExecutor) error {
 		WHERE row_hash IS NOT NULL ORDER BY seq DESC LIMIT 1), '')`).Scan(&head); err != nil {
 		return auditCanaryTransient(ctx, "read the chain head for the canary", err)
 	}
-	// Through audit_append, the only way a row enters the log since 0108, so the canary on the
+	// Through audit_append, the only way a row enters the log since 0111, so the canary on the
 	// serving pool proves the path real writes take (EXECUTE on the function included).
 	var rowHash, prevHash string
 	if err := tx.QueryRow(ctx, `

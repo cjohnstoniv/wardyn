@@ -259,7 +259,7 @@ func (tx *fakeTx) QueryRow(_ context.Context, sql string, args ...any) Row {
 		return boolRow{v: tx.db.revokedRuns[runID]}
 
 	case strings.Contains(sql, "FROM audit_append"):
-		// D29 in-tx mint audit, written through the audit_append function (0108). args: id, time,
+		// D29 in-tx mint audit, written through the audit_append function (0111). args: id, time,
 		// run_id, actor_type, actor, action, target, outcome, source_ip, data. Record preCommit so
 		// the atomicity test can prove it rode the tx rather than a separate post-commit connection.
 		runID, _ := args[2].(*uuid.UUID)

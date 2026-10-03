@@ -4,16 +4,16 @@
 -- The replayable definition of the partitioned audit_events guards (0.8.6 audit retention;
 -- design record docs/design/0.8/0.8.6-ar.md, "M-A2: the replayable trigger definition").
 --
--- 0108 converted audit_events and installed working guards before it committed. This file
+-- 0111 converted audit_events and installed working guards before it committed. This file
 -- is the same guards as IDEMPOTENT text: db.replayTriggerMigrations re-runs every migration
 -- that spells the chain trigger's name, in filename order, to restore a trigger an owner
--- dropped, and 0108 deliberately does not spell it (re-running a conversion would refuse
+-- dropped, and 0111 deliberately does not spell it (re-running a conversion would refuse
 -- boot). So this is the file that is replayed, AFTER 0047/0056/0057/0058 have put their
 -- older function bodies and triggers back, and it puts the partition-aware ones back last.
 --
 -- The chain function VERIFIES the position audit_append() allocated; it never allocates and
 -- never calls pg_get_serial_sequence(TG_RELID), which is NULL on a partition. Its body is
--- the one 0108 defines; a test compares the two so they cannot drift.
+-- the one 0111 defines; a test compares the two so they cannot drift.
 --
 -- What it creates, on the parent: the chain trigger (BEFORE INSERT, row level), the
 -- append-only trigger (BEFORE UPDATE OR DELETE, row level) and a TRUNCATE trigger; Postgres

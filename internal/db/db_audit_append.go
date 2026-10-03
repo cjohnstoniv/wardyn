@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// auditAppendSignature is audit_append's catalog identity (0108): every in-tree audit writer calls it,
+// auditAppendSignature is audit_append's catalog identity (0111): every in-tree audit writer calls it,
 // and the boot checks below ask about exactly this function rather than any same-named one.
 const auditAppendSignature = "audit_append(uuid,timestamptz,uuid,text,text,text,text,text,text,jsonb)"
 
@@ -26,7 +26,7 @@ type AuditAppendPosture struct {
 	// well-behaved or mistaken writer, not a hostile owner.
 	DirectInsert bool
 	// PublicExecute names the audit functions any role may execute (a NULL ACL means the PUBLIC
-	// default). 0108 revokes it; an owner's later REPLACE or an ALTER DEFAULT PRIVILEGES can bring
+	// default). 0111 revokes it; an owner's later REPLACE or an ALTER DEFAULT PRIVILEGES can bring
 	// it back.
 	PublicExecute []string
 }

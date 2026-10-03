@@ -154,7 +154,7 @@ func TestPG_AuditDDL_Protected(t *testing.T) {
 	})
 	must(`GRANT USAGE ON SCHEMA public TO ` + role)
 	// EXACTLY the documented deploy posture and nothing more: SELECT on
-	// audit_events and EXECUTE on audit_append (0108_audit_partitioned.sql, which
+	// audit_events and EXECUTE on audit_append (0111_audit_partitioned.sql, which
 	// hands a role that held INSERT exactly this; cmd/wardynd's boot check).
 	// No sequence grant — this role once held USAGE ON ALL SEQUENCES here, which
 	// hid the whole of review finding A1: 0056 allocated seq with an ordinary
@@ -194,7 +194,7 @@ func TestPG_AuditDDL_Protected(t *testing.T) {
 		if err := tx.QueryRow(ctx, `SELECT COALESCE(row_hash,'')
 			FROM audit_append(gen_random_uuid(), now(), NULL, 'system', 'f11-app-role', 'test.ddl.probe', '', 'success', '', NULL)`).Scan(&rowHash); err != nil {
 			t.Fatalf("audit_append as the documented app role: %v — SELECT on audit_events plus EXECUTE on audit_append is "+
-				"the whole grant set 0108 hands a role that could INSERT, so anything the append needs beyond it "+
+				"the whole grant set 0111 hands a role that could INSERT, so anything the append needs beyond it "+
 				"(the sequence, the high-water row) must run as the DEFINER, not the invoker (0057)", err)
 		}
 		if rowHash == "" {

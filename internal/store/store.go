@@ -607,7 +607,7 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 // Runs in a transaction because pg_advisory_xact_lock must be held across the
 // append: this caller's seq allocation and head read must not interleave with
 // another writer's, keeping seq order and chain order identical. audit_append
-// takes the same lock itself (the only way a row enters the table since 0108);
+// takes the same lock itself (the only way a row enters the table since 0111);
 // the lock here is re-entrant and free, and keeps the bounded wait below in
 // front of it.
 func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEvent) error {

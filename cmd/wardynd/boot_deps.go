@@ -140,7 +140,7 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 	return pool, nil
 }
 
-// verifyAuditAppendPosture is the boot check for the one write path audit_events has had since 0108.
+// verifyAuditAppendPosture is the boot check for the one write path audit_events has had since 0111.
 // Every audit row is appended by the database function audit_append, so a serving role that cannot
 // EXECUTE it would start clean and then lose every audit write to the spool and refuse every
 // credential mint: that refuses the boot, naming the GRANT. The other two findings are postures to

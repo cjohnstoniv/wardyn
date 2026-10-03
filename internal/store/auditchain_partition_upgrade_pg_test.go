@@ -15,10 +15,10 @@ import (
 )
 
 // TestPG_AuditChainVerifiesAcrossThePartitionConversion: rows chained by the 0.8.5 trigger, the
-// conversion to a partitioned table (0108, 0109), and more rows appended through the real writer
+// conversion to a partitioned table (0111, 0112), and more rows appended through the real writer
 // (store.InsertAuditEvent, which calls audit_append) are ONE chain to the verifier.
 func TestPG_AuditChainVerifiesAcrossThePartitionConversion(t *testing.T) {
-	pool := databaseBefore(t, "0108_audit_partitioned.sql") // a 0.8.5-shaped chain trigger, not yet converted
+	pool := databaseBefore(t, "0111_audit_partitioned.sql") // a 0.8.5-shaped chain trigger, not yet converted
 	ctx := context.Background()
 
 	var preHead string
@@ -27,8 +27,8 @@ func TestPG_AuditChainVerifiesAcrossThePartitionConversion(t *testing.T) {
 		preHead = row
 	}
 
-	execMigrationFile(t, pool, "0108_audit_partitioned.sql")
-	execMigrationFile(t, pool, "0109_audit_chain_partitioned.sql")
+	execMigrationFile(t, pool, "0111_audit_partitioned.sql")
+	execMigrationFile(t, pool, "0112_audit_chain_partitioned.sql")
 
 	var first types.AuditEvent
 	for i, action := range []string{"test.post.1", "test.post.2", "test.post.3"} {

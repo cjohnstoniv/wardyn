@@ -10,15 +10,15 @@ import (
 )
 
 const (
-	auditConversionFile = "0108_audit_partitioned.sql"
-	auditReplayableFile = "0109_audit_chain_partitioned.sql"
+	auditConversionFile = "0111_audit_partitioned.sql"
+	auditReplayableFile = "0112_audit_chain_partitioned.sql"
 )
 
 // TestChainTriggerReplaySetExcludesTheConversion pins the property the whole conversion rests on.
 // db.replayTriggerMigrations re-executes every migration whose text contains "TRIGGER
-// audit_events_chain", to restore a trigger an owner dropped. 0108 converts the table; re-running
+// audit_events_chain", to restore a trigger an owner dropped. 0111 converts the table; re-running
 // it would refuse every boot after the first. So it must never spell the trigger as DDL, and the
-// replayable definition (0109) must be in the set so a restore puts the partition-aware body back
+// replayable definition (0112) must be in the set so a restore puts the partition-aware body back
 // AFTER 0047/0056/0057/0058 have replaced it with theirs.
 func TestChainTriggerReplaySetExcludesTheConversion(t *testing.T) {
 	names, err := triggerMigrationFiles(auditChainTrigger)
@@ -62,8 +62,8 @@ func chainFunctionBody(t *testing.T, file string) string {
 	return body[i : i+j]
 }
 
-// TestChainFunctionBodyIsTheSameInBothFiles: 0108 defines the chain function so the guards work at
-// commit, and 0109 defines it again as the replayable text. Two copies that disagree would mean a
+// TestChainFunctionBodyIsTheSameInBothFiles: 0111 defines the chain function so the guards work at
+// commit, and 0112 defines it again as the replayable text. Two copies that disagree would mean a
 // fresh install and a restored trigger run different code.
 func TestChainFunctionBodyIsTheSameInBothFiles(t *testing.T) {
 	a, b := chainFunctionBody(t, auditConversionFile), chainFunctionBody(t, auditReplayableFile)

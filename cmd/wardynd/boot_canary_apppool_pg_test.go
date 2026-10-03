@@ -89,7 +89,7 @@ func TestConnectAndMigrate_CanaryRunsOnTheAppPoolNotJustTheMigrator(t *testing.T
 		t.Fatalf("create the shadowing audit_events in %s: %v", appSchema, err)
 	}
 
-	// The append function the app role calls exists and does not chain either: since 0108 every audit
+	// The append function the app role calls exists and does not chain either: since 0111 every audit
 	// write goes through audit_append, and a role that cannot call it is refused earlier, by name, by the
 	// privilege check (TestConnectAndMigrate_RefusesAnAppRoleWithoutExecuteOnAuditAppend).
 	if _, err := admin.Exec(ctx, `CREATE FUNCTION `+appSchema+`.audit_append(
@@ -128,7 +128,7 @@ func TestConnectAndMigrate_CanaryRunsOnTheAppPoolNotJustTheMigrator(t *testing.T
 	ok.Close()
 }
 
-// TestConnectAndMigrate_RefusesAnAppRoleWithoutExecuteOnAuditAppend: since 0108 every audit row is
+// TestConnectAndMigrate_RefusesAnAppRoleWithoutExecuteOnAuditAppend: since 0111 every audit row is
 // appended by audit_append, so a serving role that cannot EXECUTE it would start clean and then lose every
 // audit write to the spool and refuse every credential mint. The boot refuses, naming the GRANT, and comes
 // up once the grant exists.

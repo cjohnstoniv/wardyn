@@ -5220,8 +5220,8 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 `0092` adds `agent_runs.ended_at`.
 `0094` adds `attach_tickets.via_delegate`/`via_grant` and `agent_runs.created_via`.
 `0106` adds `attach_tickets.authorized_at`/`email` (`0026`'s table).
-`0108` converts `audit_events` (`0001`'s table) to a partitioned table: it adds `recorded_at`, drops the
-identity and the primary key, renames the table and re-creates its triggers, and `0109` is the
+`0111` converts `audit_events` (`0001`'s table) to a partitioned table: it adds `recorded_at`, drops the
+identity and the primary key, renames the table and re-creates its triggers, and `0112` is the
 `CREATE OR REPLACE` of `0047`'s chain function that the partitions need.
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
@@ -5282,7 +5282,7 @@ REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES ON audit_events FROM wardyn
 -- 3b. 0.8.6 and later: nothing writes audit_events directly. Every row goes in
 --     through the SECURITY DEFINER function audit_append, so the app role gets
 --     EXECUTE on it and loses INSERT. The migration that converts the table
---     (0108) does this once for every role that held INSERT at the upgrade;
+--     (0111) does this once for every role that held INSERT at the upgrade;
 --     run it yourself for a role you create after that. The same GRANT ALL
 --     TABLES in step 2 also reached the table's partitions and its bookkeeping
 --     tables, so take their write privileges back too.
@@ -5512,7 +5512,7 @@ Raise it in `env` or `extraEnv` as `h`, `m` and `s` units only.
 `kubectl scale --replicas=0` is the only pre-step that does. `-migrate-only` will still refuse while any replica
 is connected, but it is the scale-down that makes the run possible.
 
-#### What the audit conversion does (`0108_audit_partitioned`, `0109_audit_chain_partitioned`)
+#### What the audit conversion does (`0111_audit_partitioned`, `0112_audit_chain_partitioned`)
 
 `audit_events` becomes a table range-partitioned by month on a new, server-assigned `recorded_at`. Every
 existing row keeps its place in the chain, its hash and its `seq`, and lands in one partition,
@@ -5523,7 +5523,7 @@ the listener; an insert into a month that does not exist fails and waits in the 
 
 - **0.8.5 writers are refused.** A 0.8.5 binary inserts directly with no `seq` or `recorded_at`; the chain trigger
   refuses that row, and the converted schema is one a 0.8.5 binary will not start against (it does not ship
-  `0108` or `0109`). The chart's `Recreate` strategy is what keeps one from writing during the upgrade.
+  `0111` or `0112`). The chart's `Recreate` strategy is what keeps one from writing during the upgrade.
 - **The history stays together.** Every row from before the conversion is in `audit_events_legacy`, one
   partition that ends at the moment of the conversion.
 - **An index you built out of band** on `audit_events` (beyond the ones Wardyn ships) stays on
@@ -5536,7 +5536,7 @@ the listener; an insert into a month that does not exist fails and waits in the 
 - **Time.** The cost is one scan of the existing rows to prove the legacy bound, one index build on them, and
   the lock waits. Measured on Postgres 13 and 17 in a container on a shared development machine, over rows
   with the audit log's columns, bulk-loaded without chain hashes (the scan and the index build do not read them);
-  a `psql` timing of the `0108` transaction, with the twelve months of partitions inside it, and `0109` adding
+  a `psql` timing of the `0111` transaction, with the twelve months of partitions inside it, and `0112` adding
   under 10 ms:
 
   | Rows before the conversion | Postgres 13 | Postgres 17 |

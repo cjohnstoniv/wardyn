@@ -15,7 +15,7 @@ import (
 )
 
 // auditTreeCTE names every relation a write to audit_events can land on: the table itself, and since
-// 0108 every partition under it. Before the conversion (and on a database mid-bootstrap) the tree is
+// 0111 every partition under it. Before the conversion (and on a database mid-bootstrap) the tree is
 // the one table, so every reader here works on both shapes. Callers have already proved
 // audit_events exists.
 //

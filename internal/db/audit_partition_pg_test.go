@@ -3,7 +3,7 @@
 
 package db
 
-// Live tests for the partitioned audit log (0108 and 0109): the conversion of a populated 0.8.5
+// Live tests for the partitioned audit log (0111 and 0112): the conversion of a populated 0.8.5
 // chain, the append protocol and its guards, the privilege model, and the replayable trigger
 // definition. Every one needs WARDYN_TEST_PG and a role that can CREATE ROLE (the split-role posture
 // is the point), and every one runs against whatever Postgres version that variable names: CI runs
@@ -114,7 +114,7 @@ func poolAs(t *testing.T, schema, role, password string) *pgxpool.Pool {
 	return pool
 }
 
-// upgradeFixture is a 0.8.5-shaped database (every migration before 0108, which includes 0107's
+// upgradeFixture is a 0.8.5-shaped database (every migration before 0111, which includes 0107's
 // floor): audit_events is an ordinary table whose chain was written by the OLD trigger, with the
 // documented split-role posture (INSERT and SELECT for an app role whose name is deliberately not
 // wardyn_app). The conversion has NOT run.
@@ -155,7 +155,7 @@ func newUpgradeFixture(t *testing.T, rows int) *upgradeFixture {
 	return f
 }
 
-// convert runs Migrate (0108, 0109) and returns how long it took.
+// convert runs Migrate (0111, 0112) and returns how long it took.
 func (f *upgradeFixture) convert(t *testing.T) time.Duration {
 	t.Helper()
 	start := time.Now()
@@ -170,7 +170,7 @@ func (f *upgradeFixture) app(t *testing.T) *pgxpool.Pool {
 }
 
 // TestPG_AuditPartition_ConvertsAPopulated085Chain is the upgrade test: a seeded 0.8.5 chain goes
-// through 0108 and 0109 and comes out verifying, with its grants, its sequence and its indexes.
+// through 0111 and 0112 and comes out verifying, with its grants, its sequence and its indexes.
 func TestPG_AuditPartition_ConvertsAPopulated085Chain(t *testing.T) {
 	ctx := context.Background()
 	f := newUpgradeFixture(t, 40)
@@ -651,49 +651,49 @@ func auditGuardsHold(t *testing.T, pool *pgxpool.Pool, when string) {
 	}
 }
 
-// TestPG_AuditPartition_FailureInjectionLeavesNoUnguardedWindow: 0108 commits with working guards, and
-// 0109 is one transaction that either completes or leaves 0108's guards in place. The probes run from a
+// TestPG_AuditPartition_FailureInjectionLeavesNoUnguardedWindow: 0111 commits with working guards, and
+// 0112 is one transaction that either completes or leaves 0111's guards in place. The probes run from a
 // SECOND connection, because a probe on the migrating connection proves nothing about what a concurrent
 // writer sees.
 func TestPG_AuditPartition_FailureInjectionLeavesNoUnguardedWindow(t *testing.T) {
 	ctx := context.Background()
-	owner, schema := partialSchemaPool(t, auditReplayableFile) // 0108 applied and recorded; 0109 not yet
+	owner, schema := partialSchemaPool(t, auditReplayableFile) // 0111 applied and recorded; 0112 not yet
 	pgExec(t, owner, `SELECT audit_append(gen_random_uuid(), now(), NULL, 'system', 'seed', 'test.seed', '', 'success', '', NULL)`)
 	second := secondPool(t, schema)
 	count := func() int { return pgScalar[int](t, owner, `SELECT count(*)::int FROM audit_events`) }
 	want := count()
 
-	// A crash after 0108 and before 0109 (the next boot would apply it): the guards are already armed.
-	auditGuardsHold(t, second, "after 0108, before 0109")
+	// A crash after 0111 and before 0112 (the next boot would apply it): the guards are already armed.
+	auditGuardsHold(t, second, "after 0111, before 0112")
 
-	// During 0109: its statements ran, nothing committed.
+	// During 0112: its statements ran, nothing committed.
 	tx, err := owner.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 	if _, err := tx.Exec(ctx, readMigration(t, auditReplayableFile)); err != nil {
 		tx.Rollback(ctx) //nolint:errcheck
-		t.Fatalf("run 0109 inside a transaction: %v", err)
+		t.Fatalf("run 0112 inside a transaction: %v", err)
 	}
-	auditGuardsHold(t, second, "during 0109")
+	auditGuardsHold(t, second, "during 0112")
 
-	// 0109 failing at its very end rolls back to 0108's state, still guarded.
+	// 0112 failing at its very end rolls back to 0111's state, still guarded.
 	if _, err := tx.Exec(ctx, `SELECT 1/0`); err == nil {
 		t.Fatal("the injected failure did not fail")
 	}
 	if err := tx.Rollback(ctx); err != nil {
 		t.Fatalf("rollback: %v", err)
 	}
-	auditGuardsHold(t, second, "after a failed 0109")
+	auditGuardsHold(t, second, "after a failed 0112")
 	if got := count(); got != want {
 		t.Errorf("rows went from %d to %d across the injected failures", want, got)
 	}
 
-	// And the real 0109 completes from there.
+	// And the real 0112 completes from there.
 	if err := Migrate(ctx, owner); err != nil {
 		t.Fatalf("Migrate after the injected failures: %v", err)
 	}
-	auditGuardsHold(t, second, "after 0109")
+	auditGuardsHold(t, second, "after 0112")
 	if got := count(); got != want {
 		t.Errorf("rows went from %d to %d across the guard probes", want, got)
 	}
@@ -731,13 +731,13 @@ func TestPG_AuditPartition_AnOldBinaryAndItsMigratorWriteNoUnchainedRow(t *testi
 		t.Fatalf("commit the old replay: %v", err)
 	}
 	if _, err := f.owner.Exec(ctx, oldInsert); err == nil {
-		t.Fatal("after its migrator replayed the pre-0108 trigger files, the 0.8.5 binary's direct INSERT was accepted")
+		t.Fatal("after its migrator replayed the pre-0111 trigger files, the 0.8.5 binary's direct INSERT was accepted")
 	}
 	if got := count(); got != want {
 		t.Errorf("rows went from %d to %d: an old binary wrote a row", want, got)
 	}
 
-	// And the other half of the refusal: the 0.8.5 binary does not ship 0108/0109, so its own Migrate
+	// And the other half of the refusal: the 0.8.5 binary does not ship 0111/0112, so its own Migrate
 	// reads the database as migrated by something newer, which it refuses.
 	var shipped []string
 	for _, n := range embeddedMigrationNames(t) {
@@ -750,7 +750,7 @@ func TestPG_AuditPartition_AnOldBinaryAndItsMigratorWriteNoUnchainedRow(t *testi
 		t.Fatalf("unknownAppliedMigrations: %v", err)
 	}
 	if !slices.Contains(unknown, auditConversionFile) || !slices.Contains(unknown, auditReplayableFile) {
-		t.Errorf("a binary that does not ship 0108/0109 sees unknown migrations %v, want both", unknown)
+		t.Errorf("a binary that does not ship 0111/0112 sees unknown migrations %v, want both", unknown)
 	}
 }
 
@@ -821,7 +821,7 @@ func TestPG_AuditAppendPostureReportsPublicExecute(t *testing.T) {
 		t.Fatalf("AuditAppendPostureOf: %v", err)
 	}
 	if len(p.PublicExecute) != 0 {
-		t.Fatalf("a fresh install reports PUBLIC EXECUTE on %v; 0108 revokes it", p.PublicExecute)
+		t.Fatalf("a fresh install reports PUBLIC EXECUTE on %v; 0111 revokes it", p.PublicExecute)
 	}
 	pgExec(t, pool, `GRANT EXECUTE ON FUNCTION `+auditAppendFn+` TO PUBLIC`)
 	p, err = AuditAppendPostureOf(ctx, pool)
