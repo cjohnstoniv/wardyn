@@ -23,7 +23,7 @@ import type {
   SetupProviderAccess,
   Workspace,
 } from "../../../lib/types";
-import { RAIL_PROVIDER, RUN } from "../../wardyn/copy";
+import { RAIL_PROVIDER, RAIL_SETUP, RUN } from "../../wardyn/copy";
 import { savedPolicyGone } from "./policy-lane";
 import { workspaceUnavailableToCaller, type WizardState } from "./wizard-types";
 import { RunRail } from "./new-run-rail";
@@ -201,7 +201,17 @@ export function NewRunLaunchPanel({
   // so the sentence renders exactly once, on the workspace picker's own
   // advisory line (workspace-card.tsx), never a second time in the rail's
   // problem slot.
-  const problem = needsTask && !task.trim()
+  //
+  // f-f4: preflight's `backend` row says this runner cannot enforce the run's
+  // barrier; Launch would 422 on it, so the rail says so first. Only the
+  // CURRENT body's verdict counts, and only `missing` — an `unverified` row
+  // (the capability probe failed) never blocks.
+  const backendMissing =
+    preflightIsCurrent &&
+    !!preflightResult?.setup_items?.some((i) => i.kind === "backend" && i.status === "missing");
+  const problem = backendMissing
+    ? RAIL_SETUP.BACKEND_BLOCK
+    : needsTask && !task.trim()
     ? isAgent
       ? "An autonomous run needs a task to perform."
       : "Enter a command to run."
