@@ -98,7 +98,7 @@ func rowOf(t *testing.T, pool *pgxpool.Pool, owner, name string) rowInfo {
 	return r
 }
 
-func mustGet(t *testing.T, s secretstore.Store, owner, name, want string) {
+func mustGetOwned(t *testing.T, s secretstore.Store, owner, name, want string) {
 	t.Helper()
 	got, err := s.For(owner).Get(secretstore.WithPurpose(t.Context(), secretstore.PurposeStatus), name)
 	if err != nil || string(got) != want {
@@ -154,13 +154,13 @@ func TestMixedDatabase_EveryPathBehavesAsListed(t *testing.T) {
 			sAz := mixedStore(t, pool, id, principal, azure, false)
 
 			// open: every format reads, whatever the flag says.
-			mustGet(t, s, "", "wardyn-signing-key", "boot-key-value")
-			mustGet(t, s, "", "operator-token", "operator-value")
-			mustGet(t, s, "bob", "v1-cred", "bob-v1")
-			mustGet(t, s, "bob", "vault-cred", "bob-vault")
-			mustGet(t, sAz, "zoe", "azure-cred", "zoe-azure")
-			mustGet(t, s, "alice", "pk-a", "alice-v3")
-			mustGet(t, s, "bob", "pk-b", "bob-v3")
+			mustGetOwned(t, s, "", "wardyn-signing-key", "boot-key-value")
+			mustGetOwned(t, s, "", "operator-token", "operator-value")
+			mustGetOwned(t, s, "bob", "v1-cred", "bob-v1")
+			mustGetOwned(t, s, "bob", "vault-cred", "bob-vault")
+			mustGetOwned(t, sAz, "zoe", "azure-cred", "zoe-azure")
+			mustGetOwned(t, s, "alice", "pk-a", "alice-v3")
+			mustGetOwned(t, s, "bob", "pk-b", "bob-v3")
 
 			// Put: v3 for a person's row only with the flag on; every owner="" row
 			// (boot key, operator namespace) stays v1; store mode writes pointers.
@@ -194,7 +194,7 @@ func TestMixedDatabase_EveryPathBehavesAsListed(t *testing.T) {
 			if got := rowOf(t, pool, "alice", "pk-a"); got.version != wantReplaced {
 				t.Fatalf("a replaced v3 row with the flag %v is enc_version %d; want %d", principal, got.version, wantReplaced)
 			}
-			mustGet(t, s, "alice", "pk-a", "alice-v3-replaced")
+			mustGetOwned(t, s, "alice", "pk-a", "alice-v3-replaced")
 
 			// metadata: pk is the principal-key format, not a store.
 			metas, err := s.MetadataEverywhere(t.Context(), []string{"pk-b", "v1-cred", "vault-cred"})
@@ -280,7 +280,7 @@ func TestMixedDatabase_EveryPathBehavesAsListed(t *testing.T) {
 			if got := rowOf(t, pool, "alice", "pk-a"); got.version != 2 || !strings.HasPrefix(got.kekID, "vaultkv:") {
 				t.Fatalf("a v3 row migrated to the store is %+v; want a v2 pointer", got)
 			}
-			mustGet(t, s, "alice", "pk-a", "alice-v3-replaced")
+			mustGetOwned(t, s, "alice", "pk-a", "alice-v3-replaced")
 			if res.Moved == 0 || len(read) != res.Moved {
 				t.Fatalf("Migrate moved %d rows and reported %d reads", res.Moved, len(read))
 			}
@@ -292,7 +292,7 @@ func TestMixedDatabase_EveryPathBehavesAsListed(t *testing.T) {
 			if got := rowOf(t, pool, "alice", "pk-a"); got.version != wantReplaced {
 				t.Fatalf("a row migrated to local with the flag %v is enc_version %d; want %d", principal, got.version, wantReplaced)
 			}
-			mustGet(t, s, "alice", "pk-a", "alice-v3-replaced")
+			mustGetOwned(t, s, "alice", "pk-a", "alice-v3-replaced")
 
 			// No v3 row is ever owned by the operator namespace.
 			if n := count(t, pool, `SELECT count(*) FROM secrets WHERE enc_version=3 AND owned_by=''`); n != 0 {
@@ -315,12 +315,12 @@ func TestMixedDatabase_RootRotationKeepsV3Readable(t *testing.T) {
 	// A restarted wardynd on the new key (no warm cache) reads every format: v1,
 	// both pointer kinds (each through its own store) and v3.
 	cold := mixedStore(t, pool, newID, false, vault, false)
-	mustGet(t, cold, "alice", "pk-a", "alice-v3")
-	mustGet(t, cold, "bob", "pk-b", "bob-v3")
-	mustGet(t, cold, "bob", "v1-cred", "bob-v1")
-	mustGet(t, cold, "bob", "vault-cred", "bob-vault")
-	mustGet(t, cold, "", "wardyn-signing-key", "boot-key-value")
-	mustGet(t, mixedStore(t, pool, newID, false, azure, false), "zoe", "azure-cred", "zoe-azure")
+	mustGetOwned(t, cold, "alice", "pk-a", "alice-v3")
+	mustGetOwned(t, cold, "bob", "pk-b", "bob-v3")
+	mustGetOwned(t, cold, "bob", "v1-cred", "bob-v1")
+	mustGetOwned(t, cold, "bob", "vault-cred", "bob-vault")
+	mustGetOwned(t, cold, "", "wardyn-signing-key", "boot-key-value")
+	mustGetOwned(t, mixedStore(t, pool, newID, false, azure, false), "zoe", "azure-cred", "zoe-azure")
 	if _, _, err := mixedStore(t, pool, oldID, false, vault, false).SubjectKeys().Current(t.Context(), "alice", subjectkey.PurposeCred); err == nil {
 		t.Fatal("the OLD age key still opens alice's principal key after the rotation")
 	}
@@ -407,9 +407,9 @@ func TestSealToPrincipalKeys_MovesOnlyPersonRowsAndResumes(t *testing.T) {
 		t.Fatalf("a third SealToPrincipalKeys = (%+v, %v); want a no-op", res, err)
 	}
 	read := mixedStore(t, pool, id, false, vault, false)
-	mustGet(t, read, "bob", "v1-cred", "bob-v1")
-	mustGet(t, read, "bob", "vault-cred", "bob-vault")
-	mustGet(t, read, "alice", "pk-a", "alice-v3")
+	mustGetOwned(t, read, "bob", "v1-cred", "bob-v1")
+	mustGetOwned(t, read, "bob", "vault-cred", "bob-vault")
+	mustGetOwned(t, read, "alice", "pk-a", "alice-v3")
 	if n := count(t, pool, `SELECT count(*) FROM secrets WHERE enc_version=1 AND owned_by<>''`); n != 0 {
 		t.Fatalf("%d person v1 rows remain", n)
 	}
@@ -463,7 +463,7 @@ func TestSealToPrincipalKeys_ConcurrentWriter(t *testing.T) {
 	}
 	read := mixedStore(t, pool, id, false, nil, false)
 	for i := range rows {
-		mustGet(t, read, fmt.Sprintf("p%02d", i%8), fmt.Sprintf("n%02d", i), last[i])
+		mustGetOwned(t, read, fmt.Sprintf("p%02d", i%8), fmt.Sprintf("n%02d", i), last[i])
 	}
 }
 
@@ -496,7 +496,7 @@ func TestEraseOwner_ReportsCryptoErasedForV3AndDeletedForTheRest(t *testing.T) {
 		t.Fatalf("EraseOwner = %+v; want 4 credentials, 2 of them crypto-erased (the v1 and the pointer row were only deleted)", rep)
 	}
 	// alice is untouched, and so is her key.
-	mustGet(t, on, "alice", "pk-a", "alice-v3")
+	mustGetOwned(t, on, "alice", "pk-a", "alice-v3")
 
 	if n := count(t, pool, `SELECT count(*) FROM principal_keys WHERE owner='bob' AND destroyed_at IS NULL`); n != 0 {
 		t.Fatalf("%d live principal keys of bob remain after the erase", n)
@@ -517,7 +517,7 @@ func TestEraseOwner_ReportsCryptoErasedForV3AndDeletedForTheRest(t *testing.T) {
 	if got := rowOf(t, pool, "bob", "pk-new"); got.version != 3 || got.kekID != "pk:v2" {
 		t.Fatalf("a reconnect after an erase wrote %+v; want a v3 row under generation pk:v2", got)
 	}
-	mustGet(t, mixedStore(t, pool, id, true, nil, false), "bob", "pk-new", "bob-again")
+	mustGetOwned(t, mixedStore(t, pool, id, true, nil, false), "bob", "pk-new", "bob-again")
 
 	// Erasing a person who never had a key reports nothing crypto-erased.
 	mustPut(t, off, "carol", "v1-only", "carol-v1")
