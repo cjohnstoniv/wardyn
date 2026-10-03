@@ -2615,6 +2615,13 @@ for its subjects; deleting one requires unassigning it first (never a silent
 widening). Stated honestly: profiles narrow by omission — a profile that omits
 secret grants revokes them for its subjects (the editor warns); a member's
 long-lived API token keeps the group snapshot it was minted with until re-minted.
+Sandbox size is the exception: a profile that omits `resources`, or leaves one of
+its fields at zero, inherits the deployment's size for that field (the default
+policy's `resources`, else `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` /
+`WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`), so omission never grows a sandbox. A profile
+that sets a size keeps it, and the profile's `limits.max_cpu_millis` and
+`limits.max_memory_mib` (0 is unlimited, negatives refused) cap CPU and memory
+for its assigned members at create, preflight and dispatch; operators are exempt.
 
 **Limits that reach a running run (0.8.2, #1391, #1392).** Two limits bind past
 create, keyed on the profile the run was created under as it stands now, so a

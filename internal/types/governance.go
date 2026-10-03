@@ -31,7 +31,7 @@ import (
 //     describes the escape — the storage itself is the escape.
 //   - MaxConcurrentRuns is a QUOTA, not a door: 422 with no authz.denied,
 //     not 403.
-//   - MaxEphemeralDiskMiB/MaxDriveSizeMiB are neither: they CLAMP — capped
+//   - MaxCPUMillis/MaxMemoryMiB/MaxEphemeralDiskMiB/MaxDriveSizeMiB are neither: they CLAMP — capped
 //     and told so, never refused (disk_mib is policy-authored, so refusing
 //     would break every stored policy the day a limit is first written).
 //
@@ -62,6 +62,12 @@ type GovernanceLimits struct {
 	// "may this principal persist anything at all" is the question (403 +
 	// authz.denied), not "how big".
 	DenyUserDrive bool `json:"deny_user_drive,omitempty"`
+	// MaxCPUMillis and MaxMemoryMiB cap the sandbox's CPU (millicores) and memory a run under this
+	// profile may be given, whatever its ceiling's own resources or a member's request say. 0 is
+	// unlimited. A CLAMP, NOT A DOOR, like MaxEphemeralDiskMiB. Folded into composer.Clamp at
+	// create and preflight and re-applied at dispatch; assigned members only, operators exempt.
+	MaxCPUMillis int `json:"max_cpu_millis,omitempty"`
+	MaxMemoryMiB int `json:"max_memory_mib,omitempty"`
 	// MaxEphemeralDiskMiB caps the EPHEMERAL scratch (the writable layer when no drive is
 	// mounted) a run under this profile may be given. 0 is unlimited. A CLAMP, NOT A DOOR: no
 	// authz.denied at the bound. Enforced at dispatch only (runs_dispatch.go), folded with the

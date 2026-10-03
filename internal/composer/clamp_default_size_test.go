@@ -22,7 +22,7 @@ func TestClampNilCeilingUsesEffectiveLimits(t *testing.T) {
 		{"knob", 1000, 2048, 1000, 2048},
 	} {
 		runner.SetDefaultLimits(tc.cpu, tc.mem)
-		out, _ := Clamp(types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 64000, MemoryMiB: 1 << 20}}, types.RunPolicySpec{}, 0)
+		out, _ := Clamp(types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 64000, MemoryMiB: 1 << 20}}, types.RunPolicySpec{}, types.GovernanceLimits{})
 		if out.Resources == nil || out.Resources.CPUMillis != tc.wantCPU || out.Resources.MemoryMiB != tc.wantMem {
 			t.Errorf("%s: Resources = %+v, want %d/%d", tc.name, out.Resources, tc.wantCPU, tc.wantMem)
 		}

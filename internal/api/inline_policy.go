@@ -68,7 +68,7 @@ const (
 // which dispatch is the authority on — this call is what makes the member's
 // PREVIEW of it agree, see composer.Clamp).
 func (s *Server) boundUserSpec(ctx context.Context, w http.ResponseWriter, r *http.Request, spec types.RunPolicySpec, ceiling governanceCeiling, errPrefix string, dryRun bool) (types.RunPolicySpec, []string, bool) {
-	spec, warns := composer.Clamp(spec, ceiling.Spec, ceiling.Limits.MaxEphemeralDiskMiB)
+	spec, warns := composer.Clamp(spec, ceiling.Spec, ceiling.Limits)
 	kept, grantWarns, code, gerr := s.filterUserGrants(ctx, s.secretOwnerFromRequest(r), spec.AllowedDomains, spec.EligibleGrants)
 	if gerr != nil {
 		writeErrorReason(w, code, reasonInlinePolicyInvalid, errPrefix+gerr.Error())
@@ -233,7 +233,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		// below: composer.Clamp bounds a member's disk_mib by the PROFILE, but
 		// the org's default_disk_mib/max_disk_mib are dispatch's and reach no
 		// preview at all without this. A no-op on launch (see the helper).
-		clampWarnings = append(clampWarnings, s.boundEphemeralDisk(ctx, r, &spec, ceiling, dryRun)...)
+		clampWarnings = append(clampWarnings, s.boundResources(ctx, r, &spec, ceiling, dryRun)...)
 		clampWarnings = append(clampWarnings, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
 		// Audit the use of an inline (non-stored) policy. The run id is not yet
 		// minted at this point, so this event carries a nil run id (like the
@@ -329,7 +329,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// than the limit standing beside it. That member previewed a scratch size
 	// their run does not get, and a dispatch-side log line is not a disclosure to
 	// them. Both arms call the SAME helper (runs_dispatch_ceiling.go).
-	storedWarns = append(storedWarns, s.boundEphemeralDisk(ctx, r, &spec, ceiling, dryRun)...)
+	storedWarns = append(storedWarns, s.boundResources(ctx, r, &spec, ceiling, dryRun)...)
 	storedWarns = append(storedWarns, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
 	if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec); err != nil {
 		writeErrorReason(w, code, reasonInlinePolicyInvalid, "invalid policy: "+err.Error())

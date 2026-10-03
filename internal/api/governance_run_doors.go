@@ -97,7 +97,7 @@ func (s *Server) refuseUIAppsDenied(w http.ResponseWriter, r *http.Request, run 
 }
 
 // boundUIApps is deny_ui_apps at create, called from both of resolveRunPolicy's
-// arms like boundEphemeralDisk, since composer.Clamp never sees the default
+// arms like boundResources, since composer.Clamp never sees the default
 // arm's spec. It binds whoever the ceiling's limits bind: an assigned member or
 // security admin, never an operator. Audited as a drop unless dryRun.
 func (s *Server) boundUIApps(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, ceiling governanceCeiling, dryRun bool) []string {
