@@ -472,12 +472,8 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           a CHILD of the element xterm owns. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div
-          ref={containerRef}
+          data-testid="run-terminal-wrapper"
           className={cn("min-h-0 flex-1 p-1", ptyCols && "overflow-x-auto")}
-          // R4-F144: the same sentence the title bar shows, for the reader who
-          // cannot see it — 2.1.2's "advised on entry" has to hold for a screen
-          // reader landing in the grid, not only for a sighted user.
-          aria-description={TERMINAL.ESCAPE_CHORD_HINT}
           // D3: xterm only focuses itself on a click that lands exactly on its
           // own `.xterm-screen` canvas layer — a click on this container's
           // padding, or in the dead space below the last row, lands nowhere,
@@ -494,7 +490,19 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
             e.stopPropagation();
             termRef.current?.focus();
           }}
-        />
+        >
+          {/* FitAddon measures the PARENT of `.xterm`; under border-box sizing a
+              padded parent over-counts rows and clips the last one. The mount
+              is therefore an unpadded child of the padded wrapper above. */}
+          <div
+            ref={containerRef}
+            className="h-full min-h-0"
+            // R4-F144: the same sentence the title bar shows, for the reader who
+            // cannot see it — 2.1.2's "advised on entry" has to hold for a screen
+            // reader landing in the grid, not only for a sighted user.
+            aria-description={TERMINAL.ESCAPE_CHORD_HINT}
+          />
+        </div>
         {readOnly && (
           // pointer-events-none: this is a label, not a shield. The input it
           // describes is dropped SERVER-side; blocking clicks here would also
