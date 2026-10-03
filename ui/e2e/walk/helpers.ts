@@ -96,6 +96,9 @@ export const LOGIN_DONE = envMs("WARDYN_WALK_LOGIN_DONE_MS", 300_000);
  * whole of it — Dex's login form is plain HTML with no accessible names.
  */
 export async function dexSignIn(page: Page, email: string): Promise<void> {
+  // The walk drives a production bundle (no __wardynTerm registry), so terminal text is
+  // read from the DOM, which only the Compatible renderer fills. Pin it before the first load.
+  await page.addInitScript(() => localStorage.setItem("wardyn.terminal.renderer", "compatible"));
   await page.goto("/");
   await page
     .getByRole("link", { name: "Sign in with SSO" })
@@ -478,8 +481,8 @@ export async function openLoginPaneAssertingColdPull(page: Page): Promise<void> 
  * are `expect.poll(innerText)`, never `toContainText`. `toContainText` starves
  * on a terminal that repaints under load — it re-queries the same node and can
  * miss every frame the text was in. (It also matters that this reads
- * `innerText`: the console mounts xterm's DOM renderer, with no canvas or webgl
- * addon, so the buffer really is in the DOM to be read.)
+ * `innerText`: the walk pins the Compatible renderer in dexSignIn, so xterm's DOM
+ * renderer is mounted and the buffer really is in the DOM to be read.)
  *
  * STRICT, and only for a caller with NO console pane attached — case C, which
  * has abandoned the pane and is watching from the Runs list. A pane-attached

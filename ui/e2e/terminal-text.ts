@@ -35,7 +35,12 @@ export async function termRows(screen: Locator, timeout = 1_000): Promise<string
           }
         }
       }
-      return [...(host ?? el).querySelectorAll(".xterm-rows > div")].map((r) => r.textContent ?? "");
+      const root = host ?? el;
+      // The GPU renderer removes the DOM row container, so an empty read here is not "no output".
+      if (!root.querySelector(".xterm-rows")) {
+        throw new Error("no __wardynTerm registry and no .xterm-rows: production bundle with the GPU renderer: pin wardyn.terminal.renderer=compatible");
+      }
+      return [...root.querySelectorAll(".xterm-rows > div")].map((r) => r.textContent ?? "");
     },
     "__wardynTerm",
     { timeout },

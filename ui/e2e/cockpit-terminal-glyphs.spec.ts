@@ -6,9 +6,9 @@
 /*
  * Box-drawing and block glyphs (U+2500-259F) are exact in both renderers (term-t10).
  * The stub prints all 160 code points as ten rows of sixteen; the grid is cropped
- * and compared with one committed golden image, so the GPU renderer's custom
- * glyphs and the DOM renderer's self-hosted font must both land within
- * GLYPH_DIFF_RATIO of it. The OS fallback font (what the terminal used before the
+ * and compared, per renderer, with its own committed golden (terminal-glyphs-gpu.png,
+ * terminal-glyphs-compatible.png) within GLYPH_DIFF_RATIO, because the GPU and DOM
+ * cell heights differ. The OS fallback font (what the terminal used before the
  * font was self-hosted) draws these glyphs differently and exceeds it.
  */
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
