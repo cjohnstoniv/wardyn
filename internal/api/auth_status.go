@@ -14,7 +14,7 @@ import (
 // response-shaping helpers that belong beside writeError in http.go and live
 // here instead only because that file sits against the 1000-line gate.
 
-// The four reasons oidc.Middleware publishes on the request context
+// The reasons oidc.Middleware publishes on the request context
 // (oidc.SessionRejectedFromContext). Mirrored as constants rather than compared
 // as literals so the values have names where they are USED and a rename
 // upstream is a grep away rather than a silent no-op.
@@ -25,6 +25,8 @@ const (
 	sessionExpired = "expired_session"
 	sessionRevoked = "revoked_session"
 	sessionInvalid = "invalid_session"
+	// sessionRoleStale: the session is older than WARDYN_ROLE_STAMP_TTL.
+	sessionRoleStale = oidc.SessionRoleStampStale
 )
 
 // DRAFT (M2 canon pending)
@@ -47,6 +49,7 @@ const (
 	sessionExpiredMsg     = "your session expired — sign in again"
 	sessionRevokedMsg     = "your session was revoked — sign in again"
 	sessionInvalidMsg     = "your session could not be verified — sign in again"
+	sessionRoleStaleMsg   = "your sign-in is too old to trust your role — sign in again"
 	sessionUnavailableMsg = "this deployment cannot check whether your session was revoked, so it cannot " +
 		"authenticate you right now — this is a control-plane database problem, not a problem with your " +
 		"credentials; retry shortly"
@@ -71,6 +74,8 @@ func sessionRejectionResponse(reason string) (status int, msg string, ok bool) {
 		return http.StatusUnauthorized, sessionExpiredMsg, true
 	case sessionRevoked:
 		return http.StatusUnauthorized, sessionRevokedMsg, true
+	case sessionRoleStale:
+		return http.StatusUnauthorized, sessionRoleStaleMsg, true
 	case sessionInvalid:
 		return http.StatusUnauthorized, sessionInvalidMsg, true
 	}
@@ -114,6 +119,8 @@ func (s *Server) auditRejectedSession(r *http.Request, reason string) {
 		s.auditAuthFailed(r, sessionExpired)
 	case sessionRevoked:
 		s.auditAuthFailed(r, sessionRevoked)
+	case sessionRoleStale:
+		s.auditAuthFailed(r, sessionRoleStale)
 	default:
 		s.auditAuthFailed(r, sessionInvalid)
 	}

@@ -17,6 +17,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -100,6 +101,8 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 	// refuses ado_grant rather than running with the Azure DevOps gate off.
 	adoGrant := base
 	adoGrant.ADOGrant = &proxy.ADOGrantConfig{Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapCodeRead}, Hosts: []string{"dev.azure.com"}}
+	attributed := base
+	attributed.Attribution = &policyref.Ref{Source: policyref.SourceProfile, Name: "Team A"}
 	adoCaps := base
 	adoCaps.Policy.AzureDevOpsCapabilities = []adoscope.Capability{adoscope.CapCodeRead}
 
@@ -115,6 +118,9 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 		// above refuses; alone the key is refused too.
 		{"unattended", unattended, "unattended"},
 		{"azure devops grant", adoGrant, "ado_grant"},
+		// Dispatch writes it for every governed run, so the proxy image moves
+		// before wardynd (docs/UI-SANDBOXES.md, upgrade note).
+		{"a governed run's attribution", attributed, "attribution"},
 		{"azure devops capabilities chosen by the policy", adoCaps, "policy.azure_devops_capabilities"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

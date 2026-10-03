@@ -140,22 +140,22 @@ func TestBuildPlatformKEK_FailsClosed(t *testing.T) {
 		{"with one key for both", "transit", "kubernetes", "wardyn", "wardyn-platform", "WARDYN_VAULT_TRANSIT_KEY_PLATFORM is the same key as WARDYN_VAULT_TRANSIT_KEY"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			v, _ := testExternalFlags("https://vault.example", "")
+			v, az := testExternalFlags("https://vault.example", "")
 			v.transitKey = strp("wardyn")
 			if tc.name == "with one key for both" {
 				v.transitKey = strp(" wardyn-platform ")
 			}
 			v.kek, v.transitMount, v.transitKeyPlatform, v.rolePlatform = strp(tc.sel), strp("transit"), strp("wardyn-platform"), strp(tc.rolePlatform)
 			v.auth, v.role = strp(tc.auth), strp(tc.role)
-			k, err := buildPlatformKEK(t.Context(), v, "", false)
+			k, err := buildPlatformKEK(t.Context(), v, az, "", false)
 			if err == nil || k != nil || !strings.Contains(err.Error(), "refusing to start: "+tc.want) {
 				t.Fatalf("buildPlatformKEK = (%v, %v); want a refusal %q", k, err, tc.want)
 			}
 		})
 	}
-	v, _ := testExternalFlags("", "")
+	v, az := testExternalFlags("", "")
 	v.kek, v.transitKey, v.transitKeyPlatform = strp("local"), strp(""), strp("")
-	if k, err := buildPlatformKEK(t.Context(), v, "", false); k != nil || err != nil {
+	if k, err := buildPlatformKEK(t.Context(), v, az, "", false); k != nil || err != nil {
 		t.Fatalf("no platform key = (%v, %v); want no key service", k, err)
 	}
 }
@@ -175,10 +175,10 @@ func TestBuildPlatformKEK_LogsInAsThePlatformRole(t *testing.T) {
 	if err := os.WriteFile(jwt, []byte("sa-jwt\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	v, _ := testExternalFlags(srv.URL, "")
+	v, az := testExternalFlags(srv.URL, "")
 	v.auth, v.k8sTokenFile, v.role, v.rolePlatform = strp("kubernetes"), strp(jwt), strp("wardyn-cred"), strp("wardyn-platform")
 	v.kek, v.transitMount, v.transitKey, v.transitKeyPlatform = strp("transit"), strp("transit"), strp("wardyn"), strp("wardyn-platform")
-	k, err := buildPlatformKEK(t.Context(), v, "", false)
+	k, err := buildPlatformKEK(t.Context(), v, az, "", false)
 	if err == nil || k != nil || !strings.Contains(err.Error(), `role "wardyn-platform"`) {
 		t.Fatalf("buildPlatformKEK = (%v, %v); want a login refusal as the platform role", k, err)
 	}
@@ -201,19 +201,80 @@ func TestBuildPlatformKEK_RetireNeedsNoTransitKEK(t *testing.T) {
 	if err := os.WriteFile(jwt, []byte("sa-jwt\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	v, _ := testExternalFlags(srv.URL, "")
+	v, az := testExternalFlags(srv.URL, "")
 	v.auth, v.k8sTokenFile, v.role, v.rolePlatform = strp("kubernetes"), strp(jwt), strp("wardyn-cred"), strp("wardyn-platform")
 	v.kek, v.transitMount, v.transitKey, v.transitKeyPlatform = strp("local"), strp("transit"), strp("wardyn"), strp("wardyn-platform")
 	// Retiring the credential key's twin is meaningless too.
 	same := v
 	same.transitKey = strp("wardyn-platform")
-	if _, err := buildPlatformKEK(t.Context(), same, "", true); err == nil || !strings.Contains(err.Error(), "is the same key as WARDYN_VAULT_TRANSIT_KEY") {
+	if _, err := buildPlatformKEK(t.Context(), same, az, "", true); err == nil || !strings.Contains(err.Error(), "is the same key as WARDYN_VAULT_TRANSIT_KEY") {
 		t.Fatalf("retiring with one key for both = %v; want the refusal", err)
 	}
-	if _, err := buildPlatformKEK(t.Context(), v, "", false); err == nil || !strings.Contains(err.Error(), "needs WARDYN_KEK=transit") {
+	if _, err := buildPlatformKEK(t.Context(), v, az, "", false); err == nil || !strings.Contains(err.Error(), "needs WARDYN_KEK=transit") {
 		t.Fatalf("a start with WARDYN_KEK=local = %v; want the refusal", err)
 	}
-	if _, err := buildPlatformKEK(t.Context(), v, "", true); err == nil || !strings.Contains(err.Error(), `login (role "wardyn-platform")`) {
+	if _, err := buildPlatformKEK(t.Context(), v, az, "", true); err == nil || !strings.Contains(err.Error(), `login (role "wardyn-platform")`) {
 		t.Fatalf("retiring with WARDYN_KEK=local = %v; want it to reach the platform login", err)
+	}
+}
+
+// The Key Vault platform pair separates nothing unless it is a second pair,
+// reached as a second identity, under WARDYN_KEK=azurekv: each refusal fires
+// before any call to Key Vault, and equality is decided on the normalised
+// identity, so a case-only difference is still the same key.
+func TestBuildPlatformKEK_AzureFailsClosed(t *testing.T) {
+	const (
+		platKey = "https://kv.vault.azure.net/keys/wardyn-boot"
+		platSig = "https://kv.vault.azure.net/keys/wardyn-boot-sig"
+	)
+	for _, tc := range []struct {
+		name, sel, key, sig, client, transitPlatform, want string
+	}{
+		{"platform key without the signing key", "azurekv", platKey, "", "client-2", "", "WARDYN_AZURE_KEK_KEY_PLATFORM and WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM are set together or not at all"},
+		{"platform signing key without the key", "azurekv", "", platSig, "client-2", "", "are set together or not at all"},
+		{"client id alone", "azurekv", "", "", "client-2", "", "are set together or not at all"},
+		{"without a platform client id", "azurekv", platKey, platSig, "", "", "need WARDYN_AZURE_CLIENT_ID_PLATFORM"},
+		{"with WARDYN_KEK=local", "local", platKey, platSig, "client-2", "", "WARDYN_AZURE_KEK_KEY_PLATFORM needs WARDYN_KEK=azurekv"},
+		{"with WARDYN_KEK unset", "", platKey, platSig, "client-2", "", "WARDYN_AZURE_KEK_KEY_PLATFORM needs WARDYN_KEK=azurekv"},
+		{"with WARDYN_KEK=transit", "transit", platKey, platSig, "client-2", "", "WARDYN_AZURE_KEK_KEY_PLATFORM needs WARDYN_KEK=azurekv"},
+		{"one wrapping key for both", "azurekv", testAzureKEK, platSig, "client-2", "", "WARDYN_AZURE_KEK_KEY_PLATFORM is the same key as WARDYN_AZURE_KEK_KEY"},
+		{"one wrapping key for both, differing by case", "azurekv", "https://KV.vault.azure.net/keys/Wardyn-KEK", platSig, "client-2", "", "WARDYN_AZURE_KEK_KEY_PLATFORM is the same key as WARDYN_AZURE_KEK_KEY"},
+		{"one signing key for both", "azurekv", platKey, testAzureSig, "client-2", "", "WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM is the same key as WARDYN_AZURE_KEK_SIGNING_KEY"},
+		{"one signing key for both, differing by case", "azurekv", platKey, "https://kv.vault.azure.net/keys/WARDYN-KEK-SIG", "client-2", "", "WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM is the same key as WARDYN_AZURE_KEK_SIGNING_KEY"},
+		{"one client id for both", "azurekv", platKey, platSig, "client-1", "", "WARDYN_AZURE_CLIENT_ID_PLATFORM is the same identity as WARDYN_AZURE_CLIENT_ID"},
+		{"one client id for both, differing by case", "azurekv", platKey, platSig, "CLIENT-1", "", "WARDYN_AZURE_CLIENT_ID_PLATFORM is the same identity as WARDYN_AZURE_CLIENT_ID"},
+		{"a Transit platform key beside it", "azurekv", platKey, platSig, "client-2", "wardyn-platform", "both name a platform key; configure one"},
+		{"a key that is not a Key Vault key", "azurekv", "https://kv.example.com/keys/x", platSig, "client-2", "", "WARDYN_AZURE_KEK_KEY_PLATFORM"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v, az := testExternalFlags("", "")
+			v.kek, v.transitKeyPlatform = strp(tc.sel), strp(tc.transitPlatform)
+			*az.kekKey, *az.kekSigningKey, *az.clientID = testAzureKEK, testAzureSig, "client-1"
+			*az.kekKeyPlatform, *az.kekSigningKeyPlatform, *az.clientIDPlatform = tc.key, tc.sig, tc.client
+			k, err := buildPlatformKEK(t.Context(), v, az, "", false)
+			if err == nil || k != nil || !strings.Contains(err.Error(), "refusing to start: ") || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("buildPlatformKEK = (%v, %v); want a refusal %q", k, err, tc.want)
+			}
+		})
+	}
+}
+
+// Retiring reads the platform pair whatever WARDYN_KEK is, so it is not
+// refused for WARDYN_KEK=local (it goes on to build the KEK, which fails here
+// on the missing projected token); an equal identity is refused all the same.
+func TestBuildPlatformKEK_AzureRetireNeedsNoAzureKEK(t *testing.T) {
+	v, az := testExternalFlags("", "")
+	v.kek, v.transitKeyPlatform = strp("local"), strp("")
+	*az.kekKey, *az.kekSigningKey, *az.clientID = testAzureKEK, testAzureSig, "client-1"
+	*az.kekKeyPlatform, *az.kekSigningKeyPlatform, *az.clientIDPlatform = "https://kv.vault.azure.net/keys/wardyn-boot", "https://kv.vault.azure.net/keys/wardyn-boot-sig", "client-2"
+	if _, err := buildPlatformKEK(t.Context(), v, az, "", false); err == nil || !strings.Contains(err.Error(), "needs WARDYN_KEK=azurekv") {
+		t.Fatalf("a start with WARDYN_KEK=local = %v; want the refusal", err)
+	}
+	if _, err := buildPlatformKEK(t.Context(), v, az, "", true); err == nil || strings.Contains(err.Error(), "needs WARDYN_KEK=azurekv") || !strings.Contains(err.Error(), "refusing to start") {
+		t.Fatalf("retiring with WARDYN_KEK=local = %v; want it past the WARDYN_KEK check", err)
+	}
+	*az.clientIDPlatform = "client-1"
+	if _, err := buildPlatformKEK(t.Context(), v, az, "", true); err == nil || !strings.Contains(err.Error(), "is the same identity as WARDYN_AZURE_CLIENT_ID") {
+		t.Fatalf("retiring with one client id for both = %v; want the refusal", err)
 	}
 }

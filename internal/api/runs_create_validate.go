@@ -426,7 +426,7 @@ func interactiveToolApprovalsError(req createRunRequest) string {
 // refusals were decided under, and re-resolving would read the rows a second
 // time.
 func (s *Server) denyUserRequest(w http.ResponseWriter, r *http.Request, req createRunRequest) (governanceCeiling, bool) {
-	if s.isOperator(r.Context()) {
+	if s.runUngoverned(r.Context()) {
 		return governanceCeiling{Operator: true}, false
 	}
 	// One capability snapshot for every field below (capBatch's ctx memo).

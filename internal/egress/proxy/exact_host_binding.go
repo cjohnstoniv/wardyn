@@ -3,6 +3,8 @@
 
 package proxy
 
+import "github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
+
 // The credential-injection host binding — the one policy question asked
 // without a port, by the one caller that has no port to offer (buildInjector).
 // It lives beside the matcher rather than inside it: evalHost decides what
@@ -26,7 +28,7 @@ func (p *Policy) AllowedExactHost(host string) bool {
 	if p == nil {
 		return false
 	}
-	host = canonHost(host)
+	host = domainmatch.CanonHost(host)
 	if p.exactHostDenied(host) {
 		return false
 	}
@@ -39,7 +41,7 @@ func (p *Policy) AllowedExactHost(host string) bool {
 		}
 		// Also matches WILDCARD port-qualified denies (invisible to the checks
 		// above), so a blanket wildcard deny can still cancel an authored port.
-		if matchWildPort(host, port, p.deniedWildPort) {
+		if domainmatch.MatchWildPort(host, port, p.deniedWildPort) {
 			continue
 		}
 		return true
@@ -54,7 +56,7 @@ func (p *Policy) exactHostDenied(host string) bool {
 	if _, ok := p.deniedExact[host]; ok {
 		return true
 	}
-	return matchWild(host, p.deniedWild)
+	return domainmatch.MatchWild(host, p.deniedWild)
 }
 
 // AllowedBareExactHost is the STRICTER half of the same question: did the
@@ -70,10 +72,10 @@ func (p *Policy) AllowedBareExactHost(host string) bool {
 	if p == nil {
 		return false
 	}
-	host = canonHost(host)
+	host = domainmatch.CanonHost(host)
 	if p.exactHostDenied(host) {
 		return false
 	}
-	_, ok := p.allowedExact[canonHost(host)]
+	_, ok := p.allowedExact[domainmatch.CanonHost(host)]
 	return ok
 }

@@ -16,14 +16,18 @@ import (
 // was rejected, for the integrator's auth-failure audit emit.
 type sessionRejectedCtxKey struct{}
 
+// SessionRoleStampStale is the rejection reason for a session whose role stamp is older than
+// Config.RoleStampTTL.
+const SessionRoleStampStale = "role_stamp_stale"
+
 func withSessionRejected(ctx context.Context, reason string) context.Context {
 	return context.WithValue(ctx, sessionRejectedCtxKey{}, reason)
 }
 
 // SessionRejectedFromContext returns why Middleware rejected a presented
 // session cookie: "invalid_session", "expired_session", "revoked_session",
-// or "session_revocation_unavailable" (fail-closed) when Revocations is
-// wired; "" when no cookie was presented or it decoded fine.
+// "role_stamp_stale" when RoleStampTTL is set, or "session_revocation_unavailable"
+// (fail-closed) when Revocations is wired; "" when no cookie was presented or it decoded fine.
 func SessionRejectedFromContext(ctx context.Context) string {
 	reason, _ := ctx.Value(sessionRejectedCtxKey{}).(string)
 	return reason

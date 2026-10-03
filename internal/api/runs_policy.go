@@ -443,7 +443,7 @@ func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling
 		// to a member as their spec it would replace the row's default_profile
 		// with the widest list they may choose. Only a choice the member (or a
 		// selected row) made is honoured.
-		if !s.isOperator(ctx) {
+		if !s.runUngoverned(ctx) {
 			spec.AzureDevOpsCapabilities = nil
 		}
 		origin := policyOrigin{kind: policyKindDefault}
@@ -750,27 +750,63 @@ func localPrincipalOverride(r *http.Request) string {
 // fact never human-gated (breaks invariant 4 per-run identity and invariant 6
 // non-repudiation). A token action is recorded as system/admin-token, not human.
 func actorFromRequest(r *http.Request) (types.ActorType, string) {
+	return actorFromContext(r.Context(), localPrincipalOverride(r))
+}
+
+// actorFromContext is actorFromRequest's chain for a caller holding only a
+// context. localOverride is the validated dev-only header value, "" for none.
+func actorFromContext(ctx context.Context, localOverride string) (types.ActorType, string) {
 	// A device request is the device, never the admin-token fallback at the
 	// bottom (which is what a context with no human would otherwise read as).
-	if d, ok := deviceFromContext(r.Context()); ok {
+	if d, ok := deviceFromContext(ctx); ok {
 		return types.ActorSystem, deviceActor(d.ID)
 	}
 	// Attach-ticket auth (ticketOrHumanAuth): the ticket carries the actor that
 	// MINTED it through the normal authenticated surface — strongest available
 	// attribution for a WS handshake that cannot carry a credential itself.
-	if ta, ok := ticketActorFromContext(r.Context()); ok {
+	if ta, ok := ticketActorFromContext(ctx); ok {
 		return ta.actorType, ta.principal
 	}
-	if op := localPrincipalFromContext(r.Context()); op != "" {
-		if h := localPrincipalOverride(r); h != "" {
-			return types.ActorHuman, h
+	if op := localPrincipalFromContext(ctx); op != "" {
+		if localOverride != "" {
+			return types.ActorHuman, localOverride
 		}
 		return types.ActorHuman, op
 	}
-	if sub := oidcHumanFromContext(r.Context()); sub != "" {
+	if sub := oidcHumanFromContext(ctx); sub != "" {
 		return types.ActorHuman, sub
 	}
 	return types.ActorSystem, adminTokenPrincipal
+}
+
+// auditActorCtxKey carries the actor a caller resolved, for the credential
+// helpers that run on a context rather than a request.
+type auditActorCtxKey struct{}
+
+type auditActor struct {
+	actorType types.ActorType
+	name      string
+}
+
+// withActor returns ctx carrying the actor that audit rows written from it name.
+func withActor(ctx context.Context, actorType types.ActorType, name string) context.Context {
+	return context.WithValue(ctx, auditActorCtxKey{}, auditActor{actorType: actorType, name: name})
+}
+
+// withRequestActor is withActor for the actor the request resolves to, so a
+// helper that takes only a context audits the same actor the route does.
+func withRequestActor(r *http.Request) context.Context {
+	actorType, name := actorFromRequest(r)
+	return withActor(r.Context(), actorType, name)
+}
+
+// auditActorFromContext is the actor for an audit row written from a context:
+// the one attached by withActor, else what the context's own auth resolves to.
+func auditActorFromContext(ctx context.Context) (types.ActorType, string) {
+	if a, ok := ctx.Value(auditActorCtxKey{}).(auditActor); ok {
+		return a.actorType, a.name
+	}
+	return actorFromContext(ctx, "")
 }
 
 func mustJSON(v any) json.RawMessage {

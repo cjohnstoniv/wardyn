@@ -17,6 +17,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 )
 
 func TestIsKnownNonVaultRuntime(t *testing.T) {
@@ -221,6 +222,28 @@ func TestBuildProxyConfig_Unattended(t *testing.T) {
 		if !want && strings.Contains(string(b), "unattended") {
 			t.Errorf("an attended run's config names the key: %s", b)
 		}
+	}
+}
+
+// TestBuildProxyConfig_Attribution: the attribution round-trips through the
+// sidecar's own strict decoder, and an absent one leaves no key behind.
+func TestBuildProxyConfig_Attribution(t *testing.T) {
+	want := &policyref.Ref{Source: policyref.SourceProfile, Name: "Team A", RequestURL: "https://help.example.com/access"}
+	pc := ProxyConfig{RunToken: "tok", ControlPlaneURL: "http://127.0.0.1:1", Attribution: want}
+	b, err := BuildProxyConfig(uuid.New(), pc, ProxyListenPort)
+	if err != nil {
+		t.Fatalf("BuildProxyConfig: %v", err)
+	}
+	cfg, err := proxy.LoadConfigBytes(b)
+	if err != nil {
+		t.Fatalf("the sidecar refused the config: %v", err)
+	}
+	if cfg.Attribution == nil || *cfg.Attribution != *want {
+		t.Errorf("attribution = %+v, want %+v", cfg.Attribution, want)
+	}
+	pc.Attribution = nil
+	if b, _ = BuildProxyConfig(uuid.New(), pc, ProxyListenPort); strings.Contains(string(b), "attribution") {
+		t.Errorf("a run with none names the key: %s", b)
 	}
 }
 

@@ -42,6 +42,8 @@ export interface AdminMintedToken {
   created_at: string;
   last_used_at?: string;
   revoked_at?: string;
+  /** When the token stops authenticating; absent when it never expires. */
+  expires_at?: string;
 }
 
 export interface EraseResult {

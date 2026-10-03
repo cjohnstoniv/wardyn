@@ -298,7 +298,7 @@ func writeAttachMode(ctx context.Context, c *websocket.Conn, readOnly bool, hold
 // replica's holders, so "held:false" means "nobody is attached through this
 // daemon" — the UI copy must not claim more than that. Wardyn refuses
 // replicas>1 by construction today (deployment.yaml, same assumption as
-// Server.siteConfigMu and secretmask.Registry), so this is exact, not hopeful.
+// secretmask.Registry), so this is exact, not hopeful.
 // ponytail: in-process holder registry, single-daemon truth. Upgrade path is a
 // store row keyed by run id (holder principal + since + source + a heartbeat to
 // expire a holder whose replica died) if wardynd ever runs multi-replica.

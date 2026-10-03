@@ -23,6 +23,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -110,13 +111,16 @@ func reauthScopeForRun(sc types.SiteConfig, run types.AgentRun, owner string) (a
 
 // storeProviderSignIn stores an AWS provider sign-in only while its provider
 // is still the one the sign-in was launched for: same UID and kind, same
-// address (rule 8's, digested), region, portal and pin. Under siteConfigMu,
+// address (rule 8's, digested), region, portal and pin. Under the site-config lock,
 // which rule 8's purge also holds, so a purge can never land between the check
 // and the write and leave a session behind for an old address. changed=true:
 // refused, nothing stored.
 func (s *Server) storeProviderSignIn(ctx context.Context, stamp loginRunStamp, scope awsSSOScope, blob awsSSOBlob) (bool, error) {
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	ctx, unlock, err := s.lock(ctx, db.SiteConfigLockClass)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
 		return false, fmt.Errorf("read model providers: %w", err)
@@ -284,10 +288,13 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	token := strings.TrimSpace(body.Token)
-	// Under siteConfigMu, like the key door: the UID read here is still the
+	// Under the site-config lock, like the key door: the UID read here is still the
 	// provider's when the write lands, since rule 8's purge holds it too.
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
 	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonProviderSignInConfigUnreadable, mpsUnreadable)

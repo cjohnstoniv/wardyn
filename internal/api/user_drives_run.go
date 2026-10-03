@@ -208,7 +208,7 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 // site it applies to rather than inferred from a caller three files away. An
 // operator's drive still RESOLVES; only the door does not apply to them.
 func (s *Server) driveDoorProfile(ctx context.Context, ceiling governanceCeiling) (string, bool) {
-	if s.isOperator(ctx) {
+	if s.runUngoverned(ctx) {
 		return "", false
 	}
 	return driveDoorShut(ceiling)

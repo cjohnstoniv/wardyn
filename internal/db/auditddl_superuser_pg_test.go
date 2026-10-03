@@ -96,7 +96,7 @@ func TestPG_AuditDDLProtectedFollowsSuperuserRoleMembership(t *testing.T) {
 			SELECT bool_or(pg_has_role(current_user, c.relowner, 'MEMBER')),
 			       bool_or(has_table_privilege(current_user, c.oid, 'TRIGGER')),
 			       (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)
-			FROM pg_class c WHERE c.relname = 'audit_events' AND c.relkind = 'r'`,
+			FROM pg_class c WHERE c.relname = 'audit_events' AND c.relkind IN ('r', 'p')`,
 		).Scan(&ownerLeg, &triggerLeg, &attrSuper); err != nil {
 			t.Fatalf("read the other legs: %v", err)
 		}

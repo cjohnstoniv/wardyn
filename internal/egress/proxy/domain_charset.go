@@ -23,7 +23,7 @@ import "net"
 const charsetWhy = "must be spelled in ASCII letters, digits, '-' and '.'; " +
 	"an internationalised name travels the wire as punycode (xn--…), so type that"
 
-// deadCharsetEntry reports whether a classifyDomain-normalised entry is spelled
+// deadCharsetEntry reports whether a domainmatch.Classify-normalised entry is spelled
 // outside the wire charset. IP literals are exempt (an IPv6 literal is
 // legitimately full of ':').
 func deadCharsetEntry(exact, wild string) bool {
@@ -35,7 +35,7 @@ func deadCharsetEntry(exact, wild string) bool {
 
 // ldhHost reports whether h is spelled in the LDH charset (ASCII letters,
 // digits, '-', '.') — every hostname that can appear on the wire (RFC 1123,
-// and punycode by construction). Callers pass a classifyDomain-normalised value.
+// and punycode by construction). Callers pass a domainmatch.Classify-normalised value.
 func ldhHost(h string) bool {
 	for i := 0; i < len(h); i++ {
 		switch c := h[i]; {

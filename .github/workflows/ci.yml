@@ -501,6 +501,16 @@ jobs:
       # creates and drops it.
       - name: Start Postgres (named container so the seeder can psql into it)
         run: make dev-pg
+      # The cockpit-terminal-tmux-* specs drive a real tmux (>= 3.2) through the
+      # production attach endpoint; a missing tmux fails them, it never skips.
+      - name: Install tmux (real-tmux terminal specs)
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      # The e2etmux tag is used by no other job: this pins the harness's copied
+      # attach command to internal/runner/docker/session.go and the real PTY size.
+      - name: Local-tmux harness pins (attach script == docker/session.go; real PTY size)
+        run: |
+          go test -tags e2etmux ./internal/runner/localtmux/
+          go vet -tags e2etmux ./internal/runner/localtmux/ ./cmd/wardynd/
       - name: Install UI deps
         working-directory: ui
         run: pnpm install --frozen-lockfile
@@ -1261,10 +1271,11 @@ jobs:
   # D3. Covers a surface no existing gate does: `govulncheck` reads Go modules,
   # `make npm-audit` reads the UI's production dependencies — NEITHER sees the
   # Debian packages, the node runtime or the globally-installed agent CLI that
-  # the agent images actually ship. The scan targets are the seven images the
-  # release publishes (the matrix below): wardynd and wardyn-proxy, plus the five
-  # agent images (agent-base, agent-codex-cli, agent-aws-sso, agent-vscode,
-  # agent-novnc). wardynd and wardyn-proxy are distroless-static, which carries
+  # the agent images actually ship. The scan targets are the eight images the
+  # release publishes (the matrix below): wardynd, wardynd-fips and wardyn-proxy,
+  # plus the five agent images (agent-base, agent-codex-cli, agent-aws-sso,
+  # agent-vscode, agent-novnc). wardynd, wardynd-fips and wardyn-proxy are
+  # distroless-static, which carries
   # essentially no OS package surface; the agent images (trixie + node/python +
   # git/ssh/tmux/socat) are where the OS findings land.
   #
@@ -1304,6 +1315,11 @@ jobs:
         include:
           - name: wardynd
             dockerfile: deploy/compose/Dockerfile.wardynd
+          # Built with the pin, so the scanned image is the published one and the
+          # Dockerfile's own GOFIPS140 check runs on every PR.
+          - name: wardynd-fips
+            dockerfile: deploy/compose/Dockerfile.wardynd
+            build-args: --build-arg GOFIPS140=v1.0.0-c2097c7c
           - name: wardyn-proxy
             dockerfile: deploy/compose/Dockerfile.proxy
           - name: agent-base
@@ -1327,7 +1343,7 @@ jobs:
             agent-vscode|agent-novnc)
               docker build -f deploy/images/base/Dockerfile -t wardyn/agent-base:local . ;;
           esac
-          docker build -f ${{ matrix.dockerfile }} -t wardyn/${{ matrix.name }}:trivy-scan .
+          docker build ${{ matrix.build-args }} -f ${{ matrix.dockerfile }} -t wardyn/${{ matrix.name }}:trivy-scan .
       # The aws-sso image's --selftest, against the image that was actually
       # BUILT. Everything it checks (tmux present; both coding-agent shims
       # present AND refusing) is otherwise exercised only by source-level Go

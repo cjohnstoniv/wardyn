@@ -59,7 +59,7 @@ func (s PG) ResolveReauthApproval(ctx context.Context, id uuid.UUID, decision ty
 		return types.ApprovalRequest{}, fmt.Errorf("store: resolve reauth approval: %w", err)
 	}
 
-	if err := insertAuditEventTx(ctx, tx, &ev); err != nil {
+	if err := InsertAuditEventTx(ctx, tx, &ev); err != nil {
 		return types.ApprovalRequest{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -68,11 +68,11 @@ func (s PG) ResolveReauthApproval(ctx context.Context, id uuid.UUID, decision ty
 	return ap, nil
 }
 
-// insertAuditEventTx is InsertAuditEvent's body on a caller-supplied
+// InsertAuditEventTx is InsertAuditEvent's body on a caller-supplied
 // transaction: the same target cap, pinned lock-wait bound and advisory lock
 // on the chain, so a row written this way links exactly as every other row
 // does.
-func insertAuditEventTx(ctx context.Context, tx pgx.Tx, ev *types.AuditEvent) error {
+func InsertAuditEventTx(ctx context.Context, tx pgx.Tx, ev *types.AuditEvent) error {
 	ev.Target = CapAuditTarget(ev.Target)
 	dataJSON, err := json.Marshal(ev.Data)
 	if err != nil {
@@ -85,10 +85,8 @@ func insertAuditEventTx(ctx context.Context, tx pgx.Tx, ev *types.AuditEvent) er
 		return fmt.Errorf("store: lock audit chain (waited up to %s): %w", db.AuditChainLockTimeout, err)
 	}
 	const q = `
-		INSERT INTO audit_events
-			(` + auditCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-		RETURNING COALESCE(prev_hash,''), COALESCE(row_hash,'')`
+		SELECT COALESCE(prev_hash,''), COALESCE(row_hash,'')
+		FROM audit_append($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
 	if err := tx.QueryRow(ctx, q,
 		ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
 		ev.Target, ev.Outcome, ev.SourceIP, dataJSON,

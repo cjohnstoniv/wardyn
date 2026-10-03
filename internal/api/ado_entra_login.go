@@ -146,9 +146,12 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 	}
 	// Under the same per-owner lock a redemption takes, so a login landing
 	// while a redemption is persisting its rotation cannot interleave with it.
-	unlock := s.adoEntra.lock(subject, cfg.RowID)
-	defer unlock()
-	if err := s.storeADOEntraBlob(ctx, subject, cfg.RowID, blob); err != nil {
+	ctx, unlock, err := s.lockADOSignIn(ctx, subject, cfg.RowID)
+	if err == nil {
+		defer unlock()
+		err = s.storeADOEntraBlob(ctx, subject, cfg.RowID, blob)
+	}
+	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: storing the Azure DevOps credential this login earned failed; the person is signed in without one",
 			slog.String("row", cfg.RowID), slog.Any("err", err))
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
