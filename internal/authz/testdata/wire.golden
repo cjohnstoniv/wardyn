@@ -35,3 +35,4 @@ reason run_kept
 reason delegation_scope
 reason event_stream_cap
 reason run_owner_only
+reason governance_overlay_unsatisfiable

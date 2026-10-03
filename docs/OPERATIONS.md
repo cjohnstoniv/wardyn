@@ -2610,8 +2610,21 @@ escalation on the Approvals page.
 **Governance profiles.** One profile per subject; when several match, the most
 specific wins (user beats group beats user type beats everyone; priority breaks group ties) — the
 Governance page shows the resolved answer, and `GET /policies/default` returns the
-ceiling that actually binds the caller. A profile replaces the deployment ceiling
-for its subjects; deleting one requires unassigning it first (never a silent
+ceiling that actually binds the caller. A standalone profile replaces the deployment
+ceiling for its subjects; a composed one (0.8.6) names a base, which is another
+profile or the deployment default, and an overlay that can only narrow it, and the
+ceiling that binds is the base narrowed by the overlay. Every reader of a profile's
+authority sees the composed result, including the doors that bind runs already going
+(attach and SSH, UI apps, revive, the limits re-clamp, end extension), so a change to a
+base reaches every profile built on it. A chain is at most three profiles deep. A base that
+cannot be read, a chain that loops or runs deeper, or an overlay and base that nothing
+satisfies together (the deployment default narrowed until their `allowed_methods`
+are disjoint, say) refuses the launch and every live door with `403
+governance_overlay_unsatisfiable`, audited, until an administrator fixes it; it is never read as
+the deployment's policy. The profile's own name is all a member is told. A profile edit still
+reaches an already-running proxy only through the denies re-asserted at revive or restart, and
+a base edit now does so for a whole subtree at once. Deleting a profile requires unassigning it
+first, and a base that still has profiles built on it is a 409 naming them (never a silent
 widening). Stated honestly: profiles narrow by omission — a profile that omits
 secret grants revokes them for its subjects (the editor warns); a member's
 long-lived API token keeps the group snapshot it was minted with until re-minted.
@@ -2796,6 +2809,7 @@ admin walking the member path, not an incident.
 | `capability_feature` | a member tried to add an SSH key (target `me.ssh_keys`) or mint an API token (target `me.tokens`) and that feature is not available to them. Checked before the key or token is validated or stored | ⛔ `403` |
 | `capability_policy` | `policy_id`: a member selected a stored policy they aren't granted (`denyUserRequest`, target `runs.policy`, on `POST /runs` and preflight alike), and on revive/restart/extend as the owner (`internal/api/run_owner_authority.go`) | ⛔ `403` |
 | `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` below autonomy level L3 (`runs.task_mode`), a non-interactive run below autonomy level L1 (`runs.interactive`), `seed_auto_tools` below autonomy level L2 (`runs.seed_auto_tools`), an agent with no tool-approval lane — BYOA (`agent` unset) or any agent other than `claude-code` — at a resolved level of exactly L1, where an unattended run's tool calls would otherwise be derived to `hold` (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyUserDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`) or under a profile carrying `deny_task_mode_exec` (`runs.interactive_start`, `denyUserGovernance`), since it runs at sandbox boot unattended the way exec does, and — 0.8.2 — a terminal attach into a run whose profile carries `deny_interactive` (`runs.attach`) or a UI-gateway session into one whose profile carries `deny_ui_apps` (`runs.ui_apps`, which is also the target of the `dropped` row when that limit strips `ui_apps` at create; `internal/api/governance_run_doors.go`). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
+| `governance_overlay_unsatisfiable` | the governance profile that binds this person, or the run's own, is composed (0.8.6) and nothing satisfies it together with the profile or deployment default it builds on — the deployment default narrowed until an overlay's `allowed_methods` are disjoint with it, or an overlay and base that name different `llm_inspection` modes — so the launch (`governance.ceiling`, on create and preflight alike) and every live door refuse rather than guess: a terminal attach (`runs.attach`), a UI-gateway session (`runs.ui_apps`), a revive and an end extension (the `owner_profile_*` refusals' `403` sibling). A base or a chain that cannot be read is a `500` or `503`, never this reason, and is never read as the deployment's policy. The sentence names the person's own profile and never a base; an administrator sees which profile failed on `GET /governance` (`effective.error`). The SAME value is the `409` a profile write returns when a base change would leave a profile built on it in this state | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterUserGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_USER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Decided by one rule, `selectByTier` (`internal/api/select_by_tier.go`), and emitted ONCE per request at each of its two entrances: `ceilingWithUnusableGroups` (`internal/api/governance.go`) at target `governance.ceiling`, and `driveWithUnusableGroups` (`internal/api/user_drives_resolve.go`) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval, or `WARDYN_CAPABILITY_SECOND_HUMAN` is set and the caller deciding an Azure DevOps capability escalation, is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
@@ -5213,6 +5227,7 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 `0094` adds `attach_tickets.via_delegate`/`via_grant` and `agent_runs.created_via`.
 `0106` adds `attach_tickets.authorized_at`/`email` (`0026`'s table).
 `0108` adds `governance_profiles.contact` (`0052`'s table).
+`0109` adds `governance_profiles.base_profile_id`, `overlay` and `overlay_limits` with five CHECKs (`0052`'s table).
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.

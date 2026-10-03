@@ -181,6 +181,9 @@ type classifiedRoute struct {
 	body string
 }
 
+// composedProfileProbeBody is a composed profile on the deployment default: no base, an empty overlay.
+const composedProfileProbeBody = `{"name":"composed-probe","overlay":{}}`
+
 // routeMatrix is keyed exactly as chi.Walk reports a route: "METHOD /pattern".
 // Built from the ground-truth dump of a maximally-configured server (every
 // conditional route mounted: OIDC, Secrets, RecordingStore all wired) — see
@@ -422,9 +425,12 @@ var routeMatrix = map[string]classifiedRoute{
 	// is classSecurity for the reason the whole family is: the answer discloses
 	// how the org's ceilings are assigned. A member is refused here and reads
 	// their own ceiling from /policies/default instead, exactly as above.
-	"GET /api/v1/governance":                     {class: classSecurity},
-	"POST /api/v1/governance/profiles":           {class: classSecurity},
-	"PUT /api/v1/governance/profiles/{id}":       {class: classSecurity},
+	"GET /api/v1/governance": {class: classSecurity},
+	// The two profile writes probe with a COMPOSED body (an overlay on the deployment default): what
+	// the security tier admits is the composition members too, and a member is refused it by the
+	// tier before the body is read.
+	"POST /api/v1/governance/profiles":           {class: classSecurity, body: composedProfileProbeBody},
+	"PUT /api/v1/governance/profiles/{id}":       {class: classSecurity, body: composedProfileProbeBody},
 	"DELETE /api/v1/governance/profiles/{id}":    {class: classSecurity},
 	"POST /api/v1/governance/assignments":        {class: classSecurity},
 	"DELETE /api/v1/governance/assignments/{id}": {class: classSecurity},
