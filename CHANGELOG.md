@@ -115,6 +115,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   now answers `403` (`brokered:mint`) for any `git_pat` grant of the run, including grants shadowed by a
   same-host grant, vetoed, withheld for a brokered forge or Azure DevOps owner-only. Upgrade the proxy
   image together with wardynd: an older proxy refuses the new `brokered_pat_grant_ids` config key at start.
+- **The SDK and CLI treat a pending governance change as pending, not applied.** A `202` with a
+  `pending_change` body is returned as `*client.PendingApprovalError` instead of being decoded as a saved
+  object. `ApplyGovernance` returns that error when anything is pending, and the new
+  `ApplyGovernanceResult` returns the pending changes and the deferred assignments as data; an assignment
+  naming a pending profile is not sent, and `--prune` does not run after a pending write.
+  `wardyn governance set` lists them and exits 0. New `ListGovernanceChanges`, `GetGovernanceChange`,
+  `ApproveGovernanceChange` and `RejectGovernanceChange`, and `wardyn governance changes list|approve|reject`.
+  A CLI or SDK older than this release misreads a pending change; see "Pending approval" in `docs/sdk.md`.
 
 ### Changed
 
