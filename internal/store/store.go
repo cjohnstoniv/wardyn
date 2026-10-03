@@ -94,7 +94,12 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 	if err != nil {
 		return types.AgentRun{}, err
 	}
-	return scanRun(s.Pool.QueryRow(ctx, createRunSQL, args...))
+	var out types.AgentRun
+	err = s.guarded(ctx, func(q queryRower) (e error) {
+		out, e = scanRun(q.QueryRow(ctx, createRunSQL, args...))
+		return e
+	})
+	return out, err
 }
 
 // ErrRunCapReached is CreateRunUnderCap's refusal: the deployment already holds
@@ -119,6 +124,11 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 		return types.AgentRun{}, err
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	if g, ok := identityGuardFrom(ctx); ok {
+		if err := checkIdentityGuard(ctx, tx, g); err != nil {
+			return types.AgentRun{}, err
+		}
+	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.RunCapLockClass); err != nil {
 		return types.AgentRun{}, err
 	}
