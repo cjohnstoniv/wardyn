@@ -259,7 +259,7 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
   }
   if (state !== "FAILED") return undefined;
   // fail_closed:false is a WARN-ONLY selftest — an interactive BYOI run runs it
-  // for the warning and carries on (runs_dispatch.go's byoiSelftest(…, false)).
+  // for the warning and carries on (runs_dispatch_byoi.go's byoiSelftest(…, false)).
   // Its run.selftest/failure row is not why a run that later failed for its own
   // reason failed, and "refused before any task ran" would be a false diagnosis
   // of a run that ran. Only an explicit false disqualifies a row: the key is

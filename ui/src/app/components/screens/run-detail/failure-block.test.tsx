@@ -117,7 +117,7 @@ describe("runEndingFromAudit — the state picks the family, the audit picks the
     expect(runEndingFromAudit("FAILED", [ev("run.build", "failure")])).not.toHaveProperty("evidence");
   });
 
-  // An interactive BYOI run's selftest is warn-only (runs_dispatch.go's
+  // An interactive BYOI run's selftest is warn-only (runs_dispatch_byoi.go's
   // byoiSelftest(…, false)): it records run.selftest/failure and the run carries
   // on. Treating that row as the cause would tell an operator whose run failed an
   // hour later that it was "refused before any task ran" — a false diagnosis of a
