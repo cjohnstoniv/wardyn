@@ -774,16 +774,21 @@ never a URL, secret or token.
   "console_url": "https://wardyn.example.com",
   "channels": [
     {"id": "sec-hook", "type": "webhook", "url": "https://hooks.example.com/wardyn",
-     "hmac_secret": "<shared secret>", "bearer_token": "<optional>"}
+     "hmac_secret": "<shared secret>", "bearer_token": "<optional>"},
+    {"id": "sec-teams", "type": "teams", "url": "<Teams Workflows trigger URL>"},
+    {"id": "sec-slack", "type": "slack", "url": "<Slack incoming-webhook URL>", "redact_requester": true}
   ]
 }
 ```
 
 - `id` is `[a-z0-9_-]{1,32}`, unique. It is the metric label and what the outbox stores; rotating a URL
   under the same `id` keeps pending rows deliverable.
-- `type` must be one this build implements: `webhook`. Any other value refuses boot.
+- `type` must be one this build implements: `webhook`, `teams` or `slack`. Any other value refuses boot.
+- `redact_requester` (optional, per channel, default false) leaves the run owner's principal and email out of that channel's messages, whatever its type.
 - HTTPS is required when `hmac_secret` or `bearer_token` is set or the URL carries userinfo or a query.
-  Plain HTTP with none of those is allowed.
+  Plain HTTP with none of those is allowed for a `webhook`. A `teams` or `slack` URL is itself the
+  credential (a Teams workflow signature in the query, a Slack hook path), so it must always be `https://`;
+  boot refuses anything else and the error never shows the URL.
 - `console_url` is optional and must be `https://` with no userinfo, query or fragment.
 
 **The webhook body, `wardyn.approval.v1`.** A `POST` of JSON with `X-Wardyn-Delivery: <delivery_id>`
@@ -804,6 +809,19 @@ The request scope (host, tool arguments, push paths), the reason text, the run t
 are never sent: the sandbox agent writes or influences them, and an approval is decided in the console,
 signed in, not from the message. Every string field is control-stripped, capped at 256 bytes and passed
 through the run's secret masker before encoding.
+
+**Teams and Slack messages.** A `teams` channel posts a Teams Workflows message carrying one Adaptive
+Card; a `slack` channel posts a Block Kit incoming-webhook body. Both are built from the same
+allowlisted fields as the webhook body and nothing else, so the request scope, the reason and any
+credential are absent here too. The title is fixed text, `Approval waiting: <kind>` at tier 0 and
+`Approval still waiting (escalation <n>): <kind>` above it, where the kind reads Credential, Network
+access, Tool call, Sign-in needed or Push review. Under it come the run's short id, the profile name, the
+requester (unless `redact_requester`) and the request time in UTC. The only link is a button to
+`<console_url>/approvals`, from config. Requester and profile text is control-stripped, capped at 256
+bytes and masked, then made inert: Slack carries it in `plain_text` objects only, and the Adaptive Card
+escapes `&`, `<`, `>` and every Markdown character. Any 2xx answer is success and the reply body is never
+read (a Teams workflow may answer 202 with none). `hmac_secret` and `bearer_token` are webhook options;
+these two types are not signed.
 
 **Verifying the signature.** `X-Wardyn-Signature: t=<unix seconds>,v1=<hex>`, where `v1` is the
 HMAC-SHA256 of `<t>.<body>` (the timestamp, a dot, the exact bytes received) keyed with `hmac_secret`.

@@ -1,0 +1,35 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "emoji": false,
+        "text": "Approval still waiting (escalation 1): Push review",
+        "type": "plain_text"
+      },
+      "type": "header"
+    },
+    {
+      "text": {
+        "emoji": false,
+        "text": "Run: a1b2c3d4\nProfile: payments\nRequester: alice (alice@example.com)\nRequested: 2026-10-03 14:05 UTC",
+        "type": "plain_text"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": {
+            "emoji": false,
+            "text": "Open approvals",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://wardyn.example.com/approvals"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Approval still waiting (escalation 1): Push review"
+}
