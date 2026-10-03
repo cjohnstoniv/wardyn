@@ -35,10 +35,16 @@ func maintenanceMode(f *bootFlags) (bool, error) {
 		return true, fmt.Errorf("refusing to run: -rewrap-adopt-boot-keys is a mode of -rewrap; run `wardynd -rewrap -rewrap-adopt-boot-keys`")
 	}
 	if *f.migrateOnly {
-		if strings.TrimSpace(*f.rotateAgeKey) != "" || *f.rewrap || *f.migrateSecrets || *f.reconcile {
-			return true, fmt.Errorf("refusing to run: -migrate-only is a mode of its own; run it without -rotate-age-key, -rewrap, -migrate-secrets or -reconcile")
+		if strings.TrimSpace(*f.rotateAgeKey) != "" || *f.rewrap || *f.migrateSecrets || *f.reconcile || *f.auditSplitLegacy {
+			return true, fmt.Errorf("refusing to run: -migrate-only is a mode of its own; run it without -rotate-age-key, -rewrap, -migrate-secrets, -reconcile or -audit-split-legacy")
 		}
 		return true, migrateOnlyMode(f)
+	}
+	if *f.auditSplitLegacy {
+		if strings.TrimSpace(*f.rotateAgeKey) != "" || *f.rewrap || *f.migrateSecrets || *f.reconcile {
+			return true, fmt.Errorf("refusing to run: -audit-split-legacy is a mode of its own; run it without -rotate-age-key, -rewrap, -migrate-secrets or -reconcile")
+		}
+		return true, auditSplitLegacyMode(f)
 	}
 	if p := strings.TrimSpace(*f.rotateAgeKey); p != "" {
 		return true, rotateAgeKeyMode(f, p)
