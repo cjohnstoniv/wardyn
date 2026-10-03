@@ -162,7 +162,7 @@ func TestClampAndComparatorAgreeOnEveryCeilingShape(t *testing.T) {
 		},
 		{
 			// The comparator resolves a NEGATIVE ttl_seconds to the broker maximum
-			// (governance_grantbound.go's normalizeGrantTTLSeconds) and refuses it
+			// (composer.GrantWithin) and refuses it
 			// under a 300s ceiling. The clamp tested `== 0` and passed the negative
 			// through, so it kept a grant the comparator refuses — D2's failure.
 			name:             "api_key: a negative ttl_seconds",
@@ -228,7 +228,7 @@ func grantDiff(t *testing.T, want, got types.GrantSpec) string {
 	if want.RequiresApproval != got.RequiresApproval {
 		return "requires_approval changed"
 	}
-	if normalizeGrantTTLSeconds(want.TTLSeconds) != normalizeGrantTTLSeconds(got.TTLSeconds) {
+	if mintTTLSeconds(want.TTLSeconds) != mintTTLSeconds(got.TTLSeconds) {
 		return "ttl_seconds changed"
 	}
 	var a, b any
@@ -242,4 +242,13 @@ func grantDiff(t *testing.T, want, got types.GrantSpec) string {
 		return "scope " + string(want.Scope) + " -> " + string(got.Scope)
 	}
 	return ""
+}
+
+// mintTTLSeconds is the seconds a grant TTL mints at: 0, a negative and anything
+// over the one-hour broker maximum all mean the maximum.
+func mintTTLSeconds(ttl int) int {
+	if ttl <= 0 || ttl > 3600 {
+		return 3600
+	}
+	return ttl
 }
