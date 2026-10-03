@@ -240,13 +240,14 @@ func revocationAuditRows(audit *recRecorder) []string {
 func TestRevokePersonCredentials_RequestFreeMatchesRoute(t *testing.T) {
 	routeSt := sshOffboardingStore()
 	routeSrv, routeCutoffs, routeAudit := sshOffboardingServer(t, routeSt)
-	if w := do(t, routeSrv, http.MethodPost, "/api/v1/sessions/revoke", adminToken, `{"sub":"alice@example.com"}`); w.Code != http.StatusNoContent {
+	admin := ssoSession(t, "responder", "responder@example.com", oidc.RoleSecurityAdmin)
+	if w := doSSO(t, routeSrv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"alice@example.com"}`); w.Code != http.StatusNoContent {
 		t.Fatalf("route status=%d body=%s", w.Code, w.Body.String())
 	}
 
 	st := sshOffboardingStore()
 	srv, cutoffs, audit := sshOffboardingServer(t, st)
-	ctx := withActor(context.Background(), types.ActorSystem, adminTokenPrincipal)
+	ctx := withActor(context.Background(), types.ActorHuman, "responder")
 	res, err := srv.revokePersonCredentials(ctx, "alice@example.com")
 	if err != nil {
 		t.Fatal(err)
@@ -264,12 +265,30 @@ func TestRevokePersonCredentials_RequestFreeMatchesRoute(t *testing.T) {
 	if len(rows) != 2 || !slices.Equal(rows, routeRows) {
 		t.Fatalf("audit rows=%q route=%q", rows, routeRows)
 	}
+	for _, row := range rows {
+		if !strings.Contains(row, "|human|responder|") {
+			t.Fatalf("audit row not attributed to the attached actor: %q", row)
+		}
+	}
+}
+
+// TestRevokePersonCredentials_RefusesBareContext: a caller that forgot
+// withActor would be audited as the admin token, so nothing runs.
+func TestRevokePersonCredentials_RefusesBareContext(t *testing.T) {
+	st := sshOffboardingStore()
+	srv, cutoffs, audit := sshOffboardingServer(t, st)
+	if _, err := srv.revokePersonCredentials(context.Background(), "alice@example.com"); err == nil {
+		t.Fatal("bare context was accepted")
+	}
+	if len(st.revoked) != 0 || len(st.keys) != 3 || len(cutoffs.revokedSubs)+cutoffs.revokedAll != 0 || len(audit.snapshot()) != 0 {
+		t.Fatalf("bare context changed state: %+v cutoffs=%+v audit=%d", st, cutoffs, len(audit.snapshot()))
+	}
 }
 
 func TestRevokePersonCredentials_EmptyPrincipalChangesNothing(t *testing.T) {
 	st := sshOffboardingStore()
 	srv, cutoffs, audit := sshOffboardingServer(t, st)
-	if _, err := srv.revokePersonCredentials(context.Background(), ""); err == nil {
+	if _, err := srv.revokePersonCredentials(withActor(context.Background(), types.ActorSystem, "wardyn/scim"), ""); err == nil {
 		t.Fatal("empty principal was accepted")
 	}
 	if len(st.revoked) != 0 || len(st.keys) != 3 || len(cutoffs.revokedSubs)+cutoffs.revokedAll != 0 || len(audit.snapshot()) != 0 {
@@ -280,7 +299,7 @@ func TestRevokePersonCredentials_EmptyPrincipalChangesNothing(t *testing.T) {
 func TestRevokePersonCredentials_UnknownEmailIsSuccessWithZeroDeletions(t *testing.T) {
 	st := sshOffboardingStore()
 	srv, cutoffs, _ := sshOffboardingServer(t, st)
-	res, err := srv.revokePersonCredentials(context.Background(), "nobody@example.com")
+	res, err := srv.revokePersonCredentials(withActor(context.Background(), types.ActorSystem, "wardyn/scim"), "nobody@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}

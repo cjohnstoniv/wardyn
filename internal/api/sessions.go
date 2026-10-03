@@ -182,6 +182,11 @@ func (s *Server) revokePersonCredentials(ctx context.Context, principal string) 
 	if principal == "" {
 		return personRevocation{}, errors.New("revoke person credentials: principal required")
 	}
+	// Without an attached actor the audit rows would fall back to the admin
+	// token, misattributing a request-free caller in the append-only audit.
+	if _, ok := ctx.Value(auditActorCtxKey{}).(auditActor); !ok {
+		return personRevocation{}, errors.New("revoke person credentials: audit actor required")
+	}
 	if err := s.cfg.SessionRevocations.RevokeSub(ctx, principal); err != nil {
 		return personRevocation{}, err
 	}
