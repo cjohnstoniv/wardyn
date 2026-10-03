@@ -744,7 +744,9 @@ export interface SetupItem {
 // Where these are read: the new-run rail's preflight block
 // (new-run-rail.tsx's RunRail) renders overall_risk, enforced_confinement_class,
 // warnings and the `missing`/`unverified` setup_items rows; a `missing` backend
-// row also blocks Launch (new-run-launch-panel.tsx). The field is a live server
+// row, like a fresh 4xx or a `missing` llm_access row, holds Launch for that
+// exact body for up to 60s (use-launch.ts preflightBlock); every other row is
+// advisory. The field is a live server
 // contract (compose_setup.go) read by the CLI and CI scripts too, and the
 // mirror rule forbids dropping a wire field the daemon still sends.
 export interface PreflightResult {

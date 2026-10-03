@@ -175,6 +175,7 @@ describe("useLaunch — automatic preflight", () => {
   });
 
   it.each([
+    ["", 401],
     ["model_credential", 422],
     ["host_capacity_refused", 503],
     ["preflight_rate_limited", 429],
@@ -190,6 +191,16 @@ describe("useLaunch — automatic preflight", () => {
     await tick(MS);
     expect(result.current.preflightBlock).toBe(true);
     await tick(60_500);
+    expect(result.current.preflightBlock).toBe(false);
+  });
+
+  it("a manual preflight of a body held by a missing row clears the hold with the new answer", async () => {
+    preflightRun.mockResolvedValueOnce(setup("backend", "missing"));
+    const { result } = mountAuto({ task: "a" });
+    await tick(MS);
+    expect(result.current.preflightBlock).toBe(true);
+    preflightRun.mockResolvedValueOnce(setup("backend", "ready"));
+    await act(() => result.current.preflight());
     expect(result.current.preflightBlock).toBe(false);
   });
 

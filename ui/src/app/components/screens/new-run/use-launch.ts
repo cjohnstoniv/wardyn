@@ -47,8 +47,8 @@ export interface UseLaunchParams {
 export const PREFLIGHT_FRESH_MS = 60_000;
 /** Settle time before a body is checked on its own. */
 export const PREFLIGHT_DEBOUNCE_MS = 800;
-// A refusal of these classes is repaired by something other than an edit (a
-// sign-in, a retry), so it is shown but never holds Launch.
+// A refusal of these classes (and any 401) is repaired by something other than
+// an edit (a sign-in, a retry), so it is shown but never holds Launch.
 const NEVER_BLOCKS = new Set(["model_credential", "preflight_rate_limited"]);
 
 export interface UseLaunchResult {
@@ -278,7 +278,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
   // Launch is held on a fresh verdict for THIS body that the server refused,
   // or whose rows say Launch would be refused (f-f4 backend, f-f5 llm_access).
   const answeredRefusal =
-    !!graded && graded.status >= 400 && graded.status < 500 && graded.status !== 429 && !NEVER_BLOCKS.has(graded.reason);
+    !!graded && graded.status >= 400 && graded.status < 500 && graded.status !== 401 && graded.status !== 429 && !NEVER_BLOCKS.has(graded.reason);
   const rowMissing = (kind: string) =>
     !!preflightResult?.setup_items?.some((i) => i.kind === kind && i.status === "missing");
   const preflightBlock =
