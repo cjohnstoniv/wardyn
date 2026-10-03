@@ -232,7 +232,13 @@ func (s *Server) auditSweepFailure(ctx context.Context, err error) {
 func (s *Server) deleteDeadCredential(ctx context.Context, st secretstore.Store, owner, name, provider string) {
 	data := map[string]any{"reason": "invalid_grant", "provider": provider}
 	outcome := "success"
-	if err := st.Delete(ctx, name); err != nil {
+	if err := st.Delete(ctx, name); errors.Is(err, secretstore.ErrRevisionChanged) {
+		// A newer row replaced the one the authority refused (the caller's
+		// compare-and-set): it is kept, and nothing failed.
+		slog.InfoContext(ctx, "wardynd: the sign-in the authority refused was replaced meanwhile; keeping the newer row", slog.String("provider", provider))
+		s.adoEntraTokens.forget(owner)
+		return
+	} else if err != nil {
 		slog.WarnContext(ctx, "wardynd: deleting a sign-in the authority refused failed", slog.String("provider", provider), slog.Any("err", err))
 		outcome, data["error"] = "failure", err.Error()
 	}

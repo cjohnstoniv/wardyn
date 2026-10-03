@@ -485,7 +485,13 @@ func (s *Server) redeemEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig
 		"scope":         {strings.Join(scopes, " ")},
 	})
 	if err != nil {
-		s.noteEntraSignInEnded(ctx, owner, ec, blob, ADOEntraClassify(err))
+		// Guarded by the revision read above, like the rotation's Put: a holder
+		// that lost the lock must not delete or mark dead a newer row.
+		nctx := ctx
+		if guarded {
+			nctx = secretstore.WithIfRevision(ctx, rev)
+		}
+		s.noteEntraSignInEnded(nctx, owner, ec, blob, ADOEntraClassify(err))
 		return ADOEntraAccess{}, err
 	}
 

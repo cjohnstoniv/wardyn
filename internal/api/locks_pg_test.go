@@ -450,3 +450,102 @@ func TestPG_ADOEntraRefresh_LostLockDoesNotOverwriteANewerToken(t *testing.T) {
 		t.Errorf("the lost-lock redemption overwrote the newer sign-in: stored refresh token %q, want %q", got.RefreshToken, newer.RefreshToken)
 	}
 }
+
+// A refresh the authority answers invalid_grant to, whose lock was lost while
+// the call was in flight, does not delete the newer pair another replica stored:
+// the delete is the same compare-and-set as the Put.
+func TestPG_AWSRefresh_LostLockSpentAnswerKeepsANewerToken(t *testing.T) {
+	old := db.LockWatchInterval
+	db.LockWatchInterval = time.Hour // the watcher stays out of it: the compare-and-set is under test
+	t.Cleanup(func() { db.LockWatchInterval = old })
+	p := newReplicaPair(t)
+	blob := putAWSSSOBlob(t, p.a, awsSSOTestFixedNow.Add(-time.Minute))
+
+	newer := blob
+	newer.AccessToken, newer.RefreshToken = "newer-access-token-1234567890", "newer-refresh-token-1234567890"
+	newer.ExpiresAt = awsSSOTestFixedNow.Add(2 * time.Hour)
+	fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, _ int) {
+		killLockHolder(t, p.poolA, db.AWSSSOLockClass)
+		storeSSOBlob(t, p.b, newer)
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "invalid_grant", "error_description": "refresh token is invalid"})
+	})
+
+	if _, msg := p.a.refreshAWSSSOBlob(context.Background(), awsSSOTestScope(), blob); msg != awsSSORefreshSpentSentence {
+		t.Fatalf("refresh answered %q, want the spent sentence", msg)
+	}
+	b, found, err := p.b.readAWSSSOBlob(context.Background(), awsSSOTestScope())
+	if err != nil || !found {
+		t.Fatalf("the newer stored pair was deleted by the lost-lock holder: found=%v err=%v", found, err)
+	}
+	if b != newer {
+		t.Errorf("the newer stored pair changed: %+v", b)
+	}
+}
+
+// afterGetSecrets runs hook once, just after the first read of name returns:
+// the instant between a redemption's read and its token call.
+type afterGetSecrets struct {
+	secretstore.Store
+	name string
+	hook *func()
+}
+
+func (a afterGetSecrets) For(owner string) secretstore.Store {
+	return afterGetSecrets{Store: a.Store.For(owner), name: a.name, hook: a.hook}
+}
+
+func (a afterGetSecrets) Get(ctx context.Context, name string) ([]byte, error) {
+	v, err := a.Store.Get(ctx, name)
+	if h := *a.hook; h != nil && name == a.name && err == nil {
+		*a.hook = nil
+		h()
+	}
+	return v, err
+}
+
+func (a afterGetSecrets) Revision(ctx context.Context, name string) (string, error) {
+	return a.Store.(secretstore.Revisioned).Revision(ctx, name)
+}
+
+// The same for the Azure DevOps sign-in: a redemption the authority refuses as
+// dead, after its lock was lost, leaves the newer sign-in another replica stored.
+func TestPG_ADOEntraRefresh_LostLockDeadAnswerKeepsANewerToken(t *testing.T) {
+	old := db.LockWatchInterval
+	db.LockWatchInterval = time.Hour // the watcher stays out of it: the compare-and-set is under test
+	t.Cleanup(func() { db.LockWatchInterval = old })
+	p := newReplicaPair(t)
+	f := newADOFixture(t)
+	subject := f.fake.Subject()
+	f.srv = p.a
+	p.a.cfg.ADOEntra, p.a.cfg.Now = func(context.Context) (ADOEntraConfig, bool, error) { return f.cfg, true, nil }, func() time.Time { return adoTestNow }
+	if w := f.capture(t, subject); w.Code != http.StatusFound {
+		t.Fatalf("capture: status %d body %q", w.Code, w.Body.String())
+	}
+	captured, _ := f.stored(t, subject)
+
+	newer := captured
+	newer.RefreshToken, newer.RenewedAt = "newer-refresh-token-from-another-replica", adoTestNow.Add(time.Minute)
+	hook := func() {
+		killLockHolder(t, p.poolA, db.ADOSignInLockClass)
+		if err := p.b.storeADOEntraBlob(context.Background(), subject, f.cfg.RowID, newer); err != nil {
+			t.Error(err)
+		}
+		f.fake.SetInvalidGrant(true)
+	}
+	p.a.cfg.Secrets = afterGetSecrets{Store: p.a.cfg.Secrets, name: adoCapture(f.cfg).secretName, hook: &hook}
+
+	if _, err := p.a.RedeemADOEntraAccess(context.Background(), f.cfg, subject, f.cfg.Scopes); !errors.Is(err, ErrADOEntraDeadCredential) {
+		t.Fatalf("redeem = %v, want the dead-credential refusal", err)
+	}
+	if hook != nil {
+		t.Fatal("the redemption read nothing, so the test reached no refusal")
+	}
+	got, found, err := p.b.readADOEntraBlob(context.Background(), subject, f.cfg.RowID)
+	if err != nil || !found {
+		t.Fatalf("the newer sign-in was deleted by the lost-lock holder: found=%v err=%v", found, err)
+	}
+	if got.RefreshToken != newer.RefreshToken {
+		t.Errorf("the newer sign-in changed: stored refresh token %q, want %q", got.RefreshToken, newer.RefreshToken)
+	}
+}

@@ -30,9 +30,9 @@ type Revisioned interface {
 
 type ifRevisionKey struct{}
 
-// WithIfRevision returns a context under which a Put writes only while this
-// view's own row of the name still has revision rev (Revisioned.Revision), and
-// otherwise returns ErrRevisionChanged without writing. rev "" means the row
+// WithIfRevision returns a context under which a Put or Delete acts only while
+// this view's own row of the name still has revision rev (Revisioned.Revision),
+// and otherwise returns ErrRevisionChanged without writing. rev "" means the row
 // must not exist. A store that keeps no revision ignores it.
 func WithIfRevision(ctx context.Context, rev string) context.Context {
 	return context.WithValue(ctx, ifRevisionKey{}, rev)

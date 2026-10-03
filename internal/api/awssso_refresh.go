@@ -627,7 +627,15 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 			// The blob was re-read under the lock, so it is the stored one: a
 			// copy that predated a rotation would delete the pair that rotation
 			// persisted, which is why a failed re-read returns above.
-			s.deleteSpentAWSSSOBlob(ctx, scope)
+			//
+			// Detached from the lock's context and guarded by the revision read
+			// under it, like the Put: a holder that lost the lock must not delete
+			// the newer pair another replica stored.
+			dctx := context.WithoutCancel(ctx)
+			if guarded {
+				dctx = secretstore.WithIfRevision(dctx, rev)
+			}
+			s.deleteSpentAWSSSOBlob(dctx, scope)
 		}
 		slog.ErrorContext(ctx, "wardynd: renewing the captured AWS SSO credential failed",
 			slog.Bool("credential_spent", spent), slog.Any("err", err))
