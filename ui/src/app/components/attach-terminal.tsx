@@ -35,13 +35,9 @@ import * as React from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-// Bundle a real terminal font (same-origin, no external load) so the TUI gets
-// true fixed-advance cells instead of whatever monospace the OS picks. Same
-// latin/latin-ext subsets as styles/index.css — the other four subsets carry no
-// glyph xterm draws (box-drawing U+2500.. and block elements U+2580.. are in
-// NONE of the fontsource subsets; those already come from the OS fallback).
-import "@fontsource/jetbrains-mono/latin-400.css";
-import "@fontsource/jetbrains-mono/latin-ext-400.css";
+// A full JetBrains Mono build, self-hosted (same-origin, no external load), so the
+// TUI gets true fixed-advance cells and its box-drawing glyphs come from the font.
+import "../../styles/terminal-font.css";
 import { getToken, HttpError } from "../lib/api/core";
 import { runs } from "../lib/api/runs";
 import type { AttachHolder } from "../lib/types/runs";
@@ -52,6 +48,14 @@ import { Button } from "./ui/button";
 import { TakeoverConfirmDialog } from "./attach-takeover-dialog";
 import { TerminalConnectionStatus } from "./attach-terminal-status";
 import { CopyBlockedNotice, CopyOfferToast } from "./attach-terminal-copy-offer";
+import {
+  readRendererPref,
+  writeRendererPref,
+  type RendererControl,
+  type RendererPref,
+  type RendererState,
+} from "./attach-terminal-renderer";
+import { RendererFellBackNotice, RendererMenu } from "./attach-terminal-renderer-menu";
 import { isMacPlatform, type CopyGate, type CopyOffer } from "./attach-terminal-clipboard";
 import { RUN_COCKPIT, TERMINAL, TERMINAL_COPY } from "./wardyn/copy";
 import { useOperator, useOperatorResolved, usePrincipal } from "./wardyn/operator-context";
@@ -201,6 +205,23 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   }, [copyOffer]);
   const selectHint =TERMINAL_COPY.SELECT_HINT(TERMINAL_COPY.NATIVE_CHORD(isMacPlatform()));
   const copyGateRef = React.useRef<CopyGate | null>(null);
+  // Renderer: the per-browser choice, the live control, and what is actually drawing.
+  const [rendererPref, setRendererPref] = React.useState<RendererPref>(readRendererPref);
+  const rendererPrefRef = React.useRef(rendererPref);
+  const rendererRef = React.useRef<RendererControl | null>(null);
+  const [renderer, setRenderer] = React.useState<RendererState>({ active: "compatible", fellBack: false });
+  const [fellBackSeen, setFellBackSeen] = React.useState(false);
+  React.useEffect(() => {
+    if (renderer.fellBack) setFellBackSeen(true);
+  }, [renderer.fellBack]);
+  const pickRenderer = (pref: RendererPref) => {
+    writeRendererPref(pref);
+    rendererPrefRef.current = pref;
+    setRendererPref(pref);
+    setFellBackSeen(false);
+    rendererRef.current?.set(pref);
+    termRef.current?.focus();
+  };
 
   // Keep onClose in a ref so a fresh closure on every parent render does NOT
   // re-run the connect effect (which would tear down + reconnect the terminal
@@ -332,6 +353,9 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     setCopyOffer,
     setCopyNotice,
     copyGateRef,
+    rendererRef,
+    rendererPrefRef,
+    setRenderer,
   });
 
   // Fullscreen (native API, Escape fallback, refit-on-toggle) — see
@@ -471,6 +495,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           {connState === "open" && (
             <span className="inline-flex size-2 rounded-full bg-success" title="Connected" />
           )}
+          <RendererMenu pref={rendererPref} active={renderer.active} onPick={pickRenderer} />
           {/* Redraw. The browser cannot observe another client detaching, so it
               cannot know the tmux window is still clamped to a size that left —
               see refit's note. One click forces the size change that clears it. */}
@@ -579,6 +604,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       )}
 
       {copyNotice && <CopyBlockedNotice onDismiss={() => setCopyNotice(null)} />}
+      {fellBackSeen && <RendererFellBackNotice onDismiss={() => setFellBackSeen(false)} />}
 
       {/* Holder footer — only in the two states that have an action. A driving
           terminal keeps its existing chrome (every dialog embed depends on the

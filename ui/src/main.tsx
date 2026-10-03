@@ -9,7 +9,7 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./app/App";
 import { BrandingProvider } from "./app/components/wardyn/branding-context";
 import { basePath } from "./app/lib/base-path";
-import monoWoff2 from "@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2?url";
+import monoWoff2 from "jetbrains-mono/fonts/webfonts/JetBrainsMono-Regular.woff2?url";
 import "./styles/index.css";
 
 // Vite hashes the font file, so a static index.html tag cannot name it.

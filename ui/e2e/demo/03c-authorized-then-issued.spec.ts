@@ -65,6 +65,7 @@ import {
   walkPolicyKey,
   frameRun,
 } from "./demos";
+import { termText } from "../terminal-text";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -148,7 +149,7 @@ test("V03c act 1 — authorized, not issued", async () => {
 
   await typeInTerminal(page, mintCmd, card);
   await pollScreen(screen, /X-Wardyn-Demo/, "the approved mint never returned an injection rule");
-  const mintText = await screen.innerText();
+  const mintText = await termText(screen);
   expect(
     mintText.includes(DEMO_KEY_VALUE),
     "the approved mint returned the secret VALUE — the demo's entire claim is that it never does",
@@ -246,7 +247,7 @@ test("V03c act 2 — a bearer token for a real API", async () => {
 
   await typeInTerminal(page, await pillCmd(card, 1), card);
   await pollScreen(screen, /WARDYN_PROXY_URL=/, "printenv never echoed inside the demo sandbox");
-  const envText = await screen.innerText();
+  const envText = await termText(screen);
   expect(envText.includes(API_TOKEN_VALUE), "the API token's VALUE printed inside the sandbox").toBe(false);
   await caption(page, "No token in the environment — no variable to end up in a log line or a crash dump.");
   await beat(page, PACE.read);
@@ -329,7 +330,7 @@ test("V03c act 3 — a PAT that only ever exists in a pipe", async () => {
   const printenvCmd = await pillCmd(card, 3);
   await typeInTerminal(page, printenvCmd, card);
   await pollScreen(screen, /WARDYN_GIT_HELPER_SECRET=/, "printenv never echoed the gate token");
-  const fullText = await screen.innerText();
+  const fullText = await termText(screen);
   const envIdx = fullText.lastIndexOf(printenvCmd);
   const envText = envIdx >= 0 ? fullText.slice(envIdx + printenvCmd.length) : fullText;
   expect(envText.includes(PAT_VALUE), "the PAT's VALUE printed in the environment").toBe(false);

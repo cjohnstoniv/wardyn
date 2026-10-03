@@ -1440,6 +1440,8 @@ ci: ## Daemon-free merge gate: every CI check that needs no daemon or service
 ui: ## Build the embedded web UI
 	@echo "Building embedded web UI..."
 	cd ui && pnpm install --frozen-lockfile && pnpm build
+	@# The e2e text-read seam (window.__wardynTerm) must never ship in the production bundle.
+	@! grep -rq __wardynTerm ui/dist || { echo "ui/dist carries the e2e-only __wardynTerm seam"; exit 1; }
 
 ui-typecheck: ## Typecheck the web UI (tsc --noEmit) and prove the live/demo/screenshots spec files LOAD
 	@echo "Typechecking web UI (tsc --noEmit)..."

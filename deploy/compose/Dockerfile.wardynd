@@ -83,6 +83,7 @@ RUN pnpm build
 FROM --platform=$BUILDPLATFORM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS ui-prebuilt
 WORKDIR /ui
 COPY ui/dist ./dist
+RUN ! grep -rq __wardynTerm ./dist || { echo "UI_STAGE=ui-prebuilt but ui/dist carries the e2e-only __wardynTerm seam — rebuild it with 'make ui' (production mode)"; exit 1; }
 RUN test -f ./dist/index.html || { echo "UI_STAGE=ui-prebuilt but ui/dist/index.html is absent — run 'make ui' on the host first"; exit 1; }
 
 # Select which UI stage feeds the runtime image (UI_STAGE declared at file top).

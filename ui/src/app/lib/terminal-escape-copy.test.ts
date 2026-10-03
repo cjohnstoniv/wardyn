@@ -5,7 +5,7 @@
 
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { TERMINAL, TERMINAL_COPY } from "../components/wardyn/copy/terminal";
+import { TERMINAL, TERMINAL_COPY, TERMINAL_RENDERER } from "../components/wardyn/copy/terminal";
 import { parseFrozenTables, renderFromNamespaces, splitKey } from "./copy-doc-parity";
 
 // The mock round's whole value is that it stays CHECKABLE (the sign-in/
@@ -89,5 +89,23 @@ describe("terminal-escape-copy — Copy strings, M11", () => {
     expect(TERMINAL_COPY.OFFER_SIZE(1)).toBe("1 character");
     expect(TERMINAL_COPY.OFFER_BREAKS(1)).toBe("1 line break");
     expect(TERMINAL_COPY.OFFER_INVISIBLE(1)).toBe("1 invisible character");
+  });
+});
+
+// M11 (term-t10): the renderer strings.
+const rendererDoc = new Map(
+  [...parseFrozenTables(DOC, /^## Terminal renderer strings/)].filter(([key]) => key !== "Constant"),
+);
+
+describe("terminal-escape-copy — Terminal renderer strings, M11", () => {
+  it("finds every TERMINAL_RENDERER row in the doc", () => {
+    expect(new Set([...rendererDoc.keys()].map((k) => splitKey(k)[0]))).toEqual(new Set(Object.keys(TERMINAL_RENDERER)));
+  });
+
+  it.each([...rendererDoc.keys()])("%s is byte-exact", (key) => {
+    const [name, args] = splitKey(key);
+    const v = TERMINAL_RENDERER[name as keyof typeof TERMINAL_RENDERER];
+    const text = typeof v === "function" ? (v as (a: string) => string)(`{${args[0]}}`) : v;
+    expect(text).toBe(rendererDoc.get(key));
   });
 });

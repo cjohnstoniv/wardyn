@@ -88,3 +88,23 @@ The keydown decision is a pure function, `decideKey` in
 layout "shape" in `attach-terminal-keys.test.ts` (US/DE/FR/ES). It returns
 one of `"escape" | "newline" | "paste" | "pty"`; `attach-terminal.tsx` only
 wires the result into xterm's `attachCustomKeyEventHandler`.
+
+## Terminal renderer strings
+
+M11, approved 2026-10-03 (term-t10). Source:
+`ui/src/app/components/wardyn/copy/terminal.ts`, `TERMINAL_RENDERER`. The
+renderer menu (`MonitorCog`, before Redraw) and the fell-back strip render in
+`attach-terminal-renderer-menu.tsx`. The choice is stored in this browser only.
+
+| Constant | Value |
+|---|---|
+| `LABEL` | `Terminal renderer` |
+| `AUTO` | `Auto` |
+| `AUTO_HINT` | `GPU when this browser supports it, otherwise Compatible.` |
+| `GPU` | `GPU` |
+| `GPU_HINT` | `Faster with heavy output. Falls back to Compatible if the GPU stops.` |
+| `GPU_UNAVAILABLE` | `Not available in this browser.` |
+| `COMPATIBLE` | `Compatible` |
+| `COMPATIBLE_HINT` | `Draws with the page. Use it if text looks wrong or the terminal goes blank.` |
+| `FOOTER(active)` | `In use: {active}. Saved in this browser only.` |
+| `FELL_BACK` | `The GPU renderer stopped, so this terminal switched to Compatible. The session is unaffected.` |

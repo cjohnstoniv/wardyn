@@ -81,6 +81,7 @@ import { act, beat, caption, centerInFrame, ffwdEnd, ffwdStart, PACE, spotlight,
 import { stage } from "./stage";
 import { APPROVAL_APPEARS, decide } from "./funnel";
 import { sweepStaleState } from "./sweep";
+import { termText } from "../terminal-text";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -591,7 +592,7 @@ test("B3 — honest small work", async () => {
   // under a take's load and the assertion times out on a terminal that has
   // plainly already printed the string (the series' standing law).
   await expect
-    .poll(async () => (await screen.innerText()).includes(`Successfully installed ${PKG}-`), { timeout: 120_000 })
+    .poll(async () => (await termText(screen)).includes(`Successfully installed ${PKG}-`), { timeout: 120_000 })
     .toBe(true);
 
   // S2: the install's tail landed at the bottom of a scrolling terminal —
@@ -1020,7 +1021,7 @@ test("B6 — the unseen host, and the one we skipped", async () => {
   // stack actually prints before the take; if the sandbox genuinely sees
   // nothing at all (a silent deny), say THAT instead of promising a receipt
   // that never renders (Priya: "that's a better fact than an error message").
-  await expect(screen).toContainText(/403|curl: \(\d+\)|timed out/, { timeout: 45_000 });
+  await expect.poll(() => termText(screen), { timeout: 45_000 }).toMatch(/403|curl: \(\d+\)|timed out/);
   await spotlight(page, screen);
   await caption(page, "Held.");
   await beat(page, BEAT_SHORT);
@@ -1076,7 +1077,7 @@ test("B6 — the unseen host, and the one we skipped", async () => {
   // is therefore not cosmetic: it is the proof that the second catch exists
   // before the thing that could lose it (the kill) happens.
   await expect
-    .poll(async () => /ERROR:|timed out/i.test(await screen.innerText()), { timeout: 90_000 })
+    .poll(async () => /ERROR:|timed out/i.test(await termText(screen)), { timeout: 90_000 })
     .toBe(true);
   await caption(page, "Nobody answers, pip's own timeout runs out, and the install gives up — the request never got through.");
   await beat(page, PACE.read + 400);
@@ -1236,7 +1237,7 @@ test("B7 — approve the miss, run it again", async () => {
   await beat(page, PACE.read);
   await typeInTerminal(page, CONFINED_INSTALL_CMD, card);
   await expect
-    .poll(async () => (await screen.innerText()).includes(`Successfully installed ${PKG}-`), { timeout: 120_000 })
+    .poll(async () => (await termText(screen)).includes(`Successfully installed ${PKG}-`), { timeout: 120_000 })
     .toBe(true);
 
   // Nothing held, nothing denied — the idle hint, not an empty queue by luck.

@@ -49,6 +49,7 @@ import { act, beat, caption, chapter, PACE, spotlight, typeInTerminal } from "./
 // series needs them, and this file is no longer the only spec in the project.
 import { stage } from "./stage";
 import { advance, APPROVAL_APPEARS, clearWorkspace, decide } from "./funnel";
+import { termText } from "../terminal-text";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -216,9 +217,9 @@ test("act 3 — the guardrail demos", async () => {
       // terminal showing two refusals and no success. (The proxy itself warns a
       // `once` grant is spent before success is guaranteed.)
       if (demo.approve && i === 1) {
-        await expect(page.locator(".xterm-screen").first()).toContainText(/HTTP\/2 200|HTTP\/1\.1 200/, {
-          timeout: 45_000,
-        });
+        await expect
+          .poll(() => termText(page.locator(".xterm-screen").first()), { timeout: 45_000 })
+          .toMatch(/HTTP\/2 200|HTTP\/1\.1 200/);
       }
     }
 
@@ -264,10 +265,9 @@ test("act 3 — the guardrail demos", async () => {
       // 403 with an audited egress.deny (builtin:private-ip); on an older
       // stack with no proxy in that path, the gatewayless sandbox drops it at
       // the network layer — curl (7). Accept either shape (03a's regex).
-      await expect(page.locator(".xterm-screen").first()).toContainText(
-        /HTTP\/1\.1 403|Failed to connect to 169\.254\.169\.254|curl: \(\d+\)/,
-        { timeout: 60_000 },
-      );
+      await expect
+        .poll(() => termText(page.locator(".xterm-screen").first()), { timeout: 60_000 })
+        .toMatch(/HTTP\/1\.1 403|Failed to connect to 169\.254\.169\.254|curl: \(\d+\)/);
       await caption(page, "Outbound traffic was wide open — and two addresses still couldn't be reached at all: the cloud-metadata address, and the private range.");
       await beat(page, PACE.read + 1200);
       await caption(page, "No one could even say yes. The proxy refuses them underneath the policy — no approval could ever grant them.");
