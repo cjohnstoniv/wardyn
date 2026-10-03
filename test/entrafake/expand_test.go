@@ -111,3 +111,26 @@ func TestScopeNamingTwoResourcesIsRefused(t *testing.T) {
 		t.Fatalf("refresh error_description %q does not name %s", desc, entrafake.AADSTSMultipleResources)
 	}
 }
+
+// TestSetAnswerScopeReplacesTheGrantedScopeUntilCleared: an authority that
+// answers with permissions of another resource than the one asked for. The
+// override is what a relying party's "did I get what I asked for" check is
+// tested against, and no arguments restores the normal answer.
+func TestSetAnswerScopeReplacesTheGrantedScopeUntilCleared(t *testing.T) {
+	s := entrafake.New()
+	defer s.Close()
+	s.SetConsentedScopes(foundryScope, adoResourceID+"/vso.code_write")
+	other := adoResourceID + "/vso.code_write"
+
+	s.SetAnswerScope(other)
+	got := redeemCode(t, s, "verifier-llllllllllllllllllllllllllllllllllllllll", foundryResource+"/.default")
+	if scope, _ := got["scope"].(string); scope != other {
+		t.Fatalf("overridden answer scope = %q, want exactly %q", scope, other)
+	}
+
+	s.SetAnswerScope()
+	got = redeemCode(t, s, "verifier-mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm", foundryResource+"/.default")
+	if scope, _ := got["scope"].(string); scope != foundryScope {
+		t.Fatalf("restored answer scope = %q, want %q", scope, foundryScope)
+	}
+}
