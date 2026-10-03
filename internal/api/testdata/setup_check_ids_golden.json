@@ -31,6 +31,7 @@
     "llm_provider",
     "platform_shared",
     "runner",
+    "sandbox_start",
     "scm_provider"
   ],
   "with_oidc": [

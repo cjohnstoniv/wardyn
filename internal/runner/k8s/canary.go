@@ -25,10 +25,11 @@ const k8sPollInterval = 200 * time.Millisecond
 
 // Vars, not consts, only so tests can shorten them.
 var (
-	// canaryWaitTimeout is generous: an image may need a cold pull on a node's first run.
+	// canaryWaitTimeout is generous: an image may need a cold pull on a node's first run. It is the
+	// boot canary's own budget, apart from a sandbox's start deadlines (WARDYN_SANDBOX_START_TIMEOUT):
+	// two phases of it must fit inside the chart's 450s startupProbe, so raising a run's start budget
+	// must never move it.
 	canaryWaitTimeout = 3 * time.Minute
-	// podIPWaitTimeout bounds scheduling only: the CNI assigns a pod's IP before any image pull.
-	podIPWaitTimeout = 90 * time.Second
 )
 
 // canaryVerdict is the boot-time egress canary's outcome.
