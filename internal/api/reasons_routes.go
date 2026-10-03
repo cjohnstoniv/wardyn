@@ -576,6 +576,19 @@ const (
 	ReasonADOPATNeedsConsoleApp = "ado_pat_needs_console_app"
 )
 
+// GET /model-providers-entra/signin and the callback it shares with the Azure
+// DevOps sign-in (azure_foundry_entra.go): the per-row door of the Azure
+// Foundry capture. The callback answers a refusal the person can act on as a
+// redirect with a fixed code (the vocabulary of the Azure DevOps callback plus
+// row_changed) and an attack-shaped one in band.
+const (
+	reasonAzureSignInUnconfigured     = "azure_sign_in_unconfigured"     // no console Entra sign-in is configured
+	reasonAzureSignInUnknownRow       = "azure_sign_in_unknown_row"      // the uid is not an azure_foundry provider
+	reasonAzureSignInNoSession        = "azure_sign_in_no_session"       // no session subject to bind the capture to
+	reasonAzureCallbackCookiesInvalid = "azure_callback_cookies_invalid" // the one-time nonce or verifier cookie is missing, or the stamped row is malformed
+	reasonAzureCallbackMissingCode    = "azure_callback_missing_code"    // the authority redirected back with no code
+)
+
 // POST /workspace-providers/git/{id}/org-check (ado_pat_orgcheck.go).
 const (
 	reasonADOOrgCheckUnknownRow   = "ado_org_check_unknown_row"  // no such row, or not the row that creates tokens (D-6)

@@ -86,6 +86,7 @@ func TestPG_ProviderPurgeTriggers(t *testing.T) {
 					}
 					mustPut(t, sec, "alice", providerSecretName(p.UID, providerSSOPart))
 					mustPut(t, sec, "bob", providerSecretName(p.UID, providerOAuthPart))
+					mustPut(t, sec, "carol", providerSecretName(p.UID, providerEntraPart))
 				}
 				mustPut(t, sec, "", "anthropic-api-key")
 				mustPut(t, sec, "alice", "git-pat")
@@ -96,9 +97,9 @@ func TestPG_ProviderPurgeTriggers(t *testing.T) {
 
 				want := 0
 				for i, uid := range uids {
-					n := 5
+					n := 6
 					if slices.Contains(tc.purge, i) {
-						n, want = 0, want+5
+						n, want = 0, want+6
 					}
 					if got := rowsLike(t, pool, providerSecretPrefix+uid+"-%"); got != n {
 						t.Errorf("provider %d holds %d credentials across every namespace after the write, want %d", i, got, n)

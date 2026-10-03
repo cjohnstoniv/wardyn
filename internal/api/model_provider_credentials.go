@@ -28,7 +28,7 @@ import (
 
 // providerSecretPrefix starts every per-person model-provider credential name:
 // wardyn-provider-<uid>-key for a typed key or token, -oauth for a Claude
-// sign-in, -sso for an AWS sign-in. Keyed by the provider's server-minted UID,
+// sign-in, -sso for an AWS sign-in, -entra for an Azure Entra sign-in. Keyed by the provider's server-minted UID,
 // never its admin-chosen ID, so a provider deleted and re-added under the same
 // ID starts with nobody's credential.
 const providerSecretPrefix = types.ModelProviderSecretPrefix
@@ -37,22 +37,25 @@ const (
 	providerKeyPart   = "key"
 	providerOAuthPart = "oauth"
 	providerSSOPart   = "sso"
+	// providerEntraPart is an azure_foundry sign-in: the person's Entra refresh token for the row's audience.
+	providerEntraPart = "entra"
 )
 
 // providerSecretParts are every part a person's credential for one provider
 // may be stored under.
-var providerSecretParts = []string{providerKeyPart, providerOAuthPart, providerSSOPart}
+var providerSecretParts = []string{providerKeyPart, providerOAuthPart, providerSSOPart, providerEntraPart}
 
 func providerSecretName(uid, part string) string { return providerSecretPrefix + uid + "-" + part }
 
 // providerSignInSecret reports whether name is a per-person sign-in capture
-// (-oauth, -sso). Those are reserved at every sink and API (reservedSecret): a
+// (-oauth, -sso, -entra). Those are reserved at every sink and API (reservedSecret): a
 // sign-in blob is never a header value, so no grant may name one. A -key is
 // not: the injection sink resolves it by name from the namespace a grant
 // snapshots, so it is reserved only at the generic secrets API and the broker.
 func providerSignInSecret(name string) bool {
 	return strings.HasPrefix(name, providerSecretPrefix) &&
-		(strings.HasSuffix(name, "-"+providerOAuthPart) || strings.HasSuffix(name, "-"+providerSSOPart))
+		(strings.HasSuffix(name, "-"+providerOAuthPart) || strings.HasSuffix(name, "-"+providerSSOPart) ||
+			strings.HasSuffix(name, "-"+providerEntraPart))
 }
 
 // providerTypedKinds are the kinds whose credential each person types (a key or
