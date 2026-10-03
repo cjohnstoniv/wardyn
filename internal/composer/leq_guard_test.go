@@ -44,7 +44,7 @@ var leqRules = map[string]string{
 	"push_rules.hold_seconds":         "a <= b after normalising",
 	"push_rules.deny_new_executables": "b implies a",
 	"push_rules.max_file_size_mib":    "a is no looser bound than b",
-	"azure_devops_capabilities":       "b empty: any a; else a non-empty subset of b",
+	"azure_devops_capabilities":       "b empty: only an empty a; else a non-empty subset of b",
 
 	// GovernanceLimits
 	"deny_task_mode_exec":              "b implies a",

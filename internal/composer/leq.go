@@ -64,14 +64,23 @@ func leqEgress(a, b types.RunPolicySpec) bool {
 		leqSubsetWhenSet(normMethods(a.AllowedMethods), normMethods(b.AllowedMethods))
 }
 
-// leqSubsetWhenSet is the shape shared by allowed_methods and
-// azure_devops_capabilities: an empty b is the unrestricted reading, so anything
-// is within it; otherwise a must name a non-empty subset of b.
+// leqSubsetWhenSet is allowed_methods' shape: an empty b is the unrestricted
+// reading, so anything is within it; otherwise a must name a non-empty subset of b.
 func leqSubsetWhenSet(a, b []string) bool {
 	if len(b) == 0 {
 		return true
 	}
 	return len(a) > 0 && !slices.ContainsFunc(a, func(s string) bool { return !slices.Contains(b, s) })
+}
+
+// leqCapabilities is azure_devops_capabilities: an empty b is the provider
+// row's default profile, which a list cannot be proven within, so only an empty
+// a is within it; otherwise a must name a non-empty subset of b.
+func leqCapabilities(a, b []string) bool {
+	if len(b) == 0 {
+		return len(a) == 0
+	}
+	return leqSubsetWhenSet(a, b)
 }
 
 // leqAllowedDomains holds when every entry of a is covered by an entry of b,
@@ -123,7 +132,7 @@ func leqPosture(a, b types.RunPolicySpec) bool {
 	if confinementRank(a.MinConfinementClass) < confinementRank(b.MinConfinementClass) ||
 		!notLooser(a.AutoStopAfterSec, b.AutoStopAfterSec) ||
 		(a.GitPushAnyBranch && !b.GitPushAnyBranch) ||
-		!leqSubsetWhenSet(capStrings(a.AzureDevOpsCapabilities), capStrings(b.AzureDevOpsCapabilities)) {
+		!leqCapabilities(capStrings(a.AzureDevOpsCapabilities), capStrings(b.AzureDevOpsCapabilities)) {
 		return false
 	}
 	for _, g := range a.EligibleGrants {

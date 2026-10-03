@@ -210,6 +210,11 @@ func TestLeqIsFalseForEveryWidening(t *testing.T) {
 		{name: "an added domain", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.AllowedDomains = append(slices.Clone(c.AllowedDomains), "api.vendor.example")
 		}},
+		{name: "an exact host under the base's wildcard", base: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
+			c.AllowedDomains = []string{"*.vendor.example"}
+		}, wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
+			c.AllowedDomains = []string{"api.vendor.example"}
+		}},
 		{name: "a wildcard widened past the base's", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.AllowedDomains = []string{"*.example"}
 		}},
@@ -292,6 +297,9 @@ func TestLeqIsFalseForEveryWidening(t *testing.T) {
 			c.AzureDevOpsCapabilities = []adoscope.Capability{adoscope.CapCodeRead}
 		}, wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.AzureDevOpsCapabilities = []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapWorkRead}
+		}},
+		{name: "a capability list under an empty base", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
+			c.AzureDevOpsCapabilities = []adoscope.Capability{adoscope.CapCodeRead}
 		}},
 
 		// Grants.
@@ -390,7 +398,7 @@ func TestLeqIsTrueForNarrowings(t *testing.T) {
 		narrow func(*types.RunPolicySpec, *types.GovernanceLimits)
 	}{
 		{"fewer domains", func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
-			c.AllowedDomains = []string{"git.corp.example"}
+			c.AllowedDomains = []string{"pypi.org"}
 		}},
 		{"no domains", func(c *types.RunPolicySpec, _ *types.GovernanceLimits) { c.AllowedDomains = []string{} }},
 		{"a narrower wildcard", func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {

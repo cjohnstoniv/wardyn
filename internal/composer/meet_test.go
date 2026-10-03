@@ -47,11 +47,11 @@ func TestMeetAllowedDomains(t *testing.T) {
 		want []string
 		bad  bool // refused at write
 	}{
-		{"an exact host under the base's wildcard", []string{"git.corp.example"}, []string{"git.corp.example"}, false},
+		{"an exact host under the base's wildcard", []string{"git.corp.example"}, []string{}, true},
 		{"the base's own entry", []string{"api.vendor.example"}, []string{"api.vendor.example"}, false},
 		{"an empty list is a value: no domains", []string{}, []string{}, false},
 		{"a host outside the base", []string{"evil.example"}, []string{}, true},
-		{"a wildcard wider than the base's", []string{"*.example"}, []string{"*.corp.example", "api.vendor.example"}, true},
+		{"a wildcard wider than the base's", []string{"*.example"}, []string{"*.corp.example"}, true},
 		{"a literal IP the base names exactly", []string{"10.0.0.5"}, []string{"10.0.0.5"}, false},
 		{"a literal IP the base does not name", []string{"10.0.0.6"}, []string{}, true},
 		{"a port narrows an any-port entry", []string{"api.vendor.example:443"}, []string{"api.vendor.example:443"}, false},
@@ -144,6 +144,13 @@ func TestMeetCapabilities(t *testing.T) {
 	got := mustApply(t, base, overlayOf(types.CeilingOverlay{AzureDevOpsCapabilities: &[]adoscope.Capability{adoscope.CapCodeRead}}))
 	if !slices.Equal(got.Ceiling.AzureDevOpsCapabilities, []adoscope.Capability{adoscope.CapCodeRead}) {
 		t.Errorf("capabilities = %v", got.Ceiling.AzureDevOpsCapabilities)
+	}
+	// A list under an empty base (the row's default profile) is a widening: refused at write, dropped at resolve.
+	ov := overlayOf(types.CeilingOverlay{AzureDevOpsCapabilities: &[]adoscope.Capability{adoscope.CapCodeRead}})
+	wantOverlayErr(t, ValidateOverlay(Authority{}, ov), ReasonOverlayInvalid, "azure_devops_capabilities")
+	got, warns, err := ApplyOverlay(Authority{}, ov)
+	if err != nil || len(warns) == 0 || len(got.Ceiling.AzureDevOpsCapabilities) != 0 {
+		t.Errorf("resolve = %v, warns %v, err %v; want an empty list and a warning", got.Ceiling.AzureDevOpsCapabilities, warns, err)
 	}
 }
 

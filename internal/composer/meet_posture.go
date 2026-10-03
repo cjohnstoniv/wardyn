@@ -268,13 +268,17 @@ func (m *meeter) meetToolRules(base, ov []types.ToolRule) []types.ToolRule {
 }
 
 // meetCapabilities intersects two capability lists where empty means "the
-// provider row's default profile". A disjoint pair has no representable result.
+// provider row's default profile", which a list cannot be proven within: an
+// overlay list under an empty base is a widening and leaves the base empty. A
+// disjoint pair has no representable result.
 func (m *meeter) meetCapabilities(ov []adoscope.Capability) {
 	c := &m.out.Ceiling
 	want := capStrings(ov)
 	base := capStrings(c.AzureDevOpsCapabilities)
 	if len(base) == 0 {
-		c.AzureDevOpsCapabilities = toCaps(want)
+		// An empty base is the provider row's default profile, which a list
+		// cannot be proven within, so the base's reading is kept.
+		m.widen("azure_devops_capabilities", "the base carries the provider row's default profile, which a list cannot be proven within")
 		return
 	}
 	var both []string
