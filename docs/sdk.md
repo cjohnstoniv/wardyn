@@ -691,6 +691,8 @@ on another, and a repeat apply is a no-op.
 - **Pending approval.** A child whose base has a pending write is deferred, not sent; apply again
   once the base is approved.
 - **Older clients.** A client built before 0.8.6 drops `base_profile_id`, `overlay` and
-  `overlay_limits`. A composed profile it creates therefore arrives as a standalone profile with an
-  empty ceiling, and one it updates keeps the composition the server stored. It also writes in name
-  order. Upgrade before applying a composed document.
+  `overlay_limits`. A composed profile it would create is refused with a `400` (`invalid ceiling:
+  min_confinement_class is required`), because the exported row carries an empty ceiling and no
+  overlay. One it updates keeps the composition the server stored, since an absent member keeps the
+  stored value. It also writes in document order, so a child listed before its base fails. Upgrade
+  before applying a composed document.
