@@ -12,7 +12,7 @@
 // holding four interfaces nothing else imports is a file to keep in sync for no
 // reader. Move them to lib/types/governance.ts the day a second domain needs
 // them.
-import type { CapabilitySubjectType, ConfinementClass, RunPolicySpec } from "../types";
+import type { CapabilitySubjectType, ConfinementClass, PolicyContact, RunPolicySpec } from "../types";
 import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 
 // types.GovernanceLimits. ALL are `omitempty` on the wire, so an unrestricted
@@ -153,6 +153,7 @@ export interface GovernanceProfile {
   created_at: string;
   updated_at: string;
   created_by?: string;
+  contact?: PolicyContact;
 }
 
 // types.GovernanceAssignment — one subject bound to one profile.
