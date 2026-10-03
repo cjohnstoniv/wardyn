@@ -5249,6 +5249,7 @@ identity and the primary key, renames the table and re-creates its triggers, and
 `CREATE OR REPLACE` of `0047`'s chain function that the partitions need.
 `0114` adds `api_tokens.expires_at` (`0045`'s table).
 `0115` adds `api_tokens.identity_stamped_at` (`0045`'s table), backfilled to `created_at`.
+`0108` adds `governance_profiles.contact` (`0052`'s table).
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.
