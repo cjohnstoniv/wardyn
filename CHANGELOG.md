@@ -31,7 +31,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   one-way and needs stopped writers: a 0.8.5 binary's direct `INSERT` is refused afterwards, and 0.8.5 will not
   start against the converted schema. History and hashes are untouched and verify as before. A split-role app
   role that held `INSERT` on `audit_events` is granted `EXECUTE` on `audit_append` and `audit_ensure_partitions`
-  by the migration and loses `INSERT`; a role you add later needs that grant, and wardynd refuses to start
+  (and, from the retention migration, the retention functions) by the migration and loses `INSERT`; a role you add later needs that grant, and wardynd refuses to start
   without it. Conversion time by row count is in "What the audit conversion does", `docs/OPERATIONS.md`.
 - The chart's startup probe window now follows `WARDYN_MIGRATE_TIMEOUT` (30 s connect, the timeout, 120 s of
   slack). A value spelled with anything but `h`, `m` and `s` fails the render.
@@ -123,8 +123,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Audit retention: an attested partition drop and a persisted policy** (migration `0121_audit_retention`).
+  `audit_retention_drop(partition, digest, actor)` removes the oldest closed monthly partition, and only when it is
+  past the retention window, holds no row of a live run, and the digest supplied equals the one the database
+  recomputes; in one transaction it writes a chained `audit.retention.partition_dropped` event and an
+  `audit_chain_anchors` row, then drops. `GET /audit/chain/verify` starts from that anchor.
+  `WARDYN_AUDIT_RETENTION_DAYS` (default `0`, keep forever) is recorded at boot by `audit_retention_set_policy`:
+  an increase applies at once, a decrease (including `0` to a finite value) takes effect 30 days after the boot that
+  first saw it and a restart never moves the date. `GET /audit/retention` and `POST /audit/retention/drop` (security
+  tier; five distinct `409` refusals), `wardyn audit retention` and `wardyn audit retention drop`. The leader sweeper
+  keeps twelve months of partitions ahead daily (`wardyn_audit_partitions_ahead`, and an `audit_partitions` warning on
+  `/setup/status` below 3 months); `WARDYN_AUDIT_RETENTION_AUTODROP` (default off) lets it drop eligible partitions
+  itself, unattested. See "Audit retention" in `docs/OPERATIONS.md`.
 - **Audit partition digest, export and anchor-aware verify.** `audit_partition_digest(partition)` (migration
-  `0110_audit_partition_digest`) is a bounded, canonical digest of one closed audit partition, folded in `seq` order in constant
+  `0120_audit_partition_digest`) is a bounded, canonical digest of one closed audit partition, folded in `seq` order in constant
   memory. `GET /audit/export?partition=<name>` (and `wardyn audit export-partition`) streams a closed partition
   with its manifest and the same digest in a footer, in a readable form or a raw archive form you can re-hash
   with no Wardyn code ("Verifying an exported audit partition by hand", `docs/OPERATIONS.md`); only a security

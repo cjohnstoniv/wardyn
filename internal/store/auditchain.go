@@ -183,7 +183,8 @@ func (w *auditChainWalk) fail(seq int64, reason string) {
 // Everything runs in ONE repeatable-read snapshot, so the chain, the newest
 // attested retention drop, the high-water mark and the partition manifest
 // are the same instant: an append between two reads cannot read as a
-// removed tail. The walk starts from the newest `drop` anchor (the first
+// removed tail. The walk starts from the newest `drop` anchor that dropped
+// rows (row_count above 0: an empty partition leaves nothing to chain to; the first
 // retained row must chain to its recorded tail) and still inspects every
 // retained row. The chain alone cannot see a removed NEWEST tail, so after
 // it the newest row must also match audit_partition_meta's high-water mark,
@@ -196,7 +197,7 @@ func (s PG) VerifyAuditChain(ctx context.Context) (AuditChainStatus, error) {
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // read-only: nothing to undo
 
-	// An audit_events that was never partitioned (a schema from before 0108) has no anchors or
+	// An audit_events that was never partitioned (a schema from before 0111) has no anchors or
 	// high-water mark to check. Once it is partitioned, a missing bookkeeping table is an error, not a
 	// reason to skip the checks.
 	var partitioned bool
@@ -208,7 +209,7 @@ func (s PG) VerifyAuditChain(ctx context.Context) (AuditChainStatus, error) {
 	if partitioned {
 		if err := tx.QueryRow(ctx, `
 			SELECT COALESCE(tail_row_hash, ''), COALESCE(seq_hi, 0)
-			  FROM audit_chain_anchors WHERE kind = 'drop' ORDER BY id DESC LIMIT 1`).
+			  FROM audit_chain_anchors WHERE kind = 'drop' AND row_count > 0 ORDER BY id DESC LIMIT 1`).
 			Scan(&anchorTail, &anchorSeq); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return AuditChainStatus{}, fmt.Errorf("store: read audit chain anchors: %w", err)
 		}

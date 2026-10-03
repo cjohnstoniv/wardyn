@@ -149,6 +149,10 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 		runOutputPersist: *f.runOutputPersist,
 		api:              srv.HealthSweeps(),
 	})
+	// The audit retention policy and the daily partition sweep (a nil pool is a unit test).
+	if pool != nil {
+		startAuditRetention(rootCtx, f, pool, leader)
+	}
 
 	if run != nil && *f.autoStopInterval > 0 {
 		reaper := lifecycle.New(

@@ -4,7 +4,7 @@
 package store_test
 
 // Live tests for the partition digest, the partition export read and the anchor-aware verify
-// (migration 0110 and store.VerifyAuditChain). Guarded by WARDYN_TEST_PG like every *_pg_test.go here.
+// (migration 0120 and store.VerifyAuditChain). Guarded by WARDYN_TEST_PG like every *_pg_test.go here.
 // The tamper steps need a superuser to bypass the append-only triggers; without one they skip.
 
 import (
@@ -34,7 +34,7 @@ type partChain struct {
 
 func newPartChain(t *testing.T) *partChain {
 	t.Helper()
-	pool := databaseBefore(t, "0108_audit_partitioned.sql")
+	pool := databaseBefore(t, "0111_audit_partitioned.sql")
 	ctx := context.Background()
 	c := &partChain{pool: pool}
 	if _, err := pool.Exec(ctx, `ALTER TABLE audit_events DISABLE TRIGGER audit_events_chain`); err != nil {
@@ -56,7 +56,7 @@ func newPartChain(t *testing.T) *partChain {
 		c.preSeqs = append(c.preSeqs, seq)
 		c.tailHash = row
 	}
-	for _, f := range []string{"0108_audit_partitioned.sql", "0109_audit_chain_partitioned.sql", "0110_audit_partition_digest.sql"} {
+	for _, f := range []string{"0111_audit_partitioned.sql", "0112_audit_chain_partitioned.sql", "0120_audit_partition_digest.sql"} {
 		execMigrationFile(t, pool, f)
 	}
 	for i, action := range []string{"test.post.1", "test.post.2", "test.post.3"} {

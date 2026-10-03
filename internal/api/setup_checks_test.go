@@ -743,7 +743,7 @@ var setupCheckNeverBlocks = map[string]bool{
 	"kek_service": true, "kek_local": true,
 	"site_config": true, "internal_hosts": true, "tls_cookie_posture": true,
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
-	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true,
+	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true, "audit_partitions": true,
 	"agent_image":        true,
 	"github_ref_ruleset": true, "platform_wsl": true, "platform_macos": true,
 	// providerAccessCheck's llm_provider:<provider id>, as its test names it.
