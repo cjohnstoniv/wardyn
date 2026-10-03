@@ -707,6 +707,9 @@ type Server struct {
 	// output finaliser's drain barrier and retry backoff for a test; zero uses
 	// runOutputDrainWait and runOutputRetryBase (run_output_final.go).
 	runOutputDrainWaitOverride, runOutputRetryBaseOverride time.Duration
+	// paneSnapshotTimeoutOverride shrinks the pane snapshot's bound for a test;
+	// zero uses paneSnapshotTimeout (run_output_snapshot.go).
+	paneSnapshotTimeoutOverride time.Duration
 	// refRuleset caches the ONE outbound GitHub call the setup checklist makes,
 	// so polling /setup/status (which the wizard does) cannot turn into a
 	// per-poll API call or a rate-limit. Zero value is ready to use.

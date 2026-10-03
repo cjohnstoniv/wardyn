@@ -161,6 +161,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 				// store and its own copy of the reason derivation.
 				cancelApprovals: srv.CancelTerminalRunApprovals,
 				finishOutput:    srv.FinishRunOutput,
+				snapshotPane:    srv.SnapshotRunPane,
 			},
 			maskedRec,
 			lifecycle.Config{Interval: *f.autoStopInterval, MaxAge: cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0), TickLock: reapTickLock(pool), Sweeps: ticks},
