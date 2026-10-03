@@ -46,6 +46,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   a key version is reported safe to retire only once both are at it. The audit action
   `principal_key.destroyed` names the owner, purpose and generation numbers and never key material. A split
   migrator and app role install grants the app role `SELECT, INSERT, UPDATE` on `principal_keys`.
+- **Per-person credential keys, off by default (`WARDYN_PRINCIPAL_KEYS`, chart `kek.principalKeys`).** With
+  it `on`, a person's stored credential is sealed under a key of that person's own (`enc_version=3`, `kek_id`
+  `pk:v<n>`) and erasing the person destroys the key, so those rows cannot be read again even from a backup
+  of the table. Boot keys, the operator namespace and store mode are unaffected, and every row format is
+  read with it off. `wardynd -rewrap-principal-keys` moves existing credentials into the new form.
+  `credential.erase` and its response now report `crypto_erased` and `deleted`, because a row written
+  without it is only deleted, which holds to the backup horizon. **Turning it on is one-way across a
+  downgrade:** 0.8.5 refuses `enc_version=3` rows by name, and there is no tool back.
 - **The proxy refuses a raw mint of every `git_pat` grant id while the PAT broker is on.** The mint relay
   now answers `403` (`brokered:mint`) for any `git_pat` grant of the run, including grants shadowed by a
   same-host grant, vetoed, withheld for a brokered forge or Azure DevOps owner-only. Upgrade the proxy

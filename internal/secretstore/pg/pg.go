@@ -8,6 +8,10 @@
 // key-encryption key (package kek). The row records which KEK wrapped it
 // (kek_id); a read dispatches on enc_version and kek_id.
 //
+// A person's row may instead be envelope enc_version 3 (principal_rows.go): the
+// same sealed value, with the DEK wrapped under the owner's principal key, so
+// destroying that key erases the row.
+//
 // SECURITY: the plaintext and the DEK are only in memory during the Put/Get
 // call, and no error carries either. Reads are recorded by the
 // secretstore.Audited decorator this store is wrapped in.
@@ -94,6 +98,10 @@ type Store struct {
 	// subjects is the principal-key manager every view shares, nil on a Store
 	// built only to rewrap (no pool).
 	subjects *subjectkey.Manager
+	// principalKeys is WARDYN_PRINCIPAL_KEYS=on: a person's credential row is
+	// written under their principal key (enc_version 3). It governs writes
+	// only; a v3 row is read whatever it says.
+	principalKeys bool
 }
 
 // New constructs a Store whose KEKs are the local ones derived from identity
@@ -111,6 +119,7 @@ func New(pool *pgxpool.Pool, identity age.Identity) (*Store, error) {
 
 // withKEK adds the configured key service (Deps.KEK), if any.
 func (s *Store) withKEK(d secretstore.Deps) {
+	s.principalKeys = d.PrincipalKeys
 	if d.KEK != nil {
 		s.service, s.serviceWrites = d.KEK, d.KEKWrites
 	}
@@ -304,8 +313,7 @@ func (s *Store) Put(ctx context.Context, name string, value []byte) error {
 	if s.writeExt {
 		return s.putExternal(ctx, name, value)
 	}
-	k := s.writer(s.owner, name)
-	wrapped, ct, err := seal(ctx, k, s.owner, name, value)
+	r, err := s.sealRow(ctx, s.owner, name, value)
 	if err != nil {
 		return fmt.Errorf("pg secretstore: seal %s: %w", rowRef(s.owner, name), err)
 	}
@@ -314,7 +322,7 @@ func (s *Store) Put(ctx context.Context, name string, value []byte) error {
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (owned_by, name) DO UPDATE
 			SET enc_version=$3, kek_id=$4, wrapped_dek=$5, ciphertext=$6, expires_at=$7, updated_at=now()`,
-		s.owner, name, encVersion, k.ID(), wrapped, ct, expiresAt(ctx),
+		s.owner, name, r.version, r.kekID, r.wrapped, r.ct, expiresAt(ctx),
 	)
 	if err != nil {
 		return fmt.Errorf("pg secretstore: put %s: %w", rowRef(s.owner, name), err)
@@ -402,6 +410,8 @@ func (s *Store) open(ctx context.Context, e envelope) ([]byte, error) {
 		return nil, fmt.Errorf("pg secretstore: %s is a pre-envelope (v0) row written after this database was converted — an older wardynd is still writing to it; stop every older replica, then restart this one to convert the row", ref)
 	case e.version == extVersion:
 		return s.openExternal(ctx, e)
+	case e.version == pkVersion:
+		return s.openPrincipal(ctx, e)
 	case e.version != encVersion:
 		return nil, fmt.Errorf("pg secretstore: row %s "+unknownVersion, ref, e.version)
 	}
