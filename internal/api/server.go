@@ -378,9 +378,12 @@ type Config struct {
 	// PTY capture / asciicast uploads before they reach the RecordingStore.
 	// A nil registry disables masking (existing tests stay green).
 	MaskRegistry *secretmask.Registry
-	// ExecOutputTailOff is WARDYN_EXEC_OUTPUT_TAIL=off: no task_mode=exec run
+	// ExecOutputTailOff is WARDYN_EXEC_OUTPUT_TAIL=off: no non-interactive run
 	// keeps an output tail for GET /runs/{id}/output (run_output.go).
 	ExecOutputTailOff bool
+	// RunOutputTailBytes is WARDYN_RUN_OUTPUT_TAIL_BYTES: each run's tail size
+	// and the cap on ?tail=. Zero defaults to defaultRunOutputTailBytes in New.
+	RunOutputTailBytes int
 	// ExecOutputTailTTL is WARDYN_EXEC_OUTPUT_TAIL_TTL: how long a run's output
 	// tail is kept after its last output. Zero defaults to
 	// defaultExecOutputTailTTL in New.
@@ -805,6 +808,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.UISessionTTL <= 0 {
 		cfg.UISessionTTL = defaultUISessionTTL
+	}
+	if cfg.RunOutputTailBytes <= 0 {
+		cfg.RunOutputTailBytes = defaultRunOutputTailBytes
 	}
 	if cfg.ExecOutputTailTTL <= 0 {
 		cfg.ExecOutputTailTTL = defaultExecOutputTailTTL

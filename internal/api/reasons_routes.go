@@ -208,9 +208,9 @@ const (
 // GET /runs/{id}/output (run_output.go).
 const (
 	reasonRunOutputTailInvalid = "run_output_tail_invalid" // ?tail= is not a positive number of bytes
-	reasonRunOutputInteractive = "run_output_interactive"  // the run is interactive; only a task_mode=exec run keeps its output
+	reasonRunOutputInteractive = "run_output_interactive"  // the run is interactive; an interactive run keeps no output here
 	reasonRunOutputOff         = "run_output_off"          // WARDYN_EXEC_OUTPUT_TAIL=off
-	reasonRunOutputNotKept     = "run_output_not_kept"     // no tail is held for the run (not exec, or started before a restart)
+	reasonRunOutputNotKept     = "run_output_not_kept"     // no tail is held for the run (interactive, sign-in, or started before a restart)
 	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL
 )
 
