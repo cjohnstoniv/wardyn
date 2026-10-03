@@ -12,6 +12,7 @@ import (
 const (
 	auditConversionFile = "0108_audit_partitioned.sql"
 	auditReplayableFile = "0109_audit_chain_partitioned.sql"
+	auditRetentionFile  = "0112_audit_retention.sql"
 )
 
 // TestChainTriggerReplaySetExcludesTheConversion pins the property the whole conversion rests on.
@@ -79,6 +80,7 @@ func TestAuditLockKeyLiteralsMatchTheGoConstants(t *testing.T) {
 	for file, keys := range map[string][]int64{
 		auditConversionFile: {AuditChainLockKey, AuditPartitionLockKey},
 		auditReplayableFile: {AuditChainLockKey},
+		auditRetentionFile:  {AuditChainLockKey, AuditPartitionLockKey},
 	} {
 		body := readMigration(t, file)
 		for _, key := range keys {

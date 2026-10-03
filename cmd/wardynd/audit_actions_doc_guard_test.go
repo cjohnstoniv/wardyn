@@ -605,6 +605,10 @@ var auditActionGrammarAllow = map[string]bool{
 	// records a conversion that already happened, once, at upgrade.
 	"workspace.llm_cred.migrated":  true,
 	"model_provider.not_converted": true,
+	// The 0.8.6 retention drop's chained event, fixed by its design record
+	// (docs/design/0.8/0.8.6-ar.md). Past tense on purpose: it records a drop that has already
+	// happened, written inside the drop's own transaction.
+	"audit.retention.partition_dropped": true,
 }
 
 // actionSegment is one dot-separated segment of an action name.

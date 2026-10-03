@@ -64,6 +64,14 @@ const (
 	// to narrow the partition with another filter, so the digest in its footer would not cover the
 	// whole partition. Input shape, not a denial: not audited.
 	ReasonAuditExportPartitionFilter Reason = "audit_export_partition_filter"
+	// The five refusals of POST /audit/retention/drop, one per rule audit_retention_drop (migration
+	// 0112) enforces. State conflicts of an authorized security operator, audited so an attempt that
+	// was refused is on the record.
+	ReasonAuditRetentionNotOldest      Reason = "audit_retention_not_oldest"
+	ReasonAuditRetentionNotClosed      Reason = "audit_retention_not_closed"
+	ReasonAuditRetentionInsideWindow   Reason = "audit_retention_inside_window"
+	ReasonAuditRetentionLiveRun        Reason = "audit_retention_live_run"
+	ReasonAuditRetentionDigestMismatch Reason = "audit_retention_digest_mismatch"
 )
 
 // Refusal is one reason's registry row.
@@ -83,35 +91,40 @@ type Refusal struct {
 const requiresAdminRole = "requires admin role"
 
 var refusals = map[Reason]Refusal{
-	ReasonAdminSurface:                {Effect: EffectDeny, Audit: true, Sentence: requiresAdminRole},
-	ReasonSecurityAdminSurface:        {Effect: EffectDeny, Audit: true, Sentence: requiresAdminRole},
-	ReasonNotOwner:                    {Effect: EffectHidden, Audit: true},
-	ReasonAttachTicketForeignRun:      {Effect: EffectHidden, Audit: true},
-	ReasonBYOIUser:                    {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityAgent:             {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityEgressHost:        {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityFeature:           {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityPolicy:            {Effect: EffectDeny, Audit: true},
-	ReasonCapabilitySecret:            {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityWorkspace:         {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityWorkspaceProvider: {Effect: EffectDeny, Audit: true},
-	ReasonCapabilityModelProvider:     {Effect: EffectDeny, Audit: true},
-	ReasonGovernanceProfile:           {Effect: EffectDeny, Audit: true},
-	ReasonGrantPairingNotEligible:     {Effect: EffectDeny, Audit: true},
-	ReasonGroupsSnapshotStale:         {Effect: EffectDeny, Audit: true},
-	ReasonRunKept:                     {Effect: EffectDeny, Audit: true},
-	ReasonRunNotFound:                 {Effect: EffectDeny, Audit: true},
-	ReasonRunOwnerOnly:                {Effect: EffectDeny, Audit: true, Sentence: "only the person who started this run can open it interactively"},
-	ReasonRunTerminal:                 {Effect: EffectDeny, Audit: true},
-	ReasonSecondHumanRequired:         {Effect: EffectDeny, Audit: true},
-	ReasonRunQuota:                    {Effect: EffectUnprocessable},
-	ReasonModelProviderUnavailable:    {Effect: EffectUnprocessable, Audit: true},
-	ReasonUserTypeUnknown:             {Effect: EffectDeny, Audit: true},
-	ReasonUserViewTypeDeleted:         {Effect: EffectDeny, Audit: true},
-	ReasonAdminView:                   {Effect: EffectConflict},
-	ReasonDelegationScope:             {Effect: EffectDeny, Audit: true},
-	ReasonEventStreamCap:              {Effect: EffectUnprocessable},
-	ReasonAuditExportPartitionFilter:  {Effect: EffectBadRequest},
+	ReasonAdminSurface:                 {Effect: EffectDeny, Audit: true, Sentence: requiresAdminRole},
+	ReasonSecurityAdminSurface:         {Effect: EffectDeny, Audit: true, Sentence: requiresAdminRole},
+	ReasonNotOwner:                     {Effect: EffectHidden, Audit: true},
+	ReasonAttachTicketForeignRun:       {Effect: EffectHidden, Audit: true},
+	ReasonBYOIUser:                     {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityAgent:              {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityEgressHost:         {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityFeature:            {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityPolicy:             {Effect: EffectDeny, Audit: true},
+	ReasonCapabilitySecret:             {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityWorkspace:          {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityWorkspaceProvider:  {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityModelProvider:      {Effect: EffectDeny, Audit: true},
+	ReasonGovernanceProfile:            {Effect: EffectDeny, Audit: true},
+	ReasonGrantPairingNotEligible:      {Effect: EffectDeny, Audit: true},
+	ReasonGroupsSnapshotStale:          {Effect: EffectDeny, Audit: true},
+	ReasonRunKept:                      {Effect: EffectDeny, Audit: true},
+	ReasonRunNotFound:                  {Effect: EffectDeny, Audit: true},
+	ReasonRunOwnerOnly:                 {Effect: EffectDeny, Audit: true, Sentence: "only the person who started this run can open it interactively"},
+	ReasonRunTerminal:                  {Effect: EffectDeny, Audit: true},
+	ReasonSecondHumanRequired:          {Effect: EffectDeny, Audit: true},
+	ReasonRunQuota:                     {Effect: EffectUnprocessable},
+	ReasonModelProviderUnavailable:     {Effect: EffectUnprocessable, Audit: true},
+	ReasonUserTypeUnknown:              {Effect: EffectDeny, Audit: true},
+	ReasonUserViewTypeDeleted:          {Effect: EffectDeny, Audit: true},
+	ReasonAdminView:                    {Effect: EffectConflict},
+	ReasonDelegationScope:              {Effect: EffectDeny, Audit: true},
+	ReasonEventStreamCap:               {Effect: EffectUnprocessable},
+	ReasonAuditExportPartitionFilter:   {Effect: EffectBadRequest},
+	ReasonAuditRetentionNotOldest:      {Effect: EffectConflict, Audit: true},
+	ReasonAuditRetentionNotClosed:      {Effect: EffectConflict, Audit: true},
+	ReasonAuditRetentionInsideWindow:   {Effect: EffectConflict, Audit: true},
+	ReasonAuditRetentionLiveRun:        {Effect: EffectConflict, Audit: true},
+	ReasonAuditRetentionDigestMismatch: {Effect: EffectConflict, Audit: true},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,

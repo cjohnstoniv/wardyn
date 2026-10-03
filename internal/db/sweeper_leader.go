@@ -247,7 +247,7 @@ func (l *SweeperLeader) Current(ctx context.Context, epoch int64) (bool, error) 
 	return cur == epoch, nil
 }
 
-// Info reads the durable leader record. The row is seeded by 0108, so a missing
+// Info reads the durable leader record. The row is seeded by 0111, so a missing
 // row is an error.
 func (l *SweeperLeader) Info(ctx context.Context) (SweeperLeaderInfo, error) {
 	var info SweeperLeaderInfo
