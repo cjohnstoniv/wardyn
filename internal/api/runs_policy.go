@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -243,11 +244,17 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// KeptUntil (#1320) is when an ended run's files are torn down. A
 		// projection for display only, never a field of types.AgentRun.
 		KeptUntil *time.Time `json:"kept_until,omitempty"`
+		// Policy (deny-f2) is the policy the run was launched under and how to ask
+		// for a change to it: the run's leaf profile, else the deployment's
+		// policy_help, else absent. Read after getRunAuthorized, so a hidden run
+		// never reaches it.
+		Policy *policyref.Ref `json:"policy,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
 		CreatedViaName: s.runCreatedViaName(r.Context(), run),
 		KeptUntil:      s.endedRunKeptUntil(run),
+		Policy:         s.runPolicyRef(r.Context(), run),
 	})
 }
 

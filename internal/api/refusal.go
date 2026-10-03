@@ -50,7 +50,15 @@ func (s *Server) refuse(w http.ResponseWriter, r *http.Request, d authz.Decision
 	if d.WireReason != "" {
 		wireReason = d.WireReason
 	}
-	writeErrorReason(w, ref.Effect.Status(), string(wireReason), cmp.Or(d.Sentence, ref.Sentence))
+	// The policy rides only a refusal that is what it says. A decision with a
+	// WireReason is lying on purpose (Hidden-effect, byte-identical to a missing
+	// resource), and an EffectHidden one must never tell a prober the resource
+	// exists, so neither carries it.
+	policy := d.Policy
+	if d.WireReason != "" || ref.Effect == authz.EffectHidden {
+		policy = nil
+	}
+	writeErrorReasonPolicy(w, ref.Effect.Status(), string(wireReason), cmp.Or(d.Sentence, ref.Sentence), policy)
 	if ref.Audit {
 		s.recordRefusal(r.Context(), r, d)
 	}

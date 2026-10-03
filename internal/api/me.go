@@ -240,6 +240,13 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// set beside writeDriveError, which composes the sentence a member meets if
 	// they launch anyway.
 	body["user_drive_unavailable"] = unavailable
+	// Who to ask for a change to the policy that bounds this caller (deny-f2):
+	// the leaf profile's published contact, the bare deployment arm, or null for
+	// an operator and for any ceiling that could not be resolved. Always present.
+	body["governance_contact"] = nil
+	if ref := s.meGovernanceContact(r); ref != nil {
+		body["governance_contact"] = ref
+	}
 	// An SSO session dies outright at this instant (no refresh) — the
 	// console polls this and warns ahead of it, rather than the human learning
 	// about it from a sudden 401 that wipes mid-work state back to the gate.
