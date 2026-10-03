@@ -103,13 +103,15 @@ func recordCeilingRef(err error) *policyref.Ref {
 
 // meGovernanceContact is /me's governance_contact: the policy that bounds the
 // caller, read off the per-request ceiling memo the drive door already fills, so
-// /me adds no store read to the console's most-polled route. nil for an operator
-// (not clamped, and resolved before any store read), on a resolver error and on
+// /me adds no store read to the console's most-polled route. nil for a caller
+// whose runs stand outside governance (runUngoverned: not clamped, and resolved
+// before any store read; a governed admin gets their profile's contact like a
+// member), on a resolver error and on
 // a stale group snapshot: /me is a display read and never fails for this key.
 // The deployment arm carries no site-config read here; a member meets the
 // deployment's policy_help in a refusal and on a run's detail.
 func (s *Server) meGovernanceContact(r *http.Request) *policyref.Ref {
-	if s.isOperator(r.Context()) {
+	if s.runUngoverned(r.Context()) {
 		return nil
 	}
 	ceiling, err := s.effectiveCeiling(withDisplayRead(r.Context()))
