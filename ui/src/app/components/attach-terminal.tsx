@@ -264,6 +264,8 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // after it detached, and 0 again the moment the viewport actually changed
   // size. The nudge manufactures that change on demand.
   const lastSentRef = React.useRef<{ ws: WebSocket; cols: number; rows: number } | null>(null);
+  // An observer's grid is pinned to the writer's (attach-mode holder size).
+  const observerPinRef = React.useRef<{ cols: number; rows: number } | null>(null);
   const refit = React.useCallback((force = false) => {
     const fit = fitAddonRef.current;
     const term = termRef.current;
@@ -271,8 +273,11 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     if (!fit || !term) return;
     const box = term.element?.parentElement;
     if (box && (box.clientWidth === 0 || box.clientHeight === 0)) return;
+    const pin = observerPinRef.current;
     try {
-      if (ptyColsRef.current) {
+      if (pin) {
+        term.resize(pin.cols, pin.rows);
+      } else if (ptyColsRef.current) {
         const dims = fit.proposeDimensions();
         term.resize(ptyColsRef.current, dims && dims.rows > 0 ? dims.rows : term.rows);
       } else {
@@ -286,7 +291,8 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     // the CELL grid identical, and a fresh object every time would re-render
     // the panel for nothing.
     setGeom((g) => (g && g.cols === term.cols && g.rows === term.rows ? g : { cols: term.cols, rows: term.rows }));
-    if (ws && ws.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
+    // A pinned observer's resize frames are dropped server-side; send none.
+    if (!pin && ws && ws.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
       const last = lastSentRef.current;
       if (!force && last && last.ws === ws && last.cols === term.cols && last.rows === term.rows) return;
       if (force && term.cols > 1) {
@@ -316,6 +322,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     reclaimRef,
     manualReconnectRef,
     refit,
+    observerPinRef,
     setConnState,
     setErrorMsg,
     setMode,
@@ -506,7 +513,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div
           data-testid="run-terminal-wrapper"
-          className={cn("min-h-0 flex-1 p-1", ptyCols && "overflow-x-auto")}
+          className={cn("min-h-0 flex-1 p-1", (ptyCols || (readOnly && mode?.holder?.cols)) && "overflow-x-auto")}
           // D3: xterm only focuses itself on a click that lands exactly on its
           // own `.xterm-screen` canvas layer. A click on this wrapper's padding
           // or in the dead space below the last row would otherwise take the

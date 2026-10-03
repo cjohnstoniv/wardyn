@@ -42,6 +42,8 @@ vi.mock("@xterm/xterm", () => {
     // mount; the keyboard-trap-escape behaviour itself is pinned in
     // attach-terminal-interaction.test.tsx, so this mock only needs to accept
     // the call without throwing.
+    modes = { mouseTrackingMode: "none" };
+    attachCustomWheelEventHandler() {}
     attachCustomKeyEventHandler() {}
     dispose() {}
   }

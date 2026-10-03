@@ -19,6 +19,7 @@ import { createCopyGate, type CopyGate, type CopyOffer, type GateTerm } from "./
 import { runs } from "../lib/api/runs";
 import { wsURL } from "../lib/base-path";
 import { entryErrorMessage } from "../lib/run-entry";
+import { attachWheelCoalescer } from "./attach-terminal-wheel";
 import type { AttachHolder, AttachModeMsg } from "../lib/types/runs";
 
 export type ConnState = "connecting" | "open" | "reconnecting" | "closed" | "error";
@@ -93,6 +94,8 @@ export interface UseAttachSessionArgs {
   reclaimRef: React.MutableRefObject<() => void>;
   manualReconnectRef: React.MutableRefObject<() => void>;
   refit: (force?: boolean) => void;
+  /** The writer's grid an observer's terminal is pinned to; null = fit the container. */
+  observerPinRef: React.MutableRefObject<{ cols: number; rows: number } | null>;
   setConnState: React.Dispatch<React.SetStateAction<ConnState>>;
   setErrorMsg: React.Dispatch<React.SetStateAction<string>>;
   setMode: React.Dispatch<React.SetStateAction<{ readOnly: boolean; holder?: AttachHolder } | null>>;
@@ -125,6 +128,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     reclaimRef,
     manualReconnectRef,
     refit,
+    observerPinRef,
     setConnState,
     setErrorMsg,
     setMode,
@@ -375,6 +379,12 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           const msg = JSON.parse(ev.data) as AttachModeMsg;
           if (msg?.type === "attach-mode") {
             const nowReadOnly = !!msg.read_only;
+            // Re-pinned on EVERY frame: the server re-sends the writer's size
+            // to observers each time the writer resizes. Set before the
+            // promotion refit below so that one fits the container again.
+            const h = msg.holder;
+            observerPinRef.current = nowReadOnly && h?.cols && h?.rows ? { cols: h.cols, rows: h.rows } : null;
+            if (observerPinRef.current) refit();
             if (lastReadOnly === true && !nowReadOnly) {
               // Promoted in place: force the resize nudge (refit's own doc)
               // so THIS client's size wins over the geometry it inherited.
@@ -514,6 +524,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       send(new TextEncoder().encode(data));
     });
 
+    const wheelDispose = attachWheelCoalescer(term, send, () => writerWs !== null && writerWs === wsRef.current);
+
     // Binary paste (e.g. via selection) → WebSocket binary frame.
     const binaryDispose = term.onBinary((data) => {
       send(Uint8Array.from(data, (c) => c.charCodeAt(0)));
@@ -587,6 +599,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       window.removeEventListener("resize", onWinResize);
       mount.removeEventListener("paste", onPaste, true);
       inputDispose.dispose();
+      wheelDispose();
       binaryDispose.dispose();
       copyGate.dispose();
       copyGateRef.current = null;

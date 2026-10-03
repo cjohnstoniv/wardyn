@@ -29,6 +29,8 @@ vi.mock("@xterm/xterm", () => {
     onBinary() {
       return { dispose() {} };
     }
+    modes = { mouseTrackingMode: "none" };
+    attachCustomWheelEventHandler() {}
     attachCustomKeyEventHandler() {}
     dispose() {}
   }
