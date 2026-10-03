@@ -575,11 +575,11 @@ func TestSetupFixHelmCommandsAreRunnable(t *testing.T) {
 // In store mode there is no local key to be durable: the age-key row gives
 // way to store_external, which names the store (design §3).
 func TestSecretStoreCheck_StoreModeReplacesTheAgeKeyRow(t *testing.T) {
-	chks := secretStoreChecks("Vault at vault.example:8200", "", true, true, false)
+	chks := secretStoreChecks("Vault at vault.example:8200", "", true, true, false, false)
 	if len(chks) != 1 || chks[0].ID != "store_external" || chks[0].Status != "ok" || !strings.Contains(chks[0].Detail, "Vault at vault.example:8200") {
 		t.Fatalf("store mode rows = %+v", chks)
 	}
-	if got := secretStoreChecks("", "", false, false, true); len(got) != 1 || got[0].ID != "age_key" || got[0].Status != "warn" {
+	if got := secretStoreChecks("", "", false, false, true, false); len(got) != 1 || got[0].ID != "age_key" || got[0].Status != "warn" {
 		t.Fatalf("local mode rows = %+v, want the age-key warning unchanged", got)
 	}
 }
@@ -588,14 +588,14 @@ func TestSecretStoreCheck_StoreModeReplacesTheAgeKeyRow(t *testing.T) {
 // install adds the amber kek_local row (design §3, K3), and a single-user one
 // does not.
 func TestSecretStoreChecks_KeyServiceAndLocalKey(t *testing.T) {
-	chks := secretStoreChecks("", "Vault Transit at vault.example:8200", true, true, false)
+	chks := secretStoreChecks("", "Vault Transit at vault.example:8200", true, true, false, false)
 	// SETUP_CHECK.KEK_SERVICE (owner decision 2026-09-25), byte for byte.
 	if len(chks) != 1 || chks[0].ID != "kek_service" || chks[0].Status != "ok" ||
 		chks[0].Detail != "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in Vault Transit at vault.example:8200 and never leaves it. Wardyn holds no copy; each unlock is a Transit decrypt in Vault's audit log." {
 		t.Fatalf("key service rows = %+v", chks)
 	}
 	// SETUP_CHECK.KEK_SERVICE, Azure (owner decision 2026-09-30), byte for byte.
-	chks = secretStoreChecks("", "Key Vault myvault", true, true, false)
+	chks = secretStoreChecks("", "Key Vault myvault", true, true, false, false)
 	if len(chks) != 1 || chks[0].ID != "kek_service" || chks[0].Status != "ok" ||
 		chks[0].Detail != "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in Key Vault myvault and never leaves it. Wardyn holds no copy; each unlock is an unwrap in Key Vault's logs." {
 		t.Fatalf("Key Vault key service rows = %+v", chks)
@@ -603,12 +603,12 @@ func TestSecretStoreChecks_KeyServiceAndLocalKey(t *testing.T) {
 	if got := credentialStorageMode("", "Key Vault myvault"); got != "key_service_key_vault" {
 		t.Fatalf("credentialStorageMode with a Key Vault key service = %q, want key_service_key_vault", got)
 	}
-	chks = secretStoreChecks("", "", true, true, true)
+	chks = secretStoreChecks("", "", true, true, true, false)
 	if len(chks) != 2 || chks[0].ID != "age_key" || chks[1].ID != "kek_local" || chks[1].Status != "warn" ||
 		chks[1].Detail != "Credentials are encrypted with a key this deployment holds. Anyone with both the database and that key can read them. Connect a key service to keep the two apart." {
 		t.Fatalf("multi-user local key rows = %+v", chks)
 	}
-	if got := secretStoreChecks("", "", true, false, true); len(got) != 1 || got[0].ID != "age_key" {
+	if got := secretStoreChecks("", "", true, false, true, false); len(got) != 1 || got[0].ID != "age_key" {
 		t.Fatalf("single-user local key rows = %+v, want the age-key row alone", got)
 	}
 }
@@ -618,7 +618,7 @@ func TestSecretStoreChecks_KeyServiceAndLocalKey(t *testing.T) {
 // once they have a key of their own, live in the organisation's store, or are
 // wrapped by a key service.
 func TestSecretStoreRows_PlatformShared(t *testing.T) {
-	rows := secretStoreChecks("", "", true, false, false)
+	rows := secretStoreChecks("", "", true, false, false, false)
 	if len(rows) != 2 || rows[0].ID != "age_key" {
 		t.Fatalf("local mode, one key = %+v, want the age-key row then platform_shared", rows)
 	}
@@ -636,7 +636,7 @@ func TestSecretStoreRows_PlatformShared(t *testing.T) {
 		"store mode":              {"Vault at vault.example:8200", "", false},
 		"a key service":           {"", "Vault Transit at vault.example:8200", false},
 	} {
-		if rows := secretStoreChecks(c.external, c.keyService, true, false, c.separate); len(rows) != 1 {
+		if rows := secretStoreChecks(c.external, c.keyService, true, false, c.separate, false); len(rows) != 1 {
 			t.Errorf("%s: rows %+v, want only the store's own row", label, rows)
 		}
 	}
@@ -826,9 +826,9 @@ func TestSetupCheckBlocking(t *testing.T) {
 	assertSetupCheckBlocking(t, ageKeyCheck(true))
 	assertSetupCheckBlocking(t, ageKeyCheck(false))
 	for _, chks := range [][]SetupCheck{
-		secretStoreChecks("Vault at vault.example:8200", "", true, true, false),
-		secretStoreChecks("", "Vault Transit at vault.example:8200", true, true, false),
-		secretStoreChecks("", "", true, true, false),
+		secretStoreChecks("Vault at vault.example:8200", "", true, true, false, false),
+		secretStoreChecks("", "Vault Transit at vault.example:8200", true, true, false, false),
+		secretStoreChecks("", "", true, true, false, false),
 	} {
 		for _, chk := range chks {
 			assertSetupCheckBlocking(t, chk)
@@ -875,4 +875,29 @@ func TestSetupCheckBlocking(t *testing.T) {
 
 	assertSetupCheckBlocking(t, refRulesetCheck("acme/widgets", false, "detail", nil))
 	assertSetupCheckBlocking(t, refRulesetCheck("acme/widgets", true, "detail", nil))
+}
+
+// kek_required_unmet reports the posture and never blocks; a key service or
+// store mode, which the flag accepts, shows no such row.
+func TestSecretStoreChecks_KEKRequiredUnmet(t *testing.T) {
+	has := func(rows []SetupCheck) *SetupCheck {
+		for i := range rows {
+			if rows[i].ID == "kek_required_unmet" {
+				return &rows[i]
+			}
+		}
+		return nil
+	}
+	if got := has(secretStoreChecks("", "", true, false, true, true)); got == nil || got.Status != "fail" || got.Blocking {
+		t.Fatalf("local key with the flag set: row = %+v; want a non-blocking fail", got)
+	}
+	for _, rows := range [][]SetupCheck{
+		secretStoreChecks("", "", true, false, true, false),
+		secretStoreChecks("", "Vault Transit at vault.example:8200", true, false, true, true),
+		secretStoreChecks("Vault at vault.example:8200", "", true, false, true, true),
+	} {
+		if has(rows) != nil {
+			t.Fatalf("unexpected kek_required_unmet in %+v", rows)
+		}
+	}
 }

@@ -322,6 +322,10 @@ spec:
             {{- end }}
             {{- end }}
             {{- $azkek := ($.Values.kek | default dict).azurekv | default dict }}
+            {{- if ($.Values.kek | default dict).required }}
+            - name: WARDYN_KEK_REQUIRED
+              value: "true"
+            {{- end }}
             {{- with $.Values.kek }}
             {{- if eq .provider "transit" }}
             # Data keys wrapped by Vault Transit (docs/operations/secrets-and-keys.md "Key

@@ -309,6 +309,10 @@ secretStore:
 # can be removed. One key service at a time.
 kek:
   provider: local
+  # true makes wardynd refuse to start while the local key wraps credentials
+  # (provider local, with no external store): a deployment that mandates key
+  # custody. The way out is provider transit or azurekv, then `wardynd -rewrap`.
+  required: false
   transit:
     mount: transit
     # Transit key (type aes256-gcm96). Required with provider transit; set
