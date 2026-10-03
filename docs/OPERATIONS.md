@@ -5055,6 +5055,12 @@ upgrade across this release**:
   again with the same key, or restore the pre-upgrade dump (step 0) before you
   run the older version. A wrong key reads differently:
   `age decrypt: no identity matched any of the recipients`.
+  Over a database 0.8.6 or later migrated, the older binary stops earlier, at its
+  boot audit check: `migrate: db: the audit chain canary could not append a row`,
+  ending in `audit_events: rows are appended only through audit_append()`. The
+  audit conversion is one-way (see "Stopped-writer upgrade"); the meaning and the
+  remedy are the same: start the newer release again, or restore the pre-upgrade
+  dump before you run the older version.
 
 **Upgrading to 0.8 signs every SSO human out, once, under TLS (#1258).** With
 secure cookies on (TLS served directly, or `WARDYN_TLS_TERMINATED`), the session

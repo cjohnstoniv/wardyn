@@ -375,9 +375,11 @@ func TestPG_AWSRefresh_LostLockCancelsTheRedemption(t *testing.T) {
 	if msg != "" || got.AccessToken != blob.AccessToken {
 		t.Fatalf("refresh = %+v %q, want the token in hand served", got, msg)
 	}
+	// The server sees the cancelled request a moment after the client gives up,
+	// so wait for it; an uncancelled handler sends nothing for 5s.
 	select {
 	case <-cancelled:
-	default:
+	case <-time.After(3 * time.Second):
 		t.Error("the redemption in flight was not cancelled when the lock was lost")
 	}
 	if after := storedSSOBlob(t, p.a); after != blob {
