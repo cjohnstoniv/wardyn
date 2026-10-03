@@ -31,6 +31,10 @@ export interface GovernanceLimits extends RunLimits {
   deny_user_drive?: boolean;
   // 0/absent is unlimited (R4/F032). The editor's LimitNumberRow writes this.
   max_concurrent_runs?: number;
+  // types.GovernanceLimits.MaxCPUMillis / MaxMemoryMiB — the sandbox CPU and
+  // memory ceilings. 0/absent is unlimited. A CLAMP, like the disk one below.
+  max_cpu_millis?: number;
+  max_memory_mib?: number;
   // types.GovernanceLimits.MaxEphemeralDiskMiB (0.7.2) — the ephemeral scratch
   // ceiling. 0/absent is unlimited. A CLAMP, not a refusal: a run asking for
   // more is capped at dispatch and warned, never 403'd.

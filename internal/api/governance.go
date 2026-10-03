@@ -15,6 +15,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -175,6 +177,12 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 	if l.MaxConcurrentRuns < 0 {
 		return fmt.Sprintf("limits.max_concurrent_runs: %d is not a count of runs — use 0 for unlimited",
 			l.MaxConcurrentRuns)
+	}
+	if l.MaxCPUMillis < 0 {
+		return fmt.Sprintf(providers400Negative, "limits.max_cpu_millis", l.MaxCPUMillis)
+	}
+	if l.MaxMemoryMiB < 0 {
+		return fmt.Sprintf(providers400Negative, "limits.max_memory_mib", l.MaxMemoryMiB)
 	}
 	if l.MaxEphemeralDiskMiB < 0 {
 		return fmt.Sprintf(providers400Negative, "limits.max_ephemeral_disk_mib", l.MaxEphemeralDiskMiB)
@@ -860,10 +868,35 @@ func (s *Server) ceilingFromProfile(p *types.GovernanceProfile, err error, deplo
 		return deployment, nil
 	}
 	spec := p.Ceiling.Clone()
+	spec.Resources = s.inheritDeploymentResources(spec.Resources)
 	kept, warns := reintersectGovernanceGrants(spec.EligibleGrants, s.cfg.DefaultPolicy.EligibleGrants, p.Name)
 	spec.EligibleGrants = kept
 	warns = append(warns, droppedPushRulesWarning(spec, s.cfg.DefaultPolicy, p.Name)...)
 	return governanceCeiling{Spec: spec, Limits: p.Limits, Profile: p, Warnings: warns}, nil
+}
+
+// inheritDeploymentResources fills what a profile's ceiling leaves unset (no resources block, or a
+// zero field) from the deployment: DefaultPolicy.Resources, else runner.EffectiveLimits(), the same
+// order the runners and composer.Clamp fall back in. Without it an omitted size fell through to
+// the compiled-in platform default, which could be larger than the deployment's own. A set
+// field is the profile's own and stays. DiskMiB has no platform default, so it inherits only
+// DefaultPolicy's.
+func (s *Server) inheritDeploymentResources(r *types.ResourceLimits) *types.ResourceLimits {
+	eff := runner.EffectiveLimits()
+	out := types.ResourceLimits{CPUMillis: int(eff.CPUMillis), MemoryMiB: int(eff.MemoryMiB), PidsLimit: int(eff.PidsLimit)}
+	if d := s.cfg.DefaultPolicy.Resources; d != nil {
+		out.CPUMillis = cmp.Or(d.CPUMillis, out.CPUMillis)
+		out.MemoryMiB = cmp.Or(d.MemoryMiB, out.MemoryMiB)
+		out.PidsLimit = cmp.Or(d.PidsLimit, out.PidsLimit)
+		out.DiskMiB = d.DiskMiB
+	}
+	if r != nil {
+		out.CPUMillis = cmp.Or(r.CPUMillis, out.CPUMillis)
+		out.MemoryMiB = cmp.Or(r.MemoryMiB, out.MemoryMiB)
+		out.PidsLimit = cmp.Or(r.PidsLimit, out.PidsLimit)
+		out.DiskMiB = cmp.Or(r.DiskMiB, out.DiskMiB)
+	}
+	return &out
 }
 
 // droppedPushRulesWarning is ceilingFromProfile's push_rules mirror of

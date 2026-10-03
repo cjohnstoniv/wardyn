@@ -20,6 +20,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   With no resources in the operator's governance ceiling, the default is also the cap on member-authored
   policy and profile resources, so requests above 1000m/2048Mi are cut on chart installs; to allow larger
   requests, set the knob back to 2000/4096 or set ceiling resources.
+- **A profile that omits `resources` now gets the deployment's size.** Members under such a profile used
+  to get the platform's 2000m/4096Mi; a profile that omits `resources`, or leaves a field zero, now
+  inherits the default policy's value, else the deployment default above. A profile that sets a size
+  keeps it. Governance profiles also gain `limits.max_cpu_millis` and `limits.max_memory_mib` (0 is
+  unlimited) to cap an assigned member's CPU and memory, and a negative `resources` field is now refused.
 
 ## [0.8.5] — 2026-10-02
 

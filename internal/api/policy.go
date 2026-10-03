@@ -123,7 +123,28 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 	if err := validatePushRules(spec.PushRules); err != nil {
 		return err
 	}
+	if err := validateResources(spec.Resources); err != nil {
+		return err
+	}
 	return validateADOCapabilities(spec.AzureDevOpsCapabilities)
+}
+
+// validateResources refuses a negative size. Zero means "the deployment's default" and every positive
+// size is the clamp's to cap, so a negative is the one value with no reading: it would otherwise
+// reach a cgroup limit as garbage.
+func validateResources(r *types.ResourceLimits) error {
+	if r == nil {
+		return nil
+	}
+	for _, f := range []struct {
+		name string
+		v    int
+	}{{"cpu_millis", r.CPUMillis}, {"memory_mib", r.MemoryMiB}, {"pids_limit", r.PidsLimit}, {"disk_mib", r.DiskMiB}} {
+		if f.v < 0 {
+			return fmt.Errorf("resources.%s: %d is not a size — use 0 for the deployment default", f.name, f.v)
+		}
+	}
+	return nil
 }
 
 // errADOCapabilityUnknown marks validatePolicySpec's refusal of an

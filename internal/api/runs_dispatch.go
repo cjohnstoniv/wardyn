@@ -399,6 +399,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// min(provider maximum, this profile's maximum). Never a refusal, and a zero
 	// request with no org default stays unbounded.
 	diskFilled := applyEphemeralDisk(ctx, run, &policy, siteCfg, ceiling)
+	applySandboxSize(ctx, run, &policy, ceiling)
 	// Persist the resolved cap for the run page's disk-used reading (RL-13:
 	// best-effort, like SetRunImage above it — a failed write must not block
 	// dispatch, it just leaves that run's cap unknown to the resources widget).
