@@ -20,6 +20,7 @@ type sweepInstall struct {
 	approvalExpiry         time.Duration // the approval expiry sweep runs when above 0
 	recordingSweepable     bool          // the recording store can sweep
 	recordingRetentionDays int           // WARDYN_RECORDING_RETENTION_DAYS; default 0 is off
+	runOutputPersist       bool          // WARDYN_RUN_OUTPUT_PERSIST; the run output retention sweep runs when on
 	api                    []sweephealth.Sweep
 }
 
@@ -45,6 +46,9 @@ func registerSweepHealth(t *sweephealth.Tracker, in sweepInstall) {
 	}
 	if in.runner {
 		sweeps = append(sweeps, sweephealth.Sweep{Name: sweephealth.TerminalSandbox, Interval: terminalSandboxSweepInterval})
+	}
+	if in.runOutputPersist {
+		sweeps = append(sweeps, sweephealth.Sweep{Name: sweephealth.RunOutput, Interval: runOutputSweepInterval})
 	}
 	t.Register(append(sweeps, in.api...)...)
 }

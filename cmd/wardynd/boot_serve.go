@@ -146,7 +146,8 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	registerSweepHealth(ticks, sweepInstall{
 		runner: run != nil, autoStop: *f.autoStopInterval, approvalExpiry: *f.approvalExpiryInterval,
 		recordingSweepable: recSweepable, recordingRetentionDays: *f.recordingRetention,
-		api: srv.HealthSweeps(),
+		runOutputPersist: *f.runOutputPersist,
+		api:              srv.HealthSweeps(),
 	})
 
 	if run != nil && *f.autoStopInterval > 0 {
@@ -159,6 +160,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 				// the one method is smaller than giving the reaper its own approval
 				// store and its own copy of the reason derivation.
 				cancelApprovals: srv.CancelTerminalRunApprovals,
+				finishOutput:    srv.FinishRunOutput,
 			},
 			maskedRec,
 			lifecycle.Config{Interval: *f.autoStopInterval, TickLock: reapTickLock(pool), Sweeps: ticks},
@@ -209,6 +211,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// holding credentials for every run it ever dispatched. Unconditional — a
 	// no-op without a mask registry, and there is nothing to configure.
 	go goSafe("secret.sweeper", func() { runSecretSweeper(rootCtx, srv, runSecretSweepInterval, ticks) })
+	startRunOutputSweeper(rootCtx, leader, srv, runOutputSweepInterval, ticks)
 	leaderGo(rootCtx, leader, "credential.sweeper", func(ctx context.Context) { runCredentialSweeper(ctx, srv, credentialSweepInterval, ticks) })
 
 	// NOT gated on run != nil, unlike the lifecycle reaper above: ReconcileOnBoot
