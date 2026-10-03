@@ -12,7 +12,14 @@
 // holding four interfaces nothing else imports is a file to keep in sync for no
 // reader. Move them to lib/types/governance.ts the day a second domain needs
 // them.
-import type { CapabilitySubjectType, ConfinementClass, PolicyContact, RunPolicySpec } from "../types";
+import type {
+  CapabilitySubjectType,
+  ConfinementClass,
+  PolicyContact,
+  PushRulesSpec,
+  ResourceLimits,
+  RunPolicySpec,
+} from "../types";
 import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 
 // types.GovernanceLimits. ALL are `omitempty` on the wire, so an unrestricted
@@ -144,7 +151,34 @@ export interface AutonomyResolution {
   bound_by?: AutonomyRubricRowKey[];
 }
 
-// types.GovernanceProfile — one named, assignable ceiling.
+// types.CeilingOverlay (0.8.6) — the part of a RunPolicySpec a composed profile narrows. Every member
+// is optional because PRESENCE is the meaning: absent inherits the base, present (even an empty list) is
+// a value. allowed_methods and azure_devops_capabilities may not be empty (an empty list reads as
+// "everything"; the server refuses it). resources and push_rules are narrowed per field.
+export type CeilingOverlay = Partial<Omit<RunPolicySpec, "resources" | "push_rules">> & {
+  resources?: ResourceLimits;
+  push_rules?: PushRulesSpec;
+};
+
+// types.LimitsOverlay (0.8.6) — CeilingOverlay's counterpart for GovernanceLimits, run-limit fields
+// flat on the object as they are on `limits`.
+export type LimitsOverlay = GovernanceLimits;
+
+// governanceEffective (0.8.6) — what a profile resolves to once composed from its chain. On a
+// standalone profile it is the stored ceiling and limits as resolved. ADMIN surfaces only: `warnings`
+// and `error` carry base-level detail (a base's name) that never reaches a member. `error` is set, and
+// ceiling and limits empty, when the chain cannot be composed.
+export interface GovernanceEffective {
+  ceiling: RunPolicySpec;
+  limits: GovernanceLimits;
+  warnings?: string[];
+  error?: string;
+}
+
+// types.GovernanceProfile — one named, assignable ceiling. A composed profile (overlay set) stores
+// `ceiling: {}` and `limits: {}` and states its policy as base_profile_id (absent: the deployment
+// default) plus overlay and overlay_limits; `effective` is what binds. A write that omits
+// base_profile_id, overlay or overlay_limits keeps the stored value and null clears it.
 export interface GovernanceProfile {
   id: string;
   name: string;
@@ -154,6 +188,11 @@ export interface GovernanceProfile {
   updated_at: string;
   created_by?: string;
   contact?: PolicyContact;
+  base_profile_id?: string;
+  overlay?: CeilingOverlay;
+  overlay_limits?: LimitsOverlay;
+  // governanceProfileView.Effective: on GET /governance and the write responses.
+  effective?: GovernanceEffective;
 }
 
 // types.GovernanceAssignment — one subject bound to one profile.
@@ -179,6 +218,10 @@ export interface GovernanceProfileInput {
   name: string;
   ceiling: RunPolicySpec;
   limits: GovernanceLimits;
+  // Composition (0.8.6): absent keeps the stored value on a PUT, null clears it.
+  base_profile_id?: string | null;
+  overlay?: CeilingOverlay | null;
+  overlay_limits?: LimitsOverlay | null;
 }
 
 // governanceProfileResponse: the saved row plus the OMISSION warnings the

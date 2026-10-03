@@ -87,6 +87,31 @@ and does not yet follow semantic versioning (interfaces are not stable).
   to boot on a placement label that is reserved (`wardyn.managed`, `wardyn.run-id`, `wardyn.component`) or on
   any `kubernetes.io/` or `k8s.io/` annotation or label other than
   `cluster-autoscaler.kubernetes.io/safe-to-evict`, naming the key. Nothing is set by default.
+- **A governance profile can carry a contact, and the site config a `policy_help` block.** Migration
+  `0108_governance_profile_contact` adds one nullable `governance_profiles.contact` column and changes no
+  existing row. `contact` and `policy_help` hold `owner`, `email`, `request_url` (https or one mailto
+  address) and `request_text`, and a bad value is refused with `400`. A `PUT` that omits `contact` or
+  `policy_help` keeps the stored value, `null` or `{}` clears it. `policy_help` is not published by `/healthz`.
+- **A governance profile can be composed: a base plus an overlay that can only narrow it.** Migration
+  `0109_governance_profile_composition` adds the nullable `governance_profiles.base_profile_id`, `overlay`
+  and `overlay_limits` columns and five CHECK constraints, and changes no existing row: every profile stays
+  standalone and resolves exactly as on 0.8.5. A composed row stores `{}` for `ceiling` and `limits`, and its
+  effective policy is computed whenever authority is read (create, preflight, dispatch, attach and SSH, UI apps,
+  revive, the limits re-clamp and end extension), so a change to a base reaches every profile built on it. A
+  base that cannot be read, a chain deeper than three profiles, a loop, or an overlay and base that nothing
+  satisfies together refuses the launch and every live door with `403 governance_overlay_unsatisfiable`; it is
+  never read as the deployment's policy. Writes: `POST`/`PUT /governance/profiles` accept `base_profile_id`,
+  `overlay` and `overlay_limits`; an overlay naming anything its base does not permit, or a non-empty `ceiling`
+  or `limits` beside an overlay, is `400 governance_overlay_invalid`; a change that would make a profile its own
+  base is `409 governance_profile_cycle`, one that would put a profile past three deep is `409
+  governance_profile_depth`, and a base edit that leaves a profile built on it unsatisfiable is `409
+  governance_overlay_unsatisfiable` naming it. Deleting a base that still has profiles built on it is a `409` naming
+  them. A `PUT` that omits a composition field keeps it, so an older client cannot flatten a composed profile; it
+  sees `ceiling: {}` and does not know `effective`. **Rollback:** a 0.8.5 binary refuses a database with this
+  migration applied. First turn every composed profile back into a standalone one (`PUT` it with `overlay: null` and
+  its `effective.ceiling` and `effective.limits` as the new `ceiling` and `limits`), then restore the pre-upgrade
+  dump. A profile edit still reaches an already-running proxy only through the denies re-asserted at revive or
+  restart, as before; a base edit now narrows a whole subtree at once.
 
 ### Security
 

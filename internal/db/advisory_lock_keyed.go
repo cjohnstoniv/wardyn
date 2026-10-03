@@ -43,6 +43,12 @@ const PushPathListLockClass int32 = 0x57505054 // ASCII "WPPT"
 // time across replicas, so the count it checks is the cap it enforces.
 const RunCapLockClass int32 = 0x57525243 // ASCII "WRRC"
 
+// GovernanceGraphLockClass is the classid of the TRANSACTION-scoped two-argument lock
+// store.PG.WriteGovernanceProfile and DeleteGovernanceProfile take (second key 0): one write to the
+// governance profile graph at a time, so the cycle and depth checks they make are the ones the
+// stored graph keeps.
+const GovernanceGraphLockClass int32 = 0x57474750 // ASCII "WGGP"
+
 // LoginSupersedeLockWait is the TOTAL budget one caller spends trying to take
 // a keyed lock before being REFUSED (retry) rather than let through unlocked;
 // only ErrAdvisoryLockNoCapacity proceeds unlocked. Matches

@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -186,19 +187,16 @@ func (s *Server) endsCapLoosened(ctx context.Context, run types.AgentRun) bool {
 	if run.GovernanceProfileID == nil || captured <= 0 {
 		return false
 	}
-	profiles, err := s.cfg.Store.ListGovernanceProfiles(ctx)
+	p, err := s.resolveProfileByID(ctx, *run.GovernanceProfileID)
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: reading a run's launch profile for its end cap failed",
-			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		if !errors.Is(err, store.ErrNotFound) {
+			slog.WarnContext(ctx, "wardynd: reading a run's launch profile for its end cap failed",
+				slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		}
 		return false
 	}
-	for _, p := range profiles {
-		if p.ID == *run.GovernanceProfileID {
-			live := p.Limits.RunLimits.MaxEndAheadSec
-			return live == 0 || live > captured
-		}
-	}
-	return false
+	live := p.Limits.RunLimits.MaxEndAheadSec
+	return live == 0 || live > captured
 }
 
 // planRunEndWait decides a PATCH against the bounds the run captured at

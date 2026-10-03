@@ -76,7 +76,7 @@ type governSite struct {
 
 func governSites() []governSite {
 	walled := func(l types.GovernanceLimits) governanceCeiling {
-		return governanceCeiling{Limits: l, Profile: &types.GovernanceProfile{ID: uuid.New(), Name: "walled", Limits: l}}
+		return governanceCeiling{Limits: l, Profile: &ResolvedProfile{ID: uuid.New(), Name: "walled", Limits: l}}
 	}
 	wide := types.RunPolicySpec{
 		MinConfinementClass: types.CC1,
