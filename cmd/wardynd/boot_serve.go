@@ -152,7 +152,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 				cancelApprovals: srv.CancelTerminalRunApprovals,
 			},
 			maskedRec,
-			lifecycle.Config{Interval: *f.autoStopInterval, TickLock: reapTickLock(pool)},
+			lifecycle.Config{Interval: *f.autoStopInterval, MaxAge: cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0), TickLock: reapTickLock(pool)},
 		)
 		go goSafe("lifecycle.reaper", func() { reaper.Run(rootCtx) })
 		slog.Info("wardynd: lifecycle reaper started", slog.Duration("interval", *f.autoStopInterval))

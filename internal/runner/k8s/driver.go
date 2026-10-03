@@ -27,6 +27,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -88,6 +89,10 @@ type Config struct {
 	// node selector, tolerations, affinity, PriorityClass, annotations and labels for the agent,
 	// proxy and canary pods. Empty places nothing. An invalid value refuses to boot.
 	SandboxPlacement string
+	// RunMaxAge is WARDYN_RUN_MAX_AGE. When positive, both run pods get
+	// activeDeadlineSeconds = RunMaxAge + podDeadlineGrace, so a run whose control plane has
+	// gone away still fails its pods on a bounded schedule. Zero (the default) sets no deadline.
+	RunMaxAge time.Duration
 }
 
 func (c *Config) withDefaults() {
