@@ -196,6 +196,12 @@ const FAILED_CAUSE: Record<string, RunEndingKind> = {
 // sentence.
 const CREDENTIAL_REASON = "model_credential";
 
+// The reasons dispatch stamps on the sandbox-create and agent-start failure
+// rows (internal/api/runs_dispatch.go). Matched exactly, never by message text:
+// a provider refusal also writes run.create/failure and must stay unclassified.
+const SANDBOX_CREATE_REASON = "sandbox_create";
+const AGENT_START_REASON = "agent_start";
+
 /** The FIRST event matching `pick` — the root cause, not the last symptom. */
 function firstEvent(events: AuditEvent[], pick: (e: AuditEvent) => boolean): AuditEvent | undefined {
   return events.find(pick);
@@ -282,6 +288,16 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
       // The provider the refusal names (#532); absent on a row that names none.
       ...(str(credential.data?.provider) ? { provider: str(credential.data?.provider) } : {}),
     };
+  }
+  const dispatch = firstEvent(
+    events,
+    (e) =>
+      e.outcome === "failure" &&
+      ((e.action === "run.create" && str(e.data?.reason) === SANDBOX_CREATE_REASON) ||
+        (e.action === "run.exec" && str(e.data?.reason) === AGENT_START_REASON)),
+  );
+  if (dispatch) {
+    return from(dispatch.action === "run.create" ? "sandbox_create" : "agent_start", dispatch, dispatch.action);
   }
   return { kind: "unknown", action: "" };
 }
