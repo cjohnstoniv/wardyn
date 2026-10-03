@@ -1769,14 +1769,18 @@ hiding them would repeat the failure mode we are designed to avoid.
     genuinely incomplete snapshot still reads as truncated downstream, never
     silently flipped to complete by the refresh itself.
 
-    What did NOT move: the table still carries `created_at`, `last_used_at`
-    and `revoked_at` and **no expiry column**, there is no TTL the way
+    What did NOT move: there is no TTL on the stamp the way
     `WARDYN_SSH_ROLE_TTL` bounds a key, and a human who never signs in again is
-    re-stamped never. So a power that derives from a stale group snapshot — a
+    re-stamped never. Since 0.8.6 a token can end on a clock instead
+    (`api_tokens.expires_at`, capped for new tokens by
+    `WARDYN_API_TOKEN_MAX_TTL`), but only one minted with a TTL or under a cap:
+    every earlier token, and every token on a deployment that sets no cap, never
+    expires. So a power that derives from a stale group snapshot — a
     capability grant or governance profile bound to a group they have left, or
     an admin/`security_admin` role they were demoted out of — survives exactly
-    until that human's next login, and for someone who has left the
-    organization and will never sign in again, that is indefinitely. Since 0.7
+    until that human's next login or the token's expiry, and for someone who has
+    left the organization and will never sign in again, that is indefinitely
+    for a token with no expiry. Since 0.7
     stamps `security_admin` verbatim, a human demoted out of that tier keeps —
     through any token minted while they held it, until their next sign-in or an
     explicit revoke — profile authoring and assignment, capability-grant

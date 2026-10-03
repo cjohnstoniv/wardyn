@@ -62,14 +62,29 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 	if !t.CreatedAt.IsZero() {
 		age = db.AppClockAgeMicros(t.CreatedAt, time.Now())
 	}
+	// expires_at rides the same clock: the lifetime (ExpiresAt - CreatedAt, two
+	// readings of the app clock) is added to the created_at the database stamps,
+	// so wardynd's skew against Postgres never shortens or lengthens a token.
+	// NULL (no ExpiresAt) is a token that never expires.
+	var lifetime *int64
+	if t.ExpiresAt != nil {
+		from := t.CreatedAt
+		if from.IsZero() {
+			from = time.Now()
+		}
+		us := t.ExpiresAt.Sub(from).Microseconds()
+		lifetime = &us
+	}
 	// q is built, not const: the created_at expression (db.AppClockAgeSQL) is
 	// shared with the session-revocation read and a const can't call it.
 	q := `
-		INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, minted_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,` + db.AppClockAgeSQL("$10") + `, NULLIF($11, ''))
+		INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, expires_at, minted_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,` + db.AppClockAgeSQL("$10") + `,
+		        CASE WHEN $11::bigint IS NULL THEN NULL ELSE ` + db.AppClockAgeSQL("$10") + ` + $11::bigint * interval '1 microsecond' END,
+		        NULLIF($12, ''))
 		RETURNING ` + apiTokenCols
 	out, err := scanAPIToken(s.Pool.QueryRow(ctx, q,
-		t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), age, t.MintedBy))
+		t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), age, lifetime, t.MintedBy))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -84,14 +99,14 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 // the LIVE token it stands for. Deliberately UNSCOPED by principal — this
 // call is what authenticates the caller.
 //
-// SECURITY: `revoked_at IS NULL` is in the WHERE, not checked separately — a
-// revoked, unknown, or non-matching token all fail IDENTICALLY with
-// ErrNotFound, so the boundary is never an oracle for "this token once
-// existed".
+// SECURITY: `revoked_at IS NULL` and the not-expired test (apiTokenLive) are
+// in the WHERE, not checked separately — a revoked, expired, unknown, or
+// non-matching token all fail IDENTICALLY with ErrNotFound, so the boundary is
+// never an oracle for "this token once existed".
 func (s PG) GetAPITokenByRaw(ctx context.Context, raw string) (types.APIToken, error) {
 	const q = `
 		SELECT ` + apiTokenCols + `
-		FROM api_tokens WHERE token_sha256 = $1 AND revoked_at IS NULL`
+		FROM api_tokens WHERE token_sha256 = $1 AND ` + apiTokenLive
 	return scanAPIToken(s.Pool.QueryRow(ctx, q, hashToken(raw)))
 }
 
@@ -211,17 +226,21 @@ func marshalGroups(groups []string) (any, error) {
 	return b, nil
 }
 
+// apiTokenLive is the predicate for a token that can still authenticate: not
+// revoked, and either without an expiry or not yet at it, on the database's clock.
+const apiTokenLive = `revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())`
+
 // apiTokenCols is THE api_tokens READ column list, in scanAPIToken's order.
 // The INSERT list stays spelled out separately: it names token_sha256 (never
 // read back) and omits last_used_at/revoked_at (never inserted) — deriving
 // one list from the other would hide that difference.
-const apiTokenCols = `id, principal, email, role, user_type, groups, groups_truncated, name, created_at, last_used_at, revoked_at, COALESCE(minted_by, '')`
+const apiTokenCols = `id, principal, email, role, user_type, groups, groups_truncated, name, created_at, last_used_at, revoked_at, expires_at, COALESCE(minted_by, '')`
 
 func scanAPIToken(row pgx.Row) (types.APIToken, error) {
 	var t types.APIToken
 	var groups []byte
 	err := row.Scan(&t.ID, &t.Principal, &t.Email, &t.Role, &t.UserType, &groups, &t.GroupsTruncated, &t.Name,
-		&t.CreatedAt, &t.LastUsedAt, &t.RevokedAt, &t.MintedBy)
+		&t.CreatedAt, &t.LastUsedAt, &t.RevokedAt, &t.ExpiresAt, &t.MintedBy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.APIToken{}, ErrNotFound
 	}

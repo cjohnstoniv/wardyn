@@ -2263,12 +2263,26 @@ snapshot's own completeness bit** on every unrevoked token they hold — the sam
 `OnLogin` hook that has re-stamped their SSH keys since 0.6, now widened to
 carry groups too — so a demotion, or a group membership change, reaches
 outstanding tokens at that human's own next login rather than immediately. And
-nothing ages either half out on its own short of that sign-in: `api_tokens` has
-`created_at`, `last_used_at` and `revoked_at` and **no expiry column**, there is
-no TTL on the stamp the way `WARDYN_SSH_ROLE_TTL` bounds an SSH key, and a human
-who is demoted and never signs in again keeps the role and groups their tokens
-were minted with indefinitely. **Explicit revocation is the only thing that
-ends it on your schedule** rather than waiting for that next login.
+nothing ages either half out on its own short of that sign-in: there is no TTL
+on the stamp the way `WARDYN_SSH_ROLE_TTL` bounds an SSH key, and a human who is
+demoted and never signs in again keeps the role and groups their tokens were
+minted with until the token ends. What ends a token is its **expiry** (below) or
+**explicit revocation**; neither waits for that next login.
+
+**A token can expire.** `api_tokens.expires_at` is nullable: NULL means the
+token never expires, which is every token minted before 0.8.6. `POST /me/tokens`
+takes an optional `ttl_seconds`. Omitted or zero gets `WARDYN_API_TOKEN_MAX_TTL`
+when you have set one (see [ENV.md](ENV.md)) and no expiry when you have not; a
+value above that cap is clamped to it, and the `token.create` audit row records
+the clamp (`ttl_clamped_from_seconds`); a negative value is a `400` and mints
+nothing. The console's mint form sends no TTL, so on a deployment with a cap it
+gets the cap. An expired token is refused as a revoked one is, the same `401`
+with the same body, so expiry is no way to learn that a token once existed. Both
+lists show `expires_at`. The cap applies to tokens minted after it is set; it
+never shortens one already minted, so an operator who wants those gone revokes
+them. There is no default cap: turning one on is what starts failing CI tokens
+on its own schedule. Console sessions are unaffected and keep their own cookie
+expiry.
 
 A demotion made on the People page is now one of those explicit revocations:
 when a role-mapping write or delete takes a tier away from a value, Wardyn
@@ -5212,6 +5226,7 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 `0092` adds `agent_runs.ended_at`.
 `0094` adds `attach_tickets.via_delegate`/`via_grant` and `agent_runs.created_via`.
 `0106` adds `attach_tickets.authorized_at`/`email` (`0026`'s table).
+`0108` adds `api_tokens.expires_at` (`0045`'s table).
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.

@@ -36,6 +36,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   keeps it. Governance profiles also gain `limits.max_cpu_millis` and `limits.max_memory_mib` (0 is
   unlimited) to cap an assigned member's CPU and memory, and a negative `resources` field is now refused.
 
+### Added
+
+- **API tokens can expire.** Migration `0108_api_tokens_expires_at` adds a nullable `api_tokens.expires_at`;
+  every existing token keeps no expiry. `POST /api/v1/me/tokens` takes an optional `ttl_seconds`, a negative
+  value is a `400 api_token_ttl_invalid`, and the response and both token lists carry `expires_at`. An
+  expired token gets the same `401` as a revoked one. `WARDYN_API_TOKEN_MAX_TTL` (default: no cap) caps every
+  new token: a mint that asks for no TTL, as the console's form does, gets the cap, a longer one is clamped to
+  it, and the `token.create` audit row records `ttl_clamped_from_seconds`. The cap never shortens a token
+  already minted.
+
 ### Security
 
 - **The proxy refuses a raw mint of every `git_pat` grant id while the PAT broker is on.** The mint relay

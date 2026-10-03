@@ -46,10 +46,14 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 		}
 	}
 	expiryish := regexp.MustCompile(`(?i)expir|valid_until|not_after|ttl`)
+	// expires_at is the one expiry column: nullable, NULL = never expires, set only
+	// by a mint that asked for a TTL or ran under WARDYN_API_TOKEN_MAX_TTL. It
+	// narrows the window for those tokens and for no others, which is what the
+	// docs now say ("A token can expire"); any other expiry-ish column is news.
 	for _, c := range cols {
-		if expiryish.MatchString(c) {
-			t.Errorf("%s now has an api_tokens.%s column: the window may no longer be unbounded, so the docs' "+
-				"\"no expiry column\" claim and residual #33 need re-reading, not deleting", file, c)
+		if c != "expires_at" && expiryish.MatchString(c) {
+			t.Errorf("%s now has an api_tokens.%s column: the window may be bounded some other way, so the docs' "+
+				"\"A token can expire\" claim and residual #38 need re-reading, not deleting", file, c)
 		}
 	}
 
@@ -109,7 +113,8 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 	for _, want := range []string{
 		"Both halves are stamps re-checked at login",
 		"re-stamps the role, the group snapshot, and the",
-		"**no expiry column**",
+		"**A token can expire.**",
+		"`WARDYN_API_TOKEN_MAX_TTL`",
 		"A human demoted out of `security_admin`",
 		"`DELETE /api/v1/tokens/{id}`",
 		"/api/v1/sessions/revoke",
