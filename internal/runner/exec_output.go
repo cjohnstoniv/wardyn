@@ -3,7 +3,11 @@
 
 package runner
 
-import "io"
+import (
+	"context"
+	"errors"
+	"io"
+)
 
 // OutputDrainer is the optional second half of SandboxSpec.ExecOutput's
 // contract: a writer that also implements it is told when a driver starts and
@@ -37,4 +41,25 @@ func BeginOutputDrain(w io.Writer) (end func(err error)) {
 		return func(error) { _ = d.Close() }
 	}
 	return func(error) {}
+}
+
+// ErrOutputUnrecoverable is RecoverOutput's answer when the substrate keeps no
+// copy of the agent's output to read back (a Docker exec agent: its output is a
+// hijacked stream dockerd does not log). The caller records a capture gap; the
+// agent is never re-run to get it.
+var ErrOutputUnrecoverable = errors.New("runner: this run's output cannot be recovered from the substrate")
+
+// OutputRecoverer is an OPTIONAL Runner capability: a process that holds no tail
+// for a run (it restarted, or another replica adopted the run) reads the agent's
+// output back from the substrate into w. It reads the whole log from its start,
+// so w must be a fresh writer; a log still being written is followed until the
+// agent exits, a finished one is read to its end. ctx bounds the read: the
+// caller gives it a deadline, and an implementation MUST return when it ends.
+//
+// It returns ErrOutputUnrecoverable when the substrate keeps no log for this
+// agent, ErrSandboxGone when the sandbox no longer exists, and otherwise nil at
+// the end of the log or the error that cut the read short (a partial read is
+// not an error to discard: the bytes already written to w stand).
+type OutputRecoverer interface {
+	RecoverOutput(ctx context.Context, ref string, w io.Writer) error
 }

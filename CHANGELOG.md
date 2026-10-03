@@ -110,8 +110,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   ends (completion, failure, kill, idle stop, lease end, reconciliation, a failed dispatch) goes through one
   finalisation: wait up to 5 seconds for the runner's copy of the output to end, flush the masker's
   holdback, seal the tail, and write one masked row. A byte that arrives later is dropped and marks the row
-  `incomplete`; a process that holds no tail for the run (a restart) writes a `capture_gap` row and reads
-  nothing from the substrate. A failed write is retried with backoff and audited as `run.output.finalize`
+  `incomplete`; a process that holds no tail for the run (a restart, or an adopting replica) reads it back from
+  the substrate when it can (Kubernetes: the exec container's log, followed on a live adoption; Docker: an
+  exec-less agent's log) and only for a run whose masking manifest is complete, bounded to 10 seconds, and
+  otherwise writes a `capture_gap` row (a Docker exec agent, a sandbox already gone, a run with no complete
+  manifest, which includes runs alive across the upgrade). The agent is never re-run. A failed write is retried with backoff and audited as `run.output.finalize`
   (only for a capture that is not clean); an hourly leader-gated sweep deletes rows past retention
   (`run.output.retention.sweep`) and is the `run_output` row of `wardyn_sweep_last_tick_seconds`.
   `GET /runs/{id}/output` gains `source`, `incomplete`, `capture_gap`, `mask_scope` and `captured_at`.

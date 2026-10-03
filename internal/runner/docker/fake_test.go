@@ -226,6 +226,7 @@ type fakeDocker struct {
 	exitAfterInspects map[string]int
 	inspectCounts     map[string]int
 	logs              map[string][]byte
+	logOpts           []client.ContainerLogsOptions // every ContainerLogs call's options, in order
 
 	// startedAtOverride, keyed by container name, overrides ContainerStart's
 	// default (real, current-time) StartedAt for that container — used to
@@ -677,9 +678,10 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 // ContainerLogs answers f.logs[id] verbatim (a test scripts it pre-framed with
 // muxFrame when the reader under test demuxes it, as startProxy's exit watch
 // does). Options are ignored: no fake here models Tail/Follow/Since filtering.
-func (f *fakeDocker) ContainerLogs(ctx context.Context, id string, _ client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
+func (f *fakeDocker) ContainerLogs(ctx context.Context, id string, opts client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.logOpts = append(f.logOpts, opts)
 	if f.containers[id] == nil {
 		return nil, fakeNotFound{msg: "no such container: " + id}
 	}
