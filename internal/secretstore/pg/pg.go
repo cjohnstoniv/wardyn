@@ -309,6 +309,9 @@ func (s *Store) Put(ctx context.Context, name string, value []byte) error {
 	if err != nil {
 		return fmt.Errorf("pg secretstore: seal %s: %w", rowRef(s.owner, name), err)
 	}
+	if rev, guarded := secretstore.IfRevisionFrom(ctx); guarded {
+		return s.putIfRevision(ctx, name, rev, wrapped, ct, k.ID())
+	}
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -447,6 +450,17 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 		return fmt.Errorf("pg secretstore: delete %s: begin: %w", ref, err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	// A guarded delete (WithIfRevision) is the Put's compare-and-set: a holder
+	// that lost its lock must not delete a newer row. The check runs under the
+	// row's lock, before deleteLocked touches an external store.
+	if rev, guarded := secretstore.IfRevisionFrom(ctx); guarded {
+		if err := lockRow(ctx, tx, s.owner, name); err != nil {
+			return fmt.Errorf("pg secretstore: delete %s: %w", ref, err)
+		}
+		if err := s.checkRevision(ctx, tx, name, rev); err != nil {
+			return err
+		}
+	}
 	if _, err := s.deleteLocked(ctx, tx, s.owner, name); err != nil {
 		return err
 	}

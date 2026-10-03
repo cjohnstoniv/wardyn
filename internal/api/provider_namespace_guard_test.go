@@ -26,6 +26,8 @@ var strictProviderReaders = map[string]string{
 	"readEntraBlob":         "List-then-Get under a per-user scope, the Entra twin of ownSecret (Azure DevOps and azure_foundry captures)",
 	"noteEntraSignInEnded":  "hands the view to deleteDeadCredential, a Delete, which never falls back",
 	"readADOOwnPAT":         "List-then-Get under a per-user scope, the own-token twin of readEntraBlob",
+	"awsSSORevision":        "hands the view to secretstore.RevisionOf, which reads the view's OWN row's revision and never falls back; no value is read",
+	"entraRevision":         "hands the view to secretstore.RevisionOf, which reads the view's OWN row's revision and never falls back; no value is read",
 	"handleListSecrets":     "hands the view to reservedFilteredSecretNames, a List of the owner's own rows",
 	"presentSecretNamesFor": "hands the view to reservedFilteredSecretNames, a List of the owner's own rows",
 }

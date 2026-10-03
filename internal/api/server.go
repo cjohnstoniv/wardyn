@@ -667,11 +667,11 @@ type Server struct {
 	// capability_batch_test.go's growth law reads it. One atomic add per row
 	// already being compared. Zero value is ready to use.
 	capRowsScanned atomic.Int64
-	// auditChainSweep admits ONE verify sweep at a time (handleVerifyAuditChain).
-	// The sweep re-hashes an unprunable table, so concurrent GETs would multiply
-	// one operator action into N full passes each holding a pool connection.
-	// Zero value is ready to use.
-	auditChainSweep sync.Mutex
+	// locks is the in-process fallback for the cross-replica locks (locks.go).
+	// The audit chain verify sweep, the site-config and capability-enforcement
+	// writers, the per-run operation lock and the two refresh single-flights
+	// all take theirs there. Zero value is ready to use.
+	locks lockState
 	// lastTouch debounces the decision-ingest TouchRun UPDATEs per run (see
 	// shouldTouch in internal.go). Zero value is ready to use.
 	lastTouchMu sync.Mutex
@@ -707,28 +707,6 @@ type Server struct {
 	// builds tracks per-workspace image builds (the wizard's Build step).
 	// Zero value is ready to use.
 	builds buildTracker
-	// siteConfigMu serializes the single site-config document's four
-	// read-modify-write writers (PUT /site-config, PUT/DELETE/POST-adopt
-	// /integrations/{id}) — an unconditional Postgres upsert (store.go's
-	// PutSiteConfig) with no CAS, so two overlapping RMWs on one process can
-	// otherwise silently erase each other's write (SEAM-1: a hand-authored
-	// integration row, a default_for:[agent_runs] mark, or the just-saved
-	// corp proxy/redirect config). Correct because replicas>1 is refused by
-	// construction (deployment.yaml) — a single in-process mutex covers every
-	// writer that can ever exist. Zero value is ready to use. ponytail:
-	// promote to a PG advisory lock (gt_rotator.go's pattern) if
-	// allowMultiReplica ever becomes real.
-	siteConfigMu sync.Mutex
-	// capEnforcementMu is siteConfigMu's sibling for the OTHER whole-document
-	// replace this package added If-Match/ETag optimistic concurrency to
-	// (etag.go): PUT /permissions/enforcement reads the current enforcement
-	// map to check If-Match against, then writes the new one, and this mutex
-	// is what keeps that check-then-write atomic against a second overlapping
-	// PUT on the same process — same reasoning as siteConfigMu above (single
-	// replica by construction), just a second lock because the two documents
-	// live in different tables and a writer on one must never block a writer
-	// on the other. Zero value is ready to use.
-	capEnforcementMu sync.Mutex
 	// attachHolders tracks who currently holds each run's SHARED tmux PTY, so a
 	// second client can be admitted read-only instead of silently competing for
 	// the same terminal (see attach_holder.go). Process-local like sshSessions
@@ -787,11 +765,12 @@ type Server struct {
 	runLeaseState    // the run lease sweep's process state (run_lease_server.go)
 	// pause is the pause sweep's process-local state (run_pause.go).
 	pause pauseClocks
-	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
-	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
-	// that encloses re-read -> expiry check -> CreateToken -> Put, so two
-	// dispatches of the same principal cannot both redeem one rotating refresh
-	// token (the second re-reads inside the lock and finds it already renewed);
+	// ssoRefreshMu guards ssoRefreshSpent, which the control-plane AWS SSO
+	// refresher owns (awssso_refresh.go). The refresh is single-flight per owner
+	// through a cross-replica lock (locks.go) that encloses re-read -> expiry
+	// check -> CreateToken -> Put, so two dispatches of the same principal, on
+	// this or another replica, cannot both redeem one rotating refresh token
+	// (the second re-reads inside the lock and finds it already renewed).
 	// ssoRefreshSpent records the fingerprints of refresh tokens the OIDC
 	// endpoint has already told us are gone, keyed to the TOKEN rather than the
 	// credential, so a later capture is never pre-marked dead. Process-local
@@ -804,13 +783,7 @@ type Server struct {
 	// ponytail: ssoRefreshSpent grows one small entry per spent token per daemon
 	// lifetime — bound it only if that ever stops being negligible.
 	ssoRefreshMu    sync.Mutex
-	ssoRefreshLocks map[string]*sync.Mutex
 	ssoRefreshSpent map[string]bool
-	// adoEntra is the per-owner single-flight registry the Azure DevOps
-	// sign-in's redemption takes before it redeems a rotating refresh token
-	// (see ado_entra_store.go). Process-local for the same reason as the locks
-	// above, and its zero value is ready to use.
-	adoEntra adoEntraFlight
 	// adoEntraTokens reuses a minted Azure DevOps access token across the
 	// per-host grants of one run (injection_ado.go), so a sidecar's boot does
 	// not rotate one person's refresh token once per host.

@@ -3,8 +3,8 @@
 
 // If-Match/ETag optimistic concurrency for the whole-document-replace surfaces
 // PUT /permissions/enforcement and PUT /site-config. Their in-process mutexes
-// (handlePutSiteConfig's siteConfigMu, handlePutCapabilityEnforcement's
-// capEnforcementMu) already stop two concurrent PUTs clobbering each other;
+// (handlePutSiteConfig's site-config lock, handlePutCapabilityEnforcement's
+// capability-enforcement lock) already stop two concurrent PUTs clobbering each other;
 // If-Match adds a CLIENT-side guarantee: a caller that read the document is
 // told 412 rather than silently overwriting a write that landed between its GET
 // and its PUT. A caller that sends no If-Match works as before (additive).

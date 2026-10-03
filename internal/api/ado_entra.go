@@ -708,9 +708,12 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	// Under the per-owner lock a renewal holds from its read to its write, so
 	// the renewal cannot write its copy of the old sign-in over this one.
-	unlock := s.adoEntra.lock(subject, cfg.RowID)
-	defer unlock()
-	if err := s.storeADOEntraBlob(ctx, subject, cfg.RowID, blob); err != nil {
+	ctx, unlock, err := s.lockADOSignIn(ctx, subject, cfg.RowID)
+	if err == nil {
+		defer unlock()
+		err = s.storeADOEntraBlob(ctx, subject, cfg.RowID, blob)
+	}
+	if err != nil {
 		// The cause is logged, never put on the row: the trail and its SIEM
 		// export carry a fixed reason only, like every other store failure.
 		slog.ErrorContext(ctx, "wardynd: storing the captured Azure DevOps sign-in failed",

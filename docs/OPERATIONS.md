@@ -6243,14 +6243,6 @@ rather than a preference:
 - **the decision-ingest `lastTouch` debounce** (`shouldTouch`,
   `internal/api/internal.go`) — per-process, so N pods can do up to N× the
   `TouchRun` writes the 30s debounce was sized for. Load, not correctness.
-- **the per-run operation lock** (`runOps`, `internal/api/run_oplock.go`) — an
-  in-process mutex per run. A revive holds it from its claim to its settle, and
-  the lease sweep's re-assertion of a kept run's stop and the watcher's reboot
-  mark take it too, so a sweep that read a run's lost mark before a revive cannot
-  stop the proxy that revive just started (#1480). It orders work inside one
-  process only: two replicas hold two locks and the race is back. A sweep never
-  waits for it, it skips a locked run until the next pass; the expiry teardown
-  does not take it, so a run that keeps being revived still expires.
 
 Six OTHER pieces are now Postgres-backed, so they survive a crash and no longer
 break under a second replica: single-use **attach tickets**, delete-on-read
@@ -6267,6 +6259,25 @@ restart case `ReconcileOnBoot` handles alone); **session recordings** (migration
 replica; `WARDYN_RECORDING_STORE=fs` still selects the old per-pod directory); and
 the **ground-truth token rotator** (`cmd/wardynd/gt_rotator.go`, leader-elected via
 a Postgres advisory lock — a standby takes over within one ~30s backoff).
+
+Six in-process locks are Postgres advisory locks too (`internal/db/locks.go`),
+so the work they serialise holds across replicas: the **per-run operation lock**
+(a revive holds it from its claim to its settle, and the lease sweep's
+re-assertion of a kept run's stop and the watcher's reboot mark take it, so a
+sweep that read a run's lost mark before a revive cannot stop the proxy that
+revive just started, #1480; a sweep never waits for it, it skips a locked run
+until the next pass), the **site-config** and **capability-enforcement** writers,
+the **audit chain verify sweep**, and the **AWS SSO** and **Azure DevOps sign-in
+refresh** single-flights, which keep one rotating refresh token from being
+redeemed twice. They are taken in one order (run operation, run-token mint,
+AWS SSO, Azure DevOps sign-in, the document locks, the audit sweep last), each
+nested lock shares its caller's connection, and none proceeds unlocked: a lock
+that cannot be taken answers `503` `lock_unavailable` and is retried. A refresh
+that loses its lock (a failover) is cancelled, and its final write is a
+compare-and-set on the stored credential, so it cannot overwrite a newer one;
+a refresh already in flight can still race the new holder at the authority
+across a failover (residual). The connection budget is in
+[ENV.md](ENV.md) beside `pool_max_conns`.
 
 None of that makes `replicas > 1` supported. It closed the six reasons a second
 replica used to drop *requests*; it did not touch the list above, and the masking

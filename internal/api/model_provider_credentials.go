@@ -21,6 +21,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -151,7 +152,7 @@ func (s *Server) credentialOwner(w http.ResponseWriter, r *http.Request) string 
 // is answered as a PUT would be answered on availability, or DELETE would tell
 // a restricted provider from an unknown id (D-6). A provider the caller cannot
 // see, or one whose credential is a sign-in, is refused here. The caller holds
-// siteConfigMu, so the UID read here is still the provider's when the write
+// the site-config lock, so the UID read here is still the provider's when the write
 // lands — rule 8's purge runs under the same lock.
 func (s *Server) providerForCredential(w http.ResponseWriter, r *http.Request, owner string, granted bool) (types.ModelProvider, bool) {
 	id := chi.URLParam(r, "id")
@@ -225,8 +226,11 @@ func (s *Server) handlePutProviderCredential(w http.ResponseWriter, r *http.Requ
 		writeErrorReason(w, http.StatusBadRequest, reasonModelProviderCredentialTooShort, fmt.Sprintf(mpcTooShort, secretmask.MinLen))
 		return
 	}
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	r, unlock, locked := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !locked {
+		return
+	}
+	defer unlock()
 	p, ok := s.providerForCredential(w, r, owner, true)
 	if !ok {
 		return
@@ -256,8 +260,11 @@ func (s *Server) handleDeleteProviderCredential(w http.ResponseWriter, r *http.R
 	if owner == "" {
 		return
 	}
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	r, unlock, locked := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !locked {
+		return
+	}
+	defer unlock()
 	p, ok := s.providerForCredential(w, r, owner, false)
 	if !ok {
 		return
@@ -298,7 +305,7 @@ func invalidatedProviderUIDs(before, after *types.ModelProviders) []string {
 // purgeProviderCredentials deletes, in every namespace, each person's
 // credential for every provider invalidatedProviderUIDs names, and returns how
 // many it removed. Both write doors call it BEFORE saving the block, under
-// siteConfigMu: a purge that fails refuses the write, so a credential given
+// the site-config lock: a purge that fails refuses the write, so a credential given
 // for one destination never follows the provider to a new one. A failed save
 // after it leaves people to add their credential again — the closed side.
 // Each deleted row's process-wide mask copies are retired as well, keyed by

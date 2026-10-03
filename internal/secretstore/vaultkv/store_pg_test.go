@@ -1130,3 +1130,48 @@ func TestVaultKV_PurgeConformance(t *testing.T) {
 	s := storeMode(t, throwawayDB(t), newFakeStore(t, newFakeVault(t)), nil)
 	secretstoretest.RunPurgeConformance(t, func(*testing.T) secretstore.Store { return s }, func(t *testing.T) int { return drift(t, s) })
 }
+
+// A guarded Put in store mode (the compare-and-set a refresh's final write runs
+// under) checks the row's revision under the row lock BEFORE the value goes to
+// Vault: a holder that lost its lock neither replaces the newer value there nor
+// moves the row.
+func TestStoreMode_GuardedPutRefusesBeforeTheStoreIsWritten(t *testing.T) {
+	pool := throwawayDB(t)
+	f := newFakeVault(t)
+	s := storeMode(t, pool, newFakeStore(t, f), nil)
+	ctx := t.Context()
+	view := s.For("alice")
+
+	if err := view.Put(ctx, "tok", []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	rev, err := s.For("alice").(secretstore.Revisioned).Revision(ctx, "tok")
+	if err != nil || rev == "" {
+		t.Fatalf("revision = %q, %v", rev, err)
+	}
+	if err := view.Put(ctx, "tok", []byte("two")); err != nil { // another holder wrote
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	before := len(f.calls)
+	f.mu.Unlock()
+	if err := view.Put(secretstore.WithIfRevision(ctx, rev), "tok", []byte("stale")); !errors.Is(err, secretstore.ErrRevisionChanged) {
+		t.Fatalf("guarded Put of a row that changed = %v, want ErrRevisionChanged", err)
+	}
+	f.mu.Lock()
+	after := append([]string(nil), f.calls[before:]...)
+	f.mu.Unlock()
+	for _, c := range after {
+		if strings.HasPrefix(c, "POST ") || strings.HasPrefix(c, "DELETE ") {
+			t.Fatalf("a refused guarded Put reached Vault: %v", after)
+		}
+	}
+	got, err := view.Get(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), "tok")
+	if err != nil || string(got) != "two" {
+		t.Fatalf("stored = %q, %v; want the newer value", got, err)
+	}
+	cur, _ := s.For("alice").(secretstore.Revisioned).Revision(ctx, "tok")
+	if err := view.Put(secretstore.WithIfRevision(ctx, cur), "tok", []byte("three")); err != nil {
+		t.Fatalf("guarded Put of the row as read: %v", err)
+	}
+}

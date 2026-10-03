@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
@@ -760,14 +761,17 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// Integrations forward from its own read, below) against the three
 	// integration-write handlers' own RMWs on the same document
 	// (setup_integrations.go) — see handlePutIntegration's SEAM-1 comment.
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
 	existing, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
 		writeServerError(w, r, "get existing site config", err)
 		return
 	}
-	// Checked under siteConfigMu, against the SAME read this handler's own
+	// Checked under the site-config lock, against the SAME read this handler's own
 	// integrations-carry-forward uses below — no other writer can land between
 	// this check and the Put that follows it.
 	if !ifMatchSatisfied(r, computeETag(existing)) {
