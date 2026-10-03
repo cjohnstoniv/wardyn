@@ -18,7 +18,7 @@ import { SubstrateHealthBanner } from "./substrate-health-banner";
 const DETAIL = "The sandbox runner refuses Wardyn's credentials.";
 const row = (over: Partial<SetupCheck>): SetupCheck => ({
   id: "substrate_health",
-  label: "Substrate and sweep health",
+  label: "Runner health",
   status: "fail",
   cause: "runner_auth",
   detail: DETAIL,
