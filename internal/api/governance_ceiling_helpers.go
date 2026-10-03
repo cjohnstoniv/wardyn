@@ -11,12 +11,14 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
 	"strings"
 	"sync"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -30,9 +32,9 @@ import (
 // widens BY OMISSION, silently: forgetting the deployment's denied_domains
 // un-walls every host that list protected. ADVISORY ONLY, never a refusal: both
 // directions are legitimate, and refusing would make DefaultPolicy a floor this
-// feature deliberately does not have. Five checks, NOT exhaustive over
+// feature deliberately does not have. Six checks, NOT exhaustive over
 // RunPolicySpec: only fields where an omission changes what a member can reach.
-func governanceOmissionWarnings(ceiling, deployment types.RunPolicySpec) []string {
+func governanceOmissionWarnings(ceiling, deployment types.RunPolicySpec, limits types.GovernanceLimits) []string {
 	var warns []string
 	if missing := missingEntries(deployment.DeniedDomains, ceiling.DeniedDomains); len(missing) > 0 {
 		warns = append(warns, fmt.Sprintf(
@@ -62,7 +64,57 @@ func governanceOmissionWarnings(ceiling, deployment types.RunPolicySpec) []strin
 			"this profile sets allow_all_egress while the deployment default does not — "+
 				"members under it reach any non-denied public host")
 	}
+	if w := omitResourcesWarning(ceiling.Resources, deployment.Resources, limits); w != "" {
+		warns = append(warns, w)
+	}
 	return warns
+}
+
+// omitResourcesWarning says what a profile that leaves out its sandbox CPU or
+// memory (no resources block, or a zero field) hands its members instead: the
+// deployment's value, DefaultPolicy.Resources else runner.EffectiveLimits(),
+// the same order inheritDeploymentResources fills it in. Only the missing
+// field is named; both missing reads "sandbox size". When the profile's own
+// max_cpu_millis / max_memory_mib cut the inherited value, the sentence says
+// so. Empty when the profile sets both fields. Wording is mock packet M10's.
+func omitResourcesWarning(own, deployment *types.ResourceLimits, limits types.GovernanceLimits) string {
+	var ownCPU, ownMem, depCPU, depMem int
+	if own != nil {
+		ownCPU, ownMem = own.CPUMillis, own.MemoryMiB
+	}
+	if deployment != nil {
+		depCPU, depMem = deployment.CPUMillis, deployment.MemoryMiB
+	}
+	eff := runner.EffectiveLimits()
+	cpu := cmp.Or(depCPU, int(eff.CPUMillis))
+	mem := cmp.Or(depMem, int(eff.MemoryMiB))
+	var what, got, capped []string
+	if ownCPU == 0 {
+		what = append(what, "sandbox CPU")
+		got = append(got, fmt.Sprintf("%dm CPU", cpu))
+		if limits.MaxCPUMillis > 0 && limits.MaxCPUMillis < cpu {
+			capped = append(capped, fmt.Sprintf("%dm CPU", limits.MaxCPUMillis))
+		}
+	}
+	if ownMem == 0 {
+		what = append(what, "sandbox memory")
+		got = append(got, fmt.Sprintf("%d MiB memory", mem))
+		if limits.MaxMemoryMiB > 0 && limits.MaxMemoryMiB < mem {
+			capped = append(capped, fmt.Sprintf("%d MiB memory", limits.MaxMemoryMiB))
+		}
+	}
+	if len(what) == 0 {
+		return ""
+	}
+	if len(what) == 2 {
+		what = []string{"sandbox size"}
+	}
+	out := fmt.Sprintf("this profile sets no %s — runs under it get the deployment's %s",
+		what[0], strings.Join(got, " and "))
+	if len(capped) > 0 {
+		out += fmt.Sprintf(", capped at %s by this profile's limits", strings.Join(capped, " and "))
+	}
+	return out
 }
 
 // missingEntries returns the entries of have that want does not carry, compared

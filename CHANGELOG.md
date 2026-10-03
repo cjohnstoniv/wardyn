@@ -50,6 +50,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   inherits the default policy's value, else the deployment default above. A profile that sets a size
   keeps it. Governance profiles also gain `limits.max_cpu_millis` and `limits.max_memory_mib` (0 is
   unlimited) to cap an assigned member's CPU and memory, and a negative `resources` field is now refused.
+  A profile that omits `disk_mib` also inherits the default policy's value; there is no platform default.
+- **Saving a profile that omits its sandbox size now says what its members get.** The save response
+  carries a sentence such as `this profile sets no sandbox size — runs under it get the deployment's
+  1000m CPU and 2048 MiB memory`, naming only the missing field and adding `, capped at … by this
+  profile's limits` when the profile's own maximums cut it. The Governance screen shows it under the
+  retitled note "Compared with the deployment ceiling".
 - **A run that is live when you upgrade is refused at five doors after the restart, until it ends.**
   0.8.6 commits each run's masking manifest at dispatch (below); a run dispatched by an earlier version has
   none, so after the upgrade restarts wardynd its recording upload, live attach, SSH shell, exec output and
