@@ -78,6 +78,18 @@ func TestPG_AuditRetention_PrivilegeModel(t *testing.T) {
 	if got := pgScalar[int](t, app, `SELECT audit_retention_window()`); got != 0 {
 		t.Errorf("window right after a decrease = %d, want 0 (forever) until the cooldown ends", got)
 	}
+	// The read helper runs as the app role, which can read every partition it counts, and with retention
+	// forever (the default) the drop function refuses the oldest, closed legacy partition for that reason.
+	if n := pgScalar[int](t, app, `SELECT count(*)::int FROM audit_retention_partitions(NULL, true)`); n < 2 {
+		t.Errorf("the app role sees %d partition(s), want the legacy one and the live ones", n)
+	}
+	if got := pgScalar[string](t, app, `SELECT part_refusal FROM audit_retention_partitions('audit_events_legacy', false)`); got != "audit_retention_inside_window" {
+		t.Errorf("the legacy partition's refusal under retention forever = %q, want audit_retention_inside_window", got)
+	}
+	appendAudit(t, app, "test.close.legacy") // the high-water mark moves past the legacy bound: it is closed
+	if _, err := app.Exec(ctx, `SELECT audit_retention_drop('audit_events_legacy', 'x', 'someone')`); err == nil || !strings.Contains(err.Error(), "audit_retention_inside_window") {
+		t.Errorf("drop of the legacy partition under retention forever: %v, want it refused as inside the window", err)
+	}
 	// A refused drop of an unknown name is refused for that, not for permission.
 	if _, err := app.Exec(ctx, `SELECT audit_retention_drop('nope', 'x', 'someone')`); err == nil || !strings.Contains(err.Error(), "is not a partition of audit_events") {
 		t.Errorf("drop of an unknown partition as the app role: %v", err)

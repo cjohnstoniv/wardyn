@@ -42,7 +42,7 @@
 -- HARDENING is 0058's, as in 0108 and 0110: every name qualified with the ACTUAL schema discovered from the
 -- catalog, the pinned search_path ends with pg_temp, partition names are validated against the parent's
 -- pg_inherits before they are used as identifiers, EXECUTE is revoked from PUBLIC and granted to exactly the
--- roles that hold it on audit_append. The statements are CREATE FUNCTION, never CREATE OR REPLACE.
+-- roles that hold it on audit_append. The statements are DROP FUNCTION IF EXISTS then CREATE FUNCTION, never CREATE OR REPLACE.
 
 DO $mig$
 DECLARE
@@ -58,13 +58,27 @@ BEGIN
 
     -- The policy columns. retention_days 0 is forever; a pending decrease is a (pending_days,
     -- pending_effective_at) pair, both set or both NULL.
+    -- Idempotent (IF NOT EXISTS, a guarded constraint, DROP FUNCTION IF EXISTS before each CREATE): the
+    -- migrator's break-glass and replay tests re-apply the newest migration over a migrated schema.
     EXECUTE replace($q$ALTER TABLE @ns@.audit_partition_meta
-        ADD COLUMN retention_days        integer     NOT NULL DEFAULT 0 CHECK (retention_days >= 0),
-        ADD COLUMN pending_days          integer     CHECK (pending_days >= 0),
-        ADD COLUMN pending_effective_at  timestamptz,
-        ADD COLUMN retention_set_at      timestamptz,
-        ADD CONSTRAINT audit_partition_meta_pending_pair CHECK ((pending_days IS NULL) = (pending_effective_at IS NULL))$q$,
+        ADD COLUMN IF NOT EXISTS retention_days        integer     NOT NULL DEFAULT 0 CHECK (retention_days >= 0),
+        ADD COLUMN IF NOT EXISTS pending_days          integer     CHECK (pending_days >= 0),
+        ADD COLUMN IF NOT EXISTS pending_effective_at  timestamptz,
+        ADD COLUMN IF NOT EXISTS retention_set_at      timestamptz$q$,
         '@ns@', nsq);
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint
+                    WHERE conrelid = format('%I.audit_partition_meta', ns)::regclass AND conname = 'audit_partition_meta_pending_pair') THEN
+        EXECUTE replace($q$ALTER TABLE @ns@.audit_partition_meta
+            ADD CONSTRAINT audit_partition_meta_pending_pair CHECK ((pending_days IS NULL) = (pending_effective_at IS NULL))$q$,
+            '@ns@', nsq);
+    END IF;
+
+    -- The functions are re-created from scratch (and re-granted below).
+    EXECUTE replace('DROP FUNCTION IF EXISTS @ns@.audit_retention_drop(text, text, text)', '@ns@', nsq);
+    EXECUTE replace('DROP FUNCTION IF EXISTS @ns@.audit_retention_refuse(text, text)', '@ns@', nsq);
+    EXECUTE replace('DROP FUNCTION IF EXISTS @ns@.audit_retention_set_policy(integer)', '@ns@', nsq);
+    EXECUTE replace('DROP FUNCTION IF EXISTS @ns@.audit_retention_partitions(text, boolean)', '@ns@', nsq);
+    EXECUTE replace('DROP FUNCTION IF EXISTS @ns@.audit_retention_window()', '@ns@', nsq);
 
     -- audit_retention_window: the effective retention window in days (0 = forever).
     EXECUTE replace($fn$
