@@ -175,7 +175,7 @@ func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 // failure with a refusal. The operator short-circuit stays HERE too, ahead of
 // the resolve: a display read must not cost an operator a ceiling round-trip.
 func (s *Server) userDriveDeniedByProfile(r *http.Request) (name, unresolved string) {
-	if s.isOperator(r.Context()) {
+	if s.runUngoverned(r.Context()) {
 		return "", ""
 	}
 	// A display read, for the reason resolveMeUserDrive states: this is the

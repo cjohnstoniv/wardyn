@@ -801,7 +801,7 @@ func (s *Server) effectiveCeiling(ctx context.Context) (governanceCeiling, error
 // once and no call site can reach the raw resolve by accident.
 func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling, error) {
 	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone()}
-	if s.isOperator(ctx) {
+	if s.runUngoverned(ctx) {
 		deployment.Operator = true
 		return deployment, nil
 	}

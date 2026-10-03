@@ -121,7 +121,7 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	exempt := s.isOperator(r.Context())
+	exempt := s.runUngoverned(r.Context())
 	p := planRunEndWait(run, req, present, exempt, s.cfg.Now(), s.cfg.ApprovalExpiryAfter)
 	actorType, actor := actorFromRequest(r)
 	if p.status == http.StatusForbidden {
