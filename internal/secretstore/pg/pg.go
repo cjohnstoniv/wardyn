@@ -318,7 +318,7 @@ func (s *Store) Put(ctx context.Context, name string, value []byte) error {
 		return fmt.Errorf("pg secretstore: seal %s: %w", rowRef(s.owner, name), err)
 	}
 	if rev, guarded := secretstore.IfRevisionFrom(ctx); guarded {
-		return s.putIfRevision(ctx, name, rev, wrapped, ct, k.ID())
+		return s.putIfRevision(ctx, name, rev, r)
 	}
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext, expires_at)
