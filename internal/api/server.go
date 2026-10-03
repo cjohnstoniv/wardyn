@@ -214,6 +214,11 @@ type Config struct {
 	// reads to drop the admin-token form and the role-derivation caveat — can
 	// never overclaim.
 	SSOOnly bool
+	// GovernAdminRuns mirrors WARDYN_GOVERN_ADMIN_RUNS: an SSO admin's or an
+	// admin-role personal token's runs are governed like a member's (see
+	// runUngoverned in govern_admin.go). The admin token and local mode stay
+	// ungoverned either way.
+	GovernAdminRuns bool
 	// TrustDomain is surfaced in /healthz and used for run SPIFFE ids.
 	TrustDomain string
 	// DefaultPolicy is applied to runs created without an explicit policy_id.

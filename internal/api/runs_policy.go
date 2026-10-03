@@ -436,7 +436,7 @@ func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling
 		// to a member as their spec it would replace the row's default_profile
 		// with the widest list they may choose. Only a choice the member (or a
 		// selected row) made is honoured.
-		if !s.isOperator(ctx) {
+		if !s.runUngoverned(ctx) {
 			spec.AzureDevOpsCapabilities = nil
 		}
 		origin := policyOrigin{kind: policyKindDefault}
