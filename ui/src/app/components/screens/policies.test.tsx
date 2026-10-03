@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { RunPolicy } from "../../lib/types";
@@ -32,6 +32,13 @@ vi.mock("../../lib/api/policies", () => ({
 // a POST /policies/grade; stub it so the editor tests never touch the network.
 vi.mock("../../lib/api/runs", () => ({
   runs: { gradePolicy: () => Promise.resolve({ risk_assessment: [], overall_risk: "low" }) },
+}));
+
+// New policy asks the setup status which model providers the deployment has; a
+// rejection (the default here) leaves the editor on the stock starter.
+const getSetupStatusMock = vi.fn<() => Promise<unknown>>(() => Promise.reject(new Error("not mocked")));
+vi.mock("../../lib/api/setup", () => ({
+  setup: { getSetupStatus: () => getSetupStatusMock() },
 }));
 
 import { PoliciesScreen } from "./policies";
@@ -174,6 +181,36 @@ describe("PoliciesScreen — the policy editor can't be dismissed by accident on
 
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape", code: "Escape" });
 
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+});
+
+describe("PoliciesScreen: New policy follows the deployment's model providers", () => {
+  const BEDROCK_HOST = "bedrock-runtime.us-east-1.amazonaws.com";
+
+  beforeEach(() => {
+    listPoliciesMock.mockReset();
+    listPoliciesMock.mockResolvedValue([]);
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockResolvedValue({
+      model_providers: [{ id: "p1", kind: "bedrock_sso", host: BEDROCK_HOST, harnesses: ["claude-code"] }],
+    });
+  });
+
+  afterEach(() => getSetupStatusMock.mockReset());
+
+  it("re-seeds an untouched spec onto the Bedrock host and leaves the editor clean", async () => {
+    render(<PoliciesScreen />);
+    await screen.findByText(/no policies yet/i);
+    await userEvent.click(screen.getByRole("button", { name: /new policy/i }));
+    await screen.findByText(/Model hosts follow/);
+
+    const spec = screen.getByRole("dialog").querySelector("textarea") as HTMLTextAreaElement;
+    await waitFor(() => expect(spec.value).toContain(BEDROCK_HOST));
+    expect(spec.value).not.toContain("api.anthropic.com");
+
+    // Untouched means not dirty: Escape closes the dialog.
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape", code: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 });

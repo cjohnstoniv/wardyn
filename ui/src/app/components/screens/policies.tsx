@@ -519,7 +519,8 @@ function PolicyEditor({
         // A new, untouched policy re-opens on the starter that follows the providers.
         if (editor.mode !== "edit") {
           const seeded = JSON.stringify(minimalSpec(providers), null, 2);
-          setSpecText((prev) => (prev === initial.current.specText ? seeded : prev));
+          const was = initial.current.specText;
+          setSpecText((prev) => (prev === was ? seeded : prev));
           initial.current = { ...initial.current, specText: seeded };
         }
       })
