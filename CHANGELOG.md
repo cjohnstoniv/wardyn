@@ -119,18 +119,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   admin into the setup funnel: the `runner` row stays a `fail` but is not blocking, and points to the new row.
   The runner probe is one namespaced pod list of limit 1 on Kubernetes, which the chart's Role already grants,
   and a daemon ping on Docker. See `docs/operations/monitoring.md`.
-
-### Added
-
 - **Sandbox pods can be placed on the nodes the operator names.** `k8s.sandbox.{nodeSelector,tolerations,affinity,priorityClassName,podAnnotations,podLabels}`
   (chart) render to `WARDYN_K8S_SANDBOX_PLACEMENT`, and the agent pod, the proxy pod and the boot-time
   NetworkPolicy canary all take it, so the canary proves enforcement on the nodes runs use. wardynd refuses
   to boot on a placement label that is reserved (`wardyn.managed`, `wardyn.run-id`, `wardyn.component`) or on
   any `kubernetes.io/` or `k8s.io/` annotation or label other than
   `cluster-autoscaler.kubernetes.io/safe-to-evict`, naming the key. Nothing is set by default.
-
-### Added
-
 - **Approval notifications over a signed webhook (`WARDYN_APPROVAL_NOTIFY`).** Off by default. When set,
   every approval raised gets a durable outbox row in the same transaction, and a worker on each replica
   delivers it at least once to the named webhook channels, with an `X-Wardyn-Signature` HMAC when a secret
@@ -139,9 +133,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `0118_approval_notifications` only adds the `approval_notifications` table, and a 0.8.5 binary refuses a
   database that has applied it, so a downgrade is a restore from the pre-upgrade dump. See "Approval
   notifications" in `docs/OPERATIONS.md`.
-
-### Added
-
 - **Audit partition digest, export and anchor-aware verify.** `audit_partition_digest(partition)` (migration
   `0119_audit_partition_digest`) is a bounded, canonical digest of one closed audit partition, folded in `seq` order in constant
   memory. `GET /audit/export?partition=<name>` (and `wardyn audit export-partition`) streams a closed partition
