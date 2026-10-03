@@ -207,7 +207,7 @@ func TestCallbackOnLoginCarriesTheDerivedUserType(t *testing.T) {
 	auth := env.newRoleMappingAuth(t, map[string]string{"pm-group": "portfolio-manager"}, "", nil, nil,
 		func(c *writoidc.Config) {
 			c.UserTypes = &fakeUserTypeSource{list: orgTypes}
-			c.OnLogin = func(_ context.Context, _, _, userType string, _ []string, _ bool) { got = append(got, userType) }
+			c.OnLogin = func(_ context.Context, f writoidc.LoginFacts) { got = append(got, f.UserType) }
 		})
 
 	_, sess := doRoleCallback(t, env, auth, "pat@corp.example", nil, []string{"pm-group"})

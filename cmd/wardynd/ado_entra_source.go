@@ -164,6 +164,37 @@ func adoEntraByRow(st siteConfigReader, login adoEntraLogin) func(ctx context.Co
 	}
 }
 
+// azureFoundryEntraByRow fills api.Config.AzureFoundryEntra: the application an
+// azure_foundry provider row signs people in against, by the row's uid. It is
+// always the console's own sign-in application (login), never a per-row one, so
+// a console without Entra login yields an unusable configuration that both
+// legs refuse. found=false for a uid that is not an azure_foundry row. The
+// scope policy is the capture's (api.entraCapture), not this source's.
+func azureFoundryEntraByRow(st siteConfigReader, login adoEntraLogin) func(ctx context.Context, rowUID string) (api.ADOEntraConfig, bool, error) {
+	return func(ctx context.Context, rowUID string) (api.ADOEntraConfig, bool, error) {
+		sc, err := st.GetSiteConfig(ctx)
+		if err != nil || rowUID == "" || sc.ModelProviders == nil {
+			return api.ADOEntraConfig{}, false, err
+		}
+		for _, p := range sc.ModelProviders.Providers {
+			if p.UID != rowUID || p.Kind != types.ModelProviderAzureFoundry {
+				continue
+			}
+			return api.ADOEntraConfig{
+				RowID:              p.UID,
+				TenantID:           login.tenantID,
+				ClientID:           login.clientID,
+				ClientSecret:       login.clientSecret,
+				RedirectURL:        login.redirectURL,
+				LoginClientID:      login.clientID,
+				LoginTenantID:      login.tenantID,
+				AllowTestEndpoints: login.allowTestEndpoints,
+			}, true, nil
+		}
+		return api.ADOEntraConfig{}, false, nil
+	}
+}
+
 // adoEntraConfigFor is the configuration row describes under login, with the
 // console's secret attached only where it may be redeemed.
 func adoEntraConfigFor(row types.GitProvider, login adoEntraLogin, mode types.ADOTokenMode, scopes []string) api.ADOEntraConfig {

@@ -37,9 +37,4 @@ type runLeaseState struct {
 	// run's proxy (run_revive.go, #1005), so a revive of a live run is bounded
 	// to one per reviveLiveEvery. An entry drops itself once it has lapsed.
 	liveRevived sync.Map
-	// runOps holds each run's operation lock (run_oplock.go, #1480): a
-	// *sync.Mutex that the revive and the lease sweep's destructive
-	// re-assertion hold across their read and their runner call. Pruned by
-	// the sweep.
-	runOps sync.Map
 }

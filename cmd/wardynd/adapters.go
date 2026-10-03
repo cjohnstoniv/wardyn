@@ -466,6 +466,9 @@ func (f fanoutRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
 type maskingRecorder struct {
 	inner audit.Recorder
 	reg   *secretmask.Registry
+	// scope labels a run's rows "mask_scope":"globals_only" while this process
+	// does not hold the run's complete masking manifest. Nil labels nothing.
+	scope *maskScope
 }
 
 var _ audit.Recorder = maskingRecorder{}
@@ -480,6 +483,9 @@ func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 	// Before the masker, not after: masking a megabyte of attacker-chosen path
 	// is work nobody asked for, and the mask is per-byte either way.
 	ev.Target = store.CapAuditTarget(ev.Target)
+	if ev.RunID != nil && m.scope.uncovered(*ev.RunID) {
+		ev.Data = withMaskScope(ev.Data)
+	}
 	if m.reg != nil {
 		// A run-less event (ev.RunID == nil —
 		// policy.inline.apply, secret.*, an admin action) must still fall back to the

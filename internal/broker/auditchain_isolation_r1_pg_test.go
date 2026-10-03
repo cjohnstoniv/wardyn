@@ -197,9 +197,8 @@ func TestPG_BrokerMintDoesNotForkTheChainAtRepeatableRead(t *testing.T) {
 	// The WINNER commits while the broker waits. Its row_hash is the head the
 	// broker's row must chain onto.
 	var winner string
-	if err := btx.QueryRow(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
-		VALUES (gen_random_uuid(), 'system', 'blocker', 'test.f331.winner', 'success')
-		RETURNING COALESCE(row_hash, '')`).Scan(&winner); err != nil {
+	if err := btx.QueryRow(ctx, `SELECT COALESCE(row_hash, '')
+		FROM audit_append(gen_random_uuid(), now(), NULL, 'system', 'blocker', 'test.f331.winner', '', 'success', '', NULL)`).Scan(&winner); err != nil {
 		t.Fatalf("blocker appends the winning row: %v", err)
 	}
 	if winner == "" {

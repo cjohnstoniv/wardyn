@@ -84,6 +84,10 @@ type Config struct {
 	// enforcement: ClassSupport.NetworkPolicy stays false either way (see
 	// NetworkPolicyAcknowledged instead).
 	AckAmbientDefaultDeny bool
+	// SandboxPlacement is WARDYN_K8S_SANDBOX_PLACEMENT, the JSON form of Placement (placement.go):
+	// node selector, tolerations, affinity, PriorityClass, annotations and labels for the agent,
+	// proxy and canary pods. Empty places nothing. An invalid value refuses to boot.
+	SandboxPlacement string
 }
 
 func (c *Config) withDefaults() {
@@ -97,6 +101,8 @@ type Driver struct {
 	clientset  kubernetes.Interface
 	restConfig *rest.Config
 	cfg        Config
+	// placement is cfg.SandboxPlacement, parsed and validated once at construction.
+	placement Placement
 
 	// apiserverHostPort is resolved once at construction from restConfig.Host
 	// — the egress canary's dial target.
@@ -184,7 +190,11 @@ func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.C
 	if err != nil {
 		return nil, err
 	}
-	d := &Driver{clientset: cs, restConfig: restCfg, cfg: cfg, apiserverHostPort: hostPort}
+	placement, err := parsePlacement(cfg.SandboxPlacement)
+	if err != nil {
+		return nil, err
+	}
+	d := &Driver{clientset: cs, restConfig: restCfg, cfg: cfg, placement: placement, apiserverHostPort: hostPort}
 
 	verdict, cerr := d.runEgressCanary(ctx)
 	switch verdict {

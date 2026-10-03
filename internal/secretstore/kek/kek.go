@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"filippo.io/age"
@@ -58,6 +59,20 @@ type Versioned interface {
 	LatestVersion(ctx context.Context) (string, error)
 }
 
+// Behind reports whether wrapped, made under the versioned KEK k, names a
+// version other than latest. Unversioned, or with latest "", it never does.
+func Behind(k KEK, wrapped []byte, latest string) (bool, error) {
+	v, ok := k.(Versioned)
+	if !ok || latest == "" {
+		return false, nil
+	}
+	n, err := v.WrapVersion(wrapped)
+	if err != nil {
+		return false, err
+	}
+	return n != latest, nil
+}
+
 // The kek_id prefixes of the key services. A row under one holds nothing an
 // age key derives.
 const (
@@ -72,15 +87,25 @@ func IsServiceID(id string) bool {
 }
 
 // The bind keys: KMS encryption context / Transit associated data a
-// provider is handed.
+// provider is handed. A data-key wrap binds owner and name; a principal-key
+// wrap (PrincipalBind) binds owner, purpose, version and domain instead.
 const (
-	BindOwner = "wardyn:owner"
-	BindName  = "wardyn:name"
+	BindOwner   = "wardyn:owner"
+	BindName    = "wardyn:name"
+	BindPurpose = "wardyn:purpose"
+	BindVersion = "wardyn:version"
+	BindDomain  = "wardyn:domain"
 )
 
 // Bind is the bind map for the row (owner, name). owner "" is the operator.
 func Bind(owner, name string) map[string]string {
 	return map[string]string{BindOwner: owner, BindName: name}
+}
+
+// PrincipalBind is the bind map for one generation of a subject's key. owner
+// is never "": the operator namespace holds boot keys, which are not subject keys.
+func PrincipalBind(owner, purpose string, version int, domain string) map[string]string {
+	return map[string]string{BindOwner: owner, BindPurpose: purpose, BindVersion: strconv.Itoa(version), BindDomain: domain}
 }
 
 // DEKSize is the data key length: AES-256.
@@ -258,12 +283,28 @@ func (l *Local) aad(bind map[string]string) ([]byte, error) {
 	return aad, nil
 }
 
-// WrapAAD is AAD_kek = Encode("wardyn/kek/v1", owner, name, kek_id): what
-// every provider binds a wrap to. A bind missing either key is refused rather
-// than defaulted, since a zero value here would seal a DEK to the wrong row.
+// pkWrapLabel is the AAD domain label of a principal-key wrap. It differs from
+// localInfo, so a principal-key wrap can never verify as a data-key wrap.
+const pkWrapLabel = "wardyn/pk-wrap/v1"
+
+// WrapAAD is what every provider binds a wrap to: AAD_kek =
+// Encode("wardyn/kek/v1", owner, name, kek_id) for a data key, and for a
+// principal key Encode("wardyn/pk-wrap/v1", owner, purpose, version, domain,
+// kek_id). A bind missing a key of its shape, or mixing the two shapes, is
+// refused rather than defaulted, since a zero value here would seal a key to
+// the wrong row.
 func WrapAAD(bind map[string]string, kekID string) ([]byte, error) {
 	owner, okO := bind[BindOwner]
 	name, okN := bind[BindName]
+	purpose, okP := bind[BindPurpose]
+	version, okV := bind[BindVersion]
+	domain, okD := bind[BindDomain]
+	if okP || okV || okD {
+		if !okO || !okP || !okV || !okD || okN {
+			return nil, errors.New("a principal-key bind must carry " + BindOwner + ", " + BindPurpose + ", " + BindVersion + " and " + BindDomain + ", and no " + BindName)
+		}
+		return Encode(pkWrapLabel, owner, purpose, version, domain, kekID), nil
+	}
 	if !okO || !okN {
 		return nil, errors.New("bind must carry both " + BindOwner + " and " + BindName)
 	}

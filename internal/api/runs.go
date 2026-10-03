@@ -228,7 +228,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Ahead of the autonomy gate because that gate grades THIS resolution: the
 	// Bedrock model credential is handed to the run at dispatch, and a secrets
 	// axis graded without it froze the level a rung too high (#504).
-	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs)
+	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs, true)
 	if !ok {
 		return
 	}
@@ -265,6 +265,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Host capacity, the last refusal and before the mint, the same siting as
 	// the autonomy gate: a refusal leaves no identity and no run row.
 	if writeHostCapacityRefusal(w, r, s.admitHostCapacity(r.Context(), principalFromRequest(r), "runs", true)) {
+		return
+	}
+
+	// The deployment run cap, refused before the mint for the same reason: no
+	// identity.mint row and no live token for a run that gets no row.
+	// CreateRunUnderCap (createRun) still decides a race at the cap.
+	if s.refuseRunCapFull(w, r) {
 		return
 	}
 
@@ -320,6 +327,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	s.captureRunLimits(&run, ceiling)
 	created, err := s.createRun(ctx, run)
 	if err != nil {
+		s.cfg.Identity.RevokeRun(context.WithoutCancel(ctx), runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
 		writeServerError(w, r, "create run", err)
 		return
 	}
@@ -396,6 +404,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	createData := createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
 	createData["policy_source"] = policySource
+	s.markGovernanceExempt(ctx, createData)
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createData))))
 

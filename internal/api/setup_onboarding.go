@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/cjohnstoniv/wardyn/internal/db"
 )
 
 // handleSetupOnboardingComplete marks THIS INSTALL as having been through the
@@ -44,8 +46,11 @@ func (s *Server) handleSetupOnboardingComplete(w http.ResponseWriter, r *http.Re
 	// The same mutex PUT /site-config and the integration writers take,
 	// for the same reason — this is a read-modify-write on the one site-config
 	// document, and a concurrent integration write would otherwise clobber it.
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
 
 	cfg, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
