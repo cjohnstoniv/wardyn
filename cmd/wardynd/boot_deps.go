@@ -148,8 +148,10 @@ func warnAllowUnknownMigrations(allow bool) {
 }
 
 // buildAuditChain assembles the audit recorder chain:
-// audit.DelegationRecorder → maskingRecorder → spoolingRecorder →
-// (fanoutRecorder →) store.Recorder.
+// audit.DelegationRecorder → audit.DryRunRecorder → (audit.DenialCoalescer →)
+// maskingRecorder → spoolingRecorder → (fanoutRecorder →) store.Recorder.
+// The coalescer is wired only when the caller passes one (serve): the rewrap,
+// rekey and migrate_secrets commands run no preflight.
 //
 // The Postgres store is the source of truth. When audit sinks are configured,
 // every persisted event ALSO fans out to file/webhook/syslog; the store write is
@@ -166,7 +168,7 @@ func warnAllowUnknownMigrations(allow bool) {
 // store once it recovers. The drain MUST target the raw store recorder —
 // NOT the returned masking/spooling chain — or a replay that hit a still-down
 // store would re-spool (and re-enter the spool lock) instead of retrying later.
-func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source string, pool *pgxpool.Pool, maskReg *secretmask.Registry) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
+func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source string, pool *pgxpool.Pool, maskReg *secretmask.Registry, coalescer ...*audit.DenialCoalescer) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
 	// #10 WARDYN_AUDIT_SOURCE: set once, before any sink is constructed/starts
 	// emitting — see sinks.Source's doc comment. A no-op (empty) is
 	// byte-identical to before this field existed.
@@ -196,8 +198,16 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 	}
 	masked := maskingRecorder{inner: spoolingRecorder{inner: auditRec, spool: auditFallback}, reg: maskReg}
 	// Outermost: a row any writer records under a portal's delegated request
-	// names the portal (data.via, #1142) before it is masked, spooled or stored.
-	return audit.DelegationRecorder{Inner: masked}, fan, auditFallback, storeRec, nil
+	// names the portal (data.via, #1142), and one recorded under a preflight
+	// request says it was a dry run (data.dry_run), before it is masked, spooled
+	// or stored. The coalescer sits above masking so its summary rows are masked
+	// like any other.
+	var head audit.Recorder = masked
+	if len(coalescer) > 0 {
+		coalescer[0].Inner = masked
+		head = coalescer[0]
+	}
+	return audit.DelegationRecorder{Inner: audit.DryRunRecorder{Inner: head}}, fan, auditFallback, storeRec, nil
 }
 
 // substrateDeps is the registration Deps every substrate constructor receives,

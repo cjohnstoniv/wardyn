@@ -28,6 +28,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/hostcapacity"
@@ -214,7 +215,8 @@ func run() error {
 	maskReg := secretmask.NewRegistry()
 	// The masked + fanned-out + spooling recorder chain shared by EVERY audit
 	// writer (API, broker, identity, approvals, sweeper) — see buildAuditChain.
-	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg)
+	denials := &audit.DenialCoalescer{}
+	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg, denials)
 	if err != nil {
 		return err
 	}
@@ -489,7 +491,7 @@ func run() error {
 	// Serve until signal/error, then drain: HTTP first, audit sinks last, the
 	// org federation forwarder (if any) joined so it never outlives the
 	// process (issue #1131).
-	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, feats.hop, orgFederation)
+	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, denials, feats.hop, orgFederation)
 }
 
 // tlsPosture is the validated TLS/cookie posture derived from the resolved
