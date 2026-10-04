@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -147,5 +148,31 @@ func TestPeopleList_PagingAndParams(t *testing.T) {
 	}
 	if _, page, _ := e.listPeople(t, e.sec, "limit=500"); len(page.People) != len(want) {
 		t.Errorf("limit=500 returned %d rows, want all %d (clamped, not refused)", len(page.People), len(want))
+	}
+}
+
+// The role shown is the one the person's last verified login derives: their stored groups count, a
+// truncated snapshot reads "unknown", and no snapshot is the email alone.
+func TestPeopleList_RoleFromVerifiedGroups(t *testing.T) {
+	e := newPeoplePG(t)
+	ctx := context.Background()
+	e.h.srv.cfg.OIDC = newAccessAuth(t, map[string]string{"eng": oidc.RoleAdmin}, oidc.RoleUser, nil, nil)
+	e.h.srv.router = e.h.srv.routes()
+	for _, p := range []string{"in-eng", "cut", "bare"} {
+		if _, err := e.st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: p, Issuer: "https://dex.example", Email: p + "@corp.example"}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := e.pool.Exec(ctx, `INSERT INTO key_domain_login_groups (principal, groups, truncated) VALUES ('in-eng', '["eng"]', false), ('cut', '["eng"]', true)`); err != nil {
+		t.Fatal(err)
+	}
+	code, page, body := e.listPeople(t, e.sec, "")
+	if code != http.StatusOK {
+		t.Fatalf("GET /people = %d: %s", code, body)
+	}
+	for p, want := range map[string]string{"in-eng": oidc.RoleAdmin, "cut": roleUnknown, "bare": oidc.RoleUser} {
+		if got := personRow(t, page, p).Role; got != want {
+			t.Errorf("%s role = %q, want %q", p, got, want)
+		}
 	}
 }

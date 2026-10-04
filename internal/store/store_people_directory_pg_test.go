@@ -375,3 +375,66 @@ func TestPG_PeopleDirectory_QueryCountIsFixedPerPage(t *testing.T) {
 		t.Errorf("a page issued %d queries, want the directory read plus one per kind of count", large)
 	}
 }
+
+// The directory shows and searches the latest verified email; the pre-created one stands only
+// until a person's first verified sign-in, and always for a person with no identity row.
+func TestPG_PeopleDirectory_LatestVerifiedEmailWins(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	for p, e := range map[string]string{"renamed": "old@corp.example", "never": "kept@corp.example"} {
+		if _, _, err := st.CreatePerson(ctx, types.Person{Principal: p, Email: e, CreatedBy: "admin"}); err != nil {
+			t.Fatalf("create %s: %v", p, err)
+		}
+	}
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "renamed", Issuer: idIssuer, Email: "new@corp.example"}, time.Now()); err != nil {
+		t.Fatalf("sign-in: %v", err)
+	}
+	page, err := st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if got := listingByPrincipal(t, page.People, "renamed").Email; got != "new@corp.example" {
+		t.Errorf("renamed email = %q, want the verified new@corp.example", got)
+	}
+	if got := listingByPrincipal(t, page.People, "never").Email; got != "kept@corp.example" {
+		t.Errorf("never-signed-in email = %q, want the pre-created kept@corp.example", got)
+	}
+	for q, want := range map[string]int{"new@": 1, "old@": 0} {
+		page, err := st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{Query: q})
+		if err != nil {
+			t.Fatalf("search %q: %v", q, err)
+		}
+		if len(page.People) != want {
+			t.Errorf("search %q = %v, want %d rows", q, principals(page.People), want)
+		}
+	}
+}
+
+// A listing carries the person's last verified login groups, and says so when there is no snapshot.
+func TestPG_PeopleDirectory_LoginGroups(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	for _, p := range []string{"grouped", "cut", "bare"} {
+		if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: p, Issuer: idIssuer, Email: p + "@corp.example"}, time.Now()); err != nil {
+			t.Fatalf("sign-in %s: %v", p, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO key_domain_login_groups (principal, groups, truncated) VALUES ('grouped', '["eng","ops"]', false), ('cut', '["eng"]', true)`); err != nil {
+		t.Fatalf("stamp groups: %v", err)
+	}
+	page, err := st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if g := listingByPrincipal(t, page.People, "grouped"); !g.GroupsVerified || g.GroupsTruncated || !slices.Equal(g.Groups, []string{"eng", "ops"}) {
+		t.Errorf("grouped = %+v", g)
+	}
+	if g := listingByPrincipal(t, page.People, "cut"); !g.GroupsVerified || !g.GroupsTruncated {
+		t.Errorf("cut = %+v", g)
+	}
+	if g := listingByPrincipal(t, page.People, "bare"); g.GroupsVerified || g.GroupsTruncated || len(g.Groups) != 0 {
+		t.Errorf("bare = %+v", g)
+	}
+}

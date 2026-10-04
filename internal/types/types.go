@@ -465,7 +465,9 @@ type Person struct {
 
 // PersonSummary is one row of GET /people: a person this deployment knows, with the counts behind
 // the leaver actions. ActiveSessions is 0 or 1: sessions are stateless cookies, so it says whether
-// the last sign-in could still hold a live one, not how many cookies are out.
+// the last sign-in could still hold a live one, not how many cookies are out. Role is the role the
+// person's email and last verified groups derive: "denied" when sign-in would refuse them, "unknown"
+// when that sign-in's groups were truncated, and empty when sign-in is not SSO.
 type PersonSummary struct {
 	Principal       string     `json:"principal"`
 	Email           string     `json:"email,omitempty"`
