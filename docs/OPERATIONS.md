@@ -5235,7 +5235,8 @@ sandbox or calls the runner. One query reads the non-terminal rows.
 |---|---|
 | `STARTING`, `RUNNING`, `WAITING_FOR_CONFIRMATION` with no `lost_at` | yes, paused runs included (a paused sandbox keeps its pods) |
 | unschedulable: `STARTING` with the reason `Unschedulable` | yes, and listed under `unschedulable` (at most 20, oldest first, with `unschedulable_total`) |
-| kept (`lost_at` set) | no; counted as `kept` |
+| kept after an outage, before its end (its agent still runs; only its proxy was stopped) | yes, its agent only (no proxy); also counted as `kept` |
+| kept otherwise: after its end, a reboot, or an outage past its end (`lost_at` set, agent stopped) | no; counted as `kept` |
 | `PENDING` | no; appears only in `states` |
 | terminal | no |
 

@@ -38,11 +38,11 @@ type RunReviver interface {
 	// false means the run went terminal, ended, was lost or revived since, or its grace or end ran
 	// out — it gets no proxy.
 	//
-	// A run kept after its end or a reboot holds no slot under the deployment cap
-	// (CountNonTerminalRuns), so with limit > 0 its claim takes one like a create does:
-	// under CreateRunUnderCap's lock, ErrRunCapReached when the deployment already holds
-	// limit runs, the run left as it was. A live or outage-kept run is already counted and
-	// is claimed without a check.
+	// A run kept with its agent stopped (store.HoldsSandboxSQL) holds no slot under the
+	// deployment cap, so with limit > 0 its claim takes one like a create does: under
+	// CreateRunUnderCap's lock, ErrRunCapReached when the deployment already holds limit
+	// runs, the run left as it was. A run the cap already counts (live, or kept after an
+	// outage before its end) takes no extra slot and is never refused for one.
 	MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int) (bool, error)
 	// SetRunProxyRelease records release as the one that started run id's
 	// proxy, once a revive's new proxy runs.
@@ -74,23 +74,26 @@ func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostRea
 	default:
 		return false, nil
 	}
-	if limit > 0 && (from == types.LostReboot || from == types.LostEnded) {
-		return s.markKeptRunRevivedUnderCap(ctx, id, from, ended, limit)
+	if limit > 0 {
+		return s.markRunRevivedUnderCap(ctx, id, from, ended, limit)
 	}
 	return markRunRevived(ctx, s.Pool, id, from, ended)
 }
 
-// markKeptRunRevivedUnderCap is a kept run's claim under the deployment cap: the
-// count and the claim share CreateRunUnderCap's transaction-scoped advisory lock
-// and its counting predicate, so a revive and a create racing at the cap admit
-// exactly the cap.
-func (s PG) markKeptRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int) (claimed bool, err error) {
+// markRunRevivedUnderCap is the claim under the deployment cap: the count and the
+// claim share CreateRunUnderCap's transaction-scoped advisory lock and its counting
+// predicate, so a revive and a create racing at the cap admit exactly the cap.
+func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int) (claimed bool, err error) {
 	err = s.inTx(ctx, func(q Querier) error {
 		active, err := lockAndCountActiveRuns(ctx, q)
 		if err != nil {
 			return err
 		}
-		if active >= limit {
+		var counted bool
+		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs WHERE id = $1 AND `+HoldsSandboxSQL+`)`, id).Scan(&counted); err != nil {
+			return fmt.Errorf("store: read revived run's slot: %w", err)
+		}
+		if !counted && active >= limit {
 			return ErrRunCapReached
 		}
 		claimed, err = markRunRevived(ctx, q, id, from, ended)

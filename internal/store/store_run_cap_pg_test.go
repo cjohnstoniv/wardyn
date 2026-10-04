@@ -124,6 +124,13 @@ func TestPG_CreateRunUnderCap_OutageKeptRunHoldsSlot(t *testing.T) {
 	if _, err := pg.CreateRunUnderCap(ctx, newRun(types.RunPending), 1); !errors.Is(err, store.ErrRunCapReached) {
 		t.Fatalf("create at cap 1 with an outage-kept run = %v; want ErrRunCapReached", err)
 	}
+	// Past its end the lease sweep stops its agent too, so it holds no slot.
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET ends_at = now() - interval '1 minute' WHERE id = $1`, kept.ID); err != nil {
+		t.Fatalf("pass the run's end: %v", err)
+	}
+	if _, err := pg.CreateRunUnderCap(ctx, newRun(types.RunPending), 1); err != nil {
+		t.Fatalf("create at cap 1 with an outage-kept run past its end: %v", err)
+	}
 }
 
 // TestPG_MarkRunRevived_KeptRunTakesASlotUnderTheCap pins that reviving a run kept

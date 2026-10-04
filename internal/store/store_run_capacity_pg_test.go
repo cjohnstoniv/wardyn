@@ -196,3 +196,53 @@ func TestPG_RunCapacityAggregate_Caps(t *testing.T) {
 		t.Errorf("an unrecorded run's reservation must read nil, got %v", *got.Unschedulable[0].RunnerKind)
 	}
 }
+
+// TestPG_RunCapacityAggregate_KeptAgents pins which kept rows hold capacity: only one whose
+// agent still runs (kept after an outage, before its end) holds its agent's reservation, and
+// not its stopped proxy's. A run kept after a reboot or its end, or an outage-kept run past
+// its end, has its agent stopped and holds nothing. The deployment cap counts the same rows.
+func TestPG_RunCapacityAggregate_KeptAgents(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	keep := func(owner string, reason types.LostReason, endsAt *time.Time) {
+		t.Helper()
+		r := newRun(types.RunRunning)
+		r.CreatedBy, r.RunnerTarget, r.EndsAt = owner, "docker", endsAt
+		id := persistRun(t, ctx, pool, r).ID
+		if err := pg.SetRunSizing(ctx, id, store.RunSizing{RunnerKind: "docker", AgentCPURequestMillis: 2000,
+			AgentCPULimitMillis: 2000, AgentMemoryRequestMiB: 4096, AgentMemoryLimitMiB: 4096, ProxyMemoryMiB: 256}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at=now(), lost_reason=$2 WHERE id=$1`, id, string(reason)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	past := time.Now().Add(-time.Minute)
+	keep("alice", types.LostOutage, nil)
+	keep("bob", types.LostOutage, &past)
+	keep("bob", types.LostReboot, nil)
+	keep("bob", types.LostEnded, nil)
+
+	got, err := pg.RunCapacity(ctx, store.RunCapacityOpts{Now: time.Now().UTC(), CurrentKind: "docker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kept != 4 {
+		t.Errorf("kept = %d, want 4", got.Kept)
+	}
+	d := got.Totals
+	if d.Holding != 1 || d.AgentCPULimitMillis != 2000 || d.AgentMemoryLimitMiB != 4096 || d.HeldMemoryMiB != 4096 ||
+		d.ProxyMemoryMiB != 0 || d.ProxyCPUUncapped != 0 {
+		t.Errorf("docker totals = %+v, want the outage-kept live agent alone (2000m/4096Mi), no proxy", d)
+	}
+	if len(got.ByOwner) != 1 || got.ByOwner[0].Owner != "alice" || got.ByOwner[0].Holding != 1 {
+		t.Errorf("by owner = %+v, want alice holding 1", got.ByOwner)
+	}
+	if got.AgeBuckets[0].Count != 1 {
+		t.Errorf("age buckets = %+v, want the one live agent under 1h", got.AgeBuckets)
+	}
+	if n, err := pg.CountNonTerminalRuns(ctx); err != nil || n != 1 {
+		t.Errorf("CountNonTerminalRuns = %d, %v; want 1, the same live agent", n, err)
+	}
+}

@@ -156,22 +156,29 @@ func lockAndCountActiveRuns(ctx context.Context, q Querier) (int, error) {
 		return 0, err
 	}
 	var active int
-	if err := q.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames(), string(types.LostOutage)).Scan(&active); err != nil {
+	if err := q.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames()).Scan(&active); err != nil {
 		return 0, fmt.Errorf("store: count active runs: %w", err)
 	}
 	return active, nil
 }
 
-const activeRunsCountSQL = `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND (lost_at IS NULL OR lost_reason = $2)`
+// HoldsSandboxSQL is TRUE when the agent_runs row's agent is still running: the run
+// is not kept, or it was kept after a control-plane outage and has not reached its
+// end, so only its proxy was stopped (api stopLostSandbox). A run kept after its
+// end or a reboot, or an outage-kept run past its end, has its agent stopped. It is
+// the one rule for a live run under WARDYN_MAX_CONCURRENT_RUNS, in the fleet
+// capacity view and under WARDYN_RUN_MAX_AGE.
+const HoldsSandboxSQL = `(lost_at IS NULL OR (lost_reason = '` + string(types.LostOutage) + `' AND (ends_at IS NULL OR ends_at > now())))`
 
-// CountNonTerminalRuns is the number of non-terminal run rows that hold a sandbox,
-// the quantity CreateRunUnderCap holds under the cap. An ended or rebooted run kept
-// for its grace (lost_at set) has no running agent and holds no slot; a run kept
-// after a control-plane outage still runs its agent and counts. It takes no lock: a
-// pre-flight read for a refusal that must come before an identity is minted, never the authority.
+const activeRunsCountSQL = `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND ` + HoldsSandboxSQL
+
+// CountNonTerminalRuns is the number of non-terminal run rows that hold a sandbox
+// (HoldsSandboxSQL), the quantity CreateRunUnderCap holds under the cap. It takes no
+// lock: a pre-flight read for a refusal that must come before an identity is minted,
+// never the authority.
 func (s PG) CountNonTerminalRuns(ctx context.Context) (int, error) {
 	var n int
-	if err := s.Pool.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames(), string(types.LostOutage)).Scan(&n); err != nil {
+	if err := s.Pool.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames()).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count active runs: %w", err)
 	}
 	return n, nil
