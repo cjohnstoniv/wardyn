@@ -89,26 +89,71 @@ transient — regenerated on start.
 ### Run output
 
 wardynd keeps the last `WARDYN_RUN_OUTPUT_TAIL_BYTES` (default 64 KiB, between
-1 KiB and 1 MiB) of every non-interactive run's combined stdout/stderr in
-memory, so a caller can read the end of a headless run with
+1 KiB and 1 MiB) of every non-interactive run's combined stdout/stderr, in
+memory while the run lives and in Postgres once it ends, so a caller can read
+the end of a headless run, during it and after a restart, with
 `GET /api/v1/runs/{id}/output?tail=<bytes>` — the run's owner or an admin; anyone
 else gets the same `404` as `GET /runs/{id}`. Interactive runs keep none, and
 neither does the managed-harness sign-in run, whose output is a live credential.
 
-- **It is not a recording, and not stored.** It lives outside the recording
-  store and works with `WARDYN_RECORDING_STORE=off`; nothing reaches Postgres or
-  a backup, and a wardynd restart drops every tail. It is dropped
-  `WARDYN_EXEC_OUTPUT_TAIL_TTL` (default `24h`) after the run's last output.
-- **Memory bound.** A tail is held from a run's first output until
-  `WARDYN_EXEC_OUTPUT_TAIL_TTL` after its last, finished runs included, so
-  memory is at most (runs that printed within the TTL) × `WARDYN_RUN_OUTPUT_TAIL_BYTES`:
-  2,000 runs a day at 1 MiB is about 2 GiB. Size the variable against that.
+- **It is not a recording, and it is stored.** It lives outside the recording
+  store and works with `WARDYN_RECORDING_STORE=off`. With
+  `WARDYN_RUN_OUTPUT_PERSIST` on (the default) the final tail of each run is
+  written once, masked, to the `run_outputs` table when the run ends, so it
+  **is in Postgres and in its backups** for `WARDYN_RUN_OUTPUT_RETENTION_DAYS`
+  (default `30`; `0` keeps it forever) and any replica serves it, with or
+  without a restart. An hourly sweeper on the elected leader deletes rows past
+  the window, and a run whose output was erased (below) answers
+  `404 run_output_erased`. A deployment that turned recordings off so terminals
+  are not kept should decide on these two settings too.
+- **One finalisation for every way a run ends.** Completion, failure, a kill,
+  an idle stop, a lease end, a probe reclaim, boot reconciliation and a failed
+  dispatch all end in the same step: wait up to 5 seconds for the runner's copy
+  of the output to reach its end (the process exiting is not the end of its
+  output), release the bytes the masker was holding back as a possible secret
+  prefix, seal the tail, and write the row. A byte that arrives after that is
+  dropped. The row says what it is: `complete` is true only for a final capture,
+  `incomplete` when the wait ran out, a copy failed or a byte was dropped, and
+  `capture_gap` when this process held no tail (for example a run adopted after
+  a restart) so there are no bytes to keep. A write that fails is retried with
+  capped backoff, the bytes held in memory, and audited as `run.output.finalize`;
+  a clean capture writes no audit row.
+- **A restart.** A run that was live across a wardynd restart keeps only what
+  its new process captured, and ends with a `capture_gap` row: wardynd never
+  re-runs the agent, and on Docker the exec's terminal cannot be re-attached
+  after the process that held it died. Runs that finished before the upgrade
+  have no row and read `409 run_output_not_kept`.
+- **Settings.** `WARDYN_EXEC_OUTPUT_TAIL=off` collects nothing and refuses
+  stored rows too (`409 run_output_off`); the sweeper still deletes them.
+  `WARDYN_RUN_OUTPUT_PERSIST=off` keeps the tail in memory only, expired
+  `WARDYN_EXEC_OUTPUT_TAIL_TTL` (default `24h`) after the run's last output,
+  writes nothing to Postgres, and still serves rows stored earlier until the
+  sweeper deletes them. The sweep is the `run_output` row of
+  [monitoring](operations/monitoring.md).
+- **Storage.** About `WARDYN_RUN_OUTPUT_TAIL_BYTES` × (runs per day) × retention
+  days at most: 2,000 runs a day at the default size and 30 days is about
+  3.7 GiB of table, before indexes.
+- **Memory bound.** With persistence on, a tail is held from a run's first
+  output until its row commits, never expired by the TTL, so memory is at most
+  (live and kept non-interactive runs) × `WARDYN_RUN_OUTPUT_TAIL_BYTES`: 500
+  runs at 1 MiB is about 500 MiB. With persistence off a tail is held until
+  `WARDYN_EXEC_OUTPUT_TAIL_TTL` after its last output, finished runs included, so
+  memory is at most (runs that printed within the TTL) × the tail size: 2,000
+  runs a day at 1 MiB is about 2 GiB. Size the variable against the mode you run.
 - **It can hold secrets, like any log.** Values already in Wardyn's masking registry
   (brokered credentials, `env_secret` grants) are masked as they are written,
   the same way a recording is. Anything else a command prints — a token it read
   from a file, a secret a person pasted into the task — is kept verbatim and
-  served to whoever may read the run. A harness that prints a token it read from
-  a file therefore keeps that token in memory for the run's readers.
+  served to whoever may read the run, and now persisted for the retention
+  window. A harness that prints a token it read from a file therefore keeps that
+  token for the run's readers.
+- **Erasure.** `EraseRunOutputs` deletes a run's rows and writes a tombstone in
+  one transaction (nothing at all if it fails). Every write and read of a run's
+  output checks the tombstone in its own transaction, so no replica recreates or
+  serves an erased run's output, and a replica still holding the run's tail in
+  memory drops and zeroes it the next time it touches the run. Bytes already in
+  a database backup stay there until it ages out. `DELETE /people/{principal}/credentials`
+  erases credentials only and does not call it.
 - **The off switch** is `WARDYN_EXEC_OUTPUT_TAIL=off`. Turning recordings off
   does not turn this off; a deployment that disables recordings so terminals are
   not kept should decide on this one too.

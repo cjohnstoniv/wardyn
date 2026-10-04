@@ -417,6 +417,14 @@ type Config struct {
 	// tail is kept after its last output. Zero defaults to
 	// defaultExecOutputTailTTL in New.
 	ExecOutputTailTTL time.Duration
+	// RunOutputPersistOff is WARDYN_RUN_OUTPUT_PERSIST=off: the final tail stays
+	// in memory only and nothing reaches run_outputs (run_output_final.go). A
+	// store that keeps no run outputs behaves the same.
+	RunOutputPersistOff bool
+	// RunOutputRetention is WARDYN_RUN_OUTPUT_RETENTION_DAYS as a duration: final
+	// rows older than it are deleted by the retention sweeper. Zero keeps them
+	// forever.
+	RunOutputRetention time.Duration
 	// ADOEntra resolves the Azure DevOps Entra app registration the per-user
 	// sign-in runs against (see ado_entra.go). Nil — the default — means this
 	// deployment offers no Azure DevOps sign-in and both of its routes refuse.
@@ -711,6 +719,10 @@ type Server struct {
 	// maskBeat overrides maskCheckEvery for THIS server only (tests): how often
 	// an in-flight consumer re-reads its run's fence.
 	maskBeat time.Duration
+	// runOutputDrainWaitOverride and runOutputRetryBaseOverride shrink the
+	// output finaliser's drain barrier and retry backoff for a test; zero uses
+	// runOutputDrainWait and runOutputRetryBase (run_output_final.go).
+	runOutputDrainWaitOverride, runOutputRetryBaseOverride time.Duration
 	// refRuleset caches the ONE outbound GitHub call the setup checklist makes,
 	// so polling /setup/status (which the wizard does) cannot turn into a
 	// per-poll API call or a rate-limit. Zero value is ready to use.

@@ -211,8 +211,9 @@ const (
 	reasonRunOutputTailInvalid = "run_output_tail_invalid" // ?tail= is not a positive number of bytes
 	reasonRunOutputInteractive = "run_output_interactive"  // the run is interactive; an interactive run keeps no output here
 	reasonRunOutputOff         = "run_output_off"          // WARDYN_EXEC_OUTPUT_TAIL=off
-	reasonRunOutputNotKept     = "run_output_not_kept"     // no tail is held for the run (interactive, sign-in, or started before a restart)
-	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL
+	reasonRunOutputNotKept     = "run_output_not_kept"     // no output is kept for the run (a sign-in run, one never captured, or one still being captured)
+	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL, or the run ended past WARDYN_RUN_OUTPUT_RETENTION_DAYS
+	reasonRunOutputErased      = "run_output_erased"       // the run's output was erased (404)
 )
 
 // POST /runs/{id}/resume (run_pause.go).

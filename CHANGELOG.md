@@ -95,6 +95,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   stored rows with a stray key still load and launch. A policy with two same-host `git_pat` grants where one is
   narrowed is refused (`400` at write, `422` at launch).
 
+- **Run output now reaches Postgres and its backups.** Migration `0122_run_outputs` adds `run_outputs` and
+  `run_output_erasures`. With `WARDYN_RUN_OUTPUT_PERSIST` on (the default), the final masked tail of every
+  non-interactive run is written to Postgres when the run ends and kept `WARDYN_RUN_OUTPUT_RETENTION_DAYS`
+  days (default `30`; `0` keeps it forever), so "nothing reaches Postgres or a backup" no longer holds. Set
+  `WARDYN_RUN_OUTPUT_PERSIST` to `off` to keep the 0.8.5 behaviour of an in-memory tail only. A secret a
+  command prints that Wardyn never registered is kept like any log line, and is now persisted. See
+  `docs/OPERATIONS.md` "Run output".
+
 ### Added
 
 - **API tokens can expire.** Migration `0114_api_tokens_expires_at` adds a nullable `api_tokens.expires_at`;
@@ -161,6 +169,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (checked against the recorded high-water mark) and a missing expected partition, and names an unattested
   removal `rows removed without an attested retention drop`. A role you create after the upgrade needs
   `GRANT EXECUTE` on `audit_partition_digest(text)` beside the functions in the grant recipe.
+
+- **A run's output is persisted once, after its last bytes, and read from any replica.** Every way a run
+  ends (completion, failure, kill, idle stop, lease end, reconciliation, a failed dispatch) goes through one
+  finalisation: wait up to 5 seconds for the runner's copy of the output to end, flush the masker's
+  holdback, seal the tail, and write one masked row. A byte that arrives later is dropped and marks the row
+  `incomplete`; a process that holds no tail for the run (a restart) writes a `capture_gap` row and reads
+  nothing from the substrate. A failed write is retried with backoff and audited as `run.output.finalize`
+  (only for a capture that is not clean); an hourly leader-gated sweep deletes rows past retention
+  (`run.output.retention.sweep`) and is the `run_output` row of `wardyn_sweep_last_tick_seconds`.
+  `GET /runs/{id}/output` gains `source`, `incomplete`, `capture_gap`, `mask_scope` and `captured_at`.
+- **A run's output can be erased for good.** `EraseRunOutputs` writes a tombstone and deletes the rows in one
+  transaction, and every write and read checks the tombstone in its own transaction, so no replica recreates
+  or serves the output afterwards: reads answer `404` `run_output_erased`, and a replica still holding the
+  tail drops and zeroes it on its next touch. It is wired into the person erasure by a later change;
+  `DELETE /people/{principal}/credentials` does not call it.
 
 ### Security
 
@@ -235,6 +258,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **`complete` on `GET /runs/{id}/output` now means a final capture.** It used to mean the run had finished,
+  so a read could still gain bytes after it said `complete`. It is true only for a stored final row, or an
+  in-memory tail whose drain barrier closed and whose holdback was flushed. A run that has just finished
+  reads `complete: false` until then.
 - **The sweepers that must run once now run on one elected replica.** The approval expiry, recording
   retention, credential expiry, always-egress reconcile and run pause sweeps run only on the replica that
   holds a Postgres advisory lock (`db.SweeperLeaderLockKey`); the others retry and take over within about 15

@@ -45,8 +45,9 @@ func TestStartBackgroundWorkers_ReconcilesBootIndependentOfRunner(t *testing.T) 
 	srv := api.New(api.Config{ImageBuilder: fb, RunnerTarget: "none"})
 
 	zeroDur := time.Duration(0)
-	zeroInt := 0
+	zeroInt, persistOff := 0, false
 	f := &bootFlags{
+		runOutputPersist: &persistOff,
 		// Every OTHER background worker stays off so this test only needs
 		// run + srv: no runner (asserted below), no autostop, no groundtruth
 		// rotator (env unset), no approval sweeper, no recording sweeper.

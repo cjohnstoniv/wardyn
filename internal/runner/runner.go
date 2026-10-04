@@ -90,7 +90,9 @@ type SandboxSpec struct {
 	Interactive bool
 	// ExecOutput, non-nil, receives a copy of the agent exec's combined
 	// stdout/stderr (GET /runs/{id}/output). Its Write must never block or
-	// fail: the driver drains the exec through it.
+	// fail: the driver drains the exec through it. A writer that also
+	// implements OutputDrainer, or io.Closer, is told when each copy into it
+	// ends (BeginOutputDrain), so its owner can wait for the last bytes.
 	ExecOutput io.Writer `json:"-"`
 }
 

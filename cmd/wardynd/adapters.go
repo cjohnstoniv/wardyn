@@ -719,6 +719,10 @@ type lifecycleStopper struct {
 	// could get wrong; and the store this reaper holds is a pool, not the
 	// approval service the API server already owns.
 	cancelApprovals func(context.Context, uuid.UUID)
+	// finishOutput is the run-output finalisation contract (api.Server's
+	// FinishRunOutput), reached through the server rather than copied here.
+	// Nil-safe, like cancelApprovals.
+	finishOutput func(context.Context, uuid.UUID)
 }
 
 // runRevoker is the minimal revocation surface the idle reaper needs so a run
@@ -815,6 +819,9 @@ func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, transition 
 			)
 			errs["broker_error"] = rerr.Error()
 		}
+	}
+	if l.finishOutput != nil {
+		l.finishOutput(ctx, runID)
 	}
 	out := lifecycle.StopOutcome{Applied: true}
 	if len(errs) > 0 {
