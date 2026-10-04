@@ -22,8 +22,9 @@ import (
 // It has two halves, both idempotent per run:
 //
 //   - prepareRunOutput, before teardown: a process that finalises a run it holds
-//     no tail for writes a capture_gap row. (Substrate recovery replaces that in
-//     out-o2r; until then no substrate read is ever made here.)
+//     no tail for recovers the output from the substrate, when its masking
+//     manifest covers the run and the substrate can give it back, and otherwise
+//     writes a capture_gap row (run_output_recover.go).
 //   - finishRunOutput, once the process has exited or the sandbox is gone: the
 //     drain barrier, the holdback flush, the fence and the persist.
 //
@@ -209,10 +210,11 @@ func (s *Server) finishRunOutputDetached(ctx context.Context, runID uuid.UUID) {
 }
 
 // prepareRunOutput is the half before teardown. A process that holds no tail
-// for a run that owes one writes the capture_gap row: boot adoption, the
-// reconciler, and the sweeper reach this on a restart or on another replica,
-// where the bytes are not here and no substrate read is made. A run that is
-// interactive, unrecordable or kept off the books owes nothing.
+// for a run that owes one recovers the output from the substrate when that is
+// possible and safe, and otherwise writes the capture_gap row (run_output_recover.go):
+// boot adoption, the reconciler, and the sweeper reach this on a restart or on
+// another replica, where the bytes are not here. A run that is interactive,
+// unrecordable or kept off the books owes nothing.
 func (s *Server) prepareRunOutput(ctx context.Context, runID uuid.UUID) {
 	st := s.runOutputStore()
 	if st == nil || s.cfg.ExecOutputTailOff || s.cfg.Store == nil || s.tailFor(runID) != nil {
@@ -222,7 +224,7 @@ func (s *Server) prepareRunOutput(ctx context.Context, runID uuid.UUID) {
 	if err != nil || run.Interactive || runIsUnrecordable(run) {
 		return
 	}
-	s.writeGapRow(ctx, st, runID, "no_tail")
+	s.recoverRunOutput(ctx, st, run, "no_tail")
 }
 
 // writeGapRow resolves runID's pending row (or writes the row) as a capture
@@ -276,9 +278,19 @@ func (s *Server) finishRunOutput(ctx context.Context, runID uuid.UUID) {
 	uncoveredNow := s.cfg.MaskManifests != nil && !s.maskCovered(ctx, runID)
 	out, truncated, dropped, uncovered := e.seal(uncoveredNow)
 	e.fmu.Lock()
-	fenced := e.fenced
+	fenced, gap := e.fenced, e.gapReason
+	if gap == "" && e.recovered && uncovered {
+		gap = "mask_uncovered" // a recovery never persists a row masked by the globals alone
+	}
 	e.fmu.Unlock()
 	if fenced {
+		return
+	}
+	if gap != "" {
+		s.releaseRunOutput(runID, e)
+		if st != nil {
+			s.writeGapRow(ctx, st, runID, gap)
+		}
 		return
 	}
 	reasons := map[string]any{}
@@ -526,8 +538,21 @@ func (s *Server) SweepRunOutputs(ctx context.Context) error {
 	}
 	for _, id := range ids {
 		if s.tailFor(id) == nil {
-			s.writeGapRow(ctx, st, id, "stale_pending")
+			s.resolveStalePending(ctx, st, id)
 		}
 	}
 	return firstErr
+}
+
+// resolveStalePending resolves a terminal run's abandoned pending row: by
+// recovery from the substrate under the same coverage rule and bound as
+// finalisation when that is possible, else to a capture-gap row.
+func (s *Server) resolveStalePending(ctx context.Context, st store.RunOutputStore, runID uuid.UUID) {
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil || run.Interactive || runIsUnrecordable(run) {
+		s.writeGapRow(ctx, st, runID, "stale_pending")
+		return
+	}
+	s.recoverRunOutput(ctx, st, run, "stale_pending")
+	s.finishRunOutput(ctx, runID)
 }

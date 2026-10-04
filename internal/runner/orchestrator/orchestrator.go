@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"sort"
 	"sync"
@@ -401,6 +402,20 @@ func (o *Orchestrator) ExecStream(ctx context.Context, ref string, spec runner.E
 		return nil, err
 	}
 	return s.ExecStream(ctx, ref, spec)
+}
+
+// RecoverOutput forwards a run's output recovery to ref's substrate when it
+// implements runner.OutputRecoverer; one that does not has nothing to read.
+func (o *Orchestrator) RecoverOutput(ctx context.Context, ref string, w io.Writer) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	rc, ok := s.(runner.OutputRecoverer)
+	if !ok {
+		return runner.ErrOutputUnrecoverable
+	}
+	return rc.RecoverOutput(ctx, ref, w)
 }
 
 func (o *Orchestrator) Status(ctx context.Context, ref string) (runner.Status, error) {

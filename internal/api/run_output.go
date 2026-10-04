@@ -89,7 +89,7 @@ type execOutputTail struct {
 	drainErr  bool          // a copy ended in an error
 	drainWake chan struct{} // closed and replaced whenever drains changes
 
-	fmu      sync.Mutex    // guards started, committed, late and fenced
+	fmu      sync.Mutex    // guards started, committed, late, fenced, recovered and gapReason
 	started  bool          // a finisher has taken the once-guard
 	done     chan struct{} // closed when that finisher returns
 	finished bool          // the tail is sealed: barrier closed, holdback flushed
@@ -98,6 +98,12 @@ type execOutputTail struct {
 	committed bool
 	late      bool // a byte was dropped after the seal
 	fenced    bool // the run's output was erased: this tail is zeroed and dropped
+	// recovered: the bytes were read back from the substrate by a process that
+	// did not capture them live (run_output_recover.go). gapReason, when set,
+	// says the recovery found nothing it may keep, so the finisher writes a
+	// capture gap instead of this tail.
+	recovered bool
+	gapReason string
 }
 
 func newExecOutputTail(max int, now func() time.Time) *execOutputTail {

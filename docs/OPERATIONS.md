@@ -115,14 +115,43 @@ neither does the managed-harness sign-in run, whose output is a live credential.
   dropped. The row says what it is: `complete` is true only for a final capture,
   `incomplete` when the wait ran out, a copy failed or a byte was dropped, and
   `capture_gap` when this process held no tail (for example a run adopted after
-  a restart) so there are no bytes to keep. A write that fails is retried with
+  a restart) and could not read the output back from the substrate, so there are
+  no bytes to keep. A write that fails is retried with
   capped backoff, the bytes held in memory, and audited as `run.output.finalize`;
   a clean capture writes no audit row.
-- **A restart.** A run that was live across a wardynd restart keeps only what
-  its new process captured, and ends with a `capture_gap` row: wardynd never
-  re-runs the agent, and on Docker the exec's terminal cannot be re-attached
-  after the process that held it died. Runs that finished before the upgrade
-  have no row and read `409 run_output_not_kept`.
+- **A restart.** A run that was live across a wardynd restart, or that another
+  replica adopted, has its output read back from the substrate when that is
+  possible and safe, and ends with a `capture_gap` row when it is not. wardynd
+  never re-runs the agent to get it. The two substrates differ:
+  - **Kubernetes** keeps the agent container's log for as long as the pod
+    lives, so the new process re-reads it from its first byte into a fresh
+    tail, and a run adopted while still running resumes following it. The run
+    keeps all of its output: before the restart, during the handoff and after.
+  - **Docker** keeps a log only for an exec-less agent (a krun microVM), which
+    is re-read the same way. An exec agent's terminal is a hijacked stream that
+    dockerd does not log and that cannot be re-attached after the process that
+    held it died, so the run ends with a `capture_gap` row.
+  - A sandbox that is already gone, and a runner that cannot read output back,
+    also give a `capture_gap` row.
+  - **A run with no complete masking manifest gets a capture gap, and nothing
+    is read.** That is every run with no manifest (a run dispatched before
+    0.8.6, including runs that are alive across the upgrade) and any whose
+    manifest is incomplete: the log holds the secrets the run was dispatched
+    with, and a process that cannot prove its masking registry holds them would
+    persist them verbatim. The check is made before the substrate is touched,
+    by any replica, without the watcher lease. A recovery that loses its
+    coverage part-way ends as a capture gap too, so a recovered row is never
+    masked by the process-wide corpus alone.
+  - **The read is bounded** to 10 seconds, inside the finalisation's own
+    timeout and after the credential revoke cascade, so a sandbox that writes an
+    endless log cannot delay boot or a run's teardown: the row is written
+    `incomplete`, with what was read.
+  - The hourly sweeper resolves a terminal run's pending row, once its claim is
+    five minutes old, the same way: by recovery under the same rules, or to a
+    `capture_gap` row.
+
+  Runs that finished before the upgrade have no row and read
+  `409 run_output_not_kept`.
 - **Settings.** `WARDYN_EXEC_OUTPUT_TAIL=off` collects nothing and refuses
   stored rows too (`409 run_output_off`); the sweeper still deletes them.
   `WARDYN_RUN_OUTPUT_PERSIST=off` keeps the tail in memory only, expired
