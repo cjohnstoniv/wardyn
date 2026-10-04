@@ -6,7 +6,7 @@
 // The profile editor's composition half (0.8.6, M3): the base picker, per-field
 // overlay opt-in, the effective view and the server's refusals. Mounts the
 // editor directly, like profile-editor.test.tsx.
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -74,6 +74,12 @@ function renderEditor(profile: GovernanceProfile | null, profiles: GovernancePro
   return { onSaved };
 }
 
+// One change event per field, not one per keystroke: every keystroke
+// re-renders the whole editor, which is what pushed these cases past the test
+// timeout on a loaded CI runner.
+const typeValue = (label: string, value: string) =>
+  fireEvent.change(screen.getByLabelText(label), { target: { value } });
+
 const pickBase = async (name: string) => {
   await userEvent.click(screen.getByRole("combobox", { name: GOV.FIELD_BASE }));
   await userEvent.click(await screen.findByRole("option", { name: new RegExp(`^${name}`) }));
@@ -87,10 +93,13 @@ beforeEach(() => {
   updateProfileMock.mockResolvedValue({ profile: BASE, warnings: [] });
 });
 
-describe("ProfileEditor — authoring an overlay", () => {
+// Budget measured: these cases cost 0.4-0.9s of pure render CPU on an idle
+// core and 5-8s with a busy neighbour on it (each click re-renders the whole
+// editor). A timed-out case also leaks its pending clicks into the next one.
+describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
   it("on a profile base: an untouched field is absent, a narrowed one is the edited list", async () => {
     renderEditor(null);
-    await userEvent.type(screen.getByLabelText(GOV.FIELD_NAME), "Team A");
+    typeValue(GOV.FIELD_NAME, "Team A");
     await pickBase("Baseline");
 
     // The overlay lead replaces the JSON editor, and the inherited value is the base's effective one.
@@ -110,9 +119,7 @@ describe("ProfileEditor — authoring an overlay", () => {
     });
 
     await userEvent.click(screen.getByRole("switch", { name: `allowed_domains ${GOV.OVERLAY_NARROW}` }));
-    const box = screen.getByLabelText("allowed_domains");
-    await userEvent.clear(box);
-    await userEvent.type(box, "*.corp");
+    typeValue("allowed_domains", "*.corp");
     await userEvent.click(screen.getByRole("switch", { name: `${GOV.LIMIT_EXEC_LABEL} ${GOV.OVERLAY_NARROW}` }));
     await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
     expect(createProfileMock).toHaveBeenLastCalledWith(
@@ -125,7 +132,7 @@ describe("ProfileEditor — authoring an overlay", () => {
 
   it("on the deployment base: the inherited value is the deployment's, and base_profile_id is null", async () => {
     renderEditor(null);
-    await userEvent.type(screen.getByLabelText(GOV.FIELD_NAME), "Division");
+    typeValue(GOV.FIELD_NAME, "Division");
     await pickBase(GOV.BASE_DEPLOYMENT);
 
     expect((await screen.findAllByText(GOV.OVERLAY_INHERITED("*"))).length).toBeGreaterThan(0);
@@ -237,7 +244,7 @@ describe("ProfileEditor — the effective view", () => {
   });
 });
 
-describe("ProfileEditor — the server's refusals", () => {
+describe("ProfileEditor — the server's refusals", { timeout: 20_000 }, () => {
   it.each([
     ["governance_overlay_invalid", 400, GOV.REFUSED_OVERLAY_INVALID],
     ["governance_profile_cycle", 409, GOV.REFUSED_CYCLE],
@@ -247,7 +254,7 @@ describe("ProfileEditor — the server's refusals", () => {
     const sentence = `server says ${reason} here`;
     createProfileMock.mockRejectedValue(new HttpError(status, sentence, reason));
     renderEditor(null);
-    await userEvent.type(screen.getByLabelText(GOV.FIELD_NAME), "Team A");
+    typeValue(GOV.FIELD_NAME, "Team A");
     await pickBase("Baseline");
     await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
 
