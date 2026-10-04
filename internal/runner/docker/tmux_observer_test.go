@@ -58,7 +58,17 @@ func newTmuxRig(t *testing.T) *tmuxRig {
 	}
 	scratch := t.TempDir()
 	r := &tmuxRig{t: t, scratch: scratch, sock: filepath.Join(scratch, fmt.Sprintf("tmux-%d", os.Getuid()), "default")}
-	t.Cleanup(func() { _, _ = r.tmux("kill-server") })
+	t.Cleanup(func() {
+		_, _ = r.tmux("kill-server")
+		// The server and its shells exit after kill-server returns: wait until
+		// it stops answering, so TempDir's RemoveAll does not race it. (The
+		// shells keep no history file: HISTFILE is empty in their env.)
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			if _, err := r.tmux("list-sessions"); err != nil {
+				break
+			}
+		}
+	})
 	return r
 }
 
@@ -129,7 +139,7 @@ func (r *tmuxRig) attach(observer bool, cols, rows uint16) *tmuxClient {
 		r.t.Fatal(err)
 	}
 	cmd := exec.Command(attachShellFor(observer)[0], attachShellFor(observer)[1:]...)
-	cmd.Env = append(os.Environ(), "HOME="+r.scratch, "TMUX_TMPDIR="+r.scratch, "TERM=xterm-256color", "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "XDG_CONFIG_HOME="+r.scratch)
+	cmd.Env = append(os.Environ(), "HOME="+r.scratch, "TMUX_TMPDIR="+r.scratch, "TERM=xterm-256color", "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "XDG_CONFIG_HOME="+r.scratch, "HISTFILE=")
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = pts, pts, pts
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
 	if err := cmd.Start(); err != nil {
