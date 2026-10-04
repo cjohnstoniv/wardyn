@@ -123,6 +123,13 @@ describe("hostile output without a user gesture", () => {
     expect(offers).toEqual([]);
   });
 
+  it("a repaint that makes the payload true after the gesture authorises nothing", async () => {
+    drag([0, 0], [4, 0]);
+    await write("\x1b[1;1Hother" + tmuxCopy("other") + "\x1b[1;1Hhello");
+    expect(offers).toEqual([]);
+    expect(lastNotice()).toBe(TERMINAL_COPY.BLOCKED);
+  });
+
   it("a gesture older than a second authorises nothing", async () => {
     drag([0, 0], [4, 0]);
     t += GESTURE_WINDOW_MS + 1;
