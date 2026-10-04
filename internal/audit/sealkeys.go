@@ -20,9 +20,15 @@ const (
 	SealOff SealMode = "off"
 	// SealFields seals the personal data fields SealedFields lists.
 	SealFields SealMode = "fields"
-	// SealFull is SealFields and the human actor too (ar-l1.5); not yet served.
+	// SealFull is SealFields and the human actor too: the actor column holds
+	// SubjectActorPrefix and the person's subject id.
 	SealFull SealMode = "full"
 )
+
+// SubjectActorPrefix begins the actor of a human row written under SealFull. A
+// principal that starts with it is refused everywhere a person enters, so no
+// one can sign in as, or be recorded under, another person's subject.
+const SubjectActorPrefix = "subject:"
 
 // ParseSealMode reads WARDYN_AUDIT_SEAL; empty is off.
 func ParseSealMode(s string) (SealMode, error) {

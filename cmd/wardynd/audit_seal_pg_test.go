@@ -66,7 +66,9 @@ type sealRig struct {
 
 const sealRigToken = "seal-rig-admin-token"
 
-func newSealRig(t *testing.T) *sealRig {
+func newSealRig(t *testing.T) *sealRig { return newSealRigMode(t, audit.SealFields) }
+
+func newSealRigMode(t *testing.T, mode audit.SealMode) *sealRig {
 	t.Helper()
 	pool := subjectkeytest.ThrowawayDB(t)
 	id, err := age.GenerateX25519Identity()
@@ -87,8 +89,8 @@ func newSealRig(t *testing.T) *sealRig {
 
 	keysA := newKeys()
 	rg.flaky = &flakyKeys{SealKeys: subjectSealKeys{keysA}}
-	sealer := newAuditSealer(rg.flaky, pool, pending)
-	src := newAuditSealSource(audit.SealFields)
+	sealer := newAuditSealer(rg.flaky, pool, pending, mode == audit.SealFull)
+	src := newAuditSealSource(mode)
 	src.arm(sealer)
 	sinks, _ := json.Marshal(map[string]any{"file": map[string]any{"path": rg.sinkPath}})
 	rec, f, spool, drain, err := buildAuditChain(t.Context(), string(sinks), rg.spoolPath, "", pool, secretmask.NewRegistry(), src)
@@ -108,7 +110,7 @@ func newSealRig(t *testing.T) *sealRig {
 	}
 	keysB := newKeys()
 	rg.a = serve(keysA, sealer)
-	rg.b = serve(keysB, newAuditSealer(subjectSealKeys{keysB}, pool, pending))
+	rg.b = serve(keysB, newAuditSealer(subjectSealKeys{keysB}, pool, pending, mode == audit.SealFull))
 	return rg
 }
 
