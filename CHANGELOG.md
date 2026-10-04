@@ -38,6 +38,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   role-mapping store already did. Session cookies gain an optional `ae` field; an old cookie reads as epoch 0
   and stays valid until its person's first suspension. A downgrade to 0.8.5 ignores the new tables and stops
   enforcing deactivation.
+- **A sign-in is refused when its identity row is bound to another principal.** Each identity row keeps the
+  principal its first sign-in bound it to. An Entra person known here only by an earlier sign-in under their
+  pairwise sub now keeps that sub when an admin adds them on People by object id, as one who owned tokens or
+  keys already did. A sign-in that would still carry a session under a different principal is refused
+  ("sign-in refused"; the log names both principals at error), where it used to get a session that the
+  identity's suspension did not reach. This refuses a person whose identity is bound to their
+  `entra:<tenant>:<object id>` principal once their People entry is removed (remedy: add them again by object
+  id), and an Entra person whose pairwise sub changed, for example after the app registration was replaced.
 - **`WARDYN_ROLE_STAMP_TTL`** (default off) makes an API token or console session whose role stamp is older
   than the TTL sign in again before it works, so a demotion made only at the identity provider reaches
   them. Migration `0115_api_tokens_identity_stamped_at` backfills each token's stamp to its `created_at`,

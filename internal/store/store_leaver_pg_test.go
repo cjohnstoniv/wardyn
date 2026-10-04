@@ -175,6 +175,55 @@ func TestPG_IssueLoginIdentity(t *testing.T) {
 	}
 }
 
+// A sign-in naming an identity already bound to another principal is refused, at upsert and at
+// issuance, and writes nothing: no binding move, no login stamp, no email alias.
+func TestPG_IssueLoginIdentity_RefusesAnotherPrincipal(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	orig := signedIn(t, st, "pairwise-a", "a@corp.example", leaverOID)
+	moved := store.LoginIdentity{Principal: "entra:" + idTenant + ":" + leaverOID, Issuer: idIssuer, TenantID: idTenant, ObjectID: leaverOID, Email: "moved@corp.example"}
+	later := time.Now().UTC().Add(time.Minute)
+	if _, err := st.UpsertLoginIdentity(ctx, moved, later); !errors.Is(err, store.ErrIdentityBindingMismatch) {
+		t.Errorf("upsert under another principal = %v, want ErrIdentityBindingMismatch", err)
+	}
+	if _, err := st.IssueLoginIdentity(ctx, moved, later); !errors.Is(err, store.ErrIdentityBindingMismatch) {
+		t.Errorf("issue under another principal = %v, want ErrIdentityBindingMismatch", err)
+	}
+	got, err := st.GetIdentity(ctx, orig.ID)
+	if err != nil || got.Principal != "pairwise-a" || got.EmailLower != "a@corp.example" || !got.LastLoginAt.Equal(*orig.LastLoginAt) {
+		t.Errorf("identity = %+v (%v), want the original binding, email and login stamp", got, err)
+	}
+	if a := identityAliases(t, pool, orig.ID); len(a) != 1 || a[0] != "a@corp.example" {
+		t.Errorf("aliases = %v, want only the original email", a)
+	}
+}
+
+// The pending work a suspension names is written in its own transaction, beside the done cutoff, so a
+// crash after the commit still leaves the suspension for the sweeper to resume.
+func TestPG_SuspendIdentity_WritesPendingJobsWithTheCutoff(t *testing.T) {
+	st := store.NewPG(runsPGPoolIsolated(t))
+	ctx := context.Background()
+	leaver := signedIn(t, st, "sub-pending", "pending@corp.example", leaverOID)
+	keys := []store.JobKey{{Step: "audit_deactivate"}, {Step: "sweep", Target: "sub-pending"}}
+	if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: leaver.ID, Principals: []string{"sub-pending"}, PendingJobs: keys}); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := st.ListDeprovisionJobs(ctx, leaver.ID, store.JobKindSuspend)
+	if err != nil || len(jobs) != 3 {
+		t.Fatalf("ledger = %+v (%v), want the cutoff and two pending rows", jobs, err)
+	}
+	for _, j := range jobs {
+		if (j.Step == store.JobStepCutoff) != j.Done {
+			t.Errorf("job %+v: only the cutoff is done", j)
+		}
+	}
+	pending, err := st.PendingLeavers(ctx, 0, 10)
+	if err != nil || len(pending) != 1 || pending[0].ID != leaver.ID {
+		t.Errorf("pending leavers = %+v (%v), want the suspension", pending, err)
+	}
+}
+
 // The owner guard: the insert writers refuse a deactivated or past-epoch owner inside their own
 // transaction, admit the current epoch, a caller with no epoch and a principal with no row, and a
 // guard never reaches another person.
