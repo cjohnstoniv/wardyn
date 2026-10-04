@@ -174,16 +174,19 @@ export const LIMIT_FIELDS: Field[] = [
 type Bag = Record<string, unknown>;
 
 // What a standalone profile's stored limits become when it is first composed: every limit that
-// binds anything, in the overlay's narrowing form. An off door, a 0 (unlimited) and an empty
-// rubric narrow nothing and are left out.
+// binds anything, in the overlay's narrowing form. An off deny door, a 0 (unlimited) and an empty
+// rubric narrow nothing and are left out. The two permissive-when-true flags (kind "false") bind
+// when they are off, and an off flag is omitted on the wire, so an absent or false value seeds
+// false; a true value narrows nothing and is left out.
 export function seedOverlayLimits(limits: GovernanceLimits): Bag {
   const out: Bag = {};
-  for (const [k, v] of Object.entries(limits)) {
-    if (k === "autonomy_rubric") {
-      const rubric = Object.fromEntries(Object.entries((v ?? {}) as Bag).filter(([, lvl]) => lvl));
-      if (Object.keys(rubric).length > 0) out[k] = rubric;
-    } else if (v === true || (typeof v === "number" && v > 0)) {
-      out[k] = v;
+  const stored = limits as Bag;
+  const rubric = Object.fromEntries(Object.entries((stored.autonomy_rubric ?? {}) as Bag).filter(([, lvl]) => lvl));
+  if (Object.keys(rubric).length > 0) out.autonomy_rubric = rubric;
+  for (const { key, kind } of LIMIT_FIELDS) {
+    const v = stored[key];
+    if (kind === "true" ? v === true : kind === "false" ? v !== true : typeof v === "number" && v > 0) {
+      out[key] = kind === "false" ? false : v;
     }
   }
   return out;

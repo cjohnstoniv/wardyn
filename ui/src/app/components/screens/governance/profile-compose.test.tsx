@@ -44,6 +44,7 @@ import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { baseStatus } from "../../../lib/test-fixtures";
 import type { RunPolicySpec } from "../../../lib/types";
 import { aheadByHours } from "../../../lib/test-clock";
+import { seedOverlayLimits } from "./profile-overlay";
 import { ProfileEditor } from "./profile-editor";
 
 const SPEC: RunPolicySpec = {
@@ -201,10 +202,18 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
           deny_interactive: true,
           max_cpu_millis: 2000,
           max_wait_sec: 3600,
+          allow_no_end: false,
+          user_changes_limits: false,
           autonomy_rubric: { egress_open: "L1" },
         },
       }),
     );
+  });
+
+  it("a stored allow_no_end or user_changes_limits that is on is not seeded", () => {
+    const seeded = seedOverlayLimits({ allow_no_end: true, user_changes_limits: true } as never);
+    expect(seeded).not.toHaveProperty("allow_no_end");
+    expect(seeded).not.toHaveProperty("user_changes_limits");
   });
 
   it("a composed profile can narrow deny_ui_apps, the CPU ceiling and the autonomy rubric", async () => {

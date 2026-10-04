@@ -268,8 +268,9 @@ export function ProfileEditor({
             disabled={disabled}
             onChange={(next) => {
               // Composing a standalone profile moves its stored limits into the
-              // overlay (the save sends an empty `limits`), so nothing is lost silently.
-              if (base === BASE_NONE && next !== BASE_NONE && Object.keys(overlayLimits).length === 0) {
+              // overlay (the save sends an empty `limits`), so nothing is lost silently. A new
+              // profile has stored nothing yet, so there is nothing to move.
+              if (profile && base === BASE_NONE && next !== BASE_NONE && Object.keys(overlayLimits).length === 0) {
                 const moved = seedOverlayLimits(limits);
                 if (Object.keys(moved).length > 0) {
                   setOverlayLimits(moved);
