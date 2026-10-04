@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -79,12 +80,19 @@ func (r *outputRing) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// execOutputTail is one run's tail: the masking writer the runner writes to,
-// in front of the ring it fills, plus the finalisation state
+// execOutputTail is one run's tail: the masking writer the runner writes to
+// (through in), in front of the ring it fills, plus the finalisation state
 // (run_output_final.go): the open drains, the once-guard and the erasure fence.
 type execOutputTail struct {
-	mw   *liveMaskWriter
-	ring outputRing
+	mw *liveMaskWriter
+	// in is the drivers' way into mw: their copy is the agent's stdout drain, so
+	// it must never wait on the masker's registry read (maskPipe). nil for the
+	// pane snapshot, which writes mw directly.
+	in *maskPipe
+	// arrived is the clock at the drivers' latest write, in unix nanos: the TTL
+	// counts from the output, not from when the masker got to it.
+	arrived atomic.Int64
+	ring    outputRing
 	// sink is the masking writer's destination: the ring, mirrored into run_output_chunks
 	// (run_output_chunks.go).
 	sink *tailSink
@@ -111,6 +119,15 @@ type execOutputTail struct {
 	gapReason string
 }
 
+// lastOutput is when a driver last wrote, or the ring's own stamp for a tail no
+// driver has written to.
+func (e *execOutputTail) lastOutput() time.Time {
+	if n := e.arrived.Load(); n != 0 {
+		return time.Unix(0, n)
+	}
+	return e.ring.last
+}
+
 func newExecOutputTail(max int, now func() time.Time) *execOutputTail {
 	return &execOutputTail{
 		ring:      outputRing{max: max, last: now(), now: now},
@@ -135,9 +152,13 @@ type execOutputTails struct {
 func (t *execOutputTails) pruneLocked(now time.Time, ttl time.Duration) {
 	for id, e := range t.m {
 		e.mw.mu.Lock()
-		idle := now.Sub(e.ring.last)
+		last := e.ring.last
+		if !e.ring.expired {
+			last = e.lastOutput()
+		}
+		idle := now.Sub(last)
 		if idle >= ttl {
-			e.ring.expired, e.ring.buf, e.mw.tail = true, nil, nil
+			e.ring.expired, e.ring.buf, e.mw.tail, e.ring.last = true, nil, nil, last
 		}
 		e.mw.mu.Unlock()
 		if idle >= 2*ttl {
@@ -183,6 +204,7 @@ func (s *Server) openExecOutput(run types.AgentRun, interactive bool) io.Writer 
 	e := newExecOutputTail(s.cfg.RunOutputTailBytes, s.cfg.Now)
 	e.sink = s.newTailSink(runID, &e.ring)
 	e.mw = &liveMaskWriter{reg: s.cfg.MaskRegistry, runID: runID, dst: e.sink, guard: s.maskGuard(runID), capture: outputCapture{onLate: func() { s.lateRunOutput(runID, e) }}}
+	e.in = newMaskPipe(e.mw)
 	t := &s.execOutputs
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -191,7 +213,7 @@ func (s *Server) openExecOutput(run types.AgentRun, interactive bool) io.Writer 
 		t.m = map[uuid.UUID]*execOutputTail{}
 	}
 	t.m[runID] = e
-	return &tailWriter{mw: e.mw, t: e}
+	return &tailWriter{t: e}
 }
 
 // releasedHoldback is what a masker's withheld bytes become once no more output
@@ -232,6 +254,7 @@ func (s *Server) readExecOutput(runID uuid.UUID, limit int, withHold bool) (v ex
 	e.fmu.Lock()
 	v.complete = e.finished
 	e.fmu.Unlock()
+	e.flushIn()
 	e.mw.mu.Lock()
 	defer e.mw.mu.Unlock()
 	if e.ring.expired {
