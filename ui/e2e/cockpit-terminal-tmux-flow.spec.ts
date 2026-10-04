@@ -23,7 +23,6 @@ import { FLOW_HIGH_WATERMARK } from "../src/app/components/attach-terminal-flow"
 
 const MAIN_THREAD_BUDGET_MS = 200;
 const ECHO_BUDGET_MS = 200;
-const ECHO_POLL_MS = 20;
 
 test("50 MB of output keeps the page responsive and ends on the right screen", async ({ page }) => {
   const { id: runId } = await findRunningFixture(page);
@@ -79,28 +78,51 @@ test("50 MB of output keeps the page responsive and ends on the right screen", a
   await page.keyboard.press("Enter");
   await expect.poll(read, { timeout: 20_000 }).toContain("flow-ready");
 
+  // While it streams, none of the work the stream drives holds the main thread
+  // past the budget: the socket handler, xterm's parse slices (timers) and its
+  // drawing (animation frames), and style and layout. Long-animation-frame
+  // entries report every one, so nothing is sampled. A timer round trip measured
+  // the runner instead: the throttle spins the renderer, and a starved GPU
+  // process stalls each commit. React renders here follow the page's polls, not
+  // the output, so they are not counted.
+  await page.evaluate(() => {
+    type Frame = PerformanceEntry & {
+      styleAndLayoutStart: number;
+      scripts: Array<{ sourceURL: string; invoker: string; duration: number }>;
+    };
+    let worst = { what: "nothing over 50 ms", ms: 0 };
+    const note = (what: string, ms: number) => {
+      if (ms > worst.ms) worst = { what, ms };
+    };
+    const stream = ["DOMWebSocket.onmessage", "TimerHandler:setTimeout", "FrameRequestCallback"];
+    const scan = (frames: PerformanceEntryList) => {
+      for (const f of frames as Frame[]) {
+        // The page's scripts: the harness's own evaluations have no source.
+        for (const s of f.scripts) if (s.sourceURL && stream.includes(s.invoker)) note(s.invoker, s.duration);
+        if (f.styleAndLayoutStart) note("style and layout", f.startTime + f.duration - f.styleAndLayoutStart);
+      }
+    };
+    // A browser without the entry type would pass on no data, so it fails here.
+    if (!PerformanceObserver.supportedEntryTypes.includes("long-animation-frame")) {
+      throw new Error("this browser reports no long-animation-frame entries");
+    }
+    const obs = new PerformanceObserver((list) => scan(list.getEntries()));
+    obs.observe({ type: "long-animation-frame" });
+    (window as unknown as { __flowWorst: () => typeof worst }).__flowWorst = () => {
+      scan(obs.takeRecords());
+      return worst;
+    };
+  });
+
   // 50 MiB of 100-byte lines, then a sentinel the final screen must show.
   await page.keyboard.type(`yes "$(printf 'x%.0s' $(seq 1 99))" | head -c 52428800; echo; echo flow-done-$((6*7))`);
   await page.keyboard.press("Enter");
-
-  // While it streams, the main thread answers within the budget (a frozen
-  // page misses it by seconds). Probes stop once the sentinel is on screen.
-  const worst: number[] = [];
-  const deadline = Date.now() + 120_000;
-  while (Date.now() < deadline) {
-    const ms = await page.evaluate(
-      () => new Promise<number>((resolve) => {
-        const t0 = performance.now();
-        setTimeout(() => resolve(performance.now() - t0), 0);
-      }),
-    );
-    worst.push(ms);
-    if ((await read()).includes("flow-done-42")) break;
-  }
-  expect(await read()).toContain("flow-done-42");
-  worst.sort((a, b) => a - b);
-  const p95 = worst[Math.floor(worst.length * 0.95)] ?? 0;
-  expect(p95, `main-thread p95 over ${worst.length} probes`).toBeLessThan(MAIN_THREAD_BUDGET_MS);
+  await expect.poll(read, { timeout: 120_000 }).toContain("flow-done-42");
+  const worst = await page.evaluate(() =>
+    (window as unknown as { __flowWorst: () => { what: string; ms: number } }).__flowWorst(),
+  );
+  test.info().annotations.push({ type: "main-thread worst", description: `${worst.what}: ${Math.round(worst.ms)} ms` });
+  expect(worst.ms, `longest main-thread work while streaming: ${worst.what}`).toBeLessThan(MAIN_THREAD_BUDGET_MS);
 
   // A backlog past the watermark must have been paused, and every pause ended resumed.
   const peak = await page.evaluate(() => (window as unknown as { __flowPeak: number }).__flowPeak);
@@ -109,20 +131,38 @@ test("50 MB of output keeps the page responsive and ends on the right screen", a
   }
   await expect.poll(() => frames.resume).toBe(frames.pause);
 
-  // And input still echoes promptly once the stream is over. The command's output
-  // (flow-echo-42) differs from what the typed line shows, so only the shell's
-  // answer satisfies the poll. The poll's own resolution adds up to ECHO_POLL_MS.
+  // And input still echoes promptly once the stream is over: from the Enter
+  // keydown to the frame after xterm parsed the shell's answer, timed in the page
+  // so the harness's own round trips to it are not counted. The answer
+  // (flow-echo-42) differs from what the typed line shows, so only it counts.
   await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
   await page.keyboard.type("echo flow-echo-$((6*7))");
-  const t0 = Date.now();
+  await page.evaluate(() => {
+    type T = {
+      rows: number;
+      buffer: { active: { viewportY: number; getLine(y: number): { translateToString(trim: boolean): string } | undefined } };
+      onWriteParsed(cb: () => void): { dispose(): void };
+    };
+    const w = window as unknown as { __wardynTerm: { terms: Set<T> }; __echoMs?: number };
+    const term = [...w.__wardynTerm.terms][0]!;
+    let t0 = 0;
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !t0) t0 = performance.now();
+    }, { capture: true });
+    const parsed = term.onWriteParsed(() => {
+      const b = term.buffer.active;
+      for (let y = b.viewportY; t0 && y < b.viewportY + term.rows; y++) {
+        if (b.getLine(y)?.translateToString(true).includes("flow-echo-42")) {
+          parsed.dispose();
+          requestAnimationFrame(() => (w.__echoMs = performance.now() - t0));
+          return;
+        }
+      }
+    });
+  });
   await page.keyboard.press("Enter");
-  let echoMs = Number.POSITIVE_INFINITY;
-  while (Date.now() - t0 < 5_000) {
-    if ((await read()).includes("flow-echo-42")) {
-      echoMs = Date.now() - t0;
-      break;
-    }
-    await page.waitForTimeout(ECHO_POLL_MS);
-  }
+  const echo = await page.waitForFunction(() => (window as unknown as { __echoMs?: number }).__echoMs, null, { timeout: 5_000 });
+  const echoMs = (await echo.jsonValue()) as number;
+  test.info().annotations.push({ type: "input-to-echo", description: `${Math.round(echoMs)} ms` });
   expect(echoMs, "input-to-echo ms").toBeLessThan(ECHO_BUDGET_MS);
 });

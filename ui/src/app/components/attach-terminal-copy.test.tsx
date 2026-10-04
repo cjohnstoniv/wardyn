@@ -11,6 +11,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act, screen, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class {
@@ -63,6 +64,7 @@ class FakeWebSocket {
 
 import { AttachTerminal } from "./attach-terminal";
 import { TERMINAL_COPY } from "./wardyn/copy";
+import { OFFER_TTL_MS } from "./attach-terminal-clipboard";
 
 const modeFrame = (readOnly: boolean) =>
   JSON.stringify({ type: "attach-mode", read_only: readOnly, holder: { held: true, principal: "alice@example.com", since: new Date().toISOString(), cols: 80, rows: 24, source: "web" } });
@@ -253,6 +255,52 @@ describe("AttachTerminal copy offer", () => {
     expect(toast()).not.toBeNull();
     act(() => ws.drop(1006));
     expect(toast()).toBeNull();
+  });
+
+  // An offer left to expire while focus is somewhere: returns it to the terminal
+  // only from inside the panel.
+  async function expireOfferWithFocusOn(focusOn: (ta: HTMLTextAreaElement) => HTMLElement) {
+    vi.useFakeTimers({ toFake: ["setTimeout"], shouldAdvanceTime: true });
+    try {
+      const { ws, grid, view } = await attach(false);
+      const ta = view.container.querySelector("textarea") as HTMLTextAreaElement;
+      dragHello(grid);
+      await out(ws, tmuxCopy("hello"));
+      expect(toast()).not.toBeNull();
+      const focused = focusOn(ta);
+      act(() => focused.focus());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(OFFER_TTL_MS + 100);
+      });
+      expect(toast()).toBeNull();
+      return { ws, ta };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it("an offer that expires while another control has focus leaves focus and typing there", async () => {
+    const title = document.body.appendChild(document.createElement("input"));
+    try {
+      const { ws } = await expireOfferWithFocusOn(() => title);
+      expect(document.activeElement).toBe(title);
+      ws.sent.length = 0;
+      await userEvent.setup().keyboard("ab");
+      expect(title.value).toBe("ab");
+      expect(ws.sent).toEqual([]);
+    } finally {
+      title.remove();
+    }
+  });
+
+  it("an offer that expires while the terminal has focus leaves it in the terminal", async () => {
+    const { ta } = await expireOfferWithFocusOn((t) => t);
+    expect(document.activeElement).toBe(ta);
+  });
+
+  it("an offer that expires while the card has focus gives focus back to the terminal", async () => {
+    const { ta } = await expireOfferWithFocusOn(() => toast()!);
+    expect(document.activeElement).toBe(ta);
   });
 
   it("a fresh socket is not the writer until the server says so", async () => {
