@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- **Store mode without an age key or a key service now refuses to start.** With `WARDYN_SECRET_STORE=vaultkv`
+  or `azurekv`, no `WARDYN_AGE_KEY` and no key service, the per-person keys that seal run masking copies had
+  nothing to wrap under, so a run silently lost its credentials (an `env_secret` grant was left out; an Azure
+  DevOps token was refused). wardynd now refuses to serve, and the Helm chart refuses the render. Remedy: set
+  `WARDYN_AGE_KEY` (`wardynd -gen-age-key`) or a key service (`WARDYN_KEK=transit` or `azurekv`; chart
+  `kek.provider`). The maintenance modes (`-migrate-secrets`, `-rewrap`) still run.
 - **An unplaceable Kubernetes run now waits for room.** A run whose pods no machine has room for used to
   fail at 90 seconds (the proxy's IP bound); it now stays `STARTING`, showing "Waiting for a machine with
   room for this sandbox.", for up to `WARDYN_SANDBOX_CAPACITY_WAIT` (15 minutes). Set it to `0` to keep

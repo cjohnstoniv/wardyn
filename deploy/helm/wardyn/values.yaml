@@ -245,9 +245,11 @@ secrets:
 # Store mode (docs/operations/secrets-and-keys.md "Store mode: credentials in Vault"): every
 # stored credential's value lives in your organisation's Vault KV v2 engine
 # (OpenBao is a supported endpoint), and Postgres keeps only a pointer row.
-# wardynd then holds no key: with backend vaultkv the age-key refusal above does
-# not apply, and WARDYN_AGE_KEY is needed only until `wardynd -migrate-secrets
-# -to=vaultkv` has moved the existing rows. The default NetworkPolicy denies
+# wardynd keeps no credential value under the age key: with backend vaultkv the
+# age-key refusal above does not apply. It still needs an age identity or a key
+# service (kek.provider transit or azurekv) to wrap the per-person keys that
+# seal run masking copies; with a key service, WARDYN_AGE_KEY is needed only
+# until `wardynd -migrate-secrets -to=vaultkv` has moved the existing rows. The default NetworkPolicy denies
 # wardynd's egress: add a rule for Vault to networkPolicy.egress.extra.
 #
 # backend azurekv is the same in Azure Key Vault (docs/operations/secrets-and-keys.md "Store
@@ -256,7 +258,9 @@ secrets:
 # azure.vaultUrl, not both.
 secretStore:
   # "pg" (sealed in Postgres under the age key), "vaultkv" or "azurekv" (store
-  # mode).
+  # mode). Store mode still needs an age identity or a key service (kek.provider
+  # transit or azurekv) to wrap the per-person keys that seal run masking
+  # copies; the render refuses with neither.
   backend: pg
   vault:
     # https:// address of Vault. Required for vaultkv; set with backend pg it
