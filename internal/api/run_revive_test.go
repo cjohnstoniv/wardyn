@@ -658,3 +658,79 @@ func TestReviveRun_AgentStatusProbeErrorRefuses(t *testing.T) {
 		t.Error("a refused revive cleared the lost mark")
 	}
 }
+
+// TestRevive_NarrowedPATRefusedWhenBrokerOff: a revive re-asks dispatch's
+// narrowing refusals. A run whose git_pat grant is narrowed, revived after the
+// PAT broker was turned off, would keep the narrowed lane and lose the raw-mint
+// refusal, so the PAT would reach the sandbox unnarrowed. It is refused instead,
+// audited, with the proxy untouched. An unnarrowed grant revives broker-off as
+// before (raw mint is that mode's point), and broker-on keeps the refusal set.
+func TestRevive_NarrowedPATRefusedWhenBrokerOff(t *testing.T) {
+	narrowed := func(t *testing.T, f *reviveFixture) uuid.UUID {
+		t.Helper()
+		cfg, err := proxy.LoadConfigBytes(f.rs.cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		g := cfg.PATGrants["git.example"]
+		g.Access, g.Repos = types.PATAccessRead, types.PATRepoSet("team/app")
+		cfg.PATGrants["git.example"] = g
+		cfg.BrokeredPATGrantIDs = append(cfg.BrokeredPATGrantIDs, g.GrantID)
+		if f.rs.cfg, err = json.Marshal(cfg); err != nil {
+			t.Fatal(err)
+		}
+		row := patGrantRow(g.GrantID, f.run.ID, "git.example")
+		row.Spec.Scope = mustJSON(types.GitPATScope{Host: "git.example", SecretName: "pat-git.example", Repos: g.Repos, Access: g.Access})
+		f.rs.credGrants = []types.CredentialGrant{row}
+		return g.GrantID
+	}
+
+	t.Run("broker off refuses a narrowed grant", func(t *testing.T) {
+		f := newReviveFixture(t)
+		narrowed(t, f)
+		f.srv.cfg.DisableGitPATBroker = true
+		w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+		if w.Code != http.StatusConflict {
+			t.Fatalf("revive = %d, want 409 (body %s)", w.Code, w.Body.String())
+		}
+		var body struct {
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Reason != "git_pat_narrowing_needs_broker" {
+			t.Fatalf("reason = %q (err %v), want git_pat_narrowing_needs_broker", body.Reason, err)
+		}
+		if len(f.rr.replaced) != 0 {
+			t.Fatalf("ReplaceProxy calls = %d, want none", len(f.rr.replaced))
+		}
+		if lostAt, _ := f.st.lost(); lostAt == nil {
+			t.Error("a refused revive cleared the lost mark")
+		}
+		ev := f.audit.eventsFor(f.run.ID, "run.revive")
+		if len(ev) != 1 || ev[0].Outcome != "failure" || leaseAuditData(t, ev[0])["reason"] != "git_pat_narrowing_needs_broker" {
+			t.Fatalf("run.revive events = %+v, want one failure naming the reason", ev)
+		}
+	})
+
+	t.Run("broker on keeps the narrowed grant in the refusal set", func(t *testing.T) {
+		f := newReviveFixture(t)
+		id := narrowed(t, f)
+		if code := f.revive(t); code != http.StatusOK {
+			t.Fatalf("revive = %d, want 200", code)
+		}
+		if got := f.newConfig(t).BrokeredPATGrantIDs; !slices.Contains(got, id) {
+			t.Fatalf("BrokeredPATGrantIDs = %v, want it to hold %s", got, id)
+		}
+	})
+
+	t.Run("broker off revives an unnarrowed grant", func(t *testing.T) {
+		f := newReviveFixture(t)
+		f.srv.cfg.DisableGitPATBroker = true
+		f.rs.credGrants = []types.CredentialGrant{patGrantRow(uuid.New(), f.run.ID, "git.example")}
+		if code := f.revive(t); code != http.StatusOK {
+			t.Fatalf("revive = %d, want 200", code)
+		}
+		if got := f.newConfig(t).BrokeredPATGrantIDs; len(got) != 0 {
+			t.Fatalf("BrokeredPATGrantIDs = %v with the broker off, want none", got)
+		}
+	})
+}
