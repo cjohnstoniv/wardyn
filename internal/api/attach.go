@@ -322,7 +322,9 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		via:       via,
 		notify:    wa.notify,
 		displace:  wa.displace,
+		ping:      c.Ping,
 	}
+	holder.lastOutput.Store(time.Now().UnixNano())
 	wa.holder = holder
 	readOnly, releaseHolder := s.registerAttachHolder(id, holder)
 	// Deferred as the crash backstop, NOT the release point (see the explicit
@@ -331,6 +333,10 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// "held" forever, curable only by a restart. release is idempotent and
 	// identity-checked (attach_holder.go), so running it twice is safe.
 	defer releaseAttach(releaseHolder)
+	if readOnly {
+		// Possibly behind its own dead earlier tab: see attach_stale.go.
+		go s.probeStaleWriter(pumpCtx, id, holder)
+	}
 	// Tears down ONLY the exec stream, never the sandbox. Runs before the
 	// release above, so a holder never outlives its exec.
 	defer func() { _ = holder.mux.Close() }()

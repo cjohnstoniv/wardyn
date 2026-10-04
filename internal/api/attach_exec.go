@@ -88,6 +88,13 @@ func (r *attachReady) setAttaching() {
 	}
 }
 
+// isReady reports whether the holder is ready, without waiting.
+func (r *attachReady) isReady() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.ready
+}
+
 // wait blocks until the holder is ready, and reports false when ctx ended first.
 func (r *attachReady) wait(ctx context.Context) bool {
 	r.mu.Lock()
