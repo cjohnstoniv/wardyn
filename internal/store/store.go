@@ -130,12 +130,9 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 			return types.AgentRun{}, err
 		}
 	}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.RunCapLockClass); err != nil {
+	active, err := lockAndCountActiveRuns(ctx, tx)
+	if err != nil {
 		return types.AgentRun{}, err
-	}
-	var active int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND (lost_at IS NULL OR lost_reason = $2)`, nonTerminalStateNames(), string(types.LostOutage)).Scan(&active); err != nil {
-		return types.AgentRun{}, fmt.Errorf("store: count active runs: %w", err)
 	}
 	if active >= limit {
 		return types.AgentRun{}, ErrRunCapReached
@@ -150,6 +147,23 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 	return created, nil
 }
 
+// lockAndCountActiveRuns takes the deployment cap's transaction-scoped advisory
+// lock and counts the runs it holds (CountNonTerminalRuns' predicate). Every
+// writer that adds a run to that count (a create, a kept run's revive) holds the
+// lock from this count to its commit. q must be a pgx.Tx.
+func lockAndCountActiveRuns(ctx context.Context, q Querier) (int, error) {
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.RunCapLockClass); err != nil {
+		return 0, err
+	}
+	var active int
+	if err := q.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames(), string(types.LostOutage)).Scan(&active); err != nil {
+		return 0, fmt.Errorf("store: count active runs: %w", err)
+	}
+	return active, nil
+}
+
+const activeRunsCountSQL = `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND (lost_at IS NULL OR lost_reason = $2)`
+
 // CountNonTerminalRuns is the number of non-terminal run rows that hold a sandbox,
 // the quantity CreateRunUnderCap holds under the cap. An ended or rebooted run kept
 // for its grace (lost_at set) has no running agent and holds no slot; a run kept
@@ -157,7 +171,7 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 // pre-flight read for a refusal that must come before an identity is minted, never the authority.
 func (s PG) CountNonTerminalRuns(ctx context.Context) (int, error) {
 	var n int
-	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND (lost_at IS NULL OR lost_reason = $2)`, nonTerminalStateNames(), string(types.LostOutage)).Scan(&n); err != nil {
+	if err := s.Pool.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames(), string(types.LostOutage)).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count active runs: %w", err)
 	}
 	return n, nil

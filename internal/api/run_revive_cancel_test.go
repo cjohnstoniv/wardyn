@@ -33,11 +33,11 @@ type cancelAwareStore struct {
 	lostBounded  bool // a MarkRunLost that landed ran under a deadline
 }
 
-func (s *cancelAwareStore) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *store.EndedKept) (bool, error) {
+func (s *cancelAwareStore) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *store.EndedKept, limit int) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	return s.reviveStore.MarkRunRevived(ctx, id, from, ended)
+	return s.reviveStore.MarkRunRevived(ctx, id, from, ended, limit)
 }
 
 func (s *cancelAwareStore) MarkRunLost(ctx context.Context, id uuid.UUID, why types.LostReason, at time.Time, life time.Duration) (bool, error) {

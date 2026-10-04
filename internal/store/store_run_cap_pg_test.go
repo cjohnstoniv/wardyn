@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -122,5 +123,83 @@ func TestPG_CreateRunUnderCap_OutageKeptRunHoldsSlot(t *testing.T) {
 	}
 	if _, err := pg.CreateRunUnderCap(ctx, newRun(types.RunPending), 1); !errors.Is(err, store.ErrRunCapReached) {
 		t.Fatalf("create at cap 1 with an outage-kept run = %v; want ErrRunCapReached", err)
+	}
+}
+
+// TestPG_MarkRunRevived_KeptRunTakesASlotUnderTheCap pins that reviving a run kept
+// after a reboot or its end, which holds no slot, takes one like a create does: at
+// cap 1, with a replacement admitted in its slot, the revive is refused with
+// ErrRunCapReached and the run stays kept; once the slot is free, it is claimed.
+func TestPG_MarkRunRevived_KeptRunTakesASlotUnderTheCap(t *testing.T) {
+	for _, reason := range []types.LostReason{types.LostReboot, types.LostEnded} {
+		t.Run(string(reason), func(t *testing.T) {
+			ctx := context.Background()
+			pool := runsPGPoolIsolated(t)
+			pg := store.NewPG(pool)
+			kept, err := pg.CreateRunUnderCap(ctx, newRun(types.RunRunning), 1)
+			if err != nil {
+				t.Fatalf("create the run: %v", err)
+			}
+			var lostAt time.Time
+			if err := pool.QueryRow(ctx, `UPDATE agent_runs SET lost_at = now(), lost_reason = $2 WHERE id = $1 RETURNING lost_at`, kept.ID, string(reason)).Scan(&lostAt); err != nil {
+				t.Fatalf("keep the run: %v", err)
+			}
+			var ended *store.EndedKept
+			if reason == types.LostEnded {
+				ended = keptAt(lostAt, time.Now())
+			}
+			replacement, err := pg.CreateRunUnderCap(ctx, newRun(types.RunRunning), 1)
+			if err != nil {
+				t.Fatalf("create the replacement in the kept run's slot: %v", err)
+			}
+
+			if ok, err := pg.MarkRunRevived(ctx, kept.ID, reason, ended, 1); ok || !errors.Is(err, store.ErrRunCapReached) {
+				t.Fatalf("revive at the cap = %v, %v; want false, ErrRunCapReached", ok, err)
+			}
+			if n, err := pg.CountNonTerminalRuns(ctx); err != nil || n != 1 {
+				t.Fatalf("CountNonTerminalRuns = %d, %v; want 1 (the refused revive took no slot)", n, err)
+			}
+			if got, err := pg.GetRun(ctx, kept.ID); err != nil || got.LostAt == nil || got.LostReason != reason {
+				t.Fatalf("refused run: lost %v %q, err %v; want still kept (%s)", got.LostAt, got.LostReason, err, reason)
+			}
+
+			if ok, err := pg.UpdateRunStateIf(ctx, replacement.ID, types.RunRunning, types.RunFailed); err != nil || !ok {
+				t.Fatalf("end the replacement: ok=%v err=%v", ok, err)
+			}
+			if ok, err := pg.MarkRunRevived(ctx, kept.ID, reason, ended, 1); err != nil || !ok {
+				t.Fatalf("revive under the cap = %v, %v; want true", ok, err)
+			}
+			if n, err := pg.CountNonTerminalRuns(ctx); err != nil || n != 1 {
+				t.Fatalf("CountNonTerminalRuns = %d, %v; want 1 (the revived run)", n, err)
+			}
+			if got, err := pg.GetRun(ctx, kept.ID); err != nil || got.LostAt != nil {
+				t.Fatalf("revived run: lost %v, err %v; want live", got.LostAt, err)
+			}
+		})
+	}
+}
+
+// TestPG_MarkRunRevived_CountedRunTakesNoExtraSlot pins that restarting a run the
+// cap already counts (live, or kept after an outage with its agent still running)
+// is never refused at the cap and adds nothing to the count.
+func TestPG_MarkRunRevived_CountedRunTakesNoExtraSlot(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	run, err := pg.CreateRunUnderCap(ctx, newRun(types.RunRunning), 1)
+	if err != nil {
+		t.Fatalf("create the run: %v", err)
+	}
+	if ok, err := pg.MarkRunRevived(ctx, run.ID, "", nil, 1); err != nil || !ok {
+		t.Fatalf("live restart at the cap = %v, %v; want true", ok, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at = now(), lost_reason = $2 WHERE id = $1`, run.ID, string(types.LostOutage)); err != nil {
+		t.Fatalf("keep the run after an outage: %v", err)
+	}
+	if ok, err := pg.MarkRunRevived(ctx, run.ID, types.LostOutage, nil, 1); err != nil || !ok {
+		t.Fatalf("outage revive at the cap = %v, %v; want true", ok, err)
+	}
+	if n, err := pg.CountNonTerminalRuns(ctx); err != nil || n != 1 {
+		t.Fatalf("CountNonTerminalRuns = %d, %v; want 1 (the one run, counted once)", n, err)
 	}
 }

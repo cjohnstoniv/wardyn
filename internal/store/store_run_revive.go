@@ -37,7 +37,13 @@ type RunReviver interface {
 	//
 	// false means the run went terminal, ended, was lost or revived since, or its grace or end ran
 	// out — it gets no proxy.
-	MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept) (bool, error)
+	//
+	// A run kept after its end or a reboot holds no slot under the deployment cap
+	// (CountNonTerminalRuns), so with limit > 0 its claim takes one like a create does:
+	// under CreateRunUnderCap's lock, ErrRunCapReached when the deployment already holds
+	// limit runs, the run left as it was. A live or outage-kept run is already counted and
+	// is claimed without a check.
+	MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int) (bool, error)
 	// SetRunProxyRelease records release as the one that started run id's
 	// proxy, once a revive's new proxy runs.
 	SetRunProxyRelease(ctx context.Context, id uuid.UUID, release string) error
@@ -58,7 +64,7 @@ type RunProxyRelease struct {
 var _ RunReviver = PG{}
 
 // MarkRunRevived — see RunReviver.
-func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept) (bool, error) {
+func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int) (bool, error) {
 	switch from {
 	case "", types.LostOutage, types.LostReboot:
 	case types.LostEnded:
@@ -68,8 +74,34 @@ func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostRea
 	default:
 		return false, nil
 	}
+	if limit > 0 && (from == types.LostReboot || from == types.LostEnded) {
+		return s.markKeptRunRevivedUnderCap(ctx, id, from, ended, limit)
+	}
+	return markRunRevived(ctx, s.Pool, id, from, ended)
+}
+
+// markKeptRunRevivedUnderCap is a kept run's claim under the deployment cap: the
+// count and the claim share CreateRunUnderCap's transaction-scoped advisory lock
+// and its counting predicate, so a revive and a create racing at the cap admit
+// exactly the cap.
+func (s PG) markKeptRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int) (claimed bool, err error) {
+	err = s.inTx(ctx, func(q Querier) error {
+		active, err := lockAndCountActiveRuns(ctx, q)
+		if err != nil {
+			return err
+		}
+		if active >= limit {
+			return ErrRunCapReached
+		}
+		claimed, err = markRunRevived(ctx, q, id, from, ended)
+		return err
+	})
+	return claimed && err == nil, err
+}
+
+func markRunRevived(ctx context.Context, q Querier, id uuid.UUID, from types.LostReason, ended *EndedKept) (bool, error) {
 	lostAt, keptAfter, now := endedArgs(ended)
-	tag, err := s.Pool.Exec(ctx, `
+	tag, err := q.Exec(ctx, `
 		UPDATE agent_runs SET lost_at=NULL, lost_reason='', containment_error=NULL, containment_error_at=NULL,
 			paused_at=CASE WHEN $3=$8 THEN NULL ELSE paused_at END,
 			paused_reason=CASE WHEN $3=$8 THEN '' ELSE paused_reason END,

@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -234,12 +235,8 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// the row as read here, so a run read live still had its old proxy running.
 	// It also refreshes the watcher lease, so the watcher sweep does not find
 	// a rebooted agent not yet started and lose the run again.
-	claimed, err := reviver.MarkRunRevived(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()))
-	if err != nil {
-		return reviveResult{}, reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, "claim the run for revive: "+err.Error())
-	}
-	if !claimed {
-		return reviveResult{}, reviveRefused(http.StatusConflict, reasonReviveRunChanged, "the run changed while it was being revived (it ended, was lost or was revived); try again")
+	if rerr := s.claimRevive(ctx, reviver, run); rerr != nil {
+		return reviveResult{}, rerr
 	}
 	// From the claim on, the revive finishes or compensates whatever becomes of
 	// the request: a person closing the tab stops waiting for the answer, not
@@ -322,6 +319,24 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "success", mustJSON(data)))
 	return reviveResult{RunID: run.ID, DeniedAdded: re.added, ProxyRelease: version.Version, AgentStarted: rebooted}, nil
+}
+
+// claimRevive is reviveRunProxy's claim (store.RunReviver.MarkRunRevived). A run
+// kept after a reboot or its end holds no slot under WARDYN_MAX_CONCURRENT_RUNS,
+// so its claim takes one under the cap's lock, and at the cap is refused as a
+// create is, the run left kept.
+func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run types.AgentRun) *reviveError {
+	claimed, err := reviver.MarkRunRevived(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()), s.cfg.MaxConcurrentRuns)
+	if errors.Is(err, store.ErrRunCapReached) {
+		return reviveRefused(http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)
+	}
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, "claim the run for revive: "+err.Error())
+	}
+	if !claimed {
+		return reviveRefused(http.StatusConflict, reasonReviveRunChanged, "the run changed while it was being revived (it ended, was lost or was revived); try again")
+	}
+	return nil
 }
 
 // reviveFailedAfterClaim is the end of a revive whose proxy replace or agent

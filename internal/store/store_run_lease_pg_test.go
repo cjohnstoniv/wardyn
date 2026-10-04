@@ -368,7 +368,7 @@ func TestPG_RunContainmentError(t *testing.T) {
 	if err := pg.SetRunContainmentError(ctx, lost.ID, "boom", now); err != nil {
 		t.Fatalf("SetRunContainmentError(lost): %v", err)
 	}
-	if got, err := pg.MarkRunRevived(ctx, lost.ID, types.LostOutage, nil); err != nil || !got {
+	if got, err := pg.MarkRunRevived(ctx, lost.ID, types.LostOutage, nil, 0); err != nil || !got {
 		t.Fatalf("MarkRunRevived = %v, %v; want true", got, err)
 	}
 	if r := read(lost.ID); r.ContainmentError != "" || r.ContainmentErrorAt != nil {
