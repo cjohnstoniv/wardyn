@@ -5,8 +5,8 @@
 
 // The admin People page's reads and writes (internal/api/people.go, sessions.go, sshkeys_admin.go).
 // All securityOps: admin or security admin. Stored-credential erase is credentials.erase.
-import type { PersonList, PersonToken } from "../types";
-import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
+import type { PersonList, PersonSummary, PersonToken } from "../types";
+import { asJson, errText, HttpError, LIST_LIMIT, unwrapList, wfetch } from "./core";
 
 const seg = (principal: string) => encodeURIComponent(principal);
 
@@ -33,9 +33,31 @@ export const people = {
     await ok(await wfetch("/people", { method: "POST", body: JSON.stringify({ principal, ...(email ? { email } : {}) }) }));
   },
 
-  // GET /api/v1/people/{principal}/tokens -> their tokens, revoked ones included.
+  // GET /api/v1/people -> the one person with this principal, or undefined. There is no read-one route,
+  // so ask for the principal as the search and follow the cursor until the exact principal turns up
+  // (the search also matches by email, and a longer principal can sort ahead of it).
+  async get(principal: string): Promise<PersonSummary | undefined> {
+    let cursor: string | undefined;
+    do {
+      const page = await people.list({ limit: 200, cursor, q: principal });
+      const hit = page.people.find((p) => p.principal === principal);
+      if (hit) return hit;
+      cursor = page.next_cursor;
+    } while (cursor);
+    return undefined;
+  },
+
+  // GET /api/v1/people/{principal}/tokens -> all their tokens, revoked and expired ones included. The
+  // route is paged newest first, so this reads every page: an older live token can sit behind a full
+  // page of retired ones.
   async tokens(principal: string): Promise<PersonToken[]> {
-    return unwrapList<PersonToken>(await asJson<unknown>(await ok(await wfetch(`/people/${seg(principal)}/tokens`, { method: "GET" }))));
+    const all: PersonToken[] = [];
+    for (;;) {
+      const res = await ok(await wfetch(`/people/${seg(principal)}/tokens?limit=${LIST_LIMIT}&offset=${all.length}`, { method: "GET" }));
+      const page = unwrapList<PersonToken>(await asJson<unknown>(res));
+      all.push(...page);
+      if (page.length === 0 || res.headers.get("X-Wardyn-Truncated") !== "true") return all;
+    }
   },
 
   // POST /api/v1/sessions/revoke {sub, sessions_only} -> 204: the session cutoff alone. Without

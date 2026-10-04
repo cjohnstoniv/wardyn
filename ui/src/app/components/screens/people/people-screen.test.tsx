@@ -18,9 +18,11 @@ const signOutMock = vi.fn();
 const removeKeysMock = vi.fn();
 const eraseMock = vi.fn();
 const getAccessMock = vi.fn();
+const getMock = vi.fn();
 vi.mock("../../../lib/api/people", () => ({
   people: {
     list: (...a: unknown[]) => listMock(...a),
+    get: (...a: unknown[]) => getMock(...a),
     create: (...a: unknown[]) => createMock(...a),
     tokens: (...a: unknown[]) => tokensMock(...a),
     signOutEverywhere: (...a: unknown[]) => signOutMock(...a),
@@ -81,8 +83,9 @@ function renderScreen(opts: { operator?: boolean } = {}) {
 }
 
 beforeEach(() => {
-  for (const m of [listMock, createMock, tokensMock, signOutMock, removeKeysMock, eraseMock, getAccessMock]) m.mockReset();
+  for (const m of [listMock, createMock, tokensMock, signOutMock, removeKeysMock, eraseMock, getAccessMock, getMock]) m.mockReset();
   listMock.mockResolvedValue({ people: ROWS });
+  getMock.mockImplementation((principal: string) => Promise.resolve(ROWS.find((r) => r.principal === principal)));
   tokensMock.mockResolvedValue([{ id: "t1", name: "ci-bot", created_at: ago(DAY) }]);
   signOutMock.mockResolvedValue(undefined);
   removeKeysMock.mockResolvedValue(1);
@@ -194,6 +197,46 @@ describe("the person drawer", () => {
     expect(mock()).not.toHaveBeenCalled();
     await user.click(within(confirm).getByRole("button", { name: button }));
     await waitFor(() => expect(mock()).toHaveBeenCalledWith("sub-ana"));
+  });
+
+  // The count beside the list is the server's active count (unrevoked, unexpired), so the list is too.
+  it("lists only active tokens: revoked and expired ones are left out, null and future expiry stay", async () => {
+    tokensMock.mockResolvedValue([
+      { id: "a", name: "no-expiry", created_at: ago(DAY) },
+      { id: "b", name: "future-expiry", created_at: ago(DAY), expires_at: new Date(Date.now() + DAY).toISOString() },
+      { id: "c", name: "already-expired", created_at: ago(DAY), expires_at: ago(HOUR) },
+      { id: "d", name: "already-revoked", created_at: ago(DAY), revoked_at: ago(HOUR) },
+    ]);
+    const { drawer } = await openAna();
+    await within(drawer).findByText("no-expiry");
+    expect(within(drawer).getByText("future-expiry")).toBeInTheDocument();
+    expect(within(drawer).queryByText("already-expired")).toBeNull();
+    expect(within(drawer).queryByText("already-revoked")).toBeNull();
+  });
+
+  // The drawer's counts and its disabled buttons come from the person it was handed, so a completed
+  // action must hand it the person as the server now has them, on the first page or after Load more.
+  it.each([false, true])("refreshes the selected person's key count after Remove all (opened after Load more=%s)", async (secondPage) => {
+    let removed = false;
+    const target = person({ principal: "z-person", email: "target@example.com", ssh_keys: 1 });
+    const first = Array.from({ length: 50 }, (_, n) => person({ principal: `a-${String(n).padStart(2, "0")}`, email: `person-${n}@example.com` }));
+    listMock.mockImplementation((opts: { cursor?: string }) =>
+      Promise.resolve(!secondPage || opts.cursor ? { people: [{ ...target, ssh_keys: removed ? 0 : 1 }] } : { people: first, next_cursor: "page-two" }),
+    );
+    getMock.mockImplementation(() => Promise.resolve({ ...target, ssh_keys: removed ? 0 : 1 }));
+    removeKeysMock.mockImplementation(async () => {
+      removed = true;
+      return 1;
+    });
+    const user = userEvent.setup();
+    renderScreen({ operator: false });
+    if (secondPage) await user.click(await screen.findByRole("button", { name: "Load more" }));
+    await user.click(await screen.findByRole("button", { name: "target@example.com" }));
+    const drawer = await screen.findByRole("dialog");
+    await user.click(within(drawer).getByRole("button", { name: "Remove all" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Remove all" }));
+    await waitFor(() => expect(removeKeysMock).toHaveBeenCalledWith("z-person"));
+    await waitFor(() => expect(within(drawer).getByRole("button", { name: "Remove all" })).toBeDisabled());
   });
 
   it("Cancel on the confirm acts on nothing", async () => {

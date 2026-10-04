@@ -31,6 +31,9 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../../ui/sheet";
 
 type Action = "sign_out" | "ssh" | "creds";
 
+// The directory's API-token count (store_people_directory.go) counts the same rows: neither revoked nor expired.
+const isActiveToken = (t: PersonToken) => !t.revoked_at && (!t.expires_at || Date.parse(t.expires_at) > Date.now());
+
 function Section({ label, value, children }: { label: string; value: React.ReactNode; children?: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-3 border-b border-border py-3">
@@ -64,7 +67,7 @@ export function PersonDrawer({
     let live = true;
     peopleApi
       .tokens(principal)
-      .then((t) => live && setTokens(t.filter((x) => !x.revoked_at)))
+      .then((t) => live && setTokens(t.filter(isActiveToken)))
       .catch(() => {});
     return () => {
       live = false;
