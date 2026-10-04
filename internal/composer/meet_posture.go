@@ -153,7 +153,8 @@ func sameJSON(a, b any) bool {
 	return errA == nil && errB == nil && bytes.Equal(x, y)
 }
 
-// meetUIApps keeps the (name, port) pairs both sides name. An empty list is
+// meetUIApps keeps the (name, port, path) apps both sides name, the same
+// identity Leq compares. An empty list is
 // "no UI apps", never "no opinion", so a base without any admits none.
 func (m *meeter) meetUIApps(base, ov []types.UIApp) []types.UIApp {
 	var out []types.UIApp
@@ -163,7 +164,11 @@ func (m *meeter) meetUIApps(base, ov []types.UIApp) []types.UIApp {
 			m.widen("ui_apps", "%s:%d is not a UI app of the base", o.Name, o.Port)
 			continue
 		}
-		app := types.UIApp{Name: o.Name, Port: o.Port, Path: min(base[i].Path, o.Path)}
+		if base[i].PathOrRoot() != o.PathOrRoot() {
+			m.widen("ui_apps", "%s:%d serves %s in the base, not %s", o.Name, o.Port, base[i].PathOrRoot(), o.PathOrRoot())
+			continue
+		}
+		app := types.UIApp{Name: o.Name, Port: o.Port, Path: base[i].Path}
 		if !slices.ContainsFunc(out, func(x types.UIApp) bool { return x.Name == app.Name && x.Port == app.Port }) {
 			out = append(out, app)
 		}

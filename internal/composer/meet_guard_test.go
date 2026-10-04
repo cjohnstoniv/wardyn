@@ -51,7 +51,7 @@ var meetRules = map[string]meetRule{
 	"workspace_mounts":                {"none", "intersection by (source, target); read-only if either side is"},
 	"workspace_repos":                 {"none", "intersection by identity"},
 	"llm_inspection":                  {"none", "present on one side yields that side; both present and unequal is refused"},
-	"ui_apps":                         {"none", "intersection by (name, port)"},
+	"ui_apps":                         {"none", "intersection by (name, port, path)"},
 	"resources.cpu_millis":            {"the deployment size", "smaller after normalising"},
 	"resources.memory_mib":            {"the deployment size", "smaller after normalising"},
 	"resources.pids_limit":            {"the deployment size", "smaller after normalising"},
