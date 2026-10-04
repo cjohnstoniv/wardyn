@@ -107,7 +107,7 @@ func TestSweepHealth_DefaultInstallRegistersItsSweepsAtDefaultIntervals(t *testi
 	clk := &healthClock{t: time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)}
 	tr := registeredFor(t, sweepInstall{
 		runner: true, autoStop: *f.autoStopInterval, approvalExpiry: *f.approvalExpiryInterval,
-		recordingSweepable: true, recordingRetentionDays: *f.recordingRetention, api: srv.HealthSweeps(),
+		recordingSweepable: true, recordingRetentionDays: *f.recordingRetention, runOutputPersist: *f.runOutputPersist, api: srv.HealthSweeps(),
 	}, clk)
 
 	want := map[string]time.Duration{
@@ -118,6 +118,7 @@ func TestSweepHealth_DefaultInstallRegistersItsSweepsAtDefaultIntervals(t *testi
 		sweephealth.CredentialExpiry: 24 * time.Hour,
 		sweephealth.RunWatcher:       time.Minute,
 		sweephealth.OrphanedBuild:    30 * time.Minute,
+		sweephealth.RunOutput:        time.Hour,
 	}
 	got := map[string]time.Duration{}
 	for _, s := range tr.Registered() {
@@ -141,7 +142,7 @@ func TestSweepHealth_DefaultInstallFakeClock(t *testing.T) {
 	srv := api.New(api.Config{Runner: stubRunner{}, ImageBuilder: &fakeSweepImageBuilder{}})
 	in := sweepInstall{
 		runner: true, autoStop: *f.autoStopInterval, approvalExpiry: *f.approvalExpiryInterval,
-		recordingSweepable: true, recordingRetentionDays: *f.recordingRetention, api: srv.HealthSweeps(),
+		recordingSweepable: true, recordingRetentionDays: *f.recordingRetention, runOutputPersist: *f.runOutputPersist, api: srv.HealthSweeps(),
 	}
 
 	t.Run("every tick succeeds", func(t *testing.T) {

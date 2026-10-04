@@ -238,10 +238,9 @@ func (s *Server) runPolicySourceOf(ctx context.Context, run types.AgentRun, c cr
 		out.Kind = policyKindInline
 	case c.InlinePolicy != nil && run.GovernanceProfileID != nil:
 		out.Kind = policyKindProfile
-		if ps, err := s.cfg.Store.ListGovernanceProfiles(ctx); err == nil {
-			if i := slices.IndexFunc(ps, func(p types.GovernanceProfile) bool { return p.ID == *run.GovernanceProfileID }); i >= 0 {
-				out.Name = ps[i].Name
-			}
+		// The leaf's own name: a base's never reaches a member's policy view.
+		if name, err := s.profileLeafName(ctx, *run.GovernanceProfileID); err == nil {
+			out.Name = name
 		}
 	case c.InlinePolicy != nil:
 		out.Kind = policyKindDefault

@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/url"
 	"slices"
@@ -302,6 +303,11 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 		return llmTransport{}, injections, providerDispatch{}, true
 	}
 	llm := s.applyProviderEnv(ctx, run, lane, policy, sandboxEnv, proxyURL)
+	if err := llm.bedrock.maskErr; err != nil {
+		slog.WarnContext(ctx, "wardynd: the AWS SSO credential could not be recorded for masking", slog.String("run", run.ID.String()), slog.Any("err", err))
+		s.refuseProviderDispatch(ctx, run, lane.chosen.provider.Kind, providerDenial{msg: fmt.Sprintf(mpBRMaskFailed, lane.chosen.provider.ID)}, nil)
+		return llmTransport{}, injections, providerDispatch{}, false
+	}
 	if lane.chosen == nil {
 		return llm, injections, providerDispatch{detail: mpNoProviderDetail}, true
 	}

@@ -51,6 +51,15 @@ func (s *Server) attachKeepaliveEvery() time.Duration {
 // client socket cannot wedge the read pump forever.
 const attachWriteTimeout = 30 * time.Second
 
+// attachPauseLimit is how long a client may leave output paused: attachWriteTimeout
+// unless THIS server was built with an override (Server.pauseLimit, tests only).
+func (s *Server) attachPauseLimit() time.Duration {
+	if s.pauseLimit > 0 {
+		return s.pauseLimit
+	}
+	return attachWriteTimeout
+}
+
 // attachPingInterval is the liveness probe cadence for an otherwise-idle
 // attach socket.
 //
@@ -98,12 +107,13 @@ func (s *Server) attachPingEvery() time.Duration {
 // still bounding what one socket can make the daemon buffer.
 const attachReadLimit = 1 << 20
 
-// resizeMsg is the only control message the client may send out-of-band on the
-// PTY stream: a window-size change. Everything else on the client->server
+// resizeMsg is the control message the client may send out-of-band on the PTY
+// stream: a window-size change, or a pause or resume (Type only) for output flow
+// control. Everything else on the client->server
 // direction is raw PTY input (binary frames). Resize is sent as a TEXT frame so
 // it is unambiguously distinct from binary keystroke bytes.
 type resizeMsg struct {
-	Type string `json:"type"` // "resize"
+	Type string `json:"type"` // "resize", "pause" or "resume"
 	Cols uint16 `json:"cols"`
 	Rows uint16 `json:"rows"`
 }
@@ -491,8 +501,10 @@ func runIsUnrecordable(run types.AgentRun) bool {
 // returns (tee, finish):
 //
 //   - tee is the io.Writer the attach pump feeds PTY OUTPUT into. It is the
-//     front of: liveMaskWriter (re-snapshotting secret masking with a retained
-//     cross-write tail) -> CastWriter (asciicast v2) -> an in-memory buffer. When
+//     front of: maskPipe (which batches the output so the pump never waits on
+//     the masker's registry read) -> liveMaskWriter (re-snapshotting secret
+//     masking with a retained cross-write tail) -> CastWriter (asciicast v2) ->
+//     an in-memory buffer. When
 //     no RecordingStore is configured tee is nil and finish is a no-op, so attach
 //     works unchanged in headless/no-store mode.
 //   - finish flushes the masker tail and persists the buffered asciicast to the
@@ -571,8 +583,11 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 	// per-run secret set is tiny so per-write masking is cheap. A nil registry /
 	// empty snapshot is a pass-through (the asciicast is still well-formed).
 	mw := &liveMaskWriter{reg: s.cfg.MaskRegistry, runID: runID, dst: cast, guard: s.maskGuard(runID)}
+	tee := newMaskPipe(mw)
 
 	finish := func(ctx context.Context, principalType types.ActorType, principal string) {
+		// What the pump teed before it ended is masked into the cast first.
+		tee.flush()
 		// Take the masker lock across (a) flushing the retained tail
 		// into the cast and (b) reading the recording buffer, so a secret sitting in
 		// the tail at session end is still masked (not dropped or leaked) and the
@@ -610,7 +625,7 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 			key, outcome, mustJSON(data)))
 	}
 
-	return mw, finish
+	return tee, finish
 }
 
 // liveMaskWriter masks PTY output before it lands in the interactive-session
@@ -645,6 +660,9 @@ type liveMaskWriter struct {
 	// instead of masked against a corpus that may be incomplete: the writer
 	// never forwards bytes it cannot vouch for.
 	guard func() bool
+	// capture is the run-output capture's seal and marks (run_output_final.go);
+	// the zero value, which an attach's recording keeps, seals nothing.
+	capture outputCapture
 }
 
 func (w *liveMaskWriter) Write(p []byte) (int, error) {
@@ -652,10 +670,30 @@ func (w *liveMaskWriter) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	n, late, err := w.writeLocked(p)
+	w.mu.Unlock()
+	if late != nil {
+		late()
+	}
+	return n, err
+}
+
+// writeLocked is Write under w.mu. late is the seal's one-time notice, for the
+// caller to call once the lock is released.
+func (w *liveMaskWriter) writeLocked(p []byte) (n int, late func(), err error) {
+	if late, sealed := w.capture.dropSealed(); sealed {
+		return len(p), late, nil
+	}
+	// The read goes first: a read that applies an erasure's tombstones drops
+	// values, and the guard must answer for the corpus the chunk is masked
+	// against, not one from before the drop.
+	if stale, err := w.replaceIfStale(len(p)); stale {
+		return len(p), nil, err
+	}
 	if w.guard != nil && !w.guard() {
 		w.tail = nil
-		return len(p), nil
+		w.capture.dropped, w.capture.uncovered = true, true
+		return len(p), nil, nil
 	}
 
 	// One CACHED masker per registry generation, not NewMasker(Snapshot(...)) per
@@ -684,10 +722,10 @@ func (w *liveMaskWriter) Write(p []byte) (int, error) {
 
 	if len(forward) > 0 {
 		if _, err := w.dst.Write(forward); err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 	}
-	return len(p), nil
+	return len(p), nil, nil
 }
 
 // flushLocked emits any withheld tail (re-masked) so the trailing bytes held back

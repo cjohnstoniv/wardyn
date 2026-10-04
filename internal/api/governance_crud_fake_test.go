@@ -50,6 +50,17 @@ func (s *govCrudStore) UpsertGovernanceProfile(_ context.Context, p types.Govern
 	return p, s.upsertProfileErr
 }
 
+// WriteGovernanceProfile is the composed-profile write: build decides the row from every stored
+// profile, as the real store does under its graph lock, and the row is then stored at id.
+func (s *govCrudStore) WriteGovernanceProfile(ctx context.Context, id uuid.UUID, build store.GovernanceProfileBuild) (types.GovernanceProfile, error) {
+	p, err := build(s.profiles)
+	if err != nil {
+		return types.GovernanceProfile{}, err
+	}
+	p.ID = id
+	return s.UpsertGovernanceProfile(ctx, p)
+}
+
 func (s *govCrudStore) DeleteGovernanceProfile(context.Context, uuid.UUID) error {
 	return s.deleteProfileErr
 }

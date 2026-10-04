@@ -81,6 +81,19 @@ func (s *userTypeStore) UpdateUserType(_ context.Context, t types.UserType) (typ
 	return cur, nil
 }
 
+func (s *userTypeStore) UpdateUserTypeMetadata(_ context.Context, t types.UserType) (types.UserType, error) {
+	cur, ok := s.rows[t.ID]
+	if !ok {
+		return types.UserType{}, store.ErrNotFound
+	}
+	if s.nameTaken(t.ID, t.Name) {
+		return types.UserType{}, store.ErrConflict
+	}
+	cur.Name, cur.Description = t.Name, t.Description
+	s.rows[t.ID] = cur
+	return cur, nil
+}
+
 func (s *userTypeStore) UserTypeReferences(context.Context, string) (int, error) { return s.refs, nil }
 
 func (s *userTypeStore) UserTypeTokenStamps(context.Context, string) (int, error) {

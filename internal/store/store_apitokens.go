@@ -83,8 +83,12 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 		        CASE WHEN $11::bigint IS NULL THEN NULL ELSE ` + db.AppClockAgeSQL("$10") + ` + $11::bigint * interval '1 microsecond' END,
 		        NULLIF($12, ''), now())
 		RETURNING ` + apiTokenCols
-	out, err := scanAPIToken(s.Pool.QueryRow(ctx, q,
-		t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), age, lifetime, t.MintedBy))
+	var out types.APIToken
+	err = s.guarded(ctx, func(qr queryRower) (e error) {
+		out, e = scanAPIToken(qr.QueryRow(ctx, q,
+			t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), age, lifetime, t.MintedBy))
+		return e
+	})
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -108,6 +112,14 @@ func (s PG) GetAPITokenByRaw(ctx context.Context, raw string) (types.APIToken, e
 		SELECT ` + apiTokenCols + `
 		FROM api_tokens WHERE token_sha256 = $1 AND ` + apiTokenLive
 	return scanAPIToken(s.Pool.QueryRow(ctx, q, hashToken(raw)))
+}
+
+// GetLiveAPITokenQ re-reads one token by id on q (a caller's transaction), and only while it can still
+// authenticate: revoked and expired rows are ErrNotFound, as in GetAPITokenByRaw. A decision that must
+// still hold the authority of the token it was made with reads it again through this, not through the
+// context the request was authenticated with.
+func GetLiveAPITokenQ(ctx context.Context, q Querier, id uuid.UUID) (types.APIToken, error) {
+	return scanAPIToken(q.QueryRow(ctx, `SELECT `+apiTokenCols+` FROM api_tokens WHERE id = $1 AND `+apiTokenLive, id))
 }
 
 // TouchAPIToken records that id was just used. BEST EFFORT: the auth branch

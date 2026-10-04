@@ -588,3 +588,56 @@ describe("RunDetailScreen — Audit tab Request access remedy", () => {
     expect(screen.queryByTestId("policy-remedy")).toBeNull();
   });
 });
+
+// Mock packet M4 (approved 2026-10-03), surface D: a field whose key was
+// destroyed reads "Erased" on the run's own Audit tab, muted and not mono, with
+// the explanation as its title. Nothing else on the row changes.
+describe("RunDetailScreen — erased values on the Audit tab (M4 D)", () => {
+  it("an erased target and an erased data field render as Erased, never as the wire value", async () => {
+    listAuditMock.mockResolvedValue([
+      {
+        id: "e1",
+        time: new Date().toISOString(),
+        run_id: "run-1",
+        actor_type: "human",
+        actor: "me",
+        action: "approval.decide",
+        target: "[erased]",
+        outcome: "success",
+        data: { decision: "APPROVED", reason: "[erased]" },
+      },
+    ]);
+    renderRun(RUN);
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(await screen.findByRole("tab", { name: /audit/i }));
+    const target = await screen.findByText("Erased");
+    expect(target).toHaveAttribute("title", "Erased on request. The event and its place in the log remain.");
+    expect(target).toHaveClass("text-muted-foreground");
+    expect(target).not.toHaveClass("font-mono");
+    expect(screen.getByText("reason: Erased")).toHaveAttribute(
+      "title",
+      "Erased on request. The event and its place in the log remain.",
+    );
+    expect(screen.queryByText("[erased]")).toBeNull();
+    expect(screen.getByText("approval.decide")).toBeInTheDocument();
+  });
+
+  it("a row with nothing erased shows no Erased note", async () => {
+    listAuditMock.mockResolvedValue([
+      {
+        id: "e2",
+        time: new Date().toISOString(),
+        run_id: "run-1",
+        actor_type: "human",
+        actor: "me",
+        action: "approval.decide",
+        target: "api.github.com",
+        outcome: "success",
+        data: { decision: "APPROVED", reason: "looks fine" },
+      },
+    ]);
+    renderRun(RUN);
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(await screen.findByRole("tab", { name: /audit/i }));
+    expect(await screen.findByText("api.github.com")).toBeInTheDocument();
+    expect(screen.queryByText(/Erased/)).toBeNull();
+  });
+});

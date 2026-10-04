@@ -344,7 +344,7 @@ func (s *Server) storeEntraBlob(ctx context.Context, owner string, ec entraCaptu
 	if err != nil {
 		return fmt.Errorf("marshal %s sign-in blob: %w", ec.label(), err)
 	}
-	err = s.cfg.Secrets.For(owner).Put(ctx, ec.secretName, raw)
+	err = s.putOwned(ctx, owner, func() error { return s.cfg.Secrets.For(owner).Put(ctx, ec.secretName, raw) })
 	s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", owner, ec.secretName)
 	return err
 }
@@ -507,7 +507,9 @@ func (s *Server) redeemEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig
 	}
 	now := s.cfg.Now()
 	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
-	s.cfg.MaskRegistry.AddGlobalUntil(owner, ec.secretName, now, accessExpiry, []byte(resp.AccessToken), []byte(keep))
+	if err := s.cfg.MaskRegistry.AddGlobalUntil(owner, ec.secretName, now, accessExpiry, []byte(resp.AccessToken), []byte(keep)); err != nil {
+		return ADOEntraAccess{}, fmt.Errorf("%w: the new tokens could not be recorded for masking: %v", ErrADOEntraUnavailable, err)
+	}
 
 	granted := strings.Fields(resp.Scope)
 	if len(granted) == 0 {

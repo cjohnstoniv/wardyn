@@ -311,6 +311,11 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		if chk, ok := s.substrateHealthRow(ctx); ok {
 			checks = append(checks, chk)
 		}
+		// High availability rows: present only while WARDYN_HA is on, and read
+		// Postgres, so they share this operator-only gate.
+		if s.cfg.HA {
+			checks = append(checks, s.haChecks(ctx)...)
+		}
 	}
 	// k8s_egress_containment: the boot-time NetworkPolicy canary verdict —
 	// absent (no row) on a non-k8s driver; see k8sEgressContainmentCheck.
@@ -327,6 +332,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	checks = append(checks, secretStoreChecks(s.cfg.SecretStoreExternal, s.cfg.SecretKeyService, s.cfg.AgeKeyDurable, s.cfg.OIDC != nil, s.cfg.PlatformKeySeparate, s.cfg.KEKRequired)...)
+	checks = append(checks, s.keyCustodyRows(ctx)...)
 	checks = append(checks, hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
 
 	// sso_rbac / tls_cookie_posture: both OIDC-gated (mirror how every other
@@ -363,6 +369,9 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if chk, ok := s.approvalNotifyCheck(ctx); ok {
+		checks = append(checks, chk)
+	}
 	checks = append(checks, scmProviderCheck(sec.GitHubApp, secretNames, scmPosture))
 
 	// github_ref_ruleset: the only row that leaves the machine. Gated on the App
@@ -371,7 +380,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	if chk, ok := s.githubRefRulesetCheck(ctx, sec.GitHubApp); ok {
 		checks = append(checks, chk)
 	}
-	checks = append(checks, platformChecks(plat)...)
+	checks = append(checks, append(platformChecks(plat), s.auditPartitionChecks(ctx)...)...)
 
 	hasRuns := s.setupHasRuns(ctx)
 

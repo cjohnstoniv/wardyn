@@ -25,10 +25,12 @@
 // carry it; this file adds no client-side filtering of its own.
 import * as React from "react";
 import { Loader2, X } from "lucide-react";
+import { PendingChangeError } from "../../lib/api/core";
 import { permissions as api } from "../../lib/api/permissions";
 import { getErrorMessage } from "../../lib/format";
 import { AVAILABILITY } from "../../lib/availability-copy";
 import { useDeferredBusy } from "../../lib/use-deferred-busy";
+import { SubmittedNote } from "../screens/governance/submitted-note";
 import { Segmented, SUBJECT_LABEL } from "../screens/permissions";
 import type { AvailabilityView, CapabilitySubjectType } from "../../lib/types";
 import { useSecurityOperator } from "./operator-context";
@@ -122,6 +124,8 @@ function Control({ kind, value, ...family }: AvailabilityControlProps) {
   // the choice's under the choice, an add's or a remove's under the adder.
   const [choiceError, setChoiceError] = React.useState<string | null>(null);
   const [listError, setListError] = React.useState<string | null>(null);
+  // A write the server held for a second person (202), said where it was made.
+  const [submitted, setSubmitted] = React.useState(false);
   const typeName = useUserTypeNames();
 
   const load = React.useCallback(async () => {
@@ -141,10 +145,17 @@ function Control({ kind, value, ...family }: AvailabilityControlProps) {
     setBusy(what);
     setChoiceError(null);
     setListError(null);
+    setSubmitted(false);
     try {
       await fn();
       return true;
     } catch (e) {
+      if (e instanceof PendingChangeError) {
+        // Held for a second person (202): nothing changed, so `view` stays and the list is read again.
+        setSubmitted(true);
+        await load();
+        return true;
+      }
       (what === "choice" ? setChoiceError : setListError)(getErrorMessage(e));
       return false;
     } finally {
@@ -159,32 +170,35 @@ function Control({ kind, value, ...family }: AvailabilityControlProps) {
 
   const grants = view.allowed_by;
   return (
-    <AvailabilityFields
-      {...family}
-      restricted={view.restricted}
-      audiences={grants}
-      typeName={typeName}
-      busy={busy}
-      choiceError={choiceError}
-      listError={listError}
-      // `view` only ever reflects a call that landed, so a refused PUT leaves
-      // the choice where the server has it.
-      onRestrictedChange={(restricted) =>
-        void run("choice", async () => setView(await api.putAvailability(kind, value, restricted)))
-      }
-      onAdd={(subject_type, subject) =>
-        run("add", async () => {
-          await api.upsertGrant({ subject_type, subject, capability: kind, value, effect: "allow" });
-          await load();
-        })
-      }
-      onRemove={(i) =>
-        void run("remove", async () => {
-          await api.deleteGrant(grants[i].id);
-          await load();
-        })
-      }
-    />
+    <>
+      {submitted && <SubmittedNote />}
+      <AvailabilityFields
+        {...family}
+        restricted={view.restricted}
+        audiences={grants}
+        typeName={typeName}
+        busy={busy}
+        choiceError={choiceError}
+        listError={listError}
+        // `view` only ever reflects a call that landed, so a refused PUT leaves
+        // the choice where the server has it.
+        onRestrictedChange={(restricted) =>
+          void run("choice", async () => setView(await api.putAvailability(kind, value, restricted)))
+        }
+        onAdd={(subject_type, subject) =>
+          run("add", async () => {
+            await api.upsertGrant({ subject_type, subject, capability: kind, value, effect: "allow" });
+            await load();
+          })
+        }
+        onRemove={(i) =>
+          void run("remove", async () => {
+            await api.deleteGrant(grants[i].id);
+            await load();
+          })
+        }
+      />
+    </>
   );
 }
 

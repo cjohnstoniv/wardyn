@@ -40,14 +40,23 @@ const userTypeTokenStamps = `(SELECT count(*) FROM api_tokens WHERE user_type = 
 // ListUserTypes returns every type: the built-in first, then by priority
 // (highest first) and name.
 func (s PG) ListUserTypes(ctx context.Context) ([]types.UserType, error) {
-	const q = `SELECT ` + userTypeCols + ` FROM user_types ORDER BY built_in DESC, priority DESC, name`
-	return collect(ctx, s.Pool, "list", "user types", q, nil, scanUserType)
+	return ListUserTypesQ(ctx, s.Pool)
+}
+
+// ListUserTypesQ is ListUserTypes on q.
+func ListUserTypesQ(ctx context.Context, q Querier) ([]types.UserType, error) {
+	const stmt = `SELECT ` + userTypeCols + ` FROM user_types ORDER BY built_in DESC, priority DESC, name`
+	return collect(ctx, q, "list", "user types", stmt, nil, scanUserType)
 }
 
 // GetUserType returns one type by id, or ErrNotFound.
 func (s PG) GetUserType(ctx context.Context, id string) (types.UserType, error) {
-	const q = `SELECT ` + userTypeCols + ` FROM user_types WHERE id = $1`
-	return scanUserType(s.Pool.QueryRow(ctx, q, id))
+	return GetUserTypeQ(ctx, s.Pool, id, false)
+}
+
+// GetUserTypeQ is GetUserType on q; forUpdate locks the row for the transaction.
+func GetUserTypeQ(ctx context.Context, q Querier, id string, forUpdate bool) (types.UserType, error) {
+	return scanUserType(q.QueryRow(ctx, `SELECT `+userTypeCols+` FROM user_types WHERE id = $1`+lockSuffix(forUpdate), id))
 }
 
 // CreateUserType inserts a custom type (built_in is never set here).
@@ -71,12 +80,31 @@ func (s PG) CreateUserType(ctx context.Context, t types.UserType) (types.UserTyp
 // UpdateUserType rewrites a type's name, description and priority; id and
 // built_in never change. ErrNotFound when missing, ErrConflict on name clash.
 func (s PG) UpdateUserType(ctx context.Context, t types.UserType) (types.UserType, error) {
-	const q = `
+	return UpdateUserTypeQ(ctx, s.Pool, t)
+}
+
+// UpdateUserTypeQ is UpdateUserType's statement on q. A held governance change applies through it
+// inside the decision transaction.
+func UpdateUserTypeQ(ctx context.Context, q Querier, t types.UserType) (types.UserType, error) {
+	const stmt = `
 		UPDATE user_types
 		SET name = $2, description = $3, priority = $4, updated_at = now()
 		WHERE id = $1
 		RETURNING ` + userTypeCols
-	out, err := scanUserType(s.Pool.QueryRow(ctx, q, t.ID, t.Name, t.Description, t.Priority))
+	out, err := scanUserType(q.QueryRow(ctx, stmt, t.ID, t.Name, t.Description, t.Priority))
+	return out, uniqueConflict(err)
+}
+
+// UpdateUserTypeMetadata rewrites a type's name and description and never its priority, so an edit
+// that was judged metadata-only cannot overwrite a priority change approved after it was read.
+// ErrNotFound when missing, ErrConflict on name clash.
+func (s PG) UpdateUserTypeMetadata(ctx context.Context, t types.UserType) (types.UserType, error) {
+	const stmt = `
+		UPDATE user_types
+		SET name = $2, description = $3, updated_at = now()
+		WHERE id = $1
+		RETURNING ` + userTypeCols
+	out, err := scanUserType(s.Pool.QueryRow(ctx, stmt, t.ID, t.Name, t.Description))
 	return out, uniqueConflict(err)
 }
 

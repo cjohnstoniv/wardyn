@@ -218,6 +218,7 @@ func rootCmd() *cobra.Command {
 		governanceCmd(client),
 		sessionCmd(client),
 		peopleCmd(client),
+		personCmd(client),
 		deviceCmd(client),
 		supportBundleCmd(client),
 	)

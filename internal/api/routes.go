@@ -56,6 +56,9 @@ func (s *Server) routes() chi.Router {
 		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.isReservedPrincipal, s.auditSignInDenied))
 	}
 
+	// SCIM Users (scim_users.go): its own bearer, outside /api/v1 and every human gate.
+	s.mountSCIMRoutes(r)
+
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public admin-gated surface.
 		r.Group(func(r chi.Router) {
@@ -699,8 +702,9 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	r.Delete("/me/tokens/{id}", s.handleRevokeAPIToken)
 	securityOps.Get("/tokens", s.handleListAllAPITokens)
 	securityOps.Delete("/tokens/{id}", s.handleAdminRevokeAPIToken)
-	securityOps.Delete("/people/{principal}/ssh-keys", s.handleAdminDeleteSSHKeys)
+	securityOps.With(s.refuseSubjectPrincipalParam).Delete("/people/{principal}/ssh-keys", s.handleAdminDeleteSSHKeys)
 	s.mountPeopleRoutes(securityOps)
+	s.mountSCIMStatusRoute(securityOps)
 	// Run-detail widget layout: per-user, per-preset, server-synced so a
 	// layout survives a new machine (localStorage would not). Scoped to
 	// the caller's OWN principal at the store, exactly like the ssh-keys
@@ -751,7 +755,7 @@ func (s *Server) mountSecretRoutes(r, securityOps chi.Router) {
 	r.Put("/secrets/{name}", s.handlePutSecret)
 	r.Delete("/secrets/{name}", s.handleDeleteSecret)
 	r.Get("/secrets", s.handleListSecrets)
-	securityOps.Delete("/people/{principal}/credentials", s.handleErasePersonCredentials)
+	securityOps.With(s.refuseSubjectPrincipalParam).Delete("/people/{principal}/credentials", s.handleErasePersonCredentials)
 	securityOps.Get("/model-providers/credentials", s.handleCredentialInventory)
 }
 
@@ -806,6 +810,8 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// securityOps because it reconstructs nothing GET /runs?view=admin does not already show
 	// that tier; fleet volume stays off members. No exec and no runner call.
 	securityOps.Get("/admin/runs/capacity", s.handleRunCapacity)
+	// Retention (migration 0123): the policy and every partition's eligibility, and the attested drop.
+	s.mountAuditRetentionRoutes(securityOps)
 	// User types (migration 0071_user_types): defining a type is the same
 	// security-tier duty as authoring a governance profile; deciding who IS a
 	// type stays on the operatorOnly /access routes.
@@ -813,6 +819,7 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// Key domains (migration 0121): which declared domain a person's next
 	// principal-key generation is wrapped under.
 	s.mountKeyDomainRoutes(securityOps)
+	s.mountApprovalNotifyRoutes(securityOps)
 	// Sandbox sweep. SUPER, and the reason matters because an operator deciding
 	// who to trust with RoleSecurityAdmin reads exactly these lines: the sweep
 	// drives the RUNNER — Status then StopSandbox — across every run in the

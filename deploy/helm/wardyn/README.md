@@ -428,6 +428,38 @@ with no admin token left to sign in with. Create and populate the target
 Secret yourself (as in [Installation](#installation) above) **before** the
 upgrade that sets `secretRef.name`, never after.
 
+## Leaver deprovisioning (SCIM)
+
+`scim.enabled=true` lets an identity provider suspend and purge a person over SCIM 2.0
+(`<base path>/scim/v2/Users`). SCIM only removes access: it never grants a role or rebinds an identity. The
+leaver runbook, the purge steps and the residual risks are in
+[docs/OPERATIONS.md "Leavers and SCIM"](../../../docs/OPERATIONS.md#leavers-and-scim).
+
+1. Create a Secret you own, with a bearer of at least 32 bytes under `scim-token` (and, only while rotating,
+   the next one under `scim-token-next`):
+
+   ```sh
+   kubectl -n wardyn create secret generic wardyn-scim --from-literal=scim-token="$(openssl rand -hex 32)"
+   ```
+
+2. Install with `--set scim.enabled=true --set scim.tokenSecretRef=wardyn-scim`. The chart renders
+   `WARDYN_SCIM_TOKEN` and `WARDYN_SCIM_TOKEN_NEXT` from that Secret (the second is optional), plus
+   `WARDYN_SCIM_PURGE_AFTER` from `scim.purgeAfter` and `WARDYN_SCIM_LEAVER_WORKSPACES` from
+   `scim.leaverWorkspaces`.
+
+| Value | Default | Meaning |
+|---|---|---|
+| `scim.enabled` | `false` | Mount the SCIM routes. Off renders no `WARDYN_SCIM_*` variable |
+| `scim.tokenSecretRef` | `""` | Name of your Secret holding `scim-token` and, optionally, `scim-token-next`. Required when enabled |
+| `scim.purgeAfter` | `720h` | Delay from suspension to the automatic purge. `0` disables it; a SCIM `DELETE` still purges |
+| `scim.leaverWorkspaces` | `reassign` | `reassign` hands a purged person's workspaces to the operator; `keep` leaves them |
+
+The render refuses `scim.enabled` without `scim.tokenSecretRef`, and refuses a `WARDYN_SCIM_*` variable (or a
+`_FILE` twin) in `env` or `extraEnv` beside it, because wardynd refuses to boot with a secret set both ways. To
+deliver the bearer as a file instead, leave `scim.enabled` false and set `WARDYN_SCIM_TOKEN_FILE` in
+`extraEnv`. Wardynd also refuses to boot, whatever delivers the token, without OIDC on a single-tenant Entra
+issuer and without TLS (set `env.WARDYN_TLS_TERMINATED=true` when the ingress terminates it).
+
 ## Kubernetes runner substrate (`k8s.enabled`)
 
 Off by default. Turning it on makes wardynd itself create/manage sandboxes as
@@ -544,6 +576,13 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   boot, naming the key, on a reserved label (`wardyn.managed`, `wardyn.run-id`, `wardyn.component`) or on any
   `kubernetes.io/` or `k8s.io/` annotation or label except
   `cluster-autoscaler.kubernetes.io/safe-to-evict`, which is never set by default.
+- `k8s.readNodes` (`WARDYN_K8S_READ_NODES`, default `false`): adds `list` on `nodes` to the ClusterRole so preflight and
+  create can warn that no node a run may be placed on is large enough. It compares a run's requests to node size,
+  honouring `k8s.sandbox.*`, never to free capacity: pods of other namespaces are invisible to wardynd, and the
+  scheduler stays the authority. Without it the warning is absent. Separately and always on, the runner Role has
+  `list` on `resourcequotas`: a run that cannot fit the runs namespace's quota is refused before it is created
+  (`namespace_quota_exceeded`), and one that would fill a quota to 90% or more is warned; a quota wardynd may not
+  read is reported as unreadable, never as empty.
 - `runner.sandbox.defaultResources.cpuMillis` / `.memoryMiB`: the size of a run whose policy sets no
   resources (`WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`). Ships at 1000m/2048Mi so
   a run fits a shared node; set 2000/4096 to keep the pre-0.8.6 size. `runner.sandbox.proxyResources` sizes each
@@ -702,9 +741,9 @@ the chart to set — see `resourceRequirements` in
 is node-wide by design. Also **no in-sandbox DNS** (a fast-failing loopback-only resolver —
 only `wardyn-proxy` resolves hostnames, matching Compose's proxy-only egress),
 **no k8s ground-truth correlator** (the Tetragon host-sensor pipeline has no
-k8s-substrate equivalent), and **`replicas` stays 1**, same reason as every
-other substrate (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s
-"One replica, by construction").
+k8s-substrate equivalent), and **`replicas` stays 1 unless `ha.enabled` is set** (see
+[docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s
+"High availability").
 
 **Narrowed in 0.7.5, further in 0.8 (#164): `DiskMiB` now bounds an AUTONOMOUS (task-mode) run's
 writes to `/tmp`, its workdir `/home/agent/work`, and its toolchain cache root
@@ -1278,7 +1317,9 @@ See `values.yaml` for all options. Key settings:
   Mutually exclusive with `ageKeyFromSecret`/`ageKey` — the chart refuses a
   render naming two sources.
 - `secrets.allowEphemeralAgeKey`: override for the refusal above, the same
-  acknowledge-the-ceiling shape as `allowMultiReplica`. Default `false`.
+  acknowledge-the-ceiling shape as `k8s.allowRunsInReleaseNamespace`. Default `false`.
+- `scim.*`: leaver deprovisioning over SCIM, off by default — see
+  [Leaver deprovisioning (SCIM)](#leaver-deprovisioning-scim) above.
 - `defaultPolicy`: JSON text baking a default policy into a ConfigMap,
   mounted read-only — see [Default policy](#default-policy) above. Empty
   (default) => no ConfigMap, image's own baked default applies.
@@ -1348,24 +1389,28 @@ See `values.yaml` for all options. Key settings:
   not a chart value.
 - `ssh.*`: SSH access into a running sandbox, off by default — see
   [Split SSH exposure](#split-ssh-exposure) above.
-- `replicas`: **leave at 1 — the chart refuses anything higher.** A render with
-  `replicas > 1` fails with an explicit message unless you also set
-  `allowMultiReplica=true`. This chart-render pin is the first of two
-  controls: wardynd also takes a Postgres advisory lock at boot
-  (`cmd/wardynd/single_instance.go`) and refuses to serve if it can't get it
-  — `allowMultiReplica` sets `-allow-multi-instance` on the container args,
-  which lifts BOTH. The pin is a safety control: wardynd's
-  secret-masking registry is in-memory, per-process, and fails OPEN, so a
-  session recording uploaded to a replica that did not handle that run's
-  credential injection is persisted verbatim — live credentials in cleartext,
-  with a `success` audit event. The per-process defects that used to make a
-  second replica drop *requests* — attach tickets, compose-result uploads, run
-  watchers, session recordings, and the ground-truth token rotator — are closed
-  at the code level (Postgres-backed state, leases, and leader election); the
-  masking registry is not, and neither are the other per-process items
-  enumerated in [docs/OPERATIONS.md#one-replica-by-construction](../../../docs/OPERATIONS.md#one-replica-by-construction)
-  ("One replica, by construction"). `allowMultiReplica` is an acceptance of
-  that, not a fix.
-- `allowMultiReplica`: override for the refusal above. Default `false`.
+- `replicas`: **leave at 1 unless `ha.enabled=true`.** A render with `replicas > 1`
+  and no `ha.enabled` fails with an explicit message. wardynd also takes a Postgres
+  advisory lock at boot (`cmd/wardynd/single_instance.go`) and refuses to serve if it
+  can't get it, so a replica added by `kubectl scale` without HA mode exits instead of
+  serving.
+- `ha.enabled`: **high availability.** Runs two or more replicas so that one node
+  failing does not stop the control plane. Sets `WARDYN_HA=true`, lifts the
+  `replicas > 1` refusal, adds a PodDisruptionBudget (`minAvailable: 1`) and a preferred
+  pod anti-affinity across nodes (an `affinity.podAntiAffinity` of your own replaces
+  it), and keeps the audit spool on the per-pod `/tmp` emptyDir. Default `false`.
+  It replaces `allowMultiReplica`, a documented clean break: a values file that still
+  sets `allowMultiReplica=true` is refused with a pointer here, and wardynd refuses the
+  `-allow-multi-instance` flag with a pointer to `WARDYN_HA`. The chart refuses to
+  render HA unless `WARDYN_RECORDING_STORE` is `pg` or `off` (read from both `env` and
+  `extraEnv`; the chart's own default is `fs` with `persistence.enabled` and `off`
+  without, so set `env.WARDYN_RECORDING_STORE=pg` to record), unless
+  `persistence.enabled` is `false`, and unless any `WARDYN_AUDIT_SPOOL` you set is
+  under `/tmp`. It also refuses a hand-set `WARDYN_HA` in `env` or `extraEnv`. wardynd
+  itself refuses `WARDYN_HA` unless the runner is Kubernetes (`k8s.enabled`) and the
+  store is `pg` or `off`, which is the half that still holds after a `kubectl scale`.
+  The strategy stays `Recreate`: this is node-failure tolerance, not zero-downtime
+  upgrades. Per-replica limits (connection caps, rate limiters) add up across replicas.
+  See [docs/OPERATIONS.md#high-availability](../../../docs/OPERATIONS.md#high-availability).
 
 Where this chart is headed: [ROADMAP.md](../../../ROADMAP.md).

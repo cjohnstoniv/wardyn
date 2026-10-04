@@ -10,7 +10,7 @@
 // to render for them.
 //
 // Host · Model providers · Providers · User drives · Admin
-// SSH keys. The personal cards (a person's own model connection, Azure
+// SSH keys · Approval notifications. The personal cards (a person's own model connection, Azure
 // DevOps, Your SSH keys) moved to Your account (your-account-screen.tsx) —
 // nothing on this page belongs to the admin as a person.
 //
@@ -53,6 +53,8 @@ import { ProvidersCard } from "../setup/providers-card";
 import { ModelProvidersList } from "./model-providers-list";
 import { BrandingCard } from "./branding-card";
 import { AdminSshKeysCard } from "./admin-ssh-keys-card";
+import { ApprovalNotifyCard } from "./approval-notify-card";
+import { ScimCard } from "./scim-card";
 import { ViewNotice } from "../../wardyn/console-view";
 import { VIEW_REFUSAL, SETTINGS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { Button } from "../../ui/button";
@@ -352,6 +354,11 @@ export function AdminSettingsScreen() {
               adds an SSH key that reaches other people's runs, now that Your
               account is the only door left for a personal one. */}
           <AdminSshKeysCard />
+          {/* notify-e4 (packet M6 S3): the seventh card — read-only channel
+              health for the approval notifications WARDYN_APPROVAL_NOTIFY sets. */}
+          <ApprovalNotifyCard />
+          {/* 0.8.6 scim-a7 (mock M5, D1 as amended): where leaver deprovisioning stands. Read-only. */}
+          <ScimCard />
         </div>
       )}
     </div>

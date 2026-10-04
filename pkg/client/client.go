@@ -24,7 +24,7 @@
 //     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
-//     ExportAuditPartition
+//     ExportAuditPartition, AuditRetention, DropAuditPartition
 //   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, ListSecretsScoped,
 //     ListSecretsScopedPage, SetSecret, DeleteSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult
@@ -40,7 +40,7 @@
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
 //   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDeviceEnrolmentTokens, RevokeDeviceEnrolmentToken, ListDevices, RevokeDevice
-//   - people (/api/v1/people):           ListPeople (the listing only; the writes below stay unwrapped)
+//   - people (/api/v1/people):           ListPeople, and ErasePerson (a person's retained records, by scope, 0.8.6); the other writes below stay unwrapped
 //
 // NOT covered — drive these with the CLI or raw HTTP. This half is a CENSUS of
 // every registered route family the SDK does not wrap, not a list of
@@ -50,11 +50,14 @@
 //
 //   - /api/v1/user-types     — the org's user types (0.8)
 //   - /api/v1/key-domains    — which declared key domain wraps a person's next principal key (0.8.6). Security tier
+//   - /api/v1/approval-notify — each approval notification channel's delivery health (0.8.6).
+//     Security tier, and read by the console's Settings card rather than by tooling
 //   - /api/v1/permissions    — capability grants and per-kind enforcement (0.7)
 //   - /api/v1/access         — directory search and group->role mappings (0.7)
 //   - /api/v1/tokens         — admin-tier API tokens (0.7); /api/v1/me/tokens is the
 //     self-service half, also unwrapped
 //   - /api/v1/people         — the writes: creating a person, erasing their stored credentials (0.8, offboarding)
+//   - /api/v1/scim           — the Settings SCIM card's read-only status (0.8.6); the SCIM server itself is /scim/v2
 //   - /api/v1/workspace-providers — the org's git-provider policy (allowed base
 //     URLs, credential lanes) and storage ceilings (0.7.2). Admin-only, and
 //     authored through the console's providers page rather than by tooling
@@ -82,6 +85,10 @@
 //     Unwrapped for the same reason.
 //   - the attach lane under /api/v1/runs/{id} — attach, attach/ticket,
 //     attach/holder, attach/takeover, resources. A WebSocket and its ticket.
+//   - /scim/v2/Users, /scim/v2/Users/{id}, /scim/v2/Groups, /scim/v2/Groups/{id} — the
+//     identity provider's SCIM connector (0.8.6): suspend and reactivate a person, and
+//     remove one from a group. Authenticated by its own bearer
+//     (WARDYN_SCIM_TOKEN), never by an operator's credential, so no SDK caller holds it.
 //   - /api/v1/branding       — console branding (#1125): the sign-in page's anonymous
 //     read and logo, and the Admin view Branding card's save; a console surface
 //   - /metrics, /readyz      — the operator's scrape and readiness probes

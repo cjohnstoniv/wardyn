@@ -633,6 +633,28 @@ describe("AuditScreen — the liveness chip stops claiming a feed that stopped a
   });
   afterEach(() => vi.useRealTimers());
 
+  // Mock packet M4 (approved 2026-10-03), surface D: a field whose key was
+  // destroyed reads Erased, muted, with the explanation as its title.
+  it("renders an erased target and an erased data field as Erased, never the wire value", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({
+        id: "e1",
+        action: "person.create",
+        actor_type: "human",
+        actor: "sec@corp.example",
+        target: "[erased]",
+        data: { email: "[erased]", note: "kept" },
+      }),
+    ]);
+    renderScreen();
+    expect(await screen.findByText("person.create — Erased")).toBeInTheDocument();
+    const field = screen.getByText("email: Erased");
+    expect(field).toHaveAttribute("title", "Erased on request. The event and its place in the log remain.");
+    expect(field).toHaveClass("text-muted-foreground");
+    expect(screen.queryByText(/\[erased\]/)).toBeNull();
+    expect(screen.queryByText(/note:/)).toBeNull();
+  });
+
   it("drops the chip once a poll stops answering, and brings it back when the feed recovers", async () => {
     // Fake timers BEFORE the render: usePoll's setInterval has to be the fake
     // one, or advancing time never reaches a tick.

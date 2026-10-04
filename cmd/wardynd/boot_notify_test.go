@@ -42,6 +42,13 @@ func TestStartApprovalNotify_RefusesBadConfigWithoutEchoingIt(t *testing.T) {
 			`{"after":"0s","channels":["hook"]},{"after":"1s","channels":["hook"]},{"after":"2s","channels":["hook"]},` +
 			`{"after":"3s","channels":["hook"]},{"after":"4s","channels":["hook"]},{"after":"5s","channels":["hook"]}]}]}`,
 		`{"channels":[{"id":"hook","type":"webhook","url":"http://h.example.com/SECRETPATH","redact_requester":true}],"routes":[{"tiers":[{"after":"0s","channels":["hook"],"notify":["run_owner"]}]}]}`,
+		// smtp: a CR or LF in the host, from, to, username or password, and a non-address
+		`{"channels":[{"id":"mail","type":"smtp","host":"h.example.com\r\nSECRETPATH","port":587,"from":"w@example.com"}]}`,
+		`{"channels":[{"id":"mail","type":"smtp","host":"h.example.com","port":587,"from":"w@example.com\nBcc: SECRETPATH@example.com"}]}`,
+		`{"channels":[{"id":"mail","type":"smtp","host":"h.example.com","port":587,"from":"w@example.com","to":["a@example.com\rSECRETPATH"]}]}`,
+		`{"channels":[{"id":"mail","type":"smtp","host":"h.example.com","port":587,"from":"w@example.com","username":"u\nSECRETPATH","password":"HMACVALUE"}]}`,
+		`{"channels":[{"id":"mail","type":"smtp","host":"h.example.com","port":587,"from":"w@example.com","username":"u","password":"HMACVALUE\r"}]}`,
+		`{"channels":[{"id":"mail","type":"smtp","host":"h.example.com","port":587,"from":"SECRETPATH <w@example.com>"}]}`,
 	} {
 		err := startApprovalNotify(context.Background(), raw, nil, nil, nil, 0)
 		if err == nil {

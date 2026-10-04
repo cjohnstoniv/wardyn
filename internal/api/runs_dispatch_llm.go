@@ -462,7 +462,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// trust-store wiring.
 	mitmForInspect := llmInspectMITMEnabled(policy)
 	var mitmCACertPEM, mitmCAKeyPEM string
-	if llm.providerSubscription() || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject || llm.azureInject() {
+	if llm.providerSubscription() || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject || llm.azureInject() || p.PATAPI {
 		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
 			return dispatchLLMPlan{}, false
 		}

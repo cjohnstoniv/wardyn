@@ -63,6 +63,15 @@ declare -A ALLOWLIST=(
   ["cmd/wardyn/siteconfig_test.go"]=4
   ["cmd/wardynd/login_stamp_test.go"]=1
   ["cmd/wardynd/rekey_test.go"]=1
+  # ar-l1.2's partition tests: the 2200-01-01 sentinel is a far-future bound passed through as data,
+  # never compared against the clock.
+  ["internal/api/audit_partition_export_test.go"]=1
+  ["internal/db/audit_partition_digest_pg_test.go"]=1
+  ["internal/store/auditpartition_pg_test.go"]=1
+  # ar-l1.6's retention tab test: the partition bounds and the pending date are display data the
+  # table renders in the packet's own wording ("3 Oct 2026", "Oct 2026"), asserted as literal
+  # strings so the canon wording is pinned. Nothing compares them against the clock.
+  ["ui/src/app/components/screens/audit-retention.test.tsx"]=13
   ["internal/api/access_test.go"]=1
   ["internal/api/ado_entra_test.go"]=1
   ["internal/api/auth_failed_coalesce_test.go"]=1
@@ -110,6 +119,14 @@ declare -A ALLOWLIST=(
   # change's `at` are display data rendered into the tab (S-21 prints the
   # restart date); nothing compares them against the clock.
   ["ui/src/app/components/screens/run-detail/policy-tab.test.tsx"]=3
+  # 0.8.6 W4: a run output's captured_at is printed as a clock time ("Captured
+  # 14:02") or decoded and passed through (the CLI's --json), and a key-domain
+  # assignment's set_at is passed through and never rendered; nothing compares
+  # either against the clock.
+  ["cmd/wardyn/run_output_test.go"]=1
+  ["ui/e2e/run-output.spec.ts"]=1
+  ["ui/src/app/components/screens/run-detail/output-tab.test.tsx"]=1
+  ["ui/src/app/components/screens/credentials-key-domains.test.tsx"]=2
   # #541 fix review: connectionRowCopy's C5 (expiring) test pins a LITERAL
   # expected string for absoluteTime's clock-time rendering, deliberately not
   # a recomputation through absoluteTime itself (that would let the

@@ -123,6 +123,7 @@ var adHocReasonLiterals = map[string]string{
 	"user_drives_resolve.go:governance_profile":    "a drive's bound_by value on /me",
 	"user_drives_resolve.go:groups_snapshot_stale": "a drive's unavailable reason on /me",
 	"reasons.go:groups_snapshot_stale":             "#656 slice 2: the wire reason for PUT/POST governance and the drive resolver, deliberately the SAME string as authz's own registered reason, not a second vocabulary",
+	"reasons.go:governance_overlay_unsatisfiable":  "the 409 at a profile write that would strand a descendant, deliberately the SAME string as authz's registered launch refusal",
 	"user_view.go:admin_view":                      "the answered detail on the user_view_type_deleted row, not a second authz.denied row",
 	// #656 slice 3: notFoundIf's "run" case, ownerCapabilityRefusal's closed
 	// set and the drive resolver's user_type_unknown share their VALUE with a

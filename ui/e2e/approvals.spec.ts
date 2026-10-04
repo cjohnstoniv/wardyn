@@ -821,3 +821,53 @@ test.describe("F-12 — LiveApprovals row gate mirrors canDecideApproval, not a 
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// notify-e4 (packet M6 S2): escalation chips on a pending card. The outbox the
+// server projects them from is not seeded by this backend (no notification
+// config), so the page's own GET /approvals is stubbed with rows that carry
+// escalation_tier and sla_due_at; nothing is written to the database.
+// ---------------------------------------------------------------------------
+test.describe("Approvals screen — escalation chips", () => {
+  test("a pending card shows 'Escalated · level 1' and 'Escalates in 40m', and a plain one shows neither", async ({ page }) => {
+    const runId = anyRunId();
+    const row = (marker: string, extra: Record<string, unknown>) => ({
+      id: randomUUID(),
+      run_id: runId,
+      kind: "egress_domain",
+      requested_scope: { host: marker },
+      state: "PENDING",
+      requested_at: new Date().toISOString(),
+      ...extra,
+    });
+    const escalated = uniqueMarker("esc");
+    const countdownOnly = uniqueMarker("cd");
+    const plain = uniqueMarker("plain");
+    const rows = [
+      row(escalated, { escalation_tier: 1, sla_due_at: new Date(Date.now() + 40 * 60_000 + 30_000).toISOString() }),
+      row(countdownOnly, { sla_due_at: new Date(Date.now() + 3 * 3_600_000 + 30_000).toISOString() }),
+      row(plain, {}),
+    ];
+    await page.route(
+      (url) => url.pathname === "/api/v1/approvals",
+      (route) => {
+        const url = new URL(route.request().url());
+        if (route.request().method() !== "GET" || url.searchParams.get("state") !== "PENDING") return route.continue();
+        return route.fulfill({ json: rows });
+      },
+    );
+    await gotoConsole(page);
+    await gotoApprovals(page);
+
+    const card = (marker: string) => page.locator("div.rounded-xl").filter({ hasText: markerRe(marker) }).last();
+    const first = card(escalated);
+    await expect(first.getByText("Escalated · level 1")).toBeVisible();
+    await expect(first.getByText("Escalates in 40m")).toBeVisible();
+    const second = card(countdownOnly);
+    await expect(second.getByText("Escalates in 3h")).toBeVisible();
+    await expect(second.getByText(/^Escalated/)).toHaveCount(0);
+    const third = card(plain);
+    await expect(third).toBeVisible();
+    await expect(third.getByText(/^Escalat/)).toHaveCount(0);
+  });
+});

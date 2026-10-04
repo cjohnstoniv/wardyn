@@ -353,10 +353,11 @@ than the newest.
   between the create and the first use still leaves a record to revoke. A token that cannot be
   recorded is revoked at once and never handed out.
 - **The proxy adds it** to the outbound request as HTTP Basic (`Authorization: Basic base64(":" + PAT)`)
-  on both git over HTTPS and REST. The value lives in wardynd's memory and on the hop to the run's
-  proxy, and its raw, base64 and header forms are masked in output. A wardynd restart loses the copy:
-  the run's next request creates a new token (audited with reason `restart`) and the older one is left
-  to expire, or is revoked when the run ends. Tools that insist on a PAT in an environment variable get
+  on both git over HTTPS and REST. The value is kept sealed in Postgres under the run owner's key (so any replica
+  serves it, and an erasure deletes it) and crosses the hop to the run's proxy, and its raw, base64 and header forms
+  are masked in output. A run with no token on record (a pause revoked it, or its state was lost) gets a new one on
+  its next request (audited with reason `restart` or `resume`), and the older one is left to expire, or is revoked
+  when the run ends. Tools that insist on a PAT in an environment variable get
   an inert placeholder, and the proxy swaps the real credential in.
 - **Renewal happens on requests, not on a timer.** Within ten minutes of the current token's expiry,
   the next request that asks Wardyn for the run's credential creates the next token, once, however many
@@ -399,7 +400,7 @@ than the newest.
   does not guarantee that a connection already open ends.
 - **The run page lists the tokens a run held**, oldest first (`GET /api/v1/runs/{id}/ado-tokens`): when
   each was created and expires and, once its record is closed, when and why (`run_end`, `kill`, `pause`,
-  `drift`, `disconnect`, `offboarding`, `upstream_401`, `sweep`, or `expired` for a token that reached
+  `drift`, `disconnect`, `offboarding`, `upstream_401`, `sweep`, `unrecorded`, or `expired` for a token that reached
   its expiry, and whether its revoke failed). It never carries a token value or an authorization id. The
   run's owner and admins read it; anyone else gets the run's own `404`.
 
@@ -598,7 +599,7 @@ Every row below is recorded without the token value.
 | `ado_pat.disconnect` | A person disconnected: their live tokens were revoked first, then their stored sign-in deleted |
 | `ado_pat.mint` | A run's PAT is created; the reason is dispatch, renewal, widen, upstream_401, resume or restart |
 | `ado_pat.mint.denied` | A create was refused; the row carries the refusal reason |
-| `ado_pat.revoke` | A PAT is revoked; the reason is run_end, kill, pause, drift, upstream_401, disconnect, offboarding or sweep |
+| `ado_pat.revoke` | A PAT is revoked; the reason is run_end, kill, pause, drift, upstream_401, disconnect, offboarding, sweep or unrecorded |
 | `ado_pat.revoke.failed` | A revoke failed, so the PAT stands until it expires (or a canary must be revoked by hand) |
 | `ado_pat.org_check` | The organisation-settings check ran |
 | `ado_bearer.refused_mint_scopes` | A `bearer` row refused to inject a token that carries a token permission, or that reported no granted scope |

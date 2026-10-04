@@ -75,7 +75,7 @@ const SingleInstanceLockKey int64 = 0x5741524459_494E53 // ASCII "WARDYINS"
 const SecretRekeyLockKey int64 = 0x5741524459_524B59 // ASCII "WARDYRKY"
 
 // BootKeyLockKey serializes the CREATE path of cmd/wardynd's boot keys across
-// -allow-multi-instance replicas: without it, two booting against an empty
+// WARDYN_HA replicas: without it, two booting against an empty
 // store each generate a key and the loser serves one nobody else holds.
 const BootKeyLockKey int64 = 0x5741524459_424B59 // ASCII "WARDYBKY"
 
@@ -89,7 +89,7 @@ const SecretConvertLockKey int64 = 0x5741524459_454E56 // ASCII "WARDYENV"
 // ReaperAdvisoryLockKey and for the same reason SingleInstanceLockKey alone
 // is not enough: that lock is at most one steady-state instance, not mutual
 // exclusion (its own HONEST CEILING) — a deployment booted with
-// -allow-multi-instance skips the claim entirely, and a Postgres
+// WARDYN_HA skips the claim entirely, and a Postgres
 // restart/failover can release its session under a still-running daemon
 // while a second one boots and claims it. Either way, two tickers running at
 // once would both re-run teardown for the same aged KILLED run, doubling its

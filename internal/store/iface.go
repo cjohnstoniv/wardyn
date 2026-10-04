@@ -225,6 +225,8 @@ type Store interface {
 	GetUserType(ctx context.Context, id string) (types.UserType, error)
 	CreateUserType(ctx context.Context, t types.UserType) (types.UserType, error)
 	UpdateUserType(ctx context.Context, t types.UserType) (types.UserType, error)
+	// UpdateUserTypeMetadata is UpdateUserType without the priority column.
+	UpdateUserTypeMetadata(ctx context.Context, t types.UserType) (types.UserType, error)
 	UserTypeReferences(ctx context.Context, id string) (int, error)
 	// UserTypeTokenStamps counts the unrevoked API tokens stamped with the type.
 	UserTypeTokenStamps(ctx context.Context, id string) (int, error)
@@ -247,8 +249,18 @@ type Store interface {
 	// DeleteGovernanceProfile returns ErrConflict when the profile is still ASSIGNED — the ON DELETE
 	// RESTRICT, so deleting a profile can never silently widen its members.
 	UpsertGovernanceProfile(ctx context.Context, p types.GovernanceProfile) (types.GovernanceProfile, error)
+	// WriteGovernanceProfile is the graph-aware write: one transaction under the profile-graph
+	// lock, where build decides the stored row from every profile as that transaction reads them
+	// (migration 0125: a profile may be composed on another). DeleteGovernanceProfile also
+	// returns *ErrProfileHasChildren when another profile composes on the row.
+	WriteGovernanceProfile(ctx context.Context, id uuid.UUID, build GovernanceProfileBuild) (types.GovernanceProfile, error)
 	DeleteGovernanceProfile(ctx context.Context, id uuid.UUID) error
+	// ListGovernanceProfiles and GetGovernanceProfileChain return RAW rows: a composed row
+	// carries no authority of its own. Only internal/api/governance_compose.go calls them for
+	// authority (a source guard fails any other caller); GetGovernanceProfileChain is one
+	// statement, leaf first, bounded at depth 3, and ErrNotFound when the leaf is gone.
 	ListGovernanceProfiles(ctx context.Context) ([]types.GovernanceProfile, error)
+	GetGovernanceProfileChain(ctx context.Context, id uuid.UUID) ([]types.GovernanceProfile, error)
 	// UpsertGovernanceAssignment keys on the natural UNIQUE (subject_type,
 	// subject): re-assigning a subject REPOINTS its one row, returning the
 	// EXISTING row's id on a conflict. ErrNotFound when profile_id names no
@@ -256,6 +268,15 @@ type Store interface {
 	UpsertGovernanceAssignment(ctx context.Context, a types.GovernanceAssignment) (types.GovernanceAssignment, error)
 	DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) error
 	ListGovernanceAssignments(ctx context.Context) ([]types.GovernanceAssignment, error)
+	// Governance changes (migration 0126): a governance write held for a second human. Part of
+	// this interface, not an optional seam, because a store without them would let a covered write
+	// through unreviewed. See governance_changes.go for each one's contract.
+	ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChange, ttl time.Duration) (types.GovernanceChange, []uuid.UUID, error)
+	ListGovernanceChanges(ctx context.Context, state string) ([]types.GovernanceChange, error)
+	GetGovernanceChange(ctx context.Context, id uuid.UUID) (types.GovernanceChange, error)
+	DecideGovernanceChange(ctx context.Context, id uuid.UUID, d GovernanceDecision, fn GovernanceDecideFunc) (types.GovernanceChange, error)
+	// DryRunGovernance runs fn on a transaction that is always rolled back.
+	DryRunGovernance(ctx context.Context, fn func(q Querier) error) error
 	// ResolveGovernanceProfile returns THE ONE profile that applies to a caller — user > group >
 	// user_type > all, sub over email within the user tier, then priority DESC and name ASC — as a
 	// single indexed read whose ORDER BY is the whole precedence rule. ErrNotFound means "no

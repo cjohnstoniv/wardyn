@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const (
@@ -460,4 +461,44 @@ func (p *Proxy) onOwnSubnetOrControlPlane(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// parseInternalHostCIDRs parses a SiteConfig.InternalHosts entry's CIDR
+// list, failing the WHOLE entry (ok=false) the moment one fails to parse —
+// never returning a partial list. liftInternalHost treats zero CIDRs as "no
+// CIDRs declared" and lifts the FULL liftable set for the suffix, so
+// silently dropping only the one bad CIDR out of several would widen an
+// entry meant to be narrow into that full-set default, the opposite of what
+// a parse failure should do.
+func parseInternalHostCIDRs(raw []string) (cidrs []*net.IPNet, ok bool) {
+	cidrs = make([]*net.IPNet, 0, len(raw))
+	for _, c := range raw {
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			return nil, false
+		}
+		cidrs = append(cidrs, n)
+	}
+	return cidrs, true
+}
+
+// compileInternalHosts compiles each declared internal host: lowercase + trim the suffix (same
+// normalization VetHost applies to the request host, so the comparison in
+// liftInternalHost is exact), parse its CIDRs (already validated at
+// site-config write time and at proxy Config load) via
+// parseInternalHostCIDRs, which drops the WHOLE entry on a parse failure.
+func compileInternalHosts(hosts []types.InternalHost) []internalHostRule {
+	out := make([]internalHostRule, 0, len(hosts))
+	for _, h := range hosts {
+		suffix := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h.HostSuffix)), ".")
+		if suffix == "" {
+			continue
+		}
+		cidrs, ok := parseInternalHostCIDRs(h.CIDRs)
+		if !ok {
+			continue
+		}
+		out = append(out, internalHostRule{suffix: suffix, cidrs: cidrs})
+	}
+	return out
 }

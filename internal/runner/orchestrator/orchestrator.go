@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"sort"
 	"sync"
@@ -195,6 +196,18 @@ func (o *Orchestrator) ReclaimDrive(ctx context.Context, mount types.DriveMount)
 		}
 	}
 	return "", errors.New("orchestrator: no wired substrate can reclaim drive storage")
+}
+
+// CheckFit implements runner.FitChecker by delegating to the first wired substrate that
+// implements it, the same single fan-out ProbeDrive takes. A substrate with no fit to check
+// (docker) is skipped; none at all answers runner.ErrFitUnsupported.
+func (o *Orchestrator) CheckFit(ctx context.Context, res runner.Resources) (runner.Fit, error) {
+	for _, s := range o.substrates {
+		if fc, ok := s.(runner.FitChecker); ok {
+			return fc.CheckFit(ctx, res)
+		}
+	}
+	return runner.Fit{}, runner.ErrFitUnsupported
 }
 
 // Capabilities aggregates the substrates' ClassSupport into one Capabilities:
@@ -401,6 +414,20 @@ func (o *Orchestrator) ExecStream(ctx context.Context, ref string, spec runner.E
 		return nil, err
 	}
 	return s.ExecStream(ctx, ref, spec)
+}
+
+// RecoverOutput forwards a run's output recovery to ref's substrate when it
+// implements runner.OutputRecoverer; one that does not has nothing to read.
+func (o *Orchestrator) RecoverOutput(ctx context.Context, ref string, w io.Writer) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	rc, ok := s.(runner.OutputRecoverer)
+	if !ok {
+		return runner.ErrOutputUnrecoverable
+	}
+	return rc.RecoverOutput(ctx, ref, w)
 }
 
 func (o *Orchestrator) Status(ctx context.Context, ref string) (runner.Status, error) {

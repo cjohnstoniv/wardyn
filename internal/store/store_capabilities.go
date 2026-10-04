@@ -25,16 +25,32 @@ const capabilityGrantCols = `id, subject_type, subject, capability, value, effec
 // EXISTING id on a conflict, not g.ID, so a re-submit gets the id the DELETE
 // route needs.
 func (s PG) UpsertCapabilityGrant(ctx context.Context, g types.CapabilityGrant) (types.CapabilityGrant, error) {
+	var out types.CapabilityGrant
+	err := s.inTx(ctx, func(q Querier) error {
+		// The lock an approval of a held change to this grant takes too.
+		if err := LockGovernanceTarget(ctx, q, "capability_grant", string(g.SubjectType), g.Subject, g.Capability, g.Value); err != nil {
+			return err
+		}
+		var err error
+		out, err = UpsertCapabilityGrantQ(ctx, q, g)
+		return err
+	})
+	return out, err
+}
+
+// UpsertCapabilityGrantQ is UpsertCapabilityGrant's statement on q. A held governance change applies
+// through it inside the decision transaction.
+func UpsertCapabilityGrantQ(ctx context.Context, q Querier, g types.CapabilityGrant) (types.CapabilityGrant, error) {
 	if g.ID == uuid.Nil {
 		g.ID = uuid.New()
 	}
-	const q = `
+	const stmt = `
 		INSERT INTO capability_grants (id, subject_type, subject, capability, value, effect, created_by)
 		VALUES ($1,$2,$3,$4,$5,$6,$7)
 		ON CONFLICT (subject_type, subject, capability, value) DO UPDATE
 			SET effect = EXCLUDED.effect, created_by = EXCLUDED.created_by
 		RETURNING ` + capabilityGrantCols
-	return scanCapabilityGrant(s.Pool.QueryRow(ctx, q,
+	return scanCapabilityGrant(q.QueryRow(ctx, stmt,
 		g.ID, g.SubjectType, g.Subject, g.Capability, g.Value, g.Effect, g.CreatedBy))
 }
 
@@ -42,7 +58,12 @@ func (s PG) UpsertCapabilityGrant(ctx context.Context, g types.CapabilityGrant) 
 // row matched — this is an admin-only surface, so there is no principal to
 // scope the delete to and no existence oracle to worry about.
 func (s PG) DeleteCapabilityGrant(ctx context.Context, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM capability_grants WHERE id = $1`, id)
+	return DeleteCapabilityGrantQ(ctx, s.Pool, id)
+}
+
+// DeleteCapabilityGrantQ is DeleteCapabilityGrant's statement on q.
+func DeleteCapabilityGrantQ(ctx context.Context, q Querier, id uuid.UUID) error {
+	tag, err := q.Exec(ctx, `DELETE FROM capability_grants WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("store: delete capability grant: %w", err)
 	}
@@ -52,12 +73,32 @@ func (s PG) DeleteCapabilityGrant(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// GetCapabilityGrantQ reads one grant by id on q, ErrNotFound when none; forUpdate locks the row.
+func GetCapabilityGrantQ(ctx context.Context, q Querier, id uuid.UUID, forUpdate bool) (types.CapabilityGrant, error) {
+	return scanCapabilityGrant(q.QueryRow(ctx,
+		`SELECT `+capabilityGrantCols+` FROM capability_grants WHERE id = $1`+lockSuffix(forUpdate), id))
+}
+
+// GetCapabilityGrantByKeyQ reads the grant at one natural key on q, ErrNotFound when none; forUpdate
+// locks the row.
+func GetCapabilityGrantByKeyQ(ctx context.Context, q Querier, subjectType, subject, capability, value string, forUpdate bool) (types.CapabilityGrant, error) {
+	return scanCapabilityGrant(q.QueryRow(ctx,
+		`SELECT `+capabilityGrantCols+` FROM capability_grants
+		 WHERE subject_type = $1 AND subject = $2 AND capability = $3 AND value = $4`+lockSuffix(forUpdate),
+		subjectType, subject, capability, value))
+}
+
 // ListCapabilityGrants returns every grant, oldest first — the admin
 // Permissions screen's whole table in one read.
 func (s PG) ListCapabilityGrants(ctx context.Context) ([]types.CapabilityGrant, error) {
-	const q = `SELECT ` + capabilityGrantCols + ` FROM capability_grants
+	return ListCapabilityGrantsQ(ctx, s.Pool)
+}
+
+// ListCapabilityGrantsQ is ListCapabilityGrants on q.
+func ListCapabilityGrantsQ(ctx context.Context, q Querier) ([]types.CapabilityGrant, error) {
+	const stmt = `SELECT ` + capabilityGrantCols + ` FROM capability_grants
 		ORDER BY capability, subject_type, subject, value`
-	return collect(ctx, s.Pool, "list", "capability grants", q, nil, scanCapabilityGrant)
+	return collect(ctx, q, "list", "capability grants", stmt, nil, scanCapabilityGrant)
 }
 
 // ListGroupDenyGrants returns the GROUP-subject DENY rows of one capability
@@ -122,7 +163,12 @@ func (s PG) ListCapabilityGrantsFor(ctx context.Context, users, groups []string,
 // as false — that default is the whole zero-config back-compat story (see the
 // migration). Never nil.
 func (s PG) GetCapabilityEnforcement(ctx context.Context) (map[string]bool, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT capability, enabled FROM capability_enforcement`)
+	return GetCapabilityEnforcementQ(ctx, s.Pool)
+}
+
+// GetCapabilityEnforcementQ is GetCapabilityEnforcement on q.
+func GetCapabilityEnforcementQ(ctx context.Context, q Querier) (map[string]bool, error) {
+	rows, err := q.Query(ctx, `SELECT capability, enabled FROM capability_enforcement`)
 	if err != nil {
 		return nil, fmt.Errorf("store: get capability enforcement: %w", err)
 	}
@@ -147,13 +193,29 @@ func (s PG) GetCapabilityEnforcement(ctx context.Context) (map[string]bool, erro
 // a transaction: the DELETE and INSERT run against the same CTE snapshot over
 // disjoint capability sets, so the pair is already atomic.
 func (s PG) PutCapabilityEnforcement(ctx context.Context, enabled map[string]bool) (map[string]bool, error) {
+	var out map[string]bool
+	err := s.inTx(ctx, func(q Querier) error {
+		// The lock an approval of a held replacement takes too.
+		if err := LockGovernanceTarget(ctx, q, "capability_enforcement"); err != nil {
+			return err
+		}
+		var err error
+		out, err = PutCapabilityEnforcementQ(ctx, q, enabled)
+		return err
+	})
+	return out, err
+}
+
+// PutCapabilityEnforcementQ is PutCapabilityEnforcement's statements on q. A held governance change
+// applies through it inside the decision transaction.
+func PutCapabilityEnforcementQ(ctx context.Context, q Querier, enabled map[string]bool) (map[string]bool, error) {
 	caps := make([]string, 0, len(enabled))
 	vals := make([]bool, 0, len(enabled))
 	for k, v := range enabled {
 		caps = append(caps, k)
 		vals = append(vals, v)
 	}
-	const q = `
+	const stmt = `
 		WITH incoming AS (SELECT k, v FROM unnest($1::text[], $2::bool[]) AS t(k, v)),
 		     pruned AS (DELETE FROM capability_enforcement
 		                WHERE capability NOT IN (SELECT k FROM incoming))
@@ -161,17 +223,22 @@ func (s PG) PutCapabilityEnforcement(ctx context.Context, enabled map[string]boo
 		SELECT k, v, now() FROM incoming
 		ON CONFLICT (capability) DO UPDATE
 			SET enabled = EXCLUDED.enabled, updated_at = EXCLUDED.updated_at`
-	if _, err := s.Pool.Exec(ctx, q, caps, vals); err != nil {
+	if _, err := q.Exec(ctx, stmt, caps, vals); err != nil {
 		return nil, fmt.Errorf("store: put capability enforcement: %w", err)
 	}
-	return s.GetCapabilityEnforcement(ctx)
+	return GetCapabilityEnforcementQ(ctx, q)
 }
 
 // ListCapabilityRestrictions returns every restricted value, kind -> set. The
 // table holds one row per restricted admin-configured resource, so one read
 // per resolution answers every value it asks about. Never nil.
 func (s PG) ListCapabilityRestrictions(ctx context.Context) (map[string]map[string]bool, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT capability, value FROM capability_restrictions`)
+	return ListCapabilityRestrictionsQ(ctx, s.Pool)
+}
+
+// ListCapabilityRestrictionsQ is ListCapabilityRestrictions on q.
+func ListCapabilityRestrictionsQ(ctx context.Context, q Querier) (map[string]map[string]bool, error) {
+	rows, err := q.Query(ctx, `SELECT capability, value FROM capability_restrictions`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list capability restrictions: %w", err)
 	}
@@ -196,14 +263,25 @@ func (s PG) ListCapabilityRestrictions(ctx context.Context) (map[string]map[stri
 // SetCapabilityRestriction restricts one value (inserts its row, keeping the
 // first writer's provenance) or lifts the restriction (deletes it).
 func (s PG) SetCapabilityRestriction(ctx context.Context, capability, value string, restricted bool, by string) error {
-	q := `DELETE FROM capability_restrictions WHERE capability = $1 AND value = $2`
+	return s.inTx(ctx, func(q Querier) error {
+		// The lock an approval of a held availability change takes too.
+		if err := LockGovernanceTarget(ctx, q, "capability_availability", capability, value); err != nil {
+			return err
+		}
+		return SetCapabilityRestrictionQ(ctx, q, capability, value, restricted, by)
+	})
+}
+
+// SetCapabilityRestrictionQ is SetCapabilityRestriction's statement on q.
+func SetCapabilityRestrictionQ(ctx context.Context, q Querier, capability, value string, restricted bool, by string) error {
+	stmt := `DELETE FROM capability_restrictions WHERE capability = $1 AND value = $2`
 	args := []any{capability, value}
 	if restricted {
-		q = `INSERT INTO capability_restrictions (capability, value, created_by) VALUES ($1, $2, $3)
+		stmt = `INSERT INTO capability_restrictions (capability, value, created_by) VALUES ($1, $2, $3)
 			ON CONFLICT (capability, value) DO NOTHING`
 		args = append(args, by)
 	}
-	if _, err := s.Pool.Exec(ctx, q, args...); err != nil {
+	if _, err := q.Exec(ctx, stmt, args...); err != nil {
 		return fmt.Errorf("store: set capability restriction: %w", err)
 	}
 	return nil

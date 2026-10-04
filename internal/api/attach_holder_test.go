@@ -1044,8 +1044,18 @@ func TestAttachWS_EvictionStopsAPasteMidFlight(t *testing.T) {
 	if srv.evictAttachHolder(run.ID) == nil {
 		t.Fatal("nothing to evict")
 	}
-	close(sess.release)
-	wsPing(t, c) // barrier: the pump is back at c.Read, so the paste is settled
+	// A ping cannot settle the paste: the socket reader answers it, and the drain
+	// goroutine that writes keystrokes runs apart from it. Release exactly the
+	// parked chunk and wait for it to land. A write past the eviction would be
+	// issued by the same goroutine straight after it, with nothing in between to
+	// block on, and would show up on entered.
+	sess.release <- struct{}{}
+	waitFor(t, "the parked chunk to land", func() bool { return len(sess.deliveredStrings()) > 0 })
+	select {
+	case p := <-sess.entered:
+		t.Errorf("a %d-byte write entered Session.Write after the take-over was decided", len(p))
+	case <-time.After(200 * time.Millisecond):
+	}
 
 	got := sess.deliveredStrings()
 	if len(got) != 1 || len(got[0]) != attachWriteChunk {

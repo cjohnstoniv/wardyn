@@ -48,6 +48,7 @@ type dispatchParams struct {
 	// that defaults to the weaker posture is a control whose default is "off by
 	// omission", and the omission is invisible.
 	PATBroker        bool
+	PATAPI           bool                    // set by dispatchRun, never a caller: a git_pat grant sets api, so the run needs the MITM CA
 	GitPATGrants     map[string]string       // {host: grant_id} for non-GitHub PAT hosts
 	SSHGrants        map[string]string       // {host: grant_id} for SSH clone hosts
 	Injections       []runner.InjectionGrant // proxy-side credential injections
@@ -269,6 +270,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "This run was not launched: its git_pat grants could not be read to keep their PATs out of the sandbox")
 		return
 	}
+	p.PATAPI = patAPIDoor(grantRows)
 	var brokeredPATIDs []uuid.UUID
 	if p.PATBroker {
 		brokeredPATIDs = patGrantIDsOf(grantRows)

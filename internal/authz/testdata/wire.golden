@@ -45,3 +45,9 @@ reason recording_governed
 reason audit_export_partition_filter
 reason key_domain_unknown
 reason key_domain_ambiguous_membership
+reason audit_retention_not_oldest
+reason audit_retention_not_closed
+reason audit_retention_inside_window
+reason audit_retention_live_run
+reason audit_retention_digest_mismatch
+reason governance_overlay_unsatisfiable

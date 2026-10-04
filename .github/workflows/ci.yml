@@ -521,9 +521,19 @@ jobs:
         # #469: explicit rather than relying on run-ui-e2e.sh's CI-set default
         # (1 locally, 3 in CI) — a hosted runner is dedicated and sized for
         # three concurrent backends; a shared dev box's default stays 1.
+        #
+        # governance-changes needs WARDYN_GOVERNANCE_SECOND_HUMAN on in the daemon, which would change
+        # every other spec's writes, so here it skips by name and the next step runs it with the switch on.
         env:
           WARDYN_E2E_LANES: 3
+          WARDYN_E2E_ALLOW_ALL_SKIPPED: governance-changes
         run: make test-e2e-ui
+      - name: Run Playwright UI e2e, governance four-eyes (switch on)
+        # The second-human switch turns every covered governance write into a held change, so only this
+        # spec runs with it on; its tests are executed here, not skipped.
+        env:
+          WARDYN_GOVERNANCE_SECOND_HUMAN: "true"
+        run: scripts/run-ui-e2e.sh governance-changes
       - name: Upload Playwright report
         id: upload_playwright_report
         if: always()
@@ -1181,7 +1191,7 @@ jobs:
     needs: changes
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:17

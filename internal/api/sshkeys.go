@@ -179,7 +179,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		Capped:        capped,
 		CreatedAt:     authorizedAt,
 	}
-	added, err := s.cfg.Store.AddSSHKey(r.Context(), k)
+	added, err := s.cfg.Store.AddSSHKey(guardOwner(r.Context(), principal), k)
 	if errors.Is(err, store.ErrConflict) {
 		// Generic on purpose: the fingerprint PK is GLOBAL (correct — a key
 		// must map to exactly one principal), so this 409 can legitimately

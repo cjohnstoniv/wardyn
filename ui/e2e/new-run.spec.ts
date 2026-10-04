@@ -803,3 +803,52 @@ test.describe("New run rail — the Autonomy section (#93/#96)", () => {
     await expect(page.getByText(AUTONOMY_RAIL.NO_PROFILE, { exact: true })).toBeVisible();
   });
 });
+
+// P7 — the quota sentences are the server's (internal/api/run_fit.go) and the console adds none, so
+// these pin the wiring: a 422 from preflight or from Launch is the rail's alert, verbatim, and the
+// advisories ride the warnings list. The refusal is spliced as a response, the same technique as the
+// sections above; the server's own gate is pinned in Go (TestCreateRun_QuotaBreachRefusesBeforeDispatch).
+test.describe("New run rail — namespace quota sentences (P7)", () => {
+  const breach =
+    "this run needs 2 CPU, 4Gi memory, more than quota runs-quota has left (1 CPU, 2Gi memory). Stop a run, or ask your admin to raise the quota.";
+  const nearFull =
+    "this run would fill quota runs-quota to 94% (0.5 CPU, 1Gi memory left after it) — later runs may be refused.";
+  const nodeFit =
+    "no node this run may be placed on is large enough for 2 CPU, 4Gi memory. It may wait unscheduled until one is.";
+
+  test("a preflight 422 for a breached quota shows the sentence in the alert", async ({ page }) => {
+    await page.route("**/api/v1/runs/preflight", (route) =>
+      route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ error: breach, reason: "namespace_quota_exceeded" }) }),
+    );
+    await openNewRun(page);
+    await page.getByRole("button", { name: "Check again" }).click();
+    await expect(page.getByRole("alert")).toContainText(breach);
+    await expect(page.getByTestId("preflight-result")).toHaveCount(0);
+  });
+
+  test("a Launch 422 for a breached quota shows the sentence and stays on the page", async ({ page }) => {
+    await page.route("**/api/v1/runs", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      await route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ error: breach, reason: "namespace_quota_exceeded" }) });
+    });
+    await openNewRun(page);
+    await page.getByLabel("Title").fill("e2e quota refusal");
+    await page.getByRole("button", { name: "Launch run" }).click();
+    await expect(page.getByRole("alert")).toContainText(breach);
+    await expect(page).toHaveURL(/\/runs\/new$/);
+  });
+
+  test("the near-full and node-fit advisories are listed in the preflight warnings", async ({ page }) => {
+    await page.route("**/api/v1/runs/preflight", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.warnings = [...(json.warnings ?? []), nearFull, nodeFit];
+      await route.fulfill({ response, json });
+    });
+    await openNewRun(page);
+    await page.getByRole("button", { name: "Check again" }).click();
+    const result = page.getByTestId("preflight-result");
+    await expect(result.getByRole("listitem").filter({ hasText: nearFull })).toHaveCount(1);
+    await expect(result.getByRole("listitem").filter({ hasText: nodeFit })).toHaveCount(1);
+  });
+});

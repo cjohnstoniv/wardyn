@@ -277,25 +277,35 @@ func adoGitPath(path string) bool {
 	return false
 }
 
-// adoPeekBody reads the whole body when it fits adoscope.MaxBodyPeek, puts it
-// back on r for the forward, and returns it for the classifier. A body it
-// cannot see whole — declared too long, read too long, or encoded — is refused.
+// adoPeekBody is peekBody under the Azure DevOps gate's own refusal sentences.
 func adoPeekBody(r *http.Request) ([]byte, string) {
+	peek, why := peekBody(r, adoscope.MaxBodyPeek)
+	if why != "" {
+		return nil, "Wardyn refused this Azure DevOps request: " + why + "."
+	}
+	return peek, ""
+}
+
+// peekBody reads the whole body when it fits max, puts it back on r for the
+// forward, and returns it for the classifier. A body it cannot see whole —
+// declared too long, read too long, or encoded — is refused, with the reason
+// as a clause the caller completes into its own sentence.
+func peekBody(r *http.Request, max int64) ([]byte, string) {
 	for _, enc := range r.Header.Values("Content-Encoding") {
 		if !strings.EqualFold(strings.TrimSpace(enc), "identity") {
-			return nil, "Wardyn refused this Azure DevOps request: an encoded body cannot be checked."
+			return nil, "an encoded body cannot be checked"
 		}
 	}
-	if r.ContentLength > adoscope.MaxBodyPeek {
-		return nil, "Wardyn refused this Azure DevOps request: its body is too large to check."
+	if r.ContentLength > max {
+		return nil, "its body is too large to check"
 	}
 	if r.Body == nil || r.Body == http.NoBody {
 		return nil, ""
 	}
-	peek, err := io.ReadAll(io.LimitReader(r.Body, adoscope.MaxBodyPeek+1))
+	peek, err := io.ReadAll(io.LimitReader(r.Body, max+1))
 	_ = r.Body.Close()
-	if err != nil || len(peek) > adoscope.MaxBodyPeek {
-		return nil, "Wardyn refused this Azure DevOps request: its body is too large to check."
+	if err != nil || int64(len(peek)) > max {
+		return nil, "its body is too large to check"
 	}
 	r.Body = io.NopCloser(bytes.NewReader(peek))
 	r.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(peek)), nil } // adoReplayBody

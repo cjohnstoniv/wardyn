@@ -244,11 +244,14 @@ func TestDispatchScopesOnlyTheGrantsTheCeilingKept(t *testing.T) {
 
 // Review answers the same refusals launch gives at dispatch.
 func TestPreflightMirrorsThePATNarrowingRefusals(t *testing.T) {
+	t.Setenv(envGitPATAPIBitbucketServer, "")
 	narrowed := patGrantSpec(`"repos":["team/app"]`)
 	githubNarrowed := types.GrantSpec{Kind: types.GrantGitPAT, Scope: json.RawMessage(`{"host":"github.com","secret_name":"pat","repos":["org/repo"]}`)}
 	ssh := types.GrantSpec{Kind: types.GrantSSHKey, Scope: json.RawMessage(`{"host":"ssh.github.com","key_secret_ref":"pat"}`)}
 	adoNarrowed := types.GrantSpec{Kind: types.GrantGitPAT, Scope: json.RawMessage(`{"host":"dev.azure.com","secret_name":"pat","access":"read"}`)}
 	githubToken := types.GrantSpec{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":["org/repo"]}`)}
+	bbsAPI := patGrantSpec(`"api":true,"forge":"bitbucket_server"`)
+	gitlabAPI := patGrantSpec(`"api":true,"forge":"gitlab"`)
 
 	for _, tc := range []struct {
 		name      string
@@ -261,6 +264,8 @@ func TestPreflightMirrorsThePATNarrowingRefusals(t *testing.T) {
 		{"azure devops host", false, []types.GrantSpec{adoNarrowed}, reasonGitPATNarrowingUnsupportedHost},
 		{"brokered forge", false, []types.GrantSpec{githubNarrowed, githubToken}, reasonGitPATNarrowingUnsupportedHost},
 		{"narrowed grant, broker on", false, []types.GrantSpec{narrowed}, ""},
+		{"bitbucket api, flag off", false, []types.GrantSpec{bbsAPI}, reasonGitPATAPIForgeDisabled},
+		{"gitlab api", false, []types.GrantSpec{gitlabAPI}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, st, _ := govEscapeFixture(t, &capStore{})

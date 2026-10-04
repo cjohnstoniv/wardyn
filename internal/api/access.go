@@ -580,6 +580,10 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	if !s.requireOIDC(w) {
 		return
 	}
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
 	var req roleMappingWriteRequest
 	if !decodeStrict(w, r, &req) {
 		return
@@ -594,56 +598,25 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 		writeServerError(w, r, "list user types", err)
 		return
 	}
-	write, msg := accessMappingTarget(req, value, userTypes)
-	if msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonAccessMappingTargetInvalid, msg)
-		return
-	}
-	chart := s.cfg.OIDC.ChartRoleMap()
-	if cause := accessCollisionCause(value, chart, s.cfg.OIDC); cause != "" {
-		writeAccessCollision(w, value, cause)
-		return
-	}
-	// Adjudication (docs/design/people-access-prompt.md): an email-shaped
-	// CONSOLE value is refused unless the org opted in
-	// (WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS) — an SSO/Entra deployment's default
-	// posture steers an admin to an App Role or group key instead. env
-	// WARDYN_OIDC_ROLE_MAP's own email-keyed entries are UNAFFECTED (legacy,
-	// boot-warned separately — see buildOptionalFeatures). Checked AFTER the
-	// collision check on purpose: an email value that already collides with
-	// the chart/operator allowlist (e.g. an operator's own address) gets that
-	// more specific, more actionable refusal — not a generic "email mappings
-	// are off" that would be true but beside the point.
-	if strings.Contains(value, "@") && !s.cfg.AllowEmailMappings {
-		writeErrorReason(w, http.StatusBadRequest, reasonAccessEmailMappingDisabled, accessEmailKeyRefused)
-		return
-	}
-
-	existing, err := s.cfg.Store.ListRoleMappings(r.Context())
+	// The gates (shape, chart collision, email opt-in, posture flip, lockout) are gateRoleMappingUpsert's:
+	// a held change runs the same ones when it is approved. A write that is held is not lockout-checked
+	// here: the guard is the APPLYING human's, so it runs on the approval.
+	g, refuse, err := s.gateRoleMappingUpsert(r, req, value, userTypes, func() ([]types.RoleMapping, error) {
+		return s.cfg.Store.ListRoleMappings(r.Context())
+	}, mode != govQueue)
 	if err != nil {
 		writeServerError(w, r, "list role mappings", err)
 		return
 	}
-	candidate := accessCandidateRows(existing, "", write)
-
-	// Posture-flip guard: fires iff this write actually moves the
-	// unmatched-human outcome — derived from the REAL merged map via
-	// accessUnmatchedOutcome (existing rows vs. candidate rows), not a raw
-	// row-count precondition, which would miss a flip whenever a stored
-	// row was shadowed (see accessUnmatchedOutcome's doc).
-	if !req.AcknowledgeAccessChange {
-		before := s.accessUnmatchedOutcome(toOIDCRoleMappings(existing), userTypes)
-		after := s.accessUnmatchedOutcome(candidate, userTypes)
-		if before != after {
-			writeAccessPostureFlip(w, before, after)
-			return
-		}
-	}
-
-	if lerr := s.accessLockoutErr(r, existing, candidate, userTypes); lerr != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonAccessLockout, lerr.Error())
+	if refuse != nil {
+		refuse(w)
 		return
 	}
+	if mode == govQueue {
+		s.holdRoleMappingUpsert(w, r, req, g)
+		return
+	}
+	write, existing, candidate := g.write, g.existing, g.candidate
 
 	// A fresh candidate id: UpsertRoleMapping returns the EXISTING row's id on
 	// a natural-key (value) conflict, never this one — comparing the two is
@@ -689,6 +662,9 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		action, saved.ID.String(), "success", mustJSON(data)))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindRoleMapping, saved.ID.String(), "success", nil)
+	}
 	// Embedded, so the response is a strict SUPERSET of the RoleMapping every
 	// existing client already decodes — the console, pkg/client and the CLI keep
 	// working byte for byte, and a client that wants the signal reads one more
@@ -714,6 +690,10 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 // computation keyed on chart/row counts.
 func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOIDC(w) {
+		return
+	}
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id", "role mapping")
@@ -745,17 +725,12 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 	// natural-key delete has no body) — ParseBool over a bare == "true"
 	// so "1"/"TRUE"/"T" also work, err (including absent) => false.
 	acknowledge, _ := strconv.ParseBool(r.URL.Query().Get("acknowledge_access_change"))
-	if !acknowledge {
-		before := s.accessUnmatchedOutcome(toOIDCRoleMappings(existing), userTypes)
-		after := s.accessUnmatchedOutcome(candidate, userTypes)
-		if before != after {
-			writeAccessPostureFlip(w, before, after)
-			return
-		}
+	if refuse := s.gateRoleMappingEffect(r, acknowledge, existing, candidate, userTypes, mode != govQueue); refuse != nil {
+		refuse(w)
+		return
 	}
-
-	if lerr := s.accessLockoutErr(r, existing, candidate, userTypes); lerr != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonAccessLockout, lerr.Error())
+	if mode == govQueue {
+		s.holdRoleMappingDelete(w, r, id, acknowledge, existing, matched)
 		return
 	}
 
@@ -784,6 +759,9 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"access.role_mapping.delete", id.String(), "success", mustJSON(data)))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindRoleMapping, id.String(), "success", nil)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

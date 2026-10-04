@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -321,14 +323,19 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 	}
 	name := providerSecretName(p.UID, providerOAuthPart)
 	raw, _ := json.Marshal(managedCredBlob{Token: token, CapturedAt: s.cfg.Now().UTC(), SourceRunID: runID.String()})
-	if err := s.cfg.Secrets.For(owner).Put(r.Context(), name, raw); err != nil {
+	// Masked for the sign-in run's own capture only, not process-wide: the
+	// bytes are the caller's choice (the prefix guard is shape, not proof), and
+	// the sink masks the token for every run it is injected into. Recorded
+	// before it is stored, so a token that cannot be masked is never kept.
+	if err := s.maskInjected(runID, []byte(token)); err != nil {
+		slog.WarnContext(r.Context(), "wardynd: a pasted sign-in token could not be recorded for masking", slog.Any("err", err))
+		writeErrorReason(w, authz.EffectUnavailable.Status(), string(authz.ReasonMaskStateUnavailable), maskStateSentence)
+		return
+	}
+	if err := s.putOwned(r.Context(), owner, func() error { return s.cfg.Secrets.For(owner).Put(r.Context(), name, raw) }); err != nil {
 		writeServerError(w, r, "store model provider sign-in", err)
 		return
 	}
-	// Masked for the sign-in run's own capture only, not process-wide: the
-	// bytes are the caller's choice (the prefix guard is shape, not proof), and
-	// the sink masks the token for every run it is injected into.
-	s.cfg.MaskRegistry.Add(runID, []byte(token))
 	s.recordAudit(r.Context(), s.auditEvent(&runID, actorTypeFromRequest(r), principalFromRequest(r),
 		"harness.credential.capture", name, "success", mustJSON(map[string]any{
 			"provider": hl.provider, "source": "paste", "owner": owner,

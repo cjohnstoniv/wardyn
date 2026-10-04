@@ -568,6 +568,9 @@ func TestAuditActionsForwardGuardCoversEveryEmitShape(t *testing.T) {
 // is for the forward guard: an action deliberately outside docs/AUDIT-ACTIONS.md's
 // "Grammar" section, each with the reason it is not renamed.
 var auditActionGrammarAllow = map[string]bool{
+	// The run-output retention sweep (0.8.6): recording.retention.sweep's sibling,
+	// named with a fourth segment by its design before it met this grammar.
+	"run.output.retention.sweep": true,
 	// #1428's per-person Azure DevOps token rows, named by its plan and its
 	// contract (ado_pat_contract.go) before they met this grammar; the docs lane
 	// settles the audit names against it, not the lane that first emits them.
@@ -614,6 +617,14 @@ var auditActionGrammarAllow = map[string]bool{
 	// per-subject key's destroy before the lane that first emits it met this
 	// grammar. Past tense on purpose: it records the tombstone that was written.
 	"principal_key.destroyed": true,
+	// The 0.8.6 retention drop's chained event, fixed by its design record
+	// (docs/design/0.8/0.8.6-ar.md). Past tense on purpose: it records a drop that has already
+	// happened, written inside the drop's own transaction.
+	"audit.retention.partition_dropped": true,
+	// The audit-retention design fixed this name for the person-erasure act (the
+	// POST /people/{principal}/erasure row) before the lane that first emits it
+	// met this grammar. It ends in a noun, like authz.denied ends in a past tense.
+	"person.erasure": true,
 }
 
 // actionSegment is one dot-separated segment of an action name.

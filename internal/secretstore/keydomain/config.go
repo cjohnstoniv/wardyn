@@ -142,3 +142,19 @@ func (f File) Names() []string {
 	slices.Sort(names)
 	return names
 }
+
+// KeyDescriptions says, for each declared domain, where its key is, for display:
+// "Transit key finance" or "Key Vault key <id>". The key's name is a configured
+// identifier, never a secret.
+func (f File) KeyDescriptions() map[string]string {
+	out := make(map[string]string, len(f))
+	for name, e := range f {
+		switch {
+		case e.Transit != nil:
+			out[name] = "Transit key " + strings.TrimSpace(e.Transit.Key)
+		case e.AzureKV != nil:
+			out[name] = "Key Vault key " + strings.TrimSpace(e.AzureKV.Key)
+		}
+	}
+	return out
+}

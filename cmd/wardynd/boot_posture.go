@@ -407,6 +407,12 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if *f.preflightRatePerMin < 0 {
 		return fmt.Errorf("refusing to start: WARDYN_PREFLIGHT_RATE_PER_MIN is %d; want 0 (off) or a positive number", *f.preflightRatePerMin)
 	}
+	if _, err := auditSealMode(f); err != nil {
+		return err
+	}
+	if err := validateHAPosture(f); err != nil {
+		return err
+	}
 	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, *f.uiStripCookies, posture, *f.allowPlaintextListen); err != nil {
 		return err
 	}
@@ -419,8 +425,43 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateRunOutputTailBytes(*f.runOutputTailBytes); err != nil {
 		return err
 	}
+	if err := validateRunOutputRetentionDays(*f.runOutputRetention); err != nil {
+		return err
+	}
+	if _, err := scimConfig(f, posture); err != nil {
+		return err
+	}
 	for _, w := range bootPostureWarnings(f, posture) {
 		slog.Warn(w)
+	}
+	return nil
+}
+
+// validateHAPosture is the boot half of high availability, the half that still
+// holds when someone edits the Deployment by hand or scales it with kubectl,
+// which the chart's render-time guards cannot see. WARDYN_HA skips the
+// single-instance lock, so it is refused unless everything that makes a second
+// replica safe is in place: a Kubernetes runner (the Docker driver tracks
+// sandboxes in per-process maps that a replica that did not create a sandbox
+// cannot see) and a recording store every replica reads (pg), or none (off).
+// It also refuses the removed -allow-multi-instance flag, with a pointer.
+func validateHAPosture(f *bootFlags) error {
+	if *f.allowMultiInstance {
+		return errors.New("refusing to start: -allow-multi-instance was removed in 0.8.6. Running more than one replica is a supported mode now: " +
+			"set WARDYN_HA=true (the chart's ha.enabled), which needs the Kubernetes runner and WARDYN_RECORDING_STORE=pg; " +
+			"see docs/OPERATIONS.md, \"High availability\"")
+	}
+	if !*f.ha {
+		return nil
+	}
+	if *f.runnerSel != "k8s" {
+		return fmt.Errorf("refusing to start: WARDYN_HA is set but the runner is %q. High availability is supported on the Kubernetes runner only "+
+			"(WARDYN_RUNNER=k8s): the Docker driver keeps its sandbox tracking in per-process maps, so a teardown served by a replica that did not "+
+			"create the sandbox cannot see it. Unset WARDYN_HA, or run on Kubernetes", *f.runnerSel)
+	}
+	if sel := *f.recordingSel; sel != "pg" && sel != "off" {
+		return fmt.Errorf("refusing to start: WARDYN_HA is set but WARDYN_RECORDING_STORE is %q. Every replica must read the same recordings, so the "+
+			"store must be \"pg\" (Postgres) or \"off\"; the \"fs\" store is a directory on one pod's disk", sel)
 	}
 	return nil
 }
@@ -431,6 +472,15 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 func validateRunOutputTailBytes(n int) error {
 	if n < 1024 || n > 1<<20 {
 		return fmt.Errorf("WARDYN_RUN_OUTPUT_TAIL_BYTES is %d; it must be between 1024 and 1048576", n)
+	}
+	return nil
+}
+
+// validateRunOutputRetentionDays refuses a negative WARDYN_RUN_OUTPUT_RETENTION_DAYS:
+// 0 keeps persisted output forever, a positive number is the window in days.
+func validateRunOutputRetentionDays(n int) error {
+	if n < 0 {
+		return fmt.Errorf("WARDYN_RUN_OUTPUT_RETENTION_DAYS is %d; it must be 0 (keep forever) or a positive number of days", n)
 	}
 	return nil
 }

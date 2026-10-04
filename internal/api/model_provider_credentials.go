@@ -235,7 +235,9 @@ func (s *Server) handlePutProviderCredential(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	if err := s.cfg.Secrets.For(owner).Put(r.Context(), providerSecretName(p.UID, providerKeyPart), []byte(value)); err != nil {
+	if err := s.putOwned(r.Context(), owner, func() error {
+		return s.cfg.Secrets.For(owner).Put(r.Context(), providerSecretName(p.UID, providerKeyPart), []byte(value))
+	}); err != nil {
 		if errors.Is(err, secretstore.ErrUnavailable) {
 			// loggedMsg keeps the daemon's own record of a sealed/unreachable
 			// store on save (review finding F7) — writeServerError's log line,
@@ -332,7 +334,9 @@ func (s *Server) purgeProviderCredentials(ctx context.Context, before, after *ty
 	}
 	for name, owners := range holders {
 		for _, owner := range owners {
-			s.cfg.MaskRegistry.EvictGlobal(owner, name, s.cfg.Now())
+			if err := s.cfg.MaskRegistry.EvictGlobal(owner, name, s.cfg.Now()); err != nil {
+				return n, fmt.Errorf("purge model provider credentials: the masked copy of one could not be evicted: %w", err)
+			}
 		}
 	}
 	return n, nil

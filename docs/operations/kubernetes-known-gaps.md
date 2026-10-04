@@ -35,7 +35,7 @@ flowchart LR
 | ⛔ No revive or restart with current limits | The substrate implements no `runner.ProxyReviver`: the agent pod pins the proxy pod's IP, so a new proxy pod could not be reached. `POST /runs/{id}/revive` is refused with 409, and `POST /admin/runs/restart` answers 200 with each run `ok: false`; both carry reason `revive_unsupported` (`runner.ErrReviveUnsupported`), and nothing changes. A run whose proxy is out of date, including one dispatched before 0.7.12, is stopped and a new run started instead ([run lifetime](run-lifetime.md)) |
 | 🟡 No k8s ground-truth correlator | The Tetragon host-sensor → ground-truth pipeline (`cmd/wardynd/gt_rotator.go`, `wardyn-tetragon-ingest`, the `groundtruth` Compose profile) has no k8s-substrate equivalent. A k8s deployment gets the NetworkPolicy-enforced boundary (proven live by the boot-time egress canary) but not the independent kernel-level corroboration Compose + Tetragon provides |
 | ⛔ A pre-existing default-deny NetworkPolicy in `k8s.runsNamespace` refuses boot outright | Unless the canary pod actually ran and could not connect — see "The boot-time egress canary" below |
-| 🟡 `replicas` stays 1 on k8s exactly as everywhere else | See [One replica, by construction](../OPERATIONS.md#one-replica-by-construction); the masking registry is still in-process, per-pod |
+| 🟡 `replicas` stays 1 on k8s unless `ha.enabled` is set | HA is supported on Kubernetes only. See [High availability](../OPERATIONS.md#high-availability) for what the replicas share, what stays per replica (caps multiply by the replica count) and the residual risks |
 
 ## Eviction, priority and PIDs
 

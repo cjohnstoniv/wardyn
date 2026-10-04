@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/approval"
@@ -98,7 +99,9 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 					return
 				}
 				if !applied {
-					// Already terminal (e.g. killed concurrently) — nothing further to do.
+					// Already terminal (e.g. killed concurrently) — nothing further to
+					// do, but this process may hold the tail the winner does not.
+					s.finishRunOutput(base, runID)
 					return
 				}
 				s.finalizeRunTail(base, runID, ref, "run.complete", "failure", data)
@@ -153,8 +156,10 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 			return
 		}
 		if !applied {
-			// Run already terminal (e.g. KILLED by a user mid-run). Do nothing —
-			// the kill path already tore the sandbox down.
+			// Run already terminal (e.g. KILLED by a user mid-run). The kill path
+			// already tore the sandbox down; only this process's tail is left, and
+			// finishing it is a no-op when the winner already did.
+			s.finishRunOutput(base, runID)
 			return
 		}
 
@@ -463,12 +468,29 @@ func (s *Server) SweepRunSecrets(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	s.cfg.MaskRegistry.SweepGlobals(s.cfg.Now().Add(-RunSecretGrace))
+	if s.cfg.MaskManifests != nil {
+		s.cfg.MaskManifests.DropFenced(ctx)
+	}
 	if s.cfg.Store == nil {
 		return 0, nil
 	}
+	// The committed rows are the leader's: one replica deletes them, and every
+	// other replica drops its cache when it reads the tombstones. A follower's
+	// pass below touches only its own cache.
+	lctx, end, lead := s.beginLeaderSweep(ctx)
+	if lead {
+		defer end()
+	}
 	held := s.cfg.MaskRegistry.RunIDs()
-	if len(held) == 0 {
-		return 0, nil
+	var persisted []uuid.UUID
+	if lead {
+		var perr error
+		if persisted, perr = s.cfg.MaskRegistry.PersistedRuns(lctx); perr != nil {
+			return 0, fmt.Errorf("list the runs with committed masking state: %w", perr)
+		}
+	}
+	if len(held) == 0 && len(persisted) == 0 {
+		return 0, s.sweepCommittedMasks(lctx, lead, nil)
 	}
 	runs, err := s.cfg.Store.ListRuns(ctx)
 	if err != nil {
@@ -480,17 +502,20 @@ func (s *Server) SweepRunSecrets(ctx context.Context) (int, error) {
 		byID[run.ID] = run
 	}
 	cutoff := time.Now().UTC().Add(-RunSecretGrace)
+	cold := func(id uuid.UUID) bool {
+		run, known := byID[id]
+		return known && isTerminalRunState(run.State) && run.UpdatedAt.Before(cutoff)
+	}
 	evicted := 0
 	for _, id := range held {
-		run, known := byID[id]
-		if !known || !isTerminalRunState(run.State) || !run.UpdatedAt.Before(cutoff) {
+		if !cold(id) {
 			continue
 		}
 		s.cfg.MaskRegistry.Evict(id)
 		s.forgetMaskManifest(id)
 		evicted++
 	}
-	return evicted, nil
+	return evicted, s.sweepCommittedMasks(lctx, lead, slices.DeleteFunc(persisted, func(id uuid.UUID) bool { return !cold(id) }))
 }
 
 // finalizeRunTail runs the terminal-transition side effects shared by the live
@@ -516,10 +541,26 @@ func (s *Server) SweepRunSecrets(ctx context.Context) (int, error) {
 // CASes from RUNNING and audits its own uerr; the reconciler reads current state
 // first and slogs) — only the post-CAS tail is shared.
 func (s *Server) finalizeRunTail(ctx context.Context, runID uuid.UUID, ref, action, outcome string, data map[string]any) {
+	s.finalizeRunTailOrdered(ctx, runID, ref, action, outcome, data, false, false)
+}
+
+// finalizeRunTailOrdered is finalizeRunTail. The run's output is finalised
+// (run_output_final.go) after the revoke cascade and before StopSandbox, so the
+// seconds of drain never extend a live credential; finishAfterStop moves it
+// after StopSandbox, for a caller that CASed a possibly still-running run to
+// KILLED (reclaimProbeRun), whose process has not exited yet. gracefulStop is
+// a caller that is stopping a live sandbox into STOPPED itself (the lease
+// end): an interactive run's pane is then snapshotted, after the revocations
+// and before StopSandbox.
+func (s *Server) finalizeRunTailOrdered(ctx context.Context, runID uuid.UUID, ref, action, outcome string, data map[string]any, finishAfterStop, gracefulStop bool) {
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
 		runID.String(), outcome, mustJSON(data)))
 	s.revokeRunCascade(ctx, runID)
 	s.cancelRunApprovals(ctx, runID)
+	if !finishAfterStop {
+		s.prepareRunOutput(ctx, runID, gracefulStop)
+		s.finishRunOutput(ctx, runID)
+	}
 	teardownOK := false
 	if ref != "" && s.cfg.Runner != nil {
 		if serr := s.cfg.Runner.StopSandbox(ctx, ref); serr != nil {
@@ -533,6 +574,9 @@ func (s *Server) finalizeRunTail(ctx context.Context, runID uuid.UUID, ref, acti
 		} else {
 			teardownOK = true
 		}
+	}
+	if finishAfterStop {
+		s.FinishRunOutput(ctx, runID)
 	}
 	s.reconcileWorkspaceRun(ctx, runID)
 	s.reconcileRecordRun(ctx, runID)
@@ -622,6 +666,7 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		if from == types.RunRunning {
 			s.cancelRunApprovals(ctx, runID)
 		}
+		s.FinishRunOutput(ctx, runID)
 	}
 }
 
@@ -792,7 +837,7 @@ func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (b
 	// A STARTING run has no sandbox_ref yet, so the teardown tail cannot reach
 	// its half-built sandbox: stop the create instead, and its own rollback
 	// removes what it made. A no-op for a run that is not creating.
-	s.creates.cancel(run.ID)
+	s.cancelCreate(run.ID)
 	// Approvals: the transition is unambiguously ours, so the run's outstanding
 	// questions are cancelled here — BEFORE teardown, because a PENDING approval
 	// is the one piece of this cascade a human is looking at, and after the CAS
@@ -864,6 +909,9 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	}
 	// (6) Its Azure DevOps personal access tokens (best-effort; the sweep retries).
 	s.revokeRunPATs(ctx, id, adoPATRevokeKill)
+	// (7) Its output, on a tracked goroutine: the drain barrier and the write
+	// never delay the kill's answer, and the sandbox is already gone.
+	s.finishRunOutputDetached(ctx, id)
 
 	// Honest outcome: the kill-switch is the central governance control and
 	// the audit log is the system of record. If ANY teardown/revocation step

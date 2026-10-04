@@ -32,10 +32,12 @@
 //     console's frozen heading — never re-worded, never joined into a sentence.
 import * as React from "react";
 import { AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
-import { HttpError } from "../../../lib/api/core";
+import { useSearchParams } from "react-router-dom";
+import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { governance as api, type GovernanceProfile, type GovernanceSnapshot } from "../../../lib/api/governance";
+import type { GovernanceChange } from "../../../lib/types";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
-import { GOVERNANCE as GOV, setsRunLimits } from "../../../lib/governance-copy";
+import { CHANGES, GOVERNANCE as GOV, setsRunLimits } from "../../../lib/governance-copy";
 import { ACCESS_STATE, PEOPLE } from "../../../lib/people-access-copy";
 import {
   AlertDialog,
@@ -49,6 +51,7 @@ import {
 } from "../../ui/alert-dialog";
 import { Button } from "../../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
+import { Tabs, TabsList, TabsTrigger } from "../../ui/tabs";
 import { Mono } from "../../wardyn/code-block";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { PageHeader } from "../../wardyn/page-header";
@@ -56,9 +59,12 @@ import { SafetyMeter } from "../../wardyn/safety-meter";
 import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { AssignmentsBlock } from "./assignments";
+import { ChangesTab } from "./changes";
 import { Note, noteClass, question, withMono } from "./display";
 import { limitChips } from "./limit-chips";
+import { BaseChip, childrenOf } from "./profile-overlay";
 import { ProfileEditor } from "./profile-editor";
+import { SubmittedNote } from "./submitted-note";
 
 const EMPTY: GovernanceSnapshot = { profiles: [], assignments: [] };
 
@@ -78,6 +84,14 @@ export function GovernanceScreen() {
   const [deleteError, setDeleteError] = React.useState<{ title?: string; message: string } | null>(null);
   const [omission, setOmission] = React.useState<string[]>([]);
   const [busy, setBusy] = React.useState(false);
+  // The pending changes behind the Changes tab. Read with the snapshot so the tab can say how many wait,
+  // and kept apart from it: a list that cannot be read never hides the profiles.
+  const [changes, setChanges] = React.useState<GovernanceChange[]>([]);
+  const [changesError, setChangesError] = React.useState<string | null>(null);
+  // A profile write the server held for a second person (202): the note stands until the next write.
+  const [submitted, setSubmitted] = React.useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = searchParams.get("tab") === "changes" ? "changes" : "profiles";
 
   // ponytail: no setStatus("loading") here. `load` is also the post-write
   // refresh, and flipping back to loading would unmount the add form under
@@ -91,6 +105,13 @@ export function GovernanceScreen() {
         setStatus("ready");
       })
       .catch((e) => setStatus(loadFailStatus(e)));
+    api
+      .listChanges()
+      .then((c) => {
+        setChanges(c);
+        setChangesError(null);
+      })
+      .catch((e) => setChangesError(getErrorMessage(e)));
   }, []);
   React.useEffect(load, [load]);
 
@@ -101,11 +122,13 @@ export function GovernanceScreen() {
 
   const openEditor = (profile: GovernanceProfile | null) => {
     setOmission([]);
+    setSubmitted(false);
     setEditing({ profile });
   };
 
   const openDelete = (p: GovernanceProfile) => {
     setDeleteError(null);
+    setSubmitted(false);
     setToDelete(p);
   };
 
@@ -116,11 +139,21 @@ export function GovernanceScreen() {
       setToDelete(null);
       load();
     } catch (e) {
+      if (e instanceof PendingChangeError) {
+        // Held for a second person: the profile is still there.
+        setToDelete(null);
+        setSubmitted(true);
+        load();
+        return;
+      }
       // The 409 is the ON DELETE RESTRICT refusal, and it is the authority on
       // the race: another admin assigned this profile since the list was read.
       setDeleteError(
         e instanceof HttpError && e.status === 409
-          ? { title: GOV.DELETE_RESTRICT_TITLE, message: e.message }
+          ? {
+              title: childrenOf(p.id, snap.profiles).length > 0 ? GOV.REFUSED_HAS_CHILDREN : GOV.DELETE_RESTRICT_TITLE,
+              message: e.message,
+            }
           : { message: getErrorMessage(e) },
       );
     } finally {
@@ -135,11 +168,33 @@ export function GovernanceScreen() {
   const teal: "save" | "new" | "assign" = editorOpen ? "save" : noProfiles ? "new" : "assign";
 
   const deleteCount = toDelete ? assignedCount(toDelete) : 0;
+  // Profiles composed on the one being deleted: the server refuses the delete (it would widen them
+  // back to the deployment ceiling), so the dialog opens pre-filled and the confirm is disabled.
+  const deleteChildren = toDelete ? childrenOf(toDelete.id, snap.profiles) : [];
   const [deleteHead, deleteBody] = question(toDelete ? GOV.DELETE_CONFIRM(toDelete.name) : "");
 
   return (
     <div className="mx-auto max-w-[1120px] px-6 py-6">
       <PageHeader title={GOV.TITLE} description={GOV.LEAD} />
+
+      {status !== "forbidden" && status !== "error" && (
+        <Tabs
+          value={tab}
+          onValueChange={(v) => setSearchParams(v === "changes" ? { tab: "changes" } : {}, { replace: true })}
+          className="mt-6"
+        >
+          <TabsList>
+            <TabsTrigger value="profiles">{GOV.PROFILES_TITLE}</TabsTrigger>
+            <TabsTrigger value="changes">
+              {changes.length > 0 ? CHANGES.TAB_COUNT(changes.length) : CHANGES.TAB}
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      )}
+
+      {status !== "forbidden" && status !== "error" && tab === "changes" && (
+        <ChangesTab changes={changes} loadError={changesError} onChanged={load} />
+      )}
 
       {status === "forbidden" ? (
         <p className="mt-6 text-sm text-muted-foreground">{SECURITY_ONLY_REASON}</p>
@@ -159,7 +214,8 @@ export function GovernanceScreen() {
           />
         </section>
       ) : (
-        <>
+        // Hidden, never unmounted, on the Changes tab: an open editor keeps what was typed in it.
+        <div hidden={tab === "changes"}>
           <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
             <div className="flex flex-wrap items-start justify-between gap-3 px-6 pt-5">
               <div>
@@ -195,6 +251,12 @@ export function GovernanceScreen() {
                     </Mono>
                   ))}
                 </Note>
+              </div>
+            )}
+
+            {submitted && (
+              <div className="px-6">
+                <SubmittedNote />
               </div>
             )}
 
@@ -240,7 +302,10 @@ export function GovernanceScreen() {
                       return (
                         <TableRow key={p.id}>
                           {/* A profile name is a human-chosen label, never mono. */}
-                          <TableCell className="font-medium">{p.name}</TableCell>
+                          <TableCell className="font-medium">
+                            {p.name}
+                            <BaseChip profile={p} profiles={snap.profiles} />
+                          </TableCell>
                           <TableCell>{n === 0 ? GOV.ASSIGNED_NONE : GOV.ASSIGNED_COUNT(n)}</TableCell>
                           <TableCell>
                             <span className="flex flex-wrap items-center gap-1.5">
@@ -264,7 +329,7 @@ export function GovernanceScreen() {
                                 ponytail: one debounced POST /policies/grade per
                                 row. Profile lists are short; batch it if a
                                 deployment ever makes that false. */}
-                            <SafetyMeter spec={p.ceiling} />
+                            <SafetyMeter spec={p.effective?.ceiling ?? p.ceiling} />
                           </TableCell>
                           <TableCell className="whitespace-nowrap text-muted-foreground" title={p.updated_at}>
                             {relativeTime(p.updated_at)}
@@ -305,11 +370,19 @@ export function GovernanceScreen() {
               <ProfileEditor
                 key={editing.profile?.id ?? ""}
                 profile={editing.profile}
+                profiles={snap.profiles}
                 disabled={!securityOperator}
                 onCancel={() => setEditing(null)}
                 onSaved={(warnings) => {
                   setEditing(null);
                   setOmission(warnings);
+                  setSubmitted(false);
+                  load();
+                }}
+                onSubmitted={() => {
+                  setEditing(null);
+                  setOmission([]);
+                  setSubmitted(true);
                   load();
                 }}
               />
@@ -328,7 +401,7 @@ export function GovernanceScreen() {
               onChanged={load}
             />
           )}
-        </>
+        </div>
       )}
 
       <AlertDialog open={!!toDelete} onOpenChange={(o) => !o && setToDelete(null)}>
@@ -351,6 +424,12 @@ export function GovernanceScreen() {
               <AlertDialogDescription>{deleteBody}</AlertDialogDescription>
             )}
           </AlertDialogHeader>
+          {deleteChildren.length > 0 && (
+            <Note tone="red">
+              <b className="font-semibold">{GOV.REFUSED_HAS_CHILDREN}</b>
+              <span>{deleteChildren.map((c) => c.name).join(", ")}</span>
+            </Note>
+          )}
           {/* The race, post-attempt: count-free, the server's own message. */}
           {deleteError && (
             <Note tone="red" role="alert">
@@ -362,7 +441,7 @@ export function GovernanceScreen() {
             <AlertDialogCancel>{PEOPLE.CANCEL}</AlertDialogCancel>
             <AlertDialogAction
               className="bg-danger text-danger-foreground hover:bg-danger/90"
-              disabled={deleteCount > 0 || busy}
+              disabled={deleteCount > 0 || deleteChildren.length > 0 || busy}
               onClick={(e) => {
                 e.preventDefault();
                 if (toDelete) void del(toDelete);

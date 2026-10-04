@@ -42,8 +42,7 @@ type partitionFooterLine struct {
 	Digest    string `json:"digest"`
 }
 
-// partitionReadableLine is a row as the audit feed serves it (stored values as-is, ciphertext
-// included), plus its position.
+// partitionReadableLine is a row as the audit feed serves it (sealed fields opened), plus its position.
 type partitionReadableLine struct {
 	Type string `json:"type"`
 	types.FederatedAuditEvent
@@ -133,9 +132,19 @@ func (s *Server) exportAuditPartition(w http.ResponseWriter, r *http.Request) {
 		func(row store.AuditPartitionRow) error {
 			digest.Add(row.FoldHash)
 			rowsSent++
-			var line any = readablePartitionLine(row)
+			var line any
 			if form == auditFormRaw {
 				line = rawPartitionLine(row)
+			} else {
+				// The readable form opens sealed personal fields, as the feed does;
+				// the raw form keeps the stored, hash-covered ciphertext.
+				rl := readablePartitionLine(row)
+				evs, uerr := s.unsealed(r.Context(), []types.AuditEvent{rl.AuditEvent}, nil)
+				if uerr != nil {
+					return uerr
+				}
+				rl.AuditEvent = evs[0]
+				line = rl
 			}
 			if err := send(line); err != nil {
 				return err

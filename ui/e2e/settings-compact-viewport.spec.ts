@@ -74,10 +74,11 @@ test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact c
       /^Workspace providers \S/,
       /^User drives \S/,
       /^Admin SSH keys \d+ admin key/,
+      /^SCIM provisioning\s*\S/,
     ]);
 
     // Collapsed by default: none of the six cards' bodies are in the DOM.
-    for (const title of ["Host", "Branding", "Model providers", "Workspace providers", "User drives", "Admin SSH keys"]) {
+    for (const title of ["Host", "Branding", "Model providers", "Workspace providers", "User drives", "Admin SSH keys", "SCIM provisioning"]) {
       const toggle = page.getByRole("button", { name: new RegExp(`^${title}( |$)`) });
       await expect(toggle).toHaveAttribute("aria-expanded", "false");
     }
@@ -114,7 +115,7 @@ test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact c
     await navToRoute(page, "/admin/settings");
     await expect(page.getByRole("heading", { name: "Admin SSH keys" })).toBeVisible();
 
-    for (const title of ["Host", "Branding", "Model providers", "Workspace providers", "User drives", "Admin SSH keys"]) {
+    for (const title of ["Host", "Branding", "Model providers", "Workspace providers", "User drives", "Admin SSH keys", "SCIM provisioning"]) {
       const toggle = page.getByRole("button", { name: new RegExp(`^${title}( |$)`) });
       await toggle.click();
       await expect(toggle).toHaveAttribute("aria-expanded", "true");
@@ -127,7 +128,7 @@ test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact c
     // own heading, or on "Model providers" would also hit its expanded
     // body's unrelated `<h4>` empty-state heading ("No model providers
     // yet").
-    for (const title of ["Host", "Branding", "Model providers", "Workspace providers", "User drives", "Admin SSH keys"]) {
+    for (const title of ["Host", "Branding", "Model providers", "Workspace providers", "User drives", "Admin SSH keys", "SCIM provisioning"]) {
       await expect(page.getByRole("heading", { name: new RegExp(`^${title}( |$)`), level: 3 })).toBeVisible();
     }
   });

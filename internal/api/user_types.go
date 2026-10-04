@@ -178,31 +178,64 @@ func (s *Server) handleUpdateUserType(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("%s never wins a tie against another type, so it has no priority.", current.Name))
 		return
 	}
-	saved, err := s.cfg.Store.UpdateUserType(r.Context(), t)
-	if errors.Is(err, store.ErrNotFound) {
-		writeErrorReason(w, http.StatusNotFound, reasonUserTypeNotFound, "User type not found.")
-		return
+	mode := govDirect
+	if current.Priority != t.Priority {
+		// A priority change can move a person matching two types onto the other at their next sign-in,
+		// so it is covered. A name or description edit is metadata and applies directly.
+		var ok bool
+		if mode, ok = s.governanceWriteMode(w, r); !ok {
+			return
+		}
+		if mode == govQueue {
+			s.holdUserTypeUpdate(w, r, t)
+			return
+		}
 	}
-	if errors.Is(err, store.ErrConflict) {
-		writeErrorReason(w, http.StatusConflict, reasonUserTypeConflict, fmt.Sprintf("Another user type is already named %q.", t.Name))
-		return
+	// An unchanged priority is never written: a priority change approved after current was read
+	// stays as approved, whichever of the two statements ran.
+	update := s.cfg.Store.UpdateUserType
+	if current.Priority == t.Priority {
+		update = s.cfg.Store.UpdateUserTypeMetadata
 	}
-	if err != nil {
-		writeServerError(w, r, "update user type", err)
+	saved, err := update(r.Context(), t)
+	if s.writeUserTypeUpdateError(w, r, err, t) {
 		return
 	}
 	s.auditUserTypeWrite(r, saved)
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindUserType, saved.ID, "success", nil)
+	}
 	writeJSON(w, http.StatusOK, saved)
+}
+
+// writeUserTypeUpdateError answers an UpdateUserType error (a held write's dry run included) and
+// reports whether it wrote one.
+func (s *Server) writeUserTypeUpdateError(w http.ResponseWriter, r *http.Request, err error, t types.UserType) bool {
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, store.ErrNotFound):
+		writeErrorReason(w, http.StatusNotFound, reasonUserTypeNotFound, "User type not found.")
+	case errors.Is(err, store.ErrConflict):
+		writeErrorReason(w, http.StatusConflict, reasonUserTypeConflict, fmt.Sprintf("Another user type is already named %q.", t.Name))
+	default:
+		writeServerError(w, r, "update user type", err)
+	}
+	return true
+}
+
+func userTypeAuditData(t types.UserType) map[string]any {
+	return map[string]any{
+		"id":       t.ID,
+		"name":     t.Name,
+		"priority": t.Priority,
+		"built_in": t.BuiltIn,
+	}
 }
 
 func (s *Server) auditUserTypeWrite(r *http.Request, t types.UserType) {
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"user_type.write", t.ID, "success", mustJSON(map[string]any{
-			"id":       t.ID,
-			"name":     t.Name,
-			"priority": t.Priority,
-			"built_in": t.BuiltIn,
-		})))
+		"user_type.write", t.ID, "success", mustJSON(userTypeAuditData(t))))
 }
 
 // handleDeleteUserType removes a custom type nothing names. Deleting a type

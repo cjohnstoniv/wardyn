@@ -42,8 +42,10 @@ func exitCodeOf(err error) int {
 	return 1
 }
 
-func migrateRefused(format string, args ...any) error {
-	return &exitCodeError{code: exitMigrateRefused, err: fmt.Errorf("refusing to migrate: "+format, args...)}
+// refusedTo is a refusal of a quiet-database maintenance mode, naming what it refused to do ("migrate",
+// "split the legacy audit partition"). It carries exitMigrateRefused.
+func refusedTo(verb, format string, args ...any) error {
+	return &exitCodeError{code: exitMigrateRefused, err: fmt.Errorf("refusing to "+verb+": "+format, args...)}
 }
 
 // migrateOnlyMode is `wardynd -migrate-only`: run the schema migration alone, then exit, serving
@@ -52,7 +54,7 @@ func migrateRefused(format string, args ...any) error {
 //
 // The migration runs on the ONE connection that holds db.SingleInstanceLockKey, so a wardynd booting
 // meanwhile fails its claimSingleInstance and a second -migrate-only is refused. That lock alone is
-// not proof the database is quiet: a replica started with -allow-multi-instance never takes it, so
+// not proof the database is quiet: a replica started with WARDYN_HA never takes it, so
 // the lock cannot show it. The mode therefore also refuses while any other client backend is
 // connected to the database. Both checks are made before the first migration statement.
 //
@@ -99,6 +101,12 @@ func (s *migrateOnlySession) close() {
 // on the database, in that order: the lock first, so a booting wardynd is already shut out while the
 // client check runs. Any refusal returns an error with exit code exitMigrateRefused.
 func acquireMigrateOnly(ctx context.Context, dsn string, connectTimeout time.Duration) (*migrateOnlySession, error) {
+	return acquireQuiet(ctx, dsn, connectTimeout, "migrate")
+}
+
+// acquireQuiet is acquireMigrateOnly for any maintenance mode that needs the database to itself; verb
+// names what a refusal refused to do.
+func acquireQuiet(ctx context.Context, dsn string, connectTimeout time.Duration, verb string) (*migrateOnlySession, error) {
 	connectCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 	pool, err := db.Connect(connectCtx, dsn)
@@ -113,7 +121,7 @@ func acquireMigrateOnly(ctx context.Context, dsn string, connectTimeout time.Dur
 	if !ok {
 		holder := singleInstanceHolder(connectCtx, pool)
 		pool.Close()
-		return nil, migrateRefused("the single-instance lock is held by %s: a wardynd, or another -migrate-only, is running against this database. "+
+		return nil, refusedTo(verb, "the single-instance lock is held by %s: a wardynd, or another maintenance mode, is running against this database. "+
 			"Stop it first (docs/OPERATIONS.md, \"Stopped-writer upgrade\")", holder)
 	}
 	s := &migrateOnlySession{pool: pool, conn: conn, release: release}
@@ -124,8 +132,8 @@ func acquireMigrateOnly(ctx context.Context, dsn string, connectTimeout time.Dur
 	}
 	if len(others) > 0 {
 		s.close()
-		return nil, migrateRefused("%d other client connection(s) are open on this database (%s). The single-instance lock does not stop a replica started "+
-			"with -allow-multi-instance, or an older wardynd, so a conversion could run under a live writer. "+
+		return nil, refusedTo(verb, "%d other client connection(s) are open on this database (%s). The single-instance lock does not stop a replica started "+
+			"with WARDYN_HA, or an older wardynd, so a conversion could run under a live writer. "+
 			"Scale every wardynd to zero first (docs/OPERATIONS.md, \"Stopped-writer upgrade\")", len(others), strings.Join(others, "; "))
 	}
 	return s, nil

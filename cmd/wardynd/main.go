@@ -27,6 +27,7 @@ import (
 	"filippo.io/age"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adorunpat"
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
@@ -34,6 +35,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/hostcapacity"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/livebus"
 	"github.com/cjohnstoniv/wardyn/internal/nodump"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -195,7 +197,7 @@ func run() error {
 	// replicas>1 refusal is render-time only. Claimed here, immediately after
 	// the pool exists and before anything registers process-local state, and
 	// held until shutdown. See claimSingleInstance for the ceiling.
-	releaseInstance, err := claimSingleInstance(rootCtx, pool, *f.allowMultiInstance)
+	releaseInstance, err := claimSingleInstance(rootCtx, pool, *f.ha)
 	if err != nil {
 		return err
 	}
@@ -217,7 +219,8 @@ func run() error {
 	// writer (API, broker, identity, approvals, sweeper) — see buildAuditChain.
 	denials := &audit.DenialCoalescer{}
 	maskScopes := &maskScope{}
-	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg, serveChain{scope: maskScopes, denials: denials})
+	sealSrc := newAuditSealSource(sealModeOf(f)) // validated by validateBootPosture above
+	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg, sealSrc, serveChain{scope: maskScopes, denials: denials})
 	if err != nil {
 		return err
 	}
@@ -242,20 +245,31 @@ func run() error {
 		return err
 	}
 	keyDomains := keydomain.NewService(pool, domainFile.Names())
+	keyDomainKeys := domainFile.KeyDescriptions()
 
-	// Run masking manifests: what each run was given, sealed in Postgres, so a
-	// restarted or second wardynd masks it and the doors refuse a run they
-	// cannot prove masked. Over the secret store's per-subject keys.
-	maskManifests, err := buildMaskManifests(pool, secrets, maskReg, maskScopes)
+	// Boot keys: created under a lock that serializes replicas (#754).
+	bootKeys := newBootKeyStore(secrets, pool, *f.ha)
+	// What is sealed under the secret store's per-subject keys: the run masking
+	// manifests (what each run was given, so a restarted or second wardynd masks
+	// it and the doors refuse a run they cannot prove masked) and the audit
+	// fields WARDYN_AUDIT_SEAL seals, whose recorder was built before the store.
+	maskManifests, maskStore, err := armSubjectKeyed(bootCtx, pool, secrets, maskReg, maskScopes, sealSrc, bootKeys)
 	if err != nil {
 		return err
 	}
+	// Another replica's erasure fences a manifest this one holds: drop it at the
+	// background cadence instead of waiting for a door to ask.
+	maskStore.OnBackgroundRead(maskManifests.DropFenced)
+	maskStore.Start(rootCtx)
+	// The live state replicas share (ha-l2.4): the notices they send each other over NOTIFY, and
+	// each minted_pat run's token, sealed under the owner's key, in Postgres.
+	liveBus := livebus.New(pool, uuid.NewString())
+	liveBus.Start(rootCtx)
+	adoRunPATs := adorunpat.New(pool, subjectKeysOf(secrets))
 
 	// Embedded identity provider: signing key persisted in the secret store,
 	// generated on first boot. The pg-backed revocation store is the kill-switch
 	// denylist (identity_revocations).
-	// Boot keys: created under a lock that serializes replicas (#754).
-	bootKeys := newBootKeyStore(secrets, pool, *f.allowMultiInstance)
 	signKey, err := loadOrCreateSigningKey(bootCtx, bootKeys)
 	if err != nil {
 		return err
@@ -420,6 +434,7 @@ func run() error {
 		// WARDYN_GOVERN_ADMIN_RUNS_EXEMPT, already validated by parseGovernAdminRunsExempt.
 		GovernAdminRunsExempt: governAdminRunsExempt,
 
+		SCIM: scimConfigValidated(f, posture),
 		// §I: nil unless WARDYN_DIRECTORY_PROVIDER is set — the whole feature
 		// off, the search endpoint answering its distinct 503 and every "who"
 		// field staying free text.
@@ -443,11 +458,21 @@ func run() error {
 		ProxyURL:                 *f.proxyURL,
 		Secrets:                  secrets,
 		KeyDomains:               keyDomains,
+		KeyDomainKeys:            keyDomainKeys,
+		PrincipalKeys:            principalKeysOn(*f.vault.principalKeys),
 		MaskRegistry:             maskReg,
 		MaskManifests:            maskManifests,
+		HA:                       *f.ha,
+		MaskSync:                 maskStore,
+		LiveBus:                  liveBus,
+		ADORunPATs:               adoRunPATs,
+		AuditUnsealer:            sealSrc.unsealer(),
+		SubjectKeys:              subjectKeysOf(secrets),
 		ExecOutputTailOff:        !*f.execOutputTail,
 		ExecOutputTailTTL:        *f.execOutputTailTTL,
 		RunOutputTailBytes:       *f.runOutputTailBytes,
+		RunOutputPersistOff:      !*f.runOutputPersist,
+		RunOutputRetention:       time.Duration(*f.runOutputRetention) * 24 * time.Hour,
 		PreflightRatePerMin:      *f.preflightRatePerMin,
 		ADOEntra:                 adoEntraSourceFromFlags(st, f), // ado_entra_source.go
 		ADOEntraByRow:            adoEntraByRow(st, adoEntraLoginFromFlags(f)),
@@ -465,7 +490,7 @@ func run() error {
 		SecretStoreExternal:   storesExternally(secrets),
 		SecretKeyService:      keyService(secrets),
 		KEKRequired:           *f.vault.kekRequired,
-		PlatformKeySeparate:   strings.TrimSpace(*f.platformKeyFile) != "",
+		PlatformKeySeparate:   platformKeySeparate(f, keyService(secrets) != ""),
 		LocalLoopback:         lm.loopback,
 		LocalTrustForwarder:   *f.localTrustFwd,
 		OIDCRoleMapConfigured: strings.TrimSpace(*f.oidcRoleMap) != "",
@@ -482,6 +507,9 @@ func run() error {
 		SSHRoleTTL:       *f.sshRoleTTL,
 		APITokenMaxTTL:   *f.apiTokenMaxTTL,
 		RoleStampTTL:     *f.roleStampTTL,
+		// How long a governance change held for a second human waits (the switch itself is read
+		// per request by internal/api).
+		GovernanceChangeTTL: *f.governanceChangeTTL,
 		// UI-sandbox gateway (pillar 4): same "empty = off" shape as SSH above —
 		// UISessionKey is nil unless -ui-sandbox-listen is set, and the gateway
 		// checks both.

@@ -134,9 +134,23 @@ func printGovernancePending(w io.Writer, res sdk.GovernanceApplyResult) {
 	for _, ch := range res.Pending {
 		fmt.Fprintf(w, "  %s  %s %s %s  expires %s\n", ch.ID, ch.Op, ch.TargetKind, ch.TargetKey, ch.ExpiresAt.Format(time.RFC3339))
 	}
-	if len(res.Deferred) > 0 {
-		fmt.Fprintf(w, "deferred: %d assignment(s) not sent, their profile is pending; apply again once it is approved\n", len(res.Deferred))
-		for _, d := range res.Deferred {
+	var profiles, assignments []sdk.GovernanceDeferredWrite
+	for _, d := range res.Deferred {
+		if d.Base != "" {
+			profiles = append(profiles, d)
+		} else {
+			assignments = append(assignments, d)
+		}
+	}
+	if len(profiles) > 0 {
+		fmt.Fprintf(w, "deferred: %d profile(s) not sent, the profile they compose on is pending; apply again once it is approved\n", len(profiles))
+		for _, d := range profiles {
+			fmt.Fprintf(w, "  profile %q -> base %q\n", d.Profile, d.Base)
+		}
+	}
+	if len(assignments) > 0 {
+		fmt.Fprintf(w, "deferred: %d assignment(s) not sent, their profile is pending; apply again once it is approved\n", len(assignments))
+		for _, d := range assignments {
 			fmt.Fprintf(w, "  %s %q -> profile %q\n", d.SubjectType, d.Subject, d.Profile)
 		}
 	}

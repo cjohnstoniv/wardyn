@@ -128,17 +128,33 @@ func (s *Server) handlePutAvailability(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonAvailabilityOnlyEmpty, availabilityOnlyEmptyMsg)
 		return
 	}
-	if err := s.cfg.Store.SetCapabilityRestriction(r.Context(), kind, value, *req.Restricted, principalFromRequest(r)); err != nil {
-		writeServerError(w, r, "write capability availability", err)
-		return
+	mode := govDirect
+	if *req.Restricted != v.Restricted {
+		// Covered whenever the stored bit changes, in either direction: lifting a restriction admits
+		// every person with no grant write, and restricting one adds no narrowing exemption beyond that.
+		if mode, ok = s.governanceWriteMode(w, r); !ok {
+			return
+		}
+		if mode == govQueue {
+			s.holdAvailability(w, r, kind, value, *req.Restricted)
+			return
+		}
+	}
+	// With the switch on, an unchanged PUT never reaches the store (the admin token's break-glass
+	// excepted): the bit was read outside any transaction, so the only effect the write could have is
+	// to undo a restriction approved in between.
+	if *req.Restricted != v.Restricted || !envEnabled(envGovernanceSecondHuman) || isAdminTokenCaller(r) {
+		if err := s.cfg.Store.SetCapabilityRestriction(r.Context(), kind, value, *req.Restricted, principalFromRequest(r)); err != nil {
+			writeServerError(w, r, "write capability availability", err)
+			return
+		}
 	}
 	v.Restricted = *req.Restricted
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"capability.availability.write", kind, "success", mustJSON(map[string]any{
-			"kind":       kind,
-			"value":      value,
-			"restricted": v.Restricted,
-		})))
+		"capability.availability.write", kind, "success", mustJSON(availabilityAuditData(kind, value, v.Restricted))))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindAvailability, kind+"/"+value, "success", nil)
+	}
 	writeJSON(w, http.StatusOK, v)
 }
 

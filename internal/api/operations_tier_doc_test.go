@@ -102,6 +102,9 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/people/{principal}/tokens", "`GET /people/{principal}/tokens`"},
 	{"GET /api/v1/audit/chain/verify", "`GET /audit/chain/verify`"},
 	{"GET /api/v1/admin/runs/capacity", "`GET /admin/runs/capacity`"},
+	{"GET /api/v1/audit/retention", "`GET /audit/retention`"},
+	{"POST /api/v1/audit/retention/drop", "`POST /audit/retention/drop`"},
+	{"GET /api/v1/approval-notify/status", "`GET /approval-notify/status`"},
 	{"POST /api/v1/governance/profiles", "`/governance` profile and assignment routes"},
 	{"GET /api/v1/access/directory/search", "`GET /access/directory/search`"},
 	// Issue #168 (0.8): the three /drives routes that DON'T name a host path
@@ -154,6 +157,10 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/governance/assignments", "`/governance` profile and assignment routes"},
 	{"DELETE /api/v1/governance/assignments/{id}", "`/governance` profile and assignment routes"},
 	{"POST /api/v1/governance/preview", "`/governance` profile and assignment routes"},
+	{"GET /api/v1/governance/changes", "`/governance` profile and assignment routes"},
+	{"GET /api/v1/governance/changes/{id}", "`/governance` profile and assignment routes"},
+	{"POST /api/v1/governance/changes/{id}/approve", "`/governance` profile and assignment routes"},
+	{"POST /api/v1/governance/changes/{id}/reject", "`/governance` profile and assignment routes"},
 	{"GET /api/v1/user-types", "the `/user-types` routes"},
 	{"POST /api/v1/user-types", "the `/user-types` routes"},
 	{"PUT /api/v1/user-types/{id}", "the `/user-types` routes"},
@@ -190,6 +197,8 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/admin/delegates", "`GET /admin/delegates` and `DELETE /admin/delegates/{id}`"},
 	{"DELETE /api/v1/admin/delegates/{id}", "`GET /admin/delegates` and `DELETE /admin/delegates/{id}`"},
 	{"DELETE /api/v1/people/{principal}/credentials", "`DELETE /people/{principal}/credentials`"},
+	{"POST /api/v1/people/{principal}/erasure", "`POST /people/{principal}/erasure`"},
+	{"GET /api/v1/scim/status", "`GET /scim/status`"},
 	{"GET /api/v1/model-providers/credentials", "`GET /model-providers/credentials`"},
 }
 

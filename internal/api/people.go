@@ -48,8 +48,9 @@ func (s *Server) mountPeopleRoutes(securityOps chi.Router) {
 	}
 	securityOps.Get("/people", s.handleListPeople)
 	securityOps.Post("/people", s.handleCreatePerson)
-	securityOps.Post("/people/{principal}/tokens", s.handleMintPersonAPIToken)
-	securityOps.Get("/people/{principal}/tokens", s.handleListPersonAPITokens)
+	securityOps.With(s.refuseSubjectPrincipalParam).Post("/people/{principal}/tokens", s.handleMintPersonAPIToken)
+	securityOps.With(s.refuseSubjectPrincipalParam).Get("/people/{principal}/tokens", s.handleListPersonAPITokens)
+	securityOps.With(s.refuseSubjectPrincipalParam).Post("/people/{principal}/erasure", s.handleErasePerson)
 }
 
 func (s *Server) personStoreOr501(w http.ResponseWriter) (store.PersonStore, bool) {

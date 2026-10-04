@@ -23,9 +23,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/adorunpat"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/livebus"
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
+	"github.com/cjohnstoniv/wardyn/internal/maskstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	secretspg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -60,9 +63,22 @@ type replica struct {
 	rec *fakeRecordingStore
 	fr  *holderTestRunner
 	sec *secretspg.Store
+	st  *maskstore.Store
 }
 
-func (l *maskLab) replica() replica {
+func (l *maskLab) replica() replica { return l.replicaMasking(l.pool) }
+
+// replicaMasking is replica with its masking state (the manifests and the shared
+// registry) on maskPool and everything else on the lab's pool, so a test can take
+// Postgres away from masking alone.
+func (l *maskLab) replicaMasking(maskPool *pgxpool.Pool) replica {
+	l.t.Helper()
+	return l.replicaBuilt(maskPool, nil)
+}
+
+// replicaBuilt is replicaMasking with bus (nil: none) as the replica's notice bus, started for
+// the test's life.
+func (l *maskLab) replicaBuilt(maskPool *pgxpool.Pool, bus *livebus.Bus) replica {
 	l.t.Helper()
 	sec, err := secretspg.New(l.pool, l.id)
 	if err != nil {
@@ -78,10 +94,16 @@ func (l *maskLab) replica() replica {
 	cfg.Secrets = sec
 	cfg.RecordingStore = rs
 	cfg.MaskRegistry = reg
-	cfg.MaskManifests = maskmanifest.New(l.pool, sec.SubjectKeys(), reg)
+	cfg.MaskManifests = maskmanifest.New(maskPool, sec.SubjectKeys(), reg)
+	cfg.ADORunPATs = adorunpat.New(l.pool, sec.SubjectKeys())
+	if bus != nil {
+		cfg.LiveBus = bus
+		bus.Start(l.t.Context())
+	}
+	st := maskstore.New(maskPool, sec.SubjectKeys(), reg)
 	srv := New(cfg)
 	srv.maskBeat = 25 * time.Millisecond
-	return replica{srv: srv, reg: reg, rec: rs, fr: fr, sec: sec}
+	return replica{srv: srv, reg: reg, rec: rs, fr: fr, sec: sec, st: st}
 }
 
 // run persists a RUNNING, operator-owned run with a sandbox (so the attach

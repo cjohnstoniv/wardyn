@@ -11,6 +11,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// envGitPATAPIBitbucketServer is whether a git_pat grant may set api: true for
+// forge bitbucket_server. GitLab and Gitea need no flag; Bitbucket Server's table
+// ships behind this one, off by default. Only wardynd reads it (envEnabled, so a
+// garbage value is a boot refusal): the proxy gate reads no env and enforces the
+// forge carried on the grant. Write, dispatch and Review all ask patAPIBitbucketOn.
+const envGitPATAPIBitbucketServer = "WARDYN_GIT_PAT_API_BITBUCKET_SERVER"
+
+func patAPIBitbucketOn() bool { return envEnabled(envGitPATAPIBitbucketServer) }
+
+// errPATAPIBitbucketOff is the write refusal and the dispatch sentence's cause.
+const errPATAPIBitbucketOff = "api: true on forge bitbucket_server needs WARDYN_GIT_PAT_API_BITBUCKET_SERVER, which is off on this deployment"
+
 // validatePATGrantScope is the write-time check of one git_pat grant's scope
 // (validateEligibleGrant's git_pat arm, here because policy.go is the file the
 // size gate watches).
@@ -45,6 +57,9 @@ func validatePATGrantScope(i int, g types.GrantSpec, strict bool) error {
 	}
 	if nameSinkReservedSecret(sc.SecretName) {
 		return fmt.Errorf("eligible_grants[%d]: git_pat references reserved secret name %q", i, sc.SecretName)
+	}
+	if strict && sc.API && sc.Forge == types.PATForgeBitbucketServer && !patAPIBitbucketOn() {
+		return fmt.Errorf("eligible_grants[%d]: git_pat scope %s", i, errPATAPIBitbucketOff)
 	}
 	if strict && sc.SetsAnyAxis() && adoGrantHost(types.SiteConfig{}, sc.Host) {
 		return fmt.Errorf("eligible_grants[%d]: git_pat scope sets repos, access, api or forge for the Azure DevOps host %q, "+

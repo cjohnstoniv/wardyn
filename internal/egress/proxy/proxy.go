@@ -116,6 +116,9 @@ type Proxy struct {
 	adoGrants adoGrantsByHost
 	// azure is the run's Azure route gates (azure_gate.go). Nil == no host gated.
 	azure *azureGates
+	// patAPI is the run's git_pat grants with api: true, by host (pat_api.go): each host's
+	// connection on 443 is terminated and every request judged by its forge's operation table.
+	patAPI map[string]PATGrant
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -341,25 +344,6 @@ type Options struct {
 // the hostname (TOCTOU / DNS-rebinding guard).
 type vettedIPKey struct{}
 
-// parseInternalHostCIDRs parses a SiteConfig.InternalHosts entry's CIDR
-// list, failing the WHOLE entry (ok=false) the moment one fails to parse —
-// never returning a partial list. liftInternalHost treats zero CIDRs as "no
-// CIDRs declared" and lifts the FULL liftable set for the suffix, so
-// silently dropping only the one bad CIDR out of several would widen an
-// entry meant to be narrow into that full-set default, the opposite of what
-// a parse failure should do.
-func parseInternalHostCIDRs(raw []string) (cidrs []*net.IPNet, ok bool) {
-	cidrs = make([]*net.IPNet, 0, len(raw))
-	for _, c := range raw {
-		_, n, err := net.ParseCIDR(c)
-		if err != nil {
-			return nil, false
-		}
-		cidrs = append(cidrs, n)
-	}
-	return cidrs, true
-}
-
 func newProxy(opts Options) *Proxy {
 	dial := opts.Dial
 	if dial == nil {
@@ -397,23 +381,7 @@ func newProxy(opts Options) *Proxy {
 			patGrants[k] = g
 		}
 	}
-	// Compile each declared internal host: lowercase + trim the suffix (same
-	// normalization VetHost applies to the request host, so the comparison in
-	// liftInternalHost is exact), parse its CIDRs (already validated at
-	// site-config write time and at proxy Config load) via
-	// parseInternalHostCIDRs, which drops the WHOLE entry on a parse failure.
-	internalHosts := make([]internalHostRule, 0, len(opts.InternalHosts))
-	for _, h := range opts.InternalHosts {
-		suffix := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h.HostSuffix)), ".")
-		if suffix == "" {
-			continue
-		}
-		cidrs, ok := parseInternalHostCIDRs(h.CIDRs)
-		if !ok {
-			continue
-		}
-		internalHosts = append(internalHosts, internalHostRule{suffix: suffix, cidrs: cidrs})
-	}
+	internalHosts := compileInternalHosts(opts.InternalHosts)
 	// Compile the LLM-gateway table + its reverse lookup. LLMUpstreams is
 	// already validated (api.ValidateLLMGateways at boot, applyDefaultsAndValidate
 	// at config load) — a parse failure here just drops that one entry (falls
@@ -437,6 +405,9 @@ func newProxy(opts Options) *Proxy {
 		llmUpstreams[vendor] = llmUpstream{host: host, port: port, prefix: strings.TrimSuffix(u.Path, "/")}
 		gatewayVendor[host] = vendor
 	}
+	// A git_pat grant with api: true terminates its own host on 443 and nothing else, so the
+	// forge API is reached only through the door. An entry the operator already authored keeps its own scope.
+	patAPI := newPATAPIGrants(patGrants, mitmHosts, mitmPorts)
 	p := &Proxy{
 		runID:                opts.RunID,
 		policy:               opts.Policy,
@@ -456,6 +427,7 @@ func newProxy(opts Options) *Proxy {
 		brokeredPATGrantIDs:  opts.BrokeredPATGrantIDs,
 		adoGrants:            opts.ADOGrants,
 		azure:                newAzureGates(opts.AzureGates),
+		patAPI:               patAPI,
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      strings.TrimRight(opts.ControlPlaneURL, "/"),
 		runToken:             opts.RunToken,
@@ -858,7 +830,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Never a blind tunnel to an Azure DevOps grant host (refuseADOTunnel).
-	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) {
+	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) {
 		return
 	}
 

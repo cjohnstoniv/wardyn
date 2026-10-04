@@ -208,20 +208,28 @@ happens inside the sandbox after `ready`, so it is not a separate event.
 ## Reading a run's output
 
 `GET /api/v1/runs/{id}/output?tail=<bytes>` returns the end of a
-non-interactive run's combined stdout/stderr — at most `WARDYN_RUN_OUTPUT_TAIL_BYTES` (64 KiB by default), kept in
-wardynd's memory whether or not recordings are on. `RunOutput` reads it; pass
+non-interactive run's combined stdout/stderr — at most `WARDYN_RUN_OUTPUT_TAIL_BYTES` (64 KiB by default) — from wardynd's memory while the run lives and from Postgres once it has ended. `RunOutput` reads it; pass
 `0` for the whole tail:
 
 ```go
 out, err := c.RunOutput(ctx, created.ID, 0)
-fmt.Println(out.Output, out.Truncated, out.Complete)
+fmt.Println(out.Output, out.Truncated, out.Complete, out.Source)
 ```
 
 `truncated` says the output does not start at the run's first byte; `complete`
-says the run has finished; bytes it printed in its last moments can land a
-moment later, so read once more after `complete` if the end matters. The same `404` as
-`GET /runs/{id}` answers anyone who may not read the run; the other refusals
-carry a `run_output_*` reason (below).
+says the capture is final; a run that has just finished is not `complete` until
+its last bytes are in, so read once more if the end matters. `source` is
+`stdout` for a run's own output and `pane_snapshot` for an interactive run's
+last screen, which is plain text. `incomplete` says bytes may be missing;
+`capture_gap` says none could be captured, so `output` is empty. `mask_scope` is
+`run` when the capture was masked against the run's complete manifest and
+`globals_only` when it was not (empty when the deployment keeps none).
+`captured_at` is when the final row was written, nil while the run is live. The
+same `404` as `GET /runs/{id}` answers anyone who may not read the run; the
+other refusals carry a `run_output_*` reason (below), `run_output_erased`
+among them (the run's output was erased, `404`).
+
+From a shell, `wardyn run output <run-id>` prints the same bytes (below).
 
 ## Error handling
 
@@ -336,7 +344,17 @@ silent gap:
 | `groups_snapshot_stale` | `PUT/POST /governance/*` and the user-drive resolver: the caller's group-membership snapshot is missing or was truncated at sign-in, so a group-keyed governance profile cannot be resolved. The SAME value as authz's own registered reason (`internal/authz/registry.go`) — a literal in `reasons.go` (the docs⟷reasons.go guard only reads literals), tied to authz's constant by a documented `TestNoAdHocAuthz` exception rather than a reference or a second copy invented for this package. |
 | `site_config_request_invalid` / `site_config_artifact_override_invalid` / `site_config_integrations_via_own_route` / `site_config_invalid` / `site_config_stale` | `PUT /site-config`: the body did not decode, a legacy artifact-override field fails validation, integrations were named inline instead of through their own endpoints, the submitted config fails one of the agent/model-provider/default-provider validators, or `If-Match` is stale. `site_config_stale` is shared by every `PUT` that checks `If-Match` against this same document's ETag: `PUT /agent-providers`, `PUT /model-providers` and `PUT /workspace-providers` all answer it too, one reason for one cause regardless of which sub-block the write targeted. |
 | `site_config_probe_request_invalid` / `site_config_probe_url_invalid` / `egress_redirect_from_required` / `egress_redirect_not_found` | `POST /site-config/probe-proxy` and the egress-redirect edit routes. |
-| `governance_profile_request_invalid` / `governance_ceiling_invalid` / `governance_profile_name_conflict` / `governance_profile_in_use` / `governance_assignment_invalid` / `governance_preview_claims_invalid` | `PUT/POST /governance/profiles` and `/governance/assignments`, and the preview routes — `governance_preview_claims_invalid` is shared with the user-drive naming preview (`user_drives_preview.go`), which feeds the same `normalizeGovernancePreviewClaims` validator. |
+| `governance_profile_request_invalid` / `governance_ceiling_invalid` / `governance_profile_name_conflict` / `governance_profile_in_use` / `governance_assignment_invalid` / `governance_preview_claims_invalid` | `PUT/POST /governance/profiles` and `/governance/assignments`, and the preview routes — `governance_preview_claims_invalid` is shared with the user-drive naming preview (`user_drives_preview.go`), which feeds the same `normalizeGovernancePreviewClaims` validator. `governance_profile_in_use` is a `409` when a profile is still assigned or still the base of another profile (the body names those profiles). A composed profile read by an SDK that predates composition shows `ceiling: {}` and `limits: {}` and ignores `effective`; a `PUT` from it omits the composition fields, which are kept, so it cannot flatten the profile. |
+| `governance_overlay_invalid` | `PUT/POST /governance/profiles` (400): a composed profile's `overlay` or `overlay_limits` does not decode, names something its base does not permit (a domain outside the base, a method the base excludes, `allow_all_egress` on a base without it, a looser bound, a grant the base does not hold), would mean "everything" by being empty (`allowed_methods: []`), names a base that does not exist, or sits beside a non-empty `ceiling` or `limits` (a composed profile states its policy only in the overlay). |
+| `governance_profile_cycle` | `PUT/POST /governance/profiles` (409): the write would make a profile, through its base, its own base. |
+| `governance_profile_depth` | `PUT/POST /governance/profiles` (409): the write would put a profile, or one built on it, more than three profiles deep. |
+| `governance_overlay_unsatisfiable` | `PUT/POST /governance/profiles` (409): a base change would leave a profile built on it with a policy nothing satisfies (the body names that profile). The SAME value as authz's own registered launch refusal (`internal/authz/registry.go`, `403` on create, preflight and every live door), a literal in `reasons.go` for the same reason `groups_snapshot_stale` is. |
+| `governance_second_human_local_mode` | `WARDYN_GOVERNANCE_SECOND_HUMAN` cannot be enforced in local mode (`503`): nobody is authenticated there, so the proposer and the approver are both client-supplied. Every covered governance write (profile, assignment, grant, enforcement, availability, user-type priority, role mapping) and every `/governance/changes` approve or reject answers it. |
+| `governance_change_pending` | A covered write (`/governance/profiles`, `/governance/assignments`, `/permissions/grants`, `/permissions/enforcement`, `/permissions/availability`, `PUT /user-types/{id}`, `/access/mappings`) with `WARDYN_GOVERNANCE_SECOND_HUMAN` on (409): a live change already waits for approval at this target; the message names it. Approve or reject that one first, or let it expire. |
+| `governance_change_stale` | `POST /governance/changes/{id}/approve` (409): the target (or, for an assignment, the profile it points at) or the deployment default changed since the change was proposed, so approving would apply something other than what the reviewer saw. Nothing was applied and the change is now `stale`; propose it again. |
+| `governance_change_not_pending` | `POST /governance/changes/{id}/approve` or `/reject` (409): the change was already applied, rejected, expired or marked stale. A change past its expiry is moved to `expired` by the request that finds it. |
+| `governance_change_not_found` | `GET /governance/changes/{id}` and the approve and reject routes (404): no such change, or one of a kind the caller may not approve. |
+| `governance_change_state_invalid` | `GET /governance/changes?state=` (400): not one of `pending`, `applied`, `rejected`, `expired` or `stale`. |
 | `secret_name_invalid` / `secret_name_reserved` / `secret_owner_param_refused` / `secret_body_invalid` / `secret_value_too_short` / `secret_cap_reached` / `secret_not_found` | `PUT/DELETE /secrets/{name}`: the name fails the secret-name format or is reserved, `?owner=` was sent on a write, the body is malformed, the value is below the mask minimum, the owner already holds the maximum number of secrets, or (the admin-only `?owner=` delete arm) that owner holds no secret by that name. |
 | `people_store_unavailable` / `person_principal_invalid` / `person_principal_reserved` / `person_email_invalid` / `person_collision` / `person_email_taken` | `POST /people` (operator/security-tier only). |
 | `people_list_param_invalid` | `GET /people` (security tier): `state` is not `active` or `deactivated`, or `cursor` is not one a previous page returned. A malformed `limit` answers `invalid_limit_param`, as every list does. |
@@ -347,6 +365,7 @@ silent gap:
 | `api_token_no_human` / `api_token_from_delegated_token` / `api_token_member_mode_mint` / `api_token_name_invalid` / `api_token_ttl_invalid` / `api_token_cap_reached` | `POST /api/v1/tokens` (self-service mint) and `DELETE`. |
 | `owner_ambiguous` / `owner_unresolved` | The shared owner/principal resolver shape: more than one known principal matches a name, or none does. `secrets.go`'s admin `?owner=` resolution (`ownerRefusalReason`) and `sshkeys_admin.go`'s `resolveSSHKeyOwner` (also reached from `POST /sessions/revoke`'s SSH-key cutoff) both answer from this one vocabulary rather than each inventing its own. |
 | `sessions_revoke_param_invalid` | `POST /sessions/revoke`: the body must set exactly one of `sub`/`all`. |
+| `identity_deactivated` | A run, API token, SSH key or stored credential was refused because its owner's identity is deactivated, or was suspended after the caller was admitted. Sign in again; if that is refused too, ask the Wardyn admin. |
 | `sso_not_configured` / `access_role_map_value_invalid` / `access_mapping_target_invalid` / `access_email_mapping_disabled` / `access_lockout` / `access_unknown_user_type` / `access_preview_no_session_claims` | `GET/POST /access` (role-mapping admin, operator-only). |
 | `capability_grant_invalid` / `capability_kind_unknown` / `capability_enforcement_stale` / `availability_kind_not_restrictable` / `availability_target_invalid` / `availability_restricted_required` / `availability_only_empty` | `POST /permissions/grants` and the capability-availability routes. |
 | `delegation_store_unavailable` / `delegate_name_invalid` / `delegate_client_id_invalid` / `delegate_client_id_is_portal` / `delegate_group_invalid` | `POST /admin/delegates` (operator-only portal delegate registration). |
@@ -380,11 +399,12 @@ sending `error` alone — completing the sweep this issue tracks:
 | `git_pat_narrowing_needs_broker` | `POST /runs/preflight`, and the failure of a launched run: a `git_pat` grant sets `repos`, `access` or `api` while the PAT broker is off (`WARDYN_GIT_PAT_BROKER`). Only the broker enforces the narrowing; with it off the PAT is resident in the sandbox and nothing narrows it, so the run is refused. |
 | `git_pat_narrowing_ssh_conflict` | `PUT/POST /api/v1/policies`, `POST /runs`' `inline_policy`, a launch preset's `inline_policy` and `POST /runs/preflight`, and the failure of a launched run: a `git_pat` grant sets `repos`, `access` or `api` and the same policy or run holds an `ssh_key` for the same forge (`github.com` and `ssh.github.com` are one forge). SSH is a second push path the broker cannot see, so the narrowing would not bind. |
 | `git_pat_narrowing_unsupported_host` | `POST /runs/preflight`, and the failure of a launched run: a `git_pat` grant sets `repos`, `access`, `api` or `forge` for a host another lane serves and that lane does not read those fields: an Azure DevOps host or one the run's Azure DevOps gate covers, or the host of a forge the run is GitHub-brokered for (its PAT is withheld). |
+| `git_pat_api_forge_disabled` | `POST /runs/preflight`, and the failure of a launched run: a `git_pat` grant sets `api` for `bitbucket_server` while `WARDYN_GIT_PAT_API_BITBUCKET_SERVER` is off on this deployment. Policy and governance writes refuse the same grant with `400`. |
 | `policy_request_invalid` / `policy_secret_refs_invalid` / `policy_name_conflict` | `PUT/POST/DELETE /api/v1/policies`: the create/update body fails `decodePolicyRequest`, a secret reference in the spec fails shape validation, or a policy by that name already exists. |
 | `model_provider_id_invalid` / `model_provider_not_applicable` / `model_provider_no_block_configured` | `POST /runs`' model-provider choice (`run_model_provider.go`), the three field-validation arms outside `writeProviderRefusal` (which always carries its own reason, either the credential-refusal's audit reason or the generic `model_provider_unavailable`): `model_provider` is not a plain provider id, was set on a run that calls no model, or was named but this deployment has no model providers. `integration_id` is refused earlier, unconditionally (`integration_id_retired`), before this door is reached. |
 | `run_title_store_unavailable` | `PATCH /runs/{id}/title` (`run_title.go`): this store cannot rename a run. |
 | `run_inspect_no_runner` / `run_inspect_terminal` / `run_inspect_no_sandbox` / `run_inspect_paused` / `run_inspect_exec_stream_unsupported` / `run_resources_read_failed` / `run_files_no_exec_session` | `GET /runs/{id}/resources` and `GET /runs/{id}/files` (`run_resources.go`, `run_files.go`): the two widgets read the identical run-state facts and share a reason per cause rather than each inventing its own synonym. |
-| `run_output_tail_invalid` / `run_output_interactive` / `run_output_off` / `run_output_not_kept` / `run_output_expired` | `GET /runs/{id}/output` (`run_output.go`): `?tail=` is not a positive number of bytes (`400`); the run is interactive, and an interactive run keeps no output here (`409`); this deployment keeps none (`WARDYN_EXEC_OUTPUT_TAIL=off`, `409`); no tail is held for the run — an interactive or sign-in run, or started before wardynd last restarted (`409`); the tail outlived `WARDYN_EXEC_OUTPUT_TAIL_TTL` (`410`). |
+| `run_output_tail_invalid` / `run_output_interactive` / `run_output_off` / `run_output_not_kept` / `run_output_expired` / `run_output_erased` | `GET /runs/{id}/output` (`run_output.go`): `?tail=` is not a positive number of bytes (`400`); the run is interactive, and an interactive run keeps no output here (`409`); this deployment keeps none, or refuses stored rows (`WARDYN_EXEC_OUTPUT_TAIL=off`, `409`); no output is kept for the run — a sign-in run, one that finished before output was persisted, or one still being captured, which a read a moment later serves (`409`); the in-memory tail outlived `WARDYN_EXEC_OUTPUT_TAIL_TTL`, or the run ended longer ago than `WARDYN_RUN_OUTPUT_RETENTION_DAYS` and its row was deleted (`410`); the run's output was erased (`404`). |
 | `run_resume_not_running` / `run_resume_failed` | `POST /runs/{id}/resume` (`run_pause.go`): the run is not in a resumable state, or thawing it for exec failed. |
 | `internal_decision_log_invalid` / `groundtruth_batch_invalid` / `groundtruth_batch_too_large` / `groundtruth_action_not_kernel` / `groundtruth_write_failed` / `internal_approval_request_invalid` / `unsupported_internal_approval_kind` / `missing_requested_scope` / `reserved_scope_key` / `internal_approval_count_unavailable` / `internal_approval_cap_reached` / `broker_not_configured` / `mint_grant_id_required` / `brokered_forge_single_lane` / `brokered_forge_single_lane_unverifiable` / `grant_run_mismatch` / `grant_not_found` / `grant_requires_spire` / `run_renew_store_unavailable` / `run_renew_read_failed` / `run_renew_stamp_failed` / `internal_liveness_read_failed` | `POST /internal/*` (`internal.go`, `internal_live_run.go`): the sidecar/proxy surface, not the member-facing API. Most values are already the exact strings each route's own audit row wrote before #656 slice 3 put them on the wire too; `internal_liveness_read_failed` is the shared `/internal/*` liveness gate every sidecar door runs through. |
 | `store_unavailable` / `not_found` / `refused` / `resolve_failed` / `store_refused` | The credential-injection sinks' own closed set (`injection.go`'s `storeReadRefusal` and its callers across `injection_provider_key.go`, `injection_awssso.go`, `provider_subscription.go`, `internal.go`): the credential store did not answer, the named secret is not in the store, the secret exists but the store refused to serve it, resolving a subscription/managed token failed for a reason other than an unreachable store, or (`store_refused`, a person's own model-provider credential specifically) the store refused it. |
@@ -403,7 +423,7 @@ sending `error` alone — completing the sweep this issue tracks:
 | `preset_request_invalid` | `/api/v1/admin/presets` (`presets.go`): `validatePresetRequest`'s whole check is one cause bucket, the same grain as `site_config_invalid` — deliberately not split per arm (two arms echo `POST /runs`' own `user_type_*`/`confinement_class_unknown` reasons): an operator-only authoring route, the field is already named in the 400's own message, and `workspace_request_invalid` (slice 1) is the same policy for the same kind of route. |
 | `model_provider_credential_no_store` / `model_provider_credential_no_person` / `model_provider_credential_is_sign_in` / `model_provider_credential_body_invalid` / `model_provider_credential_too_short` / `model_provider_credential_store_unavailable` | `/api/v1/model-providers/{id}/credential` (`model_provider_credentials.go`): the console's own key/token storage door, distinct from the sign-in door and run-create's model-provider choice. |
 | `lock_unavailable` | Any write door that serializes on a cross-replica lock (a site-configuration or capability-enforcement write, a credential erase, a sign-in capture, a revive of one run, the audit chain verification), `503` with `Retry-After`: the lock is held elsewhere past its wait, the process's lock connections are all in use, or the database could not be asked. Nothing was done and the request is safe to retry; a lock is never skipped. |
-| `audit_invalid_run_id` / `audit_export_store_unavailable` / `audit_export_read_failed` / `audit_scope_unavailable` / `audit_chain_verify_store_unavailable` / `audit_chain_verify_busy` / `audit_chain_sweep_failed` / `audit_invalid_timestamp_param` / `audit_invalid_actor_type` / `audit_invalid_origin` / `audit_invalid_export_form` / `audit_partition_not_found` / `audit_partition_open` | `/api/v1/admin/audit` (`audit.go`, `audit_partition_export.go`): the security tier's audit-log query, export and chain-verification doors. `audit_invalid_export_form`, `audit_partition_not_found` and `audit_partition_open` are `GET /audit/export?partition=`'s: a `form` that is neither `readable` nor `raw`, a name that is not a partition of the audit log, and a partition that can still receive rows (it has no digest yet). |
+| `audit_invalid_run_id` / `audit_export_store_unavailable` / `audit_export_read_failed` / `audit_scope_unavailable` / `audit_chain_verify_store_unavailable` / `audit_chain_verify_busy` / `audit_chain_sweep_failed` / `audit_invalid_timestamp_param` / `audit_invalid_actor_type` / `audit_invalid_origin` / `audit_invalid_export_form` / `audit_partition_not_found` / `audit_partition_open` / `audit_retention_store_unavailable` / `audit_retention_read_failed` / `audit_retention_body_invalid` / `audit_retention_drop_failed` | `/api/v1/admin/audit` (`audit.go`, `audit_partition_export.go`, `audit_retention.go`): the security tier's audit-log query, export, chain-verification and retention doors. `audit_invalid_export_form`, `audit_partition_not_found` and `audit_partition_open` are `GET /audit/export?partition=`'s: a `form` that is neither `readable` nor `raw`, a name that is not a partition of the audit log, and a partition that can still receive rows (it has no digest yet). `audit_retention_store_unavailable` (`501`), `audit_retention_read_failed` (`500`, the status could not be read), `audit_retention_body_invalid` (`400`, `POST /audit/retention/drop` needs `{"partition", "digest"}`) and `audit_retention_drop_failed` (`500`, nothing was dropped) are `GET /audit/retention`'s and `POST /audit/retention/drop`'s; an unknown partition on the drop is `404` `audit_partition_not_found`. |
 | `source_not_found` / `source_scan_already_running` / `source_scan_unsupported_kind` / `source_scan_failed` / `source_scan_no_runner` | `POST /api/v1/sources/{id}/scan` and the admin bulk scan (`source_scan.go`). `source_scan_failed` is `scanLocalDirSource`'s own bucket for whatever detail the scan itself failed on. |
 | `inline_policy_xor` / `policy_id_not_found` / `inline_policy_invalid` | `POST /runs` and `POST /runs/preflight`'s policy resolution (`inline_policy.go`): `policy_id` and `inline_policy` were both set, the named policy does not exist, or (`inline_policy_invalid`, the whole resolution chain's bucket — grant filtering, domain-count cap, spec/secret-ref validation) the policy fails validation. |
 | `ui_layout_invalid_preset` / `ui_layout_too_many_widgets` / `ui_layout_unknown_widget` / `ui_layout_invalid_geometry` / `ui_layout_persistence_unavailable` | `GET/PUT /api/v1/ui-layout` (`ui_layout.go`): the console's own saved-layout door. |
@@ -415,15 +435,17 @@ sending `error` alone — completing the sweep this issue tracks:
 | `source_write_invalid` / `source_delete_conflict` / `source_in_use` | `/api/v1/sources` (`sources.go`): the shared source library. `source_write_invalid` is `validateSourceWrite`'s own bucket. |
 | `branding_not_branded` / `branding_store_unavailable` / `branding_body_unreadable` | `/api/v1/admin/branding` (`branding.go`). |
 | `org_revoked` / `internal_error` | `writeServerError`'s own classified/unclassified split (`writeservererror.go`): the one 5xx chokepoint every otherwise-unclassified server-side failure in this package routes through. `internal_error` is deliberately the single generic fallback — never the driver text the error carries (that stays in the log line, not the wire), just enough for a caller to tell "server-side, not yours" from a specific classified cause. |
+| `namespace_quota_exceeded` | `POST /api/v1/runs` and `POST /api/v1/runs/preflight` (`run_fit.go`): the runs namespace's `ResourceQuota` objects cannot hold this run (both its pods, requests and limits, honouring quota scopes), `422` before the identity mint, so no run row and no sandbox. The message names the quota and the numbers. Not audited, like `run_quota`. The quota is read as it stands and nothing is reserved, so a concurrent run can still take the room; the quota's own admission stays the authority. Kubernetes only |
 | `preflight_rate_limited` | `POST /api/v1/runs/preflight` (`preflight.go`): the person already made `WARDYN_PREFLIGHT_RATE_PER_MIN` checks this minute (burst 5), answered `429` before any gate runs. Not audited, like `run_quota`. The limit is per wardynd replica and never applies to the admin token or to `POST /runs`; `scripts/ci-run.sh` already treats a failed preflight as a warning. |
 | `directory_search_query_too_short` / `directory_search_unknown_type` / `directory_search_rate_limited` / `directory_search_failed` | `GET /api/v1/directory/search` (`directory_search.go`). |
 | `base_image_write_invalid` / `base_image_in_use` / `base_image_not_found` | `/api/v1/base-images` (`base_images.go`). `base_image_write_invalid` is `validateBaseImageWrite`'s own bucket. |
 | `credential_erase_principal_required` / `credential_erase_operator_namespace` / `credential_erase_signin_config_unreadable` | `DELETE /people/{principal}/credentials` (`credential_erase.go`). `credential_erase_signin_config_unreadable` (503): the Azure DevOps sign-in configuration could not be read, so the erase could not take the sign-in's lock and erased nothing; try again. |
+| `erasure_scope_unknown` / `erasure_self_refused` / `erasure_operator_namespace` / `erasure_incomplete` | `POST /people/{principal}/erasure` (`person_erasure.go`, security tier). `erasure_scope_unknown` (400): `scopes` is not a non-empty list of `credentials`, `audit_personal_fields`, `run_tasks`, `run_outputs`, `recordings` and `mask_copies`; nothing was erased. `erasure_operator_namespace` (400): the principal names the operator namespace, which is no person's; nothing was erased. `erasure_self_refused` (403): the person named is the caller and a scope other than `credentials` was asked for; nothing was erased (the admin token, which is no person, is never refused). `erasure_incomplete` (500): a scope failed part way; the body's `done` and `remaining` name the scopes, and a retry with the same scopes finishes the rest. The principal also refuses `owner_unresolved` / `owner_ambiguous` (422) as the credential erase does. |
 | `explain_principal_invalid` | `GET /permissions/explain` (`capabilities_explain.go`). |
 | `credential_inventory_no_meta` | `GET /admin/credentials/inventory` (`credential_inventory.go`). |
 | `recording_store_unavailable` / `recording_too_large` / `recording_invalid_part` / `part_limit` | `PUT /internal/recordings/{runID}` and `.../parts/{part}` (`recording.go`). `recording_invalid_part` is `{part}` failing to parse as canonical decimal >= 2; `part_limit` is the ONE name for a part above the limit, both on the wire and in the refusal's own `recording.upload` audit row's nested `reason` detail field. |
 | `ado_decision_scope_invalid` / `ado_access_above_ceiling` | The Azure DevOps escalation's decision rule (`injection_ado_capability.go`). |
-| `reserved_principal` | The same value as `authFailedReservedPrincipal` (`oidc.DenialReservedPrincipal`): a reserved identity (the admin token, the local-mode operator, a device, a portal delegate) attempted to authenticate as a human principal — the SSO callback, a session cookie, a `wdn_` token, and a portal's token exchange all refuse it. |
+| `reserved_principal` | The same value as `authFailedReservedPrincipal` (`oidc.DenialReservedPrincipal`): a reserved identity (the admin token, the local-mode operator, a device, a portal delegate, a person's audit subject `subject:<id>`) attempted to authenticate as a human principal — the SSO callback, a session cookie, a `wdn_` token, and a portal's token exchange all refuse it. |
 | `scan_facts_invalid` / `scan_upload_superseded` | `/internal/scan-results/{runID}` (`scanresult.go`). |
 | `policy_grade_spec_invalid` | `POST /policies/grade` (`policy_grade.go`): a dry-run grading preview, distinct from the real policy CRUD door (`policy_request_invalid`) even though both run the same spec validator. |
 | `synthesized_profile_invalid` | The AI Run Composer's profile synthesis (`profile.go`, `POST /runs/{id}/profile`): the synthesized policy spec fails validation after clamping to the operator ceiling. |
@@ -445,12 +467,18 @@ above under a *different* refusal that deliberately shares the same string
 |---|---|
 | `admin_surface` / `security_admin_surface` | The tier gates every admin/security-admin-only route runs through (`isOperator`/`isSecurityOperator`): the caller's stamped role is below the route's own floor. Both answer the byte-identical sentence "requires admin role" — the reason is what tells the two tiers apart. |
 | `audit_export_partition_filter` | `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `actor_type`, `outcome` or `origin`): a partition export always covers the whole partition. Answered `400` and not audited. |
+| `audit_retention_not_oldest` | `POST /audit/retention/drop` named a partition that is not the oldest retained one. Answered `409` and audited (`authz.denied`, target `audit.retention`, `partition` in the row). |
+| `audit_retention_not_closed` | `POST /audit/retention/drop`: the oldest partition can still receive rows. Answered `409` and audited. |
+| `audit_retention_inside_window` | `POST /audit/retention/drop`: the partition ended less than the effective retention window ago, or retention is forever. Answered `409` and audited. |
+| `audit_retention_live_run` | `POST /audit/retention/drop`: the partition holds audit rows of a run that is still live. Answered `409` and audited. |
+| `audit_retention_digest_mismatch` | `POST /audit/retention/drop`: the digest supplied is not the one the database computes for the partition. Answered `409` and audited. |
 | `byoi_user` | A Bring-Your-Own-Identity principal reached a route BYOI does not extend to. |
 | `capability_egress_host` / `capability_feature` / `capability_secret` | The capability-grant gates outside the five launch-door kinds already covered above: an egress host, a feature flag, or a secret the caller's capability grants do not cover. |
 | `delegation_scope` | A portal's delegated token asked for a route outside its own delegation allow-list (#1142). |
 | `event_stream_cap` | The caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (#1407); close one and retry. Answered `422` and not audited, like `run_quota`. |
 | `governance_profile` | The caller's resolved governance profile itself closes the door (distinct from `groups_snapshot_stale`, which is the profile being unresolvable at all). |
-| `mask_state_unavailable` | The server cannot prove a run's masking corpus complete, so a door that relays or persists the run's output (recording upload, live attach, SSH shell, live output read) refuses with `503` instead of passing bytes through (ha-l2.0). A run dispatched before 0.8.6 stays refused after a server restart until it ends; any other run clears when the server can read its manifest again. |
+| `mask_state_unavailable` | The server cannot prove a run's masking corpus complete, so a door that relays or persists the run's output (recording upload, live attach, SSH shell, live output read) refuses with `503` instead of passing bytes through (ha-l2.0). A run dispatched before 0.8.6 stays refused after a server restart until it ends; any other run clears when the server can read its manifest again. Since the shared masking registry (ha-l2.1) an injection or capture route also answers it when a value could not be committed to the registry: the value is not handed out. |
+| `governance_overlay_unsatisfiable` | The caller's governance profile, or the run's own, is composed and nothing satisfies it together with the profile or deployment default it builds on, so the launch and every live door refuse (`403`) rather than widen. The sentence names the person's own profile and never a base. |
 | `grant_pairing_not_eligible` | The named capability grant is not eligible to pair with the request it was offered against. |
 | `model_provider_unavailable` | `POST /runs`' model-provider choice, and the record door's (`POST /workspaces/{id}/record`) (`writeProviderRefusal`, `run_model_provider.go`): the generic bucket for a non-credential refusal (provider off, not serving this agent, none chosen, no such provider) — the credential-shaped refusal instead sends `model_credential` (below), which the console's sign-in door recognizes. |
 | `recording_governed` | `POST /workspaces/{id}/record` by an admin whose runs are governed (`WARDYN_GOVERN_ADMIN_RUNS`): `403`, audited at target `workspaces.record`. The body names the remedy, `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` set to `recording`. The admin token and local mode are never refused. |
@@ -516,8 +544,10 @@ applied until a different approver approves it. The SDK never reads that body as
   and a `*client.PendingApprovalError`, so a caller written before 0.8.6 fails loudly instead of
   carrying on.
 - `ApplyGovernanceResult` returns the same outcome as data: the document, the `Pending` changes,
-  the `Deferred` assignments and `PruneSkipped`. An assignment that names a profile whose write is
-  pending is deferred, never sent; prune does not run after a pending write.
+  the `Deferred` writes and `PruneSkipped`. An assignment that names a profile whose write is
+  pending is deferred, never sent; so is a composed profile whose base profile's write is pending
+  (a `Deferred` entry with `Base` set), and so, in turn, are its own children and their
+  assignments. Prune does not run after a pending write.
 - `ListGovernanceChanges(ctx, state)`, `GetGovernanceChange`, `ApproveGovernanceChange` and
   `RejectGovernanceChange(ctx, id, reason)` read and decide the stored changes
   (`/api/v1/governance/changes`).
@@ -532,7 +562,7 @@ for _, ch := range res.Pending {
 }
 ```
 
-The CLI mirrors this. `wardyn governance set` prints the pending and deferred lists on stderr and
+The CLI mirrors this. `wardyn governance set` prints the pending and deferred lists (profiles and assignments) on stderr and
 exits 0, and `wardyn governance changes list [--state ...]`, `changes approve <id>` and
 `changes reject <id> [--reason ...]` act on them.
 
@@ -653,7 +683,12 @@ can clear it (`you`/`owner`/`admin`); `status=needs` (requires `view=`) narrows
 the list to runs where `attention.by=="you"`. Every PENDING row on
 `GET /api/v1/approvals` now also carries `held` (bool) and, for a hold with a
 known end, `held_until` (RFC 3339) — the server-side port of the console's
-former client-side hold rule. `GET /api/v1/me/attention?view=user|admin`
+former client-side hold rule. With `WARDYN_APPROVAL_NOTIFY` routes set, a PENDING row also
+carries `escalation_tier` (the highest notification tier already due; absent at tier 0) and
+`sla_due_at` (RFC 3339, when the next tier is due; absent when none is left), projected at response
+time and never stored. `GET /api/v1/approval-notify/status` (security tier) returns
+`{channels: [{id, type, destination_host, last_success_at, last_error, last_error_at,
+failed_last_hour}]}`, the host only and never a URL. `GET /api/v1/me/attention?view=user|admin`
 returns `{needs_you, pending_approvals}`: `needs_you` is the count of live
 runs in that view's own default scope whose `attention.by=="you"`;
 `pending_approvals` is the same scoped PENDING count `GET /approvals` gives
@@ -678,3 +713,26 @@ line on stderr (never stdout, so `--json` stays a plain array) naming the next
 header a caller has to remember to check; `scripts/ci-run.sh` loops it so a CI
 run's `audit.json` artifact is never a silently-truncated prefix. Everything
 else here is one method on the Go client above, or one `wardyn` CLI command.
+
+### Composed profile graphs
+
+`ApplyGovernance` reproduces a graph of composed profiles (`base_profile_id`, `overlay`,
+`overlay_limits`, `contact`) from `wardyn governance get` on one install to `wardyn governance set`
+on another, and a repeat apply is a no-op.
+
+- **Order.** Profiles are written bases first, whatever order the document lists them in; a
+  `base_profile_id` cycle in the document is an error before any write. Prune deletes the profiles
+  composed on a base before the base, so it never meets the server's `409`.
+- **Ids.** Every graph reference, `base_profile_id` and an assignment's `profile_id`, is matched by the
+  id the document's own entry for that profile carries and rewritten to the id the profile holds on the
+  target. A base the document does not contain is sent as given.
+- **Fields.** A profile is rewritten only when its ceiling, limits, contact, base, overlay or
+  overlay limits differ from the stored one. The read-only `effective` view is never written back.
+- **Pending approval.** A child whose base has a pending write is deferred, not sent; apply again
+  once the base is approved.
+- **Older clients.** A client built before 0.8.6 drops `base_profile_id`, `overlay` and
+  `overlay_limits`. A composed profile it would create is refused with a `400` (`invalid ceiling:
+  min_confinement_class is required`), because the exported row carries an empty ceiling and no
+  overlay. One it updates keeps the composition the server stored, since an absent member keeps the
+  stored value. It also writes in document order, so a child listed before its base fails. Upgrade
+  before applying a composed document.

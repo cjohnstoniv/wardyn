@@ -351,6 +351,10 @@ func canonicalGrantValue(capability, value string) (string, error) {
 // happened: 201 for a genuinely new row, 200 when an existing one was
 // updated (the console's DUPLICATE copy). securityOps (routes.go).
 func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Request) {
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
 	var req grantWriteRequest
 	if !decodeStrict(w, r, &req) {
 		return
@@ -372,6 +376,10 @@ func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Requ
 	// A fresh candidate id: UpsertCapabilityGrant returns the EXISTING row's id
 	// on a natural-key conflict, never this one — comparing the two is how the
 	// handler tells created from updated without a separate existence read.
+	if mode == govQueue {
+		s.holdGrantUpsert(w, r, g)
+		return
+	}
 	g.ID = uuid.New()
 	g.CreatedBy = principalFromRequest(r)
 	saved, err := s.cfg.Store.UpsertCapabilityGrant(r.Context(), g)
@@ -384,13 +392,10 @@ func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Requ
 		action, status = "capability.grant.update", http.StatusOK
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		action, saved.ID.String(), "success", mustJSON(map[string]any{
-			"subject_type": saved.SubjectType,
-			"subject":      saved.Subject,
-			"capability":   saved.Capability,
-			"value":        saved.Value,
-			"effect":       saved.Effect,
-		})))
+		action, saved.ID.String(), "success", mustJSON(grantAuditData(saved))))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindGrant, saved.ID.String(), "success", nil)
+	}
 	writeJSON(w, status, saved)
 }
 
@@ -399,8 +404,17 @@ func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Requ
 // unknown id is the whole story (no existence oracle to protect: an admin
 // already sees the full table via GET /permissions).
 func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Request) {
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
 	id, ok := parseIDParam(w, r, "id", "capability grant")
 	if !ok {
+		return
+	}
+	if mode == govQueue {
+		// Never exempt: deleting a deny grant widens.
+		s.holdGrantDelete(w, r, id)
 		return
 	}
 	if err := s.cfg.Store.DeleteCapabilityGrant(r.Context(), id); err != nil {
@@ -412,6 +426,9 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"capability.grant.delete", id.String(), "success", nil))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindGrant, id.String(), "success", nil)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -432,6 +449,10 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 // capability-enforcement lock (locks.go) makes the check-then-write atomic
 // against a second overlapping PUT on any replica.
 func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.Request) {
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
 	var body map[string]bool
 	if !decodeStrict(w, r, &body) {
 		return
@@ -441,6 +462,11 @@ func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.R
 			writeErrorReason(w, http.StatusBadRequest, reasonCapabilityKindUnknown, fmt.Sprintf("unknown capability kind %q", kind))
 			return
 		}
+	}
+	if mode == govQueue {
+		// Turning enforcement on lets grants through, so no replacement is exempt.
+		s.holdEnforcement(w, r, body)
+		return
 	}
 	r, unlock, ok := s.lockDoor(w, r, db.CapEnforcementLockClass)
 	if !ok {
@@ -464,6 +490,9 @@ func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.R
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"capability.enforcement.write", "capability_enforcement", "success", mustJSON(saved)))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindEnforcement, govEnforcementKey, "success", nil)
+	}
 	w.Header().Set("ETag", computeETag(saved))
 	writeJSON(w, http.StatusOK, saved)
 }

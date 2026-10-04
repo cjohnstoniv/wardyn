@@ -60,22 +60,22 @@ func TestSingleInstanceLock_SecondBootRefusesUntilTheFirstReleases(t *testing.T)
 
 	// The whole point: a second wardynd against the same database must not boot.
 	if _, err := claimSingleInstance(ctx, poolB, false); err == nil {
-		t.Fatal("a SECOND wardynd booted while the first holds the lock — the process-local secret-masking registry would fail open and persist live credentials in cleartext")
+		t.Fatal("a SECOND wardynd booted while the first holds the lock — two replicas would serve one database without WARDYN_HA")
 	} else {
 		// The message is the operator's only instruction; it must name the
 		// failure and the acknowledged override, not just say "refused".
-		for _, want := range []string{"secretmask", "cleartext", "-allow-multi-instance"} {
+		for _, want := range []string{"single-instance lock", "WARDYN_HA", "ha.enabled"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("refusal never says %q:\n%s", want, err.Error())
 			}
 		}
 	}
 
-	// -allow-multi-instance is the runtime twin of the chart's allowMultiReplica:
-	// it must still start, or the chart's documented escape hatch is a lie.
+	// WARDYN_HA is the runtime twin of the chart's ha.enabled: it must start
+	// beside a lock holder, or HA mode is a lie.
 	releaseAllowed, err := claimSingleInstance(ctx, poolB, true)
 	if err != nil {
-		t.Fatalf("-allow-multi-instance was refused while another instance holds the lock: %v", err)
+		t.Fatalf("WARDYN_HA was refused while another instance holds the lock: %v", err)
 	}
 	releaseAllowed()
 

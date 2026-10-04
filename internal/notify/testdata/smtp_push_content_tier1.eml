@@ -1,0 +1,16 @@
+From: wardyn@example.com
+To: secops@example.com, alice@example.com, payments-owner@example.com
+Subject: [Wardyn] Approval still waiting (escalation 1): Push review
+Message-ID: <00000000-0000-4000-8000-0000000000d1@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+Approval still waiting (escalation 1): Push review
+
+Run: a1b2c3d4
+Profile: payments
+Requester: alice (alice@example.com)
+Requested: 2026-10-03 14:05 UTC
+
+Open approvals: https://wardyn.example.com/approvals

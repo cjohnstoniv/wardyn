@@ -67,7 +67,7 @@ type terminalSandboxPager interface {
 // Needed because claimSingleInstance (single_instance.go) is not mutual
 // exclusion: it holds db.SingleInstanceLockKey for the process lifetime only
 // in the DEFAULT configuration — a deployment booted with
-// -allow-multi-instance skips that claim, and a Postgres restart/failover can
+// WARDYN_HA skips that claim, and a Postgres restart/failover can
 // release its session under a still-running daemon while a second one boots
 // and claims it (SingleInstanceLockKey's own HONEST CEILING). Either way, two
 // tickers running at once would both re-run teardown for the same aged KILLED

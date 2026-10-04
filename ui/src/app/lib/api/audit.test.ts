@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { audit, demoAuditRows, egressFromAudit, exitCodeFromAudit, runEndingFromAudit } from "./audit";
-import type { AuditEvent } from "../types";
+import { erasedFieldNames, type AuditEvent } from "../types";
 import { aheadByHours } from "../test-clock";
 
 // egressFromAudit is the ONLY source of the run-detail egress table — the backend
@@ -278,5 +278,68 @@ describe("runEndingFromAudit — the model-credential refusal is its own ending"
     expect(
       runEndingFromAudit("COMPLETED", [failed({ error: REFUSAL, reason: "model_credential" })]),
     ).toBeUndefined();
+  });
+});
+
+// Audit retention (0.8.6): GET /audit/retention, POST /audit/retention/drop and
+// GET /audit/export?partition=, all security tier.
+describe("audit retention API", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const respond = (status: number, body: unknown, type = "application/json") =>
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(typeof body === "string" ? body : JSON.stringify(body), { status, headers: { "Content-Type": type } }),
+    );
+
+  it("getRetention GETs /audit/retention and returns the server's status as sent", async () => {
+    const status = { policy: { days: 0, effective_days: 0 }, cutover: aheadByHours(-1), partitions: [], months_ahead: 12 };
+    const spy = respond(200, status);
+    await expect(audit.getRetention()).resolves.toEqual(status);
+    const [url, init] = spy.mock.calls[0];
+    expect(String(url)).toMatch(/\/api\/v1\/audit\/retention$/);
+    expect(init?.method).toBe("GET");
+  });
+
+  it("dropPartition POSTs the partition and the digest", async () => {
+    const dropped = { partition: "audit_events_legacy", rows: 3, seq_lo: 1, seq_hi: 3, digest: "ab", event_seq: 4 };
+    const spy = respond(200, dropped);
+    await expect(audit.dropPartition("audit_events_legacy", "ab")).resolves.toEqual(dropped);
+    const [url, init] = spy.mock.calls[0];
+    expect(String(url)).toMatch(/\/api\/v1\/audit\/retention\/drop$/);
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ partition: "audit_events_legacy", digest: "ab" });
+  });
+
+  it("a refused drop throws an HttpError carrying the refusal's reason", async () => {
+    respond(409, { error: "the digest does not match", reason: "audit_retention_digest_mismatch" });
+    await expect(audit.dropPartition("p", "x")).rejects.toMatchObject({
+      status: 409,
+      reason: "audit_retention_digest_mismatch",
+    });
+  });
+
+  it("exportPartition asks for the named partition and form, encoded, and returns the archive", async () => {
+    const spy = respond(200, '{"type":"manifest"}\n', "application/x-ndjson");
+    const blob = await audit.exportPartition("audit_events_2026_10", "raw");
+    expect(await blob.text()).toBe('{"type":"manifest"}\n');
+    expect(String(spy.mock.calls[0][0])).toMatch(/\/api\/v1\/audit\/export\?partition=audit_events_2026_10&form=raw$/);
+  });
+
+  it("a failed export is an error, never an empty archive", async () => {
+    respond(409, { error: "That partition can still receive rows.", reason: "audit_partition_open" });
+    await expect(audit.exportPartition("p", "readable")).rejects.toMatchObject({ status: 409, reason: "audit_partition_open" });
+  });
+});
+
+describe("erasedFieldNames", () => {
+  it("names the target and every data leaf that carries the erased value, at any depth", () => {
+    expect(
+      erasedFieldNames(
+        ev({ target: "[erased]", data: { task: "[erased]", nested: { email: "[erased]", kept: "x" }, n: 1 } }),
+      ),
+    ).toEqual(["target", "task", "email"]);
+  });
+
+  it("is empty for an event with nothing erased", () => {
+    expect(erasedFieldNames(ev({ target: "api.example.com", data: { reason: "fine" } }))).toEqual([]);
   });
 });

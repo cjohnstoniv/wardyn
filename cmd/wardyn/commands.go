@@ -226,7 +226,7 @@ func runCmd(client clientFn) *cobra.Command {
 
 	cmd.AddCommand(runListCmd(client), runGetCmd(client), runKillCmd(client),
 		runGrantsCmd(client), runRecordingCmd(client), runWaitReadyCmd(client), runPolicyCmd(client),
-		runLogsCmd(client), attachCmd(client), sshCmd(client))
+		runLogsCmd(client), runOutputCmd(client), attachCmd(client), sshCmd(client))
 	return cmd
 }
 
@@ -827,12 +827,8 @@ func logLine(e types.AuditEvent) string {
 // agent — see Runner.Attach's doc; `run --wait` only polls terminal state,
 // printing nothing in between).
 //
-// Honesty note: this reuses the existing audit-event pipeline rather than
-// adding a new server-side stdout/stderr capture (no such capture exists for
-// exec-mode runs anywhere in the current architecture — see
-// internal/runner/runner.go's Exec/ExecStream docs). Every line is a real
-// audited action, not raw process bytes; it is the closest live signal the
-// CLI has today without new server plumbing.
+// This reads the audit-event pipeline: every line is a real audited action,
+// not raw process bytes. A run's kept stdout/stderr is `wardyn run output`.
 func runLogsCmd(client clientFn) *cobra.Command {
 	var follow bool
 	var interval time.Duration
@@ -842,8 +838,8 @@ func runLogsCmd(client clientFn) *cobra.Command {
 		Long: `Tail a run's audit-event trail: dispatch, egress decisions, credential mints,
 and completion, printed as they happen.
 
-This is NOT the agent's raw stdout/stderr — no such capture exists for a
-headless/exec-mode run today. It is the live-progress signal the CLI has: a
+This is NOT the agent's raw stdout/stderr; for that, see 'wardyn run output'.
+It is the live-progress signal the CLI has: a
 batch run's own audit trail, which is exactly what --wait's terminal
 "reason:" line already reads from, just streamed as it's written instead of
 only at the end.`,

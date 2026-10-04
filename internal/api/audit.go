@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -117,7 +119,7 @@ const (
 // session id already lives in Data (JSONB), no migration to add the column.
 func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 	pager, _ := s.cfg.Store.(store.Pager)
-	filter, ok := parseAuditFilter(w, r)
+	filter, ok := s.parseAuditFilterFor(w, r)
 	if !ok {
 		return
 	}
@@ -152,14 +154,59 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	// The fetch-all fallback MUST apply the same predicate: filtering only on
 	// the pager path would answer a filtered request with unfiltered events.
-	servePage(w, r, page, pageFn, func() ([]types.AuditEvent, error) {
+	servePage(w, r, page, s.unsealedPage(r.Context(), pageFn), func() ([]types.AuditEvent, error) {
 		if scope == nil {
 			all, err := s.cfg.Store.QueryRecentAuditEvents(r.Context(), 0)
-			return filter.Keep(all), err
+			return s.unsealed(r.Context(), filter.Keep(all), err)
 		}
 		all, err := s.cfg.Store.QueryAuditEvents(r.Context(), *scope, 0)
-		return filter.Keep(all), err
+		return s.unsealed(r.Context(), filter.Keep(all), err)
 	})
+}
+
+// unsealed opens the sealed personal fields of evs (WARDYN_AUDIT_SEAL) on their
+// way out; a field whose person was erased reads "[erased]". A key store that
+// cannot answer fails the read, so ciphertext never passes for the record.
+func (s *Server) unsealed(ctx context.Context, evs []types.AuditEvent, err error) ([]types.AuditEvent, error) {
+	if err != nil || s.cfg.AuditUnsealer == nil {
+		return evs, err
+	}
+	return s.cfg.AuditUnsealer.Unseal(ctx, evs)
+}
+
+// parseAuditFilterFor is parseAuditFilter plus the one translation sealing
+// needs: under WARDYN_AUDIT_SEAL=full a human row stores "subject:<id>" as its
+// actor, so ?actor=<person> also matches the subject the person resolves to.
+// Rows written before it was turned on keep the name, so the name still matches.
+func (s *Server) parseAuditFilterFor(w http.ResponseWriter, r *http.Request) (store.AuditFilter, bool) {
+	f, ok := parseAuditFilter(w, r)
+	if !ok || f.Actor == "" {
+		return f, ok
+	}
+	t, has := s.cfg.AuditUnsealer.(audit.ActorTranslator)
+	if !has {
+		return f, true
+	}
+	stored, found, err := t.StoredActor(r.Context(), f.Actor)
+	if err != nil {
+		writeServerError(w, r, "translate the audit actor filter", err)
+		return store.AuditFilter{}, false
+	}
+	if found {
+		f.ActorAlt = stored
+	}
+	return f, true
+}
+
+// unsealedPage is pageFn with its rows unsealed; nil stays nil, the store has no pager.
+func (s *Server) unsealedPage(ctx context.Context, pageFn func(store.Page) ([]types.AuditEvent, error)) func(store.Page) ([]types.AuditEvent, error) {
+	if pageFn == nil {
+		return nil
+	}
+	return func(p store.Page) ([]types.AuditEvent, error) {
+		evs, err := pageFn(p)
+		return s.unsealed(ctx, evs, err)
+	}
 }
 
 // handleExportAudit streams the audit feed as newline-delimited JSON (one event
@@ -199,7 +246,7 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusNotImplemented, reasonAuditExportStoreUnavailable, "audit export requires a paging store backend")
 		return
 	}
-	filter, ok := parseAuditFilter(w, r)
+	filter, ok := s.parseAuditFilterFor(w, r)
 	if !ok {
 		return
 	}
@@ -218,6 +265,10 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 			store.Page{Limit: auditExportPageSize, Offset: offset})
 		if err != nil {
 			fail("page read", err)
+			return
+		}
+		if page, err = s.unsealed(r.Context(), page, nil); err != nil {
+			fail("unseal", err)
 			return
 		}
 		for i := range page {

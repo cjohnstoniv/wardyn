@@ -34,7 +34,7 @@ func TestPG_GovernanceProfileContact(t *testing.T) {
 		w := do(t, srv, method, path, adminToken, body)
 		var resp governanceProfileResponse
 		_ = json.Unmarshal(w.Body.Bytes(), &resp)
-		return resp.Profile, w.Code, w.Body.String()
+		return resp.Profile.GovernanceProfile, w.Code, w.Body.String()
 	}
 	const base = `"name":"team-a","ceiling":{"min_confinement_class":"CC2"}`
 	want := policyref.Contact{Owner: "Platform security", Email: "sec@example.com", RequestURL: "https://help.example.com/access"}

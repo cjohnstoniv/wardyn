@@ -153,9 +153,29 @@ already grades) and `limits` is two booleans. It is stored in its own table, nev
 `run_policies` row — saved policies are selectable *content*, and making ceilings selectable
 would reproduce the conflation this campaign removes.
 
-An assigned profile **replaces** the deployment ceiling for its subjects; it is never composed
-with it. No assignment ⇒ `DefaultPolicy`, byte-for-byte today's behavior. That is the whole
-composition rule, and the console says it in `LEAD` (§7.2).
+An assigned standalone profile **replaces** the deployment ceiling for its subjects. Since 0.8.6 a
+profile may instead be **composed**. The walkthrough, in the order an author meets it:
+
+- **Base.** A composed profile names one base, `base_profile_id`: another profile, or null for the
+  deployment default. A standalone profile has no base and today's shape, unchanged.
+- **Overlay.** It also carries an overlay (and `overlay_limits`) that lists only the fields it narrows,
+  and stores no ceiling of its own. An absent field inherits the base. The write is strict: an overlay
+  that names anything its base does not permit is refused.
+- **Meet.** The ceiling that binds is `ApplyOverlay(effective(base), overlay)`: for each field the
+  overlay sets, the narrower of base and overlay under that field's own rule (union of denies,
+  intersection of allows, the stricter mode, the smaller bound), taken after the runtime's defaults.
+  The per-field table is in `docs/OPERATIONS.md` (Governance profiles). It is computed whenever
+  authority is read, never stored, so a base edit reaches every profile built on it.
+- **Depth.** At most three profiles deep, no cycles, one base each. A result nothing satisfies, or a
+  base that cannot be read, refuses the launch and every live door; it is never read as the deployment's
+  policy.
+- **Disclosure.** A member sees only their own profile's name and contact and the effective content,
+  never a base, an overlay or the chain.
+
+No assignment ⇒ `DefaultPolicy`, byte-for-byte today's behavior, and a standalone profile resolves
+exactly as it always did. Upgrade, rollback, the CLI and SDK graph apply and the residual risks are in
+`docs/OPERATIONS.md`; the design record is `docs/design/0.8/0.8.6-comp.md`. The console says it in
+`LEAD` (§7.2).
 
 ### 2.2 Assignment and precedence
 
@@ -476,7 +496,7 @@ time) and one must be able to change without the other.
 | Key | String |
 |---|---|
 | `TITLE` | Governance |
-| `LEAD` | Named ceilings, assigned to people and groups. An assigned profile replaces the deployment ceiling for its subjects; anyone with no assignment keeps the deployment ceiling. |
+| `LEAD` | Named ceilings, assigned to people and groups. A profile stands alone or narrows a base. An assigned profile replaces the deployment ceiling for its subjects; anyone with no assignment keeps the deployment ceiling. |
 | `PROFILES_TITLE` | Profiles |
 | `PROFILES_LEAD` | A profile is one ceiling: the policy every run under it is bounded by, plus the launch modes its subjects may not use at all. |
 | `COL_NAME` | Name |

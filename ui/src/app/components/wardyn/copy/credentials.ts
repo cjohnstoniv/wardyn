@@ -24,6 +24,8 @@ export const INVENTORY = {
   COL_PROVIDER: "Model provider",
   COL_STATE: "State",
   COL_STORE: "Stored in",
+  // M5 S3: the key domain a person's next key is made in, and why (KEY_DOMAINS.SOURCE_*).
+  COL_DOMAIN: "Key domain",
   COL_ADDED: "Added",
   COL_LAST_USED: "Last used",
   STATE_STORED: "Stored",
@@ -72,6 +74,41 @@ export const ERASE = {
     `The erase didn't finish, so some of ${person}'s credentials may still be stored. Try again — erasing twice is safe.`,
 } as const;
 
+// The security tier's by-scope erase of a person (0.8.6, mock packet M4,
+// approved 2026-10-03): POST /people/{principal}/erasure. Reused unchanged from
+// ERASE: FIELD, RETENTION_LOCAL / _VAULT / _KEY_VAULT, CANCEL, CLOSE.
+export const ERASE_DATA = {
+  BUTTON: "Erase someone's data",
+  BY_EMAIL_TITLE: "Erase someone's data",
+  HINT: "Anyone who has used Wardyn, listed here or not.",
+  SCOPES: "What to erase",
+  SCOPE: {
+    credentials: { label: "Credentials", hint: "Keys, sign-ins and secrets they stored." },
+    audit_personal_fields: {
+      label: "Personal details in audit events",
+      hint: "Task text, messages, notes and emails recorded about them.",
+    },
+    run_tasks: { label: "Run tasks", hint: "The task text of every run they started." },
+    run_outputs: { label: "Run output", hint: "The saved output of every run they started." },
+    mask_copies: {
+      label: "Copies kept for masking",
+      hint: "Their secret values, kept so run output can hide them.",
+    },
+    recordings: { label: "Recordings", hint: "Not erased unless you choose it." },
+  },
+  SEALING_NOTE:
+    "Personal details are erasable only for events recorded while audit sealing was on. Earlier events keep them until retention drops their partition.",
+  KEEPS: "The events themselves stay, and the log still verifies.",
+  CONFIRM: "Erase data",
+  ERASED: "Erased",
+  NOT_DONE: "Not finished",
+  DONE: (person: string) => `Erased the chosen data for ${person}.`,
+  PARTIAL: (person: string) => `Some of ${person}'s data wasn't erased. Try again — erasing twice is safe.`,
+  FAILED: (person: string) =>
+    `The erase didn't finish, so some of ${person}'s data may still be stored. Try again — erasing twice is safe.`,
+  DONE_AUDIT: "Recorded in the Audit log as person.erasure.",
+} as const;
+
 // #1477: the read-only list of tokens an admin created for another person
 // (console-085-packet, approved 2026-10-01, Q4–Q6). Strings are the packet's,
 // character for character. The singular forms (CHIP/COUNT at 1) are the
@@ -97,4 +134,44 @@ export const MINTED = {
   REVOKE_CANCEL: "Cancel",
   REVOKE_CONFIRM: "Revoke token",
   REVOKED_TOAST: "Token revoked.",
+} as const;
+
+// Key custody on the Credentials screen (mock packet M5, approved 2026-10-03; the strings are the
+// packet's, character for character). The keys marked "not in M5" are the few words the dialog and
+// the conflict chip need that the packet leaves undrawn; SUBMITTED_* are M3's CHANGES.SUBMITTED_*,
+// unchanged, until the governance Changes tab hoists them into one block.
+export const KEY_DOMAINS = {
+  TITLE: "Key domains",
+  LEDE: "Each domain is its own key in your key service. A person's keys are made in their domain, so whoever holds one domain's key can't open another's. Domains are declared in WARDYN_KEY_DOMAINS_FILE.",
+  COL_DOMAIN: "Domain",
+  COL_KEY: "Key",
+  COL_BOOT: "At boot",
+  PROVEN: "Proven",
+  NOT_PROVEN: "Not proven",
+  DEFAULT_NOTE: "default is this deployment's credential key.",
+  ASSIGN_TITLE: "Assignments",
+  COL_SUBJECT: "Person or group",
+  PRECEDENCE: "A person's own assignment beats a group's, and a group's beats everyone. Anyone matching nothing uses default.",
+  ASSIGN_CTA: "Assign a domain",
+  FIELD_DOMAIN: "Domain",
+  ASSIGN_HINT: "Applies to keys made from now on. Keys made earlier stay in the domain they were made in.",
+  REMOVE: "Remove",
+  REMOVE_CONFIRM: (subject: string) =>
+    `Remove the domain assignment for "${subject}"? Their next key is made in whatever else matches them, or in default.`,
+  OFF_NOTE: "Per-person keys are off for stored credentials (WARDYN_PRINCIPAL_KEYS), so domains apply to audit records only.",
+  SOURCE_USER: "set for them",
+  SOURCE_GROUP: (group: string) => `from ${group}`,
+  SOURCE_ALL: "everyone",
+  SOURCE_DEFAULT: "default",
+  CONFLICT: "Two groups name different domains. No new key until one is removed.",
+  // Not in M5: the dialog's subject-type choice (the wire's user | group | all) and the conflict
+  // chip's visible word (its title is CONFLICT).
+  TYPE_USER: "Person",
+  TYPE_GROUP: "Group",
+  TYPE_ALL: "Everyone",
+  CONFLICT_CHIP: "Conflict",
+  // M3 CHANGES.SUBMITTED_*.
+  SUBMITTED_TITLE: "Submitted for approval",
+  SUBMITTED_BODY: "Nothing has changed yet. It applies when someone else approves it, and expires if nobody does.",
+  SUBMITTED_LINK: "View in Changes",
 } as const;

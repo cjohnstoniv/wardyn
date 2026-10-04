@@ -345,27 +345,31 @@ forms, which no verbatim matcher catches.
   fallback bypasses the control plane and delivers UNMASKED casts (masking is
   structurally control-plane-side — `wardyn-rec` holds no secret values). Do not
   use it where recordings are viewer-exposed.
-- **The registry is process-local and fails OPEN.** `secretmask.Registry` is an
-  in-memory map, never persisted, populated on whichever wardynd process served
-  the run's injection/mint request; the cast upload and the live-attach relay are
-  separate requests, and both fall back to unmasked pass-through when the run's
-  snapshot is empty (`buildMaskingBody`, `liveMaskWriter`). One process, one
-  replica — the shipped topology — makes the CROSS-REPLICA form inert, which is
-  why `replicas: 1` is a SAFETY control: the Helm chart refuses more
-  (`deploy/helm/wardyn/templates/deployment.yaml`) and compose's `container_name`
-  rejects `--scale`. Run a second replica anyway and a cast landing on the wrong
-  pod is persisted verbatim, live credentials in cleartext, with a `success`
-  audit event. **The single-process case is not inert**: a `wardynd` restart
-  (upgrade, crash) mid-run empties the same map, so a run whose secrets
-  registered pre-restart and whose cast uploads post-restart hits the identical
-  empty-snapshot fail-open at `replicas: 1`. **0.8.6 closes the dispatch-time part:**
-  each run's secrets and Azure DevOps run token are committed to a sealed
-  per-run masking manifest before the sandbox starts, and the recording upload,
-  live attach, exec relay, SSH shell and live output read refuse (`503`
-  `mask_state_unavailable`) a run whose manifest they cannot prove complete. Still
-  open: values registered at injection time are memory-only, runs that predate
-  0.8.6 are refused rather than masked after a restart, and SSH exec, SFTP and
-  direct-tcpip are never masked.
+- **The registry is shared through Postgres and fails closed; four things stay
+  outside it.** `secretmask.Registry` holds every value a run was given, and each
+  replica's in-memory copy is a cache of what is committed. Dispatch commits a
+  sealed per-run masking manifest (the exact bytes of every rendering the run
+  received) before the sandbox starts; values registered later, and the per-owner
+  sign-in tokens, are committed to `mask_values` before the call that hands them out
+  returns. Both are sealed under the run owner's key, so destroying that key leaves
+  them undecryptable. Every replica masks with that corpus, whichever replica
+  served the request and across restarts. The five doors that relay or persist
+  sandbox output (the recording upload, live attach, exec relay, SSH shell and live
+  output read) answer `503` `mask_state_unavailable` for a run whose manifest they
+  cannot prove complete, and a consumer that cannot prove its copy current replaces
+  a live chunk with the placeholder, answers an upload `503` and refuses an attach.
+  This is what makes several replicas (`ha.enabled`) a supported topology; the
+  Helm chart and the daemon each refuse a second replica without it. Residuals:
+  - **Runs that predate 0.8.6 have no manifest**, so after any restart they are
+    refused at those doors rather than masked, until they end.
+  - **SSH exec, SFTP and direct-tcpip were never masked**
+    (`sshgateway_channels.go`), and masking is verbatim only.
+  - **Masking depends on Postgres.** With it unreachable, uploads and new attaches
+    are refused and live output shows the placeholder: availability is traded for
+    never persisting a credential.
+  - **A compromised wardynd process still sees every value it masks**, and a
+    refresh in flight on an old lock holder can still race a new holder across a
+    Postgres failover (the person signs in again).
 
 ### 4.2 The unconditional IP guard, and its two admin-authored exceptions
 
@@ -1076,10 +1080,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     by design — it writes policy, site-config, secrets and the role map, and
     nothing above it offers more than attribution. There is no per-resource
     permission model, no custom roles, and no tenant or org column. One optional
-    four-eyes rule exists, on two acts only (`WARDYN_EGRESS_SECOND_HUMAN` for
-    egress approvals and `WARDYN_CAPABILITY_SECOND_HUMAN` for Azure DevOps
-    capability escalations, § "Four-eyes on egress approvals"), and both are
-    bypassable by the admin token by design. So: separation of duty BETWEEN the two admin tiers is shipped and
+    four-eyes rule exists, on three acts (`WARDYN_EGRESS_SECOND_HUMAN` for
+    egress approvals, `WARDYN_CAPABILITY_SECOND_HUMAN` for Azure DevOps
+    capability escalations, § "Four-eyes on egress approvals", and
+    `WARDYN_GOVERNANCE_SECOND_HUMAN` for governance writes, § "Four-eyes on
+    governance writes"), and all are bypassable by the admin token by design. So: separation of duty BETWEEN the two admin tiers is shipped and
     testable; separation of duty WITHIN the super admin tier remains `ROADMAP.md`'s
     v1.0 item. `SECURITY.md` scopes its out-of-scope disclosure to match — an
     escalation ACROSS the `security_admin`/super-admin boundary, or a bypass of the
@@ -2206,7 +2211,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     vouches for the boot keys. A pre-envelope boot key found beside the platform
     key is refused at boot rather than converted under it, so the only
     adoption is the operator's. Unset,
-    the residual stands and `/setup/status` shows `platform_shared`. (b) **store
+    the residual stands and `/setup/status` shows `platform_split`. (b) **store
     mode:** the boot keys live under `platform/` in the organisation's store;
     with ONE Vault role that separates audit and filtering only (the one token
     reaches both), and the recommended second role
@@ -2507,8 +2512,9 @@ hiding them would repeat the failure mode we are designed to avoid.
     Entra refresh token, obtained with only `vso.pats` and `vso.pats_manage` on
     Wardyn's own sign-in app, and uses it to create one organisation-scoped PAT
     per run in that person's name, scoped to the run's capabilities, at most
-    `pat_max_hours` long (default 8, at most 168). The PAT is held in wardynd
-    memory, crosses the pinned hop to the run's proxy, and is injected there as
+    `pat_max_hours` long (default 8, at most 168). The PAT is kept sealed under the
+    run owner's key in Postgres (`ado_run_pat_state`, so every replica serves it and an
+    erasure deletes it; destroying the key leaves it undecryptable), crosses the pinned hop to the run's proxy, and is injected there as
     Basic; it is mask-registered in its raw, base64 and header forms and never
     enters the sandbox. Renewal and widening create a newer PAT and leave the
     older to its own expiry; pause and every end path revoke them all, and a
@@ -3106,6 +3112,55 @@ switch binds nobody, and boot says so. `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` set to
 admin with open egress and the operator's credential injections, and each
 recording is marked `governance_exempt` on `run.record.start`.
 
+### Four-eyes on governance writes: what it guarantees, and nine residuals
+
+`WARDYN_GOVERNANCE_SECOND_HUMAN` (off by default) holds an authority-changing write as a pending
+change until a second, distinct human with the authority to make that write approves it. The
+covered set, the exemptions and the approver table are in `docs/OPERATIONS.md` "Four-eyes on
+governance writes: a walkthrough". It is published here because of what it leaves open.
+
+**What it guarantees**, with SSO configured and the admin token held out of band:
+
+- no single human changes the effect of a covered target through the governance, permissions, access
+  or user-type API;
+- every change carries two named humans in the audit chain, a proposer and a distinct approver with
+  the authority to make the write;
+- every change applies against exactly the state the approver reviewed, or not at all.
+
+**Residuals**, stated rather than discovered:
+
+1. **The admin token is the break-glass.** Its writes and approvals are single-human, and audited as
+   `governance.change.bypass`. A deployment that wants the gate to bind holds the token out of band,
+   as for the egress switch above.
+2. **Local mode cannot enforce it.** Local mode authenticates nobody, so the proposer and the
+   approver are both client-supplied. With the switch on every covered write and every approve or
+   reject is refused `503`, and boot warns.
+3. **The database is not four-eyed.** A database writer can change the target tables directly. The
+   audit chain then shows a target row with no `propose`/`approve` pair beside it: detection, not
+   prevention.
+4. **Two authorised humans who collude defeat it,** as with any four-eyes control. Two principals with
+   one mailbox are not two humans (the comparison is principal and email), but two people are.
+5. **Each change is reviewed alone.** Two separately approved changes can compose into a widening
+   neither diff shows, for example a grant plus an enforcement flip. The diff shows the target, not
+   every person it reaches; the reach of a group assignment is the reviewer's judgment.
+6. **A single-super-admin deployment cannot approve a role-mapping change** without a second super
+   admin or the admin token.
+7. **Pending changes notify nobody.** Notifications cover approval requests, not governance changes.
+   An approver finds a change in the console's Changes tab or with `wardyn governance changes list`,
+   and a change nobody looks at expires.
+8. **Approver authority is the stamped role.** For an SSO session that is the role stamped at sign-in:
+   a person demoted only at the identity provider keeps it until the session ends. An API token's role
+   and revocation are re-read inside the approval transaction.
+9. **Governance-adjacent writes stay single-human.**
+   - `PUT /workspaces/{id}/approved-egress` and `/denied-egress`, and record-egress promotion;
+   - `/policies`, `/site-config` and `/integrations`;
+   - the approval `always` scope;
+   - user-type create and delete (a new type takes effect only through a covered role-mapping write,
+     and a type a mapping references cannot be deleted);
+   - the SCIM purge, which deletes the departed person's user-subject governance assignments and
+     capability grants directly, without a pending change: the identity provider is the single
+     authority for that write.
+
 ### Coalesced `auth.fail` rows: the peer address is not the bound
 
 Since 0.7.2 the control plane folds IDENTICAL consecutive `auth.fail` audit rows
@@ -3400,14 +3455,45 @@ residuals particular to holding:
   WHEN an armed merge lands, not WHAT it carries. Creating or updating a pull
   request so that it completes, or sets auto-complete, is refused while the run
   has push rules.
-- **The GitHub App and `git_pat` lanes have no REST door.** Their brokered
-  credentials never reach the sandbox, their broker routes admit only the three
-  smart-HTTP endpoints (`validGitRest`), `api.github.com` is denied to a
-  brokered run's egress (`confineGitBrokerEgress`), and the broker's own GitHub
-  API calls are `GET`s (`forgeRepo.get`). A `github_token` grant with no
-  repository declared is not brokered at all — the helper hands its token to
-  the sandbox, and neither the git nor the REST door is governed on it, the
-  same standing ceiling as `ssh_key`.
+- **The GitHub App lane has no REST door, and a `git_pat` lane has one only
+  when its grant sets `api: true`.** The brokered credentials never reach the
+  sandbox, their broker routes admit only the three smart-HTTP endpoints
+  (`validGitRest`), `api.github.com` is denied to a brokered run's egress
+  (`confineGitBrokerEgress`), and the broker's own GitHub API calls are `GET`s
+  (`forgeRepo.get`). A `github_token` grant with no repository declared is not
+  brokered at all — the helper hands its token to the sandbox, and neither the
+  git nor the REST door is governed on it, the same standing ceiling as
+  `ssh_key`.
+- **The `git_pat` forge API door is a closed operation table.** A grant with
+  `api: true` (GitLab and Gitea; Bitbucket Server only with
+  `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`) reaches its forge's REST API through a
+  gate on the MITM path (`patAPIAdmit`, `internal/egress/proxy/pat_api.go`),
+  beside the Azure DevOps gate. The proxy terminates only the grant's own host,
+  on 443. A request is admitted only when its effective method and path equal a
+  row of the forge's table under a repository the grant's `repos` names, and
+  every field it names, in the query string or a JSON, form-urlencoded or
+  multipart body, is one the row admits. The admitted rows are creating a merge
+  or pull request, commenting on a merge or pull request or an issue, and the
+  enumerated reads of a repository's own data. The gate runs before the PAT is
+  minted and before anything is sent upstream, and the PAT is never an injection
+  rule, so a refused request spends neither: an approval-gated single-use grant
+  keeps its one mint. It refuses merge and auto-merge, writes to repository
+  files and commits (they bypass the receive-pack content and branch checks),
+  GraphQL and search, project metadata, variables, hooks, keys, tokens, members
+  and exports, a numeric project id, a body or query field that names a project
+  (`target_project_id` and the like), a cross-repository head, a method override
+  that names another method than the request line, an encoded body, a body it
+  cannot parse or read whole, and any request on the plain forward lane. What
+  remains: the PAT is exactly as broad as its issuer made it everywhere outside
+  Wardyn; `repos` narrows which repositories, not which branches; a created
+  merge or pull request is not a merge, but a human or the forge's own
+  auto-merge setting may merge it; GitLab runs a slash command at the start of a
+  comment line, so a line that starts with "/" is refused rather than
+  inspected; a request form a table does not list is refused, so a route a forge
+  adds later is outside the table until someone adds it; a policy that also
+  allows the forge host directly reaches it without the PAT, as for every
+  brokered lane; and the host must be allowed in the run's egress domains for
+  the tunnel to open at all.
 
 ### Hold-lane settings sources and managed permission rules
 

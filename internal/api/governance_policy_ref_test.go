@@ -152,7 +152,7 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 
 	t.Run("an operator is never bound, so never refused with a policy", func(t *testing.T) {
 		srv, _, _ := govEscapeFixture(t, assignedStore(taggedProfile(name, tag, types.GovernanceLimits{DenyInteractive: true})))
-		if got := (governanceCeiling{Operator: true, Profile: hold}).policyRef(); got != nil {
+		if got := (governanceCeiling{Operator: true, Profile: &ResolvedProfile{Name: hold.Name}}).policyRef(); got != nil {
 			t.Errorf("operator policyRef = %+v, want nil", got)
 		}
 		if got := srv.ceilingPolicy(context.Background(), governanceCeiling{Operator: true}); got != nil {
@@ -165,7 +165,7 @@ func TestCeilingRefusalsNameThePolicy(t *testing.T) {
 // ceiling it is handed rather than from POST /runs.
 func TestDriveDoorNamesThePolicy(t *testing.T) {
 	p := taggedProfile("contractors", "alpha", types.GovernanceLimits{DenyUserDrive: true})
-	ceiling := governanceCeiling{Profile: p, Limits: p.Limits}
+	ceiling := governanceCeiling{Profile: resolvedOf(p), Limits: p.Limits}
 	srv, _ := driveRunServer(&driveStore{}, "docker")
 	_, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), ceiling, driveMemberCtx([]string{"eng"}, false))
 	if ok || w.Code != http.StatusForbidden {
@@ -261,7 +261,7 @@ func TestRecordAndProviderSignInNameThePolicy(t *testing.T) {
 	prof.Limits.DenyInteractive = true
 
 	t.Run("the error keeps its sentinel and its bytes", func(t *testing.T) {
-		inner := &types.GovernanceProfile{Name: "p"}
+		inner := &ResolvedProfile{Name: "p"}
 		err := recordCeilingError{err: errRecordCeilingLimit, ref: profilePolicyRef(inner)}
 		if !strings.Contains(err.Error(), errRecordCeilingLimit.Error()) || err.Error() != errRecordCeilingLimit.Error() {
 			t.Errorf("Error() = %q, want the wrapped value's own text", err.Error())

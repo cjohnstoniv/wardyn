@@ -15,6 +15,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { createOutputFlow } from "./attach-terminal-flow";
 import { decideKey } from "./attach-terminal-keys";
 import { terminalLinkHandlers } from "./attach-terminal-links";
 import { exposeTerminalForE2E } from "./attach-terminal-e2e-seam";
@@ -349,6 +350,9 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       // A new connection starts with no writer standing and no offer.
       writerWs = null;
       copyGate.reset();
+      const outFlow = createOutputFlow(term, (type) => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type }));
+      });
 
       // Arm the deadline for THIS attempt. Closing a socket still in CONNECTING
       // fires onclose with an abnormal code — the one path that already knows
@@ -396,7 +400,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       ws.onmessage = (ev) => {
         if (ev.data instanceof ArrayBuffer) {
           const bytes = new Uint8Array(ev.data);
-          term.write(bytes);
+          outFlow.write(bytes);
           // Mirror the decoded text to the optional observer (token detection).
           const cb = onOutputRef.current;
           if (cb) cb(outDecoder.decode(bytes, { stream: true }));

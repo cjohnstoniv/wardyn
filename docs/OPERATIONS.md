@@ -11,7 +11,7 @@ corporate-network sections are written against
 state — see [Kubernetes: day-2](#kubernetes-day-2) for the chart's own backup,
 restore, upgrade and key-persistence commands.
 "[Multi-user: who can change what](#multi-user-who-can-change-what)" and
-"[One replica, by construction](#one-replica-by-construction)" apply to both
+"[High availability](#high-availability)" apply to both
 substrates identically: authorization and the per-process constraints live in
 `internal/api`, above the runner seam.
 
@@ -40,7 +40,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Renamed in 0.8](#renamed-in-08)
 - [Upgrades](#upgrades)
 - [Kubernetes: day-2](#kubernetes-day-2)
-- [One replica, by construction](#one-replica-by-construction)
+- [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md)
 - Task pages under [`docs/operations/`](operations/): [Managed laptops: hybrid enrolment](operations/hybrid-laptops.md), [Launch presets](operations/launch-presets.md), [Console branding](operations/console-branding.md)
 
@@ -89,26 +89,133 @@ transient — regenerated on start.
 ### Run output
 
 wardynd keeps the last `WARDYN_RUN_OUTPUT_TAIL_BYTES` (default 64 KiB, between
-1 KiB and 1 MiB) of every non-interactive run's combined stdout/stderr in
-memory, so a caller can read the end of a headless run with
+1 KiB and 1 MiB) of every non-interactive run's combined stdout/stderr, in
+memory while the run lives and in Postgres once it ends, so a caller can read
+the end of a headless run, during it and after a restart, with
 `GET /api/v1/runs/{id}/output?tail=<bytes>` — the run's owner or an admin; anyone
-else gets the same `404` as `GET /runs/{id}`. Interactive runs keep none, and
-neither does the managed-harness sign-in run, whose output is a live credential.
+else gets the same `404` as `GET /runs/{id}`. An interactive run keeps no
+output of its own (its terminal is the recording's), only the pane snapshot
+below when Wardyn stops it gracefully; the managed-harness sign-in run keeps
+nothing at all, because its output is a live credential.
 
-- **It is not a recording, and not stored.** It lives outside the recording
-  store and works with `WARDYN_RECORDING_STORE=off`; nothing reaches Postgres or
-  a backup, and a wardynd restart drops every tail. It is dropped
-  `WARDYN_EXEC_OUTPUT_TAIL_TTL` (default `24h`) after the run's last output.
-- **Memory bound.** A tail is held from a run's first output until
-  `WARDYN_EXEC_OUTPUT_TAIL_TTL` after its last, finished runs included, so
-  memory is at most (runs that printed within the TTL) × `WARDYN_RUN_OUTPUT_TAIL_BYTES`:
-  2,000 runs a day at 1 MiB is about 2 GiB. Size the variable against that.
+- **It is not a recording, and it is stored.** It lives outside the recording
+  store and works with `WARDYN_RECORDING_STORE=off`. With
+  `WARDYN_RUN_OUTPUT_PERSIST` on (the default) the final tail of each run is
+  written once, masked, to the `run_outputs` table when the run ends, so it
+  **is in Postgres and in its backups** for `WARDYN_RUN_OUTPUT_RETENTION_DAYS`
+  (default `30`; `0` keeps it forever) and any replica serves it, with or
+  without a restart. An hourly sweeper on the elected leader deletes rows past
+  the window, and a run whose output was erased (below) answers
+  `404 run_output_erased`. A deployment that turned recordings off so terminals
+  are not kept should decide on these two settings too.
+- **Another replica's live tail.** With persistence on, a replica that holds no
+  tail for a live run answers the read from `run_output_chunks`, where the
+  dispatching replica keeps what its masker has passed (`complete` is false).
+- **One finalisation for every way a run ends.** Completion, failure, a kill,
+  an idle stop, a lease end, a probe reclaim, boot reconciliation and a failed
+  dispatch all end in the same step: wait up to 5 seconds for the runner's copy
+  of the output to reach its end (the process exiting is not the end of its
+  output), release the bytes the masker was holding back as a possible secret
+  prefix, seal the tail, and write the row. A byte that arrives after that is
+  dropped. The row says what it is: `complete` is true only for a final capture,
+  `incomplete` when the wait ran out, a copy failed or a byte was dropped, and
+  `capture_gap` when this process held no tail (for example a run adopted after
+  a restart) and could not read the output back from the substrate, so there are
+  no bytes to keep. A write that fails is retried with
+  capped backoff, the bytes held in memory, and audited as `run.output.finalize`;
+  a clean capture writes no audit row.
+- **A pane snapshot for an interactive run Wardyn stops.** When Wardyn itself
+  stops an interactive run's sandbox into STOPPED (the idle stop, the
+  `WARDYN_RUN_MAX_AGE` stop, or a lease end), it first revokes the run's
+  credentials, then reads the whole scrollback of the run's `wardyn` tmux
+  session as plain text (`tmux capture-pane -p -J -S -`, no escape sequences),
+  keeps the last `WARDYN_RUN_OUTPUT_TAIL_BYTES` of it, masked the way a
+  recording is, and stores it as a `source: "pane_snapshot"` row. It is bounded
+  to 3 seconds: a pane that never finishes, a sandbox with no tmux or no
+  session, or a failed read leaves no row and the stop goes on. Each attempt is
+  audited as `run.output.snapshot` (the outcome and the byte count, never the
+  text). A kill, a failed or reconciled run, and a deployment with persistence
+  off take none. **The pane is text the sandbox controls:** the sandbox runs as
+  the tmux server's user and can make the pane, or `tmux` itself, print
+  anything, so the snapshot shows what the sandbox chose to show. It is stored
+  as bytes and meant to be shown as plain text, never interpreted. A snapshot is
+  a person's last terminal screen, so it is read on the recording's rule: the
+  run's owner or a super admin gets it; a security admin gets
+  `409 run_output_interactive`, the answer for a run with no snapshot, and the
+  refusal is audited.
+- **From the CLI.** `wardyn run output <run-id> [--tail N] [--json] [--raw]`
+  reads the same endpoint, so a person without console access can read a run's
+  kept output. Piped, it writes the bytes exactly as returned, with no added
+  newline. On a terminal it prints ESC and other control characters as escapes
+  (such as `\x1b`) unless `--raw` is given, and always for a `pane_snapshot`,
+  because a run controls this text. A one-line note on stderr says when the row
+  is truncated, incomplete, a capture gap, a pane snapshot, or masked against
+  global secrets only; a refusal exits non-zero and names its `run_output_*`
+  reason.
+- **A restart.** A run that was live across a wardynd restart, or that another
+  replica adopted, has its output read back from the substrate when that is
+  possible and safe, and ends with a `capture_gap` row when it is not. wardynd
+  never re-runs the agent to get it. The two substrates differ:
+  - **Kubernetes** keeps the agent container's log for as long as the pod
+    lives, so the new process re-reads it from its first byte into a fresh
+    tail, and a run adopted while still running resumes following it. The run
+    keeps all of its output: before the restart, during the handoff and after.
+  - **Docker** keeps a log only for an exec-less agent (a krun microVM), which
+    is re-read the same way. An exec agent's terminal is a hijacked stream that
+    dockerd does not log and that cannot be re-attached after the process that
+    held it died, so the run ends with a `capture_gap` row.
+  - A sandbox that is already gone, and a runner that cannot read output back,
+    also give a `capture_gap` row.
+  - **A run with no complete masking manifest gets a capture gap, and nothing
+    is read.** That is every run with no manifest (a run dispatched before
+    0.8.6, including runs that are alive across the upgrade) and any whose
+    manifest is incomplete: the log holds the secrets the run was dispatched
+    with, and a process that cannot prove its masking registry holds them would
+    persist them verbatim. The check is made before the substrate is touched,
+    by any replica, without the watcher lease. A recovery that loses its
+    coverage part-way ends as a capture gap too, so a recovered row is never
+    masked by the process-wide corpus alone.
+  - **The read is bounded** to 10 seconds, inside the finalisation's own
+    timeout and after the credential revoke cascade, so a sandbox that writes an
+    endless log cannot delay boot or a run's teardown: the row is written
+    `incomplete`, with what was read.
+  - The hourly sweeper resolves a terminal run's pending row, once its claim is
+    five minutes old, the same way: by recovery under the same rules, or to a
+    `capture_gap` row.
+
+  Runs that finished before the upgrade have no row and read
+  `409 run_output_not_kept`.
+- **Settings.** `WARDYN_EXEC_OUTPUT_TAIL=off` collects nothing and refuses
+  stored rows too (`409 run_output_off`); the sweeper still deletes them.
+  `WARDYN_RUN_OUTPUT_PERSIST=off` keeps the tail in memory only, expired
+  `WARDYN_EXEC_OUTPUT_TAIL_TTL` (default `24h`) after the run's last output,
+  writes nothing to Postgres, and still serves rows stored earlier until the
+  sweeper deletes them. The sweep is the `run_output` row of
+  [monitoring](operations/monitoring.md).
+- **Storage.** About `WARDYN_RUN_OUTPUT_TAIL_BYTES` × (runs per day) × retention
+  days at most: 2,000 runs a day at the default size and 30 days is about
+  3.7 GiB of table, before indexes.
+- **Memory bound.** With persistence on, a tail is held from a run's first
+  output until its row commits, never expired by the TTL, so memory is at most
+  (live and kept non-interactive runs) × `WARDYN_RUN_OUTPUT_TAIL_BYTES`: 500
+  runs at 1 MiB is about 500 MiB. With persistence off a tail is held until
+  `WARDYN_EXEC_OUTPUT_TAIL_TTL` after its last output, finished runs included, so
+  memory is at most (runs that printed within the TTL) × the tail size: 2,000
+  runs a day at 1 MiB is about 2 GiB. Size the variable against the mode you run.
 - **It can hold secrets, like any log.** Values already in Wardyn's masking registry
   (brokered credentials, `env_secret` grants) are masked as they are written,
   the same way a recording is. Anything else a command prints — a token it read
   from a file, a secret a person pasted into the task — is kept verbatim and
-  served to whoever may read the run. A harness that prints a token it read from
-  a file therefore keeps that token in memory for the run's readers.
+  served to whoever may read the run, and now persisted for the retention
+  window. A harness that prints a token it read from a file therefore keeps that
+  token for the run's readers.
+- **Erasure.** `EraseRunOutputs` deletes a run's rows and writes a tombstone in
+  one transaction (nothing at all if it fails). Every write and read of a run's
+  output checks the tombstone in its own transaction, so no replica recreates or
+  serves an erased run's output, and a replica still holding the run's tail in
+  memory drops and zeroes it the next time it touches the run. Bytes already in
+  a database backup stay there until it ages out. `DELETE /people/{principal}/credentials`
+  erases credentials only and does not call it.
 - **The off switch** is `WARDYN_EXEC_OUTPUT_TAIL=off`. Turning recordings off
   does not turn this off; a deployment that disables recordings so terminals are
   not kept should decide on this one too.
@@ -376,7 +483,7 @@ not dropped: it is fsync'd, one JSON line at a time, to a local append-only spoo
 `internal/api/auditspool.go`), and a background drain replays it into Postgres
 once the store recovers. The spool is per-process by design: the fallback for one
 pod's failed write, each `wardynd` draining its own back on recovery (see
-[One replica, by construction](#one-replica-by-construction)).
+[High availability](#high-availability)).
 
 **What the drain does not restore: the off-box hash series.** The chain hashes
 are filled by the Postgres write itself (`RETURNING`, `store.InsertAuditEvent`),
@@ -738,8 +845,9 @@ package cannot see, not a defect to boot-refuse over (`internal/db/db.go`).
 
 ### Retention, erasure and GDPR — a residual, not a solved problem
 
-The append-only guarantee above is unconditional: no time window, size cap, or
-admin-invoked delete path anywhere in `audit_events`. A deliberate integrity
+The append-only guarantee above has one exception since 0.8.6: an attested, digest-checked drop of the oldest
+closed monthly partition past a retention window you set ([Audit retention](#audit-retention-the-attested-partition-drop)).
+Nothing else deletes an audit row: no size cap, no per-row, per-actor or per-run delete. A deliberate integrity
 choice, but it means **retention is forever by default and there is no erasure
 lever today**. Concretely:
 
@@ -793,9 +901,249 @@ stored PTY casts, defaulting to keep-forever but operator-settable, and each swe
 that removes anything emits its own `recording.retention.sweep` audit event. Under
 a "right to erasure" obligation on data an audit row could contain, the honest
 answer is: **you cannot selectively erase it, and the fix that exists for
-recordings does not exist here.** A time-partitioned audit table with an attested,
-operator-invoked partition-drop (or crypto-shredding) is the shape of a real fix;
-nothing in that direction is built.
+recordings does not exist here.** The partition drop (0.8.6) is the retention half of the real
+fix, and it removes whole months, never one person's rows. The crypto-shredding half, which makes one person's
+fields unreadable while the chain still verifies, is [below](#erasing-a-person), for the rows written after
+`WARDYN_AUDIT_SEAL=fields` is on.
+
+### Audit retention: the attested partition drop
+
+Since 0.8.6 the audit log is a monthly-partitioned table, and the oldest closed partition can be removed once it is
+older than a retention window, through one database function that leaves evidence. Retention is **off by default**
+(`WARDYN_AUDIT_RETENTION_DAYS` is `0`, keep forever) and nothing is dropped unless an operator drops it or you turn on
+the unattested autodrop.
+
+**The policy.** `WARDYN_AUDIT_RETENTION_DAYS` is recorded at every boot through the database function
+`audit_retention_set_policy`; the app role has no write privilege on the table that holds it. The database decides what
+takes effect when, from its own clock:
+
+- an **increase** (a longer window, or any window to `0`, forever) applies at once;
+- a **decrease** (a shorter window, and `0` to any finite value) takes effect **30 days after the boot that first saw
+  it**. The pending value and its date are stored, so a restart never moves the date, and setting the same value at
+  every boot for 29 days leaves it where it was. Restating the current value withdraws a pending decrease.
+- the boot that records a change writes an `audit.retention.set` audit row.
+
+Set the same value on every replica. `GET /audit/retention` (`wardyn audit retention`) shows the effective and the
+pending policy.
+
+**What a drop checks.** `audit_retention_drop(partition, digest, actor)` removes a partition only if it is the oldest
+retained one, is closed (nothing can be appended to it any more), is past the effective window, and holds no row of a
+run that is still live (a `PENDING`, `STARTING`, `RUNNING` or `WAITING_FOR_CONFIRMATION` run: revocation reads its
+`credential.mint` rows, and its provenance is its own audit trail). It then recomputes the partition's digest and
+refuses unless it equals the one you supplied. In one transaction it then writes the chained
+`audit.retention.partition_dropped` event, the `audit_chain_anchors` row (partition, `seq` range, row count, digest, the
+dropped tail's last `row_hash`, who dropped it, and the event's `seq`), takes the partition out of the expected manifest, and detaches and
+drops it. A crash leaves all of it or none. The scan of the partition runs before the chain lock is taken, so audit writers wait only for the drop itself; the detach needs a brief exclusive lock on the audit table and waits at most 5 seconds for it, so a long audit read (or a running chain verify) can make a drop fail with `audit_retention_drop_failed` and nothing changed: retry. `GET /audit/chain/verify` then starts from that anchor and still
+re-hashes every retained row; a partition removed any other way fails verify.
+
+**Runbook: export, check, drop.**
+
+```bash
+wardyn audit retention                                              # which partition is the oldest, and is it droppable now
+wardyn audit export-partition audit_events_p202601 --raw -o p.ndjson   # the archive: keep it where your records policy says
+tail -n1 p.ndjson                                                   # the footer: its digest
+# check the archive (see "Verifying an exported audit partition by hand", above): recompute every row hash and the fold
+wardyn audit retention drop audit_events_p202601 --digest <digest from the footer>
+curl -fsS -H "Authorization: Bearer $WARDYN_TOKEN" "$WARDYN_URL/api/v1/audit/chain/verify"   # ok, with anchor_seq at the drop
+```
+
+`POST /audit/retention/drop` takes `{"partition": "...", "digest": "..."}`. Who may drop (owner decision Q-AR1, accepted at
+the recommended default): one `security_admin` (or an admin) acting alone, with the 30-day cooldown on decreases as the
+brake. The route is on the security tier, and every refusal is a `409` with its own `reason` and an `authz.denied` row (below):
+`audit_retention_not_oldest`, `audit_retention_not_closed`, `audit_retention_inside_window` (also while retention is
+forever), `audit_retention_live_run`, `audit_retention_digest_mismatch`. An unknown partition is `404`
+(`audit_partition_not_found`). `GET /audit/retention` lists every partition with its row count, state (`closed`, `open`
+or `future`) and whether a drop would take it now; for one it would refuse, `refusal` is the reason it would refuse with.
+The two answers are the same function's, so they cannot disagree. The row counts are exact (a scan of each partition), so
+the status call costs as much as the largest partition.
+
+**Pre-0.8.6 history** sits in one legacy partition that ends at the upgrade. It becomes droppable once the upgrade itself is older than
+the window, and it is dropped whole; `wardynd -audit-split-legacy` splits it into ranges that drop one at a time (see "Split the pre-0.8.6 audit history", below). An empty partition drops too and records a row count of `0`; verify anchors on the newest drop that removed rows.
+
+**Autodrop (`WARDYN_AUDIT_RETENTION_AUTODROP`, off by default).** With it on, the sweeper leader drops each eligible oldest partition
+itself, as the system actor (`wardynd`), computing the digest in the database. It is **unattested**: nobody checked an
+export first, and the event says `attested: false`. It still writes the chained event and the anchor and verify still
+passes, and it obeys every rule above: nothing inside the window, nothing holding a live run's rows, nothing while the
+flag is off. Turn it on only if your records schedule does not require an exported archive.
+
+**Keeping months ahead.** `audit_ensure_partitions(12)` runs at every boot, before the listener, and daily on the sweeper
+leader (so with several replicas exactly one runs it). An audit write into a month with no partition fails and waits in
+the spool until one exists, so `wardyn_audit_partitions_ahead` (months past the current one that have a partition) is
+exported on `/metrics`, and `/setup/status` carries an `audit_partitions` warning below 3. A warning that stays means the leader sweeper is not
+running or cannot reach the database.
+
+**Privileges.** `audit_retention_drop`, `audit_retention_set_policy` and the two read helpers are owned by the migrator, run as it, and are granted
+to the roles that can `EXECUTE` `audit_append` (a role added later needs the same grant: see the upgrade note), never to `PUBLIC`.
+A role with nothing but `CONNECT` gets `permission denied for function`, and the app role gets `permission denied` on a direct `UPDATE`
+of the policy or an `INSERT` into the anchors. Boot reports any `PUBLIC` `EXECUTE` on them next to the audit-function posture line.
+
+#### Split the pre-0.8.6 audit history
+
+All the history from before the upgrade sits in one partition, `audit_events_legacy`, so by default none of it can be dropped
+until the upgrade itself is older than the window. `wardynd -audit-split-legacy` splits it into one range per month of the
+rows' own time, each of which ordinary retention drops on its own schedule. It is one-way and offline: **take a dump first.**
+
+```sh
+# 1. Dump the database (pg_dump, or your platform's snapshot). The tool drops the legacy table once its copies are proved.
+# 2. Stop every writer: scale the Deployment to zero. The chart's Recreate strategy does this on an upgrade; a manual run needs it.
+kubectl -n wardyn scale deploy/wardyn --replicas=0
+# 3. Run it once from the same image, on the migrator's DSN (WARDYN_PG_MIGRATE_DSN when you split roles).
+wardynd -audit-split-legacy
+# 4. Scale back up, then check the chain and the ranges.
+curl -fsS -H "Authorization: Bearer $WARDYN_TOKEN" "$WARDYN_URL/api/v1/audit/chain/verify"
+wardyn audit retention                                              # the legacy ranges, oldest first, with the same eligibility as any partition
+```
+
+It refuses, exiting `3` and naming the reason, and changes nothing, in these cases: another session holds the single-instance
+lock (it names the holder); any other client is connected to the database, lock or no lock (a replica started with
+`WARDYN_HA` never takes the lock); the connected role does not own the audit tables (`audit_split_not_migrator`:
+the app role cannot attach a partition or write an anchor, and the tool never falls back to another connection); the log is
+not partitioned yet (`audit_split_not_partitioned`: run `-migrate-only` first); there is no legacy partition left
+(`audit_split_no_legacy_partition`: it was already split or dropped) or it is empty; the chain does not verify before the
+split (`audit_split_chain_broken`: fix that first); or a table named for a range already exists. It exits `1` when the split
+fails, and then the log is exactly as it was: the whole split is one transaction. The time bound is `WARDYN_MIGRATE_TIMEOUT`
+(default 5 minutes); raise it for a large log, as the split copies every legacy row once and builds its indexes.
+
+**How the ranges are chosen.** A range is not a month of `time`. A spool replay writes an old `time` late, so a month cut by
+`time` would be scattered through the chain and dropping it would remove interior links. Instead the tool walks the rows in
+`seq` order, keeps the running maximum of `time`, and starts a new range where that maximum first crosses into a new UTC
+month. Each row's new `recorded_at` is the running maximum, never later than the instant before the upgrade, so every range
+is an unbroken run of `seq`, the ranges are in order, and each range's largest `recorded_at` is the largest `time` it holds,
+which is what its retention eligibility reads. `row_hash` does not cover `recorded_at`, so no hash changes. The ranges are
+named `audit_events_legacy_<YYYYMM>` and written to the expected partition manifest, with one `kind='split'` anchor each (its
+row count, `seq` range and digest).
+
+**What it proves before it commits.** For every range, the digest `audit_partition_digest` computes over the copy equals the
+fold over the source rows, and every column but `recorded_at` matches the source row for row; then the legacy table is
+dropped and the chain is verified again inside the same transaction, and it must inspect exactly the rows it inspected
+before (the same checked and legacy counts). Matching digests prove the copy; contiguity in `seq` order is what makes a range
+safe to remove, and the tool checks it as well. Afterwards the oldest range drops through `audit_retention_drop` like any
+partition, and verify then starts from that drop's anchor.
+
+### Erasing a person
+
+`POST /api/v1/people/{principal}/erasure` (security tier; `wardyn person erase`)
+erases one person's retained records by explicit scope, in one audited act
+(`person.erasure`). The body names the scopes, a non-empty list of:
+
+| Scope | What it erases |
+|---|---|
+| `credentials` | the person's stored credentials and the key they sit under (the same erase as `DELETE /people/{principal}/credentials`, which erases credentials only and nothing else) |
+| `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
+| `run_tasks` | the task text of the runs the person created |
+| `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
+| `recordings` | their session recordings. Opt-in: nothing deletes a recording unless this scope is asked for |
+| `mask_copies` | the masking manifests of those runs, after their live attaches, SSH shells and relays are fenced |
+
+The scopes run in the order above whatever order the body lists them: the person's live
+consumers are fenced first, the data they could still reach next, the keys last. Every scope is
+idempotent. A scope that fails stops the run: the answer is `500` `erasure_incomplete` with `done` and
+`remaining`, the `person.erasure` row records a `failure` naming each scope's outcome, and a retry with the
+same scopes finishes the rest. Erasure is reported complete (`200`, `outcome` success) only when every scope
+asked for finished.
+
+Refusals, all before anything is erased: the operator namespace (`erasure_operator_namespace`), an unknown or
+empty `scopes` (`erasure_scope_unknown`), a principal that does not resolve (`owner_unresolved`,
+`owner_ambiguous`), and the person being the caller for any scope but `credentials`
+(`erasure_self_refused`; the admin token, which is no person, may erase anyone, and is audited as every
+other bypass is).
+
+**What this does not reach.** Rows written before `WARDYN_AUDIT_SEAL=fields` was turned on, and before 0.8.6,
+are plaintext: no key covers them. A SIEM sink holds ciphertext for a sealed field, so after
+`audit_personal_fields` it holds nothing readable either; its copies of the clear `actor` and `source_ip`
+columns are outside this scope, except the `actor` of rows written under `WARDYN_AUDIT_SEAL=full`, which is a
+subject id and reads `[erased]` after the erasure. Before turning `full` on, change any SIEM rule keyed on
+`actor`: from that moment it sees `subject:<uuid>` for a person, and the setting applies only to rows written
+after it is on. A backup restores the wrapped key and so the field until the backup expires or
+the wrapping key version is retired. A row waiting in an audit spool under the pending key when the person is
+erased is stored as `[erased]` when the spool drains. See [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#sealed-fields) for
+which fields are sealed and why the rest stay clear.
+
+### Leavers and SCIM
+
+An identity provider can tell Wardyn that a person has left. Wardyn runs a SCIM 2.0 endpoint whose only job is to
+**remove access**: it suspends a person (sessions cut, API tokens revoked, SSH keys deleted, every live run killed,
+sign-in refused on every replica) and, later or at once, purges them (stored credentials erased, workspaces
+handed to the operator, user grants deleted). SCIM never grants anything: a user or group created over SCIM is
+stored and gives no access, and roles still come from the sign-in token and the role map. It is off until
+`WARDYN_SCIM_TOKEN` is set, and it mounts only on a single-tenant, commercial-cloud Entra issuer.
+
+| Provisioning event | What Wardyn does |
+|---|---|
+| `PATCH` with `active` false (or `POST` with `active` false) | **Suspend.** The answer is 5xx until every step is confirmed, so the identity provider retries; a restart or a failed teardown resumes the pending steps, including a run already `KILLED` whose teardown failed |
+| `PATCH` with `active` true | **Reactivate.** Clears the deactivation and the purge schedule and nothing else: no token, key, run or old session comes back, and the person signs in again |
+| `DELETE /Users/{id}` | **Purge now**, 204 once every step is done. Suspends first if the person is not already suspended |
+| A suspended person past `WARDYN_SCIM_PURGE_AFTER` | **Purge**, by the sweeper on the elected sweeper leader; it also finishes any suspension or purge whose identity provider stopped retrying |
+
+#### Turn it on
+
+1. Put a bearer of at least 32 bytes (`openssl rand -hex 32`) in a Secret under `scim-token`.
+2. On the chart, set `scim.enabled=true` and `scim.tokenSecretRef=<that Secret's name>`; elsewhere set
+   `WARDYN_SCIM_TOKEN` (or `WARDYN_SCIM_TOKEN_FILE`). Wardynd refuses to boot without OIDC on a
+   single-tenant issuer of the form `https://login.microsoftonline.com/<tenant id>/v2.0`, without TLS (its own,
+   or `WARDYN_TLS_TERMINATED` behind your proxy), or with a token that is short, equal to its rotation twin or
+   equal to the admin token.
+3. In the identity provider's provisioning job, set the tenant URL to `https://<your host><base path>/scim/v2`
+   and the secret token to the bearer.
+4. Map Entra's `objectId` to SCIM `externalId`. Wardyn matches a leaver by that object id first, then by the
+   `entra:<tenant id>:<object id>` person, and uses an email only to widen a removal; without `externalId`
+   a suspension can miss the person. `userName` and `emails` may change (renames are accepted as a projection
+   update and the old values are kept as removal aliases); `externalId` may not change on a bound identity.
+5. Check a test user: suspend them from the provisioning job, then confirm a `scim.user.deactivate` row and a
+   `person.deprovision` row in the audit log ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
+
+#### What a purge removes
+
+| Step | What it does |
+|---|---|
+| Suspend | Completed first, if it is not already |
+| Erase | The person's stored credentials and the masking copies of them, through the same erasure entry point as `POST /people/{principal}/erasure`, with the `credentials` and `mask_copies` scopes. Audit fields, run tasks, run outputs and recordings are not part of a purge: records retention usually outlives the leaver window, so erasing them stays a deliberate `POST /people/{principal}/erasure` |
+| Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, audited as `workspace.reassign`; `keep` leaves them |
+| Grants | The person's user-subject capability grants and governance assignments are deleted by a direct store call, audited in `person.deprovision`, never through the governance apply path. This deletes deny rows, which the governed path would treat as widening; it is safe only because the identity is a permanent tombstone whose subject can never authenticate again |
+| Drives | Listed by name in `person.deprovision`, never reclaimed. Reclaim storage with the steps in "Reclaiming a departed person's storage" |
+
+The identity row stays as a tombstone with `purged_at` set. `PATCH active=true` on it is a 400 `invalidValue`
+(a denied `scim.user.write` row with reason `purged`), and the sign-in gate refuses it. A re-hired person needs a
+new identity, which means a new object id.
+
+#### Rotating the token
+
+1. Set `WARDYN_SCIM_TOKEN_NEXT` (the chart's `scim-token-next` key) to a new value and restart.
+2. Point the identity provider at the new value.
+3. Move the new value to `WARDYN_SCIM_TOKEN`, unset `WARDYN_SCIM_TOKEN_NEXT`, restart.
+
+Either value is accepted in between, and each audit row names which slot matched, never the bearer.
+
+#### An urgent leaver
+
+Removal is as fast as the identity provider's provisioning cycle, which can be many minutes. For someone who must
+lose access now, do not wait for it:
+
+| Need | Use |
+|---|---|
+| End their console sessions and revoke their API tokens | `POST /api/v1/sessions/revoke` or `wardyn session revoke` with their subject or email. Both are wired by default whenever OIDC is |
+| A person with no sign-in since the upgrade and no API token | The session cutoff is all that reaches them; their runs need `POST /api/v1/runs/{id}/kill` until they sign in once, which gives them an identity row the suspension can find |
+| Their stored credentials | `POST /api/v1/people/{principal}/erasure` with the `credentials` scope |
+
+#### What this does not cover
+
+- **A stolen SCIM token is a deprovisioning weapon.** It can suspend everyone, and a `DELETE` erases credentials
+  at once; the purge delay does not apply to `DELETE`. HTTPS only, per-replica rate limiting, an audit row per
+  write and rotation without downtime are the mitigations. Rate limits are per replica, so an HA install's
+  effective limit is the per-replica limit times the replica count.
+- **Email recycling.** Email aliases widen removals, so an address reused by a new holder can have that holder's
+  sessions cut by the old holder's suspension. A cutoff only forces a new sign-in; deactivation never follows an
+  email.
+- **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
+  again.
+- **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
+  console streams end at their next authentication check or reconnect.
+- **A database writer** can clear `deactivated_at`, as it could any other row. The authority epoch only rises, so
+  clearing it does not revive a credential minted before the suspension.
+- **Other identity providers.** Non-Entra, multi-tenant and sovereign-cloud Entra issuers get no SCIM routes
+  (boot refuses a SCIM token on them), but every sign-in on any issuer still passes the deactivation gate.
+- **Audit rows written before 0.8.6** stay plaintext and are not reached by a purge; only retention or the
+  legacy split removes them ([Erasing a person](#erasing-a-person)).
 
 ## Monitoring
 
@@ -825,14 +1173,16 @@ never a URL, secret or token.
     {"id": "sec-hook", "type": "webhook", "url": "https://hooks.example.com/wardyn",
      "hmac_secret": "<shared secret>", "bearer_token": "<optional>"},
     {"id": "sec-teams", "type": "teams", "url": "<Teams Workflows trigger URL>"},
-    {"id": "sec-slack", "type": "slack", "url": "<Slack incoming-webhook URL>", "redact_requester": true}
+    {"id": "sec-slack", "type": "slack", "url": "<Slack incoming-webhook URL>", "redact_requester": true},
+    {"id": "mail", "type": "smtp", "host": "smtp.example.com", "port": 587, "from": "wardyn@example.com",
+     "to": ["secops@example.com"], "username": "<optional>", "password": "<optional>"}
   ]
 }
 ```
 
 - `id` is `[a-z0-9_-]{1,32}`, unique. It is the metric label and what the outbox stores; rotating a URL
   under the same `id` keeps pending rows deliverable.
-- `type` must be one this build implements: `webhook`, `teams` or `slack`. Any other value refuses boot.
+- `type` must be one this build implements: `webhook`, `teams`, `slack` or `smtp`. Any other value refuses boot.
 - `redact_requester` (optional, per channel, default false) leaves the run owner's principal and email out of that channel's messages, whatever its type.
 - HTTPS is required when `hmac_secret` or `bearer_token` is set or the URL carries userinfo or a query.
   Plain HTTP with none of those is allowed for a `webhook`. A `teams` or `slack` URL is itself the
@@ -872,6 +1222,21 @@ bytes and masked, then made inert: Slack carries it in `plain_text` objects only
 escapes `&`, `<`, `>` and every Markdown character. Any 2xx answer is success and the reply body is never
 read (a Teams workflow may answer 202 with none). `hmac_secret` and `bearer_token` are webhook options;
 these two types are not signed.
+
+**SMTP mail.** An `smtp` channel takes `host`, `port`, `from`, an optional static `to` (a list of
+addresses) and optional `username` and `password`, which are set together; it takes no `url`. It sends a
+plain-text message, `Subject: [Wardyn] ` plus the same title as above, with the same allowlisted lines as
+the chat bodies and nothing else. It sends over **verified STARTTLS only**: wardynd refuses a relay that
+does not advertise STARTTLS (`starttls_missing`), verifies the certificate against the system roots plus
+`WARDYN_TRUSTED_CA_FILE` with the server name set to `host` (`tls_verify`), and authenticates (`AUTH
+PLAIN`) only after that. There is no plaintext fallback and no option to skip verification, and
+implicit TLS (port 465) is not supported: use the submission port, usually 587. Recipients are the static
+`to` plus each `notify` target of the tier (see below); every address is re-checked at send time and one
+that is not a single bare mailbox (a display name, a list, a CR, LF, comma, semicolon, angle bracket or
+space, or over 254 bytes) is skipped and never written to a header or the envelope. With no recipient
+left the row is dead as `no_recipient` and the relay is not contacted. The `password` has the same
+custody as a SIEM bearer token: keep the value in `WARDYN_APPROVAL_NOTIFY_FILE`. Boot refuses a CR or LF
+in any smtp field and an address that is not a bare mailbox.
 
 **Verifying the signature.** `X-Wardyn-Signature: t=<unix seconds>,v1=<hex>`, where `v1` is the
 HMAC-SHA256 of `<t>.<body>` (the timestamp, a dot, the exact bytes received) keyed with `hmac_secret`.
@@ -919,7 +1284,8 @@ drops duplicates on `delivery_id`. A row that is retried keeps its `delivery_id`
 a redirect would hand the body and signature to a host you did not name), or when still unsent an hour
 after it came due. A dead row writes one `approval.notify.failed` audit row and increments
 `wardyn_approval_notify_failed_total{channel}`; both carry an error class (`http_status:503`, `timeout`,
-`tls_verify`, `dial`, `redirect_refused`, `expired`), never a URL or a response body. Terminal rows older
+`tls_verify`, `dial`, `redirect_refused`, `expired`, and for mail `smtp_reply:<code>`, `starttls_missing`,
+`no_recipient`), never a URL, a response body or a relay's reply text. Terminal rows older
 than 30 days are deleted, 500 per tick.
 
 **A per-run budget.** One run may create at most 25 tier-0 outbox rows per hour, so an agent cannot bury
@@ -928,10 +1294,24 @@ approval and shows in the console, but enqueues nothing; it increments
 `wardyn_approval_notify_suppressed_total{channel}` and writes one `approval.notify.suppressed` audit row
 per run per hour (per replica).
 
+**In the console.** Every PENDING row on `GET /api/v1/approvals` carries `escalation_tier` and
+`sla_due_at` when its route has tiers: `escalation_tier` is the highest tier whose `after` has passed
+(the first notice is tier 0 and shows nothing), `sla_due_at` is when the next tier is due. Both are read
+from the outbox at response time and never stored, so a decided approval carries neither, and a member
+sees them only on approvals of runs they own. The Approvals cards show them as an "Escalated · level n"
+chip and an "Escalates in" countdown. Settings has a read-only "Approval notifications" card (super
+admins) fed by `GET /api/v1/approval-notify/status` (security tier): per channel its `id`, `type`, the
+destination **host** only (parsed from the URL, never a path, query or userinfo), `last_success_at`, the
+last error class and time, and `failed_last_hour` (rows dead in the last hour). `GET /api/v1/setup/status`
+adds a non-blocking `approval_notify` row, present only when the setting is on: `warn` when any row went
+dead in the last hour, otherwise `ok`.
+
 **Network policy.** On Kubernetes wardynd's NetworkPolicy is default-deny for egress. Add a rule for each
 notification endpoint, and for a corporate proxy if one fronts them, through
-`networkPolicy.egress.extra`, exactly as for SIEM sinks. The delivery client uses the same transport as
-the rest of wardynd, so `WARDYN_TRUSTED_CA_FILE` and the daemon proxy setting apply to it.
+`networkPolicy.egress.extra`, exactly as for SIEM sinks. An `smtp` channel needs a rule for its relay's
+`host` and `port` too; it dials the relay directly, not through a proxy. The delivery client uses the same
+transport as the rest of wardynd, so `WARDYN_TRUSTED_CA_FILE` applies to every channel (and the daemon
+proxy setting to the HTTP ones).
 
 ## Managed laptops: hybrid enrolment and audit federation
 
@@ -1002,7 +1382,7 @@ A few things that don't fit the grid:
   person to sign in — nothing it does is saved.
 - **Some subjects never sign in.** The callback refuses an identity-provider
   `sub` that names an identity that is not a person — `admin-token`, the
-  configured `WARDYN_LOCAL_OPERATOR`, or any `local:`/`device:`/`delegate:` name, trimmed
+  configured `WARDYN_LOCAL_OPERATOR`, or any `local:`/`device:`/`delegate:`/`subject:` name, trimmed
   and case-folded — with the generic sign-in error and an `auth.fail` row
   (`reserved_principal`); a session, `wdn_` token or SSH key already carrying
   one is refused on use. Switching a local-mode install to SSO: the default
@@ -1083,8 +1463,9 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the agent roster — `GET /agent-providers` and `PUT /agent-providers`: which coding agents this deployment offers, whether each is on, and (0.8) each agent's `default_provider` — the model provider a new run uses unless the person chooses another, which must be enabled for that agent and may be turned off (its runs are then refused, never moved). Since 0.8 a row carries no model credential: model access is a model provider. Both verbs, for the sibling row's reason: the block names the org's model-provider choices. A member is served a narrower document instead — the `enabled` field on `GET /setup/status`'s harness rows | ⛔ admin only |
 | the model providers — `GET /model-providers` and `PUT /model-providers` (0.8): which kinds of model credential this deployment supports, where each sends requests (gateway addresses, Bedrock region and data plane), the AWS access portal and account pin a Bedrock SSO provider signs in against, and which agents each may serve. Configuration only — no credential lives on a record. `GET` also answers `connected_people`: per provider id, how many distinct people hold a credential of their own for it (a count, never who; 0 included), which `PUT` refuses. Both verbs, for the agent roster's reason. Removing a provider (or unticking the agent it is the default for) is refused while the roster names it as a default; turning it off is not. A person is served a narrower document instead — `model_providers` on `GET /setup/status`: the providers serving the agents they may launch, each with its kind, the agents it is the default for, and the one host their own credential would be sent to (the host only, never a path, start URL or pin). Members also receive `provider_access`: one row per granted provider (state, action, deadline, and — when they have stored one — `added_at` and `last_used_at` for their own credential, never anyone else's) graded against their OWN credential, whose pin-mismatch action names the pinned account and role, as `model_access`'s already does | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
-| the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
+| the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, `GET /audit/retention`, `POST /audit/retention/drop`, the `/governance` profile and assignment routes (with the four `/governance/changes` routes that hold and decide their writes, see "Optional: four-eyes on governance writes"), `GET /access/directory/search` | ⛔ admin or `security_admin` |
 | `GET /admin/runs/capacity` — the fleet's configured reservations (below, "Fleet capacity"): across every owner, so not a member read. It never execs into a sandbox or calls the runner | ⛔ admin or `security_admin` |
+| the approval notification status — `GET /approval-notify/status`: each configured channel's id, type, destination host (never a URL), last delivery, last error class and dead rows in the last hour. It decides nothing, and the security tier is the one that decides approvals, so it is the one that must learn an announcement is not arriving | ⛔ admin or `security_admin` |
 | the `/user-types` routes — listing, defining, editing and removing the org's user types (`GET`/`POST /user-types`, `PUT`/`DELETE /user-types/{id}`). Defining a type is the same duty as authoring a profile; deciding who IS a type stays with the admin-only People mappings above. A type is refused removal (`409`) while the chart's role map or default role, or a permission, profile or drive row, still names it, or a live API token carries it, and the built-in `standard` type is never removable | ⛔ admin or `security_admin` |
 | the `/key-domains` routes — listing the declared key domains with how many live keys each holds, and setting or removing which domain a user, a group or everyone is assigned to (`GET /key-domains`, `PUT`/`DELETE /key-domains/assignments/{subject_type}/{subject}`). An assignment decides which declared domain's key wraps the subject's NEXT principal key; nothing already written moves. The domains themselves come from `WARDYN_KEY_DOMAINS_FILE`, never from the API. A domain the file does not declare is refused (`422`), as is a group write that would leave people in two domains (`409`) | ⛔ admin or `security_admin` |
 | the `/sources` writes — `POST /sources`, `POST /sources/{id}/scan`, `DELETE /sources/{id}`: registering, rescanning, or removing a source touches the same repo/registry topology the operator-topology reads above expose | ⛔ admin only |
@@ -1098,6 +1479,8 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `POST /admin/delegates` — registering a portal that may act for the people in one group ([Delegated run management](#delegated-run-management-portals)): it creates a credential | ⛔ admin only |
 | `GET /admin/delegates` and `DELETE /admin/delegates/{id}` — the registered-portal inventory and revoking one portal: the device pair's shape, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/credentials` — erasing every credential one person has stored (offboarding, 0.8): it only removes reach and returns a count, never a value | ⛔ admin or `security_admin` |
+| `POST /people/{principal}/erasure` — erasing one person's retained records by scope (0.8.6, [Erasing a person](#erasing-a-person)): it only removes records and returns counts, never a record's content; nobody erases themself except their credentials | ⛔ admin or `security_admin` |
+| `GET /scim/status` — the Settings SCIM card's read ([Leavers and SCIM](#leavers-and-scim)): who is deactivated, which deprovisioning steps are stuck on what error, and which purged people's drives are still to reclaim; read-only, names and steps, never a credential | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/ssh-keys` — removing every registered SSH key for a resolved subject or email; returns the removed-key count | ⛔ admin or `security_admin` |
 | `GET /people` — the people this deployment knows (0.8.6): everyone who has signed in and everyone set up beforehand, with each one's role (what the role mappings give their email), first and last sign-in, deactivation, and counts of live sessions (0 or 1: sessions are stateless cookies, so this says whether the last sign-in could still hold one), API tokens, SSH keys, stored credentials and runs still going. Paged (`?limit`, default 50, at most 200, and an opaque `cursor`) and filtered by `?q=` (principal or email prefix) and `?state=` (`active` or `deactivated`). It discloses the email of everyone who has signed in, the audience that can already read the audit trail, so it sits on this tier. `wardyn people list` prints it | ⛔ admin or `security_admin` |
 | `POST /people` and `GET /people/{principal}/tokens` — setting up a person before their first sign-in, and listing the API tokens an admin once created for them (0.8, [Tokens for a person who never signs in](#tokens-for-a-person-who-never-signs-in)). `POST /people/{principal}/tokens` stays mounted on this tier so a non-admin is refused as ever, and answers every admin `403` `person_token_mint_removed`: no role creates a token that acts as another person (0.8.5) | ⛔ admin or `security_admin` |
@@ -1470,6 +1853,97 @@ break-glass, whose `approval.second_human.bypass` row names this switch in its
 follows the setting, as it does for egress: it stops naming the creator as the
 person who can act.
 
+**Optional: four-eyes on governance writes.** Set `WARDYN_GOVERNANCE_SECOND_HUMAN=1` and no
+single administrator can change a governance profile, an assignment, a capability grant, the
+enforcement map, a value's availability, a user type's priority or a role mapping alone. With it on, a
+human's write to `POST/PUT/DELETE /governance/profiles`, `POST/DELETE /governance/assignments`,
+`POST/DELETE /permissions/grants`, `PUT /permissions/enforcement`, `PUT /permissions/availability/{kind}/*`,
+`PUT /user-types/{id}` (when the priority changes) or `POST/DELETE /access/mappings`
+is decoded and validated exactly as before and then stored as a pending change, answered `202`
+with `Location: /api/v1/governance/changes/{id}` and
+`{"pending_change": {id, target_kind, op, target_key, state, proposed_by, proposed_at, expires_at, diff}}`.
+Nothing is applied. `diff` is rendered by the server, never by a client: the target's current row
+and the proposed one (every ceiling passes the same read-redaction as a read of it) plus the changed
+field paths; for an assignment, `diff.after` embeds the profile it points at as it stood at the
+proposal. A second human approves it with `POST /governance/changes/{id}/approve`, or any
+authorised human rejects it with `POST /governance/changes/{id}/reject` (an optional `reason`, at
+most 512 characters, no control characters, recorded on the change and its audit row only).
+`GET /governance/changes` lists the queue (`?state=` narrows it; pending by default) and
+`GET /governance/changes/{id}` reads one. A change nobody decides expires after
+`WARDYN_GOVERNANCE_CHANGE_TTL` (default `72h`). Nothing notifies anyone that a change is waiting:
+approvers find them through `wardyn governance changes list` or the API.
+
+- **Who may approve.** The approver must pass the predicate of the tier the write was proposed on,
+  never a weaker one. Profile, assignment, grant, enforcement, availability and user-type priority
+  changes are proposed on the security tier, so a security admin or a super admin approves; a security
+  admin may approve a super admin's change. A role mapping is written on the super-admin tier, so only a
+  super admin approves one: a security admin who tries is refused `403` `authz.denied` reason
+  `admin_surface` (target `governance.change`), and role-mapping changes are neither listed to a security
+  admin nor readable by one (`GET /governance/changes/{id}` answers `404`).
+  The predicate is evaluated again inside the approval transaction: an API token that was revoked
+  after it authenticated, one cut off by a session revocation, or one whose role no longer passes
+  is refused and the change stays pending.
+- **Distinct human.** An approval is refused (`403`, `authz.denied`, reason `second_human_required`,
+  target `governance.change`) when the approver's principal equals the proposer's, or when both
+  emails are non-empty and equal once case-folded. The proposer may reject their own change.
+- **What applies.** One transaction locks the change, requires it pending and unexpired, compares
+  the target (and, for an assignment, the profile it points at) and the deployment default with what
+  the proposal reviewed, applies the write, and moves the change to `applied`. A write to the target
+  in between (the break-glass included), a rename or ceiling change of the profile an assignment points
+  at, or a changed deployment default makes the change `stale` (`409` `governance_change_stale`):
+  it never overwrites. The write is re-validated against the current deployment default, so an
+  approval cannot apply what a direct write would refuse. Two approvals racing on one change apply it
+  once; the other is `409` `governance_change_not_pending`. A failure after the write rolls it back.
+- **Exemptions.** Only these apply directly, with no second human: a profile update whose new
+  effective profile is no more permissive than the current one (the same resolved comparison
+  composition uses, `Leq`), a rename that changes nothing else, an availability `PUT` that leaves the
+  restricted bit as it is, and a user type's name or description edit that leaves its priority alone.
+  A profile update that changes the contact is held even when it narrows. Everything else is held,
+  deletes and every assignment write included: deleting an assignment widens its subjects back to the
+  deployment ceiling. No grant, enforcement, availability, priority or role-mapping write has a
+  narrowing exemption, because each can widen: deleting a deny grant, lifting a restriction (which
+  admits every person with no grant write), turning enforcement on, raising a priority (which moves a
+  person matching two types onto the other at their next sign-in).
+- **Per target.**
+  - *Capability grant* (`POST`/`DELETE /permissions/grants`): the target is the grant's natural key
+    (subject type, subject, capability, value); a delete by id is resolved to it at proposal, so a
+    pending delete and a pending upsert of one grant collide. Staleness covers the row at that key.
+  - *Enforcement* (`PUT /permissions/enforcement`): the whole-map replacement. A stale `If-Match` is
+    refused `412` at proposal as for a direct write; the approval then compares the map's ETag, and
+    the approval transaction, not the in-process lock a direct write takes, is what serializes it.
+  - *Availability* (`PUT /permissions/availability/{kind}/*`): held whenever the stored restricted bit
+    changes, in either direction. Staleness covers the bit and the allow rows naming the value, so a
+    restriction accepted at proposal is applied only while its list is what it was.
+  - *User-type priority* (`PUT /user-types/{id}`): held when the priority changes, whole (a name and a
+    priority edit together are one held change). A name or description edit alone applies directly.
+  - *Role mapping* (`POST`/`DELETE /access/mappings`): the posture-flip acknowledgement is judged at
+    proposal and carried in the payload, and judged again when the change is applied. The lockout guard
+    runs when the change is applied, against the claim snapshot of the **approver**; the proposer's own
+    facts are not consulted (they may have been demoted since, and the second human is the safeguard
+    against them). The `admin-token` is exempt from the guard as it is on a direct write. The tokens
+    a demotion strands are revoked after the approval commits, as after a direct write.
+- **Break-glass and local mode.** The `admin-token` principal applies a covered write directly and
+  approves a change, each writing `governance.change.bypass` beside the target's own row. A deployment
+  that wants this gate to bind holds the token out of band. Local mode authenticates nobody, so the
+  proposer and approver are both client-supplied: with the switch on it answers every covered write
+  and every approve or reject `503` (`governance_second_human_local_mode`).
+- **Audit.** `governance.change.propose`, `.approve`, `.reject`, `.expire` and `.bypass`
+  ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)). On approval the target's own row (`governance.profile.write`,
+  `governance.assignment.write`, ...) is written too, its actor the approver, carrying `change_id` and
+  `proposed_by`. The proposer, the approver and their emails are personal fields: the
+  `audit_personal_fields` erasure scope clears them from the change rows, and a pending change whose
+  proposer is erased expires, so a change with no recorded proposer can never be approved.
+- **Residual risks.** The `admin-token` is single-human by design. A database writer can change the
+  tables directly: the audit chain then shows a target row with no `propose`/`approve` pair, which is
+  detection, not prevention. Each change is reviewed alone: two separately approved changes can compose
+  into a widening neither diff shows. Not covered here: the rest of the governance-adjacent writes
+  (workspace egress lists, `/policies`, `/site-config`, `/integrations`, the approval `always` scope,
+  user-type create and delete, and key-domain assignments stay single-human until their own lanes).
+- **In the console.** The Governance screen's Changes tab lists the pending changes with the server's
+  diff, and an approver approves or rejects there (a reason is optional). A covered write made in the console
+  that is held shows "Submitted for approval" at the place it was made, never a save. Approve is disabled on
+  your own proposal, and the server remains the authority.
+
 **The `admin-token` principal BYPASSES it**, and you should plan around that. A
 bare `WARDYN_ADMIN_TOKEN` caller is attributed `system`/`admin-token` because a
 shared token carries no per-human identity — there is no second human to compare
@@ -1585,6 +2059,100 @@ holds: the unclamped spec lands on the audit feed as `policy.inline.apply` befor
 the sandbox except `wardyn-proxy`, and the session is still recorded. A governance
 control, not a containment boundary against the operator holding the laptop. Full
 accounting: [docs/DESKTOP.md](DESKTOP.md) "Tamper posture, stated honestly".
+
+### Four-eyes on governance writes: a walkthrough
+
+The rules are in "Optional: four-eyes on governance writes" above; this is the order an operator
+works in. The switch and its TTL are in [ENV.md](ENV.md); the audit rows are in
+[AUDIT-ACTIONS.md](AUDIT-ACTIONS.md); the residuals are in
+[THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 "Four-eyes on governance writes".
+
+**1. Before you turn it on.** All four must hold, or the switch deadlocks you or does not bind:
+
+- **SSO is configured.** Local mode authenticates nobody, so with the switch on every covered write
+  and every approve or reject answers `503` `governance_second_human_local_mode`.
+- **The admin token is held out of band.** It applies a covered write directly and approves a change,
+  each audited as `governance.change.bypass`. It is the break-glass and the one way past this gate.
+- **Two humans can approve.** Every covered target except role mappings needs a second security admin
+  or super admin; role mappings need a second super admin (see step 6).
+- **Every CLI and SDK caller is upgraded.** A client built before 0.8.6 decodes the `202` as an empty
+  object ([sdk.md](sdk.md) "Old clients"). Nothing applies without approval, but the error it reports
+  is confusing.
+
+Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong for your approvers,
+`WARDYN_GOVERNANCE_CHANGE_TTL`) in the daemon's environment; on Kubernetes that is the chart's
+existing `env` map. Both are read at boot. Turning the switch off later leaves pending changes
+approvable and rejectable under the same rules, self-approval included; new writes apply directly.
+
+**2. What is held, and who approves it.** A write the table lists is held when the condition in its
+row is true, and approved at the tier it was proposed on.
+
+| Write | Held when | Approver |
+|---|---|---|
+| Governance profile create, update, delete | the write is not exempt (below) | security admin or super admin |
+| Governance assignment upsert, delete | always, deletes included | security admin or super admin |
+| Capability grant upsert, delete | always | security admin or super admin |
+| Enforcement map replace | always | security admin or super admin |
+| Availability set | the stored restricted bit changes, in either direction | security admin or super admin |
+| User-type priority update | the priority changes | security admin or super admin |
+| Role mapping upsert, delete | always | **super admin only** |
+
+Exempt, so applied directly: a profile update whose new effective profile is no more permissive than
+the current one, a rename or description edit that changes nothing else, an availability `PUT` that
+leaves the restricted bit as it is, and a user-type name or description edit that leaves its priority
+alone. Nothing else narrows by shape: a delete can widen (a deny grant, an assignment, a restriction),
+so no delete is exempt on its own.
+
+**3. Propose, review, decide.** A held write answers `202` with the change. Its `diff` is the
+server's: the current row, the proposed row and the changed field paths. The proposer, or anyone
+else, then:
+
+```
+wardyn governance set ci-governance.json          # held writes print as pending; exit 0
+wardyn governance changes list                    # pending by default; --state applied|rejected|expired|stale
+wardyn governance changes approve <change-id>     # a different human, at the right tier
+wardyn governance changes reject <change-id> --reason "widens egress past the review"
+```
+
+`governance set` exits 0 on a pending result and skips `--prune` until every write is decided, so
+run it again afterwards. The console does the same on the Governance screen's Changes tab, with the
+diff in a drawer; Approve is disabled on your own proposal. Nothing notifies an approver that a
+change is waiting, so name who looks, and how often, in your own runbook. There is at most one
+pending change per target: a second proposal at the same target is `409` `governance_change_pending`
+and names the first.
+
+**4. Expiry and stale changes.** A change nobody decides within the TTL reads as `expired` and cannot
+be approved (`409` `governance_change_not_pending`); propose it again. A change is `stale` (`409`
+`governance_change_stale`) when, at approval, the target, the profile an assignment points at or the
+deployment default differs from what the proposer's diff showed. Approval never overwrites: a stale
+change is dead, and the remedy is to propose the write again against the current state. A direct
+write in between (the break-glass included) is the usual cause.
+
+**5. Reading the audit.** Filter `GET /audit` by `action_prefix=governance.change.`. A normal change is
+a `governance.change.propose` row (actor the proposer, `Target` the change id) followed by a
+`governance.change.approve` row and, beside it, the target's own row (`governance.profile.write`,
+`capability.grant.create`, `access.role_mapping.write`, ...). That row's actor is the approver and
+it carries `change_id` and `proposed_by`: two named humans for one change. Also look for:
+
+- `governance.change.bypass`: the admin token wrote or approved. Alert on it.
+- `governance.change.approve` with outcome `failure`: the approval did not apply (`error` is `stale`,
+  `not_pending` or `error`).
+- `authz.denied` with reason `second_human_required` or `admin_surface` and target
+  `governance.change`: a self-approval, or a security admin at a role-mapping change.
+- A target row with **no** `propose`/`approve` pair beside it, switch on: a write that did not come
+  through the API. See the threat model's "database is not four-eyed" residual.
+
+**6. One super admin.** Role mappings are written on the super-admin tier, so only a super admin may
+approve one, and nobody approves their own. A deployment with a single super admin therefore cannot
+change a role mapping while the switch is on, except through the admin token (audited as a bypass).
+Add a second super admin before you enable the switch, or accept the token as the path for mapping
+changes. The lockout guard is judged against the **approver's** own roles at apply, so the approver
+cannot be the person whose mapping change would strip their own admin.
+
+**7. What stays single-human.** Workspace approved and denied egress lists, record-egress promotion,
+`/policies`, `/site-config`, `/integrations`, the approval `always` scope, user-type create and
+delete, and the SCIM purge's deletion of a person's own assignments and grants. The threat model
+lists each with its reason.
 
 ### Reclaiming a departed person's storage
 
@@ -2645,7 +3213,7 @@ happens when the email already names another known subject, when the subject is
 already known under a different email, when the subject differs from a known
 one only by case, or when the subject is another person's email. It answers
 `422` for the reserved subjects `admin-token`, the local-mode operator,
-`local:…`, `device:…` and `delegate:…`, in any case — the same set a sign-in is refused for
+`local:…`, `device:…`, `delegate:…` and `subject:…`, in any case — the same set a sign-in is refused for
 (see "Some subjects never sign in").
 
 Revocation of any such token is immediate either way: `DELETE /api/v1/tokens/{id}`,
@@ -2821,9 +3389,151 @@ escalation on the Approvals page.
 **Governance profiles.** One profile per subject; when several match, the most
 specific wins (user beats group beats user type beats everyone; priority breaks group ties) — the
 Governance page shows the resolved answer, and `GET /policies/default` returns the
-ceiling that actually binds the caller. A profile replaces the deployment ceiling
-for its subjects; deleting one requires unassigning it first (never a silent
-widening). Stated honestly: profiles narrow by omission — a profile that omits
+ceiling that actually binds the caller. A profile is either **standalone** or **composed**
+(0.8.6). The walkthrough below covers composed profiles from authoring to rollback; the
+design record is `docs/design/0.8/0.8.6-comp.md`.
+
+*Standalone and composed.* A standalone profile replaces the deployment ceiling for its
+subjects, exactly as on 0.8.5. A composed profile stores no ceiling of its own. It names a
+**base**, which is another profile (`base_profile_id`) or, when that is null, the deployment
+default, and an **overlay** (`overlay`, plus `overlay_limits` for the limits) that can only narrow
+that base. The ceiling that binds is `ApplyOverlay(effective(base), overlay)`, computed whenever
+authority is read and never stored, so a change to a base reaches every profile built on it. A
+composed row's own `ceiling` and `limits` columns are `{}`, and the API adds a read-only
+`effective: {ceiling, limits}` beside them.
+
+*Authoring.* A profile names at most one base. A chain is at most three profiles deep, counting
+the profile itself (a baseline, a division and a team), and a chain cannot loop; a write that would
+make a cycle or push any existing descendant past three is a `409`
+(`governance_profile_cycle`, `governance_profile_depth`). An overlay lists only the fields it
+narrows; an absent field inherits the base unchanged, and a present empty list is a value
+(`allowed_domains: []` narrows to no domains, `allowed_methods: []` is refused because it would
+mean every method). The write is strict: an overlay that names something its base does not permit
+(a domain the base's `allowed_domains` does not cover under the proxy's own matcher, a method the
+base excludes, `allow_all_egress` on a base without it, a grant the base's grants do not dominate)
+is `400 governance_overlay_invalid`, and so is an overlay whose meet with the base would be empty
+rather than narrow. A `PUT` that omits `base_profile_id`, `overlay`, `overlay_limits` or
+`contact` keeps the stored value, so an older client cannot flatten a profile by accident; only an
+explicit `null` clears one, and `overlay: null` turns the profile back into a standalone one (the
+request must then carry a valid `ceiling`).
+
+*Resolution, and what the meet does.* Resolution reads the chain once and composes from the
+deployment down. Each field has its own meet, taken after the runtime's own defaults are applied
+to both sides, so a zero that means "the default" is never read as "smaller":
+
+| `RunPolicySpec` field | Unset means | Meet |
+|---|---|---|
+| `allowed_domains` | nothing allowed | each overlay entry must be covered by the base's entries; the overlay's entries are the result |
+| `denied_domains` | none | union |
+| `allow_all_egress` | false | AND (an overlay may only set it false) |
+| `first_use_approval` | `always_deny` | the stricter mode |
+| `first_use_hold_seconds` | 30 | smaller |
+| `max_holds` | 16 | smaller |
+| `allowed_methods` | every method | intersection of non-empty sets; empty on one side takes the other; disjoint is unsatisfiable |
+| `min_confinement_class` | required | the higher class |
+| `eligible_grants` | none | the overlay's grants, each re-checked against the resolved base |
+| `auto_stop_after_sec` | 0 or less never reaps | smaller positive |
+| `workspace_mounts` | none | intersection by source and target; read-only if either side is |
+| `workspace_repos` | none | intersection by identity |
+| `llm_inspection` | none | the side that sets it; both set and different is unsatisfiable |
+| `ui_apps` | none | intersection by name and port |
+| `resources` | the deployment's size | smaller, per field |
+| `tool_rules` | an unnamed tool is held | per tool named on either side, and `*`: the stricter effect |
+| `git_push_any_branch` | false | AND |
+| `push_rules.deny_paths`, `push_rules.require_review_paths` | none | union |
+| `push_rules.max_inspect_pack_mib` | 32 | smaller |
+| `push_rules.hold_seconds` | 120 | smaller |
+| `push_rules.max_file_size_mib` | off | smaller positive (off is unbounded) |
+| `push_rules.deny_new_executables` | false | OR |
+| `azure_devops_capabilities` | the provider row's default | intersection of non-empty lists; disjoint is unsatisfiable |
+
+| `GovernanceLimits` field | Unset means | Meet |
+|---|---|---|
+| `deny_task_mode_exec`, `deny_interactive`, `deny_ui_apps`, `deny_user_drive` | false | OR |
+| `max_concurrent_runs`, `max_ephemeral_disk_mib`, `max_drive_size_mib`, `max_cpu_millis`, `max_memory_mib` | 0 is unlimited | smaller positive |
+| `autonomy_rubric` | caps nothing | per field, the lower level; a field set on one side only takes that side |
+| `max_end_ahead_sec` | 0 is no limit | smaller positive |
+| `default_end_sec` | 0 is `max_end_ahead_sec` | smaller, then clamped to the resulting maximum |
+| `max_wait_sec` | 0 is the deployment's approval expiry | smaller |
+| `default_wait_sec` | 0 is the deployment's approval expiry | smaller, then clamped to the resulting maximum |
+| `allow_no_end`, `user_changes_limits` | false | AND |
+| `pause_idle_after_sec` | 0 is pause only runs waiting for a decision | smaller positive |
+
+*Worked example.* An organisation keeps three profiles. The **baseline** is a composed profile
+with no base (so the deployment default is its base) and an overlay that sets `allowed_domains` to
+the package registries and the forge, `first_use_approval` to `always_deny`, and `limits.max_cpu_millis` to
+4000. The **division** profile names the baseline as its base and an overlay that drops the forge
+host from `allowed_domains` and sets `max_concurrent_runs` to 6. The **team** profile names the
+division and an overlay that sets `allowed_methods` to `GET` and `HEAD`, `denied_domains` to one
+extra host, and `max_cpu_millis` to 2000. Assigned to the team's group, the team profile binds
+this: the registries only, the forge dropped, `GET` and `HEAD` only, the extra host denied,
+2000 millicores (the smaller of 4000 and 2000), six concurrent runs, and the baseline's
+`always_deny`. Later the baseline's owner narrows `max_cpu_millis` to 1000: the next read of
+the division and the team gives 1000, with no write to either. A baseline edit that would leave
+a descendant empty (it narrows `allowed_methods` to `POST` while the team overlay allows only `GET` and `HEAD`) is refused with
+`409 governance_overlay_unsatisfiable` naming that descendant. Widening the baseline later widens every field a descendant's overlay leaves unset, as any
+base edit does. It never switches on an overlay entry the base did not permit, because an overlay
+is checked against the base at write.
+
+*A base that moves under an overlay.* A write is strict, but a base edit, or a redeploy that
+narrows the deployment default, is someone else's act arriving later. At resolve the meet drops
+what the base no longer covers: the run's `201` lists the drop in `clamp_warnings` (naming only the member's own profile), and an administrator sees it in that profile's `effective.warnings` on `GET /governance`. If nothing
+satisfies the base and the overlay together (the deployment default narrowed until their
+`allowed_methods` are disjoint, say), the launch and every live door refuse with `403
+governance_overlay_unsatisfiable`, audited, until an administrator fixes it. A chain that cannot
+be read, or one that loops or runs deeper than three, fails the same doors with a `500` or `503`.
+Neither case is ever read as the deployment's policy. An administrator sees which profile failed on `GET /governance`
+(`effective.error`).
+
+*Every reader sees the composed answer.* Create, preflight and dispatch, and the doors that bind
+runs already going (attach and SSH, UI apps, revive, the limits re-clamp, end extension, the run
+policy view and the preview) all resolve through one code path, and a source guard fails if any
+other code reads a raw profile row. A profile edit still reaches an already-running proxy only
+through the denies re-asserted at revive or restart; a base edit now does so for a whole
+subtree at once, so one edit has a larger reach and the same delay.
+
+*What a member sees.* A member sees their own profile's name and contact, and the effective
+content: `GET /policies/default`, `/me` and denial bodies serve the profile that binds them,
+never the chain. A base's name, overlay and contact are not disclosed, and a profile with no
+`contact` falls back to the site's `policy_help` rather than inherit a base's contact, since that
+would name the base. Only an admin or a `security_admin` can read the graph (`GET /governance`). When you write
+an example for a member, show the effective result and the profile's own name; do not describe
+the structure behind it.
+
+*Deleting and unassigning.* Deleting a profile requires unassigning it first, and a base that
+still has profiles built on it is a `409` naming them (never a silent widening).
+
+*Exporting a graph (CLI and SDK).* `wardyn governance get` exports a composed graph and
+`wardyn governance set` applies it to another install; the Go client's `ApplyGovernance` does the
+same (`docs/sdk.md`, "Composed profile graphs"). Profiles are written bases first, every graph
+reference (`base_profile_id`, an assignment's `profile_id`) is remapped through the target's
+names to ids, the read-only `effective` view is never written back, and prune deletes
+descendants before bases. Under second-person approval (four-eyes) a write may return `202`:
+a child whose base is still pending, and an assignment whose profile is pending, are
+deferred and reported, not sent with a dangling id; apply again once the base is approved.
+
+*Upgrade and rollback.* The 0.8.6 migration only adds nullable columns, so every existing
+profile is standalone and resolves exactly as on 0.8.5. An older SDK or CLI sees `ceiling: {}`
+on a composed profile; its re-apply compares equal and sends nothing, and a `PUT` it does send
+omits the composition fields, which are kept. A 0.8.5 binary refuses a database with the migration
+applied, so before a downgrade convert every composed profile to standalone (a `PUT` with
+`overlay: null` and its `effective.ceiling` and `effective.limits` as the new `ceiling` and
+`limits`), then restore the pre-upgrade dump.
+
+*Residual risks.*
+
+- Running proxies keep their dispatched egress until revive or restart (above); a base edit
+  makes that reach wider, not faster.
+- A deployment redeploy that narrows `DefaultPolicy` can strand a subtree: its launches are
+  refused with a named reason rather than widened. Look at the profile's `effective` and the
+  denial stream.
+- The overlay and the proxy share one domain matcher. That removes drift, and a matcher bug
+  now affects both sides alike; an oracle test over a fixed host corpus bounds it.
+- The comparison used to exempt narrowing edits from second-person approval is conservative,
+  so some narrowing edits still need a second approver. That is the safe direction.
+- Operators resolve no profile; that is a separate predicate from composition.
+
+Stated honestly: profiles narrow by omission — a profile that omits
 secret grants revokes them for its subjects (the editor warns); a member's
 long-lived API token keeps the group snapshot it was minted with until re-minted.
 Sandbox size is the exception: a profile that omits `resources`, or leaves one of
@@ -3032,9 +3742,10 @@ the owner or email, only the `reason` and `target` it always had.
 | `capability_feature` | a member tried to add an SSH key (target `me.ssh_keys`) or mint an API token (target `me.tokens`) and that feature is not available to them. Checked before the key or token is validated or stored | ⛔ `403` |
 | `capability_policy` | `policy_id`: a member selected a stored policy they aren't granted (`denyUserRequest`, target `runs.policy`, on `POST /runs` and preflight alike), and on revive/restart/extend as the owner (`internal/api/run_owner_authority.go`) | ⛔ `403` |
 | `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` below autonomy level L3 (`runs.task_mode`), a non-interactive run below autonomy level L1 (`runs.interactive`), `seed_auto_tools` below autonomy level L2 (`runs.seed_auto_tools`), an agent with no tool-approval lane — BYOA (`agent` unset) or any agent other than `claude-code` — at a resolved level of exactly L1, where an unattended run's tool calls would otherwise be derived to `hold` (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyUserDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`) or under a profile carrying `deny_task_mode_exec` (`runs.interactive_start`, `denyUserGovernance`), since it runs at sandbox boot unattended the way exec does, and — 0.8.2 — a terminal attach into a run whose profile carries `deny_interactive` (`runs.attach`) or a UI-gateway session into one whose profile carries `deny_ui_apps` (`runs.ui_apps`, which is also the target of the `dropped` row when that limit strips `ui_apps` at create; `internal/api/governance_run_doors.go`). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
+| `governance_overlay_unsatisfiable` | the governance profile that binds this person, or the run's own, is composed (0.8.6) and nothing satisfies it together with the profile or deployment default it builds on — the deployment default narrowed until an overlay's `allowed_methods` are disjoint with it, or an overlay and base that name different `llm_inspection` modes — so the launch (`governance.ceiling`, on create and preflight alike) and every live door refuse rather than guess: a terminal attach (`runs.attach`), a UI-gateway session (`runs.ui_apps`), a revive and an end extension (the `owner_profile_*` refusals' `403` sibling). A base or a chain that cannot be read is a `500` or `503`, never this reason, and is never read as the deployment's policy. The sentence names the person's own profile and never a base; an administrator sees which profile failed on `GET /governance` (`effective.error`). The SAME value is the `409` a profile write returns when a base change would leave a profile built on it in this state | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterUserGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_USER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Decided by one rule, `selectByTier` (`internal/api/select_by_tier.go`), and emitted ONCE per request at each of its two entrances: `ceilingWithUnusableGroups` (`internal/api/governance.go`) at target `governance.ceiling`, and `driveWithUnusableGroups` (`internal/api/user_drives_resolve.go`) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
-| `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval, or `WARDYN_CAPABILITY_SECOND_HUMAN` is set and the caller deciding an Azure DevOps capability escalation, is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
+| `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval, or `WARDYN_CAPABILITY_SECOND_HUMAN` is set and the caller deciding an Azure DevOps capability escalation, is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it. Also `WARDYN_GOVERNANCE_SECOND_HUMAN` (target `governance.change`, a new target and not a new reason): the approver of a held governance change is its proposer, by principal or by case-folded email | ⛔ `403` |
 | `model_provider_unavailable` | #987: at create and Review alike, and at the admin record door (`POST /workspaces/{id}/record`, the same writer) (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; target `runs.model_provider`), the run's model provider cannot credential it: no provider by that name, it is off, it does not serve the agent, several serve it and none is chosen or the default, the caller has no usable credential of their own for it (`remedy` `model_credential`, the one case a sign-in or a stored key repairs), or a policy grant would set a model-credential variable beside it. The row carries `provider` and `kind` when the refusal names one; the 422 body keeps its `provider`, `kind` and `reason` fields. A provider the member is not granted is `capability_model_provider` instead, one row, never both | ⛔ `422` |
 | `run_terminal` | 0.7.4: a RUN TOKEN, not a member — the run whose token authenticated an `/internal/*` call has gone terminal (`internalAuth`'s liveness gate). Token verification cannot catch this: the revoke cascade is best-effort, so a killed run whose revocation write failed still presents a token that verifies. `actor_type` is `agent`, the target is the request path, and the terminal state the run was found in rides beside the reason as its own `run_state` datum — the reason itself stays a closed value, because that is what a SIEM rule is written against. The three tail-upload doors — `/internal/recordings/`, `/internal/scan-results/`, `/internal/sso-token/` — are exempt for five minutes after the run went terminal, because those uploads race the watcher that ends it | ⛔ `403` |
 | `run_not_found` | 0.7.4: the same gate, when the run the token names has no row at all | ⛔ `403` |
@@ -3043,8 +3754,13 @@ the owner or email, only the `reason` and `target` it always had.
 | `delegation_scope` | 0.8 (#1142): a portal's delegated token asked for a route outside the delegation allow-list ([Delegated run management](#delegated-run-management-portals)), or reached `PUT /secrets/{name}` or `POST /me/ssh-keys`, which refuse a delegated request themselves whatever the allow-list says (0.8.2, #1234). The row's actor is the person and its `data.via` names the portal | ⛔ `403` |
 | `role_stamp_stale` | 0.8.6: `WARDYN_ROLE_STAMP_TTL` is set and the `wdn_` API token presented carries a role and group stamp (`api_tokens.identity_stamped_at`) older than it, or never stamped. Checked by `apiTokenAuth` after the token resolves and before it counts as used; target `api_token`, and the row's actor is the token's owner. The body is `this token's role is out of date: its owner must sign in again to refresh it`; the owner's next sign-in re-stamps the token and it works again. A revoked token is not this refusal: it stays an ordinary `401` | ⛔ `401` |
 | `event_stream_cap` | 0.8.2 (#1407): the caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (`maxRunEventStreams`, `internal/api/run_events.go`; target the run id). A portal's streams count against its person, and every admin-token caller is one principal. Not audited — a caller who IS authorized and hit a limit, like `run_quota` | ⛔ `422` |
-| `mask_state_unavailable` | 0.8.6 (ha-l2.0): a door that relays or persists a run's output — the recording upload (`PUT /internal/recordings/{runID}` and its parts, target `recordings.upload`), the live attach (`GET /runs/{id}/attach`, target `runs.attach`), the SSH shell (target `ssh.shell`, a channel error, not an HTTP status) and the live output read (`GET /runs/{id}/output`, target `runs.output`) — cannot prove the run's masking corpus complete on this server, so it refuses instead of passing bytes through. The run has no complete, unfenced masking manifest in Postgres (`run_mask_manifest`): it was dispatched before 0.8.6, its dispatch never finished committing it, its person is being erased, or Postgres did not answer. The exec relay (`task_mode=exec` output tail) refuses by keeping nothing. The row's `data.mask_scope` is `globals_only`. An attach, shell or upload already in flight ends at the next beat (about two seconds) when the run stops being covered, an attach with close status `1013`. Not hidden: the caller can already see the run | ⛔ `503` |
+| `mask_state_unavailable` | 0.8.6 (ha-l2.0): a door that relays or persists a run's output — the recording upload (`PUT /internal/recordings/{runID}` and its parts, target `recordings.upload`), the live attach (`GET /runs/{id}/attach`, target `runs.attach`), the SSH shell (target `ssh.shell`, a channel error, not an HTTP status) and the live output read (`GET /runs/{id}/output`, target `runs.output`) — cannot prove the run's masking corpus complete on this server, so it refuses instead of passing bytes through. Since the shared registry (`ha-l2.1`) the same reason also answers an injection or capture route (targets `injection.resolve` and `credential.capture`) whose value could not be committed to the masking registry: the value is not handed out. The run has no complete, unfenced masking manifest in Postgres (`run_mask_manifest`): it was dispatched before 0.8.6, its dispatch never finished committing it, its person is being erased, or Postgres did not answer. The exec relay (`task_mode=exec` output tail) refuses by keeping nothing. The row's `data.mask_scope` is `globals_only`. An attach, shell or upload already in flight ends at the next beat (about two seconds) when the run stops being covered, an attach with close status `1013`. Not hidden: the caller can already see the run | ⛔ `503` |
 | `audit_export_partition_filter` | 0.8.6: `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `actor_type`, `outcome` or `origin`). A partition export always covers the whole partition, so its footer digest can be checked against `audit_partition_digest`; remove the other parameters. Input shape rather than a denial, so it is not audited | ⛔ `400` |
+| `audit_retention_not_oldest` | 0.8.6: `POST /audit/retention/drop` named a partition that is not the oldest retained one. Only the oldest partition can be dropped, so a drop never removes an interior link of the chain. Target `audit.retention`, `partition` beside it | ⛔ `409` |
+| `audit_retention_not_closed` | 0.8.6: the same door, when the oldest partition can still receive rows (the high-water mark has not reached its upper bound) | ⛔ `409` |
+| `audit_retention_inside_window` | 0.8.6: the same door, when the partition ended less than the effective retention window ago, or retention is set to forever (`WARDYN_AUDIT_RETENTION_DAYS` is `0`). A decrease is not effective until 30 days after the boot that first saw it | ⛔ `409` |
+| `audit_retention_live_run` | 0.8.6: the same door, when the partition holds audit rows of a run that is still live (`PENDING`, `STARTING`, `RUNNING` or `WAITING_FOR_CONFIRMATION`). Drop it once the run has ended | ⛔ `409` |
+| `audit_retention_digest_mismatch` | 0.8.6: the same door, when the digest supplied is not the one the database computes for the partition. Export the partition again, check the archive, and submit the digest from its footer | ⛔ `409` |
 | `user_view_type_deleted` | 0.8: an admin in the user view made a request after the user type the view looks through was deleted. The request is refused — never answered as the admin, because its tier was already read as `user` — and the session's view is turned off on the cookie, so the next request is in the Admin view. The body is `The <type> user type was removed, so you're back in the Admin view…`; `POST /runs` and `POST /runs/preflight` answer `409` with `reason` `admin_view` instead. The row carries `user_view: true` and the deleted `user_type`. `GET /me` is never refused: it drops back and says so (`user_view_dropped`) | ⛔ `403` |
 | `user_view_preview` | 0.8.6, with `WARDYN_GOVERN_ADMIN_RUNS` on: an admin or security admin whose User view looks through a user type other than their own stamped type sent a request that is not a `GET`, `HEAD` or `OPTIONS` (`POST /runs`, `POST /runs/preflight`, a workspace create, any write). The view is a read-only preview. The body names the remedy: switch the view to your own type to make changes or launch. `POST /me/view`, `POST /auth/logout` and `POST /policies/grade` are still served. The row carries `user_view: true`, `viewed_user_type` and `stamped_user_type` | ⛔ `409` |
 
@@ -4906,7 +5622,7 @@ the way back. The upgrade runbook's `pg_dump` is the rollback.
 
 ### Version combinations
 
-`claimSingleInstance` excludes a second daemon. It does not exclude an old sidecar image, an old
+`claimSingleInstance` excludes a second daemon (outside HA mode). It does not exclude an old sidecar image, an old
 browser bundle or an old CLI, so:
 
 | combination | behaviour |
@@ -5280,7 +5996,7 @@ upgrade across this release**:
 # 0. Take the Postgres dump (see Backup) AND confirm you hold the age key. The
 #    dump plus that key is the ONLY way back to an older wardynd afterwards.
 # 1. Stop EVERY older replica — one-instance locking cannot see it under
-#    -allow-multi-instance. An older binary still running keeps writing
+#    WARDYN_HA. An older binary still running keeps writing
 #    pre-envelope payloads, which the new version refuses by name ("an older
 #    wardynd is still writing"). A NEW name it wrote is converted at the next
 #    restart;
@@ -5516,6 +6232,8 @@ identity and the primary key, renames the table and re-creates its triggers, and
 `0117` (`0117_agent_runs_sizing`) adds the dispatch-time sizing columns on `agent_runs` (`runner_kind`, the agent CPU/memory
 request and limit columns, `proxy_cpu_millis` and `proxy_memory_mib`); at dispatch, before the sandbox
 is created, each run records the values its driver applied, and a run that predates it reads all NULL.
+`0125` adds `governance_profiles.base_profile_id`, `overlay` and `overlay_limits` with five CHECKs (`0052`'s table).
+`0127` (`0127_deprovision_jobs`) adds `people.deactivated_at` (`0090`'s table), beside its new `deprovision_jobs` table.
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -5592,7 +6310,11 @@ END $$;
 GRANT EXECUTE ON FUNCTION
   audit_append(uuid, timestamptz, uuid, text, text, text, text, text, text, jsonb),
   audit_ensure_partitions(integer),
-  audit_partition_digest(text) TO wardyn_app;
+  audit_partition_digest(text),
+  audit_retention_drop(text, text, text),
+  audit_retention_set_policy(integer),
+  audit_retention_partitions(text, boolean),
+  audit_retention_window() TO wardyn_app;
 
 -- 4. Every FUTURE migration creates its tables as the MIGRATOR, and a new table
 --    grants the app role nothing. Without this line the next upgrade boots an
@@ -5794,7 +6516,7 @@ when it refused to start. It refuses, naming the reason, in two cases:
 
 - another session holds the single-instance lock: a serving wardynd, or another `-migrate-only`; and
 - any other client is connected to the database, whether or not a lock is held. The lock is not enough on its
-  own, because a replica started with `-allow-multi-instance` never takes it. A migrator role sees other
+  own, because a replica started with `WARDYN_HA` never takes it. A migrator role sees other
   roles' sessions by user and application name, so the check holds under a split `WARDYN_PG_MIGRATE_DSN`.
 
 A wardynd that boots while `-migrate-only` runs fails its own single-instance claim and exits, so a Job cannot be
@@ -5802,7 +6524,7 @@ raced by a pod the scheduler restarts. The migration's time bound is `WARDYN_MIG
 and the chart's startup probe window follows it: 30 seconds to connect, the timeout, and 120 seconds of slack.
 Raise it in `env` or `extraEnv` as `h`, `m` and `s` units only.
 
-**Under `allowMultiReplica`, no replica holds the lock**, so nothing the lock does stops writers there:
+**Under `ha.enabled`, no replica holds the lock**, so nothing the lock does stops writers there:
 `kubectl scale --replicas=0` is the only pre-step that does. `-migrate-only` will still refuse while any replica
 is connected, but it is the scale-down that makes the run possible.
 
@@ -5825,7 +6547,8 @@ the listener; an insert into a month that does not exist fails and waits in the 
   need it on the months to come.
 - **Grants.** Every role that could `INSERT` into `audit_events` before the upgrade is granted `EXECUTE` on
   `audit_append` and `audit_ensure_partitions` in the same transaction, found from the table's ACL rather than by
-  name, and only then loses `INSERT`. Roles that could `SELECT` keep it. A role you add later needs the
+  name, and only then loses `INSERT`. The later migrations of this release (`0119`, `0123`) grant their functions
+  to the roles that hold `EXECUTE` on `audit_append`. Roles that could `SELECT` keep it. A role you add later needs the
   `GRANT EXECUTE` line in the recipe above.
 - **Time.** The cost is one scan of the existing rows to prove the legacy bound, one index build on them, and
   the lock waits. Measured on Postgres 13 and 17 in a container on a shared development machine, over rows
@@ -6433,40 +7156,77 @@ runs the request UNCAPPED with a warning, while overlay2 over a non-xfs
 backing filesystem is handed the option anyway and the daemon REFUSES the
 create, so that run fails closed instead.
 
-## One replica, by construction
+## High availability
 
-`replicas` is not a scaling knob and it is not modesty — **the pin is a safety
-control.** No shipped topology runs more than one: compose pins `container_name`
-(`--scale wardynd=N` is rejected outright) and the Helm chart both defaults
-`replicas: 1` **and refuses to render above it**
-(`deploy/helm/wardyn/templates/deployment.yaml`; `allowMultiReplica=true` is the
-documented override, an acceptance of everything below, not a fix).
+`ha.enabled` runs two or more wardynd replicas on Kubernetes so that the loss of a
+node does not stop the control plane. It is one documented switch: the chart sets
+`WARDYN_HA=true`, the daemon skips the single-instance lock, and both refuse every
+configuration that would make a second replica unsafe. It is a node-failure
+posture, not a way to scale a busy deployment past one replica's capacity, and it
+is **not zero-downtime upgrades**: the Deployment strategy stays `Recreate`, so an
+upgrade stops the old replicas before it starts the new ones.
 
-wardynd keeps this state per-process. The first entry is why the pin is a control
-rather than a preference:
+### Turning it on
 
-- **the secret-masking registry** (`internal/secretmask`) — an in-memory
-  `map[runID][][]byte`, never persisted, and it **fails open**. Secrets are
-  registered by the request that mints or injects them (`Broker.mint` on the mint
-  route, `handleInternalInjection` on the proxy's injection call; the captured
-  AWS SSO token registers process-*globally* via `AddGlobal`), so they land on
-  whichever replica the run's proxy happened to dial. The session-recording
-  upload (`POST /runs/{id}/recording`) and the live-attach relay are DIFFERENT
-  requests that may land anywhere, and both pass the stream through unmasked when
-  the run's snapshot is empty (`buildMaskingBody`, `liveMaskWriter`). Two
-  replicas is therefore enough to persist an asciicast containing live
-  credentials in cleartext — with a `success` audit event, because nothing in the
-  path can tell "no secrets for this run" from "not my run". There is no
-  cross-replica fix short of moving the registry into shared storage, which has
-  not been built. **This is not bounded to two replicas either.** A single
-  `wardynd` process restarting mid-run (upgrade, crash-restart, OOM) wipes the
-  same in-memory map, so a run whose secrets were registered before the restart
-  and whose cast uploads after it hits the identical empty-snapshot fail-open —
-  with `replicas: 1` throughout. The pin removes the *cross-replica* case, not
-  this one. The map does not grow without bound: a background sweeper evicts a
-  run's entry once that run has been terminal for an hour (`api.RunSecretGrace`),
-  late enough for the finalize audit and the cast upload to still see it.
-  **Since 0.8.6 a registry miss fails closed for runs dispatched by 0.8.6.**
+```
+helm upgrade --install wardyn ./deploy/helm/wardyn \
+  --set ha.enabled=true --set replicas=2 \
+  --set env.WARDYN_RECORDING_STORE=pg \
+  --set k8s.enabled=true ... # the Kubernetes runner and its other required values
+```
+
+What the switch needs, and refuses to render or boot without:
+
+- **The Kubernetes runner.** The Docker driver's sandbox tracking maps (`agentExecs`,
+  `pending`, `mainProc`, `creating` in `internal/runner/docker/driver.go`) are
+  per-process by design, and a teardown served by a replica that did not create
+  the sandbox cannot see them, so a container can survive the kill it was supposed
+  to die from. HA is **supported on Kubernetes only**. `WARDYN_HA=true` on any other
+  runner exits non-zero at boot, naming the reason; compose pins `container_name`
+  and rejects `--scale` outright.
+- **A recording store every replica reads.** `WARDYN_RECORDING_STORE` is `pg` or
+  `off`. The chart derives `fs` from `persistence.enabled` and `off` without it, so
+  an HA install sets `env.WARDYN_RECORDING_STORE=pg` to record. The chart reads the
+  key from both `env` and `extraEnv` (`extraEnv` renders after `env` and wins), and
+  refuses `fs` from either; it also refuses `persistence.enabled=true`, whose
+  ReadWriteOnce volume exists for the per-pod `fs` store.
+- **An audit spool on the per-pod `tmp` emptyDir.** The chart renders
+  `WARDYN_AUDIT_SPOOL=/tmp/audit-spool.jsonl` and refuses a `WARDYN_AUDIT_SPOOL`
+  set in `env` or `extraEnv` anywhere outside `/tmp`.
+- **A PodDisruptionBudget** (`minAvailable: 1`) and a preferred **pod anti-affinity**
+  across nodes (soft, so a one-node cluster still schedules every replica; an
+  `affinity.podAntiAffinity` of your own replaces it).
+
+`allowMultiReplica` and the `-allow-multi-instance` flag are **removed**, a
+documented clean break: a values file that still sets `allowMultiReplica=true` is
+refused at render with a pointer to `ha.enabled`, and the flag is refused at boot
+with a pointer to `WARDYN_HA`. An install that set them was running an unsupported
+topology. `replicas > 1` without `ha.enabled` is refused too. The chart's refusals
+are render-time only (`kubectl scale` bypasses them), which is why the boot
+refusal exists: a Deployment edited by hand to `WARDYN_HA=true` on the Docker
+runner, or with the `fs` store, does not start. Without `WARDYN_HA` boot is
+unchanged: one instance, the single-instance lock taken, and a second wardynd
+against the same database refuses to start.
+
+`GET /setup/status` carries three rows while `WARDYN_HA` is on: `ha_mode`,
+`recording_store_shared` and `mask_registry_shared`. The last fails when this
+replica's `LISTEN` connection is down or its mask-sync cursor is behind the
+committed generation after one read, and while it fails the replica refuses
+recording uploads and new attaches and replaces live output with a placeholder.
+
+### What the replicas share
+
+Everything here is in Postgres, so a request served by any replica sees the same
+state.
+
+- **the secret-masking registry** (`internal/secretmask`). A value a run was
+  given is masked, verbatim, in every artefact Wardyn persists or relays for that
+  run, whichever replica serves the request and whether or not any replica
+  restarted. (Until 0.8.6 the registry was an in-memory map that failed open: a
+  recording uploaded to a replica other than the one that handled the run's
+  injection, or after a restart, was persisted with live credentials in it and a
+  `success` audit event. That is why a second replica was never supported.)
+  **A registry miss fails closed for runs dispatched by 0.8.6.**
   Dispatch commits each run's *masking manifest* to Postgres before the sandbox
   can see a value: the exact bytes of every rendering the run received (its
   workspace and inspection secrets and its Azure DevOps run token in all three
@@ -6480,33 +7240,42 @@ rather than a preference:
   a run carry `"mask_scope":"globals_only"`. **After any restart, a run that
   predates 0.8.6 has no manifest and is refused at those doors** (attach, SSH
   shell, exec output and recording upload) until it ends; runs dispatched by 0.8.6
-  survive restarts. Two limits remain until the shared registry lands: a value
-  registered at *injection* time (a minted GitHub token, an injected API key, the
-  AWS SSO and sign-in tokens) is still held in memory only, and **SSH exec, SFTP
-  and direct-tcpip were never masked** (`sshgateway_channels.go`), so none of
-  them is covered by any of this.
-- **the audit spool** — a local append-only file per pod
-  (`internal/api/auditspool.go`). Per-process *by design*: the fallback for a
-  failed Postgres write, each pod draining its own back into the database.
-- **the age identity, when `WARDYN_AGE_KEY` is unset** — each process mints its
-  own ephemeral one at boot (`buildSecretStore`, `cmd/wardynd`), so a secret
-  written by one pod cannot be decrypted by any other. The signing-key `Get`
-  happens during startup: once that key exists, a process with a different age
-  identity fails closed before serving, rather than starting healthy. Persisting
-  the same `WARDYN_AGE_KEY` across restarts avoids this mismatch; replacing it
-  without re-encrypting the stored secrets does not.
-- **the docker driver's sandbox tracking maps** (`agentExecs`, `pending`,
-  `mainProc`, `creating` in `internal/runner/docker/driver.go`) — the process that
-  created a sandbox is the only one that can observe its agent exec (`Wait`), and
-  `creating` is the in-memory tombstone that makes the exec-less (krun)
-  create/teardown handshake atomic. A teardown handled by a pod that did not
-  create the sandbox has neither, so a container can survive the kill it was
-  supposed to die from.
-- **the `/metrics` counters** (`internal/api/metrics.go`) — per-process, so a
-  scrape reports one pod's slice of the fleet, not the fleet.
-- **the decision-ingest `lastTouch` debounce** (`shouldTouch`,
-  `internal/api/internal.go`) — per-process, so N pods can do up to N× the
-  `TouchRun` writes the 30s debounce was sized for. Load, not correctness.
+  survive restarts. **Since 0.8.6 the registry itself is in Postgres.** A value
+  registered at *injection* time (a minted GitHub token, an injected API key) is
+  committed to `mask_values` (migration `0124_mask_values`) before the call
+  returns, and so is each credential a person's AWS SSO or Azure DevOps sign-in
+  registers process-wide (its access and refresh tokens, current and retired);
+  each is sealed under its owner's `cred` key, and the in-memory maps are every
+  replica's cache of that table. This holds at `replicas: 1` too: there is no
+  in-memory-only mode, and wardynd refuses to start when it cannot read the table.
+  A registration that cannot be committed fails the call that would hand the
+  value out (`503` `mask_state_unavailable`). Replicas read the table by a
+  generation cursor (`mask_gen`, taken in the registering transaction, so commit
+  order is generation order and a reader has read every generation below the one
+  it holds); a consumer about to mask a chunk waits for a read that began after
+  the chunk arrived, at most one read per 50 ms per replica. Neither a live
+  session's recording (web terminal and SSH shell) nor a batch run's output tail
+  holds its source to that rate: the relay, or the runner's copy of the agent's
+  output, hands the bytes to the masker without waiting, and everything that
+  arrived during one read is masked together after the next. The terminal and
+  the agent run at bandwidth, and the recording or tail lags them by about two
+  reads. Up to 512 KiB per session or run waits for the masker; past that the
+  relay or copy stops reading the sandbox until it drains. `NOTIFY` on
+  `wardyn_mask` is only a hint (each replica holds one connection of its own, outside
+  `pool_max_conns`, listening for it), so a missed notification costs nothing. With
+  Postgres unreachable a live chunk (for a recording, the batch) is replaced by
+  `<secret-hidden>`, a recording upload answers `503` and a new attach is refused. An eviction (a deleted
+  credential, a value retired past the grace, a run's purge, an erasure) is a
+  tombstone whose ciphertext is gone in the same statement; tombstones are deleted
+  an hour later, and a replica away longer reloads the table. The elected sweeper
+  leader (`SweeperLeaderLockKey`) deletes a terminal run's `per_run` rows and
+  manifest after `api.RunSecretGrace`; every replica's own run-secret sweep drops
+  only its cache. A credential with no owner (the operator namespace) has no
+  subject key and stays in the registering process; none exists today. A split
+  migrator and app role install grants the app role `SELECT, INSERT, UPDATE,
+  DELETE` on `mask_values`, `SELECT, UPDATE` on `mask_gen` and `DELETE` on
+  `run_mask_manifest`. **SSH exec, SFTP and direct-tcpip were never masked**
+  (`sshgateway_channels.go`), so none of them is covered by any of this.
 
 Six OTHER pieces are now Postgres-backed, so they survive a crash and no longer
 break under a second replica: single-use **attach tickets**, delete-on-read
@@ -6543,11 +7312,94 @@ a refresh already in flight can still race the new holder at the authority
 across a failover (residual). The connection budget is in
 [ENV.md](ENV.md) beside `pool_max_conns`.
 
-None of that makes `replicas > 1` supported. It closed the six reasons a second
-replica used to drop *requests*; it did not touch the list above, and the masking
-registry is a worse failure than any of the six — those lost work, this one
-persists secrets. Keep `replicas: 1`. Going beyond it has not been built, tested,
-or released, and the chart will not render it without `allowMultiReplica=true`.
+Since 0.8.6 the rest of a run's live state is in Postgres too (migration
+`0129_ha_live_state`), so a request served by any replica sees the same run:
+
+- **the exec output tail** — the dispatching replica's masker writes each chunk it
+  passes to `run_output_chunks` as well as to its memory ring, in batches off the
+  runner's path (the bytes are masked before they are inserted; the table holds
+  about one tail per run and the final `run_outputs` row's transaction deletes
+  them). Any replica answers `GET /runs/{id}/output` for a live run from them. If
+  the replica that held the tail dies, they are what is left: the run's row is
+  written from them as an `incomplete` `capture_gap` when the substrate cannot be
+  re-read (what the dead replica's masker still withheld is the gap), audited
+  `run.output.finalize` with `from_chunks`. An erased run's chunks are deleted with
+  its output and every later write is refused by the same tombstone.
+- **the attach writer slot** — a lease row per run (`run_attach_leases`, six seconds,
+  renewed every two). A client is the writer only while its holder id is the row's
+  holder; input and resize check it at least once a second and fail closed when
+  Postgres does not answer. A take-over served by any replica replaces the lease
+  with a reservation for the taker, tells the holder's replica to displace the
+  client, and promotes the taker's own queued client in place, if it has one; no
+  one else's queued client gets the slot. The lease lapses with its replica, and
+  `GET /runs/{id}/attach/holder` names a holder on another replica. The attach-mode
+  frame a client receives still names only a holder in the same replica.
+- **run events and kills** — each replica announces its run events and kills over
+  `NOTIFY wardyn_live` (one dedicated connection per replica, outside
+  `pool_max_conns`). A notice is a hint: the events stream re-reads the run every
+  beat, and a kill whose notice is lost still ends the run `KILLED`, because
+  dispatch's STARTING to RUNNING compare fails and tears the sandbox down.
+- **the Azure DevOps run token** — `ado_run_pat_state` holds each `minted_pat`
+  run's current token sealed under the run owner's `cred` key (AAD: the run id and
+  the rendering), the capabilities it was built from and the pause mark. Every mint
+  and revoke for a run takes its token lock, so two replicas resolving at once
+  create one token, and a pause's revoke cannot interleave with a mint. The count of
+  a person's sign-in ends (`ado_signin_ends`) is shared. A person's erasure deletes
+  the rows (the `mask_copies` scope) and the manifest fence stops a write after it;
+  state that cannot be read or written is a `503`, never a guess. A split migrator
+  and app role install grants the app role `SELECT, INSERT, DELETE` on
+  `run_output_chunks`, `SELECT, INSERT, UPDATE, DELETE` on `run_attach_leases` and
+  `ado_run_pat_state`, and `SELECT, INSERT, UPDATE` on `ado_signin_ends`.
+
+### What stays per replica
+
+These are per-process by design, and under HA they are **per replica**. A cap is
+therefore the per-replica cap times the replica count (cap × N):
+
+- **SSH and UI connection counts**, the **rate limiters** and the auth-failure
+  coalescer (`internal/api/server.go`): each replica admits its own cap, so N
+  replicas admit up to N times it.
+- **Debounce caches**: the decision-ingest `lastTouch` debounce (`shouldTouch`,
+  `internal/api/internal.go`) and the console's re-assert debounce. N replicas can do
+  up to N times the `TouchRun` writes the 30 s debounce was sized for. Load, not
+  correctness.
+- **The `/metrics` counters** (`internal/api/metrics.go`): a scrape reports one
+  replica's slice of the fleet, not the fleet. Sweep gauges come from the shared
+  record, so a follower reports the leader's ticks.
+- **The audit spool**, a local append-only file per pod (`internal/api/auditspool.go`),
+  the fallback for a failed Postgres write; each replica drains its own back into
+  the database. **On `emptyDir` it is lost with the node**: a node failure loses
+  whatever that pod had spooled and not yet drained. The chart keeps it on `emptyDir`
+  because a persistent volume cannot be shared between replicas.
+- **The image build tracker** (Docker only), and the run-secret sweeper's local cache
+  (it drops this replica's own copy of a terminal run's values; the durable rows are
+  the leader's pass).
+- **The age identity, when `WARDYN_AGE_KEY` is unset**: each process mints its own
+  ephemeral one at boot (`buildSecretStore`, `cmd/wardynd`), so a secret written by
+  one replica cannot be decrypted by another. Set the same `WARDYN_AGE_KEY` (or a key
+  service) on every replica; the chart refuses an ephemeral key with an external DSN.
+
+### Residual risks
+
+- **SSH exec, SFTP and direct-tcpip were never masked** (`sshgateway_channels.go`), so
+  nothing above covers them. Masking is verbatim only: an encoded or narrated value
+  is not caught.
+- **Runs that predate 0.8.6 have no masking manifest.** After any restart they are
+  refused at the five doors (recording upload, live attach, exec relay, SSH shell,
+  live output read) until they end (Q-HA1). Runs dispatched by 0.8.6 survive restarts.
+- **Masking now depends on Postgres.** With it unreachable, uploads and new attaches
+  are refused and live chunks are replaced by the placeholder. That trades
+  availability for never persisting a credential.
+- **On a Postgres failover, advisory locks can overlap briefly.** Leader actions are
+  idempotent and epoch-fenced and the refresh write is a compare-and-set, but a
+  refresh already in flight on the old holder can still race the new holder at the
+  authority and lose the credential; the person signs in again.
+- **A compromised wardynd process still sees every value it masks.** Shredding a
+  person's copies is complete only after backups expire or the wrapping key version
+  is retired.
+- **The elected leader is one replica.** The approval, recording, credential, pause and
+  always-egress sweepers run there; if it dies, another takes over within one retry
+  interval (about 15 seconds).
 
 ## Kubernetes: known gaps
 

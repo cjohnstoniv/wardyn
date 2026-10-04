@@ -232,6 +232,15 @@ const (
 	reasonGovernanceProfileNameConflict   = "governance_profile_name_conflict"   // a profile by that name already exists
 	reasonGovernanceProfileInUse          = "governance_profile_in_use"          // the profile is still assigned; delete its assignments first
 	reasonGovernanceAssignmentInvalid     = "governance_assignment_invalid"      // the assignment fails validation
+	// Composed profiles (migration 0125). The first three are write refusals. The fourth is the SAME
+	// string as authz's registered reason of that name: a 409 at a profile write that would leave a
+	// descendant with a policy nothing satisfies, and the 403 at every launch and live door when a
+	// composition cannot be applied (see adHocReasonLiterals["reasons.go:governance_overlay_unsatisfiable"]
+	// in refusal_test.go, and documentedDuplicateReasonValues).
+	reasonGovernanceOverlayInvalid       = "governance_overlay_invalid"       // the overlay names something its base does not permit, or does not decode
+	reasonGovernanceProfileCycle         = "governance_profile_cycle"         // the write would make a profile its own base
+	reasonGovernanceProfileDepth         = "governance_profile_depth"         // the write would put a profile more than three deep
+	reasonGovernanceOverlayUnsatisfiable = "governance_overlay_unsatisfiable" // nothing satisfies a profile and its base together
 	// reasonGovernancePreviewClaimsInvalid is shared by GET /governance/preview
 	// and the user-drive naming preview (user_drives_preview.go): both feed the
 	// same normalizeGovernancePreviewClaims validator over user_subjects/groups.
@@ -387,4 +396,5 @@ const (
 	reasonGitPATNarrowingNeedsBroker     = "git_pat_narrowing_needs_broker"     // the PAT broker is off, so the PAT is resident and nothing narrows it
 	reasonGitPATNarrowingSSHConflict     = "git_pat_narrowing_ssh_conflict"     // a same-forge ssh_key is a second push path the broker cannot see
 	reasonGitPATNarrowingUnsupportedHost = "git_pat_narrowing_unsupported_host" // the host is served by a lane that ignores the narrowing axes
+	reasonGitPATAPIForgeDisabled         = "git_pat_api_forge_disabled"         // api: true on a forge whose API door is off on this deployment
 )
