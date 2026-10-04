@@ -107,6 +107,13 @@ describe("the people table", () => {
     expect(within(left).getByText("3 credentials")).toBeInTheDocument();
   });
 
+  it("labels a role the server could not derive from truncated groups as Unknown", async () => {
+    listMock.mockResolvedValue({ people: [person({ role: "unknown" })] });
+    renderScreen();
+    const ana = (await screen.findByText("ana@example.com")).closest("tr")!;
+    expect(within(ana).getByText("Unknown")).toBeInTheDocument();
+  });
+
   it("mounts the SCIM card under the table", async () => {
     renderScreen({ operator: false });
     expect(await screen.findByRole("button", { name: /^SCIM provisioning/ })).toBeInTheDocument();

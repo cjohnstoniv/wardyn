@@ -5,6 +5,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -63,6 +64,12 @@ type PersonListing struct {
 	SSHKeys        int
 	Credentials    int
 	ActiveRuns     int
+	// Groups, GroupsTruncated and GroupsVerified are the person's last verified login groups
+	// (key_domain_login_groups, stamped at every SSO sign-in). GroupsVerified is false when no
+	// snapshot exists; GroupsTruncated is the login's own bit that its groups claim was cut short.
+	Groups          []string
+	GroupsTruncated bool
+	GroupsVerified  bool
 }
 
 // PeopleDirectoryPage is one page; Next is the principal to pass as After, or "" on the last page.
@@ -88,7 +95,7 @@ WITH ident AS (
      GROUP BY principal
 ), dir AS (
     SELECT COALESCE(i.principal, p.principal) AS principal,
-           COALESCE(NULLIF(p.email, ''), i.email, '') AS email,
+           COALESCE(NULLIF(i.email, ''), NULLIF(p.email, ''), '') AS email,
            COALESCE(i.entra, p.object_id <> '') AS entra,
            p.principal IS NOT NULL AS pre_created,
            COALESCE(p.first_signed_in_at, i.first_seen) AS first_sign_in_at,
@@ -97,12 +104,14 @@ WITH ident AS (
       FROM ident i
       FULL JOIN people p ON p.principal = i.principal
 )
-SELECT principal, email, entra, pre_created, first_sign_in_at, last_sign_in_at, deactivated_at
+SELECT dir.principal, dir.email, dir.entra, dir.pre_created, dir.first_sign_in_at, dir.last_sign_in_at, dir.deactivated_at,
+       COALESCE(g.groups, '[]'::jsonb), COALESCE(g.truncated, false), g.principal IS NOT NULL
   FROM dir
- WHERE ($1 = '' OR starts_with(principal, $1) OR starts_with(lower(email), lower($1)))
-   AND ($2 = '' OR ($2 = 'active' AND deactivated_at IS NULL) OR ($2 = 'deactivated' AND deactivated_at IS NOT NULL))
-   AND ($3 = '' OR principal COLLATE "C" > $3 COLLATE "C")
- ORDER BY principal COLLATE "C"
+  LEFT JOIN key_domain_login_groups g ON g.principal = dir.principal
+ WHERE ($1 = '' OR starts_with(dir.principal, $1) OR starts_with(lower(dir.email), lower($1)))
+   AND ($2 = '' OR ($2 = 'active' AND dir.deactivated_at IS NULL) OR ($2 = 'deactivated' AND dir.deactivated_at IS NOT NULL))
+   AND ($3 = '' OR dir.principal COLLATE "C" > $3 COLLATE "C")
+ ORDER BY dir.principal COLLATE "C"
  LIMIT $4`
 
 // peopleCounts are the grouped reads that fill a page's counts, one query each over the page's
@@ -135,8 +144,15 @@ func (s PG) ListPeopleDirectory(ctx context.Context, f PeopleDirectoryFilter) (P
 	}
 	people, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (PersonListing, error) {
 		var p PersonListing
-		err := r.Scan(&p.Principal, &p.Email, &p.Entra, &p.PreCreated, &p.FirstSignInAt, &p.LastSignInAt, &p.DeactivatedAt)
-		return p, err
+		var groups []byte
+		if err := r.Scan(&p.Principal, &p.Email, &p.Entra, &p.PreCreated, &p.FirstSignInAt, &p.LastSignInAt, &p.DeactivatedAt,
+			&groups, &p.GroupsTruncated, &p.GroupsVerified); err != nil {
+			return p, err
+		}
+		if err := json.Unmarshal(groups, &p.Groups); err != nil {
+			return p, fmt.Errorf("the stored groups of %q are not a list: %w", p.Principal, err)
+		}
+		return p, nil
 	})
 	if err != nil {
 		return PeopleDirectoryPage{}, fmt.Errorf("store: list people directory: %w", err)

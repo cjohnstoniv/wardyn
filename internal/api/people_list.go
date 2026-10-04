@@ -13,6 +13,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// roleUnknown is the People role of a person whose last sign-in's groups were truncated: the role
+// those groups would derive cannot be known.
+const roleUnknown = "unknown"
+
 // Issuer kinds a listed person is shown under.
 const (
 	issuerKindEntra = "entra"
@@ -24,9 +28,9 @@ const (
 // role and the counts behind the leaver actions. It is on securityOps because it discloses the
 // email of everyone who has signed in, the audience that can already read the audit trail.
 //
-// The role is what the role mappings give that email today. A person's groups and roles claims
-// only exist at sign-in, so a mapping keyed on one of those shows here only once it also names
-// the email or sets the default.
+// The role is what the role mappings give the person's email and the groups of their last verified
+// sign-in. It is "unknown" when that sign-in's groups claim was truncated, so the groups are
+// incomplete, and the email alone when the person has no recorded sign-in groups.
 func (s *Server) handleListPeople(w http.ResponseWriter, r *http.Request) {
 	ds, ok := s.cfg.Store.(store.PeopleDirectoryStore)
 	if !ok {
@@ -71,7 +75,7 @@ func (s *Server) handleListPeople(w http.ResponseWriter, r *http.Request) {
 		out.People[i] = types.PersonSummary{
 			Principal: p.Principal, Email: p.Email, IssuerKind: personIssuerKind(p),
 			PreCreated: p.PreCreated, FirstSignedInAt: p.FirstSignInAt, LastSignedInAt: p.LastSignInAt,
-			DeactivatedAt: p.DeactivatedAt, Role: roleOf(p.Email),
+			DeactivatedAt: p.DeactivatedAt, Role: roleOf(p),
 			ActiveSessions: p.ActiveSessions, APITokens: p.APITokens, SSHKeys: p.SSHKeys,
 			Credentials: p.Credentials, ActiveRuns: p.ActiveRuns,
 		}
@@ -96,10 +100,11 @@ func personIssuerKind(p store.PersonListing) string {
 }
 
 // personRoleResolver reads the role mappings and user types once and returns the role each email
-// derives against them: "denied" when sign-in would refuse it, and "" when sign-in is not SSO.
-func (s *Server) personRoleResolver(r *http.Request) (func(email string) string, error) {
+// derives against them from the email and last verified groups: "denied" when sign-in would refuse
+// it, "unknown" when the stored groups are truncated, and "" when sign-in is not SSO.
+func (s *Server) personRoleResolver(r *http.Request) (func(p store.PersonListing) string, error) {
 	if s.cfg.OIDC == nil {
-		return func(string) string { return "" }, nil
+		return func(store.PersonListing) string { return "" }, nil
 	}
 	rows, err := s.cfg.Store.ListRoleMappings(r.Context())
 	if err != nil {
@@ -110,8 +115,11 @@ func (s *Server) personRoleResolver(r *http.Request) (func(email string) string,
 		return nil, err
 	}
 	mappings := toOIDCRoleMappings(rows)
-	return func(email string) string {
-		d := s.cfg.OIDC.PreviewRoleAgainst(mappings, userTypes, nil, nil, email)
+	return func(p store.PersonListing) string {
+		if p.GroupsVerified && p.GroupsTruncated {
+			return roleUnknown
+		}
+		d := s.cfg.OIDC.PreviewRoleAgainst(mappings, userTypes, nil, p.Groups, p.Email)
 		if !d.OK() {
 			return accessDeniedRole
 		}
