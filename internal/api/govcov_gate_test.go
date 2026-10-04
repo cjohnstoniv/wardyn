@@ -259,6 +259,43 @@ func TestGovCovProposeGovernanceChange(t *testing.T) {
 	}
 }
 
+// TestGovCovProposeRefusalCarriesTheHeldChange: the 409 a second proposal gets names the change that
+// holds the target in pending_change, so a repeat apply can report it as pending. A held change that
+// cannot be read, or is no longer pending, leaves the plain refusal.
+func TestGovCovProposeRefusalCarriesTheHeldChange(t *testing.T) {
+	pendingID := uuid.MustParse("33333333-3333-3333-3333-333333333333")
+	for _, c := range []struct {
+		name     string
+		got      types.GovernanceChange
+		getErr   error
+		wantHeld bool
+	}{
+		{"the held change is read", types.GovernanceChange{ID: pendingID, State: types.GovernanceChangePending}, nil, true},
+		{"the read fails", types.GovernanceChange{}, errors.New("pg: gone"), false},
+		{"it was decided meanwhile", types.GovernanceChange{ID: pendingID, State: types.GovernanceChangeApplied}, nil, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := &govCovStore{proposeErr: &store.ErrGovernanceChangePending{ID: pendingID}, got: c.got, getErr: c.getErr}
+			s, _ := govCovServer(t, st)
+			w := httptest.NewRecorder()
+			s.proposeGovernanceChange(w, govCovHumanReq(http.MethodPost, "/x", "sub-a", "a@corp.example", oidc.RoleSecurityAdmin),
+				govProposal{kind: govKindProfile, op: "update", key: "k", payload: map[string]any{}})
+			if w.Code != http.StatusConflict || errorReason(w) != reasonGovernanceChangePending {
+				t.Fatalf("answer = %d %q, want 409 %q", w.Code, errorReason(w), reasonGovernanceChangePending)
+			}
+			var body struct {
+				Pending *types.GovernanceChange `json:"pending_change"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("body %s: %v", w.Body.String(), err)
+			}
+			if c.wantHeld != (body.Pending != nil && body.Pending.ID == pendingID) {
+				t.Errorf("pending_change = %+v, want held=%v", body.Pending, c.wantHeld)
+			}
+		})
+	}
+}
+
 func TestGovCovProposeGovernanceChangeFailures(t *testing.T) {
 	pendingID := uuid.MustParse("33333333-3333-3333-3333-333333333333")
 	for _, c := range []struct {

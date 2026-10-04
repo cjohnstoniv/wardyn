@@ -309,6 +309,12 @@ func TestPG_GovernanceChanges_QueuedWritesAnswer202(t *testing.T) {
 	if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangePending {
 		t.Errorf("a second change to a held target = %d %s, want 409 %s", w.Code, w.Body, reasonGovernanceChangePending)
 	}
+	var held struct {
+		Pending types.GovernanceChange `json:"pending_change"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &held); err != nil || held.Pending.State != types.GovernanceChangePending || held.Pending.TargetKey != upd.ID.String() {
+		t.Errorf("the 409 carries no held change for %s: %s (%v)", upd.ID, w.Body, err)
+	}
 	// A write the store would refuse is refused as it always was, not held.
 	if w := e.call(e.alice, http.MethodPost, "/api/v1/governance/profiles", `{"name":""}`); w.Code != http.StatusBadRequest {
 		t.Errorf("an invalid body = %d %s, want the direct 400", w.Code, w.Body)
