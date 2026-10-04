@@ -94,6 +94,9 @@ test("50 MB of output keeps the page responsive and ends on the right screen", a
     const note = (what: string, ms: number) => {
       if (ms > worst.ms) worst = { what, ms };
     };
+    // Every way terminal output reaches the page: use-attach-session.ts's socket handler, xterm's parse
+    // timers and its draw frames. If the output path ever moves to another invoker (a Worker, a
+    // MessagePort, idle callbacks), add it here, or this check passes on no data.
     const stream = ["DOMWebSocket.onmessage", "TimerHandler:setTimeout", "FrameRequestCallback"];
     const scan = (frames: PerformanceEntryList) => {
       for (const f of frames as Frame[]) {
