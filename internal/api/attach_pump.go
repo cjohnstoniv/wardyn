@@ -22,8 +22,8 @@ import (
 // it so the others unblock and the function returns:
 //
 //   - Session.Read -> client (and the recording tee);
-//   - the socket READER, which only parses frames: control frames (resize; pong
-//     and close are consumed by the library inside the same Read) are handled at
+//   - the socket READER, which only parses frames: control frames (resize, pause
+//     and resume; pong and close are consumed by the library inside the same Read) are handled at
 //     once, and keystroke frames go to a bounded queue. It starts BEFORE the
 //     exec is opened, so a slow Runner.Attach never leaves a live peer's pong or
 //     close unprocessed (the library needs a concurrent reader for pong);
@@ -74,6 +74,7 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, runID uuid.U
 		// window-change model).
 		resizeC: make(chan resizeMsg, 1),
 	}
+	defer p.flow.stop()
 	go p.ping()
 	go p.output()
 	go p.read()
@@ -110,6 +111,7 @@ type attachPumpState struct {
 	reasonC chan string
 	queue   *attachInputQueue
 	resizeC chan resizeMsg
+	flow    attachFlow
 }
 
 // end records why the pump ended and cancels it.
@@ -152,8 +154,17 @@ func (p *attachPumpState) ping() {
 func (p *attachPumpState) output() {
 	buf := make([]byte, attachReadBuf)
 	for {
+		// Paused by the client: the exec is not read until it resumes.
+		if !p.flow.wait(p.ctx) {
+			return
+		}
 		n, rerr := p.sess.Read(buf)
 		if n > 0 {
+			// A pause that landed while this Read was parked holds the chunk
+			// back rather than leaking it to the paused client.
+			if !p.flow.wait(p.ctx) {
+				return
+			}
 			wctx, wcancel := context.WithTimeout(p.ctx, attachWriteTimeout)
 			werr := p.c.Write(wctx, websocket.MessageBinary, buf[:n])
 			wcancel()
@@ -228,12 +239,23 @@ func (p *attachPumpState) read() {
 	}
 }
 
-// control handles one control frame: only resize is understood. An
-// unparseable or unknown control message is ignored (it is never injected into
-// the PTY, so it cannot smuggle keystrokes).
+// control handles one control frame: resize, pause and resume. An unparseable
+// or unknown control message is ignored (it is never injected into the PTY, so
+// it cannot smuggle keystrokes).
 func (p *attachPumpState) control(data []byte) {
 	var msg resizeMsg
-	if json.Unmarshal(data, &msg) != nil || msg.Type != "resize" || msg.Cols == 0 || msg.Rows == 0 {
+	if json.Unmarshal(data, &msg) != nil {
+		return
+	}
+	switch msg.Type {
+	case "pause":
+		p.flow.pause(p.s.attachPauseLimit(), func() { p.end("client stalled") })
+		return
+	case "resume":
+		p.flow.resume()
+		return
+	}
+	if msg.Type != "resize" || msg.Cols == 0 || msg.Rows == 0 {
 		return
 	}
 	// Keep the registry's geometry LIVE: the handshake ?cols=&rows= is stale the
