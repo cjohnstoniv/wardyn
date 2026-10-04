@@ -80,6 +80,20 @@ const (
 	preflightLimiterMaxPeople = 16384
 )
 
+// refusePreflightRate answers 429 when this person is over the preflight rate, true when it has
+// answered. A person only; the admin token is one shared actor name, so limiting it would pool
+// every CI job into one bucket.
+func (s *Server) refusePreflightRate(w http.ResponseWriter, r *http.Request) bool {
+	if s.preflightLimiter == nil {
+		return false
+	}
+	if t, who := actorFromRequest(r); t != types.ActorHuman || s.preflightLimiter.allow(who, s.cfg.Now()) {
+		return false
+	}
+	writeErrorReason(w, http.StatusTooManyRequests, reasonPreflightRateLimited, "too many preflight checks; slow down")
+	return true
+}
+
 // handlePreflightRun is a DRY-RUN of handleCreateRun's resolution + gating: it
 // resolves the run policy through the EXACT same resolveRunPolicy chokepoint (so
 // an XOR violation, an unknown-secret 422, or an invalid inline spec surface as
@@ -130,13 +144,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(audit.WithDryRun(r.Context()))
 	ctx := r.Context()
 	// First, before the decode and every gate: a limited call costs no work and
-	// writes no row. A person only; the admin token is one shared actor name,
-	// so limiting it would pool every CI job into one bucket.
-	if s.preflightLimiter != nil {
-		if t, who := actorFromRequest(r); t == types.ActorHuman && !s.preflightLimiter.allow(who, s.cfg.Now()) {
-			writeErrorReason(w, http.StatusTooManyRequests, reasonPreflightRateLimited, "too many preflight checks; slow down")
-			return
-		}
+	// writes no row.
+	if s.refusePreflightRate(w, r) {
+		return
 	}
 	if s.refuseAdminViewLaunch(w, r) {
 		return
