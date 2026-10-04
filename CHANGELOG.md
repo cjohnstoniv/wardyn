@@ -330,6 +330,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   sink, so a SIEM receives ciphertext for them; audit reads and the readable export open them. A key that cannot
   be had never drops the row or writes it in the clear: it waits in the spool under the new platform key
   `wardyn-audit-pending-key` and the drain re-seals it. Rows written before it is turned on stay plaintext.
+  Migration `0131_principal_key_handles` gives each `principal_keys` generation a random `handle`; a sealed field is
+  stored as `seal2.<handle>.<ciphertext>` and names the key, never the person (see "Sealed fields" in
+  `docs/AUDIT-ACTIONS.md`).
   `POST /people/{principal}/erasure` (`wardyn person erase`) erases one person's `credentials`,
   `audit_personal_fields`, `run_tasks`, `run_outputs`, `recordings` (opt-in) and `mask_copies` by explicit
   scope in one audited `person.erasure` act, reports complete only when every scope asked for is, names the
@@ -398,7 +401,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   read-only preview whose writes are refused `409` `user_view_preview`. See "Constrained-admin mode" in
   `docs/operations/member-mode.md`.
 - **Fleet capacity.** `WARDYN_MAX_CONCURRENT_RUNS` (default `0`, unlimited) caps non-terminal runs across the
-  deployment (`422` `run_quota`); `WARDYN_SANDBOX_REQUEST_RATIO` (Kubernetes, unset by default) sets the agent pod's
+  deployment (`422` `run_quota`; a kept run whose agent has stopped does not count, and reviving one takes a slot, so it is refused the same way at the cap); `WARDYN_SANDBOX_REQUEST_RATIO` (Kubernetes, unset by default) sets the agent pod's
   requests as a fraction of its limits so more runs fit a node; `GET /api/v1/admin/runs/capacity` reports the
   configured reservations, and `wardyn_runs_active`, `wardyn_runs_unschedulable`, `wardyn_runs_cpu_millis_held`,
   `wardyn_runs_memory_mib_held` and `wardyn_runs_oldest_active_seconds` export them. The chart's
