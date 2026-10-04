@@ -59,7 +59,8 @@ describe("the domains table", () => {
     listMock.mockResolvedValue(data());
     renderCard();
     expect(await screen.findByText(KEY_DOMAINS.TITLE)).toBeInTheDocument();
-    expect(screen.getByText(KEY_DOMAINS.LEDE)).toBeInTheDocument();
+    // The title is on the loading skeleton too; the lede appears only with the data.
+    expect(await screen.findByText(KEY_DOMAINS.LEDE)).toBeInTheDocument();
     const finance = screen.getAllByText("finance")[0].closest("tr")!;
     expect(within(finance).getByText("Transit key finance")).toBeInTheDocument();
     expect(within(finance).getByText(KEY_DOMAINS.PROVEN)).toBeInTheDocument();

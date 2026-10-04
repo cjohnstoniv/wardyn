@@ -25,6 +25,7 @@ package secretmask
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"slices"
@@ -287,6 +288,33 @@ func (r *Registry) EvictGlobal(owner, name string, now time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.retireLocked(globalKey{owner, name}, nil, now)
+	r.reflattenLocked()
+	return nil
+}
+
+// RetireOwnerGlobals retires every current credential value of owner, as
+// EvictGlobal does for one credential: the values stay masked until
+// SweepGlobals drops them. Idempotent. With a Backend the committed rows are
+// retired first, and an error means they are still current.
+func (r *Registry) RetireOwnerGlobals(ctx context.Context, owner string, now time.Time) error {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	b := r.backend
+	r.mu.RUnlock()
+	if b != nil {
+		if err := b.RetireOwnerGlobals(ctx, owner, now); err != nil {
+			return err
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for k := range r.current {
+		if k.owner == owner {
+			r.retireLocked(k, nil, now)
+		}
+	}
 	r.reflattenLocked()
 	return nil
 }

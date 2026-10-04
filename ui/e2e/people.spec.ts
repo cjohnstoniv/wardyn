@@ -61,6 +61,10 @@ test.describe("People (Admin view)", () => {
 
     const drawer = page.getByRole("dialog");
     await expect(drawer.getByRole("heading", { name: new RegExp(`^${person.email}`) })).toBeVisible();
+    // The token list stays; minting for another person is refused server-side (#1477), so no control offers it.
+    await expect(drawer.getByText("API tokens")).toBeVisible();
+    await expect(drawer.getByRole("listitem").filter({ hasText: "e2e" })).toBeVisible();
+    await expect(drawer.getByRole("button", { name: /mint/i })).toHaveCount(0);
 
     // Sign out everywhere: asks first, then sends exactly this person.
     let revoked: unknown = null;

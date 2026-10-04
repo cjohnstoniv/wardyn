@@ -40,7 +40,7 @@ export const PEOPLE_PAGE = {
   },
   EMPTY: "Nobody has signed in yet. People appear here after their first sign-in, or when you add them.",
   ADD: "Add a person",
-  ADD_HINT: "Add someone before their first sign-in, so you can give them tokens or a profile ahead of time.",
+  ADD_HINT: "Add someone before their first sign-in, so you can assign them a profile or key domain ahead of time. They mint their own API tokens after they sign in.",
   SESSIONS: "Sessions",
   SESSIONS_ACTIVE: (n: number) => `${n} active`,
   SIGN_OUT: "Sign out everywhere",

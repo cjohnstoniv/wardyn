@@ -342,6 +342,97 @@ func TestSCIMGroupRemovalIsDurable(t *testing.T) {
 	}
 }
 
+// failGroupRemovalAndAge makes the mover's removal fail on its session cut, then clears the fault and ages the
+// ledger past the sweeper's idle wait, so only the sweeper is left to finish it.
+func failGroupRemovalAndAge(t *testing.T, w *moverWorld) {
+	t.Helper()
+	e := w.e
+	e.rev.setFail(true)
+	if r := e.patchGroup(e.a, w.group.ID, groupRemovePatch(t, "rfc-patch-group-remove-member-filter-path.json", w.moverID)); r.Code != http.StatusInternalServerError {
+		t.Fatalf("a removal whose session cut failed = %d %s, want 5xx", r.Code, r.Body.String())
+	}
+	e.rev.setFail(false)
+	if _, err := e.pool.Exec(context.Background(), `UPDATE deprovision_jobs SET updated_at = now() - interval '1 hour' WHERE identity_id = $1`, w.moverID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A removal the identity provider never retries is finished by the sweeper on another instance, and the card
+// lists it while it is unfinished. The person is never deactivated, so the leaver sweep alone never sees it.
+func TestSCIMGroupRemovalResumedBySweeper(t *testing.T) {
+	w := newMoverWorld(t)
+	e := w.e
+	failGroupRemovalAndAge(t, w)
+	if got := e.scimStatusOf(e.a).Pending; len(got) != 1 || got[0].Person != moverEmail || got[0].Step != store.GroupStepSessions || got[0].LastError == "" {
+		t.Errorf("pending before the sweep = %+v, want the mover's failed session cut", got)
+	}
+
+	if err := e.b.srv.SweepSCIMPurge(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !e.groupJobsDone(w.moverID, w.group.ID) {
+		t.Error("the sweep left the group removal pending")
+	}
+	w.checkRemoved(t, e.a, e.b)
+	if got := e.scimStatusOf(e.a).Pending; len(got) != 0 {
+		t.Errorf("pending after the sweep = %+v, want none", got)
+	}
+	if rows := e.rows(e.b, "scim.group.member_remove"); len(rows) != 1 || dataOf(t, rows[0])["slot"] != scimSweeperSlot {
+		t.Errorf("sweeper rows = %+v, want one scim.group.member_remove from the sweeper", rows)
+	}
+}
+
+// A pending removal whose group was deleted in the meantime is still finished. The group's external id is
+// gone with it, so no token snapshot can prove the group absent and the token step revokes them all.
+func TestSCIMGroupRemovalSweeperFinishesADeletedGroup(t *testing.T) {
+	w := newMoverWorld(t)
+	e := w.e
+	failGroupRemovalAndAge(t, w)
+	_, tid, raw := e.mintTokenAs(e.a, entrafake.Identity{Username: moverEmail, Subject: "sub-mover", Groups: []string{"other-team"}})
+	if _, err := e.pool.Exec(context.Background(), `UPDATE deprovision_jobs SET state = 'pending', updated_at = now() - interval '1 hour'
+		WHERE identity_id = $1 AND kind = $2 AND step = $3`, w.moverID, store.JobKindGroupRemove, store.GroupStepTokens); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(context.Background(), `DELETE FROM scim_groups WHERE id = $1`, w.group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.b.srv.SweepSCIMPurge(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !e.groupJobsDone(w.moverID, w.group.ID) {
+		t.Error("the sweep left the deleted group's removal pending")
+	}
+	if e.tokenWorks(e.b, raw) || !e.tokenRevoked(tid) {
+		t.Error("a token whose snapshot lacks the unknown group survived the deleted group's removal")
+	}
+	for i, c := range w.moverCookies {
+		if e.cookieWorks(e.b, c) {
+			t.Errorf("the mover's session %d still works", i)
+		}
+	}
+}
+
+// A person the identity provider added back to the group is a member again: the sweeper does not take that
+// membership away, and the card does not list the old removal as unfinished.
+func TestSCIMGroupRemovalSweeperLeavesAReaddedMember(t *testing.T) {
+	w := newMoverWorld(t)
+	e := w.e
+	failGroupRemovalAndAge(t, w)
+	if r := e.patchGroup(e.a, w.group.ID, addMembersPatch(w.moverID)); r.Code != http.StatusOK {
+		t.Fatalf("re-add = %d %s", r.Code, r.Body.String())
+	}
+	if err := e.b.srv.SweepSCIMPurge(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	members, err := e.st.ScimGroupMembers(context.Background(), uuid.MustParse(w.group.ID))
+	if err != nil || !slices.Contains(members, uuid.MustParse(w.moverID)) {
+		t.Errorf("members after the sweep = %v, %v, want the re-added mover kept", members, err)
+	}
+	if got := e.scimStatusOf(e.a).Pending; len(got) != 0 {
+		t.Errorf("pending for a re-added member = %+v, want none", got)
+	}
+}
+
 // A person added to the group again after a removal is removed again for real.
 func TestSCIMGroupReaddedMemberIsRemovedAgain(t *testing.T) {
 	w := newMoverWorld(t)

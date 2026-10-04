@@ -735,7 +735,9 @@ that drop recorded, and the result reports that drop's last `seq` as `anchor_seq
 breaks the chain, and its `reason` now says `rows removed without an attested retention drop`. Two checks cover
 what a chain cannot say about itself. The newest row must be the one `audit_partition_meta` recorded as the
 high-water mark, so rows removed from the **newest** end (which leave a shorter, valid chain) read as `the log was
-truncated at its tail`. And every partition in the expected manifest must still exist unless a drop anchor names
+truncated at its tail`. The next append does not clear that: each new row links to the recorded head, not to the
+newest row left in the table (`0130_audit_chain_head_from_meta`), so the chain then breaks at the first row appended
+after the removal. And every partition in the expected manifest must still exist unless a drop anchor names
 it; a range a `split` anchor names must exist or be accounted for by a later drop. Someone who can rewrite the
 table can rewrite the high-water mark and the anchors too: the head hash on your SIEM remains the control that
 catches that.
@@ -1855,10 +1857,12 @@ person who can act.
 
 **Optional: four-eyes on governance writes.** Set `WARDYN_GOVERNANCE_SECOND_HUMAN=1` and no
 single administrator can change a governance profile, an assignment, a capability grant, the
-enforcement map, a value's availability, a user type's priority or a role mapping alone. With it on, a
+enforcement map, a value's availability, a user type's priority, a role mapping or a key-domain
+assignment alone. With it on, a
 human's write to `POST/PUT/DELETE /governance/profiles`, `POST/DELETE /governance/assignments`,
 `POST/DELETE /permissions/grants`, `PUT /permissions/enforcement`, `PUT /permissions/availability/{kind}/*`,
-`PUT /user-types/{id}` (when the priority changes) or `POST/DELETE /access/mappings`
+`PUT /user-types/{id}` (when the priority changes), `POST/DELETE /access/mappings` or
+`PUT/DELETE /key-domains/assignments/{subject_type}/{subject}`
 is decoded and validated exactly as before and then stored as a pending change, answered `202`
 with `Location: /api/v1/governance/changes/{id}` and
 `{"pending_change": {id, target_kind, op, target_key, state, proposed_by, proposed_at, expires_at, diff}}`.
@@ -1930,7 +1934,7 @@ approvers find them through `wardyn governance changes list` or the API.
 - **Audit.** `governance.change.propose`, `.approve`, `.reject`, `.expire` and `.bypass`
   ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)). On approval the target's own row (`governance.profile.write`,
   `governance.assignment.write`, ...) is written too, its actor the approver, carrying `change_id` and
-  `proposed_by`. The proposer, the approver and their emails are personal fields: the
+  `proposed_by`. The proposer, the approver, their emails and a rejection's `reason` are personal fields: the
   `audit_personal_fields` erasure scope clears them from the change rows, and a pending change whose
   proposer is erased expires, so a change with no recorded proposer can never be approved.
 - **Residual risks.** The `admin-token` is single-human by design. A database writer can change the
@@ -1938,7 +1942,7 @@ approvers find them through `wardyn governance changes list` or the API.
   detection, not prevention. Each change is reviewed alone: two separately approved changes can compose
   into a widening neither diff shows. Not covered here: the rest of the governance-adjacent writes
   (workspace egress lists, `/policies`, `/site-config`, `/integrations`, the approval `always` scope,
-  user-type create and delete, and key-domain assignments stay single-human until their own lanes).
+  and user-type create and delete stay single-human until their own lanes).
 - **In the console.** The Governance screen's Changes tab lists the pending changes with the server's
   diff, and an approver approves or rejects there (a reason is optional). A covered write made in the console
   that is held shows "Submitted for approval" at the place it was made, never a save. Approve is disabled on
@@ -3436,7 +3440,7 @@ to both sides, so a zero that means "the default" is never read as "smaller":
 | `workspace_mounts` | none | intersection by source and target; read-only if either side is |
 | `workspace_repos` | none | intersection by identity |
 | `llm_inspection` | none | the side that sets it; both set and different is unsatisfiable |
-| `ui_apps` | none | intersection by name and port |
+| `ui_apps` | none | intersection by name, port and path (an overlay app that serves a different path than the base's is a widening) |
 | `resources` | the deployment's size | smaller, per field |
 | `tool_rules` | an unnamed tool is held | per tool named on either side, and `*`: the stricter effect |
 | `git_push_any_branch` | false | AND |
@@ -6234,6 +6238,8 @@ request and limit columns, `proxy_cpu_millis` and `proxy_memory_mib`); at dispat
 is created, each run records the values its driver applied, and a run that predates it reads all NULL.
 `0125` adds `governance_profiles.base_profile_id`, `overlay` and `overlay_limits` with five CHECKs (`0052`'s table).
 `0127` (`0127_deprovision_jobs`) adds `people.deactivated_at` (`0090`'s table), beside its new `deprovision_jobs` table.
+`0130` (`0130_audit_chain_head_from_meta`) is a later `CREATE OR REPLACE` of `0047`'s chain function, which
+links each new row to the recorded head.
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -7193,6 +7199,10 @@ What the switch needs, and refuses to render or boot without:
 - **An audit spool on the per-pod `tmp` emptyDir.** The chart renders
   `WARDYN_AUDIT_SPOOL=/tmp/audit-spool.jsonl` and refuses a `WARDYN_AUDIT_SPOOL`
   set in `env` or `extraEnv` anywhere outside `/tmp`.
+- **A database pool of at least 3 connections.** The sweeper leader election holds
+  one connection for the process lifetime; below that every replica would sweep
+  with no election and no fencing. `WARDYN_HA=true` with `pool_max_conns` under 3
+  in `WARDYN_PG_DSN` exits non-zero at boot, naming the value and the minimum.
 - **A PodDisruptionBudget** (`minAvailable: 1`) and a preferred **pod anti-affinity**
   across nodes (soft, so a one-node cluster still schedules every replica; an
   `affinity.podAntiAffinity` of your own replaces it).

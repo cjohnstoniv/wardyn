@@ -364,11 +364,12 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 
 // groupSnapshotMatch selects the tokens a removal from the group with this external id affects: those
 // whose login-time group snapshot holds it, and those whose snapshot cannot prove it absent (truncated,
-// or never recorded; apiTokenSnapshotAnswerable).
+// or never recorded; apiTokenSnapshotAnswerable). With no external id (a group deleted before the sweeper
+// finished its removal) no snapshot can prove the group absent, so every token matches.
 func groupSnapshotMatch(externalID string) func(types.APIToken) bool {
 	want := strings.ToLower(strings.TrimSpace(externalID))
 	return func(t types.APIToken) bool {
-		return !apiTokenSnapshotAnswerable(t) ||
+		return want == "" || !apiTokenSnapshotAnswerable(t) ||
 			slices.ContainsFunc(t.Groups, func(g string) bool { return strings.ToLower(strings.TrimSpace(g)) == want })
 	}
 }

@@ -228,6 +228,30 @@ func TestLiveRunDoorsNameTheRunsPolicy(t *testing.T) {
 			t.Errorf("policy = %+v, want %+v", body.Policy, want)
 		}
 	})
+	t.Run("a contactless leaf borrows site help at both doors", func(t *testing.T) {
+		leaf := limitsProfile("leased", types.GovernanceLimits{DenyInteractive: true, DenyUIApps: true})
+		lrun := types.AgentRun{ID: uuid.New(), CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1",
+			Task: "make test", GovernanceProfileID: &leaf.ID}
+		lst := &profileListStore{profiles: []types.GovernanceProfile{*leaf}, authzStore: newAuthzStore()}
+		lst.authzStore.runs[lrun.ID] = lrun
+		lst.authzStore.siteCfg.PolicyHelp = &policyref.Contact{RequestURL: "https://site.example.com/help"}
+		lcfg := baseTestConfig(newHarness(t), lst)
+		lcfg.OIDC = &oidc.Authenticator{}
+		lsrv := New(lcfg)
+		for name, door := range map[string]func(http.ResponseWriter, *http.Request, types.AgentRun) bool{
+			"attach":  lsrv.refuseInteractiveAttach,
+			"ui apps": lsrv.refuseUIAppsDenied,
+		} {
+			w := httptest.NewRecorder()
+			if !door(w, httptest.NewRequest(http.MethodGet, "/", nil), lrun) {
+				t.Fatalf("%s was not refused", name)
+			}
+			got := decodeRefusal(t, w)
+			if got.Policy == nil || got.Policy.Name != "leased" || got.Policy.RequestURL != "https://site.example.com/help" {
+				t.Errorf("%s policy = %+v, want leased with the site help", name, got.Policy)
+			}
+		}
+	})
 	t.Run("run detail with no profile falls back to policy_help, then to nothing", func(t *testing.T) {
 		bare := types.AgentRun{ID: uuid.New(), CreatedBy: "alice", State: types.RunRunning}
 		st.authzStore.runs[bare.ID] = bare
@@ -295,6 +319,25 @@ func TestRecordAndProviderSignInNameThePolicy(t *testing.T) {
 		}
 	})
 
+	t.Run("record mode launch, contactless leaf borrows site help", func(t *testing.T) {
+		leaf := limitsProfile("leased", types.GovernanceLimits{DenyInteractive: true})
+		ws := &types.Workspace{ID: uuid.New(), Name: "ws", Status: types.WorkspaceScanned,
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: govWorkspaceRepo}}}
+		site := types.SiteConfig{PolicyHelp: &policyref.Contact{RequestURL: "https://site.example.com/help"}}
+		srv := providerRunFixture(t, site, assignedStore(leaf), ws)
+		code, body := recordDoor(t, srv, "", ws, true)
+		if code != http.StatusForbidden {
+			t.Fatalf("record = %d %s, want the 403 ceiling refusal", code, body)
+		}
+		var got refusalWire
+		if err := json.Unmarshal([]byte(body), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Policy == nil || got.Policy.Name != "leased" || got.Policy.RequestURL != site.PolicyHelp.RequestURL {
+			t.Errorf("policy = %+v, want leased with the site help", got.Policy)
+		}
+	})
+
 	t.Run("provider sign-in launch", func(t *testing.T) {
 		site := credentialSite(ssoProvider())
 		srv, st, _, _ := signInFixture(t, assignedStore(taggedProfile("two-at-a-time", "alpha", types.GovernanceLimits{MaxConcurrentRuns: 1})), site)
@@ -357,6 +400,60 @@ func TestDeploymentArmReadsPolicyHelpOnlyForARefusal(t *testing.T) {
 	if got := srv.ceilingPolicy(context.Background(), bound); got == nil || got.Owner != "" {
 		t.Errorf("ceilingPolicy without a store = %+v, want the bare deployment arm", got)
 	}
+}
+
+// TestContactlessLeafBorrowsSiteHelp: a leaf that publishes no contact keeps its
+// name and borrows the site's policy_help on all three projections that carry a
+// ref; a leaf with its own contact never inherits site help; a site without
+// help leaves the bare profile ref.
+func TestContactlessLeafBorrowsSiteHelp(t *testing.T) {
+	help := &policyref.Contact{RequestURL: "https://site.example.com/help"}
+	run := func(p *types.GovernanceProfile, site types.SiteConfig) (*Server, types.AgentRun, map[string]*policyref.Ref) {
+		srv, st := runLimitsFixture(t, assignedStore(p))
+		st.siteConfig = site
+		srv.cfg.Store = &attrStore{govEscapeStore: st, profiles: []types.GovernanceProfile{*p}}
+		r := types.AgentRun{GovernanceProfileID: &p.ID}
+		ctx := context.Background()
+		return srv, r, map[string]*policyref.Ref{
+			"ceiling refusal": srv.ceilingPolicy(ctx, governanceCeiling{Profile: resolvedOf(p)}),
+			"run detail":      srv.runPolicyRef(ctx, r),
+			"dispatch":        srv.runAttribution(ctx, r, site),
+		}
+	}
+
+	t.Run("no contact borrows site help", func(t *testing.T) {
+		_, _, refs := run(limitsProfile("leased", types.GovernanceLimits{}), types.SiteConfig{PolicyHelp: help})
+		want := policyref.Ref{Source: policyref.SourceProfile, Name: "leased", RequestURL: help.RequestURL}
+		for door, ref := range refs {
+			if ref == nil || *ref != want {
+				t.Errorf("%s = %+v, want %+v", door, ref, want)
+			}
+		}
+	})
+	t.Run("own contact never inherits site help", func(t *testing.T) {
+		want := profileRefFor("ci", "alpha")
+		_, _, refs := run(taggedProfile("ci", "alpha", types.GovernanceLimits{}), types.SiteConfig{PolicyHelp: help})
+		for door, ref := range refs {
+			if ref == nil || *ref != want {
+				t.Errorf("%s = %+v, want %+v", door, ref, want)
+			}
+		}
+	})
+	t.Run("site without help leaves the bare profile ref", func(t *testing.T) {
+		want := policyref.Ref{Source: policyref.SourceProfile, Name: "leased"}
+		_, _, refs := run(limitsProfile("leased", types.GovernanceLimits{}), types.SiteConfig{})
+		for door, ref := range refs {
+			if ref == nil || *ref != want {
+				t.Errorf("%s = %+v, want %+v", door, ref, want)
+			}
+		}
+	})
+	t.Run("/me adds no read and stays the bare profile ref", func(t *testing.T) {
+		got := governanceCeiling{Profile: resolvedOf(limitsProfile("leased", types.GovernanceLimits{}))}.policyRef()
+		if want := (policyref.Ref{Source: policyref.SourceProfile, Name: "leased"}); got == nil || *got != want {
+			t.Errorf("policyRef = %+v, want %+v", got, want)
+		}
+	})
 }
 
 // TestRefuseLeavesPolicyOffHiddenAndRewrittenDecisions pins the parity law: a

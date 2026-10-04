@@ -19,6 +19,8 @@ export function roleLabel(role: string): string {
     case "user":
     case "member":
       return PEOPLE.ROLE_USER;
+    case "unknown":
+      return PEOPLE.ROLE_UNKNOWN;
     default:
       return role;
   }

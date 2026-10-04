@@ -210,6 +210,9 @@ func TestW4CovApplyTombstoneOfAnUnknownRowIsANoOp(t *testing.T) {
 	}
 }
 
+// w4CovRetired marks a row retired; its value is never read.
+var w4CovRetired = time.Now()
+
 func TestW4CovApplySkipsWhatCanNeverOpen(t *testing.T) {
 	run := w4CovRun
 	cases := []struct {
@@ -220,14 +223,19 @@ func TestW4CovApplySkipsWhatCanNeverOpen(t *testing.T) {
 		{"no key version", func(_ *w4CovFixture, r *row) { r.version = nil }, bucketGlobal},
 		{"no sealed blob", func(_ *w4CovFixture, r *row) { r.sealed = nil }, bucketGlobal},
 		{"a per-run row with no run", func(_ *w4CovFixture, r *row) { r.runID = nil }, bucketRun},
-		{"a destroyed owner key", func(f *w4CovFixture, _ *row) {
+		// The next three rows are retired: a live row that cannot open fences the runs it
+		// masks in Postgres (TestPG_MaskStore_UnopenableLiveRowFencesRun), so only a retired
+		// one is skipped with no database.
+		{"a destroyed owner key", func(f *w4CovFixture, r *row) {
 			f.keys.errs[w4CovOwner] = fmt.Errorf("gone: %w", subjectkey.ErrDataLoss)
+			r.retiredAt = &w4CovRetired
 		}, bucketGlobal},
 		{"a blob that does not authenticate", func(_ *w4CovFixture, r *row) {
 			r.sealed = append([]byte(nil), r.sealed...)
 			r.sealed[len(r.sealed)-1] ^= 1
+			r.retiredAt = &w4CovRetired
 		}, bucketGlobal},
-		{"a blob sealed for another row", func(_ *w4CovFixture, r *row) { r.name = "other" }, bucketGlobal},
+		{"a blob sealed for another row", func(_ *w4CovFixture, r *row) { r.name, r.retiredAt = "other", &w4CovRetired }, bucketGlobal},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

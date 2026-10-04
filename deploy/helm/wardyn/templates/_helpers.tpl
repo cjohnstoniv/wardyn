@@ -204,14 +204,29 @@ for a values map that predates secretStore (--reuse-values).
 {{- end -}}
 
 {{/*
+wardyn.azureConsumer: "true" when anything in the release reaches Azure Key
+Vault: a store URL, the Key Vault KEK, or any kek.domains entry of kind azurekv.
+They all share the one Entra identity under secretStore.azure, so this single
+predicate gates its environment, its render refusal and its workload-identity
+wiring. Nil-safe for a values map that predates secretStore.azure, kek.azurekv
+or kek.domains (--reuse-values).
+*/}}
+{{- define "wardyn.azureConsumer" -}}
+{{- $azure := (.Values.secretStore | default dict).azure | default dict -}}
+{{- $azkek := (.Values.kek | default dict).azurekv | default dict -}}
+{{- $domain := false -}}
+{{- range $name, $d := ((.Values.kek | default dict).domains | default dict) -}}
+{{- if and (kindIs "map" $d) (hasKey $d "azurekv") -}}{{- $domain = true -}}{{- end -}}
+{{- end -}}
+{{- if or $azure.vaultUrl $azkek.key $domain -}}true{{- end -}}
+{{- end -}}
+
+{{/*
 wardyn.azureWorkloadIdentity: "true" when wardynd gets its Key Vault token
-through AKS workload identity (a Key Vault URL or Key Vault KEK with auth
-workload-identity): the pod label and service-account annotation the webhook
-keys on. Nil-safe for a values map that predates secretStore.azure or
-kek.azurekv (--reuse-values).
+through AKS workload identity (an Azure consumer with auth workload-identity):
+the pod label and service-account annotation the webhook keys on.
 */}}
 {{- define "wardyn.azureWorkloadIdentity" -}}
 {{- $azure := (.Values.secretStore | default dict).azure | default dict -}}
-{{- $azkek := (.Values.kek | default dict).azurekv | default dict -}}
-{{- if and (or $azure.vaultUrl $azkek.key) (eq ($azure.auth | default "workload-identity") "workload-identity") -}}true{{- end -}}
+{{- if and (include "wardyn.azureConsumer" .) (eq ($azure.auth | default "workload-identity") "workload-identity") -}}true{{- end -}}
 {{- end -}}

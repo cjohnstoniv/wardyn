@@ -4,14 +4,14 @@
 package api
 
 import (
-	"context"
-
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// brokeredPATGrantIDs is every git_pat grant id of the run, for
-// proxy.Config.BrokeredPATGrantIDs: with the PAT broker on, the proxy refuses a
-// raw mint of any of them at /wardyn/v1/credentials/mint.
+// brokeredPATGrantIDs is every git_pat grant id among the run's stored grant
+// rows, for proxy.Config.BrokeredPATGrantIDs: with the PAT broker on, the proxy
+// refuses a raw mint of any of them at /wardyn/v1/credentials/mint.
 //
 // It reads the run's stored grants rather than the dispatch maps on purpose.
 // PATGrants and GitPATGrants are narrowed per host (a same-host shadow, a vetoed
@@ -20,13 +20,9 @@ import (
 // mint relay. The set must be every row, so no filter belongs here.
 //
 // Broker off returns nil: that mode mints the PAT into the sandbox on purpose.
-func (s *Server) brokeredPATGrantIDs(ctx context.Context, runID uuid.UUID, brokerOn bool) ([]uuid.UUID, error) {
+func brokeredPATGrantIDs(rows []types.CredentialGrant, brokerOn bool) []uuid.UUID {
 	if !brokerOn {
-		return nil, nil
+		return nil
 	}
-	grants, err := s.cfg.Store.ListGrantsByRun(ctx, runID)
-	if err != nil {
-		return nil, err
-	}
-	return patGrantIDsOf(grants), nil
+	return patGrantIDsOf(rows)
 }

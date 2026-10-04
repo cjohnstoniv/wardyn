@@ -73,7 +73,7 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 	// route keeps credentials only; it never reaches audit, run history or
 	// outputs.
 	var rep secretstore.EraseReport
-	_, err := s.erasureOrchestrator(&rep).Orchestrate(r.Context(), owner, []erasure.Scope{erasure.Credentials})
+	orep, err := s.erasureOrchestrator(&rep).Orchestrate(r.Context(), owner, []erasure.Scope{erasure.Credentials})
 	if errors.Is(err, errSignInConfigUnreadable) {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 			"credential.erase", owner, "failure", withSecretOwner(map[string]any{"count": 0, "reason": reasonCredentialEraseSignInConfigUnreadable}, owner, known)))
@@ -82,6 +82,9 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 		return
 	}
 	data := credentialEraseData(rep)
+	if done, ok := orep.Details[erasure.Credentials].(map[string]any); ok {
+		data = done // with runs_fenced
+	}
 	resp := maps.Clone(data)
 	if err != nil {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
@@ -117,7 +120,8 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 //     every person's own-token writes. That is accepted.
 //
 // No holder of any of the three takes another of them while holding it, which
-// is what makes this order safe; keep it so. EraseOwner still re-lists and
+// is what makes this order safe; keep it so. The person's masking copies are retired
+// under the same locks, just before EraseOwner. EraseOwner still re-lists and
 // fails if anything remains, as well as the locks: the success row is written
 // by the caller only after the locks are released and the re-list was empty.
 //
@@ -137,6 +141,15 @@ func (s *Server) eraseLocked(ctx context.Context, owner, rowID string, rep *secr
 	return s.eraseADOSignIn(ctx, owner, rowID, func(ctx context.Context) (err error) {
 		adoOwnPATWriteMu.Lock()
 		defer adoOwnPATWriteMu.Unlock()
+		// Retire the person's live masking copies of their credentials too, under the same
+		// locks: they are sealed under the key EraseOwner destroys, and a live one that no
+		// replica cached would fence every run the person starts under the next key
+		// generation when a replica first reads it. A renewal in flight writes its copy under
+		// the AWS lock, so retiring before the locks would let it land after the retire.
+		// Replicas that cached them keep masking them through grace.
+		if err := s.cfg.MaskRegistry.RetireOwnerGlobals(ctx, owner, s.cfg.Now()); err != nil {
+			return err
+		}
 		*rep, err = secretstore.EraseOwner(ctx, s.cfg.Secrets, owner)
 		return err
 	})

@@ -489,6 +489,56 @@ func TestFinishRunOutput_NoTailWritesACaptureGap(t *testing.T) {
 	}
 }
 
+// A memory read of a sealed tail carries the same incomplete flag the row would: an
+// interrupted copy, a drain that timed out, or a row still being written.
+func TestFinishRunOutput_MemoryFinalKeepsIncomplete(t *testing.T) {
+	t.Run("persist off, interrupted copy", func(t *testing.T) {
+		f := newOutputFixture(t, func(c *Config) { c.RunOutputPersistOff = true })
+		w := f.open(t)
+		w.BeginDrain()
+		writeExecOutput(t, w, "kept output\n")
+		w.EndDrain(errors.New("interrupted output copy"))
+		f.srv.FinishRunOutput(t.Context(), f.run.ID)
+		if code, got := f.get(t); code != http.StatusOK || !got.Complete || !got.Incomplete {
+			t.Fatalf("a final memory read = %d %+v, want complete and incomplete", code, got)
+		}
+	})
+
+	t.Run("persist off, drain timeout", func(t *testing.T) {
+		f := newOutputFixture(t, func(c *Config) { c.RunOutputPersistOff = true })
+		f.srv.runOutputDrainWaitOverride = 30 * time.Millisecond
+		w := f.open(t)
+		writeExecOutput(t, w, "before exit\n")
+		w.BeginDrain() // a copy that never ends in time
+		f.srv.FinishRunOutput(t.Context(), f.run.ID)
+		if code, got := f.get(t); code != http.StatusOK || !got.Complete || !got.Incomplete {
+			t.Fatalf("a final memory read = %d %+v, want complete and incomplete", code, got)
+		}
+	})
+
+	t.Run("row write pending, then landed", func(t *testing.T) {
+		f := newOutputFixture(t)
+		w := f.open(t)
+		w.BeginDrain()
+		writeExecOutput(t, w, "kept output\n")
+		w.EndDrain(errors.New("interrupted output copy"))
+		f.mem.mu.Lock()
+		f.mem.failSave = 5 // more than the inline attempts, so the row is still pending after the finish
+		f.mem.mu.Unlock()
+		f.srv.FinishRunOutput(t.Context(), f.run.ID)
+		if r, _ := f.mem.row(f.run.ID); r.CapturedAt != nil {
+			t.Fatal("the row committed while the store was failing")
+		}
+		if code, got := f.get(t); code != http.StatusOK || !got.Complete || !got.Incomplete {
+			t.Fatalf("a read before the row landed = %d %+v, want complete and incomplete", code, got)
+		}
+		if row := f.finalRow(t); !row.Incomplete {
+			t.Fatalf("the stored row = %+v, want incomplete", row)
+		}
+		f.srv.WaitBackground()
+	})
+}
+
 // A failing write is retried with backoff, bytes held in memory, until it lands;
 // the failure is audited once.
 func TestFinishRunOutput_RetriesAFailingWrite(t *testing.T) {

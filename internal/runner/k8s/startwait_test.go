@@ -8,6 +8,8 @@ package k8s
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/rest"
 	clienttesting "k8s.io/client-go/testing"
 )
 
@@ -241,4 +244,71 @@ func TestStartClock(t *testing.T) {
 			t.Fatalf("err = %v; want the start expiry", err)
 		}
 	})
+}
+
+// blockedAPIDriver is a Driver whose API server accepts a request and never answers it, with
+// budgets far shorter than the pod read would otherwise block.
+func blockedAPIDriver(t *testing.T) *Driver {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	t.Cleanup(server.Close)
+	client, err := newClientset(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &Driver{clientset: client, cfg: Config{Namespace: "blocked", StartTimeout: 20 * time.Millisecond, CapacityWait: 20 * time.Millisecond}}
+}
+
+// A pod read the API server never answers still ends at the start budget: the poll bounds each
+// read by what is left of it, so a hung connection cannot strand a run in STARTING. The bound is the
+// remaining budget floored at one poll interval (200ms), hence the 2s allowance.
+func TestWaitPodIP_BlockedGETFailsWithinBudgets(t *testing.T) {
+	d := blockedAPIDriver(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // frees a still-blocked read so the fake server can close
+	done := make(chan error, 1)
+	go func() { _, err := d.waitPodIP(ctx, d.newStartClock(), "blocked-proxy", nil); done <- err }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "did not start within") {
+			t.Fatalf("err = %v; want a deadline error naming the start timeout", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("pod read still blocked after 2s against 20ms budgets")
+	}
+}
+
+func TestWaitContainerRunning_BlockedGETFailsWithinBudgets(t *testing.T) {
+	d := blockedAPIDriver(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- d.waitContainerRunning(ctx, d.newStartClock(), "blocked-agent", "agent", nil) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "did not start within") {
+			t.Fatalf("err = %v; want a deadline error naming the start timeout", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("pod read still blocked after 2s against 20ms budgets")
+	}
+}
+
+func TestStartClock_Remaining(t *testing.T) {
+	t0 := time.Now()
+	now := t0
+	c := &startClock{now: func() time.Time { return now }, begin: t0, startTimeout: 3 * time.Minute, capacityWait: 15 * time.Minute}
+	if got := c.remaining(); got != 3*time.Minute {
+		t.Fatalf("fresh clock: remaining = %s, want the 3m start budget", got)
+	}
+	c.observe(&corev1.Pod{Status: unschedulableStatus("1 Insufficient cpu")})
+	now = now.Add(14 * time.Minute)
+	if got := c.remaining(); got != time.Minute {
+		t.Fatalf("14m blocked of 15m: remaining = %s, want the 1m capacity budget (start budget untouched)", got)
+	}
+	c.observe(&corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodPending}})
+	now = now.Add(time.Hour)
+	if got := c.remaining(); got != k8sPollInterval {
+		t.Fatalf("spent clock: remaining = %s, want the %s floor", got, k8sPollInterval)
+	}
 }

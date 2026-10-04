@@ -75,11 +75,12 @@ func (b *readBackend) PutRun(uuid.UUID, []byte) error { return nil }
 func (b *readBackend) PutGlobal(string, string, []secretmask.GlobalPut, bool, time.Time) error {
 	return nil
 }
-func (b *readBackend) EvictGlobal(string, string, time.Time) error          { return nil }
-func (b *readBackend) SweepGlobals(context.Context, time.Time) (int, error) { return 0, nil }
-func (b *readBackend) PersistedRuns(context.Context) ([]uuid.UUID, error)   { return nil, nil }
-func (b *readBackend) PurgeRuns(context.Context, []uuid.UUID) error         { return nil }
-func (b *readBackend) EraseOwner(context.Context, string) (int, error)      { return 0, nil }
+func (b *readBackend) EvictGlobal(string, string, time.Time) error                 { return nil }
+func (b *readBackend) RetireOwnerGlobals(context.Context, string, time.Time) error { return nil }
+func (b *readBackend) SweepGlobals(context.Context, time.Time) (int, error)        { return 0, nil }
+func (b *readBackend) PersistedRuns(context.Context) ([]uuid.UUID, error)          { return nil, nil }
+func (b *readBackend) PurgeRuns(context.Context, []uuid.UUID) error                { return nil }
+func (b *readBackend) EraseOwner(context.Context, string) (int, error)             { return 0, nil }
 
 func newReadBackend(gap time.Duration) (*secretmask.Registry, *readBackend) {
 	reg := secretmask.NewRegistry()

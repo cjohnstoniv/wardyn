@@ -570,6 +570,7 @@ func TestPG_MaskRegistry_SealingBindsOwnerAndRow(t *testing.T) {
 	k := localKEK(t)
 	ctx := t.Context()
 	a := newRegReplica(t, pool, k)
+	aliceRun, bobRun := dispatchedRun(t, pool, a, regAlice), dispatchedRun(t, pool, a, "bob@example.com")
 	if err := a.reg.AddGlobal(regAlice, "cred-one", time.Now(), []byte("sealed-credential-one")); err != nil {
 		t.Fatal(err)
 	}
@@ -591,6 +592,12 @@ func TestPG_MaskRegistry_SealingBindsOwnerAndRow(t *testing.T) {
 	if !regMasks(r, uuid.New(), "sealed-credential-one") || !regMasks(r, uuid.New(), "bobs-sealed-credential") {
 		t.Error("an intact row did not open")
 	}
+	if r.m.Covered(ctx, aliceRun) {
+		t.Error("a run of the owner of a value that does not open is still covered")
+	}
+	if !r.m.Covered(ctx, bobRun) {
+		t.Error("another person's run lost its coverage")
+	}
 	if _, err := a.keys.Destroy(ctx, regAlice, subjectkey.PurposeCred); err != nil {
 		t.Fatal(err)
 	}
@@ -601,5 +608,82 @@ func TestPG_MaskRegistry_SealingBindsOwnerAndRow(t *testing.T) {
 	}
 	if !regMasks(after, uuid.New(), "bobs-sealed-credential") {
 		t.Error("destroying one person's key lost another's values")
+	}
+}
+
+// A live value that can never be opened again fails its runs closed instead of
+// being dropped from the corpus: a per-run value fences its run, a credential
+// value every run of its owner. The row is tombstoned with the fence, so a
+// later full read does not fence a run the owner starts afterwards.
+func TestPG_MaskStore_UnopenableLiveRowFencesRun(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	k := localKEK(t)
+	ctx := t.Context()
+	const bob = "bob@example.com"
+	a := newRegReplica(t, pool, k)
+	aliceRun, aliceOther, bobRun := dispatchedRun(t, pool, a, regAlice), dispatchedRun(t, pool, a, regAlice), dispatchedRun(t, pool, a, bob)
+	if err := a.reg.Add(aliceRun, []byte("alice-runtime-value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.reg.AddGlobal(bob, "bob-cred", time.Now(), []byte("bobs-credential-value")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Alice's key is destroyed: her runtime value fences the run it belongs to.
+	if _, err := a.keys.Destroy(ctx, regAlice, subjectkey.PurposeCred); err != nil {
+		t.Fatal(err)
+	}
+	b := newRegReplica(t, pool, k)
+	b.read(t)
+	if b.m.Covered(ctx, aliceRun) {
+		t.Error("a run whose value can never open again is still covered")
+	}
+	if !b.m.Covered(ctx, aliceOther) || !b.m.Covered(ctx, bobRun) {
+		t.Error("a run with nothing unopenable lost its coverage")
+	}
+	if n := liveRows(t, pool, `run_id = $1`, aliceRun); n != 0 {
+		t.Errorf("%d live rows left for the unopenable value, want it tombstoned", n)
+	}
+
+	// Bob's credential value is damaged: every run of his is fenced.
+	if _, err := pool.Exec(ctx,
+		`UPDATE mask_values SET sealed = set_byte(sealed, octet_length(sealed)-1, get_byte(sealed, octet_length(sealed)-1) # 1) WHERE name = 'bob-cred'`); err != nil {
+		t.Fatal(err)
+	}
+	c := newRegReplica(t, pool, k)
+	c.read(t)
+	if c.m.Covered(ctx, bobRun) {
+		t.Error("a run of the owner of a damaged credential value is still covered")
+	}
+
+	// A run bob starts afterwards is not fenced by a later replica's full read.
+	later := dispatchedRun(t, pool, a, bob)
+	d := newRegReplica(t, pool, k)
+	d.read(t)
+	if !d.m.Covered(ctx, later) {
+		t.Error("a full read fenced a run started after the damaged value was handled")
+	}
+
+	// A credentials erase retires the owner's credential values before it destroys the key: a
+	// replica that never cached one skips it, so the run the person starts under the next key
+	// generation is not fenced for a value it cannot hold.
+	const carol = "carol@example.com"
+	if err := a.reg.AddGlobal(carol, "carol-cred", time.Now(), []byte("carols-credential-value")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.m.FenceSubject(ctx, carol); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.reg.RetireOwnerGlobals(ctx, carol, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.keys.Destroy(ctx, carol, subjectkey.PurposeCred); err != nil {
+		t.Fatal(err)
+	}
+	afterErase := dispatchedRun(t, pool, a, carol)
+	e := newRegReplica(t, pool, k)
+	e.read(t)
+	if !e.m.Covered(ctx, afterErase) {
+		t.Error("a replica that never cached a retired credential value fenced a run started after the erase")
 	}
 }

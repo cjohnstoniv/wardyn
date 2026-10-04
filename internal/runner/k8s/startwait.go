@@ -7,6 +7,7 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -83,14 +84,34 @@ func (c *startClock) expired() error {
 	return nil
 }
 
+// remaining is how long one pod read may still run: what is left of the budget the pod is currently
+// spending (the capacity budget while it waits for room, else the start budget), floored at one poll
+// interval so a read's context is never created already expired.
+func (c *startClock) remaining() time.Duration {
+	left := c.startTimeout - (c.now().Sub(c.begin) - c.capacityWaited())
+	if !c.blockedSince.IsZero() {
+		left = min(left, c.capacityWait-c.capacityWaited())
+	}
+	return max(left, k8sPollInterval)
+}
+
 // poll runs check every k8sPollInterval (backing off to capacityPollMax while the pod waits for room)
 // until it reports done, errs, the clock expires, or ctx ends. check returns whether the pod it just
-// read is waiting for room.
+// read is waiting for room. Each check runs under a context bounded by remaining, so an API server
+// that never answers cannot hold a read past the budgets.
 func (c *startClock) poll(ctx context.Context, check func(ctx context.Context) (done, waitingForRoom bool, err error)) error {
 	interval := k8sPollInterval
 	for {
-		done, waiting, err := check(ctx)
+		checkCtx, cancel := context.WithTimeout(ctx, c.remaining())
+		done, waiting, err := check(checkCtx)
+		cancel()
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+				if expired := c.expired(); expired != nil {
+					return expired
+				}
+				return fmt.Errorf("kubernetes did not answer a pod read within the start budget: %w", context.DeadlineExceeded)
+			}
 			return err
 		}
 		if done {

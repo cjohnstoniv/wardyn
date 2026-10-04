@@ -43,8 +43,9 @@ func (b *gapCovMaskBackend) PurgeRuns(_ context.Context, runs []uuid.UUID) error
 	b.purged = append(b.purged, runs)
 	return b.purgeErr
 }
-func (b *gapCovMaskBackend) EraseOwner(context.Context, string) (int, error) { return 0, nil }
-func (b *gapCovMaskBackend) Fresh(context.Context, time.Time) error          { return b.freshErr }
+func (b *gapCovMaskBackend) EraseOwner(context.Context, string) (int, error)             { return 0, nil }
+func (b *gapCovMaskBackend) RetireOwnerGlobals(context.Context, string, time.Time) error { return nil }
+func (b *gapCovMaskBackend) Fresh(context.Context, time.Time) error                      { return b.freshErr }
 
 func gapCovMaskServer(b *gapCovMaskBackend, now time.Time) *Server {
 	reg := secretmask.NewRegistry()

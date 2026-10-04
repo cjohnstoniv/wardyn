@@ -118,7 +118,9 @@ func (s PG) WithIdentityShared(ctx context.Context, g IdentityGuard, fn func() e
 // bound to the principal and reads the authority epoch the session cookie will carry. The rows
 // stay locked until the commit, so a suspension either precedes it, and the sign-in is refused
 // with ErrIdentityDeactivated, or follows it, and bumps the epoch past the one returned. A
-// refused sign-in writes nothing.
+// sign-in whose identity is bound to another principal is ErrIdentityBindingMismatch: its
+// session would carry neither that identity's deactivation nor its epoch. A refused sign-in
+// writes nothing.
 func (s PG) IssueLoginIdentity(ctx context.Context, in LoginIdentity, now time.Time) (epoch int64, err error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {

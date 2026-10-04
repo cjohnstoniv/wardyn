@@ -966,6 +966,11 @@ kek:
       azurekv:
         key: https://beta.vault.azure.net/keys/wrap
         signingKey: https://beta.vault.azure.net/keys/sign
+  # An azurekv domain shares the Entra identity below, so it needs these too.
+secretStore:
+  azure:
+    tenantId: 00000000-0000-0000-0000-000000000000
+    clientId: 00000000-0000-0000-0000-000000000000
 ```
 
 The people in a domain are chosen by API, not by the chart: `PUT

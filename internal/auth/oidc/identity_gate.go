@@ -30,6 +30,10 @@ var ErrIdentityDeactivated = errors.New("oidc: identity deactivated")
 // (the same principal under a different object id).
 var ErrIdentityConflict = errors.New("oidc: identity clashes with another binding")
 
+// ErrIdentityBindingMismatch is Issue's refusal of a sign-in whose identity is bound to another
+// principal than the one its session would carry.
+var ErrIdentityBindingMismatch = errors.New("oidc: identity bound to another principal")
+
 // IdentityRef is who a sign-in names, as the gate's read-only admission check needs it.
 type IdentityRef struct {
 	Issuer, TenantID, ObjectID, Principal string
@@ -93,6 +97,10 @@ func (a *Authenticator) issueIdentity(r *http.Request, f LoginFacts, onDenied fu
 		return 0, authErrorSignInRefused
 	case errors.Is(err, ErrIdentityConflict):
 		slog.Warn("oidc: login denied — the identity clashes with another binding", "issuer", f.Issuer, "sub", f.Sub)
+		return 0, authErrorSignInRefused
+	case errors.Is(err, ErrIdentityBindingMismatch):
+		// The error names the bound principal; Sub is the one the session would have carried.
+		slog.Error("oidc: login denied — the identity is bound to another principal", "issuer", f.Issuer, "sub", f.Sub, "error", err)
 		return 0, authErrorSignInRefused
 	}
 	slog.Error("oidc: identity record unavailable, denying login (fail closed)", "error", err)

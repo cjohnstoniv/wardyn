@@ -162,7 +162,7 @@ func (e *execOutputTail) awaitDrains(ctx context.Context, wait time.Duration) bo
 // dropped), then fences the writer so a later byte is dropped, not kept. It
 // returns what the row holds.
 func (e *execOutputTail) seal(uncoveredNow bool) (out []byte, truncated, dropped, uncovered bool) {
-	e.flushIn() // a write accepted before the seal is in the row
+	e.flushIn() // a write accepted before a clean barrier is in the row
 	e.mw.mu.Lock()
 	defer e.mw.mu.Unlock()
 	if uncoveredNow {
@@ -342,6 +342,9 @@ func (s *Server) finishRunOutput(ctx context.Context, runID uuid.UUID) {
 		reasons["dropped"] = true
 	}
 	incomplete := !clean || dropped
+	e.fmu.Lock()
+	e.incomplete = incomplete
+	e.fmu.Unlock()
 	if st == nil {
 		if incomplete {
 			reasons["incomplete"] = true

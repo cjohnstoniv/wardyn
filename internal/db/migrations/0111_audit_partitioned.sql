@@ -51,7 +51,8 @@ DECLARE
     t0         timestamptz := transaction_timestamp();
     cutover    timestamptz;
     legacy_oid oid;
-    last_seq   bigint;
+    last_seq      bigint;
+    committed_seq bigint;
     hw_hash    text;
     pk_name    text;
     r          record;
@@ -76,8 +77,12 @@ BEGIN
 
     -- Everything below that reads the old table does it BEFORE the primary key is dropped,
     -- so the head and the high-water mark are index probes rather than table scans.
-    EXECUTE replace('SELECT coalesce(max(seq), 0) FROM @ns@.audit_events', '@ns@', nsq) INTO last_seq;
-    last_seq := greatest(last_seq, coalesce(
+    -- Two different numbers: committed_seq is the newest committed row, which is the high-water
+    -- mark verify compares the head against; last_seq is the newest value the identity ever
+    -- handed out, committed or not (a rolled-back insert still burns one), which is where the
+    -- new sequence must continue so no value is reused.
+    EXECUTE replace('SELECT coalesce(max(seq), 0) FROM @ns@.audit_events', '@ns@', nsq) INTO committed_seq;
+    last_seq := greatest(committed_seq, coalesce(
         pg_sequence_last_value(pg_get_serial_sequence(format('%I.audit_events', ns), 'seq')::regclass), 0));
     EXECUTE replace($q$SELECT row_hash FROM @ns@.audit_events
                        WHERE row_hash IS NOT NULL ORDER BY seq DESC LIMIT 1$q$, '@ns@', nsq) INTO hw_hash;
@@ -153,7 +158,8 @@ BEGIN
     -- the (seq, recorded_at) unique index: the one index build of the conversion.
     EXECUTE format('ALTER TABLE %1$I.audit_events ATTACH PARTITION %1$I.audit_events_legacy FOR VALUES FROM (MINVALUE) TO (%2$L)', ns, cutover);
 
-    -- 8. The high-water mark, the expected-partition manifest and the cutover.
+    -- 8. The high-water mark (the newest committed row's seq and hash), the expected-partition
+    -- manifest and the cutover.
     EXECUTE replace($q$CREATE TABLE @ns@.audit_partition_meta (
             singleton      boolean PRIMARY KEY DEFAULT true CHECK (singleton),
             cutover        timestamptz NOT NULL,
@@ -163,7 +169,7 @@ BEGIN
             manifest       jsonb       NOT NULL DEFAULT '[]'::jsonb
         )$q$, '@ns@', nsq);
     EXECUTE format('INSERT INTO %I.audit_partition_meta (cutover, hw_seq, hw_recorded_at, hw_row_hash) VALUES (%L, %s, %L, %L)',
-                   ns, cutover, last_seq, t0, hw_hash);
+                   ns, cutover, committed_seq, t0, hw_hash);
 
     -- 9. Attested retention drops and legacy splits are recorded here by ar-l1.3 and ar-l1.7;
     -- the table exists, empty, so the shape is fixed before either lane lands.

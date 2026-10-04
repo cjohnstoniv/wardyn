@@ -189,6 +189,8 @@ func TestConnectAndMigrate_RefusesAnAppRoleWithoutExecuteOnAuditAppend(t *testin
 	for _, q := range []string{
 		fmt.Sprintf(`GRANT USAGE ON SCHEMA %s TO %s`, schema, role),
 		fmt.Sprintf(`GRANT SELECT ON %s.audit_events TO %s`, schema, role),
+		// The canary reads the recorded chain head (0130) as the app role does.
+		fmt.Sprintf(`GRANT SELECT ON %s.audit_partition_meta TO %s`, schema, role),
 	} {
 		if _, err := admin.Exec(ctx, q); err != nil {
 			t.Fatalf("%s: %v", q, err)

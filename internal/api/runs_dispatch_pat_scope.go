@@ -173,14 +173,22 @@ func scopePATGrants(grants map[string]proxy.PATGrant, rows []types.CredentialGra
 func (s *Server) enforceablePATNarrowing(ctx context.Context, run types.AgentRun, p dispatchParams,
 	rows []types.CredentialGrant, site types.SiteConfig, adoRun adoEntraRun, adoInject bool,
 ) bool {
-	env := patNarrowingEnv{brokerOn: p.PATBroker, brokered: len(p.GitGrants) > 0, site: site, bbsAPI: patAPIBitbucketOn()}
-	if adoInject {
-		env.adoHosts = adoRun.laneHosts()
-	}
+	env := patNarrowingEnvOf(p.PATBroker, p.GitGrants, site, adoRun, adoInject)
 	if reason, detail := patNarrowingRefusal(patGrantSpecs(rows), env); reason != "" {
 		return s.refusePATDispatch(ctx, run, reason, "This run was not launched: "+detail)
 	}
 	return true
+}
+
+// patNarrowingEnvOf is the env dispatch and revive both fill: the broker
+// switch, the run's brokered-forge map, the site config and the run's Azure
+// DevOps lane as resolveADOEntraRun decided it.
+func patNarrowingEnvOf(brokerOn bool, gitGrants map[string]uuid.UUID, site types.SiteConfig, adoRun adoEntraRun, adoOn bool) patNarrowingEnv {
+	env := patNarrowingEnv{brokerOn: brokerOn, brokered: len(gitGrants) > 0, site: site, bbsAPI: patAPIBitbucketOn()}
+	if adoOn {
+		env.adoHosts = adoRun.laneHosts()
+	}
+	return env
 }
 
 // scopedPATGrants is the proxy's git_pat allowlist for the run, each narrowed

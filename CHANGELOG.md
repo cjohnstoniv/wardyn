@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- **Store mode without an age key or a key service now refuses to start.** With `WARDYN_SECRET_STORE=vaultkv`
+  or `azurekv`, no `WARDYN_AGE_KEY` and no key service, the per-person keys that seal run masking copies had
+  nothing to wrap under, so a run silently lost its credentials (an `env_secret` grant was left out; an Azure
+  DevOps token was refused). wardynd now refuses to serve, and the Helm chart refuses the render. Remedy: set
+  `WARDYN_AGE_KEY` (`wardynd -gen-age-key`) or a key service (`WARDYN_KEK=transit` or `azurekv`; chart
+  `kek.provider`). The maintenance modes (`-migrate-secrets`, `-rewrap`) still run.
 - **An unplaceable Kubernetes run now waits for room.** A run whose pods no machine has room for used to
   fail at 90 seconds (the proxy's IP bound); it now stays `STARTING`, showing "Waiting for a machine with
   room for this sandbox.", for up to `WARDYN_SANDBOX_CAPACITY_WAIT` (15 minutes). Set it to `0` to keep
@@ -30,14 +36,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
   release is one-way.
 - **Every sign-in now records an identity row.** Migration `0113_principal_identities` adds the
   `principal_identities` and `principal_identity_aliases` tables, and each successful sign-in on any issuer
-  writes one row for the person and keeps every email it was seen under. Nothing reads them yet and no
-  authorisation decision changes; they are what removing a leaver's access will act on.
+  writes one row for the person and keeps every email it was seen under. The People directory, the
+  sign-in gate and SCIM read them, and a deactivated identity signs in nowhere (see the next entry).
 - **A deactivated identity now signs in nowhere, on every issuer.** Migration `0127_deprovision_jobs` adds the
   `deprovision_jobs` table and a nullable `people.deactivated_at`. A sign-in now writes its identity row and
   reads its deactivation inside the gate, and fails closed: a database outage denies sign-ins, as an unreadable
   role-mapping store already did. Session cookies gain an optional `ae` field; an old cookie reads as epoch 0
   and stays valid until its person's first suspension. A downgrade to 0.8.5 ignores the new tables and stops
   enforcing deactivation.
+- **A sign-in is refused when its identity row is bound to another principal.** Each identity row keeps the
+  principal its first sign-in bound it to. An Entra person known here only by an earlier sign-in under their
+  pairwise sub now keeps that sub when an admin adds them on People by object id, as one who owned tokens or
+  keys already did. A sign-in that would still carry a session under a different principal is refused
+  ("sign-in refused"; the log names both principals at error), where it used to get a session that the
+  identity's suspension did not reach. This refuses a person whose identity is bound to their
+  `entra:<tenant>:<object id>` principal once their People entry is removed (remedy: add them again by object
+  id), and an Entra person whose pairwise sub changed, for example after the app registration was replaced.
 - **`WARDYN_ROLE_STAMP_TTL`** (default off) makes an API token or console session whose role stamp is older
   than the TTL sign in again before it works, so a demotion made only at the identity provider reaches
   them. Migration `0115_api_tokens_identity_stamped_at` backfills each token's stamp to its `created_at`,
@@ -210,7 +224,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   was cut. SCIM only removes access: it never grants, never rebinds an identity (an `externalId` change on a
   bound identity is `400 invalidValue`) and is never an operator. New audit actions `scim.user.write`,
   `scim.user.deactivate` and `person.deprovision`, and `auth.fail` reasons `invalid_scim_token` and
-  `identity_deactivated`. The console card is a separate change.
+  `identity_deactivated`. Settings shows where it stands in the "SCIM provisioning" card (see the Settings entry below).
 - **Removing a person from a group at the identity provider ends what that group gave them.** The same SCIM
   token now serves `<base path>/scim/v2/Groups` (`GET` with a `displayName` or `externalId` filter, `GET` by id,
   `POST`, `PATCH` of members and `displayName`, `DELETE`). A member removed, by either shape Entra sends, by a
@@ -281,7 +295,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   operator is served, and `?partition=` with any other filter is refused (`audit_export_partition_filter`).
   `GET /audit/chain/verify` now starts from the newest attested retention drop, reports a removed newest tail
   (checked against the recorded high-water mark) and a missing expected partition, and names an unattested
-  removal `rows removed without an attested retention drop`. A role you create after the upgrade needs
+  removal `rows removed without an attested retention drop`. A removed tail stays reported after later
+  appends: each new row links to the recorded head rather than the newest row left in the table (migration
+  `0130_audit_chain_head_from_meta`), so the chain breaks at the first row appended after the removal. A role you create after the upgrade needs
   `GRANT EXECUTE` on `audit_partition_digest(text)` beside the functions in the grant recipe.
 - **Personal audit fields can be sealed, and a person's records erased by scope.** `WARDYN_AUDIT_SEAL=fields`
   (default `off`) stores the personal fields of an audit row (the table in "Sealed fields",
@@ -315,8 +331,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **A run's output can be erased for good.** `EraseRunOutputs` writes a tombstone and deletes the rows in one
   transaction, and every write and read checks the tombstone in its own transaction, so no replica recreates
   or serves the output afterwards: reads answer `404` `run_output_erased`, and a replica still holding the
-  tail drops and zeroes it on its next touch. It is wired into the person erasure by a later change;
-  `DELETE /people/{principal}/credentials` does not call it.
+  tail drops and zeroes it on its next touch. Person erasure (`POST
+  /people/{principal}/erasure`, scope `run_outputs`) calls it; `DELETE /people/{principal}/credentials` does not.
 - **A governance profile can be composed: a base plus an overlay that can only narrow it.** Migration
   `0125_governance_profile_composition` adds the nullable `governance_profiles.base_profile_id`, `overlay`
   and `overlay_limits` columns and five CHECK constraints, and changes no existing row: every profile stays
@@ -381,7 +397,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **A per-subject key table, `principal_keys` (migration `0108_principal_keys`).** Each (person, purpose,
   generation) has one 32-byte key wrapped under the deployment's credential key (local, Vault Transit or
   Key Vault), and destroying a person's key is a tombstone that a replica with a warm cache notices at its
-  next use. Nothing writes the table yet, so this changes no stored credential. `wardynd -rewrap` and
+  next use. Masking manifests already mint and wrap a per-person key here (`maskmanifest`), so the
+  table is live on every deployment; `WARDYN_PRINCIPAL_KEYS` (default off) controls only whether stored
+  credentials move to v3, and nothing rewrites existing credentials automatically. `wardynd -rewrap` and
   `-rotate-age-key` now move its rows with the secrets, `secret.rewrap` gains a `principal_keys` count, and
   a key version is reported safe to retire only once both are at it. The audit action
   `principal_key.destroyed` names the owner, purpose and generation numbers and never key material. A split

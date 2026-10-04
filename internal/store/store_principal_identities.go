@@ -52,7 +52,8 @@ type PrincipalIdentityStore interface {
 	// one for the same (issuer, tenant, object id) on Entra and (issuer, principal) elsewhere, binds
 	// its principal if it has none, stamps the sign-in time and keeps the email as an alias. A row's
 	// principal, issuer, tenant and object id are never changed once bound; a sign-in that would
-	// change one changes nothing about the binding, and is ErrConflict when it names no row at all.
+	// change one writes nothing: ErrIdentityBindingMismatch when its row is bound to another
+	// principal, ErrConflict when it names no row at all.
 	UpsertLoginIdentity(ctx context.Context, in LoginIdentity, now time.Time) (PrincipalIdentity, error)
 	// GetIdentityByObject is the row for exactly (issuer, tenantID, objectID), or ErrNotFound. An
 	// empty objectID is always ErrNotFound.
@@ -111,17 +112,22 @@ func upsertLoginIdentityTx(ctx context.Context, tx pgx.Tx, in LoginIdentity, now
 		RETURNING id`, in.Principal, in.Issuer, in.TenantID, in.ObjectID, email, now).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// The identity is already known. An object id names it on Entra, the principal elsewhere.
-		lookup, args := `SELECT id FROM principal_identities WHERE issuer = $1 AND principal = $2 AND object_id = '' FOR UPDATE`,
+		lookup, args := `SELECT id, principal FROM principal_identities WHERE issuer = $1 AND principal = $2 AND object_id = '' FOR UPDATE`,
 			[]any{in.Issuer, in.Principal}
 		if in.ObjectID != "" {
-			lookup, args = `SELECT id FROM principal_identities WHERE issuer = $1 AND tenant_id = $2 AND object_id = $3 FOR UPDATE`,
+			lookup, args = `SELECT id, principal FROM principal_identities WHERE issuer = $1 AND tenant_id = $2 AND object_id = $3 FOR UPDATE`,
 				[]any{in.Issuer, in.TenantID, in.ObjectID}
 		}
-		if err = tx.QueryRow(ctx, lookup, args...).Scan(&id); errors.Is(err, pgx.ErrNoRows) {
+		var principal *string
+		if err = tx.QueryRow(ctx, lookup, args...).Scan(&id, &principal); errors.Is(err, pgx.ErrNoRows) {
 			return PrincipalIdentity{}, fmt.Errorf("store: login identity clashes with another binding: %w", ErrConflict)
 		}
 		if err != nil {
 			return PrincipalIdentity{}, fmt.Errorf("store: upsert login identity: %w", err)
+		}
+		// A session under another principal than the bound one would escape the identity's checks.
+		if principal != nil && *principal != in.Principal {
+			return PrincipalIdentity{}, fmt.Errorf("store: login identity is bound to %q, not %q: %w", *principal, in.Principal, ErrIdentityBindingMismatch)
 		}
 		// The only write to a binding column: it fills a principal that is still unset.
 		if _, err = tx.Exec(ctx, `UPDATE principal_identities SET principal = $2 WHERE id = $1 AND principal IS NULL`, id, in.Principal); err != nil {

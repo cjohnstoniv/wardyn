@@ -189,7 +189,7 @@ export interface AgentRun {
   // expiry), the owner's profile run limits and that profile's id (absent for
   // an unassigned or super-admin owner). Optional: a pre-0.8 daemon sends none.
   // wait_budget_sec does not bound a run's start; see Start deadlines in
-  // docs/OPERATIONS.md (#the-two-real-bounds-on-a-slow-start).
+  // docs/OPERATIONS.md (#the-start-deadlines).
   ends_at?: string | null;
   wait_budget_sec?: number;
   run_limits?: RunLimits;

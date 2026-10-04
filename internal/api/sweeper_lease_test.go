@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -84,7 +86,10 @@ func TestPauseRun_TwoStaleLeadersLeaveTheRunFrozenAndMarked(t *testing.T) {
 					return
 				}
 				newest.Store(2)
-				f.srv.pauseRun(ctxB, f.st, f.run, types.PauseWaiting, time.Hour)
+				// B is another replica: its own server, so the run lock does not
+				// serialize the two. The compensation's re-read is the defence
+				// that remains when a lock is lost.
+				New(f.srv.cfg).pauseRun(ctxB, f.st, f.run, types.PauseWaiting, time.Hour)
 			}
 
 			f.srv.pauseRun(ctxA, f.st, f.run, types.PauseWaiting, time.Hour)
@@ -103,6 +108,66 @@ func TestPauseRun_TwoStaleLeadersLeaveTheRunFrozenAndMarked(t *testing.T) {
 				t.Errorf("run.pause success rows = %d, want 1", got)
 			}
 		})
+	}
+}
+
+// pauseReadHook is a pause store whose GetRun runs afterRead once, after the
+// row is read and before it is returned: the instant a stale leader's
+// compensation has read the run and not yet thawed it.
+type pauseReadHook struct {
+	*pauseStore
+	afterRead func()
+}
+
+func (h *pauseReadHook) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	run, err := h.pauseStore.GetRun(ctx, id)
+	if fn := h.afterRead; fn != nil {
+		h.afterRead = nil
+		fn()
+	}
+	return run, err
+}
+
+// TestPauseRun_StaleCompensationCannotThawANewerPause: leader A freezes, is
+// superseded, and has its mark refused; while its compensation holds a stale
+// read of the run, the new leader B tries its whole pause. Without a lock B
+// freezes and marks inside that window and A's thaw then undoes B's freeze while
+// the row reads paused. The run's lock makes B wait out A's compensation: B is
+// skipped, A thaws an unmarked run, and B's retry on the next sweep freezes and
+// marks it for good.
+func TestPauseRun_StaleCompensationCannotThawANewerPause(t *testing.T) {
+	var newest atomic.Int64
+	newest.Store(1)
+	lease := &fakeLease{current: func(epoch int64) bool { return epoch == newest.Load() }}
+	f := newPauseFixture(t, time.Hour, withLease(lease))
+	f.st.open, f.st.waiting = true, true
+	ctxA := context.WithValue(context.Background(), leaseEpochKey{}, int64(1))
+	ctxB := context.WithValue(context.Background(), leaseEpochKey{}, int64(2))
+	f.rn.onFreeze = func() { newest.Store(2) }
+	hook := &pauseReadHook{pauseStore: f.st}
+	f.srv.cfg.Store = hook
+	hook.afterRead = func() {
+		f.srv.pauseRun(ctxB, f.st, f.run, types.PauseWaiting, time.Hour)
+		if freezes, _ := f.rn.counts(); freezes != 1 {
+			t.Errorf("freezes = %d while A's compensation holds the run, want 1: B must wait for the lock", freezes)
+		}
+	}
+
+	f.srv.pauseRun(ctxA, f.st, f.run, types.PauseWaiting, time.Hour)
+	if freezes, thaws := f.rn.counts(); freezes != 1 || thaws != 1 {
+		t.Fatalf("after A: freezes, thaws = %d, %d; want 1, 1", freezes, thaws)
+	}
+	if pausedAt, _ := f.st.paused(); pausedAt != nil {
+		t.Fatal("the run is marked paused after A's thaw")
+	}
+
+	f.srv.pauseRun(ctxB, f.st, f.run, types.PauseWaiting, time.Hour)
+	freezes, thaws := f.rn.counts()
+	if freezes != 2 || thaws != 1 {
+		t.Errorf("after B's retry: freezes, thaws = %d, %d; want 2, 1: B's freeze must come after A's thaw", freezes, thaws)
+	}
+	if pausedAt, _ := f.st.paused(); pausedAt == nil {
+		t.Error("the run is not marked paused after B's retry")
 	}
 }
 

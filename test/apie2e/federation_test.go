@@ -466,7 +466,10 @@ func TestFederation_OneAuditStream(t *testing.T) {
 	}
 
 	if !t.Run("a truncated laptop table is a visible chain reset and ingest resumes", func(t *testing.T) {
-		purge(t, `TRUNCATE audit_events`, 5, false, true, 1, fedRows)
+		// The recorded head goes too: the trigger links a new row to it (0130), so a bare
+		// TRUNCATE would chain the new rows to the removed head, not start a genesis.
+		purge(t, `TRUNCATE audit_events;
+			UPDATE audit_partition_meta SET hw_seq = 0, hw_row_hash = NULL, hw_recorded_at = cutover`, 5, false, true, 1, fedRows)
 	}) {
 		return
 	}

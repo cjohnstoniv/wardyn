@@ -80,6 +80,27 @@ func TestSealFullStoresAHumanActorAsItsSubjectAndReadsItBack(t *testing.T) {
 	}
 }
 
+// ActorSubject is the actor Seal stores under full, for a row the database
+// writes itself: the subject, with the person's key created; a person with no
+// identity row keeps their name; a directory that cannot answer is an error.
+func TestSealActorSubjectMatchesWhatSealStores(t *testing.T) {
+	s, mk, dir := newFullSealer(t, "alice")
+	got, err := s.ActorSubject(t.Context(), "alice")
+	if want := SubjectActorPrefix + dir.ids["alice"]; err != nil || got != want {
+		t.Fatalf("ActorSubject(alice) = %q, %v; want %q", got, err, want)
+	}
+	if len(mk.keys["alice"]) != 1 {
+		t.Errorf("the person's key was not created: %v", mk.keys)
+	}
+	if got, err := s.ActorSubject(t.Context(), "never-signed-in"); err != nil || got != "never-signed-in" {
+		t.Errorf("ActorSubject(no identity row) = %q, %v; want the name", got, err)
+	}
+	dir.down = true
+	if _, err := s.ActorSubject(t.Context(), "alice"); err == nil {
+		t.Error("a directory outage passed")
+	}
+}
+
 func TestSealFullAfterErasureRendersErasedButNotRowsWrittenAfter(t *testing.T) {
 	s, mk, dir := newFullSealer(t, "alice")
 	before := humanEvent("alice", "run.kill")

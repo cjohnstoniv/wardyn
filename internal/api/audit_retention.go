@@ -16,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // minPartitionsAhead is the number of months of partitions ahead below which /setup/status warns: an
@@ -73,7 +74,19 @@ func (s *Server) handleDropAuditPartition(w http.ResponseWriter, r *http.Request
 		writeErrorReason(w, http.StatusBadRequest, reasonAuditRetentionBodyInvalid, `the body is {"partition": "<name>", "digest": "<64 hex>"}`)
 		return
 	}
-	d, err := rs.DropAuditPartition(r.Context(), body.Partition, strings.TrimSpace(body.Digest), principalFromRequest(r))
+	// The drop's rows are written by the database, past the sealing recorder, so a human actor is stored
+	// as their subject here (WARDYN_AUDIT_SEAL=full); a subject is never 'wardynd', so the SQL's
+	// attested check still holds.
+	actor := principalFromRequest(r)
+	if s.cfg.AuditActorSubject != nil && actorTypeFromRequest(r) == types.ActorHuman {
+		var err error
+		if actor, err = s.cfg.AuditActorSubject(r.Context(), actor); err != nil {
+			slog.ErrorContext(r.Context(), "wardyn: audit retention drop: the caller's audit subject could not be had", slog.Any("err", err))
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonAuditRetentionDropFailed, "the audit sealer is not ready; the partition was not dropped")
+			return
+		}
+	}
+	d, err := rs.DropAuditPartition(r.Context(), body.Partition, strings.TrimSpace(body.Digest), actor)
 	var refused *store.AuditRetentionRefused
 	switch {
 	case errors.Is(err, store.ErrNotFound):

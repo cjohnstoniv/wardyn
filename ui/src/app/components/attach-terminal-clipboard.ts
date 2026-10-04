@@ -213,6 +213,8 @@ export function createCopyGate(opts: CopyGateOptions): CopyGate {
   };
 
   // The provider: reads are refused outright; a write is only ever a request.
+  // It is checked against the two gesture-time snapshots only. The live buffer
+  // is never evidence: a pane can repaint cells to make its own payload true.
   const provider = {
     readText: () => "",
     writeText: (selection: string, text: string) => request(selection, text),
@@ -228,7 +230,7 @@ export function createCopyGate(opts: CopyGateOptions): CopyGate {
     if (utf8Bytes(text) > MAX_COPY_BYTES) return drop("payload over 1 MiB", true);
     if (BAD_CONTROL.test(text)) return drop("control bytes in payload", true);
     const want = normalizeCopy(text);
-    const matches = [...g.snaps, snapshotScreen(term)].some((s) =>
+    const matches = g.snaps.some((s) =>
       candidates(g, s).some((c) => normalizeCopy(c) === want),
     );
     if (!matches) return drop("payload differs from the user's selection", true);

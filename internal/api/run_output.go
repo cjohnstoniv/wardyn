@@ -90,7 +90,8 @@ type execOutputTail struct {
 	// pane snapshot, which writes mw directly.
 	in *maskPipe
 	// arrived is the clock at the drivers' latest write, in unix nanos: the TTL
-	// counts from the output, not from when the masker got to it.
+	// counts from the output, not from when the masker got to it. A write dropped after the
+	// seal can still extend a sealed memory-only tail's TTL, bounded by the sandbox's lifetime.
 	arrived atomic.Int64
 	ring    outputRing
 	// sink is the masking writer's destination: the ring, mirrored into run_output_chunks
@@ -102,10 +103,13 @@ type execOutputTail struct {
 	drainErr  bool          // a copy ended in an error
 	drainWake chan struct{} // closed and replaced whenever drains changes
 
-	fmu      sync.Mutex    // guards started, committed, late, fenced, recovered and gapReason
+	fmu      sync.Mutex    // guards started, finished, incomplete, committed, late, fenced, recovered and gapReason
 	started  bool          // a finisher has taken the once-guard
 	done     chan struct{} // closed when that finisher returns
 	finished bool          // the tail is sealed: barrier closed, holdback flushed
+	// incomplete: the finisher found bytes may be missing (a drain failed or timed out, or one was
+	// dropped), so a memory read says so exactly as the stored row would.
+	incomplete bool
 	// committed: the final row is in Postgres, so a byte dropped now marks it
 	// incomplete rather than reaching the row as it is written.
 	committed bool
@@ -231,11 +235,12 @@ func releasedHoldback(held []byte) []byte {
 
 // execOutputView is one tail as a read sees it.
 type execOutputView struct {
-	out       []byte
-	truncated bool
-	complete  bool // the capture is final: the barrier closed and the holdback is in out
-	expired   bool // the TTL passed
-	uncovered bool // the writer lost the run's complete masking manifest at some point
+	out        []byte
+	truncated  bool
+	complete   bool // the capture is final: the barrier closed and the holdback is in out
+	incomplete bool // bytes may be missing: the finisher's verdict, or a byte dropped since
+	expired    bool // the TTL passed
+	uncovered  bool // the writer lost the run's complete masking manifest at some point
 }
 
 // readExecOutput returns at most limit bytes from the end of runID's tail.
@@ -252,7 +257,7 @@ func (s *Server) readExecOutput(runID uuid.UUID, limit int, withHold bool) (v ex
 		return execOutputView{}, false
 	}
 	e.fmu.Lock()
-	v.complete = e.finished
+	v.complete, v.incomplete = e.finished, e.incomplete
 	e.fmu.Unlock()
 	e.flushIn()
 	e.mw.mu.Lock()
@@ -261,6 +266,7 @@ func (s *Server) readExecOutput(runID uuid.UUID, limit int, withHold bool) (v ex
 		return execOutputView{expired: true}, true
 	}
 	v.uncovered = e.mw.capture.uncovered
+	v.incomplete = v.incomplete || e.mw.capture.dropped
 	v.out = append([]byte(nil), e.ring.buf...)
 	if withHold && !v.complete {
 		v.out = append(v.out, releasedHoldback(e.mw.tail)...)
@@ -384,7 +390,7 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, runOutputResponse{
-			Output: string(v.out), Truncated: v.truncated, Complete: v.complete, Source: "stdout",
+			Output: string(v.out), Truncated: v.truncated, Complete: v.complete, Source: "stdout", Incomplete: v.incomplete,
 			MaskScope: s.liveMaskScope(v.uncovered),
 		})
 		return

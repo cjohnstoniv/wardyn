@@ -85,6 +85,22 @@ func subjectKeysOf(s secretstore.Store) *subjectkey.Manager {
 	return nil
 }
 
+// principalKeyRootOf is the secret store's PrincipalKeyRootReady, through the
+// audit wrapper that does not forward it; nil for a store without one.
+func principalKeyRootOf(s secretstore.Store) error {
+	for s != nil {
+		if p, ok := s.(interface{ PrincipalKeyRootReady() error }); ok {
+			return p.PrincipalKeyRootReady()
+		}
+		u, ok := s.(interface{ Unwrap() secretstore.Store })
+		if !ok {
+			return nil
+		}
+		s = u.Unwrap()
+	}
+	return nil
+}
+
 // buildMaskManifests is the run masking manifests over the secret store's
 // subject keys, and arms scope with what they hold. wardynd refuses to serve
 // without them: a run it cannot prove masked is a door that would pass
@@ -99,6 +115,9 @@ func buildMaskManifests(ctx context.Context, pool *pgxpool.Pool, secrets secrets
 	keys := subjectKeysOf(secrets)
 	if keys == nil {
 		return nil, nil, errors.New("refusing to start: the secret store has no per-subject keys, which the run masking manifests are sealed under")
+	}
+	if err := principalKeyRootOf(secrets); err != nil {
+		return nil, nil, fmt.Errorf("refusing to start: the per-subject keys the run masking manifests are sealed under have no key to wrap under: %w. Set WARDYN_AGE_KEY (wardynd -gen-age-key) or a WARDYN_KEK key service (transit or azurekv); an external secret store alone does not wrap them", err)
 	}
 	m := maskmanifest.New(pool, keys, reg)
 	scope.arm(m.Held)

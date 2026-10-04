@@ -125,18 +125,19 @@ func (s *Server) suspendIdentity(ctx context.Context, st scimStore, id uuid.UUID
 	if err != nil {
 		return err
 	}
+	keys := []store.JobKey{{Step: jobStepAuditDeact}, {Step: jobStepAuditDeprov}}
+	for _, t := range forms.targets {
+		keys = append(keys, store.JobKey{Step: jobStepSweep, Target: t})
+	}
 	if cutoff, ok := jobByKey(jobs, store.JobStepCutoff, ""); ident.DeactivatedAt == nil || !ok || !cutoff.Done {
-		plan := store.SuspendPlan{IdentityID: id, Principals: forms.bound, CutoffSubs: forms.targets}
+		// The pending steps commit with the deactivation, so a crash right after it leaves them for the sweeper.
+		plan := store.SuspendPlan{IdentityID: id, Principals: forms.bound, CutoffSubs: forms.targets, PendingJobs: keys}
 		if s.cfg.SCIM != nil {
 			plan.PurgeAfter = s.cfg.SCIM.PurgeAfter
 		}
 		if _, err := st.SuspendIdentity(ctx, plan); err != nil {
 			return err
 		}
-	}
-	keys := []store.JobKey{{Step: jobStepAuditDeact}, {Step: jobStepAuditDeprov}}
-	for _, t := range forms.targets {
-		keys = append(keys, store.JobKey{Step: jobStepSweep, Target: t})
 	}
 	if err := st.EnsureDeprovisionJobs(ctx, id, store.JobKindSuspend, keys); err != nil {
 		return err

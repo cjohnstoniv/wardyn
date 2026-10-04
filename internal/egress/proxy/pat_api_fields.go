@@ -45,26 +45,33 @@ const patAPIMaxParts = 256
 
 // patAPIFields is what a request names. keys holds every field name seen at any
 // depth, lower-cased; a Rails-style a[b] contributes a, b and a[b]. vals holds
-// the string value of each top-level field, repeated fields in order. obj is the
-// decoded top-level JSON object, nil for any other body.
+// every string value of each top-level field, lower-cased, from the query and
+// the body alike, so a check that refuses any value sees each one the forge may
+// read. obj is the decoded top-level JSON object, nil for any other body.
 type patAPIFields struct {
 	keys map[string]bool
 	vals map[string][]string
 	obj  map[string]any
 }
 
-func (f *patAPIFields) add(name, val string) {
+func (f *patAPIFields) addKey(name string) {
 	lower := strings.ToLower(name)
 	f.keys[lower] = true
 	for _, part := range strings.FieldsFunc(lower, func(c rune) bool { return c == '[' || c == ']' }) {
 		f.keys[part] = true
 	}
+}
+
+func (f *patAPIFields) add(name, val string) {
+	f.addKey(name)
+	lower := strings.ToLower(name)
 	f.vals[lower] = append(f.vals[lower], val)
 }
 
 // collectPATAPIFields reads the query and the body. A body it cannot read whole
 // and parse is refused, as the Azure DevOps gate refuses one: an encoded body, a
-// body over the peek cap, a content type it does not parse, a duplicate JSON key.
+// body over the peek cap, a content type it does not parse, a duplicate JSON key,
+// two top-level JSON keys that differ only in case.
 // Every method's body is read, since a framework may read a GET's body params.
 func collectPATAPIFields(r *http.Request) (*patAPIFields, string) {
 	f := &patAPIFields{keys: map[string]bool{}, vals: map[string][]string{}}
@@ -114,7 +121,7 @@ func collectPATAPIFields(r *http.Request) (*patAPIFields, string) {
 
 func (f *patAPIFields) addJSON(body []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(body))
-	if err := walkJSONKeys(dec, 0, func(k string) { f.add(k, "") }); err != nil {
+	if err := walkJSONKeys(dec, 0, f.addKey); err != nil {
 		return err
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
@@ -123,26 +130,28 @@ func (f *patAPIFields) addJSON(body []byte) error {
 	if err := json.Unmarshal(body, &f.obj); err != nil || f.obj == nil {
 		return errors.New("the body is not a JSON object")
 	}
-	// walkJSONKeys added every key with an empty value; the top-level values are
-	// the ones a row reads.
-	for k := range f.obj {
-		delete(f.vals, strings.ToLower(k))
-	}
+	// The top-level values are the ones a row reads. They join the query's values
+	// for the same name rather than replace them; walkJSONKeys refused two keys
+	// that fold to one name, so each name has one body value.
 	for k, v := range f.obj {
+		lower := strings.ToLower(k)
 		switch t := v.(type) {
 		case string:
-			f.vals[strings.ToLower(k)] = []string{t}
+			f.vals[lower] = append(f.vals[lower], t)
 		case nil, map[string]any, []any:
-			f.vals[strings.ToLower(k)] = []string{""}
+			f.vals[lower] = append(f.vals[lower], "")
 		default:
-			f.vals[strings.ToLower(k)] = []string{fmt.Sprint(t)}
+			f.vals[lower] = append(f.vals[lower], fmt.Sprint(t))
 		}
 	}
 	return nil
 }
 
 // walkJSONKeys visits every object key at any depth and refuses a key repeated
-// in one object: the parsers on either side may keep the first or the last.
+// in one object: the parsers on either side may keep the first or the last. At
+// the top level, whose values the checks read by lower-cased name, it also
+// refuses two keys that differ only in case: a check would judge one while the
+// forge reads the other.
 func walkJSONKeys(dec *json.Decoder, depth int, visit func(string)) error {
 	tok, err := dec.Token()
 	if err != nil {
@@ -156,6 +165,7 @@ func walkJSONKeys(dec *json.Decoder, depth int, visit func(string)) error {
 		return errors.New("the JSON is nested too deeply")
 	}
 	seen := map[string]bool{}
+	folded := map[string]string{}
 	for dec.More() {
 		if d == '{' {
 			kt, err := dec.Token()
@@ -167,6 +177,12 @@ func walkJSONKeys(dec *json.Decoder, depth int, visit func(string)) error {
 				return fmt.Errorf("the key %q appears twice", k)
 			}
 			seen[k] = true
+			if depth == 0 {
+				if prev, dup := folded[strings.ToLower(k)]; dup {
+					return fmt.Errorf("the keys %q and %q differ only in case", prev, k)
+				}
+				folded[strings.ToLower(k)] = k
+			}
 			visit(k)
 		}
 		if err := walkJSONKeys(dec, depth+1, visit); err != nil {

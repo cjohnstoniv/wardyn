@@ -231,7 +231,7 @@ func NewLocalPurpose(identity *age.X25519Identity, purpose string) (*Local, erro
 func localRecipient(identity *age.X25519Identity) (string, error) {
 	recipient := identity.Recipient().String()
 	if _, err := age.ParseX25519Recipient(recipient); err != nil {
-		return "", errors.New("local KEK: the age identity has no public recipient (X25519 failed; GODEBUG=fips140=only forbids it) — the local key cannot run in FIPS 140-only mode; use a store mode (WARDYN_SECRET_STORE=vaultkv), which needs no WARDYN_AGE_KEY")
+		return "", errors.New("local KEK: the age identity has no public recipient (X25519 failed; GODEBUG=fips140=only forbids it) — the local key cannot run in FIPS 140-only mode; use a key service (WARDYN_KEK=transit or azurekv), alone or with a store mode, which needs no WARDYN_AGE_KEY")
 	}
 	return recipient, nil
 }

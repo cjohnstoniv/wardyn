@@ -55,6 +55,7 @@ const (
 	govKindAvailability = types.GovernanceTargetCapabilityAvailability
 	govKindUserType     = types.GovernanceTargetUserTypePriority
 	govKindRoleMapping  = types.GovernanceTargetRoleMapping
+	govKindKeyDomain    = types.GovernanceTargetKeyDomainAssignment
 )
 
 // govChangeTarget is the authz.denied target of every refusal a change decision gives.
@@ -161,9 +162,9 @@ type govApplied struct {
 	afterCommit func() map[string]any
 }
 
-// governanceChangeKinds is the single table of covered targets and who may approve each. key-l3.3
-// extends it with its own row. A role mapping is written on the operatorOnly tier, so only a super
-// admin approves it; every other kind is written on securityOps.
+// governanceChangeKinds is the single table of covered targets and who may approve each. A role
+// mapping is written on the operatorOnly tier, so only a super admin approves it; every other kind is
+// written on securityOps.
 var governanceChangeKinds = map[string]govKind{
 	govKindProfile:      {approver: securityApprover, apply: applyProfileChange},
 	govKindAssignment:   {approver: securityApprover, apply: applyAssignmentChange},
@@ -172,6 +173,7 @@ var governanceChangeKinds = map[string]govKind{
 	govKindAvailability: {approver: securityApprover, apply: applyAvailabilityChange},
 	govKindUserType:     {approver: securityApprover, apply: applyUserTypeChange},
 	govKindRoleMapping:  {approver: operatorApprover, apply: applyRoleMappingChange},
+	govKindKeyDomain:    {approver: securityApprover, apply: applyKeyDomainAssignmentChange},
 }
 
 // canSeeGovernanceKind reports whether the caller may list or read changes of kind: the approver

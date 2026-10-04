@@ -257,6 +257,53 @@ func TestPG_AuditPartition_ConvertsAPopulated085Chain(t *testing.T) {
 	}
 }
 
+// TestPG_AuditPartition_ConversionAfterARolledBackInsertVerifies: a 0.8.5 insert that rolled back
+// burned an identity value no committed row holds. The conversion must record the newest COMMITTED
+// row as the high-water mark (verify compares the head against it, so a burned value reads as a
+// truncated tail), and must still start the new sequence above the burned value.
+func TestPG_AuditPartition_ConversionAfterARolledBackInsertVerifies(t *testing.T) {
+	ctx := context.Background()
+	f := newUpgradeFixture(t, 5)
+	tx, err := f.owner.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	var burned int64
+	if err := tx.QueryRow(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
+		VALUES (gen_random_uuid(), 'system', 'seed', 'seed.rolled.back', 'success') RETURNING seq`).Scan(&burned); err != nil {
+		t.Fatalf("burn a seq: %v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	maxSeq := pgScalar[int64](t, f.owner, `SELECT max(seq) FROM audit_events`)
+	head := pgScalar[string](t, f.owner, `SELECT row_hash FROM audit_events ORDER BY seq DESC LIMIT 1`)
+	if burned <= maxSeq {
+		t.Fatalf("fixture: burned seq %d is not above the committed head %d", burned, maxSeq)
+	}
+
+	f.convert(t)
+
+	// The two facts verifyAuditPartitionState compares, before any new append.
+	hwSeq := pgScalar[int64](t, f.owner, `SELECT hw_seq FROM audit_partition_meta`)
+	hwHash := pgScalar[string](t, f.owner, `SELECT COALESCE(hw_row_hash, '') FROM audit_partition_meta`)
+	if hwSeq != maxSeq || hwHash != head {
+		t.Errorf("high-water mark after the conversion = (seq %d, hash %q), want the committed head (seq %d, hash %q)",
+			hwSeq, hwHash, maxSeq, head)
+	}
+	if got := chainBreaks(t, f.owner); got != 0 {
+		t.Errorf("%d chain break(s) after the conversion", got)
+	}
+
+	seq, prev, _ := appendAudit(t, f.app(t), "test.after.rollback")
+	if seq <= burned {
+		t.Errorf("first seq after the conversion = %d, want above the burned %d (no reuse)", seq, burned)
+	}
+	if prev != head {
+		t.Errorf("first row after the conversion chains to %q, want the committed head %q", prev, head)
+	}
+}
+
 func auditIndexNames(t *testing.T, pool *pgxpool.Pool, table string) []string {
 	t.Helper()
 	rows, err := pool.Query(context.Background(),

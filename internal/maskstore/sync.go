@@ -240,8 +240,8 @@ func (s *Store) fetch(ctx context.Context, cursor int64) (top, pruned int64, row
 // apply puts rows into the registry. A row this process already knows is
 // updated from the ref; only an unknown row is opened, under its owner's key,
 // and a key that is destroyed or a blob that does not open is skipped (nothing
-// can ever mask it). Any other failure aborts the read, so the cursor stays and
-// the caller fails closed. A full read also drops what the table no longer has.
+// can ever mask it) once the runs it masks are fenced (unopenable). Any other
+// failure aborts the read, so the cursor stays and the caller fails closed. A full read also drops what the table no longer has.
 func (s *Store) apply(ctx context.Context, rows []row, full bool) error {
 	keys := map[keyID][]byte{}
 	defer func() {
@@ -327,7 +327,7 @@ func zeroIfNil(t *time.Time) time.Time {
 }
 
 // open decrypts an unknown live row. nil, nil means it can never be opened and
-// is skipped.
+// is skipped, once unopenable has fenced what it masked.
 func (s *Store) open(ctx context.Context, r row, keys map[keyID][]byte) (*ref, error) {
 	if r.version == nil || r.sealed == nil {
 		return nil, nil
@@ -347,7 +347,7 @@ func (s *Store) open(ctx context.Context, r row, keys map[keyID][]byte) (*ref, e
 		key, err = s.keys.Key(ctx, r.owner, subjectkey.PurposeCred, *r.version)
 		switch {
 		case errors.Is(err, subjectkey.ErrDataLoss):
-			return nil, nil // the owner's key is destroyed: nothing here can open again
+			return nil, s.unopenable(ctx, r, "the owner's key is destroyed")
 		case err != nil:
 			return nil, fmt.Errorf("maskstore: the owner's key: %w", err)
 		}
@@ -355,11 +355,51 @@ func (s *Store) open(ctx context.Context, r row, keys map[keyID][]byte) (*ref, e
 	}
 	v, err := kek.Open(key, r.sealed, aad(r.bucket, r.id, r.owner, scope, *r.version))
 	if err != nil {
-		slog.WarnContext(ctx, "maskstore: a masking value does not open; skipped", slog.String("id", r.id.String()))
-		return nil, nil
+		return nil, s.unopenable(ctx, r, "the value does not open under its key")
 	}
 	rf.value = v
 	return rf, nil
+}
+
+// unopenable handles a row that can never be opened again. A retired value is
+// skipped. A live one is missing from every replica's corpus, so the runs it
+// masks fail closed: in one commit their manifests are fenced, as FenceSubject
+// fences them (a per-run value fences its run, a credential value every run of
+// its owner), and the row is tombstoned, so a later read does not fence the
+// owner's later runs for it again. An error aborts the read and the cursor stays.
+func (s *Store) unopenable(ctx context.Context, r row, why string) error {
+	if r.retiredAt != nil {
+		slog.WarnContext(ctx, "maskstore: a retired masking value does not open; skipped", slog.String("id", r.id.String()), slog.String("why", why))
+		return nil
+	}
+	where, arg := "owner = $1", any(r.owner)
+	if r.bucket == bucketRun {
+		where, arg = "run_id = $1", *r.runID
+	}
+	var fenced []uuid.UUID
+	_, err := s.commit(ctx, func(tx pgx.Tx, gen int64) error {
+		rows, err := tx.Query(ctx,
+			`UPDATE run_mask_manifest SET fenced_at = now(), revision = revision + 1 WHERE `+where+` AND fenced_at IS NULL RETURNING run_id`, arg)
+		if err != nil {
+			return fmt.Errorf("maskstore: fence the runs of an unopenable value: %w", err)
+		}
+		if fenced, err = pgx.CollectRows(rows, pgx.RowTo[uuid.UUID]); err != nil {
+			return fmt.Errorf("maskstore: fence the runs of an unopenable value: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM run_mask_values WHERE run_id = ANY($1)`, fenced); err != nil {
+			return fmt.Errorf("maskstore: delete the fenced runs' manifest values: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE mask_values SET `+tombstoneSet+`, retired_at = NULL WHERE id = $2 AND NOT tombstone`, gen, r.id); err != nil {
+			return fmt.Errorf("maskstore: tombstone an unopenable value: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	slog.ErrorContext(ctx, "maskstore: a live masking value does not open; the runs it masks are fenced",
+		slog.String("id", r.id.String()), slog.String("why", why), slog.Int("runs_fenced", len(fenced)))
+	return nil
 }
 
 // drop removes the value a ref holds from the registry and clears it.

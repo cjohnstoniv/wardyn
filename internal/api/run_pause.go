@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -341,7 +342,18 @@ func (s *Server) stampPresence(ctx context.Context, runID uuid.UUID, actorType t
 // thawForExec is markPresent for a path about to exec into the sandbox, given
 // the run it just read: a paused run is thawed whatever the stamp debounce
 // says, because the daemon refuses an exec into a paused container.
+//
+// The thaw takes the run's operation lock, as a pause does (pauseRun), so a
+// person's thaw never lands inside a pause's freeze, mark or compensation. Its
+// callers are request doors that hold no other lock; the resolvers that thaw
+// from under a sign-in lock (approvalClosed) cannot take it, since the run lock
+// comes first in db.LockOrder.
 func (s *Server) thawForExec(ctx context.Context, run types.AgentRun, actorType types.ActorType, principal, reason string) error {
+	ctx, unlock, err := s.lockRunOp(ctx, run.ID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if resumed, err := s.stampPresence(ctx, run.ID, actorType, principal, reason); err != nil || resumed {
 		return err
 	}
@@ -616,10 +628,20 @@ func (s *Server) nextIdleSamples(runs []types.AgentRun) []types.AgentRun {
 // compensation therefore re-reads the run and leaves a paused run frozen. The
 // epoch fences the two steps that start a pause: a leader that has been
 // superseded neither freezes nor marks.
+//
+// The epoch cannot fence the compensation's read-then-thaw: a current leader's
+// whole pause can commit between a stale leader's read and its thaw. The run's
+// operation lock serializes freeze, mark and compensation across replicas, so a
+// pause that finds it held is skipped and retried by the next sweep.
 func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types.AgentRun, reason types.PauseReason, quiet time.Duration) {
 	if !s.leaseCurrent(ctx) {
 		return
 	}
+	ctx, unlock, ok := s.tryLockRunOp(ctx, run.ID)
+	if !ok {
+		return
+	}
+	defer unlock()
 	f := s.cfg.Runner.(runner.Freezer)
 	if err := f.FreezeSandbox(ctx, run.SandboxRef); err != nil {
 		if !errors.Is(err, runner.ErrFreezeUnsupported) {
@@ -644,8 +666,16 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 	}
 	// The compensation outlives a lease lost mid-pass: a freeze must not be
 	// left behind because the sweep's context ended between freeze and thaw.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), pauseCompensateTimeout)
+	// It does not outlive the run lock: a thaw without it is the race the lock
+	// closes, so a lost lock connection cancels it.
+	lockCtx := ctx
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(lockCtx), pauseCompensateTimeout)
 	defer cancel()
+	defer context.AfterFunc(lockCtx, func() {
+		if errors.Is(context.Cause(lockCtx), db.ErrLockLost) {
+			cancel()
+		}
+	})()
 	if cur, rerr := s.cfg.Store.GetRun(ctx, run.ID); rerr == nil && cur.PausedAt != nil {
 		return
 	}
