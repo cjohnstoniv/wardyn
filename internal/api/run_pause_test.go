@@ -26,6 +26,58 @@ type pauseStore struct {
 	*dispatchTestStore
 	open, waiting bool
 	stamps        int
+	settles       map[uuid.UUID]time.Time // run_pause_settles: run id to due_at
+}
+
+func (s *pauseStore) NotePauseSettle(_ context.Context, id uuid.UUID, after time.Duration) (time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.settles == nil {
+		s.settles = map[uuid.UUID]time.Time{}
+	}
+	due := time.Now().Add(after)
+	if cur, ok := s.settles[id]; ok && cur.After(due) {
+		due = cur
+	}
+	s.settles[id] = due
+	return due, nil
+}
+
+func (s *pauseStore) DuePauseSettles(context.Context) ([]store.PauseSettle, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.PauseSettle
+	for id, due := range s.settles {
+		if !due.After(time.Now()) {
+			out = append(out, store.PauseSettle{RunID: id, DueAt: due})
+		}
+	}
+	return out, nil
+}
+
+func (s *pauseStore) ClearPauseSettle(_ context.Context, id uuid.UUID, due time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cur, ok := s.settles[id]; ok && cur.Equal(due) {
+		delete(s.settles, id)
+	}
+	return nil
+}
+
+// owing is how many runs have a settle recorded.
+func (s *pauseStore) owing() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.settles)
+}
+
+// settleDue makes every recorded settle due: the compensation's deadline has passed.
+func (s *pauseStore) settleDue() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id := range s.settles {
+		s.settles[id] = time.Now().Add(-time.Second)
+	}
 }
 
 func (s *pauseStore) ListPauseCandidates(ctx context.Context) ([]store.PauseCandidate, time.Time, error) {
