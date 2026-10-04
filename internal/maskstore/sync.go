@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
 )
@@ -239,9 +240,10 @@ func (s *Store) fetch(ctx context.Context, cursor int64) (top, pruned int64, row
 
 // apply puts rows into the registry. A row this process already knows is
 // updated from the ref; only an unknown row is opened, under its owner's key,
-// and a key that is destroyed or a blob that does not open is skipped (nothing
-// can ever mask it) once the runs it masks are fenced (unopenable). Any other
-// failure aborts the read, so the cursor stays and the caller fails closed. A full read also drops what the table no longer has.
+// and a key that is destroyed or does not unwrap, or a blob that does not open,
+// is skipped (nothing can ever mask it) once the runs it masks are fenced
+// (unopenable). A transient failure (the store is unavailable, the context
+// ends) aborts the read, so the cursor stays and the caller fails closed. A full read also drops what the table no longer has.
 func (s *Store) apply(ctx context.Context, rows []row, full bool) error {
 	keys := map[keyID][]byte{}
 	defer func() {
@@ -348,8 +350,14 @@ func (s *Store) open(ctx context.Context, r row, keys map[keyID][]byte) (*ref, e
 		switch {
 		case errors.Is(err, subjectkey.ErrDataLoss):
 			return nil, s.unopenable(ctx, r, "the owner's key is destroyed")
-		case err != nil:
+		case errors.Is(err, secretstore.ErrUnavailable) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 			return nil, fmt.Errorf("maskstore: the owner's key: %w", err)
+		case err != nil:
+			// A permanent failure (the key does not unwrap: its version retired, or the row
+			// corrupt) never heals by retrying; aborting would wedge every replica's read.
+			slog.ErrorContext(ctx, "maskstore: the owner's key does not open",
+				slog.String("owner", r.owner), slog.Int("key_version", *r.version), slog.Any("err", err))
+			return nil, s.unopenable(ctx, r, "the owner's key does not open")
 		}
 		keys[id] = key
 	}

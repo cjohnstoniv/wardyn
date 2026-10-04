@@ -7404,6 +7404,17 @@ therefore the per-replica cap times the replica count (cap × N):
   idempotent and epoch-fenced and the refresh write is a compare-and-set, but a
   refresh already in flight on the old holder can still race the new holder at the
   authority and lose the credential; the person signs in again.
+- **An owner's key that does not unwrap fences that owner only.** If a person's
+  principal key cannot be unwrapped (its KEK version was retired or purged before
+  `-rewrap-principal-keys`, or the `wrapped_key` is corrupted), a read of the shared
+  registry logs `maskstore: the owner's key does not open` at Error, naming the owner
+  and key version, then handles each of that owner's live values as a destroyed key:
+  their runs are fenced (attach, SSH shell and recording upload answer `503`
+  `mask_state_unavailable`) and the rows are tombstoned. Other people's values are
+  unaffected and `mask_registry_shared` stays healthy. The remedy is to restore the
+  retired KEK version and run `-rewrap-principal-keys`, or to erase that person's
+  credentials. A transient failure (Postgres or the KEK service unreachable) is
+  different: the read fails and retries, and consumers fail closed until it succeeds.
 - **A compromised wardynd process still sees every value it masks.** Shredding a
   person's copies is complete only after backups expire or the wrapping key version
   is retired.

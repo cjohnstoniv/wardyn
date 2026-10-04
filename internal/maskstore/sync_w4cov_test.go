@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
 )
@@ -252,9 +253,9 @@ func TestW4CovApplySkipsWhatCanNeverOpen(t *testing.T) {
 	}
 }
 
-func TestW4CovApplyAbortsOnAKeyFailureAndAppliesNothingAfter(t *testing.T) {
+func TestW4CovApplyAbortsOnATransientKeyFailureAndAppliesNothingAfter(t *testing.T) {
 	f := w4CovNewFixture(t)
-	injected := errors.New("key service down")
+	injected := fmt.Errorf("key service down: %w", secretstore.ErrUnavailable)
 	f.keys.errs[w4CovOwner] = injected
 	first := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
 	second := f.sealedRow(t, w4CovRowB, bucketGlobal, "cred", nil, "second-secret-value", 2)
@@ -268,6 +269,21 @@ func TestW4CovApplyAbortsOnAKeyFailureAndAppliesNothingAfter(t *testing.T) {
 	}
 	if len(f.keys.lookups) != 1 {
 		t.Errorf("the read went on after the failure: %d key lookups", len(f.keys.lookups))
+	}
+}
+
+// A key that does not unwrap never heals by retrying: the row is handled like a destroyed key
+// (here retired, so no database is needed) and the read goes on to the rows after it.
+func TestW4CovApplySkipsARowWhoseKeyDoesNotUnwrap(t *testing.T) {
+	f := w4CovNewFixture(t)
+	f.keys.errs[w4CovOwner] = errors.New("subjectkey: generation 1 does not unwrap (its key version retired)")
+	bad := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
+	bad.retiredAt = &w4CovRetired
+	if err := f.s.apply(context.Background(), []row{bad}, true); err != nil {
+		t.Fatalf("a permanent key failure must not abort the read: %v", err)
+	}
+	if f.ref(w4CovRowA) != nil || len(f.snapshot()) != 0 {
+		t.Error("a row whose key does not unwrap reached the cache")
 	}
 }
 

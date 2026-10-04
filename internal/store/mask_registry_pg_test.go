@@ -687,3 +687,37 @@ func TestPG_MaskStore_UnopenableLiveRowFencesRun(t *testing.T) {
 		t.Error("a replica that never cached a retired credential value fenced a run started after the erase")
 	}
 }
+
+// One owner's key that does not unwrap (a corrupted wrapped key, or a KEK version retired before a
+// rewrap) must not wedge the shared registry: the read goes on, the owner's runs are fenced, and
+// another person's values still mask.
+func TestPG_MaskStore_AnOwnerKeyThatDoesNotUnwrapFencesOnlyThatOwner(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	k := localKEK(t)
+	ctx := t.Context()
+	const bob = "bob@example.com"
+	a := newRegReplica(t, pool, k)
+	aliceRun, bobRun := dispatchedRun(t, pool, a, regAlice), dispatchedRun(t, pool, a, bob)
+	if err := a.reg.AddGlobal(regAlice, "alice-cred", time.Now(), []byte("alices-credential-value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.reg.AddGlobal(bob, "bob-cred", time.Now(), []byte("bobs-credential-value")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE principal_keys SET wrapped_key = set_byte(wrapped_key, octet_length(wrapped_key)-1, get_byte(wrapped_key, octet_length(wrapped_key)-1) # 1) WHERE owner = $1`, regAlice); err != nil {
+		t.Fatal(err)
+	}
+
+	r := newRegReplica(t, pool, k)
+	r.read(t) // fails the test if the read errors
+	if r.m.Covered(ctx, aliceRun) {
+		t.Error("a run of the owner whose key does not unwrap is still covered")
+	}
+	if !r.m.Covered(ctx, bobRun) || !regMasks(r, uuid.New(), "bobs-credential-value") {
+		t.Error("one person's unreadable key lost another's coverage")
+	}
+	if n := liveRows(t, pool, `owner = $1`, regAlice); n != 0 {
+		t.Errorf("%d live rows left for the unopenable owner, want them tombstoned", n)
+	}
+}
