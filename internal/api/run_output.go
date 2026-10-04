@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -276,7 +277,8 @@ type runOutputResponse struct {
 // (409); a final row, served on any replica with no manifest and no lease
 // (200); a live read of an uncovered run (503, ha-l2.0's refusal); a live
 // tail in this process (200); a pending row with no local tail (409, read again shortly);
-// an interactive run (409); a run that ended longer ago than the retention
+// an interactive run (409, which is also what a pane snapshot's non-reader
+// gets: only recordingReader's callers are served one); a run that ended longer ago than the retention
 // window (410); otherwise not kept (409).
 func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "run")
@@ -310,6 +312,15 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputOff,
 			"this deployment keeps no run output (WARDYN_EXEC_OUTPUT_TAIL=off)")
 		return
+	}
+	// A pane snapshot is a person's last terminal screen, the surface the
+	// recording gate protects: only the run's owner or an operator reads it.
+	// Anyone else who got past getRunAuthorized (a security_admin) is refused
+	// in the answer an interactive run with no snapshot gets, so the row's
+	// existence is not revealed; the refusal is audited.
+	if found && row.Source == paneSnapshotSource && !s.recordingReader(r, run) {
+		s.recordRefusal(r.Context(), r, authz.Deny(authz.ReasonNotOwner, id.String(), "").OnRun(id))
+		found = false
 	}
 	// A final row was masked before it was stored, so it needs no manifest here:
 	// it is what makes a terminal run's output readable after every replica

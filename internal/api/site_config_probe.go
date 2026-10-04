@@ -769,7 +769,7 @@ func (s *Server) reclaimProbeRun(ctx context.Context, runID uuid.UUID) {
 	}
 	if applied, _ := s.casRunState(ctx, runID, run.State, types.RunKilled); applied {
 		s.finalizeRunTailOrdered(ctx, runID, run.SandboxRef, "site_config.probe.kill",
-			"failure", map[string]any{"reason": "probe wait timed out; run reclaimed"}, true)
+			"failure", map[string]any{"reason": "probe wait timed out; run reclaimed"}, true, false)
 	}
 }
 

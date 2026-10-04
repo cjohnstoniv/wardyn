@@ -194,7 +194,7 @@ func (s *Server) outputRetryBase() time.Duration {
 // FinishRunOutput is both halves of the contract, for a caller outside this
 // package (cmd/wardynd's idle stop) that has already stopped the sandbox.
 func (s *Server) FinishRunOutput(ctx context.Context, runID uuid.UUID) {
-	s.prepareRunOutput(ctx, runID)
+	s.prepareRunOutput(ctx, runID, false)
 	s.finishRunOutput(ctx, runID)
 }
 
@@ -213,18 +213,33 @@ func (s *Server) finishRunOutputDetached(ctx context.Context, runID uuid.UUID) {
 // for a run that owes one recovers the output from the substrate when that is
 // possible and safe, and otherwise writes the capture_gap row (run_output_recover.go):
 // boot adoption, the reconciler, and the sweeper reach this on a restart or on
-// another replica, where the bytes are not here. A run that is interactive,
-// unrecordable or kept off the books owes nothing.
-func (s *Server) prepareRunOutput(ctx context.Context, runID uuid.UUID) {
+// another replica, where the bytes are not here. A run that is unrecordable or
+// kept off the books owes nothing. graceful is true only when Wardyn is stopping
+// a live sandbox into STOPPED (the idle and max-age stops and the lease end): an
+// interactive run then keeps a snapshot of its pane (run_output_snapshot.go). Any
+// other interactive run keeps nothing here.
+func (s *Server) prepareRunOutput(ctx context.Context, runID uuid.UUID, graceful bool) {
 	st := s.runOutputStore()
-	if st == nil || s.cfg.ExecOutputTailOff || s.cfg.Store == nil || s.tailFor(runID) != nil {
+	if st == nil || s.cfg.ExecOutputTailOff || s.cfg.Store == nil {
+		return
+	}
+	hasTail := s.tailFor(runID) != nil
+	if hasTail && !graceful {
 		return
 	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err != nil || run.Interactive || runIsUnrecordable(run) {
+	if err != nil {
 		return
 	}
-	s.recoverRunOutput(ctx, st, run, "no_tail")
+	switch {
+	case run.Interactive:
+		if graceful {
+			s.snapshotRunPane(ctx, st, run)
+		}
+	case runIsUnrecordable(run), hasTail:
+	default:
+		s.recoverRunOutput(ctx, st, run, "no_tail")
+	}
 }
 
 // writeGapRow resolves runID's pending row (or writes the row) as a capture

@@ -93,8 +93,10 @@ wardynd keeps the last `WARDYN_RUN_OUTPUT_TAIL_BYTES` (default 64 KiB, between
 memory while the run lives and in Postgres once it ends, so a caller can read
 the end of a headless run, during it and after a restart, with
 `GET /api/v1/runs/{id}/output?tail=<bytes>` — the run's owner or an admin; anyone
-else gets the same `404` as `GET /runs/{id}`. Interactive runs keep none, and
-neither does the managed-harness sign-in run, whose output is a live credential.
+else gets the same `404` as `GET /runs/{id}`. An interactive run keeps no
+output of its own (its terminal is the recording's), only the pane snapshot
+below when Wardyn stops it gracefully; the managed-harness sign-in run keeps
+nothing at all, because its output is a live credential.
 
 - **It is not a recording, and it is stored.** It lives outside the recording
   store and works with `WARDYN_RECORDING_STORE=off`. With
@@ -119,6 +121,25 @@ neither does the managed-harness sign-in run, whose output is a live credential.
   no bytes to keep. A write that fails is retried with
   capped backoff, the bytes held in memory, and audited as `run.output.finalize`;
   a clean capture writes no audit row.
+- **A pane snapshot for an interactive run Wardyn stops.** When Wardyn itself
+  stops an interactive run's sandbox into STOPPED (the idle stop, the
+  `WARDYN_RUN_MAX_AGE` stop, or a lease end), it first revokes the run's
+  credentials, then reads the whole scrollback of the run's `wardyn` tmux
+  session as plain text (`tmux capture-pane -p -J -S -`, no escape sequences),
+  keeps the last `WARDYN_RUN_OUTPUT_TAIL_BYTES` of it, masked the way a
+  recording is, and stores it as a `source: "pane_snapshot"` row. It is bounded
+  to 3 seconds: a pane that never finishes, a sandbox with no tmux or no
+  session, or a failed read leaves no row and the stop goes on. Each attempt is
+  audited as `run.output.snapshot` (the outcome and the byte count, never the
+  text). A kill, a failed or reconciled run, and a deployment with persistence
+  off take none. **The pane is text the sandbox controls:** the sandbox runs as
+  the tmux server's user and can make the pane, or `tmux` itself, print
+  anything, so the snapshot shows what the sandbox chose to show. It is stored
+  as bytes and meant to be shown as plain text, never interpreted. A snapshot is
+  a person's last terminal screen, so it is read on the recording's rule: the
+  run's owner or a super admin gets it; a security admin gets
+  `409 run_output_interactive`, the answer for a run with no snapshot, and the
+  refusal is audited.
 - **A restart.** A run that was live across a wardynd restart, or that another
   replica adopted, has its output read back from the substrate when that is
   possible and safe, and ends with a `capture_gap` row when it is not. wardynd

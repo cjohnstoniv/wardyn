@@ -2310,3 +2310,50 @@ func (a *authzApprovals) ListApprovalsPageByRunCreator(ctx context.Context, crea
 	}
 	return out, nil
 }
+
+// A pane snapshot is a person's last terminal screen, read on the recording's
+// rule: the owner and a super admin get it, and a security_admin, who passes
+// getRunAuthorized through the incident-response widening, gets the answer an
+// interactive run with no snapshot gets, with a not_owner refusal audited, so
+// the row's existence is not revealed.
+func TestRunOutput_PaneSnapshotIsReadOnTheRecordingsRule(t *testing.T) {
+	const ownerSub = "sub-snapshot-owner"
+	var mem *memRunOutputs
+	srv, ast, _, _ := newAuthzMatrixServer(t, func(c *Config) { mem = newMemRunOutputs(c.Store); c.Store = mem })
+	runID := uuid.New()
+	ast.mu.Lock()
+	ast.runs[runID] = types.AgentRun{ID: runID, CreatedBy: ownerSub, State: types.RunStopped, Agent: "claude-code", Interactive: true}
+	ast.mu.Unlock()
+	now := time.Now()
+	mem.rows[runID] = store.RunOutput{RunID: runID, Output: []byte("the last screen\n"), Source: "pane_snapshot", CapturedAt: &now}
+	path := "/api/v1/runs/" + runID.String() + "/output"
+
+	for name, sess := range map[string]*http.Cookie{
+		"the owner":     ssoSession(t, ownerSub, "owner@corp.example", oidc.RoleUser),
+		"a super admin": ssoSession(t, "sub-snapshot-admin", "admin@corp.example", oidc.RoleAdmin),
+	} {
+		w := doSSO(t, srv, http.MethodGet, path, sess, "")
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"source":"pane_snapshot"`) || !strings.Contains(w.Body.String(), "the last screen") {
+			t.Errorf("%s: %d %s, want 200 with the snapshot", name, w.Code, w.Body)
+		}
+	}
+
+	if reasons := auditReasons(t, srv, "authz.denied"); len(reasons) != 0 {
+		t.Fatalf("refusal rows before the security_admin read: %v", reasons)
+	}
+	secSess := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
+	w := doSSO(t, srv, http.MethodGet, path, secSess, "")
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"reason":"run_output_interactive"`) || strings.Contains(w.Body.String(), "the last screen") {
+		t.Fatalf("security_admin: %d %s, want 409 run_output_interactive and no snapshot", w.Code, w.Body)
+	}
+	if reasons := auditReasons(t, srv, "authz.denied"); len(reasons) != 1 || reasons[0] != "not_owner" {
+		t.Errorf("authz.denied reasons = %v, want exactly [not_owner]", reasons)
+	}
+
+	// The same answer a run with no snapshot gives, byte for byte.
+	delete(mem.rows, runID)
+	none := doSSO(t, srv, http.MethodGet, path, secSess, "")
+	if none.Code != w.Code || none.Body.String() != w.Body.String() {
+		t.Errorf("no snapshot: %d %s\nwith one:    %d %s", none.Code, none.Body, w.Code, w.Body)
+	}
+}
