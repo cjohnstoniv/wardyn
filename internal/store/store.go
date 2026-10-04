@@ -134,7 +134,7 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 		return types.AgentRun{}, err
 	}
 	var active int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND lost_at IS NULL`, nonTerminalStateNames()).Scan(&active); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND (lost_at IS NULL OR lost_reason = $2)`, nonTerminalStateNames(), string(types.LostOutage)).Scan(&active); err != nil {
 		return types.AgentRun{}, fmt.Errorf("store: count active runs: %w", err)
 	}
 	if active >= limit {
@@ -151,12 +151,13 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 }
 
 // CountNonTerminalRuns is the number of non-terminal run rows that hold a sandbox,
-// the quantity CreateRunUnderCap holds under the cap. A kept run (lost_at set: an
-// ended run in its grace) has no proxy and no agent, so it holds no slot. It takes no lock: a pre-flight read for
-// a refusal that must come before an identity is minted, never the authority.
+// the quantity CreateRunUnderCap holds under the cap. An ended or rebooted run kept
+// for its grace (lost_at set) has no running agent and holds no slot; a run kept
+// after a control-plane outage still runs its agent and counts. It takes no lock: a
+// pre-flight read for a refusal that must come before an identity is minted, never the authority.
 func (s PG) CountNonTerminalRuns(ctx context.Context) (int, error) {
 	var n int
-	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND lost_at IS NULL`, nonTerminalStateNames()).Scan(&n); err != nil {
+	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND (lost_at IS NULL OR lost_reason = $2)`, nonTerminalStateNames(), string(types.LostOutage)).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count active runs: %w", err)
 	}
 	return n, nil
