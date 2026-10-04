@@ -38,12 +38,15 @@ type RunReviver interface {
 	// false means the run went terminal, ended, was lost or revived since, or its grace or end ran
 	// out — it gets no proxy.
 	//
-	// A run kept with its agent stopped (store.HoldsSandboxSQL) holds no slot under the
-	// deployment cap, so with limit > 0 its claim takes one like a create does: under
-	// CreateRunUnderCap's lock, ErrRunCapReached when the deployment already holds limit
-	// runs, the run left as it was. A run the cap already counts (live, or kept after an
-	// outage before its end) takes no extra slot and is never refused for one.
-	MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int) (bool, error)
+	// startsAgent is a revive that starts the run's stopped agent (a reboot, an end, or an
+	// outage whose agent was stopped). With limit > 0 its claim takes a slot under the
+	// deployment cap like a create does: under CreateRunUnderCap's lock,
+	// ErrRunCapReached when every OTHER run that holds a sandbox already reaches limit,
+	// the run left as it was. The row's own count is not trusted for this: an outage-kept
+	// run whose end was moved later reads as holding a sandbox though its agent is
+	// stopped. A revive that starts no agent (a live restart, an outage revive whose agent
+	// still runs) adds nothing and is never refused.
+	MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int, startsAgent bool) (bool, error)
 	// SetRunProxyRelease records release as the one that started run id's
 	// proxy, once a revive's new proxy runs.
 	SetRunProxyRelease(ctx context.Context, id uuid.UUID, release string) error
@@ -64,7 +67,7 @@ type RunProxyRelease struct {
 var _ RunReviver = PG{}
 
 // MarkRunRevived — see RunReviver.
-func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int) (bool, error) {
+func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int, startsAgent bool) (bool, error) {
 	switch from {
 	case "", types.LostOutage, types.LostReboot:
 	case types.LostEnded:
@@ -74,15 +77,16 @@ func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostRea
 	default:
 		return false, nil
 	}
-	if limit > 0 {
+	if limit > 0 && startsAgent {
 		return s.markRunRevivedUnderCap(ctx, id, from, ended, limit)
 	}
 	return markRunRevived(ctx, s.Pool, id, from, ended)
 }
 
-// markRunRevivedUnderCap is the claim under the deployment cap: the count and the
-// claim share CreateRunUnderCap's transaction-scoped advisory lock and its counting
-// predicate, so a revive and a create racing at the cap admit exactly the cap.
+// markRunRevivedUnderCap is the claim of a revive that starts an agent, under the
+// deployment cap: the count and the claim share CreateRunUnderCap's transaction-scoped
+// advisory lock and its counting predicate, so a revive and a create racing at the cap
+// admit exactly the cap. The run itself is left out of the count when it is in it.
 func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int) (claimed bool, err error) {
 	err = s.inTx(ctx, func(q Querier) error {
 		active, err := lockAndCountActiveRuns(ctx, q)
@@ -93,7 +97,11 @@ func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types
 		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs WHERE id = $1 AND `+HoldsSandboxSQL+`)`, id).Scan(&counted); err != nil {
 			return fmt.Errorf("store: read revived run's slot: %w", err)
 		}
-		if !counted && active >= limit {
+		self := 0
+		if counted {
+			self = 1
+		}
+		if active-self >= limit {
 			return ErrRunCapReached
 		}
 		claimed, err = markRunRevived(ctx, q, id, from, ended)

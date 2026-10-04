@@ -125,6 +125,38 @@ func TestReviveRun_KeptRunAtTheDeploymentCapIsRefused(t *testing.T) {
 	}
 }
 
+// TestReviveRun_OutageRunWithStoppedAgentAtTheDeploymentCapIsRefused: an outage-kept run whose
+// agent is stopped (its end passed, then was moved later) is revived by starting that agent, so
+// the revive takes a slot: at the cap it is refused 422 run_quota with no proxy replaced and no
+// agent started. An outage revive whose agent still runs starts nothing and is never refused.
+func TestReviveRun_OutageRunWithStoppedAgentAtTheDeploymentCapIsRefused(t *testing.T) {
+	f := newReviveFixture(t)
+	sr := &startingRunner{reviveRunner: f.rr}
+	f.srv.cfg.Runner = sr
+	f.rr.status = types.RunStopped
+	f.srv.cfg.MaxConcurrentRuns = 1
+	f.rs.capFull = true
+
+	code, body := f.reviveAs(t, false)
+	if code != http.StatusUnprocessableEntity || !strings.Contains(body, string(authz.ReasonRunQuota)) {
+		t.Fatalf("revive at the cap = %d %s, want 422 run_quota", code, body)
+	}
+	if len(f.rr.replaced) != 0 || len(sr.starts()) != 0 {
+		t.Fatalf("refused revive replaced %d proxies and started agents %v; want neither", len(f.rr.replaced), sr.starts())
+	}
+	if lostAt, reason := f.st.lost(); lostAt == nil || reason != types.LostOutage {
+		t.Fatalf("refused revive: lost %v %q; want still kept (outage)", lostAt, reason)
+	}
+
+	f.rr.status = types.RunRunning
+	if code, body := f.reviveAs(t, false); code != http.StatusOK {
+		t.Fatalf("outage revive of a running agent at the cap = %d %s, want 200", code, body)
+	}
+	if len(sr.starts()) != 0 {
+		t.Fatalf("agent starts = %v, want none for a running agent", sr.starts())
+	}
+}
+
 // runCapAPIStore adds the deployment-cap store methods to runWarnStore: active is
 // what the lock-free count reports, and an insert at the cap answers
 // ErrRunCapReached the way store.PG does when a racing create took the last slot.

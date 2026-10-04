@@ -180,7 +180,7 @@ func TestPG_RunPause_ClearedByLostAndRevive(t *testing.T) {
 		t.Fatalf("force a stale pause mark: %v", err)
 	}
 
-	if ok, err := pg.MarkRunRevived(ctx, run.ID, types.LostReboot, nil, 0); err != nil || !ok {
+	if ok, err := pg.MarkRunRevived(ctx, run.ID, types.LostReboot, nil, 0, false); err != nil || !ok {
 		t.Fatalf("MarkRunRevived = %v, %v; want true", ok, err)
 	}
 	revived, err := pg.GetRun(ctx, run.ID)
@@ -249,7 +249,7 @@ func TestPG_RunPause_SurvivesALiveRestart(t *testing.T) {
 		t.Fatalf("MarkRunPaused = %v, %v; want true", ok, err)
 	}
 
-	if ok, err := pg.MarkRunRevived(ctx, run.ID, "", nil, 0); err != nil || !ok {
+	if ok, err := pg.MarkRunRevived(ctx, run.ID, "", nil, 0, false); err != nil || !ok {
 		t.Fatalf("MarkRunRevived(live) = %v, %v; want true", ok, err)
 	}
 	restarted, err := pg.GetRun(ctx, run.ID)

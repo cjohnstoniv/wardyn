@@ -235,7 +235,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// the row as read here, so a run read live still had its old proxy running.
 	// It also refreshes the watcher lease, so the watcher sweep does not find
 	// a rebooted agent not yet started and lose the run again.
-	if rerr := s.claimRevive(ctx, reviver, run); rerr != nil {
+	if rerr := s.claimRevive(ctx, reviver, run, rebooted); rerr != nil {
 		return reviveResult{}, rerr
 	}
 	// From the claim on, the revive finishes or compensates whatever becomes of
@@ -321,12 +321,12 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	return reviveResult{RunID: run.ID, DeniedAdded: re.added, ProxyRelease: version.Version, AgentStarted: rebooted}, nil
 }
 
-// claimRevive is reviveRunProxy's claim (store.RunReviver.MarkRunRevived). A run
-// kept after a reboot or its end holds no slot under WARDYN_MAX_CONCURRENT_RUNS,
-// so its claim takes one under the cap's lock, and at the cap is refused as a
-// create is, the run left kept.
-func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run types.AgentRun) *reviveError {
-	claimed, err := reviver.MarkRunRevived(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()), s.cfg.MaxConcurrentRuns)
+// claimRevive is reviveRunProxy's claim (store.RunReviver.MarkRunRevived). A
+// revive that starts the run's stopped agent (startsAgent, reviveNeedsAgentStart)
+// takes a slot under WARDYN_MAX_CONCURRENT_RUNS, under the cap's lock, and at the
+// cap is refused as a create is, the run left kept.
+func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run types.AgentRun, startsAgent bool) *reviveError {
+	claimed, err := reviver.MarkRunRevived(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()), s.cfg.MaxConcurrentRuns, startsAgent)
 	if errors.Is(err, store.ErrRunCapReached) {
 		return reviveRefused(http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)
 	}

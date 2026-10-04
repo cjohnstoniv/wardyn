@@ -83,11 +83,11 @@ func TestPG_RunRevive(t *testing.T) {
 		{"finished", finished, ""}, {"outage as live", outage, ""}, {"live as outage", live, types.LostOutage},
 		{"ended", ended, types.LostEnded}, {"ended as live", ended, ""},
 	} {
-		if ok, err := pg.MarkRunRevived(ctx, c.run.ID, c.from, nil, 0); err != nil || ok {
+		if ok, err := pg.MarkRunRevived(ctx, c.run.ID, c.from, nil, 0, false); err != nil || ok {
 			t.Errorf("MarkRunRevived(%s) = %v, %v; want false", c.name, ok, err)
 		}
 	}
-	if ok, err := pg.MarkRunRevived(ctx, rebooted.ID, types.LostReboot, nil, 0); err != nil || !ok {
+	if ok, err := pg.MarkRunRevived(ctx, rebooted.ID, types.LostReboot, nil, 0, false); err != nil || !ok {
 		t.Fatalf("MarkRunRevived(reboot) = %v, %v; want true", ok, err)
 	}
 	var leaseFresh bool
@@ -95,7 +95,7 @@ func TestPG_RunRevive(t *testing.T) {
 		rebooted.ID).Scan(&leaseFresh); err != nil || !leaseFresh {
 		t.Errorf("revived rebooted run: live with a fresh watcher lease = %v (%v); want true, or the watcher sweep loses it again before its agent starts", leaseFresh, err)
 	}
-	if ok, err := pg.MarkRunRevived(ctx, outage.ID, types.LostOutage, nil, 0); err != nil || !ok {
+	if ok, err := pg.MarkRunRevived(ctx, outage.ID, types.LostOutage, nil, 0, false); err != nil || !ok {
 		t.Fatalf("MarkRunRevived(outage) = %v, %v; want true", ok, err)
 	}
 	run, err := pg.GetRun(ctx, outage.ID)
@@ -112,7 +112,7 @@ func TestPG_RunRevive(t *testing.T) {
 	if slices.ContainsFunc(lapsed, func(r types.AgentRun) bool { return r.ID == outage.ID }) {
 		t.Error("a revived run is listed as lapsed: its token stamp was not refreshed")
 	}
-	if ok, err := pg.MarkRunRevived(ctx, live.ID, "", nil, 0); err != nil || !ok {
+	if ok, err := pg.MarkRunRevived(ctx, live.ID, "", nil, 0, false); err != nil || !ok {
 		t.Errorf("MarkRunRevived(live) = %v, %v; want true — a restart", ok, err)
 	}
 	if got := releases(); got[outage.ID.String()] != "" || got[live.ID.String()] != version.Version {
@@ -139,7 +139,7 @@ func TestPG_EndedRunReviveNeedsFutureEnd(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	r, endedAt := endedRun(t, ctx, pg, now)
 
-	if ok, err := pg.MarkRunRevived(ctx, r.ID, types.LostEnded, keptAt(endedAt, now), 0); err != nil || ok {
+	if ok, err := pg.MarkRunRevived(ctx, r.ID, types.LostEnded, keptAt(endedAt, now), 0, false); err != nil || ok {
 		t.Fatalf("revive before the end moved = %v, %v; want false", ok, err)
 	}
 	later := now.Add(time.Hour)
@@ -148,7 +148,7 @@ func TestPG_EndedRunReviveNeedsFutureEnd(t *testing.T) {
 	}
 	refused := func(name string, ended *store.EndedKept) {
 		t.Helper()
-		if ok, err := pg.MarkRunRevived(ctx, r.ID, types.LostEnded, ended, 0); err != nil || ok {
+		if ok, err := pg.MarkRunRevived(ctx, r.ID, types.LostEnded, ended, 0, false); err != nil || ok {
 			t.Errorf("%s: MarkRunRevived = %v, %v; want false", name, ok, err)
 		}
 	}
@@ -162,7 +162,7 @@ func TestPG_EndedRunReviveNeedsFutureEnd(t *testing.T) {
 	}
 	later = far
 	refused("the grace has run out, the end still ahead", keptAt(endedAt, endedAt.Add(testEndedGrace)))
-	if ok, err := pg.MarkRunRevived(ctx, r.ID, types.LostEnded, keptAt(endedAt, now), 0); err != nil || !ok {
+	if ok, err := pg.MarkRunRevived(ctx, r.ID, types.LostEnded, keptAt(endedAt, now), 0, false); err != nil || !ok {
 		t.Fatalf("revive inside the grace before the new end = %v, %v; want true", ok, err)
 	}
 	got, err := pg.GetRun(ctx, r.ID)
@@ -177,7 +177,7 @@ func TestPG_EndedRunReviveNeedsFutureEnd(t *testing.T) {
 	if ok, err := pg.SetRunEndAndWait(ctx, noEnd.ID, noEnd.RunLimits, noEnd.EndsAt, noEnd.WaitBudgetSec, nil, noEnd.WaitBudgetSec, keptAt(noEndAt, now)); err != nil || !ok {
 		t.Fatalf("extend to No end = %v, %v; want true", ok, err)
 	}
-	if ok, err := pg.MarkRunRevived(ctx, noEnd.ID, types.LostEnded, keptAt(noEndAt, now), 0); err != nil || !ok {
+	if ok, err := pg.MarkRunRevived(ctx, noEnd.ID, types.LostEnded, keptAt(noEndAt, now), 0, false); err != nil || !ok {
 		t.Errorf("revive with No end = %v, %v; want true", ok, err)
 	}
 }
@@ -217,7 +217,7 @@ func TestPG_EndedRunExtendReviveRacesTerminalTransition(t *testing.T) {
 			if ok, err := pg.SetRunEndAndWait(ctx, r.ID, r.RunLimits, r.EndsAt, r.WaitBudgetSec, &later, r.WaitBudgetSec, keptAt(endedAt, now)); err != nil || ok {
 				t.Errorf("extend after = %v, %v; want false", ok, err)
 			}
-			if ok, err := pg.MarkRunRevived(ctx, r.ID, types.LostEnded, keptAt(endedAt, now), 0); err != nil || ok {
+			if ok, err := pg.MarkRunRevived(ctx, r.ID, types.LostEnded, keptAt(endedAt, now), 0, false); err != nil || ok {
 				t.Errorf("revive after = %v, %v; want false", ok, err)
 			}
 			if got := state(r.ID); got != want || !got.IsTerminal() {
@@ -235,7 +235,7 @@ func TestPG_EndedRunExtendReviveRacesTerminalTransition(t *testing.T) {
 		if ok, err := pg.StopKeptRunIf(ctx, r.ID, types.RunStopped, &endedAt, types.LostEnded, stale); err != nil || ok {
 			t.Errorf("a stale expiry after the extension = %v, %v; want false", ok, err)
 		}
-		if ok, err := pg.MarkRunRevived(ctx, r.ID, types.LostEnded, keptAt(endedAt, now), 0); err != nil || !ok {
+		if ok, err := pg.MarkRunRevived(ctx, r.ID, types.LostEnded, keptAt(endedAt, now), 0, false); err != nil || !ok {
 			t.Fatalf("revive = %v, %v; want true", ok, err)
 		}
 		if ok, err := pg.StopKeptRunIf(ctx, r.ID, types.RunStopped, &endedAt, types.LostEnded, &later); err != nil || ok {
