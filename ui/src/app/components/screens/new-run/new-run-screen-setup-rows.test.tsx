@@ -6,7 +6,7 @@
 // f-f4 — preflight's setup rows on the rail, and a `missing` backend row
 // blocking Launch only while its verdict is current.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -85,7 +85,9 @@ async function preflighted(items: SetupItem[], classes: Array<"CC1" | "CC2" | "C
       </OperatorProvider>
     </MemoryRouter>,
   );
-  await user.type(await screen.findByLabelText("Title"), "Refund flow");
+  // One change event, not eleven keystrokes: every keystroke re-renders the
+  // whole screen, and on a loaded CI runner that alone outran the test timeout.
+  fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Refund flow" } });
   await user.click(screen.getByRole("button", { name: /^Check again$/ }));
   await screen.findByTestId("preflight-result");
 }
@@ -114,7 +116,10 @@ describe("NewRunScreen — preflight's setup rows", () => {
 
   it("a stale verdict (body changed since) neither shows nor blocks", async () => {
     await preflighted([BACKEND("missing")]);
-    await user.type(screen.getByLabelText("Title"), " again");
+    // Current, the verdict shows and blocks: the change below is what lifts both.
+    expect(screen.getByText(RAIL_SETUP.BACKEND_BLOCK, { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Launch run/ })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Refund flow again" } });
     expect(screen.queryByText(RAIL_SETUP.BACKEND_BLOCK, { exact: false })).toBeNull();
     expect(screen.getByRole("button", { name: /Launch run/ })).toBeEnabled();
   });

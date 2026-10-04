@@ -11,6 +11,7 @@
  */
 import type { Locator, Page } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
+import { RUN_COCKPIT } from "../src/app/components/wardyn/copy";
 import {
   attachModeFrame,
   findRunningFixture,
@@ -26,6 +27,32 @@ test.describe.configure({ mode: "serial" });
 const focusInXterm = (page: Page) =>
   page.evaluate(() => document.activeElement?.classList.contains("xterm-helper-textarea") ?? false);
 
+// Resolves once the pane's header and grid have stopped moving. The "you are
+// driving" chip and the geometry readout land after the terminal is focused,
+// and each can re-wrap the header and shift the buttons, so a click aimed
+// before they land misses its target (it hit the panel and focused that).
+async function layoutSettled(pane: Locator) {
+  const targets = [
+    pane,
+    pane.getByTestId("run-terminal-wrapper"),
+    pane.getByRole("button", { name: "Redraw terminal" }),
+    pane.getByRole("button", { name: "Fullscreen" }),
+  ];
+  let last = "";
+  let same = 0;
+  await expect
+    .poll(
+      async () => {
+        const now = JSON.stringify(await Promise.all(targets.map((t) => t.boundingBox())));
+        same = now === last ? same + 1 : 0;
+        last = now;
+        return same;
+      },
+      { intervals: [100] },
+    )
+    .toBeGreaterThanOrEqual(4);
+}
+
 async function openTerminal(page: Page) {
   const { id: runId } = await findRunningFixture(page);
   await stubInteractiveRun(page, runId);
@@ -40,6 +67,15 @@ async function openTerminal(page: Page) {
   // A writable terminal takes focus on load; wait for that, then move focus
   // away so each case starts from a terminal that is not focused.
   await expect.poll(() => focusInXterm(page)).toBe(true);
+  await expect(pane.getByText(RUN_COCKPIT.driving)).toBeVisible();
+  await expect(pane.getByText(/^\d+×\d+$/)).toBeVisible();
+  // The panel's own load-time refocus runs on a 60 ms timer set when it
+  // mounted, and takes focus again if nothing holds it. A timer set now for
+  // 100 ms runs after every earlier timer of 60 ms or less (HTML timer
+  // ordering), so by the time it fires that refocus is done and the blur
+  // below is the last word.
+  await page.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 100)));
+  await layoutSettled(pane);
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   expect(await focusInXterm(page)).toBe(false);
   return pane;

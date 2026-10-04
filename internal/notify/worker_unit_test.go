@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -159,15 +160,15 @@ func TestWorkerOnAPostgresThatDoesNotAnswer(t *testing.T) {
 		t.Errorf("Tick = %d, %v; want 0 and an error", n, err)
 	}
 
-	// A row whose facts cannot be read is not reported dead: the failure is the store's, retryable,
-	// and its lease update cannot land either, so no counter moves.
+	// A row whose facts cannot be read moves no failure counter: its outcome is only counted once
+	// the lease update lands, and on a store outage that update cannot land either.
 	before := Snapshot().Failed["a"]
 	w.process(context.Background(), claimed{id: uuid.New(), approvalID: uuid.New(), channel: "a", attempts: 1, lease: time.Now()})
 	if after := Snapshot().Failed["a"]; after != before {
 		t.Errorf("failed counter moved %d -> %d on a store outage", before, after)
 	}
 
-	// Run keeps ticking through outages and returns when its context ends.
+	// Run returns once its context ends, even with the store down.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	done := make(chan struct{})
@@ -195,7 +196,7 @@ func TestEnqueueCarriesThePlanAsThreeParallelArrays(t *testing.T) {
 	}
 	tail := e.Tail(4)
 	for _, p := range []string{"$4::smallint[]", "$5::text[]", "$6::int[]"} {
-		if !contains(tail, p) {
+		if !strings.Contains(tail, p) {
 			t.Errorf("Tail(4) does not number its parameters: missing %s", p)
 		}
 	}
@@ -203,15 +204,6 @@ func TestEnqueueCarriesThePlanAsThreeParallelArrays(t *testing.T) {
 	if off := NewEnqueue(types.ApprovalEgressDomain, nil); off.On() {
 		t.Error("an approval no route matches planned rows")
 	}
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }
 
 func TestDoneAuditsASuppressedRaiseOncePerRunAndCountsEveryChannel(t *testing.T) {
@@ -273,10 +265,10 @@ func TestEmitIsSilentWithoutARecorderAndSurvivesARefusingOne(t *testing.T) {
 
 func TestHourlyForgetsARunAfterAnHour(t *testing.T) {
 	h := &hourly{last: map[uuid.UUID]time.Time{}}
-	run := uuid.New()
+	run, other := uuid.New(), uuid.New()
 	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	if !h.first(run, t0) {
+	if !h.first(run, t0) || !h.first(other, t0) {
 		t.Fatal("the first raise of a run was not admitted")
 	}
 	if h.first(run, t0.Add(59*time.Minute)) {
@@ -285,7 +277,8 @@ func TestHourlyForgetsARunAfterAnHour(t *testing.T) {
 	if !h.first(run, t0.Add(time.Hour)) {
 		t.Error("a row an hour later was refused: the window never reopens")
 	}
-	if len(h.last) != 1 {
-		t.Errorf("tracked runs = %d, want the stale entry pruned on write", len(h.last))
+	// The write for run also prunes other, whose hour has passed and which was never raised again.
+	if _, kept := h.last[other]; kept || len(h.last) != 1 {
+		t.Errorf("tracked runs = %v, want only %s: the stale entry for another run pruned on write", h.last, run)
 	}
 }
