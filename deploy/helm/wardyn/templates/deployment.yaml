@@ -437,7 +437,7 @@ spec:
             - name: WARDYN_AZURE_KV_PURGE
               value: {{ .azure.purge | quote }}
             {{- end }}
-            {{- if and .azure (or .azure.vaultUrl $azkek.key) }}
+            {{- if and .azure (include "wardyn.azureConsumer" $) }}
             # The Entra identity the Key Vault store and KEK share. With workload
             # identity the webhook sets AZURE_FEDERATED_TOKEN_FILE, which wardynd reads.
             - name: WARDYN_AZURE_AUTH

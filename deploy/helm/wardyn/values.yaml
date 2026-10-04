@@ -365,7 +365,9 @@ kek:
   # secretStore.vault.auth kubernetes and differs from role and rolePlatform;
   # without one the domain is reached as the credential role. Never remove a
   # domain while a live key names it (docs/operations/secrets-and-keys.md
-  # "Offboarding a key domain"). Example:
+  # "Offboarding a key domain"). An azurekv domain is reached as the shared Entra
+  # identity under secretStore.azure (set tenantId and clientId there; the chart then
+  # wires the pod's Azure environment and workload identity). Example:
   #   domains:
   #     acme:
   #       transit: {key: acme-keys, role: wardyn-acme}
