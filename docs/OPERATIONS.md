@@ -195,13 +195,25 @@ nothing at all, because its output is a live credential.
 - **Storage.** About `WARDYN_RUN_OUTPUT_TAIL_BYTES` × (runs per day) × retention
   days at most: 2,000 runs a day at the default size and 30 days is about
   3.7 GiB of table, before indexes.
-- **Memory bound.** With persistence on, a tail is held from a run's first
-  output until its row commits, never expired by the TTL, so memory is at most
+- **Retained tail memory.** With persistence on, a tail is held from a run's first
+  output until its row commits, never expired by the TTL, so the retained ring
+  storage is at most
   (live and kept non-interactive runs) × `WARDYN_RUN_OUTPUT_TAIL_BYTES`: 500
   runs at 1 MiB is about 500 MiB. With persistence off a tail is held until
   `WARDYN_EXEC_OUTPUT_TAIL_TTL` after its last output, finished runs included, so
-  memory is at most (runs that printed within the TTL) × the tail size: 2,000
-  runs a day at 1 MiB is about 2 GiB. Size the variable against the mode you run.
+  the retained ring storage is at most (runs that printed within the TTL) × the
+  tail size: 2,000 runs a day at 1 MiB is about 2 GiB. Size the variable against
+  the mode you run. This is the ring only, not the whole footprint of a capture.
+- **Buffers on top of the ring, per live capture.** Each run being captured also
+  owns a masking queue that holds up to 512 KiB of output the masker has not yet
+  taken, plus the batch being masked, which can be as large again (two buffers
+  alternate, one filling while the other is masked). They are held only while
+  output is arriving and are released when the queue drains, but a run printing
+  faster than the masker keeps up with can hold about 1 MiB in them whatever the
+  tail size is, which at the default 64 KiB tail is many times the ring. With
+  persistence on, a run also queues up to 256 KiB for the database; it grows
+  toward that bound only while writes to Postgres are failing or slow. Add these
+  to the formula for the number of runs printing at once.
 - **It can hold secrets, like any log.** Values already in Wardyn's masking registry
   (brokered credentials, `env_secret` grants) are masked as they are written,
   the same way a recording is. Anything else a command prints — a token it read

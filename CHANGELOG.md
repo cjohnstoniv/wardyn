@@ -42,8 +42,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `deprovision_jobs` table and a nullable `people.deactivated_at`. A sign-in now writes its identity row and
   reads its deactivation inside the gate, and fails closed: a database outage denies sign-ins, as an unreadable
   role-mapping store already did. Session cookies gain an optional `ae` field; an old cookie reads as epoch 0
-  and stays valid until its person's first suspension. A downgrade to 0.8.5 ignores the new tables and stops
-  enforcing deactivation.
+  and stays valid until its person's first suspension. There is no downgrade: a 0.8.5 binary refuses a
+  database this migration has touched, so the way back is to restore the pre-upgrade dump.
 - **A sign-in is refused when its identity row is bound to another principal.** Each identity row keeps the
   principal its first sign-in bound it to. An Entra person known here only by an earlier sign-in under their
   pairwise sub now keeps that sub when an admin adds them on People by object id, as one who owned tokens or
@@ -121,7 +121,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   A `--reuse-values` upgrade from a release whose values carry `allowMultiReplica: false` is not refused.
 - **A `git_pat` scope now carries `repos`, `access`, `api` and `forge`, and a stray key is refused at write.**
   A stored scope that already used one of those four key names is enforced as that axis from this upgrade
-  on, and a downgrade runs a narrowed policy unnarrowed. Policy writes,
+  on. A 0.8.5 binary refuses a database this release has migrated, so the way back is to restore the
+  pre-upgrade dump. Policy writes,
   governance profiles, presets, inline run policies and the boot `--policy` file now answer `400` for an
   unknown `git_pat` scope key, an out-of-enum `access` or `forge`, a malformed `repos` entry or `api: true` on
   the `generic` forge;
@@ -374,9 +375,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   governance_overlay_unsatisfiable` naming it. Deleting a base that still has profiles built on it is a `409` naming
   them. A `PUT` that omits a composition field keeps it, so an older client cannot flatten a composed profile; it
   sees `ceiling: {}` and does not know `effective`. **Rollback:** a 0.8.5 binary refuses a database with this
-  migration applied. First turn every composed profile back into a standalone one (`PUT` it with `overlay: null` and
-  its `effective.ceiling` and `effective.limits` as the new `ceiling` and `limits`), then restore the pre-upgrade
-  dump. A profile edit still reaches an already-running proxy only through the denies re-asserted at revive or
+  migration applied, and converting composed profiles to standalone first changes nothing it sees. Restore the
+  pre-upgrade dump, which holds no composed profile. A profile edit still reaches an already-running proxy only through the denies re-asserted at revive or
   restart, as before; a base edit now narrows a whole subtree at once.
 - **A run that cannot fit the runs namespace's ResourceQuota is refused before it is created.** On
   Kubernetes, `POST /runs` and `POST /runs/preflight` list the namespace's `ResourceQuota` objects and count
@@ -460,7 +460,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   read with it off. `wardynd -rewrap-principal-keys` moves existing credentials into the new form.
   `credential.erase` and its response now report `crypto_erased` and `deleted`, because a row written
   without it is only deleted, which holds to the backup horizon. **Turning it on is one-way across a
-  downgrade:** 0.8.5 refuses `enc_version=3` rows by name, and there is no tool back.
+  downgrade:** 0.8.5 refuses `enc_version=3` rows by name, and there is no tool back; the way back is to
+  restore the pre-upgrade dump.
 - **A `git_pat` grant with `api: true` reaches its forge's REST API only through a closed operation table.**
   For GitLab and Gitea (Bitbucket Server only with the new `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`, off by
   default; a stored such grant fails launch and Review with `git_pat_api_forge_disabled`) the proxy now
