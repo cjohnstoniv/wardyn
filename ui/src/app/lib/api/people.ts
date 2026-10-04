@@ -35,7 +35,7 @@ export const people = {
 
   // GET /api/v1/people -> the one person with this principal, or undefined. There is no read-one route,
   // so ask for the principal as the search and follow the cursor until the exact principal turns up
-  // (the search also matches by email, and a longer principal can sort ahead of it).
+  // (the search also matches email prefixes, and those can sort ahead of it).
   async get(principal: string): Promise<PersonSummary | undefined> {
     let cursor: string | undefined;
     do {

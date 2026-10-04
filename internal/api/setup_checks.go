@@ -458,7 +458,7 @@ func keyCustodyChecks(k keyCustody) []SetupCheck {
 	switch {
 	case !k.PrincipalKeys:
 		pk.Status = "info"
-		pk.Detail = "Off: stored credentials use this deployment's key. Audit records use per-person keys either way."
+		pk.Detail = "Off: credentials written now use this deployment's key, or the external secret store when one is set. Audit records use per-person keys either way."
 	case k.RootKeyCreds > 0:
 		pk.Status = "info"
 		pk.Detail = fmt.Sprintf("On. %d stored credentials still use this deployment's key.", k.RootKeyCreds)

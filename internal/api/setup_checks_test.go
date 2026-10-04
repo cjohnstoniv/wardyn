@@ -946,7 +946,7 @@ func TestKeyCustodyRows(t *testing.T) {
 		t.Errorf("two domains: %+v", c)
 	}
 	if c := row(keyCustody{}, "principal_keys"); c.Status != "info" || c.Fix != "" ||
-		c.Detail != "Off: stored credentials use this deployment's key. Audit records use per-person keys either way." {
+		c.Detail != "Off: credentials written now use this deployment's key, or the external secret store when one is set. Audit records use per-person keys either way." {
 		t.Errorf("principal keys off: %+v", c)
 	}
 	if c := row(keyCustody{PrincipalKeys: true, RootKeyCreds: 4}, "principal_keys"); c.Status != "info" ||

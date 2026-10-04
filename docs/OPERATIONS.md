@@ -211,8 +211,9 @@ nothing at all, because its output is a live credential.
   output is arriving and are released when the queue drains, but a run printing
   faster than the masker keeps up with can hold about 1 MiB in them whatever the
   tail size is, which at the default 64 KiB tail is many times the ring. With
-  persistence on, a run also queues up to 256 KiB for the database; it grows
-  toward that bound only while writes to Postgres are failing or slow. Add these
+  persistence on, a run also queues up to 256 KiB for the database, plus the
+  batch being written, which can be as large again; it grows toward that only
+  while writes to Postgres are failing or slow. Add these
   to the formula for the number of runs printing at once.
 - **It can hold secrets, like any log.** Values already in Wardyn's masking registry
   (brokered credentials, `env_secret` grants) are masked as they are written,

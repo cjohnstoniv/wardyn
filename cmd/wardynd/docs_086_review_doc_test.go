@@ -108,12 +108,13 @@ func TestNoDowngradePathIsDocumented(t *testing.T) {
 		"**it boots anyway**",
 		"nothing there refuses a schema newer than the binary")
 	// The changelog's 0.8.6 entries make the same promise: the dump is the only way back.
-	cl := unreleasedChangelog(t)
+	cl := strings.Join(strings.Fields(unreleasedChangelog(t)), " ")
 	wantAll(t, "CHANGELOG.md [Unreleased]", cl, "restore the pre-upgrade dump")
 	wantNone(t, "CHANGELOG.md [Unreleased]", cl,
 		"First turn every composed profile back into a standalone one",
 		"A downgrade to 0.8.5 ignores the new tables",
-		"a downgrade runs a narrowed policy unnarrowed")
+		"a downgrade runs a narrowed policy unnarrowed",
+		"`effective.ceiling` and `effective.limits` as the new")
 }
 
 // TestKeyDomainAssignmentsAreListedAsFourEyesCovered pins every page that lists the covered set.
