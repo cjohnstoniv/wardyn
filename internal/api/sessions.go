@@ -204,7 +204,7 @@ func (s *Server) revokeCredentials(ctx context.Context, principal string) (perso
 	res.Tokens, tokenErr = s.revokeAPITokensFor(ctx, principal)
 	var keyPrincipal string
 	var keyErr error
-	res.Keys, keyPrincipal, res.Refusal, res.KeyReason, keyErr = s.deleteSSHKeysFor(ctx, principal)
+	res.Keys, keyPrincipal, res.Refusal, res.KeyReason, keyErr = s.deleteSSHKeysFor(ctx, principal, true)
 	// SSH keys have no email column. Preserve the named cutoff for sessions and
 	// tokens, and stamp the resolved subject to catch registrations the DELETE missed.
 	if principal != "" && keyPrincipal != "" && keyPrincipal != principal {

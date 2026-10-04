@@ -1101,7 +1101,7 @@ stored and gives no access, and roles still come from the sign-in token and the 
 | Suspend | Completed first, if it is not already |
 | Erase | The person's stored credentials and the masking copies of them, through the same erasure entry point as `POST /people/{principal}/erasure`, with the `credentials` and `mask_copies` scopes. Audit fields, run tasks, run outputs and recordings are not part of a purge: records retention usually outlives the leaver window, so erasing them stays a deliberate `POST /people/{principal}/erasure` |
 | Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, audited as `workspace.reassign`; `keep` leaves them |
-| Grants | The person's user-subject capability grants and governance assignments are deleted by a direct store call, audited in `person.deprovision`, never through the governance apply path. This deletes deny rows, which the governed path would treat as widening; it is safe only because the identity is a permanent tombstone whose subject can never authenticate again |
+| Grants | The person's user-subject capability grants and governance assignments are deleted by a direct store call, audited in `person.deprovision`, never through the governance apply path. This deletes deny rows, which the governed path would treat as widening; it is safe for the rows keyed by the person's own principals (the sign-in subject and the object-id form) because the identity is a permanent tombstone whose subject can never authenticate again. A row keyed by an email alias is deleted only while no other principal holds that address (another active identity, or an API token or person row under a different principal); otherwise it stays, because a recycled address's new holder owns it, and `person.deprovision` counts it as `email_rows_kept` |
 | Drives | Listed by name in `person.deprovision`, never reclaimed. Reclaim storage with the steps in "Reclaiming a departed person's storage" |
 
 The identity row stays as a tombstone with `purged_at` set. `PATCH active=true` on it is a 400 `invalidValue`
@@ -1133,9 +1133,12 @@ lose access now, do not wait for it:
   at once; the purge delay does not apply to `DELETE`. HTTPS only, per-replica rate limiting, an audit row per
   write and rotation without downtime are the mitigations. Rate limits are per replica, so an HA install's
   effective limit is the per-replica limit times the replica count.
-- **Email recycling.** Email aliases widen removals, so an address reused by a new holder can have that holder's
-  sessions cut by the old holder's suspension. A cutoff only forces a new sign-in; deactivation never follows an
-  email.
+- **Email recycling.** Email aliases widen the session cutoff, so an address reused by a new holder can have that
+  holder's sessions, and API tokens issued before the suspension, cut by the old holder's suspension. A cutoff only
+  forces a new sign-in; deactivation never follows an email. Under an email, a suspension revokes API tokens and
+  deletes SSH keys only where the owning principal is one of the leaver's own forms, never another principal's
+  that merely carries the same address, and a purge keeps email-keyed grants and assignments while another
+  principal holds the address.
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
   again.
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other

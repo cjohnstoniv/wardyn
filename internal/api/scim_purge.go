@@ -95,9 +95,9 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 	if err != nil {
 		return err
 	}
-	principals := slices.DeleteFunc(slices.Clone(forms.targets), func(t string) bool {
-		return strings.Contains(t, "@") && !slices.Contains(forms.bound, t)
-	})
+	isEmail := func(t string) bool { return strings.Contains(t, "@") && !slices.Contains(forms.bound, t) }
+	principals := slices.DeleteFunc(slices.Clone(forms.targets), isEmail)
+	emails := slices.DeleteFunc(slices.Clone(forms.targets), func(t string) bool { return !isEmail(t) })
 	keys := []store.JobKey{{Step: jobStepWorkspaces}, {Step: jobStepGrants}}
 	for _, p := range principals {
 		keys = append(keys, store.JobKey{Step: jobStepErase, Target: p})
@@ -114,8 +114,9 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 			return s.reassignWorkspaces(ctx, forms.targets)
 		}),
 		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepGrants}, func() (map[string]int, error) {
-			grants, assignments, err := st.DeleteUserSubjectRows(ctx, forms.targets)
-			return map[string]int{"grants_deleted": int(grants), "assignments_deleted": int(assignments)}, err
+			// An address another principal holds keeps its rows: it can be a recycled one, and those are the new holder's.
+			grants, assignments, kept, err := st.DeleteUserSubjectRows(ctx, id, principals, emails)
+			return map[string]int{"grants_deleted": int(grants), "assignments_deleted": int(assignments), "email_rows_kept": int(kept)}, err
 		}),
 	}
 	for _, p := range principals {
@@ -239,7 +240,7 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, sub
 	data := map[string]any{
 		"kind": store.JobKindPurge, "credentials_erased": counts["credentials_erased"], "masks_fenced": counts["masks_fenced"],
 		"workspaces_reassigned": counts["workspaces_reassigned"], "grants_deleted": counts["grants_deleted"],
-		"assignments_deleted": counts["assignments_deleted"], "drives": drives,
+		"assignments_deleted": counts["assignments_deleted"], "email_rows_kept": counts["email_rows_kept"], "drives": drives,
 	}
 	ev := s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", id.String(), "success", mustJSON(data))
 	if err := s.recordAuditStrict(ctx, ev); err != nil {

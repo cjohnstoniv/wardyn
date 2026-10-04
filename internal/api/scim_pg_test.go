@@ -600,6 +600,39 @@ func TestSCIMSuspendNeverSignedInLeavesOthersAlone(t *testing.T) {
 	}
 }
 
+// A bound leaver's email alias is also on another principal's token (a recycled address, or a second
+// principal under the same email): the suspension completes, and only the leaver's own principals are swept.
+func TestSCIMSuspendLeavesAnotherPrincipalSharingTheEmail(t *testing.T) {
+	e := newSCIMEnv(t)
+	const email = "shared@corp.example"
+	e.seedEntra("sub-leaver", email, oidLeaver)
+	id := e.postUserID(e.a, oidLeaver, email, email)
+	tokLeaver, _ := e.seedToken("sub-leaver", email)
+	tokNew, _ := e.seedToken("sub-newhire", email)
+	e.seedKey("sub-newhire")
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		if w := e.patch(e.b, id, patchOf(`"False"`)); w.Code != http.StatusOK || decodeSCIMUser(t, w).Active {
+			t.Fatalf("attempt %d: suspend = %d %s, want 200", attempt, w.Code, w.Body.String())
+		}
+	}
+	if !e.allJobsDone(id) {
+		t.Error("the ledger is not done")
+	}
+	if !e.tokenRevoked(tokLeaver) {
+		t.Error("the leaver's own token survived")
+	}
+	if e.tokenRevoked(tokNew) {
+		t.Error("another principal's token was revoked through the shared email")
+	}
+	if e.keyCount("sub-newhire") != 1 {
+		t.Error("another principal's SSH key was deleted through the shared email")
+	}
+	if len(e.rows(e.b, "scim.user.deactivate")) != 1 || len(e.rows(e.b, "person.deprovision")) != 1 {
+		t.Error("the deactivation was not recorded")
+	}
+}
+
 // With no identity row binding a principal, the suspension resolves the SCIM user's emails to subs through
 // the tokens stamped with them: that person's runs are killed, keys deleted, token revoked. An ambiguous
 // owner leaves the step pending and answers 5xx, never done.

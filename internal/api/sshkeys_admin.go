@@ -28,7 +28,7 @@ func (s *Server) handleAdminDeleteSSHKeys(w http.ResponseWriter, r *http.Request
 		writeErrorReason(w, http.StatusBadRequest, reasonSSHKeyAdminPrincipalRequired, "name the person whose SSH keys to remove")
 		return
 	}
-	count, _, refusal, reason, err := s.deleteSSHKeysFor(withRequestActor(r), raw)
+	count, _, refusal, reason, err := s.deleteSSHKeysFor(withRequestActor(r), raw, true)
 	if err != nil {
 		writeServerError(w, r, "delete ssh keys", err)
 		return
@@ -40,11 +40,13 @@ func (s *Server) handleAdminDeleteSSHKeys(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]int{"count": count})
 }
 
-func (s *Server) deleteSSHKeysFor(ctx context.Context, principal string) (count int, resolvedPrincipal, refusal, reason string, err error) {
+// deleteSSHKeysFor deletes principal's SSH keys ("" is everyone). With resolve false, principal is the key
+// owner exactly as given, so a name two principals could claim (an email) is never guessed at.
+func (s *Server) deleteSSHKeysFor(ctx context.Context, principal string, resolve bool) (count int, resolvedPrincipal, refusal, reason string, err error) {
 	target, scope := principal, "sub"
 	if principal == "" {
 		target, scope = "*", "all"
-	} else {
+	} else if resolve {
 		var resolved string
 		resolved, refusal, reason, err = s.resolveSSHKeyOwner(ctx, principal)
 		if err == nil && refusal == "" {
