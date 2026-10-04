@@ -330,6 +330,9 @@ type bootFlags struct {
 	// roleStampTTL bounds how old an API token's or console session's role
 	// stamp may be — see api.Config.RoleStampTTL. Zero is off.
 	roleStampTTL *time.Duration
+	// governanceChangeTTL is how long a governance change held for a second human waits — see
+	// api.Config.GovernanceChangeTTL.
+	governanceChangeTTL *time.Duration
 
 	// UI-sandbox gateway (pillar 4): uiListen empty = off = no listener, no new
 	// surface, exactly like sshListen. uiAdvertise/uiOriginTemplate are the
@@ -600,6 +603,7 @@ func parseBootFlags() *bootFlags {
 
 		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn run ssh" refuses`),
 		roleStampTTL:           flagDuration("role-stamp-ttl", "WARDYN_ROLE_STAMP_TTL", 0, "how old an API token's or console session's role stamp may be before its owner must sign in again (duration; 0 = off)"),
+		governanceChangeTTL:    flagDuration("governance-change-ttl", "WARDYN_GOVERNANCE_CHANGE_TTL", 72*time.Hour, "how long a governance change held for a second human (WARDYN_GOVERNANCE_SECOND_HUMAN) waits for approval before it expires (duration; must be positive)"),
 		sshRoleTTL:             flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration)"),
 		apiTokenMaxTTL:         flagDuration("api-token-max-ttl", "WARDYN_API_TOKEN_MAX_TTL", 0, "longest lifetime a newly minted API token may have; a mint that asks for none gets this, one that asks for more is clamped to it (duration; 0 = no cap)"),
 		allowUnknownMigrations: flagBool("allow-unknown-migrations", "WARDYN_ALLOW_UNKNOWN_MIGRATIONS", false, "BREAK-GLASS: boot even though the database records migrations this wardynd does not ship (a newer wardynd migrated it). Normally refused — a downgrade is unsupported; restore the pre-upgrade dump instead"),
@@ -628,6 +632,7 @@ func finalizeBootFlags(f *bootFlags) {
 	// flag.Parse does, with main's own fatal line (run() has no cyclomatic
 	// budget left for another early return).
 	exitOnBadSecretFiles(f)
+	exitOnGovernanceFlags(f)
 }
 
 // exitOnBadSecretFiles is parseBootFlags' <VAR>_FILE resolution, extracted
@@ -770,6 +775,13 @@ func resolveLocalMode(f *bootFlags) (localModeState, error) {
 	// control. The message names the consequence and the remedy.
 	if api.EgressSecondHumanEnabled() {
 		slog.Warn("wardynd: WARDYN_EGRESS_SECOND_HUMAN is set but LOCAL MODE authenticates nobody — the four-eyes gate cannot be enforced here, so EVERY egress_domain approval decision will be refused with 503. Configure SSO to use this switch, or unset it.",
+			slog.String("listen", *f.listen),
+		)
+	}
+	// The governance switch, once its boot refusal is lifted (exitOnGovernanceFlags): local mode cannot
+	// enforce it either, and every covered write and every approval is refused with a 503.
+	if api.GovernanceSecondHumanEnabled() {
+		slog.Warn("wardynd: WARDYN_GOVERNANCE_SECOND_HUMAN is set but LOCAL MODE authenticates nobody — the four-eyes gate cannot be enforced here, so EVERY governance write and approval will be refused with 503. Configure SSO to use this switch, or unset it.",
 			slog.String("listen", *f.listen),
 		)
 	}

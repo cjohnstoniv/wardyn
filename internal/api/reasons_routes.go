@@ -838,3 +838,14 @@ const (
 // taken (held elsewhere past its wait, the lock pool full, the database not
 // answering). Nothing was done; the request is safe to retry (locks.go).
 const reasonLockUnavailable = "lock_unavailable"
+
+// The governance four-eyes lane (WARDYN_GOVERNANCE_SECOND_HUMAN; governance_change_gate.go,
+// governance_changes.go).
+const (
+	reasonGovernanceSecondHumanLocalMode = "governance_second_human_local_mode" // WARDYN_GOVERNANCE_SECOND_HUMAN cannot be enforced with nobody authenticated (local mode)
+	reasonGovernanceChangePending        = "governance_change_pending"          // a live change already holds this target
+	reasonGovernanceChangeStale          = "governance_change_stale"            // the target, or the deployment default, changed since the proposal
+	reasonGovernanceChangeNotPending     = "governance_change_not_pending"      // the change was already applied, rejected, expired or marked stale
+	reasonGovernanceChangeNotFound       = "governance_change_not_found"        // a /governance/changes route named no change, or one of a kind the caller may not see
+	reasonGovernanceChangeStateInvalid   = "governance_change_state_invalid"    // ?state= is not one of the five change states
+)

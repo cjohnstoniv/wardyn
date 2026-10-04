@@ -266,6 +266,15 @@ type Store interface {
 	UpsertGovernanceAssignment(ctx context.Context, a types.GovernanceAssignment) (types.GovernanceAssignment, error)
 	DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) error
 	ListGovernanceAssignments(ctx context.Context) ([]types.GovernanceAssignment, error)
+	// Governance changes (migration 0126): a governance write held for a second human. Part of
+	// this interface, not an optional seam, because a store without them would let a covered write
+	// through unreviewed. See governance_changes.go for each one's contract.
+	ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChange, ttl time.Duration) (types.GovernanceChange, []uuid.UUID, error)
+	ListGovernanceChanges(ctx context.Context, state string) ([]types.GovernanceChange, error)
+	GetGovernanceChange(ctx context.Context, id uuid.UUID) (types.GovernanceChange, error)
+	DecideGovernanceChange(ctx context.Context, id uuid.UUID, d GovernanceDecision, fn GovernanceDecideFunc) (types.GovernanceChange, error)
+	// DryRunGovernance runs fn on a transaction that is always rolled back.
+	DryRunGovernance(ctx context.Context, fn func(q Querier) error) error
 	// ResolveGovernanceProfile returns THE ONE profile that applies to a caller — user > group >
 	// user_type > all, sub over email within the user tier, then priority DESC and name ASC — as a
 	// single indexed read whose ORDER BY is the whole precedence rule. ErrNotFound means "no

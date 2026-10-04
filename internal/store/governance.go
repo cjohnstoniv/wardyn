@@ -68,27 +68,12 @@ func (s PG) UpsertGovernanceProfile(ctx context.Context, p types.GovernanceProfi
 // Returns ErrConflict when UNIQUE(name) rejects the write. created_by and created_at are NOT
 // touched on update: creation provenance stays with whoever authored the profile.
 func (s PG) WriteGovernanceProfile(ctx context.Context, id uuid.UUID, build GovernanceProfileBuild) (types.GovernanceProfile, error) {
-	if id == uuid.Nil {
-		id = uuid.New()
-	}
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return types.GovernanceProfile{}, err
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
-	if err := lockGovernanceGraph(ctx, tx); err != nil {
-		return types.GovernanceProfile{}, err
-	}
-	all, err := listGovernanceProfilesTx(ctx, tx)
-	if err != nil {
-		return types.GovernanceProfile{}, err
-	}
-	p, err := build(all)
-	if err != nil {
-		return types.GovernanceProfile{}, err
-	}
-	p.ID = id
-	out, err := upsertGovernanceProfileTx(ctx, tx, p)
+	out, err := WriteGovernanceProfileQ(ctx, tx, id, build)
 	if err != nil {
 		return types.GovernanceProfile{}, err
 	}
@@ -98,15 +83,40 @@ func (s PG) WriteGovernanceProfile(ctx context.Context, id uuid.UUID, build Gove
 	return out, nil
 }
 
-func lockGovernanceGraph(ctx context.Context, tx pgx.Tx) error {
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.GovernanceGraphLockClass); err != nil {
+// WriteGovernanceProfileQ is WriteGovernanceProfile's body on a caller's transaction: q must be a
+// pgx.Tx, because the graph lock it takes is transaction-scoped. A held governance change applies
+// through it inside the decision transaction.
+func WriteGovernanceProfileQ(ctx context.Context, q Querier, id uuid.UUID, build GovernanceProfileBuild) (types.GovernanceProfile, error) {
+	if id == uuid.Nil {
+		id = uuid.New()
+	}
+	if err := LockGovernanceGraph(ctx, q); err != nil {
+		return types.GovernanceProfile{}, err
+	}
+	all, err := ListGovernanceProfilesQ(ctx, q)
+	if err != nil {
+		return types.GovernanceProfile{}, err
+	}
+	p, err := build(all)
+	if err != nil {
+		return types.GovernanceProfile{}, err
+	}
+	p.ID = id
+	return upsertGovernanceProfileTx(ctx, q, p)
+}
+
+// LockGovernanceGraph takes the transaction-scoped lock every write to the governance profile graph
+// holds, so one write at a time sees and changes it. q must be a pgx.Tx.
+func LockGovernanceGraph(ctx context.Context, q Querier) error {
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.GovernanceGraphLockClass); err != nil {
 		return fmt.Errorf("store: lock the governance profile graph: %w", err)
 	}
 	return nil
 }
 
-func listGovernanceProfilesTx(ctx context.Context, tx pgx.Tx) ([]types.GovernanceProfile, error) {
-	rows, err := tx.Query(ctx, `SELECT `+governanceProfileCols+` FROM governance_profiles ORDER BY name`)
+// ListGovernanceProfilesQ reads every profile by name on q.
+func ListGovernanceProfilesQ(ctx context.Context, q Querier) ([]types.GovernanceProfile, error) {
+	rows, err := q.Query(ctx, `SELECT `+governanceProfileCols+` FROM governance_profiles ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list governance profiles: %w", err)
 	}
@@ -117,7 +127,7 @@ func listGovernanceProfilesTx(ctx context.Context, tx pgx.Tx) ([]types.Governanc
 	return out, nil
 }
 
-func upsertGovernanceProfileTx(ctx context.Context, tx pgx.Tx, p types.GovernanceProfile) (types.GovernanceProfile, error) {
+func upsertGovernanceProfileTx(ctx context.Context, tx Querier, p types.GovernanceProfile) (types.GovernanceProfile, error) {
 	// An empty contact is stored as NULL, never as an empty object.
 	var contactJSON any
 	if p.Contact != nil && !p.Contact.IsZero() {
@@ -250,10 +260,19 @@ func (s PG) DeleteGovernanceProfile(ctx context.Context, id uuid.UUID) error {
 		return err
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
-	if err := lockGovernanceGraph(ctx, tx); err != nil {
+	if err := DeleteGovernanceProfileQ(ctx, tx, id); err != nil {
 		return err
 	}
-	rows, err := tx.Query(ctx, `SELECT name FROM governance_profiles WHERE base_profile_id = $1 ORDER BY name`, id)
+	return tx.Commit(ctx)
+}
+
+// DeleteGovernanceProfileQ is DeleteGovernanceProfile's body on a caller's transaction (q must be a
+// pgx.Tx: it takes the transaction-scoped graph lock) and answers the same errors.
+func DeleteGovernanceProfileQ(ctx context.Context, q Querier, id uuid.UUID) error {
+	if err := LockGovernanceGraph(ctx, q); err != nil {
+		return err
+	}
+	rows, err := q.Query(ctx, `SELECT name FROM governance_profiles WHERE base_profile_id = $1 ORDER BY name`, id)
 	if err != nil {
 		return fmt.Errorf("store: list governance profile children: %w", err)
 	}
@@ -264,7 +283,7 @@ func (s PG) DeleteGovernanceProfile(ctx context.Context, id uuid.UUID) error {
 	if len(names) > 0 {
 		return &ErrProfileHasChildren{Names: names}
 	}
-	tag, err := tx.Exec(ctx, `DELETE FROM governance_profiles WHERE id = $1`, id)
+	tag, err := q.Exec(ctx, `DELETE FROM governance_profiles WHERE id = $1`, id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
@@ -275,7 +294,7 @@ func (s PG) DeleteGovernanceProfile(ctx context.Context, id uuid.UUID) error {
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 // ListGovernanceProfiles returns every profile by name (the handle an admin
@@ -297,16 +316,47 @@ func (s PG) ListGovernanceProfiles(ctx context.Context) ([]types.GovernanceProfi
 //
 // Returns ErrNotFound when profile_id names no profile (FK 23503 → 404).
 func (s PG) UpsertGovernanceAssignment(ctx context.Context, a types.GovernanceAssignment) (types.GovernanceAssignment, error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return types.GovernanceAssignment{}, err
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	// The key lock a held change's approval takes too: the upsert and that approval never interleave.
+	if err := LockGovernanceAssignmentKey(ctx, tx, string(a.SubjectType), a.Subject); err != nil {
+		return types.GovernanceAssignment{}, err
+	}
+	out, err := UpsertGovernanceAssignmentQ(ctx, tx, a)
+	if err != nil {
+		return types.GovernanceAssignment{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.GovernanceAssignment{}, err
+	}
+	return out, nil
+}
+
+// LockGovernanceAssignmentKey takes the transaction-scoped lock keyed to one assignment's natural
+// key, so a write to that key and the approval of a held change to it serialize. q must be a pgx.Tx.
+func LockGovernanceAssignmentKey(ctx context.Context, q Querier, subjectType, subject string) error {
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`,
+		db.GovernanceAssignmentLockClass, subjectType+"\x1f"+subject); err != nil {
+		return fmt.Errorf("store: lock the governance assignment key: %w", err)
+	}
+	return nil
+}
+
+// UpsertGovernanceAssignmentQ is UpsertGovernanceAssignment's statement on q.
+func UpsertGovernanceAssignmentQ(ctx context.Context, q Querier, a types.GovernanceAssignment) (types.GovernanceAssignment, error) {
 	if a.ID == uuid.Nil {
 		a.ID = uuid.New()
 	}
-	const q = `
+	const stmt = `
 		INSERT INTO governance_assignments (id, subject_type, subject, profile_id, priority, created_by)
 		VALUES ($1,$2,$3,$4,$5,$6)
 		ON CONFLICT (subject_type, subject) DO UPDATE
 			SET profile_id = EXCLUDED.profile_id, priority = EXCLUDED.priority
 		RETURNING ` + governanceAssignmentCols
-	out, err := scanGovernanceAssignment(s.Pool.QueryRow(ctx, q,
+	out, err := scanGovernanceAssignment(q.QueryRow(ctx, stmt,
 		a.ID, a.SubjectType, a.Subject, a.ProfileID, a.Priority, a.CreatedBy))
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -322,7 +372,12 @@ func (s PG) UpsertGovernanceAssignment(ctx context.Context, a types.GovernanceAs
 // no row matched. Unassigning is the SUPPORTED way to widen someone back to
 // the deployment ceiling.
 func (s PG) DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM governance_assignments WHERE id = $1`, id)
+	return DeleteGovernanceAssignmentQ(ctx, s.Pool, id)
+}
+
+// DeleteGovernanceAssignmentQ is DeleteGovernanceAssignment's statement on q.
+func DeleteGovernanceAssignmentQ(ctx context.Context, q Querier, id uuid.UUID) error {
+	tag, err := q.Exec(ctx, `DELETE FROM governance_assignments WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("store: delete governance assignment: %w", err)
 	}
@@ -330,6 +385,32 @@ func (s PG) DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) error 
 		return ErrNotFound
 	}
 	return nil
+}
+
+// GetGovernanceAssignmentQ reads one assignment by id on q, ErrNotFound when none; forUpdate locks the
+// row for the transaction.
+func GetGovernanceAssignmentQ(ctx context.Context, q Querier, id uuid.UUID, forUpdate bool) (types.GovernanceAssignment, error) {
+	stmt := `SELECT ` + governanceAssignmentCols + ` FROM governance_assignments WHERE id = $1` + lockSuffix(forUpdate)
+	return scanGovernanceAssignment(q.QueryRow(ctx, stmt, id))
+}
+
+// GetGovernanceAssignmentByKeyQ reads the assignment at one natural key on q, ErrNotFound when none.
+func GetGovernanceAssignmentByKeyQ(ctx context.Context, q Querier, subjectType, subject string, forUpdate bool) (types.GovernanceAssignment, error) {
+	stmt := `SELECT ` + governanceAssignmentCols + ` FROM governance_assignments WHERE subject_type = $1 AND subject = $2` + lockSuffix(forUpdate)
+	return scanGovernanceAssignment(q.QueryRow(ctx, stmt, subjectType, subject))
+}
+
+// GetGovernanceProfileQ reads one profile row (raw, as GetGovernanceProfile does) on q.
+func GetGovernanceProfileQ(ctx context.Context, q Querier, id uuid.UUID, forUpdate bool) (types.GovernanceProfile, error) {
+	stmt := `SELECT ` + governanceProfileCols + ` FROM governance_profiles WHERE id = $1` + lockSuffix(forUpdate)
+	return scanGovernanceProfile(q.QueryRow(ctx, stmt, id))
+}
+
+func lockSuffix(forUpdate bool) string {
+	if forUpdate {
+		return " FOR UPDATE"
+	}
+	return ""
 }
 
 // ListGovernanceAssignments returns every assignment in the order the

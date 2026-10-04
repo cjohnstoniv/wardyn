@@ -36,6 +36,10 @@ type PersonErasureStore interface {
 	// form. A row sealed under a name the directory did not yet know is under
 	// that name's own key, so an erasure destroys these too.
 	PrincipalAliases(ctx context.Context, principal string) ([]string, error)
+	// EraseGovernanceChangePersonalFields clears the proposer and decider of every governance change
+	// recorded under one of names (a principal, or an email matched case-folded) and moves a pending
+	// change whose proposer is one of them to expired. It returns the rows it touched.
+	EraseGovernanceChangePersonalFields(ctx context.Context, names []string) (int, error)
 	// SubjectKeyDestroyedSince reports whether any generation of owner's key
 	// for purpose has a destroyed_at after since.
 	SubjectKeyDestroyedSince(ctx context.Context, owner, purpose string, since time.Time) (bool, error)

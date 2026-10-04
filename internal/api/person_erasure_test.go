@@ -50,6 +50,10 @@ func (s *erasureTestStore) PrincipalAliases(context.Context, string) ([]string, 
 	return nil, nil
 }
 
+func (s *erasureTestStore) EraseGovernanceChangePersonalFields(context.Context, []string) (int, error) {
+	return 0, nil
+}
+
 func (s *erasureTestStore) SubjectKeyDestroyedSince(context.Context, string, string, time.Time) (bool, error) {
 	return false, nil
 }

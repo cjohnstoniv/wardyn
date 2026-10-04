@@ -141,6 +141,13 @@ func decodeGovernanceProfileRequest(w http.ResponseWriter, r *http.Request) (gov
 	if msg := decodeStrictMsg(w, r, &req); msg != "" {
 		return governanceProfileRequest{}, msg
 	}
+	return finishGovernanceProfileRequest(req)
+}
+
+// finishGovernanceProfileRequest is the validation a decoded profile body gets: the part of
+// decodeGovernanceProfileRequest after the bytes are read, so a held change's payload is judged by
+// the same rules when it is replayed on approval.
+func finishGovernanceProfileRequest(req governanceProfileRequest) (governanceProfileRequest, string) {
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
 		return governanceProfileRequest{}, "name is required"
@@ -213,7 +220,15 @@ func (req *governanceProfileRequest) parseComposition() string {
 // writeGovernanceProfile is the shared body of POST and PUT: build the row under the graph lock,
 // persist, audit, and answer with the saved row plus warnings. id is the row to write (a fresh one
 // for POST, the path's for PUT) and status the success code.
+//
+// With WARDYN_GOVERNANCE_SECOND_HUMAN on, a human's write is decoded and built exactly as above and
+// then, unless the build proves it narrowing (profileWriteExempt), held for approval instead of
+// stored: the same transaction that would have stored it is abandoned and the change is proposed.
 func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, id uuid.UUID, status int) {
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
 	req, msg := decodeGovernanceProfileRequest(w, r)
 	if msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceProfileRequestInvalid, msg)
@@ -224,12 +239,22 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	var effective *ResolvedProfile
+	var held *heldProfileWrite
+	createdBy := principalFromRequest(r)
 	saved, err := s.cfg.Store.WriteGovernanceProfile(r.Context(), id,
 		func(all []types.GovernanceProfile) (types.GovernanceProfile, error) {
-			p, res, err := s.buildGovernanceProfile(r, id, req, all)
+			p, res, err := s.buildGovernanceProfile(createdBy, id, req, all)
 			effective = res
+			if err == nil && mode == govQueue && !s.profileWriteExempt(all, p, res) {
+				held = &heldProfileWrite{all: all, row: p, res: res}
+				return p, errHoldForApproval
+			}
 			return p, err
 		})
+	if held != nil && errors.Is(err, errHoldForApproval) {
+		s.holdProfileWrite(w, r, id, req, *held)
+		return
+	}
 	var refusal *profileWriteError
 	switch {
 	case errors.As(err, &refusal):
@@ -243,26 +268,35 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 		writeServerError(w, r, "write governance profile", err)
 		return
 	}
-	contactFields, contactURL := contactAudit(saved.Contact)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"governance.profile.write", saved.ID.String(), "success", mustJSON(map[string]any{
-			"name": saved.Name,
-			// The EFFECTIVE values: a composed row stores no raw ceiling or limits, and an allow-all
-			// base reaches its children, so the row's own columns would record nothing.
-			"min_confinement_class": effective.Ceiling.MinConfinementClass,
-			"allow_all_egress":      effective.Ceiling.AllowAllEgress,
-			"limits":                effective.Limits,
-			"contact_fields":        contactFields,
-			"contact_request_url":   contactURL,
-			"base_profile_id":       saved.BaseProfileID,
-			"overlay_fields":        overlayFieldNames(saved),
-		})))
+		"governance.profile.write", saved.ID.String(), "success", mustJSON(profileWriteAuditData(saved, effective))))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindProfile, saved.ID.String(), "success", nil)
+	}
 	var warns []string
 	if !saved.Composed() {
 		warns = governanceOmissionWarnings(saved.Ceiling, s.cfg.DefaultPolicy, saved.Limits)
 	}
 	warns = append(warns, effective.AdminWarnings...)
 	writeJSON(w, status, governanceProfileResponse{Profile: newProfileView(saved, effective, nil), Warnings: warns})
+}
+
+// profileWriteAuditData is the governance.profile.write row's data, shared by a direct write and an
+// approved one.
+func profileWriteAuditData(saved types.GovernanceProfile, effective *ResolvedProfile) map[string]any {
+	contactFields, contactURL := contactAudit(saved.Contact)
+	return map[string]any{
+		"name": saved.Name,
+		// The EFFECTIVE values: a composed row stores no raw ceiling or limits, and an allow-all
+		// base reaches its children, so the row's own columns would record nothing.
+		"min_confinement_class": effective.Ceiling.MinConfinementClass,
+		"allow_all_egress":      effective.Ceiling.AllowAllEgress,
+		"limits":                effective.Limits,
+		"contact_fields":        contactFields,
+		"contact_request_url":   contactURL,
+		"base_profile_id":       saved.BaseProfileID,
+		"overlay_fields":        overlayFieldNames(saved),
+	}
 }
 
 // overlayFieldNames is the names of the overlay members a composed row carries, never their values.
@@ -294,30 +328,35 @@ func profileJSONKeys(v any) []string {
 	return keys
 }
 
-// buildGovernanceProfile decides the row one write stores and what it resolves to, from every
-// profile as the write transaction reads them (all). Anything it returns as *profileWriteError is a
-// refusal the caller can fix; the row is stored only if it returns nil.
-func (s *Server) buildGovernanceProfile(r *http.Request, id uuid.UUID, req governanceProfileRequest, all []types.GovernanceProfile) (types.GovernanceProfile, *ResolvedProfile, error) {
-	p := types.GovernanceProfile{
-		ID: id, Name: req.Name, CreatedBy: principalFromRequest(r), Contact: req.contact, ContactSet: req.contactSet,
-	}
-	// Absent keeps the stored composition; null clears it (an older client that does not know the
-	// members therefore cannot flatten a profile).
-	base, overlay, limits := (*uuid.UUID)(nil), (*types.CeilingOverlay)(nil), (*types.LimitsOverlay)(nil)
+// composedFrom is the composition a write leaves on profile id, from the stored row (when one exists)
+// and what the request said. Absent keeps the stored composition; null clears it (an older client
+// that does not know the members therefore cannot flatten a profile).
+func composedFrom(all []types.GovernanceProfile, id uuid.UUID, comp compositionRequest) (base *uuid.UUID, overlay *types.CeilingOverlay, limits *types.LimitsOverlay) {
 	if i := slices.IndexFunc(all, func(x types.GovernanceProfile) bool { return x.ID == id }); i >= 0 {
 		base, overlay, limits = all[i].BaseProfileID, all[i].Overlay, all[i].OverlayLimits
 	}
-	if req.comp.overlaySet {
-		if overlay = req.comp.overlay; overlay == nil {
+	if comp.overlaySet {
+		if overlay = comp.overlay; overlay == nil {
 			base, limits = nil, nil
 		}
 	}
-	if req.comp.baseSet {
-		base = req.comp.base
+	if comp.baseSet {
+		base = comp.base
 	}
-	if req.comp.limitsSet {
-		limits = req.comp.overlayLimits
+	if comp.limitsSet {
+		limits = comp.overlayLimits
 	}
+	return base, overlay, limits
+}
+
+// buildGovernanceProfile decides the row one write stores and what it resolves to, from every
+// profile as the write transaction reads them (all). Anything it returns as *profileWriteError is a
+// refusal the caller can fix; the row is stored only if it returns nil.
+func (s *Server) buildGovernanceProfile(createdBy string, id uuid.UUID, req governanceProfileRequest, all []types.GovernanceProfile) (types.GovernanceProfile, *ResolvedProfile, error) {
+	p := types.GovernanceProfile{
+		ID: id, Name: req.Name, CreatedBy: createdBy, Contact: req.contact, ContactSet: req.contactSet,
+	}
+	base, overlay, limits := composedFrom(all, id, req.comp)
 	switch {
 	case overlay == nil && base != nil:
 		return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "base_profile_id: a base needs an overlay (send overlay: {} for the base unchanged)")
@@ -504,32 +543,53 @@ func (s *Server) handleUpdateGovernanceProfile(w http.ResponseWriter, r *http.Re
 // way, naming them, because deleting it would widen every child to the deployment. operatorOnly
 // (routes.go).
 func (s *Server) handleDeleteGovernanceProfile(w http.ResponseWriter, r *http.Request) {
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
 	id, ok := parseIDParam(w, r, "id", "governance profile")
 	if !ok {
 		return
 	}
-	err := s.cfg.Store.DeleteGovernanceProfile(r.Context(), id)
-	if notFoundIf(w, err, "governance profile", reasonGovernanceProfileNotFoundByID) {
+	if mode == govQueue {
+		// A delete is never exempt: it widens everything its profile bound, and the store refuses
+		// an assigned profile only after the fact.
+		s.holdProfileDelete(w, r, id)
 		return
+	}
+	if s.writeProfileDeleteError(w, r, s.cfg.Store.DeleteGovernanceProfile(r.Context(), id)) {
+		return
+	}
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"governance.profile.delete", id.String(), "success", nil))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindProfile, id.String(), "success", nil)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeProfileDeleteError answers a failed profile delete (or a dry run of one) and reports true, or
+// reports false for a nil error.
+func (s *Server) writeProfileDeleteError(w http.ResponseWriter, r *http.Request, err error) bool {
+	if err == nil {
+		return false
+	}
+	if notFoundIf(w, err, "governance profile", reasonGovernanceProfileNotFoundByID) {
+		return true
 	}
 	var children *store.ErrProfileHasChildren
 	if errors.As(err, &children) {
 		writeErrorReason(w, http.StatusConflict, reasonGovernanceProfileInUse, fmt.Sprintf(
 			"this governance profile is the base of %s — delete or re-base them first "+
 				"(deleting it would silently widen them back to the deployment ceiling)", strings.Join(children.Names, ", ")))
-		return
+		return true
 	}
 	if errors.Is(err, store.ErrConflict) {
 		writeErrorReason(w, http.StatusConflict, reasonGovernanceProfileInUse,
 			"this governance profile is still assigned — delete its assignments first "+
 				"(deleting it while assigned would silently widen everyone it bounds back to the deployment ceiling)")
-		return
+		return true
 	}
-	if err != nil {
-		writeServerError(w, r, "delete governance profile", err)
-		return
-	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"governance.profile.delete", id.String(), "success", nil))
-	w.WriteHeader(http.StatusNoContent)
+	writeServerError(w, r, "delete governance profile", err)
+	return true
 }
