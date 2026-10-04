@@ -821,7 +821,7 @@ test.describe("New run rail — namespace quota sentences (P7)", () => {
       route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ error: breach, reason: "namespace_quota_exceeded" }) }),
     );
     await openNewRun(page);
-    await page.getByRole("button", { name: "Preflight" }).click();
+    await page.getByRole("button", { name: "Check again" }).click();
     await expect(page.getByRole("alert")).toContainText(breach);
     await expect(page.getByTestId("preflight-result")).toHaveCount(0);
   });
@@ -846,7 +846,7 @@ test.describe("New run rail — namespace quota sentences (P7)", () => {
       await route.fulfill({ response, json });
     });
     await openNewRun(page);
-    await page.getByRole("button", { name: "Preflight" }).click();
+    await page.getByRole("button", { name: "Check again" }).click();
     const result = page.getByTestId("preflight-result");
     await expect(result.getByRole("listitem").filter({ hasText: nearFull })).toHaveCount(1);
     await expect(result.getByRole("listitem").filter({ hasText: nodeFit })).toHaveCount(1);
