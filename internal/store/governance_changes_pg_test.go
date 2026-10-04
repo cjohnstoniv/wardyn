@@ -228,3 +228,37 @@ func TestPG_GovernanceChange_EraseClearsPrincipalAndEmailMatches(t *testing.T) {
 		t.Errorf("an empty name list touched %d rows (%v)", n, err)
 	}
 }
+
+func TestPG_GovernanceChange_EraseClearsTheDecidersReason(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	who := "erase-" + uuid.NewString()
+	reject := func(decider, email string) uuid.UUID {
+		saved, _, err := st.ProposeGovernanceChange(ctx, newChange(uuid.NewString()), time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE governance_changes SET state = 'rejected', decided_at = now(),
+			decided_by = $2, decided_by_email = $3, reason = 'typed by the decider' WHERE id = $1`, saved.ID, decider, email); err != nil {
+			t.Fatal(err)
+		}
+		return saved.ID
+	}
+	mine, theirs := reject(who, who+"@corp.example"), reject("someone-else", "else@corp.example")
+	if n, err := st.EraseGovernanceChangePersonalFields(ctx, []string{who}); err != nil || n != 1 {
+		t.Fatalf("erase touched %d rows (%v), want the one the person decided", n, err)
+	}
+	reason := func(id uuid.UUID) (r string) {
+		if err := pool.QueryRow(ctx, `SELECT reason FROM governance_changes WHERE id = $1`, id).Scan(&r); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if r := reason(mine); r != "" {
+		t.Errorf("the erased decider's reason = %q, want it cleared", r)
+	}
+	if r := reason(theirs); r != "typed by the decider" {
+		t.Errorf("another decider's reason = %q, want it untouched", r)
+	}
+}

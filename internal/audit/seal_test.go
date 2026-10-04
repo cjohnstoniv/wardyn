@@ -284,6 +284,51 @@ func TestUnsealAsksForEachKeyOncePerRead(t *testing.T) {
 	}
 }
 
+// The free text an admin types when rejecting a governance change is sealed
+// under the rejecting admin's key, as approval.decide's is, in both modes.
+func TestSealGovernanceRejectReason(t *testing.T) {
+	const reason = "rejected: see the thread with the proposer"
+	for _, full := range []bool{false, true} {
+		t.Run(map[bool]string{false: "fields", true: "full"}[full], func(t *testing.T) {
+			s, mk := newSealer(t)
+			if full {
+				s, mk, _ = newFullSealer(t, "reviewer")
+			}
+			control, _, err := s.Seal(t.Context(), decideEvent("reviewer", reason))
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, _ := json.Marshal(map[string]any{"proposed_by": "proposer", "reason": reason, "target_key": "p", "target_kind": "governance_profile"})
+			ev := types.AuditEvent{
+				ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorHuman, Actor: "reviewer",
+				Action: "governance.change.reject", Target: uuid.NewString(), Outcome: "success", Data: data,
+			}
+			got, pending, err := s.Seal(t.Context(), ev)
+			if err != nil || pending {
+				t.Fatalf("Seal = pending %v, %v", pending, err)
+			}
+			for _, row := range []types.AuditEvent{control, got} {
+				if strings.Contains(string(row.Data), reason) {
+					t.Errorf("%s: the reason is stored in the clear: %s", row.Action, row.Data)
+				}
+			}
+			if field(t, got, "proposed_by") != "proposer" || field(t, got, "target_key") != "p" {
+				t.Errorf("a field that is not sealed changed: %s", got.Data)
+			}
+			mk.destroy("reviewer")
+			opened, err := s.Unseal(t.Context(), []types.AuditEvent{control, got})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, row := range opened {
+				if r := field(t, row, "reason"); r != ErasedValue {
+					t.Errorf("%s: reason after the actor's key was destroyed = %v, want %q", row.Action, r, ErasedValue)
+				}
+			}
+		})
+	}
+}
+
 func TestUnsealedActionsAreNeverSealed(t *testing.T) {
 	for _, a := range UnsealedActions {
 		if SealsAction(a) {
