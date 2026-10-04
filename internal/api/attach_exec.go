@@ -328,6 +328,12 @@ func (s *Server) establishExec(ctx context.Context, runID uuid.UUID, h *attachHo
 			}
 		}
 		h.ready.setReadyIf(func() bool { return h.writable.Load() == writer })
+		if writer {
+			// A newly installed writer sets the window: carry its size to the
+			// observers still queued, as a window-change would. A promoted SSH
+			// client sends none, so this is the only place they hear of it.
+			s.fanoutWriterResize(ctx, runID, h, opts.Cols, opts.Rows)
+		}
 		return nil
 	}
 }
