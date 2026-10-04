@@ -194,7 +194,9 @@ func (s *Server) routes() chi.Router {
 			// Dry-run of the create-run resolution + gating: same resolveRunPolicy
 			// chokepoint (real 4xx errors), the enforced confinement class, and the
 			// deterministic setup checklist — mints/persists/dispatches nothing. The
-			// manual wizard fires it on the Review step (advisory, non-gating).
+			// New Run fires it on its own as the body settles. Advisory on the server: it never
+			// refuses a launch itself, but the console holds Launch over a refusal this
+			// endpoint gave for the exact same body less than 60 seconds ago.
 			r.Post("/runs/preflight", s.handlePreflightRun)
 			r.Get("/runs", s.handleListRuns)
 			r.Get("/runs/{id}", s.handleGetRun)

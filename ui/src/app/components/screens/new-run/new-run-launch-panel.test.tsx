@@ -62,6 +62,8 @@ function renderPanel(over: Partial<NewRunLaunchPanelProps>) {
     caps: null,
     modelProviders: [],
     preflightIsCurrent: true,
+    preflightFresh: true,
+    preflightBlock: false,
     preflightError: null,
     preflightErrorSeq: 0,
     preflightResult: llm("missing"),
@@ -133,7 +135,7 @@ describe("NewRunLaunchPanel — no model for an unattended agent run", () => {
   });
 
   it("a verdict from an old body never blocks", () => {
-    renderPanel({ preflightIsCurrent: false });
+    renderPanel({ preflightIsCurrent: false, preflightFresh: false });
     expect(launch()).toBeEnabled();
   });
 });

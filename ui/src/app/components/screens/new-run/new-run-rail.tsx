@@ -88,6 +88,10 @@ interface RunRailProps {
     inFlight: boolean;
     /** Why Launch cannot be pressed — a disabled button that won't say is a dead end. */
     problem: string | null;
+    /** A fresh server refusal for THIS body holds Launch (use-launch's
+     *  preflightBlock). No text of its own: the preflight alert below already
+     *  shows the server's sentence, or the `problem` line the folded rows use. */
+    preflightBlock?: boolean;
     /** An action that rides on the `problem` line (f-f5: "Connect →"). */
     problemLink?: { to: string; label: string };
     /** #922 review F5: an ADDITIONAL disable with no text of its own — the
@@ -308,7 +312,10 @@ export function RunRail({
   // The door opens here, and the same launch fires again the moment the sign-in
   // lands, so a lapsed session costs one dialog rather than a trip to Getting
   // started. Launch stays the server's decision: nothing is pre-checked on the
-  // cached status, which can be five minutes stale. Once per click: a relaunch
+  // cached status, which can be five minutes stale. The one exception is
+  // preflight's own answer for this exact body: a 4xx it gave less than a minute
+  // ago (never model_credential, never a 429) holds Launch (preflightBlock).
+  // Once per click: a relaunch
   // refused again (a pin contradiction the same identity cannot repair) leaves
   // the sentence and waits for the person. Never over a door someone else
   // opened: openDoor overwrites the opener, and the strip's focus contract
@@ -607,7 +614,7 @@ export function RunRail({
           ref={launchRef}
           type="button"
           className="flex-1"
-          disabled={launch.disabled || !!launch.problem || !!launch.workspaceUnavailable || !!launch.noBarrier}
+          disabled={launch.disabled || !!launch.problem || !!launch.workspaceUnavailable || !!launch.noBarrier || !!launch.preflightBlock}
           onClick={() => {
             autoOpened.current = false;
             clickArm.current = { body: bodyRef.current };

@@ -19,8 +19,9 @@ import (
 // manual wizard fires this when the operator enters Review so the checklist
 // (secrets/workspaces/backend/egress), the silent-CC3 raise, and the risk
 // assessment the composer already surfaces are all visible on the manual path
-// too. The console shows an error as a danger alert beside Launch; a
-// `missing` backend setup row blocks Launch, every other row is advisory.
+// too. The console shows an error as a danger alert beside Launch. A fresh
+// 4xx, or a `missing` backend or llm_access row, holds Launch for that exact
+// body for up to 60s (use-launch.ts preflightBlock); every other row is advisory.
 type preflightResponse struct {
 	SetupItems               []SetupItem            `json:"setup_items"`
 	EnforcedConfinementClass types.ConfinementClass `json:"enforced_confinement_class"`

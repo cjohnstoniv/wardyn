@@ -77,7 +77,9 @@ import {
   type RunPrefill,
   type WizardState,
 } from "./wizard-types";
+import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import { useLaunch } from "./use-launch";
+import { launchGates } from "./new-run-launch-gates";
 import { providerCandidates as candidatesForAgent, providerGate } from "./model-provider-lane";
 import { useModelProviderPick } from "./use-model-provider-pick";
 import { WhatToRunStep } from "./step-bodies";
@@ -414,6 +416,29 @@ export function NewRunScreen() {
     patch,
   });
 
+  // The same local gates the launch panel renders: an automatic preflight may
+  // fire only when Launch would otherwise be pressable.
+  const gates = launchGates({
+    isAgent,
+    mode: state.mode,
+    task: state.task,
+    useSaved,
+    specParsedOk: policy.parsed.ok,
+    selectedPolicyId: state.selectedPolicyId,
+    savedPolicy: policy.selectedPolicy,
+    policiesLoaded,
+    pin,
+    workspaces,
+    selectedWorkspaceId: state.workspaces[0]?.workspaceId,
+    caps,
+    modelProviders,
+    providerGateState,
+    providerCandidates,
+    selectedModelProviderId: state.modelProviderId,
+    agentName,
+  });
+  const modelAccessDoor = useModelAccessDoor();
+
   // Launch + preflight state and actions — see use-launch.ts's header for why
   // this lane is a hook rather than a pure function like policy-lane.ts's.
   const {
@@ -430,6 +455,8 @@ export function NewRunScreen() {
     preflightError,
     preflightErrorSeq,
     preflightIsCurrent,
+    preflightFresh,
+    preflightBlock,
     preflight,
     currentBody,
     preflightRefusal,
@@ -441,6 +468,13 @@ export function NewRunScreen() {
     ccTouched,
     merged: policy.merged,
     onLaunchError: policy.adoDoor.notifyLaunchError,
+    autoCheck: {
+      local: !gates.problem && !gates.workspaceUnavailable && !policy.noBarrierOnHost,
+      // No runner configured: Launch is not refused, so the backend row never holds it.
+      backendArm: !policy.noBarrierOnHost && !!availableClasses,
+      modelArm: isAgent && !isInteractive,
+    },
+    doorOpen: modelAccessDoor.open,
   });
 
   const added = policy.added;
@@ -822,6 +856,8 @@ export function NewRunScreen() {
           onPreflight={preflight}
           preflightRefusal={preflightRefusal}
           preflightIsCurrent={preflightIsCurrent}
+          preflightFresh={preflightFresh}
+          preflightBlock={preflightBlock}
           preflightError={preflightError}
           preflightErrorSeq={preflightErrorSeq}
           preflightResult={preflightResult}

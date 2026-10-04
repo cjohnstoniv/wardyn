@@ -268,6 +268,14 @@ test.describe("New run — Preflight sends the body Launch sends", () => {
       if (path === "/api/v1/runs") bodies.create = req.postData() ?? "";
     });
 
+    // The hermetic backend runs no barrier runtime, so its real preflight answers
+    // a missing `backend` row, which (correctly) holds Launch for up to a minute.
+    // This spec is about the BYTES of the two bodies, so the checklist is
+    // answered clear here; the body the daemon would have received is recorded
+    // first. Auto-preflight fires on its own, so the last body seen is compared.
+    await page.route("**/api/v1/runs/preflight", (route) =>
+      route.fulfill({ json: { enforced_confinement_class: "CC1", setup_items: [] } }),
+    );
     await openNewRun(page);
     await page.getByLabel("Title").fill("e2e preflight parity");
 
