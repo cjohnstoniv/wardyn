@@ -70,6 +70,12 @@ const GovernanceAssignmentLockClass int32 = 0x57474153 // ASCII "WGAS"
 // the approval's staleness check and its own write cannot be overwritten.
 const GovernanceTargetLockClass int32 = 0x57474754 // ASCII "WGGT"
 
+// KeyDomainAssignmentLockClass is the classid of the TRANSACTION-scoped two-argument lock (second key
+// 0) every key-domain assignment write takes, the direct write and the approval of a held one alike:
+// one write at a time, so the membership check a set makes (two groups of one person in different
+// domains) sees every assignment written before it, including another group's.
+const KeyDomainAssignmentLockClass int32 = 0x574B4441 // ASCII "WKDA"
+
 // LoginSupersedeLockWait is the TOTAL budget one caller spends trying to take
 // a keyed lock before being REFUSED (retry) rather than let through unlocked;
 // only ErrAdvisoryLockNoCapacity proceeds unlocked. Matches

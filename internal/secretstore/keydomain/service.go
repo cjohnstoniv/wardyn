@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
@@ -264,8 +266,39 @@ func (s *Service) Usage(ctx context.Context) ([]Usage, error) {
 // transaction it joins (a held governance change applies inside the decision
 // transaction).
 type Querier interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// LockAssignments takes the transaction-scoped lock every assignment write
+// holds (db.KeyDomainAssignmentLockClass), so a write's checks and the write
+// itself see no other assignment write in between. q must be a transaction.
+func LockAssignments(ctx context.Context, q Querier) error {
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.KeyDomainAssignmentLockClass); err != nil {
+		return unavailable("lock the assignments", err)
+	}
+	return nil
+}
+
+// WriteAssignments runs fn on one read-committed transaction holding the
+// assignment lock, and commits it when fn returns nil.
+func (s *Service) WriteAssignments(ctx context.Context, fn func(q Querier) error) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return unavailable("begin an assignment write", err)
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	if err := LockAssignments(ctx, tx); err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return unavailable("commit an assignment write", err)
+	}
+	return nil
 }
 
 // Set writes the assignment for (a.SubjectType, a.Subject), and reports whether

@@ -16,6 +16,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -199,39 +200,61 @@ type keyDomainApplied struct {
 	Found    bool
 }
 
-// applyKeyDomainChange does c and writes its audit row. A set to a domain the
-// file does not declare returns keydomain.ErrUnknownDomain with nothing written;
-// a delete of a missing assignment is Found false, with nothing written or
-// audited.
+// keyDomainRefused is a set that the assignments, re-read under the assignment lock, no longer allow.
+type keyDomainRefused struct{ d authz.Decision }
+
+func (e *keyDomainRefused) Error() string {
+	return "key domain assignment refused: " + string(e.d.Reason)
+}
+
+// applyKeyDomainChange does c and writes its audit row. It holds the assignment lock from its checks to
+// its write, as an approval does, so a set re-checks the membership against every assignment written
+// before it: a set that would now leave someone in two domains is *keyDomainRefused, a set to a domain
+// the file does not declare likewise, with nothing written. A delete of a missing assignment is Found
+// false, with nothing written or audited.
 func (s *Server) applyKeyDomainChange(ctx context.Context, by keyDomainActor, c keyDomainChange) (keyDomainApplied, error) {
 	svc := s.cfg.KeyDomains
 	var out keyDomainApplied
-	if c.Delete {
-		prev, found, err := svc.Delete(ctx, c.SubjectType, c.Subject)
-		if err != nil || !found {
-			return out, err
+	err := svc.WriteAssignments(ctx, func(q keydomain.Querier) error {
+		if c.Delete {
+			prev, found, err := svc.DeleteQ(ctx, q, c.SubjectType, c.Subject)
+			if err != nil || !found {
+				return err
+			}
+			out.Previous, out.Found = &prev, true
+			return nil
 		}
-		out.Previous, out.Found = &prev, true
+		ambiguous := func(ctx context.Context, group, domain string) (int, error) {
+			return svc.AmbiguousIfGroupQ(ctx, q, group, domain)
+		}
+		truncated := func(ctx context.Context) (int, error) { return svc.TruncatedUnassignedQ(ctx, q) }
+		if d, err := keyDomainSetRefusal(ctx, svc, ambiguous, truncated, c); err != nil {
+			return err
+		} else if d != nil {
+			return &keyDomainRefused{*d}
+		}
+		if prev, found, err := svc.GetQ(ctx, q, c.SubjectType, c.Subject, false); err != nil {
+			return err
+		} else if found {
+			out.Previous = &prev
+		}
+		created, err := svc.SetQ(ctx, q, keydomain.Assignment{SubjectType: c.SubjectType, Subject: c.Subject, Domain: c.Domain, SetBy: by.principal})
+		if err != nil {
+			return err
+		}
+		out.Created, out.Found = created, true
+		out.Assignment, _, err = svc.GetQ(ctx, q, c.SubjectType, c.Subject, false)
+		return err
+	})
+	if err != nil || !out.Found {
+		return keyDomainApplied{}, err
+	}
+	if c.Delete {
 		s.recordAudit(ctx, s.auditEvent(nil, by.typ, by.principal, "key_domain.assignment.delete", keyDomainTarget(c), "success",
-			mustJSON(map[string]any{"subject_type": c.SubjectType, "subject": c.Subject, "domain": prev.Domain})))
+			mustJSON(map[string]any{"subject_type": c.SubjectType, "subject": c.Subject, "domain": out.Previous.Domain})))
 		return out, nil
 	}
-	if prev, found, err := svc.Get(ctx, c.SubjectType, c.Subject); err != nil {
-		return out, err
-	} else if found {
-		out.Previous = &prev
-	}
-	created, err := svc.Set(ctx, keydomain.Assignment{SubjectType: c.SubjectType, Subject: c.Subject, Domain: c.Domain, SetBy: by.principal})
-	if err != nil {
-		return out, err
-	}
-	out.Created, out.Found = created, true
-	got, _, err := svc.Get(ctx, c.SubjectType, c.Subject)
-	if err != nil {
-		return out, err
-	}
-	out.Assignment = got
-	data := map[string]any{"subject_type": c.SubjectType, "subject": c.Subject, "domain": c.Domain, "created": created}
+	data := map[string]any{"subject_type": c.SubjectType, "subject": c.Subject, "domain": c.Domain, "created": out.Created}
 	if out.Previous != nil {
 		data["previous_domain"] = out.Previous.Domain
 	}
@@ -271,6 +294,11 @@ func (s *Server) handlePutKeyDomainAssignment(w http.ResponseWriter, r *http.Req
 		return
 	}
 	out, err := s.applyKeyDomainChange(r.Context(), keyDomainActor{actorTypeFromRequest(r), principalFromRequest(r)}, c)
+	var refused *keyDomainRefused
+	if errors.As(err, &refused) {
+		s.refuse(w, r, refused.d)
+		return
+	}
 	if err != nil {
 		writeServerError(w, r, "set key domain assignment", err)
 		return
