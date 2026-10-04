@@ -39,6 +39,9 @@ type result struct {
 // send delivers one rendered body. The body is built by the caller; the signature covers its exact
 // bytes. Only the type this build implements is reachable: Parse refuses the rest at boot.
 func (ch Channel) send(ctx context.Context, client *http.Client, deliveryID string, body []byte, now time.Time) result {
+	if ch.Type == TypeSMTP {
+		return ch.sendMail(ctx, client, body, now)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ch.URL, bytes.NewReader(body))
 	if err != nil {
 		return result{class: classDial}

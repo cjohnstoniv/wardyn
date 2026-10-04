@@ -1084,14 +1084,16 @@ never a URL, secret or token.
     {"id": "sec-hook", "type": "webhook", "url": "https://hooks.example.com/wardyn",
      "hmac_secret": "<shared secret>", "bearer_token": "<optional>"},
     {"id": "sec-teams", "type": "teams", "url": "<Teams Workflows trigger URL>"},
-    {"id": "sec-slack", "type": "slack", "url": "<Slack incoming-webhook URL>", "redact_requester": true}
+    {"id": "sec-slack", "type": "slack", "url": "<Slack incoming-webhook URL>", "redact_requester": true},
+    {"id": "mail", "type": "smtp", "host": "smtp.example.com", "port": 587, "from": "wardyn@example.com",
+     "to": ["secops@example.com"], "username": "<optional>", "password": "<optional>"}
   ]
 }
 ```
 
 - `id` is `[a-z0-9_-]{1,32}`, unique. It is the metric label and what the outbox stores; rotating a URL
   under the same `id` keeps pending rows deliverable.
-- `type` must be one this build implements: `webhook`, `teams` or `slack`. Any other value refuses boot.
+- `type` must be one this build implements: `webhook`, `teams`, `slack` or `smtp`. Any other value refuses boot.
 - `redact_requester` (optional, per channel, default false) leaves the run owner's principal and email out of that channel's messages, whatever its type.
 - HTTPS is required when `hmac_secret` or `bearer_token` is set or the URL carries userinfo or a query.
   Plain HTTP with none of those is allowed for a `webhook`. A `teams` or `slack` URL is itself the
@@ -1131,6 +1133,21 @@ bytes and masked, then made inert: Slack carries it in `plain_text` objects only
 escapes `&`, `<`, `>` and every Markdown character. Any 2xx answer is success and the reply body is never
 read (a Teams workflow may answer 202 with none). `hmac_secret` and `bearer_token` are webhook options;
 these two types are not signed.
+
+**SMTP mail.** An `smtp` channel takes `host`, `port`, `from`, an optional static `to` (a list of
+addresses) and optional `username` and `password`, which are set together; it takes no `url`. It sends a
+plain-text message, `Subject: [Wardyn] ` plus the same title as above, with the same allowlisted lines as
+the chat bodies and nothing else. It sends over **verified STARTTLS only**: wardynd refuses a relay that
+does not advertise STARTTLS (`starttls_missing`), verifies the certificate against the system roots plus
+`WARDYN_TRUSTED_CA_FILE` with the server name set to `host` (`tls_verify`), and authenticates (`AUTH
+PLAIN`) only after that. There is no plaintext fallback and no option to skip verification, and
+implicit TLS (port 465) is not supported: use the submission port, usually 587. Recipients are the static
+`to` plus each `notify` target of the tier (see below); every address is re-checked at send time and one
+that is not a single bare mailbox (a display name, a list, a CR, LF, comma, semicolon, angle bracket or
+space, or over 254 bytes) is skipped and never written to a header or the envelope. With no recipient
+left the row is dead as `no_recipient` and the relay is not contacted. The `password` has the same
+custody as a SIEM bearer token: keep the value in `WARDYN_APPROVAL_NOTIFY_FILE`. Boot refuses a CR or LF
+in any smtp field and an address that is not a bare mailbox.
 
 **Verifying the signature.** `X-Wardyn-Signature: t=<unix seconds>,v1=<hex>`, where `v1` is the
 HMAC-SHA256 of `<t>.<body>` (the timestamp, a dot, the exact bytes received) keyed with `hmac_secret`.
@@ -1178,7 +1195,8 @@ drops duplicates on `delivery_id`. A row that is retried keeps its `delivery_id`
 a redirect would hand the body and signature to a host you did not name), or when still unsent an hour
 after it came due. A dead row writes one `approval.notify.failed` audit row and increments
 `wardyn_approval_notify_failed_total{channel}`; both carry an error class (`http_status:503`, `timeout`,
-`tls_verify`, `dial`, `redirect_refused`, `expired`), never a URL or a response body. Terminal rows older
+`tls_verify`, `dial`, `redirect_refused`, `expired`, and for mail `smtp_reply:<code>`, `starttls_missing`,
+`no_recipient`), never a URL, a response body or a relay's reply text. Terminal rows older
 than 30 days are deleted, 500 per tick.
 
 **A per-run budget.** One run may create at most 25 tier-0 outbox rows per hour, so an agent cannot bury
@@ -1201,8 +1219,10 @@ dead in the last hour, otherwise `ok`.
 
 **Network policy.** On Kubernetes wardynd's NetworkPolicy is default-deny for egress. Add a rule for each
 notification endpoint, and for a corporate proxy if one fronts them, through
-`networkPolicy.egress.extra`, exactly as for SIEM sinks. The delivery client uses the same transport as
-the rest of wardynd, so `WARDYN_TRUSTED_CA_FILE` and the daemon proxy setting apply to it.
+`networkPolicy.egress.extra`, exactly as for SIEM sinks. An `smtp` channel needs a rule for its relay's
+`host` and `port` too; it dials the relay directly, not through a proxy. The delivery client uses the same
+transport as the rest of wardynd, so `WARDYN_TRUSTED_CA_FILE` applies to every channel (and the daemon
+proxy setting to the HTTP ones).
 
 ## Managed laptops: hybrid enrolment and audit federation
 
