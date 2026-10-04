@@ -54,6 +54,14 @@ type ScimGroupStore interface {
 	StartGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID) error
 	GroupRemovalIdentities(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error)
 	DeleteScimGroup(ctx context.Context, id uuid.UUID) error
+	PendingGroupRemovals(ctx context.Context, idleFor time.Duration, limit int) ([]PendingGroupRemoval, error)
+	GroupRemovalFailures(ctx context.Context, limit int) ([]DeprovisionFailure, error)
+}
+
+// PendingGroupRemoval is one person's removal from one group with ledger rows still pending.
+type PendingGroupRemoval struct {
+	GroupID    uuid.UUID
+	IdentityID uuid.UUID
 }
 
 var _ ScimGroupStore = PG{}
@@ -193,6 +201,41 @@ func (s PG) GroupRemovalIdentities(ctx context.Context, groupID uuid.UUID) ([]uu
 		ORDER BY 1`, []any{groupID, JobKindGroupRemove, groupID.String()}, func(r pgx.Row) (uuid.UUID, error) {
 		var v uuid.UUID
 		return v, r.Scan(&v)
+	})
+}
+
+// pendingGroupRemovalWhere selects group_remove rows still pending of a person not recorded as a member of
+// that group again: one the identity provider added back is not unfinished work, and their next removal
+// opens a ledger of its own.
+const pendingGroupRemovalWhere = `j.kind = 'group_remove' AND j.state = 'pending'
+	AND NOT EXISTS (SELECT 1 FROM scim_group_members m WHERE m.identity_id = j.identity_id AND m.group_id::text = j.target)`
+
+// PendingGroupRemovals is the pendingGroupRemovalWhere removals that no step of the same removal has
+// touched for idleFor (a request still working on it is not one the sweeper may race), at most limit.
+func (s PG) PendingGroupRemovals(ctx context.Context, idleFor time.Duration, limit int) ([]PendingGroupRemoval, error) {
+	return collect(ctx, s.Pool, "list", "pending group removals", `
+		SELECT DISTINCT j.target::uuid, j.identity_id FROM deprovision_jobs j
+		 WHERE `+pendingGroupRemovalWhere+`
+		   AND NOT EXISTS (SELECT 1 FROM deprovision_jobs x WHERE x.identity_id = j.identity_id
+		                  AND x.kind = 'group_remove' AND x.target = j.target
+		                  AND x.updated_at > now() - $1::bigint * interval '1 microsecond')
+		 ORDER BY 2, 1 LIMIT $2`, []any{idleFor.Microseconds(), limit}, func(r pgx.Row) (PendingGroupRemoval, error) {
+		var p PendingGroupRemoval
+		return p, r.Scan(&p.GroupID, &p.IdentityID)
+	})
+}
+
+// GroupRemovalFailures is ListDeprovisionFailures for the pendingGroupRemovalWhere rows with a recorded
+// error: one row per identity and step, with the error of the target touched last.
+func (s PG) GroupRemovalFailures(ctx context.Context, limit int) ([]DeprovisionFailure, error) {
+	return collect(ctx, s.Pool, "list", "group removal failures", `
+		SELECT j.identity_id, j.kind, j.step, (array_agg(j.last_error ORDER BY j.updated_at DESC))[1]
+		  FROM deprovision_jobs j
+		 WHERE `+pendingGroupRemovalWhere+` AND j.last_error <> ''
+		 GROUP BY j.identity_id, j.kind, j.step
+		 ORDER BY min(j.created_at), j.identity_id, j.step LIMIT $1`, []any{limit}, func(r pgx.Row) (DeprovisionFailure, error) {
+		var f DeprovisionFailure
+		return f, r.Scan(&f.IdentityID, &f.Kind, &f.Step, &f.LastError)
 	})
 }
 

@@ -47,6 +47,10 @@ export const SCIM = {
     kill_run: "Stop runs",
     erase: "Erase credentials",
     workspaces: "Reassign workspaces",
+    // A group removal's steps (internal/store store_scim_groups.go).
+    sessions: "Group removal: cut sessions",
+    tokens: "Group removal: revoke tokens",
+    audit: "Group removal: record",
   } as Record<string, string>,
   PENDING_HINT:
     "Wardyn resumes from the failed step each time your identity provider retries. To cut someone off now, erase their credentials under Credentials and kill their runs.",
