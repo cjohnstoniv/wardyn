@@ -86,22 +86,20 @@ func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostRea
 // markRunRevivedUnderCap is the claim of a revive that starts an agent, under the
 // deployment cap: the count and the claim share CreateRunUnderCap's transaction-scoped
 // advisory lock and its counting predicate, so a revive and a create racing at the cap
-// admit exactly the cap. The run itself is left out of the count when it is in it.
+// admit exactly the cap. It counts the OTHER runs in one statement: the run's own
+// row is never read for admission, so an extension of it landing mid-claim (which
+// takes neither lock) cannot make it look counted to one read and not to another.
+//
+// The claim does not pin the outage run's end either: admission does not depend on
+// it, and an extension the owner makes meanwhile is legitimate, not a change that
+// should fail the revive.
 func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int) (claimed bool, err error) {
 	err = s.inTx(ctx, func(q Querier) error {
-		active, err := lockAndCountActiveRuns(ctx, q)
+		others, err := lockAndCountActiveRuns(ctx, q, id)
 		if err != nil {
 			return err
 		}
-		var counted bool
-		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs WHERE id = $1 AND `+HoldsSandboxSQL+`)`, id).Scan(&counted); err != nil {
-			return fmt.Errorf("store: read revived run's slot: %w", err)
-		}
-		self := 0
-		if counted {
-			self = 1
-		}
-		if active-self >= limit {
+		if others >= limit {
 			return ErrRunCapReached
 		}
 		claimed, err = markRunRevived(ctx, q, id, from, ended)
