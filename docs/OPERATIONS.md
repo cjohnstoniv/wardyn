@@ -1230,8 +1230,9 @@ addresses) and optional `username` and `password`, which are set together; it ta
 plain-text message, `Subject: [Wardyn] ` plus the same title as above, with the same allowlisted lines as
 the chat bodies and nothing else. It sends over **verified STARTTLS only**: wardynd refuses a relay that
 does not advertise STARTTLS (`starttls_missing`), verifies the certificate against the system roots plus
-`WARDYN_TRUSTED_CA_FILE` with the server name set to `host` (`tls_verify`), and authenticates (`AUTH
-PLAIN`) only after that. There is no plaintext fallback and no option to skip verification, and
+`WARDYN_TRUSTED_CA_FILE` with the server name set to `host` (`tls_verify`), and authenticates only after that, with the mechanism the relay advertises in its AUTH
+list: `PLAIN` when offered, else `LOGIN` (what Exchange Online offers); a relay offering neither (for
+example XOAUTH2 only) is dead as `auth_unsupported`, and nothing is sent. There is no plaintext fallback and no option to skip verification, and
 implicit TLS (port 465) is not supported: use the submission port, usually 587. Recipients are the static
 `to` plus each `notify` target of the tier (see below); every address is re-checked at send time and one
 that is not a single bare mailbox (a display name, a list, a CR, LF, comma, semicolon, angle bracket or
