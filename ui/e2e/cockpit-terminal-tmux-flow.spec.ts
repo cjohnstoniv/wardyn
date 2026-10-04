@@ -15,6 +15,7 @@
  */
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { findRunningFixture, stubInteractiveRun } from "./attach-stub";
+import { termText } from "./terminal-text";
 
 const MAIN_THREAD_BUDGET_MS = 200;
 
@@ -39,7 +40,7 @@ test("50 MB of output keeps the page responsive and ends on the right screen", a
 
   const screen = page.locator(".xterm-screen").first();
   await expect(screen).toBeVisible();
-  const read = async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")) as string;
+  const read = async () => (await termText(screen).catch(() => "")) as string;
 
   // A slower renderer than the sandbox, so the write backlog crosses the watermark.
   const cdp = await page.context().newCDPSession(page);
