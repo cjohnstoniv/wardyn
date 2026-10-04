@@ -63,6 +63,9 @@ type RunSummary struct {
 	// idle timeout in seconds. Store must JOIN to the policy table; zero is
 	// intentional, not a missing join.
 	PolicyAutoStopAfterSec int
+	// Kept is a run kept after a control-plane outage whose agent still runs: the
+	// max age still ends it, and idle reaping does not apply (its lost mark governs it).
+	Kept bool
 }
 
 // Store is the narrow persistence interface the Reaper requires; the real
@@ -241,6 +244,9 @@ func (r *Reaper) reap(ctx context.Context) error {
 			if err := r.stopMaxAge(ctx, run, now); err != nil {
 				stopErrs = append(stopErrs, err)
 			}
+			continue
+		}
+		if run.Kept {
 			continue
 		}
 		// AutoStopAfterSec <= 0 means never reap regardless of idle time (0 =

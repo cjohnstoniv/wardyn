@@ -84,3 +84,59 @@ func (o ownRuns) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.RunSumm
 	}
 	return mine, now, err
 }
+
+// TestPG_MaxAgeStopsAnOutageKeptLiveAgent: a run kept after a control-plane outage before its
+// end still runs its agent, so WARDYN_RUN_MAX_AGE ends it like a live run: STOPPED, torn down
+// and audited run.max_age.expire. A run kept with its agent already stopped (after a reboot, or
+// an outage past its end) is left to its files grace, by the scan and by the transition alike.
+func TestPG_MaxAgeStopsAnOutageKeptLiveAgent(t *testing.T) {
+	pool := revocationPool(t)
+	ctx := context.Background()
+	pg := store.PG{Pool: pool}
+	mk := func(reason types.LostReason, endsAt *time.Time) uuid.UUID {
+		id := uuid.New()
+		now := time.Now().UTC()
+		if _, err := pg.CreateRun(ctx, types.AgentRun{
+			ID: id, CreatedAt: now.Add(-3 * time.Hour), UpdatedAt: now,
+			CreatedBy: "op@example.com", Agent: "claude-code", Task: "max-age kept probe",
+			ConfinementClass: types.CC2, State: types.RunRunning, Interactive: true, EndsAt: endsAt,
+			SPIFFEID: "spiffe://wardyn.test/agent-run/" + id.String(), RunnerTarget: "docker",
+			SandboxRef: "wardyn-agent-" + id.String(),
+		}); err != nil {
+			t.Fatalf("create run: %v", err)
+		}
+		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id=$1`, id) })
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at = now(), lost_reason = $2 WHERE id=$1`, id, string(reason)); err != nil {
+			t.Fatalf("keep the run: %v", err)
+		}
+		return id
+	}
+	past := time.Now().Add(-time.Minute)
+	live, pastEnd, rebooted := mk(types.LostOutage, nil), mk(types.LostOutage, &past), mk(types.LostReboot, nil)
+
+	rn := &countingRunner{}
+	rec := &fakeAuditRecorder{}
+	stopper := lifecycleStopper{pool: pool, runner: rn}
+	own := ownRuns{Store: lifecycleStore{pool: pool}, ids: map[uuid.UUID]bool{live: true, pastEnd: true, rebooted: true}}
+	if err := lifecycle.New(own, stopper, rec, lifecycle.Config{MaxAge: time.Hour}).Tick(ctx); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	for id, want := range map[uuid.UUID]types.RunState{live: types.RunStopped, pastEnd: types.RunRunning, rebooted: types.RunRunning} {
+		if got, err := pg.GetRun(ctx, id); err != nil || got.State != want {
+			t.Errorf("run %s state = %v (err %v), want %s", id, got.State, err, want)
+		}
+	}
+	if rn.stops != 1 {
+		t.Errorf("teardowns = %d, want 1 (only the outage-kept live agent)", rn.stops)
+	}
+	if rec.calls != 1 || rec.last.Action != "run.max_age.expire" || rec.last.RunID == nil || *rec.last.RunID != live {
+		t.Errorf("audit = %d rows, last %+v; want one run.max_age.expire for %s", rec.calls, rec.last, live)
+	}
+	// A row listed before its agent was stopped still is not ended by the transition.
+	for _, id := range []uuid.UUID{pastEnd, rebooted} {
+		if out, err := stopper.StopRunMaxAge(ctx, id, time.Now()); err != nil || out.Applied {
+			t.Errorf("StopRunMaxAge(%s) = %+v, %v; want not applied", id, out, err)
+		}
+	}
+}
