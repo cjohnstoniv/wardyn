@@ -62,10 +62,11 @@ var ErrKeyErased = errors.New("audit seal: the subject's key is destroyed")
 // counted toward quarantine, because the line is not what is wrong.
 var ErrReplayDeferred = errors.New("audit replay deferred: a pending row cannot be re-sealed yet")
 
-// ErrPendingUnopenable is what Reseal returns, wrapped, for a pending field that
-// does not open under the pending key. That never heals by waiting, so the spool
-// drain counts it toward quarantine instead of deferring it.
-var ErrPendingUnopenable = errors.New("audit seal: a pending field does not open under the pending key")
+// ErrPendingUnopenable is what Reseal returns, wrapped, for a pending field or
+// actor that is malformed or does not open under the pending key. That never
+// heals by waiting, so the spool drain counts it toward quarantine instead of
+// deferring it.
+var ErrPendingUnopenable = errors.New("audit seal: a pending value does not open under the pending key")
 
 // SealKeys is the per-subject key service; *subjectkey.Manager (through
 // cmd/wardynd's adapter) is the production one. Current returns the subject's

@@ -130,12 +130,15 @@ func (s *Sealer) resealActor(ctx context.Context, ev types.AuditEvent, pk []byte
 		return ev, errors.New("audit reseal: a pending actor is spooled and the subject directory is not available")
 	}
 	str, _ := stringValue(raw)
+	// Neither failure heals by waiting, so neither defers: the drain counts the
+	// line toward quarantine, as it does a pending field, instead of holding
+	// every line behind it.
 	pv, ok, err := openPending(pk, ev, actorPath, str)
 	if !ok {
-		return ev, errors.New("audit reseal: the pending actor is malformed")
+		return ev, fmt.Errorf("%w: the pending actor is malformed", ErrPendingUnopenable)
 	}
 	if err != nil {
-		return ev, fmt.Errorf("audit reseal: the pending actor does not open under the pending key: %w", err)
+		return ev, fmt.Errorf("%w: the pending actor does not open under the pending key: %w", ErrPendingUnopenable, err)
 	}
 	actor := pv.Subject
 	principal, err := s.principalOf(ctx, actor)

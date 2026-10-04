@@ -1073,7 +1073,10 @@ for a sealed field, so after `audit_personal_fields` it holds nothing readable e
 `actor`: from that moment it sees `subject:<uuid>` for a person, and the setting applies only to rows written
 after it is on. A backup restores the wrapped key and so the field until the backup expires or
 the wrapping key version is retired. A row waiting in an audit spool under the pending key when the person is
-erased is stored as `[erased]` when the spool drains. See [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#sealed-fields) for
+erased is stored as `[erased]` when the spool drains. A pending row the drain cannot open (sealed under another
+pending key, or malformed) is moved to the quarantine sidecar `<spool>.quarantine` instead, as any line the store
+keeps refusing is: erasure does not reach that file, which stays on the daemon's disk, mode `0600`, still sealed
+under the pending key it was written with, until you remove it. See [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#sealed-fields) for
 which fields are sealed and why the rest stay clear.
 
 ### Leavers and SCIM
