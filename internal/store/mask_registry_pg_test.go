@@ -663,4 +663,27 @@ func TestPG_MaskStore_UnopenableLiveRowFencesRun(t *testing.T) {
 	if !d.m.Covered(ctx, later) {
 		t.Error("a full read fenced a run started after the damaged value was handled")
 	}
+
+	// A credentials erase retires the owner's credential values before it destroys the key: a
+	// replica that never cached one skips it, so the run the person starts under the next key
+	// generation is not fenced for a value it cannot hold.
+	const carol = "carol@example.com"
+	if err := a.reg.AddGlobal(carol, "carol-cred", time.Now(), []byte("carols-credential-value")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.m.FenceSubject(ctx, carol); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.reg.RetireOwnerGlobals(ctx, carol, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.keys.Destroy(ctx, carol, subjectkey.PurposeCred); err != nil {
+		t.Fatal(err)
+	}
+	afterErase := dispatchedRun(t, pool, a, carol)
+	e := newRegReplica(t, pool, k)
+	e.read(t)
+	if !e.m.Covered(ctx, afterErase) {
+		t.Error("a replica that never cached a retired credential value fenced a run started after the erase")
+	}
 }

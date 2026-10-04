@@ -127,6 +127,13 @@ func (s *Server) eraseCredentialsScope(ctx context.Context, owner string, rep *s
 			return 0, err
 		}
 	}
+	// Retire the person's live masking copies of their credentials too: they are sealed under
+	// the key eraseLocked destroys, and a live one that no replica cached would fence every
+	// run the person starts under the next key generation when a replica first reads it.
+	// Replicas that cached them keep masking them through grace.
+	if err := s.cfg.MaskRegistry.RetireOwnerGlobals(ctx, owner, s.cfg.Now()); err != nil {
+		return 0, err
+	}
 	return len(runs), s.eraseLocked(ctx, owner, rowID, rep)
 }
 

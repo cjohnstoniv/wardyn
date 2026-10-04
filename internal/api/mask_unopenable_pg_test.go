@@ -6,11 +6,14 @@ package api
 import (
 	"context"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/erasure"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // A run's runtime-injected value lives only in the shared registry. Once that
@@ -25,6 +28,10 @@ func TestPG_RecordingUploadRefusedAfterCredentialOnlyErase(t *testing.T) {
 			a := l.replica()
 			run := l.run()
 			a.dispatch(t, run) // a complete, empty manifest
+			if err := a.reg.AddGlobal(maskOwner, "erased-credential", time.Now(), []byte("global-credential-copy-XYZ789")); err != nil {
+				t.Fatal(err)
+			}
+			var later types.AgentRun
 			const value = "runtime-injected-credential-ABC123"
 			if err := a.srv.maskInjected(run.ID, []byte(value)); err != nil {
 				t.Fatal(err)
@@ -38,6 +45,10 @@ func TestPG_RecordingUploadRefusedAfterCredentialOnlyErase(t *testing.T) {
 				if d, _ := rep.Details[erasure.Credentials].(map[string]any); d["runs_fenced"] != 1 {
 					t.Errorf("credentials detail = %v, want runs_fenced 1", rep.Details[erasure.Credentials])
 				}
+				// A run the person starts under the next key generation holds nothing the
+				// destroyed key sealed: no replica's read of the retired copy may fence it.
+				later = l.run()
+				a.dispatch(t, later)
 			case "corrupted ciphertext":
 				if _, err := l.pool.Exec(t.Context(),
 					`UPDATE mask_values SET sealed = set_byte(sealed, octet_length(sealed)-1, get_byte(sealed, octet_length(sealed)-1) # 1) WHERE run_id=$1`, run.ID); err != nil {
@@ -58,6 +69,11 @@ func TestPG_RecordingUploadRefusedAfterCredentialOnlyErase(t *testing.T) {
 			}
 			if n := l.count(`SELECT count(*) FROM run_mask_manifest WHERE run_id=$1 AND fenced_at IS NOT NULL`, run.ID); n != 1 {
 				t.Errorf("the run's manifest is not fenced (%d fenced rows)", n)
+			}
+			if mode == "credential-only erase" {
+				if w := l.upload(b, later, "ok\n"); w.Code != http.StatusNoContent {
+					t.Errorf("a run dispatched after the erase: upload status %d, want 204: %s", w.Code, w.Body.String())
+				}
 			}
 		})
 	}
