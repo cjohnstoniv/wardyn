@@ -842,8 +842,9 @@ package cannot see, not a defect to boot-refuse over (`internal/db/db.go`).
 
 ### Retention, erasure and GDPR — a residual, not a solved problem
 
-The append-only guarantee above is unconditional: no time window, size cap, or
-admin-invoked delete path anywhere in `audit_events`. A deliberate integrity
+The append-only guarantee above has one exception since 0.8.6: an attested, digest-checked drop of the oldest
+closed monthly partition past a retention window you set ([Audit retention](#audit-retention-the-attested-partition-drop)).
+Nothing else deletes an audit row: no size cap, no per-row, per-actor or per-run delete. A deliberate integrity
 choice, but it means **retention is forever by default and there is no erasure
 lever today**. Concretely:
 
@@ -897,9 +898,80 @@ stored PTY casts, defaulting to keep-forever but operator-settable, and each swe
 that removes anything emits its own `recording.retention.sweep` audit event. Under
 a "right to erasure" obligation on data an audit row could contain, the honest
 answer is: **you cannot selectively erase it, and the fix that exists for
-recordings does not exist here.** A time-partitioned audit table with an attested,
-operator-invoked partition-drop (or crypto-shredding) is the shape of a real fix;
-nothing in that direction is built.
+recordings does not exist here.** The partition drop (0.8.6) is the retention half of the real
+fix, and it removes whole months, never one person's rows. Crypto-shredding, which would make one person's fields
+unreadable while the chain still verifies, is not built.
+
+### Audit retention: the attested partition drop
+
+Since 0.8.6 the audit log is a monthly-partitioned table, and the oldest closed partition can be removed once it is
+older than a retention window, through one database function that leaves evidence. Retention is **off by default**
+(`WARDYN_AUDIT_RETENTION_DAYS` is `0`, keep forever) and nothing is dropped unless an operator drops it or you turn on
+the unattested autodrop.
+
+**The policy.** `WARDYN_AUDIT_RETENTION_DAYS` is recorded at every boot through the database function
+`audit_retention_set_policy`; the app role has no write privilege on the table that holds it. The database decides what
+takes effect when, from its own clock:
+
+- an **increase** (a longer window, or any window to `0`, forever) applies at once;
+- a **decrease** (a shorter window, and `0` to any finite value) takes effect **30 days after the boot that first saw
+  it**. The pending value and its date are stored, so a restart never moves the date, and setting the same value at
+  every boot for 29 days leaves it where it was. Restating the current value withdraws a pending decrease.
+- the boot that records a change writes an `audit.retention.set` audit row.
+
+Set the same value on every replica. `GET /audit/retention` (`wardyn audit retention`) shows the effective and the
+pending policy.
+
+**What a drop checks.** `audit_retention_drop(partition, digest, actor)` removes a partition only if it is the oldest
+retained one, is closed (nothing can be appended to it any more), is past the effective window, and holds no row of a
+run that is still live (a `PENDING`, `STARTING`, `RUNNING` or `WAITING_FOR_CONFIRMATION` run: revocation reads its
+`credential.mint` rows, and its provenance is its own audit trail). It then recomputes the partition's digest and
+refuses unless it equals the one you supplied. In one transaction it then writes the chained
+`audit.retention.partition_dropped` event, the `audit_chain_anchors` row (partition, `seq` range, row count, digest, the
+dropped tail's last `row_hash`, who dropped it, and the event's `seq`), takes the partition out of the expected manifest, and detaches and
+drops it. A crash leaves all of it or none. The scan of the partition runs before the chain lock is taken, so audit writers wait only for the drop itself; the detach needs a brief exclusive lock on the audit table and waits at most 5 seconds for it, so a long audit read (or a running chain verify) can make a drop fail with `audit_retention_drop_failed` and nothing changed: retry. `GET /audit/chain/verify` then starts from that anchor and still
+re-hashes every retained row; a partition removed any other way fails verify.
+
+**Runbook: export, check, drop.**
+
+```bash
+wardyn audit retention                                              # which partition is the oldest, and is it droppable now
+wardyn audit export-partition audit_events_p202601 --raw -o p.ndjson   # the archive: keep it where your records policy says
+tail -n1 p.ndjson                                                   # the footer: its digest
+# check the archive (see "Verifying an exported audit partition by hand", above): recompute every row hash and the fold
+wardyn audit retention drop audit_events_p202601 --digest <digest from the footer>
+curl -fsS -H "Authorization: Bearer $WARDYN_TOKEN" "$WARDYN_URL/api/v1/audit/chain/verify"   # ok, with anchor_seq at the drop
+```
+
+`POST /audit/retention/drop` takes `{"partition": "...", "digest": "..."}`. Who may drop (owner decision Q-AR1, accepted at
+the recommended default): one `security_admin` (or an admin) acting alone, with the 30-day cooldown on decreases as the
+brake. The route is on the security tier, and every refusal is a `409` with its own `reason` and an `authz.denied` row (below):
+`audit_retention_not_oldest`, `audit_retention_not_closed`, `audit_retention_inside_window` (also while retention is
+forever), `audit_retention_live_run`, `audit_retention_digest_mismatch`. An unknown partition is `404`
+(`audit_partition_not_found`). `GET /audit/retention` lists every partition with its row count, state (`closed`, `open`
+or `future`) and whether a drop would take it now; for one it would refuse, `refusal` is the reason it would refuse with.
+The two answers are the same function's, so they cannot disagree. The row counts are exact (a scan of each partition), so
+the status call costs as much as the largest partition.
+
+**Pre-0.8.6 history** sits in one legacy partition that ends at the upgrade. It becomes droppable once the upgrade itself is older than
+the window, and it is dropped whole. An empty partition drops too and records a row count of `0`; verify anchors on the newest drop that removed rows.
+
+**Autodrop (`WARDYN_AUDIT_RETENTION_AUTODROP`, off by default).** With it on, the sweeper leader drops each eligible oldest partition
+itself, as the system actor (`wardynd`), computing the digest in the database. It is **unattested**: nobody checked an
+export first, and the event says `attested: false`. It still writes the chained event and the anchor and verify still
+passes, and it obeys every rule above: nothing inside the window, nothing holding a live run's rows, nothing while the
+flag is off. Turn it on only if your records schedule does not require an exported archive.
+
+**Keeping months ahead.** `audit_ensure_partitions(12)` runs at every boot, before the listener, and daily on the sweeper
+leader (so with several replicas exactly one runs it). An audit write into a month with no partition fails and waits in
+the spool until one exists, so `wardyn_audit_partitions_ahead` (months past the current one that have a partition) is
+exported on `/metrics`, and `/setup/status` carries an `audit_partitions` warning below 3. A warning that stays means the leader sweeper is not
+running or cannot reach the database.
+
+**Privileges.** `audit_retention_drop`, `audit_retention_set_policy` and the two read helpers are owned by the migrator, run as it, and are granted
+to the roles that can `EXECUTE` `audit_append` (a role added later needs the same grant: see the upgrade note), never to `PUBLIC`.
+A role with nothing but `CONNECT` gets `permission denied for function`, and the app role gets `permission denied` on a direct `UPDATE`
+of the policy or an `INSERT` into the anchors. Boot reports any `PUBLIC` `EXECUTE` on them next to the audit-function posture line.
 
 ## Monitoring
 
@@ -1187,7 +1259,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the agent roster — `GET /agent-providers` and `PUT /agent-providers`: which coding agents this deployment offers, whether each is on, and (0.8) each agent's `default_provider` — the model provider a new run uses unless the person chooses another, which must be enabled for that agent and may be turned off (its runs are then refused, never moved). Since 0.8 a row carries no model credential: model access is a model provider. Both verbs, for the sibling row's reason: the block names the org's model-provider choices. A member is served a narrower document instead — the `enabled` field on `GET /setup/status`'s harness rows | ⛔ admin only |
 | the model providers — `GET /model-providers` and `PUT /model-providers` (0.8): which kinds of model credential this deployment supports, where each sends requests (gateway addresses, Bedrock region and data plane), the AWS access portal and account pin a Bedrock SSO provider signs in against, and which agents each may serve. Configuration only — no credential lives on a record. `GET` also answers `connected_people`: per provider id, how many distinct people hold a credential of their own for it (a count, never who; 0 included), which `PUT` refuses. Both verbs, for the agent roster's reason. Removing a provider (or unticking the agent it is the default for) is refused while the roster names it as a default; turning it off is not. A person is served a narrower document instead — `model_providers` on `GET /setup/status`: the providers serving the agents they may launch, each with its kind, the agents it is the default for, and the one host their own credential would be sent to (the host only, never a path, start URL or pin). Members also receive `provider_access`: one row per granted provider (state, action, deadline, and — when they have stored one — `added_at` and `last_used_at` for their own credential, never anyone else's) graded against their OWN credential, whose pin-mismatch action names the pinned account and role, as `model_access`'s already does | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
-| the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
+| the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, `GET /audit/retention`, `POST /audit/retention/drop`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
 | `GET /admin/runs/capacity` — the fleet's configured reservations (below, "Fleet capacity"): across every owner, so not a member read. It never execs into a sandbox or calls the runner | ⛔ admin or `security_admin` |
 | the `/user-types` routes — listing, defining, editing and removing the org's user types (`GET`/`POST /user-types`, `PUT`/`DELETE /user-types/{id}`). Defining a type is the same duty as authoring a profile; deciding who IS a type stays with the admin-only People mappings above. A type is refused removal (`409`) while the chart's role map or default role, or a permission, profile or drive row, still names it, or a live API token carries it, and the built-in `standard` type is never removable | ⛔ admin or `security_admin` |
 | the `/key-domains` routes — listing the declared key domains with how many live keys each holds, and setting or removing which domain a user, a group or everyone is assigned to (`GET /key-domains`, `PUT`/`DELETE /key-domains/assignments/{subject_type}/{subject}`). An assignment decides which declared domain's key wraps the subject's NEXT principal key; nothing already written moves. The domains themselves come from `WARDYN_KEY_DOMAINS_FILE`, never from the API. A domain the file does not declare is refused (`422`), as is a group write that would leave people in two domains (`409`) | ⛔ admin or `security_admin` |
@@ -3149,6 +3221,11 @@ the owner or email, only the `reason` and `target` it always had.
 | `event_stream_cap` | 0.8.2 (#1407): the caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (`maxRunEventStreams`, `internal/api/run_events.go`; target the run id). A portal's streams count against its person, and every admin-token caller is one principal. Not audited — a caller who IS authorized and hit a limit, like `run_quota` | ⛔ `422` |
 | `mask_state_unavailable` | 0.8.6 (ha-l2.0): a door that relays or persists a run's output — the recording upload (`PUT /internal/recordings/{runID}` and its parts, target `recordings.upload`), the live attach (`GET /runs/{id}/attach`, target `runs.attach`), the SSH shell (target `ssh.shell`, a channel error, not an HTTP status) and the live output read (`GET /runs/{id}/output`, target `runs.output`) — cannot prove the run's masking corpus complete on this server, so it refuses instead of passing bytes through. The run has no complete, unfenced masking manifest in Postgres (`run_mask_manifest`): it was dispatched before 0.8.6, its dispatch never finished committing it, its person is being erased, or Postgres did not answer. The exec relay (`task_mode=exec` output tail) refuses by keeping nothing. The row's `data.mask_scope` is `globals_only`. An attach, shell or upload already in flight ends at the next beat (about two seconds) when the run stops being covered, an attach with close status `1013`. Not hidden: the caller can already see the run | ⛔ `503` |
 | `audit_export_partition_filter` | 0.8.6: `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `actor_type`, `outcome` or `origin`). A partition export always covers the whole partition, so its footer digest can be checked against `audit_partition_digest`; remove the other parameters. Input shape rather than a denial, so it is not audited | ⛔ `400` |
+| `audit_retention_not_oldest` | 0.8.6: `POST /audit/retention/drop` named a partition that is not the oldest retained one. Only the oldest partition can be dropped, so a drop never removes an interior link of the chain. Target `audit.retention`, `partition` beside it | ⛔ `409` |
+| `audit_retention_not_closed` | 0.8.6: the same door, when the oldest partition can still receive rows (the high-water mark has not reached its upper bound) | ⛔ `409` |
+| `audit_retention_inside_window` | 0.8.6: the same door, when the partition ended less than the effective retention window ago, or retention is set to forever (`WARDYN_AUDIT_RETENTION_DAYS` is `0`). A decrease is not effective until 30 days after the boot that first saw it | ⛔ `409` |
+| `audit_retention_live_run` | 0.8.6: the same door, when the partition holds audit rows of a run that is still live (`PENDING`, `STARTING`, `RUNNING` or `WAITING_FOR_CONFIRMATION`). Drop it once the run has ended | ⛔ `409` |
+| `audit_retention_digest_mismatch` | 0.8.6: the same door, when the digest supplied is not the one the database computes for the partition. Export the partition again, check the archive, and submit the digest from its footer | ⛔ `409` |
 | `user_view_type_deleted` | 0.8: an admin in the user view made a request after the user type the view looks through was deleted. The request is refused — never answered as the admin, because its tier was already read as `user` — and the session's view is turned off on the cookie, so the next request is in the Admin view. The body is `The <type> user type was removed, so you're back in the Admin view…`; `POST /runs` and `POST /runs/preflight` answer `409` with `reason` `admin_view` instead. The row carries `user_view: true` and the deleted `user_type`. `GET /me` is never refused: it drops back and says so (`user_view_dropped`) | ⛔ `403` |
 | `user_view_preview` | 0.8.6, with `WARDYN_GOVERN_ADMIN_RUNS` on: an admin or security admin whose User view looks through a user type other than their own stamped type sent a request that is not a `GET`, `HEAD` or `OPTIONS` (`POST /runs`, `POST /runs/preflight`, a workspace create, any write). The view is a read-only preview. The body names the remedy: switch the view to your own type to make changes or launch. `POST /me/view`, `POST /auth/logout` and `POST /policies/grade` are still served. The row carries `user_view: true`, `viewed_user_type` and `stamped_user_type` | ⛔ `409` |
 
@@ -5696,7 +5773,11 @@ END $$;
 GRANT EXECUTE ON FUNCTION
   audit_append(uuid, timestamptz, uuid, text, text, text, text, text, text, jsonb),
   audit_ensure_partitions(integer),
-  audit_partition_digest(text) TO wardyn_app;
+  audit_partition_digest(text),
+  audit_retention_drop(text, text, text),
+  audit_retention_set_policy(integer),
+  audit_retention_partitions(text, boolean),
+  audit_retention_window() TO wardyn_app;
 
 -- 4. Every FUTURE migration creates its tables as the MIGRATOR, and a new table
 --    grants the app role nothing. Without this line the next upgrade boots an
@@ -5929,7 +6010,8 @@ the listener; an insert into a month that does not exist fails and waits in the 
   need it on the months to come.
 - **Grants.** Every role that could `INSERT` into `audit_events` before the upgrade is granted `EXECUTE` on
   `audit_append` and `audit_ensure_partitions` in the same transaction, found from the table's ACL rather than by
-  name, and only then loses `INSERT`. Roles that could `SELECT` keep it. A role you add later needs the
+  name, and only then loses `INSERT`. The later migrations of this release (`0119`, `0123`) grant their functions
+  to the roles that hold `EXECUTE` on `audit_append`. Roles that could `SELECT` keep it. A role you add later needs the
   `GRANT EXECUTE` line in the recipe above.
 - **Time.** The cost is one scan of the existing rows to prove the legacy bound, one index build on them, and
   the lock waits. Measured on Postgres 13 and 17 in a container on a shared development machine, over rows

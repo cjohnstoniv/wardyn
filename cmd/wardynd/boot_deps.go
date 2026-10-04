@@ -156,7 +156,9 @@ func verifyAuditAppendPosture(connectCtx, rootCtx context.Context, pool *pgxpool
 		return fmt.Errorf("the app role %q (the role in WARDYN_PG_DSN) cannot EXECUTE audit_append, the only function that appends to audit_events, so no "+
 			"audit row could be written and every credential mint would be refused; as the migrator/owner role run: "+
 			"GRANT EXECUTE ON FUNCTION audit_append(uuid, timestamptz, uuid, text, text, text, text, text, text, jsonb), "+
-			"audit_ensure_partitions(integer) TO %s (and ALTER DEFAULT PRIVILEGES ... GRANT EXECUTE ON FUNCTIONS TO %s "+
+			"audit_ensure_partitions(integer), audit_partition_digest(text), audit_retention_drop(text, text, text), "+
+			"audit_retention_set_policy(integer), audit_retention_partitions(text, boolean), audit_retention_window() TO %s "+
+			"(and ALTER DEFAULT PRIVILEGES ... GRANT EXECUTE ON FUNCTIONS TO %s "+
 			"so later releases' functions are callable too)", p.Role, pgx.Identifier{p.Role}.Sanitize(), pgx.Identifier{p.Role}.Sanitize())
 	}
 	if p.DirectInsert {

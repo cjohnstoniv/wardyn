@@ -533,6 +533,10 @@ const (
 	reasonAuditInvalidExportForm           = "audit_invalid_export_form"
 	reasonAuditPartitionNotFound           = "audit_partition_not_found"
 	reasonAuditPartitionOpen               = "audit_partition_open"
+	reasonAuditRetentionStoreUnavailable   = "audit_retention_store_unavailable"
+	reasonAuditRetentionReadFailed         = "audit_retention_read_failed"
+	reasonAuditRetentionBodyInvalid        = "audit_retention_body_invalid"
+	reasonAuditRetentionDropFailed         = "audit_retention_drop_failed"
 )
 
 // POST /api/v1/sources/{id}/scan and the admin bulk scan (source_scan.go).

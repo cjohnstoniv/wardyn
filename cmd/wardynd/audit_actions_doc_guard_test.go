@@ -617,6 +617,10 @@ var auditActionGrammarAllow = map[string]bool{
 	// per-subject key's destroy before the lane that first emits it met this
 	// grammar. Past tense on purpose: it records the tombstone that was written.
 	"principal_key.destroyed": true,
+	// The 0.8.6 retention drop's chained event, fixed by its design record
+	// (docs/design/0.8/0.8.6-ar.md). Past tense on purpose: it records a drop that has already
+	// happened, written inside the drop's own transaction.
+	"audit.retention.partition_dropped": true,
 }
 
 // actionSegment is one dot-separated segment of an action name.

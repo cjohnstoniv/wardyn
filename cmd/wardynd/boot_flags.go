@@ -160,6 +160,14 @@ type bootFlags struct {
 	auditSpool         *string
 	auditSource        *string
 
+	// auditRetentionDays is WARDYN_AUDIT_RETENTION_DAYS (0 = keep forever): the audit log's retention window,
+	// persisted in audit_partition_meta at boot through audit_retention_set_policy. A decrease, 0 to any
+	// finite value included, takes effect 30 days after the boot that first saw it. auditRetentionAutodrop
+	// is WARDYN_AUDIT_RETENTION_AUTODROP: the leader sweeper drops eligible oldest partitions itself,
+	// unattested. See audit_retention.go.
+	auditRetentionDays     *int
+	auditRetentionAutodrop *bool
+
 	oidcIssuer       *string
 	oidcInternalIss  *string
 	oidcClientID     *string
@@ -446,6 +454,11 @@ func parseBootFlags() *bootFlags {
 		approvalNotify:     flagEnv("approval-notify", "WARDYN_APPROVAL_NOTIFY", "", "approval notification config JSON (webhook channels); empty disables notifications"),
 		auditSource:        flagEnv("audit-source", "WARDYN_AUDIT_SOURCE", "", `optional static string stamped as an extra "source" field on every audit event a sink serializes, so one SIEM index can tell multiple wardynd instances apart. Empty (default) adds no stamp`),
 		auditSpool:         flagEnv("audit-spool", "WARDYN_AUDIT_SPOOL", "./data/audit-spool.jsonl", "local append-only JSONL fallback for audit events whose Postgres write fails; empty disables"),
+
+		// OFF by default (0 = keep forever), like recordingRetention above and for the same reason; unlike
+		// it, the audit log is only ever trimmed a whole closed partition at a time, through an attested drop.
+		auditRetentionDays:     flagIntEnv("audit-retention-days", "WARDYN_AUDIT_RETENTION_DAYS", 0, "audit retention window in days (default 0, keep forever); the oldest closed monthly partition older than it can then be dropped, attested and digest-checked. A decrease takes effect 30 days after the boot that first saw it; an increase at once"),
+		auditRetentionAutodrop: flagBool("audit-retention-autodrop", "WARDYN_AUDIT_RETENTION_AUTODROP", false, "let the leader sweeper drop eligible oldest audit partitions itself, as the system actor (default false). UNATTESTED: no operator checked an export first"),
 
 		oidcIssuer:       flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL, browser-facing, matches the id_token iss; enables human SSO when set"),
 		oidcInternalIss:  flagEnv("oidc-internal-issuer", "WARDYN_OIDC_INTERNAL_ISSUER", "", "OIDC issuer URL reachable from wardynd for server-side calls, e.g. http://dex:5556; defaults to the public issuer"),

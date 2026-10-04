@@ -806,6 +806,8 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// securityOps because it reconstructs nothing GET /runs?view=admin does not already show
 	// that tier; fleet volume stays off members. No exec and no runner call.
 	securityOps.Get("/admin/runs/capacity", s.handleRunCapacity)
+	// Retention (migration 0123): the policy and every partition's eligibility, and the attested drop.
+	s.mountAuditRetentionRoutes(securityOps)
 	// User types (migration 0071_user_types): defining a type is the same
 	// security-tier duty as authoring a governance profile; deciding who IS a
 	// type stays on the operatorOnly /access routes.

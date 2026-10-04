@@ -73,7 +73,7 @@ the list is closed, so a new verb is an edit to it that review sees.
 
 **Verbs:** `add` `admit` `alert` `allow` `apply` `approve` `attach` `authenticate` `authorize` `autostop` `block` `build` `bypass` `cancel` `capture` `close` `coalesce` `collide` `complete` `configure` `confine` `connect` `create` `decide` `delete` `deny` `detach` `disconnect` `dispatch` `drop` `ending_soon` `enrol` `erase` `exchange` `exec` `expire` `fail` `finalize` `forward` `grant` `hold` `ingest` `inject` `kill` `list` `migrate` `mint` `mount` `open` `pause` `ping` `promote` `read` `reassert` `reassign` `reclaim` `reconcile` `record` `redirect` `refresh` `refuse` `reject` `rekey` `renew` `request` `reset` `resolve` `resume` `retire` `revive` `revoke` `rewrap` `scan` `selftest` `set` `skip` `snapshot` `start` `store` `sweep` `synthesize` `takeover` `test` `transfer` `update` `upload` `veto` `write`
 
-Nine exceptions, listed in that test's `auditActionGrammarAllow`: `authz.denied`
+Ten exceptions, listed in that test's `auditActionGrammarAllow`: `authz.denied`
 keeps its past tense (see "Renamed in 0.8" below for why — the single
 heaviest-cited action in the tree and a compatibility surface OPERATIONS.md
 already commits to by name). `run.ended`, `run.ended.expired` (the lease's
@@ -94,6 +94,7 @@ tombstone that was written. `approval.notify.failed` and `approval.notify.suppre
 same way, under the names the notification design fixed. `run.output.retention.sweep` is a sibling of
 `recording.retention.sweep` that the 0.8.6 run-output design named with four
 segments, so it is allowlisted rather than renamed; its verb is the same.
+`audit.retention.partition_dropped` is the 0.8.6 retention drop's event, named by its design record before this grammar saw it; it records a drop that already happened, so it is past tense on purpose.
 
 A `rule_source` value (the two tables under the `egress.*` row) is
 `family:kebab` — lowercase kebab-case segments joined by colons, never a dot;
@@ -551,6 +552,8 @@ is `types.ActorSystem` and `Actor` is a fixed component name
 | Action | When | Data fields | Where | Status | Consumers |
 |---|---|---|---|---|---|
 | `recording.retention.sweep` | The recordings age-based retention sweep runs (the retention knob `docs/ENV.md#wardynd-control-plane` names — see `docs/OPERATIONS.md`'s audit-retention paragraph for the asymmetry with the audit log itself, which has no such knob) | — | `cmd/wardynd/sweepers.go#recordingSweepTick` | internal | — |
+| `audit.retention.partition_dropped` | An audit partition was dropped past the retention window (0.8.6, `audit_retention_drop`, migration `0123_audit_retention`). Written by the database function inside the drop's own transaction, as a CHAINED row before the partition leaves, so a drop has this row and an `audit_chain_anchors` row or neither. Actor `human` (the operator who dropped it) with `attested: true`, or `system` (`wardynd`) with `attested: false` for the sweeper's autodrop (`WARDYN_AUDIT_RETENTION_AUTODROP`). `Target` is the partition name. Written only on success; a refused drop is an `authz.denied` row with one of the `audit_retention_*` reasons | `partition`, `row_count`, `seq_lo`, `seq_hi`, `recorded_lo`, `recorded_hi`, `digest`, `retention_days`, `attested` | `internal/db/migrations/0123_audit_retention.sql` | **stable** | — |
+| `audit.retention.set` | The audit retention policy changed (0.8.6, `audit_retention_set_policy`, called at every boot with `WARDYN_AUDIT_RETENTION_DAYS`). Actor `system` (`wardynd`); `Target` is `audit_partition_meta`. One row per change and none for a boot that restates the policy in force: `outcome` is `applied` (an increase, or a pending decrease whose 30 days have passed), `pending` (a decrease, effective 30 days after the boot that first saw it, `pending_effective_at`) or `cancelled` (the current value restated while a decrease was pending) | `outcome`, `requested_days`, `from_days`, `retention_days`, `pending_days`, `pending_effective_at` | `internal/db/migrations/0123_audit_retention.sql` | internal | — |
 | `k8s.netpol.fail` | Boot-time NetworkPolicy canary verdict (`k8sNetpolVerdict`, also published on the anonymous `/healthz`'s `network_policy` field) grades this k8s substrate `unenforced` or `acknowledged` — every sandbox on it runs without a proven default-deny NetworkPolicy. Nil run id (deployment-wide, not tied to a run); silent on `enforced` and on every non-k8s driver | `verdict`, `driver` | `internal/api/reconcile.go#Server.auditK8sNetpolIfUnenforced` (`auditK8sNetpolIfUnenforced`) | internal | — |
 
 ## Notes on completeness

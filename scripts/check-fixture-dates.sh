@@ -63,6 +63,11 @@ declare -A ALLOWLIST=(
   ["cmd/wardyn/siteconfig_test.go"]=4
   ["cmd/wardynd/login_stamp_test.go"]=1
   ["cmd/wardynd/rekey_test.go"]=1
+  # ar-l1.2's partition tests: the 2200-01-01 sentinel is a far-future bound passed through as data,
+  # never compared against the clock.
+  ["internal/api/audit_partition_export_test.go"]=1
+  ["internal/db/audit_partition_digest_pg_test.go"]=1
+  ["internal/store/auditpartition_pg_test.go"]=1
   ["internal/api/access_test.go"]=1
   ["internal/api/ado_entra_test.go"]=1
   ["internal/api/auth_failed_coalesce_test.go"]=1
