@@ -111,6 +111,8 @@ export interface UseAttachSessionArgs {
   setCopyOffer: React.Dispatch<React.SetStateAction<CopyOffer | null>>;
   setCopyNotice: React.Dispatch<React.SetStateAction<string | null>>;
   copyGateRef: React.MutableRefObject<CopyGate | null>;
+  /** Set while an offer card is up: Cmd/Ctrl+C in the terminal copies the offer. */
+  offerCopyRef: React.MutableRefObject<(() => void) | null>;
   /** A clicked link that needs the confirm dialog (attach-terminal-links.ts). */
   setLinkTarget: React.Dispatch<React.SetStateAction<URL | null>>;
   /** The renderer (attach-terminal-renderer.ts): its live handle, the stored choice, and what is in use. */
@@ -149,6 +151,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     setCopyOffer,
     setCopyNotice,
     copyGateRef,
+    offerCopyRef,
     setLinkTarget,
     rendererRef,
     rendererPrefRef,
@@ -588,6 +591,20 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           navigator.clipboard?.readText?.().then(sendPaste).catch(() => {});
           return false;
         default:
+          // A pending copy offer owns Cmd/Ctrl+C (xterm keeps focus, so typing
+          // is never swallowed); with none pending, Ctrl+C is the interrupt.
+          if (
+            offerCopyRef.current &&
+            (e.ctrlKey || e.metaKey) &&
+            !e.altKey &&
+            !e.shiftKey &&
+            e.key.toLowerCase() === "c" &&
+            !term.hasSelection()
+          ) {
+            e.preventDefault();
+            offerCopyRef.current();
+            return false;
+          }
           return true;
       }
     });

@@ -203,7 +203,8 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // The clipboard gate's verified copy offer and its quiet "blocked" notice.
   const [copyOffer, setCopyOffer] = React.useState<CopyOffer | null>(null);
   const [copyNotice, setCopyNotice] = React.useState<string | null>(null);
-  // The offer card takes focus; when it goes, the terminal gets it back.
+  // The card's Copy, for the terminal's Cmd/Ctrl+C. When the card goes, the terminal gets focus back.
+  const offerCopyRef = React.useRef<(() => void) | null>(null);
   const hadOffer = React.useRef(false);
   React.useEffect(() => {
     if (hadOffer.current && !copyOffer) termRef.current?.focus();
@@ -368,6 +369,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     setCopyOffer,
     setCopyNotice,
     copyGateRef,
+    offerCopyRef,
     setLinkTarget,
     rendererRef,
     rendererPrefRef,
@@ -588,7 +590,12 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           />
         </div>
         {copyOffer ? (
-          <CopyOfferToast key={copyOffer.id} offer={copyOffer} onDone={() => copyGateRef.current?.dismiss()} />
+          <CopyOfferToast
+            key={copyOffer.id}
+            offer={copyOffer}
+            onDone={() => copyGateRef.current?.dismiss()}
+            copyRef={offerCopyRef}
+          />
         ) : null}
         {readOnly && (
           // pointer-events-none: this is a label, not a shield. The input it
