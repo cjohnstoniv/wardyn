@@ -47,6 +47,10 @@ type KEK interface {
 // transient: an unreachable service is secretstore.ErrUnavailable instead.
 var ErrService = errors.New("key service error")
 
+// ErrAccess is a key service refusing this process (401/403): definitive for rule 21, but about
+// the caller, not the wrap.
+var ErrAccess = errors.New("key service refuses this process's access")
+
 // Versioned is a KEK whose key has versions (Vault Transit, Key Vault): each
 // wrap names the version it was made under, and `wardynd -rewrap` moves every
 // row naming any other version onto the latest, so the others can be retired.

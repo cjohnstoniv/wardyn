@@ -350,7 +350,7 @@ func (s *Store) open(ctx context.Context, r row, keys map[keyID][]byte) (*ref, e
 		switch {
 		case errors.Is(err, subjectkey.ErrDataLoss):
 			return nil, s.unopenable(ctx, r, "the owner's key is destroyed")
-		case errors.Is(err, secretstore.ErrUnavailable) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+		case errors.Is(err, secretstore.ErrUnavailable) || errors.Is(err, kek.ErrAccess) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 			return nil, fmt.Errorf("maskstore: the owner's key: %w", err)
 		case err != nil:
 			// A permanent failure (the key does not unwrap: its version retired, or the row

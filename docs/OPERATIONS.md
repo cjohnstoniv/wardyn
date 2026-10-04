@@ -7415,6 +7415,10 @@ therefore the per-replica cap times the replica count (cap × N):
   retired KEK version and run `-rewrap-principal-keys`, or to erase that person's
   credentials. A transient failure (Postgres or the KEK service unreachable) is
   different: the read fails and retries, and consumers fail closed until it succeeds.
+  So is a key this replica cannot reach (its own `WARDYN_KEY_DOMAINS_FILE` or KEK
+  configuration lags, or the key service refuses its access with a 401 or 403): that
+  replica fails its read instead of fencing, and heals once the configuration or the
+  access is fixed.
 - **A compromised wardynd process still sees every value it masks.** Shredding a
   person's copies is complete only after backups expire or the wrapping key version
   is retired.

@@ -272,6 +272,23 @@ func TestW4CovApplyAbortsOnATransientKeyFailureAndAppliesNothingAfter(t *testing
 	}
 }
 
+// A key service refusing this process (401/403) is about the caller, not the row: the read aborts
+// like a transient failure instead of fencing every run of the owner and tombstoning the rows.
+func TestW4CovApplyAbortsWhenTheKeyServiceRefusesThisProcess(t *testing.T) {
+	f := w4CovNewFixture(t)
+	injected := fmt.Errorf("transit KEK: %w: %w", kek.ErrService, kek.ErrAccess)
+	f.keys.errs[w4CovOwner] = injected
+	live := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
+
+	err := f.s.apply(context.Background(), []row{live}, true)
+	if !errors.Is(err, injected) {
+		t.Fatalf("apply = %v, want the injected key error wrapped", err)
+	}
+	if len(f.snapshot()) != 0 || f.ref(w4CovRowA) != nil {
+		t.Error("a refused read applied rows")
+	}
+}
+
 // A key that does not unwrap never heals by retrying: the row is handled like a destroyed key
 // (here retired, so no database is needed) and the read goes on to the rows after it.
 func TestW4CovApplySkipsARowWhoseKeyDoesNotUnwrap(t *testing.T) {

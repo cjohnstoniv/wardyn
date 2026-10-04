@@ -23,6 +23,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 )
 
 // Auth modes (WARDYN_AZURE_AUTH).
@@ -103,11 +104,14 @@ func (e *kvError) Error() string {
 // Unwrap makes a transient failure match secretstore.ErrUnavailable. 401 and
 // 403 are definitive on purpose: revoking Wardyn's role at the vault must
 // bite at once (design rule 21).
-func (e *kvError) Unwrap() error {
-	if transient(e.status) {
-		return secretstore.ErrUnavailable
+func (e *kvError) Unwrap() []error {
+	switch {
+	case transient(e.status):
+		return []error{secretstore.ErrUnavailable}
+	case e.status == http.StatusUnauthorized || e.status == http.StatusForbidden:
+		return []error{kek.ErrAccess, e.cause}
 	}
-	return e.cause
+	return []error{e.cause}
 }
 
 func transient(status int) bool {

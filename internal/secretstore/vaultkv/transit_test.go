@@ -104,14 +104,14 @@ func TestTransit_Classification(t *testing.T) {
 	f.mu.Lock()
 	f.revoked = true
 	f.mu.Unlock()
-	if _, err := tr.Unwrap(ctx, w, kek.Bind("", "k")); err == nil || errors.Is(err, secretstore.ErrUnavailable) || !strings.Contains(err.Error(), "403") {
-		t.Fatalf("Unwrap with the policy revoked = %v; want a definitive 403", err)
+	if _, err := tr.Unwrap(ctx, w, kek.Bind("", "k")); err == nil || errors.Is(err, secretstore.ErrUnavailable) || !strings.Contains(err.Error(), "403") || !errors.Is(err, kek.ErrAccess) {
+		t.Fatalf("Unwrap with the policy revoked = %v; want a definitive 403 that is kek.ErrAccess", err)
 	}
 	f.mu.Lock()
 	f.revoked = false
 	f.transit.minDecrypt = 2
 	f.mu.Unlock()
-	if _, err := tr.Unwrap(ctx, w, kek.Bind("", "k")); err == nil || errors.Is(err, secretstore.ErrUnavailable) || !strings.Contains(err.Error(), "too old") {
+	if _, err := tr.Unwrap(ctx, w, kek.Bind("", "k")); err == nil || errors.Is(err, secretstore.ErrUnavailable) || !strings.Contains(err.Error(), "too old") || errors.Is(err, kek.ErrAccess) {
 		t.Fatalf("Unwrap of a retired version = %v; want a definitive refusal", err)
 	}
 	// A row that holds no Transit ciphertext never reaches Vault.
