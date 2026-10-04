@@ -26,3 +26,4 @@ export * from "./types/access";
 export * from "./types/user-types";
 export * from "./types/governance-change";
 export * from "./types/scim";
+export * from "./types/people";

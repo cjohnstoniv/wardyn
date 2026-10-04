@@ -9,8 +9,9 @@
 // lists (deactivated people, deprovisioning steps still failing, drives a purge listed). Not set up
 // (D5): the card stays, saying what the gap is and where the fix is, so the leaver gap is never hidden.
 //
-// Mounted from AdminSettingsScreen, which only a super admin reaches, so the card carries no operator
-// check of its own (the same rule as AdminSshKeysCard). Copy is lib/scim-copy.ts, byte for byte M5's.
+// Mounted from AdminSettingsScreen (super admin only) and from the People page (both admin tiers, M5 D1
+// as amended). The one read is securityOps, so the card carries no operator check of its own. Copy is
+// lib/scim-copy.ts, byte for byte M5's.
 import * as React from "react";
 import { scim as scimApi } from "../../../lib/api/scim";
 import { appURL } from "../../../lib/base-path";

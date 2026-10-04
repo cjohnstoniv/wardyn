@@ -119,6 +119,13 @@ const CredentialsScreen = React.lazy(() =>
     default: m.CredentialsScreen,
   })),
 );
+// People (0.8.6 ppl-p2, mock M12) — everyone with access and every per-person action. securityOps
+// server-side, so both admin tiers reach it; no member route.
+const PeopleScreen = React.lazy(() =>
+  import("./components/screens/people/people-screen").then((m) => ({
+    default: m.PeopleScreen,
+  })),
+);
 const SecretsScreen = React.lazy(() =>
   import("./components/screens/secrets").then((m) => ({
     default: m.SecretsScreen,
@@ -696,6 +703,7 @@ export default function App() {
             <Route path="/admin/runs/new" element={<Navigate to="/admin/runs" replace />} />
             <Route path="/admin/runs/:id" element={suspend(<RunDetailScreen />)} />
             <Route path="/admin/approvals" element={suspend(<ApprovalsScreen onChanged={refreshBadges} />)} />
+            <Route path="/admin/people" element={suspend(<PeopleScreen />)} />
             <Route path="/admin/workspaces" element={suspend(<WorkspacesScreen />)} />
             <Route path="/admin/workspaces/:id" element={suspend(<WorkspaceDetailScreen />)} />
             <Route path="/admin/policies" element={suspend(<PoliciesScreen />)} />

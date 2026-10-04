@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -427,6 +427,7 @@ describe("MobileNav (below-md nav fallback)", () => {
     for (const label of [
       "Runs",
       "Approvals",
+      "People",
       "Workspaces",
       "Policies",
       "Governance",
@@ -512,6 +513,7 @@ describe("SidebarNav (member role)", () => {
     const labels = [
       "Runs",
       "Approvals",
+      "People",
       "Workspaces",
       "Policies",
       "Governance",
@@ -622,7 +624,7 @@ describe("SidebarNav — per view (M-2)", () => {
     const { sheet, labels } = await open("admin");
     expect(within(sheet).getByText("Admin view", { selector: ".label-eyebrow" })).toBeInTheDocument();
     expect(labels).toEqual([
-      "Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions", "Credentials", "User types",
+      "Runs", "Approvals", "People", "Workspaces", "Policies", "Governance", "Permissions", "Credentials", "User types",
       "Secrets", "Audit", "Recordings", "Setup", "Settings",
     ]);
     expect(within(sheet).getByRole("link", { name: /^Runs/ })).toHaveAttribute("href", "/admin/runs");
@@ -630,7 +632,21 @@ describe("SidebarNav — per view (M-2)", () => {
 
   it("a security admin's Admin view: Credentials, User types and Drives join; Secrets, Recordings, Setup and Settings do not", async () => {
     const { labels } = await open("security_admin");
-    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions", "Credentials", "User types", "Drives", "Audit"]);
+    expect(labels).toEqual(["Runs", "Approvals", "People", "Workspaces", "Policies", "Governance", "Permissions", "Credentials", "User types", "Drives", "Audit"]);
+  });
+
+  it("People (ppl-p2): right after Approvals for the super admin and a security admin; not for a member or an admin in the User view", async () => {
+    for (const role of ["admin", "security_admin"] as const) {
+      const { sheet, labels } = await open(role);
+      expect(labels.slice(0, 3)).toEqual(["Runs", "Approvals", "People"]);
+      expect(within(sheet).getByRole("link", { name: /^People/ })).toHaveAttribute("href", "/admin/people");
+      cleanup();
+    }
+    const member = await open("user");
+    expect(within(member.sheet).queryByRole("link", { name: /^People/ })).toBeNull();
+    cleanup();
+    const userView = await open("admin", true);
+    expect(within(userView.sheet).queryByRole("link", { name: /^People/ })).toBeNull();
   });
 
   it("a user: no eyebrow, three items, then Getting started and Your account", async () => {

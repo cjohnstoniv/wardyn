@@ -123,6 +123,8 @@ export { expect };
 export type NavLabel =
   | "Runs"
   | "Approvals"
+  // 0.8.6 (ppl-p2) — right after Approvals, both admin tiers.
+  | "People"
   | "Workspaces"
   | "Policies"
   // 0.7 — sits between Policies and Permissions (app-shell.tsx's NAV_ITEMS), so

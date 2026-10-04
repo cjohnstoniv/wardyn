@@ -455,6 +455,20 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       expect(btn.querySelector("svg.lucide-check")).toBeInTheDocument();
     });
 
+    // 0.8.6 ppl-p2 (mock M12): both modes point at the admin People page.
+    it("links to the admin People page in single-user mode", async () => {
+      renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=people");
+      const link = await screen.findByRole("link", { name: "Manage people any time under People in the admin view." });
+      expect(link).toHaveAttribute("href", "/admin/people");
+    });
+
+    it("links to the admin People page in multi-user mode, beside the access panel", async () => {
+      getSetupStatusMock.mockResolvedValue(baseStatus({ auth: { mode: "sso", local_loopback: false } }));
+      renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=people");
+      const link = await screen.findByRole("link", { name: "Manage people any time under People in the admin view." });
+      expect(link).toHaveAttribute("href", "/admin/people");
+    });
+
     // Negative control: sso reads Multi-user, not Single-user, on the same step.
     it("reads Multi-user when auth.mode is sso", async () => {
       getSetupStatusMock.mockResolvedValue(baseStatus({ auth: { mode: "sso", local_loopback: false } }));

@@ -17,6 +17,7 @@ import {
   AlertTriangle,
   CircleUser,
   Compass,
+  Contact,
   Fingerprint,
   FolderOpen,
   HardDrive,
@@ -71,6 +72,7 @@ import {
   type ViewUserType,
 } from "../wardyn/view-switch";
 import { CONSOLE_VIEW, NAV } from "../wardyn/copy/console-view";
+import { PEOPLE_PAGE } from "../wardyn/copy/people";
 import { NAV as SETTINGS_NAV } from "../../lib/unsaved-copy";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
 // importing it eagerly pulled all of that into the entry chunk even though the
@@ -364,6 +366,9 @@ interface NavItem {
 const ADMIN_NAV: NavItem[] = [
   { to: "/admin/runs", label: "Runs", icon: Activity, badge: "attention" },
   { to: "/admin/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
+  // 0.8.6 (ppl-p2, M12 D1): right after Approvals, because leaver work is frequent and urgent. securityOps
+  // server-side, so both admin tiers see it.
+  { to: "/admin/people", label: PEOPLE_PAGE.NAV, icon: Contact },
   { to: "/admin/workspaces", label: "Workspaces", icon: FolderOpen },
   { to: "/admin/policies", label: "Policies", icon: UserCog },
   // GOVERNANCE_NAV_TITLE is one string for the nav and the screen's heading.
