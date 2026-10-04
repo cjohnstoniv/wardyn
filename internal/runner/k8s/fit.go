@@ -31,8 +31,8 @@ type podDemand struct {
 	requests, limits corev1.ResourceList
 	priorityClass    string
 	// terminating is "the pod carries activeDeadlineSeconds", which selects the Terminating and
-	// NotTerminating quota scopes. ponytail: run pods set no deadline yet, so it is false for
-	// both; the change that sets one must set it here too.
+	// NotTerminating quota scopes: both run pods carry one exactly when WARDYN_RUN_MAX_AGE is set
+	// (activeDeadline, sandbox.go).
 	terminating bool
 }
 
@@ -40,11 +40,11 @@ type podDemand struct {
 // requests and limits, the ratio applied) and the proxy pod. Counting the agent alone would
 // under-count every run by the proxy's envelope.
 func (d *Driver) runPods(res runner.Resources) []podDemand {
-	agent, proxy := resourceRequirements(res), proxyResources()
-	pc := d.placement.PriorityClassName
+	agent, proxy := resourceRequirements(res), proxyResources(false)
+	pc, term := d.placement.PriorityClassName, d.activeDeadline() != nil
 	return []podDemand{
-		{requests: agent.Requests, limits: agent.Limits, priorityClass: pc},
-		{requests: proxy.Requests, limits: proxy.Limits, priorityClass: pc},
+		{requests: agent.Requests, limits: agent.Limits, priorityClass: pc, terminating: term},
+		{requests: proxy.Requests, limits: proxy.Limits, priorityClass: pc, terminating: term},
 	}
 }
 
