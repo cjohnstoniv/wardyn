@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import { HttpError } from "../../../lib/api/core";
 import type { RunOutput } from "../../../lib/types";
+import { aheadByHours } from "../../../lib/test-clock";
 import { RUN_COCKPIT, RUN_OUTPUT } from "../../wardyn/copy";
 import { OutputTab } from "./output-tab";
 
@@ -145,7 +146,7 @@ describe("OutputTab — refusals", () => {
 
   it("not kept: a long-ended run says nothing was kept", async () => {
     refuse("run_output_not_kept");
-    await mount({ endedAt: "2020-01-01T00:00:00Z" });
+    await mount({ endedAt: aheadByHours(-24 * 30) });
     expect(screen.getByText(RUN_OUTPUT.notKeptTitle)).toBeInTheDocument();
     expect(screen.getByText(RUN_OUTPUT.notKeptDesc)).toBeInTheDocument();
   });

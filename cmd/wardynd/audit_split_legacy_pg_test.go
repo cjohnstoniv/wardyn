@@ -93,7 +93,9 @@ func TestAuditSplitLegacy_SplitsAConvertedChainAndNamesARefusalWhenThereIsNothin
 		name := filepath.Base(f)
 		if !converted && name >= "0111_audit_partitioned.sql" {
 			// The 0.8.5 trigger is in place: three rows in two months, the third a replay from the first.
-			for _, tm := range []string{"2025-01-05T12:00:00Z", "2025-02-03T12:00:00Z", "2025-01-20T12:00:00Z"} {
+			ago := time.Now().UTC().AddDate(0, -20, 0)
+			month := time.Date(ago.Year(), ago.Month(), 1, 12, 0, 0, 0, time.UTC)
+			for _, tm := range []time.Time{month.AddDate(0, 0, 4), month.AddDate(0, 1, 2), month.AddDate(0, 0, 19)} {
 				if _, err := seed.Exec(ctx, `INSERT INTO audit_events (id, "time", actor_type, actor, action, outcome)
 					VALUES (gen_random_uuid(), $1, 'system', 'split-probe', 'split.probe', 'success')`, tm); err != nil {
 					t.Fatalf("seed: %v", err)

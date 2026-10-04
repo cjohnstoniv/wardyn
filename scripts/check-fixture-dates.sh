@@ -119,6 +119,14 @@ declare -A ALLOWLIST=(
   # change's `at` are display data rendered into the tab (S-21 prints the
   # restart date); nothing compares them against the clock.
   ["ui/src/app/components/screens/run-detail/policy-tab.test.tsx"]=3
+  # 0.8.6 W4: a run output's captured_at is printed as a clock time ("Captured
+  # 14:02") or decoded and passed through (the CLI's --json), and a key-domain
+  # assignment's set_at is passed through and never rendered; nothing compares
+  # either against the clock.
+  ["cmd/wardyn/run_output_test.go"]=1
+  ["ui/e2e/run-output.spec.ts"]=1
+  ["ui/src/app/components/screens/run-detail/output-tab.test.tsx"]=1
+  ["ui/src/app/components/screens/credentials-key-domains.test.tsx"]=2
   # #541 fix review: connectionRowCopy's C5 (expiring) test pins a LITERAL
   # expected string for absoluteTime's clock-time rendering, deliberately not
   # a recomputation through absoluteTime itself (that would let the
