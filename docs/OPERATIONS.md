@@ -7253,11 +7253,17 @@ state.
   generation cursor (`mask_gen`, taken in the registering transaction, so commit
   order is generation order and a reader has read every generation below the one
   it holds); a consumer about to mask a chunk waits for a read that began after
-  the chunk arrived, at most one read per 50 ms per replica, and `NOTIFY` on
+  the chunk arrived, at most one read per 50 ms per replica. A live session's
+  recording (web terminal and SSH shell) does not hold the terminal to that
+  rate: the relay hands its output to the recording's masker without waiting,
+  and everything that arrived during one read is masked together after the next,
+  so the terminal runs at bandwidth and the recording lags it by about two reads.
+  Up to 512 KiB per session waits for the masker; past that the relay stops
+  reading the sandbox until it drains. `NOTIFY` on
   `wardyn_mask` is only a hint (each replica holds one connection of its own, outside
   `pool_max_conns`, listening for it), so a missed notification costs nothing. With
-  Postgres unreachable a live chunk is replaced by `<secret-hidden>`, a recording
-  upload answers `503` and a new attach is refused. An eviction (a deleted
+  Postgres unreachable a live chunk (for a recording, the batch) is replaced by
+  `<secret-hidden>`, a recording upload answers `503` and a new attach is refused. An eviction (a deleted
   credential, a value retired past the grace, a run's purge, an erasure) is a
   tombstone whose ciphertext is gone in the same statement; tombstones are deleted
   an hour later, and a replica away longer reloads the table. The elected sweeper

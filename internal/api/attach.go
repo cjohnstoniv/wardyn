@@ -501,8 +501,10 @@ func runIsUnrecordable(run types.AgentRun) bool {
 // returns (tee, finish):
 //
 //   - tee is the io.Writer the attach pump feeds PTY OUTPUT into. It is the
-//     front of: liveMaskWriter (re-snapshotting secret masking with a retained
-//     cross-write tail) -> CastWriter (asciicast v2) -> an in-memory buffer. When
+//     front of: maskPipe (which batches the output so the pump never waits on
+//     the masker's registry read) -> liveMaskWriter (re-snapshotting secret
+//     masking with a retained cross-write tail) -> CastWriter (asciicast v2) ->
+//     an in-memory buffer. When
 //     no RecordingStore is configured tee is nil and finish is a no-op, so attach
 //     works unchanged in headless/no-store mode.
 //   - finish flushes the masker tail and persists the buffered asciicast to the
@@ -581,8 +583,11 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 	// per-run secret set is tiny so per-write masking is cheap. A nil registry /
 	// empty snapshot is a pass-through (the asciicast is still well-formed).
 	mw := &liveMaskWriter{reg: s.cfg.MaskRegistry, runID: runID, dst: cast, guard: s.maskGuard(runID)}
+	tee := newMaskPipe(mw)
 
 	finish := func(ctx context.Context, principalType types.ActorType, principal string) {
+		// What the pump teed before it ended is masked into the cast first.
+		tee.flush()
 		// Take the masker lock across (a) flushing the retained tail
 		// into the cast and (b) reading the recording buffer, so a secret sitting in
 		// the tail at session end is still masked (not dropped or leaked) and the
@@ -620,7 +625,7 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 			key, outcome, mustJSON(data)))
 	}
 
-	return mw, finish
+	return tee, finish
 }
 
 // liveMaskWriter masks PTY output before it lands in the interactive-session
