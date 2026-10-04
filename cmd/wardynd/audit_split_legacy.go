@@ -22,7 +22,7 @@ import (
 //
 // It needs the same quiet database -migrate-only does and takes the same two guards before its first
 // statement: db.SingleInstanceLockKey, held on the one connection the split runs on, and no other client
-// backend on the database (the lock alone cannot show a replica started with -allow-multi-instance).
+// backend on the database (the lock alone cannot show a replica started with WARDYN_HA).
 // It connects with WARDYN_PG_MIGRATE_DSN when set, else WARDYN_PG_DSN, and never falls back from one to
 // the other: the app role has no INSERT on the anchors and cannot DETACH or ATTACH a partition, so the
 // split refuses (exit 3) on any role that does not own the audit tables. The whole split is one

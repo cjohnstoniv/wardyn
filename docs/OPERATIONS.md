@@ -996,7 +996,7 @@ wardyn audit retention                                              # the legacy
 
 It refuses, exiting `3` and naming the reason, and changes nothing, in these cases: another session holds the single-instance
 lock (it names the holder); any other client is connected to the database, lock or no lock (a replica started with
-`-allow-multi-instance` never takes the lock); the connected role does not own the audit tables (`audit_split_not_migrator`:
+`WARDYN_HA` never takes the lock); the connected role does not own the audit tables (`audit_split_not_migrator`:
 the app role cannot attach a partition or write an anchor, and the tool never falls back to another connection); the log is
 not partitioned yet (`audit_split_not_partitioned`: run `-migrate-only` first); there is no legacy partition left
 (`audit_split_no_legacy_partition`: it was already split or dropped) or it is empty; the chain does not verify before the
