@@ -373,9 +373,13 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	}
 	// Door 5 of five (mask_manifest.go): the tail in this process was masked
 	// against a registry this server must be able to prove whole. It guards the
-	// live read: a run still running, or a tail this process holds. A terminal
-	// run with neither has only a stored row or nothing, and answers below.
-	if (!run.State.IsTerminal() || s.tailFor(id) != nil) && s.refuseUncovered(w, r, id, "runs.output") {
+	// live read: a run still running, or a tail this process holds that is not
+	// yet sealed. A sealed tail was masked at write time and cannot gain bytes,
+	// so it is served as a stored row is, after the sweeper has purged the
+	// run's manifest (a terminal run with persistence off, for the TTL). A
+	// terminal run with neither has only a stored row or nothing, and answers
+	// below.
+	if (!run.State.IsTerminal() || s.tailUnsealed(id)) && s.refuseUncovered(w, r, id, "runs.output") {
 		return
 	}
 	v, kept := s.readExecOutput(id, limit, run.State.IsTerminal())
@@ -408,6 +412,18 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept, "no output is kept for this run")
 	}
+}
+
+// tailUnsealed reports whether this process holds runID's tail and it is still
+// open to writes: the finisher has not sealed it.
+func (s *Server) tailUnsealed(runID uuid.UUID) bool {
+	e := s.tailFor(runID)
+	if e == nil {
+		return false
+	}
+	e.fmu.Lock()
+	defer e.fmu.Unlock()
+	return !e.finished
 }
 
 // readStoredRunOutput reads runID's row, checking its erasure tombstone in the
