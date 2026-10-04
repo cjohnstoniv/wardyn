@@ -1132,12 +1132,16 @@ lose access now, do not wait for it:
   at once; the purge delay does not apply to `DELETE`. HTTPS only, per-replica rate limiting, an audit row per
   write and rotation without downtime are the mitigations. Rate limits are per replica, so an HA install's
   effective limit is the per-replica limit times the replica count.
-- **Email recycling.** Email aliases widen the session cutoff, so an address reused by a new holder can have that
-  holder's sessions, and API tokens issued before the suspension, cut by the old holder's suspension. A cutoff only
-  forces a new sign-in; deactivation never follows an email. Under an email, a suspension revokes API tokens and
-  deletes SSH keys only where the owning principal is one of the leaver's own forms, never another principal's
-  that merely carries the same address, and a purge keeps email-keyed grants and assignments while another
-  principal holds the address.
+- **Email recycling.** For a person a sign-in has bound, an email alias widens the session cutoff only while no
+  other principal holds that address (another active identity, or an API token or person row under a different
+  principal), the same rule a purge uses for grants. While another principal holds it, a suspension and a SCIM
+  group removal write no cutoff or session cut under the address: the person's own credentials are reached through
+  their subject and object-id forms and the identity deactivation, and the other principal's sessions, API tokens
+  and SSH keys keep working. Under an email, a suspension revokes API tokens and deletes SSH keys, and a group
+  removal revokes API tokens, only where the owning principal is one of the leaver's own forms, never another
+  principal's that merely carries the same address. Deactivation never follows an email. A person no sign-in has
+  bound is known only by their emails, so for them every alias is cut and every principal an alias resolves to is
+  swept as theirs.
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
   again.
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other

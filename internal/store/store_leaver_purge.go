@@ -108,16 +108,7 @@ func (s PG) PendingLeavers(ctx context.Context, idleFor time.Duration, limit int
 // neither deactivated nor purged, or an API token or people row under a principal that is not in
 // principals (or the address itself, a form of the leaver). Rows kept for that reason are counted in kept.
 func (s PG) DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals, emails []string) (grants, assignments, kept int64, err error) {
-	lower := func(in []string) []string {
-		out := make([]string, 0, len(in))
-		for _, v := range in {
-			if v = strings.ToLower(strings.TrimSpace(v)); v != "" {
-				out = append(out, v)
-			}
-		}
-		return out
-	}
-	own, mails := lower(principals), lower(emails)
+	own, mails := lowerForms(principals), lowerForms(emails)
 	if len(own)+len(mails) == 0 {
 		return 0, 0, 0, nil
 	}
@@ -126,20 +117,7 @@ func (s PG) DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals,
 		return 0, 0, 0, fmt.Errorf("store: delete user subject rows: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	held, err := collect(ctx, tx, "list", "held emails", `
-		SELECT e FROM unnest($2::text[]) AS e
-		 WHERE EXISTS (SELECT 1 FROM principal_identities i
-		                WHERE i.id <> $1 AND i.deactivated_at IS NULL AND i.purged_at IS NULL
-		                  AND (i.email_lower = e OR lower(i.scim_user_name) = e OR EXISTS (
-		                        SELECT 1 FROM principal_identity_aliases a WHERE a.identity_id = i.id AND a.value_lower = e)))
-		    OR EXISTS (SELECT 1 FROM api_tokens t WHERE lower(t.email) = e AND t.principal <> ''
-		                  AND lower(t.principal) <> e AND lower(t.principal) <> ALL($3::text[]))
-		    OR EXISTS (SELECT 1 FROM people p WHERE lower(p.email) = e AND lower(p.principal) <> e
-		                  AND lower(p.principal) <> ALL($3::text[]))`,
-		[]any{id, mails, own}, func(r pgx.Row) (string, error) {
-			var v string
-			return v, r.Scan(&v)
-		})
+	held, err := heldEmails(ctx, tx, id, own, mails)
 	if err != nil {
 		return 0, 0, 0, err
 	}
@@ -200,4 +178,38 @@ func (s PG) ListDeprovisionFailures(ctx context.Context, limit int) ([]Deprovisi
 		var f DeprovisionFailure
 		return f, r.Scan(&f.IdentityID, &f.Kind, &f.Step, &f.LastError)
 	})
+}
+
+// HeldEmails is the emails another principal holds, by DeleteUserSubjectRows' rule: another identity than
+// id that is neither deactivated nor purged, or an API token or people row under a principal that is
+// neither one of principals nor the address itself. Matched case-insensitively; the answer is lower-cased.
+func (s PG) HeldEmails(ctx context.Context, id uuid.UUID, principals, emails []string) ([]string, error) {
+	return heldEmails(ctx, s.Pool, id, lowerForms(principals), lowerForms(emails))
+}
+
+func heldEmails(ctx context.Context, q Querier, id uuid.UUID, own, mails []string) ([]string, error) {
+	return collect(ctx, q, "list", "held emails", `
+		SELECT e FROM unnest($2::text[]) AS e
+		 WHERE EXISTS (SELECT 1 FROM principal_identities i
+		                WHERE i.id <> $1 AND i.deactivated_at IS NULL AND i.purged_at IS NULL
+		                  AND (i.email_lower = e OR lower(i.scim_user_name) = e OR EXISTS (
+		                        SELECT 1 FROM principal_identity_aliases a WHERE a.identity_id = i.id AND a.value_lower = e)))
+		    OR EXISTS (SELECT 1 FROM api_tokens t WHERE lower(t.email) = e AND t.principal <> ''
+		                  AND lower(t.principal) <> e AND lower(t.principal) <> ALL($3::text[]))
+		    OR EXISTS (SELECT 1 FROM people p WHERE lower(p.email) = e AND lower(p.principal) <> e
+		                  AND lower(p.principal) <> ALL($3::text[]))`,
+		[]any{id, mails, own}, func(r pgx.Row) (string, error) {
+			var v string
+			return v, r.Scan(&v)
+		})
+}
+
+func lowerForms(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if v = strings.ToLower(strings.TrimSpace(v)); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }

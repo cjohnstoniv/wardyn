@@ -657,6 +657,11 @@ func (s *scimCovStore) DeleteUserSubjectRows(_ context.Context, _ uuid.UUID, pri
 	return s.grantsDeleted, s.assignDeleted, 0, nil
 }
 
+// HeldEmails: no other principal holds an address in this fake.
+func (s *scimCovStore) HeldEmails(context.Context, uuid.UUID, []string, []string) ([]string, error) {
+	return nil, nil
+}
+
 func (s *scimCovStore) ListDeactivatedIdentities(_ context.Context, _ int) ([]store.PrincipalIdentity, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

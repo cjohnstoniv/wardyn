@@ -21,7 +21,7 @@ import (
 // that asked for it answers 5xx until every step is done, so the identity provider retries:
 //
 //  1. one transaction (store.SuspendIdentity): the session cutoff for every form the person is
-//     known by, the identity deactivation, the authority epoch bump and people.deactivated_at;
+//     known by (less a bound person's email that another principal holds), the identity deactivation, the authority epoch bump and people.deactivated_at;
 //  2. revokePersonCredentials per form, after the bump, so every credential minted under the old
 //     epoch is swept (a later mint is refused by the owner guard, not swept);
 //  3. killRunCascade on every non-terminal run those forms own, and on every KILLED run whose
@@ -60,6 +60,21 @@ type leaverForms struct {
 	// targets are bound plus every sub the emails resolve to (when no row binds a principal) plus
 	// every email alias: the forms the cutoff, the credential sweep and the kill sweep run under.
 	targets []string
+	// shared are the email forms of a bound person that another principal holds (store.HeldEmails). A
+	// cutoff or session cut keyed by one would reach that principal's credentials too, so none is written;
+	// the person's own are reached through bound and the identity deactivation.
+	shared []string
+}
+
+// cutTargets are the forms a cutoff or a session cut is written under: targets less shared.
+func (f leaverForms) cutTargets() []string {
+	return slices.DeleteFunc(slices.Clone(f.targets), func(t string) bool { return slices.Contains(f.shared, strings.ToLower(t)) })
+}
+
+// owns says a token is the person's own: its principal is one of their forms. A bound person's email
+// alias is not an owner, since another principal can hold the address.
+func (f leaverForms) owns(t types.APIToken) bool {
+	return slices.ContainsFunc(f.targets, func(form string) bool { return strings.EqualFold(form, t.Principal) })
 }
 
 func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.PrincipalIdentity) (leaverForms, error) {
@@ -79,7 +94,11 @@ func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.Prin
 	emails := slices.DeleteFunc(append(aliases, strings.ToLower(ident.EmailLower), strings.ToLower(ident.ScimUserName)),
 		func(v string) bool { return !strings.Contains(v, "@") })
 	f.targets = slices.Concat(f.bound, nonEmptyForms(emails...))
-	if ident.Principal == "" {
+	if ident.Principal != "" {
+		if f.shared, err = st.HeldEmails(ctx, ident.ID, f.bound, emails); err != nil {
+			return f, err
+		}
+	} else {
 		subs, err := st.PrincipalsByEmail(ctx, emails)
 		if err != nil {
 			return f, err
@@ -131,7 +150,7 @@ func (s *Server) suspendIdentity(ctx context.Context, st scimStore, id uuid.UUID
 	}
 	if cutoff, ok := jobByKey(jobs, store.JobStepCutoff, ""); ident.DeactivatedAt == nil || !ok || !cutoff.Done {
 		// The pending steps commit with the deactivation, so a crash right after it leaves them for the sweeper.
-		plan := store.SuspendPlan{IdentityID: id, Principals: forms.bound, CutoffSubs: forms.targets, PendingJobs: keys}
+		plan := store.SuspendPlan{IdentityID: id, Principals: forms.bound, CutoffSubs: forms.cutTargets(), PendingJobs: keys}
 		if s.cfg.SCIM != nil {
 			plan.PurgeAfter = s.cfg.SCIM.PurgeAfter
 		}
@@ -182,22 +201,21 @@ func (s *Server) sweepStep(ctx context.Context, st scimStore, id uuid.UUID, iden
 }
 
 // sweepTarget sweeps one form. A bound person's email is not an owner: another principal can hold the same
-// address (a recycled one), so under an email only the sessions are cut by name, and the tokens and keys
-// the sweep takes are those whose principal is one of the person's own forms. A person no row binds is known
-// by nothing but their emails, so those run the full sequence.
+// address (a recycled one), so under an email the cutoff is written only when no other principal holds it,
+// and the tokens and keys the sweep takes are those whose principal is one of the person's own forms. A
+// person no row binds is known by nothing but their emails, so those run the full sequence.
 func (s *Server) sweepTarget(ctx context.Context, target string, forms leaverForms, ident store.PrincipalIdentity) (personRevocation, error) {
 	if ident.Principal == "" || !strings.Contains(target, "@") || slices.Contains(forms.bound, target) {
 		return s.revokePersonCredentials(ctx, target)
 	}
-	if err := s.cfg.SessionRevocations.RevokeSub(ctx, target); err != nil {
-		return personRevocation{}, err
-	}
-	own := func(t types.APIToken) bool {
-		return slices.ContainsFunc(forms.targets, func(f string) bool { return strings.EqualFold(f, t.Principal) })
+	if !slices.Contains(forms.shared, strings.ToLower(target)) {
+		if err := s.cfg.SessionRevocations.RevokeSub(ctx, target); err != nil {
+			return personRevocation{}, err
+		}
 	}
 	res := personRevocation{Stamped: true}
 	var tokenErr, keyErr error
-	res.Tokens, tokenErr = s.revokeAPITokensMatching(ctx, target, own)
+	res.Tokens, tokenErr = s.revokeAPITokensMatching(ctx, target, forms.owns)
 	res.Keys, _, _, _, keyErr = s.deleteSSHKeysFor(ctx, target, false)
 	return res, errors.Join(tokenErr, keyErr)
 }
