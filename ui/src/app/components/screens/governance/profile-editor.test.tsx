@@ -383,7 +383,10 @@ describe("ProfileEditor — Allowed barriers (T-7)", () => {
 });
 
 // deny-f4 (mock packet M3 S5): the four access-request fields.
-describe("ProfileEditor — the Access requests section", () => {
+// Each case renders the whole editor (policy panel, limit and run-limit rows,
+// rubric); that is about 1 s on a dev box and several times that on a loaded CI
+// runner, so this block gets an explicit budget instead of the 5 s default.
+describe("ProfileEditor — the Access requests section", { timeout: 20_000 }, () => {
   beforeEach(() => {
     getSetupStatusMock.mockReset();
     getSetupStatusMock.mockResolvedValue(baseStatus());
