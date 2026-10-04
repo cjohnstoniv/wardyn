@@ -88,11 +88,16 @@ export const CollapsibleCard = React.forwardRef<HTMLElement, CollapsibleCardProp
             aria-expanded={open}
             aria-controls={bodyId}
             onClick={toggle}
-            // px-4 py-3, not p-3 (review L1): the body is p-4 — matching the
+            // px-4 either way (review L1): the body is p-4 — matching the
             // horizontal inset keeps the title flush with the body text once
             // expanded (CONSOLE-RULES §11 "one grid"). Only the vertical
-            // inset is trimmed, which is what the 744px fit needed.
-            className="flex w-full items-start justify-between gap-3 rounded-xl px-4 py-3 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring"
+            // inset is trimmed, and only while collapsed: eight collapsed
+            // cards must fit 744px (the #1200 budget), while an expanded
+            // card keeps its roomier header.
+            className={cn(
+              "flex w-full items-start justify-between gap-3 rounded-xl px-4 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring",
+              open ? "py-3" : "py-2",
+            )}
           >
             <span className="min-w-0">
               {/* headingId goes here, not on the `<h3>` (review R2-M1): a
@@ -103,7 +108,9 @@ export const CollapsibleCard = React.forwardRef<HTMLElement, CollapsibleCardProp
                 {title}
               </span>
               {summary && (
-                <span className="mt-0.5 block truncate text-body leading-snug text-muted-foreground">
+                <span
+                  className={`block truncate text-body text-muted-foreground ${open ? "mt-0.5 leading-snug" : "leading-tight"}`}
+                >
                   {summary}
                 </span>
               )}
