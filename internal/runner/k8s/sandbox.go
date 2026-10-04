@@ -424,12 +424,13 @@ func addMainContainerVolumes(pod *corev1.Pod, vols []corev1.Volume, mounts []cor
 // runner.SandboxSpec.OnWaiting.
 func (d *Driver) waitContainerRunning(ctx context.Context, clock *startClock, podName, containerName string, onWaiting func(string)) error {
 	var lastPod *corev1.Pod
+	var lastGetErr error
 	// Last reason REPORTED, so the report fires on change, not on a tick.
 	var lastReason string
 	var pulls pullWatch
 	err := clock.poll(ctx, func(pollCtx context.Context) (bool, bool, error) {
 		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(pollCtx, podName, metav1.GetOptions{})
-		if isClientThrottled(gerr) {
+		if tolerateGetError(gerr, &lastGetErr) {
 			return false, false, nil
 		}
 		if gerr != nil {
@@ -473,15 +474,7 @@ func (d *Driver) waitContainerRunning(ctx context.Context, clock *startClock, po
 			return fmt.Errorf("%w (%s)", err, why)
 		}
 	}
-	return err
-}
-
-// isClientThrottled reports client-go's own rate-limiter refusal, which does
-// not wrap context.DeadlineExceeded; treated as "not yet" so the poll ends on
-// its own deadline and enrichment still runs. String match on client-go's
-// wrapper text; degrades to pass-through if upstream renames it.
-func isClientThrottled(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "client rate limiter Wait returned an error")
+	return withLastGetError(err, lastGetErr)
 }
 
 // podStuckReason renders why a pod never started, from the last status the
@@ -571,9 +564,13 @@ func (d *Driver) resolveRuntimeClassName(ctx context.Context, class types.Confin
 func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, podName string, onWaiting func(string)) (string, error) {
 	var ip string
 	var lastPod *corev1.Pod
+	var lastGetErr error
 	var lastReason string
 	err := clock.poll(ctx, func(pollCtx context.Context) (bool, bool, error) {
 		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(pollCtx, podName, metav1.GetOptions{})
+		if tolerateGetError(gerr, &lastGetErr) {
+			return false, false, nil
+		}
 		if gerr != nil {
 			return false, false, gerr
 		}
@@ -606,7 +603,7 @@ func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, podName strin
 			return "", fmt.Errorf("%w (%s)", err, why)
 		}
 	}
-	return ip, err
+	return ip, withLastGetError(err, lastGetErr)
 }
 
 // proxyStartFailure is non-nil once the proxy pod is in a state waiting cannot
