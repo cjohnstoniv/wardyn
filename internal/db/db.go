@@ -257,9 +257,22 @@ func auditChainCanary(ctx context.Context, db migrationExecutor) error {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, AuditChainLockKey); err != nil {
 		return auditCanaryTransient(ctx, "take the chain lock for the canary", err)
 	}
+	// The head the trigger links to since 0130: the recorded high-water hash, else the newest hashed
+	// row. Read the same way, so a row removed from the tail is not mistaken for a mis-bound trigger.
+	// The meta table is looked up first because the canary also runs on pre-0111 fixtures, and a
+	// query that names a missing table fails at parse time whatever its WHERE says.
+	var hasMeta bool
+	if err := tx.QueryRow(ctx, `SELECT to_regclass('audit_partition_meta') IS NOT NULL`).Scan(&hasMeta); err != nil {
+		return auditCanaryTransient(ctx, "look up audit_partition_meta for the canary", err)
+	}
+	headSQL := `SELECT COALESCE((SELECT row_hash FROM audit_events
+		WHERE row_hash IS NOT NULL ORDER BY seq DESC LIMIT 1), '')`
+	if hasMeta {
+		headSQL = `SELECT COALESCE((SELECT hw_row_hash FROM audit_partition_meta),
+			(SELECT row_hash FROM audit_events WHERE row_hash IS NOT NULL ORDER BY seq DESC LIMIT 1), '')`
+	}
 	var head string
-	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT row_hash FROM audit_events
-		WHERE row_hash IS NOT NULL ORDER BY seq DESC LIMIT 1), '')`).Scan(&head); err != nil {
+	if err := tx.QueryRow(ctx, headSQL).Scan(&head); err != nil {
 		return auditCanaryTransient(ctx, "read the chain head for the canary", err)
 	}
 	// Through audit_append, the only way a row enters the log since 0111, so the canary on the
