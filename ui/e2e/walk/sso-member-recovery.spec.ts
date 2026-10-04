@@ -106,6 +106,7 @@ import {
   seen,
   signInThroughPane,
 } from "./helpers";
+import { termText } from "../terminal-text";
 
 test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TEST_K8S=1 (scripts/kind-sso-walk.sh)");
 test.describe.configure({ mode: "serial" });
@@ -797,9 +798,9 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
 
   // Step 4 — the ONLY screen, and the one a human is meant to see.
   await expect
-    .poll(async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")), { timeout: SANDBOX_UP })
+    .poll(async () => (await termText(screen).catch(() => "")), { timeout: SANDBOX_UP })
     .toContain("Accessing workspace:");
-  const trustScreen = await screen.innerText({ timeout: 1_000 });
+  const trustScreen = await termText(screen);
   expect(trustScreen).toContain("Yes, I trust this folder");
   // …and NOT the product tour the image now pre-answers.
   expect(trustScreen).not.toContain("Choose the text style");
@@ -813,12 +814,12 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
 
   // Step 6 — the CLI's own input prompt, on the Bedrock lane.
   await expect
-    .poll(async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")), { timeout: 120_000 })
+    .poll(async () => (await termText(screen).catch(() => "")), { timeout: 120_000 })
     .toContain("Amazon Bedrock");
   // Polled, not read once: the footer paints on its own schedule, and an
   // unpolled read here fails on a frame that simply had not landed yet.
   await expect
-    .poll(async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")), { timeout: 60_000 })
+    .poll(async () => (await termText(screen).catch(() => "")), { timeout: 60_000 })
     .toContain("manual mode on");
 
   // THE APPROVALS CHECK BELONGS AFTER THE ENTER, not before it. Everything the

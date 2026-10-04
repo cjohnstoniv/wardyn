@@ -14,6 +14,7 @@
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { findRunningFixture, stubInteractiveRun } from "./attach-stub";
+import { termText } from "./terminal-text";
 
 type Size = { cols: number; rows: number };
 
@@ -50,7 +51,7 @@ test("the shell sees the grid xterm shows: on load, after a resize, after a relo
 
   const screen = () => page.locator(".xterm-screen").first();
   await expect(screen()).toBeVisible();
-  const read = async () => (await screen().innerText({ timeout: 1_000 }).catch(() => "")) as string;
+  const read = async () => (await termText(screen()).catch(() => "")) as string;
   let n = 0;
   // The shell's own view of its window. Typing is retried: a fresh attach can
   // be admitted read-only for a moment while the previous socket is released.

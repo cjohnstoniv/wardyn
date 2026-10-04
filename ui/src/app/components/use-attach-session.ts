@@ -17,6 +17,8 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { decideKey } from "./attach-terminal-keys";
 import { terminalLinkHandlers } from "./attach-terminal-links";
+import { exposeTerminalForE2E } from "./attach-terminal-e2e-seam";
+import { createRenderer, type RendererControl, type RendererPref, type RendererState } from "./attach-terminal-renderer";
 import { createCopyGate, type CopyGate, type CopyOffer, type GateTerm } from "./attach-terminal-clipboard";
 import { runs } from "../lib/api/runs";
 import { wsURL } from "../lib/base-path";
@@ -107,6 +109,10 @@ export interface UseAttachSessionArgs {
   copyGateRef: React.MutableRefObject<CopyGate | null>;
   /** A clicked link that needs the confirm dialog (attach-terminal-links.ts). */
   setLinkTarget: React.Dispatch<React.SetStateAction<URL | null>>;
+  /** The renderer (attach-terminal-renderer.ts): its live handle, the stored choice, and what is in use. */
+  rendererRef: React.MutableRefObject<RendererControl | null>;
+  rendererPrefRef: React.RefObject<RendererPref>;
+  setRenderer: React.Dispatch<React.SetStateAction<RendererState>>;
 }
 
 export function useAttachSession(args: UseAttachSessionArgs) {
@@ -139,6 +145,9 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     setCopyNotice,
     copyGateRef,
     setLinkTarget,
+    rendererRef,
+    rendererPrefRef,
+    setRenderer,
   } = args;
 
   // Read at each (re)connect, not keyed on: /me landing late must not rebuild
@@ -171,11 +180,13 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       scrollback: 50000,
       // The unicode addon uses xterm's proposed API.
       allowProposedApi: true,
+      // Box-drawing and block glyphs are drawn exactly, not taken from the font.
+      customGlyphs: true,
       // Option+drag keeps xterm's native selection on macOS while tmux owns the mouse.
       macOptionClickForcesSelection: true,
       // OSC 8 links share the detected-link policy.
       linkHandler: links.osc8,
-      fontFamily: "'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace",
+      fontFamily: "'JetBrains Mono Terminal', 'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace",
       fontSize: 13,
       theme: {
         background: "#0d1117",
@@ -210,6 +221,10 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     term.loadAddon(new WebLinksAddon(links.detected));
     term.open(mount);
     termRef.current = term;
+    // After open: the GPU addon needs the DOM renderer in place to fall back to.
+    const renderer = createRenderer(term, rendererPrefRef.current ?? "auto", setRenderer);
+    rendererRef.current = renderer;
+    const unexpose = exposeTerminalForE2E(term);
     fitAddonRef.current = fitAddon;
     // Measure now so the attach URL carries the real geometry.
     refit();
@@ -221,7 +236,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     // dimensions change, so once the font is in, nudge cols-1 to make the next
     // refit a real change and re-measure the cells.
     document.fonts
-      .load("13px 'JetBrains Mono'")
+      .load("13px 'JetBrains Mono Terminal'")
       .then(() => {
         if (disposedFont || termRef.current !== term) return;
         if (term.cols > 1) term.resize(term.cols - 1, term.rows);
@@ -607,6 +622,9 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       binaryDispose.dispose();
       copyGate.dispose();
       copyGateRef.current = null;
+      unexpose();
+      renderer.dispose();
+      rendererRef.current = null;
       resizeObserver.disconnect();
       const ws = wsRef.current;
       if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {

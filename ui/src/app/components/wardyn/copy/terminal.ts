@@ -72,3 +72,17 @@ export const TERMINAL_COPY = {
   WRITE_FAILED: "The browser refused the clipboard write. Nothing was copied.",
   BLOCKED: "Copy blocked. The terminal sent different text than you selected, so nothing was copied.",
 } as const;
+
+// The terminal-renderer menu and its fell-back notice (M11 S4, S5).
+export const TERMINAL_RENDERER = {
+  LABEL: "Terminal renderer",
+  AUTO: "Auto",
+  AUTO_HINT: "GPU when this browser supports it, otherwise Compatible.",
+  GPU: "GPU",
+  GPU_HINT: "Faster with heavy output. Falls back to Compatible if the GPU stops.",
+  GPU_UNAVAILABLE: "Not available in this browser.",
+  COMPATIBLE: "Compatible",
+  COMPATIBLE_HINT: "Draws with the page. Use it if text looks wrong or the terminal goes blank.",
+  FOOTER: (active: string) => `In use: ${active}. Saved in this browser only.`,
+  FELL_BACK: "The GPU renderer stopped, so this terminal switched to Compatible. The session is unaffected.",
+} as const;

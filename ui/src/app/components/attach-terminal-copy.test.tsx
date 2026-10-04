@@ -23,8 +23,6 @@ vi.mock("@xterm/addon-fit", () => ({
   },
 }));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
-vi.mock("@fontsource/jetbrains-mono/latin-400.css", () => ({}));
-vi.mock("@fontsource/jetbrains-mono/latin-ext-400.css", () => ({}));
 vi.mock("../lib/api/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api/core")>()),
   getToken: () => null,

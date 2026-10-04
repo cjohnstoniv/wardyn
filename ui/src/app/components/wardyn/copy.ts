@@ -163,7 +163,7 @@ export { RUN, NO_BARRIER } from "./copy/run-clone";
 // Moved to copy/terminal.ts (the target path for the later barrel split of
 // this file) — re-exported here so every existing `from "./copy"` import
 // keeps working unchanged.
-export { TERMINAL, TERMINAL_COPY, TERMINAL_LINK } from "./copy/terminal";
+export { TERMINAL, TERMINAL_COPY, TERMINAL_LINK, TERMINAL_RENDERER } from "./copy/terminal";
 
 export {
   RECORDING_DISABLED_TITLE,

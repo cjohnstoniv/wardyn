@@ -57,8 +57,6 @@ vi.mock("@xterm/addon-fit", () => {
   return { FitAddon };
 });
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
-vi.mock("@fontsource/jetbrains-mono/latin-400.css", () => ({}));
-vi.mock("@fontsource/jetbrains-mono/latin-ext-400.css", () => ({}));
 // Force SSO mode (no admin token) so the component actually opens a WebSocket.
 // importOriginal, not a bare stub: the component now needs the REAL HttpError
 // class, because a 409 from take-over ("nobody is attached") is a distinct

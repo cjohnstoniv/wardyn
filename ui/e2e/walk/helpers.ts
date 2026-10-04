@@ -23,6 +23,7 @@ import { expect, type Page, type APIRequestContext } from "@playwright/test";
 // From the CSS-free copy module, NEVER from harness-login-pane: that module
 // reaches xterm.css, which Playwright's Node loader cannot load ("No tests found").
 import { SELFRUN_MARKER, SIGNIN_PROGRESS } from "../../src/app/components/screens/settings/login-pane-copy";
+import { termText } from "../terminal-text";
 
 // ── the walk's inputs (scripts/kind-sso-walk.sh exports every one) ──────────
 export const ADMIN_TOKEN = process.env.WARDYN_WALK_ADMIN_TOKEN || "";
@@ -95,6 +96,9 @@ export const LOGIN_DONE = envMs("WARDYN_WALK_LOGIN_DONE_MS", 300_000);
  * whole of it — Dex's login form is plain HTML with no accessible names.
  */
 export async function dexSignIn(page: Page, email: string): Promise<void> {
+  // The walk drives a production bundle (no __wardynTerm registry), so terminal text is
+  // read from the DOM, which only the Compatible renderer fills. Pin it before the first load.
+  await page.addInitScript(() => localStorage.setItem("wardyn.terminal.renderer", "compatible"));
   await page.goto("/");
   await page
     .getByRole("link", { name: "Sign in with SSO" })
@@ -477,8 +481,8 @@ export async function openLoginPaneAssertingColdPull(page: Page): Promise<void> 
  * are `expect.poll(innerText)`, never `toContainText`. `toContainText` starves
  * on a terminal that repaints under load — it re-queries the same node and can
  * miss every frame the text was in. (It also matters that this reads
- * `innerText`: the console mounts xterm's DOM renderer, with no canvas or webgl
- * addon, so the buffer really is in the DOM to be read.)
+ * `innerText`: the walk pins the Compatible renderer in dexSignIn, so xterm's DOM
+ * renderer is mounted and the buffer really is in the DOM to be read.)
  *
  * STRICT, and only for a caller with NO console pane attached — case C, which
  * has abandoned the pane and is watching from the Runs list. A pane-attached
@@ -487,7 +491,7 @@ export async function openLoginPaneAssertingColdPull(page: Page): Promise<void> 
  */
 export async function awaitSelfRunStarted(screen: ReturnType<Page["locator"]>): Promise<void> {
   await expect
-    .poll(async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")).includes(SELFRUN_MARKER), {
+    .poll(async () => (await termText(screen).catch(() => "")).includes(SELFRUN_MARKER), {
       timeout: 120_000,
     })
     .toBe(true);
@@ -501,7 +505,7 @@ export async function awaitSelfRunStarted(screen: ReturnType<Page["locator"]>): 
  * for the marker alone is a race the test loses on a slow box.
  * harness-login-pane.tsx's handleOutput → confirmCapture fires `killRun` and
  * then `onDone`, and the parent closes the pane — all within milliseconds of
- * the marker being printed. `screen.innerText()` then reads a detached node
+ * the marker being printed. `termText(screen)` then reads a detached node
  * (or throws), so the poll can watch for its full five minutes while the
  * capture has ALREADY succeeded server-side. That is exactly what happened:
  * `harness.credential.capture` in the audit, `session.detach reason="client
@@ -521,7 +525,7 @@ export async function awaitCapture(page: Page, screen: ReturnType<Page["locator"
         // budget inside a single poll iteration, and the server is never asked.
         // That is what made this case fail at exactly 300s with the provider access
         // sitting at "live" the whole time.
-        const text = await screen.innerText({ timeout: 1_000 }).catch(() => "");
+        const text = await termText(screen).catch(() => "");
         if (text.includes(FAIL_MARKER)) {
           const line = text.split("\n").find((l) => l.includes(FAIL_MARKER)) ?? FAIL_MARKER;
           throw new Error(`the login helper refused this capture: ${line.trim()}`);
@@ -571,7 +575,7 @@ export async function signInThroughPane(page: Page, openPane: (p: Page) => Promi
 
   // Bounded read; see awaitCapture() for why the bound is the whole fix.
   const paneText = async (): Promise<string> => {
-    const text = await screen.innerText({ timeout: 1_000 }).catch(() => "");
+    const text = await termText(screen).catch(() => "");
     if (text.includes(FAIL_MARKER)) {
       const line = text.split("\n").find((l) => l.includes(FAIL_MARKER)) ?? FAIL_MARKER;
       throw new Error(`the login helper refused this capture: ${line.trim()}`);

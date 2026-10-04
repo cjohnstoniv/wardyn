@@ -82,6 +82,7 @@ import {
   seen,
   signInThroughPane,
 } from "./helpers";
+import { termText } from "../terminal-text";
 
 test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TEST_K8S=1 (scripts/kind-sso-walk.sh)");
 test.describe.configure({ mode: "serial" });
@@ -297,12 +298,12 @@ async function startInteractiveRun(page: Page, title: string): Promise<{ id: str
   const screen = page.locator(".xterm-screen").first();
   await expect(screen).toBeVisible({ timeout: SANDBOX_UP });
   await expect
-    .poll(async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")), { timeout: SANDBOX_UP })
+    .poll(async () => (await termText(screen).catch(() => "")), { timeout: SANDBOX_UP })
     .toContain("Accessing workspace:");
   await screen.click();
   await page.keyboard.press("Enter");
   await expect
-    .poll(async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")), { timeout: 120_000 })
+    .poll(async () => (await termText(screen).catch(() => "")), { timeout: 120_000 })
     .toContain("Amazon Bedrock");
   return { id: runIDFromURL(page), screen };
 }

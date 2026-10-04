@@ -13,6 +13,7 @@
  */
 import { test, expect, gotoConsole, navToRoute, ADMIN_TOKEN } from "./fixtures";
 import { findRunningFixture, stubInteractiveRun } from "./attach-stub";
+import { termText } from "./terminal-text";
 
 test("the wheel scrolls tmux history and does not recall bash history", async ({ page }) => {
   const { id: runId } = await findRunningFixture(page);
@@ -22,7 +23,7 @@ test("the wheel scrolls tmux history and does not recall bash history", async ({
 
   const screen = page.locator(".xterm-screen").first();
   await expect(screen).toBeVisible();
-  const read = async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")) as string;
+  const read = async () => (await termText(screen).catch(() => "")) as string;
 
   await screen.click();
   // A history entry for the wheel to wrongly recall, then more output than one

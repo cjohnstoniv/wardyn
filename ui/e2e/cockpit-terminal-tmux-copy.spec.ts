@@ -16,6 +16,7 @@ import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { findRunningFixture, stubInteractiveRun } from "./attach-stub";
 import { clickCell, dragCells, readGrid, rowOf } from "./terminal-grid";
+import { termText } from "./terminal-text";
 
 async function open(page: Page) {
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -27,7 +28,7 @@ async function open(page: Page) {
   await page.evaluate(() => navigator.clipboard.writeText(""));
   const screen = page.locator(".xterm-screen").first();
   await expect(screen).toBeVisible();
-  const read = async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")) as string;
+  const read = async () => (await termText(screen).catch(() => "")) as string;
   await screen.click();
   // Typing is retried: a fresh attach can be admitted read-only for a moment.
   await expect
