@@ -16,6 +16,12 @@
 // be reaped; operators needing an unbounded session use the never-reap
 // escape hatch (AutoStopAfterSec <= 0).
 //
+// Config.MaxAge (WARDYN_RUN_MAX_AGE) is a separate, absolute cap on a RUNNING
+// run's age since creation. It is its own predicate: not ends_at (which a
+// person may extend), not the idle compare-and-set, and it applies to a run
+// whose policy never idle-reaps. It stops a run even with a request open,
+// because bounding a hung run is its whole purpose.
+//
 // AutoStopAfterSec (policy auto_stop_after_sec): >0 idle timeout in seconds;
 // 0 DISABLED/never reaped (default, matches docs/POLICIES.md); <0 also never
 // reaped but kept distinct so an operator can express intent loudly.
@@ -51,6 +57,7 @@ const TouchDebounce = 30 * time.Second
 // RunSummary is the minimal projection a Store must return for idle detection.
 type RunSummary struct {
 	ID        uuid.UUID
+	CreatedAt time.Time
 	UpdatedAt time.Time
 	// PolicyAutoStopAfterSec: 0 or negative means never reap, positive is the
 	// idle timeout in seconds. Store must JOIN to the policy table; zero is
@@ -97,6 +104,12 @@ type Stopper interface {
 	// a run touched by an active attach since the snapshot is NOT stopped. A
 	// non-nil error means the stop failed outright and the reaper logs/skips.
 	StopRun(ctx context.Context, runID uuid.UUID, notAfter time.Time) (StopOutcome, error)
+
+	// StopRunMaxAge stops a run that has outlived Config.MaxAge: the same
+	// RUNNING->STOPPED transition and teardown as StopRun, guarded on the run's
+	// created_at being at or before createdNotAfter instead of on idleness (and
+	// ignoring open requests). Idempotent like StopRun.
+	StopRunMaxAge(ctx context.Context, runID uuid.UUID, createdNotAfter time.Time) (StopOutcome, error)
 }
 
 // Recorder matches audit.Recorder exactly so a store.Recorder can be passed directly.
@@ -108,6 +121,9 @@ type Recorder interface {
 type Config struct {
 	// Interval is how often the reaper scans. Default: 1 minute.
 	Interval time.Duration
+	// MaxAge, when positive, ends any RUNNING run created longer ago than this
+	// (WARDYN_RUN_MAX_AGE). Zero or negative is off.
+	MaxAge time.Duration
 	// Now overrides the wall clock. Nil means use real time.
 	Now func() time.Time
 	// TickLock, when non-nil, makes each tick single-flight across control
@@ -132,6 +148,7 @@ type Reaper struct {
 	recorder Recorder
 	now      func() time.Time
 	interval time.Duration
+	maxAge   time.Duration
 	tickLock func(ctx context.Context) (func(), bool)
 	sweeps   *sweephealth.Tracker
 	logger   *slog.Logger
@@ -145,6 +162,7 @@ func New(store Store, stopper Stopper, recorder Recorder, cfg Config) *Reaper {
 		recorder: recorder,
 		now:      cfg.Now,
 		interval: cfg.Interval,
+		maxAge:   cfg.MaxAge,
 		tickLock: cfg.TickLock,
 		sweeps:   cfg.Sweeps,
 		logger:   slog.Default().With("component", "lifecycle.reaper"),
@@ -219,6 +237,10 @@ func (r *Reaper) reap(ctx context.Context) error {
 
 	var stopErrs []error
 	for _, run := range runs {
+		if r.maxAge > 0 && now.Sub(run.CreatedAt) >= r.maxAge {
+			r.stopMaxAge(ctx, run, now)
+			continue
+		}
 		// AutoStopAfterSec <= 0 means never reap regardless of idle time (0 =
 		// disabled default; negative = explicit unbounded-attach escape hatch).
 		if run.PolicyAutoStopAfterSec <= 0 {
@@ -269,6 +291,28 @@ func (r *Reaper) reap(ctx context.Context) error {
 	return errors.Join(stopErrs...)
 }
 
+// stopMaxAge ends one run past Config.MaxAge and audits it. Same per-stop
+// deadline and failure handling as the idle path; a lost compare-and-set (the
+// run already ended) writes nothing.
+func (r *Reaper) stopMaxAge(ctx context.Context, run RunSummary, now time.Time) {
+	stopCtx, cancel := context.WithTimeout(ctx, defaultStopTimeout)
+	defer cancel()
+	// The cutoff is the scan's clock minus the cap, so created_at is compared
+	// on the one clock that stamped it.
+	out, err := r.stopper.StopRunMaxAge(stopCtx, run.ID, now.Add(-r.maxAge))
+	if err != nil {
+		r.logger.ErrorContext(ctx, "lifecycle: max-age stop failed", "run_id", run.ID, "err", err)
+		return
+	}
+	if !out.Applied {
+		return
+	}
+	r.emitMaxAgeStop(ctx, run.ID, now.Sub(run.CreatedAt))
+	if len(out.Errors) > 0 {
+		r.emitRevokeFailure(ctx, run.ID, out.Errors)
+	}
+}
+
 // thresholdFor returns the idle threshold for a run: policy AutoStopAfterSec
 // (always positive here, since reap filters <= 0 before calling this) plus
 // TouchDebounce slack. Sourcing the override from policy, not workspace
@@ -301,6 +345,33 @@ func (r *Reaper) emitAutoStop(ctx context.Context, runID uuid.UUID, idleFor, thr
 	}
 	if err := r.recorder.Record(ctx, ev); err != nil {
 		r.logger.ErrorContext(ctx, "lifecycle: emit autostop audit event failed",
+			"run_id", runID,
+			"err", fmt.Sprintf("%v", err),
+		)
+	}
+}
+
+// emitMaxAgeStop writes a "run.max_age.expire" audit event; like emitAutoStop,
+// a failure to record is logged and swallowed.
+func (r *Reaper) emitMaxAgeStop(ctx context.Context, runID uuid.UUID, age time.Duration) {
+	data, _ := json.Marshal(map[string]any{
+		"age_sec":     int64(age.Seconds()),
+		"max_age_sec": int64(r.maxAge.Seconds()),
+		"reason":      "max_age",
+	})
+	ev := types.AuditEvent{
+		ID:        uuid.New(),
+		Time:      r.now(),
+		RunID:     &runID,
+		ActorType: types.ActorSystem,
+		Actor:     "wardyn/lifecycle-reaper",
+		Action:    "run.max_age.expire",
+		Target:    runID.String(),
+		Outcome:   "success",
+		Data:      json.RawMessage(data),
+	}
+	if err := r.recorder.Record(ctx, ev); err != nil {
+		r.logger.ErrorContext(ctx, "lifecycle: emit max-age stop audit event failed",
 			"run_id", runID,
 			"err", fmt.Sprintf("%v", err),
 		)
