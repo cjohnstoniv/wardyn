@@ -98,6 +98,28 @@ func unavailable(op string, err error) error {
 // domain the file no longer declares is ErrUnknownDomain. A Postgres that does
 // not answer is secretstore.ErrUnavailable.
 func (s *Service) Domain(ctx context.Context, owner string) (string, error) {
+	p, err := s.Place(ctx, owner)
+	return p.Domain, err
+}
+
+// The ways a person's domain was decided (Placement.Source).
+const (
+	SourceUser    = "user"    // an assignment for the person
+	SourceGroup   = "group"   // one group the person's last login carried
+	SourceAll     = "all"     // the assignment for everyone
+	SourceDefault = "default" // nothing matched
+)
+
+// Placement is where owner's next principal-key generation goes, and why.
+type Placement struct {
+	Domain string
+	Source string
+	// Group is the group that named the domain, when Source is SourceGroup.
+	Group string
+}
+
+// Place is Domain with the reason: the same decision, the same refusals.
+func (s *Service) Place(ctx context.Context, owner string) (Placement, error) {
 	var groups []string
 	var truncated bool
 	var raw []byte
@@ -105,10 +127,10 @@ func (s *Service) Domain(ctx context.Context, owner string) (string, error) {
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 	case err != nil:
-		return "", unavailable("read the login's groups", err)
+		return Placement{}, unavailable("read the login's groups", err)
 	default:
 		if err := json.Unmarshal(raw, &groups); err != nil {
-			return "", fmt.Errorf("keydomain: the stored groups of %q are not a list: %w", owner, err)
+			return Placement{}, fmt.Errorf("keydomain: the stored groups of %q are not a list: %w", owner, err)
 		}
 	}
 	rows, err := s.pool.Query(ctx, `
@@ -116,11 +138,11 @@ func (s *Service) Domain(ctx context.Context, owner string) (string, error) {
 		WHERE (subject_type='user' AND subject=$1) OR subject_type='all' OR (subject_type='group' AND subject = ANY($2))`,
 		owner, groups)
 	if err != nil {
-		return "", unavailable("read the assignments", err)
+		return Placement{}, unavailable("read the assignments", err)
 	}
 	hits, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Type, Subject, Domain string }])
 	if err != nil {
-		return "", unavailable("read the assignments", err)
+		return Placement{}, unavailable("read the assignments", err)
 	}
 	var user, all string
 	byGroup := map[string][]string{} // domain -> the groups naming it
@@ -134,10 +156,10 @@ func (s *Service) Domain(ctx context.Context, owner string) (string, error) {
 			byGroup[h.Domain] = append(byGroup[h.Domain], h.Subject)
 		}
 	}
-	domain := Default
+	place := Placement{Domain: Default, Source: SourceDefault}
 	switch {
 	case user != "":
-		domain = user
+		place = Placement{Domain: user, Source: SourceUser}
 	case len(byGroup) > 1:
 		var parts []string
 		for d, gs := range byGroup {
@@ -145,27 +167,28 @@ func (s *Service) Domain(ctx context.Context, owner string) (string, error) {
 			parts = append(parts, fmt.Sprintf("%s (%s)", d, strings.Join(gs, ", ")))
 		}
 		slices.Sort(parts)
-		return "", fmt.Errorf("%w: %q is in groups assigned to %s; assign the person to one domain as a user", ErrAmbiguous, owner, strings.Join(parts, " and "))
+		return Placement{}, fmt.Errorf("%w: %q is in groups assigned to %s; assign the person to one domain as a user", ErrAmbiguous, owner, strings.Join(parts, " and "))
 	case len(byGroup) == 1:
-		for d := range byGroup {
-			domain = d
+		for d, gs := range byGroup {
+			slices.Sort(gs)
+			place = Placement{Domain: d, Source: SourceGroup, Group: gs[0]}
 		}
 	case all != "":
-		domain = all
+		place = Placement{Domain: all, Source: SourceAll}
 	}
 	if truncated && user == "" {
 		var any bool
 		if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM key_domain_assignments WHERE subject_type='group')`).Scan(&any); err != nil {
-			return "", unavailable("read the assignments", err)
+			return Placement{}, unavailable("read the assignments", err)
 		}
 		if any {
-			return "", fmt.Errorf("%w: the last sign-in of %q lost groups; assign the person to a domain as a user, or have them sign in again", ErrGroupsTruncated, owner)
+			return Placement{}, fmt.Errorf("%w: the last sign-in of %q lost groups; assign the person to a domain as a user, or have them sign in again", ErrGroupsTruncated, owner)
 		}
 	}
-	if !s.Has(domain) {
-		return "", fmt.Errorf("%w: %q is assigned to %q", ErrUnknownDomain, owner, domain)
+	if !s.Has(place.Domain) {
+		return Placement{}, fmt.Errorf("%w: %q is assigned to %q", ErrUnknownDomain, owner, place.Domain)
 	}
-	return domain, nil
+	return place, nil
 }
 
 // RecordLoginGroups stamps the groups of a verified login, which a group
@@ -302,6 +325,44 @@ func (s *Service) AmbiguousIfGroup(ctx context.Context, group, domain string) (i
 		              AND l.groups @> jsonb_build_array(g.subject))`, group, domain).Scan(&n)
 	if err != nil {
 		return 0, unavailable("count the people this would make ambiguous", err)
+	}
+	return n, nil
+}
+
+// Changes is the assignment writes audited since a time.
+type Changes struct {
+	Count int
+	// Latest and LatestBy describe the newest of them; the zero time when Count is 0.
+	Latest   time.Time
+	LatestBy string
+}
+
+// ChangesSince counts the key_domain.assignment.set and .delete audit rows
+// recorded since since: the mitigation for a database writer moving where a
+// person's next keys are made, which no assignment row can show once deleted.
+func (s *Service) ChangesSince(ctx context.Context, since time.Time) (Changes, error) {
+	var c Changes
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE action IN ('key_domain.assignment.set','key_domain.assignment.delete') AND time >= $1`, since).Scan(&c.Count)
+	if err != nil {
+		return c, unavailable("count the assignment changes", err)
+	}
+	if c.Count == 0 {
+		return c, nil
+	}
+	err = s.pool.QueryRow(ctx, `SELECT time, actor FROM audit_events WHERE action IN ('key_domain.assignment.set','key_domain.assignment.delete') AND time >= $1 ORDER BY time DESC LIMIT 1`, since).Scan(&c.Latest, &c.LatestBy)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return c, unavailable("read the latest assignment change", err)
+	}
+	return c, nil
+}
+
+// RootKeyCredentials counts the stored credentials of people still sealed
+// under the deployment's credential key (enc_version 1) rather than under their
+// own principal key: what `wardynd -rewrap-principal-keys` moves.
+func (s *Service) RootKeyCredentials(ctx context.Context) (int, error) {
+	var n int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM secrets WHERE owned_by <> '' AND enc_version = 1`).Scan(&n); err != nil {
+		return 0, unavailable("count the credentials under the credential key", err)
 	}
 	return n, nil
 }

@@ -9,7 +9,9 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -333,7 +335,8 @@ func secretStoreChecks(external, keyService string, durable, multiUser, platform
 		}
 		return []SetupCheck{{ID: "kek_service", Label: "Credential storage", Status: "ok",
 			Detail: "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in " + keyService +
-				" and never leaves it. Wardyn holds no copy; each unlock is " + unlock + "."}}
+				" and never leaves it. Wardyn holds no copy; each unlock is " + unlock + "."},
+			platformSplitCheck(keyService, platformSeparate)}
 	}
 	checks := []SetupCheck{ageKeyCheck(durable)}
 	if kekRequired {
@@ -351,13 +354,117 @@ func secretStoreChecks(external, keyService string, durable, multiUser, platform
 		})
 	}
 	if !platformSeparate {
-		checks = append(checks, SetupCheck{
-			ID: "platform_shared", Label: "Platform key separation", Status: "warn",
-			Detail: "Wardyn's own signing and session keys are protected by the same key as people's credentials.",
-			Fix:    "Mint a second key with `wardynd -gen-age-key`, point WARDYN_PLATFORM_KEY_FILE at it, run `wardynd -rewrap -rewrap-adopt-boot-keys` once (it says you have never moved the boot keys before), then restart wardynd with it set.",
-		})
+		checks = append(checks, platformSplitCheck("", false))
 	}
 	return checks
+}
+
+// platformSplitShared is the platform_split warning's detail, local or key service.
+const platformSplitShared = "Wardyn's own signing and session keys are protected by the same key as people's credentials."
+
+// platformSplitCheck is the platform_split row (M5 S5, label "Platform key separation"). keyService
+// is "" in local mode, where the boot keys' own key is WARDYN_PLATFORM_KEY_FILE; under a key service
+// the split is a second key and identity there, which the credential identity cannot reach. In local
+// mode the row is emitted only while the split is absent (secretStoreChecks).
+func platformSplitCheck(keyService string, separate bool) SetupCheck {
+	c := SetupCheck{ID: "platform_split", Label: "Platform key separation", Status: "warn", Detail: platformSplitShared}
+	switch {
+	case keyService == "" && !separate:
+		c.Fix = "Mint a second key with `wardynd -gen-age-key`, point WARDYN_PLATFORM_KEY_FILE at it, run `wardynd -rewrap -rewrap-adopt-boot-keys` once (it says you have never moved the boot keys before), then restart wardynd with it set."
+	case separate:
+		c.Status, c.Fix = "ok", ""
+		c.Detail = "Wardyn's own signing and session keys use a separate key and identity in " + keyService +
+			"; the credential identity can't reach them."
+	case strings.HasPrefix(keyService, "Key Vault"):
+		c.Fix = "Set WARDYN_AZURE_KEK_KEY_PLATFORM, WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM and WARDYN_AZURE_CLIENT_ID_PLATFORM to a second key pair and identity, run `wardynd -rewrap -rewrap-adopt-boot-keys` once, then restart."
+	default:
+		c.Fix = "Set WARDYN_VAULT_TRANSIT_KEY_PLATFORM and WARDYN_VAULT_ROLE_PLATFORM to a second Transit key and role, run `wardynd -rewrap -rewrap-adopt-boot-keys` once, then restart."
+	}
+	return c
+}
+
+// keyCustody is what the three key-custody rows are graded from.
+type keyCustody struct {
+	Domains       []string // the declared domain names, sorted
+	PrincipalKeys bool
+	RootKeyCreds  int // person-owned credentials still under the credential key
+	Changes       keydomain.Changes
+	Now           time.Time
+}
+
+// keyCustodyChecks are the key_domains, principal_keys and key_domain_changes rows (M5 S5). The
+// changes row is amber while any assignment changed in the last 30 days: it is the mitigation for a
+// database writer moving where a person's next keys are made.
+func keyCustodyChecks(k keyCustody) []SetupCheck {
+	domains := SetupCheck{ID: "key_domains", Label: "Key domains", Status: "info",
+		Detail: "Only default: everyone's keys use this deployment's credential key."}
+	if n := len(k.Domains); n > 0 {
+		noun := "key domains, each proven at boot: "
+		if n == 1 {
+			noun = "key domain, proven at boot: "
+		}
+		domains.Status = "ok"
+		domains.Detail = fmt.Sprintf("%d %s%s.", n, noun, strings.Join(k.Domains, ", "))
+	}
+	pk := SetupCheck{ID: "principal_keys", Label: "Per-person keys"}
+	switch {
+	case !k.PrincipalKeys:
+		pk.Status = "info"
+		pk.Detail = "Off: stored credentials use this deployment's key. Audit records use per-person keys either way."
+	case k.RootKeyCreds > 0:
+		pk.Status = "info"
+		pk.Detail = fmt.Sprintf("On. %d stored credentials still use this deployment's key.", k.RootKeyCreds)
+		pk.Fix = "Run wardynd -rewrap-principal-keys to re-seal them."
+	default:
+		pk.Status = "ok"
+		pk.Detail = "On. Every stored credential is sealed under its owner's key."
+	}
+	ch := SetupCheck{ID: "key_domain_changes", Label: "Key domain changes", Status: "ok",
+		Detail: "No key-domain assignment changed in the last 30 days."}
+	if n := k.Changes.Count; n > 0 {
+		s := "s"
+		if n == 1 {
+			s = ""
+		}
+		ch.Status = "warn"
+		ch.Detail = fmt.Sprintf("%d key-domain assignment change%s in the last 30 days, the latest %s by %s. Each one moves where that person's next keys are made.",
+			n, s, keyChangeWhen(k.Now, k.Changes.Latest), k.Changes.LatestBy)
+		ch.Fix = "Check each in Audit: key_domain.assignment.set and key_domain.assignment.delete."
+	}
+	return []SetupCheck{domains, pk, ch}
+}
+
+// keyChangeWhen says how long ago t was, in days.
+func keyChangeWhen(now, t time.Time) string {
+	switch d := int(now.Sub(t) / (24 * time.Hour)); {
+	case d <= 0:
+		return "today"
+	case d == 1:
+		return "1 day ago"
+	default:
+		return fmt.Sprintf("%d days ago", d)
+	}
+}
+
+// keyCustodyRows reads the key-custody inputs for a security-tier caller: a member's checks are
+// discarded, so they are not read for one. A read that fails leaves its row out rather than showing a
+// guess.
+func (s *Server) keyCustodyRows(ctx context.Context) []SetupCheck {
+	svc := s.cfg.KeyDomains
+	if svc == nil || !s.isSecurityOperator(ctx) {
+		return nil
+	}
+	now := s.cfg.Now()
+	k := keyCustody{Domains: svc.Declared(), PrincipalKeys: s.cfg.PrincipalKeys, Now: now}
+	n, err := svc.RootKeyCredentials(ctx)
+	if err != nil {
+		return nil
+	}
+	k.RootKeyCreds = n
+	if k.Changes, err = svc.ChangesSince(ctx, now.Add(-30*24*time.Hour)); err != nil {
+		return nil
+	}
+	return keyCustodyChecks(k)
 }
 
 // credentialStorageMode names the kind of store this deployment keeps

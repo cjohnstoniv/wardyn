@@ -112,6 +112,22 @@ func parsePrincipalKeys(v string) (bool, error) {
 	return false, fmt.Errorf("refusing to start: WARDYN_PRINCIPAL_KEYS is %q; it must be \"on\" or \"off\"", v)
 }
 
+// principalKeysOn is WARDYN_PRINCIPAL_KEYS read as parsePrincipalKeys does, after boot has
+// accepted it: anything but "on" is off.
+func principalKeysOn(v string) bool {
+	on, _ := parsePrincipalKeys(v)
+	return on
+}
+
+// platformKeySeparate reports whether the boot keys have a key of their own: the local platform key
+// file, or the key service's second key (Transit or Key Vault), each of which buildPlatformKEK
+// refuses to accept without its identity.
+func platformKeySeparate(f *bootFlags) bool {
+	return strings.TrimSpace(*f.platformKeyFile) != "" ||
+		strings.TrimSpace(*f.vault.transitKeyPlatform) != "" ||
+		strings.TrimSpace(*f.azure.kekKeyPlatform) != ""
+}
+
 // storeClients are the configured clients a secret store is built over.
 type storeClients struct {
 	// ext is the external store client, or nil.

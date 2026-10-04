@@ -241,6 +241,7 @@ func run() error {
 		return err
 	}
 	keyDomains := keydomain.NewService(pool, domainFile.Names())
+	keyDomainKeys := domainFile.KeyDescriptions()
 
 	// Boot keys: created under a lock that serializes replicas (#754).
 	bootKeys := newBootKeyStore(secrets, pool, *f.allowMultiInstance)
@@ -448,6 +449,8 @@ func run() error {
 		ProxyURL:                 *f.proxyURL,
 		Secrets:                  secrets,
 		KeyDomains:               keyDomains,
+		KeyDomainKeys:            keyDomainKeys,
+		PrincipalKeys:            principalKeysOn(*f.vault.principalKeys),
 		MaskRegistry:             maskReg,
 		MaskManifests:            maskManifests,
 		AuditUnsealer:            sealSrc.unsealer(),
@@ -474,7 +477,7 @@ func run() error {
 		SecretStoreExternal:   storesExternally(secrets),
 		SecretKeyService:      keyService(secrets),
 		KEKRequired:           *f.vault.kekRequired,
-		PlatformKeySeparate:   strings.TrimSpace(*f.platformKeyFile) != "",
+		PlatformKeySeparate:   platformKeySeparate(f),
 		LocalLoopback:         lm.loopback,
 		LocalTrustForwarder:   *f.localTrustFwd,
 		OIDCRoleMapConfigured: strings.TrimSpace(*f.oidcRoleMap) != "",

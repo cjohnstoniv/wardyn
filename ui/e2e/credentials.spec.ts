@@ -124,6 +124,60 @@ test.describe("Stored credentials (Admin view)", () => {
     expect(body.credentials.some((c) => c.person === person.subject)).toBe(false);
   });
 
+  // Key custody (M5 S2/S3): a security admin sees the declared domains (the e2e backend declares
+  // none, so only default), assigns everyone to a domain, sees the Key domain column say so, and
+  // removes the assignment. A refused write keeps its dialog open with the server's sentence.
+  test("a security admin manages key-domain assignments and sees each person's key domain", async ({ page }) => {
+    await putModelProviders(page.request, [
+      {
+        id: "corp-gateway",
+        name: "Corp gateway",
+        kind: "custom_endpoint",
+        base_url: "https://gateway.corp.example",
+        harnesses: [{ harness: "claude-code", path: "/anthropic" }],
+      },
+    ]);
+    const person = seedPerson();
+    const put = await page.request.put("/api/v1/model-providers/corp-gateway/credential", {
+      headers: person.auth,
+      data: { value: "e2e-key-domain-token-0123456789" },
+    });
+    expect(put.status(), await put.text()).toBe(204);
+
+    await asRealSecurityAdmin(page);
+    await openCredentials(page);
+    const card = page.locator("section").filter({ has: page.getByRole("heading", { name: "Key domains", exact: true }) });
+    await expect(card).toBeVisible();
+    await expect(card.getByRole("row").filter({ hasText: "default" }).first()).toContainText("Proven");
+
+    // Nothing assigned: the person's next key is in default.
+    const personRow = page.getByRole("row").filter({ hasText: person.email });
+    await expect(personRow).toContainText("default · default");
+
+    // A domain the file does not declare is not offered; assign everyone to default.
+    await card.getByRole("button", { name: "Assign a domain" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByLabel("Domain").locator("option")).toHaveText(["default"]);
+    await dialog.getByRole("radio", { name: "Everyone" }).check();
+    await dialog.getByRole("button", { name: "Assign a domain" }).click();
+    await expect(dialog).toHaveCount(0);
+    const assignmentRow = card.getByRole("row").filter({ hasText: "everyone" });
+    await expect(assignmentRow).toContainText("default");
+    await expect(card.getByText("Submitted for approval")).toHaveCount(0);
+
+    // The column now says why.
+    await page.reload();
+    await expect(page.getByRole("row").filter({ hasText: person.email })).toContainText("default · everyone");
+
+    await card.getByRole("row").filter({ hasText: "everyone" }).getByRole("button", { name: "Remove" }).click();
+    const confirm = page.getByRole("alertdialog");
+    await expect(confirm).toContainText('Remove the domain assignment for "everyone"?');
+    await confirm.getByRole("button", { name: "Remove" }).click();
+    await expect(card.getByRole("row").filter({ hasText: "everyone" })).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole("row").filter({ hasText: person.email })).toContainText("default · default");
+  });
+
   test("erasing by email reaches someone not on the list, and refuses an unknown address", async ({ page }) => {
     await putModelProviders(page.request, [
       {

@@ -24,6 +24,8 @@ export const INVENTORY = {
   COL_PROVIDER: "Model provider",
   COL_STATE: "State",
   COL_STORE: "Stored in",
+  // M5 S3: the key domain a person's next key is made in, and why (KEY_DOMAINS.SOURCE_*).
+  COL_DOMAIN: "Key domain",
   COL_ADDED: "Added",
   COL_LAST_USED: "Last used",
   STATE_STORED: "Stored",
@@ -97,4 +99,44 @@ export const MINTED = {
   REVOKE_CANCEL: "Cancel",
   REVOKE_CONFIRM: "Revoke token",
   REVOKED_TOAST: "Token revoked.",
+} as const;
+
+// Key custody on the Credentials screen (mock packet M5, approved 2026-10-03; the strings are the
+// packet's, character for character). The keys marked "not in M5" are the few words the dialog and
+// the conflict chip need that the packet leaves undrawn; SUBMITTED_* are M3's CHANGES.SUBMITTED_*,
+// unchanged, until the governance Changes tab hoists them into one block.
+export const KEY_DOMAINS = {
+  TITLE: "Key domains",
+  LEDE: "Each domain is its own key in your key service. A person's keys are made in their domain, so whoever holds one domain's key can't open another's. Domains are declared in WARDYN_KEY_DOMAINS_FILE.",
+  COL_DOMAIN: "Domain",
+  COL_KEY: "Key",
+  COL_BOOT: "At boot",
+  PROVEN: "Proven",
+  NOT_PROVEN: "Not proven",
+  DEFAULT_NOTE: "default is this deployment's credential key.",
+  ASSIGN_TITLE: "Assignments",
+  COL_SUBJECT: "Person or group",
+  PRECEDENCE: "A person's own assignment beats a group's, and a group's beats everyone. Anyone matching nothing uses default.",
+  ASSIGN_CTA: "Assign a domain",
+  FIELD_DOMAIN: "Domain",
+  ASSIGN_HINT: "Applies to keys made from now on. Keys made earlier stay in the domain they were made in.",
+  REMOVE: "Remove",
+  REMOVE_CONFIRM: (subject: string) =>
+    `Remove the domain assignment for "${subject}"? Their next key is made in whatever else matches them, or in default.`,
+  OFF_NOTE: "Per-person keys are off for stored credentials (WARDYN_PRINCIPAL_KEYS), so domains apply to audit records only.",
+  SOURCE_USER: "set for them",
+  SOURCE_GROUP: (group: string) => `from ${group}`,
+  SOURCE_ALL: "everyone",
+  SOURCE_DEFAULT: "default",
+  CONFLICT: "Two groups name different domains. No new key until one is removed.",
+  // Not in M5: the dialog's subject-type choice (the wire's user | group | all) and the conflict
+  // chip's visible word (its title is CONFLICT).
+  TYPE_USER: "Person",
+  TYPE_GROUP: "Group",
+  TYPE_ALL: "Everyone",
+  CONFLICT_CHIP: "Conflict",
+  // M3 CHANGES.SUBMITTED_*.
+  SUBMITTED_TITLE: "Submitted for approval",
+  SUBMITTED_BODY: "Nothing has changed yet. It applies when someone else approves it, and expires if nobody does.",
+  SUBMITTED_LINK: "View in Changes",
 } as const;
