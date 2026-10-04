@@ -1937,6 +1937,100 @@ the sandbox except `wardyn-proxy`, and the session is still recorded. A governan
 control, not a containment boundary against the operator holding the laptop. Full
 accounting: [docs/DESKTOP.md](DESKTOP.md) "Tamper posture, stated honestly".
 
+### Four-eyes on governance writes: a walkthrough
+
+The rules are in "Optional: four-eyes on governance writes" above; this is the order an operator
+works in. The switch and its TTL are in [ENV.md](ENV.md); the audit rows are in
+[AUDIT-ACTIONS.md](AUDIT-ACTIONS.md); the residuals are in
+[THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 "Four-eyes on governance writes".
+
+**1. Before you turn it on.** All four must hold, or the switch deadlocks you or does not bind:
+
+- **SSO is configured.** Local mode authenticates nobody, so with the switch on every covered write
+  and every approve or reject answers `503` `governance_second_human_local_mode`.
+- **The admin token is held out of band.** It applies a covered write directly and approves a change,
+  each audited as `governance.change.bypass`. It is the break-glass and the one way past this gate.
+- **Two humans can approve.** Every covered target except role mappings needs a second security admin
+  or super admin; role mappings need a second super admin (see step 6).
+- **Every CLI and SDK caller is upgraded.** A client built before 0.8.6 decodes the `202` as an empty
+  object ([sdk.md](sdk.md) "Old clients"). Nothing applies without approval, but the error it reports
+  is confusing.
+
+Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong for your approvers,
+`WARDYN_GOVERNANCE_CHANGE_TTL`) in the daemon's environment; on Kubernetes that is the chart's
+existing `env` map. Both are read at boot. Turning the switch off later leaves pending changes
+approvable and rejectable under the same rules, self-approval included; new writes apply directly.
+
+**2. What is held, and who approves it.** A write the table lists is held when the condition in its
+row is true, and approved at the tier it was proposed on.
+
+| Write | Held when | Approver |
+|---|---|---|
+| Governance profile create, update, delete | the write is not exempt (below) | security admin or super admin |
+| Governance assignment upsert, delete | always, deletes included | security admin or super admin |
+| Capability grant upsert, delete | always | security admin or super admin |
+| Enforcement map replace | always | security admin or super admin |
+| Availability set | the stored restricted bit changes, in either direction | security admin or super admin |
+| User-type priority update | the priority changes | security admin or super admin |
+| Role mapping upsert, delete | always | **super admin only** |
+
+Exempt, so applied directly: a profile update whose new effective profile is no more permissive than
+the current one, a rename or description edit that changes nothing else, an availability `PUT` that
+leaves the restricted bit as it is, and a user-type name or description edit that leaves its priority
+alone. Nothing else narrows by shape: a delete can widen (a deny grant, an assignment, a restriction),
+so no delete is exempt on its own.
+
+**3. Propose, review, decide.** A held write answers `202` with the change. Its `diff` is the
+server's: the current row, the proposed row and the changed field paths. The proposer, or anyone
+else, then:
+
+```
+wardyn governance set ci-governance.json          # held writes print as pending; exit 0
+wardyn governance changes list                    # pending by default; --state applied|rejected|expired|stale
+wardyn governance changes approve <change-id>     # a different human, at the right tier
+wardyn governance changes reject <change-id> --reason "widens egress past the review"
+```
+
+`governance set` exits 0 on a pending result and skips `--prune` until every write is decided, so
+run it again afterwards. The console does the same on the Governance screen's Changes tab, with the
+diff in a drawer; Approve is disabled on your own proposal. Nothing notifies an approver that a
+change is waiting, so name who looks, and how often, in your own runbook. There is at most one
+pending change per target: a second proposal at the same target is `409` `governance_change_pending`
+and names the first.
+
+**4. Expiry and stale changes.** A change nobody decides within the TTL reads as `expired` and cannot
+be approved (`409` `governance_change_not_pending`); propose it again. A change is `stale` (`409`
+`governance_change_stale`) when, at approval, the target, the profile an assignment points at or the
+deployment default differs from what the proposer's diff showed. Approval never overwrites: a stale
+change is dead, and the remedy is to propose the write again against the current state. A direct
+write in between (the break-glass included) is the usual cause.
+
+**5. Reading the audit.** Filter `GET /audit` by `action_prefix=governance.change.`. A normal change is
+a `governance.change.propose` row (actor the proposer, `Target` the change id) followed by a
+`governance.change.approve` row and, beside it, the target's own row (`governance.profile.write`,
+`capability.grant.create`, `access.role_mapping.write`, ...). That row's actor is the approver and
+it carries `change_id` and `proposed_by`: two named humans for one change. Also look for:
+
+- `governance.change.bypass`: the admin token wrote or approved. Alert on it.
+- `governance.change.approve` with outcome `failure`: the approval did not apply (`error` is `stale`,
+  `not_pending` or `error`).
+- `authz.denied` with reason `second_human_required` or `admin_surface` and target
+  `governance.change`: a self-approval, or a security admin at a role-mapping change.
+- A target row with **no** `propose`/`approve` pair beside it, switch on: a write that did not come
+  through the API. See the threat model's "database is not four-eyed" residual.
+
+**6. One super admin.** Role mappings are written on the super-admin tier, so only a super admin may
+approve one, and nobody approves their own. A deployment with a single super admin therefore cannot
+change a role mapping while the switch is on, except through the admin token (audited as a bypass).
+Add a second super admin before you enable the switch, or accept the token as the path for mapping
+changes. The lockout guard is judged against the **approver's** own roles at apply, so the approver
+cannot be the person whose mapping change would strip their own admin.
+
+**7. What stays single-human.** Workspace approved and denied egress lists, record-egress promotion,
+`/policies`, `/site-config`, `/integrations`, the approval `always` scope, user-type create and
+delete, and the SCIM purge's deletion of a person's own assignments and grants. The threat model
+lists each with its reason.
+
 ### Reclaiming a departed person's storage
 
 Deleting a drive removes its row and deleting an allocation stops the mount;
