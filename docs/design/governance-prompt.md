@@ -610,7 +610,7 @@ bites — at their launch, as `DENIED_STALE_GROUPS` (§7.7).
 | `DELETE_CONFIRM(name)` | Delete "{name}"? It isn't assigned to anyone, so nobody's ceiling changes. |
 | `DELETE_RESTRICT_TITLE` | This profile is still assigned |
 | `DELETE_RESTRICT_BODY(name, n)` | "{name}" still has {n} assignment / {n} assignments. Deleting it would widen those subjects back to the deployment ceiling without anyone deciding that — remove the assignments first. |
-| `OMISSION_TITLE` | This profile narrows by omission |
+| `OMISSION_TITLE` | Compared with the deployment ceiling |
 | `OMISSION_ACK` | I understand this profile takes these away. |
 
 **Two of these are headings over server text, not replacements for it.** The enforcement lane
