@@ -221,8 +221,9 @@ algorithm fail instead of run. Under `only` the age key cannot be used: the
 `local` key's id is taken over the age key's public recipient, which is X25519,
 and `only` forbids X25519. wardynd then refuses to start with a `WARDYN_AGE_KEY`
 (or an ephemeral one) and names store mode. Run the image with non-age custody
-instead: Vault Transit (`WARDYN_KEK=transit`), Azure Key Vault, or store mode
-(`WARDYN_SECRET_STORE=vaultkv`, below). None of them needs an age key. Age is
+instead: Vault Transit (`WARDYN_KEK=transit`) or Azure Key Vault, alone or
+under store mode (`WARDYN_SECRET_STORE=vaultkv`, below). None of them needs an
+age key; store mode without a key service does, and is refused. Age is
 used once, to convert pre-envelope rows, and is outside the module.
 
 Exercised under `GODEBUG=fips140=only` on a kind cluster, with Transit custody
@@ -1002,8 +1003,13 @@ API-compatible endpoint). Wardyn keeps only a pointer row in Postgres:
 owner, name, when, and where in Vault (`enc_version` 2, `kek_id`
 `vaultkv:<mount>/<path>`, no ciphertext).
 
-- Wardyn does no at-rest cryptography for such a row, and holds no key:
-  once every row is in Vault, `WARDYN_AGE_KEY` is unset.
+- Wardyn does no at-rest cryptography for such a row.
+- The per-person keys that seal run masking copies still need a key to wrap
+  under: `WARDYN_AGE_KEY`, or a key service (`WARDYN_KEK=transit` or
+  `azurekv`). A serving wardynd refuses to start with neither, and the chart
+  refuses the render; the maintenance modes (`-migrate-secrets`, `-rewrap`)
+  still run. With a key service, `WARDYN_AGE_KEY` is unset once
+  every row is in Vault.
 - Every read is one Vault read, so it appears in your Vault audit device
   (with the path and the token's entity; values HMAC'd) as well as in
   Wardyn's audit log.

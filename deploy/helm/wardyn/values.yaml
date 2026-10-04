@@ -256,7 +256,9 @@ secrets:
 # azure.vaultUrl, not both.
 secretStore:
   # "pg" (sealed in Postgres under the age key), "vaultkv" or "azurekv" (store
-  # mode).
+  # mode). Store mode still needs an age identity or a key service (kek.provider
+  # transit or azurekv) to wrap the per-person keys that seal run masking
+  # copies; the render refuses with neither.
   backend: pg
   vault:
     # https:// address of Vault. Required for vaultkv; set with backend pg it

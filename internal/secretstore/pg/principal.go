@@ -19,6 +19,14 @@ import (
 // only whether credential rows are written under these keys.
 func (s *Store) SubjectKeys() *subjectkey.Manager { return s.subjects }
 
+// PrincipalKeyRootReady is nil when a new principal key in the default domain
+// has a key to be wrapped under, else pkWriter's refusal naming the settings
+// that provide one.
+func (s *Store) PrincipalKeyRootReady() error {
+	_, err := s.pkWriter(subjectkey.DomainDefault)
+	return err
+}
+
 // initSubjects arms SubjectKeys once the store's KEKs are set. A store with a
 // pool places each owner's next generation by the key-domain assignments.
 func (s *Store) initSubjects() {
