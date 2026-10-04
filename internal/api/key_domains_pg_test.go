@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
@@ -21,6 +22,13 @@ import (
 // b, over a real Postgres, with bob known to the directory.
 func keyDomainFixture(t *testing.T) (*harness, *Server, *keydomain.Service) {
 	t.Helper()
+	h, srv, svc, _ := keyDomainFixturePool(t)
+	return h, srv, svc
+}
+
+// keyDomainFixturePool is keyDomainFixture and the pool under it.
+func keyDomainFixturePool(t *testing.T) (*harness, *Server, *keydomain.Service, *pgxpool.Pool) {
+	t.Helper()
 	pool := throwawayPGPool(t)
 	svc := keydomain.NewService(pool, []string{"a", "b"})
 	h := newHarness(t)
@@ -28,7 +36,7 @@ func keyDomainFixture(t *testing.T) (*harness, *Server, *keydomain.Service) {
 	h.srv.cfg.Store = secretOwnerDirectory{toks: []types.APIToken{{ID: uuid.New(), Principal: "bob", Email: "bob@corp.example"}}}
 	h.srv.cfg.KeyDomains = svc
 	h.srv.router = h.srv.routes()
-	return h, h.srv, svc
+	return h, h.srv, svc, pool
 }
 
 func keyDomainPut(t *testing.T, srv *Server, subjectType, subject, body string) (int, string) {
