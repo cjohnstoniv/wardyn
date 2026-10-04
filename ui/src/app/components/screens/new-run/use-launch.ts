@@ -14,6 +14,7 @@ import { useNavigate } from "react-router-dom";
 import type { CreateRunResult, PreflightResult } from "../../../lib/types";
 import { isCredentialRefusal, runs as runsApi } from "../../../lib/api/runs";
 import { HttpError, isSignedOutHold } from "../../../lib/api/core";
+import type { PolicyRef } from "../../../lib/api/health";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { getErrorMessage } from "../../../lib/format";
 import { primaryWorkspaceId, type WizardState } from "./wizard-types";
@@ -60,6 +61,9 @@ export interface UseLaunchResult {
   /** Bumped on every failed launch, including a repeat of the same message —
    *  so the rail's alert region remounts and gets re-announced (#459). */
   errorSeq: number;
+  /** The policy the refusal came from and how to ask for a change (the
+   *  envelope's `policy`), undefined when the failure carries none. */
+  errorPolicy: PolicyRef | undefined;
   credentialRefused: boolean;
   /** The model provider that credential refusal names (#532), "" when it
    *  names none — the door the rail opens is THAT provider's (#543). */
@@ -130,6 +134,7 @@ export function useLaunch({
   const { disabled: launchDisabled, showSpinner: launchSpinning } = useDeferredBusy(launching);
   const [error, setError] = React.useState<string | null>(null);
   const [errorSeq, setErrorSeq] = React.useState(0);
+  const [errorPolicy, setErrorPolicy] = React.useState<PolicyRef | undefined>(undefined);
   const [credentialRefused, setCredentialRefused] = React.useState(false);
   const [refusedProvider, setRefusedProvider] = React.useState("");
   // Preflight is a dry-run of the SAME request Launch sends — see buildRunInput
@@ -186,6 +191,7 @@ export function useLaunch({
 
   const launch = async () => {
     setError(null);
+    setErrorPolicy(undefined);
     setCredentialRefused(false);
     setRefusedProvider("");
     setLaunching(true);
@@ -208,6 +214,7 @@ export function useLaunch({
       const sentence = server || "Failed to launch run.";
       setError(sentence);
       setErrorSeq((n) => n + 1);
+      setErrorPolicy(e instanceof HttpError ? e.policy : undefined);
       setCredentialRefused(isCredentialRefusal(e));
       setRefusedProvider(isCredentialRefusal(e) && e instanceof HttpError ? e.provider : "");
       onLaunchError?.(e);
@@ -346,6 +353,7 @@ export function useLaunch({
     launchSpinning,
     error,
     errorSeq,
+    errorPolicy,
     credentialRefused,
     refusedProvider,
     launch,

@@ -8,6 +8,7 @@
 // one documented exception, in a different domain module).
 
 import type { AutonomyLevel, AutonomyResolution, RunLimits } from "../api/governance";
+import type { PolicyRef } from "../api/health";
 import type { RunPolicySpec } from "./policy";
 import type { SCMAccess } from "./setup";
 
@@ -374,6 +375,9 @@ export interface RunDetail extends AgentRun {
   model_provider_deleted?: boolean;
   created_via_name?: string;
   kept_until?: string;
+  // The policy the run was launched under and how to ask for a change to it
+  // (GET /runs/{id}, internal/policyref.Ref). Absent when none applies.
+  policy?: PolicyRef;
 }
 
 // GET /api/v1/runs/{id}/policy — the policy a run actually got (the run page's

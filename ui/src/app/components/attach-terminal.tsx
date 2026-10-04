@@ -41,6 +41,8 @@ import "../../styles/terminal-font.css";
 import { getToken, HttpError } from "../lib/api/core";
 import { runs } from "../lib/api/runs";
 import type { AttachHolder } from "../lib/types/runs";
+import type { PolicyRef } from "../lib/api/health";
+import { PolicyRemedy } from "./wardyn/policy-remedy";
 import { getErrorMessage } from "../lib/format";
 import { Eye, Loader2, TriangleAlert, Maximize2, Minimize2, RotateCw } from "lucide-react";
 import { cn } from "./ui/utils";
@@ -134,6 +136,9 @@ export interface AttachTerminalProps {
    *  admin may enter it. Absent on a person's run, where entry is the owner's
    *  alone (#1476). */
   operatorOwned?: boolean;
+  /** The run's own policy (GET /runs/{id}), for the Request access remedy
+   *  beside a refusal. Never an error envelope. */
+  policy?: PolicyRef;
 }
 
 export interface AttachTerminalHandle {
@@ -142,7 +147,7 @@ export interface AttachTerminalHandle {
 }
 
 export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTerminalProps>(function AttachTerminal(
-  { runId, onClose, autoRun, onOutput, ptyCols, heightClass = "h-[70vh]", fill, createdBy, operatorOwned },
+  { runId, onClose, autoRun, onOutput, ptyCols, heightClass = "h-[70vh]", fill, createdBy, operatorOwned, policy },
   ref,
 ) {
   // Attach is owner-or-admin, not operator-only: the WS's cookie lane is
@@ -540,7 +545,9 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       {connState === "error" && (
         <div className="flex items-start gap-3 p-4 text-sm text-danger">
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-          <p>{errorMsg}</p>
+          <p>
+            {errorMsg} <PolicyRemedy policy={policy} className="block" />
+          </p>
         </div>
       )}
 

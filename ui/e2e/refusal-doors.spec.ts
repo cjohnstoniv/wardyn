@@ -330,3 +330,72 @@ test.describe("the approvals reauth card names and opens the hold's own provider
     await expect(page.getByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeVisible();
   });
 });
+
+// deny-f4 (mock packet M10 S4): a refusal that names the governing policy says
+// who owns it and where to ask for a change. The policy reference is spliced at
+// the wire (the seeded daemon has no governance profile with a contact); the
+// strings are M10's, written out here rather than imported so a copy edit fails.
+const POLICY_REF = {
+  source: "profile",
+  name: "Contractors",
+  owner: "Platform Security",
+  request_url: "https://example.com/access",
+};
+
+test.describe("a refusal names the policy and how to request a change (M10 S4)", () => {
+  test("a refused launch shows the remedy under the server's sentence", async ({ page }) => {
+    const sentence = "Your governance profile allows 2 runs at once.";
+    await asViewer(page, VIEWER);
+    await page.route("**/api/v1/runs", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      await route.fulfill({ status: 422, json: { error: sentence, reason: "run_quota", policy: POLICY_REF } });
+    });
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await page.getByLabel("Title").fill("e2e policy refusal");
+    await page.getByRole("button", { name: "Launch run" }).click();
+
+    await expect(page.getByRole("alert")).toContainText(sentence);
+    const remedy = page.getByTestId("policy-remedy");
+    await expect(remedy).toHaveText("Owned by Platform Security · Request access ↗");
+    await expect(remedy.getByRole("link", { name: "Request access" })).toHaveAttribute("href", "https://example.com/access");
+  });
+
+  test("a refused egress decision on the run detail shows the remedy beside its chip", async ({ page }) => {
+    await asViewer(page, VIEWER);
+    await withProviders(page);
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === FAILED_TASK) json.policy = POLICY_REF;
+      await route.fulfill({ response, json });
+    });
+    await page.route("**/api/v1/audit*", async (route) => {
+      const response = await route.fetch();
+      const rows = (await response.json()) as Record<string, unknown>[];
+      if (new URL(route.request().url()).searchParams.has("action") || !Array.isArray(rows)) {
+        return route.fulfill({ response, json: rows });
+      }
+      rows.unshift({
+        id: randomUUID(),
+        time: new Date().toISOString(),
+        run_id: rows[0]?.run_id,
+        actor_type: "system",
+        actor: "proxy",
+        action: "egress.deny",
+        target: "pypi.org",
+        outcome: "deny",
+        data: { rule_source: "policy:denied" },
+      });
+      await route.fulfill({ response, json: rows });
+    });
+    await openFailedRun(page);
+    await page.getByRole("tab", { name: /audit/i }).click();
+
+    await expect(page.getByText("pypi.org")).toBeVisible();
+    await expect(page.getByText("Refused by policy")).toBeVisible();
+    await expect(page.getByTestId("policy-remedy")).toHaveText("Owned by Platform Security · Request access ↗");
+  });
+});

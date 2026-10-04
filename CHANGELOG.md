@@ -133,6 +133,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   admin into the setup funnel: the `runner` row stays a `fail` but is not blocking, and points to the new row.
   The runner probe is one namespaced pod list of limit 1 on Kubernetes, which the chart's Role already grants,
   and a daemon ping on Docker. See `docs/operations/monitoring.md`.
+- **The console shows who owns a refusing policy and a Request access link.** A refused launch, a refused egress
+  decision on the run detail, the attach panel's refusal and the New Run rail's profile line show the owner and
+  one link, mail address or sentence, from the server's `policy` reference. A link is built only for `https:` or one
+  `mailto:` address, re-checked in the browser. The governance profile editor gains the four contact fields.
 - **Sandbox pods can be placed on the nodes the operator names.** `k8s.sandbox.{nodeSelector,tolerations,affinity,priorityClassName,podAnnotations,podLabels}`
   (chart) render to `WARDYN_K8S_SANDBOX_PLACEMENT`, and the agent pod, the proxy pod and the boot-time
   NetworkPolicy canary all take it, so the canary proves enforcement on the nodes runs use. wardynd refuses

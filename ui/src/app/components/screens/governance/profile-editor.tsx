@@ -24,7 +24,7 @@ import { governance as api, isGrantBoundError, type GovernanceLimits, type Gover
 import { getErrorMessage } from "../../../lib/format";
 import { GOVERNANCE as GOV, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
-import type { ConfinementClass, RunPolicySpec, SetupModelProvider } from "../../../lib/types";
+import type { ConfinementClass, PolicyContact, RunPolicySpec, SetupModelProvider } from "../../../lib/types";
 import { CC_ORDER } from "../../../lib/types";
 import type { StorageEnforcement } from "../../../lib/api/drives";
 import { isUncappedEnforcement } from "../drives/display";
@@ -33,7 +33,8 @@ import { TIER_PICKER } from "../../../lib/tier-picker-copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
-import { Mono } from "../../wardyn/code-block";
+import { makeMono, Mono } from "../../wardyn/code-block";
+import { safeRequestHref } from "../../wardyn/policy-remedy";
 import { CC_META } from "../../wardyn/cc-meta";
 import { FIELD_HELP } from "../../wardyn/policy-field-help";
 import { Field, fieldHintId, Switch } from "../../wardyn/form-primitives";
@@ -59,6 +60,9 @@ const SEC_PER_DAY = 86400;
 // hand-maintained starter to drift.
 const STARTER_SPEC: RunPolicySpec = minimalSpec();
 
+// `https:` and `mailto:` are literals in the contact strings, so they render mono.
+const withContactMono = makeMono(["https:", "mailto:"]);
+
 const specText = (spec: RunPolicySpec): string => JSON.stringify(spec, null, 2);
 
 export function ProfileEditor({
@@ -79,6 +83,14 @@ export function ProfileEditor({
   const [spec, setSpec] = React.useState(() => specText(profile?.ceiling ?? STARTER_SPEC));
   const [limits, setLimits] = React.useState<GovernanceLimits>(profile?.limits ?? {});
   const [saving, setSaving] = React.useState(false);
+  // The four access-request fields (M3 S5), kept as typed; save trims them.
+  const [contact, setContact] = React.useState<Required<PolicyContact>>({
+    owner: profile?.contact?.owner ?? "",
+    email: profile?.contact?.email ?? "",
+    request_url: profile?.contact?.request_url ?? "",
+    request_text: profile?.contact?.request_text ?? "",
+  });
+  const [urlRefused, setUrlRefused] = React.useState(false);
   // `title` is set only for the grant-bound refusal: the console contributes a
   // heading over the SERVER's message there (§7.4). Every other failure renders
   // the message alone — a frozen sentence would be less specific than what the
@@ -117,10 +129,30 @@ export function ProfileEditor({
       setError({ message: parsed.message });
       return;
     }
+    // The server refuses a bad request_url too, but a javascript: value should
+    // never leave the browser, so the scheme is re-checked here first.
+    const trimmed = Object.fromEntries(
+      Object.entries(contact).map(([k, v]) => [k, v.trim()]),
+    ) as Required<PolicyContact>;
+    if (trimmed.request_url && !safeRequestHref(trimmed.request_url)) {
+      setUrlRefused(true);
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
-      const input = { name: name.trim(), ceiling: parsed.spec, limits };
+      const anyContact = Object.values(trimmed).some(Boolean);
+      const input = {
+        name: name.trim(),
+        ceiling: parsed.spec,
+        limits,
+        // Omit when there is none and none to clear, so a save never rewrites it.
+        ...(anyContact
+          ? { contact: Object.fromEntries(Object.entries(trimmed).filter(([, v]) => v)) as PolicyContact }
+          : profile?.contact
+            ? { contact: null }
+            : {}),
+      };
       const res = profile ? await api.updateProfile(profile.id, input) : await api.createProfile(input);
       onSaved(res.warnings);
     } catch (e) {
@@ -303,6 +335,59 @@ export function ProfileEditor({
         disabled={disabled}
         onChange={(rubric) => setLimits((l) => ({ ...l, autonomy_rubric: rubric }))}
       />
+
+      <section className="mt-6" data-testid="governance-profile-contact">
+        <h4 className="text-body font-medium text-foreground">{GOV.CONTACT_TITLE}</h4>
+        <p className="mt-0.5 max-w-[62ch] text-xs text-muted-foreground">{GOV.CONTACT_LEAD}</p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <Field label={GOV.CONTACT_OWNER} htmlFor="governance-contact-owner" hint={GOV.CONTACT_OWNER_HINT}>
+            <Input
+              id="governance-contact-owner"
+              value={contact.owner}
+              onChange={(e) => setContact((c) => ({ ...c, owner: e.target.value }))}
+              disabled={disabled}
+              autoComplete="off"
+            />
+          </Field>
+          <Field label={GOV.CONTACT_EMAIL} htmlFor="governance-contact-email" hint={GOV.CONTACT_EMAIL_HINT}>
+            <Input
+              id="governance-contact-email"
+              type="email"
+              value={contact.email}
+              onChange={(e) => setContact((c) => ({ ...c, email: e.target.value }))}
+              disabled={disabled}
+              autoComplete="off"
+            />
+          </Field>
+          <Field label={GOV.CONTACT_URL} htmlFor="governance-contact-url" hint={withContactMono(GOV.CONTACT_URL_HINT)}>
+            <Input
+              id="governance-contact-url"
+              value={contact.request_url}
+              onChange={(e) => {
+                setUrlRefused(false);
+                setContact((c) => ({ ...c, request_url: e.target.value }));
+              }}
+              disabled={disabled}
+              autoComplete="off"
+              aria-invalid={urlRefused || undefined}
+            />
+            {urlRefused && (
+              <p role="alert" className="text-xs text-danger">
+                {withContactMono(GOV.CONTACT_URL_REFUSED)}
+              </p>
+            )}
+          </Field>
+          <Field label={GOV.CONTACT_TEXT} htmlFor="governance-contact-text" hint={GOV.CONTACT_TEXT_HINT}>
+            <Input
+              id="governance-contact-text"
+              value={contact.request_text}
+              onChange={(e) => setContact((c) => ({ ...c, request_text: e.target.value }))}
+              disabled={disabled}
+              autoComplete="off"
+            />
+          </Field>
+        </div>
+      </section>
 
       {error && (
         <Note tone="red" role="alert">

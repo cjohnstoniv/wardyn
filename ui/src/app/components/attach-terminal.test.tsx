@@ -339,6 +339,27 @@ describe("AttachTerminal — role-aware attach", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
+  // deny-f4: the refused state carries the run's own policy contact, from
+  // GET /runs/{id}, beside the sentence it never rewords.
+  it("refused state shows the Request access remedy from the run's policy, and none without one", async () => {
+    const policy = { source: "profile", owner: "Platform Security", request_url: "https://example.com/access" };
+    const { unmount } = render(
+      <OperatorProvider operator={false} principal="alice@example.com">
+        <AttachTerminal runId="run_1" createdBy="bob@example.com" policy={policy} />
+      </OperatorProvider>,
+    );
+    expect(await screen.findByText(RUN_OWNER_ONLY, { exact: false })).toBeInTheDocument();
+    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Owned by Platform Security · Request access");
+    unmount();
+    render(
+      <OperatorProvider operator={false} principal="alice@example.com">
+        <AttachTerminal runId="run_1" createdBy="bob@example.com" />
+      </OperatorProvider>,
+    );
+    expect(await screen.findByText(RUN_OWNER_ONLY, { exact: false })).toBeInTheDocument();
+    expect(screen.queryByTestId("policy-remedy")).toBeNull();
+  });
+
   // P1: a member's own run must reach its terminal even when the login pane
   // mounts this component for a run the member created one round trip earlier
   // and passes no createdBy — there is no run object to read one from yet, so

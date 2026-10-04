@@ -381,3 +381,72 @@ describe("ProfileEditor — Allowed barriers (T-7)", () => {
     expect(screen.getByRole("button", { name: "Vault" })).toBeDisabled();
   });
 });
+
+// deny-f4 (mock packet M3 S5): the four access-request fields.
+describe("ProfileEditor — the Access requests section", () => {
+  beforeEach(() => {
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    gradePolicyMock.mockReset();
+    gradePolicyMock.mockResolvedValue({ overall_risk: "medium", risk_assessment: [] });
+    createProfileMock.mockReset();
+    updateProfileMock.mockReset();
+    updateProfileMock.mockResolvedValue({ profile: GREENFIELD, warnings: [] });
+  });
+
+  const WITH_CONTACT: GovernanceProfile = {
+    ...GREENFIELD,
+    contact: { owner: "Platform Security", email: "access@example.com", request_url: "https://example.com/access", request_text: "Include the run id." },
+  };
+
+  it("shows the stored contact under M3's labels", () => {
+    renderEditor(WITH_CONTACT);
+    expect(screen.getByText(GOV.CONTACT_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(GOV.CONTACT_LEAD)).toBeInTheDocument();
+    expect(screen.getByLabelText(GOV.CONTACT_OWNER)).toHaveValue("Platform Security");
+    expect(screen.getByLabelText(GOV.CONTACT_EMAIL)).toHaveValue("access@example.com");
+    expect(screen.getByLabelText(GOV.CONTACT_URL)).toHaveValue("https://example.com/access");
+    expect(screen.getByLabelText(GOV.CONTACT_TEXT)).toHaveValue("Include the run id.");
+  });
+
+  it("saves the four fields as typed, trimmed", async () => {
+    renderEditor(GREENFIELD);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(GOV.CONTACT_OWNER), "  Platform Security ");
+    await user.type(screen.getByLabelText(GOV.CONTACT_URL), "https://example.com/access");
+    await user.click(screen.getByRole("button", { name: GOV.SAVE }));
+    await waitFor(() => expect(updateProfileMock).toHaveBeenCalledTimes(1));
+    expect(updateProfileMock.mock.calls[0][1].contact).toEqual({
+      owner: "Platform Security",
+      request_url: "https://example.com/access",
+    });
+  });
+
+  it("refuses a javascript: request link client-side, before the server sees it", async () => {
+    renderEditor(GREENFIELD);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(GOV.CONTACT_URL), "javascript:alert(1)");
+    await user.click(screen.getByRole("button", { name: GOV.SAVE }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Use an https: link or a single mailto: address, with nothing after it.");
+    expect(updateProfileMock).not.toHaveBeenCalled();
+    expect(createProfileMock).not.toHaveBeenCalled();
+  });
+
+  it("clears a stored contact with null when every field is emptied, and omits it when there was none", async () => {
+    renderEditor(WITH_CONTACT);
+    const user = userEvent.setup();
+    for (const label of [GOV.CONTACT_OWNER, GOV.CONTACT_EMAIL, GOV.CONTACT_URL, GOV.CONTACT_TEXT]) {
+      await user.clear(screen.getByLabelText(label));
+    }
+    await user.click(screen.getByRole("button", { name: GOV.SAVE }));
+    await waitFor(() => expect(updateProfileMock).toHaveBeenCalledTimes(1));
+    expect(updateProfileMock.mock.calls[0][1].contact).toBeNull();
+  });
+
+  it("leaves contact off the request for a profile that never had one", async () => {
+    renderEditor(GREENFIELD);
+    await userEvent.setup().click(screen.getByRole("button", { name: GOV.SAVE }));
+    await waitFor(() => expect(updateProfileMock).toHaveBeenCalledTimes(1));
+    expect(updateProfileMock.mock.calls[0][1]).not.toHaveProperty("contact");
+  });
+});
