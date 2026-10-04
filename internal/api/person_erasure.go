@@ -66,10 +66,7 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport) *erasure.
 		}
 	}
 	if s.cfg.MaskManifests != nil {
-		steps[erasure.MaskCopies] = func(ctx context.Context, person string) (any, error) {
-			runs, err := s.cfg.MaskManifests.FenceSubject(ctx, person)
-			return map[string]any{"runs_fenced": len(runs)}, err
-		}
+		steps[erasure.MaskCopies] = s.eraseMaskCopies
 	}
 	if s.cfg.SubjectKeys != nil {
 		steps[erasure.AuditPersonalFields] = s.eraseAuditSealKeys
@@ -110,6 +107,27 @@ func (s *Server) eraseCredentialsScope(ctx context.Context, owner string, rep *s
 	defer s.adoSignInEnds.begin(owner, adoPATRevokeOffboarding)()
 	s.revokeOwnerRunPATs(ctx, owner, adoPATRevokeOffboarding)
 	return s.eraseLocked(ctx, owner, rowID, rep)
+}
+
+// eraseMaskCopies is the mask_copies scope: the person's live consumers are
+// fenced first and their masking manifests deleted (FenceSubject), then every
+// committed value under the person, per-run and global, is tombstoned. It is
+// done only when no row still holds ciphertext for the person: a registration
+// that raced the erase leaves one, and the retry finishes it.
+func (s *Server) eraseMaskCopies(ctx context.Context, person string) (any, error) {
+	runs, err := s.cfg.MaskManifests.FenceSubject(ctx, person)
+	detail := map[string]any{"runs_fenced": len(runs)}
+	if err != nil {
+		return detail, err
+	}
+	left, err := s.cfg.MaskRegistry.EraseOwner(ctx, person)
+	if err != nil {
+		return detail, err
+	}
+	if left > 0 {
+		return detail, fmt.Errorf("%d masking values of the person were registered while the erase ran; retry", left)
+	}
+	return detail, nil
 }
 
 func (s *Server) personErasureStore() (store.PersonErasureStore, error) {

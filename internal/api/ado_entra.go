@@ -666,7 +666,15 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	// The access token is let go one grace after its expiry (#151).
 	now := s.cfg.Now()
 	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
-	s.cfg.MaskRegistry.MergeGlobalUntil(subject, adoEntraSecretName(cfg.RowID), accessExpiry, []byte(resp.AccessToken), []byte(resp.RefreshToken))
+	if err := s.cfg.MaskRegistry.MergeGlobalUntil(subject, adoEntraSecretName(cfg.RowID), accessExpiry, []byte(resp.AccessToken), []byte(resp.RefreshToken)); err != nil {
+		slog.ErrorContext(ctx, "wardynd: the Azure DevOps sign-in tokens could not be recorded for masking; not stored",
+			slog.String("row", cfg.RowID), slog.Any("err", err))
+		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
+			"reason": reasonStoreError, "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
+		})
+		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+reasonStoreError, http.StatusFound)
+		return
+	}
 
 	if reason, ok := s.bindADOEntraIdentity(ctx, cfg, resp.IDToken, nonce, subject); !ok {
 		// The refusal SENTENCE stays server-side, logged for whoever reads this
@@ -727,7 +735,11 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Stored: this sign-in is now the credential, and the one it replaced is not.
-	s.cfg.MaskRegistry.AddGlobalUntil(subject, adoEntraSecretName(cfg.RowID), s.cfg.Now(), blob.ExpiresAt, []byte(resp.AccessToken), []byte(resp.RefreshToken))
+	// The Merge above put both tokens on record; this retires what the sign-in
+	// replaced, and a failure leaves the old values masked longer.
+	if err := s.cfg.MaskRegistry.AddGlobalUntil(subject, adoEntraSecretName(cfg.RowID), s.cfg.Now(), blob.ExpiresAt, []byte(resp.AccessToken), []byte(resp.RefreshToken)); err != nil {
+		slog.WarnContext(ctx, "wardynd: the replaced Azure DevOps sign-in tokens could not be retired", slog.String("row", cfg.RowID), slog.Any("err", err))
+	}
 	s.auditADOCapture(ctx, subject, cfg.RowID, "success", map[string]any{
 		"tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		"scopes": granted, "source": adoEntraSourceSignIn,

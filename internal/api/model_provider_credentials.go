@@ -332,7 +332,9 @@ func (s *Server) purgeProviderCredentials(ctx context.Context, before, after *ty
 	}
 	for name, owners := range holders {
 		for _, owner := range owners {
-			s.cfg.MaskRegistry.EvictGlobal(owner, name, s.cfg.Now())
+			if err := s.cfg.MaskRegistry.EvictGlobal(owner, name, s.cfg.Now()); err != nil {
+				return n, fmt.Errorf("purge model provider credentials: the masked copy of one could not be evicted: %w", err)
+			}
 		}
 	}
 	return n, nil

@@ -669,6 +669,12 @@ func (w *liveMaskWriter) writeLocked(p []byte) (n int, late func(), err error) {
 	if late, sealed := w.capture.dropSealed(); sealed {
 		return len(p), late, nil
 	}
+	// The read goes first: a read that applies an erasure's tombstones drops
+	// values, and the guard must answer for the corpus the chunk is masked
+	// against, not one from before the drop.
+	if stale, err := w.replaceIfStale(len(p)); stale {
+		return len(p), nil, err
+	}
 	if w.guard != nil && !w.guard() {
 		w.tail = nil
 		w.capture.dropped, w.capture.uncovered = true, true

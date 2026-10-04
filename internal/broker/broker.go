@@ -620,16 +620,30 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	// never does (its value stays proxy-side). KnownHosts is mask-registered too:
 	// see the Minted.KnownHosts doc comment for why a nominally
 	// public field still gets this treatment.
-	if b.maskReg != nil {
-		if minted.Token != "" {
-			b.maskReg.Add(caller.RunID, []byte(minted.Token))
-		}
-		if minted.KnownHosts != "" {
-			b.maskReg.Add(caller.RunID, []byte(minted.KnownHosts))
-		}
+	// A value that cannot be put on record is not handed out: the mint is
+	// committed and audited, and the caller gets the error instead.
+	if err := b.maskMinted(caller.RunID, minted); err != nil {
+		return Minted{}, err
 	}
 
 	return minted, nil
+}
+
+// maskMinted registers a minted credential's value-bearing fields with the mask
+// registry, committed before it returns. A nil registry is a no-op.
+func (b *Broker) maskMinted(runID uuid.UUID, minted Minted) error {
+	if b.maskReg == nil {
+		return nil
+	}
+	for what, v := range map[string]string{"token": minted.Token, "known_hosts": minted.KnownHosts} {
+		if v == "" {
+			continue
+		}
+		if err := b.maskReg.Add(runID, []byte(v)); err != nil {
+			return fmt.Errorf("broker: record the minted %s for masking: %w", what, err)
+		}
+	}
+	return nil
 }
 
 // leaseCoversRemint reports whether an ALREADY-MINTED approval still authorizes

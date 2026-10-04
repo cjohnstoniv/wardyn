@@ -127,7 +127,15 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 
 	// Mask BEFORE anything can log or persist it, merged until the store write
 	// succeeds: a failed write leaves the credential already stored live.
-	s.cfg.MaskRegistry.MergeGlobal(subject, adoEntraSecretName(cfg.RowID), []byte(grant.RefreshToken))
+	if err := s.cfg.MaskRegistry.MergeGlobal(subject, adoEntraSecretName(cfg.RowID), []byte(grant.RefreshToken)); err != nil {
+		slog.ErrorContext(ctx, "wardynd: the Azure DevOps sign-in token could not be recorded for masking; not stored",
+			slog.String("row", cfg.RowID), slog.Any("err", err))
+		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
+			"reason": "store_error", "source": adoEntraSourceLogin,
+			"tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
+		})
+		return
+	}
 
 	now := s.cfg.Now()
 	expiresAt := grant.Expiry.UTC()
@@ -160,7 +168,10 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 		})
 		return
 	}
-	s.cfg.MaskRegistry.AddGlobal(subject, adoEntraSecretName(cfg.RowID), s.cfg.Now(), []byte(grant.RefreshToken))
+	// The Merge above put the token on record; this retires what it replaced.
+	if err := s.cfg.MaskRegistry.AddGlobal(subject, adoEntraSecretName(cfg.RowID), s.cfg.Now(), []byte(grant.RefreshToken)); err != nil {
+		slog.WarnContext(ctx, "wardynd: the replaced Azure DevOps sign-in token could not be retired", slog.String("row", cfg.RowID), slog.Any("err", err))
+	}
 	s.auditADOCapture(ctx, subject, cfg.RowID, "success", map[string]any{
 		"tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		"scopes": usable, "source": adoEntraSourceLogin,

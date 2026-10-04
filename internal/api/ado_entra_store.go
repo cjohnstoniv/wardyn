@@ -507,7 +507,9 @@ func (s *Server) redeemEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig
 	}
 	now := s.cfg.Now()
 	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
-	s.cfg.MaskRegistry.AddGlobalUntil(owner, ec.secretName, now, accessExpiry, []byte(resp.AccessToken), []byte(keep))
+	if err := s.cfg.MaskRegistry.AddGlobalUntil(owner, ec.secretName, now, accessExpiry, []byte(resp.AccessToken), []byte(keep)); err != nil {
+		return ADOEntraAccess{}, fmt.Errorf("%w: the new tokens could not be recorded for masking: %v", ErrADOEntraUnavailable, err)
+	}
 
 	granted := strings.Fields(resp.Scope)
 	if len(granted) == 0 {

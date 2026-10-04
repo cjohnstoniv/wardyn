@@ -323,9 +323,8 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	// sentinel's rule: a crossed-wire grant must not put a live bearer in some
 	// other header.
 	value := formatInjectionValue(adoEntraInjectFormat, []byte(access.AccessToken))
-	if s.cfg.MaskRegistry != nil {
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(access.AccessToken))
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(value))
+	if s.refuseUnmasked(w, r, claims, "injection.resolve", []byte(access.AccessToken), []byte(value)) {
+		return true
 	}
 	data := map[string]any{
 		"purpose": "proxy-injection-ado", "grant_id": grantID, "jti": minted.JTI,

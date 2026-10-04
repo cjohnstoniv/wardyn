@@ -210,8 +210,11 @@ func (s *Server) createADOPAT(ctx context.Context, cfg ADOEntraConfig, owner, or
 	case err == nil:
 		// Masked process-wide under its own name until it expires: one name per
 		// token, so registering it never retires the sign-in's own values.
-		if s.cfg.MaskRegistry != nil {
-			s.cfg.MaskRegistry.AddGlobalUntil(owner, "ado-pat-"+pat.AuthorizationID, s.cfg.Now(), pat.ValidTo, []byte(pat.Token))
+		if merr := s.cfg.MaskRegistry.AddGlobalUntil(owner, "ado-pat-"+pat.AuthorizationID, s.cfg.Now(), pat.ValidTo, []byte(pat.Token)); merr != nil {
+			// The token exists at Azure DevOps but is not on record for masking, so
+			// it is not handed out; it lapses at its own expiry.
+			slog.ErrorContext(ctx, "wardynd: a minted Azure DevOps token could not be recorded for masking; discarding it", slog.Any("err", merr))
+			return adoPAT{}, fmt.Errorf("%w: %v", ErrADOEntraUnavailable, merr)
 		}
 		s.noteADOMintBlocked(ctx, cfg.RowID, owner, false)
 	}

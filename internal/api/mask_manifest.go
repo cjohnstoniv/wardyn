@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -63,9 +64,13 @@ func (s *Server) maskCovered(ctx context.Context, runID uuid.UUID) bool {
 	if m == nil {
 		return true
 	}
+	arrived := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, maskCheckTimeout)
 	defer cancel()
-	return m.Covered(ctx, runID)
+	// Covered proves the run's manifest; Fresh proves this server has read every
+	// value any server committed before now (the run's per-run rows included),
+	// and fails when Postgres does not answer.
+	return m.Covered(ctx, runID) && s.cfg.MaskRegistry.Fresh(arrived)
 }
 
 // maskGuard is the per-chunk check an in-flight consumer of runID carries: nil
@@ -189,13 +194,42 @@ func (s *Server) failMaskManifest(ctx context.Context, run types.AgentRun, step 
 // them to its manifest, before the caller hands them to the run. An error means
 // they are not on record: the caller must not hand them out.
 func (s *Server) maskDispatchValue(ctx context.Context, runID uuid.UUID, values ...[]byte) error {
-	for _, v := range values {
-		s.cfg.MaskRegistry.Add(runID, v)
-	}
 	if m := s.cfg.MaskManifests; m != nil {
+		// The value masks in this process's cache as soon as it is resolved,
+		// committed or not; its durable copy is the manifest's row, not the
+		// registry's own: a rendering is in exactly one table.
+		for _, v := range values {
+			s.cfg.MaskRegistry.AddLocal(runID, v)
+		}
 		return m.Append(ctx, runID, values...)
 	}
+	return s.maskInjected(runID, values...)
+}
+
+// maskInjected registers values for runID in the shared masking registry,
+// committed before it returns. An error means they are not on record: the
+// caller must not hand them to the run.
+func (s *Server) maskInjected(runID uuid.UUID, values ...[]byte) error {
+	for _, v := range values {
+		if err := s.cfg.MaskRegistry.Add(runID, v); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// refuseUnmasked registers values for the run behind claims and, when they
+// cannot be put on record, answers 503 mask_state_unavailable instead of handing
+// them out, and reports that it did. door names the route in the denied row.
+func (s *Server) refuseUnmasked(w http.ResponseWriter, r *http.Request, claims *identity.Claims, door string, values ...[]byte) bool {
+	err := s.maskInjected(claims.RunID, values...)
+	if err == nil {
+		return false
+	}
+	slog.WarnContext(r.Context(), "wardynd: a credential could not be recorded for masking; not handing it out",
+		slog.String("door", door), slog.String("run", claims.RunID.String()), slog.Any("err", err))
+	s.refuseAgent(w, r, claims, door)
+	return true
 }
 
 // maskMintedValue is maskDispatchValue for a credential minted after dispatch
@@ -205,7 +239,7 @@ func (s *Server) maskDispatchValue(ctx context.Context, runID uuid.UUID, values 
 func (s *Server) maskMintedValue(ctx context.Context, runID uuid.UUID, values ...[]byte) error {
 	err := s.maskDispatchValue(ctx, runID, values...)
 	if errors.Is(err, maskmanifest.ErrNoManifest) {
-		return nil
+		return s.maskInjected(runID, values...)
 	}
 	return err
 }

@@ -3303,7 +3303,7 @@ the owner or email, only the `reason` and `target` it always had.
 | `delegation_scope` | 0.8 (#1142): a portal's delegated token asked for a route outside the delegation allow-list ([Delegated run management](#delegated-run-management-portals)), or reached `PUT /secrets/{name}` or `POST /me/ssh-keys`, which refuse a delegated request themselves whatever the allow-list says (0.8.2, #1234). The row's actor is the person and its `data.via` names the portal | ⛔ `403` |
 | `role_stamp_stale` | 0.8.6: `WARDYN_ROLE_STAMP_TTL` is set and the `wdn_` API token presented carries a role and group stamp (`api_tokens.identity_stamped_at`) older than it, or never stamped. Checked by `apiTokenAuth` after the token resolves and before it counts as used; target `api_token`, and the row's actor is the token's owner. The body is `this token's role is out of date: its owner must sign in again to refresh it`; the owner's next sign-in re-stamps the token and it works again. A revoked token is not this refusal: it stays an ordinary `401` | ⛔ `401` |
 | `event_stream_cap` | 0.8.2 (#1407): the caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (`maxRunEventStreams`, `internal/api/run_events.go`; target the run id). A portal's streams count against its person, and every admin-token caller is one principal. Not audited — a caller who IS authorized and hit a limit, like `run_quota` | ⛔ `422` |
-| `mask_state_unavailable` | 0.8.6 (ha-l2.0): a door that relays or persists a run's output — the recording upload (`PUT /internal/recordings/{runID}` and its parts, target `recordings.upload`), the live attach (`GET /runs/{id}/attach`, target `runs.attach`), the SSH shell (target `ssh.shell`, a channel error, not an HTTP status) and the live output read (`GET /runs/{id}/output`, target `runs.output`) — cannot prove the run's masking corpus complete on this server, so it refuses instead of passing bytes through. The run has no complete, unfenced masking manifest in Postgres (`run_mask_manifest`): it was dispatched before 0.8.6, its dispatch never finished committing it, its person is being erased, or Postgres did not answer. The exec relay (`task_mode=exec` output tail) refuses by keeping nothing. The row's `data.mask_scope` is `globals_only`. An attach, shell or upload already in flight ends at the next beat (about two seconds) when the run stops being covered, an attach with close status `1013`. Not hidden: the caller can already see the run | ⛔ `503` |
+| `mask_state_unavailable` | 0.8.6 (ha-l2.0): a door that relays or persists a run's output — the recording upload (`PUT /internal/recordings/{runID}` and its parts, target `recordings.upload`), the live attach (`GET /runs/{id}/attach`, target `runs.attach`), the SSH shell (target `ssh.shell`, a channel error, not an HTTP status) and the live output read (`GET /runs/{id}/output`, target `runs.output`) — cannot prove the run's masking corpus complete on this server, so it refuses instead of passing bytes through. Since the shared registry (`ha-l2.1`) the same reason also answers an injection or capture route (targets `injection.resolve` and `credential.capture`) whose value could not be committed to the masking registry: the value is not handed out. The run has no complete, unfenced masking manifest in Postgres (`run_mask_manifest`): it was dispatched before 0.8.6, its dispatch never finished committing it, its person is being erased, or Postgres did not answer. The exec relay (`task_mode=exec` output tail) refuses by keeping nothing. The row's `data.mask_scope` is `globals_only`. An attach, shell or upload already in flight ends at the next beat (about two seconds) when the run stops being covered, an attach with close status `1013`. Not hidden: the caller can already see the run | ⛔ `503` |
 | `audit_export_partition_filter` | 0.8.6: `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `actor_type`, `outcome` or `origin`). A partition export always covers the whole partition, so its footer digest can be checked against `audit_partition_digest`; remove the other parameters. Input shape rather than a denial, so it is not audited | ⛔ `400` |
 | `audit_retention_not_oldest` | 0.8.6: `POST /audit/retention/drop` named a partition that is not the oldest retained one. Only the oldest partition can be dropped, so a drop never removes an interior link of the chain. Target `audit.retention`, `partition` beside it | ⛔ `409` |
 | `audit_retention_not_closed` | 0.8.6: the same door, when the oldest partition can still receive rows (the high-water mark has not reached its upper bound) | ⛔ `409` |
@@ -6750,11 +6750,35 @@ rather than a preference:
   a run carry `"mask_scope":"globals_only"`. **After any restart, a run that
   predates 0.8.6 has no manifest and is refused at those doors** (attach, SSH
   shell, exec output and recording upload) until it ends; runs dispatched by 0.8.6
-  survive restarts. Two limits remain until the shared registry lands: a value
-  registered at *injection* time (a minted GitHub token, an injected API key, the
-  AWS SSO and sign-in tokens) is still held in memory only, and **SSH exec, SFTP
-  and direct-tcpip were never masked** (`sshgateway_channels.go`), so none of
-  them is covered by any of this.
+  survive restarts. **Since 0.8.6 the registry itself is in Postgres.** A value
+  registered at *injection* time (a minted GitHub token, an injected API key) is
+  committed to `mask_values` (migration `0124_mask_values`) before the call
+  returns, and so is each credential a person's AWS SSO or Azure DevOps sign-in
+  registers process-wide (its access and refresh tokens, current and retired);
+  each is sealed under its owner's `cred` key, and the in-memory maps are every
+  replica's cache of that table. This holds at `replicas: 1` too: there is no
+  in-memory-only mode, and wardynd refuses to start when it cannot read the table.
+  A registration that cannot be committed fails the call that would hand the
+  value out (`503` `mask_state_unavailable`). Replicas read the table by a
+  generation cursor (`mask_gen`, taken in the registering transaction, so commit
+  order is generation order and a reader has read every generation below the one
+  it holds); a consumer about to mask a chunk waits for a read that began after
+  the chunk arrived, at most one read per 50 ms per replica, and `NOTIFY` on
+  `wardyn_mask` is only a hint (each replica holds one connection of its own, outside
+  `pool_max_conns`, listening for it), so a missed notification costs nothing. With
+  Postgres unreachable a live chunk is replaced by `<secret-hidden>`, a recording
+  upload answers `503` and a new attach is refused. An eviction (a deleted
+  credential, a value retired past the grace, a run's purge, an erasure) is a
+  tombstone whose ciphertext is gone in the same statement; tombstones are deleted
+  an hour later, and a replica away longer reloads the table. The elected sweeper
+  leader (`SweeperLeaderLockKey`) deletes a terminal run's `per_run` rows and
+  manifest after `api.RunSecretGrace`; every replica's own run-secret sweep drops
+  only its cache. A credential with no owner (the operator namespace) has no
+  subject key and stays in the registering process; none exists today. A split
+  migrator and app role install grants the app role `SELECT, INSERT, UPDATE,
+  DELETE` on `mask_values`, `SELECT, UPDATE` on `mask_gen` and `DELETE` on
+  `run_mask_manifest`. **SSH exec, SFTP and direct-tcpip were never masked**
+  (`sshgateway_channels.go`), so none of them is covered by any of this.
 - **the audit spool** — a local append-only file per pod
   (`internal/api/auditspool.go`). Per-process *by design*: the fallback for a
   failed Postgres write, each pod draining its own back into the database.

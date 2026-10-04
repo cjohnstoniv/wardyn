@@ -272,9 +272,8 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// dispatch that actually selects this credential, so the global registration
 	// follows the SERVER's decision to use the credential rather than the
 	// sandbox's decision to name a string. Add is nil-safe.
-	s.cfg.MaskRegistry.Add(claims.RunID, []byte(blob.AccessToken))
-	if blob.RefreshToken != "" {
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(blob.RefreshToken))
+	if s.refuseUnmasked(w, r, claims, "credential.capture", []byte(blob.AccessToken), []byte(blob.RefreshToken)) {
+		return
 	}
 
 	// owner + credential_source say WHOSE credential landed, and

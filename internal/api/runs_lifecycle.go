@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/approval"
@@ -467,12 +468,29 @@ func (s *Server) SweepRunSecrets(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	s.cfg.MaskRegistry.SweepGlobals(s.cfg.Now().Add(-RunSecretGrace))
+	if s.cfg.MaskManifests != nil {
+		s.cfg.MaskManifests.DropFenced(ctx)
+	}
 	if s.cfg.Store == nil {
 		return 0, nil
 	}
+	// The committed rows are the leader's: one replica deletes them, and every
+	// other replica drops its cache when it reads the tombstones. A follower's
+	// pass below touches only its own cache.
+	lctx, end, lead := s.beginLeaderSweep(ctx)
+	if lead {
+		defer end()
+	}
 	held := s.cfg.MaskRegistry.RunIDs()
-	if len(held) == 0 {
-		return 0, nil
+	var persisted []uuid.UUID
+	if lead {
+		var perr error
+		if persisted, perr = s.cfg.MaskRegistry.PersistedRuns(lctx); perr != nil {
+			return 0, fmt.Errorf("list the runs with committed masking state: %w", perr)
+		}
+	}
+	if len(held) == 0 && len(persisted) == 0 {
+		return 0, s.sweepCommittedMasks(lctx, lead, nil)
 	}
 	runs, err := s.cfg.Store.ListRuns(ctx)
 	if err != nil {
@@ -484,17 +502,20 @@ func (s *Server) SweepRunSecrets(ctx context.Context) (int, error) {
 		byID[run.ID] = run
 	}
 	cutoff := time.Now().UTC().Add(-RunSecretGrace)
+	cold := func(id uuid.UUID) bool {
+		run, known := byID[id]
+		return known && isTerminalRunState(run.State) && run.UpdatedAt.Before(cutoff)
+	}
 	evicted := 0
 	for _, id := range held {
-		run, known := byID[id]
-		if !known || !isTerminalRunState(run.State) || !run.UpdatedAt.Before(cutoff) {
+		if !cold(id) {
 			continue
 		}
 		s.cfg.MaskRegistry.Evict(id)
 		s.forgetMaskManifest(id)
 		evicted++
 	}
-	return evicted, nil
+	return evicted, s.sweepCommittedMasks(lctx, lead, slices.DeleteFunc(persisted, func(id uuid.UUID) bool { return !cold(id) }))
 }
 
 // finalizeRunTail runs the terminal-transition side effects shared by the live

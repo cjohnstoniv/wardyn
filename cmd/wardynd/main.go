@@ -250,10 +250,14 @@ func run() error {
 	// manifests (what each run was given, so a restarted or second wardynd masks
 	// it and the doors refuse a run they cannot prove masked) and the audit
 	// fields WARDYN_AUDIT_SEAL seals, whose recorder was built before the store.
-	maskManifests, err := armSubjectKeyed(bootCtx, pool, secrets, maskReg, maskScopes, sealSrc, bootKeys)
+	maskManifests, maskStore, err := armSubjectKeyed(bootCtx, pool, secrets, maskReg, maskScopes, sealSrc, bootKeys)
 	if err != nil {
 		return err
 	}
+	// Another replica's erasure fences a manifest this one holds: drop it at the
+	// background cadence instead of waiting for a door to ask.
+	maskStore.OnBackgroundRead(maskManifests.DropFenced)
+	maskStore.Start(rootCtx)
 
 	// Embedded identity provider: signing key persisted in the secret store,
 	// generated on first boot. The pg-backed revocation store is the kill-switch
