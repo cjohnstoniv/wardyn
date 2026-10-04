@@ -265,11 +265,13 @@ describe("NewRunScreen — Preflight sends the body Launch sends", () => {
     await waitFor(() => expect(preflightRunMock).toHaveBeenCalled());
 
     // Nothing is touched between the two clicks: Review is a dry run of THIS
-    // request, so any divergence is the prediction lying about the launch.
+    // request, so any divergence is the prediction lying about the launch. The
+    // automatic check may already have graded an earlier body, so the check
+    // compared is the last one.
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
 
-    expect(preflightRunMock.mock.calls[0][0]).toEqual(createRunMock.mock.calls[0][0]);
+    expect(preflightRunMock.mock.lastCall![0]).toEqual(createRunMock.mock.calls[0][0]);
   });
 
   it("...and the three fields a silent drop is invisible in survive on BOTH", async () => {
@@ -288,7 +290,7 @@ describe("NewRunScreen — Preflight sends the body Launch sends", () => {
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
 
-    const flown = preflightRunMock.mock.calls[0][0];
+    const flown = preflightRunMock.mock.lastCall![0];
     const launched = createRunMock.mock.calls[0][0];
     // The member ticked their drive: it must be on the predicted body too, or
     // Review answers for a run that is not the one about to start.

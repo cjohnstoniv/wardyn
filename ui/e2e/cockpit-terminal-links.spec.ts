@@ -28,6 +28,9 @@ async function open(page: Page, lines: string[], ready: string) {
     ws.send(attachModeFrame(false));
     ws.send(Buffer.from(lines.map((l) => `${l}\r\n`).join("")));
   });
+  // clickLink measures the rendered text through the DOM rows, which only the
+  // Compatible renderer draws: pin it before the first load.
+  await page.addInitScript(() => localStorage.setItem("wardyn.terminal.renderer", "compatible"));
   await page.addInitScript(() => {
     const w = window as unknown as { __opened: Array<[string, string, string]> };
     w.__opened = [];

@@ -470,6 +470,9 @@ func TestAttachPromotion_SSHObserverPromoted(t *testing.T) {
 		t.Fatal("the web client was told it is read-only")
 	}
 	waitFor(t, "the web writer to register", func() bool { return srv.attachHolderFor(run.ID) != nil })
+	// The writer registers before its exec opens: wait for that exec, so it is
+	// Attach 0 and the ssh observer's is Attach 1.
+	waitForSession(t, fr, 0)
 
 	ch := newFakeSSHChannel()
 	resizeCh := make(chan sshWindowChangeMsg, 1)
