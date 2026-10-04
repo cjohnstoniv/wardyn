@@ -68,3 +68,69 @@ func TestSCIMGroupRemovalSweeperDropsACandidateAddedBack(t *testing.T) {
 		t.Error("the sweeper recorded a removal of a person added back")
 	}
 }
+
+// The identity provider's add is in flight when the sweeper resumes the mover's removal: the add's foreign-key
+// check holds the identity row, so the resume waits for it, and once the add commits the resume sees the
+// membership and drops the candidate.
+func TestSCIMGroupRemovalSweeperWaitsForAnAddInFlight(t *testing.T) {
+	w := newMoverWorld(t)
+	e := w.e
+	ctx := context.Background()
+	failGroupRemovalAndAge(t, w)
+	tok, raw := e.seedToken("sub-mover", moverEmail)
+	if _, err := e.pool.Exec(ctx, `UPDATE api_tokens SET groups = $2::jsonb WHERE id = $1`, tok, `["`+groupExternalID+`"]`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(ctx, `UPDATE deprovision_jobs SET state = 'pending' WHERE identity_id = $1 AND kind = $2`,
+		w.moverID, store.JobKindGroupRemove); err != nil {
+		t.Fatal(err)
+	}
+
+	add, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = add.Rollback(ctx) }()
+	if _, err := add.Exec(ctx, `INSERT INTO scim_group_members (group_id, identity_id, added_at) VALUES ($1, $2, now())`, w.group.ID, w.moverID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- e.b.srv.SweepSCIMPurge(ctx) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("the sweep finished without waiting for the add in flight: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the sweep never waited on the identity row")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := add.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	if len(e.rows(e.b, "scim.group.member_remove")) != 0 {
+		t.Error("the sweeper recorded a removal of a person added back")
+	}
+	if e.tokenRevoked(tok) {
+		t.Error("the sweeper revoked the member's token")
+	}
+	for name, node := range map[string]*scimNode{"a": e.a, "b": e.b} {
+		if !e.tokenWorks(node, raw) {
+			t.Errorf("instance %s: the member's token stopped authenticating", name)
+		}
+	}
+}
