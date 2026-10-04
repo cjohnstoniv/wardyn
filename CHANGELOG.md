@@ -171,6 +171,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   keeps twelve months of partitions ahead daily (`wardyn_audit_partitions_ahead`, and an `audit_partitions` warning on
   `/setup/status` below 3 months); `WARDYN_AUDIT_RETENTION_AUTODROP` (default off) lets it drop eligible partitions
   itself, unattested. See "Audit retention" in `docs/OPERATIONS.md`.
+- **`wardynd -audit-split-legacy` splits the pre-0.8.6 audit history.** The one legacy partition becomes
+  seq-contiguous ranges (`audit_events_legacy_<YYYYMM>`) that retention drops one at a time, without changing a row
+  hash. The ranges follow the running maximum of `time` in `seq` order, never `time` alone, so a spool-replayed row
+  cannot scatter a month. A one-shot, offline mode on the migrator DSN: it refuses (exit 3, naming the reason) while the
+  single-instance lock is held, while any other client is connected, or on a role that does not own the audit tables;
+  each range's digest is proved against its source rows and the chain must verify over the same rows before and after,
+  inside one transaction. Take a dump first: "Split the pre-0.8.6 audit history" in `docs/OPERATIONS.md`.
 - **Audit partition digest, export and anchor-aware verify.** `audit_partition_digest(partition)` (migration
   `0119_audit_partition_digest`) is a bounded, canonical digest of one closed audit partition, folded in `seq` order in constant
   memory. `GET /audit/export?partition=<name>` (and `wardyn audit export-partition`) streams a closed partition

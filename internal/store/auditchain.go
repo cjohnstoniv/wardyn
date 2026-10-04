@@ -196,7 +196,13 @@ func (s PG) VerifyAuditChain(ctx context.Context) (AuditChainStatus, error) {
 		return AuditChainStatus{}, fmt.Errorf("store: begin audit chain sweep: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // read-only: nothing to undo
+	return verifyAuditChain(ctx, tx)
+}
 
+// verifyAuditChain is VerifyAuditChain's sweep on a transaction the caller owns, so the legacy split
+// (SplitLegacyAudit) can prove the chain verifies, row for row, before and after it, inside the
+// transaction that makes the change.
+func verifyAuditChain(ctx context.Context, tx pgx.Tx) (AuditChainStatus, error) {
 	// An audit_events that was never partitioned (a schema from before 0111) has no anchors or
 	// high-water mark to check. Once it is partitioned, a missing bookkeeping table is an error, not a
 	// reason to skip the checks.

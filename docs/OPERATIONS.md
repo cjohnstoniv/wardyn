@@ -955,7 +955,7 @@ The two answers are the same function's, so they cannot disagree. The row counts
 the status call costs as much as the largest partition.
 
 **Pre-0.8.6 history** sits in one legacy partition that ends at the upgrade. It becomes droppable once the upgrade itself is older than
-the window, and it is dropped whole. An empty partition drops too and records a row count of `0`; verify anchors on the newest drop that removed rows.
+the window, and it is dropped whole; `wardynd -audit-split-legacy` splits it into ranges that drop one at a time (see "Split the pre-0.8.6 audit history", below). An empty partition drops too and records a row count of `0`; verify anchors on the newest drop that removed rows.
 
 **Autodrop (`WARDYN_AUDIT_RETENTION_AUTODROP`, off by default).** With it on, the sweeper leader drops each eligible oldest partition
 itself, as the system actor (`wardynd`), computing the digest in the database. It is **unattested**: nobody checked an
@@ -973,6 +973,49 @@ running or cannot reach the database.
 to the roles that can `EXECUTE` `audit_append` (a role added later needs the same grant: see the upgrade note), never to `PUBLIC`.
 A role with nothing but `CONNECT` gets `permission denied for function`, and the app role gets `permission denied` on a direct `UPDATE`
 of the policy or an `INSERT` into the anchors. Boot reports any `PUBLIC` `EXECUTE` on them next to the audit-function posture line.
+
+#### Split the pre-0.8.6 audit history
+
+All the history from before the upgrade sits in one partition, `audit_events_legacy`, so by default none of it can be dropped
+until the upgrade itself is older than the window. `wardynd -audit-split-legacy` splits it into one range per month of the
+rows' own time, each of which ordinary retention drops on its own schedule. It is one-way and offline: **take a dump first.**
+
+```sh
+# 1. Dump the database (pg_dump, or your platform's snapshot). The tool drops the legacy table once its copies are proved.
+# 2. Stop every writer: scale the Deployment to zero. The chart's Recreate strategy does this on an upgrade; a manual run needs it.
+kubectl -n wardyn scale deploy/wardyn --replicas=0
+# 3. Run it once from the same image, on the migrator's DSN (WARDYN_PG_MIGRATE_DSN when you split roles).
+wardynd -audit-split-legacy
+# 4. Scale back up, then check the chain and the ranges.
+curl -fsS -H "Authorization: Bearer $WARDYN_TOKEN" "$WARDYN_URL/api/v1/audit/chain/verify"
+wardyn audit retention                                              # the legacy ranges, oldest first, with the same eligibility as any partition
+```
+
+It refuses, exiting `3` and naming the reason, and changes nothing, in these cases: another session holds the single-instance
+lock (it names the holder); any other client is connected to the database, lock or no lock (a replica started with
+`-allow-multi-instance` never takes the lock); the connected role does not own the audit tables (`audit_split_not_migrator`:
+the app role cannot attach a partition or write an anchor, and the tool never falls back to another connection); the log is
+not partitioned yet (`audit_split_not_partitioned`: run `-migrate-only` first); there is no legacy partition left
+(`audit_split_no_legacy_partition`: it was already split or dropped) or it is empty; the chain does not verify before the
+split (`audit_split_chain_broken`: fix that first); or a table named for a range already exists. It exits `1` when the split
+fails, and then the log is exactly as it was: the whole split is one transaction. The time bound is `WARDYN_MIGRATE_TIMEOUT`
+(default 5 minutes); raise it for a large log, as the split copies every legacy row once and builds its indexes.
+
+**How the ranges are chosen.** A range is not a month of `time`. A spool replay writes an old `time` late, so a month cut by
+`time` would be scattered through the chain and dropping it would remove interior links. Instead the tool walks the rows in
+`seq` order, keeps the running maximum of `time`, and starts a new range where that maximum first crosses into a new UTC
+month. Each row's new `recorded_at` is the running maximum, never later than the instant before the upgrade, so every range
+is an unbroken run of `seq`, the ranges are in order, and each range's largest `recorded_at` is the largest `time` it holds,
+which is what its retention eligibility reads. `row_hash` does not cover `recorded_at`, so no hash changes. The ranges are
+named `audit_events_legacy_<YYYYMM>` and written to the expected partition manifest, with one `kind='split'` anchor each (its
+row count, `seq` range and digest).
+
+**What it proves before it commits.** For every range, the digest `audit_partition_digest` computes over the copy equals the
+fold over the source rows, and every column but `recorded_at` matches the source row for row; then the legacy table is
+dropped and the chain is verified again inside the same transaction, and it must inspect exactly the rows it inspected
+before (the same checked and legacy counts). Matching digests prove the copy; contiguity in `seq` order is what makes a range
+safe to remove, and the tool checks it as well. Afterwards the oldest range drops through `audit_retention_drop` like any
+partition, and verify then starts from that drop's anchor.
 
 ### Erasing a person
 
