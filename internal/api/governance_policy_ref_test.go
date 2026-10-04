@@ -228,6 +228,30 @@ func TestLiveRunDoorsNameTheRunsPolicy(t *testing.T) {
 			t.Errorf("policy = %+v, want %+v", body.Policy, want)
 		}
 	})
+	t.Run("a contactless leaf borrows site help at both doors", func(t *testing.T) {
+		leaf := limitsProfile("leased", types.GovernanceLimits{DenyInteractive: true, DenyUIApps: true})
+		lrun := types.AgentRun{ID: uuid.New(), CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1",
+			Task: "make test", GovernanceProfileID: &leaf.ID}
+		lst := &profileListStore{profiles: []types.GovernanceProfile{*leaf}, authzStore: newAuthzStore()}
+		lst.authzStore.runs[lrun.ID] = lrun
+		lst.authzStore.siteCfg.PolicyHelp = &policyref.Contact{RequestURL: "https://site.example.com/help"}
+		lcfg := baseTestConfig(newHarness(t), lst)
+		lcfg.OIDC = &oidc.Authenticator{}
+		lsrv := New(lcfg)
+		for name, door := range map[string]func(http.ResponseWriter, *http.Request, types.AgentRun) bool{
+			"attach":  lsrv.refuseInteractiveAttach,
+			"ui apps": lsrv.refuseUIAppsDenied,
+		} {
+			w := httptest.NewRecorder()
+			if !door(w, httptest.NewRequest(http.MethodGet, "/", nil), lrun) {
+				t.Fatalf("%s was not refused", name)
+			}
+			got := decodeRefusal(t, w)
+			if got.Policy == nil || got.Policy.Name != "leased" || got.Policy.RequestURL != "https://site.example.com/help" {
+				t.Errorf("%s policy = %+v, want leased with the site help", name, got.Policy)
+			}
+		}
+	})
 	t.Run("run detail with no profile falls back to policy_help, then to nothing", func(t *testing.T) {
 		bare := types.AgentRun{ID: uuid.New(), CreatedBy: "alice", State: types.RunRunning}
 		st.authzStore.runs[bare.ID] = bare
@@ -292,6 +316,25 @@ func TestRecordAndProviderSignInNameThePolicy(t *testing.T) {
 		}
 		if !strings.HasPrefix(got.Error, "interactive runs are not allowed by your governance profile") {
 			t.Errorf("sentence = %q, want the create path's own sentence", got.Error)
+		}
+	})
+
+	t.Run("record mode launch, contactless leaf borrows site help", func(t *testing.T) {
+		leaf := limitsProfile("leased", types.GovernanceLimits{DenyInteractive: true})
+		ws := &types.Workspace{ID: uuid.New(), Name: "ws", Status: types.WorkspaceScanned,
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: govWorkspaceRepo}}}
+		site := types.SiteConfig{PolicyHelp: &policyref.Contact{RequestURL: "https://site.example.com/help"}}
+		srv := providerRunFixture(t, site, assignedStore(leaf), ws)
+		code, body := recordDoor(t, srv, "", ws, true)
+		if code != http.StatusForbidden {
+			t.Fatalf("record = %d %s, want the 403 ceiling refusal", code, body)
+		}
+		var got refusalWire
+		if err := json.Unmarshal([]byte(body), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Policy == nil || got.Policy.Name != "leased" || got.Policy.RequestURL != site.PolicyHelp.RequestURL {
+			t.Errorf("policy = %+v, want leased with the site help", got.Policy)
 		}
 	})
 
