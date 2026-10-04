@@ -1064,7 +1064,8 @@ other bypass is).
 
 **What this does not reach.** Rows written before `WARDYN_AUDIT_SEAL=fields` was turned on, and before 0.8.6,
 are plaintext: no key covers them. A sealed field is stored as `seal2.<handle>.<ciphertext>`: the handle is a
-random id of the key, not derived from the person, and the erasure clears it from the key table, so neither the
+random id of the key (migration `0131_principal_key_handles` adds it to `principal_keys`), not derived from the
+person, and the erasure clears it from the key table, so neither the
 row nor any copy of it (spool, SIEM sink, export, federation push) holds anything in the field that names the
 person, in any encoding, and after the erasure nothing maps the handle back to them. A SIEM sink holds ciphertext
 for a sealed field, so after `audit_personal_fields` it holds nothing readable either; its copies of the clear
