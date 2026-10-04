@@ -593,7 +593,8 @@ describe("NewRunScreen — Title tracks the task until edited", { timeout: 20_00
 describe("NewRunScreen — Preflight", () => {
   async function readyScreen() {
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    // One change event, not eleven keystrokes (each re-renders the whole screen).
+    fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Refund flow" } });
     return screen.getByRole("button", { name: /^Check again$/ });
   }
 
@@ -680,7 +681,7 @@ describe("NewRunScreen — Preflight", () => {
     expect(await screen.findByTestId("preflight-result")).toBeInTheDocument();
 
     // Any field that reaches the wire body — the title is the cheapest one.
-    await user.type(screen.getByLabelText("Title"), " v2 PROD");
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Refund flow v2 PROD" } });
 
     await waitFor(() => expect(screen.queryByTestId("preflight-result")).toBeNull());
   });
@@ -691,7 +692,7 @@ describe("NewRunScreen — Preflight", () => {
     await user.click(button);
     expect(await screen.findByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText("Title"), " v2 PROD");
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Refund flow v2 PROD" } });
 
     await waitFor(() =>
       expect(screen.queryByText('workspaces[0]: unknown secret "prod-db"')).toBeNull(),
