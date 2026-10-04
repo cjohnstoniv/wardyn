@@ -8,8 +8,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -22,6 +25,16 @@ type attrStore struct {
 
 func (s *attrStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
 	return s.profiles, nil
+}
+
+// GetGovernanceProfileChain is the run's profile alone: each one here is standalone.
+func (s *attrStore) GetGovernanceProfileChain(_ context.Context, id uuid.UUID) ([]types.GovernanceProfile, error) {
+	for _, p := range s.profiles {
+		if p.ID == id {
+			return []types.GovernanceProfile{p}, nil
+		}
+	}
+	return nil, store.ErrNotFound
 }
 
 // TestDispatchWritesTheRunsAttribution: a run under a governance profile, with or

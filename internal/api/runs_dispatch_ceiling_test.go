@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -318,6 +319,11 @@ func (s ceilingRecordStore) ResolveGovernanceProfile(context.Context, []string, 
 // refusal attribution, and the embedded store has no such table.
 func (s ceilingRecordStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
 	return nil, nil
+}
+
+// GetGovernanceProfileChain finds none, for the same reason.
+func (s ceilingRecordStore) GetGovernanceProfileChain(context.Context, uuid.UUID) ([]types.GovernanceProfile, error) {
+	return nil, store.ErrNotFound
 }
 
 func (s ceilingRecordStore) HasGroupTierAssignments(context.Context) (bool, error) {
