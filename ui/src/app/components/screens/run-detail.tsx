@@ -13,6 +13,7 @@ import {
   ArrowRight,
   FileText,
   LayoutDashboard,
+  Logs,
   RotateCw,
   ScrollText,
   ShieldCheck,
@@ -68,6 +69,7 @@ import { useOperator, useOperatorResolved, usePrincipal, useSecurityOperator } f
 import { useConsoleMode, type ConsoleView } from "../wardyn/console-view";
 import {
   RUN_COCKPIT,
+  RUN_OUTPUT,
   VIEWER_APPROVAL_BLOCKS_NOTE,
 } from "../wardyn/copy";
 import { ProfileReview } from "./profile-review";
@@ -84,6 +86,7 @@ import { TerminalPane } from "./run-detail/terminal-notice";
 import { PolicyTab } from "./run-detail/policy-tab";
 import { POLICY_TAB } from "./run-detail/policy-tab-copy";
 import { RecordingTab } from "./run-detail/recording-tab";
+import { OutputTab } from "./run-detail/output-tab";
 import { cloneFromAudit, CLONE_UNREADABLE } from "./new-run/wizard-types";
 import type { WidgetContext } from "./run-detail/widget-registry";
 
@@ -92,7 +95,7 @@ const DETAIL_POLL_MS = 4000;
 // How long after a KILLED run ended its page keeps asking whether the kill row has landed.
 const KILL_SETTLE_MS = 120_000;
 
-type Tab = "overview" | "approvals" | "policy" | "audit" | "recording";
+type Tab = "overview" | "approvals" | "policy" | "audit" | "recording" | "output";
 
 // The route's component. KEYED by the route id on both run routes (/runs/:id
 // and /admin/runs/:id), so moving from run A to run B REMOUNTS the page: A's
@@ -555,6 +558,9 @@ function RunDetailPage({ id }: { id: string }) {
                 <TabsTrigger value="recording" className="h-7 gap-1.5 text-xs">
                   <SquareTerminal className="size-3.5" /> Recording
                 </TabsTrigger>
+                <TabsTrigger value="output" className="h-7 gap-1.5 text-xs">
+                  <Logs className="size-3.5" /> {RUN_OUTPUT.tab}
+                </TabsTrigger>
               </TabsList>
             }
           />
@@ -612,6 +618,15 @@ function RunDetailPage({ id }: { id: string }) {
                 setRecState("idle");
               }}
               onRetry={() => setRecState("idle")}
+            />
+          </TabsContent>
+
+          <TabsContent value="output" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
+            <OutputTab
+              runId={run.id}
+              live={!terminal}
+              endedAt={run.ended_at}
+              onGoRecording={() => setTab("recording")}
             />
           </TabsContent>
         </Tabs>

@@ -19,6 +19,7 @@ export * from "./types/site";
 export * from "./types/approvals";
 export * from "./types/audit";
 export * from "./types/recording";
+export * from "./types/run-output";
 export * from "./types/ssh";
 export * from "./types/permissions";
 export * from "./types/access";

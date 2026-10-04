@@ -313,4 +313,12 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     const adoPatTs = readFileSync(join(root, "ui/src/app/lib/types/ado-pat.ts"), "utf8");
     expect(new Set(tsInlineKeys(adoPatTs, "ADOPATAccess", "last_token"))).toEqual(new Set(goTags));
   });
+
+  // GET /runs/{id}/output: RunOutput mirrors runOutputResponse.
+  it("runOutputResponse (GET /runs/{id}/output): full parity with the TS RunOutput mirror", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/api/run_output.go"), "utf8"), "runOutputResponse");
+    expect(goTags.length).toBeGreaterThanOrEqual(7);
+    const outTs = readFileSync(join(root, "ui/src/app/lib/types/run-output.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(outTs, "RunOutput"))).toEqual(new Set(goTags));
+  });
 });
