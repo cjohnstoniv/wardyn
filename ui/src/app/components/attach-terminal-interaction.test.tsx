@@ -45,6 +45,8 @@ vi.mock("@xterm/xterm", () => {
     // F144: captured, not swallowed. The escape chord is bound through this
     // hook, so a no-op mock would make the keyboard-trap fix untestable — and
     // untestable is how it got filed in the first place.
+    modes = { mouseTrackingMode: "none" };
+    attachCustomWheelEventHandler() {}
     attachCustomKeyEventHandler(fn: (e: KeyboardEvent) => boolean) {
       keyHandler = fn;
     }
