@@ -116,6 +116,9 @@ describe("NewRunScreen — preflight's setup rows", () => {
 
   it("a stale verdict (body changed since) neither shows nor blocks", async () => {
     await preflighted([BACKEND("missing")]);
+    // Current, the verdict shows and blocks: the change below is what lifts both.
+    expect(screen.getByText(RAIL_SETUP.BACKEND_BLOCK, { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Launch run/ })).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Refund flow again" } });
     expect(screen.queryByText(RAIL_SETUP.BACKEND_BLOCK, { exact: false })).toBeNull();
     expect(screen.getByRole("button", { name: /Launch run/ })).toBeEnabled();
