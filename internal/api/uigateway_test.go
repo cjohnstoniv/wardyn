@@ -55,6 +55,12 @@ func newUIMemStore() *uiMemStore {
 	return &uiMemStore{sshMemStore: newSSHMemStore(), tickets: map[string]store.AttachTicket{}}
 }
 
+// GetSiteConfig answers an empty config: a refusal reads the site's policy_help
+// for a contactless leaf, and the embedded fake has no store to ask.
+func (s *uiMemStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 func (s *uiMemStore) MintAttachTicket(_ context.Context, token string, t store.AttachTicket, _, _ time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

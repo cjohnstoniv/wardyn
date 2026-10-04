@@ -25,6 +25,29 @@ func profilePolicyRef(p *ResolvedProfile) *policyref.Ref {
 	return policyref.Project(policyref.SourceProfile, p.Name, p.Contact)
 }
 
+// profileRefOrSiteHelp is profilePolicyRef, except that a leaf with no contact of
+// its own borrows the site's policy_help (already in hand) for the "how to ask"
+// fields, keeping the leaf's identity: the ref still names the profile.
+func profileRefOrSiteHelp(p *ResolvedProfile, help *policyref.Contact) *policyref.Ref {
+	if p != nil && p.Contact == nil && help != nil {
+		return policyref.Project(policyref.SourceProfile, p.Name, help)
+	}
+	return profilePolicyRef(p)
+}
+
+// profileRefWithSiteHelp reads the site config for profileRefOrSiteHelp only
+// when the leaf has no contact, so a leaf that publishes one costs no read. An
+// unreadable site config leaves the bare profile reference.
+func (s *Server) profileRefWithSiteHelp(ctx context.Context, p *ResolvedProfile) *policyref.Ref {
+	if p == nil || p.Contact != nil {
+		return profilePolicyRef(p)
+	}
+	if sc, ok := s.siteConfigSnapshot(ctx); ok {
+		return profileRefOrSiteHelp(p, sc.PolicyHelp)
+	}
+	return profilePolicyRef(p)
+}
+
 // policyRef is the policy that bounds this principal, with no store read: the
 // leaf profile, or the bare deployment arm for a member no profile binds, or nil
 // for an operator, who is not clamped. /me serves this directly; a written
@@ -47,6 +70,9 @@ func (c governanceCeiling) policyRef() *policyref.Ref {
 // An unreadable site config leaves the bare deployment reference: a refusal is
 // never turned into an error by its own help text.
 func (s *Server) ceilingPolicy(ctx context.Context, c governanceCeiling) *policyref.Ref {
+	if c.Profile != nil {
+		return s.profileRefWithSiteHelp(ctx, c.Profile)
+	}
 	ref := c.policyRef()
 	if ref == nil || ref.Source != policyref.SourceDeployment {
 		return ref
@@ -70,7 +96,7 @@ func (s *Server) runPolicyRef(ctx context.Context, run types.AgentRun) *policyre
 		return nil
 	}
 	if p != nil {
-		return profilePolicyRef(p)
+		return s.profileRefWithSiteHelp(ctx, p)
 	}
 	if sc, ok := s.siteConfigSnapshot(ctx); ok && sc.PolicyHelp != nil {
 		return policyref.Project(policyref.SourceDeployment, "", sc.PolicyHelp)
