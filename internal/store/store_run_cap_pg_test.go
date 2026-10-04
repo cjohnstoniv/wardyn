@@ -345,3 +345,37 @@ func TestPG_MarkRunRevived_ConcurrentExtendCannotSplitTheCapCount(t *testing.T) 
 		t.Fatalf("B: state %s lost %v, err %v; want the one live run", got.State, got.LostAt, err)
 	}
 }
+
+// TestPG_MarkRunRevived_OutageRunPastItsEndIsNotClaimed pins that an outage revive's claim needs
+// the run's end still in the future, as revive admission does: an end that passed after the
+// revive was admitted fails the claim (the revive_run_changed refusal) and leaves the row as it
+// was, whether the revive would start the agent or not. Otherwise a non-starting claim would make
+// an uncounted run count again after a create took its slot, and a starting one would start an
+// agent past its end.
+func TestPG_MarkRunRevived_OutageRunPastItsEndIsNotClaimed(t *testing.T) {
+	for name, startsAgent := range map[string]bool{"starts the agent": true, "starts no agent": false} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			pool := runsPGPoolIsolated(t)
+			pg := store.NewPG(pool)
+			a, err := pg.CreateRunUnderCap(ctx, newRun(types.RunRunning), 1)
+			if err != nil {
+				t.Fatalf("create A: %v", err)
+			}
+			var lostAt time.Time
+			if err := pool.QueryRow(ctx, `UPDATE agent_runs SET lost_at = now(), lost_reason = $2, ends_at = now() - interval '1 minute' WHERE id = $1 RETURNING lost_at`, a.ID, string(types.LostOutage)).Scan(&lostAt); err != nil {
+				t.Fatalf("keep A after an outage, its end passed: %v", err)
+			}
+			if ok, err := pg.MarkRunRevived(ctx, a.ID, types.LostOutage, nil, 1, startsAgent); err != nil || ok {
+				t.Fatalf("revive claim of A past its end = %v, %v; want false, nil", ok, err)
+			}
+			got, err := pg.GetRun(ctx, a.ID)
+			if err != nil || got.LostAt == nil || !got.LostAt.Equal(lostAt) || got.LostReason != types.LostOutage {
+				t.Fatalf("A after the refused claim: lost %v %q, err %v; want unchanged (outage at %v)", got.LostAt, got.LostReason, err, lostAt)
+			}
+			if n, err := pg.CountNonTerminalRuns(ctx); err != nil || n != 0 {
+				t.Fatalf("CountNonTerminalRuns = %d, %v; want 0 (A still holds no slot)", n, err)
+			}
+		})
+	}
+}

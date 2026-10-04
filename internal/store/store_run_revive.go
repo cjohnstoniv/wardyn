@@ -36,7 +36,7 @@ type RunReviver interface {
 	// perform (a lease end already cleared the pause of a run kept by its own end).
 	//
 	// false means the run went terminal, ended, was lost or revived since, or its grace or end ran
-	// out — it gets no proxy.
+	// out (an outage-kept run's end too, as revive admission requires) — it gets no proxy.
 	//
 	// startsAgent is a revive that starts the run's stopped agent (a reboot, an end, or an
 	// outage whose agent was stopped). With limit > 0 its claim takes a slot under the
@@ -116,8 +116,9 @@ func markRunRevived(ctx context.Context, q Querier, id uuid.UUID, from types.Los
 			paused_reason=CASE WHEN $3=$8 THEN '' ELSE paused_reason END,
 			token_renewed_at=now(), watcher_heartbeat=now(), updated_at=now()
 		WHERE id=$1 AND state=$2 AND (lost_at IS NOT NULL) = ($3 <> '') AND lost_reason=$3
-		  AND ($3 <> $4 OR (lost_at = $5 AND lost_at > $6::timestamptz AND (ends_at IS NULL OR ends_at > $7::timestamptz)))`,
-		id, string(types.RunRunning), string(from), string(types.LostEnded), lostAt, keptAfter, now, string(types.LostReboot))
+		  AND ($3 <> $4 OR (lost_at = $5 AND lost_at > $6::timestamptz AND (ends_at IS NULL OR ends_at > $7::timestamptz)))
+		  AND ($3 <> $9 OR ends_at IS NULL OR ends_at > now())`,
+		id, string(types.RunRunning), string(from), string(types.LostEnded), lostAt, keptAfter, now, string(types.LostReboot), string(types.LostOutage))
 	if err != nil {
 		return false, fmt.Errorf("store: mark run revived: %w", err)
 	}
