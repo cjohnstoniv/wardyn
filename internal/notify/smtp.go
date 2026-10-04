@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"mime"
 	"mime/quotedprintable"
 	"net"
@@ -27,6 +28,7 @@ import (
 const (
 	classNoRecipient     = "no_recipient"
 	classSTARTTLSMissing = "starttls_missing"
+	classAuthUnsupported = "auth_unsupported"
 )
 
 // errNoRecipient is returned by render when no address survives the send-time checks.
@@ -107,8 +109,8 @@ func (ch Channel) renderMail(deliveryID uuid.UUID, msg message, resolved []recip
 
 // sendMail delivers a rendered message over verified STARTTLS. Nothing is authenticated or sent until
 // the relay has advertised STARTTLS and its certificate has verified against the delivery client's
-// roots (the system roots plus WARDYN_TRUSTED_CA_FILE) for the configured host. net/smtp's PlainAuth is
-// used only after the upgrade, so its own localhost exemption is never reached.
+// roots (the system roots plus WARDYN_TRUSTED_CA_FILE) for the configured host. Authentication runs only
+// after the upgrade, so net/smtp's PlainAuth localhost exemption is never reached.
 func (ch Channel) sendMail(ctx context.Context, client *http.Client, body []byte, now time.Time) result {
 	m, err := mail.ReadMessage(bytes.NewReader(body))
 	if err != nil {
@@ -141,7 +143,12 @@ func (ch Channel) sendMail(ctx context.Context, client *http.Client, body []byte
 		return smtpResult(err)
 	}
 	if ch.Username != "" {
-		if err := c.Auth(smtp.PlainAuth("", ch.Username, ch.Password, ch.Host)); err != nil {
+		_, offered := c.Extension("AUTH")
+		auth := ch.smtpAuth(offered)
+		if auth == nil {
+			return result{class: classAuthUnsupported}
+		}
+		if err := c.Auth(auth); err != nil {
 			return smtpResult(err)
 		}
 	}
@@ -165,6 +172,53 @@ func (ch Channel) sendMail(ctx context.Context, client *http.Client, body []byte
 	}
 	_ = c.Quit() // the relay has accepted the message; a failed QUIT changes nothing
 	return result{}
+}
+
+// smtpAuth picks the mechanism from the relay's AUTH list (read after the TLS upgrade): PLAIN when it
+// is offered, else LOGIN, which Exchange Online offers without PLAIN. It returns nil when the relay
+// offers neither, so nothing is sent for a mechanism the relay never advertised.
+func (ch Channel) smtpAuth(offered string) smtp.Auth {
+	var plain, login bool
+	for _, m := range strings.Fields(offered) {
+		switch strings.ToUpper(m) {
+		case "PLAIN":
+			plain = true
+		case "LOGIN":
+			login = true
+		}
+	}
+	switch {
+	case plain:
+		return smtp.PlainAuth("", ch.Username, ch.Password, ch.Host)
+	case login:
+		return loginAuth{ch.Username, ch.Password}
+	}
+	return nil
+}
+
+// loginAuth is the LOGIN mechanism: the relay asks for "Username:" and then "Password:" in 334
+// challenges and each answer is the plain value (net/smtp base64-encodes it on the wire). Like
+// smtp.PlainAuth it refuses a connection that is not TLS.
+type loginAuth struct{ username, password string }
+
+func (a loginAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
+	if !server.TLS {
+		return "", nil, errors.New("smtp: refusing LOGIN over an unencrypted connection")
+	}
+	return "LOGIN", nil, nil
+}
+
+func (a loginAuth) Next(challenge []byte, more bool) ([]byte, error) {
+	if !more {
+		return nil, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(string(challenge))) {
+	case "username:":
+		return []byte(a.username), nil
+	case "password:":
+		return []byte(a.password), nil
+	}
+	return nil, fmt.Errorf("smtp: unexpected LOGIN challenge")
 }
 
 // tlsConfig is a copy of the delivery client's TLS config (which boot has given the trusted CA) with
