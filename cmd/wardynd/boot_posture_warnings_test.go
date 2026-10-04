@@ -94,8 +94,9 @@ func TestValidateBootPostureLogsTheWarnings(t *testing.T) {
 		t.Cleanup(func() { slog.SetDefault(prev) })
 		listen, ui, ssh, tmpl, strip, base := ":8080", ":8081", "", "", "", ""
 		redirect, control, internal, org, tok := "https://wardyn.example.com/auth/callback", "https://wardynd:8443", "", "", ""
-		allow, member, tail, rate, retention := false, false, 65536, 20, 30
+		allow, member, tail, rate, retention, seal := false, false, 65536, 20, 30, "off"
 		f := &bootFlags{
+			auditSeal:           &seal,
 			runOutputTailBytes:  &tail,
 			runOutputRetention:  &retention,
 			preflightRatePerMin: &rate,

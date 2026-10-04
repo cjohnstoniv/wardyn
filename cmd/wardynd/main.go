@@ -217,7 +217,8 @@ func run() error {
 	// writer (API, broker, identity, approvals, sweeper) — see buildAuditChain.
 	denials := &audit.DenialCoalescer{}
 	maskScopes := &maskScope{}
-	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg, serveChain{scope: maskScopes, denials: denials})
+	sealSrc := newAuditSealSource(sealModeOf(f)) // validated by validateBootPosture above
+	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg, sealSrc, serveChain{scope: maskScopes, denials: denials})
 	if err != nil {
 		return err
 	}
@@ -243,10 +244,13 @@ func run() error {
 	}
 	keyDomains := keydomain.NewService(pool, domainFile.Names())
 
-	// Run masking manifests: what each run was given, sealed in Postgres, so a
-	// restarted or second wardynd masks it and the doors refuse a run they
-	// cannot prove masked. Over the secret store's per-subject keys.
-	maskManifests, err := buildMaskManifests(pool, secrets, maskReg, maskScopes)
+	// Boot keys: created under a lock that serializes replicas (#754).
+	bootKeys := newBootKeyStore(secrets, pool, *f.allowMultiInstance)
+	// What is sealed under the secret store's per-subject keys: the run masking
+	// manifests (what each run was given, so a restarted or second wardynd masks
+	// it and the doors refuse a run they cannot prove masked) and the audit
+	// fields WARDYN_AUDIT_SEAL seals, whose recorder was built before the store.
+	maskManifests, err := armSubjectKeyed(bootCtx, pool, secrets, maskReg, maskScopes, sealSrc, bootKeys)
 	if err != nil {
 		return err
 	}
@@ -254,8 +258,6 @@ func run() error {
 	// Embedded identity provider: signing key persisted in the secret store,
 	// generated on first boot. The pg-backed revocation store is the kill-switch
 	// denylist (identity_revocations).
-	// Boot keys: created under a lock that serializes replicas (#754).
-	bootKeys := newBootKeyStore(secrets, pool, *f.allowMultiInstance)
 	signKey, err := loadOrCreateSigningKey(bootCtx, bootKeys)
 	if err != nil {
 		return err
@@ -445,6 +447,8 @@ func run() error {
 		KeyDomains:               keyDomains,
 		MaskRegistry:             maskReg,
 		MaskManifests:            maskManifests,
+		AuditUnsealer:            sealSrc.unsealer(),
+		SubjectKeys:              subjectKeysOf(secrets),
 		ExecOutputTailOff:        !*f.execOutputTail,
 		ExecOutputTailTTL:        *f.execOutputTailTTL,
 		RunOutputTailBytes:       *f.runOutputTailBytes,

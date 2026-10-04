@@ -159,6 +159,8 @@ type bootFlags struct {
 	approvalNotify     *string
 	auditSpool         *string
 	auditSource        *string
+	// auditSeal is WARDYN_AUDIT_SEAL (off|fields|full): whether personal audit fields are stored sealed under the person's own key.
+	auditSeal *string
 
 	// auditRetentionDays is WARDYN_AUDIT_RETENTION_DAYS (0 = keep forever): the audit log's retention window,
 	// persisted in audit_partition_meta at boot through audit_retention_set_policy. A decrease, 0 to any
@@ -454,6 +456,7 @@ func parseBootFlags() *bootFlags {
 		approvalNotify:     flagEnv("approval-notify", "WARDYN_APPROVAL_NOTIFY", "", "approval notification config JSON (webhook channels); empty disables notifications"),
 		auditSource:        flagEnv("audit-source", "WARDYN_AUDIT_SOURCE", "", `optional static string stamped as an extra "source" field on every audit event a sink serializes, so one SIEM index can tell multiple wardynd instances apart. Empty (default) adds no stamp`),
 		auditSpool:         flagEnv("audit-spool", "WARDYN_AUDIT_SPOOL", "./data/audit-spool.jsonl", "local append-only JSONL fallback for audit events whose Postgres write fails; empty disables"),
+		auditSeal:          flagEnv("audit-seal", "WARDYN_AUDIT_SEAL", "off", "off|fields: with fields, the personal fields of an audit row (docs/AUDIT-ACTIONS.md, Sealed fields) are stored, spooled and sent to sinks only as ciphertext under the person's own key, so erasing the person makes them unreadable everywhere they were copied. Rows written before it was turned on stay plaintext. full (also the actor) is not available yet and refuses to boot (default off)"),
 
 		// OFF by default (0 = keep forever), like recordingRetention above and for the same reason; unlike
 		// it, the audit log is only ever trimmed a whole closed partition at a time, through an attested drop.
@@ -581,7 +584,6 @@ func parseBootFlags() *bootFlags {
 			"Separate from -rewrap, which rotates the root key. See docs/operations/secrets-and-keys.md (default false)"),
 		vault:               registerVaultFlags(),
 		hostCapacity:        registerHostCapacityFlags(),
-		preflightRatePerMin: flagIntEnv("preflight-rate-per-min", "WARDYN_PREFLIGHT_RATE_PER_MIN", 20, "POST /runs/preflight calls one person may make per minute (burst 5); 0 turns the limit off. The admin token is exempt"),
 		azure:               registerAzureFlags(),
 
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address, e.g. ":2222". Empty (default) disables the gateway entirely`),

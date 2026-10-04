@@ -621,6 +621,10 @@ var auditActionGrammarAllow = map[string]bool{
 	// (docs/design/0.8/0.8.6-ar.md). Past tense on purpose: it records a drop that has already
 	// happened, written inside the drop's own transaction.
 	"audit.retention.partition_dropped": true,
+	// The audit-retention design fixed this name for the person-erasure act (the
+	// POST /people/{principal}/erasure row) before the lane that first emits it
+	// met this grammar. It ends in a noun, like authz.denied ends in a past tense.
+	"person.erasure": true,
 }
 
 // actionSegment is one dot-separated segment of an action name.

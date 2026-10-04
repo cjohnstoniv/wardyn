@@ -29,7 +29,7 @@ func (a *auditSink) Record(_ context.Context, ev types.AuditEvent) error {
 // above masking so a summary row is masked like any other (a secret in its
 // reason never reaches the recorder below).
 func TestAuditChainStampsAndCoalescesDryRunDenials(t *testing.T) {
-	plain, _, _, _, err := buildAuditChain(context.Background(), "", "", "", nil, secretmask.NewRegistry())
+	plain, _, _, _, err := buildAuditChain(context.Background(), "", "", "", nil, secretmask.NewRegistry(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestAuditChainStampsAndCoalescesDryRunDenials(t *testing.T) {
 	reg := secretmask.NewRegistry()
 	reg.AddGlobal("test", "dry-run-reason", time.Now(), []byte("s3cr3t-value"))
 	denials := &audit.DenialCoalescer{}
-	head, _, _, _, err := buildAuditChain(context.Background(), "", "", "", nil, reg, serveChain{denials: denials})
+	head, _, _, _, err := buildAuditChain(context.Background(), "", "", "", nil, reg, nil, serveChain{denials: denials})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestAuditChainStampsAndCoalescesDryRunDenials(t *testing.T) {
 // records under a portal's delegated request names the portal too (#1142),
 // not only the rows the API writes itself.
 func TestAuditChainStampsDelegation(t *testing.T) {
-	rec, _, _, _, err := buildAuditChain(context.Background(), "", "", "", nil, secretmask.NewRegistry())
+	rec, _, _, _, err := buildAuditChain(context.Background(), "", "", "", nil, secretmask.NewRegistry(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

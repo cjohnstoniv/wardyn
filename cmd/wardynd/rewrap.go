@@ -105,7 +105,7 @@ func rewrapMode(f *bootFlags) error {
 	}
 	defer release()
 
-	rec, fan, _, _, err := buildAuditChain(ctx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, secretmask.NewRegistry())
+	rec, fan, _, _, err := buildAuditChain(ctx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, secretmask.NewRegistry(), newAuditSealSource(audit.SealOff))
 	if err != nil {
 		return err
 	}

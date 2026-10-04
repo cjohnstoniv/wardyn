@@ -340,7 +340,10 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 			// passCtx.Err() == nil, so auditWriteTimedOut checks it too. Per
 			// docs/OPERATIONS.md an outage, chain-lock contention included, must
 			// quarantine nothing.
-			if passCtx.Err() != nil || auditWriteTimedOut(err) {
+			// A row waiting to be re-sealed (its subject's key could not be had when
+			// it was written) is no rejection either: the line is fine, the key store
+			// is what is away, and quarantining it would park a personal field.
+			if passCtx.Err() != nil || auditWriteTimedOut(err) || errors.Is(err, audit.ErrReplayDeferred) {
 				break
 			}
 			// A second rejection in the same pass answers the question the

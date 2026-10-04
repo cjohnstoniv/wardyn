@@ -38,6 +38,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -183,6 +184,14 @@ type Config struct {
 	// spooling chain) the spool drain replays into. It must bypass the spool to
 	// avoid a re-spool loop / lock re-entry; a nil recorder disables the drain.
 	AuditDrainRecorder audit.Recorder
+	// AuditUnsealer opens the sealed personal fields of the audit rows the
+	// audit reads serve (WARDYN_AUDIT_SEAL, internal/audit/seal.go). Nil serves
+	// rows as stored.
+	AuditUnsealer audit.Unsealer
+	// SubjectKeys is the per-subject key service; person erasure destroys a
+	// person's audit-seal key through it. Nil makes the audit_personal_fields
+	// scope unavailable.
+	SubjectKeys *subjectkey.Manager
 	// AuditSinkDrops, when set, reports per-sink audit-delivery drop counts for
 	// the wardyn_audit_sink_drops_total metric (cmd/wardynd wires it to the audit
 	// Fanout's DropsByName). Nil omits the metric — a deployment with no SIEM

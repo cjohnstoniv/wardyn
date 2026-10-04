@@ -192,7 +192,7 @@ func warnAllowUnknownMigrations(allow bool) {
 
 // buildAuditChain assembles the audit recorder chain:
 // audit.DelegationRecorder → audit.DryRunRecorder → (audit.DenialCoalescer →)
-// maskingRecorder → spoolingRecorder → (fanoutRecorder →) store.Recorder.
+// maskingRecorder → sealingRecorder → spoolingRecorder → (fanoutRecorder →) store.Recorder.
 // The coalescer is wired only when the caller passes one (serve): the rewrap,
 // rekey and migrate_secrets commands run no preflight.
 //
@@ -206,11 +206,17 @@ func warnAllowUnknownMigrations(allow bool) {
 // log-only, never blocking startup. Extracted verbatim from run(); the returned
 // *sinks.Fanout (nil when unconfigured) must be Closed on shutdown.
 //
+// Sealing sits below masking and above the spool (WARDYN_AUDIT_SEAL): the row
+// hash, the spool, the store and every sink see a personal field only as
+// ciphertext. seal is armed with its keys once the secret store exists.
+//
 // It also returns the *api.AuditSpool and the RAW store.Recorder so the API
 // server can start the background drain that replays spooled events back into the
 // store once it recovers. The drain MUST target the raw store recorder —
 // NOT the returned masking/spooling chain — or a replay that hit a still-down
 // store would re-spool (and re-enter the spool lock) instead of retrying later.
+// That recorder is wrapped in sealingRecorder's replay mode, which re-seals the
+// rows that waited under the pending key before the store sees them.
 // serveChain is what only the serving boot adds to the chain; the maintenance
 // modes (rewrap, rekey, migrate_secrets) pass none.
 type serveChain struct {
@@ -218,7 +224,7 @@ type serveChain struct {
 	denials *audit.DenialCoalescer // summarises repeated refused dry runs
 }
 
-func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source string, pool *pgxpool.Pool, maskReg *secretmask.Registry, serve ...serveChain) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
+func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source string, pool *pgxpool.Pool, maskReg *secretmask.Registry, seal *auditSealSource, serve ...serveChain) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
 	// #10 WARDYN_AUDIT_SOURCE: set once, before any sink is constructed/starts
 	// emitting — see sinks.Source's doc comment. A no-op (empty) is
 	// byte-identical to before this field existed.
@@ -246,7 +252,8 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 			slog.Info("wardynd: audit fallback spool", slog.String("path", spoolPath))
 		}
 	}
-	masked := maskingRecorder{inner: spoolingRecorder{inner: auditRec, spool: auditFallback}, reg: maskReg}
+	sealed := sealingRecorder{inner: spoolingRecorder{inner: auditRec, spool: auditFallback}, src: seal, spool: auditFallback}
+	masked := maskingRecorder{inner: sealed, reg: maskReg}
 	var coalescer *audit.DenialCoalescer
 	if len(serve) > 0 {
 		masked.scope = serve[0].scope // the serving boot's; maintenance modes label nothing
@@ -254,15 +261,15 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 	}
 	// Outermost: a row any writer records under a portal's delegated request
 	// names the portal (data.via, #1142), and one recorded under a preflight
-	// request says it was a dry run (data.dry_run), before it is masked, spooled
-	// or stored. The coalescer sits above masking so its summary rows are masked
-	// like any other.
+	// request says it was a dry run (data.dry_run), before it is masked, sealed,
+	// spooled or stored. The coalescer sits above masking so its summary rows are
+	// masked like any other.
 	var head audit.Recorder = masked
 	if coalescer != nil {
 		coalescer.Inner = masked
 		head = coalescer
 	}
-	return audit.DelegationRecorder{Inner: audit.DryRunRecorder{Inner: head}}, fan, auditFallback, storeRec, nil
+	return audit.DelegationRecorder{Inner: audit.DryRunRecorder{Inner: head}}, fan, auditFallback, sealingRecorder{inner: storeRec, src: seal, replay: true}, nil
 }
 
 // substrateDeps is the registration Deps every substrate constructor receives,

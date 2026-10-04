@@ -142,6 +142,8 @@ var PlatformNames = map[string]bool{
 	"wardyn-internal-ca":    true,
 	// Seals each run's stored proxy config (cmd/wardynd's loadOrCreateRunConfigKey).
 	"wardyn-run-config-key": true,
+	// Holds audit rows whose subject key could not be had (internal/audit/seal.go).
+	"wardyn-audit-pending-key": true,
 	// The hybrid laptop's org device credential (cmd/wardynd's bootHybrid).
 	"wardyn-org-device-credential": true,
 }

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/erasure"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -67,39 +68,20 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 		writeErrorReason(w, http.StatusUnprocessableEntity, reason, eraseRefusalMsg(refusal))
 		return
 	}
-	data := map[string]any{}
-	// The sign-in's row id is read BEFORE anything is erased, because the erase
-	// must hold the redemption lock for it: a configuration that cannot be read
-	// refuses the erase rather than proceeding without the lock.
-	rowID, cfgErr := s.adoSignInRowID(r.Context())
-	if cfgErr != nil {
+	// One code path erases credentials: the orchestrator's credentials scope
+	// (person_erasure.go), which POST /people/{principal}/erasure shares. This
+	// route keeps credentials only; it never reaches audit, run history or
+	// outputs.
+	var rep secretstore.EraseReport
+	_, err := s.erasureOrchestrator(&rep).Orchestrate(r.Context(), owner, []erasure.Scope{erasure.Credentials})
+	if errors.Is(err, errSignInConfigUnreadable) {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 			"credential.erase", owner, "failure", withSecretOwner(map[string]any{"count": 0, "reason": reasonCredentialEraseSignInConfigUnreadable}, owner, known)))
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonCredentialEraseSignInConfigUnreadable,
 			"The Azure DevOps sign-in configuration could not be read, so nothing was erased. Try again.")
 		return
 	}
-	// Revoke the person's live Azure DevOps tokens first: the erase takes the
-	// sign-in that revoking them needs. That runs BEFORE and OUTSIDE the three
-	// locks below, because its paths take the Entra redemption lock themselves
-	// (ado_pat_client.go) and a nested take would deadlock.
-	// end runs even on a panic, or the person's mints would self-revoke until restart.
-	var rep secretstore.EraseReport
-	err := func() error {
-		defer s.adoSignInEnds.begin(owner, adoPATRevokeOffboarding)()
-		s.revokeOwnerRunPATs(r.Context(), owner, adoPATRevokeOffboarding)
-		return s.eraseLocked(r.Context(), owner, rowID, &rep)
-	}()
-	// crypto_erased are the rows under the person's destroyed principal key;
-	// deleted are the rest (v1 rows, rows written with principal keys off,
-	// external pointers), which are gone only to the backup horizon.
-	data["count"], data["crypto_erased"], data["deleted"] = rep.Count, rep.CryptoErased, rep.Count-rep.CryptoErased
-	if rep.Store != "" {
-		data["store"], data["purged"] = rep.Store, rep.Purged
-		if !rep.Purged && rep.RecoverableDays > 0 {
-			data["recoverable_days"] = rep.RecoverableDays
-		}
-	}
+	data := credentialEraseData(rep)
 	resp := maps.Clone(data)
 	if err != nil {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),

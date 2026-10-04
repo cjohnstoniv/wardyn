@@ -899,8 +899,9 @@ that removes anything emits its own `recording.retention.sweep` audit event. Und
 a "right to erasure" obligation on data an audit row could contain, the honest
 answer is: **you cannot selectively erase it, and the fix that exists for
 recordings does not exist here.** The partition drop (0.8.6) is the retention half of the real
-fix, and it removes whole months, never one person's rows. Crypto-shredding, which would make one person's fields
-unreadable while the chain still verifies, is not built.
+fix, and it removes whole months, never one person's rows. The crypto-shredding half, which makes one person's
+fields unreadable while the chain still verifies, is [below](#erasing-a-person), for the rows written after
+`WARDYN_AUDIT_SEAL=fields` is on.
 
 ### Audit retention: the attested partition drop
 
@@ -972,6 +973,42 @@ running or cannot reach the database.
 to the roles that can `EXECUTE` `audit_append` (a role added later needs the same grant: see the upgrade note), never to `PUBLIC`.
 A role with nothing but `CONNECT` gets `permission denied for function`, and the app role gets `permission denied` on a direct `UPDATE`
 of the policy or an `INSERT` into the anchors. Boot reports any `PUBLIC` `EXECUTE` on them next to the audit-function posture line.
+
+### Erasing a person
+
+`POST /api/v1/people/{principal}/erasure` (security tier; `wardyn person erase`)
+erases one person's retained records by explicit scope, in one audited act
+(`person.erasure`). The body names the scopes, a non-empty list of:
+
+| Scope | What it erases |
+|---|---|
+| `credentials` | the person's stored credentials and the key they sit under (the same erase as `DELETE /people/{principal}/credentials`, which erases credentials only and nothing else) |
+| `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
+| `run_tasks` | the task text of the runs the person created |
+| `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
+| `recordings` | their session recordings. Opt-in: nothing deletes a recording unless this scope is asked for |
+| `mask_copies` | the masking manifests of those runs, after their live attaches, SSH shells and relays are fenced |
+
+The scopes run in the order above whatever order the body lists them: the person's live
+consumers are fenced first, the data they could still reach next, the keys last. Every scope is
+idempotent. A scope that fails stops the run: the answer is `500` `erasure_incomplete` with `done` and
+`remaining`, the `person.erasure` row records a `failure` naming each scope's outcome, and a retry with the
+same scopes finishes the rest. Erasure is reported complete (`200`, `outcome` success) only when every scope
+asked for finished.
+
+Refusals, all before anything is erased: the operator namespace (`erasure_operator_namespace`), an unknown or
+empty `scopes` (`erasure_scope_unknown`), a principal that does not resolve (`owner_unresolved`,
+`owner_ambiguous`), and the person being the caller for any scope but `credentials`
+(`erasure_self_refused`; the admin token, which is no person, may erase anyone, and is audited as every
+other bypass is).
+
+**What this does not reach.** Rows written before `WARDYN_AUDIT_SEAL=fields` was turned on, and before 0.8.6,
+are plaintext: no key covers them. A SIEM sink holds ciphertext for a sealed field, so after
+`audit_personal_fields` it holds nothing readable either; its copies of the clear `actor` and `source_ip`
+columns are outside this scope. A backup restores the wrapped key and so the field until the backup expires or
+the wrapping key version is retired. A row waiting in an audit spool under the pending key when the person is
+erased is stored as `[erased]` when the spool drains. See [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#sealed-fields) for
+which fields are sealed and why the rest stay clear.
 
 ## Monitoring
 
@@ -1274,6 +1311,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `POST /admin/delegates` — registering a portal that may act for the people in one group ([Delegated run management](#delegated-run-management-portals)): it creates a credential | ⛔ admin only |
 | `GET /admin/delegates` and `DELETE /admin/delegates/{id}` — the registered-portal inventory and revoking one portal: the device pair's shape, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/credentials` — erasing every credential one person has stored (offboarding, 0.8): it only removes reach and returns a count, never a value | ⛔ admin or `security_admin` |
+| `POST /people/{principal}/erasure` — erasing one person's retained records by scope (0.8.6, [Erasing a person](#erasing-a-person)): it only removes records and returns counts, never a record's content; nobody erases themself except their credentials | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/ssh-keys` — removing every registered SSH key for a resolved subject or email; returns the removed-key count | ⛔ admin or `security_admin` |
 | `GET /people` — the people this deployment knows (0.8.6): everyone who has signed in and everyone set up beforehand, with each one's role (what the role mappings give their email), first and last sign-in, deactivation, and counts of live sessions (0 or 1: sessions are stateless cookies, so this says whether the last sign-in could still hold one), API tokens, SSH keys, stored credentials and runs still going. Paged (`?limit`, default 50, at most 200, and an opaque `cursor`) and filtered by `?q=` (principal or email prefix) and `?state=` (`active` or `deactivated`). It discloses the email of everyone who has signed in, the audience that can already read the audit trail, so it sits on this tier. `wardyn people list` prints it | ⛔ admin or `security_admin` |
 | `POST /people` and `GET /people/{principal}/tokens` — setting up a person before their first sign-in, and listing the API tokens an admin once created for them (0.8, [Tokens for a person who never signs in](#tokens-for-a-person-who-never-signs-in)). `POST /people/{principal}/tokens` stays mounted on this tier so a non-admin is refused as ever, and answers every admin `403` `person_token_mint_removed`: no role creates a token that acts as another person (0.8.5) | ⛔ admin or `security_admin` |
