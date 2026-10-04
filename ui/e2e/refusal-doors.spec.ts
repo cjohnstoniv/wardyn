@@ -267,6 +267,12 @@ test.describe("a New Run refusal opens the door its provider names (state 4)", (
         json: { error: sentence, reason: "model_credential", provider: P.gateway.id, kind: P.gateway.kind },
       });
     });
+    // New Run preflights on its own, and the hermetic backend's real answer
+    // (no model providers, no barrier) holds Launch. This case is about the
+    // launch refusal, so the check is answered clear.
+    await page.route("**/api/v1/runs/preflight", (route) =>
+      route.fulfill({ json: { enforced_confinement_class: "CC1", setup_items: [] } }),
+    );
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
