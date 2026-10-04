@@ -3122,8 +3122,8 @@ governance writes: a walkthrough". It is published here because of what it leave
 
 **What it guarantees**, with SSO configured and the admin token held out of band:
 
-- no single human changes the effect of a covered target through the governance, permissions, access
-  or user-type API;
+- no single human changes the effect of a covered target through the governance, permissions, access,
+  user-type or key-domain API;
 - every change carries two named humans in the audit chain, a proposer and a distinct approver with
   the authority to make the write;
 - every change applies against exactly the state the approver reviewed, or not at all.

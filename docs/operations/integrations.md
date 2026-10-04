@@ -45,7 +45,7 @@ set is the ONLY writable set:
 | `anthropic_api_key`, `anthropic_subscription`, `bedrock`, `openai_api_key` | Left the closed set in 0.8 — see "Model access is not an integration" above |
 | Generic kinds (`"jira"`, `"artifactory"`, …) | A 0.5 carry-over — no longer writable, though a row stored under an earlier release still loads, still sits in `SiteConfig`, and is still injected by `internal/api/integrations_run.go` |
 | `azure_openai` | Gone as a kind (also a 0.5 carry-over) |
-| `azure_foundry` | A model-provider kind, not an integration kind: each person's own Entra sign-in for one Azure Foundry resource. See "Azure Foundry" below |
+| `azure_foundry` | A model-provider kind, not an integration kind: each person's own Entra sign-in for one Azure Foundry resource. **Switched off in 0.8.6:** a provider write of this kind answers `400` "the azure_foundry kind is not available in this release". See "Azure Foundry" below |
 
 ## Where it's configured
 
@@ -173,6 +173,8 @@ owner's own key, token or sign-in, or by nothing.
   `internal/api/record_model_provider.go`).
 
 ## Azure Foundry (`azure_foundry`)
+
+**Switched off in 0.8.6:** a provider write of this kind answers `400` "the azure_foundry kind is not available in this release". This section describes the design a later release turns on. Do not set up Entra consent for it yet.
 
 An `azure_foundry` model provider sends a run's model calls to one Azure Foundry endpoint. It uses the
 launching person's own Entra sign-in. No key or token is ever in the sandbox. The harness holds the

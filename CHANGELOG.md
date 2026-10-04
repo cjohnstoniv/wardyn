@@ -129,6 +129,23 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `WARDYN_RUN_OUTPUT_PERSIST` to `off` to keep the 0.8.5 behaviour of an in-memory tail only. A secret a
   command prints that Wardyn never registered is kept like any log line, and is now persisted. See
   `docs/OPERATIONS.md` "Run output".
+- **`POST /runs/preflight` is now rate limited, on by default.** `WARDYN_PREFLIGHT_RATE_PER_MIN` (default `20`,
+  burst 5) lets one person (an SSO session, a local-mode principal or the person behind a `wdn_` token) make that
+  many preflight calls a minute; the next is refused `429` `preflight_rate_limited` before any gate runs, and no
+  audit row is written. The limit is per person and per wardynd replica. A CI pipeline that preflights more than
+  20 times a minute under one token fails on upgrade: raise the value, or set it to `0` to turn the limit off.
+  The admin token is exempt and `POST /runs` is never limited. See `docs/ENV.md`.
+- **The kept run output tail grows from 8 KiB to 64 KiB.** `WARDYN_RUN_OUTPUT_TAIL_BYTES` (default `65536`,
+  between `1024` and `1048576`) sizes the tail of every non-interactive run (0.8.5 kept 8 KiB, for `task_mode=exec`
+  runs only) and caps `GET /api/v1/runs/{id}/output?tail=`. The tail is now also what is persisted (previous entry),
+  and memory per live run grows with it. See `docs/OPERATIONS.md` "Run output".
+- **The terminal behaves differently on day one.** A plain drag in the console terminal is now a tmux selection with a
+  copy offer (Shift+drag, Option+drag on macOS, keeps the browser's native selection), right-click stays with the
+  browser, and the wheel scrolls tmux history. Every link a terminal prints asks for confirmation before it opens,
+  except the two device-login pages (`https://github.com/login/device` and `https://microsoft.com/devicelogin`).
+  A person's second tab is admitted read-only behind their first, and when that first tab's writer stops answering
+  the stale tab is evicted and the new one promoted. Sandboxes already running from 0.8.5 images get the tmux
+  settings at their next attach. No migration, environment or chart change.
 
 ### Added
 
@@ -149,8 +166,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   A person's erasure (`mask_copies`, `run_outputs`) deletes the token and chunk rows, and nothing writes them
   back. A server whose database cannot be reached for this state refuses the work rather than guessing: `503`.
   **After an upgrade or a restart a client that attaches while the previous process's lease is still live
-  is read-only for up to about six seconds, then promoted.** Each replica holds one more database connection,
-  for `LISTEN wardyn_live`, outside `pool_max_conns`. See `docs/OPERATIONS.md` "Replicas".
+  is read-only for up to about six seconds, then promoted.** Each replica holds two more database connections,
+  for `LISTEN wardyn_live` and `LISTEN wardyn_mask`, outside `pool_max_conns`. See `docs/OPERATIONS.md` "Replicas".
 - **API tokens can expire.** Migration `0114_api_tokens_expires_at` adds a nullable `api_tokens.expires_at`;
   every existing token keeps no expiry. `POST /api/v1/me/tokens` takes an optional `ttl_seconds`, a negative
   value is a `400 api_token_ttl_invalid`, and the response and both token lists carry `expires_at`. An
@@ -191,11 +208,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   decision on the run detail, the attach panel's refusal and the New Run rail's profile line show the owner and
   one link, mail address or sentence, from the server's `policy` reference. A link is built only for `https:` or one
   `mailto:` address, re-checked in the browser. The governance profile editor gains the four contact fields.
-- **Capability grants, the enforcement map, availability, user-type priority and role mappings can require a
-  second human too.** With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, a human's write to `/permissions/grants`,
+- **Capability grants, the enforcement map, availability, user-type priority, role mappings and key-domain
+  assignments can require a second human too.** With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, a human's write to `/permissions/grants`,
   `/permissions/enforcement`, `/permissions/availability/{kind}/*` (when the restricted bit changes),
-  `PUT /user-types/{id}` (when the priority changes) or `/access/mappings` is held as a pending change and answered
-  `202`, and applies only on a distinct approval. A role mapping needs a super admin to approve it, and its lockout
+  `PUT /user-types/{id}` (when the priority changes), `/access/mappings` or `/key-domains/assignments/{subject_type}/{subject}`
+  is held as a pending change and answered `202`, and applies only on a distinct approval. A key-domain assignment set
+  or delete is held always and approved by a security admin or super admin. A role mapping needs a super admin to approve it, and its lockout
   guard is judged against the approver. No write to these targets has a narrowing exemption.
 
 - **Governance profile and assignment writes can require a second human.** With `WARDYN_GOVERNANCE_SECOND_HUMAN`
@@ -207,7 +225,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the `admin-token` principal is the break-glass (`governance.change.bypass`) and local mode answers `503`. Migration
   `0126_governance_changes` adds one table and changes no existing row. With the switch unset every route answers as
   before. Upgrade the CLI and SDK callers before turning it on: a client older than 0.8.6 reads the `202` as an empty
-  profile. The console shows the held changes on a Changes tab of the Governance screen, with the server's diff and
+  profile. A key-domain assignment write is held the same way (see the next entry). The console shows the held changes on a Changes tab of the Governance screen, with the server's diff and
   Approve and Reject, and every covered write there answers a held change as "Submitted for approval", never as a save.
   The switch boots; `audit_personal_fields` erasure clears the proposer and decider of a change.
 
@@ -363,6 +381,31 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `resourcequotas`. With `k8s.readNodes` (`WARDYN_K8S_READ_NODES`, off by default; adds `list` on `nodes` to the
   ClusterRole), a run bigger than every node its placement allows also gets a warning. That compares requests
   to node size, not free capacity, and the scheduler stays the authority.
+- **An absolute run-age cap, `WARDYN_RUN_MAX_AGE`** (a duration, off by default). The lifecycle reaper stops a RUNNING
+  run older than this, busy or not, and writes a `run.max_age.expire` audit row. On Kubernetes it also sets
+  `activeDeadlineSeconds` on the proxy pod and the agent pod (the value plus 10 minutes), so a run whose control plane
+  is gone still ends. See `docs/ENV.md` and `docs/OPERATIONS.md` "Run output".
+- **Constrained-admin mode, `WARDYN_GOVERN_ADMIN_RUNS`** (off by default). Every run an SSO admin or an admin-role
+  personal token launches is governed like a member's; the admin token and local mode stay ungoverned and are marked
+  `governance_exempt` on `run.create`. Record Mode is refused for a governed admin (`403` `recording_governed`) unless
+  `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` is set to `recording`, and an admin's User view onto another user type is a
+  read-only preview whose writes are refused `409` `user_view_preview`. See "Constrained-admin mode" in
+  `docs/operations/member-mode.md`.
+- **Fleet capacity.** `WARDYN_MAX_CONCURRENT_RUNS` (default `0`, unlimited) caps non-terminal runs across the
+  deployment (`422` `run_quota`); `WARDYN_SANDBOX_REQUEST_RATIO` (Kubernetes, unset by default) sets the agent pod's
+  requests as a fraction of its limits so more runs fit a node; `GET /api/v1/admin/runs/capacity` reports the
+  configured reservations, and `wardyn_runs_active`, `wardyn_runs_unschedulable`, `wardyn_runs_cpu_millis_held`,
+  `wardyn_runs_memory_mib_held` and `wardyn_runs_oldest_active_seconds` export them. The chart's
+  `metrics.serviceMonitor.enabled` (default `false`) renders a `ServiceMonitor`. See "Fleet capacity" in
+  `docs/OPERATIONS.md` and `docs/operations/monitoring.md`.
+- **Key custody options.** `WARDYN_KEK_REQUIRED` (default off; chart `kek.required`) refuses to start while the local key
+  wraps credentials. With Azure Key Vault, `WARDYN_AZURE_KEK_KEY_PLATFORM`, `WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM`
+  and `WARDYN_AZURE_CLIENT_ID_PLATFORM` (all unset by default, set together) split wardynd's own signing, session
+  and SSH host keys onto a second key pair and Entra identity, so the credential identity wraps no boot key. See
+  `docs/operations/secrets-and-keys.md`.
+- **Terminal.** The console gains a per-browser "Terminal renderer" setting (Auto, GPU or Compatible). `session.attach`
+  rows carry a `state` (`attaching`, then `ready`), and `session.takeover` a `reason`: `stale_writer` when a person's
+  stale tab is evicted. See `docs/AUDIT-ACTIONS.md`.
 
 ### Security
 
@@ -496,7 +539,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `Recreate`: this tolerates a node failure, it is not zero-downtime upgrades. What stays per replica
   (connection caps, rate limiters, debounce caches) multiplies by the replica count; an audit spool on
   `emptyDir` is lost with its node; SSH exec, SFTP and direct-tcpip were never masked. After any restart, runs
-  that predate 0.8.6 are refused at the five masking doors until they end (Q-HA1, above). See "High
+  that predate 0.8.6 are refused at the five masking doors until they end (see the upgrade entry above). See "High
   availability" in `docs/OPERATIONS.md`.
 
 ## [0.8.5] — 2026-10-02
