@@ -53,7 +53,8 @@ func activateNotifyConfig(t *testing.T) {
 	t.Helper()
 	cfg, err := notify.Parse(`{"channels":[
 		{"id":"sec-oncall","type":"webhook","url":"` + notifyFixtureURL + `"},
-		{"id":"plain","type":"webhook","url":"http://127.0.0.1:9/hook"}]}`)
+		{"id":"plain","type":"webhook","url":"http://127.0.0.1:9/hook"},
+		{"id":"mail","type":"smtp","host":"relay.example.test","port":587,"from":"wardyn@example.test","to":["ops@example.test"],"username":"smtpuser-xq","password":"smtppass-xq"}]}`)
 	if err != nil {
 		t.Fatalf("parse notify config: %v", err)
 	}
@@ -258,8 +259,8 @@ func TestApprovalNotifyStatus_HostOnlyNeverTheURL(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.Channels) != 2 {
-		t.Fatalf("channels = %+v, want both configured channels", resp.Channels)
+	if len(resp.Channels) != 3 {
+		t.Fatalf("channels = %+v, want all configured channels", resp.Channels)
 	}
 	c := resp.Channels[0]
 	if c.ID != "sec-oncall" || c.Type != "webhook" || c.DestinationHost != notifyFixtureHost || c.LastError != "http_status:503" || c.FailedLastHour != 4 || c.LastSuccessAt == nil {
@@ -267,6 +268,14 @@ func TestApprovalNotifyStatus_HostOnlyNeverTheURL(t *testing.T) {
 	}
 	if p := resp.Channels[1]; p.DestinationHost != "127.0.0.1" || p.LastError != "" {
 		t.Errorf("channel 1 = %+v, want host 127.0.0.1 and the unsafe error class dropped", p)
+	}
+	if m := resp.Channels[2]; m.ID != "mail" || m.Type != "smtp" || m.DestinationHost != "relay.example.test" {
+		t.Errorf("channel 2 = %+v, want the smtp relay host", m)
+	}
+	for _, leak := range []string{"smtpuser-xq", "smtppass-xq"} {
+		if strings.Contains(w.Body.String(), leak) {
+			t.Errorf("status body contains %q: %s", leak, w.Body.String())
+		}
 	}
 }
 

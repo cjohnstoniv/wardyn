@@ -342,6 +342,9 @@ func (s *Server) finishRunOutput(ctx context.Context, runID uuid.UUID) {
 		reasons["dropped"] = true
 	}
 	incomplete := !clean || dropped
+	e.fmu.Lock()
+	e.incomplete = incomplete
+	e.fmu.Unlock()
 	if st == nil {
 		if incomplete {
 			reasons["incomplete"] = true

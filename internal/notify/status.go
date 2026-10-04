@@ -25,9 +25,12 @@ func ChannelInfos() []ChannelInfo {
 	return out
 }
 
-// host is the hostname of the channel's URL, parsed, never cut out of the string. An unparsable URL
-// yields "": Parse already refused one at boot, so this is only a guard.
+// host is an smtp channel's validated relay host, else the hostname of the channel's URL, parsed, never
+// cut out of the string. An unparsable URL yields "": Parse already refused one at boot, so this is only a guard.
 func (ch *Channel) host() string {
+	if ch.Type == TypeSMTP {
+		return ch.Host
+	}
 	u, err := url.Parse(ch.URL)
 	if err != nil {
 		return ""
