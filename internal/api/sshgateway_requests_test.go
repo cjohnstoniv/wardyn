@@ -69,8 +69,9 @@ func TestSSHGateway_SessionRequestsAreAnsweredByWhatTheyAre(t *testing.T) {
 	if !ask("env", true, ssh.Marshal(sshEnvMsg{Name: "TERM", Value: "xterm"})) {
 		t.Error("env is always acknowledged, whether or not it is kept")
 	}
-	// A burst of resizes with nothing reading them coalesces rather than blocking the loop,
-	// a malformed one is dropped, and a client that asks for a reply gets one.
+	// A burst of resizes with nothing reading them coalesces rather than blocking the loop
+	// (a blocked loop would never answer the third), a client that asks for a reply gets
+	// one, and a malformed one sent without a reply does not stall the exec behind it.
 	for range 3 {
 		if !ask("window-change", true, ssh.Marshal(sshWindowChangeMsg{Columns: 100, Rows: 30})) {
 			t.Error("window-change with a reply requested was refused")

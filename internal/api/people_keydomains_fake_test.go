@@ -366,7 +366,7 @@ func TestKeyDomains_RequestsAreValidatedBeforeTheServiceIsAsked(t *testing.T) {
 		})
 	}
 
-	// A malformed DELETE is refused the same way, and never reads a body.
+	// A malformed DELETE is refused the same way.
 	w := do(t, srv, http.MethodDelete, "/api/v1/key-domains/assignments/planet/mars", adminToken, "")
 	if w.Code != http.StatusBadRequest || errorReason(w) != reasonKeyDomainRequestInvalid {
 		t.Errorf("DELETE of an unknown subject type = %d %s, want 400 %s", w.Code, w.Body.String(), reasonKeyDomainRequestInvalid)
