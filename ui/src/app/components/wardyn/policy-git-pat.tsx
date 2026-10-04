@@ -65,7 +65,7 @@ function ReposField({
 }) {
   const joined = (repos ?? []).join("\n");
   const [text, setText] = React.useState(joined);
-  if (splitRepos(text).join("\n") !== joined) setText(joined);
+  if (splitRepos(text).join("\n") !== splitRepos(joined).join("\n")) setText(joined);
   return (
     <Textarea
       id={id}

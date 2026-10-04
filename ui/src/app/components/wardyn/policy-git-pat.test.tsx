@@ -142,6 +142,21 @@ describe("GitPATSection (packet M7)", () => {
     expect(screen.queryByText(C.REPOS_HINT)).not.toBeInTheDocument();
   });
 
+  it("shows stored repos with surrounding whitespace without re-rendering forever", () => {
+    render(
+      <Harness
+        initial={{
+          ...BASE,
+          eligible_grants: [
+            { kind: "git_pat", requires_approval: false, scope: { ...PAT, repos: [" group/app", "group/libs/* "] } },
+          ],
+        }}
+        seen={[]}
+      />,
+    );
+    expect(screen.getByLabelText(C.REPOS)).toHaveValue(" group/app\ngroup/libs/* ");
+  });
+
   it("shows a value the editor would not write, instead of hiding it", () => {
     render(
       <Harness
