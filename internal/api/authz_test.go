@@ -440,7 +440,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/user-types":        {class: classSecurity},
 	"PUT /api/v1/user-types/{id}":    {class: classSecurity},
 	"DELETE /api/v1/user-types/{id}": {class: classSecurity},
-	// Key domains (migration 0109): the security tier, beside the credential erase.
+	// Key domains (migration 0121): the security tier, beside the credential erase.
 	"GET /api/v1/key-domains":                                         {class: classSecurity},
 	"PUT /api/v1/key-domains/assignments/{subject_type}/{subject}":    {class: classSecurity},
 	"DELETE /api/v1/key-domains/assignments/{subject_type}/{subject}": {class: classSecurity},

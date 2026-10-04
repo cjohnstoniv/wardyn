@@ -928,7 +928,7 @@ func recordLoginIdentity(ctx context.Context, st store.PrincipalIdentityStore, f
 }
 
 // stampLoginGroups records the groups a verified login carried, which a key
-// domain's group assignment reads (migration 0109). Best-effort, like
+// domain's group assignment reads (migration 0121). Best-effort, like
 // refreshLoginStamps: a hiccup logs and the login still succeeds, leaving the
 // person's earlier groups in force until their next sign-in.
 func stampLoginGroups(ctx context.Context, pool *pgxpool.Pool, sub string, groups []string, truncated bool) {

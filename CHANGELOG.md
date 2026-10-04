@@ -201,7 +201,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   write) and `git_pat_narrowing_unsupported_host` (an Azure DevOps host, or a GitHub-brokered forge). The PAT
   itself is not narrowed. Upgrade the proxy image together with wardynd: an older proxy refuses the new
   `pat_grants` keys at start.
-- **Key domains (`WARDYN_KEY_DOMAINS_FILE`, chart `kek.domains`; migration `0109_key_domains`).** A domain
+- **Key domains (`WARDYN_KEY_DOMAINS_FILE`, chart `kek.domains`; migration `0121_key_domains`).** A domain
   is a tenant of the key service, declared in deploy configuration only: a Transit key and an optional
   Vault role, or a Key Vault key pair and an optional client id. A security admin assigns a user, a group or
   everyone to a domain (`PUT`/`DELETE /api/v1/key-domains/assignments/{subject_type}/{subject}`, `GET

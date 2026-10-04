@@ -810,7 +810,7 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// security-tier duty as authoring a governance profile; deciding who IS a
 	// type stays on the operatorOnly /access routes.
 	s.mountUserTypeRoutes(securityOps)
-	// Key domains (migration 0109): which declared domain a person's next
+	// Key domains (migration 0121): which declared domain a person's next
 	// principal-key generation is wrapped under.
 	s.mountKeyDomainRoutes(securityOps)
 	// Sandbox sweep. SUPER, and the reason matters because an operator deciding

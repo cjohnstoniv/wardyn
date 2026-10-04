@@ -395,7 +395,7 @@ type Config struct {
 	// disables both surfaces.
 	Secrets secretstore.Store
 	// KeyDomains resolves, lists and writes the key-domain assignments behind
-	// /key-domains (migration 0109). Nil answers 501.
+	// /key-domains (migration 0121). Nil answers 501.
 	KeyDomains *keydomain.Service
 	// MaskRegistry, when non-nil, is used to mask verbatim secret values from
 	// PTY capture / asciicast uploads before they reach the RecordingStore.

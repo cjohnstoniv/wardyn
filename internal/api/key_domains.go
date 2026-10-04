@@ -3,7 +3,7 @@
 
 package api
 
-// Key domains (WARDYN_KEY_DOMAINS_FILE, migration 0109): a domain is a tenant of
+// Key domains (WARDYN_KEY_DOMAINS_FILE, migration 0121): a domain is a tenant of
 // the deployment's key service, declared in deploy configuration and proven at
 // boot. The API never declares one. It only says which declared domain a
 // subject's NEXT principal-key generation is wrapped under, with the governance
