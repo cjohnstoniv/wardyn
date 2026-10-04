@@ -249,10 +249,13 @@ func (s *Server) handleSCIMDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = s.removeGroupMembers(ctx, st, g, ids, scimSlot(ctx))
 	}
-	if err == nil {
-		err = st.DeleteScimGroup(ctx, g.ID)
+	if err != nil {
+		s.scimServerError(w, r, "delete the group", err)
+		return
 	}
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
+	// Only the group's own delete may find it already gone; a not-found from the removal above is a step that
+	// failed, and the 5xx lets the identity provider retry it.
+	if err := st.DeleteScimGroup(ctx, g.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
 		s.scimServerError(w, r, "delete the group", err)
 		return
 	}

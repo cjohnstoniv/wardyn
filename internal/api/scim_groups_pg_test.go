@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -146,9 +147,9 @@ type moverWorld struct {
 	memberCookie, unrelatedCookie   *http.Cookie
 }
 
-func newMoverWorld(t *testing.T) *moverWorld {
+func newMoverWorld(t *testing.T, shape ...func(*Config)) *moverWorld {
 	t.Helper()
-	e := newSCIMEnv(t)
+	e := newSCIMEnv(t, shape...)
 	w := &moverWorld{e: e}
 	mint := func(dst *groupToken, id entrafake.Identity) *http.Cookie {
 		c, tid, raw := e.mintTokenAs(e.a, id)
@@ -366,6 +367,34 @@ func TestSCIMGroupReaddedMemberIsRemovedAgain(t *testing.T) {
 
 // DELETE of a group removes every member as a mover, then the group; remove-all by PATCH is the same sweep.
 func TestSCIMGroupDeleteAndRemoveAllMoveEveryone(t *testing.T) {
+	t.Run("DELETE is not answered 204 when a token was revoked under the sweep", func(t *testing.T) {
+		race := &revokeRaceStore{}
+		w := newMoverWorld(t, func(c *Config) {
+			race.PG = c.Store.(store.PG)
+			c.Store = race
+		})
+		e := w.e
+		race.arm(w.withGroup.id)
+		if r := e.scim(e.a, http.MethodDelete, "/scim/v2/Groups/"+w.group.ID, ""); r.Code < 500 {
+			t.Fatalf("DELETE with a token revoked under the sweep = %d %s, want 5xx so the provider retries", r.Code, r.Body.String())
+		}
+		if r := e.scim(e.a, http.MethodGet, "/scim/v2/Groups/"+w.group.ID, ""); r.Code != http.StatusOK {
+			t.Errorf("the group is gone while its removal is unfinished: %d", r.Code)
+		}
+		if r := e.scim(e.b, http.MethodDelete, "/scim/v2/Groups/"+w.group.ID, ""); r.Code != http.StatusNoContent {
+			t.Fatalf("the retried DELETE = %d %s", r.Code, r.Body.String())
+		}
+		if r := e.scim(e.a, http.MethodGet, "/scim/v2/Groups/"+w.group.ID, ""); r.Code != http.StatusNotFound {
+			t.Errorf("GET of the deleted group = %d, want 404", r.Code)
+		}
+		if !e.tokenRevoked(w.truncated.id) || !e.tokenRevoked(w.withGroup.id) {
+			t.Error("the retried DELETE left the mover's group-holding tokens unrevoked")
+		}
+		// Each instance keeps its own audit log; the pair holds one row per member, none repeated by the retry.
+		if got := len(e.rows(e.a, "scim.group.member_remove")) + len(e.rows(e.b, "scim.group.member_remove")); got != 2 {
+			t.Errorf("%d scim.group.member_remove rows, want one per member", got)
+		}
+	})
 	t.Run("DELETE", func(t *testing.T) {
 		w := newMoverWorld(t)
 		e := w.e
@@ -592,4 +621,34 @@ func TestSCIMGroupsRoutes(t *testing.T) {
 	if w := e.scim(n, http.MethodPost, "/scim/v2/Groups", post); w.Code != http.StatusCreated || decodeSCIMGroup(t, w.Body.Bytes()).ExternalID != rec.ExternalID {
 		t.Errorf("the recorded POST /Groups = %d %s", w.Code, w.Body.String())
 	}
+}
+
+// revokeRaceStore revokes an armed token first, as the owner's own DELETE would between the sweep's listing and
+// its revoke, so the sweep's revoke finds nothing live and answers store.ErrNotFound.
+type revokeRaceStore struct {
+	store.PG
+	mu    sync.Mutex
+	armed map[uuid.UUID]bool
+}
+
+func (r *revokeRaceStore) arm(id uuid.UUID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.armed == nil {
+		r.armed = map[uuid.UUID]bool{}
+	}
+	r.armed[id] = true
+}
+
+func (r *revokeRaceStore) RevokeAPIToken(ctx context.Context, id uuid.UUID, principal string, now time.Time) (types.APIToken, error) {
+	r.mu.Lock()
+	race := r.armed[id]
+	delete(r.armed, id)
+	r.mu.Unlock()
+	if race {
+		if _, err := r.PG.RevokeAPIToken(ctx, id, principal, now); err != nil {
+			return types.APIToken{}, err
+		}
+	}
+	return r.PG.RevokeAPIToken(ctx, id, principal, now)
 }
