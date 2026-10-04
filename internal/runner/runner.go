@@ -186,6 +186,11 @@ type Resources struct {
 type AttachOptions struct {
 	Cols uint16
 	Rows uint16
+	// Observer marks a client that only watches the shared tmux session. Its
+	// tmux client is attached with the ignore-size flag (tmux >= 3.2), so it is
+	// never counted when tmux sizes the shared window; on older tmux it is
+	// seeded from the writer's live size instead (Cols/Rows).
+	Observer bool
 }
 
 // Session is a live, bidirectional interactive PTY stream into a RUNNING
