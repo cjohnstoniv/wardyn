@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,6 +31,13 @@ import (
 // them needs this lock.
 func claimSingleInstance(ctx context.Context, pool *pgxpool.Pool, ha bool) (func(), error) {
 	if ha {
+		// A pool below the minimum makes every replica's sweeper leader run solo
+		// (epoch 0, always current): each replica sweeps with no election and no
+		// fencing, which defeats the leader-only guarantees HA exists for.
+		if mc := pool.Config().MaxConns; mc < db.SweeperLeaderMinConns {
+			return nil, fmt.Errorf("refusing to start: WARDYN_HA is set but pool_max_conns=%d; the sweeper leader election needs a pool of at least %d so it can hold its lock. "+
+				"Raise pool_max_conns in WARDYN_PG_DSN, or run one replica without WARDYN_HA", mc, db.SweeperLeaderMinConns)
+		}
 		slog.Info("wardynd: WARDYN_HA is set; the single-instance lock is not taken, and other replicas may serve this database")
 		return func() {}, nil
 	}

@@ -34,10 +34,12 @@ const (
 	sweeperLeaderMonitor = 5 * time.Second
 	// sweeperLeaderPoll is how often a gated sweeper looks for a new term.
 	sweeperLeaderPoll = time.Second
-	// sweeperLeaderMinConns is the smallest pool that can spare the connection
+	// SweeperLeaderMinConns is the smallest pool that can spare the connection
 	// the leader holds for the process lifetime (the single-instance lock holds
-	// one more, and requests need at least one). A smaller pool runs solo.
-	sweeperLeaderMinConns = 3
+	// one more, and requests need at least one). A smaller pool runs solo, which
+	// is unfenced, so WARDYN_HA refuses to boot on one (claimSingleInstance).
+	SweeperLeaderMinConns = 3
+	sweeperLeaderMinConns = SweeperLeaderMinConns
 )
 
 // SweeperLeader elects and monitors the sweeper leader. Build one with
