@@ -271,7 +271,7 @@ type Store interface {
 	// Governance changes (migration 0126): a governance write held for a second human. Part of
 	// this interface, not an optional seam, because a store without them would let a covered write
 	// through unreviewed. See governance_changes.go for each one's contract.
-	ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChange, ttl time.Duration) (types.GovernanceChange, []uuid.UUID, error)
+	ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChange, ttl time.Duration) (types.GovernanceChange, []ExpiredGovernanceChange, error)
 	ListGovernanceChanges(ctx context.Context, state string) ([]types.GovernanceChange, error)
 	GetGovernanceChange(ctx context.Context, id uuid.UUID) (types.GovernanceChange, error)
 	DecideGovernanceChange(ctx context.Context, id uuid.UUID, d GovernanceDecision, fn GovernanceDecideFunc) (types.GovernanceChange, error)

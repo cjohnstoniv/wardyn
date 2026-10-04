@@ -260,6 +260,7 @@ func TestPG_GovernanceChanges_RepeatCreateNamesTheHeldOne(t *testing.T) {
 	if first.Op != "create" {
 		t.Fatalf("first create held as %q", first.Op)
 	}
+	var matches *bool
 	heldBy := func(w *httptest.ResponseRecorder) uuid.UUID {
 		t.Helper()
 		if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangePending {
@@ -267,18 +268,26 @@ func TestPG_GovernanceChanges_RepeatCreateNamesTheHeldOne(t *testing.T) {
 		}
 		var held struct {
 			Pending types.GovernanceChange `json:"pending_change"`
+			Matches *bool                  `json:"pending_change_matches"`
 		}
 		if err := json.Unmarshal(w.Body.Bytes(), &held); err != nil || held.Pending.State != types.GovernanceChangePending {
 			t.Fatalf("the 409 carries no held change: %s (%v)", w.Body, err)
 		}
+		matches = held.Matches
 		return held.Pending.ID
 	}
 	if id := heldBy(e.call(e.alice, http.MethodPost, "/api/v1/governance/profiles", body)); id != first.ID {
 		t.Errorf("a repeat POST names %s, want the held create %s", id, first.ID)
 	}
-	// A create at a caller-chosen id is the same name, so the same held create.
+	if matches == nil || !*matches {
+		t.Errorf("a repeat of the same create: pending_change_matches = %v, want true", matches)
+	}
+	// A create at a caller-chosen id is the same name, so the same held create, with other content.
 	if id := heldBy(e.call(e.carol, http.MethodPut, "/api/v1/governance/profiles/"+uuid.NewString(), profileBody("repeat-new", "pypi.org"))); id != first.ID {
 		t.Errorf("a create by PUT of the same name names %s, want %s", id, first.ID)
+	}
+	if matches == nil || *matches {
+		t.Errorf("a create of the same name with other content: pending_change_matches = %v, want false", matches)
 	}
 	if n := e.pendingCount(); n != 1 {
 		t.Fatalf("%d pending changes after repeat creates, want 1", n)
@@ -294,13 +303,52 @@ func TestPG_GovernanceChanges_RepeatCreateNamesTheHeldOne(t *testing.T) {
 	if again.ID == first.ID || e.changeState(first.ID) != types.GovernanceChangeExpired {
 		t.Fatalf("after the first lapsed: new change %s, first %s; want a new change and the first expired", again.ID, e.changeState(first.ID))
 	}
-	if rows := e.audits("governance.change.expire"); len(rows) != 1 || rows[0].Target != first.ID.String() {
-		t.Errorf("governance.change.expire rows = %+v, want one naming %s", rows, first.ID)
+	rows := e.audits("governance.change.expire")
+	if len(rows) != 1 || rows[0].Target != first.ID.String() {
+		t.Fatalf("governance.change.expire rows = %+v, want one naming %s", rows, first.ID)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(rows[0].Data, &data); err != nil || data["target_key"] != first.TargetKey || data["target_key"] == again.TargetKey {
+		t.Errorf("expire row data = %s, want target_key %s (the lapsed create's own, not the new proposal's %s)", rows[0].Data, first.TargetKey, again.TargetKey)
 	}
 	e.approve(again.ID)
 	e.approve(other.ID)
 	if n := e.pendingCount(); n != 0 {
 		t.Errorf("%d pending changes after both creates applied, want 0", n)
+	}
+}
+
+// TestPG_GovernanceChanges_RefusalSaysWhetherTheHeldChangeIsTheProposal: a write at a held target is a
+// 409 carrying the held change and whether it is this proposal. The same update again matches; one with
+// other content, or a delete, does not, so the caller never mistakes the held change for its own write.
+func TestPG_GovernanceChanges_RefusalSaysWhetherTheHeldChangeIsTheProposal(t *testing.T) {
+	e := newGovEnv(t)
+	prof := e.seedProfile("held-target", "pypi.org")
+	path := "/api/v1/governance/profiles/" + prof.ID.String()
+	widened := func(extra string) string { return profileBody("held-target", "pypi.org", extra) }
+	held := e.pending(e.call(e.alice, http.MethodPut, path, widened("github.com")))
+	for _, c := range []struct {
+		name, method, body string
+		want               bool
+	}{
+		{"the same update", http.MethodPut, widened("github.com"), true},
+		{"an update with other content", http.MethodPut, widened("npmjs.org"), false},
+		{"a delete", http.MethodDelete, "", false},
+	} {
+		w := e.call(e.carol, c.method, path, c.body)
+		var got struct {
+			Pending types.GovernanceChange `json:"pending_change"`
+			Matches *bool                  `json:"pending_change_matches"`
+		}
+		if w.Code != http.StatusConflict || json.Unmarshal(w.Body.Bytes(), &got) != nil || got.Pending.ID != held.ID {
+			t.Fatalf("%s = %d %s, want 409 naming %s", c.name, w.Code, w.Body, held.ID)
+		}
+		if got.Matches == nil || *got.Matches != c.want {
+			t.Errorf("%s: pending_change_matches = %v, want %v", c.name, got.Matches, c.want)
+		}
+	}
+	if n := e.pendingCount(); n != 1 {
+		t.Errorf("%d pending changes, want only the first", n)
 	}
 }
 

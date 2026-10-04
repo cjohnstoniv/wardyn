@@ -23,10 +23,13 @@ type errorBody struct {
 	// Policy (deny-f2) names the policy whose ceiling refused the request and how
 	// to ask for a change. Present only on a ceiling refusal that carries one.
 	Policy *policyref.Ref `json:"policy,omitempty"`
-	// PendingChange names the held governance change a 409 governance_change_pending is ABOUT, so a
-	// repeat apply of the same document can report it as still pending instead of failing. Absent
-	// when the change was decided between the refusal and the read.
+	// PendingChange names the held governance change a 409 governance_change_pending is ABOUT.
+	// Absent when the change was decided between the refusal and the read.
 	PendingChange *types.GovernanceChange `json:"pending_change,omitempty"`
+	// PendingChangeMatches is present with PendingChange: true when the held change is this very
+	// proposal (same op, same payload), so a repeat apply can report it as still pending; false when
+	// it is another change, which the repeat must fail on rather than report as its own.
+	PendingChangeMatches *bool `json:"pending_change_matches,omitempty"`
 }
 
 // writeErrorReasonPolicy is writeErrorReason for a ceiling refusal that names the
