@@ -103,6 +103,9 @@ func (f *fakeStopper) StopRunMaxAge(_ context.Context, id uuid.UUID, createdNotA
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.maxAgeCutoff = createdNotAfter
+	if err, ok := f.errOn[id]; ok {
+		return lifecycle.StopOutcome{}, err
+	}
 	if f.noApplyOn[id] {
 		return lifecycle.StopOutcome{Applied: false}, nil
 	}
@@ -804,6 +807,43 @@ func TestMaxAgeStopsAnOldRunWhateverItsIdleness(t *testing.T) {
 	}
 	if rec.len() != 1 {
 		t.Errorf("audit rows = %d, want 1", rec.len())
+	}
+}
+
+// TestMaxAgeStopFailureFailsTheTick: a failed max-age stop is a failed tick like a failed idle
+// stop: Tick returns the error, the sweep records an attempt without a success, no max-age audit
+// row is written for it, and a healthy over-age run later in the same scan is still stopped.
+func TestMaxAgeStopFailureFailsTheTick(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	tracker, ticks := sweepTicks(func() time.Time { return base })
+	store := &fakeStore{}
+	stopper := newFakeStopper()
+	rec := &fakeRecorder{}
+	bad, good := uuid.New(), uuid.New()
+	stopper.errOn[bad] = errors.New("synthetic update failure")
+	store.rows = []lifecycle.RunSummary{
+		{ID: bad, CreatedAt: base.Add(-25 * time.Hour), UpdatedAt: base},
+		{ID: good, CreatedAt: base.Add(-26 * time.Hour), UpdatedAt: base},
+	}
+	r := lifecycle.New(store, stopper, rec, lifecycle.Config{
+		Interval: time.Hour, MaxAge: 24 * time.Hour, Now: func() time.Time { return base }, Sweeps: tracker,
+	})
+
+	err := r.Tick(context.Background())
+
+	if err == nil || !strings.Contains(err.Error(), bad.String()) {
+		t.Fatalf("Tick error = %v, want the failed max-age stop of %v", err, bad)
+	}
+	tk, _ := ticks.Ticks(context.Background())
+	got := tk[sweephealth.IdleReaper]
+	if got.AttemptedAt.IsZero() || !got.SucceededAt.IsZero() {
+		t.Fatalf("sweep tick = %+v, want an attempt and no success", got)
+	}
+	if !slices.Equal(stopper.maxAgeStopped, []uuid.UUID{good}) {
+		t.Fatalf("max-age stops = %v, want only the healthy run %v", stopper.maxAgeStopped, good)
+	}
+	if rec.len() != 1 {
+		t.Errorf("audit rows = %d, want 1 (the healthy run only)", rec.len())
 	}
 }
 
