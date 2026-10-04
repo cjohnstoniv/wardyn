@@ -4,6 +4,7 @@
  */
 
 import type { RunPolicySpec } from "../../lib/types";
+import { GIT_PAT_SCOPE } from "./copy/git-pat";
 
 export interface FieldHelp {
   /** One line: what the key does. */
@@ -80,7 +81,9 @@ export const FIELD_HELP = {
   eligible_grants: {
     what: "The ceiling of credential scopes this run may request — eligibility, not issuance.",
     values:
-      "kind: github_token | cloud_sts | api_key | git_pat | ssh_key, each with its own scope, plus ttl_seconds (1h max) and requires_approval.",
+      "kind: github_token | cloud_sts | api_key | git_pat | ssh_key, each with its own scope, plus ttl_seconds (1h max) and requires_approval. " +
+      "A git_pat scope also takes repos, access, api and forge. " +
+      `${GIT_PAT_SCOPE.HONESTY_TOKEN} ${GIT_PAT_SCOPE.HONESTY_API} ${GIT_PAT_SCOPE.HONESTY_BROKER}`,
     doc: "eligible_grants--grantspec",
     snippet: [
       {

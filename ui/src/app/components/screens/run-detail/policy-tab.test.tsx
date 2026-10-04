@@ -23,6 +23,7 @@ import { toYaml } from "../../wardyn/code-block";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { PolicyTab } from "./policy-tab";
 import { CHANGE_HEADING, POLICY_TAB } from "./policy-tab-copy";
+import { GIT_PAT_SCOPE } from "../../wardyn/copy";
 
 const RUN = {
   id: "run-1",
@@ -470,6 +471,36 @@ describe("PolicyTab — the Summary", () => {
     expect(rowValue("Apps", "UI apps")).toHaveTextContent("vscode → localhost:8080/");
     expect(rowValue("Files and code", "Repositories")).toHaveTextContent("acme/api at main → work/api");
     expect(rowValue("Traffic checks", "Traffic checks")).toHaveTextContent("On");
+  });
+
+  it("shows a git access token's narrowing: host, chips, and the repositories or every repository", async () => {
+    const grants = [
+      {
+        kind: "git_pat",
+        scope: { host: "gitlab.example.com", secret_name: "s", forge: "gitlab", repos: ["group/app", "group/libs/*"], access: "read", api: true },
+        requires_approval: false,
+      },
+      { kind: "git_pat", scope: { host: "git.example.com", secret_name: "t" }, requires_approval: false },
+      { kind: "git_pat", scope: { host: "none.example.com", secret_name: "u", repos: [] }, requires_approval: false },
+    ];
+    show(view({ spec: { ...SPEC, eligible_grants: grants } }));
+    await ready();
+    const rows = within(sectionFor("Credentials")).getAllByText("Git access token").map((dt) => dt.nextElementSibling as HTMLElement);
+    expect(rows).toHaveLength(3);
+
+    expect(rows[0]).toHaveTextContent("gitlab.example.com");
+    expect(within(rows[0]).getByText("Read-only")).toBeInTheDocument();
+    expect(within(rows[0]).getByText(GIT_PAT_SCOPE.RUN_API)).toBeInTheDocument();
+    expect(rows[0]).toHaveTextContent("group/app, group/libs/*");
+    expect(rows[0]).not.toHaveTextContent(GIT_PAT_SCOPE.RUN_REPOS_ALL);
+    expect(within(rows[0]).getByText("Read-only").closest("[title]")).toHaveAttribute("title", GIT_PAT_SCOPE.HONESTY_TOKEN);
+
+    expect(rows[1]).toHaveTextContent("git.example.com");
+    expect(rows[1]).toHaveTextContent(GIT_PAT_SCOPE.RUN_REPOS_ALL);
+    expect(within(rows[1]).queryByText("Read-only")).not.toBeInTheDocument();
+    expect(within(rows[1]).queryByText(GIT_PAT_SCOPE.RUN_API)).not.toBeInTheDocument();
+
+    expect(rows[2]).toHaveTextContent(GIT_PAT_SCOPE.REPOS_NONE);
   });
 
   it("shows Azure DevOps access only when the policy set capabilities", async () => {

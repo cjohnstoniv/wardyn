@@ -43,6 +43,7 @@ import { EFFECT_PAST, splitToolRules, ToolRulesSection } from "./policy-tool-rul
 import { PushRulesSection } from "./policy-push-rules";
 import { ADOCapabilitiesSection } from "./policy-ado-capabilities";
 import { RAIL_CHECK } from "./copy";
+import { GitPATSection } from "./policy-git-pat";
 
 export type PolicyPanelInstance = "run" | "policies";
 
@@ -312,6 +313,9 @@ export interface PolicyPanelProps {
   /** The Azure DevOps row's capability_ceiling (/setup/status scm_access);
    *  capabilities off it render locked. Undefined = unknown, nothing locked. */
   adoCeiling?: readonly string[];
+  /** The editor's last save refusal; one naming an axis of a git_pat grant is
+   *  shown on that field (policy-git-pat.tsx). */
+  serverError?: string | null;
   /**
    * Run instance: the "Reuse a saved policy" half of the mode row. The screen
    * owns the policy list and the selection; this is only where it renders and
@@ -337,6 +341,7 @@ export function PolicyPanel({
   interactive,
   adoCeiling,
   modelProviders,
+  serverError,
   savedPolicy,
   className,
 }: PolicyPanelProps) {
@@ -468,6 +473,16 @@ export function PolicyPanel({
             <ADOCapabilitiesSection
               spec={parsed.spec}
               ceiling={adoCeiling}
+              onSpecChange={(next) => onChange(JSON.stringify(next, null, 2))}
+            />
+          )}
+
+          {/* git_pat narrowing (repos, access, api, forge): one block per
+              stored-token grant, with the honesty lines packet M7 fixes. */}
+          {parsed.ok && (
+            <GitPATSection
+              spec={parsed.spec}
+              serverError={serverError}
               onSpecChange={(next) => onChange(JSON.stringify(next, null, 2))}
             />
           )}
