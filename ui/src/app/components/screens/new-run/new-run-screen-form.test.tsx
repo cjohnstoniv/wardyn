@@ -594,7 +594,7 @@ describe("NewRunScreen — Preflight", () => {
   async function readyScreen() {
     renderScreen();
     await user.type(await screen.findByLabelText("Title"), "Refund flow");
-    return screen.getByRole("button", { name: /^Preflight$/ });
+    return screen.getByRole("button", { name: /^Check again$/ });
   }
 
   it("renders the warnings, risk grade, and enforced confinement class on success", async () => {

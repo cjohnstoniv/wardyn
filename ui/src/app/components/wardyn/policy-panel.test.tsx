@@ -228,11 +228,12 @@ describe("PolicyPanel — run instance extras", () => {
     const user = userEvent.setup();
     const onPreflight = vi.fn();
     const { unmount } = render(<Harness instance="run" initial={VALID} />);
-    expect(screen.queryByRole("button", { name: /preflight/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /check again/i })).toBeNull();
     unmount();
 
     render(<Harness instance="run" initial={VALID} onPreflight={onPreflight} />);
-    await user.click(screen.getByRole("button", { name: /preflight/i }));
+    expect(screen.getByText("Checked as you edit. A refusal holds Launch for up to a minute.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^check again$/i }));
     expect(onPreflight).toHaveBeenCalledTimes(1);
   });
 

@@ -183,6 +183,7 @@ describe("useLaunch — automatic preflight", () => {
     const { result } = await refused(status, reason);
     expect(result.current.preflightBlock).toBe(false);
     if (status === 429) expect(result.current.preflightError).toBeNull();
+    expect(result.current.preflightNotChecked).toBe(status === 429);
   });
 
   it.each(["backend", "llm_access"])("a missing %s row blocks, then expires at 60s", async (kind) => {

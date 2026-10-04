@@ -64,6 +64,8 @@ function renderPanel(over: Partial<NewRunLaunchPanelProps>) {
     preflightIsCurrent: true,
     preflightFresh: true,
     preflightBlock: false,
+    preflightChecking: false,
+    preflightNotChecked: false,
     preflightError: null,
     preflightErrorSeq: 0,
     preflightResult: llm("missing"),

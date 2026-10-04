@@ -37,7 +37,7 @@ import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { ADO } from "../../../lib/ado-entra-copy";
 import type { SCMAccessPAT } from "../../../lib/types/ado-pat";
 import { PEOPLE } from "../../../lib/people-access-copy";
-import { NO_BARRIER, RAIL, RAIL_PROVIDER, RAIL_RECORDING_ON, RAIL_SETUP, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
+import { NO_BARRIER, RAIL, RAIL_CHECK, RAIL_PROVIDER, RAIL_RECORDING_ON, RAIL_SETUP, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { useOperator, useUserViewSuperAdmin } from "../../wardyn/operator-context";
 import { useViewAccess } from "../../wardyn/console-view";
@@ -128,6 +128,10 @@ interface RunRailProps {
     /** Preflight's own model-credential refusal: the body it graded and the
      *  provider it names, "" when none. */
     refusal?: { body: string; provider: string } | null;
+    /** A check is in flight (M1 S3). */
+    checking?: boolean;
+    /** The current body's last check was a 429 (M1 S3). */
+    notChecked?: boolean;
     error: string | null;
     /** Same remount purpose as launch.errorSeq, for the preflight alert. */
     errorSeq: number;
@@ -688,6 +692,19 @@ export function RunRail({
               </Link>
               .
             </>
+          )}
+        </p>
+      )}
+
+      {(preflight.checking || preflight.notChecked) && (
+        <p data-testid="preflight-check-state" className="mt-2 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+          {preflight.checking ? (
+            <>
+              <Loader2 className="size-3 animate-spin" />
+              {RAIL_CHECK.CHECKING}
+            </>
+          ) : (
+            RAIL_CHECK.NOT_CHECKED
           )}
         </p>
       )}

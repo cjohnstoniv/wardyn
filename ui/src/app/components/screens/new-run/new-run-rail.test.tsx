@@ -28,7 +28,7 @@ vi.mock("../../../lib/api/health", () => ({
 }));
 
 import { RunRail } from "./new-run-rail";
-import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../wardyn/copy";
+import { RAIL_CHECK, RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../wardyn/copy";
 import type { ModelCredential, PreflightResult, SetupHarnessTool } from "../../../lib/types";
 
 // U-15: through the constant, never a fourth typed copy of the sentence.
@@ -42,7 +42,7 @@ function preflightWith(cred: ModelCredential): PreflightResult {
   return { setup_items: [], enforced_confinement_class: "CC1", model_credential: cred };
 }
 
-function renderRail(props: { agentRow?: SetupHarnessTool; preflightResult?: PreflightResult; showModelWarning?: boolean }) {
+function renderRail(props: { agentRow?: SetupHarnessTool; preflightResult?: PreflightResult; showModelWarning?: boolean; checking?: boolean; notChecked?: boolean }) {
   return render(
     <MemoryRouter>
       <RunRail
@@ -62,7 +62,7 @@ function renderRail(props: { agentRow?: SetupHarnessTool; preflightResult?: Pref
           errorSeq: 0,
           credentialRefused: false,
         }}
-        preflight={{ error: null, errorSeq: 0, result: props.preflightResult ?? null }}
+        preflight={{ error: null, errorSeq: 0, result: props.preflightResult ?? null, checking: props.checking, notChecked: props.notChecked }}
         agentRow={props.agentRow}
         adoDialog={{
           open: false,
@@ -127,6 +127,15 @@ describe("New run rail — the two facts it used to assert (Appendix A finding 1
     renderRail({ agentRow: harnessRow(), preflightResult: preflightWith(credentialArms[0].cred) });
     expect(await screen.findByText(RAIL_CREDENTIAL.PROXY)).toBeInTheDocument();
     expect(screen.queryByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER)).toBeNull();
+  });
+
+  it("shows the approved check-state lines", () => {
+    const { unmount } = renderRail({ checking: true });
+    expect(screen.getByText(RAIL_CHECK.CHECKING)).toBeInTheDocument();
+    unmount();
+    renderRail({ notChecked: true });
+    expect(screen.getByText("Not checked — too many checks this minute. It retries on your next edit.")).toBeInTheDocument();
+    expect(screen.queryByText(RAIL_CHECK.CHECKING)).toBeNull();
   });
 
   // F1 regression pin. The agent row carries no residency: only a preflight

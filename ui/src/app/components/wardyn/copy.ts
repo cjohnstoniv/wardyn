@@ -172,5 +172,6 @@ export {
   RAIL_CREDENTIAL,
   RAIL_PROVIDER,
   RAIL_RECORDING_ON,
+  RAIL_CHECK,
   RAIL_SETUP,
 } from "./copy/new-run-rail";
