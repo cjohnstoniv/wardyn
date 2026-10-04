@@ -73,6 +73,8 @@ var sealFields = map[string][]SealField{
 	"person.create": {{Path: "email", Subject: SubjectTarget}},
 	// The free text the decider typed with the decision.
 	"approval.decide": {{Path: "reason", Subject: SubjectActor}},
+	// The free text the rejecting admin typed with the decision (gov4).
+	"governance.change.reject": {{Path: "reason", Subject: SubjectActor}},
 }
 
 // SealLeafNames is the closed set of data key names a field may carry to be a

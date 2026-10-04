@@ -467,6 +467,7 @@ func run() error {
 		LiveBus:                  liveBus,
 		ADORunPATs:               adoRunPATs,
 		AuditUnsealer:            sealSrc.unsealer(),
+		AuditActorSubject:        sealSrc.actorSubject(),
 		SubjectKeys:              subjectKeysOf(secrets),
 		ExecOutputTailOff:        !*f.execOutputTail,
 		ExecOutputTailTTL:        *f.execOutputTailTTL,

@@ -103,6 +103,23 @@ func (a *auditSealSource) unsealer() audit.Unsealer {
 	return nil
 }
 
+// actorSubject is api.Config.AuditActorSubject: under full, a human actor the
+// database writes past the recorder chain is stored as its subject, as the
+// sealing recorder stores one; nil otherwise. Before the Sealer is armed it
+// refuses rather than store the name in the clear.
+func (a *auditSealSource) actorSubject() func(context.Context, string) (string, error) {
+	if a == nil || a.mode != audit.SealFull {
+		return nil
+	}
+	return func(ctx context.Context, principal string) (string, error) {
+		s := a.sealer.Load()
+		if s == nil {
+			return "", errors.New("audit seal: the sealing keys are not available yet")
+		}
+		return s.ActorSubject(ctx, principal)
+	}
+}
+
 // sealingRecorder seals a row's personal fields, between maskingRecorder and
 // spoolingRecorder, so the row hash, the spool, the store and every sink all
 // carry ciphertext. In replay mode (the spool drain's recorder, over the raw

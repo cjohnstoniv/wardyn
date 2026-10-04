@@ -1934,7 +1934,7 @@ approvers find them through `wardyn governance changes list` or the API.
 - **Audit.** `governance.change.propose`, `.approve`, `.reject`, `.expire` and `.bypass`
   ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)). On approval the target's own row (`governance.profile.write`,
   `governance.assignment.write`, ...) is written too, its actor the approver, carrying `change_id` and
-  `proposed_by`. The proposer, the approver and their emails are personal fields: the
+  `proposed_by`. The proposer, the approver, their emails and a rejection's `reason` are personal fields: the
   `audit_personal_fields` erasure scope clears them from the change rows, and a pending change whose
   proposer is erased expires, so a change with no recorded proposer can never be approved.
 - **Residual risks.** The `admin-token` is single-human by design. A database writer can change the
