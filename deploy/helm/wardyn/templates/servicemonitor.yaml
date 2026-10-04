@@ -1,0 +1,44 @@
+{{/*
+Opt-in Prometheus Operator ServiceMonitor (metrics.serviceMonitor.enabled).
+
+Rendered on the flag alone, with NO .Capabilities gate: a gate on the CRD
+silently drops the object from offline, `helm template` and GitOps renders. The
+cluster either has the monitoring.coreos.com/v1 CRD or the apply says so.
+
+The chart never creates the scrape-credential Secret: a Secret built from values
+would put an admin credential in Helm release history. The operator creates it in
+this release's namespace (a ServiceMonitor resolves secret references in its own
+namespace) and names it in metrics.serviceMonitor.bearerTokenSecret. It is emitted
+as endpoints[].authorization.credentials, the field the monitoring.coreos.com/v1
+API documents for a bearer credential (the older bearerTokenSecret field is
+deprecated there). See the chart README's "Scraping /metrics" section.
+*/}}
+{{- $mon := (.Values.metrics | default dict).serviceMonitor | default dict -}}
+{{- if $mon.enabled -}}
+{{- $secret := $mon.bearerTokenSecret | default dict -}}
+{{- $basePath := (get .Values.env "WARDYN_BASE_PATH") | default .Values.basePath | default "" -}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "wardyn.fullname" . }}
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+    {{- with $mon.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "wardyn.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: {{ printf "%s/metrics" $basePath | quote }}
+      {{- with $mon.interval }}
+      interval: {{ . | quote }}
+      {{- end }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ required "metrics.serviceMonitor.bearerTokenSecret.name is required when metrics.serviceMonitor.enabled" $secret.name | quote }}
+          key: {{ required "metrics.serviceMonitor.bearerTokenSecret.key is required when metrics.serviceMonitor.enabled" $secret.key | quote }}
+{{- end }}

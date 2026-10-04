@@ -704,6 +704,27 @@ networkPolicy:
     # Additional NetworkPolicy egress rules (e.g. OIDC issuer, SIEM webhooks).
     extra: []
 
+# Opt-in Prometheus Operator ServiceMonitor for GET /metrics. Off by default.
+# /metrics is gated by requireOperator, so the scrape credential carries FULL
+# ADMIN authority, and the Operator copies it into the Prometheus configuration
+# Secret in the Prometheus namespace. Read the chart README's "Scraping
+# /metrics" section before turning this on. The chart never creates the Secret:
+# create it in THIS release's namespace (a ServiceMonitor resolves secret
+# references in its own namespace) from a dedicated personal API token, never
+# from auth.adminToken.
+metrics:
+  serviceMonitor:
+    enabled: false
+    # Secret in this release's namespace holding the bearer token.
+    bearerTokenSecret:
+      name: ""
+      key: ""
+    # Extra labels on the ServiceMonitor; they must match the Prometheus
+    # serviceMonitorSelector.
+    labels: {}
+    # Scrape interval (e.g. "30s"). Unset: the Prometheus default applies.
+    interval: ""
+
 podAnnotations: {}
 
 # How long Kubernetes waits after SIGTERM before SIGKILL. wardynd's orderly
