@@ -22,6 +22,7 @@
 // free x/y placement with collision, a snap ghost and resize handles, and that
 // is several hundred lines of pointer math to hand-roll badly.
 import * as React from "react";
+import { createPortal } from "react-dom";
 import GridLayout, { noCompactor, type Layout } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import { Check, Expand, GripVertical, LayoutGrid, Pencil, Plus, RotateCcw, X } from "lucide-react";
@@ -34,6 +35,7 @@ import { useFocusMode } from "../app-shell";
 import { FocusMode } from "./focus-mode";
 import { useRunLayout } from "./use-run-layout";
 import { WidgetSlot } from "./widget-slot";
+import { ErrorBoundary } from "../../wardyn/error-boundary";
 import {
   GRID_COLS,
   GRID_ROWS,
@@ -93,6 +95,19 @@ function useCanvasSize() {
   return { ref: setNode, width: size.width, height: size.height };
 }
 
+/** Where the terminal shows right now: the cockpit tile or the focus overlay.
+ *  It renders only an empty box and moves the run's one host element into it,
+ *  so the terminal itself is never remounted by moving between the two. */
+function TerminalSlot({ host }: { host: HTMLElement }) {
+  const attach = React.useCallback(
+    (box: HTMLDivElement | null) => {
+      if (box) box.appendChild(host);
+    },
+    [host],
+  );
+  return <div ref={attach} className="flex min-h-0 flex-1 flex-col" />;
+}
+
 export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   // The situation picks the preset; the toolbar can override it while editing.
   // Interactive vs autonomous is NOT a third preset — that changes the Terminal
@@ -125,6 +140,30 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   // Never leave the console headless: whatever unmounts this canvas — a route
   // change, an ErrorBoundary catch — puts the shell's chrome back.
   React.useEffect(() => () => setFocus(false), [setFocus]);
+
+  // The terminal lives in ONE host element per run, outside the React tree the
+  // layout switches between. The pane is portaled into it once (a fixed
+  // container, so it never remounts) and TerminalSlot moves the element
+  // between the cockpit tile and the focus overlay. Leaving the run screen
+  // unmounts this canvas, which tears the terminal and its socket down.
+  const runId = ctx.run.id;
+  const host = React.useMemo(() => {
+    const el = document.createElement("div");
+    el.className = "flex min-h-0 flex-1 flex-col";
+    el.dataset.runId = runId;
+    return el;
+  }, [runId]);
+  React.useEffect(() => () => host.remove(), [host]);
+  const slotCtx = React.useMemo(
+    () => ({ ...ctx, terminalPane: <TerminalSlot host={host} /> }),
+    [ctx, host],
+  );
+  const terminalPortal = createPortal(
+    <ErrorBoundary region={RUN_WIDGETS.terminal.label} resetKey={runId}>
+      {ctx.terminalPane}
+    </ErrorBoundary>,
+    host,
+  );
 
   // A row is one twelfth of the visible pane, so a preset that adds up to
   // GRID_ROWS fills the cockpit exactly and nothing scrolls. Floors keep the
@@ -187,150 +226,156 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
     });
   };
 
-  // The terminal moves OUT of the grid and into the overlay, so it remounts and
-  // the attach socket reconnects — the tmux session survives that (it survives
-  // a full page refresh), which is exactly why the terminal can be moved at
-  // all. Rendering it in both places at once would open two sockets.
-  if (focus) return <FocusMode ctx={ctx} onExit={exitFocus} />;
+  if (focus) {
+    return (
+      <>
+        {terminalPortal}
+        <FocusMode ctx={slotCtx} onExit={exitFocus} />
+      </>
+    );
+  }
 
   return (
-    <div className="relative min-h-0 flex-1 overflow-hidden">
-      <div
-        ref={ref}
-        className="scroll-thin h-full w-full overflow-y-auto overflow-x-hidden"
-        style={editing ? DOT_GRID : undefined}
-      >
-        <GridLayout
-          width={gridWidth}
-          layout={items}
-          className={GHOST}
-          gridConfig={{
-            cols: GRID_COLS,
-            rowHeight,
-            margin: MARGIN,
-            containerPadding: PADDING,
-          }}
-          // Free placement: a dropped tile stays where it was dropped. The
-          // default vertical compactor would yank every tile to the top and
-          // make "put the diff next to the terminal" impossible.
-          compactor={noCompactor}
-          dragConfig={{ enabled: editing, handle: "[data-drag-handle]", cancel: "[data-no-drag]" }}
-          resizeConfig={{ enabled: editing, handles: ["se"] }}
-          onDragStart={track}
-          onDrag={track}
-          onDragStop={commit}
-          onResizeStart={track}
-          onResize={track}
-          onResizeStop={commit}
+    <>
+      {terminalPortal}
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        <div
+          ref={ref}
+          className="scroll-thin h-full w-full overflow-y-auto overflow-x-hidden"
+          style={editing ? DOT_GRID : undefined}
         >
-          {visible.map((w) => {
-            const id = w.widget as WidgetId;
-            const def = RUN_WIDGETS[id];
-            return (
-              <div
-                key={id}
-                className="flex min-h-0 flex-col overflow-hidden rounded-lg"
-                // Load-bearing for e2e: the terminal's tile must be findable
-                // AND above the fold. Both presets place it at y=0.
-                data-testid={id === "terminal" ? "run-terminal-pane" : undefined}
-              >
-                {editing && (
-                  <TileHandle
-                    def={def}
-                    size={active?.i === id ? sizeLabel(active.w, active.h) : undefined}
-                    onRemove={def.required ? undefined : () => toggleWidget(id)}
-                  />
-                )}
-                {/* WidgetSlot, not a bare div: the FILL stretch and the
-                    per-widget boundary are shared with focus mode's dock, which
-                    renders this same def.component(ctx). */}
-                <WidgetSlot region={def.label} resetKey={ctx.run.id}>
-                  {def.component(ctx)}
-                </WidgetSlot>
-              </div>
-            );
-          })}
-        </GridLayout>
-      </div>
+          <GridLayout
+            width={gridWidth}
+            layout={items}
+            className={GHOST}
+            gridConfig={{
+              cols: GRID_COLS,
+              rowHeight,
+              margin: MARGIN,
+              containerPadding: PADDING,
+            }}
+            // Free placement: a dropped tile stays where it was dropped. The
+            // default vertical compactor would yank every tile to the top and
+            // make "put the diff next to the terminal" impossible.
+            compactor={noCompactor}
+            dragConfig={{ enabled: editing, handle: "[data-drag-handle]", cancel: "[data-no-drag]" }}
+            resizeConfig={{ enabled: editing, handles: ["se"] }}
+            onDragStart={track}
+            onDrag={track}
+            onDragStop={commit}
+            onResizeStart={track}
+            onResize={track}
+            onResizeStop={commit}
+          >
+            {visible.map((w) => {
+              const id = w.widget as WidgetId;
+              const def = RUN_WIDGETS[id];
+              return (
+                <div
+                  key={id}
+                  className="flex min-h-0 flex-col overflow-hidden rounded-lg"
+                  // Load-bearing for e2e: the terminal's tile must be findable
+                  // AND above the fold. Both presets place it at y=0.
+                  data-testid={id === "terminal" ? "run-terminal-pane" : undefined}
+                >
+                  {editing && (
+                    <TileHandle
+                      def={def}
+                      size={active?.i === id ? sizeLabel(active.w, active.h) : undefined}
+                      onRemove={def.required ? undefined : () => toggleWidget(id)}
+                    />
+                  )}
+                  {/* WidgetSlot, not a bare div: the FILL stretch and the
+                      per-widget boundary are shared with focus mode's dock, which
+                      renders this same def.component(ctx). */}
+                  <WidgetSlot region={def.label} resetKey={ctx.run.id}>
+                    {def.component(slotCtx)}
+                  </WidgetSlot>
+                </div>
+              );
+            })}
+          </GridLayout>
+        </div>
 
-      {editing ? (
-        <div className="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1.5 rounded-xl border border-border bg-popover p-1.5 shadow-floating">
-          <span className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 px-2.5 text-xs font-medium text-primary">
-            <LayoutGrid className="size-3.5" />
-            {RUN_COCKPIT.editing}
-          </span>
-          <span className="h-5 w-px bg-border" />
-          {(["live", "finished"] as const).map((p) => (
-            <button
-              key={p}
-              type="button"
-              onClick={() => setPreset(p)}
-              className={cn(
-                "inline-flex h-8 items-center rounded-lg px-2.5 font-mono text-xs",
-                p === preset
-                  ? "border border-border bg-card text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {RUN_COCKPIT.layoutPreset(p === "live" ? "Live" : "Finished")}
-            </button>
-          ))}
-          <span className="h-5 w-px bg-border" />
-          {/* The catalog offers exactly what a tile could appear for. Deriving
-              it from the whole table while the GRID derived from `renderable`
-              made "Attach from your terminal" a dead control on every finished
-              run and every run you did not start: the click ticked the row, ran
-              addWidget and PUT the phantom placement, and no tile ever came
-              back. Two gates, one of them uninformed. */}
-          <Catalog
-            open={catalogOpen}
-            onOpenChange={setCatalogOpen}
-            ids={WIDGET_IDS.filter(renderable)}
-            placed={layout.map((w) => w.widget)}
-            onToggle={toggleWidget}
-          />
-          <ToolbarButton onClick={reset} Icon={RotateCcw}>
-            {RUN_COCKPIT.resetLayout}
-          </ToolbarButton>
-          <ToolbarButton onClick={saveDefault}>{RUN_COCKPIT.saveLayoutDefault}</ToolbarButton>
-          <button
-            type="button"
-            onClick={() => setEditing(false)}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground"
-          >
-            <Check className="size-3.5" />
-            {RUN_COCKPIT.doneEditing}
-          </button>
-          {!persistable && (
-            <span className="max-w-[16rem] px-1.5 text-meta leading-tight text-muted-foreground">
-              {RUN_COCKPIT.layoutNotPersisted}
+        {editing ? (
+          <div className="absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1.5 rounded-xl border border-border bg-popover p-1.5 shadow-floating">
+            <span className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 px-2.5 text-xs font-medium text-primary">
+              <LayoutGrid className="size-3.5" />
+              {RUN_COCKPIT.editing}
             </span>
-          )}
-        </div>
-      ) : (
-        // The board puts these controls in the tabs row; that row belongs to
-        // run-detail-command-bar.tsx, which this file does not own — so the
-        // canvas carries its own entry points.
-        <div className="absolute bottom-4 right-4 z-30 flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setFocus(true)}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-xs font-medium text-muted-foreground shadow-xs hover:text-foreground"
-          >
-            <Expand className="size-3.5" />
-            {RUN_COCKPIT.enterFocus}
-          </button>
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-xs font-medium text-muted-foreground shadow-xs hover:text-foreground"
-          >
-            <Pencil className="size-3.5" />
-            {RUN_COCKPIT.editLayout}
-          </button>
-        </div>
-      )}
-    </div>
+            <span className="h-5 w-px bg-border" />
+            {(["live", "finished"] as const).map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setPreset(p)}
+                className={cn(
+                  "inline-flex h-8 items-center rounded-lg px-2.5 font-mono text-xs",
+                  p === preset
+                    ? "border border-border bg-card text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {RUN_COCKPIT.layoutPreset(p === "live" ? "Live" : "Finished")}
+              </button>
+            ))}
+            <span className="h-5 w-px bg-border" />
+            {/* The catalog offers exactly what a tile could appear for. Deriving
+                it from the whole table while the GRID derived from `renderable`
+                made "Attach from your terminal" a dead control on every finished
+                run and every run you did not start: the click ticked the row, ran
+                addWidget and PUT the phantom placement, and no tile ever came
+                back. Two gates, one of them uninformed. */}
+            <Catalog
+              open={catalogOpen}
+              onOpenChange={setCatalogOpen}
+              ids={WIDGET_IDS.filter(renderable)}
+              placed={layout.map((w) => w.widget)}
+              onToggle={toggleWidget}
+            />
+            <ToolbarButton onClick={reset} Icon={RotateCcw}>
+              {RUN_COCKPIT.resetLayout}
+            </ToolbarButton>
+            <ToolbarButton onClick={saveDefault}>{RUN_COCKPIT.saveLayoutDefault}</ToolbarButton>
+            <button
+              type="button"
+              onClick={() => setEditing(false)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground"
+            >
+              <Check className="size-3.5" />
+              {RUN_COCKPIT.doneEditing}
+            </button>
+            {!persistable && (
+              <span className="max-w-[16rem] px-1.5 text-meta leading-tight text-muted-foreground">
+                {RUN_COCKPIT.layoutNotPersisted}
+              </span>
+            )}
+          </div>
+        ) : (
+          // The board puts these controls in the tabs row; that row belongs to
+          // run-detail-command-bar.tsx, which this file does not own — so the
+          // canvas carries its own entry points.
+          <div className="absolute bottom-4 right-4 z-30 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setFocus(true)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-xs font-medium text-muted-foreground shadow-xs hover:text-foreground"
+            >
+              <Expand className="size-3.5" />
+              {RUN_COCKPIT.enterFocus}
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-xs font-medium text-muted-foreground shadow-xs hover:text-foreground"
+            >
+              <Pencil className="size-3.5" />
+              {RUN_COCKPIT.editLayout}
+            </button>
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 

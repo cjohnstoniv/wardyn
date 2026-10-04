@@ -136,6 +136,14 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     copyGateRef,
   } = args;
 
+  // Read at each (re)connect, not keyed on: /me landing late must not rebuild
+  // the terminal (one socket and one ticket per page load). Teardown on a
+  // changed authorisation still rides `mayEnter` and `signedOut` below.
+  const operatorRef = React.useRef(operator);
+  const operatorResolvedRef = React.useRef(operatorResolved);
+  operatorRef.current = operator;
+  operatorResolvedRef.current = operatorResolved;
+
   React.useEffect(() => {
     // Fail-open default (operator-context.tsx) means this stays exactly
     // today's behavior — connects immediately — for every deployment that
@@ -283,7 +291,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       // worked was never tried. Preferring the ticket lane when unsure costs an
       // admin nothing: minting is itself owner-or-admin (handleAttachTicket,
       // attach_ticket.go), so the lane serves both.
-      if (tokenOnlyMode || !operator || !operatorResolved) {
+      if (tokenOnlyMode || !operatorRef.current || !operatorResolvedRef.current) {
         // Mint a fresh single-use ticket per (re)connect — the previous one was
         // consumed by the last handshake — then open the WS with ?ticket=.
         runs
@@ -600,15 +608,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       fitAddonRef.current = null;
       wsRef.current = null;
     };
-    // operator/mayEnter are added deliberately: in the single-operator/default
-    // case they never change value, so this never causes an extra run there —
-    // today's behavior is untouched. They matter for the (rare) case where
-    // /me resolves to a non-owning viewer shortly after an optimistic mount;
-    // the early return above then tears the effect back down via its own
-    // cleanup before running again.
-    // operatorResolved rides with operator for the same reason: when /me lands
-    // late, the lane the socket picked on the fail-open default must be
-    // re-decided against the answer.
+    // mayEnter is keyed on deliberately: a confirmed non-owner tears the
+    // terminal down. operator and operatorResolved are read through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refs and setters are stable identities (useRef/useState in the caller); these deps are unchanged from the effect this hook was extracted from
-  }, [runId, tokenOnlyMode, refit, operator, operatorResolved, mayEnter, refusal, signedOut]);
+  }, [runId, tokenOnlyMode, refit, mayEnter, refusal, signedOut]);
 }

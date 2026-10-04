@@ -392,7 +392,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // dialog — because fullscreen goes through the native API (see
   // toggleFullscreen) rather than a `fixed inset-0` overlay that any ancestor
   // could capture. Portaling on toggle would NOT have been safe: the xterm setup
-  // effect is keyed on [runId, tokenOnlyMode, refit, operator, mayEnter] and not on
+  // effect is keyed on [runId, tokenOnlyMode, refit, mayEnter] and not on
   // fullscreen, so React would rebuild this container under the new parent
   // without re-running term.open() and leave a permanently blank terminal.
   return (
