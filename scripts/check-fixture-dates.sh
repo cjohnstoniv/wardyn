@@ -58,6 +58,7 @@ literal_dates() {
 declare -A ALLOWLIST=(
   ["cmd/wardyn-aws-sso/main_test.go"]=2
   ["cmd/wardyn/commands_test.go"]=6
+  ["cmd/wardyn/people_test.go"]=3 # display only: personDay formats LastSignedInAt, never compared to the clock
   ["cmd/wardyn/policyio_test.go"]=2
   ["cmd/wardyn/siteconfig_test.go"]=4
   ["cmd/wardynd/login_stamp_test.go"]=1
@@ -80,6 +81,7 @@ declare -A ALLOWLIST=(
   ["internal/egress/egress_test.go"]=1
   ["internal/egress/proxy/llm_unavailable_detail_test.go"]=3
   ["internal/egress/proxy/tool_rules_test.go"]=1
+  ["internal/notify/render_test.go"]=1 # display only: the golden body prints RequestedAt, never compared to the clock
   ["internal/runner/k8s/drives_test.go"]=2
   ["internal/types/types_test.go"]=1
   ["pkg/client/client_more_test.go"]=2
