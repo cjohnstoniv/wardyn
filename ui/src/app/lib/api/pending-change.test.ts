@@ -13,6 +13,7 @@ import { asJson, PendingChangeError } from "./core";
 import { governance, type GovernanceProfileInput } from "./governance";
 import { permissions } from "./permissions";
 import { userTypes } from "./user-types";
+import { aheadByHours } from "../test-clock";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -23,8 +24,8 @@ const CHANGE = {
   target_key: "team-a",
   state: "pending",
   proposed_by: "ana",
-  proposed_at: "2026-10-03T10:00:00Z",
-  expires_at: "2026-10-06T10:00:00Z",
+  proposed_at: aheadByHours(-1),
+  expires_at: aheadByHours(71),
   diff: { changed: ["ceiling.allowed_domains"] },
 };
 
