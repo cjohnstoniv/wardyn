@@ -197,7 +197,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
-	cfg, rerr := s.reviveSourceConfig(ctx, rv, run)
+	cfg, rerr := s.reviveSourceConfig(ctx, rv, run, actorType, actor)
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
@@ -344,7 +344,7 @@ func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun,
 // reviveSourceConfig is the config a revive starts from: the run's stored
 // one (run_proxy_config.go), never the proxy container's (#1176), once the
 // run's substrate says it can replace a proxy at all.
-func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver, run types.AgentRun) (*proxy.Config, *reviveError) {
+func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver, run types.AgentRun, actorType types.ActorType, actor string) (*proxy.Config, *reviveError) {
 	if err := rv.CanReplaceProxy(ctx, run.SandboxRef); err != nil {
 		if errors.Is(err, runner.ErrReviveUnsupported) {
 			return nil, reviveUnsupported()
@@ -363,15 +363,46 @@ func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver,
 	if err != nil {
 		return nil, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad, "the run's proxy config does not load: "+err.Error())
 	}
-	// A config rendered under 0.8.5 has no brokered_pat_grant_ids, so the set is
-	// recomputed rather than trusted, whatever the stored value says.
-	ids, err := s.brokeredPATGrantIDs(ctx, run.ID, !s.cfg.DisableGitPATBroker)
+	grants, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
 	if err != nil {
 		return nil, reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable,
 			"read the run's git_pat grants: "+err.Error())
 	}
-	cfg.BrokeredPATGrantIDs = ids
+	if rerr := s.revivePATNarrowing(ctx, run, cfg, grants, actorType, actor); rerr != nil {
+		return nil, rerr
+	}
+	// A config rendered under 0.8.5 has no brokered_pat_grant_ids, so the set is
+	// recomputed rather than trusted, whatever the stored value says.
+	cfg.BrokeredPATGrantIDs = brokeredPATGrantIDs(grants, !s.cfg.DisableGitPATBroker)
 	return cfg, nil
+}
+
+// revivePATNarrowing asks dispatch's narrowing refusals (patNarrowingRefusal)
+// again under the deployment as it is now. A narrowed git_pat grant revived
+// after the PAT broker was turned off would keep its narrowed lane but lose the
+// raw-mint refusal, so the PAT would reach the sandbox unnarrowed; the revive is
+// refused and audited instead. A run with no git_pat grant reads nothing more.
+func (s *Server) revivePATNarrowing(ctx context.Context, run types.AgentRun, cfg *proxy.Config,
+	grants []types.CredentialGrant, actorType types.ActorType, actor string,
+) *reviveError {
+	if len(patGrantIDsOf(grants)) == 0 {
+		return nil
+	}
+	site, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable,
+			"re-check the run's git_pat narrowing: read site config: "+err.Error())
+	}
+	adoRun, adoOn := resolveADOEntraRun(site, repoLocatorsOf(cfg.Policy.WorkspaceRepos), runIdentitySubject(ctx, run.CreatedBy))
+	env := patNarrowingEnvOf(!s.cfg.DisableGitPATBroker, cfg.GitGrants, site, adoRun, adoOn)
+	reason, detail := patNarrowingRefusal(patGrantSpecs(grants), env)
+	if reason == "" {
+		return nil
+	}
+	detail = "the run cannot be revived as it was dispatched: " + detail
+	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure",
+		mustJSON(map[string]any{"subject": run.CreatedBy, "reason": reason, "error": detail})))
+	return reviveRefused(http.StatusConflict, reason, detail)
 }
 
 // stripRevivedModelInjections is dispatch's strip (dropLegacyModelInjections)
