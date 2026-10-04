@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -330,6 +331,73 @@ func TestCreateRenewal_EraseDuringPutRetryWinsAndBootstrapFailsClosed(t *testing
 	w := do(t, f.srv, http.MethodGet, "/api/v1/internal/injection/"+f.grantID.String(), f.token, "")
 	if w.Code == http.StatusOK || strings.Contains(w.Body.String(), "fresh-access-token") {
 		t.Fatalf("bootstrap after the erase = %d %s, want a refusal with no token", w.Code, w.Body.String())
+	}
+}
+
+// supersededCreateFixture is a create whose renewal loses its lock mid-redeem
+// (the holder's connection is killed) and whose lost-lock window is then used by
+// during, run from inside the CreateToken call. Needs WARDYN_TEST_PG.
+func supersededCreateFixture(t *testing.T, during func(p *replicaPair)) (*Server, *replicaPair) {
+	t.Helper()
+	old := db.LockWatchInterval
+	db.LockWatchInterval = time.Hour // the compare-and-set is under test, not the watcher
+	t.Cleanup(func() { db.LockWatchInterval = old })
+	p := newReplicaPair(t)
+	srv := createRenewalFixture(t)
+	srv.cfg.Secrets = p.a.cfg.Secrets
+	srv.locks.override = db.NewPGLocker(p.poolA, 2)
+	storeSSOBlobFor(t, srv, createRenewalOwner, createRenewalBlob())
+	fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, _ int) {
+		killLockHolder(t, p.poolA, db.AWSSSOLockClass)
+		during(p)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"accessToken": "fresh-access-token-abcdefghij", "expiresIn": 3600,
+			"refreshToken": "rotated-refresh-token-abcdefghij",
+		})
+	})
+	return srv, p
+}
+
+// A renewal superseded by an erase persisted nothing: create must refuse with
+// the sign-in door and no run row, not serve the in-memory pair the proxy's
+// bootstrap will never find.
+func TestCreateRenewal_SupersededByEraseRefusesCreate(t *testing.T) {
+	srv, _ := supersededCreateFixture(t, func(p *replicaPair) {
+		if err := p.b.cfg.Secrets.For(createRenewalOwner).Delete(context.Background(), createRenewalScope().ssoSecret()); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	res := postCreate(t, srv)
+	var body errorBody
+	_ = json.Unmarshal([]byte(res.body), &body)
+	if res.code != http.StatusUnprocessableEntity || body.Reason != llmRefusalAuditReason {
+		t.Fatalf("create = %d %s, want the 422 sign-in door", res.code, res.body)
+	}
+	if n := runRowCount(srv); n != 0 {
+		t.Errorf("run rows = %d, want none", n)
+	}
+	if _, found := createRenewalStored(t, srv); found {
+		t.Error("the erased credential is back in the store")
+	}
+}
+
+// A renewal superseded by a newer pair another replica stored serves THAT pair,
+// the one the proxy's bootstrap reads, and leaves the row alone.
+func TestCreateRenewal_SupersededByNewerPairLaunchesOnTheStoredPair(t *testing.T) {
+	newer := createRenewalBlob()
+	newer.AccessToken, newer.RefreshToken = "newer-access-token-1234567890", "newer-refresh-token-1234567890"
+	newer.ExpiresAt = time.Now().Add(2 * time.Hour)
+	srv, _ := supersededCreateFixture(t, func(p *replicaPair) {
+		storeSSOBlobFor(t, &Server{cfg: Config{Secrets: p.b.cfg.Secrets}}, createRenewalOwner, newer)
+	})
+
+	res := postCreate(t, srv)
+	if res.code != http.StatusCreated {
+		t.Fatalf("create = %d %s, want 201", res.code, res.body)
+	}
+	if after, found := createRenewalStored(t, srv); !found || after.RefreshToken != newer.RefreshToken || after.AccessToken != newer.AccessToken {
+		t.Errorf("the stored pair = %+v, want the newer pair left as it was", after)
 	}
 }
 

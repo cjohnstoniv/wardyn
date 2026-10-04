@@ -727,13 +727,33 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 			slog.Any("err", perr))
 	}
 	s.auditAWSSSORefresh(ctx, scope, outcome, data)
-	if perr != nil && !superseded && createRenewal(ctx) {
-		// Create has no run to serve from memory: the proxy's bootstrap reads
-		// the stored pair, which is now marked spent. Refuse before a run row
-		// exists; the next launch gets the sign-in door at once.
-		return blob, awsSSORefreshPersistFailedSentence
+	if createRenewal(ctx) {
+		if superseded {
+			return s.storedPairAfterSupersededCreate(ctx, scope, blob)
+		}
+		if perr != nil {
+			// Create has no run to serve from memory: the proxy's bootstrap reads
+			// the stored pair, which is now marked spent. Refuse before a run row
+			// exists; the next launch gets the sign-in door at once.
+			return blob, awsSSORefreshPersistFailedSentence
+		}
 	}
 	return next, ""
+}
+
+// storedPairAfterSupersededCreate is what a create-time renewal that lost the
+// compare-and-set serves. Nothing of that renewal was stored, and the proxy's
+// bootstrap reads the stored row, not the redeemed pair: serve what is there
+// now, or refuse when an erase (or a pair too short to carry a run) won the
+// race. Read detached: the lock's context is the one that was lost.
+func (s *Server) storedPairAfterSupersededCreate(ctx context.Context, scope awsSSOScope, blob awsSSOBlob) (awsSSOBlob, string) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), awsSSOPersistBudget)
+	defer cancel()
+	stored, found, err := s.readAWSSSOBlob(rctx, scope)
+	if err != nil || !found || !stored.servableFor(s.cfg.Now(), awsSSORefreshServeFloor) {
+		return blob, awsSSORefreshSpentSentence
+	}
+	return stored, ""
 }
 
 // auditAWSSSORefresh emits the harness.credential.refresh row. Run-less: the
