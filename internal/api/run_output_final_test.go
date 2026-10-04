@@ -624,6 +624,7 @@ func TestEraseRunOutputs(t *testing.T) {
 	}
 	writeExecOutput(t, wb, "secret-ish output held on B\n")
 	tail := b.tailFor(a.run.ID)
+	tail.flushIn() // the write is in the ring, as a read would see it
 	ring := tail.ring.buf
 	if len(ring) == 0 {
 		t.Fatal("B's ring is empty")

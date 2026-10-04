@@ -81,16 +81,35 @@ func (c *outputCapture) dropSealed() (late func(), sealed bool) {
 }
 
 // tailWriter is what the runner receives as SandboxSpec.ExecOutput: the masking
-// writer, plus runner.OutputDrainer so the drivers report the start and end of
-// each copy into it and the finisher can wait for the last bytes.
+// writer's pipe, plus runner.OutputDrainer so the drivers report the start and
+// end of each copy into it and the finisher can wait for the last bytes.
 type tailWriter struct {
-	mw *liveMaskWriter
-	t  *execOutputTail
+	t *execOutputTail
 }
 
-func (w *tailWriter) Write(p []byte) (int, error) { return w.mw.Write(p) }
-func (w *tailWriter) BeginDrain()                 { w.t.beginDrain() }
-func (w *tailWriter) EndDrain(err error)          { w.t.endDrain(err) }
+func (w *tailWriter) Write(p []byte) (int, error) {
+	w.t.arrived.Store(w.t.ring.now().UnixNano())
+	return w.t.in.Write(p)
+}
+
+func (w *tailWriter) BeginDrain() { w.t.beginDrain() }
+
+// EndDrain must not block (runner.OutputDrainer), and the drain may end only
+// once the copy's bytes are through the masker, or the finisher would seal ahead
+// of them: the end waits for that on its own goroutine.
+func (w *tailWriter) EndDrain(err error) {
+	go func() {
+		w.t.in.flush()
+		w.t.endDrain(err)
+	}()
+}
+
+// flushIn waits until every byte a driver has written so far is in the ring.
+func (e *execOutputTail) flushIn() {
+	if e.in != nil {
+		e.in.flush()
+	}
+}
 
 func (e *execOutputTail) beginDrain() {
 	e.dmu.Lock()
@@ -143,6 +162,7 @@ func (e *execOutputTail) awaitDrains(ctx context.Context, wait time.Duration) bo
 // dropped), then fences the writer so a later byte is dropped, not kept. It
 // returns what the row holds.
 func (e *execOutputTail) seal(uncoveredNow bool) (out []byte, truncated, dropped, uncovered bool) {
+	e.flushIn() // a write accepted before the seal is in the row
 	e.mw.mu.Lock()
 	defer e.mw.mu.Unlock()
 	if uncoveredNow {
