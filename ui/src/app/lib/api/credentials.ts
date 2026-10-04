@@ -48,6 +48,10 @@ export interface AdminMintedToken {
 
 export interface EraseResult {
   count: number;
+  /** Rows under the person's destroyed principal key, unreadable now. */
+  crypto_erased?: number;
+  /** The rest of `count`: deleted only, gone to the backup horizon. */
+  deleted?: number;
   store?: string;
   purged?: boolean;
   recoverable_days?: number;

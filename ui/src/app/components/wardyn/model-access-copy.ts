@@ -41,6 +41,9 @@ export const MODEL_ACCESS_BANNER = {
 export const RAIL_MODEL_ACCESS = {
   NO_PROVIDER: "No model provider is connected. This run launches; its first model call fails.",
   NO_PROVIDER_CTA: "Connect →",
+  // An unattended agent run with no model provider waits at Launch (M1, D2).
+  UNATTENDED_BLOCK: (agent: string) =>
+    `No model provider serves ${agent} for you, so an autonomous run would fail. Switch Run mode to Interactive, or connect one.`,
 } as const;
 
 // Ruled by the UX rounds (B7, S7, S8)

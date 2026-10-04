@@ -440,7 +440,7 @@ func (s *Server) routes() chi.Router {
 			// varies with whether the id exists — owning a workspace does not
 			// let a member disown it.
 			operatorOnly.Post("/workspaces/{id}/reassign", s.handleReassignWorkspace)
-			operatorOnly.Post("/workspaces/{id}/record", s.handleRecordWorkspace)
+			operatorOnly.Post("/workspaces/{id}/record", s.handleRecordGoverned)
 			securityOps.Post("/workspaces/{id}/record/{task}/promote-egress", s.handlePromoteRecordEgress)
 			// Committable env-as-code (devcontainer.json/AGENTS.md) from the
 			// scanned profile. GET re-generates it any time (repo workspaces have
@@ -799,6 +799,10 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// whole-fleet audit VOLUME is the same disclosure that keeps /metrics
 	// gated. Operator-INVOKED by design: wardynd never verifies at boot.
 	securityOps.Get("/audit/chain/verify", s.handleVerifyAuditChain)
+	// Fleet capacity (runs_capacity.go): configured reservations summed from the run rows.
+	// securityOps because it reconstructs nothing GET /runs?view=admin does not already show
+	// that tier; fleet volume stays off members. No exec and no runner call.
+	securityOps.Get("/admin/runs/capacity", s.handleRunCapacity)
 	// User types (migration 0071_user_types): defining a type is the same
 	// security-tier duty as authoring a governance profile; deciding who IS a
 	// type stays on the operatorOnly /access routes.

@@ -2124,7 +2124,24 @@ hiding them would repeat the failure mode we are designed to avoid.
     backup taken now could have its data keys unwrapped by a future adversary
     who can factor the public modulus; the local key and Transit (AES-256) do
     not have this exposure. (a) holds unchanged: a restored row opens until its
-    wrapping-key version is disabled in Key Vault.
+    wrapping-key version is disabled in Key Vault. (e) **Crypto-erasure
+    (`WARDYN_PRINCIPAL_KEYS=on`, envelope enc_version 3, 0.8.6)** narrows (b) for
+    the rows it covers, and for no others. A person's credential written with it
+    on has its data key under that person's own `cred` principal key, and an erase
+    destroys that key, so the row cannot be read on any replica at its next use,
+    whatever a backup holds of the row. **The scope is exactly the v3 rows:** a v1
+    row, a row written while the setting was off, an external-store pointer (the
+    value lives in the organisation's store), the operator namespace and the boot
+    keys are only deleted, and `credential.erase` reports the two apart
+    (`crypto_erased`, `deleted`). **The backup horizon moves, it does not vanish:** a
+    destroyed `principal_keys` row restored from a backup before the tombstone
+    unwraps while the wrapping key's version lives (the shape of (a)), so shredding
+    is complete only once backups taken before the erase expire or that
+    key-encryption-key version is retired. **Metadata stays in the clear:** who
+    held a credential, and when, is still in the table (c). **A live run keeps
+    what it already holds,** and whatever was sealed for it under the destroyed
+    key (its masking copies) is undecryptable after a restart: the run is
+    uncovered, which fails closed and is disclosed.
 
 49. **One age key guards every stored credential AND the daemon's own
     signing keys: one key, one shared blast radius.** `WARDYN_AGE_KEY` (or
@@ -2560,6 +2577,29 @@ hiding them would repeat the failure mode we are designed to avoid.
 
     Offboarding a person revokes their live PATs before their stored grant is
     deleted. None of the audit rows for this lane carries a token value.
+
+63. **A narrowed `git_pat` grant narrows the run, not the PAT, and three things stay
+    outside it (0.8.6).** With the PAT broker on, a `git_pat` grant's `repos` and
+    `access: read` bind at the broker route: a request for a repository outside
+    `repos`, and both doors of a push under `access: read`, are refused before the
+    push rules and before any mint, so a refusal spends nothing. The credential is
+    exactly as broad as its issuer made it everywhere outside Wardyn. The residuals:
+    - **Direct egress by name.** A run whose policy also allows the forge host
+      directly can reach it without the PAT, with whatever credential the sandbox
+      holds of its own. That is the standing "by name" caveat of every broker lane
+      (see `docs/POLICIES.md`), not a new one.
+    - **Branches and content are separate.** `repos` narrows which repositories, not
+      which branches. Branch confinement stays `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`'s
+      `pat` scope (off by default for this lane) and content stays `push_rules`.
+    - **Path tables can lag a forge.** A request form a forge's table does not list is
+      refused; a forge that later serves a new alias of an existing path is outside the
+      table until someone adds it. The failure is a refusal, not a pass. `generic` and
+      the named forges all compare the path exactly (no case-folding, no `.git`
+      stripping), because the compared string is the string the proxy forwards.
+    A narrowing the broker cannot enforce is refused at launch rather than carried as a
+    fiction: the broker off, a same-forge `ssh_key` (a second push path), and an Azure
+    DevOps or GitHub-brokered host (another lane serves it) each fail the run with a
+    named reason.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
@@ -3018,6 +3058,35 @@ as the operator's handling of that token: SSO configured, token held out of band
 Local mode carries the same shape under a different label — the injected operator
 IS a verified human, so a self-decision there is refused like any other, which is
 why this switch is not one to turn on for a single-dev machine.
+
+### Constrained-admin mode is not separation of duties, and its break-glass is the admin token
+
+`WARDYN_GOVERN_ADMIN_RUNS` (off by default) governs an SSO admin's and an
+admin-role personal token's own runs like a member's: the governance profile, the
+capability grants, the quotas and the run doors all apply to them. It changes who
+stands outside governance when a run launches, and nothing else. Two residuals
+stay, and the mode does not claim otherwise.
+
+**An admin still governs the governance.** Profiles, assignments, capability
+grants and role mappings are security-operator writes, and a super admin is a
+security operator. A constrained admin can widen their own profile and then launch
+inside it. Every such write is audited, but nothing stops it: the mode is not
+separation of duties on its own, and it needs a four-eyes rule on governance
+changes beside it. The same holds for the surfaces the mode leaves alone:
+site-config hosts, provider rows and a workspace's approved egress feed every
+run's egress, and a deployment's environment, which can turn the switch off, is
+the platform team's change control.
+
+**The admin token and local mode stay break-glass.** Neither carries a person to
+resolve a profile for, so whoever holds the admin token runs ungoverned. With the
+switch on, each such launch carries `governance_exempt: true` on `run.create`, so
+a SIEM rule can alert on one; that is disclosure, not prevention, exactly as for
+the four-eyes bypass above, and the gate is only as strong as the handling of the
+token (SSO configured, token held out of band). With no sign-in configured the
+switch binds nobody, and boot says so. `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` set to
+`recording` is the one deliberate exemption: Record Mode then runs for a governed
+admin with open egress and the operator's credential injections, and each
+recording is marked `governance_exempt` on `run.record.start`.
 
 ### Coalesced `auth.fail` rows: the peer address is not the bound
 

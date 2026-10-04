@@ -69,6 +69,7 @@ import {
 import {
   agentLabel,
   initialWizardState,
+  seedAllowedDomains,
   primaryWorkspaceId,
   resolvedModelProviders,
   titleFromTask,
@@ -212,6 +213,21 @@ export function NewRunScreen() {
     setState((s) => ({ ...s, title: titleFromTask(s.task) }));
   }, [state.task, titleUserEdited]);
 
+  // An untouched form opens on the starters that follow the model providers,
+  // once /setup/status has named them: the policy body and the Network seed.
+  React.useEffect(() => {
+    if (!modelProviders) return;
+    const seeded = defaultSpecText(modelProviders);
+    const was = pristineSpec.current;
+    setSpecText((prev) => (prev === was ? seeded : prev));
+    pristineSpec.current = seeded;
+    if (!prefill?.state.allowedDomains) {
+      setState((s) => (JSON.stringify(s.allowedDomains) === JSON.stringify(seedAllowedDomains()) ? { ...s, allowedDomains: seedAllowedDomains(modelProviders) } : s));
+    }
+    // prefill is read once, like the useState seeds above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelProviders]);
+
   // ONE /setup/status read for everything this screen needs: model-access
   // readiness, the harness catalog, and which barriers this host can build —
   // runner.confinement_classes, the same field every other surface reads, never
@@ -347,6 +363,7 @@ export function NewRunScreen() {
     // floor and offer a tier the server then refuses.
     operator: operator && operatorResolved,
     workspaces,
+    modelProviders,
     pristineCc,
   });
 
@@ -419,6 +436,7 @@ export function NewRunScreen() {
   } = useLaunch({
     state,
     workspaces,
+    modelProviders,
     useSaved,
     ccTouched,
     merged: policy.merged,
@@ -465,7 +483,7 @@ export function NewRunScreen() {
   const dirty =
     useSaved ||
     specText !== pristineSpec.current ||
-    JSON.stringify(state) !== JSON.stringify(initialWizardState(pristineCc.current));
+    JSON.stringify(state) !== JSON.stringify(initialWizardState(pristineCc.current, undefined, modelProviders));
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // defaultPrevented is load-bearing: Radix's DismissableLayer preventDefaults
@@ -653,10 +671,11 @@ export function NewRunScreen() {
                 preflightDisabled={useSaved && !state.selectedPolicyId}
                 interactive={isInteractive}
                 adoCeiling={adoCeiling}
+                modelProviders={modelProviders}
                 savedPolicy={{
                   active: useSaved,
                   onActiveChange: (v: boolean) => {
-                    const c = clearedSpecOnCustomSwitch(v, securityOperator && operatorResolved, !!state.selectedPolicyId);
+                    const c = clearedSpecOnCustomSwitch(v, securityOperator && operatorResolved, !!state.selectedPolicyId, modelProviders);
                     if (c) setSpecText(c);
                     setUseSaved(v);
                   },
@@ -794,6 +813,7 @@ export function NewRunScreen() {
           caps={caps}
           modelProviders={modelProviders}
           noBarrier={policy.noBarrierOnHost}
+          runnerUnknown={!availableClasses}
           error={error}
           errorSeq={errorSeq}
           credentialRefused={credentialRefused}

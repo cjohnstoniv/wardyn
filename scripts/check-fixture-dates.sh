@@ -120,6 +120,17 @@ declare -A ALLOWLIST=(
   # assertion compares the rendered string against the clock, so the literal
   # dates themselves never go stale.
   ["ui/src/app/components/screens/credentials.test.tsx"]=2
+  # 0.8.6 W2a: the seed of an injected fake clock (sweep health, substrate
+  # health), never compared against the wall clock; the audit-partition tests'
+  # '2200-01-01' high-water mark, which only has to sit after every partition
+  # bound; and a mocked workspace's created_at/updated_at, rendered, never graded.
+  ["cmd/wardynd/sweep_health_test.go"]=5
+  ["internal/api/substrate_health_test.go"]=2
+  ["internal/sweephealth/sweephealth_test.go"]=2
+  ["internal/api/audit_partition_export_test.go"]=1
+  ["internal/db/audit_partition_digest_pg_test.go"]=1
+  ["internal/store/auditpartition_pg_test.go"]=1
+  ["ui/e2e/governed-admin.spec.ts"]=2
 )
 
 fail=0

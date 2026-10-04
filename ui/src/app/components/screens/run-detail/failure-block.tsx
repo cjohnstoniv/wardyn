@@ -27,7 +27,7 @@
 // 1280px; this is its other, unclipped home.
 import * as React from "react";
 import type { ReactNode } from "react";
-import { ScrollText } from "lucide-react";
+import { ChevronRight, ScrollText } from "lucide-react";
 import type { AgentRun, AuditEvent, RunEnding, RunEndingKind } from "../../../lib/types";
 import type { HeldCredential, HeldCredentials } from "../../../lib/held-credentials";
 import { runEndingFromAudit } from "../../../lib/api/audit";
@@ -42,6 +42,7 @@ import { OpenInUserView, useConsoleMode } from "../../wardyn/console-view";
 import { CONNECTIONS } from "../../wardyn/copy/door";
 import { resolveDoor, type DoorTarget } from "../../../lib/model-access";
 import { formatElapsed } from "../run-detail-summary-header";
+import { stripCriWrapper } from "../run-status-detail";
 
 // Copy change (M7): the two labels, the action, and the four reason bodies.
 // Local to this file rather than copy.ts on purpose — nothing else renders
@@ -50,6 +51,7 @@ import { formatElapsed } from "../run-detail-summary-header";
 const HAPPENED = "What happened";
 const TODO = "What to do";
 const OPEN_AUDIT = "Open audit trail";
+const PLATFORM_MESSAGE = "Platform message";
 
 type EndingCopy = {
   /** `elapsed` is the run's own lifetime up to the ending event. */
@@ -79,6 +81,22 @@ const ENDING_COPY: Partial<Record<RunEndingKind, EndingCopy>> = {
       "Read the selftest output in the audit trail — it names the missing tool.",
       "Rebuild the base image with that tool, or pick a different one.",
       "Nothing was mounted and no credential was minted; there is nothing to clean up.",
+    ],
+  },
+  sandbox_create: {
+    happened: () =>
+      "The sandbox could not be created, so the run stopped before the agent started. There is no exit code because nothing ran.",
+    todo: [
+      "Read the runner's message above — it names what it could not create or find.",
+      "Fix that, then start a new run — the policy and workspace are unchanged.",
+    ],
+  },
+  agent_start: {
+    happened: () =>
+      "The sandbox was created, but the agent could not be started in it, so no task ran. There is no exit code because nothing ran.",
+    todo: [
+      "Read the runner's message above — it says why the agent process would not start.",
+      "Fix that, then start a new run — the policy and workspace are unchanged.",
     ],
   },
   auto_stop: {
@@ -235,6 +253,7 @@ export function RunFailureBlock({
   const ending = runEndingFromAudit(run.state, audit);
   const door = useModelAccessDoor();
   const credential = ending?.kind === "credential";
+  const dispatchFailure = ending?.kind === "sandbox_create" || ending?.kind === "agent_start";
   // The context's status can be up to five minutes old, and a just-refused run
   // is exactly when the credential's state changed — so read it again, ONCE per
   // mount (the trail arrives after the first paint, so this fires when the
@@ -292,8 +311,22 @@ export function RunFailureBlock({
               this never appears without a cause naming it. */}
           {ending.detail && (
             <p className="mt-1 break-words text-muted-foreground">
-              <Mono>{ending.detail}</Mono>
+              <Mono>{dispatchFailure ? stripCriWrapper(ending.detail) : ending.detail}</Mono>
             </p>
+          )}
+          {/* Only the two dispatch kinds: the unstripped text, and only when
+              stripping removed something (nothing new is fetched; it is the
+              row's own data.error). */}
+          {dispatchFailure && ending.detail && stripCriWrapper(ending.detail) !== ending.detail && (
+            <details className="group mt-1">
+              <summary className="flex cursor-pointer list-none items-center gap-1 text-xs text-muted-foreground">
+                <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
+                {PLATFORM_MESSAGE}
+              </summary>
+              <p className="mt-1 break-words text-muted-foreground">
+                <Mono>{ending.detail}</Mono>
+              </p>
+            </details>
           )}
           {copy && (
             <>

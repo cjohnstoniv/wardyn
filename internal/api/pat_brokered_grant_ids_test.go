@@ -20,8 +20,19 @@ import (
 func patGrantRow(id, runID uuid.UUID, host string) types.CredentialGrant {
 	return types.CredentialGrant{ID: id, RunID: runID, Spec: types.GrantSpec{
 		Kind:  types.GrantGitPAT,
-		Scope: mustJSON(map[string]any{"host": host, "secret_ref": "pat-" + host}),
+		Scope: mustJSON(map[string]any{"host": host, "secret_name": "pat-" + host}),
 	}}
+}
+
+// patRowsFor stores a git_pat row for every {host: grant id} a dispatch is
+// handed as winning, which is what persistRunGrants has done by the time
+// dispatchRun runs: dispatch reads each winning grant's scope from its row.
+func patRowsFor(runID uuid.UUID, winning map[string]string) []types.CredentialGrant {
+	var rows []types.CredentialGrant
+	for host, id := range winning {
+		rows = append(rows, patGrantRow(uuid.MustParse(id), runID, host))
+	}
+	return rows
 }
 
 func sortedIDs(ids []uuid.UUID) []uuid.UUID {

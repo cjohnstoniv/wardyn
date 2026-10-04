@@ -100,6 +100,7 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/people/{principal}/tokens", "`POST /people/{principal}/tokens`"},
 	{"GET /api/v1/people/{principal}/tokens", "`GET /people/{principal}/tokens`"},
 	{"GET /api/v1/audit/chain/verify", "`GET /audit/chain/verify`"},
+	{"GET /api/v1/admin/runs/capacity", "`GET /admin/runs/capacity`"},
 	{"POST /api/v1/governance/profiles", "`/governance` profile and assignment routes"},
 	{"GET /api/v1/access/directory/search", "`GET /access/directory/search`"},
 	// Issue #168 (0.8): the three /drives routes that DON'T name a host path

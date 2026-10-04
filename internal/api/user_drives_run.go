@@ -258,7 +258,7 @@ func (s *Server) denyUserDrive(w http.ResponseWriter, r *http.Request, ceiling g
 	}
 	// The mock round's frozen member copy, reproduced byte-exact: the console
 	// never rewords a server refusal, so this line is where that string ships.
-	return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.drive", driveDeniedByProfileMsg(profile)))
+	return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.drive", driveDeniedByProfileMsg(profile)).WithPolicy(s.ceilingPolicy(r.Context(), ceiling)))
 }
 
 // driveIsMountableHere is the pair of refusals that are about the DEPLOYMENT

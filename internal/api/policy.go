@@ -123,6 +123,9 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict bool) error {
 	if err := validatePATNarrowedDuplicates(spec.EligibleGrants); err != nil {
 		return err
 	}
+	if err := validatePATNarrowingSSHConflict(spec.EligibleGrants); err != nil {
+		return err
+	}
 	if err := validatePolicyWorkspaces(spec); err != nil {
 		return err
 	}
@@ -184,6 +187,9 @@ func validateADOCapabilities(caps []adoscope.Capability) error {
 func specRefusalReason(err error, bucket string) string {
 	if errors.Is(err, errADOCapabilityUnknown) {
 		return reasonADOCapabilityUnknown
+	}
+	if errors.Is(err, errPATNarrowingSSHConflict) {
+		return reasonGitPATNarrowingSSHConflict
 	}
 	return bucket
 }

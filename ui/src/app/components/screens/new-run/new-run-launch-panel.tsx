@@ -23,7 +23,8 @@ import type {
   SetupProviderAccess,
   Workspace,
 } from "../../../lib/types";
-import { RAIL_PROVIDER, RUN } from "../../wardyn/copy";
+import { RAIL_PROVIDER, RAIL_SETUP, RUN } from "../../wardyn/copy";
+import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
 import { savedPolicyGone } from "./policy-lane";
 import { workspaceUnavailableToCaller, type WizardState } from "./wizard-types";
 import { RunRail } from "./new-run-rail";
@@ -67,6 +68,10 @@ export interface NewRunLaunchPanelProps {
   onPreflight: () => Promise<void>;
   preflightRefusal: { body: string; provider: string } | null;
   noBarrier: boolean;
+  /** The barrier probe read no class list: no runner is configured, or the
+   *  status read failed. Create-run skips its capability gate with no runner,
+   *  so a `missing` backend row then predicts no refusal and never blocks. */
+  runnerUnknown?: boolean;
 
   /** The screen's ONE validation rule (RunRail's `launch.problem`) and the
    *  #922 workspace-availability disable (`launch.workspaceUnavailable`) —
@@ -130,6 +135,7 @@ export function NewRunLaunchPanel({
   onPreflight,
   preflightRefusal,
   noBarrier,
+  runnerUnknown,
   mode,
   task,
   useSaved,
@@ -201,7 +207,26 @@ export function NewRunLaunchPanel({
   // so the sentence renders exactly once, on the workspace picker's own
   // advisory line (workspace-card.tsx), never a second time in the rail's
   // problem slot.
-  const problem = needsTask && !task.trim()
+  const modelBlocked =
+    isAgent &&
+    !isInteractive &&
+    preflightIsCurrent &&
+    !!preflightResult?.setup_items?.some((i) => i.kind === "llm_access" && i.status === "missing");
+  // f-f4: preflight's `backend` row says this runner cannot enforce the run's
+  // barrier; Launch would 422 on it, so the rail says so first. Only the
+  // CURRENT body's verdict counts, and only `missing` — an `unverified` row
+  // (the capability probe failed) never blocks. Not when `noBarrier`: a host
+  // with no barrier at all has its own host-wide line in the rail, so that
+  // stays the single sentence. Not when `runnerUnknown` either: with no runner
+  // configured Launch is not refused, so neither is it blocked here.
+  const backendMissing =
+    !noBarrier &&
+    !runnerUnknown &&
+    preflightIsCurrent &&
+    !!preflightResult?.setup_items?.some((i) => i.kind === "backend" && i.status === "missing");
+  const problem = backendMissing
+    ? RAIL_SETUP.BACKEND_BLOCK
+    : needsTask && !task.trim()
     ? isAgent
       ? "An autonomous run needs a task to perform."
       : "Enter a command to run."
@@ -240,7 +265,16 @@ export function NewRunLaunchPanel({
               // generic hint stays silent whenever one is set.
               providerCandidates.length > 1 && !selectedModelProviderId && !pin
               ? RAIL_PROVIDER.LAUNCH_HINT
-              : null;
+              : // f-f5: mirrors the server's runNeedsModelWarning — an unattended
+                // agent run with no reachable model waits. Interactive bodies are
+                // exempt (a shell still works). The verdict is the current body's
+                // own preflight `llm_access` row, never the mount-time llm_ready.
+                modelBlocked
+                ? RAIL_MODEL_ACCESS.UNATTENDED_BLOCK(agentName)
+                : null;
+  // The Connect link belongs to the unattended-block sentence only; an
+  // earlier arm that wins while modelBlocked is true keeps its own sentence.
+  const modelBlockShown = modelBlocked && problem === RAIL_MODEL_ACCESS.UNATTENDED_BLOCK(agentName);
 
   return (
     <RunRail
@@ -248,6 +282,7 @@ export function NewRunLaunchPanel({
       savedPolicy={savedPolicy}
       cc={cc}
       showModelWarning={showModelWarning}
+      modelBlocked={modelBlocked}
       startup={startup}
       showHoldNote={showHoldNote}
       toolRules={toolRules}
@@ -256,6 +291,7 @@ export function NewRunLaunchPanel({
       launch={{
         onLaunch,
         disabled: launchDisabled,
+        problemLink: modelBlockShown ? { to: "/account", label: RAIL_MODEL_ACCESS.NO_PROVIDER_CTA } : undefined,
         spinning: launchSpinning,
         inFlight: launching,
         problem,

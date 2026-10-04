@@ -21,7 +21,8 @@ Every secret-carrying `wardynd` boot setting has a `<VAR>_FILE` twin that holds
 a **path** instead of the value: `WARDYN_PG_DSN_FILE`,
 `WARDYN_PG_MIGRATE_DSN_FILE`, `WARDYN_ADMIN_TOKEN_FILE`, `WARDYN_AGE_KEY_FILE`,
 `WARDYN_OIDC_CLIENT_SECRET_FILE`, `WARDYN_DIRECTORY_CLIENT_SECRET_FILE`,
-`WARDYN_AUDIT_SINKS_FILE` and `WARDYN_ORG_ENROLMENT_TOKEN_FILE`
+`WARDYN_AUDIT_SINKS_FILE`, `WARDYN_APPROVAL_NOTIFY_FILE` and
+`WARDYN_ORG_ENROLMENT_TOKEN_FILE`
 ([ENV.md](../ENV.md)). Use them when a control requires
 secrets delivered at runtime (Vault Agent injector, Secrets Store CSI driver,
 projected volumes), or when a posture scanner flags secret env vars.
@@ -784,6 +785,63 @@ start until you do.** Once no stored row is left under the age key, it
 could only let whoever also holds the database forge a row wardynd still
 reads under it, its own boot keys among them.
 
+
+## Credentials under a person's own key: `WARDYN_PRINCIPAL_KEYS`
+
+By default every person's stored credential has its data key wrapped under the
+deployment's credential key. Erasing a person then deletes their rows and no more.
+A backup of the table, with the key that wraps it, still opens them (residual 48).
+With `WARDYN_PRINCIPAL_KEYS=on` (chart `kek.principalKeys`) a credential written
+for a person is sealed under a key of that person's own. Erasing the person
+destroys that key.
+
+**The format.** The row is `enc_version=3` and its `kek_id` is `pk:v<n>`, naming
+the generation of the person's `cred` key in `principal_keys`. The value is
+sealed under a fresh data key exactly as in v1, bound to `(owned_by, name)`; the
+data key is wrapped with AES-256-GCM under the person's principal key, bound to
+`("wardyn/pk/v1", owned_by, name, n)`. The principal key itself is wrapped under
+the credential key service (local key, Vault Transit or Key Vault) as before, so
+a key service still guards every person's key. Version 2 stays the external-store
+pointer.
+
+**What it covers.**
+
+- Only a person's credential (`owned_by` not empty). The boot keys (signing,
+  session, SSH host and the rest), the operator namespace and the mask key stay v1
+  under the platform or credential key. The setting does not change that, and no
+  principal key exists for the operator namespace.
+- In store mode (`WARDYN_SECRET_STORE=vaultkv` or `azurekv`) a write is still a
+  pointer to the organisation's store; the setting does nothing there.
+- With the setting `off`, nothing is written as v3 but every v3 row is still
+  read, so turning it back off within 0.8.6 loses nothing.
+
+**Moving existing rows: `wardynd -rewrap-principal-keys`.** A maintenance mode,
+safe beside a serving daemon with the same settings. It moves each person's v1
+credential row into a v3 envelope under their key and exits. Each row moves in
+its own transaction, under the row's lock. Boot keys, the operator namespace and
+pointer rows are never touched, and no value is decrypted. It is not a root rotation: `-rewrap`
+moves data keys and principal keys onto a new root key, and this changes which key
+a row's data key is under. An abort names the row with every earlier row
+committed, so re-run it. A credential written under the credential key while it
+ran is reported as `remaining`; run it again until it is 0. It takes the same
+advisory lock as `-rewrap` and `-rotate-age-key`, writes one `secret.rewrap` row
+(`mode` `principal_keys`) and exits. Turn the setting on first, so new writes are
+v3, then run it.
+
+**Erasing a person.** `DELETE /people/{principal}/credentials` deletes the rows,
+then destroys the person's `cred` key. The report and the `credential.erase` audit
+row count the v3 rows as `crypto_erased`. Every other row is counted as `deleted`:
+a v1 row, a row written with the setting off, or an external pointer. A `deleted`
+row is gone from the database only, and a backup holds it until the backup expires. Reconnecting
+afterwards writes a new key generation. A run that was already holding a
+credential keeps it, and whatever was sealed for that run under the destroyed key
+(its masking copies) stops opening, so after a restart that run is uncovered.
+That fails closed, and it is disclosed.
+
+**Rolling back is one-way.** wardynd 0.8.5 refuses a row whose `enc_version` it
+does not know, by name, so once any v3 row exists a downgrade below 0.8.6
+strands it. There is no v3-to-v1 tool. Turn the setting off and stay on 0.8.6 if
+you need to stop writing v3.
 
 ## Store mode: credentials in Vault
 

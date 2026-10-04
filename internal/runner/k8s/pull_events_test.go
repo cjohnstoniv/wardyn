@@ -93,7 +93,7 @@ func TestWaitContainerRunning_ReportsImagePullFromEvents(t *testing.T) {
 	})
 
 	var seen []string
-	if err := d.waitContainerRunning(context.Background(), pullTestPod, mainContainerName, func(detail string) {
+	if err := d.waitContainerRunning(context.Background(), d.newStartClock(), pullTestPod, mainContainerName, func(detail string) {
 		seen = append(seen, detail)
 	}); err != nil {
 		t.Fatalf("waitContainerRunning: %v", err)
@@ -126,7 +126,7 @@ func TestWaitContainerRunning_EventsForbiddenKeepsThePodsReason(t *testing.T) {
 	})
 
 	var seen []string
-	if err := d.waitContainerRunning(context.Background(), pullTestPod, mainContainerName, func(detail string) {
+	if err := d.waitContainerRunning(context.Background(), d.newStartClock(), pullTestPod, mainContainerName, func(detail string) {
 		seen = append(seen, detail)
 	}); err != nil {
 		t.Fatalf("waitContainerRunning must not fail on an Events read error: %v", err)

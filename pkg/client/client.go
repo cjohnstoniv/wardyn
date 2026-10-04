@@ -23,13 +23,16 @@
 //   - workspaces (/api/v1/workspaces):   CreateWorkspace, GetWorkspace, ListWorkspaces,
 //     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
-//   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents
+//   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
+//     ExportAuditPartition
 //   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, ListSecretsScoped,
 //     ListSecretsScopedPage, SetSecret, DeleteSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives
 //   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
-//   - governance (/api/v1/governance):   GetGovernance, ApplyGovernance
+//   - governance (/api/v1/governance):   GetGovernance, ApplyGovernance, ApplyGovernanceResult
+//   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
+//     ApproveGovernanceChange, RejectGovernanceChange
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
 //   - identity (/api/v1/me):             Me — and, on the same prefix, ListSSHKeys/
 //     ListSSHKeysPage/AddSSHKey/DeleteSSHKey (/api/v1/me/ssh-keys). The rest of
@@ -695,30 +698,50 @@ func (c *Client) GetRecording(ctx context.Context, runID uuid.UUID, session ...s
 // body (if non-nil) is JSON-encoded as the request body.
 // out (if non-nil) is JSON-decoded from a 2xx response body.
 // Any non-2xx response is returned as *APIError.
+// A 202 whose body carries a pending_change (a governance write held for a
+// second approver) is returned as *PendingApprovalError and never decoded into
+// out: the write has NOT been applied, and out would otherwise read as a
+// zero-value success.
 // headerOut, if a non-nil *http.Header is passed (at most one — variadic only
 // to keep this optional for every existing zero-arg call site), receives the
 // raw response header on return, success or error alike — the sole mechanism
 // AuditEventsPage uses to surface X-Wardyn-Truncated to a caller.
 func (c *Client) do(ctx context.Context, method, path string, body, out any, headerOut ...*http.Header) error {
+	pending, err := c.doPending(ctx, method, path, body, out, headerOut...)
+	if err != nil {
+		return err
+	}
+	if pending != nil {
+		return &PendingApprovalError{Changes: []GovernanceChange{*pending}}
+	}
+	return nil
+}
+
+// doPending is do for a caller that handles a pending change itself: it returns
+// the pending change (out untouched) when the server answered 202 with a
+// pending_change body, and (nil, nil) for every other success. Detection keys
+// on the body's pending_change field, never on the 202 alone: KillRun,
+// RecordWorkspaceTask and the scan routes also answer 202 and decode into out.
+func (c *Client) doPending(ctx context.Context, method, path string, body, out any, headerOut ...*http.Header) (*GovernanceChange, error) {
 	// Encode the request body.
 	var reqBody io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("marshal request body: %w", err)
+			return nil, fmt.Errorf("marshal request body: %w", err)
 		}
 		reqBody = bytes.NewReader(b)
 	}
 
 	req, err := c.newRequest(ctx, method, path, reqBody, body != nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
-		return fmt.Errorf("http: %w", err)
+		return nil, fmt.Errorf("http: %w", err)
 	}
 	defer resp.Body.Close()
 	if len(headerOut) > 0 && headerOut[0] != nil {
@@ -727,17 +750,37 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any, hea
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
-		return NewAPIError(resp.StatusCode, raw)
+		return nil, NewAPIError(resp.StatusCode, raw)
 	}
 
 	// Success path: decode the FULL body (no 2 KiB cap). Streaming via
 	// json.NewDecoder avoids buffering the whole body up front; an empty body
 	// (e.g. 204) leaves out untouched and returns nil. io.EOF is the normal
 	// "no body" signal and is not an error here.
+	var src io.Reader = resp.Body
+	if resp.StatusCode == http.StatusAccepted {
+		// Only a 202 can be a pending change, and the probe needs the whole
+		// body, so this one status is buffered; its bodies are small.
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
+		var probe struct {
+			PendingChange json.RawMessage `json:"pending_change"`
+		}
+		if json.Unmarshal(raw, &probe) == nil && len(probe.PendingChange) > 0 && string(probe.PendingChange) != "null" {
+			var change GovernanceChange
+			if err := json.Unmarshal(probe.PendingChange, &change); err != nil {
+				return nil, fmt.Errorf("decode pending change: %w", err)
+			}
+			return &change, nil
+		}
+		src = bytes.NewReader(raw)
+	}
 	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil && err != io.EOF {
-			return fmt.Errorf("decode response: %w", err)
+		if err := json.NewDecoder(src).Decode(out); err != nil && err != io.EOF {
+			return nil, fmt.Errorf("decode response: %w", err)
 		}
 	}
-	return nil
+	return nil, nil
 }

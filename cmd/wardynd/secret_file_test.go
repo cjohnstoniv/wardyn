@@ -197,7 +197,7 @@ func TestSecretFile_ValueNeverLogged(t *testing.T) {
 func TestSecretFileSettings_EveryDefaultIsEmpty(t *testing.T) {
 	f := &bootFlags{
 		dsn: new(string), migrateDSN: new(string), adminToken: new(string), ageKey: new(string),
-		oidcClientSecret: new(string), dirSecret: new(string), auditSinks: new(string),
+		oidcClientSecret: new(string), dirSecret: new(string), auditSinks: new(string), approvalNotify: new(string),
 		orgEnrolToken: new(string),
 	}
 	settings := secretFileSettings(f)
@@ -237,7 +237,7 @@ func TestSecretFileSettings_NamingConvention(t *testing.T) {
 func TestSecretFileSettings_FillsBootFlag(t *testing.T) {
 	f := &bootFlags{
 		dsn: new(string), migrateDSN: new(string), adminToken: new(string), ageKey: new(string),
-		oidcClientSecret: new(string), dirSecret: new(string), auditSinks: new(string),
+		oidcClientSecret: new(string), dirSecret: new(string), auditSinks: new(string), approvalNotify: new(string),
 		orgEnrolToken: new(string),
 	}
 	t.Setenv("WARDYN_AGE_KEY_FILE", writeSecret(t, "AGE-SECRET-KEY-1TEST\n", 0o400))

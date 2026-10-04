@@ -49,6 +49,10 @@ const (
 	// the view looks through was deleted. Not audited on its own — the cause
 	// row is ReasonUserViewTypeDeleted, which the launch response answered.
 	ReasonAdminView Reason = "admin_view"
+	// ReasonUserViewPreview: with WARDYN_GOVERN_ADMIN_RUNS on, an admin whose
+	// User view looks through a type other than their own sent a write; the
+	// view is a read-only preview. 409, audited with the viewed and stamped types.
+	ReasonUserViewPreview Reason = "user_view_preview"
 	// ReasonDelegationScope: a portal's delegated token asked for a route
 	// outside the delegation allow-list (#1142).
 	ReasonDelegationScope Reason = "delegation_scope"
@@ -68,6 +72,13 @@ const (
 	// ReasonRoleStampStale: an API token's role and group stamp is older than
 	// WARDYN_ROLE_STAMP_TTL. Its owner signs in again to re-stamp it.
 	ReasonRoleStampStale Reason = "role_stamp_stale"
+	// ReasonRecordingGoverned: Record Mode is refused for an admin whose runs are
+	// governed (WARDYN_GOVERN_ADMIN_RUNS) unless the deployment exempts recording.
+	ReasonRecordingGoverned Reason = "recording_governed"
+	// ReasonAuditExportPartitionFilter: a partition export (GET /audit/export?partition=) was asked
+	// to narrow the partition with another filter, so the digest in its footer would not cover the
+	// whole partition. Input shape, not a denial: not audited.
+	ReasonAuditExportPartitionFilter Reason = "audit_export_partition_filter"
 )
 
 // Refusal is one reason's registry row.
@@ -106,6 +117,7 @@ var refusals = map[Reason]Refusal{
 	ReasonRunKept:                     {Effect: EffectDeny, Audit: true},
 	ReasonRunNotFound:                 {Effect: EffectDeny, Audit: true},
 	ReasonRunOwnerOnly:                {Effect: EffectDeny, Audit: true, Sentence: "only the person who started this run can open it interactively"},
+	ReasonRecordingGoverned:           {Effect: EffectDeny, Audit: true},
 	ReasonRunTerminal:                 {Effect: EffectDeny, Audit: true},
 	ReasonSecondHumanRequired:         {Effect: EffectDeny, Audit: true},
 	ReasonRunQuota:                    {Effect: EffectUnprocessable},
@@ -113,10 +125,12 @@ var refusals = map[Reason]Refusal{
 	ReasonUserTypeUnknown:             {Effect: EffectDeny, Audit: true},
 	ReasonUserViewTypeDeleted:         {Effect: EffectDeny, Audit: true},
 	ReasonAdminView:                   {Effect: EffectConflict},
+	ReasonUserViewPreview:             {Effect: EffectConflict, Audit: true},
 	ReasonDelegationScope:             {Effect: EffectDeny, Audit: true},
 	ReasonEventStreamCap:              {Effect: EffectUnprocessable},
 	ReasonMaskStateUnavailable:        {Effect: EffectUnavailable, Audit: true},
 	ReasonRoleStampStale:              {Effect: EffectUnauthenticated, Audit: true, Sentence: "this token's role is out of date: its owner must sign in again to refresh it"},
+	ReasonAuditExportPartitionFilter:  {Effect: EffectBadRequest},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,

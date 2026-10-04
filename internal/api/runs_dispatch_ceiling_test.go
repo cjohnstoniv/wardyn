@@ -76,6 +76,7 @@ func runWalledDispatch(t *testing.T, d walledDispatch) (types.RunPolicySpec, run
 	srv.cfg.Store = ceilingDispatchStore{dispatchTestStore: st, site: d.site}
 	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{govCeilingSecret: []byte("v")}}
 	run.Task = "" // no agent exec / completion watcher: this is about composition
+	st.grants = patRowsFor(run.ID, d.patGrants)
 
 	var firstGitHub *uuid.UUID
 	for _, id := range d.gitGrants {
@@ -311,6 +312,12 @@ type ceilingRecordStore struct {
 
 func (s ceilingRecordStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	return s.profile, types.CapabilitySubjectUser, nil
+}
+
+// ListGovernanceProfiles answers none: dispatch reads the run's profile for its
+// refusal attribution, and the embedded store has no such table.
+func (s ceilingRecordStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+	return nil, nil
 }
 
 func (s ceilingRecordStore) HasGroupTierAssignments(context.Context) (bool, error) {

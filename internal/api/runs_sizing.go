@@ -11,6 +11,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // runSizingSetter is the OPTIONAL store capability the dispatch-time sizing record needs,
@@ -49,6 +50,20 @@ func (s *Server) recordRunSizing(ctx context.Context, runID uuid.UUID, res runne
 	}
 	if err := setter.SetRunSizing(ctx, runID, runSizing(s.cfg.RunnerTarget, res)); err != nil {
 		slog.WarnContext(ctx, "wardynd: persist run sizing failed",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
+	}
+}
+
+// recordRunDiskCap persists the resolved disk cap for the run page's disk-used reading (RL-13:
+// best-effort, like SetRunImage — a failed write must not block dispatch, it just leaves that
+// run's cap unknown to the resources widget).
+func (s *Server) recordRunDiskCap(ctx context.Context, runID uuid.UUID, res *types.ResourceLimits) {
+	effectiveDiskMiB := 0
+	if res != nil {
+		effectiveDiskMiB = res.DiskMiB
+	}
+	if err := s.cfg.Store.SetRunDiskMiB(ctx, runID, effectiveDiskMiB); err != nil {
+		slog.WarnContext(ctx, "wardynd: persist run disk cap failed",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
 }

@@ -37,6 +37,7 @@ import {
   resolveWorkspaceMounts,
   toRunWorkspacesWire,
 } from "./wizard-types";
+import type { SetupModelProvider } from "../../../lib/types";
 import type {
   CreateRunInputWithComposition,
   GitHubPermission,
@@ -61,6 +62,7 @@ export interface ImpliedEgressHost {
 export function impliedEgressHosts(
   state: WizardState,
   workspaces: Workspace[] = [],
+  providers?: readonly SetupModelProvider[],
 ): ImpliedEgressHost[] {
   const out: ImpliedEgressHost[] = [];
   // A governed command never resolves model access (task_mode=exec runs no
@@ -69,7 +71,7 @@ export function impliedEgressHosts(
   // though buildSpec below never emits the grant that host was for.
   const impliedLlmHost =
     state.runType !== "command" && state.llmSecretName
-      ? llmHostForSecret(state.agent, state.llmSecretName)
+      ? llmHostForSecret(state.agent, state.llmSecretName, providers)
       : undefined;
   if (impliedLlmHost) {
     out.push({ host: impliedLlmHost, why: "model key" });
@@ -111,6 +113,7 @@ export function impliedEgressHosts(
 export function buildSpec(
   state: WizardState,
   workspaces: Workspace[] = [],
+  providers?: readonly SetupModelProvider[],
 ): {
   run: CreateRunInputWithComposition;
   inline_policy: RunPolicySpec;
@@ -301,7 +304,7 @@ export function buildSpec(
   // resolves no model access, so a stale llmSecretName must not mint one.
   const llmGrantHost =
     state.runType !== "command" && state.llmSecretName
-      ? llmHostForSecret(state.agent, state.llmSecretName)
+      ? llmHostForSecret(state.agent, state.llmSecretName, providers)
       : undefined;
   if (llmGrantHost) {
     const host = llmGrantHost;
@@ -332,7 +335,7 @@ export function buildSpec(
   // approval. impliedEgressHosts is the ONE list (D6/claim3) — step-egress.tsx
   // renders the SAME hosts as "Added by grants:" chips, so the two can never
   // disagree about what buildSpec actually unions in here.
-  const requiredHosts = impliedEgressHosts(state, workspaces).map((h) => h.host);
+  const requiredHosts = impliedEgressHosts(state, workspaces, providers).map((h) => h.host);
 
   // Allow-all egress: deny-list only. allowed_domains may be empty and first-use
   // approval is inert, so we drop the run's own required hosts (everything
@@ -425,8 +428,9 @@ export function mergeRunSelections(
   authored: RunPolicySpec,
   state: WizardState,
   workspaces: Workspace[] = [],
+  providers?: readonly SetupModelProvider[],
 ): { spec: RunPolicySpec; added: SpecAdditions } {
-  const { inline_policy: composed } = buildSpec(state, workspaces);
+  const { inline_policy: composed } = buildSpec(state, workspaces, providers);
 
   // --- eligible_grants: authored ∪ composed, deep-equal dedupe ---
   const grants = [...(authored.eligible_grants ?? [])];
@@ -452,7 +456,7 @@ export function mergeRunSelections(
     .filter(Boolean);
   const have = new Set(authored.allowed_domains ?? []);
   const hosts = dedupe([
-    ...impliedEgressHosts(state, workspaces).map((h) => h.host),
+    ...impliedEgressHosts(state, workspaces, providers).map((h) => h.host),
     ...pins,
   ]).filter((h) => !have.has(h));
 
@@ -489,8 +493,17 @@ function githubPermissionsMap(perm: GitHubPermission): Record<string, string> {
 // api.anthropic.com pinned an Anthropic injection rule — and an Anthropic host
 // in allowed_domains — onto a run that never speaks to Anthropic. Callers skip
 // the grant, the implied-egress line and the pinned host when it is undefined.
-function llmHostForSecret(agent: WizardAgent, _secret: string): string | undefined {
+function llmHostForSecret(
+  agent: WizardAgent,
+  _secret: string,
+  providers?: readonly SetupModelProvider[],
+): string | undefined {
   if (agent === "none") return undefined;
+  // The configured provider that serves this harness (its default first) names
+  // the host; with none configured, the vendor host as before.
+  const serving = (providers ?? []).filter((p) => !p.disabled && p.host && p.harnesses.includes(agent));
+  const chosen = serving.find((p) => p.default_for?.includes(agent)) ?? serving[0];
+  if (chosen) return chosen.host;
   return agent === "codex-cli" ? "api.openai.com" : "api.anthropic.com";
 }
 

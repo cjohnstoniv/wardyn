@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- **An unplaceable Kubernetes run now waits for room.** A run whose pods no machine has room for used to
+  fail at 90 seconds (the proxy's IP bound); it now stays `STARTING`, showing "Waiting for a machine with
+  room for this sandbox.", for up to `WARDYN_SANDBOX_CAPACITY_WAIT` (15 minutes). Set it to `0` to keep
+  failing fast. `WARDYN_SANDBOX_START_TIMEOUT` (default 3 minutes) is now one absolute deadline across the
+  proxy and agent pods, replacing the separate 90 second proxy bound. See "The start deadlines" in
+  `docs/OPERATIONS.md`.
 - **Postgres 13+ required.** Migration `0107_pg13_floor` changes nothing; on a server older than 13 it
   refuses with a message naming the version, and the database is left exactly as 0.8.5 left it. Upgrade
   the database server first. Take a dump before this upgrade: the audit conversion that follows in this
@@ -26,6 +32,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   stopped writers. It refuses (exit 3) while another wardynd holds the single-instance lock or any other
   client is connected to the database, and exits 1 when the migration fails. See "Stopped-writer upgrade"
   in `docs/OPERATIONS.md`.
+- **Move the proxy image pin in the same step as wardynd, image first.** From 0.8.6 wardynd writes
+  `attribution` into the proxy's config for every run launched under a governance profile (contact or not)
+  and for every run when `policy_help` is set. A 0.8.5 proxy refuses that key at startup and the run fails
+  to launch, so the proxy image must be the 0.8.6 image before wardynd is upgraded on any deployment that
+  assigns a governance profile. If you pin `WARDYN_PROXY_IMAGE` or `k8s.proxyImage` by digest, move the
+  pin with wardynd.
 - **The audit log becomes a monthly-partitioned table, and every audit write goes through the database
   function `audit_append`** (`0111_audit_partitioned`, `0112_audit_chain_partitioned`). The conversion is
   one-way and needs stopped writers: a 0.8.5 binary's direct `INSERT` is refused afterwards, and 0.8.5 will not
@@ -33,6 +45,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   role that held `INSERT` on `audit_events` is granted `EXECUTE` on `audit_append` and `audit_ensure_partitions`
   by the migration and loses `INSERT`; a role you add later needs that grant, and wardynd refuses to start
   without it. Conversion time by row count is in "What the audit conversion does", `docs/OPERATIONS.md`.
+- **Dry-run audit rows are marked and summarised.** Every audit row written while serving `POST /runs/preflight`
+  now carries `dry_run: true`, and a repeated identical refusal inside ten minutes is counted into one appended
+  `preflight.denial.coalesce` row instead of one `authz.denied` row per keystroke. Rows written before this
+  release carry no marker, so a SIEM rule over `authz.denied` sees fewer dry-run rows and a new summary action
+  (`count` includes the first row). The windows are per replica. Launch refusals are unchanged.
 - The chart's startup probe window now follows `WARDYN_MIGRATE_TIMEOUT` (30 s connect, the timeout, 120 s of
   slack). A value spelled with anything but `h`, `m` and `s` fails the render.
 - **Chart installs get a smaller default sandbox (1000m CPU, 2048 MiB).** A run whose policy sets no
@@ -78,15 +95,54 @@ and does not yet follow semantic versioning (interfaces are not stable).
   existing row. `contact` and `policy_help` hold `owner`, `email`, `request_url` (https or one mailto
   address) and `request_text`, and a bad value is refused with `400`. A `PUT` that omits `contact` or
   `policy_help` keeps the stored value, `null` or `{}` clears it. `policy_help` is not published by `/healthz`.
-
-### Added
-
+- **A refusal by the governance ceiling now names the policy and how to ask for a change.** The `403` and
+  `422` bodies of `governance_profile`, `run_quota` and `record_ceiling_limit` gain a `policy` object: the
+  leaf profile's name and contact, or the deployment's `policy_help` for a member no profile binds. The
+  `error` text, `reason` and status are unchanged, and a hidden door stays byte-identical to a missing
+  resource. `GET /me` gains `governance_contact` (`null` for an operator or when the ceiling cannot be
+  resolved), `GET /runs/{id}` gains `policy`, the Go SDK's `APIError` gains `Policy`, and `wardyn` prints one
+  `governed by …, to request a change: …` line after the error. Exit codes are unchanged.
+- **A sandbox refused by its run's policy is told which policy and where to ask for a change.** The egress
+  proxy's `policy:denied`, `policy:default-deny`, `policy:method` and `approval:denied` refusals, and the
+  git, PAT and Azure DevOps broker refusals the policy decides, carry `X-Wardyn-Policy` and
+  `X-Wardyn-Policy-Request` headers and one body line ("This run is governed by the profile ... To request a
+  change: ..."). The line names the profile and the route, never the owner. Faults (`builtin:*`,
+  `policy:evaluator-error`, an uninspectable push) and every decision-log row are unchanged. See the proxy
+  image note under "Before you upgrade".
+- **A broken substrate or a stalled background sweep shows on a gauge and a `/setup/status` row, and `/readyz`
+  is unchanged.** Migration `0120_sweep_ticks` adds the `sweep_ticks` table, one row per sweep, shared by every
+  replica. `wardyn_runner_up` (per replica) reads 0 when the runner's substrate is unreachable or refuses the
+  control plane, and `wardyn_sweep_last_tick_seconds{sweep,result}` carries each sweep's last attempt and last
+  success. The new `substrate_health` row fails with cause `runner_unreachable` or `runner_auth`, and warns with
+  cause `sweep_stale` once a sweep goes three of its intervals without a success; it is never blocking and
+  members never see it. A runner that is configured but cannot report its capabilities no longer sends every
+  admin into the setup funnel: the `runner` row stays a `fail` but is not blocking, and points to the new row.
+  The runner probe is one namespaced pod list of limit 1 on Kubernetes, which the chart's Role already grants,
+  and a daemon ping on Docker. See `docs/operations/monitoring.md`.
 - **Sandbox pods can be placed on the nodes the operator names.** `k8s.sandbox.{nodeSelector,tolerations,affinity,priorityClassName,podAnnotations,podLabels}`
   (chart) render to `WARDYN_K8S_SANDBOX_PLACEMENT`, and the agent pod, the proxy pod and the boot-time
   NetworkPolicy canary all take it, so the canary proves enforcement on the nodes runs use. wardynd refuses
   to boot on a placement label that is reserved (`wardyn.managed`, `wardyn.run-id`, `wardyn.component`) or on
   any `kubernetes.io/` or `k8s.io/` annotation or label other than
   `cluster-autoscaler.kubernetes.io/safe-to-evict`, naming the key. Nothing is set by default.
+- **Approval notifications over a signed webhook (`WARDYN_APPROVAL_NOTIFY`).** Off by default. When set,
+  every approval raised gets a durable outbox row in the same transaction, and a worker on each replica
+  delivers it at least once to the named webhook channels, with an `X-Wardyn-Signature` HMAC when a secret
+  is set. A dead notification writes an `approval.notify.failed` audit row and counts in
+  `wardyn_approval_notify_failed_total{channel}`; a run is held to 25 notifications an hour. Migration
+  `0118_approval_notifications` only adds the `approval_notifications` table, and a 0.8.5 binary refuses a
+  database that has applied it, so a downgrade is a restore from the pre-upgrade dump. See "Approval
+  notifications" in `docs/OPERATIONS.md`.
+- **Audit partition digest, export and anchor-aware verify.** `audit_partition_digest(partition)` (migration
+  `0119_audit_partition_digest`) is a bounded, canonical digest of one closed audit partition, folded in `seq` order in constant
+  memory. `GET /audit/export?partition=<name>` (and `wardyn audit export-partition`) streams a closed partition
+  with its manifest and the same digest in a footer, in a readable form or a raw archive form you can re-hash
+  with no Wardyn code ("Verifying an exported audit partition by hand", `docs/OPERATIONS.md`); only a security
+  operator is served, and `?partition=` with any other filter is refused (`audit_export_partition_filter`).
+  `GET /audit/chain/verify` now starts from the newest attested retention drop, reports a removed newest tail
+  (checked against the recorded high-water mark) and a missing expected partition, and names an unattested
+  removal `rows removed without an attested retention drop`. A role you create after the upgrade needs
+  `GRANT EXECUTE` on `audit_partition_digest(text)` beside the functions in the grant recipe.
 
 ### Security
 
@@ -111,10 +167,34 @@ and does not yet follow semantic versioning (interfaces are not stable).
   a key version is reported safe to retire only once both are at it. The audit action
   `principal_key.destroyed` names the owner, purpose and generation numbers and never key material. A split
   migrator and app role install grants the app role `SELECT, INSERT, UPDATE` on `principal_keys`.
+- **Per-person credential keys, off by default (`WARDYN_PRINCIPAL_KEYS`, chart `kek.principalKeys`).** With
+  it `on`, a person's stored credential is sealed under a key of that person's own (`enc_version=3`, `kek_id`
+  `pk:v<n>`) and erasing the person destroys the key, so those rows cannot be read again even from a backup
+  of the table. Boot keys, the operator namespace and store mode are unaffected, and every row format is
+  read with it off. `wardynd -rewrap-principal-keys` moves existing credentials into the new form.
+  `credential.erase` and its response now report `crypto_erased` and `deleted`, because a row written
+  without it is only deleted, which holds to the backup horizon. **Turning it on is one-way across a
+  downgrade:** 0.8.5 refuses `enc_version=3` rows by name, and there is no tool back.
+- **A narrowed `git_pat` grant now binds the run at the broker.** The PAT broker refuses, before any mint, a git
+  request for a repository outside the grant's `repos` (`brokered:git-pat:repo`) and, for `access: read`, both
+  doors of a push (`brokered:git-pat:read-only`). A request form a forge's path table does not list is refused.
+  A run whose narrowing cannot be enforced is refused at launch and by Review: `git_pat_narrowing_needs_broker`
+  (the PAT broker is off), `git_pat_narrowing_ssh_conflict` (a same-forge `ssh_key`, also refused at policy
+  write) and `git_pat_narrowing_unsupported_host` (an Azure DevOps host, or a GitHub-brokered forge). The PAT
+  itself is not narrowed. Upgrade the proxy image together with wardynd: an older proxy refuses the new
+  `pat_grants` keys at start.
 - **The proxy refuses a raw mint of every `git_pat` grant id while the PAT broker is on.** The mint relay
   now answers `403` (`brokered:mint`) for any `git_pat` grant of the run, including grants shadowed by a
   same-host grant, vetoed, withheld for a brokered forge or Azure DevOps owner-only. Upgrade the proxy
   image together with wardynd: an older proxy refuses the new `brokered_pat_grant_ids` config key at start.
+- **The SDK and CLI treat a pending governance change as pending, not applied.** A `202` with a
+  `pending_change` body is returned as `*client.PendingApprovalError` instead of being decoded as a saved
+  object. `ApplyGovernance` returns that error when anything is pending, and the new
+  `ApplyGovernanceResult` returns the pending changes and the deferred assignments as data; an assignment
+  naming a pending profile is not sent, and `--prune` does not run after a pending write.
+  `wardyn governance set` lists them and exits 0. New `ListGovernanceChanges`, `GetGovernanceChange`,
+  `ApproveGovernanceChange` and `RejectGovernanceChange`, and `wardyn governance changes list|approve|reject`.
+  A CLI or SDK older than this release misreads a pending change; see "Pending approval" in `docs/sdk.md`.
 
 ### Changed
 

@@ -862,7 +862,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	dep=$$(echo "$$out" | awk '/^---/{r=0} /^kind: Deployment$$/{r=1} r'); \
 	echo "$$dep" | grep -q "kind: Deployment" || { echo "store mode with secretFiles.enabled rendered no Deployment — the absence checks below would be vacuous"; exit 1; }; \
 	echo "$$dep" | grep -q "secretKeyRef" && { echo "store mode with secretFiles.enabled still renders a secretKeyRef env var"; exit 1; }; \
-	echo "$$dep" | grep -qE 'name: WARDYN_(PG_DSN|PG_MIGRATE_DSN|ADMIN_TOKEN|AGE_KEY|OIDC_CLIENT_SECRET|DIRECTORY_CLIENT_SECRET|AUDIT_SINKS|ORG_ENROLMENT_TOKEN|VAULT_TOKEN)$$' && { echo "store mode with secretFiles.enabled renders a secret-carrying var as a value"; exit 1; }; \
+	echo "$$dep" | grep -qE 'name: WARDYN_(PG_DSN|PG_MIGRATE_DSN|ADMIN_TOKEN|AGE_KEY|OIDC_CLIENT_SECRET|DIRECTORY_CLIENT_SECRET|AUDIT_SINKS|APPROVAL_NOTIFY|ORG_ENROLMENT_TOKEN|VAULT_TOKEN)$$' && { echo "store mode with secretFiles.enabled renders a secret-carrying var as a value"; exit 1; }; \
 	echo "$$dep" | grep -q "name: WARDYN_AGE_KEY" && { echo "store mode wired an age key (value or _FILE) — it needs none"; exit 1; }; \
 	for v in PG_DSN ADMIN_TOKEN; do echo "$$dep" | grep -A1 "name: WARDYN_$${v}_FILE" | grep -q 'value: "/etc/wardyn/secrets/' || { echo "store mode with secretFiles.enabled did not point WARDYN_$${v}_FILE into the boot-secrets mount"; exit 1; }; done
 	@# B3 (T-60, #720): flipping secretFiles.enabled on an EXISTING pg-mode install

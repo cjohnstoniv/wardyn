@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/notify"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 )
@@ -547,11 +548,25 @@ func scanGrant(row pgx.Row) (types.CredentialGrant, error) {
 
 // ApprovalRequest
 
-// CreateApproval inserts a new approval request.
+// CreateApproval inserts a new approval request. With approval notifications configured it also
+// inserts the approval's outbox rows in the same transaction, so no crash can leave an approval nobody
+// was told about; without them the INSERT is the only write.
 func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error) {
 	scopeJSON, err := json.Marshal(a.RequestedScope)
 	if err != nil {
 		return types.ApprovalRequest{}, fmt.Errorf("store: marshal approval scope: %w", err)
+	}
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return types.ApprovalRequest{}, fmt.Errorf("store: begin approval tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var profileID *uuid.UUID
+	if notify.Enabled() {
+		// Read in the approval's own transaction, so a concurrent profile change cannot route it by stale data.
+		if err := tx.QueryRow(ctx, notify.ProfileSQL, a.RunID).Scan(&profileID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return types.ApprovalRequest{}, fmt.Errorf("store: read run profile: %w", err)
+		}
 	}
 	// INSERT omits decision_scope/decision_expires_at: their SQL DEFAULTs already
 	// mean "no decision"; RETURNING names them so the caller sees those defaults.
@@ -559,20 +574,34 @@ func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.
 		INSERT INTO approvals (` + approvalInsertCols + `)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		RETURNING ` + approvalCols
-	out, err := scanApproval(s.Pool.QueryRow(ctx, q,
+	out, err := scanApproval(tx.QueryRow(ctx, q,
 		a.ID, a.RunID, a.GrantID, string(a.Kind), scopeJSON, string(a.State), a.RequestedAt,
 		a.DecidedAt, a.DecidedBy, a.MintedJTI, a.Reason,
 	))
 	if err != nil {
 		// A partial unique index rejecting the insert means a concurrent raise
 		// already persisted the open PENDING row; surface a sentinel so
-		// RequestApproval can dedup to the winner instead of erroring.
+		// RequestApproval can dedup to the winner instead of erroring. The deferred
+		// rollback is what makes the loser enqueue nothing.
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return types.ApprovalRequest{}, ErrDuplicatePending
 		}
 		return types.ApprovalRequest{}, err
 	}
+	enq := notify.NewEnqueue(out.Kind, profileID)
+	var raised, queued int64
+	if enq.On() {
+		const src = `WITH ins AS (SELECT $1::uuid AS id, $2::uuid AS run_id, $3::timestamptz AS requested_at)`
+		args := append([]any{out.ID, out.RunID, out.RequestedAt}, enq.Args()...)
+		if err := tx.QueryRow(ctx, src+enq.Tail(4), args...).Scan(&raised, &queued); err != nil {
+			return types.ApprovalRequest{}, fmt.Errorf("store: enqueue approval notifications: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.ApprovalRequest{}, fmt.Errorf("store: commit approval: %w", err)
+	}
+	enq.Done(ctx, out.ID, out.RunID, raised, queued)
 	return out, nil
 }
 

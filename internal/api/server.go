@@ -16,6 +16,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"sync"
@@ -37,6 +38,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
@@ -139,6 +141,10 @@ type Config struct {
 	// run pause) to the elected leader and fences them by lease epoch. Nil means
 	// this process is the only one sweeping: every pass runs and no fence applies.
 	SweeperLease SweeperLease
+	// SweepHealth records each background sweep's ticks in the shared sweep_ticks
+	// record and reads them back for the sweep gauges and the substrate_health
+	// setup row. Nil records nothing and reports no sweep.
+	SweepHealth *sweephealth.Tracker
 	// Store is the abstract persistence seam (run/policy/grant/approval/audit
 	// CRUD + reads). The control plane talks to this instead of *pgxpool.Pool
 	// directly, so a future pure-Go backend can be swapped in. Defaults to a
@@ -219,6 +225,9 @@ type Config struct {
 	// runUngoverned in govern_admin.go). The admin token and local mode stay
 	// ungoverned either way.
 	GovernAdminRuns bool
+	// GovernAdminRunsExempt mirrors WARDYN_GOVERN_ADMIN_RUNS_EXEMPT: the lanes
+	// left ungoverned under the switch. The only value is "recording".
+	GovernAdminRunsExempt []string
 	// TrustDomain is surfaced in /healthz and used for run SPIFFE ids.
 	TrustDomain string
 	// DefaultPolicy is applied to runs created without an explicit policy_id.
@@ -423,6 +432,9 @@ type Config struct {
 	AzureFoundryEntra func(ctx context.Context, rowUID string) (ADOEntraConfig, bool, error)
 	// ADOLoginFacts is the console's own OIDC client, tenant and whether it holds a secret (S1; nil: none).
 	ADOLoginFacts func() (clientID, tenantID string, hasSecret bool)
+	// HostResolver is how the model-provider write boundary resolves an azure_foundry endpoint host for its
+	// private-address advisory. Nil: the system resolver, bounded to three seconds.
+	HostResolver func(host string) ([]net.IP, error)
 	// AuditCoalesceWindow folds IDENTICAL consecutive auth.fail audit rows —
 	// same boundary, reason, path and peer — into the first row plus one summary
 	// row carrying count/first_seen/last_seen (env WARDYN_AUDIT_COALESCE_WINDOW,
@@ -693,6 +705,10 @@ type Server struct {
 	// refRuleset caches the ONE outbound GitHub call the setup checklist makes,
 	// so polling /setup/status (which the wizard does) cannot turn into a
 	// per-poll API call or a rate-limit. Zero value is ready to use.
+	// substrateProbe is this replica's cached probe of the runner's substrate,
+	// read by /metrics and /setup/status (substrate_health.go).
+	substrateProbe substrateProbeCache
+
 	refRulesetMu   sync.Mutex
 	refRulesetAt   time.Time
 	refRulesetRow  SetupCheck
@@ -765,6 +781,8 @@ type Server struct {
 	runLeaseState    // the run lease sweep's process state (run_lease_server.go)
 	// pause is the pause sweep's process-local state (run_pause.go).
 	pause pauseClocks
+	// activity is the CPU signal's last read, for the idle detection row (run_activity.go).
+	activity activitySignal
 	// ssoRefreshMu guards ssoRefreshSpent, which the control-plane AWS SSO
 	// refresher owns (awssso_refresh.go). The refresh is single-flight per owner
 	// through a cross-replica lock (locks.go) that encloses re-read -> expiry

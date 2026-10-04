@@ -35,6 +35,11 @@
     "sentence": "\"run not found\""
   },
   {
+    "reason": "audit_export_partition_filter",
+    "target": "\"audit.export\"",
+    "sentence": "\"a partition export covers the whole partition; remove the other filter parameters\""
+  },
+  {
     "reason": "byoi_user",
     "target": "\"runs.image\"",
     "sentence": "\"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image\""
@@ -142,7 +147,7 @@
   {
     "reason": "governance_profile",
     "target": "\"runs.attach\"",
-    "sentence": "fmt.Sprintf(\"attaching is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.\", name)"
+    "sentence": "fmt.Sprintf(\"attaching is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.\", p.Name)"
   },
   {
     "reason": "governance_profile",
@@ -255,6 +260,11 @@
     "sentence": "(audit only)"
   },
   {
+    "reason": "recording_governed",
+    "target": "\"workspaces.record\"",
+    "sentence": "recordingGovernedRefusal"
+  },
+  {
     "reason": "role_stamp_stale",
     "target": "\"api_token\"",
     "sentence": "\"this token's role is out of date: its owner must sign in again to refresh it\" (registry)"
@@ -293,6 +303,11 @@
     "reason": "user_type_unknown",
     "target": "\"user_type\"",
     "sentence": "userTypeUnknownMsg"
+  },
+  {
+    "reason": "user_view_preview",
+    "target": "r.URL.Path",
+    "sentence": "userViewPreviewRefusal(viewed, stamped)"
   },
   {
     "reason": "user_view_type_deleted",

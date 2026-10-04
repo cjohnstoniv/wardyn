@@ -318,6 +318,13 @@ kek:
   # (provider local, with no external store): a deployment that mandates key
   # custody. The way out is provider transit or azurekv, then `wardynd -rewrap`.
   required: false
+  # on seals each person's stored credentials under a key of that person's own
+  # (enc_version 3), which erasing the person destroys. Boot keys and the
+  # operator namespace are unaffected, and so is store mode. Turning it back off
+  # still reads every row; enabling it is one-way across a downgrade below 0.8.6.
+  # `wardynd -rewrap-principal-keys` moves rows written before it was on
+  # (docs/operations/secrets-and-keys.md). off or on.
+  principalKeys: "off"
   transit:
     mount: transit
     # Transit key (type aes256-gcm96). Required with provider transit; set

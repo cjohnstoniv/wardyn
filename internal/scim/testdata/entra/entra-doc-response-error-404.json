@@ -1,0 +1,11 @@
+{
+  "source": "https://learn.microsoft.com/en-us/entra/identity/app-provisioning/use-scim-to-provision-users-and-groups",
+  "captured": false,
+  "body": {
+    "schemas": [
+      "urn:ietf:params:scim:api:messages:2.0:Error"
+    ],
+    "status": "404",
+    "detail": "Resource 23B51B0E5D7AE9110A49411D@7cca31655d49f3640a494224 not found"
+  }
+}

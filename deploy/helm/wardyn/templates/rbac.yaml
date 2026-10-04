@@ -199,6 +199,15 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["list"]
+  # Idle auto-stop's CPU signal (lane p-p5): ONE PodMetrics list per sweep tick
+  # for this namespace, label-selected to the agent pods, so a run busy inside
+  # its sandbox is not stopped as idle. Namespaced, never the cluster-wide
+  # metrics; `list` only (no get, no watch). Without metrics-server, or without
+  # this rule, the signal is off and /setup/status says so; idleness then falls
+  # back to attaches and egress.
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["list"]
 {{- if $drives.enabled }}
   # Drives (drives.go's ensureDrivePVC), each verb justified:
   #   get    — a drive's claim is looked up BY NAME before anything else, and a

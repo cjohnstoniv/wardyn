@@ -152,7 +152,7 @@ func TestValidateModelProviders_BedrockHTTPNeedsTestHatch(t *testing.T) {
 	for _, raw := range []string{"http://u:p@host:8090", "http://169.254.169.254", "http://host:8090?x=1"} {
 		q := ssoProvider()
 		q.Bedrock.BaseURL = raw
-		if err := validateModelProviders(providerBlock(q), true); err == nil {
+		if _, err := validateModelProviders(providerBlock(q), providerWriteEnv{AllowTestEndpoints: true}); err == nil {
 			t.Errorf("bedrock.base_url %q accepted under the test hatch — it must relax the scheme only", raw)
 		}
 	}

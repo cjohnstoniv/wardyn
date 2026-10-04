@@ -98,7 +98,7 @@ func TestPG_ModelProviderConversion_OutputPassesTheWriteDoors(t *testing.T) {
 			if err := dec.Decode(&sc); err != nil {
 				t.Fatalf("the converted document does not decode strictly: %v\n%s", err, raw)
 			}
-			if err := validateModelProviders(sc.ModelProviders, false); err != nil {
+			if _, err := validateModelProviders(sc.ModelProviders, providerWriteEnv{}); err != nil {
 				t.Errorf("PUT /model-providers would refuse the converted block: %v\n%s", err, raw)
 			}
 			if err := validateAgentProviders(sc.AgentProviders, nil); err != nil {

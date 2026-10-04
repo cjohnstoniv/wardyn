@@ -455,22 +455,25 @@ const RunSecretGrace = time.Hour
 // It also drops the process-wide mask copies of credentials that were refreshed
 // or deleted more than RunSecretGrace ago (secretmask.Registry.SweepGlobals),
 // on the same grace and for the same reason.
-func (s *Server) SweepRunSecrets(ctx context.Context) int {
+//
+// The error is the run listing's: a sweep that could not look at the runs
+// evicted nothing, and says so, so that it is not counted as a clean tick.
+func (s *Server) SweepRunSecrets(ctx context.Context) (int, error) {
 	if s.cfg.MaskRegistry == nil {
-		return 0
+		return 0, nil
 	}
 	s.cfg.MaskRegistry.SweepGlobals(s.cfg.Now().Add(-RunSecretGrace))
 	if s.cfg.Store == nil {
-		return 0
+		return 0, nil
 	}
 	held := s.cfg.MaskRegistry.RunIDs()
 	if len(held) == 0 {
-		return 0
+		return 0, nil
 	}
 	runs, err := s.cfg.Store.ListRuns(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: run-secret sweep skipped", slog.Any("err", err))
-		return 0
+		return 0, fmt.Errorf("list runs for the run-secret sweep: %w", err)
 	}
 	byID := make(map[uuid.UUID]types.AgentRun, len(runs))
 	for _, run := range runs {
@@ -487,7 +490,7 @@ func (s *Server) SweepRunSecrets(ctx context.Context) int {
 		s.forgetMaskManifest(id)
 		evicted++
 	}
-	return evicted
+	return evicted, nil
 }
 
 // finalizeRunTail runs the terminal-transition side effects shared by the live

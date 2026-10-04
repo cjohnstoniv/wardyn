@@ -27,6 +27,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -88,9 +89,18 @@ type Config struct {
 	// node selector, tolerations, affinity, PriorityClass, annotations and labels for the agent,
 	// proxy and canary pods. Empty places nothing. An invalid value refuses to boot.
 	SandboxPlacement string
+	// StartTimeout is WARDYN_SANDBOX_START_TIMEOUT: the absolute budget for a sandbox's proxy and agent
+	// pods to start. Zero means runner.DefaultSandboxStartTimeout.
+	StartTimeout time.Duration
+	// CapacityWait is WARDYN_SANDBOX_CAPACITY_WAIT: how long a pod the scheduler has no room for waits,
+	// on top of StartTimeout. Zero turns the wait off: such a pod fails at StartTimeout.
+	CapacityWait time.Duration
 }
 
 func (c *Config) withDefaults() {
+	if c.StartTimeout <= 0 {
+		c.StartTimeout = runner.DefaultSandboxStartTimeout
+	}
 	if c.Namespace == "" {
 		c.Namespace = "default"
 	}
@@ -127,6 +137,10 @@ type Driver struct {
 	// caller-supplied remotecommand.Executor. Nil in production.
 	execFactory func(podName, container string, cmd []string, stdin, tty bool) (remotecommand.Executor, error)
 
+	// metricsRead is the test seam readPodMetrics defers to when set: the real
+	// read is a raw GET that a fake clientset cannot serve. Nil in production.
+	metricsRead func(ctx context.Context, namespace, labelSelector string) ([]byte, error)
+
 	// execOutputs maps a sandbox ref to its SandboxSpec.ExecOutput (an
 	// io.Writer), which Exec streams the agent container's log into. The one
 	// in-memory state here: the buffer it feeds is in memory too, so a
@@ -135,6 +149,7 @@ type Driver struct {
 }
 
 var _ substrate.Substrate = (*Driver)(nil)
+var _ runner.ActivitySampler = (*Driver)(nil)
 
 // New constructs a Driver against the cluster client-go's standard config
 // loading resolves (in-cluster, else kubeconfig), running the boot-time

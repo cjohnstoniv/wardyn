@@ -39,7 +39,7 @@ func TestWalkProviderBodyDecodes(t *testing.T) {
 	if err := dec.Decode(&got); err != nil {
 		t.Fatalf("the walk's provider body does not decode into types.ModelProviders: %v\nbody: %s", err, walkProviderBody)
 	}
-	if err := validateModelProviders(&got, false); err != nil {
+	if _, err := validateModelProviders(&got, providerWriteEnv{}); err != nil {
 		t.Fatalf("the walk's provider body is refused by validateModelProviders: %v", err)
 	}
 	if len(got.Providers) != 1 {

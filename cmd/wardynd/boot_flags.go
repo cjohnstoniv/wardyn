@@ -85,6 +85,9 @@ type bootFlags struct {
 	// govern every run an SSO admin or an admin-role personal token launches.
 	// The admin token and local mode stay break-glass (api.Server.runUngoverned).
 	governAdminRuns *bool
+	// governAdminRunsExempt is WARDYN_GOVERN_ADMIN_RUNS_EXEMPT: the lanes left
+	// ungoverned under the switch. The only value is "recording".
+	governAdminRunsExempt *string
 	// runnerTargetOverride is WARDYN_RUNNER_TARGET, and it is a TEST-HARNESS
 	// knob: the substrate name STORED objects validate against while -runner is
 	// "none". A runner-less daemon resolves the target "none", which no drive
@@ -151,6 +154,7 @@ type bootFlags struct {
 	recordingDir       *string
 	recordingRetention *int
 	auditSinks         *string
+	approvalNotify     *string
 	auditSpool         *string
 	auditSource        *string
 
@@ -279,6 +283,9 @@ type bootFlags struct {
 	// rewrapAdoptBootKeys is `wardynd -rewrap -rewrap-adopt-boot-keys`: no
 	// env pair either, so a stray variable cannot arm an adoption.
 	rewrapAdoptBootKeys *bool
+	// rewrapPrincipalKeys is `wardynd -rewrap-principal-keys` (rewrap_principal_keys.go):
+	// no env pair, like -rewrap.
+	rewrapPrincipalKeys *bool
 	// vault configures the Vault KV v2 external store, azure the Azure Key
 	// Vault one (secret_store.go).
 	vault vaultFlags
@@ -399,6 +406,7 @@ func parseBootFlags() *bootFlags {
 		orgEnrolToken:          flagEnv("org-enrolment-token", "WARDYN_ORG_ENROLMENT_TOKEN", "", "secret enrolment token this device presents to -org-url; requires -org-url to also be set"),
 		userDriveHostRoots:     flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a host_path user drive may be registered inside, typically the mount point of a share the operator mounted host-side. Empty (default) means no host_path drive may be registered; never $HOME or /"),
 		governAdminRuns:        flagBool("govern-admin-runs", "WARDYN_GOVERN_ADMIN_RUNS", false, "govern every run an SSO admin or an admin-role personal token launches, like a member's; the admin token and local mode stay ungoverned and are marked governance_exempt on run.create. With OIDC unset it binds nobody (default false)"),
+		governAdminRunsExempt:  flagEnv("govern-admin-runs-exempt", "WARDYN_GOVERN_ADMIN_RUNS_EXEMPT", "", "comma-separated lanes left ungoverned under -govern-admin-runs; the only value is \"recording\" (Record Mode runs as before). Any other value is refused at boot; set without -govern-admin-runs it does nothing"),
 		ssoOnly:                flagBool("sso-only", "WARDYN_SSO_ONLY", false, "declare SSO the only way into the console; refuses to start unless OIDC is configured and the admin token, local mode, member mode and no-operator-list override are all unset (default false)"),
 		uiDir:                  flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
 		basePath:               flagEnv("base-path", "WARDYN_BASE_PATH", "", `sub-path the console, API, sign-in and /healthz are served under behind a reverse proxy, e.g. "/wardyn": a leading slash, no trailing slash. Empty (default) serves them at the host root`),
@@ -431,6 +439,7 @@ func parseBootFlags() *bootFlags {
 		// the operator asks for a retention window.
 		recordingRetention: flagIntEnv("recording-retention-days", "WARDYN_RECORDING_RETENTION_DAYS", 0, "delete stored session recordings older than N days (default 0, keep forever)"),
 		auditSinks:         flagEnv("audit-sinks", "WARDYN_AUDIT_SINKS", "", "audit sink config JSON (file/webhook/syslog); empty disables fanout"),
+		approvalNotify:     flagEnv("approval-notify", "WARDYN_APPROVAL_NOTIFY", "", "approval notification config JSON (webhook channels); empty disables notifications"),
 		auditSource:        flagEnv("audit-source", "WARDYN_AUDIT_SOURCE", "", `optional static string stamped as an extra "source" field on every audit event a sink serializes, so one SIEM index can tell multiple wardynd instances apart. Empty (default) adds no stamp`),
 		auditSpool:         flagEnv("audit-spool", "WARDYN_AUDIT_SPOOL", "./data/audit-spool.jsonl", "local append-only JSONL fallback for audit events whose Postgres write fails; empty disables"),
 
@@ -550,6 +559,9 @@ func parseBootFlags() *bootFlags {
 			"(WARDYN_VAULT_TRANSIT_KEY_PLATFORM, WARDYN_AZURE_KEK_KEY_PLATFORM or WARDYN_PLATFORM_KEY_FILE) yet, so the signing, session and SSH host keys still under "+
 			"the credential key or the age key may be moved onto it. Run it once, when you first turn the platform key on. Without it, "+
 			"-rewrap refuses a boot key under any other key. See docs/operations/secrets-and-keys.md (default false)"),
+		rewrapPrincipalKeys: flag.Bool("rewrap-principal-keys", false, "maintenance mode, safe while a daemon serves: move every person's stored credential from the credential key into an envelope under that person's own principal key (enc_version 3), "+
+			"one row at a time, then exit; idempotent and resumable, and values are never decrypted. Boot keys, the operator namespace and external-store pointers are untouched. "+
+			"Separate from -rewrap, which rotates the root key. See docs/operations/secrets-and-keys.md (default false)"),
 		vault:               registerVaultFlags(),
 		hostCapacity:        registerHostCapacityFlags(),
 		preflightRatePerMin: flagIntEnv("preflight-rate-per-min", "WARDYN_PREFLIGHT_RATE_PER_MIN", 20, "POST /runs/preflight calls one person may make per minute (burst 5); 0 turns the limit off. The admin token is exempt"),

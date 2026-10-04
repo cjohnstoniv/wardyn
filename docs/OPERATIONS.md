@@ -27,6 +27,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 
 - [State stores](#state-stores)
 - [Monitoring](operations/monitoring.md)
+- [Approval notifications](#approval-notifications)
 - [Multi-user: who can change what](#multi-user-who-can-change-what)
 - [Run lifetime: lease, extend, revive, ends](operations/run-lifetime.md)
 - [Exercising member mode as an admin](operations/member-mode.md)
@@ -575,7 +576,7 @@ as an exact `seq` and a reason.
 **What it does not give you.** Tamper-**evidence**, not tamper-proofness. Someone
 who can rewrite one row can usually rewrite every row after it and re-chain the
 lot; a re-chained tail verifies perfectly clean, and truncating the newest rows
-leaves a shorter, valid chain. The defence against both is **off-box**: every
+leaves a shorter, valid chain (the high-water mark below catches it, unless it is rewritten too). The defence against both is **off-box**: every
 event **whose Postgres write succeeded** carries its `prev_hash`/`row_hash` onto
 the audit sink stream (`WARDYN_AUDIT_SINKS`), so a SIEM holds head hashes Wardyn
 cannot later disown — that comparison, not the sweep, is the control. The
@@ -619,6 +620,48 @@ append-only, so every later sweep reports that same `broken_seq` forever — no
 repair, no "acknowledge" cursor. `ok: false` is a one-way latch: treat the first
 occurrence as the incident and preserve the row range, because the alert will not
 clear.
+
+**After the audit log was partitioned (0.8.6): what verify checks beyond the chain.** The sweep runs in one
+repeatable-read snapshot and still re-hashes every retained row. It starts from the newest attested retention drop
+(a `kind = 'drop'` row in `audit_chain_anchors`): the first retained row's `prev_hash` must equal the tail hash
+that drop recorded, and the result reports that drop's last `seq` as `anchor_seq`. A removal with no anchor still
+breaks the chain, and its `reason` now says `rows removed without an attested retention drop`. Two checks cover
+what a chain cannot say about itself. The newest row must be the one `audit_partition_meta` recorded as the
+high-water mark, so rows removed from the **newest** end (which leave a shorter, valid chain) read as `the log was
+truncated at its tail`. And every partition in the expected manifest must still exist unless a drop anchor names
+it; a range a `split` anchor names must exist or be accounted for by a later drop. Someone who can rewrite the
+table can rewrite the high-water mark and the anchors too: the head hash on your SIEM remains the control that
+catches that.
+
+**Verifying an exported audit partition by hand.** A partition that is fully behind the high-water mark is
+*closed*: nothing can be appended to it, so its digest is fixed. Export it in the raw archive form, fold it
+yourself, and compare with the database and the footer:
+
+```bash
+wardyn audit export-partition audit_events_p202610 --raw -o p.ndjson   # security_admin; or GET /audit/export?partition=audit_events_p202610&form=raw
+# manifest header: a JSON array of strings, jsonb's own text form (", " between elements);
+# the ranges are empty strings for an empty partition
+header=$(jq -r 'select(.type=="manifest")
+  | (if .row_count == 0 then "" else null end) as $e
+  | [.partition] + ([.seq_lo, .seq_hi, .recorded_lo_us, .recorded_hi_us] | map($e // tostring)) + [(.row_count | tostring)]
+  | "[" + (map(@json) | join(", ")) + "]"' p.ndjson)
+d=$(printf %s "$header" | sha256sum | cut -d' ' -f1)                       # d_0
+while read -r h; do d=$(printf %s "$d$h" | sha256sum | cut -d' ' -f1); done \
+  < <(jq -r 'select(.type=="row") | (.row_hash // .fold_hash)' p.ndjson)   # d_i = sha256(d_(i-1) || row_hash_i)
+echo "fold:   $d"
+jq -r 'select(.type=="footer") | "footer: " + .digest' p.ndjson
+psql -Atc "SELECT 'db:     ' || audit_partition_digest('audit_events_p202610')"
+```
+
+All three must match, and the export must end with its `footer` line (a transfer that stops short is aborted, not
+ended cleanly). The fold is over lowercase hex text, in `seq` order: `d_0 = sha256(header)` and
+`d_i = sha256(d_(i-1) || row_hash_i)`, which holds in constant memory however large the partition is. A row from
+before the chain began has no `row_hash`; the archive carries the hash it folds as `fold_hash`. To check each row,
+recompute `row_hash` from the archive's own columns as the formula above gives it: `time_us` is the `time` in
+microseconds since the epoch, and `data` is the jsonb text exactly as stored (not re-encoded), embedded in the
+array as a JSON value. Only a security operator may export a partition; anyone else gets an empty export, and
+`?partition=` with any other filter is refused (`audit_export_partition_filter`). The readable form
+(`form=readable`, the default) gives the same rows in the audit feed's own event shape.
 
 **Rows written before the upgrade** keep `NULL` hashes, are reported as `legacy`,
 and are never a failure. There is no backfill, on purpose: hashes computed after
@@ -757,6 +800,87 @@ nothing in that direction is built.
 ## Monitoring
 
 Moved to [monitoring.md](operations/monitoring.md).
+
+## Approval notifications
+
+A pending approval waits in the console until someone opens the Approvals page. With
+`WARDYN_APPROVAL_NOTIFY` set, wardynd also tells a channel you name that one is waiting. Unset or empty
+(the default) means no notification row is written and no worker runs.
+
+**What it guarantees.** Every approval raised while the setting is on gets a durable outbox row in the
+same database transaction that creates the approval, at both places an approval can be created (the API
+raise paths and the broker's credential path). A crash cannot leave an approval with no notification,
+and a raise that loses a dedup race writes nothing. A worker on every replica then delivers each row at
+least once, or records a failure. Approvals already pending when you turn it on get no notification.
+
+**Configuration.** One JSON value, read once at boot; a change needs a restart. The value holds URLs
+and secrets, so deliver it through `WARDYN_APPROVAL_NOTIFY_FILE` from a secret store where you can (see
+[ENV.md](ENV.md)). Wardynd never logs it, and a boot refusal names a channel `id` and the rule it broke,
+never a URL, secret or token.
+
+```json
+{
+  "console_url": "https://wardyn.example.com",
+  "channels": [
+    {"id": "sec-hook", "type": "webhook", "url": "https://hooks.example.com/wardyn",
+     "hmac_secret": "<shared secret>", "bearer_token": "<optional>"}
+  ]
+}
+```
+
+- `id` is `[a-z0-9_-]{1,32}`, unique. It is the metric label and what the outbox stores; rotating a URL
+  under the same `id` keeps pending rows deliverable.
+- `type` must be one this build implements: `webhook`. Any other value refuses boot.
+- HTTPS is required when `hmac_secret` or `bearer_token` is set or the URL carries userinfo or a query.
+  Plain HTTP with none of those is allowed.
+- `console_url` is optional and must be `https://` with no userinfo, query or fragment.
+
+**The webhook body, `wardyn.approval.v1`.** A `POST` of JSON with `X-Wardyn-Delivery: <delivery_id>`
+and, with `hmac_secret` set, `X-Wardyn-Signature`. Only these fields are ever sent:
+
+| Field | Meaning |
+|---|---|
+| `schema` | the literal `wardyn.approval.v1` |
+| `delivery_id` | the outbox row's id, stable across retries |
+| `event`, `tier` | `raised` at tier 0 |
+| `approval.id`, `approval.kind`, `approval.requested_at` | the approval |
+| `run.id` | the run that raised it |
+| `profile.id`, `profile.name` | the run's governance profile, when it has one |
+| `requester.principal`, `requester.email` | the run's owner |
+| `console_url` | `<console_url>/approvals`, when configured |
+
+The request scope (host, tool arguments, push paths), the reason text, the run title and any credential
+are never sent: the sandbox agent writes or influences them, and an approval is decided in the console,
+signed in, not from the message. Every string field is control-stripped, capped at 256 bytes and passed
+through the run's secret masker before encoding.
+
+**Verifying the signature.** `X-Wardyn-Signature: t=<unix seconds>,v1=<hex>`, where `v1` is the
+HMAC-SHA256 of `<t>.<body>` (the timestamp, a dot, the exact bytes received) keyed with `hmac_secret`.
+Reject a `t` more than five minutes old. Test vector: key `whsec_test_vector`, `t` 1700000000, body
+`{"schema":"wardyn.approval.v1","delivery_id":"d"}` gives
+`v1=b851b43234ba1d1386179e9f8785cf6c37337c6dee0791f8479579e0eb1e097a`.
+
+**At least once.** A crash between a successful send and recording it resends, so a receiver that cares
+drops duplicates on `delivery_id`. A row that is retried keeps its `delivery_id`.
+
+**Retries and failure.** Network errors, timeouts, HTTP 408, 429 and 5xx retry after 30 s, 1 m, 2 m and
+4 m. A row goes dead on its fifth failure, on any other 4xx or a 3xx (redirects are never followed:
+a redirect would hand the body and signature to a host you did not name), or when still unsent an hour
+after it came due. A dead row writes one `approval.notify.failed` audit row and increments
+`wardyn_approval_notify_failed_total{channel}`; both carry an error class (`http_status:503`, `timeout`,
+`tls_verify`, `dial`, `redirect_refused`, `expired`), never a URL or a response body. Terminal rows older
+than 30 days are deleted, 500 per tick.
+
+**A per-run budget.** One run may create at most 25 tier-0 outbox rows per hour, so an agent cannot bury
+the one real approval under a flood of chat messages. A raise over the budget still creates its
+approval and shows in the console, but enqueues nothing; it increments
+`wardyn_approval_notify_suppressed_total{channel}` and writes one `approval.notify.suppressed` audit row
+per run per hour (per replica).
+
+**Network policy.** On Kubernetes wardynd's NetworkPolicy is default-deny for egress. Add a rule for each
+notification endpoint, and for a corporate proxy if one fronts them, through
+`networkPolicy.egress.extra`, exactly as for SIEM sinks. The delivery client uses the same transport as
+the rest of wardynd, so `WARDYN_TRUSTED_CA_FILE` and the daemon proxy setting apply to it.
 
 ## Managed laptops: hybrid enrolment and audit federation
 
@@ -909,6 +1033,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the model providers — `GET /model-providers` and `PUT /model-providers` (0.8): which kinds of model credential this deployment supports, where each sends requests (gateway addresses, Bedrock region and data plane), the AWS access portal and account pin a Bedrock SSO provider signs in against, and which agents each may serve. Configuration only — no credential lives on a record. `GET` also answers `connected_people`: per provider id, how many distinct people hold a credential of their own for it (a count, never who; 0 included), which `PUT` refuses. Both verbs, for the agent roster's reason. Removing a provider (or unticking the agent it is the default for) is refused while the roster names it as a default; turning it off is not. A person is served a narrower document instead — `model_providers` on `GET /setup/status`: the providers serving the agents they may launch, each with its kind, the agents it is the default for, and the one host their own credential would be sent to (the host only, never a path, start URL or pin). Members also receive `provider_access`: one row per granted provider (state, action, deadline, and — when they have stored one — `added_at` and `last_used_at` for their own credential, never anyone else's) graded against their OWN credential, whose pin-mismatch action names the pinned account and role, as `model_access`'s already does | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
 | the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
+| `GET /admin/runs/capacity` — the fleet's configured reservations (below, "Fleet capacity"): across every owner, so not a member read. It never execs into a sandbox or calls the runner | ⛔ admin or `security_admin` |
 | the `/user-types` routes — listing, defining, editing and removing the org's user types (`GET`/`POST /user-types`, `PUT`/`DELETE /user-types/{id}`). Defining a type is the same duty as authoring a profile; deciding who IS a type stays with the admin-only People mappings above. A type is refused removal (`409`) while the chart's role map or default role, or a permission, profile or drive row, still names it, or a live API token carries it, and the built-in `standard` type is never removable | ⛔ admin or `security_admin` |
 | the `/sources` writes — `POST /sources`, `POST /sources/{id}/scan`, `DELETE /sources/{id}`: registering, rescanning, or removing a source touches the same repo/registry topology the operator-topology reads above expose | ⛔ admin only |
 | the `/base-images` writes — `POST /base-images`, `DELETE /base-images/{id}`: adding or removing a base image changes what every future onboarded workspace can run | ⛔ admin only |
@@ -2808,6 +2933,28 @@ reason — the `reason`, the status code and the body are unchanged, and the key
 is absent entirely for an ordinary member. A burst of denials carrying it is an
 admin walking the member path, not an incident.
 
+**A ceiling refusal names the policy that caused it.** A refusal made by the resolved
+ceiling (`governance_profile` and `run_quota`, plus the Record Mode and provider sign-in
+launches that answer `record_ceiling_limit`) carries a `policy` object beside `error` and
+`reason`: `source` (`profile` or `deployment`), the leaf profile's `name`, and the contact
+it published (`owner`, `email`, `request_url`, `request_text`, each present only when set
+and still valid). A member bound by the deployment is named as `deployment` with the
+site config's `policy_help`. An operator is never refused by a ceiling, so never gets one.
+The `error` text and the status are unchanged. The key is never on a hidden door (the
+`404` twin of a missing resource) and never on a decision whose wire reason was rewritten,
+so those stay byte-identical to a missing resource. An `authz.denied` row never carries
+the owner or email, only the `reason` and `target` it always had.
+
+- `GET /me` carries `governance_contact`: the caller's own `policy` object, or `null` for
+  an operator, when the ceiling cannot be resolved, and on a stale group snapshot. It
+  never fails the read, and for a member bound by the deployment it is `{"source":
+  "deployment"}` without a site-config read.
+- `GET /runs/{id}` carries `policy`: the profile the run was launched under, else the
+  deployment's `policy_help`, else the key is absent. A store failure omits it.
+- `wardyn` prints one `governed by …, to request a change: …` line after the error when the
+  refusal carries a `policy`. Exit codes are unchanged, and the Go SDK exposes it as
+  `APIError.Policy`.
+
 | `reason` | Raised when | Shape |
 |---|---|---|
 | `admin_surface` | a member requested an admin-only route (`requireOperator`) | ⛔ `403` |
@@ -2816,6 +2963,7 @@ admin walking the member path, not an incident.
 | `not_owner` | a member reached a run/approval/recording, or a member-OWNED workspace (`owned_by`, migration 0048), that exists but isn't theirs | ⛔ `404` (byte-identical to missing) |
 | `attach_ticket_foreign_run` | a caller who is not the run's owner — **including a `security_admin`** — asked to mint a PTY attach ticket for a run they did not create. Its own reason rather than `not_owner` so an auditor can see the security tier refused a foreign shell without inferring it from the path (`internal/api/attach_ticket.go`) | ⛔ `404` (byte-identical to missing) |
 | `run_owner_only` | 0.8.5 (#1476): a **super admin** asked for interactive entry (attach-ticket mint or consume, the cookie attach lane, a UI app, take-over) to a run that is not theirs and has a personal owner. A `403` with the body `{"error":"only the person who started this run can open it interactively","reason":"run_owner_only"}`, not the `404` above, because the admin can already see the run. A run with no personal owner (operator-owned service or local runs) stays enterable. Kill, approve, policy, grants, revoke, audit, revive, resume and end are unchanged | ⛔ `403` |
+| `recording_governed` | 0.8.6: with `WARDYN_GOVERN_ADMIN_RUNS` on, an admin whose runs are governed (an SSO admin, an admin-role personal token) asked for Record Mode (`POST /workspaces/{id}/record`). Refused first, before the ceiling read and the import-step claim, at target `workspaces.record`; the body says Record Mode is refused for admins whose runs are governed and that the operator can allow it by setting `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` to `recording`. That setting lifts it for that lane, and each recording is then marked `governance_exempt` on `run.record.start`. The admin token and local mode are never refused. See [Constrained-admin mode](operations/member-mode.md#constrained-admin-mode) | ⛔ `403` |
 | `byoi_user` | a member named a `devcontainer_repo`, or an `image` they hold no grant for | ⛔ `403` |
 | `capability_workspace` | `workspace_id`: a member named a workspace they aren't granted (`403`). Launching: an `inline_policy` `workspace_repos` entry for an ungranted workspace was dropped — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | ⛔ `403`, or 🟡 a drop |
@@ -2838,7 +2986,9 @@ admin walking the member path, not an incident.
 | `role_stamp_stale` | 0.8.6: `WARDYN_ROLE_STAMP_TTL` is set and the `wdn_` API token presented carries a role and group stamp (`api_tokens.identity_stamped_at`) older than it, or never stamped. Checked by `apiTokenAuth` after the token resolves and before it counts as used; target `api_token`, and the row's actor is the token's owner. The body is `this token's role is out of date: its owner must sign in again to refresh it`; the owner's next sign-in re-stamps the token and it works again. A revoked token is not this refusal: it stays an ordinary `401` | ⛔ `401` |
 | `event_stream_cap` | 0.8.2 (#1407): the caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (`maxRunEventStreams`, `internal/api/run_events.go`; target the run id). A portal's streams count against its person, and every admin-token caller is one principal. Not audited — a caller who IS authorized and hit a limit, like `run_quota` | ⛔ `422` |
 | `mask_state_unavailable` | 0.8.6 (ha-l2.0): a door that relays or persists a run's output — the recording upload (`PUT /internal/recordings/{runID}` and its parts, target `recordings.upload`), the live attach (`GET /runs/{id}/attach`, target `runs.attach`), the SSH shell (target `ssh.shell`, a channel error, not an HTTP status) and the live output read (`GET /runs/{id}/output`, target `runs.output`) — cannot prove the run's masking corpus complete on this server, so it refuses instead of passing bytes through. The run has no complete, unfenced masking manifest in Postgres (`run_mask_manifest`): it was dispatched before 0.8.6, its dispatch never finished committing it, its person is being erased, or Postgres did not answer. The exec relay (`task_mode=exec` output tail) refuses by keeping nothing. The row's `data.mask_scope` is `globals_only`. An attach, shell or upload already in flight ends at the next beat (about two seconds) when the run stops being covered, an attach with close status `1013`. Not hidden: the caller can already see the run | ⛔ `503` |
+| `audit_export_partition_filter` | 0.8.6: `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `actor_type`, `outcome` or `origin`). A partition export always covers the whole partition, so its footer digest can be checked against `audit_partition_digest`; remove the other parameters. Input shape rather than a denial, so it is not audited | ⛔ `400` |
 | `user_view_type_deleted` | 0.8: an admin in the user view made a request after the user type the view looks through was deleted. The request is refused — never answered as the admin, because its tier was already read as `user` — and the session's view is turned off on the cookie, so the next request is in the Admin view. The body is `The <type> user type was removed, so you're back in the Admin view…`; `POST /runs` and `POST /runs/preflight` answer `409` with `reason` `admin_view` instead. The row carries `user_view: true` and the deleted `user_type`. `GET /me` is never refused: it drops back and says so (`user_view_dropped`) | ⛔ `403` |
+| `user_view_preview` | 0.8.6, with `WARDYN_GOVERN_ADMIN_RUNS` on: an admin or security admin whose User view looks through a user type other than their own stamped type sent a request that is not a `GET`, `HEAD` or `OPTIONS` (`POST /runs`, `POST /runs/preflight`, a workspace create, any write). The view is a read-only preview. The body names the remedy: switch the view to your own type to make changes or launch. `POST /me/view`, `POST /auth/logout` and `POST /policies/grade` are still served. The row carries `user_view: true`, `viewed_user_type` and `stamped_user_type` | ⛔ `409` |
 
 The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member
 whose whole allowlist is ungranted gets a run with no member-authored egress, not
@@ -2850,15 +3000,27 @@ reason with the affected values beside it, not one per dropped host. A preflight
 dry-run writes no **drop** rows — a drop is not a denial, and it is recorded at
 launch. A dry run that is **refused** does audit, though: every gate preflight
 reproduces is the real gate, so a refused door writes its own `authz.denied` row
-from inside the shared path (`refuse`, `internal/api/refusal.go`) — one row per refused door per
-call, with **`run_id` NULL**, because there is no run. A dry run that passes
-writes nothing at all. That is deliberate rather than suppressed: the row records
-that this principal was refused this capability, which is true whether or not
-they went on to launch, and a gate that audits at one door and not at the
-identical door one handler over is the drift the shared path exists to prevent.
-What it costs is that Review re-resolves on every edit, so a member editing
-against a closed door can write a row per keystroke — the NULL `run_id` is what
-tells those apart from the denials that actually bounded a run
+from inside the shared path (`refuse`, `internal/api/refusal.go`), with **`run_id` NULL**,
+because there is no run. A dry run that passes writes nothing at all. That is
+deliberate rather than suppressed: the row records that this principal was
+refused this capability, which is true whether or not they went on to launch, and
+a gate that audits at one door and not at the identical door one handler over is
+the drift the shared path exists to prevent.
+
+`run_id` NULL does not mark a dry run, because a launch refused before its run
+row exists carries it too. Every row written while serving the preflight request
+carries **`dry_run: true`** instead, stamped from the request context by
+`audit.DryRunRecorder` (`internal/audit/dryrun.go`) so no door's detail can set or
+clear it; a launch row never carries it. Review re-resolves on every edit, so a
+member editing against a closed door would otherwise write a row per keystroke.
+`audit.DenialCoalescer` (`internal/audit/coalesce.go`) writes the first refusal
+for an actor, target and `reason` in full and counts identical repeats for ten
+minutes, then appends one **`preflight.denial.coalesce`** row (`count` including
+the first row, `suppressed`, `first_at`, `last_at`). Nothing already written is
+changed, a window with no repeat writes no summary, and a launch refusal is never
+coalesced. The windows live in the replica that served the request, so a
+multi-replica deployment writes one summary per replica, and open windows are
+flushed on graceful shutdown. Rows written before 0.8.6 carry no marker
 (`handlePreflightRun`, `internal/api/preflight.go`).
 
 A 404 on a resource that genuinely doesn't exist stays silent by design. One
@@ -4260,27 +4422,64 @@ failure. The last reason therefore survives on the row for a `SELECT`
 postmortem without the console ever narrating a finished run's old wait. A run read from a pre-0.7.6
 daemon, or a run that started before this upgrade, simply carries no reason.
 
-### The two real bounds on a slow start
+### Fleet capacity
 
-The pane will wait; the **runner** will not wait forever, and those are the bounds an operator has to
-size:
+`GET /api/v1/admin/runs/capacity` (admin or `security_admin`) returns what the fleet's runs were
+configured to reserve, summed from the values each run recorded at dispatch. The response says
+`basis: "configured_reservations"`: these are not measurements, and the endpoint never execs into a
+sandbox or calls the runner. One query reads the non-terminal rows.
 
-- `podIPWaitTimeout` = **90 seconds** (`internal/runner/k8s/canary.go`) is a SCHEDULING bound, not a
-  pull bound. It bounds the wait for the PROXY pod's CNI-assigned IP, and the CNI assigns that at
-  PodSandbox creation, *before* any application image is pulled. A cold pull can therefore never trip
-  it; an unschedulable pod trips it every time, which is why `pod: Unschedulable: …` is the line an
-  operator most often sees just before this error.
-- The proxy image's pull, its config-staging init container and its container becoming Ready are then
-  bounded by `canaryWaitTimeout` below, counted from the proxy pod's creation. The agent pod is not
-  created before the proxy is Ready. A terminal proxy state (`ImagePullBackOff`, `CrashLoopBackOff`, a
-  failed init, …) fails the run at once instead of waiting it out.
-- `canaryWaitTimeout` = **3 minutes** (same file) is the agent image's PULL bound. It bounds the wait
-  for the agent pod's main container to reach Running, which is where a genuine first pull of an
-  arbitrary agent image is spent. A first pull of the `aws-sso` image was measured at **131 seconds**
-  on a reporting estate — 73% of this budget.
+| Row | Counted as holding |
+|---|---|
+| `STARTING`, `RUNNING`, `WAITING_FOR_CONFIRMATION` with no `lost_at` | yes, paused runs included (a paused sandbox keeps its pods) |
+| unschedulable: `STARTING` with the reason `Unschedulable` | yes, and listed under `unschedulable` (at most 20, oldest first, with `unschedulable_total`) |
+| kept (`lost_at` set) | no; counted as `kept` |
+| `PENDING` | no; appears only in `states` |
+| terminal | no |
 
-Neither is configurable in 0.7.6 and neither was moved: they bound every Kubernetes run on every
-estate. A pull slower than them fails the run honestly — the run carries a `failure_hint` naming the
+Kubernetes rows sum requests and report limits beside them; Docker rows report caps, and a proxy
+with no CPU cap adds nothing to the CPU sum (`proxy_cpu_uncapped` counts them). `by_runner` keeps
+the two kinds apart, and `totals` carries the deployment's own kind. A holding row that recorded no
+reservation (a run from before it was recorded, a failed best-effort write, or a `STARTING` run
+between its create and the dispatch write) is counted in `unknown` and adds to no sum. `by_owner`
+lists the top 50 owners by held CPU, with `by_owner_truncated` when more exist.
+
+Residual: a run whose teardown failed after it reached a terminal state is not counted, though its
+pods may still exist; `POST /admin/sandboxes/sweep` reaps those.
+
+### The start deadlines
+
+The pane will wait; the **runner** will not wait forever, and these are the bounds an operator sizes:
+
+- `WARDYN_SANDBOX_START_TIMEOUT` (default **3 minutes**) is one absolute deadline for the whole sandbox
+  start, counted from the moment the proxy pod is created and spent across BOTH pods: the proxy's
+  scheduling, image pull, config-staging init container and Ready, then the agent's pull and Running. It
+  is not restarted when the agent pod is created, and a change in the reason a pod is stuck never resets
+  it. A first pull of the `aws-sso` image was measured at **131 seconds** on a reporting estate, which is
+  most of the default; raise it for a slower registry. Before 0.8.6 this was a fixed 3 minutes for the
+  agent plus a separate fixed 90 seconds for the proxy's IP.
+- `WARDYN_SANDBOX_CAPACITY_WAIT` (default **15 minutes**) is how long a pod the scheduler cannot place
+  for lack of room (`Unschedulable`, for example `Insufficient cpu`) may wait. The run stays `STARTING`
+  with "Waiting for a machine with room for this sandbox." and the poll backs off to every few seconds.
+  That time is counted apart: it spends the capacity wait, not the start timeout, so a run that waited ten
+  minutes for room still has its full start budget to pull an image. The longest a run can sit in
+  `STARTING` is therefore the two added together (18 minutes by default). `0` turns the wait off: an
+  unplaceable run fails at the start timeout, which is what 0.8.5 did (at 90 seconds for the proxy).
+- Terminal states never wait: `ImagePullBackOff`, `CrashLoopBackOff`, a failed init and the like fail the
+  run at once, inside a capacity wait as anywhere else.
+- The **boot egress canary** keeps its own fixed budget (`canaryWaitTimeout`, 3 minutes a phase,
+  `internal/runner/k8s/canary.go`) and neither setting moves it: both phases must fit inside the chart's
+  450 second startup probe.
+- While a run waits, wardynd holds the run's watcher lease with a heartbeat for as long as the sandbox
+  create blocks, so another replica's sweep does not adopt a run that is still being set up.
+- `GET /api/v1/setup/status` reports both values (`runner.sandbox_start`, Kubernetes only) and the
+  checklist shows them as the `sandbox_start` row. The console's "taking longer than expected" bound for a
+  starting run is the two added together plus 90 seconds, read from there.
+
+**Upgrading:** a run that cannot be placed now waits up to 15 minutes where 0.8.5 failed it at 90 seconds.
+Set `WARDYN_SANDBOX_CAPACITY_WAIT` to `0` to keep failing fast.
+
+A pull slower than the start timeout fails the run honestly: the run carries a `failure_hint` naming the
 deadline and the pod's Pending state, and the pane shows that sentence rather than a guess.
 
 **A first pull after an upgrade does not fail a run.** Every image tag changes at a version bump, so
@@ -5334,7 +5533,8 @@ BEGIN
 END $$;
 GRANT EXECUTE ON FUNCTION
   audit_append(uuid, timestamptz, uuid, text, text, text, text, text, text, jsonb),
-  audit_ensure_partitions(integer) TO wardyn_app;
+  audit_ensure_partitions(integer),
+  audit_partition_digest(text) TO wardyn_app;
 
 -- 4. Every FUTURE migration creates its tables as the MIGRATOR, and a new table
 --    grants the app role nothing. Without this line the next upgrade boots an

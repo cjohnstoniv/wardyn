@@ -37,7 +37,7 @@ import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { ADO } from "../../../lib/ado-entra-copy";
 import type { SCMAccessPAT } from "../../../lib/types/ado-pat";
 import { PEOPLE } from "../../../lib/people-access-copy";
-import { NO_BARRIER, RAIL, RAIL_PROVIDER, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
+import { NO_BARRIER, RAIL, RAIL_PROVIDER, RAIL_RECORDING_ON, RAIL_SETUP, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { useOperator, useUserViewSuperAdmin } from "../../wardyn/operator-context";
 import { useViewAccess } from "../../wardyn/console-view";
@@ -62,6 +62,9 @@ interface RunRailProps {
   cc: ConfinementClass;
   /** An agent run with no model path launches, then fails its first model call. */
   showModelWarning: boolean;
+  /** Launch is already blocked on the missing model: the block sentence speaks, so this
+   *  rail adds neither the no-provider advice nor "Resolved at launch.". */
+  modelBlocked?: boolean;
   /** What happens the moment this launches, in one sentence. */
   startup: string;
   /** Autonomous + held tool approvals: every call parks for a human. */
@@ -85,6 +88,8 @@ interface RunRailProps {
     inFlight: boolean;
     /** Why Launch cannot be pressed — a disabled button that won't say is a dead end. */
     problem: string | null;
+    /** An action that rides on the `problem` line (f-f5: "Connect →"). */
+    problemLink?: { to: string; label: string };
     /** #922 review F5: an ADDITIONAL disable with no text of its own — the
      *  workspace picker's own advisory line (workspace-card.tsx) already
      *  names the reason, so Launch disables without the rail repeating the
@@ -251,6 +256,7 @@ export function RunRail({
   savedPolicy,
   cc,
   showModelWarning,
+  modelBlocked,
   startup,
   showHoldNote,
   toolRules,
@@ -267,6 +273,9 @@ export function RunRail({
   const operator = useOperator();
   const userViewSuperAdmin = useUserViewSuperAdmin();
   const access = useViewAccess();
+  const canSetUpBarrier = operator || (access === "session-user" && userViewSuperAdmin);
+  // M1 S1: only rows that need attention; `satisfied` stays hidden.
+  const setupRows = (preflight.result?.setup_items ?? []).filter((i) => i.status === "missing" || i.status === "unverified");
   // Both of finding 1's facts, read rather than asserted: where the model
   // credential lands, and whether this deployment records anything at all.
   // `recordingDisabled` is tri-state — undefined until /healthz answers.
@@ -383,7 +392,7 @@ export function RunRail({
   // connected. This run launches; its first model call fails." Nothing
   // resolves at launch when there is nothing to resolve. A resolved credential
   // still states itself — that sentence is read off the verdict, not guessed.
-  const showCredentialFacts = !!cred || (!!agentRow && !showModelWarning);
+  const showCredentialFacts = !!cred || (!!agentRow && !showModelWarning && !modelBlocked);
   // #181 review finding 6 — pushRulesIsSet(pushRules) alone is true for a
   // policy that sets ONLY max_inspect_pack_mib (no deny_paths/
   // require_review_paths at all): there is nothing to say about PATHS in
@@ -494,7 +503,7 @@ export function RunRail({
               harnessLabel={modelProvider.harnessLabel}
             />
           )}
-          {!hasProviderCandidates && showModelWarning && (
+          {!hasProviderCandidates && showModelWarning && !modelBlocked && (
             <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
               {RAIL_MODEL_ACCESS.NO_PROVIDER}{" "}
               {/* The action that fills the gap rides next to the
@@ -624,7 +633,28 @@ export function RunRail({
           gate is also active, since it's a separate reason nothing has
           launched yet. */}
       {launch.problem && !launch.inFlight && launch.problem !== gateSentence(modelProvider) && (
-        <p className="mt-2 text-center text-xs text-muted-foreground">{launch.problem}</p>
+        <p className="mt-2 text-center text-xs text-muted-foreground">
+          {launch.problem}
+          {/* f-f4: the same CTA, under the same operator/super-admin rule, as
+              the no-barrier line below. */}
+          {launch.problem === RAIL_SETUP.BACKEND_BLOCK && canSetUpBarrier && (
+            <>
+              {" "}
+              <Link to={NO_BARRIER.ADMIN_ROUTE} className="font-medium text-info hover:underline">
+                {NO_BARRIER.CTA}
+              </Link>
+              .
+            </>
+          )}
+          {launch.problemLink && (
+            <>
+              {" "}
+              <Link to={launch.problemLink.to} className="font-medium text-info hover:underline">
+                {launch.problemLink.label}
+              </Link>
+            </>
+          )}
+        </p>
       )}
       {/* #214 — the one control that genuinely cannot work says so beside
           itself, not in a tooltip, with a route to the step that fixes it.
@@ -643,7 +673,7 @@ export function RunRail({
       {launch.noBarrier && !launch.inFlight && (
         <p className="mt-2 text-center text-xs text-muted-foreground">
           {NO_BARRIER.LAUNCH_REASON}
-          {(operator || (access === "session-user" && userViewSuperAdmin)) && (
+          {canSetUpBarrier && (
             <>
               {" "}
               <Link to={NO_BARRIER.ADMIN_ROUTE} className="font-medium text-info hover:underline">
@@ -676,6 +706,19 @@ export function RunRail({
             {preflight.result.overall_risk && <RiskBadge level={preflight.result.overall_risk} />}
             <ConfinementChip value={preflight.result.enforced_confinement_class} />
           </div>
+          {setupRows.length > 0 && (
+            <div className="mb-1.5">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{RAIL_SETUP.HEADING}</p>
+              <ul className="space-y-0.5 text-xs">
+                {setupRows.map((r) => (
+                  <li key={r.id} className={r.kind === "backend" && r.status === "missing" ? "text-danger" : "text-warning"}>
+                    {r.label}
+                    {r.detail ? ` — ${r.detail}` : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {preflight.result.warnings && preflight.result.warnings.length > 0 ? (
             <ul className="list-disc space-y-0.5 pl-4 text-xs text-warning">
               {preflight.result.warnings.map((w, i) => (

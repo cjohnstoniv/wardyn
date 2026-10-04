@@ -28,6 +28,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/db"
@@ -39,6 +40,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -215,9 +217,13 @@ func run() error {
 	maskReg := secretmask.NewRegistry()
 	// The masked + fanned-out + spooling recorder chain shared by EVERY audit
 	// writer (API, broker, identity, approvals, sweeper) — see buildAuditChain.
+	denials := &audit.DenialCoalescer{}
 	maskScopes := &maskScope{}
-	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg, maskScopes)
+	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg, serveChain{scope: maskScopes, denials: denials})
 	if err != nil {
+		return err
+	}
+	if err := startApprovalNotify(rootCtx, *f.approvalNotify, pool, maskedRec, maskReg); err != nil {
 		return err
 	}
 
@@ -269,14 +275,7 @@ func run() error {
 	// middleware ignores the run claims and checks only the audience. Print and
 	// exit so this slots cleanly into a compose token-seeding step.
 	if *f.printGroundtruthToken {
-		mintCtx, mintCancel := context.WithTimeout(rootCtx, 10*time.Second)
-		defer mintCancel()
-		ri, merr := idp.MintRunIdentity(mintCtx, groundtruthSensorRunID, groundtruthSensorSub, groundtruthSensorSub, groundtruthAudience, false)
-		if merr != nil {
-			return fmt.Errorf("mint groundtruth token: %w", merr)
-		}
-		fmt.Println(ri.Token)
-		return nil
+		return printGroundtruthToken(rootCtx, idp)
 	}
 
 	// Token broker: GitHub minter only when the App credentials are present;
@@ -335,9 +334,7 @@ func run() error {
 		return err
 	}
 
-	// WARDYN_DEMO_VIDEO_BASE_URL: validated once at boot, fail closed on a
-	// malformed value.
-	demoVideoBaseURL, err := api.ValidateDemoVideoBaseURL(*f.demoVideoBaseURL)
+	demoVideoBaseURL, governAdminRunsExempt, err := parseServeKnobs(f)
 	if err != nil {
 		return err
 	}
@@ -369,9 +366,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	leader := db.NewSweeperLeader(pool, sweeperHolder())
+	holder := sweeperHolder()
+	leader := db.NewSweeperLeader(pool, holder)
+	ticks := sweephealth.New(db.NewSweepTicks(pool), holder, nil)
 	srv := api.New(api.Config{
 		SweeperLease: leader,
+		SweepHealth:  ticks,
 		Store:        st,
 		Identity:     idp,
 		Approvals:    approvals,
@@ -410,6 +410,10 @@ func run() error {
 		ControlPlaneCAPEM:   feats.hop.caCertPEM(),
 		RecordingStore:      feats.recStore,
 		OIDC:                feats.authn,
+
+		// WARDYN_GOVERN_ADMIN_RUNS_EXEMPT, already validated by parseGovernAdminRunsExempt.
+		GovernAdminRunsExempt: governAdminRunsExempt,
+
 		// §I: nil unless WARDYN_DIRECTORY_PROVIDER is set — the whole feature
 		// off, the search endpoint answering its distinct 503 and every "who"
 		// field staying free text.
@@ -500,7 +504,7 @@ func run() error {
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
-	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore, leader)
+	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore, leader, ticks)
 
 	// SSH gateway accept loop (own goroutine, like the periodic workers above,
 	// and extracted the same way — see startSSHGateway's own doc comment).
@@ -513,7 +517,7 @@ func run() error {
 	// Serve until signal/error, then drain: HTTP first, audit sinks last, the
 	// org federation forwarder (if any) joined so it never outlives the
 	// process (issue #1131).
-	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, feats.hop, orgFederation)
+	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, denials, feats.hop, orgFederation)
 }
 
 // tlsPosture is the validated TLS/cookie posture derived from the resolved
@@ -777,3 +781,27 @@ var (
 	flagIntEnv   = cliutil.FlagIntEnv
 	splitCSV     = cliutil.SplitCSV
 )
+
+// printGroundtruthToken mints the host-sensor token and prints it, so the -print-groundtruth-token
+// path slots into a compose token-seeding step and exits.
+func printGroundtruthToken(ctx context.Context, idp identity.Provider) error {
+	mintCtx, mintCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer mintCancel()
+	ri, err := idp.MintRunIdentity(mintCtx, groundtruthSensorRunID, groundtruthSensorSub, groundtruthSensorSub, groundtruthAudience, false)
+	if err != nil {
+		return fmt.Errorf("mint groundtruth token: %w", err)
+	}
+	fmt.Println(ri.Token)
+	return nil
+}
+
+// parseServeKnobs validates the two free-text knobs api.Config carries parsed, once at boot,
+// failing closed on a malformed value: WARDYN_DEMO_VIDEO_BASE_URL and
+// WARDYN_GOVERN_ADMIN_RUNS_EXEMPT.
+func parseServeKnobs(f *bootFlags) (demoVideoBaseURL string, governAdminRunsExempt []string, err error) {
+	if demoVideoBaseURL, err = api.ValidateDemoVideoBaseURL(*f.demoVideoBaseURL); err != nil {
+		return "", nil, err
+	}
+	governAdminRunsExempt, err = parseGovernAdminRunsExempt(*f.governAdminRunsExempt, *f.governAdminRuns)
+	return demoVideoBaseURL, governAdminRunsExempt, err
+}

@@ -38,6 +38,9 @@ func main() {
 		if hint := dialHint(err); hint != "" {
 			fmt.Fprintln(os.Stderr, "wardyn:", hint)
 		}
+		if hint := policyHint(err); hint != "" {
+			fmt.Fprintln(os.Stderr, "wardyn:", hint)
+		}
 		os.Exit(exitCodeFor(err))
 	}
 }

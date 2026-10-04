@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -38,6 +39,12 @@ import (
 // Nothing the file omits is touched, and nothing is deleted, unless --prune is
 // passed — so `get` immediately followed by `set` is a no-op, the same round
 // trip drive get/set's pair promises.
+//
+// Where the deployment requires a second approver for governance writes, a
+// write is held as a pending change rather than applied: `set` prints the
+// pending and deferred lists on stderr (stdout stays the document) and exits
+// 0, because pending is the expected outcome there. `changes list|approve|
+// reject` is the second approver's side.
 func governanceCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "governance",
@@ -51,9 +58,12 @@ func governanceCmd(client clientFn) *cobra.Command {
 			"(subject_type, subject). A profile in the file but absent server-side is\n" +
 			"created; one present server-side but absent from the file is left alone unless\n" +
 			"--prune is passed, which also deletes any server-side assignment the file omits.\n" +
-			"`wardyn governance get > f && wardyn governance set f` is a no-op.",
+			"`wardyn governance get > f && wardyn governance set f` is a no-op.\n\n" +
+			"Where governance writes need a second approver, `set` holds them as pending\n" +
+			"changes (it exits 0 and lists them); a second human then runs\n" +
+			"`wardyn governance changes approve <id>`.",
 	}
-	cmd.AddCommand(governanceGetCmd(client), governanceSetCmd(client))
+	cmd.AddCommand(governanceGetCmd(client), governanceSetCmd(client), governanceChangesCmd(client))
 	return subcommandGroup(cmd)
 }
 
@@ -100,14 +110,109 @@ func governanceSetCmd(client clientFn) *cobra.Command {
 			if err := decodeOneJSONStrict(bytes.NewReader(raw), &doc); err != nil {
 				return fmt.Errorf("parse governance document JSON: %w", err)
 			}
-			out, err := client().ApplyGovernance(cmd.Context(), doc, prune)
+			res, err := client().ApplyGovernanceResult(cmd.Context(), doc, prune)
 			if err != nil {
 				return err
 			}
-			return emitJSON(cmd.OutOrStdout(), out)
+			printGovernancePending(cmd.ErrOrStderr(), res)
+			return emitJSON(cmd.OutOrStdout(), res.Document)
 		},
 	}
 	cmd.Flags().BoolVar(&prune, "prune", false,
 		"also delete every server-side profile and assignment the file omits (default: leave them alone)")
 	return cmd
+}
+
+// printGovernancePending writes what an apply held for approval to w, nothing
+// when nothing is pending. It goes to stderr so stdout stays a document that
+// `governance set` can strict-decode again.
+func printGovernancePending(w io.Writer, res sdk.GovernanceApplyResult) {
+	if len(res.Pending) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "pending approval: %d change(s) stored, not applied; a second approver runs `wardyn governance changes approve <id>`\n", len(res.Pending))
+	for _, ch := range res.Pending {
+		fmt.Fprintf(w, "  %s  %s %s %s  expires %s\n", ch.ID, ch.Op, ch.TargetKind, ch.TargetKey, ch.ExpiresAt.Format(time.RFC3339))
+	}
+	if len(res.Deferred) > 0 {
+		fmt.Fprintf(w, "deferred: %d assignment(s) not sent, their profile is pending; apply again once it is approved\n", len(res.Deferred))
+		for _, d := range res.Deferred {
+			fmt.Fprintf(w, "  %s %q -> profile %q\n", d.SubjectType, d.Subject, d.Profile)
+		}
+	}
+	if res.PruneSkipped {
+		fmt.Fprintln(w, "prune skipped: a write is pending; apply again with --prune once it is decided")
+	}
+}
+
+func governanceChangesCmd(client clientFn) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "changes",
+		Short: "List, approve or reject governance changes held for a second approver",
+	}
+	var state string
+	var asJSON bool
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List governance changes (optionally filtered by --state)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			changes, err := client().ListGovernanceChanges(cmd.Context(), state)
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				return emitJSON(cmd.OutOrStdout(), changes)
+			}
+			tw := newTab(cmd.OutOrStdout())
+			fmt.Fprintln(tw, "ID\tSTATE\tOP\tKIND\tTARGET\tPROPOSED BY\tEXPIRES")
+			for _, ch := range changes {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					ch.ID, ch.State, ch.Op, ch.TargetKind, ch.TargetKey, ch.ProposedBy, ch.ExpiresAt.Format(time.RFC3339))
+			}
+			return tw.Flush()
+		},
+	}
+	list.Flags().StringVar(&state, "state", "", "filter by state: pending, applied, rejected, expired or stale (default: the server's)")
+	list.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
+
+	approve := &cobra.Command{
+		Use:   "approve <change-id>",
+		Short: "Approve a pending governance change, which applies it",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseID("governance change", args[0])
+			if err != nil {
+				return err
+			}
+			ch, err := client().ApproveGovernanceChange(cmd.Context(), id)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "governance change %s -> %s\n", ch.ID, ch.State)
+			return nil
+		},
+	}
+
+	var reason string
+	reject := &cobra.Command{
+		Use:   "reject <change-id>",
+		Short: "Reject a pending governance change; nothing is applied",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseID("governance change", args[0])
+			if err != nil {
+				return err
+			}
+			ch, err := client().RejectGovernanceChange(cmd.Context(), id, reason)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "governance change %s -> %s\n", ch.ID, ch.State)
+			return nil
+		},
+	}
+	reject.Flags().StringVar(&reason, "reason", "", "reason recorded with the rejection")
+	cmd.AddCommand(list, approve, reject)
+	return subcommandGroup(cmd)
 }

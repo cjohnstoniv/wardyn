@@ -16,7 +16,15 @@ import type {
   WorkspaceSourceInput,
   WorkspaceWriteResult,
 } from "../types";
-import { asJson, errText, HttpError, LAUNCH_DEADLINE_MS, unwrapList, wfetch, withLimit } from "./core";
+import { asJson, errText, HttpError, launchDeadlineMs, unwrapList, wfetch, withLimit } from "./core";
+import { setup } from "./setup";
+
+// The deadline for a launch call that blocks on CreateSandbox, read from the deployment's own
+// start deadlines (/setup/status). getSetupStatus never throws but a 401, and a status that
+// carries none (older daemon, not Kubernetes) yields the LAUNCH_DEADLINE_MS floor.
+async function launchDeadline(): Promise<number> {
+  return launchDeadlineMs((await setup.getSetupStatus()).runner?.sandbox_start);
+}
 
 // ---- Composition + requirements-contract wire types ----
 // These moved home to lib/types/workspaces.ts when the shared Workspace type
@@ -222,12 +230,14 @@ export const workspaces = {
     // The operator drives the real activity in the attach shell. `confined` picks a
     // VERIFY session (default-deny egress, limited to the approved set) over an open
     // learning session — off-policy hosts are denied live in the confined case.
-    // LAUNCH_DEADLINE_MS: a record session IS a sandbox launch — same
-    // CreateSandbox, same cold pull (see the constant's note in core.ts).
+    // launchDeadlineMs: a record session IS a sandbox launch — same
+    // CreateSandbox, same cold pull, and the same capacity wait on a full
+    // cluster (see the constant's note in core.ts).
+    const launchMs = await launchDeadline();
     const res = await wfetch(
       `/workspaces/${encodeURIComponent(id)}/record`,
       { method: "POST", body: JSON.stringify({ name, confined }) },
-      LAUNCH_DEADLINE_MS,
+      launchMs,
     );
     if (res.status === 202) {
       const body = await asJson<{ record_run_id?: string; confinement_class?: string; warnings?: string[] }>(res);
@@ -312,13 +322,15 @@ export const workspaces = {
   // key (the single-source handleScanSource) — this endpoint never sends it,
   // so every governed scan silently reported no run ids.
   async scanWorkspace(id: string): Promise<{ async: boolean; scanRunIds: string[] }> {
-    // LAUNCH_DEADLINE_MS: a repo scan launches a governed run per source and
+    // launchDeadlineMs: a repo scan launches a governed run per source and
     // blocks on its CreateSandbox before the 202 (scanAttachedSources ->
-    // dispatchAndSettle) — the same cold-pull exposure as recordTask above.
+    // dispatchAndSettle) — the same cold-pull and capacity-wait exposure as
+    // recordTask above.
+    const launchMs = await launchDeadline();
     const res = await wfetch(
       `/workspaces/${encodeURIComponent(id)}/scan`,
       { method: "POST" },
-      LAUNCH_DEADLINE_MS,
+      launchMs,
     );
     const body = await asJson<{ scan_run_ids?: string[] }>(res);
     return { async: res.status === 202, scanRunIds: body?.scan_run_ids ?? [] };

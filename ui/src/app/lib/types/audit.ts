@@ -129,6 +129,12 @@ export type RunEndingKind =
   // only addition is the sign-in itself, where a sign-in this viewer can
   // complete would repair it.
   | "credential"
+  // run.create/failure stamped reason "sandbox_create": the runner could not
+  // create the sandbox, so nothing ran.
+  | "sandbox_create"
+  // run.exec/failure stamped reason "agent_start": the sandbox exists but the
+  // agent process could not be started in it.
+  | "agent_start"
   | "unknown";
 
 export interface RunEnding {

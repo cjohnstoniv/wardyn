@@ -12,6 +12,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -99,7 +100,7 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	if level == "" {
 		return res, s.managedSettingsUndeliveredWarning(r.Context(), req, "", enforced), scmSite, grade, bedrock, true
 	}
-	warnings, ok := s.autonomyLadder(w, r, req, level, autonomyBoundList(boundBy, grade, bedrock), ceiling.Profile.Name)
+	warnings, ok := s.autonomyLadder(w, r, req, level, autonomyBoundList(boundBy, grade, bedrock), ceiling.Profile.Name, s.ceilingPolicy(r.Context(), ceiling))
 	// Here rather than in the ladder: whether the managed settings land depends
 	// on the ENFORCED class's substrate, which only this function holds. After
 	// it, because the ladder may derive the hold that brings the file.
@@ -117,7 +118,7 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 // derived-hold warning cannot drift into naming different causes for one
 // resolution.
 func (s *Server) autonomyLadder(w http.ResponseWriter, r *http.Request, req *createRunRequest,
-	level types.AutonomyLevel, bound, name string,
+	level types.AutonomyLevel, bound, name string, policy *policyref.Ref,
 ) ([]string, bool) {
 	// requestIsInteractive, never req.Interactive: a request with no task
 	// coerces to interactive inside decodeAndValidateCreateRun, and preflight
@@ -137,7 +138,7 @@ func (s *Server) autonomyLadder(w http.ResponseWriter, r *http.Request, req *cre
 		s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.task_mode", fmt.Sprintf(
 			"`task_mode=exec` is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"and an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.",
-			name, level, bound)))
+			name, level, bound)).WithPolicy(policy))
 		return nil, false
 	}
 	// The shell boot seed ranks WITH exec, not with seed_auto_tools, because it
@@ -153,24 +154,24 @@ func (s *Server) autonomyLadder(w http.ResponseWriter, r *http.Request, req *cre
 			"a startup command is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"and with `interactive_start` unset or `shell` an interactive run's task runs as a shell command at sandbox boot, before anyone attaches — "+
 				"what `task_mode=exec` does. Launch with `interactive_start=agent` to hand the task to the agent as its first prompt, or without a task.",
-			name, level, bound)))
+			name, level, bound)).WithPolicy(policy))
 		return nil, false
 	}
 	if level.Rank() < types.AutonomyL2.Rank() && req.SeedAutoTools {
 		s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.seed_auto_tools", fmt.Sprintf(
 			"`seed_auto_tools` is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"and the pre-attach seed runs before any human is at the pane. Launch without it.",
-			name, level, bound)))
+			name, level, bound)).WithPolicy(policy))
 		return nil, false
 	}
 	if level.Rank() < types.AutonomyL1.Rank() && !interactive {
 		s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.interactive", fmt.Sprintf(
 			"unattended runs are not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"which requires a human at the pane. Launch with `--interactive`, or narrow the run's egress, secrets or confinement.",
-			name, level, bound)))
+			name, level, bound)).WithPolicy(policy))
 		return nil, false
 	}
-	return s.autonomyDerive(w, r, req, level, bound, name, interactive)
+	return s.autonomyDerive(w, r, req, level, bound, name, policy, interactive)
 }
 
 // autonomyDerive is the gate's L1 half — the rung that PERMITS an unattended
@@ -182,7 +183,7 @@ func (s *Server) autonomyLadder(w http.ResponseWriter, r *http.Request, req *cre
 // warnings. `bound` arrives already rendered (autonomyBoundList) so this half
 // and autonomyLadder's refusals name the same causes by construction.
 func (s *Server) autonomyDerive(w http.ResponseWriter, r *http.Request, req *createRunRequest,
-	level types.AutonomyLevel, bound, name string, interactive bool,
+	level types.AutonomyLevel, bound, name string, policy *policyref.Ref, interactive bool,
 ) ([]string, bool) {
 	var warnings []string
 	// One honest sentence, whatever the rung: an agent with no hold lane has no
@@ -210,7 +211,7 @@ func (s *Server) autonomyDerive(w http.ResponseWriter, r *http.Request, req *cre
 		s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.agent", fmt.Sprintf(
 			"%s is not supported under your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), which routes an "+
 				"unattended run's tool calls to a Wardyn approval, and this agent has no external tool-approval contract. Launch a different agent, or launch interactively.",
-			autonomyAgentLabel(req.Agent), name, level, bound)))
+			autonomyAgentLabel(req.Agent), name, level, bound)).WithPolicy(policy))
 		return nil, false
 	}
 	if req.ToolApprovals == "hold" {

@@ -468,7 +468,7 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 			slog.Int("denied_paths", len(denied)),
 			slog.Any("paths", sampleOf(denied)),
 			slog.String("reason", why))
-		http.Error(w, deniedPathsBody(denied, why), http.StatusForbidden)
+		p.denyAttributed(w, deniedPathsBody(denied, why), http.StatusForbidden)
 		return nil, pushReview{}, noRelease, false
 	}
 	if rules.maxFileBytes > 0 && !p.refuseLargeFiles(w, r, func(cs []gitpack.Change) ([]string, []gitpack.Change, error) {
@@ -610,7 +610,7 @@ func (p *Proxy) refuseLargeFiles(w http.ResponseWriter, r *http.Request,
 		slog.Any("paths", sampleOf(append(over, uncarriedPaths(left)...))),
 		slog.String("reason", "max_file_size_mib"),
 		slog.String("forge", why))
-	http.Error(w, body, http.StatusForbidden)
+	p.denyAttributed(w, body, http.StatusForbidden)
 	return false
 }
 
@@ -634,7 +634,13 @@ func (p *Proxy) refusePush(w http.ResponseWriter, r *http.Request, subject slog.
 		subject,
 		slog.String("rule_source", ruleSource),
 		slog.String("reason", msg))
-	http.Error(w, msg, status)
+	// An uninspectable push is the inspector's fault (a thin pack, a busy slot, an
+	// encoding it cannot read), not a rule the policy decided, so it names no policy.
+	if ruleSource == ruleSourceGitPackBlind {
+		http.Error(w, msg, status)
+		return
+	}
+	p.denyAttributed(w, msg, status)
 }
 
 // deniedPathsBody is the refusal git shows the person: the paths that matched,

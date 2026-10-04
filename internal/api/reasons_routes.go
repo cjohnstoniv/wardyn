@@ -55,6 +55,7 @@ const (
 	reasonReviveOwnerAuthorityUnreadable    = "revive_owner_authority_unreadable"     // the owner's launch-door or model-credential re-check, or the read of the run's git_pat grants for its brokered set, could not be completed
 	reasonReviveAdminRestartCountInvalid    = "revive_admin_restart_count_invalid"    // run_ids named none, or more than the bulk maximum
 	reasonReviveProxyWindowStoreUnavailable = "revive_proxy_window_store_unavailable" // this store cannot list run proxy releases
+	reasonRunCapacityStoreUnavailable       = "run_capacity_store_unavailable"        // this store cannot report fleet capacity
 )
 
 // ownerRefusal's own reason values (run_owner_authority.go): a revive's and a
@@ -519,6 +520,9 @@ const (
 	reasonAuditInvalidTimestampParam       = "audit_invalid_timestamp_param"
 	reasonAuditInvalidActorType            = "audit_invalid_actor_type"
 	reasonAuditInvalidOrigin               = "audit_invalid_origin"
+	reasonAuditInvalidExportForm           = "audit_invalid_export_form"
+	reasonAuditPartitionNotFound           = "audit_partition_not_found"
+	reasonAuditPartitionOpen               = "audit_partition_open"
 )
 
 // POST /api/v1/sources/{id}/scan and the admin bulk scan (source_scan.go).

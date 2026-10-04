@@ -55,29 +55,39 @@ func (s *Server) runProfile(ctx context.Context, run types.AgentRun) (*types.Gov
 // run. The harness sign-in run is exempt, as harnessLoginGovernance exempts it
 // at create: its terminal is a device-code step, not the member's session.
 func (s *Server) interactiveDeniedProfile(ctx context.Context, run types.AgentRun) (string, error) {
-	if run.Task == harnessLoginTask {
-		return "", nil
-	}
-	p, err := s.runProfile(ctx, run)
-	if err != nil || p == nil || !p.Limits.DenyInteractive {
+	p, err := s.interactiveDeniedBy(ctx, run)
+	if err != nil || p == nil {
 		return "", err
 	}
 	return p.Name, nil
 }
 
+// interactiveDeniedBy is interactiveDeniedProfile's profile itself, nil when no
+// profile closes the session, so the attach refusal can name the policy as well.
+func (s *Server) interactiveDeniedBy(ctx context.Context, run types.AgentRun) (*types.GovernanceProfile, error) {
+	if run.Task == harnessLoginTask {
+		return nil, nil
+	}
+	p, err := s.runProfile(ctx, run)
+	if err != nil || p == nil || !p.Limits.DenyInteractive {
+		return nil, err
+	}
+	return p, nil
+}
+
 // refuseInteractiveAttach is the terminal attach's deny_interactive door: true
 // when it has answered. Callers skip it for a super admin.
 func (s *Server) refuseInteractiveAttach(w http.ResponseWriter, r *http.Request, run types.AgentRun) bool {
-	name, err := s.interactiveDeniedProfile(r.Context(), run)
+	p, err := s.interactiveDeniedBy(r.Context(), run)
 	if err != nil {
 		writeServerError(w, r, "attach", err)
 		return true
 	}
-	if name == "" {
+	if p == nil {
 		return false
 	}
 	return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.attach", fmt.Sprintf(
-		"attaching is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.", name)).OnRun(run.ID))
+		"attaching is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.", p.Name)).OnRun(run.ID).WithPolicy(profilePolicyRef(p)))
 }
 
 // refuseUIAppsDenied is the UI gateway's deny_ui_apps door, for a run created
@@ -93,7 +103,7 @@ func (s *Server) refuseUIAppsDenied(w http.ResponseWriter, r *http.Request, run 
 		return false
 	}
 	return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.ui_apps", fmt.Sprintf(
-		"UI apps are not allowed under the governance profile %q this run was launched under.", p.Name)).OnRun(run.ID))
+		"UI apps are not allowed under the governance profile %q this run was launched under.", p.Name)).OnRun(run.ID).WithPolicy(profilePolicyRef(p)))
 }
 
 // boundUIApps is deny_ui_apps at create, called from both of resolveRunPolicy's

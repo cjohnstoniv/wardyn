@@ -8,7 +8,8 @@
 //
 // wfetch's default (WFETCH_TIMEOUT_MS) bounds a HANG; it is not a latency
 // budget. Every one of these paths blocks through CreateSandbox server-side,
-// which on k8s waits canaryWaitTimeout on top of a cold image pull — so the
+// which on k8s waits WARDYN_SANDBOX_START_TIMEOUT (and, on a full cluster,
+// WARDYN_SANDBOX_CAPACITY_WAIT) on top of a cold image pull — so the
 // default turned a launch that was working into "Could not reach the control
 // plane." and threw away the id the console was about to be handed.
 //
@@ -26,7 +27,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
-import { LAUNCH_DEADLINE_MS, WFETCH_TIMEOUT_MS } from "./core";
+import { LAUNCH_DEADLINE_MS, LAUNCH_SLACK_MS, launchDeadlineMs, WFETCH_TIMEOUT_MS } from "./core";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (f: string) => readFileSync(join(here, f), "utf8");
@@ -55,12 +56,21 @@ describe("every console call that launches a sandbox passes an explicit deadline
       const at = src.indexOf(path, start);
       expect(at, `${fn} in ${file} no longer calls ${path}`).toBeGreaterThan(-1);
       const call = src.slice(start, src.indexOf(");", at));
-      expect(call).toContain("LAUNCH_DEADLINE_MS");
+      // A call that waits on CreateSandbox follows the deployment's real start deadlines
+      // (launchDeadlineMs, from /setup/status); the rest ride the fixed launch floor.
+      expect(call).toMatch(file === "workspaces.ts" ? /launchMs|launchDeadline\(/ : /LAUNCH_DEADLINE_MS/);
     });
   }
 
   it("the launch deadline is longer than the default it replaces, and finite", () => {
     expect(LAUNCH_DEADLINE_MS).toBeGreaterThan(WFETCH_TIMEOUT_MS);
     expect(Number.isFinite(LAUNCH_DEADLINE_MS)).toBe(true);
+  });
+
+  it("launchDeadlineMs follows the start timeout plus the capacity wait, never below the floor", () => {
+    expect(launchDeadlineMs(undefined)).toBe(LAUNCH_DEADLINE_MS);
+    expect(launchDeadlineMs({ start_timeout_seconds: 60, capacity_wait_seconds: 0 })).toBe(LAUNCH_DEADLINE_MS);
+    // The defaults: 3 min + 15 min, so a full cluster outlasts the 5-minute floor.
+    expect(launchDeadlineMs({ start_timeout_seconds: 180, capacity_wait_seconds: 900 })).toBe(1_080_000 + LAUNCH_SLACK_MS);
   });
 });

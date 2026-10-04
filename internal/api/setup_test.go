@@ -595,8 +595,9 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 // redacted runner used to carry the confinement classes alone, so their
 // console could not tell a Kubernetes install from a Docker host and named the
 // /dev/kvm remedy for Vault. The substrate bit survives the member view — and
-// it is the ONLY thing added: the driver name, the disk-enforcement word and
-// the per-class substrates stay operator-only.
+// it, and the start deadlines the run page's overdue bound follows, are the
+// ONLY things added: the driver name, the disk-enforcement word and the
+// per-class substrates stay operator-only.
 func TestSetupStatus_MemberRunnerCarriesOnlyTheKubernetesBit(t *testing.T) {
 	h := newHarness(t)
 	for _, tc := range []struct {
@@ -627,13 +628,13 @@ func TestSetupStatus_MemberRunnerCarriesOnlyTheKubernetesBit(t *testing.T) {
 			// "driver" is always serialized (no omitempty) — redaction blanks its value.
 			for k, v := range raw.Runner {
 				switch k {
-				case "confinement_classes", "kubernetes":
+				case "confinement_classes", "kubernetes", "sandbox_start":
 				case "driver":
 					if string(v) != `""` {
 						t.Errorf("member runner.driver = %s, want the redacted empty string", v)
 					}
 				default:
-					t.Errorf("member runner carries %q — only confinement_classes and the kubernetes bit may reach a member", k)
+					t.Errorf("member runner carries %q — only confinement_classes, the kubernetes bit and the start deadlines may reach a member", k)
 				}
 			}
 			var st SetupStatus

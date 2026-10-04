@@ -31,8 +31,9 @@ import (
 // Blocking decides ONE thing: whether the console must not open on
 // this install at all — setupGateActive (the console's setup gate) redirects
 // every route into the funnel while any row carries it, until onboarding
-// completes. It is set on exactly three arms: runnerCheck's fail (no runner, so
-// no run can happen), confinementFloorCheck's warn (a floor the runner cannot
+// completes. It is set on exactly three arms: runnerCheck's fail (no runner configured, so
+// no run can happen; a configured runner whose Capabilities() errored is a
+// substrate fault and never blocks), confinementFloorCheck's warn (a floor the runner cannot
 // meet refuses every run before it launches), and ssoRBACCheck's warn (OIDC
 // with no role mapping makes every signed-in human an admin, and the funnel's
 // People step is where that is fixed).
@@ -59,8 +60,9 @@ type SetupCheck struct {
 	// Cause narrows a row that can warn for more than one reason, the same
 	// shape as SCMAccess.cause on the wire (ui/src/app/lib/types/setup.ts) — a
 	// machine key, never prose, so a console reader can pick per-cause copy
-	// without string-matching Detail. Only sso_rbac sets it today ("default_role",
-	// #491): #484's original no-role-map-and-no-admin-list warn leaves it empty.
+	// without string-matching Detail. sso_rbac sets it ("default_role", #491:
+	// #484's original no-role-map-and-no-admin-list warn leaves it empty), and so
+	// does substrate_health ("runner_unreachable", "runner_auth", "sweep_stale").
 	Cause string `json:"cause,omitempty"`
 }
 
@@ -68,6 +70,16 @@ type SetupCheck struct {
 // FAIL on the checklist — runs cannot launch at all. CC2+ is ok; a CC1-only host
 // is "info", not a warning: runs work, just at the weakest isolation.
 func runnerCheck(rnr SetupRunner) SetupCheck {
+	// A runner that is configured but could not report its capabilities is a
+	// substrate fault, not a missing runner: sending every admin into the setup
+	// funnel (Blocking) during an outage would hide the console that shows it.
+	if rnr.Driver != "none" && rnr.capsUnreadable {
+		return SetupCheck{
+			ID: "runner", Label: "Sandbox runner", Status: "fail",
+			Detail: "The sandbox runner is configured but did not report its capabilities, so runs cannot launch until it does.",
+			Fix:    "The substrate_health row says what is wrong with the runner's substrate.",
+		}
+	}
 	if rnr.Driver == "none" || len(rnr.ConfinementClasses) == 0 {
 		return SetupCheck{
 			ID: "runner", Label: "Sandbox runner", Status: "fail",
@@ -174,6 +186,32 @@ func envBuilderCheck(wired bool) SetupCheck {
 	}
 }
 
+// sandboxStartCheck states the Kubernetes sandbox start deadlines (canon SETUP_CHECK.SANDBOX_START,
+// mock packet M10). Always info: it describes a setting, it grades nothing. Absent off Kubernetes.
+func sandboxStartCheck(d *SetupSandboxStart) (SetupCheck, bool) {
+	if d == nil {
+		return SetupCheck{}, false
+	}
+	start := formatStartDeadline(d.StartTimeoutSeconds)
+	detail := "A sandbox has " + start + " to start. If no machine has room for it, it waits up to " +
+		formatStartDeadline(d.CapacityWaitSeconds) + ", then fails."
+	if d.CapacityWaitSeconds == 0 {
+		detail = "A sandbox has " + start + " to start. Capacity wait is off, so a sandbox no machine has room for fails when that deadline passes."
+	}
+	return SetupCheck{ID: "sandbox_start", Label: "Sandbox start deadlines", Status: "info", Detail: detail}, true
+}
+
+// formatStartDeadline renders whole seconds as the shortest exact "1h", "15m", "90s" form.
+func formatStartDeadline(seconds int) string {
+	switch {
+	case seconds > 0 && seconds%3600 == 0:
+		return fmt.Sprintf("%dh", seconds/3600)
+	case seconds > 0 && seconds%60 == 0:
+		return fmt.Sprintf("%dm", seconds/60)
+	}
+	return fmt.Sprintf("%ds", seconds)
+}
+
 // k8sEgressContainmentCheck grades the k8s substrate's boot-time NetworkPolicy
 // canary verdict (netpolProven, computed in setupRunnerInfo from
 // ClassSupport.NetworkPolicy — a local value, not a wire field: nothing else
@@ -238,6 +276,27 @@ func k8sEgressContainmentCheck(driver, netpolProven string) (SetupCheck, bool) {
 				"so egress containment cannot be confirmed.",
 			Fix: "Upgrade wardynd to a build that reports the canary verdict, and check its boot logs for the egress-canary result.",
 		}, true
+	}
+}
+
+// idleCPUSignalCheck is the "Idle detection" row (M10, SETUP_CHECK.IDLE_CPU_SIGNAL),
+// pinned byte for byte by TestIdleCPUSignalCheck. Off is a warn, not an info:
+// a run busy inside its sandbox with no attach and no egress can be stopped as
+// idle, and its work lost.
+func idleCPUSignalCheck(off bool) SetupCheck {
+	const id, label = "idle_cpu_signal", "Idle detection"
+	if off {
+		return SetupCheck{
+			ID: id, Label: label, Status: "warn",
+			Detail: "Wardyn can't read this cluster's metrics API, so idle auto-stop sees only attaches and network traffic. " +
+				"A run busy inside its sandbox with neither can be stopped as idle.",
+			Fix: "Install metrics-server. If it is installed, check that the runner Role allows `list` on `pods` in " +
+				"`metrics.k8s.io` (the chart adds it).",
+		}
+	}
+	return SetupCheck{
+		ID: id, Label: label, Status: "ok",
+		Detail: "Idle auto-stop counts CPU work inside a sandbox, so a run that is busy but quiet isn't stopped.",
 	}
 }
 
@@ -777,4 +836,30 @@ func permissionsPostureCheck(enforcement map[string]bool) SetupCheck {
 			"%d of %d permission kinds enforced. Enforced: %s. Fail-open (default allow, matching pre-0.6 behavior): %s.",
 			len(on), len(capabilityKinds), joined(on), joined(off)),
 	}
+}
+
+// governAdminRunsCheck is the Admin runs row (mock M10, SETUP_CHECK.GOVERN_ADMIN_RUNS),
+// shown only while WARDYN_GOVERN_ADMIN_RUNS is on. Info while it governs
+// someone; warn when no sign-in is configured, because then it governs no one
+// and every launch is the admin, marked governance_exempt.
+func governAdminRunsCheck(on, recordingExempt, oidcConfigured bool) (SetupCheck, bool) {
+	if !on {
+		return SetupCheck{}, false
+	}
+	if !oidcConfigured {
+		return SetupCheck{
+			ID: "govern_admin_runs", Label: "Admin runs", Status: "warn",
+			Detail: "`WARDYN_GOVERN_ADMIN_RUNS` is on, but nobody signs in to this deployment, so it governs no one: every run is launched as the admin and marked `governance_exempt`.",
+			Fix:    "Configure single sign-on, or unset `WARDYN_GOVERN_ADMIN_RUNS`.",
+		}, true
+	}
+	recording := "Record Mode is refused for them."
+	if recordingExempt {
+		recording = "Record Mode is exempt; each recording is marked `governance_exempt` in the audit trail."
+	}
+	return SetupCheck{
+		ID: "govern_admin_runs", Label: "Admin runs", Status: "info",
+		Detail: "Admins' own runs are governed: each is bounded by the governance profile and grants that apply to that person. " + recording +
+			" The admin token stays outside, as break-glass, and its runs are marked `governance_exempt` in the audit trail.",
+	}, true
 }

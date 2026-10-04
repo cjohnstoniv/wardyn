@@ -12,6 +12,8 @@ import (
 	"slices"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 )
 
 // Schema names the wire shape of Decision. Changes inside v1 are additive and
@@ -45,6 +47,9 @@ const (
 	// no longer acceptable (its role stamp is too old), and signing in again is
 	// the remedy.
 	EffectUnauthenticated Effect = "unauthenticated"
+	// EffectBadRequest is a refusal answered 400: the request combines parameters the door does not
+	// accept together. Input shape, not a caller's rights.
+	EffectBadRequest Effect = "bad_request"
 )
 
 // Status is the HTTP status a refusal with this effect answers with.
@@ -62,6 +67,8 @@ func (e Effect) Status() int {
 		return 503
 	case EffectUnauthenticated:
 		return 401
+	case EffectBadRequest:
+		return 400
 	default:
 		return 403 // an unknown effect refuses
 	}
@@ -110,7 +117,13 @@ type Decision struct {
 	// row"): the caller must see the SAME reason a truly-missing resource's
 	// 404 carries, never the internal "not_owner"/"attach_ticket_foreign_run"
 	// that would tell a prober the resource exists. See Decision.AsIf.
-	WireReason  Reason            `json:"wire_reason,omitempty"`
+	WireReason Reason `json:"wire_reason,omitempty"`
+	// Policy names the policy whose ceiling caused the refusal and how to ask for
+	// a change. Set only by a ceiling door, and written to the wire by the HTTP
+	// refusal emitter, never into the audit datum (Datum reads none of it). The
+	// emitter leaves it off a decision with a WireReason and off an EffectHidden
+	// one: a hidden door must stay byte-identical to a missing resource.
+	Policy      *policyref.Ref    `json:"policy,omitempty"`
 	Detail      map[string]string `json:"detail,omitempty"`
 	Obligations []Obligation      `json:"obligations,omitempty"`
 	Trace       []Step            `json:"trace,omitempty"`
@@ -152,6 +165,13 @@ func (d Decision) AsIf(reason Reason) Decision {
 	return d
 }
 
+// WithPolicy is d naming ref as the policy that bound the person. A nil ref
+// leaves d unchanged.
+func (d Decision) WithPolicy(ref *policyref.Ref) Decision {
+	d.Policy = ref
+	return d
+}
+
 // With is d with one more detail. The map is copied, so a Decision built from
 // d is never changed by it.
 func (d Decision) With(key, value string) Decision {
@@ -183,7 +203,7 @@ type Origin struct {
 	Placement string     `json:"placement,omitempty"`
 }
 
-var reservedDatumKeys = []string{"reason", "method", "user_view", "device_channel", "dropped", "user_type"}
+var reservedDatumKeys = []string{"reason", "method", "user_view", "device_channel", "dropped", "user_type", "dry_run"}
 
 // Datum is the data of d's audit row, refused to p over method (empty when no request
 // carried it). A detail never stands in for a reserved key, so it can never forge the
