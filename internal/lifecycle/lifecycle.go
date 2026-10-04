@@ -238,7 +238,9 @@ func (r *Reaper) reap(ctx context.Context) error {
 	var stopErrs []error
 	for _, run := range runs {
 		if r.maxAge > 0 && now.Sub(run.CreatedAt) >= r.maxAge {
-			r.stopMaxAge(ctx, run, now)
+			if err := r.stopMaxAge(ctx, run, now); err != nil {
+				stopErrs = append(stopErrs, err)
+			}
 			continue
 		}
 		// AutoStopAfterSec <= 0 means never reap regardless of idle time (0 =
@@ -292,9 +294,9 @@ func (r *Reaper) reap(ctx context.Context) error {
 }
 
 // stopMaxAge ends one run past Config.MaxAge and audits it. Same per-stop
-// deadline and failure handling as the idle path; a lost compare-and-set (the
-// run already ended) writes nothing.
-func (r *Reaper) stopMaxAge(ctx context.Context, run RunSummary, now time.Time) {
+// deadline and failure handling as the idle path (the error fails the tick); a
+// lost compare-and-set (the run already ended) writes nothing.
+func (r *Reaper) stopMaxAge(ctx context.Context, run RunSummary, now time.Time) error {
 	stopCtx, cancel := context.WithTimeout(ctx, defaultStopTimeout)
 	defer cancel()
 	// The cutoff is the scan's clock minus the cap, so created_at is compared
@@ -302,15 +304,16 @@ func (r *Reaper) stopMaxAge(ctx context.Context, run RunSummary, now time.Time) 
 	out, err := r.stopper.StopRunMaxAge(stopCtx, run.ID, now.Add(-r.maxAge))
 	if err != nil {
 		r.logger.ErrorContext(ctx, "lifecycle: max-age stop failed", "run_id", run.ID, "err", err)
-		return
+		return fmt.Errorf("lifecycle: max-age stop %s: %w", run.ID, err)
 	}
 	if !out.Applied {
-		return
+		return nil
 	}
 	r.emitMaxAgeStop(ctx, run.ID, now.Sub(run.CreatedAt))
 	if len(out.Errors) > 0 {
 		r.emitRevokeFailure(ctx, run.ID, out.Errors)
 	}
+	return nil
 }
 
 // thresholdFor returns the idle threshold for a run: policy AutoStopAfterSec
