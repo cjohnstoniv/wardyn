@@ -811,6 +811,20 @@ func (s *scimCovStore) StartGroupRemoval(_ context.Context, groupID, identityID 
 	return nil
 }
 
+func (s *scimCovStore) ResumeGroupRemoval(_ context.Context, groupID, identityID uuid.UUID) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.enter("ResumeGroupRemoval"); err != nil {
+		return false, err
+	}
+	if slices.Contains(s.members[groupID], identityID) {
+		return false, nil
+	}
+	return slices.ContainsFunc(s.jobs, func(j *store.DeprovisionJob) bool {
+		return j.IdentityID == identityID && j.Kind == store.JobKindGroupRemove && j.Target == groupID.String() && !j.Done
+	}), nil
+}
+
 func (s *scimCovStore) GroupRemovalIdentities(_ context.Context, groupID uuid.UUID) ([]uuid.UUID, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

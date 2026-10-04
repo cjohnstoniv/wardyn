@@ -267,7 +267,7 @@ func (s *Server) handleSCIMDeleteGroup(w http.ResponseWriter, r *http.Request) {
 func (s *Server) removeGroupMembers(ctx context.Context, st scimStore, g store.ScimGroup, ids []uuid.UUID, slot string) error {
 	var errs []error
 	for _, id := range ids {
-		if err := s.removeGroupMember(ctx, st, g, id, slot); err != nil {
+		if err := s.removeGroupMember(ctx, st, g, id, slot, false); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -289,7 +289,10 @@ func (s *Server) removeGroupMembers(ctx context.Context, st scimStore, g store.S
 // recorded. Only the removed person's tokens are looked at: for a bound person, a token whose principal is
 // one of their forms, never another principal's under a shared email, and no session is cut under an email
 // another principal holds (leaverForms.shared).
-func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.ScimGroup, identityID uuid.UUID, slot string) error {
+//
+// resume is the sweeper's recovery of a removal it selected earlier: it only goes on with a pending ledger
+// (store.ResumeGroupRemoval), and drops the candidate when the person has been added back since.
+func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.ScimGroup, identityID uuid.UUID, slot string, resume bool) error {
 	ctx = withActor(ctx, types.ActorSystem, scimActor)
 	ident, err := st.GetIdentity(ctx, identityID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -298,7 +301,11 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 	if err != nil {
 		return err
 	}
-	if err := st.StartGroupRemoval(ctx, g.ID, identityID); err != nil {
+	if resume {
+		if ok, err := st.ResumeGroupRemoval(ctx, g.ID, identityID); err != nil || !ok {
+			return err
+		}
+	} else if err := st.StartGroupRemoval(ctx, g.ID, identityID); err != nil {
 		return err
 	}
 	forms, err := s.leaverForms(ctx, st, ident)
