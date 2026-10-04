@@ -119,13 +119,15 @@ func principalKeysOn(v string) bool {
 	return on
 }
 
-// platformKeySeparate reports whether the boot keys have a key of their own: the local platform key
-// file, or the key service's second key (Transit or Key Vault), each of which buildPlatformKEK
-// refuses to accept without its identity.
-func platformKeySeparate(f *bootFlags) bool {
-	return strings.TrimSpace(*f.platformKeyFile) != "" ||
-		strings.TrimSpace(*f.vault.transitKeyPlatform) != "" ||
-		strings.TrimSpace(*f.azure.kekKeyPlatform) != ""
+// platformKeySeparate reports whether the boot keys have a key of their own. In local mode that is the
+// platform key file. Under a key service the file separates nothing (boot-key rows go to the credential
+// key service until a platform key service is set), so only the service's second key counts: Transit or
+// Key Vault, each of which buildPlatformKEK refuses to accept without its identity.
+func platformKeySeparate(f *bootFlags, keyService bool) bool {
+	if keyService {
+		return strings.TrimSpace(*f.vault.transitKeyPlatform) != "" || azurePlatformNamed(f.azure)
+	}
+	return strings.TrimSpace(*f.platformKeyFile) != ""
 }
 
 // storeClients are the configured clients a secret store is built over.

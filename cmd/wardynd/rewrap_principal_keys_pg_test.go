@@ -25,6 +25,37 @@ func TestParsePrincipalKeys(t *testing.T) {
 	}
 }
 
+func TestPlatformKeySeparate(t *testing.T) {
+	str := func(s string) *string { return &s }
+	file := func(f *bootFlags) { *f.platformKeyFile = "/keys/platform.age" }
+	transit := func(f *bootFlags) { *f.vault.transitKeyPlatform = "wardyn-platform" }
+	azure := func(f *bootFlags) {
+		*f.azure.kekKeyPlatform, *f.azure.kekSigningKeyPlatform, *f.azure.clientIDPlatform = "k", "s", "c"
+	}
+	for _, tc := range []struct {
+		name       string
+		set        []func(*bootFlags)
+		keyService bool
+		want       bool
+	}{
+		{"local, no file", nil, false, false},
+		{"local, file", []func(*bootFlags){file}, false, true},
+		{"key service, file only", []func(*bootFlags){file}, true, false},
+		{"key service, transit platform key", []func(*bootFlags){transit}, true, true},
+		{"key service, azure platform pair", []func(*bootFlags){azure}, true, true},
+	} {
+		f := &bootFlags{platformKeyFile: str("")}
+		f.vault.transitKeyPlatform = str("")
+		f.azure = azureFlags{kekKeyPlatform: str(""), kekSigningKeyPlatform: str(""), clientIDPlatform: str("")}
+		for _, set := range tc.set {
+			set(f)
+		}
+		if got := platformKeySeparate(f, tc.keyService); got != tc.want {
+			t.Errorf("%s: platformKeySeparate = %v; want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 // With the setting on, a boot under a key service mints and reads every boot
 // key as v1 under that service, and a person's credential is v3. `-rewrap-principal-keys`
 // then moves a v1 person row, writes one secret.rewrap row that names no

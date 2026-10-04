@@ -477,7 +477,7 @@ func run() error {
 		SecretStoreExternal:   storesExternally(secrets),
 		SecretKeyService:      keyService(secrets),
 		KEKRequired:           *f.vault.kekRequired,
-		PlatformKeySeparate:   platformKeySeparate(f),
+		PlatformKeySeparate:   platformKeySeparate(f, keyService(secrets) != ""),
 		LocalLoopback:         lm.loopback,
 		LocalTrustForwarder:   *f.localTrustFwd,
 		OIDCRoleMapConfigured: strings.TrimSpace(*f.oidcRoleMap) != "",

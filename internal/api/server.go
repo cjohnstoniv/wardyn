@@ -508,8 +508,9 @@ type Config struct {
 	SecretKeyService string
 	// KEKRequired: WARDYN_KEK_REQUIRED; /setup/status shows kek_required_unmet while neither a key service nor an external store holds the credentials.
 	KEKRequired bool
-	// PlatformKeySeparate: the boot keys have a key of their own: WARDYN_PLATFORM_KEY_FILE in local mode, the
-	// platform key (and identity) of the key service otherwise. False shows platform_split as a warning (§2.13 c).
+	// PlatformKeySeparate: the boot keys have a key of their own: WARDYN_PLATFORM_KEY_FILE in local mode only
+	// (under a key service the file counts for nothing), the platform key (and identity) of the key service
+	// otherwise. False shows platform_split as a warning (§2.13 c).
 	PlatformKeySeparate bool
 	// LocalLoopback reports whether the HTTP listen address binds only loopback.
 	// It feeds SetupAuth.LocalLoopback so the wizard can explain the local-mode
