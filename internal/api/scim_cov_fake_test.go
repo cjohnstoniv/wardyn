@@ -835,6 +835,18 @@ func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
+func (s *scimCovStore) PendingGroupRemovals(context.Context, time.Duration, int) ([]store.PendingGroupRemoval, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return nil, s.enter("PendingGroupRemovals")
+}
+
+func (s *scimCovStore) GroupRemovalFailures(context.Context, int) ([]store.DeprovisionFailure, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return nil, s.enter("GroupRemovalFailures")
+}
+
 // ---- the ordinary store calls a suspension, a purge and the status read make ----
 
 func (s *scimCovStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
