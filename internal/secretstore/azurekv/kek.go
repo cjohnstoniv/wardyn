@@ -277,7 +277,10 @@ func (k *KEK) Unwrap(ctx context.Context, wrapped []byte, bind map[string]string
 		return nil, fmt.Errorf("azurekv KEK: %w", err)
 	}
 	b, err := parseWrap(wrapped)
-	if err != nil {
+	switch {
+	case errors.Is(err, errUnknownFormat):
+		return nil, fmt.Errorf("azurekv KEK %s: the row holds %w", k.id, err) // not proof about the row: a reader fails closed
+	case err != nil:
 		return nil, fmt.Errorf("azurekv KEK %s: %w: the row holds %w", k.id, kek.ErrCorrupt, err)
 	}
 	pub, err := k.signingVersion(ctx, b.sv)
@@ -325,13 +328,15 @@ type wrap struct {
 	c, sig []byte
 }
 
+var errUnknownFormat = errors.New("a wrap whose format is not " + blobLabel + ": written by a newer wardynd, or not a Key Vault wrap")
+
 func parseWrap(w []byte) (wrap, error) {
 	fs, err := decodeFields(w)
 	switch {
 	case err != nil:
 		return wrap{}, fmt.Errorf("no Key Vault wrap: %w", err)
 	case len(fs) == 0 || fs[0] != blobLabel:
-		return wrap{}, fmt.Errorf("a wrap whose format is not %s: written by a newer wardynd, or not a Key Vault wrap", blobLabel)
+		return wrap{}, errUnknownFormat
 	case len(fs) != 5:
 		return wrap{}, fmt.Errorf("a Key Vault wrap of %d fields, want 5", len(fs))
 	case !versionRE.MatchString(fs[1]) || !versionRE.MatchString(fs[2]):

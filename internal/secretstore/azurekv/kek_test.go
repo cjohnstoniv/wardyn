@@ -205,8 +205,8 @@ func TestKEK_BlobFormat(t *testing.T) {
 	f.resetCalls()
 	_, err := k.Unwrap(t.Context(), kek.Encode("wardyn/kek/azurekv/v2", fs[1], fs[2], fs[3], fs[4]), bind)
 	kektest.Definitive(t, "Unwrap of a v2 wrap", err)
-	if !strings.Contains(err.Error(), "newer wardynd") || !errors.Is(err, kek.ErrCorrupt) {
-		t.Fatalf("Unwrap of a v2 wrap = %v; want the newer-wardynd refusal, as kek.ErrCorrupt", err)
+	if !strings.Contains(err.Error(), "newer wardynd") || errors.Is(err, kek.ErrCorrupt) {
+		t.Fatalf("Unwrap of a v2 wrap = %v; want the newer-wardynd refusal, not kek.ErrCorrupt", err)
 	}
 	_, err = k.Unwrap(t.Context(), append(w, 0, 0, 0, 0), bind)
 	kektest.Definitive(t, "Unwrap of a wrap with trailing bytes", err)
