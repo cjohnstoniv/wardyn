@@ -210,8 +210,9 @@ func (e *keyDomainRefused) Error() string {
 // applyKeyDomainChange does c and writes its audit row. It holds the assignment lock from its checks to
 // its write, as an approval does, so a set re-checks the membership against every assignment written
 // before it: a set that would now leave someone in two domains is *keyDomainRefused, a set to a domain
-// the file does not declare likewise, with nothing written. A delete of a missing assignment is Found
-// false, with nothing written or audited.
+// the file does not declare likewise, and a delete of the user assignment of a person whose sign-in lost
+// groups, while a group is assigned, is refused the same way, with nothing written. A delete of a
+// missing assignment is Found false, with nothing written or audited.
 func (s *Server) applyKeyDomainChange(ctx context.Context, by keyDomainActor, c keyDomainChange) (keyDomainApplied, error) {
 	svc := s.cfg.KeyDomains
 	var out keyDomainApplied
@@ -221,13 +222,18 @@ func (s *Server) applyKeyDomainChange(ctx context.Context, by keyDomainActor, c 
 			if err != nil || !found {
 				return err
 			}
+			if d, err := keyDomainDeleteRefusal(ctx, func(ctx context.Context, p string) (bool, error) { return svc.TruncatedWithGroupsQ(ctx, q, p) }, c); err != nil {
+				return err
+			} else if d != nil {
+				return &keyDomainRefused{*d} // the transaction rolls the delete back
+			}
 			out.Previous, out.Found = &prev, true
 			return nil
 		}
 		ambiguous := func(ctx context.Context, group, domain string) (int, error) {
 			return svc.AmbiguousIfGroupQ(ctx, q, group, domain)
 		}
-		truncated := func(ctx context.Context) (int, error) { return svc.TruncatedUnassignedQ(ctx, q) }
+		truncated := func(ctx context.Context) (int, []string, error) { return svc.TruncatedUnassignedQ(ctx, q) }
 		if d, err := keyDomainSetRefusal(ctx, svc, ambiguous, truncated, c); err != nil {
 			return err
 		} else if d != nil {
@@ -319,7 +325,7 @@ func (s *Server) handlePutKeyDomainAssignment(w http.ResponseWriter, r *http.Req
 // overage always does) has no user assignment, whose next key would then be refused by name. ambiguous
 // and truncated count those people, on the pool for a direct write or on the decision transaction for
 // a held one.
-func keyDomainSetRefusal(ctx context.Context, svc *keydomain.Service, ambiguous func(ctx context.Context, group, domain string) (int, error), truncated func(ctx context.Context) (int, error), c keyDomainChange) (*authz.Decision, error) {
+func keyDomainSetRefusal(ctx context.Context, svc *keydomain.Service, ambiguous func(ctx context.Context, group, domain string) (int, error), truncated func(ctx context.Context) (int, []string, error), c keyDomainChange) (*authz.Decision, error) {
 	if !svc.Has(c.Domain) {
 		d := authz.Deny(authz.ReasonKeyDomainUnknown, keyDomainTarget(c), fmt.Sprintf(
 			"The key domain %q is not declared in the deployment's key domains file, so nothing was changed. Declared: %s.",
@@ -339,13 +345,35 @@ func keyDomainSetRefusal(ctx context.Context, svc *keydomain.Service, ambiguous 
 				"Assign each of them to one domain as a user first, or give both groups the same domain. Nothing was changed.", n))
 		return &d, nil
 	}
-	n, err = truncated(ctx)
+	n, names, err := truncated(ctx)
 	if err != nil || n == 0 {
 		return nil, err
 	}
+	who := strings.Join(names, ", ")
+	if n > len(names) {
+		who += fmt.Sprintf(" and %d more", n-len(names))
+	}
 	d := authz.Deny(authz.ReasonKeyDomainAmbiguous, keyDomainTarget(c), fmt.Sprintf(
-		"%d people last signed in with a group list that was cut short, as a Microsoft Entra group overage does, and have no assignment of their own, so once any group is assigned their next key would be refused. "+
-			"Assign each of them to one domain as a user first. Nothing was changed.", n))
+		"%d people last signed in with a group list that was cut short, as a Microsoft Entra group overage does, and have no assignment of their own, so once any group is assigned their next key would be refused: %s. "+
+			"Assign each of them to one domain as a user first. Nothing was changed.", n, who))
+	return &d, nil
+}
+
+// keyDomainDeleteRefusal is why the delete c may not be made, or nil: removing the user assignment of a
+// person whose last sign-in lost groups, while any group is assigned, would leave their next key refused
+// by name, the lockout keyDomainSetRefusal keeps a group write from creating. truncatedWithGroups says
+// whether that holds for a principal, on the pool or on the decision transaction.
+func keyDomainDeleteRefusal(ctx context.Context, truncatedWithGroups func(ctx context.Context, principal string) (bool, error), c keyDomainChange) (*authz.Decision, error) {
+	if !c.Delete || c.SubjectType != keydomain.SubjectUser {
+		return nil, nil
+	}
+	locked, err := truncatedWithGroups(ctx, c.Subject)
+	if err != nil || !locked {
+		return nil, err
+	}
+	d := authz.Deny(authz.ReasonKeyDomainAmbiguous, keyDomainTarget(c), fmt.Sprintf(
+		"%s last signed in with a group list that was cut short, as a Microsoft Entra group overage does, and a group is assigned, so without their own assignment their next key would be refused. "+
+			"Assign them to another domain instead of deleting it. Nothing was changed.", c.Subject))
 	return &d, nil
 }
 
@@ -366,6 +394,11 @@ func (s *Server) handleDeleteKeyDomainAssignment(w http.ResponseWriter, r *http.
 		return
 	}
 	out, err := s.applyKeyDomainChange(r.Context(), keyDomainActor{actorTypeFromRequest(r), principalFromRequest(r)}, c)
+	var refused *keyDomainRefused
+	if errors.As(err, &refused) {
+		s.refuse(w, r, refused.d)
+		return
+	}
 	if err != nil {
 		writeServerError(w, r, "delete key domain assignment", err)
 		return

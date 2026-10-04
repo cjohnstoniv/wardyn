@@ -372,9 +372,16 @@ func (s *Service) DeleteQ(ctx context.Context, q Querier, subjectType, subject s
 	return got[0], true, nil
 }
 
+// liveLogin keeps a key_domain_login_groups row l whose person can still sign in: a person whose
+// identity is deactivated or purged is never placed again, so their stale row must not refuse
+// anyone's assignment. A person with no identity row at all still counts.
+const liveLogin = `NOT EXISTS (SELECT 1 FROM principal_identities i WHERE i.principal = l.principal
+		                         AND (i.deactivated_at IS NOT NULL OR i.purged_at IS NOT NULL))`
+
 // AmbiguousIfGroup counts the people whose last login carries group and another
 // group assigned to a domain other than domain, with no user assignment of
-// their own: assigning group to domain would make them ambiguous.
+// their own: assigning group to domain would make them ambiguous. A deactivated or
+// purged person is not counted.
 func (s *Service) AmbiguousIfGroup(ctx context.Context, group, domain string) (int, error) {
 	return s.AmbiguousIfGroupQ(ctx, s.pool, group, domain)
 }
@@ -384,7 +391,7 @@ func (s *Service) AmbiguousIfGroupQ(ctx context.Context, q Querier, group, domai
 	var n int
 	err := q.QueryRow(ctx, `
 		SELECT count(*) FROM key_domain_login_groups l
-		WHERE l.groups @> jsonb_build_array($1::text)
+		WHERE l.groups @> jsonb_build_array($1::text) AND `+liveLogin+`
 		  AND NOT EXISTS (SELECT 1 FROM key_domain_assignments u WHERE u.subject_type='user' AND u.subject = l.principal)
 		  AND EXISTS (SELECT 1 FROM key_domain_assignments g WHERE g.subject_type='group' AND g.subject <> $1 AND g.domain <> $2
 		              AND l.groups @> jsonb_build_array(g.subject))`, group, domain).Scan(&n)
@@ -395,22 +402,42 @@ func (s *Service) AmbiguousIfGroupQ(ctx context.Context, q Querier, group, domai
 }
 
 // TruncatedUnassigned counts the people whose last login lost groups and who have no user
-// assignment of their own: once any group is assigned, Domain refuses each of them by name.
-func (s *Service) TruncatedUnassigned(ctx context.Context) (int, error) {
+// assignment of their own: once any group is assigned, Domain refuses each of them by name. It
+// also returns the first few of them, by name. A deactivated or purged person is not counted.
+func (s *Service) TruncatedUnassigned(ctx context.Context) (int, []string, error) {
 	return s.TruncatedUnassignedQ(ctx, s.pool)
 }
 
 // TruncatedUnassignedQ is TruncatedUnassigned on q.
-func (s *Service) TruncatedUnassignedQ(ctx context.Context, q Querier) (int, error) {
+func (s *Service) TruncatedUnassignedQ(ctx context.Context, q Querier) (int, []string, error) {
 	var n int
+	var names []string
 	err := q.QueryRow(ctx, `
-		SELECT count(*) FROM key_domain_login_groups l
-		WHERE l.truncated
-		  AND NOT EXISTS (SELECT 1 FROM key_domain_assignments u WHERE u.subject_type='user' AND u.subject = l.principal)`).Scan(&n)
+		SELECT count(*), coalesce((array_agg(l.principal ORDER BY l.principal))[1:10], '{}') FROM key_domain_login_groups l
+		WHERE l.truncated AND `+liveLogin+`
+		  AND NOT EXISTS (SELECT 1 FROM key_domain_assignments u WHERE u.subject_type='user' AND u.subject = l.principal)`).Scan(&n, &names)
 	if err != nil {
-		return 0, unavailable("count the people with a truncated group snapshot", err)
+		return 0, nil, unavailable("count the people with a truncated group snapshot", err)
 	}
-	return n, nil
+	return n, names, nil
+}
+
+// TruncatedWithGroups says whether principal's last login lost groups, they can still sign in, and
+// some group is assigned: deleting their user assignment would leave Domain refusing them by name.
+func (s *Service) TruncatedWithGroups(ctx context.Context, principal string) (bool, error) {
+	return s.TruncatedWithGroupsQ(ctx, s.pool, principal)
+}
+
+// TruncatedWithGroupsQ is TruncatedWithGroups on q.
+func (s *Service) TruncatedWithGroupsQ(ctx context.Context, q Querier, principal string) (bool, error) {
+	var yes bool
+	err := q.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM key_domain_login_groups l WHERE l.principal = $1 AND l.truncated AND `+liveLogin+`)
+		   AND EXISTS (SELECT 1 FROM key_domain_assignments g WHERE g.subject_type='group')`, principal).Scan(&yes)
+	if err != nil {
+		return false, unavailable("read the person's group snapshot", err)
+	}
+	return yes, nil
 }
 
 // Changes is the assignment writes audited since a time.

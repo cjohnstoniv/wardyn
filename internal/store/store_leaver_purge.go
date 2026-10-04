@@ -181,8 +181,10 @@ func (s PG) ListDeprovisionFailures(ctx context.Context, limit int) ([]Deprovisi
 }
 
 // HeldEmails is the emails another principal holds, by DeleteUserSubjectRows' rule: another identity than
-// id that is neither deactivated nor purged, or an API token or people row under a principal that is
-// neither one of principals nor the address itself. Matched case-insensitively; the answer is lower-cased.
+// id that is neither deactivated nor purged, or a live API token (unrevoked, unexpired) or people row
+// (not deactivated) under a principal that is neither one of principals nor the address itself and whose
+// identity is neither deactivated nor purged. A previous holder that is gone holds nothing. Matched
+// case-insensitively; the answer is lower-cased.
 func (s PG) HeldEmails(ctx context.Context, id uuid.UUID, principals, emails []string) ([]string, error) {
 	return heldEmails(ctx, s.Pool, id, lowerForms(principals), lowerForms(emails))
 }
@@ -195,9 +197,14 @@ func heldEmails(ctx context.Context, q Querier, id uuid.UUID, own, mails []strin
 		                  AND (i.email_lower = e OR lower(i.scim_user_name) = e OR EXISTS (
 		                        SELECT 1 FROM principal_identity_aliases a WHERE a.identity_id = i.id AND a.value_lower = e)))
 		    OR EXISTS (SELECT 1 FROM api_tokens t WHERE lower(t.email) = e AND t.principal <> ''
-		                  AND lower(t.principal) <> e AND lower(t.principal) <> ALL($3::text[]))
+		                  AND lower(t.principal) <> e AND lower(t.principal) <> ALL($3::text[])
+		                  AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > now())
+		                  AND NOT EXISTS (SELECT 1 FROM principal_identities d WHERE d.principal = t.principal
+		                                   AND (d.deactivated_at IS NOT NULL OR d.purged_at IS NOT NULL)))
 		    OR EXISTS (SELECT 1 FROM people p WHERE lower(p.email) = e AND lower(p.principal) <> e
-		                  AND lower(p.principal) <> ALL($3::text[]))`,
+		                  AND lower(p.principal) <> ALL($3::text[]) AND p.deactivated_at IS NULL
+		                  AND NOT EXISTS (SELECT 1 FROM principal_identities d WHERE d.principal = p.principal
+		                                   AND (d.deactivated_at IS NOT NULL OR d.purged_at IS NOT NULL)))`,
 		[]any{id, mails, own}, func(r pgx.Row) (string, error) {
 			var v string
 			return v, r.Scan(&v)

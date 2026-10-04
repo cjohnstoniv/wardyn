@@ -128,7 +128,7 @@ func TestService_TruncatedUnassigned(t *testing.T) {
 	login(t, s, "hal", true, "eng")
 	login(t, s, "ivy", false, "eng")
 	set(t, s, "user", "hal", "a")
-	n, err := s.TruncatedUnassigned(t.Context())
+	n, _, err := s.TruncatedUnassigned(t.Context())
 	if err != nil || n != 1 {
 		t.Fatalf("TruncatedUnassigned = (%d, %v); want 1: gina (hal has a user assignment, ivy's login was complete)", n, err)
 	}
