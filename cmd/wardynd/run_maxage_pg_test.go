@@ -45,7 +45,8 @@ func TestPG_MaxAgeStopsAnOldRunThroughTheRealAdapter(t *testing.T) {
 
 	rn := &countingRunner{}
 	rec := &fakeAuditRecorder{}
-	reaper := lifecycle.New(lifecycleStore{pool: pool}, lifecycleStopper{pool: pool, runner: rn}, rec,
+	own := ownRuns{Store: lifecycleStore{pool: pool}, ids: map[uuid.UUID]bool{old: true, young: true, kept: true}}
+	reaper := lifecycle.New(own, lifecycleStopper{pool: pool, runner: rn}, rec,
 		lifecycle.Config{MaxAge: time.Hour})
 	reaper.Tick(ctx)
 
@@ -63,4 +64,23 @@ func TestPG_MaxAgeStopsAnOldRunThroughTheRealAdapter(t *testing.T) {
 	if rec.calls != 1 || rec.last.Action != "run.max_age.expire" || rec.last.RunID == nil || *rec.last.RunID != old {
 		t.Errorf("audit = %d rows, last %+v; want one run.max_age.expire for %s", rec.calls, rec.last, old)
 	}
+}
+
+// ownRuns narrows the real adapter's scan to one test's runs: the shared test
+// database holds other tests' RUNNING runs, which this tick must neither stop
+// nor count.
+type ownRuns struct {
+	lifecycle.Store
+	ids map[uuid.UUID]bool
+}
+
+func (o ownRuns) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.RunSummary, time.Time, error) {
+	all, now, err := o.Store.ListRunningWithPolicy(ctx)
+	var mine []lifecycle.RunSummary
+	for _, r := range all {
+		if o.ids[r.ID] {
+			mine = append(mine, r)
+		}
+	}
+	return mine, now, err
 }
