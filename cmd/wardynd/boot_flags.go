@@ -592,6 +592,7 @@ func parseBootFlags() *bootFlags {
 			"Separate from -rewrap, which rotates the root key. See docs/operations/secrets-and-keys.md (default false)"),
 		vault:               registerVaultFlags(),
 		hostCapacity:        registerHostCapacityFlags(),
+		preflightRatePerMin: flagIntEnv("preflight-rate-per-min", "WARDYN_PREFLIGHT_RATE_PER_MIN", 20, "POST /runs/preflight calls one person may make per minute (burst 5); 0 turns the limit off. The admin token is exempt"),
 		azure:               registerAzureFlags(),
 
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address, e.g. ":2222". Empty (default) disables the gateway entirely`),
