@@ -632,11 +632,13 @@ func (s *Server) nextIdleSamples(runs []types.AgentRun) []types.AgentRun {
 // The epoch cannot fence the compensation's read-then-thaw: a current leader's
 // whole pause can commit between a stale leader's read and its thaw. The run's
 // operation lock serializes freeze, mark and compensation across replicas, so a
-// pause that finds it held is skipped and retried by the next sweep.
+// pause that finds it held is skipped and retried by the next sweep; the
+// compensation proves it still holds that lock around its thaw (undoFreeze).
 func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types.AgentRun, reason types.PauseReason, quiet time.Duration) {
 	if !s.leaseCurrent(ctx) {
 		return
 	}
+	pass := ctx
 	ctx, unlock, ok := s.tryLockRunOp(ctx, run.ID)
 	if !ok {
 		return
@@ -666,24 +668,68 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 	}
 	// The compensation outlives a lease lost mid-pass: a freeze must not be
 	// left behind because the sweep's context ended between freeze and thaw.
-	// It does not outlive the run lock: a thaw without it is the race the lock
-	// closes, so a lost lock connection cancels it.
-	lockCtx := ctx
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(lockCtx), pauseCompensateTimeout)
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(pass), pauseCompensateTimeout)
 	defer cancel()
-	defer context.AfterFunc(lockCtx, func() {
-		if errors.Is(context.Cause(lockCtx), db.ErrLockLost) {
-			cancel()
+	s.undoFreeze(cctx, ctx, f, run, reason)
+}
+
+// undoFreeze is pauseRun's compensation: it thaws a freeze no pause marked,
+// and never one a newer pause holds. hold is the context of the run lock the
+// pause took; ctx outlives the pass and carries no lock.
+//
+// Whether the run lock is still this replica's is asked of the database, on
+// the lock's own connection (db.LockHeld), immediately before and after the
+// thaw. It is never read from hold: once the pass's cancellation has ended
+// hold, its cause stays context.Canceled, and a lock lost after that never
+// shows there. A thaw without the lock can land on a pause another replica
+// froze and marked meanwhile, leaving the run marked paused with its agent
+// running. So a lock found lost before the thaw, or lost while it was in
+// flight, sends the compensation round again under the lock taken afresh: it
+// re-reads the row and moves the sandbox to it, freezing a run marked paused
+// that this compensation may have thawed and thawing one nobody marked, until
+// a round acts with its lock held throughout or ctx ends.
+func (s *Server) undoFreeze(ctx, hold context.Context, f runner.Freezer, run types.AgentRun, reason types.PauseReason) {
+	release := func() {}
+	defer func() { release() }()
+	thawed := false
+	for round := 0; ; round++ {
+		if round > 0 {
+			release()
+			slog.WarnContext(ctx, "wardynd: a pause lost its run lock; settling the run under a new one",
+				slog.String("run_id", run.ID.String()), slog.Bool("thawed", thawed))
+			lctx, unlock, err := s.lockRunOp(ctx, run.ID)
+			if err != nil {
+				slog.ErrorContext(ctx, "wardynd: a pause lost its run lock and could not take it again; the run's sandbox may not match its pause",
+					slog.String("run_id", run.ID.String()), slog.Bool("thawed", thawed), slog.Any("err", err))
+				return
+			}
+			hold, release = lctx, unlock
 		}
-	})()
-	if cur, rerr := s.cfg.Store.GetRun(ctx, run.ID); rerr == nil && cur.PausedAt != nil {
-		return
-	}
-	if terr := f.ThawSandbox(ctx, run.SandboxRef); terr != nil {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.pause",
-			run.ID.String(), "failure", mustJSON(map[string]any{
-				"reason": reason, "thaw_error": terr.Error(),
-			})))
+		cur, err := s.cfg.Store.GetRun(ctx, run.ID)
+		paused := err == nil && cur.PausedAt != nil
+		if paused && !thawed {
+			return // a newer pause holds the run frozen: nothing of this one is left to undo
+		}
+		if db.LockHeld(hold) != nil {
+			continue
+		}
+		if paused {
+			if ferr := f.FreezeSandbox(ctx, run.SandboxRef); ferr != nil {
+				slog.ErrorContext(ctx, "wardynd: re-freezing a paused run after a stale thaw failed",
+					slog.String("run_id", run.ID.String()), slog.Any("err", ferr))
+			}
+		} else {
+			thawed = true
+			if terr := f.ThawSandbox(ctx, run.SandboxRef); terr != nil {
+				s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.pause",
+					run.ID.String(), "failure", mustJSON(map[string]any{
+						"reason": reason, "thaw_error": terr.Error(),
+					})))
+			}
+		}
+		if db.LockHeld(hold) == nil {
+			return
+		}
 	}
 }
 

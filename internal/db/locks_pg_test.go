@@ -162,6 +162,40 @@ func TestPGLocker_LostConnectionCancelsTheGuardedContext(t *testing.T) {
 	rel()
 }
 
+// LockHeld asks the session, not the context: a hold whose parent context ended
+// first is still held, and reads as lost once its session is gone, though its
+// context's cause stays context.Canceled for good.
+func TestPGLocker_LockHeldAsksTheSessionNotTheContext(t *testing.T) {
+	pool := pgPool(t)
+	l := NewPGLocker(pool, 2)
+	parent, cancel := context.WithCancel(context.Background())
+	k := testKey(t, RunOpLockClass)
+	hctx, release, err := l.Lock(parent, k, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	cancel()
+	<-hctx.Done()
+	if err := LockHeld(hctx); err != nil {
+		t.Fatalf("a lock still held reads as lost once its parent context ended: %v", err)
+	}
+	if _, err := pool.Exec(context.Background(), `SELECT pg_terminate_backend(pid) FROM pg_locks
+		WHERE locktype = 'advisory' AND objsubid = 2 AND classid::bigint = $1 AND objid::bigint = $2`,
+		int64(uint32(k.Class)), int64(uint32(k.Obj))); err != nil {
+		t.Fatal(err)
+	}
+	if err := LockHeld(hctx); !errors.Is(err, ErrLockLost) {
+		t.Errorf("LockHeld after the session was terminated = %v, want ErrLockLost", err)
+	}
+	if cause := context.Cause(hctx); !errors.Is(cause, context.Canceled) {
+		t.Errorf("cause = %v, want context.Canceled: the parent's cancellation fixed it first", cause)
+	}
+	if err := LockHeld(context.Background()); !errors.Is(err, ErrLockLost) {
+		t.Errorf("LockHeld with no hold = %v, want ErrLockLost", err)
+	}
+}
+
 // Releasing frees the lock at once, and a hold that is never lost never has its
 // context cancelled by the watcher.
 func TestPGLocker_ReleaseFreesTheLockAtOnce(t *testing.T) {
