@@ -659,7 +659,7 @@ Erasure is complete for backups only when the backup expires or the wrapping key
   `secret:` requirement's grant on the agent's model host — now `run.requirement.skip`)
   and `authz.denied`'s `capability_integration` reason. None is emitted any more; rows
   written before the upgrade keep them.
-- `mask_scope` (0.8.6, ha-l2.0) is a field any row of a run can carry, whatever its
+- `mask_scope` (0.8.6) is a field any row of a run can carry, whatever its
   action: `"mask_scope":"globals_only"` says the process that wrote the row did not hold
   the run's complete masking manifest, so only the process-wide corpus masked the row's
   `Data` and `Target`. It is absent while the writing process holds the manifest, and on

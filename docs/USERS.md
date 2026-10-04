@@ -213,12 +213,12 @@ access request if it sets `WARDYN_CAPABILITY_SECOND_HUMAN=1`.
 
 If your deployment sets `WARDYN_GOVERNANCE_SECOND_HUMAN`, an administrator's change to who may do what
 (a governance profile or assignment, a capability grant, the enforcement map, a value's availability,
-a user type's priority or a role mapping) is held as a pending change until a second administrator
+a user type's priority, a role mapping or a key-domain assignment) is held as a pending change until a second administrator
 approves it. Members propose and approve nothing here; these tiers do:
 
 | Role | May approve |
 |---|---|
-| Security admin | profile, assignment, grant, enforcement, availability and user-type priority changes, including a super admin's |
+| Security admin | profile, assignment, grant, enforcement, availability, user-type priority and key-domain assignment changes, including a super admin's |
 | Super admin (`admin`) | everything a security admin may, and role-mapping changes |
 | Member | nothing |
 

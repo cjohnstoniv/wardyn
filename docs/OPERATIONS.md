@@ -949,8 +949,7 @@ wardyn audit retention drop audit_events_p202601 --digest <digest from the foote
 curl -fsS -H "Authorization: Bearer $WARDYN_TOKEN" "$WARDYN_URL/api/v1/audit/chain/verify"   # ok, with anchor_seq at the drop
 ```
 
-`POST /audit/retention/drop` takes `{"partition": "...", "digest": "..."}`. Who may drop (owner decision Q-AR1, accepted at
-the recommended default): one `security_admin` (or an admin) acting alone, with the 30-day cooldown on decreases as the
+`POST /audit/retention/drop` takes `{"partition": "...", "digest": "..."}`. Who may drop: one `security_admin` (or an admin) acting alone, with the 30-day cooldown on decreases as the
 brake. The route is on the security tier, and every refusal is a `409` with its own `reason` and an `authz.denied` row (below):
 `audit_retention_not_oldest`, `audit_retention_not_closed`, `audit_retention_inside_window` (also while retention is
 forever), `audit_retention_live_run`, `audit_retention_digest_mismatch`. An unknown partition is `404`
@@ -2104,6 +2103,7 @@ row is true, and approved at the tier it was proposed on.
 | Availability set | the stored restricted bit changes, in either direction | security admin or super admin |
 | User-type priority update | the priority changes | security admin or super admin |
 | Role mapping upsert, delete | always | **super admin only** |
+| Key-domain assignment set, delete | always | security admin or super admin |
 
 Exempt, so applied directly: a profile update whose new effective profile is no more permissive than
 the current one, a rename or description edit that changes nothing else, an availability `PUT` that
@@ -3534,10 +3534,9 @@ deferred and reported, not sent with a dangling id; apply again once the base is
 *Upgrade and rollback.* The 0.8.6 migration only adds nullable columns, so every existing
 profile is standalone and resolves exactly as on 0.8.5. An older SDK or CLI sees `ceiling: {}`
 on a composed profile; its re-apply compares equal and sends nothing, and a `PUT` it does send
-omits the composition fields, which are kept. A 0.8.5 binary refuses a database with the migration
-applied, so before a downgrade convert every composed profile to standalone (a `PUT` with
-`overlay: null` and its `effective.ceiling` and `effective.limits` as the new `ceiling` and
-`limits`), then restore the pre-upgrade dump.
+omits the composition fields, which are kept. There is no downgrade: a 0.8.5 binary refuses a database the migration
+has touched, and converting composed profiles to standalone first changes nothing it sees. Restore the
+pre-upgrade dump, which holds no composed profile.
 
 *Residual risks.*
 
@@ -3773,7 +3772,7 @@ the owner or email, only the `reason` and `target` it always had.
 | `delegation_scope` | 0.8 (#1142): a portal's delegated token asked for a route outside the delegation allow-list ([Delegated run management](#delegated-run-management-portals)), or reached `PUT /secrets/{name}` or `POST /me/ssh-keys`, which refuse a delegated request themselves whatever the allow-list says (0.8.2, #1234). The row's actor is the person and its `data.via` names the portal | ⛔ `403` |
 | `role_stamp_stale` | 0.8.6: `WARDYN_ROLE_STAMP_TTL` is set and the `wdn_` API token presented carries a role and group stamp (`api_tokens.identity_stamped_at`) older than it, or never stamped. Checked by `apiTokenAuth` after the token resolves and before it counts as used; target `api_token`, and the row's actor is the token's owner. The body is `this token's role is out of date: its owner must sign in again to refresh it`; the owner's next sign-in re-stamps the token and it works again. A revoked token is not this refusal: it stays an ordinary `401` | ⛔ `401` |
 | `event_stream_cap` | 0.8.2 (#1407): the caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (`maxRunEventStreams`, `internal/api/run_events.go`; target the run id). A portal's streams count against its person, and every admin-token caller is one principal. Not audited — a caller who IS authorized and hit a limit, like `run_quota` | ⛔ `422` |
-| `mask_state_unavailable` | 0.8.6 (ha-l2.0): a door that relays or persists a run's output — the recording upload (`PUT /internal/recordings/{runID}` and its parts, target `recordings.upload`), the live attach (`GET /runs/{id}/attach`, target `runs.attach`), the SSH shell (target `ssh.shell`, a channel error, not an HTTP status) and the live output read (`GET /runs/{id}/output`, target `runs.output`) — cannot prove the run's masking corpus complete on this server, so it refuses instead of passing bytes through. Since the shared registry (`ha-l2.1`) the same reason also answers an injection or capture route (targets `injection.resolve` and `credential.capture`) whose value could not be committed to the masking registry: the value is not handed out. The run has no complete, unfenced masking manifest in Postgres (`run_mask_manifest`): it was dispatched before 0.8.6, its dispatch never finished committing it, its person is being erased, or Postgres did not answer. The exec relay (`task_mode=exec` output tail) refuses by keeping nothing. The row's `data.mask_scope` is `globals_only`. An attach, shell or upload already in flight ends at the next beat (about two seconds) when the run stops being covered, an attach with close status `1013`. Not hidden: the caller can already see the run | ⛔ `503` |
+| `mask_state_unavailable` | 0.8.6: a door that relays or persists a run's output — the recording upload (`PUT /internal/recordings/{runID}` and its parts, target `recordings.upload`), the live attach (`GET /runs/{id}/attach`, target `runs.attach`), the SSH shell (target `ssh.shell`, a channel error, not an HTTP status) and the live output read (`GET /runs/{id}/output`, target `runs.output`) — cannot prove the run's masking corpus complete on this server, so it refuses instead of passing bytes through. Since the shared masking registry the same reason also answers an injection or capture route (targets `injection.resolve` and `credential.capture`) whose value could not be committed to the masking registry: the value is not handed out. The run has no complete, unfenced masking manifest in Postgres (`run_mask_manifest`): it was dispatched before 0.8.6, its dispatch never finished committing it, its person is being erased, or Postgres did not answer. The exec relay (`task_mode=exec` output tail) refuses by keeping nothing. The row's `data.mask_scope` is `globals_only`. An attach, shell or upload already in flight ends at the next beat (about two seconds) when the run stops being covered, an attach with close status `1013`. Not hidden: the caller can already see the run | ⛔ `503` |
 | `audit_export_partition_filter` | 0.8.6: `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `actor_type`, `outcome` or `origin`). A partition export always covers the whole partition, so its footer digest can be checked against `audit_partition_digest`; remove the other parameters. Input shape rather than a denial, so it is not audited | ⛔ `400` |
 | `audit_retention_not_oldest` | 0.8.6: `POST /audit/retention/drop` named a partition that is not the oldest retained one. Only the oldest partition can be dropped, so a drop never removes an interior link of the chain. Target `audit.retention`, `partition` beside it | ⛔ `409` |
 | `audit_retention_not_closed` | 0.8.6: the same door, when the oldest partition can still receive rows (the high-water mark has not reached its upper bound) | ⛔ `409` |
@@ -6276,20 +6275,15 @@ state, not a repair of it. In the scenario above, `0050` and `0051` commit befor
 at `0060` instead leaves `0050`–`0059` applied. Migrations are forward-only with
 no `down` path, so **restoring the pre-upgrade dump is the only supported
 recovery** — putting the older binary back does not undo the migrations that
-already committed, and **it boots anyway**: `migrateOn`'s apply loop iterates
-only the binary's own embedded migration files and skips any name
-`isMigrationApplied` already finds recorded (`internal/db/db.go:425-436`), so
-nothing there refuses a schema newer than the binary. It then fails at the
-first write the older schema no longer supports, not at boot — on the scenario
-above that is the first secret write: `0050` moves the `secrets` primary key
-from `(name)` to `(owned_by, name)` (`internal/db/migrations/0050_secret_owned_by.sql:19-24`),
-and the older binary's `INSERT … ON CONFLICT (name)`
-(`internal/secretstore/pg/pg.go:78` at `v0.6.6`; the same statement on this
-branch already reads `ON CONFLICT (owned_by, name)`, `internal/secretstore/pg/pg.go` `Store.Put`)
-names a constraint that no longer exists, which Postgres refuses as
-`SQLSTATE 42P10` ("no unique or exclusion constraint matching the ON CONFLICT
-specification") on every secret upsert. Take the dump before the upgrade, not
-after the refusal.
+already committed, and it does not boot over them: `migrateOn` lists the migrations
+`schema_migrations` records that the binary does not ship (`unknownAppliedMigrations`,
+`internal/db/db.go`) and refuses to boot, naming the newest one. With
+`WARDYN_ALLOW_UNKNOWN_MIGRATIONS` set it carries on over a schema whose one-way
+conversions it cannot read: over a 0.8.6 schema it stops at the audit chain canary,
+whose direct insert the chain trigger refuses, and over an older one it fails at the
+first write the schema no longer supports (the first secret write, for the scenario
+above). The dump is the only way back. Take it before the upgrade, not after the
+refusal.
 
 The permission error itself has no way forward except giving the migrator
 ownership; do that on the restored database, not on the half-upgraded one.
@@ -7411,7 +7405,7 @@ therefore the per-replica cap times the replica count (cap × N):
   is not caught.
 - **Runs that predate 0.8.6 have no masking manifest.** After any restart they are
   refused at the five doors (recording upload, live attach, exec relay, SSH shell,
-  live output read) until they end (Q-HA1). Runs dispatched by 0.8.6 survive restarts.
+  live output read) until they end. Runs dispatched by 0.8.6 survive restarts.
 - **Masking now depends on Postgres.** With it unreachable, uploads and new attaches
   are refused and live chunks are replaced by the placeholder. That trades
   availability for never persisting a credential.
