@@ -6,6 +6,7 @@
 import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { access as api } from "../../../lib/api/access";
+import { PendingChangeError } from "../../../lib/api/core";
 import type { AccessResponse, AccessRole } from "../../../lib/types";
 import { GUARD, PEOPLE } from "../../../lib/people-access-copy";
 import { Button } from "../../ui/button";
@@ -32,11 +33,14 @@ import { classifyWriteError, writeErrorNote, Note, type WriteErrorKind } from ".
 export function AddMappingForm({
   access,
   onReload,
+  onHeld,
   prefillValue,
   onPrefillConsumed,
 }: {
   access: AccessResponse;
   onReload: () => void;
+  /** Whether the last write was held for a second person (202) rather than saved. */
+  onHeld: (held: boolean) => void;
   // #913: a migrated row's "Choose a type" action sets this to that row's
   // value; consumed once (below) so a second click can prefill the same
   // value again.
@@ -90,8 +94,18 @@ export function AddMappingForm({
       setGuardOpen(false);
       setAck(false);
       setTokensRevoked(res.tokensRevoked ?? null);
+      onHeld(false);
       onReload();
     } catch (e) {
+      if (e instanceof PendingChangeError) {
+        setValue("");
+        setUserType("");
+        setGuardOpen(false);
+        setAck(false);
+        onHeld(true);
+        onReload();
+        return;
+      }
       const classified = classifyWriteError(e);
       if (classified.kind === "posture_flip") {
         setGuardBeforeAfter({ before: classified.before, after: classified.after });

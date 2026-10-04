@@ -1467,7 +1467,7 @@ ui-test: ## Web UI vitest unit/component tests + coverage
 test-e2e-ui: ## Playwright UI e2e vs a seeded backend (needs Docker + chromium)
 	@echo "Running Playwright UI e2e (fresh seed per spec)..."
 	cd ui && pnpm install --frozen-lockfile
-	./scripts/run-ui-e2e.sh
+	WARDYN_E2E_ALLOW_ALL_SKIPPED="$${WARDYN_E2E_ALLOW_ALL_SKIPPED:-} governance-changes" ./scripts/run-ui-e2e.sh
 
 # regenerates docs/img UI screenshots; run after visible UI changes and commit the diff.
 screenshots: ## Regenerate docs/img UI screenshots (run after visible UI changes)

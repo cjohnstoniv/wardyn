@@ -45,7 +45,8 @@ import type { CapabilityGrant } from "../../lib/types";
 import { PermissionsScreen } from "./permissions";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
-import { HttpError } from "../../lib/api/core";
+import { HttpError, PendingChangeError } from "../../lib/api/core";
+import { CHANGES } from "../../lib/governance-copy";
 import { aheadByHours } from "../../lib/test-clock";
 
 function grant(over: Partial<CapabilityGrant> = {}): CapabilityGrant {
@@ -590,5 +591,70 @@ describe("PermissionsScreen — a 403 is a tier, not an outage", () => {
     getPermissionsMock.mockRejectedValue(new HttpError(500, "boom"));
     renderMember();
     expect(await screen.findAllByRole("button", { name: /retry/i })).not.toHaveLength(0);
+  });
+});
+
+// 0.8.6 four-eyes: a covered write the server holds for a second person (202) is "submitted", never saved.
+describe("PermissionsScreen — a 202 is submitted, never saved", () => {
+  const held = () =>
+    new PendingChangeError({
+      id: "c1",
+      target_kind: "capability_grant",
+      op: "upsert",
+      target_key: "x",
+      state: "pending",
+      proposed_by: "ana",
+      proposed_at: aheadByHours(-1),
+      expires_at: aheadByHours(20),
+      diff: { changed: [] },
+    });
+
+  it("an enforcement change held for approval shows the note, no error toast, and reads the snapshot again", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: {} });
+    putEnforcementMock.mockRejectedValue(held());
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText(KIND.egress_host.unenforced);
+    getPermissionsMock.mockClear();
+    await user.click(screen.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.egress_host.label}` }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: PERM.ENFORCE_CONFIRM }));
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(toastError).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(getPermissionsMock).toHaveBeenCalled());
+  });
+
+  it("a grant removal held for approval keeps the row and shows the note", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: {} });
+    deleteGrantMock.mockRejectedValue(held());
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText("*.github.com");
+    await user.click(screen.getByRole("button", { name: `${PERM.REMOVE} ${KIND.egress_host.label} *.github.com` }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: PERM.REMOVE }));
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(toastError).not.toHaveBeenCalled();
+    expect(await screen.findByText("*.github.com")).toBeInTheDocument();
+  });
+
+  it("a grant add held for approval shows the note in the form and no duplicate chip", async () => {
+    upsertGrantMock.mockRejectedValue(held());
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText(PERM.ADD_TITLE);
+    await user.type(screen.getByLabelText(PERM.FIELD_WHO), "alice@corp.example");
+    await user.type(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.queryByText(PERM.DUPLICATE)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

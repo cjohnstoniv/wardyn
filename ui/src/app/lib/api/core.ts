@@ -9,7 +9,7 @@
 // token store, and one 401 handler across the whole client. Split out of the
 // former monolithic lib/api.ts so unused domains tree-shake per route chunk.
 import { lsGet, lsSet, ssGet, ssSet } from "../storage";
-import { CC_ORDER, type ConfinementClass } from "../types";
+import { CC_ORDER, type ConfinementClass, type GovernanceChange } from "../types";
 import { apiURL } from "../base-path";
 
 const TOKEN_KEY = "wardyn_admin_token";
@@ -284,12 +284,34 @@ export async function wfetch(
   return res;
 }
 
+// Thrown by asJson for a 202 whose body carries `pending_change`: a covered governance write that was held
+// for a second human, not saved. It is an error on purpose, so no write site, present or later, can read a
+// held change as a save: each one catches it and shows the submitted-for-approval state.
+export class PendingChangeError extends Error {
+  change: GovernanceChange;
+  constructor(change: GovernanceChange) {
+    super("Submitted for approval");
+    this.name = "PendingChangeError";
+    this.change = change;
+  }
+}
+
 export async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const { message, reason, org, provider, kind } = await errEnvelope(res);
     throw new HttpError(res.status, message, reason, org, provider, kind);
   }
-  return (await res.json()) as T;
+  const body = await res.json();
+  if (res.status === 202 && body && typeof body === "object" && (body as { pending_change?: unknown }).pending_change) {
+    throw new PendingChangeError((body as { pending_change: GovernanceChange }).pending_change);
+  }
+  return body as T;
+}
+
+// The delete routes answer 204 and read no body, so a held delete's 202 would pass for success. This is
+// asJson's 202 rule for them.
+export async function throwIfPending(res: Response): Promise<void> {
+  if (res.status === 202) await asJson<unknown>(res);
 }
 
 // The ONE parser for the control plane's `{"error":"<human message>"}` envelope:

@@ -159,6 +159,8 @@ func TestSecondHumanBootWarningFiresOnlyForTheBrokenCombination(t *testing.T) {
 	}{
 		{"local mode + capability switch on: the same broken combination", true, true, true, "WARDYN_CAPABILITY_SECOND_HUMAN"},
 		{"capability switch on, NOT local mode: works normally", false, true, false, "WARDYN_CAPABILITY_SECOND_HUMAN"},
+		{"local mode + governance switch on: the same broken combination", true, true, true, "WARDYN_GOVERNANCE_SECOND_HUMAN"},
+		{"governance switch on, NOT local mode: works normally", false, true, false, "WARDYN_GOVERNANCE_SECOND_HUMAN"},
 		{"local mode + switch on: the broken combination", true, true, true, ""},
 		{"local mode, switch off: nothing to say", true, false, false, ""},
 		{"switch on, NOT local mode: the switch works normally", false, true, false, ""},

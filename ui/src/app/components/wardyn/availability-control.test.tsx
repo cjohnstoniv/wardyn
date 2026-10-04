@@ -12,7 +12,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as React from "react";
-import { HttpError } from "../../lib/api/core";
+import { HttpError, PendingChangeError } from "../../lib/api/core";
+import { CHANGES } from "../../lib/governance-copy";
 import { aheadByHours } from "../../lib/test-clock";
 
 const getAvailabilityMock = vi.fn();
@@ -393,5 +394,57 @@ describe("AvailabilityDraft + writeAvailability — a creation form (decision 4)
     });
     expect(upsertGrantMock).toHaveBeenCalledTimes(1);
     expect(putAvailabilityMock).not.toHaveBeenCalled();
+  });
+});
+
+// 0.8.6 four-eyes: a change the server holds for a second person (202) is "submitted", never applied.
+describe("AvailabilityControl — a 202 is submitted, never saved", () => {
+  const held = () =>
+    new PendingChangeError({
+      id: "c1",
+      target_kind: "capability_availability",
+      op: "set",
+      target_key: `${KIND}/${ID}`,
+      state: "pending",
+      proposed_by: "ana",
+      proposed_at: aheadByHours(-1),
+      expires_at: aheadByHours(20),
+      diff: { changed: ["restricted"] },
+    });
+
+  it("a choice held for approval shows the note, no error, and stays on Everyone", async () => {
+    getAvailabilityMock.mockResolvedValue(view(false, [DEV]));
+    putAvailabilityMock.mockRejectedValue(held());
+    render(policyControl());
+    await screen.findByText("Developer");
+
+    await userEvent.click(only());
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(first()).toBeChecked();
+  });
+
+  it("an add held for approval shows the note and reads the list again", async () => {
+    getAvailabilityMock.mockResolvedValue(view(false));
+    upsertGrantMock.mockRejectedValue(held());
+    render(policyControl());
+    await screen.findByText(AVAILABILITY.LABEL);
+    getAvailabilityMock.mockClear();
+
+    await userEvent.type(screen.getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "developer");
+    await userEvent.click(screen.getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    await waitFor(() => expect(getAvailabilityMock).toHaveBeenCalled());
+  });
+
+  it("a remove held for approval shows the note", async () => {
+    getAvailabilityMock.mockResolvedValue(view(true, [DEV, PM]));
+    deleteGrantMock.mockRejectedValue(held());
+    render(policyControl());
+
+    await userEvent.click(await screen.findByRole("button", { name: AVAILABILITY.REMOVE_ARIA("Portfolio manager") }));
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
   });
 });
