@@ -499,11 +499,11 @@ func TestCreateSandbox_RollbackOnFailure(t *testing.T) {
 
 // TestCreateSandbox_RollbackOnProxyIPTimeout covers the podIP-wait failure
 // path specifically: the proxy pod is created, but its IP never resolves
-// (here: the reactor errors on every Get, aborting the poll immediately
-// rather than exhausting the real 90s timeout) — CreateSandbox must still
+// (here: the reactor errors on every Get; the wait rides that error out and the
+// short StartTimeout ends it) — CreateSandbox must still
 // roll back the proxy pod + both netpols + the secret.
 func TestCreateSandbox_RollbackOnProxyIPTimeout(t *testing.T) {
-	d, cs := newTestDriver(t, Config{})
+	d, cs := newTestDriver(t, Config{StartTimeout: 300 * time.Millisecond})
 	cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
 		ga, ok := action.(clienttesting.GetAction)
 		if !ok || !strings.HasPrefix(ga.GetName(), "wardyn-proxy-") {
@@ -522,12 +522,11 @@ func TestCreateSandbox_RollbackOnProxyIPTimeout(t *testing.T) {
 
 // TestCreateSandbox_RollbackOnAgentRunningTimeout covers the agent-pod
 // readiness wait's failure path: the pod is created, but its main container
-// never reports Running (here: the reactor errors on every Get, aborting the
-// poll immediately rather than exhausting the real canaryWaitTimeout) —
-// CreateSandbox must still roll back the agent pod itself + the proxy pod +
-// both netpols + the secret. Mirrors TestCreateSandbox_RollbackOnProxyIPTimeout.
+// never reports Running (here: the reactor errors on every Get; the wait rides
+// that error out and the short StartTimeout ends it) — CreateSandbox must still
+// roll back the agent pod itself + the proxy pod + both netpols + the secret. Mirrors TestCreateSandbox_RollbackOnProxyIPTimeout.
 func TestCreateSandbox_RollbackOnAgentRunningTimeout(t *testing.T) {
-	d, cs := newTestDriver(t, Config{})
+	d, cs := newTestDriver(t, Config{StartTimeout: 300 * time.Millisecond})
 	installProxyIPReactor(t, cs, "10.244.0.7")
 	cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
 		ga, ok := action.(clienttesting.GetAction)
@@ -557,7 +556,7 @@ func TestCreateSandbox_RollbackOnAgentRunningTimeout(t *testing.T) {
 // the wait-for-gone poll — THEN the netpol delete-collection), mirroring
 // TestTeardown_WaitsForPodsGoneBeforeDroppingNetPols in lifecycle_test.go.
 func TestCreateSandbox_RollbackWaitsForPodsGoneBeforeDroppingNetPols(t *testing.T) {
-	d, cs := newTestDriver(t, Config{})
+	d, cs := newTestDriver(t, Config{StartTimeout: 300 * time.Millisecond})
 	installProxyIPReactor(t, cs, "10.244.0.7")
 	// Fail the agent pod's readiness wait so rollback fires with BOTH pods
 	// and BOTH netpols already created — the maximal-exposure failure point.

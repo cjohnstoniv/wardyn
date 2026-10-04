@@ -15,6 +15,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
@@ -310,5 +311,81 @@ func TestStartClock_Remaining(t *testing.T) {
 	now = now.Add(time.Hour)
 	if got := c.remaining(); got != k8sPollInterval {
 		t.Fatalf("spent clock: remaining = %s, want the %s floor", got, k8sPollInterval)
+	}
+}
+
+// failGets makes the first n pod reads of podName answer err, then falls through to whatever else is
+// installed (the pod's own reactor), and returns how many reads it has seen.
+func failGets(cs interface {
+	PrependReactor(verb, resource string, reaction clienttesting.ReactionFunc)
+}, podName string, n int, err error) *int {
+	seen := 0
+	cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		if action.(clienttesting.GetAction).GetName() != podName {
+			return false, nil, nil
+		}
+		seen++
+		if seen <= n {
+			return true, nil, err
+		}
+		return false, nil, nil
+	})
+	return &seen
+}
+
+// One transient apiserver answer (a control-plane upgrade's 503) must not end a run that is
+// still waiting for room: the poll treats it as "not yet" and the next read decides.
+func TestWaitPodIP_TransientGetErrorIsNotYet(t *testing.T) {
+	d, cs := newTestDriver(t, Config{StartTimeout: 5 * time.Second})
+	const podName = "wardyn-proxy-blip"
+	podByAge(cs, podName, func(time.Duration) corev1.PodStatus { return proxyReadyStatus() })
+	reads := failGets(cs, podName, 1, apierrors.NewServiceUnavailable("control plane rolling"))
+	ip, err := d.waitPodIP(context.Background(), d.newStartClock(), podName, nil)
+	if err != nil || ip != "10.244.0.7" || *reads < 2 {
+		t.Fatalf("waitPodIP = %q, %v after %d reads; want the IP after one retried 503", ip, err, *reads)
+	}
+}
+
+func TestWaitContainerRunning_TransientGetErrorIsNotYet(t *testing.T) {
+	d, cs := newTestDriver(t, Config{StartTimeout: 5 * time.Second})
+	const podName = "wardyn-agent-blip"
+	podByAge(cs, podName, func(time.Duration) corev1.PodStatus { return agentRunningStatus() })
+	reads := failGets(cs, podName, 1, apierrors.NewServiceUnavailable("control plane rolling"))
+	if err := d.waitContainerRunning(context.Background(), d.newStartClock(), podName, mainContainerName, nil); err != nil || *reads < 2 {
+		t.Fatalf("waitContainerRunning = %v after %d reads; want the start after one retried 503", err, *reads)
+	}
+}
+
+// An apiserver that keeps failing ends at the start budget, and the timeout names the last answer.
+func TestWaitPodIP_PersistentGetErrorExpiresNamingIt(t *testing.T) {
+	d, cs := newTestDriver(t, Config{StartTimeout: 400 * time.Millisecond})
+	const podName = "wardyn-proxy-down"
+	failGets(cs, podName, 1<<30, apierrors.NewServiceUnavailable("control plane rolling"))
+	_, err := d.waitPodIP(context.Background(), d.newStartClock(), podName, nil)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "control plane rolling") {
+		t.Fatalf("err = %v; want a deadline error naming the last apiserver answer", err)
+	}
+}
+
+func TestWaitContainerRunning_PersistentGetErrorExpiresNamingIt(t *testing.T) {
+	d, cs := newTestDriver(t, Config{StartTimeout: 400 * time.Millisecond})
+	const podName = "wardyn-agent-down"
+	failGets(cs, podName, 1<<30, apierrors.NewServiceUnavailable("control plane rolling"))
+	err := d.waitContainerRunning(context.Background(), d.newStartClock(), podName, mainContainerName, nil)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "control plane rolling") {
+		t.Fatalf("err = %v; want a deadline error naming the last apiserver answer", err)
+	}
+}
+
+// A pod deleted under the wait stays fatal: waiting cannot bring it back.
+func TestWaits_PodDeletedStaysFatal(t *testing.T) {
+	d, cs := newTestDriver(t, Config{StartTimeout: 5 * time.Second})
+	const podName = "wardyn-pod-gone"
+	failGets(cs, podName, 1<<30, apierrors.NewNotFound(corev1.Resource("pods"), podName))
+	if _, err := d.waitPodIP(context.Background(), d.newStartClock(), podName, nil); !apierrors.IsNotFound(err) {
+		t.Fatalf("waitPodIP err = %v; want NotFound", err)
+	}
+	if err := d.waitContainerRunning(context.Background(), d.newStartClock(), podName, mainContainerName, nil); !apierrors.IsNotFound(err) {
+		t.Fatalf("waitContainerRunning err = %v; want NotFound", err)
 	}
 }

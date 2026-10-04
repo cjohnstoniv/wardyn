@@ -80,3 +80,47 @@ func TestPG_CreateRunUnderCap_CountsRowsAndFreesOnTerminal(t *testing.T) {
 		t.Fatalf("create at cap 2 with one live row (the other is terminal): %v", err)
 	}
 }
+
+// TestPG_CreateRunUnderCap_KeptRunHoldsNoSlot pins that an ended run kept for its
+// grace (RUNNING with lost_at set, no running agent) is not counted: it holds no
+// sandbox, so it must not hold a slot for the whole grace. A run kept after an
+// outage still runs its agent, so it keeps its slot.
+func TestPG_CreateRunUnderCap_KeptRunHoldsNoSlot(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	kept, err := pg.CreateRunUnderCap(ctx, newRun(types.RunRunning), 1)
+	if err != nil {
+		t.Fatalf("create the run: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at = now(), lost_reason = $2 WHERE id = $1`, kept.ID, string(types.LostEnded)); err != nil {
+		t.Fatalf("keep the run: %v", err)
+	}
+	if n, err := pg.CountNonTerminalRuns(ctx); err != nil || n != 0 {
+		t.Fatalf("CountNonTerminalRuns = %d, %v; want 0 (the kept run holds no sandbox)", n, err)
+	}
+	if _, err := pg.CreateRunUnderCap(ctx, newRun(types.RunPending), 1); err != nil {
+		t.Fatalf("create at cap 1 with only a kept run: %v", err)
+	}
+}
+
+// TestPG_CreateRunUnderCap_OutageKeptRunHoldsSlot pins that a run kept after a
+// control-plane outage still runs its agent, so it still counts against the cap.
+func TestPG_CreateRunUnderCap_OutageKeptRunHoldsSlot(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	kept, err := pg.CreateRunUnderCap(ctx, newRun(types.RunRunning), 1)
+	if err != nil {
+		t.Fatalf("create the run: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at = now(), lost_reason = $2 WHERE id = $1`, kept.ID, string(types.LostOutage)); err != nil {
+		t.Fatalf("keep the run: %v", err)
+	}
+	if n, err := pg.CountNonTerminalRuns(ctx); err != nil || n != 1 {
+		t.Fatalf("CountNonTerminalRuns = %d, %v; want 1 (the outage-kept run's agent still runs)", n, err)
+	}
+	if _, err := pg.CreateRunUnderCap(ctx, newRun(types.RunPending), 1); !errors.Is(err, store.ErrRunCapReached) {
+		t.Fatalf("create at cap 1 with an outage-kept run = %v; want ErrRunCapReached", err)
+	}
+}
