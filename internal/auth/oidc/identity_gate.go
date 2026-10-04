@@ -116,6 +116,25 @@ type IdentityRevocations interface {
 	SessionStatus(ctx context.Context, sub, email string, issuedAt time.Time, epoch int64) (SessionStatus, error)
 }
 
+// SessionCutter is SessionRevocations that can also end a person's browser sessions without ending their
+// API tokens and SSH keys. A cut is read by IsSessionRevoked and by SessionStatus for a credential that
+// carries an epoch (a session cookie), never by SessionStatus for one that does not (epoch < 0: an API
+// token, an SSH key). A mover keeps the tokens whose group snapshot does not hold the group they left, so
+// the group removal cuts with this and revokes the tokens it means to one by one.
+type SessionCutter interface {
+	// CutSessions invalidates every current browser session for sub, matched against both identities.
+	CutSessions(ctx context.Context, sub string) error
+}
+
+// CutSessions cuts sub's browser sessions. A rev that cannot cut without touching tokens (a test double)
+// falls back to RevokeSub, which ends the person's tokens and keys too: the safe direction.
+func CutSessions(ctx context.Context, rev SessionRevocations, sub string) error {
+	if c, ok := rev.(SessionCutter); ok {
+		return c.CutSessions(ctx, sub)
+	}
+	return rev.RevokeSub(ctx, sub)
+}
+
 // CheckSession is the one owner check every credential lane asks: the revocation cutoff and, when
 // rev can answer it, the owner's identity. A rev that cannot (a test double) checks the cutoff only.
 func CheckSession(ctx context.Context, rev SessionRevocations, sub, email string, issuedAt time.Time, epoch int64) (SessionStatus, error) {

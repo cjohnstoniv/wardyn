@@ -18,6 +18,7 @@ import (
 var (
 	_ oidc.SessionRevocations  = (*pgSessionRevocations)(nil)
 	_ oidc.IdentityRevocations = (*pgSessionRevocations)(nil)
+	_ oidc.SessionCutter       = (*pgSessionRevocations)(nil)
 )
 
 // sessionRevocationsFor returns the D16 pg-backed revocations store when OIDC
@@ -88,7 +89,7 @@ func (r *pgSessionRevocations) appNow() time.Time {
 // (folding at write time) cannot work, since the writer does not know whether
 // the caller named a sub or an email.
 func (r *pgSessionRevocations) IsSessionRevoked(ctx context.Context, sub, email string, issuedAt time.Time) (bool, error) {
-	st, err := r.sessionStatus(ctx, sub, email, issuedAt, false, 0)
+	st, err := r.sessionStatus(ctx, sub, email, issuedAt, false, 0, true)
 	return st == oidc.SessionRevoked, err
 }
 
@@ -97,10 +98,10 @@ func (r *pgSessionRevocations) IsSessionRevoked(ctx context.Context, sub, email 
 // deactivated or purged, or, for epoch >= 0, when its authority epoch is past the one the
 // credential was admitted under. The cutoff answer is IsSessionRevoked's, unchanged.
 func (r *pgSessionRevocations) SessionStatus(ctx context.Context, sub, email string, issuedAt time.Time, epoch int64) (oidc.SessionStatus, error) {
-	return r.sessionStatus(ctx, sub, email, issuedAt, true, epoch)
+	return r.sessionStatus(ctx, sub, email, issuedAt, true, epoch, epoch >= 0)
 }
 
-func (r *pgSessionRevocations) sessionStatus(ctx context.Context, sub, email string, issuedAt time.Time, identity bool, epoch int64) (oidc.SessionStatus, error) {
+func (r *pgSessionRevocations) sessionStatus(ctx context.Context, sub, email string, issuedAt time.Time, identity bool, epoch int64, cuts bool) (oidc.SessionStatus, error) {
 	// Asked on both clocks, and either answer of "revoked" wins.
 	//
 	// revoked_at is stamped by POSTGRES. issuedAt is stamped by WARDYND — and by
@@ -124,11 +125,15 @@ func (r *pgSessionRevocations) sessionStatus(ctx context.Context, sub, email str
 	// The age is measured entirely on wardynd's clock (now minus issuedAt), so no
 	// skew rides in on it — see db.AppClockAgeMicros, whose contract is that both
 	// of its arguments come from one clock.
+	//
+	// cuts says the browser-session cuts (CutSessions) count too: for IsSessionRevoked and for a credential
+	// that carries an epoch, a session cookie, and not for an API token or an SSH key.
 	q := `
 		SELECT MAX(revoked_at), MAX(revoked_at) >= ` + db.AppClockAgeSQL("$4") + `,
 		       $5::boolean AND EXISTS (SELECT 1 FROM principal_identities WHERE principal = $1
 		          AND (deactivated_at IS NOT NULL OR purged_at IS NOT NULL OR ($6::bigint >= 0 AND authority_epoch > $6::bigint)))
-		FROM oidc_session_revocations
+		FROM (SELECT sub, revoked_at FROM oidc_session_revocations
+		      UNION ALL SELECT sub, cut_at FROM oidc_session_cuts WHERE $7::boolean) r
 		WHERE sub = $1
 		   OR lower(sub) = lower($2)
 		   OR sub = $3`
@@ -136,7 +141,7 @@ func (r *pgSessionRevocations) sessionStatus(ctx context.Context, sub, email str
 	var byDBClock sql.NullBool
 	var blocked bool
 	age := db.AppClockAgeMicros(issuedAt, r.appNow())
-	if err := r.pool.QueryRow(ctx, q, sub, email, globalRevokeSub, age, identity, epoch).Scan(&cutoff, &byDBClock, &blocked); err != nil {
+	if err := r.pool.QueryRow(ctx, q, sub, email, globalRevokeSub, age, identity, epoch, cuts).Scan(&cutoff, &byDBClock, &blocked); err != nil {
 		return oidc.SessionLive, fmt.Errorf("wardynd: is-session-revoked query: %w", err)
 	}
 	if blocked {
@@ -161,6 +166,19 @@ func (r *pgSessionRevocations) sessionStatus(ctx context.Context, sub, email str
 // for that principal. Idempotent (repeat revokes just move the cutoff later).
 func (r *pgSessionRevocations) RevokeSub(ctx context.Context, sub string) error {
 	return r.upsertCutoff(ctx, sub)
+}
+
+// CutSessions stamps sub's session-only cutoff at now (oidc.SessionCutter): current browser sessions
+// stop, API tokens and SSH keys are not read against it. Idempotent, like RevokeSub.
+func (r *pgSessionRevocations) CutSessions(ctx context.Context, sub string) error {
+	const q = `
+		INSERT INTO oidc_session_cuts (sub, cut_at)
+		VALUES ($1, now())
+		ON CONFLICT (sub) DO UPDATE SET cut_at = EXCLUDED.cut_at`
+	if _, err := r.pool.Exec(ctx, q, sub); err != nil {
+		return fmt.Errorf("wardynd: cut sessions: %w", err)
+	}
+	return nil
 }
 
 // RevokeAll stamps the global cutoff at now, invalidating every current

@@ -45,10 +45,11 @@ const (
 var errDeprovisionIncomplete = errors.New("deprovisioning is incomplete; retry the request")
 
 // scimStore is what the SCIM routes need of the store: the identity rows, the leaver operations
-// and the people rows.
+// and the groups.
 type scimStore interface {
 	store.LeaverStore
 	store.PrincipalIdentityStore
+	store.ScimGroupStore
 }
 
 // leaverForms are every form a person is known by.

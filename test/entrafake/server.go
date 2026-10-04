@@ -141,6 +141,11 @@ type refreshGrant struct {
 type Identity struct {
 	Username string
 	Subject  string
+	// Groups are the values of the id_token's `groups` claim, as the tenant would send them.
+	Groups []string
+	// GroupsOverage replaces the claim with Entra's distributed-claim pointer, the token a person in too
+	// many groups gets.
+	GroupsOverage bool
 }
 
 // IssuedToken is what an OnIssue hook is told about each access token minted:
@@ -888,6 +893,15 @@ func (s *Server) signIDToken(nonce string, who *Identity) (string, error) {
 		claims["preferred_username"] = who.Username
 		claims["email"] = who.Username
 		claims["name"] = who.Username
+		if who.Groups != nil {
+			claims["groups"] = who.Groups
+		}
+		if who.GroupsOverage {
+			claims["_claim_names"] = map[string]string{"groups": "src1"}
+			claims["_claim_sources"] = map[string]any{"src1": map[string]string{
+				"endpoint": "https://graph.microsoft.com/v1.0/users/" + who.Subject + "/getMemberObjects",
+			}}
+		}
 	}
 	if nonce != "" {
 		claims["nonce"] = nonce

@@ -49,10 +49,14 @@ type pgTestRevocations struct {
 	onLateCheck func()
 }
 
-func (r *pgTestRevocations) cutoffRevoked(ctx context.Context, sub, email string, issuedAt time.Time) (bool, error) {
+// cutoffRevoked is the cutoff check. cuts says the browser-session cuts count too, as in the production
+// adapter: for IsSessionRevoked and for a credential that carries an epoch, not for a token or a key.
+func (r *pgTestRevocations) cutoffRevoked(ctx context.Context, sub, email string, issuedAt time.Time, cuts bool) (bool, error) {
 	var cutoff sql.NullTime
-	err := r.pool.QueryRow(ctx, `SELECT MAX(revoked_at) FROM oidc_session_revocations WHERE sub = $1 OR lower(sub) = lower($2) OR sub = ''`,
-		sub, email).Scan(&cutoff)
+	err := r.pool.QueryRow(ctx, `SELECT MAX(revoked_at) FROM (
+			SELECT sub, revoked_at FROM oidc_session_revocations
+			UNION ALL SELECT sub, cut_at FROM oidc_session_cuts WHERE $3::boolean) r
+		WHERE sub = $1 OR lower(sub) = lower($2) OR sub = ''`, sub, email, cuts).Scan(&cutoff)
 	if err != nil || !cutoff.Valid {
 		return false, err
 	}
@@ -62,7 +66,7 @@ func (r *pgTestRevocations) cutoffRevoked(ctx context.Context, sub, email string
 // IsSessionRevoked is the cutoff check. After it has computed its answer, a pending onLateCheck hook runs
 // once: a request that read "not revoked" and then lost a race with a suspension is exactly this.
 func (r *pgTestRevocations) IsSessionRevoked(ctx context.Context, sub, email string, issuedAt time.Time) (bool, error) {
-	revoked, err := r.cutoffRevoked(ctx, sub, email, issuedAt)
+	revoked, err := r.cutoffRevoked(ctx, sub, email, issuedAt, true)
 	r.mu.Lock()
 	hook := r.onLateCheck
 	r.onLateCheck = nil
@@ -81,7 +85,7 @@ func (r *pgTestRevocations) SessionStatus(ctx context.Context, sub, email string
 	if blocked {
 		return oidc.SessionDeactivated, nil
 	}
-	revoked, err := r.cutoffRevoked(ctx, sub, email, issuedAt)
+	revoked, err := r.cutoffRevoked(ctx, sub, email, issuedAt, epoch >= 0)
 	if revoked {
 		return oidc.SessionRevoked, err
 	}
@@ -97,6 +101,18 @@ func (r *pgTestRevocations) RevokeSub(ctx context.Context, sub string) error {
 	}
 	_, err := r.pool.Exec(ctx, `INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, clock_timestamp())
 		ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, sub)
+	return err
+}
+
+func (r *pgTestRevocations) CutSessions(ctx context.Context, sub string) error {
+	r.mu.Lock()
+	fail := r.failRevoke
+	r.mu.Unlock()
+	if fail {
+		return errors.New("revocation store unavailable")
+	}
+	_, err := r.pool.Exec(ctx, `INSERT INTO oidc_session_cuts (sub, cut_at) VALUES ($1, clock_timestamp())
+		ON CONFLICT (sub) DO UPDATE SET cut_at = EXCLUDED.cut_at`, sub)
 	return err
 }
 
@@ -497,7 +513,14 @@ func dataOf(t *testing.T, ev types.AuditEvent) map[string]any {
 // signIn drives a real sign-in on n as the person the fake tenant offers, returning the callback response.
 func (e *scimEnv) signIn(n *scimNode, sub, email string) *httptest.ResponseRecorder {
 	e.t.Helper()
-	e.fake.SetIdentities(entrafake.Identity{Username: email, Subject: sub})
+	return e.signInAs(n, entrafake.Identity{Username: email, Subject: sub})
+}
+
+// signInAs is signIn for a person whose id_token carries the claims id names.
+func (e *scimEnv) signInAs(n *scimNode, id entrafake.Identity) *httptest.ResponseRecorder {
+	e.t.Helper()
+	email := id.Username
+	e.fake.SetIdentities(id)
 	handler := panicFails(e.t, n.srv.Handler())
 	lw := httptest.NewRecorder()
 	handler.ServeHTTP(lw, httptest.NewRequest(http.MethodGet, "/auth/login", nil))
