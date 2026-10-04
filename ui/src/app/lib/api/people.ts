@@ -38,9 +38,10 @@ export const people = {
     return unwrapList<PersonToken>(await asJson<unknown>(await ok(await wfetch(`/people/${seg(principal)}/tokens`, { method: "GET" }))));
   },
 
-  // POST /api/v1/sessions/revoke {sub} -> 204: the session cutoff, plus their tokens and SSH keys.
+  // POST /api/v1/sessions/revoke {sub, sessions_only} -> 204: the session cutoff alone. Without
+  // sessions_only the route also revokes their API tokens and deletes their SSH keys.
   async signOutEverywhere(principal: string): Promise<void> {
-    await ok(await wfetch("/sessions/revoke", { method: "POST", body: JSON.stringify({ sub: principal }) }));
+    await ok(await wfetch("/sessions/revoke", { method: "POST", body: JSON.stringify({ sub: principal, sessions_only: true }) }));
   },
 
   // DELETE /api/v1/people/{principal}/ssh-keys -> {count}.
