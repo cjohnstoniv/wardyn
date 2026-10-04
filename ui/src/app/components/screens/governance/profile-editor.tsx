@@ -484,6 +484,7 @@ export function ProfileEditor({
               disabled={disabled}
               autoComplete="off"
               aria-invalid={urlRefused || undefined}
+              aria-describedby={fieldHintId("governance-contact-url")}
             />
             {urlRefused && (
               <p role="alert" className="text-xs text-danger">

@@ -412,6 +412,11 @@ describe("ProfileEditor — the Access requests section", { timeout: 20_000 }, (
     expect(screen.getByLabelText(GOV.CONTACT_TEXT)).toHaveValue("Include the run id.");
   });
 
+  it("describes the request link by its scheme hint", () => {
+    renderEditor(GREENFIELD);
+    expect(screen.getByLabelText(GOV.CONTACT_URL)).toHaveAccessibleDescription(expect.stringContaining("An https: page"));
+  });
+
   it("saves the four fields as typed, trimmed", async () => {
     renderEditor(GREENFIELD);
     const user = userEvent.setup();
