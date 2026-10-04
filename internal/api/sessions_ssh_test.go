@@ -311,8 +311,9 @@ func TestRevokePersonCredentials_UnknownEmailIsSuccessWithZeroDeletions(t *testi
 	}
 }
 
-// "sessions_only" is the routine sign-out: the cutoff lands, and the person's
-// API tokens and SSH keys are left exactly as they were.
+// "sessions_only" is the routine sign-out: the session-only cut lands, the
+// credential cutoff does not, and the person's API tokens and SSH keys are left
+// exactly as they were.
 func TestRevokeSessions_SessionsOnlyLeavesTokensAndKeys(t *testing.T) {
 	st := sshOffboardingStore()
 	srv, cutoffs, audit := sshOffboardingServer(t, st)
@@ -321,8 +322,8 @@ func TestRevokeSessions_SessionsOnlyLeavesTokensAndKeys(t *testing.T) {
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-	if !slices.Equal(cutoffs.revokedSubs, []string{"sub-alice"}) {
-		t.Fatalf("cutoffs=%v, want [sub-alice]", cutoffs.revokedSubs)
+	if !slices.Equal(cutoffs.cutSubs, []string{"sub-alice"}) || len(cutoffs.revokedSubs)+cutoffs.revokedAll != 0 {
+		t.Fatalf("cuts=%v cutoffs=%v all=%d, want the cut [sub-alice] and no cutoff", cutoffs.cutSubs, cutoffs.revokedSubs, cutoffs.revokedAll)
 	}
 	if len(st.keys) != 3 {
 		t.Fatalf("SSH keys=%+v, want all 3 kept", st.keys)

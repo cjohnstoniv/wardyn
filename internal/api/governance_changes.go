@@ -27,6 +27,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -157,9 +158,9 @@ func sameGovernanceHuman(ch types.GovernanceChange, principal, email string) boo
 
 // recheckApprover re-establishes, inside the decision transaction, that the approver still has the
 // authority they had when the request was authenticated. A session or the admin token carries nothing
-// to re-read. An API token's row is read again by id (revoked or expired is refused), the
-// session-revocation cutoff is asked again, and the approver predicate is re-evaluated against the
-// role the row holds now. Each failure is the auth lane's own answer, never a pass.
+// to re-read. An API token's row is read again by id (revoked or expired is refused), its owner check
+// is asked again as apiTokenAuth asks it (the credential cutoff and the identity row, not the
+// browser-session cut), and the approver predicate is re-evaluated against the role the row holds now. Each failure is the auth lane's own answer, never a pass.
 func (s *Server) recheckApprover(ctx context.Context, r *http.Request, q store.Querier, kind govKind) error {
 	tokenID := apiTokenIDFromContext(ctx)
 	if tokenID == uuid.Nil {
@@ -176,14 +177,14 @@ func (s *Server) recheckApprover(ctx context.Context, r *http.Request, q store.Q
 		return err
 	}
 	if s.cfg.SessionRevocations != nil {
-		revoked, rerr := s.cfg.SessionRevocations.IsSessionRevoked(ctx, t.Principal, t.Email, t.CreatedAt)
+		status, rerr := oidc.CheckSession(ctx, s.cfg.SessionRevocations, t.Principal, t.Email, t.CreatedAt, -1)
 		if rerr != nil {
 			return &govRefusal{why: "session revocation unreadable", write: func(w http.ResponseWriter, r *http.Request) {
 				s.metrics.authStoreErrorInc()
 				writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "api token lookup failed")
 			}}
 		}
-		if revoked {
+		if status != oidc.SessionLive {
 			return &govRefusal{why: "approver session revoked", write: func(w http.ResponseWriter, r *http.Request) {
 				s.auditAuthFailed(r, "invalid_admin_token")
 				writeErrorReason(w, http.StatusUnauthorized, reasonInvalidAdminToken, "invalid admin token")

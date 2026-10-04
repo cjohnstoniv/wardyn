@@ -2981,8 +2981,9 @@ revoke.
 
 To end only a person's browser sessions, send `"sessions_only": true` with
 `sub`: a session-only cut is stamped and nothing else changes. Their browser
-sessions end on every instance; their API tokens and SSH keys keep working,
-because those credentials are not checked against the cut. It is refused
+sessions end on every instance; their API tokens, SSH keys and portal-delegated
+tokens keep working, and an API token can still approve a governance change,
+because no token-borne credential is checked against the cut. It is refused
 (`sessions_revoke_param_invalid`) with `all`.
 The audit row is the usual `session.revoke`, with `sessions_only` set and both
 counts `0`. The People drawer's "Sign out everywhere" sends it.
