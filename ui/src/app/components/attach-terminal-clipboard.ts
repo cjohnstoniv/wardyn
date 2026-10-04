@@ -21,30 +21,25 @@
  */
 import type { IDisposable, ITerminalAddon } from "@xterm/xterm";
 import { ClipboardAddon } from "@xterm/addon-clipboard";
+import { TERMINAL_COPY } from "./wardyn/copy";
 
 export const MAX_COPY_BYTES = 1024 * 1024;
 /** A copy gesture authorises an OSC 52 for this long after it ends. tmux's own
  *  double/triple-click copy runs about 0.3s after the click. */
 export const GESTURE_WINDOW_MS = 1000;
 export const OFFER_TTL_MS = 10_000;
-export const NOTICE_TTL_MS = 6000;
 
-// Neutral built-in strings; term-t3b swaps in the approved copy.
-export const COPY_TEXT = {
-  offerTitle: "Copy this text?",
-  copy: "Copy",
-  dismiss: "Dismiss",
-  copied: "Copied",
-  copyFailed: "The browser refused clipboard access.",
-  lineBreaks: (n: number) => `contains ${n} line break${n === 1 ? "" : "s"}`,
-  blocked: "copy blocked: the terminal sent different text than you selected",
-  pending: "copy blocked: an earlier copy offer is still waiting",
-} as const;
+/** macOS gets Option+drag and Cmd+C; every other platform Shift+drag and Ctrl+C. */
+export const isMacPlatform = () => /Mac/i.test(navigator.platform);
 
 export interface CopyOffer {
   id: number;
   text: string;
   lineBreaks: number;
+  /** Code points the preview must show as ⟨U+XXXX⟩ (format and control characters). */
+  invisible: number;
+  /** Code points in the text. */
+  chars: number;
 }
 
 interface CellLike {
@@ -202,7 +197,6 @@ export function createCopyGate(opts: CopyGateOptions): CopyGate {
   let offer: CopyOffer | null = null;
   let offerId = 0;
   let offerTimer: ReturnType<typeof setTimeout> | null = null;
-  let noticeTimer: ReturnType<typeof setTimeout> | null = null;
   const cleanups: Array<() => void> = [];
 
   const dismiss = () => {
@@ -213,15 +207,9 @@ export function createCopyGate(opts: CopyGateOptions): CopyGate {
       onOffer(null);
     }
   };
-  const notice = (msg: string | null) => {
-    if (noticeTimer) clearTimeout(noticeTimer);
-    noticeTimer = null;
-    onNotice(msg);
-    if (msg) noticeTimer = setTimeout(() => onNotice(null), NOTICE_TTL_MS);
-  };
   const drop = (why: string, withNotice: boolean) => {
     console.debug(`terminal clipboard: OSC 52 dropped: ${why}`);
-    if (withNotice) notice(COPY_TEXT.blocked);
+    if (withNotice) onNotice(TERMINAL_COPY.BLOCKED);
   };
 
   // The provider: reads are refused outright; a write is only ever a request.
@@ -245,11 +233,18 @@ export function createCopyGate(opts: CopyGateOptions): CopyGate {
     );
     if (!matches) return drop("payload differs from the user's selection", true);
     if (offer) {
-      console.debug("terminal clipboard: OSC 52 dropped: an offer is already pending");
-      return notice(COPY_TEXT.pending);
+      // The card already on screen is the notice; M11 words no second one.
+      return console.debug("terminal clipboard: OSC 52 dropped: an offer is already pending");
     }
     g.used = true;
-    offer = { id: ++offerId, text, lineBreaks: text.split("\n").length - 1 };
+    const parts = visibleParts(text);
+    offer = {
+      id: ++offerId,
+      text,
+      lineBreaks: text.split("\n").length - 1,
+      invisible: parts.filter((p) => p.hidden).length,
+      chars: [...text].length,
+    };
     onNotice(null);
     onOffer(offer);
     offerTimer = setTimeout(dismiss, OFFER_TTL_MS);
@@ -273,7 +268,7 @@ export function createCopyGate(opts: CopyGateOptions): CopyGate {
       return { col: Math.min(term.cols - 1, Math.max(0, col)), row: Math.min(term.rows - 1, Math.max(0, row)) };
     };
     // Shift/Option+drag is xterm's own selection, which tmux never sees.
-    const native = (e: MouseEvent) => e.shiftKey || (e.altKey && /Mac/i.test(navigator.platform));
+    const native = (e: MouseEvent) => e.shiftKey || (e.altKey && isMacPlatform());
     let down: { cell: Cell; snap: Snap } | null = null;
     const onUp = (e: MouseEvent) => {
       window.removeEventListener("mouseup", onUp, true);
@@ -301,7 +296,7 @@ export function createCopyGate(opts: CopyGateOptions): CopyGate {
   const reset = () => {
     gesture = null;
     dismiss();
-    notice(null);
+    onNotice(null);
   };
   return {
     dismiss,
@@ -313,24 +308,34 @@ export function createCopyGate(opts: CopyGateOptions): CopyGate {
   };
 }
 
-/** The payload as the toast shows it: line breaks and every non-printing or
- *  direction-changing character made visible. Never truncates. */
-export function renderVisible(text: string): string {
-  let out = "";
+export interface PreviewPart {
+  text: string;
+  /** A ⟨U+XXXX⟩ marker for a character that would otherwise not show. */
+  hidden: boolean;
+}
+
+/** The payload as the offer card shows it (M11 D2): ↵ at a line end, → for a tab,
+ *  and ⟨U+XXXX⟩ for each control, format (Unicode Cf) or byte-order-mark code
+ *  point. Never truncates. */
+export function visibleParts(text: string): PreviewPart[] {
+  const out: PreviewPart[] = [];
+  const plain = (t: string) => {
+    const last = out[out.length - 1];
+    if (last && !last.hidden) last.text += t;
+    else out.push({ text: t, hidden: false });
+  };
   for (const ch of text) {
     const cp = ch.codePointAt(0)!;
-    if (ch === "\n") out += "↵\n";
-    else if (ch === "\t") out += "⇥";
-    else if (
-      cp < 0x20 ||
-      (cp >= 0x7f && cp <= 0x9f) ||
-      (cp >= 0x200b && cp <= 0x200f) ||
-      (cp >= 0x2028 && cp <= 0x202e) ||
-      (cp >= 0x2060 && cp <= 0x2069) ||
-      cp === 0xfeff
-    )
-      out += `<U+${cp.toString(16).toUpperCase().padStart(4, "0")}>`;
-    else out += ch;
+    if (ch === "\n") plain("↵\n");
+    else if (ch === "\t") plain("→");
+    else if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f) || cp === 0xfeff || /^\p{Cf}$/u.test(ch))
+      out.push({ text: `⟨U+${cp.toString(16).toUpperCase().padStart(4, "0")}⟩`, hidden: true });
+    else plain(ch);
   }
   return out;
 }
+
+export const renderVisible = (text: string): string =>
+  visibleParts(text)
+    .map((p) => p.text)
+    .join("");

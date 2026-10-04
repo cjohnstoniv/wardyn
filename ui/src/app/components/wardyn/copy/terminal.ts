@@ -53,3 +53,22 @@ export const TERMINAL_LINK = {
   CANCEL: "Cancel",
   OPEN: "Open link",
 } as const;
+
+// Canon: docs/design/terminal-escape-canon.md, "Copy strings" (M11, term-t3b).
+// The selection hint, the copy-offer card and the copy-blocked notice.
+const plural = (n: number | string, one: string, many: string) => (n === 1 ? `1 ${one}` : `${n} ${many}`);
+export const TERMINAL_COPY = {
+  NATIVE_CHORD: (mac: boolean) => (mac ? "Option+drag" : "Shift+drag"),
+  SELECT_HINT: (chord: string) => `${chord} selects for right-click Copy`,
+  OFFER_TITLE: "Copy selection",
+  OFFER_SIZE: (n: number | string) => plural(n, "character", "characters"),
+  OFFER_BREAKS: (n: number | string) => plural(n, "line break", "line breaks"),
+  OFFER_INVISIBLE: (n: number | string) => plural(n, "invisible character", "invisible characters"),
+  OFFER_EXPIRES: (s: number | string) => `Closes in ${s}s`,
+  OFFER_KEYS: (mac: boolean) => (mac ? "Cmd+C copies" : "Ctrl+C copies"),
+  COPY: "Copy",
+  DISMISS: "Dismiss",
+  COPIED: "Copied",
+  WRITE_FAILED: "The browser refused the clipboard write. Nothing was copied.",
+  BLOCKED: "Copy blocked. The terminal sent different text than you selected, so nothing was copied.",
+} as const;

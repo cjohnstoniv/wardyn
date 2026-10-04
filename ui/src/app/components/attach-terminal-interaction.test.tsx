@@ -278,7 +278,7 @@ describe("AttachTerminal — the keyboard trap has an advertised exit", () => {
     expect(screen.getByText(TERMINAL.ESCAPE_CHORD_HINT)).toBeInTheDocument();
     // …and on the grid itself, for the reader who never sees the title bar.
     expect(
-      container.querySelector(`[aria-description="${TERMINAL.ESCAPE_CHORD_HINT}"]`),
+      container.querySelector(`[aria-description^="${TERMINAL.ESCAPE_CHORD_HINT}"]`),
     ).not.toBeNull();
   });
 
@@ -342,7 +342,7 @@ describe("AttachTerminal — focus", () => {
     // the F144 test above uses) — it is NOT the inner `.xterm-screen` xterm
     // itself would focus, which is exactly the gap this fix closes: a click
     // that never reaches that inner element must still focus the terminal.
-    const el = container.querySelector(`[aria-description="${TERMINAL.ESCAPE_CHORD_HINT}"]`);
+    const el = container.querySelector(`[aria-description^="${TERMINAL.ESCAPE_CHORD_HINT}"]`);
     expect(el).not.toBeNull();
     fireEvent.mouseDown(el!);
 
