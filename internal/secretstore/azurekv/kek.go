@@ -269,7 +269,8 @@ func (k *KEK) Wrap(ctx context.Context, dek []byte, bind map[string]string) ([]b
 // Unwrap implements kek.KEK: parse, verify the signature for this row, and
 // only then unwrapkey. A malformed, moved or forged wrap is a definitive
 // refusal with no Key Vault call (a signing-key version not yet seen costs
-// one GET per missTTL).
+// one GET per missTTL), and kek.ErrCorrupt: the versions a wrap names are
+// globally unique, so it is proof about the row.
 func (k *KEK) Unwrap(ctx context.Context, wrapped []byte, bind map[string]string) ([]byte, error) {
 	aad, err := kek.WrapAAD(bind, k.id)
 	if err != nil {
@@ -277,14 +278,14 @@ func (k *KEK) Unwrap(ctx context.Context, wrapped []byte, bind map[string]string
 	}
 	b, err := parseWrap(wrapped)
 	if err != nil {
-		return nil, fmt.Errorf("azurekv KEK %s: the row holds %w", k.id, err)
+		return nil, fmt.Errorf("azurekv KEK %s: %w: the row holds %w", k.id, kek.ErrCorrupt, err)
 	}
 	pub, err := k.signingVersion(ctx, b.sv)
 	if err != nil {
 		return nil, err
 	}
 	if !verify(pub, sigMsg(aad, b.wv, b.sv, b.c), b.sig) {
-		return nil, fmt.Errorf("azurekv KEK %s: the wrap is not signed for this row: moved, forged or corrupted", k.id)
+		return nil, fmt.Errorf("azurekv KEK %s: %w: the wrap is not signed for this row: moved, forged or corrupted", k.id, kek.ErrCorrupt)
 	}
 	dek, err := k.crypt(ctx, k.wrapName, b.wv, "unwrapkey", "RSA-OAEP-256", b.c)
 	if err != nil {

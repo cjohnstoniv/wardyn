@@ -171,6 +171,35 @@ func TestTransit_DecryptRefusalsAreTheServices(t *testing.T) {
 	}
 }
 
+// A decrypt status nothing classifies (a DR secondary's 472, a performance standby's 473, an Enterprise
+// 412) is Vault's answer, not proof about the row: never kek.ErrCorrupt, and not transient either.
+func TestTransit_UnclassifiedDecryptAnswersAreNotCorrupt(t *testing.T) {
+	f := newFakeVault(t)
+	tr := newFakeTransit(t, f)
+	ctx := t.Context()
+	w, err := tr.Wrap(ctx, testDEK(), kek.Bind("", "k"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, code := range []int{472, 473, 412} {
+		f.mu.Lock()
+		f.force = []int{code}
+		f.mu.Unlock()
+		_, err := tr.Unwrap(ctx, w, kek.Bind("", "k"))
+		if err == nil || !errors.Is(err, kek.ErrService) || errors.Is(err, kek.ErrCorrupt) || errors.Is(err, secretstore.ErrUnavailable) {
+			t.Errorf("Unwrap answered %d = %v; want kek.ErrService, not kek.ErrCorrupt", code, err)
+		}
+	}
+	for _, c := range []struct {
+		what string
+		wrap []byte
+	}{{"a non-Transit blob", []byte("local-wrap-bytes")}, {"a wrap under another row", w}} {
+		if _, err := tr.Unwrap(ctx, c.wrap, kek.Bind("bob", "k")); err == nil || errors.Is(err, kek.ErrCorrupt) {
+			t.Errorf("Unwrap of %s = %v; Transit never answers kek.ErrCorrupt", c.what, err)
+		}
+	}
+}
+
 // A rotation moves new wraps to the latest version; older wraps still unwrap
 // until min_decryption_version retires them.
 func TestTransit_Versions(t *testing.T) {

@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
 )
@@ -347,20 +346,20 @@ func (s *Store) open(ctx context.Context, r row, keys map[keyID][]byte) (*ref, e
 	if !ok {
 		var err error
 		key, err = s.keys.Key(ctx, r.owner, subjectkey.PurposeCred, *r.version)
+		// The fence is irreversible, so it needs proof about the row: a destroyed generation, or a
+		// wrap that does not open under its own key (kek.ErrCorrupt), which never heals by
+		// retrying. Every other failure (unreachable, access refused, a key or version the
+		// service does not hold or has retired, any answer nothing classifies) aborts the read:
+		// consumers fail closed and it heals once the service or configuration does.
 		switch {
 		case errors.Is(err, subjectkey.ErrDataLoss):
 			return nil, s.unopenable(ctx, r, "the owner's key is destroyed")
-		case errors.Is(err, secretstore.ErrUnavailable) || errors.Is(err, kek.ErrAccess) || errors.Is(err, kek.ErrKeyMissing) || errors.Is(err, kek.ErrRefused) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
-			return nil, fmt.Errorf("maskstore: the owner's key: %w", err)
-		case err != nil:
-			// A wrap corrupted under the local key or Key Vault never heals by retrying;
-			// aborting would wedge every replica's read. A key the service no longer holds,
-			// or a wrap it refuses (Transit: a retired version, or another Vault's key), is
-			// the service's or this configuration's state, not proof about the row, so it
-			// aborted above: the fence is irreversible.
+		case errors.Is(err, kek.ErrCorrupt):
 			slog.ErrorContext(ctx, "maskstore: the owner's key does not open",
 				slog.String("owner", r.owner), slog.Int("key_version", *r.version), slog.Any("err", err))
 			return nil, s.unopenable(ctx, r, "the owner's key does not open")
+		case err != nil:
+			return nil, fmt.Errorf("maskstore: the owner's key: %w", err)
 		}
 		keys[id] = key
 	}

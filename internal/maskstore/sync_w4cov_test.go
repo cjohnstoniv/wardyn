@@ -324,11 +324,30 @@ func TestW4CovApplyAbortsWhenTheKeyServiceRefusesTheWrap(t *testing.T) {
 	}
 }
 
-// A key that does not unwrap never heals by retrying: the row is handled like a destroyed key
-// (here retired, so no database is needed) and the read goes on to the rows after it.
+// A key-service answer nothing classifies (a Vault DR secondary's 472, a 409) is not proof about the
+// row: the read aborts on a live row and fences nothing (this Store has no database, so a fence or a
+// tombstone would fail the test), and heals once the service answers.
+func TestW4CovApplyAbortsOnAnUnclassifiedKeyServiceAnswer(t *testing.T) {
+	f := w4CovNewFixture(t)
+	injected := fmt.Errorf("transit KEK: %w: vault POST transit/decrypt/wardyn: 472", kek.ErrService)
+	f.keys.errs[w4CovOwner] = injected
+	live := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
+
+	err := f.s.apply(context.Background(), []row{live}, true)
+	if !errors.Is(err, injected) {
+		t.Fatalf("apply = %v, want the injected key error wrapped", err)
+	}
+	if len(f.snapshot()) != 0 || f.ref(w4CovRowA) != nil {
+		t.Error("a read that aborted applied rows")
+	}
+}
+
+// A wrap that provably does not open under its own key never heals by retrying: the row is handled
+// like a destroyed key (here retired, so no database is needed; the live fence is
+// TestPG_MaskStore_ACorruptWrapFencesALiveRowAndNothingElseDoes) and the read goes on.
 func TestW4CovApplySkipsARowWhoseKeyDoesNotUnwrap(t *testing.T) {
 	f := w4CovNewFixture(t)
-	f.keys.errs[w4CovOwner] = errors.New("subjectkey: generation 1 does not unwrap (its key version retired)")
+	f.keys.errs[w4CovOwner] = fmt.Errorf("subjectkey: generation 1 does not unwrap: local KEK: %w", kek.ErrCorrupt)
 	bad := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
 	bad.retiredAt = &w4CovRetired
 	if err := f.s.apply(context.Background(), []row{bad}, true); err != nil {

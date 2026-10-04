@@ -82,6 +82,9 @@ func TestKEK_ForgedWrapIsRefused(t *testing.T) {
 	for what, sig := range map[string]string{"another wrap's signature": honest[4], "64 random bytes": string(random)} {
 		_, err := k.Unwrap(ctx, kek.Encode(blobLabel, wv, sv, string(c), sig), bind)
 		kektest.Definitive(t, "Unwrap of a public-key wrap with "+what, err)
+		if !errors.Is(err, kek.ErrCorrupt) {
+			t.Errorf("Unwrap of a public-key wrap with %s = %v; want kek.ErrCorrupt", what, err)
+		}
 	}
 	if n := f.cryptoCalls("unwrapkey"); n != 0 {
 		t.Fatalf("a forged wrap cost %d unwrapkey calls; want 0 (refused on the local verify)", n)
@@ -97,8 +100,8 @@ func TestKEK_MovedWrapMakesNoUnwrapCall(t *testing.T) {
 	f.resetCalls()
 	_, err := k.Unwrap(t.Context(), w, kek.Bind("bob", "pat"))
 	kektest.Definitive(t, "Unwrap under another row", err)
-	if !strings.Contains(err.Error(), "not signed for this row") {
-		t.Fatalf("Unwrap under another row = %v; want the signature refusal", err)
+	if !strings.Contains(err.Error(), "not signed for this row") || !errors.Is(err, kek.ErrCorrupt) {
+		t.Fatalf("Unwrap under another row = %v; want the signature refusal, as kek.ErrCorrupt", err)
 	}
 	if n := f.cryptoCalls("unwrapkey"); n != 0 || len(f.calls) != 0 {
 		t.Fatalf("a moved wrap cost %d unwrapkey calls and %v; want no Key Vault call", n, f.calls)
@@ -202,11 +205,14 @@ func TestKEK_BlobFormat(t *testing.T) {
 	f.resetCalls()
 	_, err := k.Unwrap(t.Context(), kek.Encode("wardyn/kek/azurekv/v2", fs[1], fs[2], fs[3], fs[4]), bind)
 	kektest.Definitive(t, "Unwrap of a v2 wrap", err)
-	if !strings.Contains(err.Error(), "newer wardynd") {
-		t.Fatalf("Unwrap of a v2 wrap = %v; want the newer-wardynd refusal", err)
+	if !strings.Contains(err.Error(), "newer wardynd") || !errors.Is(err, kek.ErrCorrupt) {
+		t.Fatalf("Unwrap of a v2 wrap = %v; want the newer-wardynd refusal, as kek.ErrCorrupt", err)
 	}
 	_, err = k.Unwrap(t.Context(), append(w, 0, 0, 0, 0), bind)
 	kektest.Definitive(t, "Unwrap of a wrap with trailing bytes", err)
+	if !errors.Is(err, kek.ErrCorrupt) {
+		t.Fatalf("Unwrap of a wrap with trailing bytes = %v; want kek.ErrCorrupt", err)
+	}
 	if len(f.calls) != 0 {
 		t.Fatalf("malformed wraps made Key Vault calls: %v", f.calls)
 	}
@@ -261,6 +267,13 @@ func TestKEK_ErrorClassification(t *testing.T) {
 		if absent := name == "404"; errors.Is(err, kek.ErrKeyMissing) != absent {
 			t.Fatalf("%s = %v; kek.ErrKeyMissing want %v", name, err, absent)
 		}
+		if errors.Is(err, kek.ErrCorrupt) {
+			t.Fatalf("%s = %v; a Key Vault status is never kek.ErrCorrupt", name, err)
+		}
+	}
+	// A status nothing classifies is still the service's answer, not proof about the row.
+	if err := unwrap(409); !errors.Is(err, kek.ErrService) || errors.Is(err, kek.ErrCorrupt) {
+		t.Fatalf("409 = %v; want kek.ErrService and not kek.ErrCorrupt", err)
 	}
 	f.mu.Lock()
 	f.shortUnwrap = true

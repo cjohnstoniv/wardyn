@@ -61,6 +61,12 @@ var ErrKeyMissing = errors.New("the key service does not hold the key")
 // reader fails closed and destroys nothing.
 var ErrRefused = errors.New("the key service refuses to open this wrap")
 
+// ErrCorrupt is a wrap that provably does not open under its own key for this row: the local key's
+// AES-GCM refuses it, or a Key Vault wrap is malformed or not signed for this row (its versions are
+// globally unique). The one key failure that is proof about the row, so the only one a reader may
+// destroy anything on.
+var ErrCorrupt = errors.New("the wrap does not open under its key for this row")
+
 // Versioned is a KEK whose key has versions (Vault Transit, Key Vault): each
 // wrap names the version it was made under, and `wardynd -rewrap` moves every
 // row naming any other version onto the latest, so the others can be retired.
@@ -276,7 +282,7 @@ func (l *Local) Wrap(_ context.Context, dek []byte, bind map[string]string) ([]b
 }
 
 // Unwrap: a wrap moved to another row, or made under another key, fails
-// authentication.
+// authentication: ErrCorrupt.
 func (l *Local) Unwrap(_ context.Context, wrapped []byte, bind map[string]string) ([]byte, error) {
 	aad, err := l.aad(bind)
 	if err != nil {
@@ -284,7 +290,7 @@ func (l *Local) Unwrap(_ context.Context, wrapped []byte, bind map[string]string
 	}
 	dek, err := Open(l.key, wrapped, aad)
 	if err != nil {
-		return nil, fmt.Errorf("local KEK %s: unwrap: %w", l.id, err)
+		return nil, fmt.Errorf("local KEK %s: unwrap: %w: %w", l.id, ErrCorrupt, err)
 	}
 	return dek, nil
 }

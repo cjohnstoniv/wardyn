@@ -721,3 +721,59 @@ func TestPG_MaskStore_AnOwnerKeyThatDoesNotUnwrapFencesOnlyThatOwner(t *testing.
 		t.Errorf("%d live rows left for the unopenable owner, want them tombstoned", n)
 	}
 }
+
+// failingKeys answers every Key request for owner with err: a key read that never succeeds.
+type failingKeys struct {
+	maskstore.Keys
+	owner string
+	err   error
+}
+
+func (k failingKeys) Key(ctx context.Context, owner, purpose string, version int) ([]byte, error) {
+	if owner == k.owner {
+		return nil, k.err
+	}
+	return k.Keys.Key(ctx, owner, purpose, version)
+}
+
+// Only a wrap that provably does not open under its own key fences a live row's runs and tombstones
+// it. Any other key-service answer (here a Vault DR secondary's 472) fails the read, and leaves the
+// runs unfenced and the rows live, so the read heals once the service answers.
+func TestPG_MaskStore_ACorruptWrapFencesALiveRowAndNothingElseDoes(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		err   error
+		fence bool
+	}{
+		{"a corrupt wrap", errors.Join(errors.New("local KEK: unwrap"), kek.ErrCorrupt), true},
+		{"an unclassified key-service answer", errors.Join(errors.New("transit KEK: vault POST transit/decrypt/wardyn: 472"), kek.ErrService), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pool := runsPGPoolIsolated(t)
+			k := localKEK(t)
+			ctx := t.Context()
+			a := newRegReplica(t, pool, k)
+			run := dispatchedRun(t, pool, a, regAlice)
+			if err := a.reg.AddGlobal(regAlice, "alice-cred", time.Now(), []byte("alices-credential-value")); err != nil {
+				t.Fatal(err)
+			}
+
+			reg := secretmask.NewRegistry()
+			st := maskstore.New(pool, failingKeys{Keys: subjectkeytest.Manager(pool, k), owner: regAlice, err: c.err}, reg)
+			err := st.Fresh(ctx, time.Now())
+			if c.fence != (err == nil) {
+				t.Fatalf("read = %v; want it to fail exactly when nothing is fenced (fence=%v)", err, c.fence)
+			}
+			var fenced bool
+			if err := pool.QueryRow(ctx, `SELECT fenced_at IS NOT NULL FROM run_mask_manifest WHERE run_id = $1`, run).Scan(&fenced); err != nil {
+				t.Fatal(err)
+			}
+			if fenced != c.fence {
+				t.Errorf("the owner's run fenced = %v, want %v", fenced, c.fence)
+			}
+			if n, want := liveRows(t, pool, `owner = $1`, regAlice), map[bool]int{true: 0, false: 1}[c.fence]; n != want {
+				t.Errorf("%d live rows for the owner, want %d", n, want)
+			}
+		})
+	}
+}

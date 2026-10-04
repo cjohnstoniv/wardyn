@@ -7413,7 +7413,8 @@ therefore the per-replica cap times the replica count (cap × N):
   `mask_state_unavailable`) and the rows are tombstoned. Other people's values are
   unaffected and `mask_registry_shared` stays healthy. The remedy is to erase that
   person's credentials through the API, which restores their credentials and future
-  runs; the fenced runs stay fenced. Only that corruption, or a destroyed key, fences.
+  runs; the fenced runs stay fenced. Only a destroyed generation, or a wrap that
+  provably does not open under its own key (the local key, or Key Vault), fences.
   Every other key failure fails the read instead, so consumers fail closed and
   nothing is fenced or tombstoned:
   - A transient failure (Postgres or the KEK service unreachable): the read fails and
@@ -7433,6 +7434,9 @@ therefore the per-replica cap times the replica count (cap × N):
     reading through that Vault fails its read until the floor is lowered and
     `-rewrap-principal-keys` is run, the address is fixed, or that person's
     credentials are erased through the API.
+  - Any other answer, including a Vault DR secondary's `472`, a performance
+    standby's `473` and an Enterprise `412`: every replica fails its read closed
+    until the service answers.
 - **A compromised wardynd process still sees every value it masks.** Shredding a
   person's copies is complete only after backups expire or the wrapping key version
   is retired.
