@@ -30,7 +30,7 @@ Every run captures a **lease** at create:
   [Multi-user](../OPERATIONS.md#multi-user-who-can-change-what).
 - An end (`ends_at`; `null` is "no end," only where the ceiling allows it).
 - A decision-wait budget (`wait_budget_sec`). It does not bound a run's start; see
-  [Start deadlines](../OPERATIONS.md#the-two-real-bounds-on-a-slow-start).
+  [Start deadlines](../OPERATIONS.md#the-start-deadlines).
 
 A run keeps the limits it captured at create even if the profile that
 produced them changes later. Extending or shortening the lease is bounded

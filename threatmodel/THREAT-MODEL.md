@@ -1787,8 +1787,9 @@ hiding them would repeat the failure mode we are designed to avoid.
     key, and a human who never signs in again is re-stamped never. Since 0.8.6 a
     token can end on a clock instead (`api_tokens.expires_at`, capped for new
     tokens by `WARDYN_API_TOKEN_MAX_TTL`), but only one minted with a TTL or under
-    a cap: every earlier token, and every token on a deployment that sets no cap,
-    never expires. So a power that derives from a stale group snapshot — a
+    a cap: every token minted before 0.8.6, and every token minted with neither a
+    requested `ttl_seconds` nor a deployment cap, never expires.
+    So a power that derives from a stale group snapshot — a
     capability grant or governance profile bound to a group they have left, or
     an admin/`security_admin` role they were demoted out of — survives exactly
     until that human's next login or the token's expiry, and for someone who has
