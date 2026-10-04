@@ -140,6 +140,15 @@ nothing at all, because its output is a live credential.
   run's owner or a super admin gets it; a security admin gets
   `409 run_output_interactive`, the answer for a run with no snapshot, and the
   refusal is audited.
+- **From the CLI.** `wardyn run output <run-id> [--tail N] [--json] [--raw]`
+  reads the same endpoint, so a person without console access can read a run's
+  kept output. Piped, it writes the bytes exactly as returned, with no added
+  newline. On a terminal it prints ESC and other control characters as escapes
+  (such as `\x1b`) unless `--raw` is given, and always for a `pane_snapshot`,
+  because a run controls this text. A one-line note on stderr says when the row
+  is truncated, incomplete, a capture gap, a pane snapshot, or masked against
+  global secrets only; a refusal exits non-zero and names its `run_output_*`
+  reason.
 - **A restart.** A run that was live across a wardynd restart, or that another
   replica adopted, has its output read back from the substrate when that is
   possible and safe, and ends with a `capture_gap` row when it is not. wardynd

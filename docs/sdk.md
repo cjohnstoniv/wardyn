@@ -208,20 +208,28 @@ happens inside the sandbox after `ready`, so it is not a separate event.
 ## Reading a run's output
 
 `GET /api/v1/runs/{id}/output?tail=<bytes>` returns the end of a
-non-interactive run's combined stdout/stderr — at most `WARDYN_RUN_OUTPUT_TAIL_BYTES` (64 KiB by default), kept in
-wardynd's memory whether or not recordings are on. `RunOutput` reads it; pass
+non-interactive run's combined stdout/stderr — at most `WARDYN_RUN_OUTPUT_TAIL_BYTES` (64 KiB by default) — from wardynd's memory while the run lives and from Postgres once it has ended. `RunOutput` reads it; pass
 `0` for the whole tail:
 
 ```go
 out, err := c.RunOutput(ctx, created.ID, 0)
-fmt.Println(out.Output, out.Truncated, out.Complete)
+fmt.Println(out.Output, out.Truncated, out.Complete, out.Source)
 ```
 
 `truncated` says the output does not start at the run's first byte; `complete`
-says the run has finished; bytes it printed in its last moments can land a
-moment later, so read once more after `complete` if the end matters. The same `404` as
-`GET /runs/{id}` answers anyone who may not read the run; the other refusals
-carry a `run_output_*` reason (below).
+says the capture is final; a run that has just finished is not `complete` until
+its last bytes are in, so read once more if the end matters. `source` is
+`stdout` for a run's own output and `pane_snapshot` for an interactive run's
+last screen, which is plain text. `incomplete` says bytes may be missing;
+`capture_gap` says none could be captured, so `output` is empty. `mask_scope` is
+`run` when the capture was masked against the run's complete manifest and
+`globals_only` when it was not (empty when the deployment keeps none).
+`captured_at` is when the final row was written, nil while the run is live. The
+same `404` as `GET /runs/{id}` answers anyone who may not read the run; the
+other refusals carry a `run_output_*` reason (below), `run_output_erased`
+among them (the run's output was erased, `404`).
+
+From a shell, `wardyn run output <run-id>` prints the same bytes (below).
 
 ## Error handling
 
