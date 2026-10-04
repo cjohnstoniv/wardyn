@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -506,7 +507,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// TLS-MITM (beyond the built-in LLM hosts) so a registry token injects on
 			// the wire. Only hosts with a resolved token injection appear here — a
 			// tight per-host allowlist, never a blanket. See isMITMHost widening.
-			MITMHosts: append(append(append([]string{}, artifactPlan.mitmHosts...), plan.bedrockMITMHosts...), ado.mitmHosts...),
+			MITMHosts: slices.Concat(artifactPlan.mitmHosts, plan.bedrockMITMHosts, ado.mitmHosts, plan.azure.mitmHosts),
 			// MITM the BUILT-IN LLM hosts only when that's actually intended for this
 			// run — subscription OAuth injection or intercept_tls content inspection.
 			// The CA above may also be minted purely for artifact-token injection, so
@@ -532,6 +533,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// The per-person Azure DevOps REST gate's grant (runs_dispatch_ado_inject.go).
 			// Nil for every run not on that lane, which leaves the gate off.
 			ADOGrant: ado.gate,
+			// The azure_foundry lane's route gate and channel host (provider_azure.go). Empty for every
+			// run not on that lane, which leaves both off.
+			AzureGates:      plan.azure.gates,
+			LLMChannelHosts: plan.azure.channelHosts,
 			// Resolved above from site-config.UpstreamProxySecretRef; "" when
 			// unconfigured or unresolvable (direct dial, backward-compatible).
 			UpstreamProxyURL: upstreamProxyURL,

@@ -591,6 +591,7 @@ const (
 	reasonAzureSignInNoSession        = "azure_sign_in_no_session"       // no session subject to bind the capture to
 	reasonAzureCallbackCookiesInvalid = "azure_callback_cookies_invalid" // the one-time nonce or verifier cookie is missing, or the stamped row is malformed
 	reasonAzureCallbackMissingCode    = "azure_callback_missing_code"    // the authority redirected back with no code
+	reasonHostNotEndpoint             = "host_not_endpoint"              // the requested host is not the Azure provider's own endpoint
 )
 
 // POST /workspace-providers/git/{id}/org-check (ado_pat_orgcheck.go).

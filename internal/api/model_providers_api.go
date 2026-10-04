@@ -356,6 +356,9 @@ func (s *Server) setupModelProviders(ctx context.Context, sc types.SiteConfig) [
 // when it has one, else the vendor's.
 func providerHost(p types.ModelProvider) string {
 	base := p.BaseURL
+	if p.Azure != nil {
+		base = p.Azure.Endpoint
+	}
 	if p.Bedrock != nil {
 		base = p.Bedrock.BaseURL
 		if base == "" {

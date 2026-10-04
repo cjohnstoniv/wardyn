@@ -229,6 +229,8 @@ func (p *Proxy) channelForHost(host string) contentscan.Channel {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
 	if vendor, ok := p.gatewayVendor[h]; ok {
 		h = vendor
+	} else if vendor, ok := p.channelHosts[h]; ok {
+		h = vendor
 	}
 	switch h {
 	case openaiHost:
@@ -435,6 +437,10 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 			// SECURITY: client gone via its own cancellation was never refused — writing a 401/deny
 			// here would log an expiry that didn't happen. The hold itself continues (it belongs to
 			// the workflow), so the owner's sign-in still lands for whoever is left.
+			return
+		}
+		if p.isAzureLane(host) {
+			p.refuseAzureCredential(w, r, host, port, ierr)
 			return
 		}
 		if p.isADOLane(host) {

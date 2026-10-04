@@ -83,16 +83,19 @@ codex_set_toml_key() {
     mv "$tmp" "$file"
 }
 
-# prepare_codex_config: point codex at its brokered route through the config it
-# reads, and authenticate it with the inert sentinel.  Each piece is written only
-# when its variable is non-empty, so a run dispatch gave neither leaves
-# config.toml and auth.json exactly as they were.  Run by task mode and --idle,
-# before prep-done.
+# prepare_codex_config: point codex at its route through the config it reads
+# (and, when dispatch pins one, its model), and authenticate it with the inert
+# sentinel.  Each piece is written only when its variable is non-empty, so a run
+# dispatch gave none leaves config.toml and auth.json exactly as they were.  Run
+# by task mode and --idle, before prep-done.
 prepare_codex_config() {
     local cfg_dir="${CODEX_HOME:-$HOME/.codex}"
     mkdir -p "$cfg_dir"
     if [[ -n "${WARDYN_CODEX_BASE_URL:-}" ]]; then
         codex_set_toml_key "$cfg_dir/config.toml" openai_base_url "$WARDYN_CODEX_BASE_URL"
+    fi
+    if [[ -n "${WARDYN_CODEX_MODEL:-}" ]]; then
+        codex_set_toml_key "$cfg_dir/config.toml" model "$WARDYN_CODEX_MODEL"
     fi
     if [[ -n "${CODEX_API_KEY:-}" ]]; then
         printf '%s' "$CODEX_API_KEY" | codex login --with-api-key >&2 \
@@ -282,6 +285,7 @@ if [[ "${1:-}" == "--boot-seed" ]]; then
     if [[ "${WARDYN_INTERACTIVE_START:-}" == "agent" ]]; then
         echo "agent-run: boot seed — starting codex on the run's prompt" >&2
         seed_argv=(codex)
+        if [[ -n "${WARDYN_CODEX_MODEL:-}" ]]; then seed_argv+=(-m "$WARDYN_CODEX_MODEL"); fi
         if [[ "${WARDYN_SEED_AUTO_TOOLS:-}" == "1" ]]; then
             # VERIFIED against the codex in this image (codex-cli 0.147.0, npm
             # @openai/codex, unpinned at build time): there is NO --full-auto flag;
@@ -382,4 +386,6 @@ maybe_exec_task_mode "$task"
 # Run Codex CLI in non-interactive exec mode.
 # `codex exec "<prompt>"` runs a single task without REPL interaction.
 # The exit code from `codex` propagates to the caller.
-exec codex exec "$task"
+exec_argv=(codex exec)
+if [[ -n "${WARDYN_CODEX_MODEL:-}" ]]; then exec_argv+=(-m "$WARDYN_CODEX_MODEL"); fi
+exec "${exec_argv[@]}" "$task"

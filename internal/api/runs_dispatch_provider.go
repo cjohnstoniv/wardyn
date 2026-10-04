@@ -90,6 +90,13 @@ func (s *Server) providerLiveness(ctx context.Context, p types.ModelProvider, ag
 		}
 		d, err := s.providerSubscriptionRefusal(secretstore.WithPurpose(ctx, purpose), p, owner)
 		return awsSSOBlob{}, d, err
+	case p.Kind == types.ModelProviderAzureFoundry:
+		purpose := secretstore.PurposeStatus
+		if refresh {
+			purpose = secretstore.PurposeDispatch
+		}
+		d, err := s.providerAzureRefusal(secretstore.WithPurpose(ctx, purpose), p, agent, owner)
+		return awsSSOBlob{}, d, err
 	case p.Kind.IsBedrock():
 		// A status read, unless this pass may renew.
 		purpose := secretstore.PurposeStatus
@@ -112,6 +119,8 @@ func providerReadFailed(p types.ModelProvider) string {
 		return fmt.Sprintf(mpSubReadFailed, p.ID)
 	case p.Kind.IsBedrock():
 		return fmt.Sprintf(mpBRReadFailed, p.ID)
+	case p.Kind == types.ModelProviderAzureFoundry:
+		return fmt.Sprintf(mpAZReadFailed, p.ID)
 	}
 	return fmt.Sprintf(mpRunCredUnreadable, p.ID)
 }
@@ -201,8 +210,9 @@ type providerDispatch struct {
 // run": nothing credentials it.
 type providerLane struct {
 	chosen *chosenProvider
-	key    providerKeyLane // the key and endpoint kinds'
-	blob   awsSSOBlob      // bedrock_sso's: the owner's live, renewed session
+	key    providerKeyLane   // the key and endpoint kinds'
+	blob   awsSSOBlob        // bedrock_sso's: the owner's live, renewed session
+	azure  providerAzureLane // azure_foundry's
 }
 
 // hosts is every host the lane's arm credentials or reaches its model on: the
@@ -224,6 +234,8 @@ func (l providerLane) hosts(s *Server) []string {
 			hosts = append(hosts, ssoPortalHost(l.blob.Region, s.cfg.AWSSSOEndpointOverride))
 		}
 		return hosts
+	case p.Kind == types.ModelProviderAzureFoundry:
+		return []string{l.azure.host}
 	}
 	return []string{l.key.host}
 }
@@ -335,6 +347,13 @@ func (s *Server) providerLaneForRun(ctx context.Context, run types.AgentRun, sit
 		}
 		lane.key.owner = lane.chosen.owner
 	}
+	if p.Kind == types.ModelProviderAzureFoundry {
+		var ok bool
+		if lane.azure, ok = providerAzureLaneFor(p, run.Agent); !ok {
+			return providerLane{}, p.Kind, notServing
+		}
+		lane.azure.owner = lane.chosen.owner
+	}
 	blob, d, err := s.providerLiveness(ctx, p, run.Agent, lane.chosen.owner, true)
 	if err != nil {
 		return providerLane{}, p.Kind, providerDenial{msg: providerReadFailed(p)}
@@ -438,6 +457,8 @@ func (s *Server) applyProviderEnv(ctx context.Context, run types.AgentRun, lane 
 			return s.providerSubscriptionTransport(run, sandboxEnv, *c)
 		case c.provider.Kind.IsBedrock():
 			return s.providerBedrockTransport(ctx, run, policy, sandboxEnv, *c, lane.blob)
+		case c.provider.Kind == types.ModelProviderAzureFoundry:
+			return s.providerAzureTransport(sandboxEnv, *c, lane.azure)
 		}
 	}
 	switch run.Agent {
