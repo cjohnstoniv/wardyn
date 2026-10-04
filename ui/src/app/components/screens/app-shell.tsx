@@ -890,15 +890,15 @@ export function AppShell({
               <React.Suspense fallback={null}>
                 <EveryoneAdminBanner />
               </React.Suspense>
-              {/* Constrained-admin mode (mock M10): Admin view only, an info
-              band beside the everyone-is-an-admin one. */}
-              <React.Suspense fallback={null}>
-                <GovernedAdminBanner view={view} />
-              </React.Suspense>
               {/* M10 — Admin view, admins only: the substrate_health row as the
               server graded it. */}
               <React.Suspense fallback={null}>
                 <SubstrateHealthBanner view={view} />
+              </React.Suspense>
+              {/* Constrained-admin mode (mock M10): Admin view only, an info
+              band beside the everyone-is-an-admin one. */}
+              <React.Suspense fallback={null}>
+                <GovernedAdminBanner view={view} />
               </React.Suspense>
               {/* #162 — last in the stack (mock-approval ruling 3): the four
               bands above are each the better explanation of what you are

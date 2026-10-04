@@ -20,7 +20,7 @@ import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
-import { governance as api, isGrantBoundError, type GovernanceLimits, type GovernanceProfile, type GovernanceProfileInput } from "../../../lib/api/governance";
+import { governance as api, isGrantBoundError, type AutonomyRubric, type GovernanceLimits, type GovernanceProfile, type GovernanceProfileInput } from "../../../lib/api/governance";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { getErrorMessage } from "../../../lib/format";
 import { GOVERNANCE as GOV, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
@@ -53,6 +53,7 @@ import {
   EffectiveView,
   LIMIT_FIELDS,
   OverlayRows,
+  seedOverlayLimits,
 } from "./profile-overlay";
 import { ProfileRubric } from "./profile-rubric";
 
@@ -127,6 +128,7 @@ export function ProfileEditor({
   const inheritedCeiling = (baseProfile?.effective?.ceiling ?? deployment ?? {}) as unknown as Record<string, unknown>;
   const inheritedLimits = (baseProfile?.effective?.limits ?? {}) as Record<string, unknown>;
   const [limits, setLimits] = React.useState<GovernanceLimits>(profile?.limits ?? {});
+  const [limitsMoved, setLimitsMoved] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   // The four access-request fields (M3 S5), kept as typed; save trims them.
   const [contact, setContact] = React.useState<Required<PolicyContact>>({
@@ -264,7 +266,18 @@ export function ProfileEditor({
             value={base}
             options={baseOptions(profile, profiles)}
             disabled={disabled}
-            onChange={setBase}
+            onChange={(next) => {
+              // Composing a standalone profile moves its stored limits into the
+              // overlay (the save sends an empty `limits`), so nothing is lost silently.
+              if (base === BASE_NONE && next !== BASE_NONE && Object.keys(overlayLimits).length === 0) {
+                const moved = seedOverlayLimits(limits);
+                if (Object.keys(moved).length > 0) {
+                  setOverlayLimits(moved);
+                  setLimitsMoved(true);
+                }
+              }
+              setBase(next);
+            }}
           />
         </Field>
       </div>
@@ -303,14 +316,21 @@ export function ProfileEditor({
         <h4 className="text-body font-medium text-foreground">{GOV.LIMITS_TITLE}</h4>
         <p className="mt-0.5 max-w-[82ch] text-body text-muted-foreground">{GOV.LIMITS_LEAD}</p>
         {composed ? (
-          <OverlayRows
-            idPrefix="governance-overlay-limit"
-            fields={LIMIT_FIELDS}
-            value={overlayLimits}
-            inherited={inheritedLimits}
-            disabled={disabled}
-            onChange={setOverlayLimits}
-          />
+          <>
+            {limitsMoved && (
+              <p className="mt-2 max-w-[82ch] text-body text-muted-foreground" data-testid="governance-limits-moved">
+                {GOV.OVERLAY_LIMITS_MOVED}
+              </p>
+            )}
+            <OverlayRows
+              idPrefix="governance-overlay-limit"
+              fields={LIMIT_FIELDS}
+              value={overlayLimits}
+              inherited={inheritedLimits}
+              disabled={disabled}
+              onChange={setOverlayLimits}
+            />
+          </>
         ) : (
           <>
         <LimitRow
@@ -439,7 +459,18 @@ export function ProfileEditor({
       </section>
       )}
 
-      {!composed && (
+      {composed ? (
+        // A row left at "no cap" is an absent key, which is exactly an un-narrowed overlay field.
+        <ProfileRubric
+          value={(overlayLimits.autonomy_rubric ?? {}) as AutonomyRubric}
+          disabled={disabled}
+          onChange={(rubric) =>
+            setOverlayLimits(({ autonomy_rubric: _drop, ...rest }) =>
+              Object.values(rubric).some(Boolean) ? { ...rest, autonomy_rubric: rubric } : rest,
+            )
+          }
+        />
+      ) : (
         <ProfileRubric
           value={limits.autonomy_rubric ?? {}}
           disabled={disabled}

@@ -175,6 +175,54 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
     });
   });
 
+  it("composing a standalone profile moves its stored limits and rubric into the overlay, with a note", async () => {
+    const solo = row({
+      id: "ps",
+      name: "Solo",
+      limits: {
+        deny_interactive: true,
+        deny_ui_apps: false,
+        max_cpu_millis: 2000,
+        max_memory_mib: 0,
+        max_wait_sec: 3600,
+        autonomy_rubric: { egress_open: "L1" },
+      } as never,
+    });
+    renderEditor(solo, [BASE, solo]);
+    expect(screen.queryByTestId("governance-limits-moved")).toBeNull();
+    await pickBase("Baseline");
+    expect(screen.getByTestId("governance-limits-moved")).toHaveTextContent(GOV.OVERLAY_LIMITS_MOVED);
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+    expect(updateProfileMock).toHaveBeenCalledWith(
+      "ps",
+      expect.objectContaining({
+        limits: {},
+        overlay_limits: {
+          deny_interactive: true,
+          max_cpu_millis: 2000,
+          max_wait_sec: 3600,
+          autonomy_rubric: { egress_open: "L1" },
+        },
+      }),
+    );
+  });
+
+  it("a composed profile can narrow deny_ui_apps, the CPU ceiling and the autonomy rubric", async () => {
+    renderEditor(null);
+    typeValue(GOV.FIELD_NAME, "Team A");
+    await pickBase("Baseline");
+    await userEvent.click(screen.getByRole("switch", { name: `deny_ui_apps ${GOV.OVERLAY_NARROW}` }));
+    await userEvent.click(screen.getByRole("switch", { name: `max_cpu_millis ${GOV.OVERLAY_NARROW}` }));
+    typeValue("max_cpu_millis", "500");
+    await userEvent.click(screen.getAllByRole("combobox", { name: /caps autonomy at/ })[0]);
+    await userEvent.click(await screen.findByRole("option", { name: "Gated" }));
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+    const sent = createProfileMock.mock.calls[0][0];
+    expect(sent.overlay_limits.deny_ui_apps).toBe(true);
+    expect(sent.overlay_limits.max_cpu_millis).toBe(500);
+    expect(Object.keys(sent.overlay_limits.autonomy_rubric)).toHaveLength(1);
+  });
+
   it("choosing None on a composed profile clears the composition and sends a full ceiling", async () => {
     const child = row({ id: "pc", name: "Team A", ceiling: {} as RunPolicySpec, base_profile_id: "pb", overlay: {} });
     renderEditor(child, [BASE, child]);
