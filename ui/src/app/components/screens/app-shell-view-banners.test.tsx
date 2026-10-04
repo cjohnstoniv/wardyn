@@ -30,6 +30,8 @@ import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
 import "../wardyn/model-access-banner";
 import "../wardyn/confinement-posture";
 import "../wardyn/governed-admin-banner";
+import "../wardyn/substrate-health-banner";
+import { SUBSTRATE_BANNER } from "../../lib/substrate-banner-copy";
 
 // A person not yet signed in to their claude-code default's AWS sign-in: the
 // strip's B1 line, User view only.
@@ -128,6 +130,19 @@ describe("the governed-admin band follows the resolved view (mock M10)", () => {
     // Positive control: the User view's own per-user strip proves the shell resolved.
     expect(await screen.findByText(STRIP)).toBeInTheDocument();
     expect(screen.queryByText(GOVERNED_ADMIN_BANNER.TITLE)).toBeNull();
+  });
+
+  it("sits below the substrate-health band, so the refusal reads before the reassurance (M10 S2)", async () => {
+    const both = {
+      ...GOVERNED,
+      checks: [
+        { id: "substrate_health", label: "Runner health", status: "fail", cause: "runner_auth", detail: "refused" },
+      ],
+    } as unknown as typeof STATUS;
+    renderShellAt("/admin/runs", ADMIN_ME, {}, undefined, both);
+    const substrate = await screen.findByText(SUBSTRATE_BANNER.TITLE_AUTH);
+    const governed = await screen.findByText(GOVERNED_ADMIN_BANNER.TITLE);
+    expect(substrate.compareDocumentPosition(governed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("is silent with the switch off", async () => {
