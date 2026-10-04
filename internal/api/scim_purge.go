@@ -250,8 +250,8 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, sub
 
 // SweepSCIMPurge is one tick of the purge sweeper, run on the elected sweeper leader: it purges every
 // suspended person past their purge_after (unless WARDYN_SCIM_PURGE_AFTER is zero) and resumes any
-// suspension or purge whose identity provider stopped retrying. Idempotent, and a failure on one
-// identity does not stop the others.
+// suspension, purge or group removal whose identity provider stopped retrying. Idempotent, and a
+// failure on one identity does not stop the others.
 func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 	st, ok := s.cfg.Store.(scimStore)
 	if !ok || s.cfg.SCIM == nil {
@@ -278,6 +278,20 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 		} else {
 			errs = append(errs, s.suspendIdentity(ctx, st, p.ID, scimSweeperSlot))
 		}
+	}
+	// A mover stays active, so their group removals are not leaver work and are resumed on their own. A
+	// group deleted since still has its member's steps finished, with its external id unknown.
+	removals, err := st.PendingGroupRemovals(ctx, scimResumeIdle, scimSweepBatch)
+	errs = append(errs, err)
+	for _, p := range removals {
+		g, err := st.GetScimGroup(ctx, p.GroupID)
+		if errors.Is(err, store.ErrNotFound) {
+			g, err = store.ScimGroup{ID: p.GroupID}, nil
+		}
+		if err == nil {
+			err = s.removeGroupMember(ctx, st, g, p.IdentityID, scimSweeperSlot)
+		}
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }

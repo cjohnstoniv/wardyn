@@ -110,6 +110,13 @@ func (s *Server) handleSCIMStatus(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "list deprovision failures", err)
 		return
 	}
+	// A mover stays active, so their failed group removals are listed apart from the leavers'.
+	groupFailures, err := st.GroupRemovalFailures(ctx, scimStatusListCap)
+	if err != nil {
+		writeServerError(w, r, "list group removal failures", err)
+		return
+	}
+	failures = append(failures, groupFailures...)
 	for _, f := range failures {
 		person, err := label(f.IdentityID)
 		if err != nil {
