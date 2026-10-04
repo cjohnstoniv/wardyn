@@ -18,7 +18,7 @@
     "env_builder",
     "host_proxy",
     "llm_provider",
-    "platform_shared",
+    "platform_split",
     "runner",
     "scm_provider"
   ],
