@@ -7,17 +7,17 @@ import "sync"
 
 // maskPipeMax bounds the bytes a maskPipe holds that its masker has not taken
 // yet. A batch costs one read of the shared registry (at most one per 50ms per
-// replica), so this over that interval is the most a session recording masks
-// per second: 512 KiB a batch is about 8 MB/s, past what a browser terminal
-// renders.
+// replica), so this over that interval is the most one pipe masks per second:
+// 512 KiB a batch is about 8 MB/s, past what a browser terminal renders.
 const maskPipeMax = 512 << 10
 
-// maskPipe is the front of a live session's recording masker (the attach and SSH
-// shell pumps tee their output into it). liveMaskWriter forwards nothing until a
-// read of the shared masking registry that began after the bytes arrived has
-// finished, and those reads are coalesced to one per 50ms per replica, so a pump
-// that teed each chunk straight into it read the exec once per read: about 20
-// chunks a second.
+// maskPipe is the front of a live masker whose producer must not wait on it: a
+// live session's recording (the attach and SSH shell pumps tee their output into
+// it) and a batch run's output tail (the drivers' copy of the agent's output).
+// liveMaskWriter forwards nothing until a read of the shared masking registry
+// that began after the bytes arrived has finished, and those reads are coalesced
+// to one per 50ms per replica, so a producer that wrote each chunk straight into
+// it read its source once per read: about 20 chunks a second.
 //
 // Write queues and returns. One goroutine hands everything queued to the masker
 // in a single Write, in arrival order, and the next batch gathers while that
