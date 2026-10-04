@@ -38,6 +38,7 @@ type pendingFake struct {
 	holdDeletes     bool                 // every DELETE is held
 	heldProfiles    map[string]uuid.UUID // profile names a live change already holds: a write answers 409 naming it
 	bigDiff         bool                 // pad the held change's diff past the 2 KiB error-body cap
+	heldDiffers     bool                 // the held change is not the refused write (pending_change_matches false)
 
 	reqs        []string // "METHOD path", in arrival order
 	assignSent  []client.GovernanceAssignmentRequest
@@ -160,7 +161,7 @@ func (f *pendingFake) answerHeld(w http.ResponseWriter, name string) bool {
 	}
 	writeJSON(w, http.StatusConflict, map[string]any{
 		"error":  "a change to this target is already waiting for approval: " + id.String(),
-		"reason": "governance_change_pending", "pending_change": held,
+		"reason": "governance_change_pending", "pending_change": held, "pending_change_matches": !f.heldDiffers,
 	})
 	return true
 }
@@ -547,5 +548,26 @@ func TestApplyGovernance_RepeatApplyDuringTheWindowIsStillPending(t *testing.T) 
 		if len(f.assignSent) != 1 || f.assignSent[0].Subject != "carol" {
 			t.Errorf("big=%v: assignments sent = %+v, want only carol: the writes after the held one still go", big, f.assignSent)
 		}
+	}
+}
+
+// TestApplyGovernance_HeldChangeThatIsNotThisWriteFails: a 409 whose held change is not the refused
+// proposal (pending_change_matches false: another payload, op or proposer) is the refusal, not a
+// pending result, so an edited document never reports the old change as its own.
+func TestApplyGovernance_HeldChangeThatIsNotThisWriteFails(t *testing.T) {
+	heldID := uuid.New()
+	f := &pendingFake{
+		profiles:     []client.GovernanceProfile{{ID: uuid.New(), Name: "held", Limits: client.GovernanceLimits{MaxConcurrentRuns: 1}}},
+		heldProfiles: map[string]uuid.UUID{"held": heldID},
+		heldDiffers:  true,
+	}
+	res, err := f.server(t).ApplyGovernanceResult(context.Background(), client.GovernanceDocument{
+		Profiles: []client.GovernanceProfile{{ID: uuid.New(), Name: "held", Limits: client.GovernanceLimits{MaxConcurrentRuns: 9}}},
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), heldID.String()) {
+		t.Fatalf("apply = %+v, %v; want an error naming the held change %s", res, err, heldID)
+	}
+	if len(res.Pending) != 0 {
+		t.Errorf("pending = %+v, want none", res.Pending)
 	}
 }

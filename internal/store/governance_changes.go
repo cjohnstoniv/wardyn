@@ -75,12 +75,19 @@ type GovernanceDecision struct {
 // rolls everything back, the change still pending.
 type GovernanceDecideFunc func(q Querier, ch types.GovernanceChange) error
 
+// ExpiredGovernanceChange is a lapsed change a proposal moved to expired: its id and its own target
+// key, which differs from the proposal's when it was a create of the same name.
+type ExpiredGovernanceChange struct {
+	ID        uuid.UUID
+	TargetKey string
+}
+
 // ProposeGovernanceChange stores ch as pending, expiring ttl from now on the database's clock. In the
-// same transaction it first moves any lapsed pending change for the same target to expired (their ids
-// are returned, for the audit rows), so a live one is the only thing the one-pending-per-target index
+// same transaction it first moves any lapsed pending change for the same target to expired (returned,
+// for the audit rows), so a live one is the only thing the one-pending-per-target index
 // can refuse: that is *ErrGovernanceChangePending naming it. A create also holds the name it creates
 // (claimCreateName).
-func (s PG) ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChange, ttl time.Duration) (types.GovernanceChange, []uuid.UUID, error) {
+func (s PG) ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChange, ttl time.Duration) (types.GovernanceChange, []ExpiredGovernanceChange, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return types.GovernanceChange{}, nil, err
@@ -93,11 +100,11 @@ func (s PG) ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChan
 	rows, err := tx.Query(ctx, `
 		UPDATE governance_changes SET state = 'expired', decided_at = now()
 		WHERE target_kind = $1 AND target_key = $2 AND state = 'pending' AND expires_at <= now()
-		RETURNING id`, ch.TargetKind, ch.TargetKey)
+		RETURNING id, target_key`, ch.TargetKind, ch.TargetKey)
 	if err != nil {
 		return types.GovernanceChange{}, nil, fmt.Errorf("store: expire lapsed governance changes: %w", err)
 	}
-	expired, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	expired, err := pgx.CollectRows(rows, pgx.RowToStructByPos[ExpiredGovernanceChange])
 	if err != nil {
 		return types.GovernanceChange{}, nil, fmt.Errorf("store: expire lapsed governance changes: %w", err)
 	}
@@ -128,9 +135,9 @@ func (s PG) ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChan
 // claimCreateName holds a create's name: a create's target key is the id it mints, so a second create
 // of the same name would otherwise be a second target, and the two could never both apply. Under the
 // target lock for the kind's creates of that name, a lapsed pending create of it is moved to expired
-// (its id returned) and a live one is *ErrGovernanceChangePending naming it. The name is the payload's
+// (returned) and a live one is *ErrGovernanceChangePending naming it. The name is the payload's
 // "name"; a change that is not a create, or names nothing, holds nothing.
-func claimCreateName(ctx context.Context, tx pgx.Tx, ch types.GovernanceChange) ([]uuid.UUID, error) {
+func claimCreateName(ctx context.Context, tx pgx.Tx, ch types.GovernanceChange) ([]ExpiredGovernanceChange, error) {
 	var p struct {
 		Name string `json:"name"`
 	}
@@ -143,11 +150,11 @@ func claimCreateName(ctx context.Context, tx pgx.Tx, ch types.GovernanceChange) 
 	rows, err := tx.Query(ctx, `
 		UPDATE governance_changes SET state = 'expired', decided_at = now()
 		WHERE target_kind = $1 AND op = 'create' AND payload->>'name' = $2 AND state = 'pending' AND expires_at <= now()
-		RETURNING id`, ch.TargetKind, p.Name)
+		RETURNING id, target_key`, ch.TargetKind, p.Name)
 	if err != nil {
 		return nil, fmt.Errorf("store: expire lapsed governance creates: %w", err)
 	}
-	lapsed, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	lapsed, err := pgx.CollectRows(rows, pgx.RowToStructByPos[ExpiredGovernanceChange])
 	if err != nil {
 		return nil, fmt.Errorf("store: expire lapsed governance creates: %w", err)
 	}

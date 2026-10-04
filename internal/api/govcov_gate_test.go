@@ -208,7 +208,7 @@ func TestGovCovProposeGovernanceChange(t *testing.T) {
 		ExpiresAt: expires,
 	}
 	expiredID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
-	st := &govCovStore{proposeSaved: saved, proposeExpired: []uuid.UUID{expiredID}}
+	st := &govCovStore{proposeSaved: saved, proposeExpired: []store.ExpiredGovernanceChange{{ID: expiredID, TargetKey: "expired-key"}}}
 	s, h := govCovServer(t, st, func(c *Config) { c.GovernanceChangeTTL = 5 * time.Hour })
 	r := govCovHumanReq(http.MethodPost, "/x", "sub-alice", "Alice@Corp.Example", oidc.RoleSecurityAdmin)
 	w := httptest.NewRecorder()
@@ -250,7 +250,7 @@ func TestGovCovProposeGovernanceChange(t *testing.T) {
 		t.Fatalf("audit rows = %v, want %v (the lapsed change's expiry first)", got, want)
 	}
 	exp := govCovAudits(h, "governance.change.expire")[0]
-	if exp.Target != expiredID.String() || govCovAuditData(t, exp)["target_key"] != "k1" {
+	if exp.Target != expiredID.String() || govCovAuditData(t, exp)["target_key"] != "expired-key" {
 		t.Errorf("expire row = target %q data %s", exp.Target, exp.Data)
 	}
 	prop := govCovAuditData(t, govCovAudits(h, "governance.change.propose")[0])
@@ -265,32 +265,39 @@ func TestGovCovProposeGovernanceChange(t *testing.T) {
 func TestGovCovProposeRefusalCarriesTheHeldChange(t *testing.T) {
 	pendingID := uuid.MustParse("33333333-3333-3333-3333-333333333333")
 	for _, c := range []struct {
-		name     string
-		got      types.GovernanceChange
-		getErr   error
-		wantHeld bool
+		name        string
+		got         types.GovernanceChange
+		getErr      error
+		wantHeld    bool
+		wantMatches bool
 	}{
-		{"the held change is read", types.GovernanceChange{ID: pendingID, State: types.GovernanceChangePending}, nil, true},
-		{"the read fails", types.GovernanceChange{}, errors.New("pg: gone"), false},
-		{"it was decided meanwhile", types.GovernanceChange{ID: pendingID, State: types.GovernanceChangeApplied}, nil, false},
+		{"the held change is this proposal", types.GovernanceChange{ID: pendingID, State: types.GovernanceChangePending, Op: "update", Payload: json.RawMessage(`{ "a": 1 }`)}, nil, true, true},
+		{"the held change has another payload", types.GovernanceChange{ID: pendingID, State: types.GovernanceChangePending, Op: "update", Payload: json.RawMessage(`{"a":2}`)}, nil, true, false},
+		{"the held change is another op", types.GovernanceChange{ID: pendingID, State: types.GovernanceChangePending, Op: "delete", Payload: json.RawMessage(`{"a":1}`)}, nil, true, false},
+		{"the read fails", types.GovernanceChange{}, errors.New("pg: gone"), false, false},
+		{"it was decided meanwhile", types.GovernanceChange{ID: pendingID, State: types.GovernanceChangeApplied}, nil, false, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := &govCovStore{proposeErr: &store.ErrGovernanceChangePending{ID: pendingID}, got: c.got, getErr: c.getErr}
 			s, _ := govCovServer(t, st)
 			w := httptest.NewRecorder()
 			s.proposeGovernanceChange(w, govCovHumanReq(http.MethodPost, "/x", "sub-a", "a@corp.example", oidc.RoleSecurityAdmin),
-				govProposal{kind: govKindProfile, op: "update", key: "k", payload: map[string]any{}})
+				govProposal{kind: govKindProfile, op: "update", key: "k", payload: map[string]any{"a": 1}})
 			if w.Code != http.StatusConflict || errorReason(w) != reasonGovernanceChangePending {
 				t.Fatalf("answer = %d %q, want 409 %q", w.Code, errorReason(w), reasonGovernanceChangePending)
 			}
 			var body struct {
 				Pending *types.GovernanceChange `json:"pending_change"`
+				Matches *bool                   `json:"pending_change_matches"`
 			}
 			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 				t.Fatalf("body %s: %v", w.Body.String(), err)
 			}
 			if c.wantHeld != (body.Pending != nil && body.Pending.ID == pendingID) {
 				t.Errorf("pending_change = %+v, want held=%v", body.Pending, c.wantHeld)
+			}
+			if c.wantHeld != (body.Matches != nil) || (body.Matches != nil && *body.Matches != c.wantMatches) {
+				t.Errorf("pending_change_matches = %v, want present=%v value=%v", body.Matches, c.wantHeld, c.wantMatches)
 			}
 		})
 	}

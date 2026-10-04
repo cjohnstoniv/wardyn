@@ -59,7 +59,7 @@ func TestPG_GovernanceChange_ProposeRefusesALiveOneAndExpiresALapsedOne(t *testi
 		t.Fatalf("the read wrote the row: state %q (%v)", stored, err)
 	}
 	second, expired, err := st.ProposeGovernanceChange(ctx, newChange(key), time.Hour)
-	if err != nil || len(expired) != 1 || expired[0] != first.ID {
+	if err != nil || len(expired) != 1 || expired[0].ID != first.ID || expired[0].TargetKey != key {
 		t.Fatalf("re-proposal = %+v, expired %v, %v; want the lapsed change expired in the same transaction", second, expired, err)
 	}
 	if err := pool.QueryRow(ctx, `SELECT state FROM governance_changes WHERE id = $1`, first.ID).Scan(&stored); err != nil || stored != types.GovernanceChangeExpired {

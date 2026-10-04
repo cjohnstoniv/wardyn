@@ -769,13 +769,15 @@ func (c *Client) doPending(ctx context.Context, method, path string, body, out a
 		if len(apiErr.Body) > maxErrBody {
 			apiErr.Body = apiErr.Body[:maxErrBody]
 		}
-		// A 409 governance_change_pending names the change already holding the target: that is
-		// still-pending, the same result the first proposal got, so a repeat apply carries on.
+		// A 409 governance_change_pending that says the held change is this very proposal is
+		// still-pending, the same result the first proposal got, so a repeat apply carries on. A
+		// different held change stays the refusal: the proposal itself was never stored.
 		if resp.StatusCode == http.StatusConflict && apiErr.Reason == "governance_change_pending" {
 			var env struct {
-				PendingChange *GovernanceChange `json:"pending_change"`
+				PendingChange        *GovernanceChange `json:"pending_change"`
+				PendingChangeMatches bool              `json:"pending_change_matches"`
 			}
-			if json.Unmarshal(raw, &env) == nil && env.PendingChange != nil {
+			if json.Unmarshal(raw, &env) == nil && env.PendingChange != nil && env.PendingChangeMatches {
 				return env.PendingChange, nil
 			}
 		}
