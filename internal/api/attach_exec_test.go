@@ -483,7 +483,7 @@ func TestAttachWS_PromotionReattachesAtThePromotedClientsOwnSize(t *testing.T) {
 	if err := c1.Close(websocket.StatusNormalClosure, "done"); err != nil {
 		t.Fatalf("close the writer: %v", err)
 	}
-	m := readNextAttachMode(t, c2)
+	m := readPromotionFrame(t, c2, holderOwner)
 	if m.ReadOnly || m.Holder == nil || m.Holder.Principal != holderSecond {
 		t.Fatalf("promotion frame = %+v, want the oldest observer promoted", m)
 	}

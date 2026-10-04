@@ -402,7 +402,7 @@ func TestDelegation_AttachPromoteAndDetachCarryVia(t *testing.T) {
 	if err := writer.Close(websocket.StatusNormalClosure, "done"); err != nil {
 		t.Fatalf("close the writer: %v", err)
 	}
-	if readNextAttachMode(t, observer).ReadOnly {
+	if readPromotionFrame(t, observer, holderOwner).ReadOnly {
 		t.Fatal("the observer was not promoted")
 	}
 	if promo := waitForActorAudit(t, rec, run.ID, "session.promote", holderOwner); viaOf(t, *promo) != via {
