@@ -38,9 +38,24 @@ func (s *Server) mountKeyDomainRoutes(securityOps chi.Router) {
 	securityOps.Delete("/key-domains/assignments/{subject_type}/{subject}", s.handleDeleteKeyDomainAssignment)
 }
 
+// keyDomainRow is one domain of GET /key-domains: how many live keys it holds,
+// where its key is, and whether boot proved it. Every declared domain was proven
+// (a domain that could not be fails boot); a domain only an assignment or a live
+// key names is not declared, so it is not proven.
+type keyDomainRow struct {
+	Domain   string `json:"domain"`
+	Declared bool   `json:"declared"`
+	LiveKeys int    `json:"live_keys"`
+	Key      string `json:"key,omitempty"`
+	Proven   bool   `json:"proven"`
+}
+
 type keyDomainsResponse struct {
-	Domains     []keydomain.Usage      `json:"domains"`
+	Domains     []keyDomainRow         `json:"domains"`
 	Assignments []keydomain.Assignment `json:"assignments"`
+	// PrincipalKeys is WARDYN_PRINCIPAL_KEYS on: with it off, domains place
+	// audit-record keys only.
+	PrincipalKeys bool `json:"principal_keys"`
 }
 
 func (s *Server) keyDomainsOr501(w http.ResponseWriter) (*keydomain.Service, bool) {
@@ -68,7 +83,24 @@ func (s *Server) handleListKeyDomains(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "list key domain assignments", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, keyDomainsResponse{Domains: usage, Assignments: assignments})
+	rows := make([]keyDomainRow, len(usage))
+	for i, u := range usage {
+		key := s.cfg.KeyDomainKeys[u.Domain]
+		if u.Domain == keydomain.Default {
+			key = s.defaultKeyDomainKey()
+		}
+		rows[i] = keyDomainRow{Domain: u.Domain, Declared: u.Declared, LiveKeys: u.LiveKeys, Key: key, Proven: u.Declared}
+	}
+	writeJSON(w, http.StatusOK, keyDomainsResponse{Domains: rows, Assignments: assignments, PrincipalKeys: s.cfg.PrincipalKeys})
+}
+
+// defaultKeyDomainKey says where the default domain's key is: the credential key
+// service, or the deployment's local key.
+func (s *Server) defaultKeyDomainKey() string {
+	if s.cfg.SecretKeyService != "" {
+		return s.cfg.SecretKeyService
+	}
+	return "Credential key"
 }
 
 // keyDomainChange is one validated assignment write. Decoding and validating

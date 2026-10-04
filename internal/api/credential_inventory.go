@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -115,6 +116,13 @@ type credentialInventoryRow struct {
 	AddedAt      time.Time  `json:"added_at"`
 	LastUsedAt   *time.Time `json:"last_used_at,omitempty"`
 	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	// KeyDomain, KeyDomainSource and KeyDomainGroup say which key domain the
+	// person's NEXT key is made in and why (keydomain.Source*, or "conflict" when
+	// two groups name different domains and nothing settles it). Absent when the
+	// deployment has no key-domain service or the person's domain cannot be read.
+	KeyDomain       string `json:"key_domain,omitempty"`
+	KeyDomainSource string `json:"key_domain_source,omitempty"`
+	KeyDomainGroup  string `json:"key_domain_group,omitempty"`
 }
 
 // credentialInventoryCounts: distinct people holding any credential, the rows,
@@ -168,6 +176,7 @@ func (s *Server) handleCredentialInventory(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		inv.fill(metas, providerOf, providerNames, s.emailsByPrincipal(ctx), s.cfg.Now())
+		s.annotateKeyDomains(ctx, &inv)
 	}
 	writeJSON(w, http.StatusOK, inv)
 }
@@ -187,6 +196,34 @@ func (s *Server) emailsByPrincipal(ctx context.Context) map[string]string {
 		}
 	}
 	return out
+}
+
+// annotateKeyDomains adds each row's key domain, decided once per person. A
+// person whose domain cannot be decided keeps no domain; a fail-closed
+// ambiguity shows as "conflict".
+func (s *Server) annotateKeyDomains(ctx context.Context, inv *credentialInventory) {
+	svc := s.cfg.KeyDomains
+	if svc == nil {
+		return
+	}
+	placed := map[string]keydomain.Placement{}
+	for i := range inv.Credentials {
+		row := &inv.Credentials[i]
+		p, seen := placed[row.Person]
+		if !seen {
+			var err error
+			if p, err = svc.Place(ctx, row.Person); err != nil {
+				if errors.Is(err, keydomain.ErrAmbiguous) || errors.Is(err, keydomain.ErrGroupsTruncated) {
+					p = keydomain.Placement{Source: "conflict"}
+				} else {
+					slog.WarnContext(ctx, "wardynd: reading a person's key domain failed", slog.Any("err", err))
+					p = keydomain.Placement{}
+				}
+			}
+			placed[row.Person] = p
+		}
+		row.KeyDomain, row.KeyDomainSource, row.KeyDomainGroup = p.Domain, p.Source, p.Group
+	}
 }
 
 func (inv *credentialInventory) fill(metas []secretstore.Meta, providerOf, providerNames, emailOf map[string]string, now time.Time) {

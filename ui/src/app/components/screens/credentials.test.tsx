@@ -24,6 +24,11 @@ vi.mock("../../lib/api/credentials", () => ({
     revokeToken: (...a: unknown[]) => revokeTokenMock(...a),
   },
 }));
+// The key-domain card has its own spec (credentials-key-domains.test.tsx); here it is absent (501).
+const listKeyDomainsMock = vi.fn();
+vi.mock("../../lib/api/key-domains", () => ({
+  keyDomains: { list: (...a: unknown[]) => listKeyDomainsMock(...a) },
+}));
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
 vi.mock("sonner", () => ({
@@ -35,7 +40,7 @@ import type { CredentialInventory } from "../../lib/api/credentials";
 import type { SetupStatus } from "../../lib/types";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
-import { INVENTORY, ERASE, MINTED } from "../wardyn/copy/credentials";
+import { INVENTORY, ERASE, MINTED, KEY_DOMAINS } from "../wardyn/copy/credentials";
 import { CredentialsScreen } from "./credentials";
 import { aheadByHours } from "../../lib/test-clock";
 
@@ -73,6 +78,8 @@ beforeEach(() => {
   eraseMock.mockReset();
   listMintedMock.mockReset();
   listMintedMock.mockResolvedValue([]);
+  listKeyDomainsMock.mockReset();
+  listKeyDomainsMock.mockRejectedValue(new HttpError(501, "key domains require the Postgres store backend"));
   revokeTokenMock.mockReset();
   toastSuccess.mockReset();
   toastError.mockReset();
@@ -132,6 +139,35 @@ describe("the inventory", () => {
     expect(screen.getByText("Corp gateway")).toBeInTheDocument();
     expect(screen.getByText("Bedrock (prod)")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: INVENTORY.ERASE_ROW })).toHaveLength(1);
+  });
+
+  it("no Key domain column on a deployment without the key-domain service", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    renderScreen();
+    await screen.findByText("alice@corp.example");
+    expect(screen.queryByRole("columnheader", { name: INVENTORY.COL_DOMAIN })).toBeNull();
+    expect(screen.queryByText(KEY_DOMAINS.TITLE)).toBeNull();
+  });
+
+  it("the Key domain column says where each person's next key is made, and why (M5 S3)", async () => {
+    const rows = [
+      { ...aliceRow, key_domain: "finance", key_domain_source: "group" as const, key_domain_group: "eng-finance" },
+      { ...aliceRow, person: "sub-bob", email: "bob@corp.example", key_domain: "default", key_domain_source: "default" as const },
+      { ...aliceRow, person: "sub-cat", email: "cat@corp.example", key_domain: "research", key_domain_source: "user" as const },
+      { ...aliceRow, person: "sub-dan", email: "dan@corp.example", key_domain: "finance", key_domain_source: "all" as const },
+      { ...aliceRow, person: "sub-eve", email: "eve@corp.example", key_domain_source: "conflict" as const },
+    ];
+    listInventoryMock.mockResolvedValue(inventory(rows, { "corp-gw": 5 }));
+    renderScreen();
+    await screen.findByText("alice@corp.example");
+    expect(screen.getByRole("columnheader", { name: INVENTORY.COL_DOMAIN })).toBeInTheDocument();
+    const cell = (email: string) => screen.getByText(email).closest("tr")!;
+    expect(cell("alice@corp.example")).toHaveTextContent(`finance · ${KEY_DOMAINS.SOURCE_GROUP("eng-finance")}`);
+    expect(cell("bob@corp.example")).toHaveTextContent(`default · ${KEY_DOMAINS.SOURCE_DEFAULT}`);
+    expect(cell("cat@corp.example")).toHaveTextContent(`research · ${KEY_DOMAINS.SOURCE_USER}`);
+    expect(cell("dan@corp.example")).toHaveTextContent(`finance · ${KEY_DOMAINS.SOURCE_ALL}`);
+    const chip = within(cell("eve@corp.example")).getByLabelText(KEY_DOMAINS.CONFLICT);
+    expect(chip).toHaveAttribute("title", KEY_DOMAINS.CONFLICT);
   });
 
   it("a zero-credential provider chip falls back to the raw id when no row named it", async () => {

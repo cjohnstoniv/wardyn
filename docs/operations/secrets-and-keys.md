@@ -352,7 +352,7 @@ people's credentials, and wardynd's own signing, session, UI-session and
 SSH host keys. A leak of `WARDYN_AGE_KEY` together with the database then
 lets someone forge run identities, console sessions and the SSH host, not
 only read credentials (`threatmodel/THREAT-MODEL.md` residual #49).
-`/setup/status` says so as the amber `platform_shared` row.
+`/setup/status` says so as the amber `platform_split` row.
 
 `WARDYN_PLATFORM_KEY_FILE` names a file holding a **second** age
 identity. The boot keys are then wrapped under a key derived from it
@@ -911,6 +911,20 @@ valid domain and means the credential key. Each write is audited
 (`key_domain.assignment.set` and `key_domain.assignment.delete`), and a refused
 one is an `authz.denied` row (`key_domain_unknown`,
 `key_domain_ambiguous_membership`).
+
+The console shows the same under Admin, Credentials. A Key domains card lists each declared domain,
+where its key is and whether boot proved it, with Assign a domain and Remove. A Key domain column in the
+Stored credentials table says where each person's next key is made and why. A write answered `202` (held
+for a second person) shows as submitted for approval, and changes nothing until it is approved.
+
+`/setup/status` carries four rows for key custody:
+
+- `platform_split`: the boot keys have a key and identity of their own in the key service.
+- `key_domains`: the declared domains, each proven at boot.
+- `principal_keys`: the `WARDYN_PRINCIPAL_KEYS` mode, and how many stored credentials still use the
+  credential key.
+- `key_domain_changes`: amber while any assignment changed in the last 30 days. Moving where a person's
+  next keys are made is what a database writer could do, so check each change in Audit.
 
 **Resolution** for a person's next key generation is user, then group, then `all`,
 then `default`:

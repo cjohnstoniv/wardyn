@@ -22,6 +22,12 @@ export interface CredentialRow {
   added_at: string;
   last_used_at?: string;
   expires_at?: string;
+  /** The key domain the person's NEXT key is made in (M5 S3); absent when the deployment has no key-domain service. */
+  key_domain?: string;
+  /** Why: "user" | "group" | "all" | "default", or "conflict" when two groups name different domains. */
+  key_domain_source?: "user" | "group" | "all" | "default" | "conflict";
+  /** The group that named the domain, when key_domain_source is "group". */
+  key_domain_group?: string;
 }
 
 export interface CredentialInventory {

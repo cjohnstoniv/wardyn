@@ -406,6 +406,12 @@ type Config struct {
 	// KeyDomains resolves, lists and writes the key-domain assignments behind
 	// /key-domains (migration 0121). Nil answers 501.
 	KeyDomains *keydomain.Service
+	// KeyDomainKeys names, for each declared key domain, the key that holds it
+	// ("Transit key finance", "Key Vault key https://...") for the console's
+	// domains table. A domain missing here shows no key.
+	KeyDomainKeys map[string]string
+	// PrincipalKeys is WARDYN_PRINCIPAL_KEYS=on; /setup/status shows principal_keys.
+	PrincipalKeys bool
 	// MaskRegistry, when non-nil, is used to mask verbatim secret values from
 	// PTY capture / asciicast uploads before they reach the RecordingStore.
 	// A nil registry disables masking (existing tests stay green).
@@ -509,7 +515,9 @@ type Config struct {
 	SecretKeyService string
 	// KEKRequired: WARDYN_KEK_REQUIRED; /setup/status shows kek_required_unmet while neither a key service nor an external store holds the credentials.
 	KEKRequired bool
-	// PlatformKeySeparate: WARDYN_PLATFORM_KEY_FILE gives the boot keys their own local key; false in local mode, /setup/status shows platform_shared (§2.13 c).
+	// PlatformKeySeparate: the boot keys have a key of their own: WARDYN_PLATFORM_KEY_FILE in local mode only
+	// (under a key service the file counts for nothing), the platform key (and identity) of the key service
+	// otherwise. False shows platform_split as a warning (§2.13 c).
 	PlatformKeySeparate bool
 	// LocalLoopback reports whether the HTTP listen address binds only loopback.
 	// It feeds SetupAuth.LocalLoopback so the wizard can explain the local-mode

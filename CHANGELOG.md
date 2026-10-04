@@ -318,6 +318,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   write) and `git_pat_narrowing_unsupported_host` (an Azure DevOps host, or a GitHub-brokered forge). The PAT
   itself is not narrowed. Upgrade the proxy image together with wardynd: an older proxy refuses the new
   `pat_grants` keys at start.
+- **Key custody in the console.** Admin, Credentials gains a Key domains card (each declared domain, where
+  its key is, whether boot proved it, and Assign a domain / Remove for assignments) and a Key domain column
+  in Stored credentials saying where each person's next key is made and why; two groups that name different
+  domains show a conflict. `GET /api/v1/key-domains` adds `key`, `proven` and `principal_keys`, and
+  `GET /api/v1/model-providers/credentials` adds `key_domain`, `key_domain_source` and `key_domain_group`.
+  `/setup/status` adds `key_domains`, `principal_keys` and `key_domain_changes` (amber while an assignment
+  changed in the last 30 days), and the `platform_shared` row is now `platform_split`: under a key service it
+  is amber until the boot keys have a second key and identity there, and green once they do. This is a
+  rename of a row id.
 - **Key domains (`WARDYN_KEY_DOMAINS_FILE`, chart `kek.domains`; migration `0121_key_domains`).** A domain
   is a tenant of the key service, declared in deploy configuration only: a Transit key and an optional
   Vault role, or a Key Vault key pair and an optional client id. A security admin assigns a user, a group or

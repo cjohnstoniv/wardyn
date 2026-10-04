@@ -321,4 +321,17 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     const outTs = readFileSync(join(root, "ui/src/app/lib/types/run-output.ts"), "utf8");
     expect(new Set(tsInterfaceTopKeys(outTs, "RunOutput"))).toEqual(new Set(goTags));
   });
+
+  // Key custody (key-l3.4): GET /key-domains and the key-domain fields of the credential inventory.
+  it.each([
+    ["internal/api/key_domains.go", "keyDomainRow", "key-domains.ts", "KeyDomainRow"],
+    ["internal/api/key_domains.go", "keyDomainsResponse", "key-domains.ts", "KeyDomains"],
+    ["internal/secretstore/keydomain/service.go", "Assignment", "key-domains.ts", "KeyDomainAssignment"],
+    ["internal/api/credential_inventory.go", "credentialInventoryRow", "credentials.ts", "CredentialRow"],
+  ])("%s %s: full parity with the TS %s mirror", (goFile, goName, tsFile, tsName) => {
+    const goTags = goJSONTags(readFileSync(join(root, goFile), "utf8"), goName);
+    expect(goTags.length).toBeGreaterThanOrEqual(3);
+    const ts = readFileSync(join(root, "ui/src/app/lib/api", tsFile), "utf8");
+    expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
+  });
 });

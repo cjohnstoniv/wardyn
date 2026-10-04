@@ -2211,7 +2211,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     vouches for the boot keys. A pre-envelope boot key found beside the platform
     key is refused at boot rather than converted under it, so the only
     adoption is the operator's. Unset,
-    the residual stands and `/setup/status` shows `platform_shared`. (b) **store
+    the residual stands and `/setup/status` shows `platform_split`. (b) **store
     mode:** the boot keys live under `platform/` in the organisation's store;
     with ONE Vault role that separates audit and filtering only (the one token
     reaches both), and the recommended second role

@@ -112,6 +112,24 @@ func parsePrincipalKeys(v string) (bool, error) {
 	return false, fmt.Errorf("refusing to start: WARDYN_PRINCIPAL_KEYS is %q; it must be \"on\" or \"off\"", v)
 }
 
+// principalKeysOn is WARDYN_PRINCIPAL_KEYS read as parsePrincipalKeys does, after boot has
+// accepted it: anything but "on" is off.
+func principalKeysOn(v string) bool {
+	on, _ := parsePrincipalKeys(v)
+	return on
+}
+
+// platformKeySeparate reports whether the boot keys have a key of their own. In local mode that is the
+// platform key file. Under a key service the file separates nothing (boot-key rows go to the credential
+// key service until a platform key service is set), so only the service's second key counts: Transit or
+// Key Vault, each of which buildPlatformKEK refuses to accept without its identity.
+func platformKeySeparate(f *bootFlags, keyService bool) bool {
+	if keyService {
+		return strings.TrimSpace(*f.vault.transitKeyPlatform) != "" || azurePlatformNamed(f.azure)
+	}
+	return strings.TrimSpace(*f.platformKeyFile) != ""
+}
+
 // storeClients are the configured clients a secret store is built over.
 type storeClients struct {
 	// ext is the external store client, or nil.
