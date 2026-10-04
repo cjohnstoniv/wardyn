@@ -75,9 +75,10 @@ func TestService_PostgresDownFailsEveryCallAsUnavailable(t *testing.T) {
 			_, err := s.Set(ctx, keydomain.Assignment{SubjectType: keydomain.SubjectAll, Domain: "vault-b"})
 			return err
 		},
-		"Get":              func() error { _, _, err := s.Get(ctx, keydomain.SubjectUser, "alice"); return err },
-		"Delete":           func() error { _, _, err := s.Delete(ctx, keydomain.SubjectUser, "alice"); return err },
-		"AmbiguousIfGroup": func() error { _, err := s.AmbiguousIfGroup(ctx, "eng", "vault-b"); return err },
+		"Get":                 func() error { _, _, err := s.Get(ctx, keydomain.SubjectUser, "alice"); return err },
+		"Delete":              func() error { _, _, err := s.Delete(ctx, keydomain.SubjectUser, "alice"); return err },
+		"AmbiguousIfGroup":    func() error { _, err := s.AmbiguousIfGroup(ctx, "eng", "vault-b"); return err },
+		"TruncatedUnassigned": func() error { _, err := s.TruncatedUnassigned(ctx); return err },
 	} {
 		if err := call(); !errors.Is(err, secretstore.ErrUnavailable) {
 			t.Errorf("%s = %v, want secretstore.ErrUnavailable", name, err)

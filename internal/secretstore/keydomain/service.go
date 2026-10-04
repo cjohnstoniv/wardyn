@@ -182,7 +182,7 @@ func (s *Service) Place(ctx context.Context, owner string) (Placement, error) {
 			return Placement{}, unavailable("read the assignments", err)
 		}
 		if any {
-			return Placement{}, fmt.Errorf("%w: the last sign-in of %q lost groups; assign the person to a domain as a user, or have them sign in again", ErrGroupsTruncated, owner)
+			return Placement{}, fmt.Errorf("%w: the last sign-in of %q lost groups; assign the person to a domain as a user", ErrGroupsTruncated, owner)
 		}
 	}
 	if !s.Has(place.Domain) {
@@ -357,6 +357,25 @@ func (s *Service) AmbiguousIfGroupQ(ctx context.Context, q Querier, group, domai
 		              AND l.groups @> jsonb_build_array(g.subject))`, group, domain).Scan(&n)
 	if err != nil {
 		return 0, unavailable("count the people this would make ambiguous", err)
+	}
+	return n, nil
+}
+
+// TruncatedUnassigned counts the people whose last login lost groups and who have no user
+// assignment of their own: once any group is assigned, Domain refuses each of them by name.
+func (s *Service) TruncatedUnassigned(ctx context.Context) (int, error) {
+	return s.TruncatedUnassignedQ(ctx, s.pool)
+}
+
+// TruncatedUnassignedQ is TruncatedUnassigned on q.
+func (s *Service) TruncatedUnassignedQ(ctx context.Context, q Querier) (int, error) {
+	var n int
+	err := q.QueryRow(ctx, `
+		SELECT count(*) FROM key_domain_login_groups l
+		WHERE l.truncated
+		  AND NOT EXISTS (SELECT 1 FROM key_domain_assignments u WHERE u.subject_type='user' AND u.subject = l.principal)`).Scan(&n)
+	if err != nil {
+		return 0, unavailable("count the people with a truncated group snapshot", err)
 	}
 	return n, nil
 }

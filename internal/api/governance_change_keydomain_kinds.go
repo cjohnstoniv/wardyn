@@ -98,7 +98,7 @@ func applyKeyDomainAssignmentChange(s *Server, r *http.Request, q store.Querier,
 	ambiguous := func(ctx context.Context, group, domain string) (int, error) {
 		return svc.AmbiguousIfGroupQ(ctx, q, group, domain)
 	}
-	if d, err := keyDomainSetRefusal(ctx, svc, ambiguous, c); err != nil {
+	if d, err := keyDomainSetRefusal(ctx, svc, ambiguous, func(ctx context.Context) (int, error) { return svc.TruncatedUnassignedQ(ctx, q) }, c); err != nil {
 		return govApplied{}, err
 	} else if d != nil {
 		return govApplied{}, &govRefusal{why: string(d.Reason), write: func(w http.ResponseWriter, r *http.Request) { s.refuse(w, r, *d) }}

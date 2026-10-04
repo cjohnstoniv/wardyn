@@ -936,8 +936,11 @@ then `default`:
   assignment API refuses a group write that would leave anyone that way. Assign
   such a person to one domain as a user, or give the groups the same domain;
 - a login that lost groups (a truncated snapshot) cannot place a person while
-  group assignments exist. The new generation is refused by name until they sign
-  in again or are assigned as a user;
+  group assignments exist. The new generation is refused by name until they are
+  assigned as a user. Signing in again does not clear it for Microsoft Entra: a
+  group overage truncates every sign-in. The assignment API therefore refuses a
+  group write while anyone whose last sign-in lost groups has no user assignment,
+  so assign those people as users before the first group assignment;
 - `all` applies only when no user or group assignment matches.
 
 A background write by someone who has not signed in since a group changed (a

@@ -255,7 +255,7 @@ func (s *Server) handlePutKeyDomainAssignment(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	if d, err := keyDomainSetRefusal(r.Context(), svc, svc.AmbiguousIfGroup, c); err != nil {
+	if d, err := keyDomainSetRefusal(r.Context(), svc, svc.AmbiguousIfGroup, svc.TruncatedUnassigned, c); err != nil {
 		writeServerError(w, r, "check key domain membership", err)
 		return
 	} else if d != nil {
@@ -287,9 +287,11 @@ func (s *Server) handlePutKeyDomainAssignment(w http.ResponseWriter, r *http.Req
 
 // keyDomainSetRefusal is why the set c may not be made as the assignments stand, or nil: a domain
 // the file does not declare, or a group whose assignment would leave someone with two groups in
-// different domains and no user assignment, whose next key would then be refused by name. ambiguous
-// counts those people, on the pool for a direct write or on the decision transaction for a held one.
-func keyDomainSetRefusal(ctx context.Context, svc *keydomain.Service, ambiguous func(ctx context.Context, group, domain string) (int, error), c keyDomainChange) (*authz.Decision, error) {
+// different domains and no user assignment, or while someone whose last sign-in lost groups (an Entra
+// overage always does) has no user assignment, whose next key would then be refused by name. ambiguous
+// and truncated count those people, on the pool for a direct write or on the decision transaction for
+// a held one.
+func keyDomainSetRefusal(ctx context.Context, svc *keydomain.Service, ambiguous func(ctx context.Context, group, domain string) (int, error), truncated func(ctx context.Context) (int, error), c keyDomainChange) (*authz.Decision, error) {
 	if !svc.Has(c.Domain) {
 		d := authz.Deny(authz.ReasonKeyDomainUnknown, keyDomainTarget(c), fmt.Sprintf(
 			"The key domain %q is not declared in the deployment's key domains file, so nothing was changed. Declared: %s.",
@@ -300,12 +302,22 @@ func keyDomainSetRefusal(ctx context.Context, svc *keydomain.Service, ambiguous 
 		return nil, nil
 	}
 	n, err := ambiguous(ctx, c.Subject, c.Domain)
+	if err != nil {
+		return nil, err
+	}
+	if n > 0 {
+		d := authz.Deny(authz.ReasonKeyDomainAmbiguous, keyDomainTarget(c), fmt.Sprintf(
+			"%d people last signed in with this group and another group assigned to a different domain, and have no assignment of their own, so their next key would be refused. "+
+				"Assign each of them to one domain as a user first, or give both groups the same domain. Nothing was changed.", n))
+		return &d, nil
+	}
+	n, err = truncated(ctx)
 	if err != nil || n == 0 {
 		return nil, err
 	}
 	d := authz.Deny(authz.ReasonKeyDomainAmbiguous, keyDomainTarget(c), fmt.Sprintf(
-		"%d people last signed in with this group and another group assigned to a different domain, and have no assignment of their own, so their next key would be refused. "+
-			"Assign each of them to one domain as a user first, or give both groups the same domain. Nothing was changed.", n))
+		"%d people last signed in with a group list that was cut short, as a Microsoft Entra group overage does, and have no assignment of their own, so once any group is assigned their next key would be refused. "+
+			"Assign each of them to one domain as a user first. Nothing was changed.", n))
 	return &d, nil
 }
 

@@ -141,6 +141,32 @@ func TestPG_KeyDomains_AmbiguousMembershipIsRefused(t *testing.T) {
 	}
 }
 
+// A person whose last sign-in lost groups (an Entra overage always does) cannot be placed once any
+// group is assigned, so a group write is refused while such a person has no user assignment of
+// their own, and counts them. Assigning them as a user first lets it through.
+func TestPG_KeyDomains_TruncatedLoginRefusesAGroupWrite(t *testing.T) {
+	h, srv, svc := keyDomainFixture(t)
+	if err := svc.RecordLoginGroups(t.Context(), "gina", []string{"eng"}, true); err != nil {
+		t.Fatal(err)
+	}
+	code, body := keyDomainPut(t, srv, "group", "finance", `{"domain":"a"}`)
+	if code != http.StatusConflict || !strings.Contains(body, "key_domain_ambiguous_membership") || !strings.Contains(body, "1 people") || strings.Contains(body, "sign in again") {
+		t.Fatalf("PUT group beside a truncated login = %d %s; want 409 key_domain_ambiguous_membership counting one person", code, body)
+	}
+	if !strings.Contains(string(lastAuditEvent(t, h.audit.events, "authz.denied").Data), "key_domain_ambiguous_membership") {
+		t.Fatal("no authz.denied row for the truncated login")
+	}
+	if list, _ := svc.List(t.Context()); len(list) != 0 {
+		t.Fatalf("a refused write left %+v", list)
+	}
+	if code, body = keyDomainPut(t, srv, "user", "gina", `{"domain":"default"}`); code != http.StatusCreated {
+		t.Fatalf("PUT user gina = %d %s", code, body)
+	}
+	if code, body = keyDomainPut(t, srv, "group", "finance", `{"domain":"a"}`); code != http.StatusCreated {
+		t.Fatalf("PUT group once gina is a user = %d %s, want 201", code, body)
+	}
+}
+
 func TestPG_KeyDomains_RequestValidation(t *testing.T) {
 	_, srv, _ := keyDomainFixture(t)
 	for name, tc := range map[string]struct {

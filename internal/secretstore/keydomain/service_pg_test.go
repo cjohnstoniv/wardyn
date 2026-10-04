@@ -119,6 +119,21 @@ func TestService_AmbiguousIfGroup(t *testing.T) {
 	}
 }
 
+// The API's guard counts who a group assignment would lock out: people whose last login lost
+// groups and who have no user assignment.
+func TestService_TruncatedUnassigned(t *testing.T) {
+	pool := subjectkeytest.ThrowawayDB(t)
+	s := keydomain.NewService(pool, []string{"a"})
+	login(t, s, "gina", true, "eng")
+	login(t, s, "hal", true, "eng")
+	login(t, s, "ivy", false, "eng")
+	set(t, s, "user", "hal", "a")
+	n, err := s.TruncatedUnassigned(t.Context())
+	if err != nil || n != 1 {
+		t.Fatalf("TruncatedUnassigned = (%d, %v); want 1: gina (hal has a user assignment, ivy's login was complete)", n, err)
+	}
+}
+
 // A login that lost groups cannot place a person while group assignments exist.
 func TestService_TruncatedGroups(t *testing.T) {
 	pool := subjectkeytest.ThrowawayDB(t)
@@ -130,6 +145,8 @@ func TestService_TruncatedGroups(t *testing.T) {
 	set(t, s, "group", "other", "a")
 	if _, err := s.Domain(t.Context(), "gina"); !errors.Is(err, keydomain.ErrGroupsTruncated) {
 		t.Fatalf("truncated beside a group assignment = %v, want ErrGroupsTruncated", err)
+	} else if strings.Contains(err.Error(), "sign in again") {
+		t.Fatalf("the refusal %q offers a remedy an overage login never delivers", err)
 	}
 	set(t, s, "user", "gina", "a")
 	if got := domainOf(t, s, "gina"); got != "a" {
