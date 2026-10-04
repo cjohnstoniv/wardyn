@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -33,11 +34,33 @@ func TestRevokeSessions_SessionsOnlyKeepsTokensAndKeysAuthenticating(t *testing.
 	}
 	time.Sleep(10 * time.Millisecond)
 
+	// The directory the drawer re-reads after the sign-out: a live session before it, none after.
+	activeSessions := func() int {
+		t.Helper()
+		w := doSSO(t, e.a.srv, http.MethodGet, "/api/v1/people?q="+sub, accessSession(t, "sec", "sec@corp.example", oidc.RoleSecurityAdmin, []string{}), "")
+		var page struct {
+			People []struct {
+				Principal      string `json:"principal"`
+				ActiveSessions int    `json:"active_sessions"`
+			} `json:"people"`
+		}
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.People) != 1 {
+			t.Fatalf("GET /people?q=%s = %d %s", sub, w.Code, w.Body.String())
+		}
+		return page.People[0].ActiveSessions
+	}
+	if got := activeSessions(); got != 1 {
+		t.Fatalf("active_sessions before the sign-out = %d, want 1", got)
+	}
+
 	admin := accessSession(t, "sec", "sec@corp.example", oidc.RoleSecurityAdmin, []string{})
 	if w := doSSO(t, e.a.srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"`+sub+`","sessions_only":true}`); w.Code != http.StatusNoContent {
 		t.Fatalf("sessions_only revoke = %d %s", w.Code, w.Body.String())
 	}
 
+	if got := activeSessions(); got != 0 {
+		t.Errorf("active_sessions after the sign-out = %d, want 0", got)
+	}
 	for name, n := range map[string]*scimNode{"a": e.a, "b": e.b} {
 		if e.cookieWorks(n, cookie) {
 			t.Errorf("instance %s: the session issued before the sign-out still works", name)

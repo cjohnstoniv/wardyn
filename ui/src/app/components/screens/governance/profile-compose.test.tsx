@@ -210,6 +210,18 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
     );
   });
 
+  it("limits set on a new profile before a base is picked move into the overlay on compose", async () => {
+    renderEditor(null);
+    typeValue(GOV.FIELD_NAME, "Team A");
+    await userEvent.click(screen.getByRole("switch", { name: GOV.LIMIT_INTERACTIVE_LABEL }));
+    await pickBase("Baseline");
+    expect(screen.getByTestId("governance-limits-moved")).toHaveTextContent(GOV.OVERLAY_LIMITS_MOVED);
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+    expect(createProfileMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ limits: {}, overlay_limits: expect.objectContaining({ deny_interactive: true }) }),
+    );
+  });
+
   it("a stored allow_no_end or user_changes_limits that is on is not seeded", () => {
     const seeded = seedOverlayLimits({ allow_no_end: true, user_changes_limits: true } as never);
     expect(seeded).not.toHaveProperty("allow_no_end");
