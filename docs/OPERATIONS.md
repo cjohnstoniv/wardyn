@@ -2975,9 +2975,11 @@ applies all three actions deployment-wide, including the calling admin's own
 credentials. Plan to re-mint tokens and register SSH keys again after a global
 revoke.
 
-To end only a person's sessions, send `"sessions_only": true` with `sub`: the
-session cutoff is stamped and nothing else changes, so their API tokens and SSH
-keys keep working. It is refused (`sessions_revoke_param_invalid`) with `all`.
+To end only a person's browser sessions, send `"sessions_only": true` with
+`sub`: a session-only cut is stamped and nothing else changes. Their browser
+sessions end on every instance; their API tokens and SSH keys keep working,
+because those credentials are not checked against the cut. It is refused
+(`sessions_revoke_param_invalid`) with `all`.
 The audit row is the usual `session.revoke`, with `sessions_only` set and both
 counts `0`. The People drawer's "Sign out everywhere" sends it.
 
@@ -3122,7 +3124,7 @@ curl -X DELETE -H "Authorization: Bearer $TOKEN" $WARDYN/api/v1/tokens/<id>
 curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"sub":"alice@corp.com"}' $WARDYN/api/v1/sessions/revoke
 
-# Only her sessions; her tokens and SSH keys are left alone:
+# Only her browser sessions; her API tokens and SSH keys keep working:
 curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"sub":"alice@corp.com","sessions_only":true}' $WARDYN/api/v1/sessions/revoke
 ```
