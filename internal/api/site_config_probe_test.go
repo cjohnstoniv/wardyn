@@ -1095,7 +1095,21 @@ func TestHandleTestSiteConfigProxy_NeverLogsCredentialedUpstreamURL(t *testing.T
 	if strings.Contains(w.Body.String(), "hunter2-token") || strings.Contains(w.Body.String(), "svc-account") {
 		t.Fatalf("response body leaks the credentialed upstream URL: %s", w.Body.String())
 	}
-	for _, ev := range ps.events {
+	// The completion watcher outlives the response: it records run.complete and
+	// tears down after the handler has read the verdict, and clearing the sandbox
+	// ref is its last write. Wait for that so its events are checked too, then
+	// read the trail under the store's lock.
+	deadline := time.Now().Add(10 * time.Second)
+	for ps.soleRun().SandboxRef != "" {
+		if time.Now().After(deadline) {
+			t.Fatal("the completion watcher never finished the probe run")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	ps.mu.Lock()
+	events := append([]types.AuditEvent(nil), ps.events...)
+	ps.mu.Unlock()
+	for _, ev := range events {
 		raw := string(ev.Data)
 		if strings.Contains(raw, "hunter2-token") || strings.Contains(raw, "svc-account") {
 			t.Fatalf("audit event %q leaks the credentialed upstream URL: %s", ev.Action, raw)
