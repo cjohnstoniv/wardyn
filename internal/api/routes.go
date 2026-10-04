@@ -815,6 +815,7 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// Key domains (migration 0121): which declared domain a person's next
 	// principal-key generation is wrapped under.
 	s.mountKeyDomainRoutes(securityOps)
+	s.mountApprovalNotifyRoutes(securityOps)
 	// Sandbox sweep. SUPER, and the reason matters because an operator deciding
 	// who to trust with RoleSecurityAdmin reads exactly these lines: the sweep
 	// drives the RUNNER — Status then StopSandbox — across every run in the

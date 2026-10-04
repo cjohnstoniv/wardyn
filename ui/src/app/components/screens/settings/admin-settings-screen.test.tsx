@@ -52,6 +52,11 @@ vi.mock("../../../lib/api/ssh-keys", () => ({
   },
 }));
 
+const getApprovalNotifyStatusMock = vi.fn();
+vi.mock("../../../lib/api/approval-notify", () => ({
+  approvalNotify: { getStatus: (...a: unknown[]) => getApprovalNotifyStatusMock(...a) },
+}));
+
 vi.mock("../../../lib/api/secrets", () => ({
   secrets: { setSecret: vi.fn(), deleteSecret: vi.fn() },
 }));
@@ -74,6 +79,7 @@ import { AdminSettingsScreen } from "./admin-settings-screen";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { MODEL_PROVIDERS } from "../../../lib/model-providers-copy";
 import { ADMIN_SSH_KEYS } from "./admin-ssh-keys-card";
+import { APPROVAL_NOTIFY } from "../../wardyn/copy/approval-notify";
 import { SETTINGS_SUPER_ONLY, VIEW_REFUSAL } from "../../wardyn/copy/console-view";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { expandCard, startsWith } from "../../../lib/test-dom";
@@ -102,10 +108,11 @@ beforeEach(() => {
   getWorkspaceProvidersMock.mockReset().mockResolvedValue({ providers: {}, etag: null });
   getModelProvidersMock.mockReset().mockResolvedValue({ providers: {}, connected: {}, etag: null });
   listKeysMock.mockReset().mockResolvedValue([]);
+  getApprovalNotifyStatusMock.mockReset().mockResolvedValue({ channels: [] });
 });
 
 describe("AdminSettingsScreen", () => {
-  it("draws Host, Model providers, Providers, User drives, Admin SSH keys — in that order", async () => {
+  it("draws Host, Model providers, Providers, User drives, Admin SSH keys, Approval notifications — in that order", async () => {
     renderScreen();
     await screen.findByTestId("user-drives-card");
     const html = document.body.innerHTML;
@@ -115,27 +122,26 @@ describe("AdminSettingsScreen", () => {
       "Workspace providers",
       "User drives",
       ADMIN_SSH_KEYS.TITLE,
+      APPROVAL_NOTIFY.TITLE,
     ].map((label) => html.indexOf(`>${label}<`));
     for (const p of positions) expect(p).toBeGreaterThan(-1);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
   });
 
-  // M-5 (#636): Admin SSH keys (S-1) is the sixth and now LAST card — the
-  // mock draws it after User drives (§1a). The pre-M-5 "drives is the fifth
-  // and last card" invariant (user-drives-prompt.md §6) is superseded for
-  // THIS page by the packet's own layout; Your account has no Drives card at
-  // all, so there is nothing left for that rule to protect there either.
-  it("draws Admin SSH keys LAST, after User drives", async () => {
+  // M-5 (#636): Admin SSH keys (S-1) is drawn after User drives (§1a). notify-e4
+  // (packet M6 S3) adds Approval notifications as the seventh and now LAST card,
+  // directly after it. Your account has no Drives card at all, so there is
+  // nothing left for the old "drives is the last card" rule to protect there.
+  it("draws Approval notifications LAST, after Admin SSH keys", async () => {
     renderScreen();
-    const heading = await screen.findByRole("heading", { name: startsWith(ADMIN_SSH_KEYS.TITLE) });
+    const heading = await screen.findByRole("heading", { name: startsWith(APPROVAL_NOTIFY.TITLE) });
     const card = heading.closest("section")!;
     expect(card.parentElement?.lastElementChild).toBe(card);
-    const drivesCard = await screen.findByTestId("user-drives-card");
+    const sshCard = (await screen.findByRole("heading", { name: startsWith(ADMIN_SSH_KEYS.TITLE) })).closest("section")!;
     // Host, Branding, Model providers (list), Providers, User drives, Admin
-    // SSH keys.
-    expect(card.parentElement?.children).toHaveLength(6);
-    // User drives sits directly before it.
-    expect(card.previousElementSibling).toBe(drivesCard);
+    // SSH keys, Approval notifications.
+    expect(card.parentElement?.children).toHaveLength(7);
+    expect(card.previousElementSibling).toBe(sshCard);
   });
 
   // The retired Model provider card is replaced by the Model providers list;

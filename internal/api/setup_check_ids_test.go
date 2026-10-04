@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/notify"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -135,5 +136,9 @@ func TestSetupCheckIds_Golden(t *testing.T) {
 			OIDCRedirectURL: "https://wardyn.example.com/auth/callback",
 		})),
 	}
+	// Approval notifications configured: surfaces the approval_notify row, absent on every other fixture.
+	activateNotifyConfig(t)
+	got["with_approval_notify"] = setupCheckIds(t, New(Config{AdminToken: adminToken, Approvals: newNotifyApprovals()}))
+	notify.SetActive(nil, nil)
 	compareOrUpdateGolden(t, "testdata/setup_check_ids_golden.json", got)
 }

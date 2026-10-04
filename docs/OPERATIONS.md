@@ -1187,6 +1187,18 @@ approval and shows in the console, but enqueues nothing; it increments
 `wardyn_approval_notify_suppressed_total{channel}` and writes one `approval.notify.suppressed` audit row
 per run per hour (per replica).
 
+**In the console.** Every PENDING row on `GET /api/v1/approvals` carries `escalation_tier` and
+`sla_due_at` when its route has tiers: `escalation_tier` is the highest tier whose `after` has passed
+(the first notice is tier 0 and shows nothing), `sla_due_at` is when the next tier is due. Both are read
+from the outbox at response time and never stored, so a decided approval carries neither, and a member
+sees them only on approvals of runs they own. The Approvals cards show them as an "Escalated · level n"
+chip and an "Escalates in" countdown. Settings has a read-only "Approval notifications" card (super
+admins) fed by `GET /api/v1/approval-notify/status` (security tier): per channel its `id`, `type`, the
+destination **host** only (parsed from the URL, never a path, query or userinfo), `last_success_at`, the
+last error class and time, and `failed_last_hour` (rows dead in the last hour). `GET /api/v1/setup/status`
+adds a non-blocking `approval_notify` row, present only when the setting is on: `warn` when any row went
+dead in the last hour, otherwise `ok`.
+
 **Network policy.** On Kubernetes wardynd's NetworkPolicy is default-deny for egress. Add a rule for each
 notification endpoint, and for a corporate proxy if one fronts them, through
 `networkPolicy.egress.extra`, exactly as for SIEM sinks. The delivery client uses the same transport as
@@ -1344,6 +1356,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
 | the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, `GET /audit/retention`, `POST /audit/retention/drop`, the `/governance` profile and assignment routes (with the four `/governance/changes` routes that hold and decide their writes, see "Optional: four-eyes on governance writes"), `GET /access/directory/search` | ⛔ admin or `security_admin` |
 | `GET /admin/runs/capacity` — the fleet's configured reservations (below, "Fleet capacity"): across every owner, so not a member read. It never execs into a sandbox or calls the runner | ⛔ admin or `security_admin` |
+| the approval notification status — `GET /approval-notify/status`: each configured channel's id, type, destination host (never a URL), last delivery, last error class and dead rows in the last hour. It decides nothing, and the security tier is the one that decides approvals, so it is the one that must learn an announcement is not arriving | ⛔ admin or `security_admin` |
 | the `/user-types` routes — listing, defining, editing and removing the org's user types (`GET`/`POST /user-types`, `PUT`/`DELETE /user-types/{id}`). Defining a type is the same duty as authoring a profile; deciding who IS a type stays with the admin-only People mappings above. A type is refused removal (`409`) while the chart's role map or default role, or a permission, profile or drive row, still names it, or a live API token carries it, and the built-in `standard` type is never removable | ⛔ admin or `security_admin` |
 | the `/key-domains` routes — listing the declared key domains with how many live keys each holds, and setting or removing which domain a user, a group or everyone is assigned to (`GET /key-domains`, `PUT`/`DELETE /key-domains/assignments/{subject_type}/{subject}`). An assignment decides which declared domain's key wraps the subject's NEXT principal key; nothing already written moves. The domains themselves come from `WARDYN_KEY_DOMAINS_FILE`, never from the API. A domain the file does not declare is refused (`422`), as is a group write that would leave people in two domains (`409`) | ⛔ admin or `security_admin` |
 | the `/sources` writes — `POST /sources`, `POST /sources/{id}/scan`, `DELETE /sources/{id}`: registering, rescanning, or removing a source touches the same repo/registry topology the operator-topology reads above expose | ⛔ admin only |
