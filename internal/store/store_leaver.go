@@ -98,6 +98,8 @@ type LeaverStore interface {
 	PurgeDueIdentities(ctx context.Context, limit int) ([]uuid.UUID, error)
 	PendingLeavers(ctx context.Context, idleFor time.Duration, limit int) ([]PendingLeaver, error)
 	DeleteUserSubjectRows(ctx context.Context, subjects []string) (grants, assignments int64, err error)
+	ListDeactivatedIdentities(ctx context.Context, limit int) ([]PrincipalIdentity, error)
+	ListDeprovisionFailures(ctx context.Context, limit int) ([]DeprovisionFailure, error)
 }
 
 var _ LeaverStore = PG{}

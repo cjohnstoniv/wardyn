@@ -210,6 +210,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   provider stopped retrying. `WARDYN_SCIM_LEAVER_WORKSPACES` set to `keep` leaves workspaces with the person.
   The chart gains `scim.enabled`, `scim.tokenSecretRef`, `scim.purgeAfter` and `scim.leaverWorkspaces`, and
   `docs/OPERATIONS.md` gains the leaver runbook, "Leavers and SCIM".
+- **Settings shows where leaver deprovisioning stands.** A "SCIM provisioning" card on Settings reads the new
+  read-only `GET /api/v1/scim/status` (admin or `security_admin`): whether SCIM is set up, which token slot
+  matched last, the purge delay, the deactivated people, the deprovisioning steps still failing with their last
+  error, and the drives a purge listed that are still to reclaim. With SCIM off the card says so and links the
+  runbook.
 - **Sandbox pods can be placed on the nodes the operator names.** `k8s.sandbox.{nodeSelector,tolerations,affinity,priorityClassName,podAnnotations,podLabels}`
   (chart) render to `WARDYN_K8S_SANDBOX_PLACEMENT`, and the agent pod, the proxy pod and the boot-time
   NetworkPolicy canary all take it, so the canary proves enforcement on the nodes runs use. wardynd refuses

@@ -54,6 +54,7 @@ import { ModelProvidersList } from "./model-providers-list";
 import { BrandingCard } from "./branding-card";
 import { AdminSshKeysCard } from "./admin-ssh-keys-card";
 import { ApprovalNotifyCard } from "./approval-notify-card";
+import { ScimCard } from "./scim-card";
 import { ViewNotice } from "../../wardyn/console-view";
 import { VIEW_REFUSAL, SETTINGS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { Button } from "../../ui/button";
@@ -356,6 +357,8 @@ export function AdminSettingsScreen() {
           {/* notify-e4 (packet M6 S3): the seventh card — read-only channel
               health for the approval notifications WARDYN_APPROVAL_NOTIFY sets. */}
           <ApprovalNotifyCard />
+          {/* 0.8.6 scim-a7 (mock M5, D1 as amended): where leaver deprovisioning stands. Read-only. */}
+          <ScimCard />
         </div>
       )}
     </div>
