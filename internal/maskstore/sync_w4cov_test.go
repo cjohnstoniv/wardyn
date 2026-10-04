@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
 )
@@ -252,9 +253,9 @@ func TestW4CovApplySkipsWhatCanNeverOpen(t *testing.T) {
 	}
 }
 
-func TestW4CovApplyAbortsOnAKeyFailureAndAppliesNothingAfter(t *testing.T) {
+func TestW4CovApplyAbortsOnATransientKeyFailureAndAppliesNothingAfter(t *testing.T) {
 	f := w4CovNewFixture(t)
-	injected := errors.New("key service down")
+	injected := fmt.Errorf("key service down: %w", secretstore.ErrUnavailable)
 	f.keys.errs[w4CovOwner] = injected
 	first := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
 	second := f.sealedRow(t, w4CovRowB, bucketGlobal, "cred", nil, "second-secret-value", 2)
@@ -268,6 +269,92 @@ func TestW4CovApplyAbortsOnAKeyFailureAndAppliesNothingAfter(t *testing.T) {
 	}
 	if len(f.keys.lookups) != 1 {
 		t.Errorf("the read went on after the failure: %d key lookups", len(f.keys.lookups))
+	}
+}
+
+// A key service refusing this process (401/403) is about the caller, not the row: the read aborts
+// like a transient failure instead of fencing every run of the owner and tombstoning the rows.
+func TestW4CovApplyAbortsWhenTheKeyServiceRefusesThisProcess(t *testing.T) {
+	f := w4CovNewFixture(t)
+	injected := fmt.Errorf("transit KEK: %w: %w", kek.ErrService, kek.ErrAccess)
+	f.keys.errs[w4CovOwner] = injected
+	live := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
+
+	err := f.s.apply(context.Background(), []row{live}, true)
+	if !errors.Is(err, injected) {
+		t.Fatalf("apply = %v, want the injected key error wrapped", err)
+	}
+	if len(f.snapshot()) != 0 || f.ref(w4CovRowA) != nil {
+		t.Error("a refused read applied rows")
+	}
+}
+
+// A key service that does not hold the key is the service's state, not the row's: the read fails and
+// retries instead of fencing the owner.
+func TestW4CovApplyAbortsWhenTheKeyServiceDoesNotHoldTheKey(t *testing.T) {
+	f := w4CovNewFixture(t)
+	injected := fmt.Errorf("azurekv KEK: %w: %w", kek.ErrService, kek.ErrKeyMissing)
+	f.keys.errs[w4CovOwner] = injected
+	live := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
+
+	err := f.s.apply(context.Background(), []row{live}, true)
+	if !errors.Is(err, injected) {
+		t.Fatalf("apply = %v, want the injected key error wrapped", err)
+	}
+	if len(f.snapshot()) != 0 || f.ref(w4CovRowA) != nil {
+		t.Error("a read that aborted applied rows")
+	}
+}
+
+// A wrap the key service refuses to open (Transit: a version retired by min_decryption_version, or a
+// key that is not the one that made it) is the service's answer, not proof about the row: the read
+// aborts instead of fencing the owner, and heals once the floor is lowered or the address fixed.
+func TestW4CovApplyAbortsWhenTheKeyServiceRefusesTheWrap(t *testing.T) {
+	f := w4CovNewFixture(t)
+	injected := fmt.Errorf("transit KEK: %w: %w", kek.ErrService, kek.ErrRefused)
+	f.keys.errs[w4CovOwner] = injected
+	live := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
+
+	err := f.s.apply(context.Background(), []row{live}, true)
+	if !errors.Is(err, injected) {
+		t.Fatalf("apply = %v, want the injected key error wrapped", err)
+	}
+	if len(f.snapshot()) != 0 || f.ref(w4CovRowA) != nil {
+		t.Error("a read that aborted applied rows")
+	}
+}
+
+// A key-service answer nothing classifies (a Vault DR secondary's 472, a 409) is not proof about the
+// row: the read aborts on a live row and fences nothing (this Store has no database, so a fence or a
+// tombstone would fail the test), and heals once the service answers.
+func TestW4CovApplyAbortsOnAnUnclassifiedKeyServiceAnswer(t *testing.T) {
+	f := w4CovNewFixture(t)
+	injected := fmt.Errorf("transit KEK: %w: vault POST transit/decrypt/wardyn: 472", kek.ErrService)
+	f.keys.errs[w4CovOwner] = injected
+	live := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
+
+	err := f.s.apply(context.Background(), []row{live}, true)
+	if !errors.Is(err, injected) {
+		t.Fatalf("apply = %v, want the injected key error wrapped", err)
+	}
+	if len(f.snapshot()) != 0 || f.ref(w4CovRowA) != nil {
+		t.Error("a read that aborted applied rows")
+	}
+}
+
+// A wrap that provably does not open under its own key never heals by retrying: the row is handled
+// like a destroyed key (here retired, so no database is needed; the live fence is
+// TestPG_MaskStore_ACorruptWrapFencesALiveRowAndNothingElseDoes) and the read goes on.
+func TestW4CovApplySkipsARowWhoseKeyDoesNotUnwrap(t *testing.T) {
+	f := w4CovNewFixture(t)
+	f.keys.errs[w4CovOwner] = fmt.Errorf("subjectkey: generation 1 does not unwrap: local KEK: %w", kek.ErrCorrupt)
+	bad := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
+	bad.retiredAt = &w4CovRetired
+	if err := f.s.apply(context.Background(), []row{bad}, true); err != nil {
+		t.Fatalf("a permanent key failure must not abort the read: %v", err)
+	}
+	if f.ref(w4CovRowA) != nil || len(f.snapshot()) != 0 {
+		t.Error("a row whose key does not unwrap reached the cache")
 	}
 }
 

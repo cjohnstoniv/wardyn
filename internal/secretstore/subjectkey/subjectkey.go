@@ -260,7 +260,9 @@ func (m *Manager) fill(ctx context.Context, id keyID) ([]byte, error) {
 	}
 	k, err := m.keks.Reader(domain, kekID)
 	if err != nil {
-		return nil, fmt.Errorf("subjectkey: generation %d of (owner=%q, purpose=%q): %w", id.version, id.owner, id.purpose, err)
+		// This process cannot reach the key (its own domain or KEK configuration): unavailable to
+		// it, not destroyed, so a reader aborts and heals once the configuration is fixed.
+		return nil, unavailable(fmt.Sprintf("the KEK of generation %d of (owner=%q, purpose=%q)", id.version, id.owner, id.purpose), err)
 	}
 	key, err := k.Unwrap(ctx, wrapped, kek.PrincipalBind(id.owner, id.purpose, id.version, domain))
 	if err != nil {

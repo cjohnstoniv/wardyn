@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -152,12 +153,13 @@ func (t *Transit) Wrap(ctx context.Context, dek []byte, bind map[string]string) 
 	return w, nil
 }
 
-// Unwrap implements kek.KEK. A wrap moved to another row, made under another
-// key, or under a version min_decryption_version has retired is a definitive
-// refusal; only an unreachable Vault is transient.
+// Unwrap implements kek.KEK. A wrap that is not a Transit ciphertext, moved to
+// another row, made under another key, or under a version min_decryption_version
+// has retired is a definitive refusal (kek.ErrRefused); only an unreachable Vault
+// is transient.
 func (t *Transit) Unwrap(ctx context.Context, wrapped []byte, bind map[string]string) ([]byte, error) {
 	if _, err := t.WrapVersion(wrapped); err != nil {
-		return nil, fmt.Errorf("transit KEK %s: the row holds %w", t.id, err)
+		return nil, fmt.Errorf("transit KEK %s: %w: the row holds %w", t.id, kek.ErrRefused, err)
 	}
 	aad, err := kek.WrapAAD(bind, t.id)
 	if err != nil {
@@ -184,20 +186,34 @@ func (t *Transit) Unwrap(ctx context.Context, wrapped []byte, bind map[string]st
 // post calls <mount>/<op>/<key>. An unreachable Vault stays transient
 // (secretstore.ErrUnavailable); any answer Vault gives with an error status —
 // 400 for a deleted key or a wrap that does not authenticate, 403, 404 — is
-// kek.ErrService, carrying Vault's status and message.
+// kek.ErrService, carrying Vault's status and message. Any other 400 from a
+// decrypt is also kek.ErrRefused: Vault's "too old", "invalid ciphertext" and
+// "message authentication failed" cannot tell a corrupted row from a retired
+// version or another Vault with this mount and key name (the id names no cluster).
 func (t *Transit) post(ctx context.Context, op string, in map[string]string, out any) error {
 	path := t.mount + "/" + op + "/" + t.key
 	status, err := t.c.call(ctx, http.MethodPost, path, in, out)
 	if errors.Is(err, secretstore.ErrUnavailable) {
 		return fmt.Errorf("transit KEK %s: %w", t.id, err)
 	}
+	if s := statusOf(err); s == http.StatusNotFound || (s == http.StatusBadRequest && vaultSays(err, "encryption key not found")) {
+		return fmt.Errorf("transit KEK %s: %w: %w: %w", t.id, kek.ErrService, kek.ErrKeyMissing, err)
+	}
+	if op == "decrypt" && statusOf(err) == http.StatusBadRequest {
+		return fmt.Errorf("transit KEK %s: %w: %w: %w", t.id, kek.ErrService, kek.ErrRefused, err)
+	}
 	if err != nil {
 		return fmt.Errorf("transit KEK %s: %w: %w", t.id, kek.ErrService, err)
 	}
 	if status == http.StatusNotFound {
-		return fmt.Errorf("transit KEK %s: vault POST %s: 404 (no such mount or key)", t.id, path)
+		return fmt.Errorf("transit KEK %s: %w: %w: vault POST %s: 404 (no such mount or key)", t.id, kek.ErrService, kek.ErrKeyMissing, path)
 	}
 	return nil
+}
+
+func vaultSays(err error, msg string) bool {
+	var ve *vaultError
+	return errors.As(err, &ve) && slices.ContainsFunc(ve.msgs, func(m string) bool { return strings.Contains(m, msg) })
 }
 
 // WrapVersion implements kek.Versioned: the N of a "vault:vN:…" ciphertext.

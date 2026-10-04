@@ -9,6 +9,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 
@@ -245,6 +246,38 @@ func TestLocalKEK_RefusesAnyOtherBinding(t *testing.T) {
 	}
 	if got, err := a.Unwrap(ctx, wrapped, Bind("alice", "k")); err != nil || !bytes.Equal(got, dek) {
 		t.Errorf("Unwrap under its own bind = (%x, %v)", got, err)
+	}
+}
+
+// A wrap that does not authenticate under the local key for its row (corrupted, moved, or made under
+// another key) is kek.ErrCorrupt: the one local answer that proves the row's bytes are wrong. A bind
+// this process built wrong is not.
+func TestLocalKEK_AWrapThatDoesNotAuthenticateIsErrCorrupt(t *testing.T) {
+	ctx := context.Background()
+	a, _ := newLocal("ikm-a", "rcpt-a", "local:", localInfo)
+	b, _ := newLocal("ikm-b", "rcpt-b", "local:", localInfo)
+	wrapped, err := a.Wrap(ctx, seq(0x40, DEKSize), Bind("alice", "k"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	flipped := append([]byte(nil), wrapped...)
+	flipped[len(flipped)-1] ^= 1
+	for label, c := range map[string]struct {
+		k    *Local
+		w    []byte
+		bind map[string]string
+	}{
+		"a flipped byte": {a, flipped, Bind("alice", "k")},
+		"another row":    {a, wrapped, Bind("bob", "k")},
+		"another key":    {b, wrapped, Bind("alice", "k")},
+		"a short wrap":   {a, wrapped[:5], Bind("alice", "k")},
+	} {
+		if _, err := c.k.Unwrap(ctx, c.w, c.bind); !errors.Is(err, ErrCorrupt) {
+			t.Errorf("%s: Unwrap = %v; want ErrCorrupt", label, err)
+		}
+	}
+	if _, err := a.Unwrap(ctx, wrapped, map[string]string{BindName: "k"}); err == nil || errors.Is(err, ErrCorrupt) {
+		t.Errorf("a bind without an owner: Unwrap = %v; want a refusal that is not ErrCorrupt", err)
 	}
 }
 

@@ -239,9 +239,10 @@ func (s *Store) fetch(ctx context.Context, cursor int64) (top, pruned int64, row
 
 // apply puts rows into the registry. A row this process already knows is
 // updated from the ref; only an unknown row is opened, under its owner's key,
-// and a key that is destroyed or a blob that does not open is skipped (nothing
-// can ever mask it) once the runs it masks are fenced (unopenable). Any other
-// failure aborts the read, so the cursor stays and the caller fails closed. A full read also drops what the table no longer has.
+// and a key that is destroyed or does not unwrap, or a blob that does not open,
+// is skipped (nothing can ever mask it) once the runs it masks are fenced
+// (unopenable). A transient failure (the store is unavailable, the context
+// ends) aborts the read, so the cursor stays and the caller fails closed. A full read also drops what the table no longer has.
 func (s *Store) apply(ctx context.Context, rows []row, full bool) error {
 	keys := map[keyID][]byte{}
 	defer func() {
@@ -345,9 +346,18 @@ func (s *Store) open(ctx context.Context, r row, keys map[keyID][]byte) (*ref, e
 	if !ok {
 		var err error
 		key, err = s.keys.Key(ctx, r.owner, subjectkey.PurposeCred, *r.version)
+		// The fence is irreversible, so it needs proof about the row: a destroyed generation, or a
+		// wrap that does not open under its own key (kek.ErrCorrupt), which never heals by
+		// retrying. Every other failure (unreachable, access refused, a key or version the
+		// service does not hold or has retired, any answer nothing classifies) aborts the read:
+		// consumers fail closed and it heals once the service or configuration does.
 		switch {
 		case errors.Is(err, subjectkey.ErrDataLoss):
 			return nil, s.unopenable(ctx, r, "the owner's key is destroyed")
+		case errors.Is(err, kek.ErrCorrupt):
+			slog.ErrorContext(ctx, "maskstore: the owner's key does not open",
+				slog.String("owner", r.owner), slog.Int("key_version", *r.version), slog.Any("err", err))
+			return nil, s.unopenable(ctx, r, "the owner's key does not open")
 		case err != nil:
 			return nil, fmt.Errorf("maskstore: the owner's key: %w", err)
 		}
