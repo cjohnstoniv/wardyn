@@ -84,10 +84,10 @@ func TestGapCovMaintenanceModeRefusesModesThatAreModesOfTheirOwn(t *testing.T) {
 	}
 }
 
-// With high availability on, no single-instance lock is taken: the claim needs no database and its
-// release does nothing.
+// With high availability on, no single-instance lock is taken: the claim never dials the database
+// (lazyPool) and its release does nothing.
 func TestGapCovClaimSingleInstanceUnderHAHoldsNothing(t *testing.T) {
-	release, err := claimSingleInstance(context.Background(), nil, true)
+	release, err := claimSingleInstance(context.Background(), lazyPool(t, 3), true)
 	if err != nil || release == nil {
 		t.Fatalf("claimSingleInstance = %v, %v; want a release func and no error", release != nil, err)
 	}
