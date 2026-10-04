@@ -8,6 +8,7 @@
 // that never touches runs drops this module from its chunk.
 import type {
   AdminProxyWindowResult,
+  RunCapacityResponse,
   AdminRestartResponse,
   AgentRun,
   AttachHolder,
@@ -506,6 +507,14 @@ export const runs = {
     const res = await wfetch("/admin/runs/proxy-window", { method: "GET" });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
     return asJson<AdminProxyWindowResult>(res);
+  },
+
+  // GET /api/v1/admin/runs/capacity — security operator only. The fleet's
+  // configured reservations (not measurements), computed on request.
+  async getAdminRunCapacity(): Promise<RunCapacityResponse> {
+    const res = await wfetch("/admin/runs/capacity", { method: "GET" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<RunCapacityResponse>(res);
   },
 
   // POST /api/v1/admin/runs/restart { run_ids } — operator only. Restarts

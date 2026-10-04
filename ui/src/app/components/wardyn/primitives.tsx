@@ -185,6 +185,9 @@ const runStateMeta: Record<
   KILLED: { tone: "danger", label: "Killed", Icon: ShieldX, solid: true },
 };
 
+/** The badge's label for a run state, for surfaces that name states in prose. */
+export const runStateLabel = (s: string): string => metaFor(runStateMeta, s, { tone: "neutral", label: s }).label;
+
 /**
  * `variant`:
  *   "chip"  (default) the pill — group headers, the table, the detail header.
