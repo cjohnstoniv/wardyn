@@ -142,7 +142,7 @@ func (s *Server) capturePane(ctx context.Context, st store.RunOutputStore, run t
 		return 0, "timeout"
 	}
 
-	out, truncated, dropped, uncovered := tail.seal(s.cfg.MaskManifests != nil && !s.maskCovered(ctx, run.ID))
+	out, truncated, dropped, uncovered := tail.seal(s.cfg.MaskManifests != nil && !s.maskCovered(ctx, run.ID), true)
 	if uncovered {
 		return 0, "mask_uncovered"
 	}
