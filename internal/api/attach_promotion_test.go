@@ -183,6 +183,9 @@ func TestAttachPromotion_WebObserverPromotedInPlace(t *testing.T) {
 		t.Fatal("the first client was told it is read-only")
 	}
 	waitFor(t, "the writer to register", func() bool { return srv.attachHolderFor(run.ID) != nil })
+	// The writer registers before its exec opens: wait for that exec, so it is
+	// Attach 0 and the observer's is Attach 1.
+	waitForSession(t, fr, 0)
 
 	c2 := dialAttach(t, ts, srv, run.ID, holderSecond, "")
 	m2 := readAttachMode(t, c2)
@@ -201,6 +204,12 @@ func TestAttachPromotion_WebObserverPromotedInPlace(t *testing.T) {
 	}
 
 	m3 := readNextAttachMode(t, c2)
+	// The writer's exec, once ready, re-sends its size and mode to the observers
+	// queued by then (fanoutWriterResize), so the observer may first read that
+	// restatement of the same holder; the frame after it is the promotion.
+	for m3.ReadOnly && m3.Holder != nil && m3.Holder.Principal == holderOwner {
+		m3 = readNextAttachMode(t, c2)
+	}
 	if m3.ReadOnly {
 		t.Fatal("the observer was told read_only:true again; it was never promoted")
 	}
