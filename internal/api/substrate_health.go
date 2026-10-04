@@ -136,7 +136,7 @@ const (
 // is where the operator reads this row. Its detail is the classified state and
 // the names of stale sweeps, never the text of a substrate error, which can carry
 // API-server wording this row was never meant to publish.
-func substrateHealthCheck(driver string, state runner.SubstrateState, haveRunner bool, sweeps []sweephealth.Status) (SetupCheck, bool) {
+func substrateHealthCheck(state runner.SubstrateState, haveRunner bool, sweeps []sweephealth.Status) (SetupCheck, bool) {
 	var stale []string
 	for _, sw := range sweeps {
 		if sw.Stale {
@@ -146,8 +146,8 @@ func substrateHealthCheck(driver string, state runner.SubstrateState, haveRunner
 	if !haveRunner && len(sweeps) == 0 {
 		return SetupCheck{}, false
 	}
-	chk := SetupCheck{ID: "substrate_health", Label: "Substrate and sweep health", Status: "ok",
-		Detail: "The sandbox runner answers and every background sweep is running."}
+	chk := SetupCheck{ID: "substrate_health", Label: "Runner health", Status: "ok",
+		Detail: "The runner answers, and every background sweep is on time."}
 	if !haveRunner {
 		chk.Detail = "Every background sweep is running."
 	}
@@ -156,30 +156,20 @@ func substrateHealthCheck(driver string, state runner.SubstrateState, haveRunner
 	}
 	if len(stale) > 0 {
 		chk.Status, chk.Cause = "warn", causeSweepStale
-		chk.Detail = fmt.Sprintf("These background sweeps have not finished in %d of their intervals: %s.", sweephealth.StaleAfterIntervals, strings.Join(stale, ", "))
-		chk.Fix = "Read the wardynd log for the sweep's error and check the database. If every replica is running, one of them should hold the sweeper lease."
+		chk.Detail = "These background sweeps haven't succeeded for three of their intervals: `" + strings.Join(stale, "`, `") + "`. What they stop, expire or clean up waits until they run again."
+		chk.Fix = "Check wardynd's logs for the named sweeps; `wardyn_sweep_last_tick_seconds` shows when each last succeeded."
 	}
 	switch state {
 	case runner.SubstrateUnreachable:
 		chk.Status, chk.Cause = "fail", causeRunnerUnreachable
-		chk.Detail = "The control plane cannot reach the sandbox runner's substrate, so runs cannot launch or be controlled." + staleSuffix(stale)
-		chk.Fix = "Check that the substrate answers from this replica: the Docker daemon is running and its socket is mounted, or the Kubernetes API server is reachable from the wardynd pod. /readyz is unaffected."
+		chk.Detail = "Wardyn can't reach the sandbox runner, so new runs can't start."
+		chk.Fix = "Check the runner: the Docker daemon on this host, or the Kubernetes API from the wardynd pod."
 	case runner.SubstrateUnauthorized, runner.SubstrateForbidden:
 		chk.Status, chk.Cause = "fail", causeRunnerAuth
-		chk.Detail = fmt.Sprintf("The sandbox runner's substrate refused the control plane (%s), so runs cannot launch or be controlled.", state) + staleSuffix(stale)
-		chk.Fix = "Docker: check that wardynd's user may use the Docker socket. Kubernetes: check the wardynd ServiceAccount token, and that the runner Role and RoleBinding exist in the runs namespace. /readyz is unaffected."
-		if driver == "k8s" {
-			chk.Fix = "Check the wardynd ServiceAccount token, and that the runner Role and RoleBinding exist in the runs namespace. /readyz is unaffected."
-		}
+		chk.Detail = "The sandbox runner refuses Wardyn's credentials, so new runs can't start."
+		chk.Fix = "On Kubernetes, the chart's runner Role and RoleBinding must exist in the runs namespace; `helm upgrade` restores them."
 	}
 	return chk, true
-}
-
-func staleSuffix(stale []string) string {
-	if len(stale) == 0 {
-		return ""
-	}
-	return " Sweeps not finished in time: " + strings.Join(stale, ", ") + "."
 }
 
 // substrateHealthRow reads this replica's probe and the shared sweep record and
@@ -189,11 +179,7 @@ func staleSuffix(stale []string) string {
 func (s *Server) substrateHealthRow(ctx context.Context) (SetupCheck, bool) {
 	state, haveRunner := s.runnerSubstrateState(ctx)
 	sweeps := s.sweepStatuses(ctx)
-	driver := ""
-	if haveRunner {
-		driver = s.cfg.Runner.Name()
-	}
-	return substrateHealthCheck(driver, state, haveRunner, sweeps)
+	return substrateHealthCheck(state, haveRunner, sweeps)
 }
 
 // sweepStatuses reads the shared sweep record. A record that cannot be read is

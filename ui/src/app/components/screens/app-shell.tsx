@@ -467,6 +467,10 @@ const EveryoneAdminBanner = React.lazy(() =>
 const GovernedAdminBanner = React.lazy(() =>
   import("../wardyn/governed-admin-banner").then((m) => ({ default: m.GovernedAdminBanner })),
 );
+// M10 (o-o2b) — same lazy rationale; mounted after GovernedAdminBanner.
+const SubstrateHealthBanner = React.lazy(() =>
+  import("../wardyn/substrate-health-banner").then((m) => ({ default: m.SubstrateHealthBanner })),
+);
 // #659 Q2 — same lazy rationale; mounted FIRST in the stack, ahead of every
 // deployment-wide band: it answers what the person just did (a redirect they
 // are actively watching for), one time, then clears itself from the URL —
@@ -885,6 +889,11 @@ export function AppShell({
               band beside the everyone-is-an-admin one. */}
               <React.Suspense fallback={null}>
                 <GovernedAdminBanner view={view} />
+              </React.Suspense>
+              {/* M10 — Admin view, admins only: the substrate_health row as the
+              server graded it. */}
+              <React.Suspense fallback={null}>
+                <SubstrateHealthBanner view={view} />
               </React.Suspense>
               {/* #162 — last in the stack (mock-approval ruling 3): the four
               bands above are each the better explanation of what you are
