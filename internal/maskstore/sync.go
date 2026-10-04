@@ -350,11 +350,13 @@ func (s *Store) open(ctx context.Context, r row, keys map[keyID][]byte) (*ref, e
 		switch {
 		case errors.Is(err, subjectkey.ErrDataLoss):
 			return nil, s.unopenable(ctx, r, "the owner's key is destroyed")
-		case errors.Is(err, secretstore.ErrUnavailable) || errors.Is(err, kek.ErrAccess) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+		case errors.Is(err, secretstore.ErrUnavailable) || errors.Is(err, kek.ErrAccess) || errors.Is(err, kek.ErrKeyMissing) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 			return nil, fmt.Errorf("maskstore: the owner's key: %w", err)
 		case err != nil:
 			// A permanent failure (the key does not unwrap: its version retired, or the row
 			// corrupt) never heals by retrying; aborting would wedge every replica's read.
+			// A key the service no longer holds is the service's or this configuration's
+			// state, not the row's, so it aborted above.
 			slog.ErrorContext(ctx, "maskstore: the owner's key does not open",
 				slog.String("owner", r.owner), slog.Int("key_version", *r.version), slog.Any("err", err))
 			return nil, s.unopenable(ctx, r, "the owner's key does not open")

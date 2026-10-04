@@ -258,6 +258,9 @@ func TestKEK_ErrorClassification(t *testing.T) {
 		if refused := name != "404"; errors.Is(err, kek.ErrAccess) != refused {
 			t.Fatalf("%s = %v; kek.ErrAccess want %v", name, err, refused)
 		}
+		if absent := name == "404"; errors.Is(err, kek.ErrKeyMissing) != absent {
+			t.Fatalf("%s = %v; kek.ErrKeyMissing want %v", name, err, absent)
+		}
 	}
 	f.mu.Lock()
 	f.shortUnwrap = true

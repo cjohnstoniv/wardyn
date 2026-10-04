@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -191,13 +192,21 @@ func (t *Transit) post(ctx context.Context, op string, in map[string]string, out
 	if errors.Is(err, secretstore.ErrUnavailable) {
 		return fmt.Errorf("transit KEK %s: %w", t.id, err)
 	}
+	if s := statusOf(err); s == http.StatusNotFound || (s == http.StatusBadRequest && vaultSays(err, "encryption key not found")) {
+		return fmt.Errorf("transit KEK %s: %w: %w: %w", t.id, kek.ErrService, kek.ErrKeyMissing, err)
+	}
 	if err != nil {
 		return fmt.Errorf("transit KEK %s: %w: %w", t.id, kek.ErrService, err)
 	}
 	if status == http.StatusNotFound {
-		return fmt.Errorf("transit KEK %s: vault POST %s: 404 (no such mount or key)", t.id, path)
+		return fmt.Errorf("transit KEK %s: %w: %w: vault POST %s: 404 (no such mount or key)", t.id, kek.ErrService, kek.ErrKeyMissing, path)
 	}
 	return nil
+}
+
+func vaultSays(err error, msg string) bool {
+	var ve *vaultError
+	return errors.As(err, &ve) && slices.ContainsFunc(ve.msgs, func(m string) bool { return strings.Contains(m, msg) })
 }
 
 // WrapVersion implements kek.Versioned: the N of a "vault:vN:…" ciphertext.

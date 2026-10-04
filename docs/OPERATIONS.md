@@ -7405,7 +7405,7 @@ therefore the per-replica cap times the replica count (cap × N):
   refresh already in flight on the old holder can still race the new holder at the
   authority and lose the credential; the person signs in again.
 - **An owner's key that does not unwrap fences that owner only.** If a person's
-  principal key cannot be unwrapped (its KEK version was retired or purged before
+  principal key cannot be unwrapped (its KEK version was retired before
   `-rewrap-principal-keys`, or the `wrapped_key` is corrupted), a read of the shared
   registry logs `maskstore: the owner's key does not open` at Error, naming the owner
   and key version, then handles each of that owner's live values as a destroyed key:
@@ -7413,12 +7413,15 @@ therefore the per-replica cap times the replica count (cap × N):
   `mask_state_unavailable`) and the rows are tombstoned. Other people's values are
   unaffected and `mask_registry_shared` stays healthy. The remedy is to restore the
   retired KEK version and run `-rewrap-principal-keys`, or to erase that person's
-  credentials. A transient failure (Postgres or the KEK service unreachable) is
+  credentials, which restores their credentials and future runs; the fenced runs stay
+  fenced. A transient failure (Postgres or the KEK service unreachable) is
   different: the read fails and retries, and consumers fail closed until it succeeds.
   So is a key this replica cannot reach (its own `WARDYN_KEY_DOMAINS_FILE` or KEK
   configuration lags, or the key service refuses its access with a 401 or 403): that
   replica fails its read instead of fencing, and heals once the configuration or the
-  access is fixed.
+  access is fixed. So is a key or mount the service no longer holds (deleted,
+  soft-deleted or renamed): every replica fails its read, and consumers fail closed,
+  until the key is restored or that person's credentials are erased through the API.
 - **A compromised wardynd process still sees every value it masks.** Shredding a
   person's copies is complete only after backups expire or the wrapping key version
   is retired.

@@ -547,7 +547,7 @@ func (k *KEK) signingVersion(ctx context.Context, sv string) (*ecdsa.PublicKey, 
 	}
 	kb, _, err := k.getKey(ctx, k.signName, sv)
 	if err == nil && !kb.Attributes.Enabled {
-		err = fmt.Errorf("%s version %s is disabled", k.signName, sv)
+		err = fmt.Errorf("%w: %s version %s is disabled", kek.ErrKeyMissing, k.signName, sv)
 	}
 	if err == nil {
 		pub, err = k.p256(sv, kb)
@@ -602,7 +602,7 @@ func (k *KEK) call(ctx context.Context, method, path string, in, out any) error 
 	case err != nil:
 		return k.serviceErr(err)
 	case status == http.StatusNotFound:
-		return k.serviceErr(fmt.Errorf("key vault %s %s: 404 (no such key or version)", method, path))
+		return fmt.Errorf("azurekv KEK %s: %w: %w: key vault %s %s: 404 (no such key or version)", k.id, kek.ErrService, kek.ErrKeyMissing, method, path)
 	}
 	return nil
 }

@@ -114,6 +114,14 @@ func TestTransit_Classification(t *testing.T) {
 	if _, err := tr.Unwrap(ctx, w, kek.Bind("", "k")); err == nil || errors.Is(err, secretstore.ErrUnavailable) || !strings.Contains(err.Error(), "too old") || errors.Is(err, kek.ErrAccess) {
 		t.Fatalf("Unwrap of a retired version = %v; want a definitive refusal", err)
 	}
+	// A key or mount the service no longer holds is about the service, not the row.
+	f.mu.Lock()
+	f.transit.minDecrypt = 0
+	f.transit.name = "other"
+	f.mu.Unlock()
+	if _, err := tr.Unwrap(ctx, w, kek.Bind("", "k")); err == nil || !errors.Is(err, kek.ErrKeyMissing) || errors.Is(err, kek.ErrAccess) || errors.Is(err, secretstore.ErrUnavailable) {
+		t.Fatalf("Unwrap under a key Vault does not hold = %v; want kek.ErrKeyMissing and neither ErrAccess nor ErrUnavailable", err)
+	}
 	// A row that holds no Transit ciphertext never reaches Vault.
 	before := f.callCount("POST transit/decrypt")
 	if _, err := tr.Unwrap(ctx, []byte("local-wrap-bytes"), kek.Bind("", "k")); err == nil {

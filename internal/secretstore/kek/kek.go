@@ -51,6 +51,10 @@ var ErrService = errors.New("key service error")
 // the caller, not the wrap.
 var ErrAccess = errors.New("key service refuses this process's access")
 
+// ErrKeyMissing is a key service that does not hold the key or mount a wrap names: about the
+// service or this process's configuration, never the row.
+var ErrKeyMissing = errors.New("the key service does not hold the key")
+
 // Versioned is a KEK whose key has versions (Vault Transit, Key Vault): each
 // wrap names the version it was made under, and `wardynd -rewrap` moves every
 // row naming any other version onto the latest, so the others can be retired.
