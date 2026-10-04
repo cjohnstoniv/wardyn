@@ -227,8 +227,8 @@ func TestAttachPump_RevokeWhilePaused(t *testing.T) {
 	}
 }
 
-// TestAttachPump_PauseStall: a pause never followed by a resume ends the pump
-// with the reason "client stalled".
+// TestAttachPump_PauseStall: a pause never followed by a resume, from a peer
+// that no longer answers pings, ends the pump with the reason "client stalled".
 func TestAttachPump_PauseStall(t *testing.T) {
 	srv, gr, rec, run := f5Server(t)
 	srv.pauseLimit = 100 * time.Millisecond
@@ -236,7 +236,7 @@ func TestAttachPump_PauseStall(t *testing.T) {
 	defer ts.Close()
 	c, sess := flowPumpClient(t, srv, gr, ts, run.ID)
 	defer close(sess.release)
-	go drainClient(c)
+	// The client never reads again, so it never answers the stall probe.
 
 	wsWrite(t, c, websocket.MessageText, []byte(`{"type":"pause"}`))
 	ev := waitForAudit(t, rec, run.ID, "session.detach", "success")
@@ -245,5 +245,31 @@ func TestAttachPump_PauseStall(t *testing.T) {
 	}
 	if !strings.Contains(string(ev.Data), `"reason":"client stalled"`) {
 		t.Fatalf("detach data = %s, want reason client stalled", ev.Data)
+	}
+}
+
+// TestAttachPump_PausedLivePeerSurvives: a client paused past the stall bound
+// that still answers pings (a hidden browser tab: timers throttled, network
+// layer alive) keeps its socket, and its late resume releases the held output.
+func TestAttachPump_PausedLivePeerSurvives(t *testing.T) {
+	srv, gr, rec, run := f5Server(t)
+	srv.pauseLimit = 100 * time.Millisecond
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
+	defer ts.Close()
+	c, sess := flowPumpClient(t, srv, gr, ts, run.ID)
+	defer close(sess.release)
+
+	var rerr error
+	frames := clientFrames(c, &rerr) // reads, so it answers every ping
+	wsWrite(t, c, websocket.MessageText, []byte(`{"type":"pause"}`))
+	wsPing(t, c)
+	go func() { _, _ = sess.w.Write([]byte("held")) }()
+	time.Sleep(600 * time.Millisecond) // several stall bounds
+	if ev := findAudit(rec.snapshot(), run.ID, "session.detach", "success"); ev != nil {
+		t.Fatalf("a paused client that answers pings was detached: %s", ev.Data)
+	}
+	wsWrite(t, c, websocket.MessageText, []byte(`{"type":"resume"}`))
+	if got, ok := recvWithin(frames, 3*time.Second); !ok || string(got) != "held" {
+		t.Fatalf("after a late resume got %q ok=%v, want the held output", got, ok)
 	}
 }

@@ -51,7 +51,8 @@ func (s *Server) attachKeepaliveEvery() time.Duration {
 // client socket cannot wedge the read pump forever.
 const attachWriteTimeout = 30 * time.Second
 
-// attachPauseLimit is how long a client may leave output paused: attachWriteTimeout
+// attachPauseLimit is how long a client may leave output paused before the pump
+// asks it for a pong (an unanswered ping ends the pump): attachWriteTimeout
 // unless THIS server was built with an override (Server.pauseLimit, tests only).
 func (s *Server) attachPauseLimit() time.Duration {
 	if s.pauseLimit > 0 {

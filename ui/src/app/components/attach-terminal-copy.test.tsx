@@ -51,7 +51,10 @@ class FakeWebSocket {
     this.readyState = FakeWebSocket.CLOSED;
     this.onclose?.({ code, reason: "" });
   }
-  send() {}
+  sent: unknown[] = [];
+  send(d: unknown) {
+    this.sent.push(d);
+  }
   message(data: unknown) {
     this.onmessage?.({ data });
   }
@@ -147,6 +150,63 @@ describe("AttachTerminal copy offer", () => {
     await out(ws, tmuxCopy("hello"));
     await act(async () => {
       fireEvent.keyDown(toast()!, { key: "c", ctrlKey: true });
+    });
+    expect(writeText).toHaveBeenCalledWith("hello");
+  });
+
+  it("the offer leaves focus in the terminal, so the next keystrokes still type", async () => {
+    const { ws, grid, view } = await attach(false);
+    dragHello(grid);
+    await out(ws, tmuxCopy("hello"));
+    expect(toast()).not.toBeNull();
+    expect(toast()!.contains(document.activeElement)).toBe(false);
+    const ta = view.container.querySelector("textarea") as HTMLTextAreaElement;
+    ws.sent.length = 0;
+    fireEvent.keyDown(ta, { key: "a", code: "KeyA", keyCode: 65 });
+    const typed = ws.sent.map((d) => new TextDecoder().decode(d as Uint8Array)).join("");
+    expect(typed).toBe("a");
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("Ctrl+C in the terminal copies a pending offer", async () => {
+    const { ws, grid, view } = await attach(false);
+    dragHello(grid);
+    await out(ws, tmuxCopy("hello"));
+    const ta = view.container.querySelector("textarea") as HTMLTextAreaElement;
+    ws.sent.length = 0;
+    await act(async () => {
+      fireEvent.keyDown(ta, { key: "c", code: "KeyC", keyCode: 67, ctrlKey: true });
+    });
+    expect(writeText).toHaveBeenCalledWith("hello");
+    expect(ws.sent).toHaveLength(0);
+  });
+
+  it("Ctrl+C with no offer pending still interrupts", async () => {
+    const { ws, view } = await attach(false);
+    const ta = view.container.querySelector("textarea") as HTMLTextAreaElement;
+    ws.sent.length = 0;
+    fireEvent.keyDown(ta, { key: "c", code: "KeyC", keyCode: 67, ctrlKey: true });
+    const typed = ws.sent.map((d) => new TextDecoder().decode(d as Uint8Array)).join("");
+    expect(typed).toBe("\x03");
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("on a Mac, Ctrl+C interrupts through a pending offer and Cmd+C copies it", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    const { ws, grid, view } = await attach(false);
+    dragHello(grid);
+    await out(ws, tmuxCopy("hello"));
+    const ta = view.container.querySelector("textarea") as HTMLTextAreaElement;
+    ws.sent.length = 0;
+    fireEvent.keyDown(ta, { key: "c", code: "KeyC", keyCode: 67, ctrlKey: true });
+    expect(ws.sent.map((d) => new TextDecoder().decode(d as Uint8Array)).join("")).toBe("\x03");
+    expect(writeText).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.keyDown(toast()!, { key: "c", ctrlKey: true });
+    });
+    expect(writeText).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.keyDown(ta, { key: "c", code: "KeyC", keyCode: 67, metaKey: true });
     });
     expect(writeText).toHaveBeenCalledWith("hello");
   });
