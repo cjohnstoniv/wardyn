@@ -225,7 +225,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the `admin-token` principal is the break-glass (`governance.change.bypass`) and local mode answers `503`. Migration
   `0126_governance_changes` adds one table and changes no existing row. With the switch unset every route answers as
   before. Upgrade the CLI and SDK callers before turning it on: a client older than 0.8.6 reads the `202` as an empty
-  profile. A key-domain assignment write is held the same way (see the next entry). The console shows the held changes on a Changes tab of the Governance screen, with the server's diff and
+  profile. A key-domain assignment write is held the same way (see the previous entry). The console shows the held changes on a Changes tab of the Governance screen, with the server's diff and
   Approve and Reject, and every covered write there answers a held change as "Submitted for approval", never as a save.
   The switch boots; `audit_personal_fields` erasure clears the proposer and decider of a change.
 
