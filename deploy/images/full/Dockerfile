@@ -20,8 +20,8 @@
 # go >= 1.26 (running go 1.23.5; GOTOOLCHAIN=local)". Keep this at or above the
 # `toolchain` line of the repos you build (this digest is go1.27; wardyn itself
 # pins toolchain go1.26.6). Bump the pin rather than relaxing GOTOOLCHAIN.
-FROM golang:1.27@sha256:4013ae0f9e7994f8535c58c811f8f863fbed38b72e0d51e6592156f758d66146 AS goroot
-FROM rust:1.98.0-slim-trixie@sha256:17d1ba895198f9934c6314ec5346a0d5115372f3243390c3d731e242f35c2f27 AS rustroot
+FROM golang:1.27@sha256:e0174e51e81218523251d85d248a90d24c3d5e81543b4f07a5d66229397db190 AS goroot
+FROM rust:1.98.1-slim-trixie@sha256:4cd829461bd5c4d511c32e269da9cb8929223b666519d8004e35fc8d1d771ab7 AS rustroot
 
 # Not digest-pinned: this is a locally-built image tag (produced by
 # deploy/images/claude-code/Dockerfile), not a registry image — it has no
