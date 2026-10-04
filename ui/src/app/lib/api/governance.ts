@@ -20,7 +20,7 @@ import type {
   ResourceLimits,
   RunPolicySpec,
 } from "../types";
-import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
+import { asJson, errEnvelope, errText, HttpError, unwrapList, wfetch } from "./core";
 
 // types.GovernanceLimits. ALL are `omitempty` on the wire, so an unrestricted
 // profile arrives with the keys absent — optional here for the same reason,
@@ -349,7 +349,8 @@ export const governance = {
   async deleteProfile(id: string): Promise<void> {
     const res = await wfetch(`/governance/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
     if (!res.ok && res.status !== 404) {
-      throw new HttpError(res.status, await errText(res));
+      const { message, reason } = await errEnvelope(res);
+      throw new HttpError(res.status, message, reason);
     }
   },
 

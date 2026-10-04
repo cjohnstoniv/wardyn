@@ -102,7 +102,7 @@ export const GOVERNANCE = {
   // "Governance profiles" label. Lives in nav-copy.ts (see its own comment)
   // so app-shell's eager sidebar isn't the reason this whole table ships early.
   TITLE: GOVERNANCE_NAV_TITLE,
-  LEAD: "Named ceilings, assigned to people and groups. An assigned profile replaces the deployment ceiling for its subjects; anyone with no assignment keeps the deployment ceiling.",
+  LEAD: "Named ceilings, assigned to people and groups. A profile stands alone or narrows a base. An assigned profile replaces the deployment ceiling for its subjects; anyone with no assignment keeps the deployment ceiling.",
   PROFILES_TITLE: "Profiles",
   PROFILES_LEAD:
     "A profile is one ceiling: the policy every run under it is bounded by, plus the launch modes its subjects may not use at all.",
@@ -137,6 +137,24 @@ export const GOVERNANCE = {
   FIELD_NAME: "Name",
   NAME_HINT:
     "What this profile is called on the assignments below, and in the run of anyone assigned to it. Names are unique.",
+  // ---- 0.8.6 profile composition (mock packet M3, S5) ----
+  FIELD_BASE: "Base",
+  BASE_HINT: "A profile with a base can only narrow it. Edits to the base flow through to this profile.",
+  BASE_NONE: "None — standalone",
+  BASE_DEPLOYMENT: "Deployment ceiling",
+  BASE_TOO_DEEP: "Can't be the base: the chain would be deeper than 3 profiles.",
+  BASE_DESCENDANT: "Can't be the base: it is based on this profile.",
+  OVERLAY_LEAD: "Only what you set to Narrow changes anything. The rest is inherited and follows the base.",
+  OVERLAY_NARROW: "Narrow",
+  OVERLAY_INHERITED: (v: string) => `Inherited: ${v}`,
+  EFFECTIVE_TITLE: "Effective ceiling and limits",
+  EFFECTIVE_LEAD: "What runs under this profile are bounded by: the base, narrowed here. Read-only.",
+  BASE_CHIP: (name: string) => `Base · ${name}`,
+  REFUSED_OVERLAY_INVALID: "This narrows past its base",
+  REFUSED_CYCLE: "This would make a loop of bases",
+  REFUSED_DEPTH: "This chain would be deeper than 3 profiles",
+  REFUSED_UNSATISFIABLE: "A profile based on this one would be left with nothing allowed",
+  REFUSED_HAS_CHILDREN: "Other profiles are based on this one",
   CEILING_TITLE: "Ceiling",
   CEILING_LEAD:
     "Every run under this profile is bounded by this spec. A member's own policy is clamped to it, and so is a saved policy they pick.",
