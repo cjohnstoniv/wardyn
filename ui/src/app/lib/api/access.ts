@@ -14,7 +14,7 @@ import type {
   AccessResponse,
   RoleMappingWriteInput,
 } from "../types";
-import { asJson, errText, HttpError, wfetch } from "./core";
+import { asJson, errText, HttpError, throwIfPending, wfetch } from "./core";
 
 // What an upsert actually did — same 201-created/200-updated split
 // permissions.ts's GrantUpsert reports (access.go's handleUpsertRoleMapping
@@ -130,6 +130,7 @@ export const access = {
   async deleteMapping(id: string, acknowledgeAccessChange = false): Promise<void> {
     const qs = acknowledgeAccessChange ? "?acknowledge_access_change=true" : "";
     const res = await wfetch(`/access/mappings/${encodeURIComponent(id)}${qs}`, { method: "DELETE" });
+    await throwIfPending(res);
     if (!res.ok) await throwAccessWriteError(res);
   },
 

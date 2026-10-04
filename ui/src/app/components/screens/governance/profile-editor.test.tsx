@@ -54,7 +54,7 @@ const GREENFIELD: GovernanceProfile = {
 
 function renderEditor(profile: GovernanceProfile | null = GREENFIELD) {
   const onSaved = vi.fn();
-  render(<ProfileEditor profile={profile} disabled={false} onCancel={vi.fn()} onSaved={onSaved} />);
+  render(<ProfileEditor profile={profile} disabled={false} onCancel={vi.fn()} onSaved={onSaved} onSubmitted={vi.fn()} />);
   return { onSaved };
 }
 

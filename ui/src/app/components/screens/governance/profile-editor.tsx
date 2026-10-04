@@ -19,7 +19,7 @@ import { nonNegativeInt } from "../../../lib/format";
 import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { setup as setupApi } from "../../../lib/api/setup";
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { governance as api, isGrantBoundError, type GovernanceLimits, type GovernanceProfile, type GovernanceProfileInput } from "../../../lib/api/governance";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { getErrorMessage } from "../../../lib/format";
@@ -84,6 +84,7 @@ export function ProfileEditor({
   disabled,
   onCancel,
   onSaved,
+  onSubmitted,
 }: {
   /** The profile being edited, or null for a new one. */
   profile: GovernanceProfile | null;
@@ -94,6 +95,8 @@ export function ProfileEditor({
   /** Hands the write's OMISSION warnings up: the screen renders them after the
    *  save, non-blocking, which is Q6's adopted variant. */
   onSaved: (warnings: string[]) => void;
+  /** The write was held for a second person (202): nothing is saved yet. */
+  onSubmitted: () => void;
 }) {
   const [name, setName] = React.useState(profile?.name ?? "");
   // A composed profile stores `{}` as its ceiling; going standalone starts from the starter.
@@ -214,6 +217,10 @@ export function ProfileEditor({
       const res = profile ? await api.updateProfile(profile.id, input) : await api.createProfile(input);
       onSaved(res.warnings);
     } catch (e) {
+      if (e instanceof PendingChangeError) {
+        onSubmitted();
+        return;
+      }
       // A refusal the SERVER composed is rendered verbatim — it names the
       // failing leg, the grant, the host and the two TTLs, all of which a
       // frozen sentence would have had to drop (§7.4). SAVE_ERROR is for the

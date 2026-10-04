@@ -24,3 +24,4 @@ export * from "./types/ssh";
 export * from "./types/permissions";
 export * from "./types/access";
 export * from "./types/user-types";
+export * from "./types/governance-change";

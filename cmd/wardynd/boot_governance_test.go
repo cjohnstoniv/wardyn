@@ -11,11 +11,10 @@ import (
 	"testing"
 )
 
-// TestParseBootFlagsGovernanceSettings pins the two boot refusals of the governance four-eyes lane,
-// each an exit 2 before anything is served: the switch itself (this build holds only the profile and
-// assignment writes, so a tree that accepted it would advertise four-eyes over writes that are still
-// single-human), and a change TTL that is not positive. Unset, both boot normally. The refusal runs in
-// a re-exec'd child because cliutil's exit is os.Exit.
+// TestParseBootFlagsGovernanceSettings pins the governance four-eyes boot settings: the switch itself
+// boots (the covered set and the console are pending-aware, so the refusal an earlier build carried is
+// gone), and a change TTL that is not positive is an exit 2 before anything is served. The refusal runs
+// in a re-exec'd child because cliutil's exit is os.Exit.
 func TestParseBootFlagsGovernanceSettings(t *testing.T) {
 	if os.Getenv("GOVERNANCE_BOOT_CHILD") == "1" {
 		resetFlags(t)
@@ -43,15 +42,11 @@ func TestParseBootFlagsGovernanceSettings(t *testing.T) {
 	if code, out := run("WARDYN_GOVERNANCE_CHANGE_TTL=48h"); code != 0 {
 		t.Fatalf("a positive TTL exits %d, want 0:\n%s", code, out)
 	}
-	for _, v := range []string{"true", "1", "on"} {
-		code, out := run("WARDYN_GOVERNANCE_SECOND_HUMAN=" + v)
-		if code != 2 || !strings.Contains(out, "WARDYN_GOVERNANCE_SECOND_HUMAN") || !strings.Contains(out, "not yet available") {
-			t.Errorf("WARDYN_GOVERNANCE_SECOND_HUMAN=%s exits %d, want 2 naming the variable as not yet available:\n%s", v, code, out)
+	// The switch boots, on or off.
+	for _, v := range []string{"true", "1", "on", "false"} {
+		if code, out := run("WARDYN_GOVERNANCE_SECOND_HUMAN=" + v); code != 0 {
+			t.Errorf("WARDYN_GOVERNANCE_SECOND_HUMAN=%s exits %d, want 0:\n%s", v, code, out)
 		}
-	}
-	// Set false is the same as unset.
-	if code, out := run("WARDYN_GOVERNANCE_SECOND_HUMAN=false"); code != 0 {
-		t.Errorf("WARDYN_GOVERNANCE_SECOND_HUMAN=false exits %d, want 0:\n%s", code, out)
 	}
 	for _, v := range []string{"0s", "-5m"} {
 		code, out := run("WARDYN_GOVERNANCE_CHANGE_TTL=" + v)
