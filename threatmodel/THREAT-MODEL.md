@@ -1076,10 +1076,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     by design — it writes policy, site-config, secrets and the role map, and
     nothing above it offers more than attribution. There is no per-resource
     permission model, no custom roles, and no tenant or org column. One optional
-    four-eyes rule exists, on two acts only (`WARDYN_EGRESS_SECOND_HUMAN` for
-    egress approvals and `WARDYN_CAPABILITY_SECOND_HUMAN` for Azure DevOps
-    capability escalations, § "Four-eyes on egress approvals"), and both are
-    bypassable by the admin token by design. So: separation of duty BETWEEN the two admin tiers is shipped and
+    four-eyes rule exists, on three acts (`WARDYN_EGRESS_SECOND_HUMAN` for
+    egress approvals, `WARDYN_CAPABILITY_SECOND_HUMAN` for Azure DevOps
+    capability escalations, § "Four-eyes on egress approvals", and
+    `WARDYN_GOVERNANCE_SECOND_HUMAN` for governance writes, § "Four-eyes on
+    governance writes"), and all are bypassable by the admin token by design. So: separation of duty BETWEEN the two admin tiers is shipped and
     testable; separation of duty WITHIN the super admin tier remains `ROADMAP.md`'s
     v1.0 item. `SECURITY.md` scopes its out-of-scope disclosure to match — an
     escalation ACROSS the `security_admin`/super-admin boundary, or a bypass of the
@@ -3035,6 +3036,55 @@ as the operator's handling of that token: SSO configured, token held out of band
 Local mode carries the same shape under a different label — the injected operator
 IS a verified human, so a self-decision there is refused like any other, which is
 why this switch is not one to turn on for a single-dev machine.
+
+### Four-eyes on governance writes: what it guarantees, and nine residuals
+
+`WARDYN_GOVERNANCE_SECOND_HUMAN` (off by default) holds an authority-changing write as a pending
+change until a second, distinct human with the authority to make that write approves it. The
+covered set, the exemptions and the approver table are in `docs/OPERATIONS.md` "Four-eyes on
+governance writes: a walkthrough". It is published here because of what it leaves open.
+
+**What it guarantees**, with SSO configured and the admin token held out of band:
+
+- no single human changes the effect of a covered target through the governance, permissions, access
+  or user-type API;
+- every change carries two named humans in the audit chain, a proposer and a distinct approver with
+  the authority to make the write;
+- every change applies against exactly the state the approver reviewed, or not at all.
+
+**Residuals**, stated rather than discovered:
+
+1. **The admin token is the break-glass.** Its writes and approvals are single-human, and audited as
+   `governance.change.bypass`. A deployment that wants the gate to bind holds the token out of band,
+   as for the egress switch above.
+2. **Local mode cannot enforce it.** Local mode authenticates nobody, so the proposer and the
+   approver are both client-supplied. With the switch on every covered write and every approve or
+   reject is refused `503`, and boot warns.
+3. **The database is not four-eyed.** A database writer can change the target tables directly. The
+   audit chain then shows a target row with no `propose`/`approve` pair beside it: detection, not
+   prevention.
+4. **Two authorised humans who collude defeat it,** as with any four-eyes control. Two principals with
+   one mailbox are not two humans (the comparison is principal and email), but two people are.
+5. **Each change is reviewed alone.** Two separately approved changes can compose into a widening
+   neither diff shows, for example a grant plus an enforcement flip. The diff shows the target, not
+   every person it reaches; the reach of a group assignment is the reviewer's judgment.
+6. **A single-super-admin deployment cannot approve a role-mapping change** without a second super
+   admin or the admin token.
+7. **Pending changes notify nobody.** Notifications cover approval requests, not governance changes.
+   An approver finds a change in the console's Changes tab or with `wardyn governance changes list`,
+   and a change nobody looks at expires.
+8. **Approver authority is the stamped role.** For an SSO session that is the role stamped at sign-in:
+   a person demoted only at the identity provider keeps it until the session ends. An API token's role
+   and revocation are re-read inside the approval transaction.
+9. **Governance-adjacent writes stay single-human.**
+   - `PUT /workspaces/{id}/approved-egress` and `/denied-egress`, and record-egress promotion;
+   - `/policies`, `/site-config` and `/integrations`;
+   - the approval `always` scope;
+   - user-type create and delete (a new type takes effect only through a covered role-mapping write,
+     and a type a mapping references cannot be deleted);
+   - the SCIM purge, which deletes the departed person's user-subject governance assignments and
+     capability grants directly, without a pending change: the identity provider is the single
+     authority for that write.
 
 ### Coalesced `auth.fail` rows: the peer address is not the bound
 
