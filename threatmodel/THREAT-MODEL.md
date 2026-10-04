@@ -345,31 +345,31 @@ forms, which no verbatim matcher catches.
   fallback bypasses the control plane and delivers UNMASKED casts (masking is
   structurally control-plane-side — `wardyn-rec` holds no secret values). Do not
   use it where recordings are viewer-exposed.
-- **The registry is process-local and fails OPEN.** `secretmask.Registry` is an
-  in-memory map, never persisted, populated on whichever wardynd process served
-  the run's injection/mint request; the cast upload and the live-attach relay are
-  separate requests, and both fall back to unmasked pass-through when the run's
-  snapshot is empty (`buildMaskingBody`, `liveMaskWriter`). One process, one
-  replica — the shipped topology — makes the CROSS-REPLICA form inert, which is
-  why `replicas: 1` is a SAFETY control: the Helm chart refuses more
-  (`deploy/helm/wardyn/templates/deployment.yaml`) and compose's `container_name`
-  rejects `--scale`. Run a second replica anyway and a cast landing on the wrong
-  pod is persisted verbatim, live credentials in cleartext, with a `success`
-  audit event. **The single-process case is not inert**: a `wardynd` restart
-  (upgrade, crash) mid-run empties the same map, so a run whose secrets
-  registered pre-restart and whose cast uploads post-restart hits the identical
-  empty-snapshot fail-open at `replicas: 1`. **0.8.6 closes the dispatch-time part:**
-  each run's secrets and Azure DevOps run token are committed to a sealed
-  per-run masking manifest before the sandbox starts, and the recording upload,
-  live attach, exec relay, SSH shell and live output read refuse (`503`
-  `mask_state_unavailable`) a run whose manifest they cannot prove complete. **The
-  registry itself is shared too:** values registered after dispatch, and the
-  per-owner sign-in tokens, are committed to Postgres (`mask_values`, sealed under
-  the owner's key) before the call that hands them out returns, every replica masks
-  with that corpus, and a consumer that cannot prove its copy current replaces a
-  live chunk with the placeholder, answers an upload `503` and refuses an attach.
-  Still open: runs that predate 0.8.6 are refused rather than masked after a
-  restart, and SSH exec, SFTP and direct-tcpip are never masked.
+- **The registry is shared through Postgres and fails closed; four things stay
+  outside it.** `secretmask.Registry` holds every value a run was given, and each
+  replica's in-memory copy is a cache of what is committed. Dispatch commits a
+  sealed per-run masking manifest (the exact bytes of every rendering the run
+  received) before the sandbox starts; values registered later, and the per-owner
+  sign-in tokens, are committed to `mask_values` before the call that hands them out
+  returns. Both are sealed under the run owner's key, so destroying that key leaves
+  them undecryptable. Every replica masks with that corpus, whichever replica
+  served the request and across restarts. The five doors that relay or persist
+  sandbox output (the recording upload, live attach, exec relay, SSH shell and live
+  output read) answer `503` `mask_state_unavailable` for a run whose manifest they
+  cannot prove complete, and a consumer that cannot prove its copy current replaces
+  a live chunk with the placeholder, answers an upload `503` and refuses an attach.
+  This is what makes several replicas (`ha.enabled`) a supported topology; the
+  Helm chart and the daemon each refuse a second replica without it. Residuals:
+  - **Runs that predate 0.8.6 have no manifest**, so after any restart they are
+    refused at those doors rather than masked, until they end.
+  - **SSH exec, SFTP and direct-tcpip were never masked**
+    (`sshgateway_channels.go`), and masking is verbatim only.
+  - **Masking depends on Postgres.** With it unreachable, uploads and new attaches
+    are refused and live output shows the placeholder: availability is traded for
+    never persisting a credential.
+  - **A compromised wardynd process still sees every value it masks**, and a
+    refresh in flight on an old lock holder can still race a new holder across a
+    Postgres failover (the person signs in again).
 
 ### 4.2 The unconditional IP guard, and its two admin-authored exceptions
 

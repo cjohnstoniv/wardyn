@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -60,6 +61,9 @@ type syncer struct {
 	kick chan struct{}
 	// idle, when set, runs after each background read.
 	idle func(context.Context)
+
+	// listening is true while the LISTEN connection is up.
+	listening atomic.Bool
 }
 
 // note records a row this process just committed, so a later tombstone for it
@@ -127,6 +131,33 @@ func (s *Store) Fresh(ctx context.Context, arrived time.Time) error {
 			return err
 		}
 	}
+}
+
+// Synced returns nil while this replica can vouch for its copy of the shared
+// corpus: its LISTEN connection is up, and one read of the table that began
+// after the generation was read has brought its cursor to that generation. A
+// commit announced a moment ago does not fail it, because that read applies it;
+// a replica that cannot reach Postgres, or cannot apply what it finds, does.
+// It is the /setup/status mask_registry_shared check, not a door: the doors use
+// Fresh.
+func (s *Store) Synced(ctx context.Context) error {
+	if !s.sync.listening.Load() {
+		return errors.New("the connection that listens for secret-masking changes is down")
+	}
+	var gen int64
+	if err := s.pool.QueryRow(ctx, `SELECT gen FROM mask_gen`).Scan(&gen); err != nil {
+		return fmt.Errorf("read the masking generation: %w", err)
+	}
+	if err := s.Fresh(ctx, time.Now()); err != nil {
+		return err
+	}
+	s.sync.mu.Lock()
+	cursor := s.sync.cursor
+	s.sync.mu.Unlock()
+	if cursor < gen {
+		return fmt.Errorf("this replica is at masking generation %d, behind %d", cursor, gen)
+	}
+	return nil
 }
 
 // row is one mask_values row as a read returns it.
@@ -399,6 +430,8 @@ func (s *Store) listenOnce(ctx context.Context) {
 	if _, err := conn.Exec(ctx, "LISTEN "+Channel); err != nil {
 		return
 	}
+	s.sync.listening.Store(true)
+	defer s.sync.listening.Store(false)
 	s.poke() // a read now: whatever was announced while this was down
 	for {
 		if _, err := conn.WaitForNotification(ctx); err != nil {

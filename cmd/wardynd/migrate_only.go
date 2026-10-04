@@ -54,7 +54,7 @@ func refusedTo(verb, format string, args ...any) error {
 //
 // The migration runs on the ONE connection that holds db.SingleInstanceLockKey, so a wardynd booting
 // meanwhile fails its claimSingleInstance and a second -migrate-only is refused. That lock alone is
-// not proof the database is quiet: a replica started with -allow-multi-instance never takes it, so
+// not proof the database is quiet: a replica started with WARDYN_HA never takes it, so
 // the lock cannot show it. The mode therefore also refuses while any other client backend is
 // connected to the database. Both checks are made before the first migration statement.
 //
@@ -133,7 +133,7 @@ func acquireQuiet(ctx context.Context, dsn string, connectTimeout time.Duration,
 	if len(others) > 0 {
 		s.close()
 		return nil, refusedTo(verb, "%d other client connection(s) are open on this database (%s). The single-instance lock does not stop a replica started "+
-			"with -allow-multi-instance, or an older wardynd, so a conversion could run under a live writer. "+
+			"with WARDYN_HA, or an older wardynd, so a conversion could run under a live writer. "+
 			"Scale every wardynd to zero first (docs/OPERATIONS.md, \"Stopped-writer upgrade\")", len(others), strings.Join(others, "; "))
 	}
 	return s, nil

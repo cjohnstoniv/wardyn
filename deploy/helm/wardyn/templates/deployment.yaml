@@ -98,8 +98,43 @@ which is why the DSN entry is conditional at all (secret.yaml refuses the rest).
 {{- if and $digest (not (hasPrefix "sha256:" $digest)) -}}
 {{- fail (printf "wardyn: image.digest=%q must be a full digest beginning with \"sha256:\" (sha256: followed by 64 hex characters). It is appended as <repository>@<digest>, so a bare hex string renders `<repository>@<that string>`, which no kubelet can pull — and the pod ImagePullBackOffs with nothing else to go on. Putting a digest in image.tag or image.repository does not work either: they render `repo:sha256:...` and `repo@sha256:...:<appVersion>` respectively, which is why this key exists." $digest) -}}
 {{- end -}}
-{{- if and (gt (int .Values.replicas) 1) (not .Values.allowMultiReplica) -}}
-{{- fail "wardyn: replicas > 1 is refused. wardynd keeps state per-process that a second pod cannot see; the sharpest is the secret-masking registry (internal/secretmask) — an in-memory, process-local map that FAILS OPEN. Secrets are registered on whichever replica served the run's proxy injection; a session recording uploaded to any other replica finds an empty snapshot and is persisted VERBATIM, live credentials in cleartext, with a `success` audit event. The same holds for the live-attach cast. Run one replica (docs/OPERATIONS.md, \"One replica, by construction\"); set allowMultiReplica=true to render anyway and accept that. Note this refusal is only the FIRST of two controls: wardynd itself takes the database's single-instance advisory lock at boot and refuses to start while another instance holds it, so a second pod exits rather than serving — which is what still protects you when someone scales this Deployment by hand instead of through the chart. allowMultiReplica=true passes -allow-multi-instance to the process too, lifting both together." -}}
+{{- /*
+High availability (ha.enabled -> WARDYN_HA=true). The one switch for running more than one wardynd
+replica; it replaces allowMultiReplica, which is refused with a pointer. $eff is every container
+env entry by name as the pod will see it: .Values.env first, then extraEnv, which renders after it
+and wins (k8s env: last-defined-wins). A guard that read only .Values.env would pass while extraEnv
+set the same key to the unsafe value, so every guard below reads $eff. An extraEnv entry with no
+literal value (valueFrom) reads as "<valueFrom>", which no guard accepts: HA needs values the
+chart can read.
+*/ -}}
+{{- if .Values.allowMultiReplica -}}
+{{- fail "wardyn: allowMultiReplica was removed in 0.8.6. Running more than one replica is now a supported mode with its own switch: set ha.enabled=true (it sets WARDYN_HA=true, adds a PodDisruptionBudget and pod anti-affinity, and needs a Kubernetes runner and WARDYN_RECORDING_STORE=pg). The -allow-multi-instance flag it used to pass is refused by wardynd with the same pointer. See docs/OPERATIONS.md, \"High availability\"." -}}
+{{- end -}}
+{{- $haValues := .Values.ha | default dict -}}
+{{- $ha := $haValues.enabled | default false -}}
+{{- $eff := dict -}}
+{{- range $k, $v := .Values.env }}{{ $_ := set $eff $k (toString $v) }}{{ end -}}
+{{- range .Values.extraEnv }}{{ if hasKey . "value" }}{{ $_ := set $eff (.name | toString) (toString .value) }}{{ else }}{{ $_ := set $eff (.name | toString) "<valueFrom>" }}{{ end }}{{ end -}}
+{{- if hasKey $eff "WARDYN_HA" -}}
+{{- fail "wardyn: WARDYN_HA is set through env or extraEnv. Do not set it by hand: the chart's multi-replica guards read ha.enabled, so a hand-set WARDYN_HA would lift the daemon's single-instance lock without them. Set ha.enabled=true instead." -}}
+{{- end -}}
+{{- if and (gt (int .Values.replicas) 1) (not $ha) -}}
+{{- fail "wardyn: replicas > 1 is refused without ha.enabled. A second wardynd replica needs the shared masking registry, the cross-replica locks and the elected sweeper leader, all of which wardynd turns on only in high-availability mode, and the chart's guards for it (a Postgres recording store, no persistence, a /tmp audit spool). Set ha.enabled=true to run several replicas; leave replicas at 1 otherwise. wardynd itself also takes the database's single-instance advisory lock at boot and refuses to start while another instance holds it, so a replica added by `kubectl scale` without WARDYN_HA exits rather than serving. See docs/OPERATIONS.md, \"High availability\"." -}}
+{{- end -}}
+{{- if $ha -}}
+{{- $store := "" -}}
+{{- if hasKey $eff "WARDYN_RECORDING_STORE" -}}{{ $store = index $eff "WARDYN_RECORDING_STORE" }}{{ else if .Values.persistence.enabled }}{{ $store = "fs" }}{{ else }}{{ $store = "off" }}{{ end -}}
+{{- if not (has $store (list "pg" "off")) -}}
+{{- fail (printf "wardyn: ha.enabled needs WARDYN_RECORDING_STORE to be \"pg\" or \"off\", and the chart reads %q. The \"fs\" store is a directory on one pod's disk, so a replay or upload that lands on another replica cannot find the recording. Set env.WARDYN_RECORDING_STORE=pg (or off) and remove any WARDYN_RECORDING_STORE entry from extraEnv; the chart reads both." $store) -}}
+{{- end -}}
+{{- if .Values.persistence.enabled -}}
+{{- fail "wardyn: ha.enabled refuses persistence.enabled=true. The persistent volume is ReadWriteOnce, so a second replica cannot mount it, and it exists to hold the per-pod fs recording store, which HA does not support. Leave persistence off and set env.WARDYN_RECORDING_STORE=pg." -}}
+{{- end -}}
+{{- $spool := "/tmp/audit-spool.jsonl" -}}
+{{- if hasKey $eff "WARDYN_AUDIT_SPOOL" }}{{ $spool = index $eff "WARDYN_AUDIT_SPOOL" }}{{ end -}}
+{{- if not (hasPrefix "/tmp/" $spool) -}}
+{{- fail (printf "wardyn: ha.enabled needs WARDYN_AUDIT_SPOOL under /tmp, and the chart reads %q. Each replica spools audit rows to the per-pod tmp emptyDir while Postgres is unreachable; a path anywhere else is the read-only root filesystem or a volume another replica shares. Remove WARDYN_AUDIT_SPOOL from env and extraEnv to take the chart's default /tmp/audit-spool.jsonl." $spool) -}}
+{{- end -}}
 {{- end -}}
 {{- if and .Values.k8s.enabled (not .Values.serviceAccount.automount) -}}
 {{- fail "wardyn: k8s.enabled requires serviceAccount.automount=true. The k8s runner substrate (internal/runner/k8s) drives the Kubernetes API directly via client-go, which needs the pod's own projected ServiceAccount token to authenticate — automount=false (the chart's own default, since wardynd calls no API server otherwise) leaves it completely unable to. Set serviceAccount.automount=true." -}}
@@ -125,33 +160,18 @@ metadata:
   labels:
     {{- include "wardyn.labels" . | nindent 4 }}
 spec:
-  # replicas stays at 1, and the fail above ENFORCES it (allowMultiReplica is the
-  # only way past). Five defects that used to make >1 drop requests — attach
-  # tickets, compose results, the lifecycle reaper, run watchers, session
-  # recordings, and the ground-truth token rotator — are closed at the code level
-  # (Postgres state, leases, leader election). What is NOT closed is the
-  # secret-masking registry, which fails open across replicas; docs/OPERATIONS.md
-  # "One replica, by construction" carries the full remaining list. The value
-  # stays templated for a future build that ships multi-replica for real.
+  # replicas stays at 1 unless ha.enabled is set; the fail above ENFORCES it.
+  # ha.enabled is the supported way to run more: the masking registry, the
+  # locks and the sweepers are shared through Postgres, and docs/OPERATIONS.md
+  # "High availability" carries what stays per replica.
   replicas: {{ .Values.replicas }}
-  # Recreate, not Kubernetes' default RollingUpdate. TWO reasons, either alone
-  # sufficient:
-  #   1. A rolling update starts the NEW pod before terminating the old one — a
-  #      second replica for the window between them, on every `helm upgrade`,
-  #      even though `replicas` never leaves 1 — exactly the secret-masking
-  #      exposure the refusal above exists to prevent.
-  #   2. It could not converge anyway. wardynd holds the database's
-  #      single-instance advisory lock and refuses to start while another
-  #      instance holds it, so under RollingUpdate the new pod would refuse,
-  #      never become Ready, and therefore never let the old pod (which holds
-  #      the lock) be terminated — a rollout deadlocked on itself, with the
-  #      only symptom a CrashLoopBackOff whose log says another instance is
-  #      running.
-  # Recreate tears the old pod down first, releasing the lock with its
-  # connection, so there is never a second one live and the new one always
-  # starts clean. The cost is a brief gap with no control plane during an
-  # upgrade, which is the correct trade for a daemon that is single-instance by
-  # construction.
+  # Recreate, not Kubernetes' default RollingUpdate, with or without ha.enabled.
+  # HA here means a node failure does not take the control plane down; it does
+  # not mean zero-downtime upgrades. Without HA a rolling update would start a
+  # second pod while the old one holds the single-instance lock, and never
+  # converge. With HA the replicas could roll, but a mixed-version window across
+  # a migration is not something this release supports, so an upgrade stops the
+  # old replicas first and starts the new ones.
   strategy:
     type: Recreate
   selector:
@@ -218,18 +238,6 @@ spec:
             # The proxy-facing TLS listener (internal CA, minted into the secret
             # store on first boot): every run's proxy resolves credentials here.
             - -internal-listen=:{{ $internalPort }}
-            {{- if .Values.allowMultiReplica }}
-            # wardynd takes the database's single-instance advisory lock at boot
-            # and REFUSES to start when another wardynd already holds it — the
-            # runtime half of the one-replica rule, and the half that survives
-            # someone editing this Deployment by hand or scaling it with
-            # `kubectl scale`, which no render-time refusal can see. An operator
-            # who set allowMultiReplica has already accepted that ceiling here,
-            # so the acceptance is handed to the process rather than made a
-            # second, separately-remembered switch: without it every replica but
-            # the first would exit at boot and the rollout would never converge.
-            - -allow-multi-instance
-            {{- end }}
           env:
             {{- if and $chartDSN $sf.enabled }}
             # secretFiles.enabled: every chart-wired secret below is a PATH into
@@ -451,6 +459,14 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             {{- end }}
+            {{- end }}
+            {{- if $ha }}
+            # High availability: skips the single-instance lock and makes wardynd
+            # refuse to boot unless the runner is Kubernetes and the recording
+            # store is pg or off. The render guards above are the first half; this
+            # is the half that still holds after `kubectl scale`.
+            - name: WARDYN_HA
+              value: "true"
             {{- end }}
             {{- if not (hasKey .Values.env "WARDYN_RECORDING_STORE") }}
             # persistence.enabled is the SINGLE recording switch it is documented
@@ -832,7 +848,12 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- $affinity := .Values.affinity | default dict }}
+      {{- if and $ha (not (hasKey $affinity "podAntiAffinity")) }}
+      {{- /* Prefer a different node per replica, so one node failure takes out one replica. Soft, so a one-node cluster still schedules both. An affinity.podAntiAffinity of your own replaces this. */ -}}
+      {{- $affinity = merge (deepCopy $affinity) (dict "podAntiAffinity" (dict "preferredDuringSchedulingIgnoredDuringExecution" (list (dict "weight" 100 "podAffinityTerm" (dict "topologyKey" "kubernetes.io/hostname" "labelSelector" (dict "matchLabels" (fromYaml (include "wardyn.selectorLabels" .)))))))) }}
+      {{- end }}
+      {{- with $affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}

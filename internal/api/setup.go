@@ -311,6 +311,11 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		if chk, ok := s.substrateHealthRow(ctx); ok {
 			checks = append(checks, chk)
 		}
+		// High availability rows: present only while WARDYN_HA is on, and read
+		// Postgres, so they share this operator-only gate.
+		if s.cfg.HA {
+			checks = append(checks, s.haChecks(ctx)...)
+		}
 	}
 	// k8s_egress_containment: the boot-time NetworkPolicy canary verdict —
 	// absent (no row) on a non-k8s driver; see k8sEgressContainmentCheck.

@@ -23,13 +23,14 @@ import (
 // a Postgres failover releases it under a live daemon: at most one steady-state
 // instance, not mutual exclusion).
 //
-// allow is -allow-multi-instance, the runtime twin of the chart's
-// allowMultiReplica: it skips the claim entirely rather than logging a refusal
-// nobody can act on. It warns every boot on purpose — an acknowledged ceiling
-// that goes quiet is one nobody remembers accepting.
-func claimSingleInstance(ctx context.Context, pool *pgxpool.Pool, allow bool) (func(), error) {
-	if allow {
-		slog.Warn("wardynd: -allow-multi-instance is set — the single-instance lock is NOT taken. wardynd's secret-masking registry (internal/secretmask) is process-local and FAILS OPEN, so a recording uploaded to an instance that did not serve the run's proxy injection is persisted verbatim, live credentials in cleartext, with a `success` audit event.")
+// ha is WARDYN_HA (validateHAPosture has already required the Kubernetes runner
+// and a shared recording store): it skips the claim, because several replicas
+// serving one database is the point. The masking registry, the cross-replica
+// locks and the sweeper leader election are what make that safe, and none of
+// them needs this lock.
+func claimSingleInstance(ctx context.Context, pool *pgxpool.Pool, ha bool) (func(), error) {
+	if ha {
+		slog.Info("wardynd: WARDYN_HA is set; the single-instance lock is not taken, and other replicas may serve this database")
 		return func() {}, nil
 	}
 	// The lock holds ONE pooled connection for the whole process lifetime, and
@@ -45,12 +46,10 @@ func claimSingleInstance(ctx context.Context, pool *pgxpool.Pool, allow bool) (f
 	}
 	if !ok {
 		return nil, errors.New("refusing to start: another wardynd already holds this database's single-instance lock. " +
-			"wardynd keeps state per-process that a second instance cannot see — the sharpest is the secret-masking " +
-			"registry (internal/secretmask), an in-memory, process-local map that FAILS OPEN: secrets are registered on " +
-			"whichever instance served the run's proxy injection, so a session recording uploaded to any other instance " +
-			"finds an empty snapshot and is persisted VERBATIM, live credentials in cleartext, with a `success` audit " +
-			"event. The same holds for the live-attach cast. Stop the other instance (docs/OPERATIONS.md, \"One replica, " +
-			"by construction\"), or pass -allow-multi-instance to start anyway and accept that (the chart's allowMultiReplica)")
+			"Without high availability wardynd keeps state per-process that a second instance cannot see: the sandbox " +
+			"tracking of the Docker runner, and the rate limiters and connection caps. Stop the other instance, or run " +
+			"several replicas on purpose with WARDYN_HA=true (the chart's ha.enabled), which needs the Kubernetes runner " +
+			"and a shared recording store (docs/OPERATIONS.md, \"High availability\")")
 	}
 	slog.Info("wardynd: single-instance lock held for the process lifetime")
 	return release, nil

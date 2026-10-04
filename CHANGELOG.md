@@ -93,6 +93,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   live output read answer `503` `mask_state_unavailable` (the SSH shell closes with an error line). Let
   such runs end, or end them, before you restart; runs dispatched by 0.8.6 survive restarts. Before 0.8.6
   the same restart passed that output through unmasked.
+- **`allowMultiReplica` and `-allow-multi-instance` are removed; running more than one replica is now
+  `ha.enabled`.** A values file that still sets `allowMultiReplica=true` is refused at render with a pointer to
+  `ha.enabled`, and wardynd refuses the `-allow-multi-instance` flag at boot with a pointer to `WARDYN_HA`. An
+  install that set either was running an unsupported topology; if you did, move to `ha.enabled=true` (it needs
+  the Kubernetes runner and `env.WARDYN_RECORDING_STORE=pg`, and refuses persistence) or go back to one replica.
+  A `--reuse-values` upgrade from a release whose values carry `allowMultiReplica: false` is not refused.
 - **A `git_pat` scope now carries `repos`, `access`, `api` and `forge`, and a stray key is refused at write.**
   A stored scope that already used one of those four key names is enforced as that axis from this upgrade
   on, and a downgrade runs a narrowed policy unnarrowed. Policy writes,
@@ -460,6 +466,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   stops its sweeps before releasing it. A pause whose mark loses the compare to another leader's no longer
   thaws the run the other leader just paused. The lock holds one more connection for the process lifetime:
   size `pool_max_conns` at least 3 (5 with the ground-truth rotator); `docs/ENV.md` has the detail.
+
+- **Several replicas are a supported topology on Kubernetes (`ha.enabled`).** The chart sets `WARDYN_HA=true`,
+  lifts the `replicas > 1` refusal and adds a PodDisruptionBudget (`minAvailable: 1`) and a preferred pod
+  anti-affinity. It refuses to render HA unless `WARDYN_RECORDING_STORE` is `pg` or `off` (read from both `env`
+  and `extraEnv`), with persistence on, or with a `WARDYN_AUDIT_SPOOL` outside `/tmp`; the audit spool stays on
+  the per-pod `tmp` emptyDir. wardynd with `WARDYN_HA=true` does not take the single-instance lock and refuses
+  to boot unless the runner is Kubernetes and the recording store is `pg` or `off`, which holds after a
+  `kubectl scale`. `/setup/status` gains `ha_mode`, `recording_store_shared` and `mask_registry_shared`, the
+  last failing while a replica cannot confirm it holds the latest secret-masking list. The strategy stays
+  `Recreate`: this tolerates a node failure, it is not zero-downtime upgrades. What stays per replica
+  (connection caps, rate limiters, debounce caches) multiplies by the replica count; an audit spool on
+  `emptyDir` is lost with its node; SSH exec, SFTP and direct-tcpip were never masked. After any restart, runs
+  that predate 0.8.6 are refused at the five masking doors until they end (Q-HA1, above). See "High
+  availability" in `docs/OPERATIONS.md`.
 
 ## [0.8.5] — 2026-10-02
 

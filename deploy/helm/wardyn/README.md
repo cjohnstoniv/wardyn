@@ -741,9 +741,9 @@ the chart to set — see `resourceRequirements` in
 is node-wide by design. Also **no in-sandbox DNS** (a fast-failing loopback-only resolver —
 only `wardyn-proxy` resolves hostnames, matching Compose's proxy-only egress),
 **no k8s ground-truth correlator** (the Tetragon host-sensor pipeline has no
-k8s-substrate equivalent), and **`replicas` stays 1**, same reason as every
-other substrate (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s
-"One replica, by construction").
+k8s-substrate equivalent), and **`replicas` stays 1 unless `ha.enabled` is set** (see
+[docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s
+"High availability").
 
 **Narrowed in 0.7.5, further in 0.8 (#164): `DiskMiB` now bounds an AUTONOMOUS (task-mode) run's
 writes to `/tmp`, its workdir `/home/agent/work`, and its toolchain cache root
@@ -1317,7 +1317,7 @@ See `values.yaml` for all options. Key settings:
   Mutually exclusive with `ageKeyFromSecret`/`ageKey` — the chart refuses a
   render naming two sources.
 - `secrets.allowEphemeralAgeKey`: override for the refusal above, the same
-  acknowledge-the-ceiling shape as `allowMultiReplica`. Default `false`.
+  acknowledge-the-ceiling shape as `k8s.allowRunsInReleaseNamespace`. Default `false`.
 - `scim.*`: leaver deprovisioning over SCIM, off by default — see
   [Leaver deprovisioning (SCIM)](#leaver-deprovisioning-scim) above.
 - `defaultPolicy`: JSON text baking a default policy into a ConfigMap,
@@ -1389,24 +1389,28 @@ See `values.yaml` for all options. Key settings:
   not a chart value.
 - `ssh.*`: SSH access into a running sandbox, off by default — see
   [Split SSH exposure](#split-ssh-exposure) above.
-- `replicas`: **leave at 1 — the chart refuses anything higher.** A render with
-  `replicas > 1` fails with an explicit message unless you also set
-  `allowMultiReplica=true`. This chart-render pin is the first of two
-  controls: wardynd also takes a Postgres advisory lock at boot
-  (`cmd/wardynd/single_instance.go`) and refuses to serve if it can't get it
-  — `allowMultiReplica` sets `-allow-multi-instance` on the container args,
-  which lifts BOTH. The pin is a safety control: wardynd's
-  secret-masking registry is in-memory, per-process, and fails OPEN, so a
-  session recording uploaded to a replica that did not handle that run's
-  credential injection is persisted verbatim — live credentials in cleartext,
-  with a `success` audit event. The per-process defects that used to make a
-  second replica drop *requests* — attach tickets, compose-result uploads, run
-  watchers, session recordings, and the ground-truth token rotator — are closed
-  at the code level (Postgres-backed state, leases, and leader election); the
-  masking registry is not, and neither are the other per-process items
-  enumerated in [docs/OPERATIONS.md#one-replica-by-construction](../../../docs/OPERATIONS.md#one-replica-by-construction)
-  ("One replica, by construction"). `allowMultiReplica` is an acceptance of
-  that, not a fix.
-- `allowMultiReplica`: override for the refusal above. Default `false`.
+- `replicas`: **leave at 1 unless `ha.enabled=true`.** A render with `replicas > 1`
+  and no `ha.enabled` fails with an explicit message. wardynd also takes a Postgres
+  advisory lock at boot (`cmd/wardynd/single_instance.go`) and refuses to serve if it
+  can't get it, so a replica added by `kubectl scale` without HA mode exits instead of
+  serving.
+- `ha.enabled`: **high availability.** Runs two or more replicas so that one node
+  failing does not stop the control plane. Sets `WARDYN_HA=true`, lifts the
+  `replicas > 1` refusal, adds a PodDisruptionBudget (`minAvailable: 1`) and a preferred
+  pod anti-affinity across nodes (an `affinity.podAntiAffinity` of your own replaces
+  it), and keeps the audit spool on the per-pod `/tmp` emptyDir. Default `false`.
+  It replaces `allowMultiReplica`, a documented clean break: a values file that still
+  sets `allowMultiReplica=true` is refused with a pointer here, and wardynd refuses the
+  `-allow-multi-instance` flag with a pointer to `WARDYN_HA`. The chart refuses to
+  render HA unless `WARDYN_RECORDING_STORE` is `pg` or `off` (read from both `env` and
+  `extraEnv`; the chart's own default is `fs` with `persistence.enabled` and `off`
+  without, so set `env.WARDYN_RECORDING_STORE=pg` to record), unless
+  `persistence.enabled` is `false`, and unless any `WARDYN_AUDIT_SPOOL` you set is
+  under `/tmp`. It also refuses a hand-set `WARDYN_HA` in `env` or `extraEnv`. wardynd
+  itself refuses `WARDYN_HA` unless the runner is Kubernetes (`k8s.enabled`) and the
+  store is `pg` or `off`, which is the half that still holds after a `kubectl scale`.
+  The strategy stays `Recreate`: this is node-failure tolerance, not zero-downtime
+  upgrades. Per-replica limits (connection caps, rate limiters) add up across replicas.
+  See [docs/OPERATIONS.md#high-availability](../../../docs/OPERATIONS.md#high-availability).
 
 Where this chart is headed: [ROADMAP.md](../../../ROADMAP.md).
