@@ -437,8 +437,8 @@ type APIToken struct {
 	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt       *time.Time `json:"revoked_at,omitempty"`
 	ExpiresAt       *time.Time `json:"expires_at,omitempty"` // nil = never expires; an expired token authenticates nothing
-	MintedBy        string     `json:"minted_by,omitempty"` // admin who minted this for its owner; empty when the owner minted it
-	Token           string     `json:"token,omitempty"`     // plaintext, create response ONLY
+	MintedBy        string     `json:"minted_by,omitempty"`  // admin who minted this for its owner; empty when the owner minted it
+	Token           string     `json:"token,omitempty"`      // plaintext, create response ONLY
 	// IdentityStampedAt is when Role and Groups were last stamped: at mint, then at each sign-in of
 	// the owner. Nil reads as stale under WARDYN_ROLE_STAMP_TTL. Never on the wire.
 	IdentityStampedAt *time.Time `json:"-"`
@@ -456,6 +456,31 @@ type Person struct {
 	CreatedBy       string     `json:"created_by"`
 	CreatedAt       time.Time  `json:"created_at"`
 	FirstSignedInAt *time.Time `json:"first_signed_in_at,omitempty"`
+}
+
+// PersonSummary is one row of GET /people: a person this deployment knows, with the counts behind
+// the leaver actions. ActiveSessions is 0 or 1: sessions are stateless cookies, so it says whether
+// the last sign-in could still hold a live one, not how many cookies are out.
+type PersonSummary struct {
+	Principal       string     `json:"principal"`
+	Email           string     `json:"email,omitempty"`
+	IssuerKind      string     `json:"issuer_kind"`
+	PreCreated      bool       `json:"pre_created"`
+	FirstSignedInAt *time.Time `json:"first_signed_in_at,omitempty"`
+	LastSignedInAt  *time.Time `json:"last_signed_in_at,omitempty"`
+	DeactivatedAt   *time.Time `json:"deactivated_at,omitempty"`
+	Role            string     `json:"role,omitempty"`
+	ActiveSessions  int        `json:"active_sessions"`
+	APITokens       int        `json:"api_tokens"`
+	SSHKeys         int        `json:"ssh_keys"`
+	Credentials     int        `json:"credentials"`
+	ActiveRuns      int        `json:"active_runs"`
+}
+
+// PersonList is one page of GET /people. NextCursor is empty on the last page.
+type PersonList struct {
+	People     []PersonSummary `json:"people"`
+	NextCursor string          `json:"next_cursor,omitempty"`
 }
 
 // RecordingMaxParts bounds how many parts one run's session recording may be

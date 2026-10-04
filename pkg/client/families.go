@@ -297,6 +297,44 @@ func (c *Client) MintDeviceEnrolmentToken(ctx context.Context, name string) (Dev
 	return out, err
 }
 
+// PeopleListOpts narrows and pages ListPeople. The zero value is the first page of everyone.
+type PeopleListOpts struct {
+	// Limit is the page size: 50 when zero, at most 200.
+	Limit int
+	// Cursor is the NextCursor of the previous page.
+	Cursor string
+	// Query keeps people whose principal or email starts with it.
+	Query string
+	// State is "active" or "deactivated"; empty keeps both.
+	State string
+}
+
+// ListPeople returns one page of the people this deployment knows: everyone who has signed in and
+// everyone pre-created, each with their role, sign-in state and the counts behind the leaver
+// actions (admin or security_admin). Pass a page's NextCursor back as PeopleListOpts.Cursor until
+// it is empty. GET /api/v1/people.
+func (c *Client) ListPeople(ctx context.Context, opts ...PeopleListOpts) (PersonList, error) {
+	q := url.Values{}
+	if len(opts) > 0 {
+		o := opts[0]
+		if o.Limit > 0 {
+			q.Set("limit", strconv.Itoa(o.Limit))
+		}
+		for k, v := range map[string]string{"cursor": o.Cursor, "q": o.Query, "state": o.State} {
+			if v != "" {
+				q.Set(k, v)
+			}
+		}
+	}
+	path := "/api/v1/people"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	var out PersonList
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
+	return out, err
+}
+
 // ListDevices returns every enrolled device, revoked ones included, newest
 // first (admin or security_admin). GET /api/v1/admin/devices.
 func (c *Client) ListDevices(ctx context.Context) ([]Device, error) {

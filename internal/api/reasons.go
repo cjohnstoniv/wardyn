@@ -253,6 +253,7 @@ const (
 	reasonPersonEmailInvalid      = "person_email_invalid"      // email fails validation
 	reasonPersonCollision         = "person_collision"          // the principal or email collides with an existing person
 	reasonPersonEmailTaken        = "person_email_taken"        // another subject is already known by this email
+	reasonPeopleListParamInvalid  = "people_list_param_invalid" // GET /people: state or cursor is not one the endpoint accepts
 	// reasonPersonMintNoHuman / reasonAPITokenFromAPIToken are shared: minting a
 	// token needs a signed-in human, and neither an API token nor a delegated
 	// token may mint another — the SAME two shapes apitokens.go's own
