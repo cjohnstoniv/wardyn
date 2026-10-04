@@ -143,7 +143,7 @@ func (s *Server) suspendIdentity(ctx context.Context, st scimStore, id uuid.UUID
 		return err
 	}
 	stepErr := errors.Join(
-		s.sweepStep(ctx, st, id, forms.targets),
+		s.sweepStep(ctx, st, id, ident, forms),
 		s.killStep(ctx, st, id, forms.targets),
 	)
 	if stepErr != nil {
@@ -158,7 +158,8 @@ func (s *Server) suspendIdentity(ctx context.Context, st scimStore, id uuid.UUID
 }
 
 // sweepStep is step 2: every pending target's tokens revoked and keys deleted.
-func (s *Server) sweepStep(ctx context.Context, st scimStore, id uuid.UUID, targets []string) error {
+func (s *Server) sweepStep(ctx context.Context, st scimStore, id uuid.UUID, ident store.PrincipalIdentity, forms leaverForms) error {
+	targets := forms.targets
 	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
 	if err != nil {
 		return err
@@ -169,7 +170,7 @@ func (s *Server) sweepStep(ctx context.Context, st scimStore, id uuid.UUID, targ
 			continue
 		}
 		key := store.JobKey{Step: jobStepSweep, Target: t}
-		res, err := s.revokePersonCredentials(ctx, t)
+		res, err := s.sweepTarget(ctx, t, forms, ident)
 		if err != nil {
 			errs = append(errs, errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, err)))
 			continue
@@ -178,6 +179,27 @@ func (s *Server) sweepStep(ctx context.Context, st scimStore, id uuid.UUID, targ
 			map[string]int{"tokens_revoked": res.Tokens, "keys_deleted": res.Keys}))
 	}
 	return errors.Join(errs...)
+}
+
+// sweepTarget sweeps one form. A bound person's email is not an owner: another principal can hold the same
+// address (a recycled one), so under an email only the sessions are cut by name, and the tokens and keys
+// the sweep takes are those whose principal is one of the person's own forms. A person no row binds is known
+// by nothing but their emails, so those run the full sequence.
+func (s *Server) sweepTarget(ctx context.Context, target string, forms leaverForms, ident store.PrincipalIdentity) (personRevocation, error) {
+	if ident.Principal == "" || !strings.Contains(target, "@") || slices.Contains(forms.bound, target) {
+		return s.revokePersonCredentials(ctx, target)
+	}
+	if err := s.cfg.SessionRevocations.RevokeSub(ctx, target); err != nil {
+		return personRevocation{}, err
+	}
+	own := func(t types.APIToken) bool {
+		return slices.ContainsFunc(forms.targets, func(f string) bool { return strings.EqualFold(f, t.Principal) })
+	}
+	res := personRevocation{Stamped: true}
+	var tokenErr, keyErr error
+	res.Tokens, tokenErr = s.revokeAPITokensMatching(ctx, target, own)
+	res.Keys, _, _, _, keyErr = s.deleteSSHKeysFor(ctx, target, false)
+	return res, errors.Join(tokenErr, keyErr)
 }
 
 // killStep is step 3. Every non-terminal run a target owns joins the ledger as pending, and so does

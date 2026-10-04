@@ -411,3 +411,37 @@ func TestSCIMSweeperResumesAnIncompletePurge(t *testing.T) {
 		t.Errorf("%d purge rows after the resume, want 1", len(rows))
 	}
 }
+
+// An email alias another principal holds is not the leaver's to clear: the purge keeps that email-keyed deny
+// row (it can be the recycled address's new holder's), deletes every row keyed by the leaver's own
+// principals, and names the kept rows in person.deprovision.
+func TestSCIMPurgeKeepsEmailRowsAnotherPrincipalHolds(t *testing.T) {
+	cases := map[string]func(e *scimEnv){
+		"a token minted by another principal under the address": func(e *scimEnv) { e.seedToken("sub-newhire", purgeEmail) },
+		"another active identity seen under the address":        func(e *scimEnv) { e.seedSignIn("sub-newhire", purgeEmail) },
+	}
+	for name, holder := range cases {
+		t.Run(name, func(t *testing.T) {
+			e := newSCIMEnv(t)
+			f := e.seedPurgeSubject(purgeSub, purgeEmail, purgeOID)
+			holder(e)
+
+			if w := e.del(e.b, f.id); w.Code != http.StatusNoContent {
+				t.Fatalf("DELETE = %d %s, want 204", w.Code, w.Body.String())
+			}
+			if g, a := e.userRows(purgeSub); g != 0 || a != 0 {
+				t.Errorf("the leaver's own rows left: %d grants, %d assignments", g, a)
+			}
+			if g, _ := e.userRows(purgeEmail); g != 1 {
+				t.Errorf("%d email-subject grants left, want the held address's one kept", g)
+			}
+			rows := e.purgeRows(e.a, e.b)
+			if len(rows) != 1 {
+				t.Fatalf("%d purge rows, want 1", len(rows))
+			}
+			if d := dataOf(t, rows[0]); d["grants_deleted"] != float64(1) || d["email_rows_kept"] != float64(1) {
+				t.Errorf("purge row = %v, want 1 grant deleted and 1 email row kept", d)
+			}
+		})
+	}
+}
