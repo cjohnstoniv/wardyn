@@ -90,7 +90,8 @@ type execOutputTail struct {
 	// pane snapshot, which writes mw directly.
 	in *maskPipe
 	// arrived is the clock at the drivers' latest write, in unix nanos: the TTL
-	// counts from the output, not from when the masker got to it.
+	// counts from the output, not from when the masker got to it. A write dropped after the
+	// seal can still extend a sealed memory-only tail's TTL, bounded by the sandbox's lifetime.
 	arrived atomic.Int64
 	ring    outputRing
 	// sink is the masking writer's destination: the ring, mirrored into run_output_chunks
