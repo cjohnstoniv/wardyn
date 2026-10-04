@@ -2122,11 +2122,12 @@ wardyn governance changes reject <change-id> --reason "widens egress past the re
 ```
 
 `governance set` exits 0 on a pending result and skips `--prune` until every write is decided, so
-run it again afterwards. The console does the same on the Governance screen's Changes tab, with the
+run it again afterwards. Running it again before then is safe: a target that still has a held change
+is reported as pending, with the held change named, and the rest of the file is applied. The console does the same on the Governance screen's Changes tab, with the
 diff in a drawer; Approve is disabled on your own proposal. Nothing notifies an approver that a
 change is waiting, so name who looks, and how often, in your own runbook. There is at most one
-pending change per target: a second proposal at the same target is `409` `governance_change_pending`
-and names the first.
+pending change per target: a second proposal at the same target is `409` `governance_change_pending`,
+which names the first and carries it in `pending_change`.
 
 **4. Expiry and stale changes.** A change nobody decides within the TTL reads as `expired` and cannot
 be approved (`409` `governance_change_not_pending`); propose it again. A change is `stale` (`409`

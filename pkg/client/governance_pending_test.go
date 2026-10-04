@@ -33,9 +33,11 @@ type pendingFake struct {
 	profiles    []client.GovernanceProfile
 	assignments []client.GovernanceAssignment
 
-	holdProfiles    map[string]bool // profile names whose create/update is held
-	holdAssignments map[string]bool // assignment subjects whose write is held
-	holdDeletes     bool            // every DELETE is held
+	holdProfiles    map[string]bool      // profile names whose create/update is held
+	holdAssignments map[string]bool      // assignment subjects whose write is held
+	holdDeletes     bool                 // every DELETE is held
+	heldProfiles    map[string]uuid.UUID // profile names a live change already holds: a write answers 409 naming it
+	bigDiff         bool                 // pad the held change's diff past the 2 KiB error-body cap
 
 	reqs        []string // "METHOD path", in arrival order
 	assignSent  []client.GovernanceAssignmentRequest
@@ -67,6 +69,9 @@ func (f *pendingFake) server(t *testing.T) *client.Client {
 		case r.Method == http.MethodPost && p == "/api/v1/governance/profiles":
 			var req client.GovernanceProfileRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
+			if f.answerHeld(w, req.Name) {
+				return
+			}
 			if f.holdProfiles[req.Name] {
 				writeJSON(w, http.StatusAccepted, pendingChange("create", "governance_profile", req.Name))
 				return
@@ -78,6 +83,9 @@ func (f *pendingFake) server(t *testing.T) *client.Client {
 		case r.Method == http.MethodPut && strings.HasPrefix(p, "/api/v1/governance/profiles/"):
 			var req client.GovernanceProfileRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
+			if f.answerHeld(w, req.Name) {
+				return
+			}
 			if f.holdProfiles[req.Name] {
 				writeJSON(w, http.StatusAccepted, pendingChange("update", "governance_profile", req.Name))
 				return
@@ -136,6 +144,25 @@ func (f *pendingFake) server(t *testing.T) *client.Client {
 	}))
 	t.Cleanup(srv.Close)
 	return &client.Client{BaseURL: srv.URL, Token: testToken, HTTPClient: srv.Client()}
+}
+
+// answerHeld answers the 409 governance_change_pending the real server gives a second proposal at a
+// held target, with the held change beside the error, and reports whether it did.
+func (f *pendingFake) answerHeld(w http.ResponseWriter, name string) bool {
+	id, ok := f.heldProfiles[name]
+	if !ok {
+		return false
+	}
+	held := pendingChange("update", "governance_profile", name)["pending_change"].(map[string]any)
+	held["id"] = id
+	if f.bigDiff {
+		held["payload"] = map[string]any{"pad": strings.Repeat("x", 8192)}
+	}
+	writeJSON(w, http.StatusConflict, map[string]any{
+		"error":  "a change to this target is already waiting for approval: " + id.String(),
+		"reason": "governance_change_pending", "pending_change": held,
+	})
+	return true
 }
 
 // writes returns the mutating requests the fake received.
@@ -481,5 +508,44 @@ func TestGovernanceChanges_ListGetApproveReject(t *testing.T) {
 	}
 	if _, err := c.RejectGovernanceChange(ctx, ch.ID, ""); err != nil || strings.Contains(f.rejectBody, "reason") {
 		t.Errorf("an empty reason must be omitted, body = %q (err %v)", f.rejectBody, err)
+	}
+}
+
+// TestApplyGovernance_RepeatApplyDuringTheWindowIsStillPending: the same document applied again while
+// a held change still sits at a target is a 409 naming that change. It reports as pending, defers what
+// depends on it, and the writes after it are still sent.
+func TestApplyGovernance_RepeatApplyDuringTheWindowIsStillPending(t *testing.T) {
+	for _, big := range []bool{false, true} {
+		heldID := uuid.New()
+		held := client.GovernanceProfile{ID: uuid.New(), Name: "held", Limits: client.GovernanceLimits{MaxConcurrentRuns: 1}}
+		f := &pendingFake{
+			profiles:     []client.GovernanceProfile{held},
+			heldProfiles: map[string]uuid.UUID{"held": heldID},
+			bigDiff:      big,
+		}
+		c := f.server(t)
+		heldFileID, laterFileID := uuid.New(), uuid.New()
+		res, err := c.ApplyGovernanceResult(context.Background(), client.GovernanceDocument{
+			Profiles: []client.GovernanceProfile{
+				{ID: heldFileID, Name: "held", Limits: client.GovernanceLimits{MaxConcurrentRuns: 9}},
+				{ID: laterFileID, Name: "later"},
+			},
+			Assignments: []client.GovernanceAssignment{
+				{SubjectType: client.CapabilitySubjectUser, Subject: "bob", ProfileID: heldFileID},
+				{SubjectType: client.CapabilitySubjectUser, Subject: "carol", ProfileID: laterFileID},
+			},
+		}, false)
+		if err != nil {
+			t.Fatalf("big=%v: a repeat apply during the window failed: %v", big, err)
+		}
+		if len(res.Pending) != 1 || res.Pending[0].ID != heldID {
+			t.Fatalf("big=%v: pending = %+v, want the existing change %s", big, res.Pending, heldID)
+		}
+		if len(res.Deferred) != 1 || res.Deferred[0].Subject != "bob" {
+			t.Errorf("big=%v: deferred = %+v, want bob (his profile is held)", big, res.Deferred)
+		}
+		if len(f.assignSent) != 1 || f.assignSent[0].Subject != "carol" {
+			t.Errorf("big=%v: assignments sent = %+v, want only carol: the writes after the held one still go", big, f.assignSent)
+		}
 	}
 }
