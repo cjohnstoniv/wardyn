@@ -48,10 +48,11 @@ func (f *fakeBackend) EvictGlobal(string, string, time.Time) error {
 	return nil
 }
 
-func (f *fakeBackend) SweepGlobals(context.Context, time.Time) (int, error) { return 0, nil }
-func (f *fakeBackend) PersistedRuns(context.Context) ([]uuid.UUID, error)   { return nil, nil }
-func (f *fakeBackend) PurgeRuns(context.Context, []uuid.UUID) error         { return nil }
-func (f *fakeBackend) EraseOwner(context.Context, string) (int, error)      { return 0, nil }
+func (f *fakeBackend) RetireOwnerGlobals(context.Context, string, time.Time) error { return nil }
+func (f *fakeBackend) SweepGlobals(context.Context, time.Time) (int, error)        { return 0, nil }
+func (f *fakeBackend) PersistedRuns(context.Context) ([]uuid.UUID, error)          { return nil, nil }
+func (f *fakeBackend) PurgeRuns(context.Context, []uuid.UUID) error                { return nil }
+func (f *fakeBackend) EraseOwner(context.Context, string) (int, error)             { return 0, nil }
 func (f *fakeBackend) Fresh(context.Context, time.Time) error {
 	if f.stale {
 		return errBackendDown

@@ -360,6 +360,39 @@ func (s *Store) EvictGlobal(owner, name string, now time.Time) error {
 	return err
 }
 
+// RetireOwnerGlobals retires every current credential value of owner, as
+// PutGlobal retires a replaced credential's: a replica that cached one keeps
+// masking it through its grace, and a replica that never did skips the row when
+// it reads it (a retired value that cannot open fences nothing). The credentials
+// erase calls it before the key that seals these values is destroyed.
+func (s *Store) RetireOwnerGlobals(ctx context.Context, owner string, now time.Time) error {
+	if owner == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	var any bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM mask_values WHERE bucket=$1 AND owner=$2 AND NOT tombstone AND retired_at IS NULL)`,
+		bucketGlobal, owner).Scan(&any); err != nil {
+		return fmt.Errorf("maskstore: look for the owner's credential values: %w", err)
+	}
+	if !any {
+		return nil
+	}
+	_, err := s.commit(ctx, func(tx pgx.Tx, gen int64) error {
+		_, err := tx.Exec(ctx,
+			`UPDATE mask_values SET retired_at = GREATEST($1::timestamptz, COALESCE(until, $1::timestamptz)), gen = $2, updated_at = now()
+			 WHERE bucket = $3 AND owner = $4 AND NOT tombstone AND retired_at IS NULL`,
+			now, gen, bucketGlobal, owner)
+		if err != nil {
+			return fmt.Errorf("maskstore: retire the owner's credential values: %w", err)
+		}
+		return nil
+	})
+	return err
+}
+
 // dueCond selects the credential values SweepGlobals evicts: retired before the
 // cutoff, or still current but expired before it. bucket and cutoff are the
 // numbers of the statement's parameters that carry them.

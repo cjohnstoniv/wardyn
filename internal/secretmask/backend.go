@@ -37,6 +37,8 @@ type Backend interface {
 	PutGlobal(owner, name string, values []GlobalPut, merge bool, now time.Time) error
 	// EvictGlobal tombstones the credential's current values.
 	EvictGlobal(owner, name string, now time.Time) error
+	// RetireOwnerGlobals retires every current credential value of owner.
+	RetireOwnerGlobals(ctx context.Context, owner string, now time.Time) error
 	// SweepGlobals tombstones the credential values retired, or expired, before
 	// cutoff, and reports how many.
 	SweepGlobals(ctx context.Context, cutoff time.Time) (int, error)
