@@ -68,6 +68,7 @@ function response(o: Partial<RunCapacityResponse> = {}): RunCapacityResponse {
     by_owner_truncated: false,
     unschedulable: [],
     unschedulable_total: 0,
+    oldest_active_seconds: 0,
     ...o,
   };
 }

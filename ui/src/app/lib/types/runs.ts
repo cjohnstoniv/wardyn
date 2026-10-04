@@ -857,6 +857,8 @@ export interface RunCapacity {
   by_owner_truncated: boolean;
   unschedulable: RunCapacityUnschedulable[];
   unschedulable_total: number;
+  /** Age in seconds since created_at of the oldest holding run (0 when none). */
+  oldest_active_seconds: number;
 }
 
 // GET /api/v1/admin/runs/capacity: RunCapacity plus generated_at and basis
