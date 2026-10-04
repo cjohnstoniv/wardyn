@@ -7197,6 +7197,10 @@ What the switch needs, and refuses to render or boot without:
 - **An audit spool on the per-pod `tmp` emptyDir.** The chart renders
   `WARDYN_AUDIT_SPOOL=/tmp/audit-spool.jsonl` and refuses a `WARDYN_AUDIT_SPOOL`
   set in `env` or `extraEnv` anywhere outside `/tmp`.
+- **A database pool of at least 3 connections.** The sweeper leader election holds
+  one connection for the process lifetime; below that every replica would sweep
+  with no election and no fencing. `WARDYN_HA=true` with `pool_max_conns` under 3
+  in `WARDYN_PG_DSN` exits non-zero at boot, naming the value and the minimum.
 - **A PodDisruptionBudget** (`minAvailable: 1`) and a preferred **pod anti-affinity**
   across nodes (soft, so a one-node cluster still schedules every replica; an
   `affinity.podAntiAffinity` of your own replaces it).
