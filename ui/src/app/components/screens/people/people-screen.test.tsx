@@ -187,7 +187,7 @@ describe("the person drawer", () => {
   });
 
   it.each([
-    ["Sign out everywhere", "Sign ana@example.com out of every browser and the CLI? They can sign in again unless their access is removed.", () => signOutMock],
+    ["Sign out everywhere", "Sign ana@example.com out of every browser? Their API tokens, including the CLI's, and SSH keys keep working; revoke those from Tokens or Remove all. They can sign in again unless their access is removed.", () => signOutMock],
     ["Remove all", "Remove every SSH key ana@example.com has added? Their open SSH sessions end.", () => removeKeysMock],
   ])("%s asks first, naming the person, and only then acts", async (button, sentence, mock) => {
     const { user, drawer } = await openAna();

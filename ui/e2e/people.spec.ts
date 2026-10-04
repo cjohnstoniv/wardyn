@@ -75,12 +75,13 @@ test.describe("People (Admin view)", () => {
     await drawer.getByRole("button", { name: "Sign out everywhere" }).click();
     const confirm = page.getByRole("alertdialog");
     await expect(
-      confirm.getByText(`Sign ${person.email} out of every browser and the CLI? They can sign in again unless their access is removed.`),
+      confirm.getByText(`Sign ${person.email} out of every browser? Their API tokens, including the CLI's, and SSH keys keep working; revoke those from Tokens or Remove all. They can sign in again unless their access is removed.`),
     ).toBeVisible();
     expect(revoked).toBeNull();
     await confirm.getByRole("button", { name: "Sign out everywhere" }).click();
     await expect(confirm).toHaveCount(0);
-    // Only the sessions go: the route would otherwise revoke their tokens and delete their SSH keys too.
+    // Only the sessions go, as the confirm says: the route would otherwise revoke their tokens (the CLI's
+    // included) and delete their SSH keys too.
     expect(revoked).toEqual({ sub: person.subject, sessions_only: true });
 
     // Remove all SSH keys: the confirm changes nothing until it is accepted.

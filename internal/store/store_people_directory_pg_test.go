@@ -239,6 +239,42 @@ func TestPG_PeopleDirectory_ActiveSessions(t *testing.T) {
 	}
 }
 
+// "Sign out everywhere" stamps oidc_session_cuts, not oidc_session_revocations; the directory count
+// reads both, so the person shows no active session afterwards, and a later sign-in revives it.
+func TestPG_PeopleDirectory_ActiveSessionsHonourSessionCuts(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	signIn := func(sub string, at time.Time) {
+		t.Helper()
+		if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: sub, Issuer: "https://dex.example", Email: sub + "@Corp.Example"}, at); err != nil {
+			t.Fatalf("sign-in %s: %v", sub, err)
+		}
+	}
+	signIn("kept", now.Add(-time.Minute))
+	signIn("cut-sub", now.Add(-time.Hour))
+	signIn("cut-email", now.Add(-time.Hour))
+	signIn("cut-again", now.Add(-time.Hour))
+	for _, sub := range []string{"cut-sub", "CUT-EMAIL@corp.example", "cut-again"} {
+		if _, err := pool.Exec(ctx, `INSERT INTO oidc_session_cuts (sub, cut_at) VALUES ($1, $2)`, sub, now.Add(-30*time.Minute)); err != nil {
+			t.Fatalf("cut %s: %v", sub, err)
+		}
+	}
+	signIn("cut-again", now.Add(-10*time.Minute))
+
+	page, err := st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for sub, want := range map[string]int{"kept": 1, "cut-sub": 0, "cut-email": 0, "cut-again": 1} {
+		if got := listingByPrincipal(t, page.People, sub).ActiveSessions; got != want {
+			t.Errorf("%s active sessions = %d, want %d", sub, got, want)
+		}
+	}
+}
+
 // Paging returns every row exactly once across pages, in principal order, and q and state filter.
 func TestPG_PeopleDirectory_PagingAndFilters(t *testing.T) {
 	pool := runsPGPoolIsolated(t)

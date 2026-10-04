@@ -205,10 +205,12 @@ func (s PG) ListPeopleDirectory(ctx context.Context, f PeopleDirectoryFilter) (P
 }
 
 // countActiveSessions sets ActiveSessions from the last sign-in and the revoke cutoffs
-// (oidc_session_revocations). A cutoff names a sub exactly or an email case-insensitively, and the
+// (oidc_session_revocations, and oidc_session_cuts where "Sign out everywhere" stamps a sessions-only cut).
+// A cutoff names a sub exactly or an email case-insensitively, and the
 // empty sub revokes everyone, the same match IsSessionRevoked makes.
 func (s PG) countActiveSessions(ctx context.Context, people []PersonListing, principals, emails []string) error {
-	rows, err := s.Pool.Query(ctx, `SELECT sub, revoked_at FROM oidc_session_revocations WHERE sub = ANY($1) OR lower(sub) = ANY($2)`,
+	rows, err := s.Pool.Query(ctx, `SELECT sub, revoked_at FROM oidc_session_revocations WHERE sub = ANY($1) OR lower(sub) = ANY($2)
+		UNION ALL SELECT sub, cut_at FROM oidc_session_cuts WHERE sub = ANY($1) OR lower(sub) = ANY($2)`,
 		append(principals, ""), emails)
 	if err != nil {
 		return fmt.Errorf("store: read session revocations: %w", err)

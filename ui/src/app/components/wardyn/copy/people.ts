@@ -45,7 +45,7 @@ export const PEOPLE_PAGE = {
   SESSIONS_ACTIVE: (n: number) => `${n} active`,
   SIGN_OUT: "Sign out everywhere",
   SIGN_OUT_CONFIRM: (p: string) =>
-    `Sign ${p} out of every browser and the CLI? They can sign in again unless their access is removed.`,
+    `Sign ${p} out of every browser? Their API tokens, including the CLI's, and SSH keys keep working; revoke those from Tokens or Remove all. They can sign in again unless their access is removed.`,
   TOKENS: "API tokens",
   SSH: "SSH keys",
   SSH_REMOVE: "Remove all",
