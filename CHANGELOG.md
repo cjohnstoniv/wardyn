@@ -316,7 +316,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   transaction, and every write and read checks the tombstone in its own transaction, so no replica recreates
   or serves the output afterwards: reads answer `404` `run_output_erased`, and a replica still holding the
   tail drops and zeroes it on its next touch. Person erasure (`POST
-  /people/{principal}/erasure`, scope `outputs`) calls it; `DELETE /people/{principal}/credentials` does not.
+  /people/{principal}/erasure`, scope `run_outputs`) calls it; `DELETE /people/{principal}/credentials` does not.
 - **A governance profile can be composed: a base plus an overlay that can only narrow it.** Migration
   `0125_governance_profile_composition` adds the nullable `governance_profiles.base_profile_id`, `overlay`
   and `overlay_limits` columns and five CHECK constraints, and changes no existing row: every profile stays
