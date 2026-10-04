@@ -7455,8 +7455,8 @@ therefore the per-replica cap times the replica count (cap × N):
   runs are fenced (attach, SSH shell and recording upload answer `503`
   `mask_state_unavailable`) and the rows are tombstoned. Other people's values are
   unaffected and `mask_registry_shared` stays healthy. The remedy is to erase that
-  person's credentials through the API, which restores their credentials and future
-  runs; the fenced runs stay fenced. Only a destroyed generation, or a wrap that
+  person's credentials through the API; they then store their credentials again and
+  their future runs are covered. The fenced runs stay fenced. Only a destroyed generation, or a wrap that
   provably does not open under its own key (the local key, or Key Vault), fences.
   Every other key failure fails the read instead, so consumers fail closed and
   nothing is fenced or tombstoned:
