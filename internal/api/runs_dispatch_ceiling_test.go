@@ -88,7 +88,7 @@ func runWalledDispatch(t *testing.T, d walledDispatch) (types.RunPolicySpec, run
 	if len(d.deny) > 0 {
 		ceiling = ceilingForDispatch(governanceCeiling{
 			Spec:    types.RunPolicySpec{DeniedDomains: d.deny},
-			Profile: &types.GovernanceProfile{Name: "walled"},
+			Profile: &ResolvedProfile{Name: "walled"},
 		}, adoEntraUngraded(), bedrockCredUngraded())
 	}
 	srv.dispatchRun(context.Background(), run, ceiling, dispatchParams{

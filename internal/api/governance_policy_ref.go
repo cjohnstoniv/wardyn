@@ -18,7 +18,7 @@ import (
 // (policyref.Project), and nothing else about the profile. The ceiling of one
 // profile never reaches a person bound by another, because every caller passes
 // the profile that bound THIS person: a leaf, never a composed result.
-func profilePolicyRef(p *types.GovernanceProfile) *policyref.Ref {
+func profilePolicyRef(p *ResolvedProfile) *policyref.Ref {
 	if p == nil {
 		return nil
 	}

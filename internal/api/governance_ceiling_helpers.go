@@ -27,10 +27,11 @@ import (
 // governanceOmissionWarnings names what the DEPLOYMENT ceiling carries that
 // this profile does not.
 //
-// A governance profile REPLACES Config.DefaultPolicy for the principals it binds
+// A STANDALONE governance profile replaces Config.DefaultPolicy for the principals it binds
 // (composing through composer.Clamp is not a lattice meet), so it narrows and
 // widens BY OMISSION, silently: forgetting the deployment's denied_domains
-// un-walls every host that list protected. ADVISORY ONLY, never a refusal: both
+// un-walls every host that list protected. A composed profile inherits instead, so the write
+// door does not run this for it. ADVISORY ONLY, never a refusal: both
 // directions are legitimate, and refusing would make DefaultPolicy a floor this
 // feature deliberately does not have. Six checks, NOT exhaustive over
 // RunPolicySpec: only fields where an omission changes what a member can reach.

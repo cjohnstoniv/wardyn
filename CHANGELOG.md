@@ -222,6 +222,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   or serves the output afterwards: reads answer `404` `run_output_erased`, and a replica still holding the
   tail drops and zeroes it on its next touch. It is wired into the person erasure by a later change;
   `DELETE /people/{principal}/credentials` does not call it.
+- **A governance profile can be composed: a base plus an overlay that can only narrow it.** Migration
+  `0125_governance_profile_composition` adds the nullable `governance_profiles.base_profile_id`, `overlay`
+  and `overlay_limits` columns and five CHECK constraints, and changes no existing row: every profile stays
+  standalone and resolves exactly as on 0.8.5. A composed row stores `{}` for `ceiling` and `limits`, and its
+  effective policy is computed whenever authority is read (create, preflight, dispatch, attach and SSH, UI apps,
+  revive, the limits re-clamp and end extension), so a change to a base reaches every profile built on it. A
+  base that nothing satisfies together with its overlay refuses the launch and every live door with
+  `403 governance_overlay_unsatisfiable`; a base that cannot be read, a loop or a chain deeper than three
+  profiles closes the launch and every live door with a `500` (a revive or end extension with `503`/`409`), and
+  none of them is ever read as the deployment's policy. Writes: `POST`/`PUT /governance/profiles` accept `base_profile_id`,
+  `overlay` and `overlay_limits`; an overlay naming anything its base does not permit, or a non-empty `ceiling`
+  or `limits` beside an overlay, is `400 governance_overlay_invalid`; a change that would make a profile its own
+  base is `409 governance_profile_cycle`, one that would put a profile past three deep is `409
+  governance_profile_depth`, and a base edit that leaves a profile built on it unsatisfiable is `409
+  governance_overlay_unsatisfiable` naming it. Deleting a base that still has profiles built on it is a `409` naming
+  them. A `PUT` that omits a composition field keeps it, so an older client cannot flatten a composed profile; it
+  sees `ceiling: {}` and does not know `effective`. **Rollback:** a 0.8.5 binary refuses a database with this
+  migration applied. First turn every composed profile back into a standalone one (`PUT` it with `overlay: null` and
+  its `effective.ceiling` and `effective.limits` as the new `ceiling` and `limits`), then restore the pre-upgrade
+  dump. A profile edit still reaches an already-running proxy only through the denies re-asserted at revive or
+  restart, as before; a base edit now narrows a whole subtree at once.
 
 ### Security
 

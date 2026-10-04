@@ -13,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The memo released its lock between the check and the fill, so two concurrent
@@ -48,7 +47,7 @@ func TestCeilingMemoIsSingleFlight(t *testing.T) {
 		case <-release:
 		case <-time.After(100 * time.Millisecond):
 		}
-		return governanceCeiling{Profile: &types.GovernanceProfile{
+		return governanceCeiling{Profile: &ResolvedProfile{
 			ID: uuid.New(), Name: "profile-" + strconv.FormatInt(n, 10),
 		}}, nil
 	}
@@ -103,7 +102,7 @@ func TestCeilingMemoStoresTheFailure(t *testing.T) {
 		if calls.Add(1) == 1 {
 			return governanceCeiling{}, context.DeadlineExceeded
 		}
-		return governanceCeiling{Profile: &types.GovernanceProfile{Name: "would-have-succeeded"}}, nil
+		return governanceCeiling{Profile: &ResolvedProfile{Name: "would-have-succeeded"}}, nil
 	}
 	if _, err := memo.do(context.Background(), resolve); err == nil {
 		t.Fatal("first call: want the resolver's error")

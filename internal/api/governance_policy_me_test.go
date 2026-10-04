@@ -144,6 +144,16 @@ func (s *profileMatrixStore) ResolveGovernanceProfile(_ context.Context, users, 
 	return nil, "", store.ErrNotFound
 }
 
+// GetGovernanceProfileChain is the run-door read: each profile here is standalone, so its chain is itself.
+func (s *profileMatrixStore) GetGovernanceProfileChain(_ context.Context, id uuid.UUID) ([]types.GovernanceProfile, error) {
+	for _, p := range s.bySub {
+		if p.ID == id {
+			return []types.GovernanceProfile{*p}, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
 func (s *profileMatrixStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
 	var out []types.GovernanceProfile
 	for _, p := range s.bySub {
