@@ -534,6 +534,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   stops its sweeps before releasing it. A pause whose mark loses the compare to another leader's no longer
   thaws the run the other leader just paused. The lock holds one more connection for the process lifetime:
   size `pool_max_conns` at least 3 (5 with the ground-truth rotator); `docs/ENV.md` has the detail.
+- **A pause that cannot finish undoing its own freeze leaves the run for the pause sweep, never a thaw on a
+  guess.** Migration `0132_run_pause_settles` adds `run_pause_settles`; it alters no existing table. A pause
+  whose mark is refused records the run there before it thaws, and thaws only a run it has just read as not
+  paused, under a run lock it has proven held around the thaw. A read, a freeze or a thaw that still fails
+  after three tries, or a run lock it cannot take again, leaves the sandbox as it is and keeps the record.
+  Once about 15 seconds have passed, the leader's next pause sweep settles the run under its lock: it freezes
+  a run marked paused, thaws one that is not, and deletes the record. A run such a compensation left reading
+  paused with its agent running, or frozen without a pause mark, now lasts only until that sweep.
 
 - **Several replicas are a supported topology on Kubernetes (`ha.enabled`).** The chart sets `WARDYN_HA=true`,
   lifts the `replicas > 1` refusal and adds a PodDisruptionBudget (`minAvailable: 1`) and a preferred pod

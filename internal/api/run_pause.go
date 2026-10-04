@@ -17,7 +17,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -484,8 +483,9 @@ func (s *Server) thawedSandboxRunning(ctx context.Context, ref string) error {
 	return nil
 }
 
-// sweepRunPauses is one pass of the pause over every live run: pause the ones
-// nobody is at, and resume a waiting one whose requests have all closed. Every
+// sweepRunPauses is one pass of the pause over every live run: settle the ones
+// a pause compensation left unsettled (settlePauses), pause the ones nobody is
+// at, and resume a waiting one whose requests have all closed. Every
 // write is a conditional UPDATE. With a SweeperLease only the elected leader
 // sweeps, its context ends when the lease is lost, and its epoch fences each
 // pause (pauseRun).
@@ -500,6 +500,9 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 		return nil
 	}
 	defer end()
+	if canFreeze {
+		s.settlePauses(ctx, s.cfg.Runner.(runner.Freezer))
+	}
 	cands, now, err := pauser.ListPauseCandidates(ctx)
 	if err != nil {
 		return err
@@ -671,66 +674,6 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(pass), pauseCompensateTimeout)
 	defer cancel()
 	s.undoFreeze(cctx, ctx, f, run, reason)
-}
-
-// undoFreeze is pauseRun's compensation: it thaws a freeze no pause marked,
-// and never one a newer pause holds. hold is the context of the run lock the
-// pause took; ctx outlives the pass and carries no lock.
-//
-// Whether the run lock is still this replica's is asked of the database, on
-// the lock's own connection (db.LockHeld), immediately before and after the
-// thaw. It is never read from hold: once the pass's cancellation has ended
-// hold, its cause stays context.Canceled, and a lock lost after that never
-// shows there. A thaw without the lock can land on a pause another replica
-// froze and marked meanwhile, leaving the run marked paused with its agent
-// running. So a lock found lost before the thaw, or lost while it was in
-// flight, sends the compensation round again under the lock taken afresh: it
-// re-reads the row and moves the sandbox to it, freezing a run marked paused
-// that this compensation may have thawed and thawing one nobody marked, until
-// a round acts with its lock held throughout or ctx ends.
-func (s *Server) undoFreeze(ctx, hold context.Context, f runner.Freezer, run types.AgentRun, reason types.PauseReason) {
-	release := func() {}
-	defer func() { release() }()
-	thawed := false
-	for round := 0; ; round++ {
-		if round > 0 {
-			release()
-			slog.WarnContext(ctx, "wardynd: a pause lost its run lock; settling the run under a new one",
-				slog.String("run_id", run.ID.String()), slog.Bool("thawed", thawed))
-			lctx, unlock, err := s.lockRunOp(ctx, run.ID)
-			if err != nil {
-				slog.ErrorContext(ctx, "wardynd: a pause lost its run lock and could not take it again; the run's sandbox may not match its pause",
-					slog.String("run_id", run.ID.String()), slog.Bool("thawed", thawed), slog.Any("err", err))
-				return
-			}
-			hold, release = lctx, unlock
-		}
-		cur, err := s.cfg.Store.GetRun(ctx, run.ID)
-		paused := err == nil && cur.PausedAt != nil
-		if paused && !thawed {
-			return // a newer pause holds the run frozen: nothing of this one is left to undo
-		}
-		if db.LockHeld(hold) != nil {
-			continue
-		}
-		if paused {
-			if ferr := f.FreezeSandbox(ctx, run.SandboxRef); ferr != nil {
-				slog.ErrorContext(ctx, "wardynd: re-freezing a paused run after a stale thaw failed",
-					slog.String("run_id", run.ID.String()), slog.Any("err", ferr))
-			}
-		} else {
-			thawed = true
-			if terr := f.ThawSandbox(ctx, run.SandboxRef); terr != nil {
-				s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.pause",
-					run.ID.String(), "failure", mustJSON(map[string]any{
-						"reason": reason, "thaw_error": terr.Error(),
-					})))
-			}
-		}
-		if db.LockHeld(hold) == nil {
-			return
-		}
-	}
 }
 
 // handleResumeRun serves POST /runs/{id}/resume: the person presses Resume.
