@@ -197,7 +197,7 @@ func (s PG) VerifyAuditChain(ctx context.Context) (AuditChainStatus, error) {
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // read-only: nothing to undo
 
-	// An audit_events that was never partitioned (a schema from before 0108) has no anchors or
+	// An audit_events that was never partitioned (a schema from before 0111) has no anchors or
 	// high-water mark to check. Once it is partitioned, a missing bookkeeping table is an error, not a
 	// reason to skip the checks.
 	var partitioned bool

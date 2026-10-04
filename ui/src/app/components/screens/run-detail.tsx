@@ -37,7 +37,7 @@ import {
   type Recording,
   type RunDetail,
 } from "../../lib/types";
-import { isTerminalRunState } from "../../lib/types";
+import { ERASED_VALUE, isTerminalRunState } from "../../lib/types";
 import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
 import {
@@ -59,8 +59,9 @@ import { absoluteTime, clockTime, getErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { ActorTypeChip } from "../wardyn/primitives";
-import { AuditDecision, isAttributedRefusal, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
+import { AuditDecision, ErasedFields, isAttributedRefusal, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
 import { PolicyRemedy } from "../wardyn/policy-remedy";
+import { AUDIT } from "./audit-copy";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
@@ -883,11 +884,18 @@ function AuditTab({
                   <AuditDecision event={e} className="flex min-w-0 flex-1 items-center gap-2 text-xs" />
                 ) : (
                   <span className="flex min-w-0 flex-1 items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target}>
-                      {e.target || "—"}
-                    </span>
+                    {e.target === ERASED_VALUE ? (
+                      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={AUDIT.ERASED_HINT}>
+                        {AUDIT.ERASED}
+                      </span>
+                    ) : (
+                      <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target}>
+                        {e.target || "—"}
+                      </span>
+                    )}
                     <RuleSourceChip event={e} />
                     {isAttributedRefusal(e) && <PolicyRemedy policy={policy} className="shrink-0" />}
+                    <ErasedFields event={e} className="shrink-0 text-xs" />
                   </span>
                 )}
               </div>

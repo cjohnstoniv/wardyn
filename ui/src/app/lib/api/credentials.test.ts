@@ -4,7 +4,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { credentials } from "./credentials";
+import { credentials, ErasureIncomplete } from "./credentials";
 import { aheadByHours } from "../test-clock";
 
 afterEach(() => vi.restoreAllMocks());
@@ -54,5 +54,46 @@ describe("credentials.revokeToken", () => {
   it("throws on a failure, so a token that is still live is never reported revoked", async () => {
     respond(404, { error: "api token not found" });
     await expect(credentials.revokeToken("t-1")).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+// POST /people/{principal}/erasure (0.8.6, security tier): the by-scope erase.
+describe("credentials.erasePerson", () => {
+  it("POSTs the scopes to /people/{principal}/erasure, the principal encoded", async () => {
+    const result = { person: "sub-ana", scopes: ["credentials"], outcome: { credentials: "done" } };
+    const spy = respond(200, result);
+    await expect(credentials.erasePerson("ana@example.com", ["credentials"])).resolves.toEqual(result);
+    const [url, init] = spy.mock.calls[0];
+    expect(String(url)).toMatch(/\/api\/v1\/people\/ana%40example\.com\/erasure$/);
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ scopes: ["credentials"] });
+  });
+
+  it("a partial run is an ErasureIncomplete naming what finished and what is left", async () => {
+    respond(500, {
+      error: "erasure is not complete; retry with the same scopes to finish the rest",
+      reason: "erasure_incomplete",
+      done: ["mask_copies"],
+      remaining: ["run_outputs", "credentials"],
+    });
+    const err = await credentials.erasePerson("ana", ["mask_copies", "run_outputs", "credentials"]).catch((e) => e);
+    expect(err).toBeInstanceOf(ErasureIncomplete);
+    expect(err).toMatchObject({ status: 500, done: ["mask_copies"], remaining: ["run_outputs", "credentials"] });
+  });
+
+  it("any other 500 is a plain HttpError", async () => {
+    respond(500, { error: "internal error" });
+    const err = await credentials.erasePerson("ana", ["credentials"]).catch((e) => e);
+    expect(err).not.toBeInstanceOf(ErasureIncomplete);
+    expect(err).toMatchObject({ status: 500, message: "internal error" });
+  });
+
+  it("a refusal carries the server's sentence", async () => {
+    respond(403, { error: "you cannot erase your own records", reason: "erasure_self_refused" });
+    await expect(credentials.erasePerson("me", ["run_tasks"])).rejects.toMatchObject({
+      status: 403,
+      message: "you cannot erase your own records",
+      reason: "erasure_self_refused",
+    });
   });
 });

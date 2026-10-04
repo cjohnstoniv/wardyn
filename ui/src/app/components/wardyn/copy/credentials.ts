@@ -72,6 +72,41 @@ export const ERASE = {
     `The erase didn't finish, so some of ${person}'s credentials may still be stored. Try again — erasing twice is safe.`,
 } as const;
 
+// The security tier's by-scope erase of a person (0.8.6, mock packet M4,
+// approved 2026-10-03): POST /people/{principal}/erasure. Reused unchanged from
+// ERASE: FIELD, RETENTION_LOCAL / _VAULT / _KEY_VAULT, CANCEL, CLOSE.
+export const ERASE_DATA = {
+  BUTTON: "Erase someone's data",
+  BY_EMAIL_TITLE: "Erase someone's data",
+  HINT: "Anyone who has used Wardyn, listed here or not.",
+  SCOPES: "What to erase",
+  SCOPE: {
+    credentials: { label: "Credentials", hint: "Keys, sign-ins and secrets they stored." },
+    audit_personal_fields: {
+      label: "Personal details in audit events",
+      hint: "Task text, messages, notes and emails recorded about them.",
+    },
+    run_tasks: { label: "Run tasks", hint: "The task text of every run they started." },
+    run_outputs: { label: "Run output", hint: "The saved output of every run they started." },
+    mask_copies: {
+      label: "Copies kept for masking",
+      hint: "Their secret values, kept so run output can hide them.",
+    },
+    recordings: { label: "Recordings", hint: "Not erased unless you choose it." },
+  },
+  SEALING_NOTE:
+    "Personal details are erasable only for events recorded while audit sealing was on. Earlier events keep them until retention drops their partition.",
+  KEEPS: "The events themselves stay, and the log still verifies.",
+  CONFIRM: "Erase data",
+  ERASED: "Erased",
+  NOT_DONE: "Not finished",
+  DONE: (person: string) => `Erased the chosen data for ${person}.`,
+  PARTIAL: (person: string) => `Some of ${person}'s data wasn't erased. Try again — erasing twice is safe.`,
+  FAILED: (person: string) =>
+    `The erase didn't finish, so some of ${person}'s data may still be stored. Try again — erasing twice is safe.`,
+  DONE_AUDIT: "Recorded in the Audit log as person.erasure.",
+} as const;
+
 // #1477: the read-only list of tokens an admin created for another person
 // (console-085-packet, approved 2026-10-01, Q4–Q6). Strings are the packet's,
 // character for character. The singular forms (CHIP/COUNT at 1) are the

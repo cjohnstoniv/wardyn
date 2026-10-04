@@ -19,7 +19,8 @@
 // page's Audit tab.
 import { Link } from "react-router-dom";
 import { cn } from "../ui/utils";
-import { toolRuleDecision, type AuditEvent } from "../../lib/types";
+import { erasedFieldNames, toolRuleDecision, type AuditEvent } from "../../lib/types";
+import { AUDIT } from "../screens/audit-copy";
 import { Chip } from "./primitives";
 import { PUSH } from "./copy/push";
 
@@ -218,5 +219,25 @@ export function RuleSourceChip({ event, className }: { event: AuditEvent; classN
       {chip}
       {causeSpan}
     </span>
+  );
+}
+
+// A field the person it describes had erased (a sealed field whose key was
+// destroyed) renders "Erased", never the wire sentinel (mock packet M4,
+// surface D). Nothing else on the row changes; shared by the two mounts that
+// show a trail, like AuditDecision above. One note per erased field, named by
+// its key, with the explanation as its title. The target is not here: its row
+// shows it in place.
+export function ErasedFields({ event, className }: { event: AuditEvent; className?: string }) {
+  const names = erasedFieldNames(event).filter((n) => n !== "target");
+  if (names.length === 0) return null;
+  return (
+    <>
+      {names.map((n) => (
+        <span key={n} className={cn("text-muted-foreground", className)} title={AUDIT.ERASED_HINT}>
+          {n}: {AUDIT.ERASED}
+        </span>
+      ))}
+    </>
   );
 }

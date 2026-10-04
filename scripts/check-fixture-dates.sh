@@ -68,6 +68,10 @@ declare -A ALLOWLIST=(
   ["internal/api/audit_partition_export_test.go"]=1
   ["internal/db/audit_partition_digest_pg_test.go"]=1
   ["internal/store/auditpartition_pg_test.go"]=1
+  # ar-l1.6's retention tab test: the partition bounds and the pending date are display data the
+  # table renders in the packet's own wording ("3 Oct 2026", "Oct 2026"), asserted as literal
+  # strings so the canon wording is pinned. Nothing compares them against the clock.
+  ["ui/src/app/components/screens/audit-retention.test.tsx"]=13
   ["internal/api/access_test.go"]=1
   ["internal/api/ado_entra_test.go"]=1
   ["internal/api/auth_failed_coalesce_test.go"]=1
