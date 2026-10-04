@@ -485,6 +485,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	var body bytes.Buffer
 	s.metrics.write(&body)
 	s.writeHealthGauges(r, &body)
+	s.writeFleetGauges(r, &body)
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	_, _ = w.Write(body.Bytes())
 }

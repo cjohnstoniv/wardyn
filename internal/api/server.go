@@ -675,6 +675,8 @@ type Server struct {
 	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is
 	// ready to use.
 	metrics metrics
+	// fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).
+	fleet fleetSnapshot
 	// capRowsScanned counts capability-grant rows compared inside capBatch (see
 	// capabilities.go). It is INSTRUMENTATION, read by nothing on any request
 	// path: the per-request cost of the capability seam is chosen partly by the
