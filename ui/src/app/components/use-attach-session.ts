@@ -20,7 +20,7 @@ import { decideKey } from "./attach-terminal-keys";
 import { terminalLinkHandlers } from "./attach-terminal-links";
 import { exposeTerminalForE2E } from "./attach-terminal-e2e-seam";
 import { createRenderer, type RendererControl, type RendererPref, type RendererState } from "./attach-terminal-renderer";
-import { createCopyGate, type CopyGate, type CopyOffer, type GateTerm } from "./attach-terminal-clipboard";
+import { createCopyGate, isMacPlatform, type CopyGate, type CopyOffer, type GateTerm } from "./attach-terminal-clipboard";
 import { runs } from "../lib/api/runs";
 import { wsURL } from "../lib/base-path";
 import { entryErrorMessage } from "../lib/run-entry";
@@ -595,7 +595,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           // is never swallowed); with none pending, Ctrl+C is the interrupt.
           if (
             offerCopyRef.current &&
-            (e.ctrlKey || e.metaKey) &&
+            (isMacPlatform() ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) &&
             !e.altKey &&
             !e.shiftKey &&
             e.key.toLowerCase() === "c" &&

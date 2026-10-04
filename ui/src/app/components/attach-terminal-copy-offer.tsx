@@ -71,7 +71,7 @@ export function CopyOfferToast({
         if (e.key === "Escape") {
           e.preventDefault();
           onDone();
-        } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
+        } else if ((mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) && e.key.toLowerCase() === "c") {
           // A selection inside the preview keeps the browser's own copy.
           if (previewRef.current && window.getSelection()?.toString()) return;
           e.preventDefault();
