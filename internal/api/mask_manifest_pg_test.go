@@ -23,8 +23,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/adorunpat"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/livebus"
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/maskstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -71,6 +73,13 @@ func (l *maskLab) replica() replica { return l.replicaMasking(l.pool) }
 // Postgres away from masking alone.
 func (l *maskLab) replicaMasking(maskPool *pgxpool.Pool) replica {
 	l.t.Helper()
+	return l.replicaBuilt(maskPool, nil)
+}
+
+// replicaBuilt is replicaMasking with bus (nil: none) as the replica's notice bus, started for
+// the test's life.
+func (l *maskLab) replicaBuilt(maskPool *pgxpool.Pool, bus *livebus.Bus) replica {
+	l.t.Helper()
 	sec, err := secretspg.New(l.pool, l.id)
 	if err != nil {
 		l.t.Fatal(err)
@@ -86,6 +95,11 @@ func (l *maskLab) replicaMasking(maskPool *pgxpool.Pool) replica {
 	cfg.RecordingStore = rs
 	cfg.MaskRegistry = reg
 	cfg.MaskManifests = maskmanifest.New(maskPool, sec.SubjectKeys(), reg)
+	cfg.ADORunPATs = adorunpat.New(l.pool, sec.SubjectKeys())
+	if bus != nil {
+		cfg.LiveBus = bus
+		bus.Start(l.t.Context())
+	}
 	st := maskstore.New(maskPool, sec.SubjectKeys(), reg)
 	srv := New(cfg)
 	srv.maskBeat = 25 * time.Millisecond

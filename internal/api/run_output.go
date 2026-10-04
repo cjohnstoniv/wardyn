@@ -21,8 +21,9 @@ import (
 )
 
 // GET /runs/{id}/output (#1232) serves the end of a non-interactive run's
-// combined stdout/stderr. wardynd keeps it in memory while the run lives, apart
-// from the recording store, so a deployment with WARDYN_RECORDING_STORE=off can
+// combined stdout/stderr. wardynd keeps it in memory while the run lives (and,
+// with persistence on, mirrors the masked bytes into run_output_chunks so any
+// replica serves it: run_output_chunks.go), apart from the recording store, so a deployment with WARDYN_RECORDING_STORE=off can
 // still read what its headless runs printed. An interactive run is refused: its
 // terminal is the recording's to keep, never this route's.
 //
@@ -83,13 +84,16 @@ func (r *outputRing) Write(p []byte) (int, error) {
 type execOutputTail struct {
 	mw   *liveMaskWriter
 	ring outputRing
+	// sink is the masking writer's destination: the ring, mirrored into run_output_chunks
+	// (run_output_chunks.go).
+	sink *tailSink
 
 	dmu       sync.Mutex    // guards drains, drainErr and drainWake
 	drains    int           // copies into this tail that have begun and not ended
 	drainErr  bool          // a copy ended in an error
 	drainWake chan struct{} // closed and replaced whenever drains changes
 
-	fmu      sync.Mutex    // guards started, committed, late and fenced
+	fmu      sync.Mutex    // guards started, committed, late, fenced, recovered and gapReason
 	started  bool          // a finisher has taken the once-guard
 	done     chan struct{} // closed when that finisher returns
 	finished bool          // the tail is sealed: barrier closed, holdback flushed
@@ -98,6 +102,12 @@ type execOutputTail struct {
 	committed bool
 	late      bool // a byte was dropped after the seal
 	fenced    bool // the run's output was erased: this tail is zeroed and dropped
+	// recovered: the bytes were read back from the substrate by a process that
+	// did not capture them live (run_output_recover.go). gapReason, when set,
+	// says the recovery found nothing it may keep, so the finisher writes a
+	// capture gap instead of this tail.
+	recovered bool
+	gapReason string
 }
 
 func newExecOutputTail(max int, now func() time.Time) *execOutputTail {
@@ -170,7 +180,8 @@ func (s *Server) openExecOutput(run types.AgentRun, interactive bool) io.Writer 
 		}
 	}
 	e := newExecOutputTail(s.cfg.RunOutputTailBytes, s.cfg.Now)
-	e.mw = &liveMaskWriter{reg: s.cfg.MaskRegistry, runID: runID, dst: &e.ring, guard: s.maskGuard(runID), capture: outputCapture{onLate: func() { s.lateRunOutput(runID, e) }}}
+	e.sink = s.newTailSink(runID, &e.ring)
+	e.mw = &liveMaskWriter{reg: s.cfg.MaskRegistry, runID: runID, dst: e.sink, guard: s.maskGuard(runID), capture: outputCapture{onLate: func() { s.lateRunOutput(runID, e) }}}
 	t := &s.execOutputs
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -269,7 +280,8 @@ type runOutputResponse struct {
 // After getRunAuthorized the answer is, in order: erased (404); output off
 // (409); a final row, served on any replica with no manifest and no lease
 // (200); a live read of an uncovered run (503, ha-l2.0's refusal); a live
-// tail in this process (200); a pending row with no local tail (409, read again shortly);
+// tail in this process (200); the live chunks another replica wrote (200); a pending row
+// with nothing to read (409, read again shortly);
 // an interactive run (409); a run that ended longer ago than the retention
 // window (410); otherwise not kept (409).
 func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
@@ -326,7 +338,12 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	if (!run.State.IsTerminal() || s.tailFor(id) != nil) && s.refuseUncovered(w, r, id, "runs.output") {
 		return
 	}
-	if v, kept := s.readExecOutput(id, limit, run.State.IsTerminal()); kept {
+	v, kept := s.readExecOutput(id, limit, run.State.IsTerminal())
+	// No tail in this process: the replica that holds it has been writing it to run_output_chunks.
+	if !kept && s.readSharedOutput(w, r, id, limit) {
+		return
+	}
+	if kept {
 		if v.expired {
 			writeErrorReason(w, http.StatusGone, reasonRunOutputExpired,
 				"this run's output has expired: it is kept for WARDYN_EXEC_OUTPUT_TAIL_TTL after the run's last output")

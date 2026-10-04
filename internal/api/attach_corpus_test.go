@@ -82,8 +82,14 @@ func TestAttachCorpus_TakeoverPromotesWebObserverOverSSHHolder(t *testing.T) {
 
 		// The capability, not just the announcement: its keystrokes now reach the
 		// sandbox on the socket it already had.
+		// A promotion re-attaches: the writer exec is a NEW session, and the
+		// observer's own is closed.
+		promotedSess := waitForSession(t, fr, 2)
 		wsWrite(t, c2, websocket.MessageBinary, []byte("mine now\r"))
-		waitFor(t, "the promoted web client's keystrokes to reach the sandbox", func() bool { return observed.written() > 0 })
+		waitFor(t, "the promoted web client's keystrokes to reach the sandbox", func() bool { return promotedSess.written() > 0 })
+		if n := observed.written(); n != 0 {
+			t.Errorf("the promoted client's keystrokes reached its old observer exec (%d writes)", n)
+		}
 
 		// The displaced SSH holder learns why, on its own transport's equivalent
 		// of the close frame, and the bridge returns.
@@ -244,8 +250,12 @@ func TestAttachCorpus_ReconnectAfterDaemonRebuildSharesStore(t *testing.T) {
 		t.Fatalf("attachHolderFor = %+v, want the promoted client %s", got, holderSecond)
 	}
 
+	promotedSess := waitForSession(t, fr2, 2)
 	wsWrite(t, c3, websocket.MessageBinary, []byte("echo reconnected\r"))
-	waitFor(t, "the promoted client's keystrokes to reach the sandbox", func() bool { return observed.written() > 0 })
+	waitFor(t, "the promoted client's keystrokes to reach the sandbox", func() bool { return promotedSess.written() > 0 })
+	if n := observed.written(); n != 0 {
+		t.Errorf("the promoted client's keystrokes reached its old observer exec (%d writes)", n)
+	}
 
 	waitForActorAudit(t, rec, run.ID, "session.promote", holderSecond)
 }

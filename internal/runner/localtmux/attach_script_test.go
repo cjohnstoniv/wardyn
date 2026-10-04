@@ -22,8 +22,8 @@ func TestAttachScriptMatchesDockerSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(src), "runner.TmuxAttachSh") {
-		t.Fatal("docker/session.go no longer runs runner.TmuxAttachSh, the attach script this harness runs")
+	if !strings.Contains(string(src), "runner.TmuxAttachShFor(observer)") {
+		t.Fatal("docker/session.go no longer runs runner.TmuxAttachShFor(observer), the attach script this harness runs")
 	}
 }
 

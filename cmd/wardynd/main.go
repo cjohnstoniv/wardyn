@@ -27,12 +27,14 @@ import (
 	"filippo.io/age"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adorunpat"
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/hostcapacity"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/livebus"
 	"github.com/cjohnstoniv/wardyn/internal/nodump"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -247,6 +249,11 @@ func run() error {
 	// background cadence instead of waiting for a door to ask.
 	maskStore.OnBackgroundRead(maskManifests.DropFenced)
 	maskStore.Start(rootCtx)
+	// The live state replicas share (ha-l2.4): the notices they send each other over NOTIFY, and
+	// each minted_pat run's token, sealed under the owner's key, in Postgres.
+	liveBus := livebus.New(pool, uuid.NewString())
+	liveBus.Start(rootCtx)
+	adoRunPATs := adorunpat.New(pool, subjectKeysOf(secrets))
 
 	// Embedded identity provider: signing key persisted in the secret store,
 	// generated on first boot. The pg-backed revocation store is the kill-switch
@@ -444,6 +451,8 @@ func run() error {
 		Secrets:                  secrets,
 		MaskRegistry:             maskReg,
 		MaskManifests:            maskManifests,
+		LiveBus:                  liveBus,
+		ADORunPATs:               adoRunPATs,
 		AuditUnsealer:            sealSrc.unsealer(),
 		SubjectKeys:              subjectKeysOf(secrets),
 		ExecOutputTailOff:        !*f.execOutputTail,

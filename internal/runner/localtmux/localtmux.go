@@ -37,11 +37,11 @@ import (
 // from the same binary, so the name is never registered twice.
 const Name = "docker"
 
-// attachScript is the tmux branch both real drivers run (runner.TmuxAttachSh,
-// with its version-gated tmux settings). The docker package is behind the
-// docker build tag and cannot be imported here; attach_script_test.go pins
-// docker/session.go to the same fragment.
-var attachScript = runner.TmuxAttachSh
+// The attach script is the tmux branch both real drivers run
+// (runner.TmuxAttachShFor, with its version-gated tmux settings and, for an
+// observer, ignore-size). The docker package is behind the docker build tag and
+// cannot be imported here; attach_script_test.go pins docker/session.go to the
+// same fragment.
 
 func init() {
 	substrate.Register(Name, func(substrate.Deps) (substrate.Substrate, error) {
@@ -154,7 +154,7 @@ func (s *Substrate) Attach(_ context.Context, _ string, opts runner.AttachOption
 		}
 	}
 
-	cmd := exec.Command("/bin/sh", "-c", attachScript)
+	cmd := exec.Command("/bin/sh", "-c", runner.TmuxAttachShFor(opts.Observer))
 	cmd.Dir = s.dir
 	cmd.Env = []string{
 		"PATH=" + s.dir + ":" + os.Getenv("PATH"),

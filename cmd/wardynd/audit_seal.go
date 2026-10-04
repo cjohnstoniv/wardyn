@@ -147,6 +147,9 @@ func (r sealingRecorder) record(ctx context.Context, ev types.AuditEvent) error 
 		}
 		var err error
 		if ev, err = sealer.Reseal(ctx, ev); err != nil {
+			if errors.Is(err, audit.ErrPendingUnopenable) {
+				return err
+			}
 			return fmt.Errorf("%w: %w", audit.ErrReplayDeferred, err)
 		}
 	}

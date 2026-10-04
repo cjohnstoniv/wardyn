@@ -701,6 +701,9 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 	// here or on another replica, adopts the run).
 	stopLease := s.holdRunWatcherLease(ctx, runID)
 	defer stopLease()
+	// A run adopted live by a process with no tail for it resumes its output
+	// capture from the substrate, so the run's end persists all of it.
+	s.resumeRunOutput(ctx, runID, ref)
 	baseInterval := time.Duration(reconcileWatchIntervalNS.Load())
 	tick := time.NewTicker(baseInterval)
 	defer tick.Stop()

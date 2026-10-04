@@ -74,6 +74,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **A second wardynd sees a run's live output, attach ownership, events, kills and Azure DevOps run
+  token.** Migration `0121_ha_live_state` adds `run_output_chunks`, `run_attach_leases`,
+  `ado_run_pat_state` and `ado_signin_ends`; it alters no existing table. `GET /runs/{id}/output` is served
+  from the masked chunks the dispatching replica writes (bytes are masked before they are inserted, about one
+  tail per run is kept, the final row replaces them, an erasure deletes them and a write after it is refused),
+  so any replica reads a live run's tail and a replica that died leaves what it printed; when no replica can
+  re-read the substrate, the run's row is written from them as an incomplete `capture_gap`. The attach
+  writer slot is a Postgres lease: input and resize are fenced by it, a take-over served by any replica
+  displaces the holder wherever it is and keeps the slot for the taker, and a waiting client on any replica
+  is promoted when it is released. Run events and a kill reach the other replicas over `NOTIFY` (a lost
+  notice costs promptness only: the events stream re-reads the store each beat, and dispatch's STARTING to
+  RUNNING compare still tears down a sandbox whose run was killed). A `minted_pat` run's token is kept in
+  `ado_run_pat_state` sealed under the run owner's key, its mint and revoke take a per-run lock after the run
+  operation lock, and the sign-in end counter is shared, so two replicas never create one run's token twice.
+  A person's erasure (`mask_copies`, `run_outputs`) deletes the token and chunk rows, and nothing writes them
+  back. A server whose database cannot be reached for this state refuses the work rather than guessing: `503`.
+  **After an upgrade or a restart a client that attaches while the previous process's lease is still live
+  is read-only for up to about six seconds, then promoted.** Each replica holds one more database connection,
+  for `LISTEN wardyn_live`, outside `pool_max_conns`. See `docs/OPERATIONS.md` "Replicas".
 - **API tokens can expire.** Migration `0114_api_tokens_expires_at` adds a nullable `api_tokens.expires_at`;
   every existing token keeps no expiry. `POST /api/v1/me/tokens` takes an optional `ttl_seconds`, a negative
   value is a `400 api_token_ttl_invalid`, and the response and both token lists carry `expires_at`. An
@@ -110,8 +129,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   ends (completion, failure, kill, idle stop, lease end, reconciliation, a failed dispatch) goes through one
   finalisation: wait up to 5 seconds for the runner's copy of the output to end, flush the masker's
   holdback, seal the tail, and write one masked row. A byte that arrives later is dropped and marks the row
-  `incomplete`; a process that holds no tail for the run (a restart) writes a `capture_gap` row and reads
-  nothing from the substrate. A failed write is retried with backoff and audited as `run.output.finalize`
+  `incomplete`; a process that holds no tail for the run (a restart, or an adopting replica) reads it back from
+  the substrate when it can (Kubernetes: the exec container's log, followed on a live adoption; Docker: an
+  exec-less agent's log) and only for a run whose masking manifest is complete, bounded to 10 seconds, and
+  otherwise writes a `capture_gap` row (a Docker exec agent, a sandbox already gone, a run with no complete
+  manifest, which includes runs alive across the upgrade). The agent is never re-run. A failed write is retried with backoff and audited as `run.output.finalize`
   (only for a capture that is not clean); an hourly leader-gated sweep deletes rows past retention
   (`run.output.retention.sweep`) and is the `run_output` row of `wardyn_sweep_last_tick_seconds`.
   `GET /runs/{id}/output` gains `source`, `incomplete`, `capture_gap`, `mask_scope` and `captured_at`.

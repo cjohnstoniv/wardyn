@@ -103,7 +103,11 @@ func (s *Server) handleADODisconnect(w http.ResponseWriter, r *http.Request) {
 	// A token created while this runs revokes itself (adoSignInEnds).
 	// end runs even on a panic, or the person's mints would self-revoke until restart.
 	removed, err := func() (bool, error) {
-		defer s.adoSignInEnds.begin(subject, adoPATRevokeDisconnect)()
+		finish, berr := s.beginADOSignInEnd(ctx, subject, adoPATRevokeDisconnect)
+		if berr != nil {
+			return false, berr
+		}
+		defer finish()
 		s.revokeOwnerRunPATs(ctx, subject, adoPATRevokeDisconnect)
 		return s.forgetADOSignIn(ctx, subject, rowID)
 	}()
@@ -206,8 +210,9 @@ func (s *Server) adoSignInRowID(ctx context.Context) (string, error) {
 // checks it after it records: a count that moved, or an end still running,
 // means the token was created across an end, and the mint revokes it itself.
 //
-// In memory, per process: on a deployment with more than one replica a mint
-// on another replica keeps this gap, bounded by the token's valid_to.
+// The count is in Postgres (ado_signin_ends) when the store keeps one, so a mint on any
+// replica sees an end begun on any other; adoSignInEnds is the in-process count of a store
+// without it.
 type adoSignInEnds struct {
 	mu sync.Mutex
 	m  map[string]*adoSignInEnd

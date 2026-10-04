@@ -104,7 +104,11 @@ func (s *Server) eraseCredentialsScope(ctx context.Context, owner string, rep *s
 	// locks eraseLocked takes, because its paths take the Entra redemption lock
 	// themselves (ado_pat_client.go) and a nested take would deadlock.
 	// end runs even on a panic, or the person's mints would self-revoke until restart.
-	defer s.adoSignInEnds.begin(owner, adoPATRevokeOffboarding)()
+	finish, err := s.beginADOSignInEnd(ctx, owner, adoPATRevokeOffboarding)
+	if err != nil {
+		return err
+	}
+	defer finish()
 	s.revokeOwnerRunPATs(ctx, owner, adoPATRevokeOffboarding)
 	return s.eraseLocked(ctx, owner, rowID, rep)
 }
@@ -119,6 +123,15 @@ func (s *Server) eraseMaskCopies(ctx context.Context, person string) (any, error
 	detail := map[string]any{"runs_fenced": len(runs)}
 	if err != nil {
 		return detail, err
+	}
+	// The run tokens the person's runs hold in Postgres go with the manifests: the fence just
+	// set is what stops a replica writing one back (adorunpat.Save).
+	if s.cfg.ADORunPATs != nil {
+		n, err := s.cfg.ADORunPATs.DeleteOwner(ctx, person)
+		detail["run_tokens"] = n
+		if err != nil {
+			return detail, err
+		}
 	}
 	left, err := s.cfg.MaskRegistry.EraseOwner(ctx, person)
 	if err != nil {
