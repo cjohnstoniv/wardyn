@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,6 +32,30 @@ type GovernanceProfileRequest struct {
 	// change. nil leaves the stored contact unchanged (an older caller that
 	// never sets it cannot wipe it); a pointer to an empty Contact clears it.
 	Contact *PolicyContact `json:"contact,omitempty"`
+	// BaseProfileID, Overlay and OverlayLimits are a composed profile's members. Left nil they are
+	// omitted, which keeps the stored value; ApplyGovernance sets each to an explicit JSON null when
+	// it must clear one, so a repeat apply reproduces the document and not a merge of it.
+	BaseProfileID json.RawMessage `json:"base_profile_id,omitempty"`
+	Overlay       json.RawMessage `json:"overlay,omitempty"`
+	OverlayLimits json.RawMessage `json:"overlay_limits,omitempty"`
+}
+
+// withComposition sets the request's composition members from p. Nothing is sent when neither p nor
+// the stored profile it replaces is composed, so a standalone apply is byte-identical to before.
+func (r *GovernanceProfileRequest) withComposition(p GovernanceProfile, replacing *GovernanceProfile) {
+	if !p.Composed() && (replacing == nil || !replacing.Composed()) {
+		return
+	}
+	r.BaseProfileID, r.Overlay, r.OverlayLimits = jsonOrNull(p.BaseProfileID), jsonOrNull(p.Overlay), jsonOrNull(p.OverlayLimits)
+}
+
+// jsonOrNull marshals a pointer member, or the explicit null for a nil one.
+func jsonOrNull[T any](v *T) json.RawMessage {
+	if v == nil {
+		return json.RawMessage("null")
+	}
+	b, _ := json.Marshal(v) // plain data structs: cannot fail
+	return b
 }
 
 // GovernanceProfileResponse is a profile write's body: the saved profile plus
@@ -85,14 +110,18 @@ type GovernanceChange struct {
 	Diff       GovernanceChangeDiff `json:"diff"`
 }
 
-// GovernanceDeferredWrite is an assignment ApplyGovernanceResult did not send
-// because the profile it names has a write pending approval. Apply again once
+// GovernanceDeferredWrite is a write ApplyGovernanceResult did not send because
+// the profile it names (an assignment's profile, or a child profile's base) has
+// a write pending approval. Apply again once
 // that change is approved.
 type GovernanceDeferredWrite struct {
 	SubjectType CapabilitySubjectType `json:"subject_type"`
 	Subject     string                `json:"subject"`
 	// Profile is the pending profile's name.
 	Profile string `json:"profile"`
+	// Base is set when the deferred write is a PROFILE rather than an assignment: Profile is the
+	// child that was not sent, Base the profile it composes on whose write is pending.
+	Base string `json:"base,omitempty"`
 }
 
 // PendingApprovalError is returned when a write was held for a second approver
@@ -148,7 +177,71 @@ func governanceAssignmentKey(subjectType CapabilitySubjectType, subject string) 
 // than ApplyDrives, which always re-PUTs/re-POSTs).
 func governanceProfileUnchanged(existing, p GovernanceProfile) bool {
 	return reflect.DeepEqual(existing.Ceiling, p.Ceiling) && reflect.DeepEqual(existing.Limits, p.Limits) &&
-		(p.Contact == nil || reflect.DeepEqual(existing.Contact, p.Contact))
+		(p.Contact == nil || reflect.DeepEqual(existing.Contact, p.Contact)) &&
+		reflect.DeepEqual(existing.BaseProfileID, p.BaseProfileID) &&
+		reflect.DeepEqual(existing.Overlay, p.Overlay) &&
+		reflect.DeepEqual(existing.OverlayLimits, p.OverlayLimits)
+}
+
+// governanceWriteOrder returns the indexes of profiles with every base before the profiles composed
+// on it, otherwise in document order. A base is matched by the id the document's own entry carries
+// (fileIDToName); a base outside the document is already on the target and adds no edge.
+func governanceWriteOrder(profiles []GovernanceProfile, fileIDToName map[uuid.UUID]string) ([]int, error) {
+	indexByName := make(map[string]int, len(profiles))
+	for i, p := range profiles {
+		indexByName[p.Name] = i
+	}
+	order := make([]int, 0, len(profiles))
+	state := make([]byte, len(profiles)) // 0 new, 1 in progress, 2 emitted
+	var visit func(i int) error
+	visit = func(i int) error {
+		switch state[i] {
+		case 2:
+			return nil
+		case 1:
+			return fmt.Errorf("governance profile %q is part of a base_profile_id cycle", profiles[i].Name)
+		}
+		state[i] = 1
+		if b := profiles[i].BaseProfileID; b != nil {
+			if j, ok := indexByName[fileIDToName[*b]]; ok {
+				if err := visit(j); err != nil {
+					return err
+				}
+			}
+		}
+		state[i] = 2
+		order = append(order, i)
+		return nil
+	}
+	for i := range profiles {
+		if err := visit(i); err != nil {
+			return nil, err
+		}
+	}
+	return order, nil
+}
+
+// governancePruneOrder returns profiles with every profile before the base it composes on, so a
+// delete never meets the 409 a still-referenced base gives. Depth in the stored graph decides it.
+func governancePruneOrder(profiles []GovernanceProfile) []GovernanceProfile {
+	byID := make(map[uuid.UUID]GovernanceProfile, len(profiles))
+	for _, p := range profiles {
+		byID[p.ID] = p
+	}
+	depth := func(p GovernanceProfile) int {
+		d := 0
+		for ; p.BaseProfileID != nil && d <= len(profiles); d++ { // bounded: the server refuses cycles, a bad document must not hang
+			next, ok := byID[*p.BaseProfileID]
+			if !ok {
+				break
+			}
+			p = next
+		}
+		return d
+	}
+	out := append([]GovernanceProfile(nil), profiles...)
+	sort.SliceStable(out, func(i, j int) bool { return depth(out[i]) > depth(out[j]) })
+	return out
 }
 
 // ApplyGovernance upserts every profile and assignment doc names, over the
@@ -269,34 +362,52 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 	// approval: an assignment naming one is deferred, never sent.
 	pendingProfile := make(map[string]bool)
 
-	for i, p := range doc.Profiles {
+	for _, p := range doc.Profiles {
+		if p.ID != uuid.Nil {
+			fileIDToName[p.ID] = p.Name
+		}
+	}
+	order, err := governanceWriteOrder(doc.Profiles, fileIDToName)
+	if err != nil {
+		return GovernanceApplyResult{}, err
+	}
+
+	for _, i := range order {
+		p := doc.Profiles[i]
 		saved := p
-		if existing, ok := profileByName[p.Name]; ok && governanceProfileUnchanged(existing, p) {
+		// Every graph reference is rewritten to the id the base holds on THIS server; bases were
+		// written first, so nameToRealID has it. A base the document does not carry is sent as given.
+		if p.BaseProfileID != nil {
+			if baseName, ok := fileIDToName[*p.BaseProfileID]; ok {
+				if pendingProfile[baseName] {
+					res.Deferred = append(res.Deferred, GovernanceDeferredWrite{Profile: p.Name, Base: baseName})
+					pendingProfile[p.Name] = true
+					continue
+				}
+				real := nameToRealID[baseName]
+				p.BaseProfileID = &real
+			}
+		}
+		existing, ok := profileByName[p.Name]
+		if ok && governanceProfileUnchanged(existing, p) {
 			saved = existing
 		} else {
-			req := GovernanceProfileRequest{Name: p.Name, Ceiling: p.Ceiling, Limits: p.Limits, Contact: p.Contact}
-			var resp GovernanceProfileResponse
-			var pending *GovernanceChange
-			var werr error
+			var replacing *GovernanceProfile
 			if ok {
-				pending, werr = c.doPending(ctx, http.MethodPut, "/api/v1/governance/profiles/"+existing.ID.String(), req, &resp)
-			} else {
-				pending, werr = c.doPending(ctx, http.MethodPost, "/api/v1/governance/profiles", req, &resp)
+				replacing = &existing
 			}
+			got, pending, werr := c.writeGovernanceProfile(ctx, p, replacing)
 			if werr != nil {
-				return GovernanceApplyResult{}, fmt.Errorf("apply governance profile %q: %w", p.Name, werr)
+				return GovernanceApplyResult{}, werr
 			}
 			if pending != nil {
 				res.Pending = append(res.Pending, *pending)
 				pendingProfile[p.Name] = true
 			} else {
-				saved = resp.Profile
+				saved = got
 			}
 		}
 		doc.Profiles[i] = saved
-		if p.ID != uuid.Nil {
-			fileIDToName[p.ID] = p.Name
-		}
 		nameToRealID[p.Name] = saved.ID
 	}
 
@@ -354,6 +465,23 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 	return res, err
 }
 
+// writeGovernanceProfile creates p, or replaces the stored profile it names. A write the server holds
+// for approval comes back as the pending change and a zero profile.
+func (c *Client) writeGovernanceProfile(ctx context.Context, p GovernanceProfile, replacing *GovernanceProfile) (GovernanceProfile, *GovernanceChange, error) {
+	req := GovernanceProfileRequest{Name: p.Name, Ceiling: p.Ceiling, Limits: p.Limits, Contact: p.Contact}
+	req.withComposition(p, replacing)
+	method, path := http.MethodPost, "/api/v1/governance/profiles"
+	if replacing != nil {
+		method, path = http.MethodPut, path+"/"+replacing.ID.String()
+	}
+	var resp GovernanceProfileResponse
+	pending, err := c.doPending(ctx, method, path, req, &resp)
+	if err != nil {
+		return GovernanceProfile{}, nil, fmt.Errorf("apply governance profile %q: %w", p.Name, err)
+	}
+	return resp.Profile, pending, nil
+}
+
 // pruneGovernance deletes every assignment, then every profile, in current that
 // doc does not name. It stops at the first delete the server holds for approval
 // (recording it in res.Pending) and reports that as skipped=true, because the
@@ -382,7 +510,7 @@ func (c *Client) pruneGovernance(ctx context.Context, current, doc GovernanceDoc
 	for _, p := range doc.Profiles {
 		keepProfile[p.Name] = true
 	}
-	for _, p := range current.Profiles {
+	for _, p := range governancePruneOrder(current.Profiles) {
 		if keepProfile[p.Name] {
 			continue
 		}

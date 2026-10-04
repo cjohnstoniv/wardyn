@@ -535,8 +535,10 @@ applied until a different approver approves it. The SDK never reads that body as
   and a `*client.PendingApprovalError`, so a caller written before 0.8.6 fails loudly instead of
   carrying on.
 - `ApplyGovernanceResult` returns the same outcome as data: the document, the `Pending` changes,
-  the `Deferred` assignments and `PruneSkipped`. An assignment that names a profile whose write is
-  pending is deferred, never sent; prune does not run after a pending write.
+  the `Deferred` writes and `PruneSkipped`. An assignment that names a profile whose write is
+  pending is deferred, never sent; so is a composed profile whose base profile's write is pending
+  (a `Deferred` entry with `Base` set), and so, in turn, are its own children and their
+  assignments. Prune does not run after a pending write.
 - `ListGovernanceChanges(ctx, state)`, `GetGovernanceChange`, `ApproveGovernanceChange` and
   `RejectGovernanceChange(ctx, id, reason)` read and decide the stored changes
   (`/api/v1/governance/changes`).
@@ -551,7 +553,7 @@ for _, ch := range res.Pending {
 }
 ```
 
-The CLI mirrors this. `wardyn governance set` prints the pending and deferred lists on stderr and
+The CLI mirrors this. `wardyn governance set` prints the pending and deferred lists (profiles and assignments) on stderr and
 exits 0, and `wardyn governance changes list [--state ...]`, `changes approve <id>` and
 `changes reject <id> [--reason ...]` act on them.
 
@@ -697,3 +699,26 @@ line on stderr (never stdout, so `--json` stays a plain array) naming the next
 header a caller has to remember to check; `scripts/ci-run.sh` loops it so a CI
 run's `audit.json` artifact is never a silently-truncated prefix. Everything
 else here is one method on the Go client above, or one `wardyn` CLI command.
+
+### Composed profile graphs
+
+`ApplyGovernance` reproduces a graph of composed profiles (`base_profile_id`, `overlay`,
+`overlay_limits`, `contact`) from `wardyn governance get` on one install to `wardyn governance set`
+on another, and a repeat apply is a no-op.
+
+- **Order.** Profiles are written bases first, whatever order the document lists them in; a
+  `base_profile_id` cycle in the document is an error before any write. Prune deletes the profiles
+  composed on a base before the base, so it never meets the server's `409`.
+- **Ids.** Every graph reference, `base_profile_id` and an assignment's `profile_id`, is matched by the
+  id the document's own entry for that profile carries and rewritten to the id the profile holds on the
+  target. A base the document does not contain is sent as given.
+- **Fields.** A profile is rewritten only when its ceiling, limits, contact, base, overlay or
+  overlay limits differ from the stored one. The read-only `effective` view is never written back.
+- **Pending approval.** A child whose base has a pending write is deferred, not sent; apply again
+  once the base is approved.
+- **Older clients.** A client built before 0.8.6 drops `base_profile_id`, `overlay` and
+  `overlay_limits`. A composed profile it would create is refused with a `400` (`invalid ceiling:
+  min_confinement_class is required`), because the exported row carries an empty ceiling and no
+  overlay. One it updates keeps the composition the server stored, since an absent member keeps the
+  stored value. It also writes in document order, so a child listed before its base fails. Upgrade
+  before applying a composed document.
