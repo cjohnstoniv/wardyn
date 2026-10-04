@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -35,6 +37,15 @@ func (e *scimEnv) scimStatusOf(n *scimNode) scimStatus {
 func TestSCIMStatus(t *testing.T) {
 	e := newSCIMEnv(t, func(c *Config) { c.SCIM.PurgeAfter = 48 * time.Hour })
 	purged := e.seedPurgeSubject(purgeSub, purgeEmail, purgeOID)
+	// A second drive the purge lists, so each way off the list is pinned on a drive of its own. A subject
+	// holds one grant, so this one goes to the email.
+	second, err := e.st.UpsertUserDrive(context.Background(), *driveFixture(func(d *types.UserDrive) { d.Name = "Team share" }), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.UpsertUserDriveGrant(context.Background(), *grantFixture(second.ID, func(g *types.UserDriveGrant) { g.Subject = purgeEmail }), false); err != nil {
+		t.Fatal(err)
+	}
 	const stuckSub, stuckEmail = "sub-stuck", "stuck@corp.example"
 	e.seedEntra(stuckSub, stuckEmail, "aaaaaaaa-0000-4000-8000-0000000000c1")
 	stuck := e.postUserID(e.a, "aaaaaaaa-0000-4000-8000-0000000000c1", stuckEmail, stuckEmail)
@@ -75,23 +86,45 @@ func TestSCIMStatus(t *testing.T) {
 	if len(got.Pending) != 1 || got.Pending[0].Person != stuckEmail || got.Pending[0].Step != jobStepKillRun || got.Pending[0].LastError == "" {
 		t.Errorf("pending = %+v, want the stuck person's kill_run with its error", got.Pending)
 	}
-	if len(got.Drives) != 1 || got.Drives[0].Person != purgeEmail || got.Drives[0].Drive != purged.drive {
-		t.Errorf("drives = %+v, want %q of %s", got.Drives, purged.drive, purgeEmail)
+	gotDrives := []string{}
+	for _, d := range got.Drives {
+		if d.Person != purgeEmail {
+			t.Errorf("drive %q listed for %s, want %s", d.Drive, d.Person, purgeEmail)
+		}
+		gotDrives = append(gotDrives, d.Drive)
+	}
+	slices.Sort(gotDrives)
+	if want := []string{purged.drive, second.Name}; !slices.Equal(gotDrives, want) {
+		t.Errorf("drives = %v, want %v", gotDrives, want)
 	}
 
-	// A reclaimed drive leaves the list.
+	// A drive.reclaim of the purged person's storage, after the purge, takes the drive off the list while
+	// the drive itself stays.
 	grants, err := e.st.ListUserDriveGrants(context.Background())
 	if err != nil || len(grants) == 0 {
 		t.Fatalf("drive grants = %d, %v", len(grants), err)
 	}
-	if _, err := e.pool.Exec(context.Background(), `DELETE FROM user_drive_grants`); err != nil {
+	reclaim := types.AuditEvent{
+		ID: uuid.New(), Time: e.purgeRows(e.a)[0].Time.Add(time.Minute), ActorType: types.ActorHuman, Actor: "admin",
+		Action: "drive.reclaim", Target: uuid.NewString(), Outcome: "success",
+		Data: mustJSON(map[string]any{"drive": purged.drive, "subject": purgeEmail, "subject_type": "user"}),
+	}
+	if err := store.InsertAuditEvent(context.Background(), e.pool, &reclaim); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.pool.Exec(context.Background(), `DELETE FROM user_drives`); err != nil {
+	if got := e.scimStatusOf(e.a); len(got.Drives) != 1 || got.Drives[0].Drive != second.Name {
+		t.Errorf("drives after the reclaim = %+v, want only %q", got.Drives, second.Name)
+	}
+
+	// The other exit: the second drive is deleted, not reclaimed.
+	if _, err := e.pool.Exec(context.Background(), `DELETE FROM user_drive_grants WHERE drive_id = $1`, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(context.Background(), `DELETE FROM user_drives WHERE id = $1`, second.ID); err != nil {
 		t.Fatal(err)
 	}
 	if got := e.scimStatusOf(e.a); len(got.Drives) != 0 {
-		t.Errorf("drives after the reclaim = %+v, want none", got.Drives)
+		t.Errorf("drives after the drive was deleted = %+v, want none", got.Drives)
 	}
 
 	// A person the identity provider reinstated is not unfinished work: the sweeper no longer resumes

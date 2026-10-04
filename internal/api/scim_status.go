@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -122,7 +123,7 @@ func (s *Server) handleSCIMStatus(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "read the last SCIM token slot", err)
 		return
 	}
-	if out.Drives, err = s.scimDrivesToReclaim(ctx, label); err != nil {
+	if out.Drives, err = s.scimDrivesToReclaim(ctx, st, label); err != nil {
 		writeServerError(w, r, "read the drives to reclaim", err)
 		return
 	}
@@ -176,10 +177,11 @@ func (s *Server) scimLastTokenSlot(ctx context.Context) (string, error) {
 	return "", nil
 }
 
-// scimDrivesToReclaim is the drives the purges listed that still exist, newest purge first. A purge
-// lists a person's drives in its person.deprovision row and leaves them in place; a drive that was
-// reclaimed since is gone from the drive list and so from this one.
-func (s *Server) scimDrivesToReclaim(ctx context.Context, label func(uuid.UUID) (string, error)) ([]scimStatusDrive, error) {
+// scimDrivesToReclaim is the drives the purges listed that still need their purged person's storage
+// reclaimed, newest purge first. A purge lists a person's drives in its person.deprovision row and leaves
+// them in place; a drive leaves the list when it is deleted or when a drive.reclaim succeeded for that
+// person after the purge.
+func (s *Server) scimDrivesToReclaim(ctx context.Context, st scimStore, label func(uuid.UUID) (string, error)) ([]scimStatusDrive, error) {
 	out := []scimStatusDrive{}
 	rows, err := s.scimAuditRows(ctx, store.AuditFilter{
 		Action: "person.deprovision", DataContains: string(mustJSON(map[string]any{"kind": store.JobKindPurge})),
@@ -191,6 +193,16 @@ func (s *Server) scimDrivesToReclaim(ctx context.Context, label func(uuid.UUID) 
 	if err != nil {
 		return nil, err
 	}
+	var reclaims []types.AuditEvent
+	if pager, ok := s.cfg.Store.(store.Pager); ok {
+		// Not scimAuditRows: an operator wrote these, not the SCIM caller.
+		reclaims, err = pager.QueryAuditEventsFilteredPage(ctx, nil, store.AuditFilter{
+			Action: "drive.reclaim", Outcome: "success", Origin: store.AuditOriginOrganisation,
+		}, store.Page{Limit: scimStatusAuditScan})
+		if err != nil {
+			return nil, err
+		}
+	}
 	for _, ev := range rows {
 		var d struct {
 			Drives []string `json:"drives"`
@@ -200,6 +212,7 @@ func (s *Server) scimDrivesToReclaim(ctx context.Context, label func(uuid.UUID) 
 			continue
 		}
 		var person string
+		var ident store.PrincipalIdentity
 		for _, name := range d.Drives {
 			if !slices.ContainsFunc(live, func(l types.UserDriveListItem) bool { return l.Name == name }) {
 				continue
@@ -208,9 +221,32 @@ func (s *Server) scimDrivesToReclaim(ctx context.Context, label func(uuid.UUID) 
 				if person, err = label(id); err != nil {
 					return nil, err
 				}
+				if ident, err = st.GetIdentity(ctx, id); err != nil {
+					return nil, err
+				}
+			}
+			if scimReclaimedSince(reclaims, ev.Time, name, ident) {
+				continue
 			}
 			out = append(out, scimStatusDrive{Person: person, Drive: name, PurgedAt: ev.Time.UTC()})
 		}
 	}
 	return out, nil
+}
+
+// scimReclaimedSince reports whether a successful drive.reclaim of drive for ident's user grant is
+// recorded after since.
+func scimReclaimedSince(reclaims []types.AuditEvent, since time.Time, drive string, ident store.PrincipalIdentity) bool {
+	return slices.ContainsFunc(reclaims, func(ev types.AuditEvent) bool {
+		var d struct {
+			Drive       string `json:"drive"`
+			Subject     string `json:"subject"`
+			SubjectType string `json:"subject_type"`
+		}
+		if !ev.Time.After(since) || json.Unmarshal(ev.Data, &d) != nil {
+			return false
+		}
+		return d.SubjectType == "user" && d.Drive == drive && d.Subject != "" &&
+			(strings.EqualFold(d.Subject, ident.EmailLower) || strings.EqualFold(d.Subject, ident.Principal))
+	})
 }
