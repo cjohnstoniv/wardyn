@@ -42,7 +42,7 @@ func TestAuditSplitLegacy_RefusesWhileTheSingleInstanceLockIsHeld(t *testing.T) 
 func TestAuditSplitLegacy_RefusesWhileASecondConnectionIsOpenAndNoLockIsHeld(t *testing.T) {
 	dsn := emptyDatabase(t)
 	ctx := context.Background()
-	// A replica run with -allow-multi-instance holds a connection and no lock.
+	// A replica run with WARDYN_HA holds a connection and no lock.
 	other, err := db.Connect(ctx, dsn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
@@ -50,7 +50,7 @@ func TestAuditSplitLegacy_RefusesWhileASecondConnectionIsOpenAndNoLockIsHeld(t *
 	defer other.Close()
 
 	err = auditSplitLegacyMode(migrateOnlyFlags(dsn))
-	requireExit(t, err, exitMigrateRefused, "split the legacy audit partition", "other client connection", "-allow-multi-instance")
+	requireExit(t, err, exitMigrateRefused, "split the legacy audit partition", "other client connection", "WARDYN_HA")
 	// The refusal released its own lock.
 	release, err := claimSingleInstance(ctx, other, false)
 	if err != nil {
