@@ -20,6 +20,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -27,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -171,6 +173,20 @@ func (p *Proxy) servePATAPI(w http.ResponseWriter, r *http.Request, host string,
 		p.refusePATAPI(w, r, host, port, why)
 		return
 	}
+	// The door returns before the generic forward-body scan in serveMITMRequest, so it runs the
+	// same scan here: a registered secret in an MR/PR body must not leave with the PAT attached.
+	// Before the mint, so a refused body never redeems a token.
+	var bodyReader io.Reader = r.Body
+	var scanSummary *egress.ScanSummary
+	if p.scanner != nil && p.scanner.InspectForwardEgress() && p.scanner.Mode() != contentscan.ModeOff && hasScannableBody(r) {
+		var release func()
+		var blocked bool
+		bodyReader, scanSummary, release, blocked = p.inspectForwardBody(w, r, host, port)
+		defer release()
+		if blocked {
+			return
+		}
+	}
 	token, _, err := p.patToken(r.Context(), grant)
 	if err != nil {
 		p.emitPATAPIDecision(r, host, port, egress.Deny, ruleSourcePATAPIDenied)
@@ -196,8 +212,8 @@ func (p *Proxy) servePATAPI(w http.ResponseWriter, r *http.Request, host string,
 	raw := adoRawPath(r)
 	path, _ := url.PathUnescape(raw)
 	upstream := (&url.URL{Scheme: scheme, Host: hostport, Path: path, RawPath: raw, RawQuery: r.URL.RawQuery}).String()
-	body := r.Body
-	if body == http.NoBody {
+	body := bodyReader
+	if r.Body == http.NoBody {
 		body = nil
 	}
 	out, err := http.NewRequestWithContext(context.WithValue(r.Context(), vettedIPKey{}, target), r.Method, upstream, body)
@@ -220,7 +236,7 @@ func (p *Proxy) servePATAPI(w http.ResponseWriter, r *http.Request, host string,
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
-	p.emitPATAPIDecision(r, host, port, egress.Allow, ruleSourcePATAPI)
+	p.emitLLMDecision(r, host, port, egress.Allow, ruleSourcePATAPI, scanSummary)
 	relay(w, resp)
 }
 

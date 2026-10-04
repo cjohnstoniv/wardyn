@@ -563,3 +563,36 @@ func TestLoadConfigRefusesAnAPIGrantTheDoorCannotHonour(t *testing.T) {
 		})
 	}
 }
+
+// The door runs the run's forward-egress content scan like every other MITM'd
+// host: a registered secret in an MR description is refused before the forge or
+// the mint is reached, and an alert-mode finding rides the allow row.
+func TestPATAPIDoorRunsForwardEgressScan(t *testing.T) {
+	post := apiReq{"POST", glBase + "/merge_requests", jsonCT,
+		`{"source_branch":"f","target_branch":"main","title":"t","description":"leak ` + scanTestSecret + `"}`, nil}
+
+	h := newAPIHarness(t, types.PATForgeGitLab, apiGrants[types.PATForgeGitLab])
+	h.p.scanner = forwardScanEngine(t, "block")
+	rec := h.serve(t, post)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("a secret in an MR description must be refused, got %d", rec.Code)
+	}
+	if h.forgeHits() != 0 || h.mints() != 0 {
+		t.Fatalf("a blocked request must not mint or reach the forge: hits=%d mints=%d", h.forgeHits(), h.mints())
+	}
+	if d := lastDecision(t, h.log); d.RuleSource != ruleSourceLLMBlocked {
+		t.Fatalf("decision = %+v, want scan:blocked", d)
+	}
+
+	h = newAPIHarness(t, types.PATForgeGitLab, apiGrants[types.PATForgeGitLab])
+	h.p.scanner = forwardScanEngine(t, "alert")
+	if rec := h.serve(t, post); rec.Code != http.StatusOK {
+		t.Fatalf("alert mode forwards, got %d", rec.Code)
+	}
+	if h.forgeHits() != 1 {
+		t.Fatalf("alert mode must reach the forge once, got %d", h.forgeHits())
+	}
+	if d := lastDecision(t, h.log); d.RuleSource != ruleSourcePATAPI || d.Scan == nil || len(d.Scan.Findings) == 0 {
+		t.Fatalf("allow row must carry the scan summary, got %+v", d)
+	}
+}
