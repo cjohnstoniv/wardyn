@@ -30,6 +30,8 @@ type fakePendingGovernance struct {
 	writes   []string
 	calls    []string
 	reason   string
+	// conflict answers every write as a repeat apply does while a change still holds the target.
+	conflict bool
 }
 
 func (f *fakePendingGovernance) handler() http.HandlerFunc {
@@ -38,14 +40,21 @@ func (f *fakePendingGovernance) handler() http.HandlerFunc {
 		f.calls = append(f.calls, r.Method+" "+r.URL.RequestURI())
 		pend := func(kind string) {
 			f.writes = append(f.writes, r.Method+" "+r.URL.Path)
-			w.WriteHeader(http.StatusAccepted)
-			_ = json.NewEncoder(w).Encode(map[string]any{"pending_change": map[string]any{
+			status := http.StatusAccepted
+			body := map[string]any{}
+			if f.conflict {
+				status = http.StatusConflict
+				body["error"], body["reason"] = "a change to this target is already waiting for approval", "governance_change_pending"
+			}
+			w.WriteHeader(status)
+			body["pending_change"] = map[string]any{
 				"id": uuid.New(), "target_kind": kind, "op": "create", "target_key": "k",
 				"state": "pending", "proposed_by": "alice",
 				"proposed_at": time.Now().UTC().Format(time.RFC3339),
 				"expires_at":  time.Now().Add(72 * time.Hour).UTC().Format(time.RFC3339),
 				"diff":        map[string]any{"changed": []string{"name"}},
-			}})
+			}
+			_ = json.NewEncoder(w).Encode(body)
 		}
 		decided := func(state string) {
 			ch := f.change
@@ -215,5 +224,22 @@ func TestGovernanceSet_PendingBaseListsDeferredChildProfile(t *testing.T) {
 	}
 	if got := strings.Join(f.writes, ","); got != "POST /api/v1/governance/profiles" {
 		t.Errorf("writes = %q, want only the base create", got)
+	}
+}
+
+// TestGovernanceSet_RepeatApplyDuringTheWindowExitsZero: running `set` again while its first proposal
+// still waits is a 409 naming the held change; the CLI reports it as pending and exits 0.
+func TestGovernanceSet_RepeatApplyDuringTheWindowExitsZero(t *testing.T) {
+	f := &fakePendingGovernance{conflict: true}
+	srv := httptest.NewServer(f.handler())
+	t.Cleanup(srv.Close)
+
+	path := writeGovernanceFile(t, sdk.GovernanceDocument{Profiles: []sdk.GovernanceProfile{{Name: "contractor"}}})
+	_, stderr, err := runGovernance(t, srv.URL, "set", path)
+	if err != nil {
+		t.Fatalf("a repeat set during the approval window exited non-zero: %v", err)
+	}
+	if !strings.Contains(stderr, "pending approval: 1 change(s)") {
+		t.Errorf("stderr missing the pending line:\n%s", stderr)
 	}
 }

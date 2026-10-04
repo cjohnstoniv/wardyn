@@ -6,7 +6,7 @@
 /**
  * The copy offer (see attach-terminal-clipboard.ts): the verified text the
  * user's own selection produced, shown IN FULL, with an explicit Copy. The Copy
- * button, or Cmd/Ctrl+C while the card is focused, is the only call to
+ * button, or Cmd/Ctrl+C while the offer is pending, is the only call to
  * navigator.clipboard.writeText that terminal output can lead to. Wording is
  * M11 canon (docs/design/terminal-escape-canon.md).
  */
@@ -20,15 +20,25 @@ import { TERMINAL_COPY } from "./wardyn/copy";
 const chipClass =
   "rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 font-mono text-meta text-warning";
 
-export function CopyOfferToast({ offer, onDone }: { offer: CopyOffer; onDone: () => void }) {
+export function CopyOfferToast({
+  offer,
+  onDone,
+  copyRef,
+}: {
+  offer: CopyOffer;
+  onDone: () => void;
+  /** Filled with this card's Copy while it is mounted: the terminal's Cmd/Ctrl+C reaches it. */
+  copyRef: React.MutableRefObject<(() => void) | null>;
+}) {
   const [error, setError] = React.useState("");
   const [left, setLeft] = React.useState(OFFER_TTL_MS / 1000);
   const cardRef = React.useRef<HTMLDivElement>(null);
   const previewRef = React.useRef<HTMLPreElement>(null);
   const mac = isMacPlatform();
 
+  // Focus stays in the terminal: a person who selects and then types must not
+  // have those keystrokes swallowed by the card.
   React.useEffect(() => {
-    cardRef.current?.focus();
     const t = setInterval(() => setLeft((s) => Math.max(0, s - 1)), 1000);
     return () => clearInterval(t);
   }, []);
@@ -43,6 +53,13 @@ export function CopyOfferToast({ offer, onDone }: { offer: CopyOffer; onDone: ()
     }
   };
 
+  React.useEffect(() => {
+    copyRef.current = () => void copy();
+    return () => {
+      copyRef.current = null;
+    };
+  });
+
   return (
     <div
       ref={cardRef}
@@ -54,7 +71,7 @@ export function CopyOfferToast({ offer, onDone }: { offer: CopyOffer; onDone: ()
         if (e.key === "Escape") {
           e.preventDefault();
           onDone();
-        } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
+        } else if ((mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) && e.key.toLowerCase() === "c") {
           // A selection inside the preview keeps the browser's own copy.
           if (previewRef.current && window.getSelection()?.toString()) return;
           e.preventDefault();

@@ -203,12 +203,8 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // The clipboard gate's verified copy offer and its quiet "blocked" notice.
   const [copyOffer, setCopyOffer] = React.useState<CopyOffer | null>(null);
   const [copyNotice, setCopyNotice] = React.useState<string | null>(null);
-  // The offer card takes focus; when it goes, the terminal gets it back.
-  const hadOffer = React.useRef(false);
-  React.useEffect(() => {
-    if (hadOffer.current && !copyOffer) termRef.current?.focus();
-    hadOffer.current = !!copyOffer;
-  }, [copyOffer]);
+  // The card's Copy, for the terminal's Cmd/Ctrl+C.
+  const offerCopyRef = React.useRef<(() => void) | null>(null);
   const selectHint =TERMINAL_COPY.SELECT_HINT(TERMINAL_COPY.NATIVE_CHORD(isMacPlatform()));
   const copyGateRef = React.useRef<CopyGate | null>(null);
   // A clicked terminal link awaiting the confirm dialog.
@@ -368,6 +364,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     setCopyOffer,
     setCopyNotice,
     copyGateRef,
+    offerCopyRef,
     setLinkTarget,
     rendererRef,
     rendererPrefRef,
@@ -385,6 +382,14 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     if (a && a !== document.body && !panelRef.current?.contains(a)) return;
     termRef.current?.focus();
   }, []);
+  // When the card goes (copied, dismissed, expired), focus returns to the
+  // terminal only if it was still in this panel: an offer that expires while the
+  // user types in another control must not move their keystrokes into the shell.
+  const hadOffer = React.useRef(false);
+  React.useEffect(() => {
+    if (hadOffer.current && !copyOffer) focusTermIfFree();
+    hadOffer.current = !!copyOffer;
+  }, [copyOffer, focusTermIfFree]);
   const { fullscreen, toggleFullscreen } = useTerminalFullscreen(panelRef, refit, focusTermIfFree);
 
   // Holder / take-over
@@ -588,7 +593,12 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           />
         </div>
         {copyOffer ? (
-          <CopyOfferToast key={copyOffer.id} offer={copyOffer} onDone={() => copyGateRef.current?.dismiss()} />
+          <CopyOfferToast
+            key={copyOffer.id}
+            offer={copyOffer}
+            onDone={() => copyGateRef.current?.dismiss()}
+            copyRef={offerCopyRef}
+          />
         ) : null}
         {readOnly && (
           // pointer-events-none: this is a label, not a shield. The input it

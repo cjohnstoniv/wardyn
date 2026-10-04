@@ -847,6 +847,29 @@ func TestMaxAgeStopFailureFailsTheTick(t *testing.T) {
 	}
 }
 
+// TestMaxAgeStopsAKeptRunThatIsNeverIdleReaped: a run kept after an outage with its agent still
+// running is ended by the max age, but never by idleness, however long it was untouched.
+func TestMaxAgeStopsAKeptRunThatIsNeverIdleReaped(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	store := &fakeStore{}
+	stopper := newFakeStopper()
+	rec := &fakeRecorder{}
+	old, idle := uuid.New(), uuid.New()
+	store.rows = []lifecycle.RunSummary{
+		{ID: old, CreatedAt: base.Add(-25 * time.Hour), UpdatedAt: base.Add(-25 * time.Hour), PolicyAutoStopAfterSec: 60, Kept: true},
+		{ID: idle, CreatedAt: base.Add(-time.Hour), UpdatedAt: base.Add(-time.Hour), PolicyAutoStopAfterSec: 60, Kept: true},
+	}
+
+	maxAgeReaper(store, stopper, rec, base, 24*time.Hour).Tick(context.Background())
+
+	if !slices.Equal(stopper.maxAgeStopped, []uuid.UUID{old}) {
+		t.Fatalf("max-age stops = %v, want only %v", stopper.maxAgeStopped, old)
+	}
+	if stopper.wasStopped(idle) {
+		t.Fatalf("the idle kept run %v was idle-reaped", idle)
+	}
+}
+
 // TestMaxAgeOffNeverStopsOnAge: with no max age configured, a run of any age is untouched.
 func TestMaxAgeOffNeverStopsOnAge(t *testing.T) {
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -16,11 +18,11 @@ import (
 // miscCovFixedKeys is a subject-key service that has one 32-byte key for every subject.
 type miscCovFixedKeys struct{ key []byte }
 
-func (k miscCovFixedKeys) Current(context.Context, string, string) (int, []byte, error) {
-	return 1, append([]byte(nil), k.key...), nil
+func (k miscCovFixedKeys) Current(context.Context, string, string) (uuid.UUID, []byte, error) {
+	return uuid.Nil, append([]byte(nil), k.key...), nil
 }
 
-func (k miscCovFixedKeys) Key(context.Context, string, string, int) ([]byte, error) {
+func (k miscCovFixedKeys) Key(context.Context, string, uuid.UUID) ([]byte, error) {
 	return append([]byte(nil), k.key...), nil
 }
 

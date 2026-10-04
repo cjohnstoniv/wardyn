@@ -460,14 +460,16 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	//
 	// A KEPT run (lost_at set: its lease ended it) is not idle, it is stopped;
 	// the ended-run grace decides when its files go, not auto_stop_after_sec.
+	// The one exception is a run kept after an outage whose agent still runs
+	// (store.HoldsSandboxSQL): it is listed as Kept, for the max age alone.
 	//
 	// An EMPTY scan returns the zero time, which the reaper reads as "no clock":
 	// there are no rows to measure, so there is nothing for it to be wrong about,
 	// and a second round trip to fetch a clock nobody would use is not worth it.
 	const q = `
-		SELECT id, created_at, updated_at, auto_stop_after_sec, now()
+		SELECT id, created_at, updated_at, auto_stop_after_sec, lost_at IS NOT NULL, now()
 		FROM agent_runs
-		WHERE state = $1 AND lost_at IS NULL`
+		WHERE state = $1 AND ` + store.HoldsSandboxSQL
 	rows, err := l.pool.Query(ctx, q, string(types.RunRunning))
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("wardynd: list running with policy: %w", err)
@@ -478,7 +480,7 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	var dbNow time.Time
 	for rows.Next() {
 		var s lifecycle.RunSummary
-		if err := rows.Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt, &s.PolicyAutoStopAfterSec, &dbNow); err != nil {
+		if err := rows.Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt, &s.PolicyAutoStopAfterSec, &s.Kept, &dbNow); err != nil {
 			return nil, time.Time{}, fmt.Errorf("wardynd: scan run summary: %w", err)
 		}
 		out = append(out, s)

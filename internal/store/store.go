@@ -130,12 +130,9 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 			return types.AgentRun{}, err
 		}
 	}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.RunCapLockClass); err != nil {
+	active, err := lockAndCountActiveRuns(ctx, tx)
+	if err != nil {
 		return types.AgentRun{}, err
-	}
-	var active int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM agent_runs WHERE state = ANY($1)`, nonTerminalStateNames()).Scan(&active); err != nil {
-		return types.AgentRun{}, fmt.Errorf("store: count active runs: %w", err)
 	}
 	if active >= limit {
 		return types.AgentRun{}, ErrRunCapReached
@@ -150,12 +147,38 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 	return created, nil
 }
 
-// CountNonTerminalRuns is the number of non-terminal run rows, the quantity
-// CreateRunUnderCap holds under the cap. It takes no lock: a pre-flight read for
-// a refusal that must come before an identity is minted, never the authority.
+// lockAndCountActiveRuns takes the deployment cap's transaction-scoped advisory
+// lock and counts the runs it holds (CountNonTerminalRuns' predicate). Every
+// writer that adds a run to that count (a create, a kept run's revive) holds the
+// lock from this count to its commit. q must be a pgx.Tx.
+func lockAndCountActiveRuns(ctx context.Context, q Querier) (int, error) {
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.RunCapLockClass); err != nil {
+		return 0, err
+	}
+	var active int
+	if err := q.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames()).Scan(&active); err != nil {
+		return 0, fmt.Errorf("store: count active runs: %w", err)
+	}
+	return active, nil
+}
+
+// HoldsSandboxSQL is TRUE when the agent_runs row's agent is still running: the run
+// is not kept, or it was kept after a control-plane outage and has not reached its
+// end, so only its proxy was stopped (api stopLostSandbox). A run kept after its
+// end or a reboot, or an outage-kept run past its end, has its agent stopped. It is
+// the one rule for a live run under WARDYN_MAX_CONCURRENT_RUNS, in the fleet
+// capacity view and under WARDYN_RUN_MAX_AGE.
+const HoldsSandboxSQL = `(lost_at IS NULL OR (lost_reason = '` + string(types.LostOutage) + `' AND (ends_at IS NULL OR ends_at > now())))`
+
+const activeRunsCountSQL = `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND ` + HoldsSandboxSQL
+
+// CountNonTerminalRuns is the number of non-terminal run rows that hold a sandbox
+// (HoldsSandboxSQL), the quantity CreateRunUnderCap holds under the cap. It takes no
+// lock: a pre-flight read for a refusal that must come before an identity is minted,
+// never the authority.
 func (s PG) CountNonTerminalRuns(ctx context.Context) (int, error) {
 	var n int
-	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM agent_runs WHERE state = ANY($1)`, nonTerminalStateNames()).Scan(&n); err != nil {
+	if err := s.Pool.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames()).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count active runs: %w", err)
 	}
 	return n, nil
@@ -262,14 +285,16 @@ func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, t
 }
 
 // UpdateRunStateIfCreatedBefore transitions a run only when still in fromState,
-// created_at is at or before createdNotAfter, and it has no lost/end mark. The
+// created_at is at or before createdNotAfter, and its agent still runs
+// (HoldsSandboxSQL: not kept, or kept after an outage before its end; a run kept
+// with its agent stopped is left to its files grace). The
 // max-age stop's own predicate on the run's age: it carries neither the idleness
 // guard nor the open-request guard of UpdateRunStateIfIdle, because an absolute
 // age cap exists to end a run that is not going to finish by itself.
 func (s PG) UpdateRunStateIfCreatedBefore(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, createdNotAfter time.Time) (bool, error) {
 	tag, err := s.Pool.Exec(ctx,
 		`UPDATE agent_runs SET state=$1, updated_at=now(), ended_at=CASE WHEN $5 THEN now() ELSE ended_at END
-		 WHERE id=$2 AND state=$3 AND created_at <= $4 AND lost_at IS NULL`,
+		 WHERE id=$2 AND state=$3 AND created_at <= $4 AND `+HoldsSandboxSQL,
 		string(toState), id, string(fromState), createdNotAfter, toState.IsTerminal(),
 	)
 	if err != nil {

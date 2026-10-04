@@ -100,9 +100,10 @@ func (s *Server) delegatedTokenAuth(next, fallback http.Handler) http.Handler {
 			return
 		}
 		// The person's own cutoff (POST /sessions/revoke), against the token's
-		// created_at — apiTokenAuth's rule, and its fail-closed 503.
+		// created_at — apiTokenAuth's owner check, epoch -1, so a session-only cut
+		// (sessions_only) leaves it working, and its fail-closed 503.
 		if s.cfg.SessionRevocations != nil {
-			revoked, rerr := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), t.Principal, t.Email, t.CreatedAt)
+			status, rerr := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, t.Principal, t.Email, t.CreatedAt, -1)
 			if rerr != nil {
 				slog.ErrorContext(r.Context(), "api: session-revocation lookup failed; this delegated token could not be authenticated",
 					"error", rerr, "path", r.URL.Path)
@@ -110,7 +111,7 @@ func (s *Server) delegatedTokenAuth(next, fallback http.Handler) http.Handler {
 				writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "delegated token lookup failed")
 				return
 			}
-			if revoked {
+			if status != oidc.SessionLive {
 				fallback.ServeHTTP(w, r)
 				return
 			}

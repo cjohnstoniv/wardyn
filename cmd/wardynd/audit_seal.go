@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
@@ -182,15 +183,15 @@ func (r sealingRecorder) record(ctx context.Context, ev types.AuditEvent) error 
 }
 
 // subjectSealKeys adapts the secret store's subject keys to audit.SealKeys: a
-// destroyed generation is audit.ErrKeyErased.
+// generation is named by its handle, and a destroyed one is audit.ErrKeyErased.
 type subjectSealKeys struct{ m *subjectkey.Manager }
 
-func (k subjectSealKeys) Current(ctx context.Context, owner, purpose string) (int, []byte, error) {
-	return k.m.Current(ctx, owner, purpose)
+func (k subjectSealKeys) Current(ctx context.Context, owner, purpose string) (uuid.UUID, []byte, error) {
+	return k.m.CurrentHandle(ctx, owner, purpose)
 }
 
-func (k subjectSealKeys) Key(ctx context.Context, owner, purpose string, version int) ([]byte, error) {
-	key, err := k.m.Key(ctx, owner, purpose, version)
+func (k subjectSealKeys) Key(ctx context.Context, purpose string, handle uuid.UUID) ([]byte, error) {
+	key, err := k.m.KeyByHandle(ctx, purpose, handle)
 	if errors.Is(err, subjectkey.ErrDataLoss) {
 		return nil, fmt.Errorf("%w: %w", audit.ErrKeyErased, err)
 	}

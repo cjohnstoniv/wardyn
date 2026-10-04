@@ -14,9 +14,13 @@ import (
 // exec, so a client that cannot render as fast as the sandbox writes pushes back
 // on the PTY instead of buffering without bound.
 //
-// A pause that is never resumed is bounded exactly like a blocked write
-// (attachWriteTimeout): the stall callback ends the pump. The bound runs on its
-// own timer, off the output goroutine, so it holds while that goroutine waits.
+// A pause that is never resumed is bounded by liveness, not by time alone: each
+// time the bound lapses the alive probe asks the peer for a pong, and only a peer
+// that does not answer ends the pump through the stall callback. A browser tab
+// hidden for minutes still answers pings (the network layer does) while its
+// timer-driven resume is throttled to once a minute, so a time-only bound tore
+// down a live writer. The bound runs on its own timer, off the output goroutine,
+// so it holds while that goroutine waits.
 type attachFlow struct {
 	mu    sync.Mutex
 	gate  chan struct{} // non-nil while paused; closed on resume
@@ -24,15 +28,28 @@ type attachFlow struct {
 }
 
 // pause stops output reads and arms the stall bound; a pause while already
-// paused keeps the first timer, so repeated frames never extend it.
-func (f *attachFlow) pause(limit time.Duration, onStall func()) {
+// paused keeps the first timer, so repeated frames never extend it. When the
+// bound lapses and alive reports the peer answering, the pause stands and the
+// bound re-arms; otherwise onStall runs.
+func (f *attachFlow) pause(limit time.Duration, alive func() bool, onStall func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.gate != nil {
 		return
 	}
-	f.gate = make(chan struct{})
-	f.stall = time.AfterFunc(limit, onStall)
+	gate := make(chan struct{})
+	f.gate = gate
+	f.stall = time.AfterFunc(limit, func() {
+		if !alive() {
+			onStall()
+			return
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.gate == gate { // still the same pause: not resumed meanwhile
+			f.stall.Reset(limit)
+		}
+	})
 }
 
 // resume lets output flow again and disarms the stall bound.

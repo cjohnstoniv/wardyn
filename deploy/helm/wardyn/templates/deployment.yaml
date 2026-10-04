@@ -267,24 +267,25 @@ spec:
                   name: {{ include "wardyn.authSecretName" . }}
                   key: {{ .Values.auth.adminToken.key }}
             {{- end }}
-            {{- if .Values.scim.enabled }}
+            {{- $scim := .Values.scim | default dict }}
+            {{- if $scim.enabled }}
             # SCIM leaver deprovisioning (secret.yaml refuses a second source in env/extraEnv). The
             # bearer rides a secretKeyRef, never a literal; the rotation token is optional.
             - name: WARDYN_SCIM_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.scim.tokenSecretRef | quote }}
+                  name: {{ $scim.tokenSecretRef | quote }}
                   key: scim-token
             - name: WARDYN_SCIM_TOKEN_NEXT
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.scim.tokenSecretRef | quote }}
+                  name: {{ $scim.tokenSecretRef | quote }}
                   key: scim-token-next
                   optional: true
             - name: WARDYN_SCIM_PURGE_AFTER
-              value: {{ .Values.scim.purgeAfter | toString | quote }}
+              value: {{ $scim.purgeAfter | toString | quote }}
             - name: WARDYN_SCIM_LEAVER_WORKSPACES
-              value: {{ .Values.scim.leaverWorkspaces | quote }}
+              value: {{ $scim.leaverWorkspaces | quote }}
             {{- end }}
             {{- if and .Values.basePath (not (hasKey .Values.env "WARDYN_BASE_PATH")) }}
             - name: WARDYN_BASE_PATH
@@ -547,25 +548,30 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
-            {{- if not (hasKey .Values.env "WARDYN_SANDBOX_DEFAULT_CPU_MILLIS") }}
+            {{- /* `default dict`: a `--reuse-values` upgrade from before 0.8.6 carries no runner block. An absent
+            value renders no env, so wardynd keeps its compiled-in sizes (2000m/4096Mi agent, the proxy defaults). */}}
+            {{- $sb := ((.Values.runner | default dict).sandbox | default dict) }}
+            {{- $dr := $sb.defaultResources | default dict }}
+            {{- $pr := $sb.proxyResources | default dict }}
+            {{- if and $dr.cpuMillis (not (hasKey .Values.env "WARDYN_SANDBOX_DEFAULT_CPU_MILLIS")) }}
             - name: WARDYN_SANDBOX_DEFAULT_CPU_MILLIS
-              value: {{ .Values.runner.sandbox.defaultResources.cpuMillis | quote }}
+              value: {{ $dr.cpuMillis | quote }}
             {{- end }}
-            {{- if not (hasKey .Values.env "WARDYN_SANDBOX_DEFAULT_MEMORY_MIB") }}
+            {{- if and $dr.memoryMiB (not (hasKey .Values.env "WARDYN_SANDBOX_DEFAULT_MEMORY_MIB")) }}
             - name: WARDYN_SANDBOX_DEFAULT_MEMORY_MIB
-              value: {{ .Values.runner.sandbox.defaultResources.memoryMiB | quote }}
+              value: {{ $dr.memoryMiB | quote }}
             {{- end }}
-            {{- if and .Values.runner.sandbox.requestRatio (not (hasKey .Values.env "WARDYN_SANDBOX_REQUEST_RATIO")) }}
+            {{- if and $sb.requestRatio (not (hasKey .Values.env "WARDYN_SANDBOX_REQUEST_RATIO")) }}
             - name: WARDYN_SANDBOX_REQUEST_RATIO
-              value: {{ .Values.runner.sandbox.requestRatio | quote }}
+              value: {{ $sb.requestRatio | quote }}
             {{- end }}
-            {{- if not (hasKey .Values.env "WARDYN_PROXY_CPU_MILLIS") }}
+            {{- if and $pr.cpuMillis (not (hasKey .Values.env "WARDYN_PROXY_CPU_MILLIS")) }}
             - name: WARDYN_PROXY_CPU_MILLIS
-              value: {{ .Values.runner.sandbox.proxyResources.cpuMillis | quote }}
+              value: {{ $pr.cpuMillis | quote }}
             {{- end }}
-            {{- if not (hasKey .Values.env "WARDYN_PROXY_MEMORY_MIB") }}
+            {{- if and $pr.memoryMiB (not (hasKey .Values.env "WARDYN_PROXY_MEMORY_MIB")) }}
             - name: WARDYN_PROXY_MEMORY_MIB
-              value: {{ .Values.runner.sandbox.proxyResources.memoryMiB | quote }}
+              value: {{ $pr.memoryMiB | quote }}
             {{- end }}
             {{- if and (gt (int .Values.maxConcurrentRuns) 0) (not (hasKey .Values.env "WARDYN_MAX_CONCURRENT_RUNS")) }}
             - name: WARDYN_MAX_CONCURRENT_RUNS
@@ -595,8 +601,9 @@ spec:
               value: {{ .Values.k8s.imagePullSecret | quote }}
             {{- end }}
             {{- $placement := dict -}}
+            {{- $k8sSandbox := (.Values.k8s.sandbox | default dict) -}}
             {{- range $key := list "nodeSelector" "tolerations" "affinity" "priorityClassName" "podAnnotations" "podLabels" -}}
-            {{- with index $.Values.k8s.sandbox $key }}{{- $_ := set $placement $key . -}}{{- end -}}
+            {{- with index $k8sSandbox $key }}{{- $_ := set $placement $key . -}}{{- end -}}
             {{- end }}
             {{- /* A bare `--set key=true` is a YAML bool; annotation and label values are strings. */ -}}
             {{- range $key := list "podAnnotations" "podLabels" -}}

@@ -146,6 +146,8 @@ export const GOVERNANCE = {
   BASE_DESCENDANT: "Can't be the base: it is based on this profile.",
   OVERLAY_LEAD: "Only what you set to Narrow changes anything. The rest is inherited and follows the base.",
   OVERLAY_NARROW: "Narrow",
+  OVERLAY_LIMITS_MOVED:
+    "This profile's own limits and rubric were moved into the narrowing rows below, so they still apply on top of the base. Review them before saving.",
   OVERLAY_INHERITED: (v: string) => `Inherited: ${v}`,
   EFFECTIVE_TITLE: "Effective ceiling and limits",
   EFFECTIVE_LEAD: "What runs under this profile are bounded by: the base, narrowed here. Read-only.",

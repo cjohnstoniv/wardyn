@@ -7,7 +7,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -74,6 +76,84 @@ func TestReviveRun_AtTheDeploymentCapSucceeds(t *testing.T) {
 	f.srv.cfg.MaxConcurrentRuns = 1
 	if code := f.revive(t); code != http.StatusOK {
 		t.Fatalf("revive at the cap: code %d, want 200", code)
+	}
+}
+
+// TestReviveRun_KeptRunAtTheDeploymentCapIsRefused: a run kept after a reboot or
+// its end holds no slot, so reviving it takes one. At the cap the revive gets the
+// create's refusal (422 run_quota) before any proxy or agent starts, and the run
+// stays kept; with a slot free, the same revive succeeds.
+func TestReviveRun_KeptRunAtTheDeploymentCapIsRefused(t *testing.T) {
+	for name, keep := range map[string]func(t *testing.T) (*reviveFixture, *startingRunner, bool){
+		"reboot": func(t *testing.T) (*reviveFixture, *startingRunner, bool) {
+			f, sr := newRebootFixture(t)
+			return f, sr, false
+		},
+		"ended": func(t *testing.T) (*reviveFixture, *startingRunner, bool) {
+			f, sr := newEndedFixture(t)
+			f.now = f.now.Add(time.Hour)
+			if code, body := f.extendAs(t, true, f.now.Add(48*time.Hour)); code != http.StatusOK {
+				t.Fatalf("extend = %d %s, want 200", code, body)
+			}
+			f.run = f.st.run
+			return f, sr, true
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, sr, owner := keep(t)
+			f.srv.cfg.MaxConcurrentRuns = 1
+			f.rs.capFull = true
+			code, body := f.reviveAs(t, owner)
+			if code != http.StatusUnprocessableEntity || !strings.Contains(body, string(authz.ReasonRunQuota)) {
+				t.Fatalf("revive at the cap = %d %s, want 422 run_quota", code, body)
+			}
+			if len(f.rr.replaced) != 0 || len(sr.starts()) != 0 {
+				t.Fatalf("refused revive replaced %d proxies and started agents %v; want neither", len(f.rr.replaced), sr.starts())
+			}
+			if lostAt, reason := f.st.lost(); lostAt == nil || reason != f.run.LostReason {
+				t.Fatalf("refused revive: lost %v %q; want still kept (%s)", lostAt, reason, f.run.LostReason)
+			}
+
+			f.rs.capFull = false
+			if code, body := f.reviveAs(t, owner); code != http.StatusOK {
+				t.Fatalf("revive under the cap = %d %s, want 200", code, body)
+			}
+			if lostAt, _ := f.st.lost(); lostAt != nil || len(sr.starts()) != 1 {
+				t.Fatalf("revive under the cap: lost %v, agent starts %v; want live with its agent started once", lostAt, sr.starts())
+			}
+		})
+	}
+}
+
+// TestReviveRun_OutageRunWithStoppedAgentAtTheDeploymentCapIsRefused: an outage-kept run whose
+// agent is stopped (its end passed, then was moved later) is revived by starting that agent, so
+// the revive takes a slot: at the cap it is refused 422 run_quota with no proxy replaced and no
+// agent started. An outage revive whose agent still runs starts nothing and is never refused.
+func TestReviveRun_OutageRunWithStoppedAgentAtTheDeploymentCapIsRefused(t *testing.T) {
+	f := newReviveFixture(t)
+	sr := &startingRunner{reviveRunner: f.rr}
+	f.srv.cfg.Runner = sr
+	f.rr.status = types.RunStopped
+	f.srv.cfg.MaxConcurrentRuns = 1
+	f.rs.capFull = true
+
+	code, body := f.reviveAs(t, false)
+	if code != http.StatusUnprocessableEntity || !strings.Contains(body, string(authz.ReasonRunQuota)) {
+		t.Fatalf("revive at the cap = %d %s, want 422 run_quota", code, body)
+	}
+	if len(f.rr.replaced) != 0 || len(sr.starts()) != 0 {
+		t.Fatalf("refused revive replaced %d proxies and started agents %v; want neither", len(f.rr.replaced), sr.starts())
+	}
+	if lostAt, reason := f.st.lost(); lostAt == nil || reason != types.LostOutage {
+		t.Fatalf("refused revive: lost %v %q; want still kept (outage)", lostAt, reason)
+	}
+
+	f.rr.status = types.RunRunning
+	if code, body := f.reviveAs(t, false); code != http.StatusOK {
+		t.Fatalf("outage revive of a running agent at the cap = %d %s, want 200", code, body)
+	}
+	if len(sr.starts()) != 0 {
+		t.Fatalf("agent starts = %v, want none for a running agent", sr.starts())
 	}
 }
 

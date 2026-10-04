@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -23,15 +25,15 @@ type w4CovKeys struct {
 	calls int
 }
 
-func (k *w4CovKeys) Current(context.Context, string, string) (int, []byte, error) {
+func (k *w4CovKeys) Current(context.Context, string, string) (uuid.UUID, []byte, error) {
 	k.calls++
 	if k.err != nil {
-		return 0, nil, k.err
+		return uuid.Nil, nil, k.err
 	}
-	return 1, append([]byte(nil), k.key...), nil
+	return uuid.New(), append([]byte(nil), k.key...), nil
 }
 
-func (k *w4CovKeys) Key(context.Context, string, string, int) ([]byte, error) {
+func (k *w4CovKeys) Key(context.Context, string, uuid.UUID) ([]byte, error) {
 	return nil, errors.New("w4cov: Key is not part of this test")
 }
 
@@ -50,45 +52,44 @@ func w4CovPendingEvent(t *testing.T) (types.AuditEvent, func() []byte) {
 }
 
 func TestW4CovParseSealed(t *testing.T) {
-	good := "seal1.3." + b64([]byte("alice")) + "." + b64([]byte("ciphertext"))
-	v, sub, ct, ok := parseSealed(good)
-	if !ok || v != 3 || sub != "alice" || string(ct) != "ciphertext" {
-		t.Fatalf("parseSealed(good) = %d, %q, %q, %v", v, sub, ct, ok)
+	h := uuid.New()
+	good := "seal2." + h.String() + "." + b64([]byte("ciphertext"))
+	got, ct, ok := parseSealed(good)
+	if !ok || got != h || string(ct) != "ciphertext" {
+		t.Fatalf("parseSealed(good) = %s, %q, %v", got, ct, ok)
 	}
 	for name, s := range map[string]string{
-		"no prefix":          "other." + good[len("seal1."):],
-		"a pending string":   "seal1p." + b64([]byte("alice")) + "." + b64([]byte("c")),
-		"two parts":          "seal1.3." + b64([]byte("alice")),
-		"four parts":         good + ".extra",
-		"version not a num":  "seal1.x." + b64([]byte("alice")) + "." + b64([]byte("c")),
-		"version zero":       "seal1.0." + b64([]byte("alice")) + "." + b64([]byte("c")),
-		"negative version":   "seal1.-1." + b64([]byte("alice")) + "." + b64([]byte("c")),
-		"subject not b64":    "seal1.1.!!." + b64([]byte("c")),
-		"ciphertext not b64": "seal1.1." + b64([]byte("alice")) + ".!!",
-		"empty subject":      "seal1.1.." + b64([]byte("c")),
+		"no prefix":          "other." + good[len("seal2."):],
+		"the old format":     "seal1.1." + b64([]byte("alice")) + "." + b64([]byte("c")),
+		"a pending string":   "seal2p." + b64([]byte("c")),
+		"one part":           "seal2." + h.String(),
+		"three parts":        good + ".extra",
+		"handle not a uuid":  "seal2." + b64([]byte("alice")) + "." + b64([]byte("c")),
+		"empty handle":       "seal2.." + b64([]byte("c")),
+		"ciphertext not b64": "seal2." + h.String() + ".!!",
+		"empty ciphertext":   "seal2." + h.String() + ".",
 	} {
-		if _, _, _, ok := parseSealed(s); ok {
+		if _, _, ok := parseSealed(s); ok {
 			t.Errorf("parseSealed accepted %s: %q", name, s)
 		}
 	}
 }
 
 func TestW4CovParsePending(t *testing.T) {
-	good := "seal1p." + b64([]byte("alice")) + "." + b64([]byte("ciphertext"))
-	sub, ct, ok := parsePending(good)
-	if !ok || sub != "alice" || string(ct) != "ciphertext" {
-		t.Fatalf("parsePending(good) = %q, %q, %v", sub, ct, ok)
+	good := "seal2p." + b64([]byte("ciphertext"))
+	ct, ok := parsePending(good)
+	if !ok || string(ct) != "ciphertext" {
+		t.Fatalf("parsePending(good) = %q, %v", ct, ok)
 	}
 	for name, s := range map[string]string{
-		"no prefix":          "other." + good[len("seal1p."):],
-		"a sealed string":    "seal1.1." + b64([]byte("alice")) + "." + b64([]byte("c")),
-		"one part":           "seal1p." + b64([]byte("alice")),
-		"three parts":        good + ".extra",
-		"subject not b64":    "seal1p.!!." + b64([]byte("c")),
-		"ciphertext not b64": "seal1p." + b64([]byte("alice")) + ".!!",
-		"empty subject":      "seal1p.." + b64([]byte("c")),
+		"no prefix":          "other." + good[len("seal2p."):],
+		"the old format":     "seal1p." + b64([]byte("alice")) + "." + b64([]byte("c")),
+		"a sealed string":    "seal2." + uuid.NewString() + "." + b64([]byte("c")),
+		"two parts":          good + ".extra",
+		"ciphertext not b64": "seal2p.!!",
+		"empty ciphertext":   "seal2p.",
 	} {
-		if _, _, ok := parsePending(s); ok {
+		if _, ok := parsePending(s); ok {
 			t.Errorf("parsePending accepted %s: %q", name, s)
 		}
 	}
@@ -128,7 +129,7 @@ func TestW4CovSealRefusesWhenTheSubjectKeyCannotSeal(t *testing.T) {
 	if pending || string(out.Data) != string(ev.Data) {
 		t.Errorf("a failed seal returned pending=%v and changed data %s", pending, out.Data)
 	}
-	if strings.Contains(string(out.Data), "seal1") {
+	if strings.Contains(string(out.Data), "seal2") {
 		t.Error("a failed seal left a sealed marker in the row")
 	}
 }
@@ -171,10 +172,10 @@ func TestW4CovSealRefusesWhenThePendingKeyIsTheWrongSize(t *testing.T) {
 func TestW4CovUnsealLeavesWhatIsNotAWrittenSealAlone(t *testing.T) {
 	s, mk := newSealer(t)
 	ctx := context.Background()
-	mk.keys["alice"] = [][]byte{make([]byte, 32)}
+	mk.keys["alice"] = []memKey{{handle: uuid.New(), key: make([]byte, 32)}}
 	for name, data := range map[string]string{
-		"a string with the prefix that is not a seal": `{"reason":"seal1.not-a-seal"}`,
-		"a non-string at the sealed path":             `{"reason":5,"note":"seal1.x"}`,
+		"a string with the prefix that is not a seal": `{"reason":"seal2.not-a-seal"}`,
+		"a non-string at the sealed path":             `{"reason":5,"note":"seal2.x"}`,
 	} {
 		ev := decideEvent("alice", "x")
 		ev.Data = json.RawMessage(data)
@@ -290,8 +291,8 @@ func TestW4CovResealNeedsThePendingKey(t *testing.T) {
 func TestW4CovResealLeavesFieldsThatAreNotPendingStringsAlone(t *testing.T) {
 	s, mk := newSealer(t)
 	for name, data := range map[string]string{
-		"a non-string at the field":    `{"pending_subject":true,"reason":7,"other":"seal1p.zzz"}`,
-		"a string that is not pending": `{"pending_subject":true,"reason":"seal1p.bad","other":"seal1p.zzz"}`,
+		"a non-string at the field":    `{"pending_subject":true,"reason":7,"other":"seal2p.zzz"}`,
+		"a string that is not pending": `{"pending_subject":true,"reason":"seal2p.not.pending","other":"seal2p.zzz"}`,
 	} {
 		ev := decideEvent("alice", "x")
 		ev.Data = json.RawMessage(data)
@@ -315,7 +316,7 @@ func TestW4CovResealLeavesFieldsThatAreNotPendingStringsAlone(t *testing.T) {
 func TestW4CovResealOfARowWhoseDataIsNotAnObjectFails(t *testing.T) {
 	s, _ := newSealer(t)
 	ev := decideEvent("alice", "x")
-	ev.Data = json.RawMessage(`["pending_subject","seal1p.x"]`)
+	ev.Data = json.RawMessage(`["pending_subject","seal2p.x"]`)
 	out, err := s.Reseal(context.Background(), ev)
 	if err == nil || !strings.Contains(err.Error(), "data is not an object") {
 		t.Fatalf("Reseal = %v, want the not-an-object refusal", err)

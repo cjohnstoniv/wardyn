@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -94,9 +93,9 @@ func (s *Sealer) sealActor(ctx context.Context, ev types.AuditEvent) (types.Audi
 	if pk == nil {
 		return ev, false, fmt.Errorf("audit seal: no subject for the actor and no pending key to hold the row: %w", err)
 	}
-	ct, serr := kek.Seal(pk, []byte(name), sealAAD(ev.ID.String(), ev.Action, actorPath, name, 0))
+	sealed, serr := sealPending(pk, ev, actorPath, name, nil)
 	if serr != nil {
-		return ev, false, fmt.Errorf("audit seal: %w", serr)
+		return ev, false, serr
 	}
 	m := map[string]json.RawMessage{}
 	if len(ev.Data) > 0 {
@@ -104,7 +103,7 @@ func (s *Sealer) sealActor(ctx context.Context, ev types.AuditEvent) (types.Audi
 			return ev, false, fmt.Errorf("audit seal: the row's data is not an object, so the actor cannot wait in it: %v", jerr)
 		}
 	}
-	m[PendingActorKey] = jsonString(pendingPrefix + b64([]byte(name)) + "." + b64(ct))
+	m[PendingActorKey] = sealed
 	m[PendingMarker] = json.RawMessage("true")
 	data, merr := json.Marshal(m)
 	if merr != nil {
@@ -131,15 +130,17 @@ func (s *Sealer) resealActor(ctx context.Context, ev types.AuditEvent, pk []byte
 		return ev, errors.New("audit reseal: a pending actor is spooled and the subject directory is not available")
 	}
 	str, _ := stringValue(raw)
-	name, ct, ok := parsePending(str)
+	// Neither failure heals by waiting, so neither defers: the drain counts the
+	// line toward quarantine, as it does a pending field, instead of holding
+	// every line behind it.
+	pv, ok, err := openPending(pk, ev, actorPath, str)
 	if !ok {
-		return ev, errors.New("audit reseal: the pending actor is malformed")
+		return ev, fmt.Errorf("%w: the pending actor is malformed", ErrPendingUnopenable)
 	}
-	plain, err := kek.Open(pk, ct, sealAAD(ev.ID.String(), ev.Action, actorPath, name, 0))
 	if err != nil {
-		return ev, fmt.Errorf("audit reseal: the pending actor does not open under the pending key: %w", err)
+		return ev, fmt.Errorf("%w: the pending actor does not open under the pending key: %w", ErrPendingUnopenable, err)
 	}
-	actor := string(plain)
+	actor := pv.Subject
 	principal, err := s.principalOf(ctx, actor)
 	if err != nil {
 		return ev, err

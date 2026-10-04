@@ -7,9 +7,18 @@ import { createOutputFlow, FLOW_HIGH_WATERMARK, FLOW_LOW_WATERMARK } from "./att
 
 function harness() {
   const cbs: Array<() => void> = [];
+  const writes: Uint8Array[] = [];
   const sent: string[] = [];
-  const flow = createOutputFlow({ write: (_d, cb) => void cbs.push(cb!) }, (t) => sent.push(t));
-  return { flow, cbs, sent };
+  const flow = createOutputFlow(
+    {
+      write: (d, cb) => {
+        writes.push(d);
+        cbs.push(cb!);
+      },
+    },
+    (t) => sent.push(t),
+  );
+  return { flow, cbs, writes, sent };
 }
 
 describe("createOutputFlow", () => {
@@ -29,6 +38,20 @@ describe("createOutputFlow", () => {
     expect(sent).toEqual(["pause"]);
     cbs[1]!(); // 1 KiB left
     expect(sent).toEqual(["pause", "resume"]);
+    cbs[2]!();
+    expect(sent).toEqual(["pause", "resume"]);
+  });
+
+  it("hands xterm a frame larger than the high watermark in slices no larger than it", () => {
+    const { flow, cbs, writes, sent } = harness();
+    const frame = Uint8Array.from({ length: 2 * FLOW_HIGH_WATERMARK + 5 }, (_, i) => i % 251);
+    flow.write(frame);
+    expect(writes.map((w) => w.length)).toEqual([FLOW_HIGH_WATERMARK, FLOW_HIGH_WATERMARK, 5]);
+    expect(Uint8Array.from(writes.flatMap((w) => [...w]))).toEqual(frame); // in order, nothing lost
+    expect(sent).toEqual(["pause"]);
+    cbs[0]!();
+    cbs[1]!();
+    expect(sent).toEqual(["pause", "resume"]); // 5 bytes left
     cbs[2]!();
     expect(sent).toEqual(["pause", "resume"]);
   });

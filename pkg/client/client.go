@@ -571,6 +571,10 @@ func (c *Client) RecordWorkspaceTask(ctx context.Context, wsID uuid.UUID, taskKe
 // broke JSON decoding (the original finding).
 const maxErrBody = 2048
 
+// maxPendingErrBody bounds the error body doPending reads: a 409 governance_change_pending carries
+// the held change, payload and diff included, which can pass maxErrBody.
+const maxPendingErrBody = 1 << 20
+
 // newRequest builds an authenticated request against the control plane. Every
 // method routes through it, so the auth/principal headers have ONE owner (the
 // raw-stream methods must not hand-copy them).
@@ -728,7 +732,8 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any, hea
 
 // doPending is do for a caller that handles a pending change itself: it returns
 // the pending change (out untouched) when the server answered 202 with a
-// pending_change body, and (nil, nil) for every other success. Detection keys
+// pending_change body, or a 409 governance_change_pending carrying the held
+// change, and (nil, nil) for every other success. Detection keys
 // on the body's pending_change field, never on the 202 alone: KillRun,
 // RecordWorkspaceTask and the scan routes also answer 202 and decode into out.
 func (c *Client) doPending(ctx context.Context, method, path string, body, out any, headerOut ...*http.Header) (*GovernanceChange, error) {
@@ -758,8 +763,23 @@ func (c *Client) doPending(ctx context.Context, method, path string, body, out a
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
-		return nil, NewAPIError(resp.StatusCode, raw)
+		// Read past maxErrBody so a held change's body parses whole; Body is capped after.
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxPendingErrBody))
+		apiErr := NewAPIError(resp.StatusCode, raw)
+		if len(apiErr.Body) > maxErrBody {
+			apiErr.Body = apiErr.Body[:maxErrBody]
+		}
+		// A 409 governance_change_pending names the change already holding the target: that is
+		// still-pending, the same result the first proposal got, so a repeat apply carries on.
+		if resp.StatusCode == http.StatusConflict && apiErr.Reason == "governance_change_pending" {
+			var env struct {
+				PendingChange *GovernanceChange `json:"pending_change"`
+			}
+			if json.Unmarshal(raw, &env) == nil && env.PendingChange != nil {
+				return env.PendingChange, nil
+			}
+		}
+		return nil, apiErr
 	}
 
 	// Success path: decode the FULL body (no 2 KiB cap). Streaming via

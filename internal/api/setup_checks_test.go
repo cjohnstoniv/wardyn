@@ -946,12 +946,16 @@ func TestKeyCustodyRows(t *testing.T) {
 		t.Errorf("two domains: %+v", c)
 	}
 	if c := row(keyCustody{}, "principal_keys"); c.Status != "info" || c.Fix != "" ||
-		c.Detail != "Off: stored credentials use this deployment's key. Audit records use per-person keys either way." {
+		c.Detail != "Off: credentials written now use this deployment's key, or the external secret store when one is set. Audit records use per-person keys either way." {
 		t.Errorf("principal keys off: %+v", c)
 	}
 	if c := row(keyCustody{PrincipalKeys: true, RootKeyCreds: 4}, "principal_keys"); c.Status != "info" ||
 		c.Detail != "On. 4 stored credentials still use this deployment's key." || c.Fix != "Run wardynd -rewrap-principal-keys to re-seal them." {
 		t.Errorf("principal keys on, 4 left: %+v", c)
+	}
+	if c := row(keyCustody{PrincipalKeys: true, ExternalCreds: 2}, "principal_keys"); c.Status != "ok" || c.Fix != "" ||
+		c.Detail != "On. Every stored credential held here is sealed under its owner's key. 2 are kept in the external secret store instead, outside these keys." {
+		t.Errorf("principal keys on, 2 external: %+v", c)
 	}
 	if c := row(keyCustody{PrincipalKeys: true}, "principal_keys"); c.Status != "ok" || c.Detail != "On. Every stored credential is sealed under its owner's key." {
 		t.Errorf("principal keys on, none left: %+v", c)

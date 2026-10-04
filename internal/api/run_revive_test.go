@@ -35,6 +35,9 @@ type reviveStore struct {
 	cfg     []byte
 	key     []byte
 	dropped bool
+	// capFull is store.PG's deployment cap already full: the claim of a revive
+	// that starts an agent, which would take a slot, answers ErrRunCapReached.
+	capFull bool
 }
 
 var _ store.RunProxyConfigs = (*reviveStore)(nil)
@@ -68,9 +71,12 @@ func (s *reviveStore) DeleteRunProxyConfig(context.Context, uuid.UUID) error {
 
 func (s *reviveStore) PurgeTerminalRunProxyConfigs(context.Context) (int64, error) { return 0, nil }
 
-func (s *reviveStore) MarkRunRevived(_ context.Context, _ uuid.UUID, from types.LostReason, ended *store.EndedKept) (bool, error) {
+func (s *reviveStore) MarkRunRevived(_ context.Context, _ uuid.UUID, from types.LostReason, ended *store.EndedKept, limit int, startsAgent bool) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if limit > 0 && s.capFull && startsAgent {
+		return false, store.ErrRunCapReached
+	}
 	if s.state != types.RunRunning || (s.run.LostAt != nil) != (from != "") || s.run.LostReason != from {
 		return false, nil
 	}

@@ -21,7 +21,7 @@ import (
 // that asked for it answers 5xx until every step is done, so the identity provider retries:
 //
 //  1. one transaction (store.SuspendIdentity): the session cutoff for every form the person is
-//     known by, the identity deactivation, the authority epoch bump and people.deactivated_at;
+//     known by (less a bound person's email that another principal holds), the identity deactivation, the authority epoch bump and people.deactivated_at;
 //  2. revokePersonCredentials per form, after the bump, so every credential minted under the old
 //     epoch is swept (a later mint is refused by the owner guard, not swept);
 //  3. killRunCascade on every non-terminal run those forms own, and on every KILLED run whose
@@ -60,6 +60,21 @@ type leaverForms struct {
 	// targets are bound plus every sub the emails resolve to (when no row binds a principal) plus
 	// every email alias: the forms the cutoff, the credential sweep and the kill sweep run under.
 	targets []string
+	// shared are the email forms of a bound person that another principal holds (store.HeldEmails). A
+	// cutoff or session cut keyed by one would reach that principal's credentials too, so none is written;
+	// the person's own are reached through bound and the identity deactivation.
+	shared []string
+}
+
+// cutTargets are the forms a cutoff or a session cut is written under: targets less shared.
+func (f leaverForms) cutTargets() []string {
+	return slices.DeleteFunc(slices.Clone(f.targets), func(t string) bool { return slices.Contains(f.shared, strings.ToLower(t)) })
+}
+
+// owns says a token is the person's own: its principal is one of their forms. A bound person's email
+// alias is not an owner, since another principal can hold the address.
+func (f leaverForms) owns(t types.APIToken) bool {
+	return slices.ContainsFunc(f.targets, func(form string) bool { return strings.EqualFold(form, t.Principal) })
 }
 
 func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.PrincipalIdentity) (leaverForms, error) {
@@ -79,7 +94,11 @@ func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.Prin
 	emails := slices.DeleteFunc(append(aliases, strings.ToLower(ident.EmailLower), strings.ToLower(ident.ScimUserName)),
 		func(v string) bool { return !strings.Contains(v, "@") })
 	f.targets = slices.Concat(f.bound, nonEmptyForms(emails...))
-	if ident.Principal == "" {
+	if ident.Principal != "" {
+		if f.shared, err = st.HeldEmails(ctx, ident.ID, f.bound, emails); err != nil {
+			return f, err
+		}
+	} else {
 		subs, err := st.PrincipalsByEmail(ctx, emails)
 		if err != nil {
 			return f, err
@@ -113,37 +132,21 @@ func jobByKey(jobs []store.DeprovisionJob, step, target string) (store.Deprovisi
 // already done writes nothing new, so an identity provider that repeats the request costs nothing.
 func (s *Server) suspendIdentity(ctx context.Context, st scimStore, id uuid.UUID, slot string) error {
 	ctx = withActor(ctx, types.ActorSystem, scimActor)
-	ident, err := st.GetIdentity(ctx, id)
+	ident, forms, keys, err := s.suspendStepOne(ctx, st, id)
+	// A sign-in that bound the row after it was read is seen under the suspension's lock: read it again, so
+	// the newly bound principal is cut, swept and has its runs killed. A binding never changes once made,
+	// so the second plan is the last one.
+	if errors.Is(err, store.ErrIdentityRebound) {
+		ident, forms, keys, err = s.suspendStepOne(ctx, st, id)
+	}
 	if err != nil {
 		return err
-	}
-	forms, err := s.leaverForms(ctx, st, ident)
-	if err != nil {
-		return err
-	}
-	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
-	if err != nil {
-		return err
-	}
-	keys := []store.JobKey{{Step: jobStepAuditDeact}, {Step: jobStepAuditDeprov}}
-	for _, t := range forms.targets {
-		keys = append(keys, store.JobKey{Step: jobStepSweep, Target: t})
-	}
-	if cutoff, ok := jobByKey(jobs, store.JobStepCutoff, ""); ident.DeactivatedAt == nil || !ok || !cutoff.Done {
-		// The pending steps commit with the deactivation, so a crash right after it leaves them for the sweeper.
-		plan := store.SuspendPlan{IdentityID: id, Principals: forms.bound, CutoffSubs: forms.targets, PendingJobs: keys}
-		if s.cfg.SCIM != nil {
-			plan.PurgeAfter = s.cfg.SCIM.PurgeAfter
-		}
-		if _, err := st.SuspendIdentity(ctx, plan); err != nil {
-			return err
-		}
 	}
 	if err := st.EnsureDeprovisionJobs(ctx, id, store.JobKindSuspend, keys); err != nil {
 		return err
 	}
 	stepErr := errors.Join(
-		s.sweepStep(ctx, st, id, forms.targets),
+		s.sweepStep(ctx, st, id, ident, forms),
 		s.killStep(ctx, st, id, forms.targets),
 	)
 	if stepErr != nil {
@@ -157,8 +160,41 @@ func (s *Server) suspendIdentity(ctx context.Context, st scimStore, id uuid.UUID
 	return nil
 }
 
+// suspendStepOne reads the identity and its forms and, unless a finished suspension already covers it,
+// runs step 1 with them. It returns what steps 2 and 3 run under.
+func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID) (store.PrincipalIdentity, leaverForms, []store.JobKey, error) {
+	ident, err := st.GetIdentity(ctx, id)
+	if err != nil {
+		return ident, leaverForms{}, nil, err
+	}
+	forms, err := s.leaverForms(ctx, st, ident)
+	if err != nil {
+		return ident, forms, nil, err
+	}
+	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
+	if err != nil {
+		return ident, forms, nil, err
+	}
+	keys := []store.JobKey{{Step: jobStepAuditDeact}, {Step: jobStepAuditDeprov}}
+	for _, t := range forms.targets {
+		keys = append(keys, store.JobKey{Step: jobStepSweep, Target: t})
+	}
+	if cutoff, ok := jobByKey(jobs, store.JobStepCutoff, ""); ident.DeactivatedAt == nil || !ok || !cutoff.Done {
+		// The pending steps commit with the deactivation, so a crash right after it leaves them for the sweeper.
+		plan := store.SuspendPlan{IdentityID: id, Principal: ident.Principal, Principals: forms.bound, CutoffSubs: forms.cutTargets(), PendingJobs: keys}
+		if s.cfg.SCIM != nil {
+			plan.PurgeAfter = s.cfg.SCIM.PurgeAfter
+		}
+		if _, err := st.SuspendIdentity(ctx, plan); err != nil {
+			return ident, forms, nil, err
+		}
+	}
+	return ident, forms, keys, nil
+}
+
 // sweepStep is step 2: every pending target's tokens revoked and keys deleted.
-func (s *Server) sweepStep(ctx context.Context, st scimStore, id uuid.UUID, targets []string) error {
+func (s *Server) sweepStep(ctx context.Context, st scimStore, id uuid.UUID, ident store.PrincipalIdentity, forms leaverForms) error {
+	targets := forms.targets
 	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
 	if err != nil {
 		return err
@@ -169,7 +205,7 @@ func (s *Server) sweepStep(ctx context.Context, st scimStore, id uuid.UUID, targ
 			continue
 		}
 		key := store.JobKey{Step: jobStepSweep, Target: t}
-		res, err := s.revokePersonCredentials(ctx, t)
+		res, err := s.sweepTarget(ctx, t, forms, ident)
 		if err != nil {
 			errs = append(errs, errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, err)))
 			continue
@@ -178,6 +214,26 @@ func (s *Server) sweepStep(ctx context.Context, st scimStore, id uuid.UUID, targ
 			map[string]int{"tokens_revoked": res.Tokens, "keys_deleted": res.Keys}))
 	}
 	return errors.Join(errs...)
+}
+
+// sweepTarget sweeps one form. A bound person's email is not an owner: another principal can hold the same
+// address (a recycled one), so under an email the cutoff is written only when no other principal holds it,
+// and the tokens and keys the sweep takes are those whose principal is one of the person's own forms. A
+// person no row binds is known by nothing but their emails, so those run the full sequence.
+func (s *Server) sweepTarget(ctx context.Context, target string, forms leaverForms, ident store.PrincipalIdentity) (personRevocation, error) {
+	if ident.Principal == "" || !strings.Contains(target, "@") || slices.Contains(forms.bound, target) {
+		return s.revokePersonCredentials(ctx, target)
+	}
+	if !slices.Contains(forms.shared, strings.ToLower(target)) {
+		if err := s.cfg.SessionRevocations.RevokeSub(ctx, target); err != nil {
+			return personRevocation{}, err
+		}
+	}
+	res := personRevocation{Stamped: true}
+	var tokenErr, keyErr error
+	res.Tokens, tokenErr = s.revokeAPITokensMatching(ctx, target, forms.owns)
+	res.Keys, _, _, _, keyErr = s.deleteSSHKeysFor(ctx, target, false)
+	return res, errors.Join(tokenErr, keyErr)
 }
 
 // killStep is step 3. Every non-terminal run a target owns joins the ledger as pending, and so does

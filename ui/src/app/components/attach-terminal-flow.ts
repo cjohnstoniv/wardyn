@@ -7,6 +7,10 @@
 // parsed are the backlog. Past HIGH the server is told to stop reading the
 // sandbox; once the backlog drains below LOW it is told to go on. The server
 // bounds a pause that is never resumed, and a 0.8.5 server ignores both frames.
+//
+// xterm parses each write whole, between its own yields to the page, so a chunk
+// reaches it in slices of at most HIGH bytes: however large a frame the server
+// sends, one slice is one bounded piece of main-thread work.
 
 export const FLOW_HIGH_WATERMARK = 128 * 1024;
 export const FLOW_LOW_WATERMARK = 16 * 1024;
@@ -22,20 +26,25 @@ export function createOutputFlow(
 ): OutputFlow {
   let pending = 0;
   let paused = false;
+  const writeSlice = (slice: Uint8Array) => {
+    pending += slice.length;
+    if (!paused && pending > FLOW_HIGH_WATERMARK) {
+      paused = true;
+      sendControl("pause");
+    }
+    term.write(slice, () => {
+      pending -= slice.length;
+      if (paused && pending < FLOW_LOW_WATERMARK) {
+        paused = false;
+        sendControl("resume");
+      }
+    });
+  };
   return {
     write(bytes) {
-      pending += bytes.length;
-      if (!paused && pending > FLOW_HIGH_WATERMARK) {
-        paused = true;
-        sendControl("pause");
+      for (let at = 0; at < bytes.length; at += FLOW_HIGH_WATERMARK) {
+        writeSlice(bytes.subarray(at, at + FLOW_HIGH_WATERMARK));
       }
-      term.write(bytes, () => {
-        pending -= bytes.length;
-        if (paused && pending < FLOW_LOW_WATERMARK) {
-          paused = false;
-          sendControl("resume");
-        }
-      });
     },
   };
 }

@@ -159,9 +159,11 @@ func (e *execOutputTail) awaitDrains(ctx context.Context, wait time.Duration) bo
 
 // seal ends the capture: it flushes the masker's holdback into the ring (unless
 // the run is uncovered, when the held bytes cannot be vouched for and are
-// dropped), then fences the writer so a later byte is dropped, not kept. It
-// returns what the row holds.
-func (e *execOutputTail) seal(uncoveredNow bool) (out []byte, truncated, dropped, uncovered bool) {
+// dropped), then fences the writer so a later byte is dropped, not kept. clean
+// is the drain verdict: it is published with the finished flag in one critical
+// section, so a read never sees a final capture without its incomplete verdict.
+// It returns what the row holds.
+func (e *execOutputTail) seal(uncoveredNow, clean bool) (out []byte, truncated, dropped, uncovered bool) {
 	e.flushIn() // a write accepted before a clean barrier is in the row
 	e.mw.mu.Lock()
 	defer e.mw.mu.Unlock()
@@ -176,6 +178,7 @@ func (e *execOutputTail) seal(uncoveredNow bool) (out []byte, truncated, dropped
 	e.mw.tail = nil
 	e.mw.capture.sealed = true
 	e.fmu.Lock()
+	e.incomplete = !clean || e.mw.capture.dropped
 	e.finished = true
 	e.fmu.Unlock()
 	return append([]byte{}, e.ring.buf...), e.ring.truncated, e.mw.capture.dropped, e.mw.capture.uncovered
@@ -317,7 +320,7 @@ func (s *Server) finishRunOutput(ctx context.Context, runID uuid.UUID) {
 	}
 	clean := e.awaitDrains(ctx, s.outputDrainWait())
 	uncoveredNow := s.cfg.MaskManifests != nil && !s.maskCovered(ctx, runID)
-	out, truncated, dropped, uncovered := e.seal(uncoveredNow)
+	out, truncated, dropped, uncovered := e.seal(uncoveredNow, clean)
 	e.fmu.Lock()
 	fenced, gap := e.fenced, e.gapReason
 	if gap == "" && e.recovered && uncovered {
@@ -342,9 +345,6 @@ func (s *Server) finishRunOutput(ctx context.Context, runID uuid.UUID) {
 		reasons["dropped"] = true
 	}
 	incomplete := !clean || dropped
-	e.fmu.Lock()
-	e.incomplete = incomplete
-	e.fmu.Unlock()
 	if st == nil {
 		if incomplete {
 			reasons["incomplete"] = true

@@ -239,9 +239,10 @@ func (s *Store) fetch(ctx context.Context, cursor int64) (top, pruned int64, row
 
 // apply puts rows into the registry. A row this process already knows is
 // updated from the ref; only an unknown row is opened, under its owner's key,
-// and a key that is destroyed or a blob that does not open is skipped (nothing
-// can ever mask it) once the runs it masks are fenced (unopenable). Any other
-// failure aborts the read, so the cursor stays and the caller fails closed. A full read also drops what the table no longer has.
+// and a key that is destroyed or does not unwrap, or a blob that does not open,
+// is skipped (nothing can ever mask it) once the runs it masks are fenced
+// (unopenable). A transient failure (the store is unavailable, the context
+// ends) aborts the read, so the cursor stays and the caller fails closed. A full read also drops what the table no longer has.
 func (s *Store) apply(ctx context.Context, rows []row, full bool) error {
 	keys := map[keyID][]byte{}
 	defer func() {
@@ -345,9 +346,18 @@ func (s *Store) open(ctx context.Context, r row, keys map[keyID][]byte) (*ref, e
 	if !ok {
 		var err error
 		key, err = s.keys.Key(ctx, r.owner, subjectkey.PurposeCred, *r.version)
+		// The fence is irreversible, so it needs proof about the row: a destroyed generation, or a
+		// wrap that does not open under its own key (kek.ErrCorrupt), which never heals by
+		// retrying. Every other failure (unreachable, access refused, a key or version the
+		// service does not hold or has retired, any answer nothing classifies) aborts the read:
+		// consumers fail closed and it heals once the service or configuration does.
 		switch {
 		case errors.Is(err, subjectkey.ErrDataLoss):
 			return nil, s.unopenable(ctx, r, "the owner's key is destroyed")
+		case errors.Is(err, kek.ErrCorrupt):
+			slog.ErrorContext(ctx, "maskstore: the owner's key does not open",
+				slog.String("owner", r.owner), slog.Int("key_version", *r.version), slog.Any("err", err))
+			return nil, s.unopenable(ctx, r, "the owner's key does not open")
 		case err != nil:
 			return nil, fmt.Errorf("maskstore: the owner's key: %w", err)
 		}
@@ -367,6 +377,13 @@ func (s *Store) open(ctx context.Context, r row, keys map[keyID][]byte) (*ref, e
 // fences them (a per-run value fences its run, a credential value every run of
 // its owner), and the row is tombstoned, so a later read does not fence the
 // owner's later runs for it again. An error aborts the read and the cursor stays.
+//
+// r is this read's snapshot, which can be older than the key failure it found:
+// a credentials erase may have retired the row, destroyed the key and let the
+// owner start runs under the next key generation since. The fence is
+// irreversible, so the commit first locks the row and fences only if it is
+// still live at the generation this read saw; otherwise it changes nothing, and
+// the read that reaches the row's newer generation decides it on that state.
 func (s *Store) unopenable(ctx context.Context, r row, why string) error {
 	if r.retiredAt != nil {
 		slog.WarnContext(ctx, "maskstore: a retired masking value does not open; skipped", slog.String("id", r.id.String()), slog.String("why", why))
@@ -378,6 +395,16 @@ func (s *Store) unopenable(ctx context.Context, r row, why string) error {
 	}
 	var fenced []uuid.UUID
 	_, err := s.commit(ctx, func(tx pgx.Tx, gen int64) error {
+		var live bool
+		err := tx.QueryRow(ctx, `SELECT NOT tombstone AND retired_at IS NULL FROM mask_values WHERE id = $1 AND gen = $2 FOR UPDATE`, r.id, r.gen).Scan(&live)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return errRowMoved
+		case err != nil:
+			return fmt.Errorf("maskstore: lock an unopenable value: %w", err)
+		case !live:
+			return errRowMoved
+		}
 		rows, err := tx.Query(ctx,
 			`UPDATE run_mask_manifest SET fenced_at = now(), revision = revision + 1 WHERE `+where+` AND fenced_at IS NULL RETURNING run_id`, arg)
 		if err != nil {
@@ -394,6 +421,11 @@ func (s *Store) unopenable(ctx context.Context, r row, why string) error {
 		}
 		return nil
 	})
+	if errors.Is(err, errRowMoved) {
+		slog.WarnContext(ctx, "maskstore: a masking value that does not open changed since this read; nothing fenced",
+			slog.String("id", r.id.String()), slog.String("why", why))
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -401,6 +433,10 @@ func (s *Store) unopenable(ctx context.Context, r row, why string) error {
 		slog.String("id", r.id.String()), slog.String("why", why), slog.Int("runs_fenced", len(fenced)))
 	return nil
 }
+
+// errRowMoved rolls back unopenable's commit: the row is no longer the live
+// generation the read found.
+var errRowMoved = errors.New("maskstore: the value changed since it was read")
 
 // drop removes the value a ref holds from the registry and clears it.
 func (s *Store) drop(rf *ref) {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // errorBody is the uniform JSON error envelope.
@@ -22,6 +23,10 @@ type errorBody struct {
 	// Policy (deny-f2) names the policy whose ceiling refused the request and how
 	// to ask for a change. Present only on a ceiling refusal that carries one.
 	Policy *policyref.Ref `json:"policy,omitempty"`
+	// PendingChange names the held governance change a 409 governance_change_pending is ABOUT, so a
+	// repeat apply of the same document can report it as still pending instead of failing. Absent
+	// when the change was decided between the refusal and the read.
+	PendingChange *types.GovernanceChange `json:"pending_change,omitempty"`
 }
 
 // writeErrorReasonPolicy is writeErrorReason for a ceiling refusal that names the

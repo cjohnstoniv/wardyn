@@ -80,6 +80,34 @@ func TestSMTP_VerifiedServerReceivesTheMessageAfterTLS(t *testing.T) {
 	}
 }
 
+// TestSMTP_AuthFollowsTheRelaysAdvertisedMechanism: Exchange Online lists LOGIN and XOAUTH2 without PLAIN,
+// so a PLAIN attempt dies on a 504. LOGIN is used when PLAIN is absent, PLAIN is preferred when both are
+// offered, and a relay offering neither is refused as auth_unsupported before any credential is sent.
+func TestSMTP_AuthFollowsTheRelaysAdvertisedMechanism(t *testing.T) {
+	for _, tc := range []struct{ list, class, cred string }{
+		{"LOGIN XOAUTH2", "", "LOGIN relay-user " + smtpPassword},
+		{"XOAUTH2 LOGIN PLAIN", "", "PLAIN relay-user " + smtpPassword},
+		{"XOAUTH2", "auth_unsupported", ""},
+		{"", "auth_unsupported", ""},
+	} {
+		f := newFakeSMTP(t, true)
+		f.authList = tc.list
+		class, retry := sendTo(t, mailChannel(f), f.trust)
+		if class != tc.class || retry {
+			t.Fatalf("AUTH %q: class = %q retry %v, want %q and no retry", tc.list, class, retry, tc.class)
+		}
+		if tc.cred == "" {
+			if f.saw("AUTH") || f.saw("MAIL") || f.saw("DATA") {
+				t.Fatalf("AUTH %q: commands after the refusal: %v", tc.list, f.seen())
+			}
+			continue
+		}
+		if len(f.creds) != 1 || f.creds[0] != tc.cred || !f.saw("DATA") {
+			t.Fatalf("AUTH %q: creds = %v, commands = %v, want %q then DATA", tc.list, f.creds, f.seen(), tc.cred)
+		}
+	}
+}
+
 // TestSMTP_RelayReplyTextIsNeverReturned: a relay's refusal comes back as its code alone.
 func TestSMTP_RelayReplyTextIsNeverReturned(t *testing.T) {
 	f := newFakeSMTP(t, true)

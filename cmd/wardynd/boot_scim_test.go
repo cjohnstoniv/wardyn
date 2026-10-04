@@ -147,7 +147,7 @@ func TestPGSessionStatusReadsTheIdentityRows(t *testing.T) {
 	if status(0) != oidc.SessionLive || status(-1) != oidc.SessionLive {
 		t.Fatal("an active identity at its epoch is not live")
 	}
-	if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: row.ID, Principals: []string{sub}}); err != nil {
+	if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: row.ID, Principal: sub, Principals: []string{sub}}); err != nil {
 		t.Fatal(err)
 	}
 	if status(0) != oidc.SessionDeactivated || status(-1) != oidc.SessionDeactivated || status(1) != oidc.SessionDeactivated {

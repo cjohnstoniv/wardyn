@@ -120,37 +120,51 @@ const createAttempts = 4
 // index, and the key returned is always the one read back and unwrapped from
 // the winning row, so a concurrent loser discards its own key.
 func (m *Manager) Current(ctx context.Context, owner, purpose string) (int, []byte, error) {
+	version, _, key, err := m.current(ctx, owner, purpose)
+	return version, key, err
+}
+
+// CurrentHandle is Current for a caller that names the generation by its
+// handle: a random id the generation carries while it lives, which says nothing
+// about its owner (a sealed audit field stores it in place of the person).
+func (m *Manager) CurrentHandle(ctx context.Context, owner, purpose string) (uuid.UUID, []byte, error) {
+	_, handle, key, err := m.current(ctx, owner, purpose)
+	return handle, key, err
+}
+
+func (m *Manager) current(ctx context.Context, owner, purpose string) (int, uuid.UUID, []byte, error) {
 	if err := check(owner, purpose); err != nil {
-		return 0, nil, err
+		return 0, uuid.Nil, nil, err
 	}
 	domain := DomainDefault
 	if m.keks.Domain != nil {
 		var err error
 		if domain, err = m.keks.Domain(ctx, owner); err != nil {
-			return 0, nil, fmt.Errorf("subjectkey: the key domain of owner=%q: %w", owner, err)
+			return 0, uuid.Nil, nil, fmt.Errorf("subjectkey: the key domain of owner=%q: %w", owner, err)
 		}
 	}
 	for range createAttempts {
 		var version int
 		var have string
+		var handle uuid.UUID
 		err := m.pool.QueryRow(ctx,
-			`SELECT version, domain FROM principal_keys WHERE owner=$1 AND purpose=$2 AND destroyed_at IS NULL AND superseded_at IS NULL`, owner, purpose).Scan(&version, &have)
+			`SELECT version, domain, handle FROM principal_keys WHERE owner=$1 AND purpose=$2 AND destroyed_at IS NULL AND superseded_at IS NULL`, owner, purpose).Scan(&version, &have, &handle)
 		switch {
 		case err == nil && have == domain:
 			key, err := m.Key(ctx, owner, purpose, version)
 			if errors.Is(err, ErrDataLoss) {
 				continue // destroyed since the read: the next lap creates the next generation
 			}
-			return version, key, err
+			return version, handle, key, err
 		case err == nil, errors.Is(err, pgx.ErrNoRows):
 			if err := m.create(ctx, owner, purpose, domain); err != nil {
-				return 0, nil, err
+				return 0, uuid.Nil, nil, err
 			}
 		default:
-			return 0, nil, unavailable("read the current generation", err)
+			return 0, uuid.Nil, nil, unavailable("read the current generation", err)
 		}
 	}
-	return 0, nil, fmt.Errorf("subjectkey: no stable generation for (owner=%q, purpose=%q) after %d attempts", owner, purpose, createAttempts)
+	return 0, uuid.Nil, nil, fmt.Errorf("subjectkey: no stable generation for (owner=%q, purpose=%q) after %d attempts", owner, purpose, createAttempts)
 }
 
 // create inserts generation max+1 of (owner, purpose) in domain, and in the same
@@ -238,6 +252,22 @@ func (m *Manager) Key(ctx context.Context, owner, purpose string, version int) (
 	return key, nil
 }
 
+// KeyByHandle is Key for the generation of purpose that carries handle. A
+// handle no generation carries (Destroy clears it, or it was never issued) is
+// ErrDataLoss.
+func (m *Manager) KeyByHandle(ctx context.Context, purpose string, handle uuid.UUID) ([]byte, error) {
+	var owner string
+	var version int
+	err := m.pool.QueryRow(ctx, `SELECT owner, version FROM principal_keys WHERE handle=$1 AND purpose=$2`, handle, purpose).Scan(&owner, &version)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return nil, fmt.Errorf("subjectkey: no generation of purpose %q carries handle %s: %w", purpose, handle, ErrDataLoss)
+	case err != nil:
+		return nil, unavailable("read a handle", err)
+	}
+	return m.Key(ctx, owner, purpose, version)
+}
+
 func dataLoss(id keyID) error {
 	return fmt.Errorf("subjectkey: generation %d of (owner=%q, purpose=%q): %w", id.version, id.owner, id.purpose, ErrDataLoss)
 }
@@ -260,7 +290,9 @@ func (m *Manager) fill(ctx context.Context, id keyID) ([]byte, error) {
 	}
 	k, err := m.keks.Reader(domain, kekID)
 	if err != nil {
-		return nil, fmt.Errorf("subjectkey: generation %d of (owner=%q, purpose=%q): %w", id.version, id.owner, id.purpose, err)
+		// This process cannot reach the key (its own domain or KEK configuration): unavailable to
+		// it, not destroyed, so a reader aborts and heals once the configuration is fixed.
+		return nil, unavailable(fmt.Sprintf("the KEK of generation %d of (owner=%q, purpose=%q)", id.version, id.owner, id.purpose), err)
 	}
 	key, err := k.Unwrap(ctx, wrapped, kek.PrincipalBind(id.owner, id.purpose, id.version, domain))
 	if err != nil {
@@ -303,8 +335,9 @@ func (m *Manager) Reseal(ctx context.Context, owner, purpose string, from int, s
 }
 
 // Destroy tombstones every generation of (owner, purpose) in one transaction:
-// destroyed_at is set, wrapped_key cleared, and principal_key.destroyed written
-// with the owner, purpose and generation numbers, never key material. Rows are
+// destroyed_at is set, wrapped_key and handle cleared, and principal_key.destroyed
+// written with the owner, purpose and generation numbers, never key material or
+// a handle, which would map a sealed audit field back to its owner. Rows are
 // never deleted, so a version is never reused and the next write creates
 // max+1. It returns the generations this call destroyed (none when the subject
 // had no live key, which writes no event). The local cache is evicted only after
@@ -321,7 +354,7 @@ func (m *Manager) Destroy(ctx context.Context, owner, purpose string) ([]int, er
 	// A generation already destroyed is tombstoned (the table's CHECK ties
 	// wrapped_key to destroyed_at), so only the live one is left to change.
 	rows, err := tx.Query(ctx,
-		`UPDATE principal_keys SET destroyed_at=now(), wrapped_key=NULL WHERE owner=$1 AND purpose=$2 AND destroyed_at IS NULL RETURNING version`, owner, purpose)
+		`UPDATE principal_keys SET destroyed_at=now(), wrapped_key=NULL, handle=NULL WHERE owner=$1 AND purpose=$2 AND destroyed_at IS NULL RETURNING version`, owner, purpose)
 	if err != nil {
 		return nil, unavailable("destroy", err)
 	}

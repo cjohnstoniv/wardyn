@@ -149,6 +149,14 @@ func TestRoutes_TiersAreEnqueuedUpFrontAndSentOnlyWhenDueAndPending(t *testing.T
 	if got.count() != 1 || got.last()["event"] != "raised" {
 		t.Fatalf("receiver got %d bodies, last %v", got.count(), got.last())
 	}
+	// The tier-0 announcement names when the next tier is due.
+	var nextDue time.Time
+	if err := h.pool.QueryRow(ctx, `SELECT min(due_at) FROM approval_notifications WHERE approval_id = $1 AND tier = 1`, pending.ID).Scan(&nextDue); err != nil {
+		t.Fatal(err)
+	}
+	if ap, _ := got.last()["approval"].(map[string]any); ap["sla_due_at"] != nextDue.UTC().Format(time.RFC3339) {
+		t.Fatalf("tier-0 approval = %v, want sla_due_at %s", ap, nextDue.UTC().Format(time.RFC3339))
+	}
 	if s := h.tierState(t, pending.ID, 1); s != "pending" {
 		t.Fatalf("tier-1 state before due = %s, want pending", s)
 	}
@@ -160,6 +168,10 @@ func TestRoutes_TiersAreEnqueuedUpFrontAndSentOnlyWhenDueAndPending(t *testing.T
 	}
 	if got.count() != 3 || got.last()["event"] != "escalated" || got.last()["tier"] != float64(1) {
 		t.Fatalf("receiver got %d bodies, last %v", got.count(), got.last())
+	}
+	// No later tier is scheduled, so the last tier carries no deadline.
+	if ap, _ := got.last()["approval"].(map[string]any); ap["sla_due_at"] != nil {
+		t.Fatalf("last-tier approval = %v, want no sla_due_at", ap)
 	}
 	if s := h.tierState(t, pending.ID, 1); s != "sent" {
 		t.Fatalf("tier-1 state after send = %s, want sent", s)

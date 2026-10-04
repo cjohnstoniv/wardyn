@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -537,6 +538,32 @@ func TestFinishRunOutput_MemoryFinalKeepsIncomplete(t *testing.T) {
 		}
 		f.srv.WaitBackground()
 	})
+}
+
+// A read concurrent with the finish never sees a final capture before its
+// incomplete verdict: the verdict and the finished flag are published together.
+func TestFinishRunOutput_NoFinalReadBeforeTheVerdict(t *testing.T) {
+	for i := 0; i < 300; i++ {
+		f := newOutputFixture(t, func(c *Config) { c.RunOutputPersistOff = true })
+		w := f.open(t)
+		w.BeginDrain()
+		writeExecOutput(t, w, "kept output\n")
+		w.EndDrain(errors.New("interrupted output copy"))
+		seen := make(chan execOutputView, 1)
+		go func() {
+			for {
+				if v, _ := f.srv.readExecOutput(f.run.ID, 1<<10, false); v.complete {
+					seen <- v
+					return
+				}
+				runtime.Gosched()
+			}
+		}()
+		f.srv.FinishRunOutput(t.Context(), f.run.ID)
+		if v := <-seen; !v.incomplete {
+			t.Fatalf("iteration %d: the first final read = %+v, want incomplete after a drain error", i, v)
+		}
+	}
 }
 
 // A failing write is retried with backoff, bytes held in memory, until it lands;

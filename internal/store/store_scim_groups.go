@@ -52,6 +52,7 @@ type ScimGroupStore interface {
 	// AddScimGroupMembers records identities as members, skipping any id that names no identity.
 	AddScimGroupMembers(ctx context.Context, id uuid.UUID, identities []uuid.UUID, now time.Time) error
 	StartGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID) error
+	ResumeGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID) (bool, error)
 	GroupRemovalIdentities(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error)
 	DeleteScimGroup(ctx context.Context, id uuid.UUID) error
 	PendingGroupRemovals(ctx context.Context, idleFor time.Duration, limit int) ([]PendingGroupRemoval, error)
@@ -190,6 +191,37 @@ func (s PG) StartGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID
 		return fmt.Errorf("store: commit group removal: %w", err)
 	}
 	return nil
+}
+
+// ResumeGroupRemoval says whether the sweeper may go on with a removal it selected earlier: true only when
+// the pair's ledger still has a pending step and the person is not recorded a member again. It never opens
+// a removal or deletes a membership, so a candidate the identity provider added back since it was selected
+// is dropped, not removed again. The identity row is locked FOR UPDATE first, in a statement of its own: a
+// membership insert's foreign-key check holds that row, so the lock waits for an add in flight to commit
+// or roll back. The membership is then read by a second statement, whose snapshot is taken after the lock
+// and so sees that add; an add that starts later waits for this transaction, and is ordered after the answer.
+func (s PG) ResumeGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID) (bool, error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return false, fmt.Errorf("store: resume group removal: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var one int
+	err = tx.QueryRow(ctx, `SELECT 1 FROM principal_identities WHERE id = $1 FOR UPDATE`, identityID).Scan(&one)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: lock identity for group removal: %w", err)
+	}
+	var resume bool
+	if err = tx.QueryRow(ctx, `
+		SELECT NOT EXISTS (SELECT 1 FROM scim_group_members WHERE group_id = $1 AND identity_id = $2)
+		   AND EXISTS (SELECT 1 FROM deprovision_jobs WHERE identity_id = $2 AND kind = $3 AND target = $4 AND state = 'pending')`,
+		groupID, identityID, JobKindGroupRemove, groupID.String()).Scan(&resume); err != nil {
+		return false, fmt.Errorf("store: resume group removal: %w", err)
+	}
+	return resume, tx.Commit(ctx)
 }
 
 // GroupRemovalIdentities is every identity a group's deletion must remove as a mover: the recorded

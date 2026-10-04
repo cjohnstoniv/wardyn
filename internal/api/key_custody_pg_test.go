@@ -81,6 +81,25 @@ func TestPG_SetupStatus_KeyCustodyRows(t *testing.T) {
 	}
 }
 
+// With principal keys on and only external-store pointers (enc_version 2) in the table, setup does
+// not claim those credentials are sealed under their owners' keys.
+func TestPG_SetupStatus_KeyCustodyRowsCountExternalPointers(t *testing.T) {
+	pool := throwawayPGPool(t)
+	h := newHarness(t)
+	h.srv.cfg.KeyDomains = keydomain.NewService(pool, nil)
+	h.srv.cfg.PrincipalKeys = true
+	h.srv.router = h.srv.routes()
+
+	if _, err := pool.Exec(t.Context(), `INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext) VALUES ('bob','k',2,'vault:x','\x00','\x00')`); err != nil {
+		t.Fatalf("seed an external pointer: %v", err)
+	}
+	c := setupRows(t, h.srv)["principal_keys"]
+	if c.Status != "ok" || c.Fix != "" ||
+		c.Detail != "On. Every stored credential held here is sealed under its owner's key. 1 is kept in the external secret store instead, outside these keys." {
+		t.Errorf("principal_keys with one v2 row = %+v", c)
+	}
+}
+
 // The credential inventory says which domain each person's next key goes to,
 // and why, and marks a conflict.
 func TestPG_CredentialInventory_KeyDomains(t *testing.T) {

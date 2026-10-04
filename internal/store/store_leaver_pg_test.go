@@ -64,7 +64,7 @@ func TestPG_SuspendIdentity_OneTransaction(t *testing.T) {
 	}
 
 	res, err := st.SuspendIdentity(ctx, store.SuspendPlan{
-		IdentityID: leaver.ID, Principals: []string{"sub-leaver"}, CutoffSubs: []string{"sub-leaver", "leaver@corp.example", ""},
+		IdentityID: leaver.ID, Principal: "sub-leaver", Principals: []string{"sub-leaver"}, CutoffSubs: []string{"sub-leaver", "leaver@corp.example", ""},
 	})
 	if err != nil || !res.WasActive || res.Epoch != 1 {
 		t.Fatalf("suspend = %+v, %v; want a new suspension at epoch 1", res, err)
@@ -91,7 +91,7 @@ func TestPG_SuspendIdentity_OneTransaction(t *testing.T) {
 	if err := st.EnsureDeprovisionJobs(ctx, leaver.ID, store.JobKindSuspend, []store.JobKey{{Step: "sweep", Target: "sub-leaver"}}); err != nil {
 		t.Fatal(err)
 	}
-	again, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: leaver.ID, Principals: []string{"sub-leaver"}})
+	again, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: leaver.ID, Principal: "sub-leaver", Principals: []string{"sub-leaver"}})
 	if err != nil || again.WasActive || again.Epoch != 2 {
 		t.Fatalf("repeat suspend = %+v, %v; want the repair of an old one, epoch 2", again, err)
 	}
@@ -106,7 +106,7 @@ func TestPG_SuspendIdentity_OneTransaction(t *testing.T) {
 	if err := st.Pool.QueryRow(ctx, `SELECT deactivated_at IS NOT NULL FROM people WHERE principal = 'sub-leaver'`).Scan(&personDeactivated); err != nil || personDeactivated {
 		t.Errorf("reactivation left people.deactivated_at set (%v, %v)", personDeactivated, err)
 	}
-	next, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: leaver.ID, Principals: []string{"sub-leaver"}})
+	next, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: leaver.ID, Principal: "sub-leaver", Principals: []string{"sub-leaver"}})
 	if err != nil || !next.WasActive || next.Epoch != 3 {
 		t.Fatalf("second suspension = %+v, %v; want a new one at epoch 3", next, err)
 	}
@@ -120,7 +120,7 @@ func TestPG_ReactivatePurgedIsRefused(t *testing.T) {
 	st := store.NewPG(runsPGPoolIsolated(t))
 	ctx := context.Background()
 	row := signedIn(t, st, "sub-gone", "gone@corp.example", leaverOID)
-	if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: row.ID, Principals: []string{"sub-gone"}}); err != nil {
+	if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: row.ID, Principal: "sub-gone", Principals: []string{"sub-gone"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Pool.Exec(ctx, `UPDATE principal_identities SET purged_at = now() WHERE id = $1`, row.ID); err != nil {
@@ -156,7 +156,7 @@ func TestPG_IssueLoginIdentity(t *testing.T) {
 	if bound, _ := st.GetIdentity(ctx, scimRow.ID); bound.Principal != "sub-new" || bound.LastLoginAt == nil {
 		t.Errorf("the first sign-in did not bind the SCIM row: %+v", bound)
 	}
-	if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: scimRow.ID, Principals: []string{"sub-new"}}); err != nil {
+	if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: scimRow.ID, Principal: "sub-new", Principals: []string{"sub-new"}}); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := st.GetIdentity(ctx, scimRow.ID)
@@ -206,7 +206,7 @@ func TestPG_SuspendIdentity_WritesPendingJobsWithTheCutoff(t *testing.T) {
 	ctx := context.Background()
 	leaver := signedIn(t, st, "sub-pending", "pending@corp.example", leaverOID)
 	keys := []store.JobKey{{Step: "audit_deactivate"}, {Step: "sweep", Target: "sub-pending"}}
-	if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: leaver.ID, Principals: []string{"sub-pending"}, PendingJobs: keys}); err != nil {
+	if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: leaver.ID, Principal: "sub-pending", Principals: []string{"sub-pending"}, PendingJobs: keys}); err != nil {
 		t.Fatal(err)
 	}
 	jobs, err := st.ListDeprovisionJobs(ctx, leaver.ID, store.JobKindSuspend)
@@ -257,7 +257,7 @@ func TestPG_IdentityGuardRefusesInsertWriters(t *testing.T) {
 			t.Errorf("%s: a principal with no identity row was refused: %v", name, err)
 		}
 	}
-	if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: row.ID, Principals: []string{"sub-guard"}}); err != nil {
+	if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: row.ID, Principal: "sub-guard", Principals: []string{"sub-guard"}}); err != nil {
 		t.Fatal(err)
 	}
 	for name, write := range writers {

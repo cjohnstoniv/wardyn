@@ -3,8 +3,8 @@
 
 // The key-domain assignment target kind: the half that HOLDS a set or delete (the handler has already
 // decoded and validated it as a direct write is) and the half that APPLIES a held one inside the
-// decision transaction, re-validating against the assignments it finds and writing through the
-// key-domain service's Querier forms.
+// decision transaction, holding the assignment lock the direct write holds, re-validating against the
+// assignments it finds and writing through the key-domain service's Querier forms.
 //
 // No exemption: moving where a person's next keys are made is a custody decision either way.
 package api
@@ -64,8 +64,10 @@ func (s *Server) holdKeyDomainChange(w http.ResponseWriter, r *http.Request, c k
 }
 
 // applyKeyDomainAssignmentChange applies a held key-domain change inside the decision transaction: the
+// assignment lock taken first (keydomain.LockAssignments, the lock every assignment write holds), the
 // assignment read FOR UPDATE and compared with what the proposal reviewed, the set re-validated
-// against the assignments as they now stand, then the write on q. It takes no governance lock.
+// against the assignments as they now stand, then the write on q. Under the lock no other group's
+// assignment can land between the re-validation and the write.
 func applyKeyDomainAssignmentChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	ctx := r.Context()
 	svc := s.cfg.KeyDomains
@@ -75,6 +77,9 @@ func applyKeyDomainAssignmentChange(s *Server, r *http.Request, q store.Querier,
 	var c keyDomainChange
 	if err := decodeHeldPayload(ch.Payload, &c); err != nil {
 		return govApplied{}, fmt.Errorf("governance change %s: payload: %w", ch.ID, err)
+	}
+	if err := keydomain.LockAssignments(ctx, q); err != nil {
+		return govApplied{}, err
 	}
 	cur, found, err := svc.GetQ(ctx, q, c.SubjectType, c.Subject, true)
 	if err != nil {
@@ -98,7 +103,7 @@ func applyKeyDomainAssignmentChange(s *Server, r *http.Request, q store.Querier,
 	ambiguous := func(ctx context.Context, group, domain string) (int, error) {
 		return svc.AmbiguousIfGroupQ(ctx, q, group, domain)
 	}
-	if d, err := keyDomainSetRefusal(ctx, svc, ambiguous, c); err != nil {
+	if d, err := keyDomainSetRefusal(ctx, svc, ambiguous, func(ctx context.Context) (int, error) { return svc.TruncatedUnassignedQ(ctx, q) }, c); err != nil {
 		return govApplied{}, err
 	} else if d != nil {
 		return govApplied{}, &govRefusal{why: string(d.Reason), write: func(w http.ResponseWriter, r *http.Request) { s.refuse(w, r, *d) }}

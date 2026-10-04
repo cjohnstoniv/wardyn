@@ -289,8 +289,8 @@ func (c *lockConn) take(ctx context.Context, k LockKey, try bool, wait time.Dura
 	return true, nil
 }
 
-// verify reports whether the session still holds every key.
-func (c *lockConn) verify(ctx context.Context) error {
+// verify reports whether the session still holds every one of keys.
+func (c *lockConn) verify(ctx context.Context, keys []LockKey) error {
 	rows, err := c.conn.Query(ctx, `SELECT classid::bigint, objid::bigint FROM pg_locks
 		WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND objsubid = 2 AND granted`)
 	if err != nil {
@@ -304,10 +304,41 @@ func (c *lockConn) verify(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, k := range c.keys {
+	for _, k := range keys {
 		if !slices.Contains(got, pair{int64(uint32(k.Class)), int64(uint32(k.Obj))}) {
 			return fmt.Errorf("session no longer holds %v", k)
 		}
+	}
+	return nil
+}
+
+// LockHeld asks the database, on the hold's own connection, whether every lock
+// ctx carries is still held: nil only when it is, ErrLockLost when it is not
+// or the session cannot be asked. It answers whether or not ctx has ended, and
+// that is its use: a hold's context ended first by its parent keeps that cause
+// for good, so a lock lost afterwards never shows in it. Work that must not
+// act once another replica may hold the lock asks here immediately before and
+// after acting. A session-level lock lost with its session is never held by
+// that session again, so a nil after acting means the lock was held
+// throughout. A local hold cannot be lost and is always held.
+func LockHeld(ctx context.Context) error {
+	h := heldFrom(ctx)
+	if h == nil {
+		return fmt.Errorf("%w: the context carries no lock", ErrLockLost)
+	}
+	if h.conn == nil {
+		return nil
+	}
+	c := h.conn
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return fmt.Errorf("%w: the hold was released", ErrLockLost)
+	}
+	qctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*LockWatchInterval+time.Second)
+	defer cancel()
+	if err := c.verify(qctx, h.keys); err != nil {
+		return fmt.Errorf("%w: %w", ErrLockLost, err)
 	}
 	return nil
 }
@@ -455,7 +486,7 @@ func (c *lockConn) watch(cancel context.CancelCauseFunc, stop <-chan struct{}, e
 			return
 		}
 		bg, bcancel := context.WithTimeout(context.Background(), 2*every+time.Second)
-		err := c.verify(bg)
+		err := c.verify(bg, c.keys)
 		bcancel()
 		c.mu.Unlock()
 		if err != nil {

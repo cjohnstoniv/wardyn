@@ -156,9 +156,41 @@ export const LIMIT_FIELDS: Field[] = [
   { key: "max_concurrent_runs", kind: "number", label: GOV.LIMIT_CONCURRENT_LABEL, mono: false },
   { key: "max_ephemeral_disk_mib", kind: "number", label: GOV.LIMIT_EPHEMERAL_LABEL, mono: false },
   { key: "max_drive_size_mib", kind: "number", label: GOV.LIMIT_DRIVE_SIZE_LABEL, mono: false },
+  // The rest of the server's LimitsOverlay. They carry no friendly label (the
+  // durations are seconds on the wire), so the wire key names the row, mono,
+  // as the ceiling rows do. The autonomy rubric has its own section.
+  ceilingField("deny_ui_apps", "true"),
+  ceilingField("max_cpu_millis", "number"),
+  ceilingField("max_memory_mib", "number"),
+  ceilingField("max_end_ahead_sec", "number"),
+  ceilingField("default_end_sec", "number"),
+  ceilingField("allow_no_end", "false"),
+  ceilingField("max_wait_sec", "number"),
+  ceilingField("default_wait_sec", "number"),
+  ceilingField("user_changes_limits", "false"),
+  ceilingField("pause_idle_after_sec", "number"),
 ];
 
 type Bag = Record<string, unknown>;
+
+// What a standalone profile's stored limits become when it is first composed: every limit that
+// binds anything, in the overlay's narrowing form. An off deny door, a 0 (unlimited) and an empty
+// rubric narrow nothing and are left out. The two permissive-when-true flags (kind "false") bind
+// when they are off, and an off flag is omitted on the wire, so an absent or false value seeds
+// false; a true value narrows nothing and is left out.
+export function seedOverlayLimits(limits: GovernanceLimits): Bag {
+  const out: Bag = {};
+  const stored = limits as Bag;
+  const rubric = Object.fromEntries(Object.entries((stored.autonomy_rubric ?? {}) as Bag).filter(([, lvl]) => lvl));
+  if (Object.keys(rubric).length > 0) out.autonomy_rubric = rubric;
+  for (const { key, kind } of LIMIT_FIELDS) {
+    const v = stored[key];
+    if (kind === "true" ? v === true : kind === "false" ? v !== true : typeof v === "number" && v > 0) {
+      out[key] = kind === "false" ? false : v;
+    }
+  }
+  return out;
+}
 
 const onOff = (v: unknown) => (v ? "On" : "Off");
 

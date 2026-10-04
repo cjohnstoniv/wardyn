@@ -363,3 +363,50 @@ func TestRunOutputPG_PaneSnapshotIsMaskedInTheColumn(t *testing.T) {
 		t.Fatalf("audit rows %+v, want one success row without pane content", evs)
 	}
 }
+
+// With persistence off, a finished run's sealed tail is served from memory for
+// the TTL even after the sweeper has purged the run's masking manifest: the tail
+// was masked at write time and cannot gain bytes, so it needs no manifest. Past
+// the TTL the read says it expired.
+func TestRunOutputPG_PersistOffSealedTailOutlivesThePurgedManifest(t *testing.T) {
+	l := newMaskLab(t)
+	a := l.replica()
+	const ttl = time.Hour
+	clock := &testClock{now: time.Now().UTC()}
+	a.srv.cfg.RunOutputPersistOff, a.srv.cfg.ExecOutputTailTTL, a.srv.cfg.Now = true, ttl, clock.Now
+	run := l.run()
+	a.dispatch(t, run, "purge-me-secret-value")
+
+	w := a.srv.openExecOutput(run, false)
+	writeExecOutput(t, w, "line with purge-me-secret-value\n")
+	if code, _, body := l.readOutput(a, run.ID); code != http.StatusOK {
+		t.Fatalf("a live read while covered = %d %s, want 200", code, body)
+	}
+	if ok, err := store.NewPG(l.pool).UpdateRunStateIf(t.Context(), run.ID, types.RunRunning, types.RunCompleted); err != nil || !ok {
+		t.Fatalf("complete the run: %v %v", ok, err)
+	}
+	a.srv.FinishRunOutput(t.Context(), run.ID)
+	if a.srv.tailFor(run.ID) == nil {
+		t.Fatal("persistence off released the sealed tail")
+	}
+
+	if err := a.st.PurgeRuns(t.Context(), []uuid.UUID{run.ID}); err != nil { // the leader's sweep, an hour after the end
+		t.Fatal(err)
+	}
+	clock.advance(ttl - time.Minute)
+	const want = "line with <secret-hidden>\n"
+	code, got, body := l.readOutput(a, run.ID)
+	if code != http.StatusOK || got.Output != want || !got.Complete {
+		t.Fatalf("the sealed tail after the purge = %d %s, want 200 %q complete", code, body, want)
+	}
+	for _, ev := range l.rec.snapshot() {
+		if ev.Target == "runs.output" && ev.Outcome == "denied" {
+			t.Errorf("the read of a sealed tail wrote a denied row: %+v", ev)
+		}
+	}
+
+	clock.advance(time.Minute)
+	if code, _, body := l.readOutput(a, run.ID); code != http.StatusGone || !strings.Contains(body, reasonRunOutputExpired) {
+		t.Fatalf("a read after the TTL = %d %s, want 410 %s", code, body, reasonRunOutputExpired)
+	}
+}

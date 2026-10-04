@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
@@ -216,8 +217,10 @@ func TestManager_OneDomainsKeyOpensOnlyThatDomain(t *testing.T) {
 	if _, err := onlyA.Key(t.Context(), "in-a", subjectkey.PurposeCred, 1); err != nil {
 		t.Fatalf("a-only manager on a's key: %v", err)
 	}
-	if _, err := onlyA.Key(t.Context(), "in-b", subjectkey.PurposeCred, 1); err == nil || errors.Is(err, subjectkey.ErrDataLoss) {
-		t.Fatalf("a-only manager on b's key = %v, want a refusal that is not data loss", err)
+	// A key this process cannot reach is unavailable to it, never destroyed: a masking read aborts
+	// on it instead of fencing the owner's runs.
+	if _, err := onlyA.Key(t.Context(), "in-b", subjectkey.PurposeCred, 1); !errors.Is(err, secretstore.ErrUnavailable) || errors.Is(err, subjectkey.ErrDataLoss) {
+		t.Fatalf("a-only manager on b's key = %v, want ErrUnavailable and not data loss", err)
 	}
 }
 

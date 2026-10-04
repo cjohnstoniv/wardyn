@@ -146,7 +146,9 @@ func (w *Worker) Tick(ctx context.Context) (int, error) {
 
 const factsSQL = `
 SELECT a.state, a.kind, a.requested_at, a.run_id, r.created_by, COALESCE(p.email, ''),
-       r.governance_profile_id, COALESCE(gp.name, ''), gp.contact
+       r.governance_profile_id, COALESCE(gp.name, ''), gp.contact,
+       (SELECT min(n.due_at) FROM approval_notifications n
+         WHERE n.approval_id = a.id AND n.tier > $2 AND n.state = 'pending')
   FROM approvals a
   JOIN agent_runs r ON r.id = a.run_id
   LEFT JOIN people p ON p.principal = r.created_by
@@ -154,12 +156,13 @@ SELECT a.state, a.kind, a.requested_at, a.run_id, r.created_by, COALESCE(p.email
  WHERE a.id = $1`
 
 // loadFacts also returns the leaf profile's stored contact, raw: it is read only to resolve a
-// profile_contact target and is never sent as is.
-func (w *Worker) loadFacts(ctx context.Context, approvalID uuid.UUID) (approvalFacts, []byte, error) {
+// profile_contact target and is never sent as is. NextTierDueAt is read relative to tier, the claimed
+// row's tier.
+func (w *Worker) loadFacts(ctx context.Context, approvalID uuid.UUID, tier int16) (approvalFacts, []byte, error) {
 	f := approvalFacts{ApprovalID: approvalID}
 	var contact []byte
-	err := w.pool.QueryRow(ctx, factsSQL, approvalID).Scan(
-		&f.State, &f.Kind, &f.RequestedAt, &f.RunID, &f.Principal, &f.Email, &f.ProfileID, &f.ProfileName, &contact)
+	err := w.pool.QueryRow(ctx, factsSQL, approvalID, tier).Scan(
+		&f.State, &f.Kind, &f.RequestedAt, &f.RunID, &f.Principal, &f.Email, &f.ProfileID, &f.ProfileName, &contact, &f.NextTierDueAt)
 	return f, contact, err
 }
 
@@ -201,7 +204,7 @@ type outcome struct {
 }
 
 func (w *Worker) process(ctx context.Context, c claimed) {
-	facts, contact, err := w.loadFacts(ctx, c.approvalID)
+	facts, contact, err := w.loadFacts(ctx, c.approvalID, c.tier)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		w.finalize(ctx, c, nil, outcome{state: types.NotifyCancelled})

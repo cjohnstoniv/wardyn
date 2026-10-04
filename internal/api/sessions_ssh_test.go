@@ -310,3 +310,58 @@ func TestRevokePersonCredentials_UnknownEmailIsSuccessWithZeroDeletions(t *testi
 		t.Fatalf("cutoffs=%v", cutoffs.revokedSubs)
 	}
 }
+
+// "sessions_only" is the routine sign-out: the session-only cut lands, the
+// credential cutoff does not, and the person's API tokens and SSH keys are left
+// exactly as they were.
+func TestRevokeSessions_SessionsOnlyLeavesTokensAndKeys(t *testing.T) {
+	st := sshOffboardingStore()
+	srv, cutoffs, audit := sshOffboardingServer(t, st)
+	admin := ssoSession(t, "responder", "responder@example.com", oidc.RoleSecurityAdmin)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"sub-alice","sessions_only":true}`)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !slices.Equal(cutoffs.cutSubs, []string{"sub-alice"}) || len(cutoffs.revokedSubs)+cutoffs.revokedAll != 0 {
+		t.Fatalf("cuts=%v cutoffs=%v all=%d, want the cut [sub-alice] and no cutoff", cutoffs.cutSubs, cutoffs.revokedSubs, cutoffs.revokedAll)
+	}
+	if len(st.keys) != 3 {
+		t.Fatalf("SSH keys=%+v, want all 3 kept", st.keys)
+	}
+	if len(st.revoked) != 0 {
+		t.Fatalf("revoked tokens=%v, want none", st.revoked)
+	}
+	var rows int
+	for _, ev := range audit.snapshot() {
+		if ev.Action == "ssh_key.delete" || ev.Action == "token.revoke" {
+			t.Fatalf("unexpected %s audit row", ev.Action)
+		}
+		if ev.Action != "session.revoke" {
+			continue
+		}
+		rows++
+		var data map[string]any
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		if data["tokens_revoked"] != float64(0) || data["ssh_keys_deleted"] != float64(0) || data["sessions_only"] != true || data["sub"] != "sub-alice" {
+			t.Fatalf("session audit=%s", ev.Data)
+		}
+	}
+	if rows != 1 {
+		t.Fatalf("session.revoke rows=%d, want 1", rows)
+	}
+}
+
+func TestRevokeSessions_SessionsOnlyRefusesAll(t *testing.T) {
+	st := sshOffboardingStore()
+	srv, cutoffs, _ := sshOffboardingServer(t, st)
+	admin := ssoSession(t, "responder", "responder@example.com", oidc.RoleSecurityAdmin)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"all":true,"sessions_only":true}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if len(cutoffs.revokedSubs) != 0 || cutoffs.revokedAll != 0 || len(st.keys) != 3 {
+		t.Fatalf("a refused request changed state: %v %d %d", cutoffs.revokedSubs, cutoffs.revokedAll, len(st.keys))
+	}
+}

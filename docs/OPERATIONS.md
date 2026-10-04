@@ -195,13 +195,26 @@ nothing at all, because its output is a live credential.
 - **Storage.** About `WARDYN_RUN_OUTPUT_TAIL_BYTES` × (runs per day) × retention
   days at most: 2,000 runs a day at the default size and 30 days is about
   3.7 GiB of table, before indexes.
-- **Memory bound.** With persistence on, a tail is held from a run's first
-  output until its row commits, never expired by the TTL, so memory is at most
+- **Retained tail memory.** With persistence on, a tail is held from a run's first
+  output until its row commits, never expired by the TTL, so the retained ring
+  storage is at most
   (live and kept non-interactive runs) × `WARDYN_RUN_OUTPUT_TAIL_BYTES`: 500
   runs at 1 MiB is about 500 MiB. With persistence off a tail is held until
   `WARDYN_EXEC_OUTPUT_TAIL_TTL` after its last output, finished runs included, so
-  memory is at most (runs that printed within the TTL) × the tail size: 2,000
-  runs a day at 1 MiB is about 2 GiB. Size the variable against the mode you run.
+  the retained ring storage is at most (runs that printed within the TTL) × the
+  tail size: 2,000 runs a day at 1 MiB is about 2 GiB. Size the variable against
+  the mode you run. This is the ring only, not the whole footprint of a capture.
+- **Buffers on top of the ring, per live capture.** Each run being captured also
+  owns a masking queue that holds up to 512 KiB of output the masker has not yet
+  taken, plus the batch being masked, which can be as large again (two buffers
+  alternate, one filling while the other is masked). They are held only while
+  output is arriving and are released when the queue drains, but a run printing
+  faster than the masker keeps up with can hold about 1 MiB in them whatever the
+  tail size is, which at the default 64 KiB tail is many times the ring. With
+  persistence on, a run also queues up to 256 KiB for the database, plus the
+  batch being written, which can be as large again; it grows toward that only
+  while writes to Postgres are failing or slow. Add these
+  to the formula for the number of runs printing at once.
 - **It can hold secrets, like any log.** Values already in Wardyn's masking registry
   (brokered credentials, `env_secret` grants) are masked as they are written,
   the same way a recording is. Anything else a command prints — a token it read
@@ -949,8 +962,7 @@ wardyn audit retention drop audit_events_p202601 --digest <digest from the foote
 curl -fsS -H "Authorization: Bearer $WARDYN_TOKEN" "$WARDYN_URL/api/v1/audit/chain/verify"   # ok, with anchor_seq at the drop
 ```
 
-`POST /audit/retention/drop` takes `{"partition": "...", "digest": "..."}`. Who may drop (owner decision Q-AR1, accepted at
-the recommended default): one `security_admin` (or an admin) acting alone, with the 30-day cooldown on decreases as the
+`POST /audit/retention/drop` takes `{"partition": "...", "digest": "..."}`. Who may drop: one `security_admin` (or an admin) acting alone, with the 30-day cooldown on decreases as the
 brake. The route is on the security tier, and every refusal is a `409` with its own `reason` and an `authz.denied` row (below):
 `audit_retention_not_oldest`, `audit_retention_not_closed`, `audit_retention_inside_window` (also while retention is
 forever), `audit_retention_live_run`, `audit_retention_digest_mismatch`. An unknown partition is `404`
@@ -1051,14 +1063,21 @@ empty `scopes` (`erasure_scope_unknown`), a principal that does not resolve (`ow
 other bypass is).
 
 **What this does not reach.** Rows written before `WARDYN_AUDIT_SEAL=fields` was turned on, and before 0.8.6,
-are plaintext: no key covers them. A SIEM sink holds ciphertext for a sealed field, so after
-`audit_personal_fields` it holds nothing readable either; its copies of the clear `actor` and `source_ip`
-columns are outside this scope, except the `actor` of rows written under `WARDYN_AUDIT_SEAL=full`, which is a
-subject id and reads `[erased]` after the erasure. Before turning `full` on, change any SIEM rule keyed on
+are plaintext: no key covers them. A sealed field is stored as `seal2.<handle>.<ciphertext>`: the handle is a
+random id of the key (migration `0131_principal_key_handles` adds it to `principal_keys`), not derived from the
+person, and the erasure clears it from the key table, so neither the
+row nor any copy of it (spool, SIEM sink, export, federation push) holds anything in the field that names the
+person, in any encoding, and after the erasure nothing maps the handle back to them. A SIEM sink holds ciphertext
+for a sealed field, so after `audit_personal_fields` it holds nothing readable either; its copies of the clear
+`actor`, `target` and `source_ip` columns are outside this scope, except the `actor` of rows written under
+`WARDYN_AUDIT_SEAL=full`, which is a subject id and reads `[erased]` after the erasure. Before turning `full` on, change any SIEM rule keyed on
 `actor`: from that moment it sees `subject:<uuid>` for a person, and the setting applies only to rows written
 after it is on. A backup restores the wrapped key and so the field until the backup expires or
 the wrapping key version is retired. A row waiting in an audit spool under the pending key when the person is
-erased is stored as `[erased]` when the spool drains. See [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#sealed-fields) for
+erased is stored as `[erased]` when the spool drains. A pending row the drain cannot open (sealed under another
+pending key, or malformed) is moved to the quarantine sidecar `<spool>.quarantine` instead, as any line the store
+keeps refusing is: erasure does not reach that file, which stays on the daemon's disk, mode `0600`, still sealed
+under the pending key it was written with, until you remove it. See [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#sealed-fields) for
 which fields are sealed and why the rest stay clear.
 
 ### Leavers and SCIM
@@ -1101,7 +1120,7 @@ stored and gives no access, and roles still come from the sign-in token and the 
 | Suspend | Completed first, if it is not already |
 | Erase | The person's stored credentials and the masking copies of them, through the same erasure entry point as `POST /people/{principal}/erasure`, with the `credentials` and `mask_copies` scopes. Audit fields, run tasks, run outputs and recordings are not part of a purge: records retention usually outlives the leaver window, so erasing them stays a deliberate `POST /people/{principal}/erasure` |
 | Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, audited as `workspace.reassign`; `keep` leaves them |
-| Grants | The person's user-subject capability grants and governance assignments are deleted by a direct store call, audited in `person.deprovision`, never through the governance apply path. This deletes deny rows, which the governed path would treat as widening; it is safe only because the identity is a permanent tombstone whose subject can never authenticate again |
+| Grants | The person's user-subject capability grants and governance assignments are deleted by a direct store call, audited in `person.deprovision`, never through the governance apply path. This deletes deny rows, which the governed path would treat as widening; it is safe for the rows keyed by the person's own principals (the sign-in subject and the object-id form) because the identity is a permanent tombstone whose subject can never authenticate again. A row keyed by an email alias is deleted only while no other principal holds that address (another active identity, or an API token or person row under a different principal); otherwise it stays, because a recycled address's new holder owns it, and `person.deprovision` counts it as `email_rows_kept` |
 | Drives | Listed by name in `person.deprovision`, never reclaimed. Reclaim storage with the steps in "Reclaiming a departed person's storage" |
 
 The identity row stays as a tombstone with `purged_at` set. `PATCH active=true` on it is a 400 `invalidValue`
@@ -1133,9 +1152,16 @@ lose access now, do not wait for it:
   at once; the purge delay does not apply to `DELETE`. HTTPS only, per-replica rate limiting, an audit row per
   write and rotation without downtime are the mitigations. Rate limits are per replica, so an HA install's
   effective limit is the per-replica limit times the replica count.
-- **Email recycling.** Email aliases widen removals, so an address reused by a new holder can have that holder's
-  sessions cut by the old holder's suspension. A cutoff only forces a new sign-in; deactivation never follows an
-  email.
+- **Email recycling.** For a person a sign-in has bound, an email alias widens the session cutoff only while no
+  other principal holds that address (another active identity, or an API token or person row under a different
+  principal), the same rule a purge uses for grants. While another principal holds it, a suspension and a SCIM
+  group removal write no cutoff or session cut under the address: the person's own credentials are reached through
+  their subject and object-id forms and the identity deactivation, and the other principal's sessions, API tokens
+  and SSH keys keep working. Under an email, a suspension revokes API tokens and deletes SSH keys, and a group
+  removal revokes API tokens, only where the owning principal is one of the leaver's own forms, never another
+  principal's that merely carries the same address. Deactivation never follows an email. A person no sign-in has
+  bound is known only by their emails, so for them every alias is cut and every principal an alias resolves to is
+  swept as theirs.
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
   again.
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
@@ -1201,6 +1227,7 @@ and, with `hmac_secret` set, `X-Wardyn-Signature`. Only these fields are ever se
 | `delivery_id` | the outbox row's id, stable across retries |
 | `event`, `tier` | `raised` at tier 0, `escalated` above it |
 | `approval.id`, `approval.kind`, `approval.requested_at` | the approval |
+| `approval.sla_due_at` | when the next tier is due; omitted when no later tier is scheduled |
 | `run.id` | the run that raised it |
 | `profile.id`, `profile.name` | the run's governance profile, when it has one |
 | `requester.principal`, `requester.email` | the run's owner; omitted on a channel with `redact_requester` |
@@ -1230,8 +1257,9 @@ addresses) and optional `username` and `password`, which are set together; it ta
 plain-text message, `Subject: [Wardyn] ` plus the same title as above, with the same allowlisted lines as
 the chat bodies and nothing else. It sends over **verified STARTTLS only**: wardynd refuses a relay that
 does not advertise STARTTLS (`starttls_missing`), verifies the certificate against the system roots plus
-`WARDYN_TRUSTED_CA_FILE` with the server name set to `host` (`tls_verify`), and authenticates (`AUTH
-PLAIN`) only after that. There is no plaintext fallback and no option to skip verification, and
+`WARDYN_TRUSTED_CA_FILE` with the server name set to `host` (`tls_verify`), and authenticates only after that, with the mechanism the relay advertises in its AUTH
+list: `PLAIN` when offered, else `LOGIN` (what Exchange Online offers); a relay offering neither (for
+example XOAUTH2 only) is dead as `auth_unsupported`, and nothing is sent. There is no plaintext fallback and no option to skip verification, and
 implicit TLS (port 465) is not supported: use the submission port, usually 587. Recipients are the static
 `to` plus each `notify` target of the tier (see below); every address is re-checked at send time and one
 that is not a single bare mailbox (a display name, a list, a CR, LF, comma, semicolon, angle bracket or
@@ -1287,7 +1315,7 @@ a redirect would hand the body and signature to a host you did not name), or whe
 after it came due. A dead row writes one `approval.notify.failed` audit row and increments
 `wardyn_approval_notify_failed_total{channel}`; both carry an error class (`http_status:503`, `timeout`,
 `tls_verify`, `dial`, `redirect_refused`, `expired`, and for mail `smtp_reply:<code>`, `starttls_missing`,
-`no_recipient`), never a URL, a response body or a relay's reply text. Terminal rows older
+`auth_unsupported`, `no_recipient`), never a URL, a response body or a relay's reply text. Terminal rows older
 than 30 days are deleted, 500 per tick.
 
 **A per-run budget.** One run may create at most 25 tier-0 outbox rows per hour, so an agent cannot bury
@@ -2100,6 +2128,7 @@ row is true, and approved at the tier it was proposed on.
 | Availability set | the stored restricted bit changes, in either direction | security admin or super admin |
 | User-type priority update | the priority changes | security admin or super admin |
 | Role mapping upsert, delete | always | **super admin only** |
+| Key-domain assignment set, delete | always | security admin or super admin |
 
 Exempt, so applied directly: a profile update whose new effective profile is no more permissive than
 the current one, a rename or description edit that changes nothing else, an availability `PUT` that
@@ -2119,11 +2148,13 @@ wardyn governance changes reject <change-id> --reason "widens egress past the re
 ```
 
 `governance set` exits 0 on a pending result and skips `--prune` until every write is decided, so
-run it again afterwards. The console does the same on the Governance screen's Changes tab, with the
+run it again afterwards. Running it again before then is safe: a target that still has a held change
+is reported as pending, with the held change named, and the rest of the file is applied. The console does the same on the Governance screen's Changes tab, with the
 diff in a drawer; Approve is disabled on your own proposal. Nothing notifies an approver that a
 change is waiting, so name who looks, and how often, in your own runbook. There is at most one
-pending change per target: a second proposal at the same target is `409` `governance_change_pending`
-and names the first.
+pending change per target: a second proposal at the same target is `409` `governance_change_pending`,
+which names the first and carries it in `pending_change`. A new profile's target is its name while its
+create waits, so creating the same name again (by `POST`, or `PUT` at any new id) meets the held create.
 
 **4. Expiry and stale changes.** A change nobody decides within the TTL reads as `expired` and cannot
 be approved (`409` `governance_change_not_pending`); propose it again. A change is `stale` (`409`
@@ -2970,6 +3001,16 @@ applies all three actions deployment-wide, including the calling admin's own
 credentials. Plan to re-mint tokens and register SSH keys again after a global
 revoke.
 
+To end only a person's browser sessions, send `"sessions_only": true` with
+`sub`: a session-only cut is stamped and nothing else changes. Their browser
+sessions end on every instance; their API tokens, SSH keys and portal-delegated
+tokens keep working, and an API token can still approve a governance change:
+no token-borne credential is refused by the cut; an event stream a token opened
+before the cut closes at its next keepalive and reconnects. It is refused
+(`sessions_revoke_param_invalid`) with `all`.
+The audit row is the usual `session.revoke`, with `sessions_only` set and both
+counts `0`. The People drawer's "Sign out everywhere" sends it.
+
 **No `role` parameter on `POST /me/tokens`.** A token always mints at the
 caller's own current role; there is no deliberately-downgraded mint. Still
 open at 0.8.
@@ -3110,6 +3151,10 @@ curl -X DELETE -H "Authorization: Bearer $TOKEN" $WARDYN/api/v1/tokens/<id>
 # the email.
 curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"sub":"alice@corp.com"}' $WARDYN/api/v1/sessions/revoke
+
+# Only her browser sessions; her API tokens and SSH keys keep working:
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"sub":"alice@corp.com","sessions_only":true}' $WARDYN/api/v1/sessions/revoke
 ```
 
 A revoked token is never re-stamped — it keeps whatever role it carried when it
@@ -3519,10 +3564,9 @@ deferred and reported, not sent with a dangling id; apply again once the base is
 *Upgrade and rollback.* The 0.8.6 migration only adds nullable columns, so every existing
 profile is standalone and resolves exactly as on 0.8.5. An older SDK or CLI sees `ceiling: {}`
 on a composed profile; its re-apply compares equal and sends nothing, and a `PUT` it does send
-omits the composition fields, which are kept. A 0.8.5 binary refuses a database with the migration
-applied, so before a downgrade convert every composed profile to standalone (a `PUT` with
-`overlay: null` and its `effective.ceiling` and `effective.limits` as the new `ceiling` and
-`limits`), then restore the pre-upgrade dump.
+omits the composition fields, which are kept. There is no downgrade: a 0.8.5 binary refuses a database the migration
+has touched, and converting composed profiles to standalone first changes nothing it sees. Restore the
+pre-upgrade dump, which holds no composed profile.
 
 *Residual risks.*
 
@@ -3735,7 +3779,7 @@ the owner or email, only the `reason` and `target` it always had.
 | `run_owner_only` | 0.8.5 (#1476): a **super admin** asked for interactive entry (attach-ticket mint or consume, the cookie attach lane, a UI app, take-over) to a run that is not theirs and has a personal owner. A `403` with the body `{"error":"only the person who started this run can open it interactively","reason":"run_owner_only"}`, not the `404` above, because the admin can already see the run. A run with no personal owner (operator-owned service or local runs) stays enterable. Kill, approve, policy, grants, revoke, audit, revive, resume and end are unchanged | ⛔ `403` |
 | `recording_governed` | 0.8.6: with `WARDYN_GOVERN_ADMIN_RUNS` on, an admin whose runs are governed (an SSO admin, an admin-role personal token) asked for Record Mode (`POST /workspaces/{id}/record`). Refused first, before the ceiling read and the import-step claim, at target `workspaces.record`; the body says Record Mode is refused for admins whose runs are governed and that the operator can allow it by setting `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` to `recording`. That setting lifts it for that lane, and each recording is then marked `governance_exempt` on `run.record.start`. The admin token and local mode are never refused. See [Constrained-admin mode](operations/member-mode.md#constrained-admin-mode) | ⛔ `403` |
 | `key_domain_unknown` | 0.8.6: `PUT /key-domains/assignments/{subject_type}/{subject}` named a key domain the deployment's key domains file (`WARDYN_KEY_DOMAINS_FILE`, chart `kek.domains`) does not declare. The body names the declared domains; nothing was written. Domains come from the file alone, so the API can only choose among them | ⛔ `422` |
-| `key_domain_ambiguous_membership` | 0.8.6: a `PUT` of a group key-domain assignment would leave people who last signed in with that group and another group assigned to a different domain, and who have no assignment of their own, so their next principal key would be refused by name. The body counts them; nothing was written. Assign each of them to one domain as a user first, or give both groups the same domain | ⛔ `409` |
+| `key_domain_ambiguous_membership` | 0.8.6: a `PUT` of a group key-domain assignment would leave people who last signed in with that group and another group assigned to a different domain, and who have no assignment of their own, so their next principal key would be refused by name. The body counts them; nothing was written. Assign each of them to one domain as a user first, or give both groups the same domain. The same reason refuses any group write while someone whose last sign-in lost groups (a Microsoft Entra group overage always does) has no user assignment, since once any group is assigned that person is refused by name and signing in again does not clear it | ⛔ `409` |
 | `byoi_user` | a member named a `devcontainer_repo`, or an `image` they hold no grant for | ⛔ `403` |
 | `capability_workspace` | `workspace_id`: a member named a workspace they aren't granted (`403`). Launching: an `inline_policy` `workspace_repos` entry for an ungranted workspace was dropped — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | ⛔ `403`, or 🟡 a drop |
@@ -3758,7 +3802,7 @@ the owner or email, only the `reason` and `target` it always had.
 | `delegation_scope` | 0.8 (#1142): a portal's delegated token asked for a route outside the delegation allow-list ([Delegated run management](#delegated-run-management-portals)), or reached `PUT /secrets/{name}` or `POST /me/ssh-keys`, which refuse a delegated request themselves whatever the allow-list says (0.8.2, #1234). The row's actor is the person and its `data.via` names the portal | ⛔ `403` |
 | `role_stamp_stale` | 0.8.6: `WARDYN_ROLE_STAMP_TTL` is set and the `wdn_` API token presented carries a role and group stamp (`api_tokens.identity_stamped_at`) older than it, or never stamped. Checked by `apiTokenAuth` after the token resolves and before it counts as used; target `api_token`, and the row's actor is the token's owner. The body is `this token's role is out of date: its owner must sign in again to refresh it`; the owner's next sign-in re-stamps the token and it works again. A revoked token is not this refusal: it stays an ordinary `401` | ⛔ `401` |
 | `event_stream_cap` | 0.8.2 (#1407): the caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (`maxRunEventStreams`, `internal/api/run_events.go`; target the run id). A portal's streams count against its person, and every admin-token caller is one principal. Not audited — a caller who IS authorized and hit a limit, like `run_quota` | ⛔ `422` |
-| `mask_state_unavailable` | 0.8.6 (ha-l2.0): a door that relays or persists a run's output — the recording upload (`PUT /internal/recordings/{runID}` and its parts, target `recordings.upload`), the live attach (`GET /runs/{id}/attach`, target `runs.attach`), the SSH shell (target `ssh.shell`, a channel error, not an HTTP status) and the live output read (`GET /runs/{id}/output`, target `runs.output`) — cannot prove the run's masking corpus complete on this server, so it refuses instead of passing bytes through. Since the shared registry (`ha-l2.1`) the same reason also answers an injection or capture route (targets `injection.resolve` and `credential.capture`) whose value could not be committed to the masking registry: the value is not handed out. The run has no complete, unfenced masking manifest in Postgres (`run_mask_manifest`): it was dispatched before 0.8.6, its dispatch never finished committing it, its person is being erased, or Postgres did not answer. The exec relay (`task_mode=exec` output tail) refuses by keeping nothing. The row's `data.mask_scope` is `globals_only`. An attach, shell or upload already in flight ends at the next beat (about two seconds) when the run stops being covered, an attach with close status `1013`. Not hidden: the caller can already see the run | ⛔ `503` |
+| `mask_state_unavailable` | 0.8.6: a door that relays or persists a run's output — the recording upload (`PUT /internal/recordings/{runID}` and its parts, target `recordings.upload`), the live attach (`GET /runs/{id}/attach`, target `runs.attach`), the SSH shell (target `ssh.shell`, a channel error, not an HTTP status) and the live output read (`GET /runs/{id}/output`, target `runs.output`) — cannot prove the run's masking corpus complete on this server, so it refuses instead of passing bytes through. Since the shared masking registry the same reason also answers an injection or capture route (targets `injection.resolve` and `credential.capture`) whose value could not be committed to the masking registry: the value is not handed out. The run has no complete, unfenced masking manifest in Postgres (`run_mask_manifest`): it was dispatched before 0.8.6, its dispatch never finished committing it, its person is being erased, or Postgres did not answer. The exec relay (`task_mode=exec` output tail) refuses by keeping nothing. The row's `data.mask_scope` is `globals_only`. An attach, shell or upload already in flight ends at the next beat (about two seconds) when the run stops being covered, an attach with close status `1013`. Not hidden: the caller can already see the run | ⛔ `503` |
 | `audit_export_partition_filter` | 0.8.6: `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `actor_type`, `outcome` or `origin`). A partition export always covers the whole partition, so its footer digest can be checked against `audit_partition_digest`; remove the other parameters. Input shape rather than a denial, so it is not audited | ⛔ `400` |
 | `audit_retention_not_oldest` | 0.8.6: `POST /audit/retention/drop` named a partition that is not the oldest retained one. Only the oldest partition can be dropped, so a drop never removes an interior link of the chain. Target `audit.retention`, `partition` beside it | ⛔ `409` |
 | `audit_retention_not_closed` | 0.8.6: the same door, when the oldest partition can still receive rows (the high-water mark has not reached its upper bound) | ⛔ `409` |
@@ -5211,7 +5255,8 @@ sandbox or calls the runner. One query reads the non-terminal rows.
 |---|---|
 | `STARTING`, `RUNNING`, `WAITING_FOR_CONFIRMATION` with no `lost_at` | yes, paused runs included (a paused sandbox keeps its pods) |
 | unschedulable: `STARTING` with the reason `Unschedulable` | yes, and listed under `unschedulable` (at most 20, oldest first, with `unschedulable_total`) |
-| kept (`lost_at` set) | no; counted as `kept` |
+| kept after an outage, before its end (its agent still runs; only its proxy was stopped) | yes, its agent only (no proxy); also counted as `kept` |
+| kept otherwise: after its end, a reboot, or an outage past its end (`lost_at` set, agent stopped) | no; counted as `kept` |
 | `PENDING` | no; appears only in `states` |
 | terminal | no |
 
@@ -6261,20 +6306,15 @@ state, not a repair of it. In the scenario above, `0050` and `0051` commit befor
 at `0060` instead leaves `0050`–`0059` applied. Migrations are forward-only with
 no `down` path, so **restoring the pre-upgrade dump is the only supported
 recovery** — putting the older binary back does not undo the migrations that
-already committed, and **it boots anyway**: `migrateOn`'s apply loop iterates
-only the binary's own embedded migration files and skips any name
-`isMigrationApplied` already finds recorded (`internal/db/db.go:425-436`), so
-nothing there refuses a schema newer than the binary. It then fails at the
-first write the older schema no longer supports, not at boot — on the scenario
-above that is the first secret write: `0050` moves the `secrets` primary key
-from `(name)` to `(owned_by, name)` (`internal/db/migrations/0050_secret_owned_by.sql:19-24`),
-and the older binary's `INSERT … ON CONFLICT (name)`
-(`internal/secretstore/pg/pg.go:78` at `v0.6.6`; the same statement on this
-branch already reads `ON CONFLICT (owned_by, name)`, `internal/secretstore/pg/pg.go` `Store.Put`)
-names a constraint that no longer exists, which Postgres refuses as
-`SQLSTATE 42P10` ("no unique or exclusion constraint matching the ON CONFLICT
-specification") on every secret upsert. Take the dump before the upgrade, not
-after the refusal.
+already committed, and it does not boot over them: `migrateOn` lists the migrations
+`schema_migrations` records that the binary does not ship (`unknownAppliedMigrations`,
+`internal/db/db.go`) and refuses to boot, naming the newest one. With
+`WARDYN_ALLOW_UNKNOWN_MIGRATIONS` set it carries on over a schema whose one-way
+conversions it cannot read: over a 0.8.6 schema it stops at the audit chain canary,
+whose direct insert the chain trigger refuses, and over an older one it fails at the
+first write the schema no longer supports (the first secret write, for the scenario
+above). The dump is the only way back. Take it before the upgrade, not after the
+refusal.
 
 The permission error itself has no way forward except giving the migrator
 ownership; do that on the restored database, not on the half-upgraded one.
@@ -7396,7 +7436,7 @@ therefore the per-replica cap times the replica count (cap × N):
   is not caught.
 - **Runs that predate 0.8.6 have no masking manifest.** After any restart they are
   refused at the five doors (recording upload, live attach, exec relay, SSH shell,
-  live output read) until they end (Q-HA1). Runs dispatched by 0.8.6 survive restarts.
+  live output read) until they end. Runs dispatched by 0.8.6 survive restarts.
 - **Masking now depends on Postgres.** With it unreachable, uploads and new attaches
   are refused and live chunks are replaced by the placeholder. That trades
   availability for never persisting a credential.
@@ -7404,6 +7444,39 @@ therefore the per-replica cap times the replica count (cap × N):
   idempotent and epoch-fenced and the refresh write is a compare-and-set, but a
   refresh already in flight on the old holder can still race the new holder at the
   authority and lose the credential; the person signs in again.
+- **An owner's key that does not unwrap fences that owner only.** If a person's
+  principal key cannot be unwrapped because its `wrapped_key` is corrupted under the
+  local key or Azure Key Vault, a read of the shared registry logs
+  `maskstore: the owner's key does not open` at Error, naming the owner and key
+  version, then handles each of that owner's live values as a destroyed key: their
+  runs are fenced (attach, SSH shell and recording upload answer `503`
+  `mask_state_unavailable`) and the rows are tombstoned. Other people's values are
+  unaffected and `mask_registry_shared` stays healthy. The remedy is to erase that
+  person's credentials through the API, which restores their credentials and future
+  runs; the fenced runs stay fenced. Only a destroyed generation, or a wrap that
+  provably does not open under its own key (the local key, or Key Vault), fences.
+  Every other key failure fails the read instead, so consumers fail closed and
+  nothing is fenced or tombstoned:
+  - A transient failure (Postgres or the KEK service unreachable): the read fails and
+    retries, and consumers fail closed until it succeeds.
+  - A key this replica cannot reach (its own `WARDYN_KEY_DOMAINS_FILE` or KEK
+    configuration lags, or the key service refuses its access with a 401 or 403):
+    that replica fails its read, and heals once the configuration or the access is
+    fixed.
+  - A key or mount the service no longer holds (deleted, soft-deleted or renamed), or
+    a Key Vault version that is disabled: every replica fails its read until the key
+    is restored or that person's credentials are erased through the API.
+  - Under Vault Transit, a wrap that does not open: a version retired by
+    `min_decryption_version`, a `WARDYN_VAULT_ADDR` that names another Vault with the
+    same mount and key name, or a corrupted `wrapped_key`. A retired version comes back
+    when the floor is lowered, and Vault's answer for a corrupted wrap is the one it
+    gives another Vault's wrap, so none of these is proof about the row. Every replica
+    reading through that Vault fails its read until the floor is lowered and
+    `-rewrap-principal-keys` is run, the address is fixed, or that person's
+    credentials are erased through the API.
+  - Any other answer, including a Vault DR secondary's `472`, a performance
+    standby's `473` and an Enterprise `412`: every replica fails its read closed
+    until the service answers.
 - **A compromised wardynd process still sees every value it masks.** Shredding a
   person's copies is complete only after backups expire or the wrapping key version
   is retired.

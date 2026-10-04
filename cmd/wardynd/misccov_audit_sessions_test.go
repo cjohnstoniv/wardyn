@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
@@ -280,16 +281,16 @@ func TestMiscCovSealingRecorderHoldsAPendingRowInTheSpool(t *testing.T) {
 }
 
 // The adapter hands the subject key manager's answers through unchanged: an owner the manager refuses is
-// refused here, and that refusal is not mistaken for an erased key.
+// refused here, and a key store that cannot answer is not mistaken for an erased key.
 func TestMiscCovSubjectSealKeysPassTheManagersRefusalThrough(t *testing.T) {
 	pool, _ := miscCovClosedPool(t)
 	k := subjectSealKeys{m: subjectkey.New(pool, subjectkey.Resolver{})}
 	if _, _, err := k.Current(t.Context(), "", audit.SealPurpose); !errors.Is(err, subjectkey.ErrOperatorOwner) {
 		t.Errorf("Current for the operator namespace = %v, want ErrOperatorOwner", err)
 	}
-	_, err := k.Key(t.Context(), "", audit.SealPurpose, 1)
-	if !errors.Is(err, subjectkey.ErrOperatorOwner) || errors.Is(err, audit.ErrKeyErased) {
-		t.Errorf("Key for the operator namespace = %v, want ErrOperatorOwner and not ErrKeyErased", err)
+	_, err := k.Key(t.Context(), audit.SealPurpose, uuid.New())
+	if !errors.Is(err, secretstore.ErrUnavailable) || errors.Is(err, audit.ErrKeyErased) {
+		t.Errorf("Key over a closed pool = %v, want ErrUnavailable and not ErrKeyErased", err)
 	}
 }
 

@@ -219,8 +219,14 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 	var pending *store.ErrGovernanceChangePending
 	switch {
 	case errors.As(err, &pending):
-		writeErrorReason(w, http.StatusConflict, reasonGovernanceChangePending,
-			"a change to this target is already waiting for approval: "+pending.ID.String())
+		body := errorBody{Reason: reasonGovernanceChangePending,
+			Error: "a change to this target is already waiting for approval: " + pending.ID.String()}
+		// The held change rides in the refusal so a repeat apply reports it as pending. A read that
+		// fails or finds it gone leaves the plain refusal.
+		if held, gerr := s.cfg.Store.GetGovernanceChange(r.Context(), pending.ID); gerr == nil && held.State == types.GovernanceChangePending {
+			body.PendingChange = &held
+		}
+		writeJSON(w, http.StatusConflict, body)
 		return
 	case err != nil:
 		writeServerError(w, r, "hold governance change", err)

@@ -250,6 +250,60 @@ func TestPG_GovernanceChanges_SwitchOffIsUnchanged(t *testing.T) {
 	}
 }
 
+// TestPG_GovernanceChanges_RepeatCreateNamesTheHeldOne: a create mints its id, so the same new profile
+// applied again while its create waits must still meet that create: a 409 governance_change_pending
+// carrying it, never a second held create of the same name. A lapsed create of the name does not hold it.
+func TestPG_GovernanceChanges_RepeatCreateNamesTheHeldOne(t *testing.T) {
+	e := newGovEnv(t)
+	body := profileBody("repeat-new", "github.com")
+	first := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/profiles", body))
+	if first.Op != "create" {
+		t.Fatalf("first create held as %q", first.Op)
+	}
+	heldBy := func(w *httptest.ResponseRecorder) uuid.UUID {
+		t.Helper()
+		if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangePending {
+			t.Fatalf("a repeat create = %d %s, want 409 %s", w.Code, w.Body, reasonGovernanceChangePending)
+		}
+		var held struct {
+			Pending types.GovernanceChange `json:"pending_change"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &held); err != nil || held.Pending.State != types.GovernanceChangePending {
+			t.Fatalf("the 409 carries no held change: %s (%v)", w.Body, err)
+		}
+		return held.Pending.ID
+	}
+	if id := heldBy(e.call(e.alice, http.MethodPost, "/api/v1/governance/profiles", body)); id != first.ID {
+		t.Errorf("a repeat POST names %s, want the held create %s", id, first.ID)
+	}
+	// A create at a caller-chosen id is the same name, so the same held create.
+	if id := heldBy(e.call(e.carol, http.MethodPut, "/api/v1/governance/profiles/"+uuid.NewString(), profileBody("repeat-new", "pypi.org"))); id != first.ID {
+		t.Errorf("a create by PUT of the same name names %s, want %s", id, first.ID)
+	}
+	if n := e.pendingCount(); n != 1 {
+		t.Fatalf("%d pending changes after repeat creates, want 1", n)
+	}
+	// Another name is another create.
+	other := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/profiles", profileBody("repeat-other", "github.com")))
+
+	// A lapsed create of the name holds nothing: the next create expires it and is held itself.
+	if _, err := e.pool.Exec(context.Background(), `UPDATE governance_changes SET expires_at = now() - interval '1 second' WHERE id = $1`, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	again := e.pending(e.call(e.alice, http.MethodPost, "/api/v1/governance/profiles", body))
+	if again.ID == first.ID || e.changeState(first.ID) != types.GovernanceChangeExpired {
+		t.Fatalf("after the first lapsed: new change %s, first %s; want a new change and the first expired", again.ID, e.changeState(first.ID))
+	}
+	if rows := e.audits("governance.change.expire"); len(rows) != 1 || rows[0].Target != first.ID.String() {
+		t.Errorf("governance.change.expire rows = %+v, want one naming %s", rows, first.ID)
+	}
+	e.approve(again.ID)
+	e.approve(other.ID)
+	if n := e.pendingCount(); n != 0 {
+		t.Errorf("%d pending changes after both creates applied, want 0", n)
+	}
+}
+
 // TestPG_GovernanceChanges_QueuedWritesAnswer202: with the switch on, each profile and assignment
 // operation by a human answers 202 with the pending change, the target is unchanged on a direct store
 // read, GET /governance is unchanged, and one pending row exists per target.
@@ -308,6 +362,12 @@ func TestPG_GovernanceChanges_QueuedWritesAnswer202(t *testing.T) {
 	w := e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+upd.ID.String(), profileBody("to-update", "pypi.org", "npmjs.org"))
 	if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangePending {
 		t.Errorf("a second change to a held target = %d %s, want 409 %s", w.Code, w.Body, reasonGovernanceChangePending)
+	}
+	var held struct {
+		Pending types.GovernanceChange `json:"pending_change"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &held); err != nil || held.Pending.State != types.GovernanceChangePending || held.Pending.TargetKey != upd.ID.String() {
+		t.Errorf("the 409 carries no held change for %s: %s (%v)", upd.ID, w.Body, err)
 	}
 	// A write the store would refuse is refused as it always was, not held.
 	if w := e.call(e.alice, http.MethodPost, "/api/v1/governance/profiles", `{"name":""}`); w.Code != http.StatusBadRequest {

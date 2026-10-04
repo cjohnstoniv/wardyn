@@ -23,6 +23,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 )
 
 // Auth modes (WARDYN_VAULT_AUTH).
@@ -85,8 +86,11 @@ func (e *vaultError) Error() string {
 // 403 are definitive on purpose: revoking Wardyn's access at Vault must bite
 // at once, not ride out a grace period (design rule 21).
 func (e *vaultError) Unwrap() error {
-	if transient(e.status) {
+	switch {
+	case transient(e.status):
 		return secretstore.ErrUnavailable
+	case e.status == http.StatusUnauthorized || e.status == http.StatusForbidden:
+		return kek.ErrAccess
 	}
 	return nil
 }

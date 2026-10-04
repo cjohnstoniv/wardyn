@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -99,38 +100,50 @@ func (s PG) PendingLeavers(ctx context.Context, idleFor time.Duration, limit int
 	})
 }
 
-// DeleteUserSubjectRows deletes the user-subject capability grants and governance assignments of
-// subjects (matched case-insensitively), and says how many of each. A direct delete, never the GOV4
-// apply path: the subject is a purged identity that can never authenticate again.
-func (s PG) DeleteUserSubjectRows(ctx context.Context, subjects []string) (grants, assignments int64, err error) {
-	lowered := make([]string, 0, len(subjects))
-	for _, v := range subjects {
-		if v = strings.ToLower(strings.TrimSpace(v)); v != "" {
-			lowered = append(lowered, v)
-		}
-	}
-	if len(lowered) == 0 {
-		return 0, 0, nil
+// DeleteUserSubjectRows deletes the user-subject capability grants and governance assignments of the
+// purged identity id, matched case-insensitively, and says how many of each. A direct delete, never the
+// GOV4 apply path. Rows keyed by one of principals go: the subject is a purged identity that can never
+// authenticate again. Rows keyed by one of emails go only while no other principal holds that address,
+// because an address can be recycled and the new holder's deny rows are theirs: another identity that is
+// neither deactivated nor purged, or an API token or people row under a principal that is not in
+// principals (or the address itself, a form of the leaver). Rows kept for that reason are counted in kept.
+func (s PG) DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals, emails []string) (grants, assignments, kept int64, err error) {
+	own, mails := lowerForms(principals), lowerForms(emails)
+	if len(own)+len(mails) == 0 {
+		return 0, 0, 0, nil
 	}
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return 0, 0, fmt.Errorf("store: delete user subject rows: %w", err)
+		return 0, 0, 0, fmt.Errorf("store: delete user subject rows: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	tag, err := tx.Exec(ctx, `DELETE FROM capability_grants WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[])`, lowered)
+	held, err := heldEmails(ctx, tx, id, own, mails)
 	if err != nil {
-		return 0, 0, fmt.Errorf("store: delete user grants: %w", err)
+		return 0, 0, 0, err
+	}
+	subjects := slices.Concat(own, slices.DeleteFunc(slices.Clone(mails), func(m string) bool { return slices.Contains(held, m) }))
+	tag, err := tx.Exec(ctx, `DELETE FROM capability_grants WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[])`, subjects)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("store: delete user grants: %w", err)
 	}
 	grants = tag.RowsAffected()
-	tag, err = tx.Exec(ctx, `DELETE FROM governance_assignments WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[])`, lowered)
+	tag, err = tx.Exec(ctx, `DELETE FROM governance_assignments WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[])`, subjects)
 	if err != nil {
-		return 0, 0, fmt.Errorf("store: delete user assignments: %w", err)
+		return 0, 0, 0, fmt.Errorf("store: delete user assignments: %w", err)
 	}
 	assignments = tag.RowsAffected()
-	if err = tx.Commit(ctx); err != nil {
-		return 0, 0, fmt.Errorf("store: commit user subject delete: %w", err)
+	if len(held) > 0 {
+		err = tx.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM capability_grants WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[])) +
+			(SELECT count(*) FROM governance_assignments WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[]))`, held).Scan(&kept)
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("store: count kept user rows: %w", err)
+		}
 	}
-	return grants, assignments, nil
+	if err = tx.Commit(ctx); err != nil {
+		return 0, 0, 0, fmt.Errorf("store: commit user subject delete: %w", err)
+	}
+	return grants, assignments, kept, nil
 }
 
 // DeprovisionFailure is a ledger row of a suspension or purge that is still pending and has failed at
@@ -165,4 +178,38 @@ func (s PG) ListDeprovisionFailures(ctx context.Context, limit int) ([]Deprovisi
 		var f DeprovisionFailure
 		return f, r.Scan(&f.IdentityID, &f.Kind, &f.Step, &f.LastError)
 	})
+}
+
+// HeldEmails is the emails another principal holds, by DeleteUserSubjectRows' rule: another identity than
+// id that is neither deactivated nor purged, or an API token or people row under a principal that is
+// neither one of principals nor the address itself. Matched case-insensitively; the answer is lower-cased.
+func (s PG) HeldEmails(ctx context.Context, id uuid.UUID, principals, emails []string) ([]string, error) {
+	return heldEmails(ctx, s.Pool, id, lowerForms(principals), lowerForms(emails))
+}
+
+func heldEmails(ctx context.Context, q Querier, id uuid.UUID, own, mails []string) ([]string, error) {
+	return collect(ctx, q, "list", "held emails", `
+		SELECT e FROM unnest($2::text[]) AS e
+		 WHERE EXISTS (SELECT 1 FROM principal_identities i
+		                WHERE i.id <> $1 AND i.deactivated_at IS NULL AND i.purged_at IS NULL
+		                  AND (i.email_lower = e OR lower(i.scim_user_name) = e OR EXISTS (
+		                        SELECT 1 FROM principal_identity_aliases a WHERE a.identity_id = i.id AND a.value_lower = e)))
+		    OR EXISTS (SELECT 1 FROM api_tokens t WHERE lower(t.email) = e AND t.principal <> ''
+		                  AND lower(t.principal) <> e AND lower(t.principal) <> ALL($3::text[]))
+		    OR EXISTS (SELECT 1 FROM people p WHERE lower(p.email) = e AND lower(p.principal) <> e
+		                  AND lower(p.principal) <> ALL($3::text[]))`,
+		[]any{id, mails, own}, func(r pgx.Row) (string, error) {
+			var v string
+			return v, r.Scan(&v)
+		})
+}
+
+func lowerForms(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if v = strings.ToLower(strings.TrimSpace(v)); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }

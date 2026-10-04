@@ -153,7 +153,9 @@ func zeroNil(p *int64) int64 {
 // types.NonTerminalRunStates list, never NOT IN terminal, so a new terminal state cannot be
 // counted as active) and folds it per the state table in the 0.8.6 fleet design: STARTING,
 // RUNNING and WAITING_FOR_CONFIRMATION rows with lost_at NULL hold capacity, paused ones
-// included; kept rows (lost_at set) count as Kept; PENDING rows appear only in States.
+// included; kept rows (lost_at set) count as Kept; PENDING rows appear only in States. A kept
+// row whose agent still runs (HoldsSandboxSQL: kept after an outage, before its end) also
+// holds its agent's reservation, without the proxy that was stopped.
 func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, error) {
 	states := make([]string, 0, len(types.NonTerminalRunStates))
 	for _, st := range types.NonTerminalRunStates {
@@ -161,7 +163,8 @@ func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, er
 	}
 	rows, err := s.Pool.Query(ctx, `SELECT id, created_by, state, created_at, paused_at, lost_at, status_detail,
 		   runner_target, runner_kind, agent_cpu_request_millis, agent_cpu_limit_millis,
-		   agent_memory_request_mib, agent_memory_limit_mib, proxy_cpu_millis, proxy_memory_mib
+		   agent_memory_request_mib, agent_memory_limit_mib, proxy_cpu_millis, proxy_memory_mib,
+		   `+HoldsSandboxSQL+`
 		 FROM agent_runs WHERE state = ANY($1)`, states)
 	if err != nil {
 		return RunCapacity{}, fmt.Errorf("store: run capacity: %w", err)
@@ -193,9 +196,10 @@ func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, er
 			paused, lost               *time.Time
 			kind                       *string
 			c, cl, m, ml, pc, pm       *int64
+			holds                      bool
 		)
 		if err := rows.Scan(&id, &owner, &state, &created, &paused, &lost, &detail, &rtgt, &kind,
-			&c, &cl, &m, &ml, &pc, &pm); err != nil {
+			&c, &cl, &m, &ml, &pc, &pm, &holds); err != nil {
 			return RunCapacity{}, fmt.Errorf("store: run capacity: scan: %w", err)
 		}
 		out.States[state]++
@@ -204,7 +208,10 @@ func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, er
 		}
 		if lost != nil {
 			out.Kept++
-			continue
+			if !holds {
+				continue
+			}
+			pc, pm = new(int64), new(int64) // its proxy was stopped
 		}
 		if paused != nil {
 			out.Paused++

@@ -6,10 +6,12 @@ package notify_test
 import (
 	"bufio"
 	"crypto/tls"
+	"encoding/base64"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -23,10 +25,12 @@ type fakeSMTP struct {
 	trust    *http.Client // an http.Client whose transport trusts cert
 	starttls bool         // advertise STARTTLS
 	mailCode string       // reply to MAIL, default 250; a text-bearing reply tests redaction
+	authList string       // the AUTH extension's mechanisms, default "PLAIN"; "" omits the line
 
 	mu    sync.Mutex
 	verbs []string // every command verb, in order, e.g. EHLO STARTTLS AUTH DATA
 	auth  []bool   // for each AUTH seen, whether it arrived over TLS
+	creds []string // for each accepted AUTH, "mechanism user password" as the relay decoded it
 	data  string   // the DATA payload, dot-unstuffed, CRLF-normalised to LF
 }
 
@@ -40,7 +44,7 @@ func newFakeSMTP(t *testing.T, starttls bool) *fakeSMTP {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fakeSMTP{ln: ln, cert: ts.TLS.Certificates[0], trust: ts.Client(), starttls: starttls, mailCode: "250 ok"}
+	f := &fakeSMTP{ln: ln, cert: ts.TLS.Certificates[0], trust: ts.Client(), starttls: starttls, mailCode: "250 ok", authList: "PLAIN"}
 	t.Cleanup(func() { _ = ln.Close() })
 	go func() {
 		for {
@@ -71,6 +75,54 @@ func (f *fakeSMTP) saw(verb string) bool {
 	return false
 }
 
+// answerAuth answers one AUTH command like a relay: a mechanism it did not advertise is a 504, PLAIN
+// takes its initial response, and LOGIN runs the two base64 334 challenges (RFC 4954).
+func (f *fakeSMTP) answerAuth(tp *textproto.Conn, line string) {
+	parts := strings.Fields(line)
+	mech := ""
+	if len(parts) > 1 {
+		mech = strings.ToUpper(parts[1])
+	}
+	if !slices.Contains(strings.Fields(strings.ToUpper(f.authList)), mech) {
+		_ = tp.PrintfLine("504 5.7.4 Unrecognized authentication type")
+		return
+	}
+	dec := func(s string) string { b, _ := base64.StdEncoding.DecodeString(s); return string(b) }
+	var user, pass string
+	switch mech {
+	case "PLAIN":
+		if len(parts) < 3 {
+			_ = tp.PrintfLine("501 PLAIN needs an initial response")
+			return
+		}
+		fields := strings.Split(dec(parts[2]), "\x00")
+		if len(fields) != 3 {
+			_ = tp.PrintfLine("501 bad PLAIN response")
+			return
+		}
+		user, pass = fields[1], fields[2]
+	case "LOGIN":
+		_ = tp.PrintfLine("334 %s", base64.StdEncoding.EncodeToString([]byte("Username:")))
+		u, err := tp.ReadLine()
+		if err != nil {
+			return
+		}
+		_ = tp.PrintfLine("334 %s", base64.StdEncoding.EncodeToString([]byte("Password:")))
+		p, err := tp.ReadLine()
+		if err != nil {
+			return
+		}
+		user, pass = dec(u), dec(p)
+	default:
+		_ = tp.PrintfLine("504 unsupported")
+		return
+	}
+	f.mu.Lock()
+	f.creds = append(f.creds, mech+" "+user+" "+pass)
+	f.mu.Unlock()
+	_ = tp.PrintfLine("235 ok")
+}
+
 func (f *fakeSMTP) serve(raw net.Conn) {
 	defer raw.Close()
 	var conn net.Conn = raw
@@ -95,7 +147,11 @@ func (f *fakeSMTP) serve(raw net.Conn) {
 			if f.starttls && !secure {
 				_ = tp.PrintfLine("250-STARTTLS")
 			}
-			_ = tp.PrintfLine("250 AUTH PLAIN")
+			if f.authList == "" {
+				_ = tp.PrintfLine("250 OK")
+			} else {
+				_ = tp.PrintfLine("250 AUTH %s", f.authList)
+			}
 		case "STARTTLS":
 			_ = tp.PrintfLine("220 go ahead")
 			srv := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{f.cert}})
@@ -105,7 +161,7 @@ func (f *fakeSMTP) serve(raw net.Conn) {
 			conn, secure = srv, true
 			tp = textproto.NewConn(conn)
 		case "AUTH":
-			_ = tp.PrintfLine("235 ok")
+			f.answerAuth(tp, line)
 		case "MAIL":
 			_ = tp.PrintfLine("%s", f.mailCode)
 		case "RCPT":

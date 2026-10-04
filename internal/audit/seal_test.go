@@ -19,48 +19,57 @@ import (
 
 // memKeys is a SealKeys over a map, with destroy and outage switches.
 type memKeys struct {
-	keys      map[string][][]byte // owner -> key per version (index+1); nil entry = destroyed
+	keys      map[string][]memKey // owner -> generations, oldest first
 	down      bool
 	keyCalls  int
 	currCalls int
 }
 
-func (m *memKeys) Current(_ context.Context, owner, purpose string) (int, []byte, error) {
-	m.currCalls++
-	if m.down {
-		return 0, nil, errors.New("key store down")
-	}
-	vs := m.keys[owner]
-	if n := len(vs); n > 0 && vs[n-1] != nil {
-		return n, append([]byte(nil), vs[n-1]...), nil
-	}
-	k := make([]byte, 32)
-	_, _ = rand.Read(k)
-	m.keys[owner] = append(vs, k)
-	return len(m.keys[owner]), append([]byte(nil), k...), nil
+// memKey is one generation: its handle, and its key until it is destroyed.
+type memKey struct {
+	handle uuid.UUID
+	key    []byte
 }
 
-func (m *memKeys) Key(_ context.Context, owner, purpose string, version int) ([]byte, error) {
+func (m *memKeys) Current(_ context.Context, owner, purpose string) (uuid.UUID, []byte, error) {
+	m.currCalls++
+	if m.down {
+		return uuid.Nil, nil, errors.New("key store down")
+	}
+	gens := m.keys[owner]
+	if n := len(gens); n > 0 && gens[n-1].key != nil {
+		return gens[n-1].handle, append([]byte(nil), gens[n-1].key...), nil
+	}
+	g := memKey{handle: uuid.New(), key: make([]byte, 32)}
+	_, _ = rand.Read(g.key)
+	m.keys[owner] = append(gens, g)
+	return g.handle, append([]byte(nil), g.key...), nil
+}
+
+func (m *memKeys) Key(_ context.Context, purpose string, handle uuid.UUID) ([]byte, error) {
 	m.keyCalls++
 	if m.down {
 		return nil, errors.New("key store down")
 	}
-	vs := m.keys[owner]
-	if version < 1 || version > len(vs) || vs[version-1] == nil {
-		return nil, ErrKeyErased
+	for _, gens := range m.keys {
+		for _, g := range gens {
+			if g.handle == handle && g.key != nil {
+				return append([]byte(nil), g.key...), nil
+			}
+		}
 	}
-	return append([]byte(nil), vs[version-1]...), nil
+	return nil, ErrKeyErased
 }
 
 func (m *memKeys) destroy(owner string) {
 	for i := range m.keys[owner] {
-		m.keys[owner][i] = nil
+		m.keys[owner][i].key = nil
 	}
 }
 
 func newSealer(t *testing.T) (*Sealer, *memKeys) {
 	t.Helper()
-	mk := &memKeys{keys: map[string][][]byte{}}
+	mk := &memKeys{keys: map[string][]memKey{}}
 	pk := make([]byte, 32)
 	_, _ = rand.Read(pk)
 	return &Sealer{Keys: mk, Pending: func() []byte { return pk }}, mk
@@ -155,7 +164,7 @@ func TestSealedValueDoesNotOpenOnAnotherEventFieldOrPerson(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := field(t, got[0], "reason").(string); !strings.HasPrefix(v, "seal1.") {
+	if v, _ := field(t, got[0], "reason").(string); !strings.HasPrefix(v, sealedPrefix) {
 		t.Errorf("a ciphertext moved to another event opened: reason = %q", v)
 	}
 	// Moved to another action's path.
@@ -165,7 +174,7 @@ func TestSealedValueDoesNotOpenOnAnotherEventFieldOrPerson(t *testing.T) {
 	moved := strings.Replace(string(a.Data), `"reason"`, `"email"`, 1)
 	c.Data = json.RawMessage(moved)
 	got, _ = s.Unseal(t.Context(), []types.AuditEvent{c})
-	if v, _ := field(t, got[0], "email").(string); !strings.HasPrefix(v, "seal1.") {
+	if v, _ := field(t, got[0], "email").(string); !strings.HasPrefix(v, sealedPrefix) {
 		t.Errorf("a ciphertext moved to another action opened: email = %q", v)
 	}
 }
@@ -253,9 +262,9 @@ func TestSealResolvesAliasesToOnePerson(t *testing.T) {
 	if len(mk.keys["alice-sub"]) != 1 || len(mk.keys["Alice@Corp.Test"]) != 0 {
 		t.Fatalf("key under %v, want the resolved principal", mk.keys)
 	}
-	_, subject, _, ok := parseSealed(field(t, sealed, "reason").(string))
-	if !ok || subject != "alice-sub" {
-		t.Errorf("sealed subject = %q, want alice-sub", subject)
+	handle, _, ok := parseSealed(field(t, sealed, "reason").(string))
+	if !ok || handle != mk.keys["alice-sub"][0].handle {
+		t.Errorf("sealed handle = %s, want alice-sub's", handle)
 	}
 }
 

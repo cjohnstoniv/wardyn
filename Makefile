@@ -777,6 +777,13 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -A1 "name: WARDYN_VAULT_TOKEN_FILE" | grep -q '/vault/secrets/token' || { echo "secretStore.vault.auth=token-file did not render WARDYN_VAULT_TOKEN_FILE"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_VAULT_KV_PREFIX" | grep -q 'wardyn-ci' || { echo "secretStore.vault.kvPrefix did not render"; exit 1; }; \
 	echo "$$out" | grep -q "wardyn-vault-token" && { echo "token-file auth still projected the Kubernetes Vault token"; exit 1; } || true
+	@# `helm upgrade --reuse-values` hands the templates the PREVIOUS release's values map in place of values.yaml,
+	@# so a block added since (runner, scim, ...) is absent. ci/reuse-values/v0.8.5.yaml is v0.8.5's values.yaml; render
+	@# the chart with it AS values.yaml (-f would merge over the new defaults and prove nothing), plain and on k8s.
+	@d=$$(mktemp -d); trap 'rm -rf "$$d"' EXIT; cp -r deploy/helm/wardyn "$$d/wardyn" && cp deploy/helm/wardyn/ci/reuse-values/v0.8.5.yaml "$$d/wardyn/values.yaml"; \
+	helm template wardyn "$$d/wardyn" --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true >/dev/null || { echo "chart does not render against v0.8.5's values (a --reuse-values upgrade): guard the new block with default dict"; exit 1; }; \
+	out=$$(helm template wardyn "$$d/wardyn" --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=x --set serviceAccount.automount=true --set k8s.runsNamespace=wardyn-runs) || { echo "k8s chart does not render against v0.8.5's values (a --reuse-values upgrade)"; exit 1; }; \
+	echo "$$out" | grep -q "WARDYN_SANDBOX_DEFAULT_CPU_MILLIS\|WARDYN_PROXY_CPU_MILLIS" && { echo "absent runner.sandbox rendered sizing env — wardynd must keep its compiled-in default"; exit 1; } || true
 	@# metrics.serviceMonitor (o-o1): off by default (a default render holds no ServiceMonitor), and on
 	@# it renders exactly one, scraping the named http port at the base-pathed /metrics with the
 	@# operator's Secret as the bearer credential (the chart never creates that Secret).

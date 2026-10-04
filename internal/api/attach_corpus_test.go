@@ -242,7 +242,7 @@ func TestAttachCorpus_ReconnectAfterDaemonRebuildSharesStore(t *testing.T) {
 
 	// The promotion this whole corpus exists to prove keeps working after a
 	// rebuild against the same store, not only on a daemon that never restarted.
-	m4 := readNextAttachMode(t, c3)
+	m4 := readPromotionFrame(t, c3, holderOwner)
 	if m4.ReadOnly || m4.Holder == nil || m4.Holder.Principal != holderSecond {
 		t.Fatalf("the observer was not promoted in place after the reconnect: %+v", m4)
 	}

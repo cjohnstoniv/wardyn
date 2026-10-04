@@ -134,3 +134,28 @@ func (c *startClock) poll(ctx context.Context, check func(ctx context.Context) (
 		}
 	}
 }
+
+// tolerateGetError reports a pod read failure the wait should ride out as "not yet": every error but
+// NotFound (the pod was deleted under the wait, which no waiting fixes) and the read's own deadline
+// (which poll turns into a budget verdict). A control-plane roll answers 503 for seconds, and the
+// start and capacity budgets, not one blip, decide how long a run waits. The answer is kept in last
+// so a timeout can name it; a good read clears it.
+func tolerateGetError(err error, last *error) bool {
+	if err == nil {
+		*last = nil
+		return false
+	}
+	if isNotFound(err) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	*last = err
+	return true
+}
+
+// withLastGetError names the last tolerated apiserver answer on a timeout.
+func withLastGetError(err, last error) error {
+	if last == nil || !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return fmt.Errorf("%w (last apiserver answer: %v)", err, last)
+}

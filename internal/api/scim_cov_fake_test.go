@@ -647,14 +647,19 @@ func (s *scimCovStore) PendingLeavers(_ context.Context, idleFor time.Duration, 
 	return slices.Clone(s.pending), nil
 }
 
-func (s *scimCovStore) DeleteUserSubjectRows(_ context.Context, subjects []string) (int64, int64, error) {
+func (s *scimCovStore) DeleteUserSubjectRows(_ context.Context, _ uuid.UUID, principals, emails []string) (int64, int64, int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.deleteRows = append(s.deleteRows, slices.Clone(subjects))
+	s.deleteRows = append(s.deleteRows, slices.Concat(principals, emails))
 	if err := s.enter("DeleteUserSubjectRows"); err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
-	return s.grantsDeleted, s.assignDeleted, nil
+	return s.grantsDeleted, s.assignDeleted, 0, nil
+}
+
+// HeldEmails: no other principal holds an address in this fake.
+func (s *scimCovStore) HeldEmails(context.Context, uuid.UUID, []string, []string) ([]string, error) {
+	return nil, nil
 }
 
 func (s *scimCovStore) ListDeactivatedIdentities(_ context.Context, _ int) ([]store.PrincipalIdentity, error) {
@@ -804,6 +809,20 @@ func (s *scimCovStore) StartGroupRemoval(_ context.Context, groupID, identityID 
 		}
 	}
 	return nil
+}
+
+func (s *scimCovStore) ResumeGroupRemoval(_ context.Context, groupID, identityID uuid.UUID) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.enter("ResumeGroupRemoval"); err != nil {
+		return false, err
+	}
+	if slices.Contains(s.members[groupID], identityID) {
+		return false, nil
+	}
+	return slices.ContainsFunc(s.jobs, func(j *store.DeprovisionJob) bool {
+		return j.IdentityID == identityID && j.Kind == store.JobKindGroupRemove && j.Target == groupID.String() && !j.Done
+	}), nil
 }
 
 func (s *scimCovStore) GroupRemovalIdentities(_ context.Context, groupID uuid.UUID) ([]uuid.UUID, error) {

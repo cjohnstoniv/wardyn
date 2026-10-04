@@ -137,15 +137,19 @@ func (p *attachPumpState) ping() {
 		case <-p.ctx.Done():
 			return
 		case <-t.C:
-			pctx, pcancel := context.WithTimeout(p.ctx, every)
-			err := p.c.Ping(pctx)
-			pcancel()
-			if err != nil {
+			if !p.pong(every) {
 				p.end("ping timeout")
 				return
 			}
 		}
 	}
+}
+
+// pong reports whether the peer answers a ping within d.
+func (p *attachPumpState) pong(d time.Duration) bool {
+	pctx, pcancel := context.WithTimeout(p.ctx, d)
+	defer pcancel()
+	return p.c.Ping(pctx) == nil
 }
 
 // output is Session.Read -> client (binary PTY frames). The blocking Read is
@@ -249,7 +253,12 @@ func (p *attachPumpState) control(data []byte) {
 	}
 	switch msg.Type {
 	case "pause":
-		p.flow.pause(p.s.attachPauseLimit(), func() { p.end("client stalled") })
+		limit := p.s.attachPauseLimit()
+		p.flow.pause(limit, func() bool { return p.pong(limit) }, func() {
+			if p.ctx.Err() == nil { // a pump already ending keeps its own reason
+				p.end("client stalled")
+			}
+		})
 		return
 	case "resume":
 		p.flow.resume()

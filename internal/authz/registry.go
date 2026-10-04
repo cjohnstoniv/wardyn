@@ -85,7 +85,8 @@ const (
 	ReasonKeyDomainUnknown Reason = "key_domain_unknown"
 	// ReasonKeyDomainAmbiguous: a group assignment would leave people whose
 	// groups are assigned to different domains, with no user assignment of
-	// their own, so their next principal key would be refused.
+	// their own, or while someone whose last sign-in lost groups has none, so
+	// their next principal key would be refused.
 	ReasonKeyDomainAmbiguous Reason = "key_domain_ambiguous_membership"
 	// The five refusals of POST /audit/retention/drop, one per rule audit_retention_drop (migration
 	// 0123) enforces. State conflicts of an authorized security operator, audited so an attempt that

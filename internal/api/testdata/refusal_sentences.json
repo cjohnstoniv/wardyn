@@ -247,6 +247,11 @@
   {
     "reason": "key_domain_ambiguous_membership",
     "target": "keyDomainTarget(c)",
+    "sentence": "fmt.Sprintf(\"%d people last signed in with a group list that was cut short, as a Microsoft Entra group overage does, and have no assignment of their own, so once any group is assigned their next key would be refused. \" + \"Assign each of them to one domain as a user first. Nothing was changed.\", n)"
+  },
+  {
+    "reason": "key_domain_ambiguous_membership",
+    "target": "keyDomainTarget(c)",
     "sentence": "fmt.Sprintf(\"%d people last signed in with this group and another group assigned to a different domain, and have no assignment of their own, so their next key would be refused. \" + \"Assign each of them to one domain as a user first, or give both groups the same domain. Nothing was changed.\", n)"
   },
   {

@@ -267,7 +267,7 @@ func (s *Server) handleSCIMDeleteGroup(w http.ResponseWriter, r *http.Request) {
 func (s *Server) removeGroupMembers(ctx context.Context, st scimStore, g store.ScimGroup, ids []uuid.UUID, slot string) error {
 	var errs []error
 	for _, id := range ids {
-		if err := s.removeGroupMember(ctx, st, g, id, slot); err != nil {
+		if err := s.removeGroupMember(ctx, st, g, id, slot, false); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -286,8 +286,13 @@ func (s *Server) removeGroupMembers(ctx context.Context, st scimStore, g store.S
 // whose group snapshot does not hold the group keeps working. A token is revoked when its snapshot
 // holds the group's external id (compared lower-cased and trimmed, as the snapshot was normalised at
 // sign-in; never the display name) or when it cannot say, because the snapshot was truncated or never
-// recorded. Only the removed person's tokens are looked at.
-func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.ScimGroup, identityID uuid.UUID, slot string) error {
+// recorded. Only the removed person's tokens are looked at: for a bound person, a token whose principal is
+// one of their forms, never another principal's under a shared email, and no session is cut under an email
+// another principal holds (leaverForms.shared).
+//
+// resume is the sweeper's recovery of a removal it selected earlier: it only goes on with a pending ledger
+// (store.ResumeGroupRemoval), and drops the candidate when the person has been added back since.
+func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.ScimGroup, identityID uuid.UUID, slot string, resume bool) error {
 	ctx = withActor(ctx, types.ActorSystem, scimActor)
 	ident, err := st.GetIdentity(ctx, identityID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -296,7 +301,11 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 	if err != nil {
 		return err
 	}
-	if err := st.StartGroupRemoval(ctx, g.ID, identityID); err != nil {
+	if resume {
+		if ok, err := st.ResumeGroupRemoval(ctx, g.ID, identityID); err != nil || !ok {
+			return err
+		}
+	} else if err := st.StartGroupRemoval(ctx, g.ID, identityID); err != nil {
 		return err
 	}
 	forms, err := s.leaverForms(ctx, st, ident)
@@ -323,14 +332,19 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 	var errs []error
 	if pending(store.GroupStepSessions) {
 		var cutErr error
-		for _, t := range forms.targets {
+		cuts := forms.cutTargets()
+		for _, t := range cuts {
 			cutErr = errors.Join(cutErr, oidc.CutSessions(ctx, s.cfg.SessionRevocations, t))
 		}
-		errs = append(errs, finish(store.GroupStepSessions, cutErr, map[string]int{"sessions_cut": len(forms.targets)}))
+		errs = append(errs, finish(store.GroupStepSessions, cutErr, map[string]int{"sessions_cut": len(cuts)}))
 	}
 	if pending(store.GroupStepTokens) {
 		revoked, revokeErr := 0, error(nil)
 		match := groupSnapshotMatch(g.ExternalID)
+		if ident.Principal != "" {
+			snapshot := match
+			match = func(t types.APIToken) bool { return forms.owns(t) && snapshot(t) }
+		}
 		for _, t := range forms.targets {
 			n, err := s.revokeAPITokensMatching(ctx, t, match)
 			revoked += n

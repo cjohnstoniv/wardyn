@@ -10,9 +10,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -20,18 +21,27 @@ import (
 
 // A sealed field is a JSON string in place of the value it hides:
 //
-//	seal1.<key version>.<subject>.<ciphertext>      under the subject's own key
-//	seal1p.<subject>.<ciphertext>                   under the platform pending key
+//	seal2.<handle>.<ciphertext>      under the subject's own key
+//	seal2p.<ciphertext>              under the platform pending key
 //
-// subject and ciphertext are unpadded base64url. The ciphertext is kek.Seal of
-// the original JSON value; its additional data binds the event id, the action,
-// the field's path, the subject and the key version, so a ciphertext moved to
-// another event, field or person fails to open. The row hash covers the
-// string, so the chain verifies whether or not the key is still there.
+// handle is the random id of the subject's key generation (principal_keys.handle):
+// it names the key, never the person, is not derived from anything about them,
+// and is cleared when the key is destroyed. So the row, and every copy of it
+// (the spool, a sink, an export, a federation push), says whose field it is
+// only through the key table, and after an erasure not even there. ciphertext is
+// unpadded base64url of kek.Seal of the original JSON value; its additional data
+// binds the event id, the action, the field's path and the handle, so a
+// ciphertext moved to another event, field or key fails to open. A pending
+// ciphertext holds the name the value is for inside it, beside the value, for
+// the drain to resolve. The row hash covers the string, so the chain verifies
+// whether or not the key is still there.
 const (
-	sealedPrefix  = "seal1."
-	pendingPrefix = "seal1p."
-	aadLabel      = "wardyn/audit-seal/v1"
+	sealedPrefix  = "seal2."
+	pendingPrefix = "seal2p."
+	aadLabel      = "wardyn/audit-seal/v2"
+	// pendingKeyRef stands in sealAAD for the handle of a value under the
+	// pending key.
+	pendingKeyRef = "pending"
 
 	// PendingMarker is the data key a row carries while any of its fields waits
 	// under the pending key. Such a row lives only in the spool: the drain
@@ -52,18 +62,20 @@ var ErrKeyErased = errors.New("audit seal: the subject's key is destroyed")
 // counted toward quarantine, because the line is not what is wrong.
 var ErrReplayDeferred = errors.New("audit replay deferred: a pending row cannot be re-sealed yet")
 
-// ErrPendingUnopenable is what Reseal returns, wrapped, for a pending field that
-// does not open under the pending key. That never heals by waiting, so the spool
-// drain counts it toward quarantine instead of deferring it.
-var ErrPendingUnopenable = errors.New("audit seal: a pending field does not open under the pending key")
+// ErrPendingUnopenable is what Reseal returns, wrapped, for a pending field or
+// actor that is malformed or does not open under the pending key. That never
+// heals by waiting, so the spool drain counts it toward quarantine instead of
+// deferring it.
+var ErrPendingUnopenable = errors.New("audit seal: a pending value does not open under the pending key")
 
 // SealKeys is the per-subject key service; *subjectkey.Manager (through
-// cmd/wardynd's adapter) is the production one. Current may create the
-// subject's first key; Key reads a version and fails ErrKeyErased once it is
-// destroyed.
+// cmd/wardynd's adapter) is the production one. Current returns the subject's
+// current key and the handle a sealed field names it by, creating the subject's
+// first key when there is none. Key reads the key a handle names and fails
+// ErrKeyErased once it is destroyed, or when no key carries the handle.
 type SealKeys interface {
-	Current(ctx context.Context, owner, purpose string) (version int, key []byte, err error)
-	Key(ctx context.Context, owner, purpose string, version int) ([]byte, error)
+	Current(ctx context.Context, owner, purpose string) (handle uuid.UUID, key []byte, err error)
+	Key(ctx context.Context, purpose string, handle uuid.UUID) ([]byte, error)
 }
 
 // Unsealer opens the sealed fields of rows being read.
@@ -131,8 +143,10 @@ type Sealer struct {
 	SealActor bool
 }
 
-func sealAAD(eventID, action, path, subject string, version int) []byte {
-	return kek.Encode(aadLabel, eventID, action, path, subject, strconv.Itoa(version))
+// sealAAD binds a sealed value to its event, action and field path, and to the
+// key it is under: a subject key's handle, or pendingKeyRef.
+func sealAAD(eventID, action, path, key string) []byte {
+	return kek.Encode(aadLabel, eventID, action, path, key)
 }
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
@@ -237,36 +251,77 @@ func (s *Sealer) sealFields(ctx context.Context, ev types.AuditEvent) (out types
 // sealValue seals one value under name's key, or under the pending key when
 // that key cannot be had.
 func (s *Sealer) sealValue(ctx context.Context, ev types.AuditEvent, path, name string, v json.RawMessage) (json.RawMessage, bool, error) {
-	subject, version, key, kerr := s.subjectKey(ctx, name)
+	handle, key, kerr := s.subjectKey(ctx, name)
 	if kerr == nil {
 		defer clear(key)
-		ct, err := kek.Seal(key, v, sealAAD(ev.ID.String(), ev.Action, path, subject, version))
-		if err != nil {
-			return nil, false, fmt.Errorf("audit seal: %w", err)
-		}
-		return jsonString(sealedPrefix + strconv.Itoa(version) + "." + b64([]byte(subject)) + "." + b64(ct)), false, nil
+		sealed, err := sealUnder(key, handle, ev, path, v)
+		return sealed, false, err
 	}
 	pk := s.pendingKey()
 	if pk == nil {
 		return nil, false, fmt.Errorf("audit seal: no key for the subject and no pending key to hold the row: %w", kerr)
 	}
-	ct, err := kek.Seal(pk, v, sealAAD(ev.ID.String(), ev.Action, path, name, 0))
-	if err != nil {
-		return nil, false, fmt.Errorf("audit seal: %w", err)
-	}
-	return jsonString(pendingPrefix + b64([]byte(name)) + "." + b64(ct)), true, nil
+	sealed, err := sealPending(pk, ev, path, name, v)
+	return sealed, true, err
 }
 
-// subjectKey resolves name to its person and returns that person's current key.
-func (s *Sealer) subjectKey(ctx context.Context, name string) (subject string, version int, key []byte, err error) {
-	subject = name
-	if s.Resolve != nil {
-		if subject, err = s.Resolve(ctx, name); err != nil {
-			return "", 0, nil, err
-		}
+// sealUnder seals v at path of ev under the subject key handle names.
+func sealUnder(key []byte, handle uuid.UUID, ev types.AuditEvent, path string, v []byte) (json.RawMessage, error) {
+	ct, err := kek.Seal(key, v, sealAAD(ev.ID.String(), ev.Action, path, handle.String()))
+	if err != nil {
+		return nil, fmt.Errorf("audit seal: %w", err)
 	}
-	version, key, err = s.Keys.Current(ctx, subject, SealPurpose)
-	return subject, version, key, err
+	return jsonString(sealedPrefix + handle.String() + "." + b64(ct)), nil
+}
+
+// pendingValue is what a value under the pending key holds: the name it was
+// sealed for, which the drain resolves to the subject's key, and the value (none
+// for a pending actor, whose name is the value). The name is inside the
+// ciphertext, so the sealed string names no one.
+type pendingValue struct {
+	Subject string          `json:"subject"`
+	Value   json.RawMessage `json:"value,omitempty"`
+}
+
+func sealPending(pk []byte, ev types.AuditEvent, path, name string, v json.RawMessage) (json.RawMessage, error) {
+	plain, err := json.Marshal(pendingValue{Subject: name, Value: v})
+	if err != nil {
+		return nil, fmt.Errorf("audit seal: %w", err)
+	}
+	defer clear(plain)
+	ct, err := kek.Seal(pk, plain, sealAAD(ev.ID.String(), ev.Action, path, pendingKeyRef))
+	if err != nil {
+		return nil, fmt.Errorf("audit seal: %w", err)
+	}
+	return jsonString(pendingPrefix + b64(ct)), nil
+}
+
+// openPending opens the pending string s at path of ev. ok is false for any
+// other string; err is set for a pending string that does not open.
+func openPending(pk []byte, ev types.AuditEvent, path, s string) (pv pendingValue, ok bool, err error) {
+	ct, ok := parsePending(s)
+	if !ok {
+		return pv, false, nil
+	}
+	plain, err := kek.Open(pk, ct, sealAAD(ev.ID.String(), ev.Action, path, pendingKeyRef))
+	if err != nil {
+		return pv, true, err
+	}
+	defer clear(plain)
+	if err := json.Unmarshal(plain, &pv); err != nil || pv.Subject == "" {
+		return pv, true, errors.New("it names no subject")
+	}
+	return pv, true, nil
+}
+
+// subjectKey resolves name to its person and returns that person's current key
+// and its handle.
+func (s *Sealer) subjectKey(ctx context.Context, name string) (uuid.UUID, []byte, error) {
+	subject, err := s.principalOf(ctx, name)
+	if err != nil {
+		return uuid.Nil, nil, err
+	}
+	return s.Keys.Current(ctx, subject, SealPurpose)
 }
 
 func (s *Sealer) pendingKey() []byte {
@@ -304,42 +359,33 @@ func IsPending(ev types.AuditEvent) bool {
 }
 
 // parseSealed splits a sealed string. ok is false for any other string.
-func parseSealed(s string) (version int, subject string, ct []byte, ok bool) {
+func parseSealed(s string) (handle uuid.UUID, ct []byte, ok bool) {
 	rest, found := strings.CutPrefix(s, sealedPrefix)
 	if !found {
-		return 0, "", nil, false
+		return uuid.Nil, nil, false
 	}
-	parts := strings.Split(rest, ".")
-	if len(parts) != 3 {
-		return 0, "", nil, false
+	h, c, found := strings.Cut(rest, ".")
+	if !found {
+		return uuid.Nil, nil, false
 	}
-	v, err := strconv.Atoi(parts[0])
-	if err != nil || v < 1 {
-		return 0, "", nil, false
+	handle, err1 := uuid.Parse(h)
+	ct, err2 := base64.RawURLEncoding.DecodeString(c)
+	if err1 != nil || err2 != nil || len(ct) == 0 {
+		return uuid.Nil, nil, false
 	}
-	sub, err1 := base64.RawURLEncoding.DecodeString(parts[1])
-	c, err2 := base64.RawURLEncoding.DecodeString(parts[2])
-	if err1 != nil || err2 != nil || len(sub) == 0 {
-		return 0, "", nil, false
-	}
-	return v, string(sub), c, true
+	return handle, ct, true
 }
 
-func parsePending(s string) (subject string, ct []byte, ok bool) {
+func parsePending(s string) (ct []byte, ok bool) {
 	rest, found := strings.CutPrefix(s, pendingPrefix)
 	if !found {
-		return "", nil, false
+		return nil, false
 	}
-	parts := strings.Split(rest, ".")
-	if len(parts) != 2 {
-		return "", nil, false
+	ct, err := base64.RawURLEncoding.DecodeString(rest)
+	if err != nil || len(ct) == 0 {
+		return nil, false
 	}
-	sub, err1 := base64.RawURLEncoding.DecodeString(parts[0])
-	c, err2 := base64.RawURLEncoding.DecodeString(parts[1])
-	if err1 != nil || err2 != nil || len(sub) == 0 {
-		return "", nil, false
-	}
-	return string(sub), c, true
+	return ct, true
 }
 
 func stringValue(v json.RawMessage) (string, bool) {
@@ -351,10 +397,10 @@ func stringValue(v json.RawMessage) (string, bool) {
 }
 
 // keyMemo holds the keys one read opened, so a page of rows asks for each
-// (subject, version) once, and clears them when the read is done.
+// handle once, and clears them when the read is done.
 type keyMemo struct {
-	keys   map[string][]byte
-	erased map[string]bool
+	keys   map[uuid.UUID][]byte
+	erased map[uuid.UUID]bool
 	actors map[string]actorMemo // subject id -> who it is
 }
 
@@ -365,7 +411,7 @@ type actorMemo struct {
 }
 
 func newKeyMemo() *keyMemo {
-	return &keyMemo{keys: map[string][]byte{}, erased: map[string]bool{}, actors: map[string]actorMemo{}}
+	return &keyMemo{keys: map[uuid.UUID][]byte{}, erased: map[uuid.UUID]bool{}, actors: map[string]actorMemo{}}
 }
 
 func (m *keyMemo) clear() {
@@ -374,23 +420,22 @@ func (m *keyMemo) clear() {
 	}
 }
 
-func (s *Sealer) memoKey(ctx context.Context, m *keyMemo, subject string, version int) ([]byte, error) {
-	id := subject + "\x00" + strconv.Itoa(version)
-	if m.erased[id] {
+func (s *Sealer) memoKey(ctx context.Context, m *keyMemo, handle uuid.UUID) ([]byte, error) {
+	if m.erased[handle] {
 		return nil, ErrKeyErased
 	}
-	if k, ok := m.keys[id]; ok {
+	if k, ok := m.keys[handle]; ok {
 		return k, nil
 	}
-	k, err := s.Keys.Key(ctx, subject, SealPurpose, version)
+	k, err := s.Keys.Key(ctx, SealPurpose, handle)
 	if errors.Is(err, ErrKeyErased) {
-		m.erased[id] = true
+		m.erased[handle] = true
 		return nil, err
 	}
 	if err != nil {
 		return nil, err
 	}
-	m.keys[id] = k
+	m.keys[handle] = k
 	return k, nil
 }
 
@@ -453,18 +498,18 @@ func (s *Sealer) unsealData(ctx context.Context, memo *keyMemo, ev types.AuditEv
 			if !ok {
 				return v, false, nil
 			}
-			version, subject, ct, ok := parseSealed(str)
+			handle, ct, ok := parseSealed(str)
 			if !ok {
 				return v, false, nil
 			}
-			key, err := s.memoKey(ctx, memo, subject, version)
+			key, err := s.memoKey(ctx, memo, handle)
 			if errors.Is(err, ErrKeyErased) {
 				return jsonString(ErasedValue), true, nil
 			}
 			if err != nil {
 				return nil, false, err
 			}
-			plain, err := kek.Open(key, ct, sealAAD(ev.ID.String(), ev.Action, f.Path, subject, version))
+			plain, err := kek.Open(key, ct, sealAAD(ev.ID.String(), ev.Action, f.Path, handle.String()))
 			if err != nil {
 				return v, false, nil
 			}
@@ -499,16 +544,15 @@ func (s *Sealer) Reseal(ctx context.Context, ev types.AuditEvent) (types.AuditEv
 			if !ok {
 				return v, false, nil
 			}
-			name, ct, ok := parsePending(str)
+			pv, ok, err := openPending(pk, ev, f.Path, str)
 			if !ok {
 				return v, false, nil
 			}
-			plain, err := kek.Open(pk, ct, sealAAD(ev.ID.String(), ev.Action, f.Path, name, 0))
 			if err != nil {
 				return nil, false, fmt.Errorf("%w: %w", ErrPendingUnopenable, err)
 			}
-			defer clear(plain)
-			subject, version, key, err := s.subjectKeyUnlessGone(ctx, ev.Time, name)
+			defer clear(pv.Value)
+			handle, key, err := s.subjectKeyUnlessGone(ctx, ev.Time, pv.Subject)
 			if errors.Is(err, ErrKeyErased) {
 				return jsonString(ErasedValue), true, nil
 			}
@@ -516,11 +560,8 @@ func (s *Sealer) Reseal(ctx context.Context, ev types.AuditEvent) (types.AuditEv
 				return nil, false, err
 			}
 			defer clear(key)
-			sealed, err := kek.Seal(key, plain, sealAAD(ev.ID.String(), ev.Action, f.Path, subject, version))
-			if err != nil {
-				return nil, false, err
-			}
-			return jsonString(sealedPrefix + strconv.Itoa(version) + "." + b64([]byte(subject)) + "." + b64(sealed)), true, nil
+			sealed, err := sealUnder(key, handle, ev, f.Path, pv.Value)
+			return sealed, err == nil, err
 		})
 		if err != nil {
 			return ev, fmt.Errorf("audit reseal: %w", err)
@@ -536,23 +577,19 @@ func (s *Sealer) Reseal(ctx context.Context, ev types.AuditEvent) (types.AuditEv
 
 // subjectKeyUnlessGone is subjectKey, except ErrKeyErased when the subject's
 // key was destroyed after the row was written.
-func (s *Sealer) subjectKeyUnlessGone(ctx context.Context, at time.Time, name string) (string, int, []byte, error) {
-	subject := name
-	if s.Resolve != nil {
-		var err error
-		if subject, err = s.Resolve(ctx, name); err != nil {
-			return "", 0, nil, err
-		}
+func (s *Sealer) subjectKeyUnlessGone(ctx context.Context, at time.Time, name string) (uuid.UUID, []byte, error) {
+	subject, err := s.principalOf(ctx, name)
+	if err != nil {
+		return uuid.Nil, nil, err
 	}
 	if s.GoneSince != nil {
 		gone, err := s.GoneSince(ctx, subject, at)
 		if err != nil {
-			return "", 0, nil, err
+			return uuid.Nil, nil, err
 		}
 		if gone {
-			return "", 0, nil, ErrKeyErased
+			return uuid.Nil, nil, ErrKeyErased
 		}
 	}
-	version, key, err := s.Keys.Current(ctx, subject, SealPurpose)
-	return subject, version, key, err
+	return s.Keys.Current(ctx, subject, SealPurpose)
 }

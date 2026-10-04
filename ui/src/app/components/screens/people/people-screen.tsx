@@ -65,7 +65,7 @@ function useAccess(enabled: boolean) {
   return { access, state, reload };
 }
 
-function PeopleTable({ onOpen, onLoaded, reloadKey }: { onOpen: (p: PersonSummary) => void; onLoaded: (rows: PersonSummary[]) => void; reloadKey: number }) {
+function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void; reloadKey: number }) {
   const [rows, setRows] = React.useState<PersonSummary[]>([]);
   const [cursor, setCursor] = React.useState<string | undefined>(undefined);
   const [status, setStatus] = React.useState<ScreenStatus>("loading");
@@ -98,7 +98,6 @@ function PeopleTable({ onOpen, onLoaded, reloadKey }: { onOpen: (p: PersonSummar
     },
     [q, filter],
   );
-  React.useEffect(() => onLoaded(rows), [rows, onLoaded]);
   // reloadKey re-reads the first page after a drawer action or an add.
   React.useEffect(() => load(), [load, reloadKey]);
 
@@ -197,12 +196,18 @@ export function PeopleScreen() {
   const [reloadKey, setReloadKey] = React.useState(0);
   const [selected, setSelected] = React.useState<PersonSummary | null>(null);
   const [adding, setAdding] = React.useState(false);
-  const refresh = () => setReloadKey((k) => k + 1);
-  // A reload re-reads the open person too, so the drawer's counts follow what an action just did.
-  const onLoaded = React.useCallback(
-    (rows: PersonSummary[]) => setSelected((cur) => (cur ? (rows.find((r) => r.principal === cur.principal) ?? cur) : cur)),
-    [],
-  );
+  // A drawer action or an add re-reads the first page, and the open person on their own: after Load more
+  // they are not on that page, and the drawer's counts and disabled buttons follow what the action did.
+  const refresh = () => {
+    setReloadKey((k) => k + 1);
+    const open = selected?.principal;
+    if (open) {
+      peopleApi
+        .get(open)
+        .then((p) => p && setSelected((cur) => (cur?.principal === open ? p : cur)))
+        .catch(() => {});
+    }
+  };
 
   return (
     <div className="mx-auto max-w-[1200px] px-6 py-6">
@@ -232,7 +237,7 @@ export function PeopleScreen() {
           {P.TABLE_TITLE}
         </h2>
         <div className="overflow-hidden rounded-xl border border-border bg-card">
-          <PeopleTable onOpen={setSelected} onLoaded={onLoaded} reloadKey={reloadKey} />
+          <PeopleTable onOpen={setSelected} reloadKey={reloadKey} />
         </div>
       </section>
 
