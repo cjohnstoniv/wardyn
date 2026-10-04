@@ -180,6 +180,7 @@ func (s *Store) PutRun(runID uuid.UUID, value []byte) error {
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("maskstore: look for the value: %w", err)
 	}
+	var inserted bool
 	gen, err := s.commit(ctx, func(tx pgx.Tx, gen int64) error {
 		// FOR SHARE keeps an erasure's fence (an UPDATE of this row) from
 		// committing between this check and this commit.
@@ -189,17 +190,21 @@ func (s *Store) PutRun(runID uuid.UUID, value []byte) error {
 		if fenced {
 			return ErrFenced
 		}
-		_, err := tx.Exec(ctx,
+		tag, err := tx.Exec(ctx,
 			`INSERT INTO mask_values (id, bucket, owner, run_id, digest, key_version, sealed, gen)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING`,
 			row.id, bucketRun, owner, runID, row.digest, version, row.blob, gen)
 		if err != nil {
 			return fmt.Errorf("maskstore: write a value: %w", err)
 		}
+		inserted = tag.RowsAffected() == 1
 		return nil
 	})
 	if err != nil {
 		return err
+	}
+	if !inserted {
+		return nil // a racing replica's row won: it is the record, and the next read applies it
 	}
 	s.note(&ref{id: row.id, gen: gen, bucket: bucketRun, runID: runID, value: append([]byte(nil), value...), current: true})
 	return nil

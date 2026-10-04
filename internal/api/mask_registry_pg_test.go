@@ -268,6 +268,54 @@ func TestMaskRegistry_ErasureLeavesNothingToDecryptAndNothingRecreatesIt(t *test
 	}
 }
 
+// A follower's live writer never forwards an erased person's value, not even in
+// the beat after the erasure: the read that applies the erasure's tombstones drops
+// the value from the corpus, and the guard it consults for that same chunk must
+// already see the fence rather than answer from before it.
+func TestMaskRegistry_AFollowersLiveWriterDropsTheChunkRightAfterAnErasure(t *testing.T) {
+	l := newMaskLab(t)
+	fail := false
+	a, b := erasureReplica(l, &fail), erasureReplica(l, &fail)
+	b.srv.maskBeat = time.Hour // the guard answers from its cache unless the registry moved
+	ctx := t.Context()
+	const alice = "alice-sub"
+	const injected = "alice-injected-value-1"
+
+	run := l.personRun(alice, "alice plan")
+	a.dispatch(t, run, "alice-dispatch-value-0")
+	if err := a.reg.Add(run.ID, []byte(injected)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.st.Fresh(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	var live bytes.Buffer
+	mw := &liveMaskWriter{reg: b.reg, runID: run.ID, dst: &live, guard: b.srv.maskGuard(run.ID)}
+	if _, err := mw.Write([]byte("before " + injected + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got := live.String(); strings.Contains(got, injected) || !strings.Contains(got, "<secret-hidden>") {
+		t.Fatalf("a chunk before the erasure = %q, want the value masked", got)
+	}
+
+	sec := ssoSession(t, "sec-sub", "sec@corp.example", oidc.RoleSecurityAdmin)
+	if w := doSSO(t, a.srv, http.MethodPost, "/api/v1/people/"+alice+"/erasure", sec,
+		erasureBody("mask_copies", "run_outputs", "run_tasks", "audit_personal_fields", "credentials")); w.Code != http.StatusOK {
+		t.Fatalf("erasure = %d %s", w.Code, w.Body)
+	}
+
+	live.Reset()
+	if _, err := mw.Write([]byte("after " + injected + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got := live.String(); strings.Contains(got, injected) {
+		t.Errorf("a chunk right after the erasure reached the viewer with the value in clear: %q", got)
+	}
+	if !mw.capture.dropped {
+		t.Errorf("the writer did not record that the chunk was dropped: %+v", mw.capture)
+	}
+}
+
 // staticLease is a SweeperLease with a fixed answer.
 type staticLease struct{ leader bool }
 

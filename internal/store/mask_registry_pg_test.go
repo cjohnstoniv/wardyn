@@ -248,6 +248,60 @@ func TestPG_MaskRegistry_ALateCommittingValueIsNeverSkipped(t *testing.T) {
 	}
 }
 
+// Two replicas committing one value for one run at once: the loser's insert does
+// nothing and it records no row of its own, so a later full reload (a replica away
+// past the prune horizon) keeps masking the value from the winner's row.
+func TestPG_MaskRegistry_ARacedRunValueIsStillMaskedAfterAFullReload(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	k := localKEK(t)
+	ctx := t.Context()
+	t1, t2 := newRegReplica(t, pool, k), newRegReplica(t, pool, k)
+	run := dispatchedRun(t, pool, t1, regAlice)
+	const value = "the-raced-value"
+	t2.read(t) // t2 is loaded, with a cursor below everything that follows
+
+	// T1 is held open mid-flight, after its dedup check and its generation, so
+	// T2's dedup check also finds no committed row.
+	hold, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = hold.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := hold.Exec(ctx, `SELECT 1 FROM run_mask_manifest WHERE run_id=$1 FOR UPDATE`, run); err != nil {
+		t.Fatal(err)
+	}
+	done1, done2 := make(chan error, 1), make(chan error, 1)
+	go func() { done1 <- t1.reg.Add(run, []byte(value)) }()
+	waitFor(t, "T1 to hold its generation and wait on the manifest row", func() bool {
+		return pendingOn(t, pool, "%FOR SHARE%")
+	})
+	go func() { done2 <- t2.reg.Add(run, []byte(value)) }()
+	waitFor(t, "T2 to queue on the generation", func() bool {
+		return pendingOn(t, pool, "%UPDATE mask_gen%")
+	})
+	if err := hold.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done1; err != nil {
+		t.Fatalf("T1: %v", err)
+	}
+	if err := <-done2; err != nil {
+		t.Fatalf("T2: %v", err)
+	}
+	if n := liveRows(t, pool, `run_id=$1`, run); n != 1 {
+		t.Fatalf("%d live rows for the raced value, want the winner's one", n)
+	}
+
+	// The loser is away past the prune horizon: its next read reloads the table.
+	if _, err := pool.Exec(ctx, `UPDATE mask_gen SET pruned = gen`); err != nil {
+		t.Fatal(err)
+	}
+	t2.read(t)
+	if !regMasks(t2, run, value) {
+		t.Error("the loser stopped masking a live run's value after a full reload")
+	}
+}
+
 // Every eviction is a tombstone with no ciphertext: EvictGlobal, retirement past
 // the grace, a run's purge, and an erasure each leave no row that can be opened,
 // replicas drop the value when they read it, and the row itself is gone after
