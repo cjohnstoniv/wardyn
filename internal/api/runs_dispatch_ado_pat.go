@@ -27,6 +27,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -46,6 +47,9 @@ const (
 	adoPATMintUpstream401   = "upstream_401"
 	adoPATRevokeUpstream401 = "upstream_401"
 	adoPATRevokeOffboarding = "offboarding"
+	// adoPATRevokeUnrecorded closes a token created but never handed out because its value
+	// could not be recorded for the other replicas.
+	adoPATRevokeUnrecorded = "unrecorded"
 )
 
 // The launch and resolve refusals: the approved mock's sentences and the
@@ -68,6 +72,9 @@ var (
 	errADOPATRunPaused   = errors.New("azure devops personal access tokens: the run is paused")
 	errADOPATRunEnded    = errors.New("azure devops personal access tokens: the run has ended")
 	errADOPATRunUnread   = errors.New("azure devops personal access tokens: the run could not be read")
+	// errADOPATStateUnavailable: the run's token state could not be read or written, so nothing
+	// is created or handed out from a guess.
+	errADOPATStateUnavailable = errors.New("azure devops personal access tokens: the run's token state is unavailable")
 )
 
 // adoInjectFormat is the header format a run's grants are authored with.
@@ -156,7 +163,10 @@ func (s *Server) mintRunPAT(ctx context.Context, runID uuid.UUID, sn adoEntraSco
 	}
 	// Read before the redeem: a disconnect or erase from here on is caught
 	// after the record (adoSignInEnds).
-	ends := s.adoSignInEnds.read(sn.OwnerSubject)
+	ends, err := s.readADOSignInEnds(ctx, sn.OwnerSubject)
+	if err != nil {
+		return denied(err)
+	}
 	// mintAccess holds S1: the sign-in is redeemed only with the console's
 	// own secret.
 	access, err := s.mintAccess(ctx, cfg, sn.OwnerSubject)
@@ -198,7 +208,13 @@ func (s *Server) mintRunPAT(ctx context.Context, runID uuid.UUID, sn adoEntraSco
 		_ = client.Revoke(ctx, sn.Organisation, access.AccessToken, pat.AuthorizationID)
 		return adoPAT{}, fmt.Errorf("record the run's personal access token: %w", err)
 	}
-	if why, ended := s.adoSignInEnds.since(sn.OwnerSubject, ends); ended {
+	why, ended, err := s.adoSignInEndedSince(ctx, sn.OwnerSubject, ends)
+	if err != nil {
+		// The count cannot be read: the token cannot be shown to be clear of an end, so it is not handed out.
+		s.revokeRunPATCreatedAcrossEnd(ctx, st, client, access.AccessToken, row, "ends_unreadable")
+		return denied(err)
+	}
+	if ended {
 		s.revokeRunPATCreatedAcrossEnd(ctx, st, client, access.AccessToken, row, why)
 		return denied(fmt.Errorf("%w: the sign-in ended while this token was created", ErrADOEntraNotCaptured))
 	}
@@ -217,6 +233,8 @@ func (s *Server) mintRunPAT(ctx context.Context, runID uuid.UUID, sn adoEntraSco
 func adoRunPATRefusal(err error) (status int, reason, body string) {
 	var pe *adoPATError
 	switch {
+	case db.LockRefused(err), errors.Is(err, errADOPATStateUnavailable):
+		return http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg
 	case errors.Is(err, errADOPATUnavailable):
 		return http.StatusForbidden, reasonADOPATUnavailable, adoRunPATUnavailable
 	case errors.Is(err, ErrADOMintNeedsSecret):
@@ -262,13 +280,20 @@ func (s *Server) dispatchRunPAT(ctx context.Context, run types.AgentRun, ado ado
 	if status != 0 {
 		return s.refuseADOEntraDispatch(ctx, run, reason, body)
 	}
-	e, unlock := s.adoRunPATs.lock(run.ID)
-	pat, err := s.mintRunPAT(ctx, run.ID, sn, cfg, ado.caps,
+	lctx, e, unlock, err := s.lockRunPAT(ctx, run.ID)
+	if err != nil {
+		_, reason, body := adoRunPATRefusal(err)
+		return s.refuseADOEntraDispatch(ctx, run, reason, body)
+	}
+	pat, err := s.mintRunPAT(lctx, run.ID, sn, cfg, ado.caps,
 		adoRunPATValidTo(s.cfg.Now(), ado.patHours, run.EndsAt), adoPATMintDispatch)
 	if err == nil {
-		e.cur, e.caps = pat, slices.Clone(ado.caps)
+		e.owner, e.cur, e.caps = sn.OwnerSubject, pat, slices.Clone(ado.caps)
+		if err = s.saveRunPAT(lctx, run.ID, e); err != nil {
+			s.revokeUnrecordedRunPAT(lctx, run.ID, sn, pat)
+		}
 	}
-	// Unlocked before refusing: the refusal's revoke cascade takes this entry.
+	// Unlocked before refusing: the refusal's revoke cascade takes this lock.
 	unlock()
 	if err != nil {
 		_, reason, body := adoRunPATRefusal(err)
@@ -331,7 +356,10 @@ func (s *Server) resolveADORunPAT(w http.ResponseWriter, r *http.Request, claims
 func (s *Server) runPATFor(ctx context.Context, runID uuid.UUID, sn adoEntraScopeSnapshot, cfg ADOEntraConfig,
 	sc types.SiteConfig, want []adoscope.Capability, staleJTI string,
 ) (adoPAT, error) {
-	e, unlock := s.adoRunPATs.lock(runID)
+	ctx, e, unlock, err := s.lockRunPAT(ctx, runID)
+	if err != nil {
+		return adoPAT{}, err
+	}
 	defer unlock()
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	switch {
@@ -374,6 +402,9 @@ func (s *Server) runPATFor(ctx context.Context, runID uuid.UUID, sn adoEntraScop
 	}
 	pat, err := s.mintRunPAT(ctx, runID, sn, cfg, caps, validTo, reason)
 	if err != nil {
+		if reason == adoPATMintUpstream401 {
+			_ = s.saveRunPAT(ctx, runID, e) // the forced-mint mark holds even when the mint failed
+		}
 		if reason == adoPATMintRenewal && e.cur.ValidTo.After(now) {
 			// The current token still works until its validTo; the next resolve
 			// tries again. Past it, the failure is the answer.
@@ -381,7 +412,12 @@ func (s *Server) runPATFor(ctx context.Context, runID uuid.UUID, sn adoEntraScop
 		}
 		return adoPAT{}, err
 	}
-	e.cur, e.caps, e.paused = pat, caps, false
+	e.owner, e.cur, e.caps, e.paused = sn.OwnerSubject, pat, caps, false
+	if err := s.saveRunPAT(ctx, runID, e); err != nil {
+		// Not handed out: no replica could be given it again, and nothing else records it.
+		s.revokeUnrecordedRunPAT(ctx, runID, sn, pat)
+		return adoPAT{}, err
+	}
 	if reason == adoPATMintUpstream401 {
 		if st, ok := s.cfg.Store.(store.RunPATStore); ok {
 			if old, rerr := runPATRow(runID, sn, stale); rerr == nil {
@@ -390,6 +426,18 @@ func (s *Server) runPATFor(ctx context.Context, runID uuid.UUID, sn adoEntraScop
 		}
 	}
 	return pat, nil
+}
+
+// revokeUnrecordedRunPAT revokes a token mintRunPAT created whose value could not be recorded, so
+// it is never handed out and not left to live to its validTo. Best-effort, like every revoke here.
+func (s *Server) revokeUnrecordedRunPAT(ctx context.Context, runID uuid.UUID, sn adoEntraScopeSnapshot, pat adoPAT) {
+	st, ok := s.cfg.Store.(store.RunPATStore)
+	if !ok {
+		return
+	}
+	if row, err := runPATRow(runID, sn, pat); err == nil {
+		s.revokeRunPAT(ctx, st, row, adoPATRevokeUnrecorded)
+	}
 }
 
 // adoRunPATStanding is want plus every capability approved for the whole run,
