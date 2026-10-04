@@ -881,6 +881,8 @@ describe("GovernanceScreen — the Changes tab", () => {
     const tab = await screen.findByRole("tab", { name: CHANGES.TAB_COUNT(2) });
     await userEvent.click(tab);
     expect(await screen.findByText(CHANGES.LEAD)).toBeInTheDocument();
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: GOV.PROFILES_TITLE })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByText("team-a")).toBeInTheDocument();
     expect(screen.getByText("team-b")).toBeInTheDocument();
   });
