@@ -130,7 +130,7 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 			return types.AgentRun{}, err
 		}
 	}
-	active, err := lockAndCountActiveRuns(ctx, tx)
+	active, err := lockAndCountActiveRuns(ctx, tx, uuid.Nil)
 	if err != nil {
 		return types.AgentRun{}, err
 	}
@@ -148,15 +148,16 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 }
 
 // lockAndCountActiveRuns takes the deployment cap's transaction-scoped advisory
-// lock and counts the runs it holds (CountNonTerminalRuns' predicate). Every
-// writer that adds a run to that count (a create, a kept run's revive) holds the
-// lock from this count to its commit. q must be a pgx.Tx.
-func lockAndCountActiveRuns(ctx context.Context, q Querier) (int, error) {
+// lock and counts the runs it holds (CountNonTerminalRuns' predicate) other than
+// except (uuid.Nil for none), in one statement. Every writer that adds a run to
+// that count (a create, a kept run's revive) holds the lock from this count to its
+// commit. q must be a pgx.Tx.
+func lockAndCountActiveRuns(ctx context.Context, q Querier, except uuid.UUID) (int, error) {
 	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.RunCapLockClass); err != nil {
 		return 0, err
 	}
 	var active int
-	if err := q.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames()).Scan(&active); err != nil {
+	if err := q.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames(), except).Scan(&active); err != nil {
 		return 0, fmt.Errorf("store: count active runs: %w", err)
 	}
 	return active, nil
@@ -170,7 +171,7 @@ func lockAndCountActiveRuns(ctx context.Context, q Querier) (int, error) {
 // capacity view and under WARDYN_RUN_MAX_AGE.
 const HoldsSandboxSQL = `(lost_at IS NULL OR (lost_reason = '` + string(types.LostOutage) + `' AND (ends_at IS NULL OR ends_at > now())))`
 
-const activeRunsCountSQL = `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND ` + HoldsSandboxSQL
+const activeRunsCountSQL = `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND id <> $2 AND ` + HoldsSandboxSQL
 
 // CountNonTerminalRuns is the number of non-terminal run rows that hold a sandbox
 // (HoldsSandboxSQL), the quantity CreateRunUnderCap holds under the cap. It takes no
@@ -178,7 +179,7 @@ const activeRunsCountSQL = `SELECT count(*) FROM agent_runs WHERE state = ANY($1
 // never the authority.
 func (s PG) CountNonTerminalRuns(ctx context.Context) (int, error) {
 	var n int
-	if err := s.Pool.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames()).Scan(&n); err != nil {
+	if err := s.Pool.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames(), uuid.Nil).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count active runs: %w", err)
 	}
 	return n, nil
