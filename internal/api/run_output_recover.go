@@ -98,6 +98,7 @@ func (s *Server) openRecoveryTail(run types.AgentRun) *tailWriter {
 	if tw == nil {
 		return nil
 	}
+	tw.t.dropChunks()
 	tw.t.fmu.Lock()
 	tw.t.recovered = true
 	tw.t.fmu.Unlock()

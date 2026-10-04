@@ -26,12 +26,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adorunpat"
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/directory"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/livebus"
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -422,6 +424,14 @@ type Config struct {
 	// complete is refused instead of passed through. Nil keeps no manifests
 	// and gates nothing, as a nil MaskRegistry masks nothing.
 	MaskManifests *maskmanifest.Manifests
+	// LiveBus, when non-nil, carries the notices replicas send each other over Postgres NOTIFY:
+	// run lifecycle events, a kill for the replica creating the run's sandbox, and the end of an
+	// attach lease (live_bus.go). Nil keeps each replica to its own process, as before.
+	LiveBus *livebus.Bus
+	// ADORunPATs, when non-nil, keeps each `minted_pat` run's current token in Postgres so every
+	// replica serves the one any replica created (ado_run_pat_cache.go). Nil keeps it in this
+	// process.
+	ADORunPATs *adorunpat.Store
 	// ExecOutputTailOff is WARDYN_EXEC_OUTPUT_TAIL=off: no non-interactive run
 	// keeps an output tail for GET /runs/{id}/output (run_output.go).
 	ExecOutputTailOff bool
@@ -783,8 +793,12 @@ type Server struct {
 	// refused by construction (deployment.yaml). Zero value is ready to use.
 	attachHolders attachHolderRegistry
 	// creates lets a kill cancel a STARTING run's CreateSandbox (runs_create_cancel.go).
-	creates   inflightCreates
-	runEvents runEventHub // each run's lifecycle event ring (run_events.go)
+	creates inflightCreates
+	// replica is this server's identity when no LiveBus names one (replicaName).
+	replica         string
+	replicaOnce     sync.Once
+	leaseKeeperOnce sync.Once   // starts attachLeaseKeeper (attach_lease.go)
+	runEvents       runEventHub // each run's lifecycle event ring (run_events.go)
 	// execOutputs holds each non-interactive run's output tail (run_output.go).
 	execOutputs execOutputTails
 	// uiConns counts concurrent UI-gateway relay connections per run, enforcing
@@ -922,6 +936,7 @@ func New(cfg Config) *Server {
 		s.preflightLimiter = &principalLimiter{rate: float64(cfg.PreflightRatePerMin) / 60, burst: preflightBurst, max: preflightLimiterMaxPeople}
 	}
 	s.router = s.routes()
+	s.registerLiveBus()
 	// drain the durable audit-fallback spool back into the store once it
 	// recovers, so a PG outage no longer leaves spooled events permanently invisible
 	// to /audit and `wardyn audit`. Uses BaseCtx (daemon lifetime) so it survives

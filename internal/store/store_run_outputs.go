@@ -144,6 +144,11 @@ func (s PG) SaveFinalRunOutput(ctx context.Context, o RunOutput) error {
 				capture_gap = EXCLUDED.capture_gap, source = EXCLUDED.source, mask_scope = EXCLUDED.mask_scope,
 				captured_at = EXCLUDED.captured_at, claimed_at = EXCLUDED.claimed_at`,
 			o.RunID, body, o.Truncated, o.Incomplete, o.CaptureGap, o.Source, o.MaskScope)
+		if err != nil {
+			return err
+		}
+		// The live chunks (0129) were the tail's stand-in until this row: they go in the transaction that writes it.
+		_, err = tx.Exec(ctx, `DELETE FROM run_output_chunks WHERE run_id = $1`, o.RunID)
 		return err
 	})
 }
@@ -157,7 +162,14 @@ func (s PG) SaveGapRunOutput(ctx context.Context, runID uuid.UUID) (bool, error)
 			VALUES ($1, 'stdout', true, now())
 			ON CONFLICT (run_id) DO UPDATE SET capture_gap = true, captured_at = now(), claimed_at = now()
 			WHERE run_outputs.captured_at IS NULL`, runID)
-		wrote = err == nil && tag.RowsAffected() == 1
+		if err != nil {
+			return err
+		}
+		wrote = tag.RowsAffected() == 1
+		if !wrote {
+			return nil
+		}
+		_, err = tx.Exec(ctx, `DELETE FROM run_output_chunks WHERE run_id = $1`, runID)
 		return err
 	})
 	return wrote, err
@@ -233,6 +245,9 @@ func (s PG) EraseRunOutputs(ctx context.Context, runIDs []uuid.UUID) error {
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM run_outputs WHERE run_id = ANY($1)`, ids); err != nil {
 		return fmt.Errorf("store: erase run outputs: delete: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM run_output_chunks WHERE run_id = ANY($1)`, ids); err != nil {
+		return fmt.Errorf("store: erase run outputs: delete chunks: %w", err)
 	}
 	return tx.Commit(ctx)
 }

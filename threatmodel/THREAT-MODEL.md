@@ -2512,8 +2512,9 @@ hiding them would repeat the failure mode we are designed to avoid.
     Entra refresh token, obtained with only `vso.pats` and `vso.pats_manage` on
     Wardyn's own sign-in app, and uses it to create one organisation-scoped PAT
     per run in that person's name, scoped to the run's capabilities, at most
-    `pat_max_hours` long (default 8, at most 168). The PAT is held in wardynd
-    memory, crosses the pinned hop to the run's proxy, and is injected there as
+    `pat_max_hours` long (default 8, at most 168). The PAT is kept sealed under the
+    run owner's key in Postgres (`ado_run_pat_state`, so every replica serves it and an
+    erasure deletes it; destroying the key leaves it undecryptable), crosses the pinned hop to the run's proxy, and is injected there as
     Basic; it is mask-registered in its raw, base64 and header forms and never
     enters the sandbox. Renewal and widening create a newer PAT and leave the
     older to its own expiry; pause and every end path revoke them all, and a

@@ -108,6 +108,9 @@ nothing at all, because its output is a live credential.
   the window, and a run whose output was erased (below) answers
   `404 run_output_erased`. A deployment that turned recordings off so terminals
   are not kept should decide on these two settings too.
+- **Another replica's live tail.** With persistence on, a replica that holds no
+  tail for a live run answers the read from `run_output_chunks`, where the
+  dispatching replica keeps what its masker has passed (`complete` is false).
 - **One finalisation for every way a run ends.** Completion, failure, a kill,
   an idle stop, a lease end, a probe reclaim, boot reconciliation and a failed
   dispatch all end in the same step: wait up to 5 seconds for the runner's copy
@@ -7286,6 +7289,45 @@ compare-and-set on the stored credential, so it cannot overwrite a newer one;
 a refresh already in flight can still race the new holder at the authority
 across a failover (residual). The connection budget is in
 [ENV.md](ENV.md) beside `pool_max_conns`.
+
+Since 0.8.6 the rest of a run's live state is in Postgres too (migration
+`0129_ha_live_state`), so a request served by any replica sees the same run:
+
+- **the exec output tail** — the dispatching replica's masker writes each chunk it
+  passes to `run_output_chunks` as well as to its memory ring, in batches off the
+  runner's path (the bytes are masked before they are inserted; the table holds
+  about one tail per run and the final `run_outputs` row's transaction deletes
+  them). Any replica answers `GET /runs/{id}/output` for a live run from them. If
+  the replica that held the tail dies, they are what is left: the run's row is
+  written from them as an `incomplete` `capture_gap` when the substrate cannot be
+  re-read (what the dead replica's masker still withheld is the gap), audited
+  `run.output.finalize` with `from_chunks`. An erased run's chunks are deleted with
+  its output and every later write is refused by the same tombstone.
+- **the attach writer slot** — a lease row per run (`run_attach_leases`, six seconds,
+  renewed every two). A client is the writer only while its holder id is the row's
+  holder; input and resize check it at least once a second and fail closed when
+  Postgres does not answer. A take-over served by any replica replaces the lease
+  with a reservation for the taker, tells the holder's replica to displace the
+  client, and promotes the taker's own queued client in place, if it has one; no
+  one else's queued client gets the slot. The lease lapses with its replica, and
+  `GET /runs/{id}/attach/holder` names a holder on another replica. The attach-mode
+  frame a client receives still names only a holder in the same replica.
+- **run events and kills** — each replica announces its run events and kills over
+  `NOTIFY wardyn_live` (one dedicated connection per replica, outside
+  `pool_max_conns`). A notice is a hint: the events stream re-reads the run every
+  beat, and a kill whose notice is lost still ends the run `KILLED`, because
+  dispatch's STARTING to RUNNING compare fails and tears the sandbox down.
+- **the Azure DevOps run token** — `ado_run_pat_state` holds each `minted_pat`
+  run's current token sealed under the run owner's `cred` key (AAD: the run id and
+  the rendering), the capabilities it was built from and the pause mark. Every mint
+  and revoke for a run takes its token lock, so two replicas resolving at once
+  create one token, and a pause's revoke cannot interleave with a mint. The count of
+  a person's sign-in ends (`ado_signin_ends`) is shared. A person's erasure deletes
+  the rows (the `mask_copies` scope) and the manifest fence stops a write after it;
+  state that cannot be read or written is a `503`, never a guess. A split migrator
+  and app role install grants the app role `SELECT, INSERT, DELETE` on
+  `run_output_chunks`, `SELECT, INSERT, UPDATE, DELETE` on `run_attach_leases` and
+  `ado_run_pat_state`, and `SELECT, INSERT, UPDATE` on `ado_signin_ends`.
 
 None of that makes `replicas > 1` supported. It closed the six reasons a second
 replica used to drop *requests*; it did not touch the list above, and the masking

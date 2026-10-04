@@ -148,7 +148,10 @@ func (e *execOutputTail) seal(uncoveredNow bool) (out []byte, truncated, dropped
 	if uncoveredNow {
 		e.mw.capture.uncovered, e.mw.capture.dropped = true, e.mw.capture.dropped || len(e.mw.tail) > 0
 	} else if held := releasedHoldback(e.mw.tail); len(held) > 0 {
-		_, _ = e.ring.Write(held)
+		_, _ = e.sink.Write(held)
+	}
+	if e.sink.q != nil {
+		e.sink.q.stop() // sealed: the final row replaces the chunks
 	}
 	e.mw.tail = nil
 	e.mw.capture.sealed = true
@@ -245,6 +248,9 @@ func (s *Server) prepareRunOutput(ctx context.Context, runID uuid.UUID, graceful
 // writeGapRow resolves runID's pending row (or writes the row) as a capture
 // gap with no bytes, never over a final row, and audits it.
 func (s *Server) writeGapRow(ctx context.Context, st store.RunOutputStore, runID uuid.UUID, reason string) {
+	if s.saveRowFromChunks(ctx, runID, reason) {
+		return
+	}
 	wrote, err := st.SaveGapRunOutput(ctx, runID)
 	switch {
 	case errors.Is(err, store.ErrRunOutputErased):
