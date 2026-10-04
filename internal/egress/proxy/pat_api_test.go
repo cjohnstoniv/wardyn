@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -594,5 +595,53 @@ func TestPATAPIDoorRunsForwardEgressScan(t *testing.T) {
 	}
 	if d := lastDecision(t, h.log); d.RuleSource != ruleSourcePATAPI || d.Scan == nil || len(d.Scan.Findings) == 0 {
 		t.Fatalf("allow row must carry the scan summary, got %+v", d)
+	}
+}
+
+// GitLab reads create params from the query as well as the body, so the door's scan covers the
+// query: a secret in ?description= on a bodiless POST is refused before the mint, and an
+// alert-mode finding there rides the allow row.
+func TestPATAPIDoorScansTheQuery(t *testing.T) {
+	post := apiReq{"POST", glBase + "/merge_requests?source_branch=f&target_branch=main&title=t&description=leak+" + scanTestSecret, "", "", nil}
+
+	h := newAPIHarness(t, types.PATForgeGitLab, apiGrants[types.PATForgeGitLab])
+	h.p.scanner = forwardScanEngine(t, "block")
+	if rec := h.serve(t, post); rec.Code != http.StatusForbidden {
+		t.Fatalf("a secret in the query must be refused, got %d", rec.Code)
+	}
+	if h.forgeHits() != 0 || h.mints() != 0 {
+		t.Fatalf("a blocked request must not mint or reach the forge: hits=%d mints=%d", h.forgeHits(), h.mints())
+	}
+	if d := lastDecision(t, h.log); d.RuleSource != ruleSourceLLMBlocked {
+		t.Fatalf("decision = %+v, want scan:blocked", d)
+	}
+
+	h = newAPIHarness(t, types.PATForgeGitLab, apiGrants[types.PATForgeGitLab])
+	h.p.scanner = forwardScanEngine(t, "alert")
+	if rec := h.serve(t, post); rec.Code != http.StatusOK {
+		t.Fatalf("alert mode forwards, got %d", rec.Code)
+	}
+	if d := lastDecision(t, h.log); d.RuleSource != ruleSourcePATAPI || d.Scan == nil || len(d.Scan.Findings) == 0 {
+		t.Fatalf("allow row must carry the query's scan summary, got %+v", d)
+	}
+}
+
+// With scanning on but inspect_forward_egress off, the door's allow row says the body was not
+// inspected, as every other MITM'd generic host's does.
+func TestPATAPIDoorSaysWhenTheBodyIsNotInspected(t *testing.T) {
+	post := apiReq{"POST", glBase + "/merge_requests", jsonCT,
+		`{"source_branch":"f","target_branch":"main","title":"t","description":"clean"}`, nil}
+	eng, err := contentscan.NewEngine(types.LLMInspectionSpec{Mode: "block", DetectSecrets: true}, [][]byte{[]byte(scanTestSecret)})
+	if err != nil || eng == nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	h := newAPIHarness(t, types.PATForgeGitLab, apiGrants[types.PATForgeGitLab])
+	h.p.scanner = eng
+	if rec := h.serve(t, post); rec.Code != http.StatusOK {
+		t.Fatalf("an uninspected body forwards, got %d", rec.Code)
+	}
+	d := lastDecision(t, h.log)
+	if d.RuleSource != ruleSourcePATAPI || d.Scan == nil || !d.Scan.Skipped || d.Scan.SkipReason != "uninspected_channel" {
+		t.Fatalf("allow row must carry the uninspected_channel skip, got %+v", d)
 	}
 }

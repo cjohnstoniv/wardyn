@@ -251,7 +251,7 @@ every request, and only then mints the PAT and injects it in the forge's header 
 `PRIVATE-TOKEN`, Gitea `Authorization: token`, Bitbucket Server `Authorization: Bearer`). A
 refusal is a `403` with `wardyn: git_pat_api_refused` and `rule_source`
 `brokered:git-pat:api:denied`, before the mint and before anything is sent upstream; an admitted
-request is `brokered:git-pat:api`. `generic` has no table, so `api: true` on it is refused at write.
+request is `brokered:git-pat:api`. Under `inspect_forward_egress` the body and query are scanned before the mint, and a block-mode finding is a `403` with `wardyn: llm_content_blocked` (`scan:blocked`) instead. `generic` has no table, so `api: true` on it is refused at write.
 
 What the table admits, under a repository the grant's `repos` names (an absent `repos` admits any
 repository path, never a project named by number):
