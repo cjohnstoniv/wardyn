@@ -111,6 +111,11 @@ type Config struct {
 	// audit reads serve (WARDYN_AUDIT_SEAL, internal/audit/seal.go). Nil serves
 	// rows as stored.
 	AuditUnsealer audit.Unsealer
+	// AuditActorSubject is the actor a human caller is stored under on a row
+	// written outside the recorder chain (the retention drop's chained event
+	// and anchor): under WARDYN_AUDIT_SEAL=full the person's "subject:<id>".
+	// Nil stores the principal as it is.
+	AuditActorSubject func(ctx context.Context, principal string) (string, error)
 	// SubjectKeys is the per-subject key service; person erasure destroys a
 	// person's audit-seal key through it. Nil makes the audit_personal_fields
 	// scope unavailable.

@@ -631,7 +631,9 @@ their subject. **SIEM rules keyed on `actor` see subject ids from the moment `fu
 see the name. A person with no identity row (one who never signed in through SSO) keeps their name in `actor`, and
 `person.erasure`, `credential.erase` and `principal_key.destroyed` keep theirs. A row whose subject could not be
 had waits in the spool with the actor sealed under the pending key and `subject:pending` in the column, and the
-drain stores the subject. `subject:` is a reserved principal prefix whatever the mode is: a session cookie, a
+drain stores the subject. The `audit.retention.partition_dropped` row and its anchor, which the database writes,
+carry the dropping operator's subject too; a drop is refused (`503` `audit_retention_drop_failed`) while the
+subject cannot be had. `subject:` is a reserved principal prefix whatever the mode is: a session cookie, a
 `wdn_` token or a `/people/{principal}` path carrying it is refused with `reserved_principal`.
 
 **Out of reach.** Rows written before sealing was turned on, or before 0.8.6, are plaintext and stay so.

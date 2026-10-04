@@ -199,6 +199,45 @@ func TestAuditRetention_DropAndItsRefusals(t *testing.T) {
 	})
 }
 
+// Under WARDYN_AUDIT_SEAL=full the drop's chained event and anchor carry the human caller's subject, never
+// the principal; with no translation configured the principal passes as it is. A sealer that cannot answer
+// refuses the drop before the store sees it.
+func TestDropAuditPartition_FullSealStoresSubjectActor(t *testing.T) {
+	sec := ssoSession(t, "sub-sec", "sec@corp.example", oidc.RoleSecurityAdmin)
+	body := `{"partition":"audit_events_legacy","digest":"abc"}`
+	serve := func(subject func(context.Context, string) (string, error)) (*Server, *retentionFake) {
+		fake := &retentionFake{}
+		cfg := baseTestConfig(newHarness(t), fake)
+		cfg.OIDC = &oidc.Authenticator{}
+		cfg.AuditActorSubject = subject
+		return New(cfg), fake
+	}
+
+	srv, fake := serve(func(_ context.Context, principal string) (string, error) {
+		if principal != "sub-sec" {
+			t.Errorf("translated %q, want the caller's principal", principal)
+		}
+		return "subject:abc", nil
+	})
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/audit/retention/drop", sec, body); w.Code != http.StatusOK {
+		t.Fatalf("drop: %d %s", w.Code, w.Body.String())
+	}
+	if fake.dropActor != "subject:abc" {
+		t.Errorf("the store saw actor %q, want the subject", fake.dropActor)
+	}
+
+	srv, fake = serve(nil)
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/audit/retention/drop", sec, body); w.Code != http.StatusOK || fake.dropActor != "sub-sec" {
+		t.Errorf("no translation: %d, store saw %q, want the principal", w.Code, fake.dropActor)
+	}
+
+	srv, fake = serve(func(context.Context, string) (string, error) { return "", errors.New("not armed") })
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/audit/retention/drop", sec, body)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "audit_retention_drop_failed") || fake.drops != 0 {
+		t.Errorf("a sealer that cannot answer: %d %s, %d drop(s); want 503 audit_retention_drop_failed and no drop", w.Code, w.Body.String(), fake.drops)
+	}
+}
+
 // /setup/status warns when the partition runway is short, and says nothing while it is healthy.
 func TestAuditPartitionChecks(t *testing.T) {
 	for _, c := range []struct {

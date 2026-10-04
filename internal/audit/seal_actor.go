@@ -59,6 +59,24 @@ func (s *Sealer) actorSubject(ctx context.Context, name string) (id string, ok b
 	return id, true, nil
 }
 
+// ActorSubject is the actor column a human row written outside the recorder
+// chain stores under SealFull (the retention drop's event and anchor): the
+// person's subject, with their audit-seal key created when there is none, as
+// Seal stores it. A person with no identity row keeps their name.
+func (s *Sealer) ActorSubject(ctx context.Context, principal string) (string, error) {
+	if s.Subjects == nil {
+		return "", errors.New("audit seal: the subject directory is not available")
+	}
+	id, ok, err := s.actorSubject(ctx, principal)
+	switch {
+	case err != nil:
+		return "", err
+	case !ok:
+		return principal, nil
+	}
+	return SubjectActorPrefix + id, nil
+}
+
 // sealActor stores ev's human actor as its subject. A person with no identity
 // row keeps their actor. When the subject cannot be had the actor waits under
 // the pending key, as a sealed field does: the row is returned pending, and the
