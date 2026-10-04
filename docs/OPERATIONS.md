@@ -1207,6 +1207,7 @@ and, with `hmac_secret` set, `X-Wardyn-Signature`. Only these fields are ever se
 | `delivery_id` | the outbox row's id, stable across retries |
 | `event`, `tier` | `raised` at tier 0, `escalated` above it |
 | `approval.id`, `approval.kind`, `approval.requested_at` | the approval |
+| `approval.sla_due_at` | when the next tier is due; omitted when no later tier is scheduled |
 | `run.id` | the run that raised it |
 | `profile.id`, `profile.name` | the run's governance profile, when it has one |
 | `requester.principal`, `requester.email` | the run's owner; omitted on a channel with `redact_requester` |

@@ -59,6 +59,22 @@ func TestBuildPayload_Golden(t *testing.T) {
 	}
 }
 
+// An approval with a later tier scheduled names its due time in approval.sla_due_at.
+func TestBuildPayload_SLADueAt(t *testing.T) {
+	f := facts()
+	due := f.RequestedAt.Add(30 * time.Minute)
+	f.NextTierDueAt = &due
+	got, err := buildPayload(uuid.MustParse("00000000-0000-4000-8000-0000000000dd"), 0, f, "", secretmask.Masker{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"approval":{"id":"00000000-0000-4000-8000-000000000001","kind":"egress_domain","requested_at":"` +
+		f.RequestedAt.Format(time.RFC3339) + `","sla_due_at":"` + due.Format(time.RFC3339) + `"},`
+	if !strings.Contains(string(got), want) {
+		t.Fatalf("payload\n got %s\nwant it to contain %s", got, want)
+	}
+}
+
 // TestBuildPayload_NeverCarriesSandboxText: the facts the worker loads have no field for the scope, the
 // reason or the title, so a secret written into any of them cannot reach the body. The test asserts that
 // at the seam: it renders a payload for an approval whose scope and reason hold a registered secret and

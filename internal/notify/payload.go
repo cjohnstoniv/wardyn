@@ -51,6 +51,8 @@ type payloadApproval struct {
 	ID          string `json:"id"`
 	Kind        string `json:"kind"`
 	RequestedAt string `json:"requested_at"`
+	// SLADueAt is the next tier's due time, set only while a later tier is scheduled.
+	SLADueAt string `json:"sla_due_at,omitempty"`
 }
 
 type payloadRun struct {
@@ -73,11 +75,13 @@ type approvalFacts struct {
 	State       types.ApprovalState
 	Kind        types.ApprovalKind
 	RequestedAt time.Time
-	RunID       uuid.UUID
-	Principal   string
-	Email       string
-	ProfileID   *uuid.UUID
-	ProfileName string
+	// NextTierDueAt is the earliest due time of a later tier still pending for this approval; nil when none.
+	NextTierDueAt *time.Time
+	RunID         uuid.UUID
+	Principal     string
+	Email         string
+	ProfileID     *uuid.UUID
+	ProfileName   string
 	// Recipients are the addresses the tier's notify targets resolved to at send time; RedactRequester
 	// is the sending channel's setting.
 	Recipients      []recipient
@@ -109,6 +113,9 @@ func buildPayload(deliveryID uuid.UUID, tier int16, f approvalFacts, consoleURL 
 			RequestedAt: clean(f.RequestedAt.UTC().Format(time.RFC3339)),
 		},
 		Run: payloadRun{ID: clean(f.RunID.String())},
+	}
+	if f.NextTierDueAt != nil {
+		p.Approval.SLADueAt = clean(f.NextTierDueAt.UTC().Format(time.RFC3339))
 	}
 	if f.ProfileID != nil {
 		p.Profile = &payloadProfile{ID: clean(f.ProfileID.String()), Name: clean(f.ProfileName)}
