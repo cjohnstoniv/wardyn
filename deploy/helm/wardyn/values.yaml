@@ -595,6 +595,13 @@ k8s:
     priorityClassName: ""
     podAnnotations: {}
     podLabels: {}
+  # Let wardynd list the cluster's nodes (WARDYN_K8S_READ_NODES), which adds a `list` on `nodes` to the
+  # ClusterRole, so preflight and create can warn that no node a run may be placed on is large enough for it.
+  # Off by default: nodes are cluster-scoped, and a tenant of a shared cluster may not be granted them. The
+  # warning compares a run's requests to node SIZE, never to free capacity (other namespaces' pods are
+  # invisible here), and the scheduler stays the authority. The ResourceQuota read needs no flag: it is a
+  # namespaced `list` on `resourcequotas` in the runner Role.
+  readNodes: false
   # Confinement-Class -> RuntimeClass NAME pins (WARDYN_CONFINEMENT_MAP's k8s
   # form, e.g. CC2=gvisor;CC3=kata-qemu). A k8s RuntimeClass object name
   # carries no platform convention Wardyn can guess (unlike docker's runtime

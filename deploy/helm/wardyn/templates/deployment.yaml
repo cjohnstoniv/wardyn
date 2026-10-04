@@ -576,6 +576,11 @@ spec:
             - name: WARDYN_K8S_SANDBOX_PLACEMENT
               value: {{ toJson $placement | quote }}
             {{- end }}
+            {{- if .Values.k8s.readNodes }}
+            # The node-size advisory (internal/runner/k8s/fit_nodes.go); rbac.yaml grants the matching nodes list.
+            - name: WARDYN_K8S_READ_NODES
+              value: "true"
+            {{- end }}
             {{- $rtc := list -}}
             {{- with .Values.k8s.runtimeClasses.CC2 }}{{- $rtc = append $rtc (printf "CC2=%s" .) -}}{{- end }}
             {{- with .Values.k8s.runtimeClasses.CC3 }}{{- $rtc = append $rtc (printf "CC3=%s" .) -}}{{- end }}
