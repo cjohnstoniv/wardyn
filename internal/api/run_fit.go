@@ -43,6 +43,19 @@ func (s *Server) refuseRunFit(w http.ResponseWriter, r *http.Request, spec types
 	return v.warnings, false
 }
 
+// runFitSpec is the spec the fit check is asked about: the policy with the disk dispatch will
+// settle on (the org default filled in, the org and profile maximums applied), so a hard
+// ephemeral-storage quota is judged the same at both doors. It works on a copy: the fill must
+// never reach a launch spec (runner.Resources.DiskMiBFilled carries its provenance).
+func (s *Server) runFitSpec(ctx context.Context, spec types.RunPolicySpec, ceiling governanceCeiling) types.RunPolicySpec {
+	profileMax := 0
+	if ceiling.Profile != nil && !s.runUngoverned(ctx) {
+		profileMax = ceiling.Limits.MaxEphemeralDiskMiB
+	}
+	s.previewEphemeralDisk(ctx, &spec, profileMax)
+	return spec
+}
+
 // runFit asks the substrate whether a run of the spec's size fits. A deployment whose runner has no
 // fit to check (docker, or no runner) has nothing to say. A check that errors is reported as an
 // unreadable quota: the quota is enforced when the run starts either way.

@@ -341,7 +341,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// The runs namespace's ResourceQuota, launch's refusal after the cap and in the same place:
 	// the same 422, so a run that cannot fit shows before the click. Its advisories join the
 	// warnings below.
-	fitWarnings, refused := s.refuseRunFit(w, r, spec)
+	fitWarnings, refused := s.refuseRunFit(w, r, s.runFitSpec(r.Context(), spec, ceiling))
 	if refused {
 		return
 	}

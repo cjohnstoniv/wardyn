@@ -153,7 +153,12 @@ func TestRunFit_RunnerWithoutAFitToCheckSaysNothing(t *testing.T) {
 
 // fitStore ends a run's detached launch at its first state claim: these tests are about the
 // answer POST /runs gives, and a claim that does not apply makes dispatch stop and write one audit row.
-type fitStore struct{ *runCapAPIStore }
+type fitStore struct {
+	*runCapAPIStore
+	site types.SiteConfig
+}
+
+func (s *fitStore) GetSiteConfig(context.Context) (types.SiteConfig, error) { return s.site, nil }
 
 func (*fitStore) UpdateRunStateIf(context.Context, uuid.UUID, types.RunState, types.RunState) (bool, error) {
 	return false, nil
@@ -166,7 +171,7 @@ func fitServer(t *testing.T, fit runner.Fit, cpuMillis, memMiB int) (*Server, *r
 	h := newHarness(t)
 	st := &runCapAPIStore{runWarnStore: &runWarnStore{capStore: &capStore{}}}
 	fr := &fitRunner{fakeRunner: &fakeRunner{}, fit: fit}
-	cfg := baseTestConfig(h, &fitStore{st})
+	cfg := baseTestConfig(h, &fitStore{runCapAPIStore: st})
 	cfg.Runner = fr
 	cfg.DefaultPolicy = types.RunPolicySpec{
 		MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
@@ -183,6 +188,9 @@ func TestCreateRun_QuotaBreachRefusesBeforeDispatch(t *testing.T) {
 		{Name: "runs-quota", Axes: []runner.QuotaAxis{{Key: "requests.cpu", Need: 2500, Left: 1000, Hard: 4000}}},
 	}}
 	srv, st, fr, h := fitServer(t, breach, 2000, 4096)
+	// An org default disk and a policy that names none: dispatch will fill it, so both doors
+	// must ask the quota for it (the ephemeral-storage axes).
+	srv.cfg.Store.(*fitStore).site = ephemeralSite(10240, 0)
 	const body = `{"agent":"claude-code","task":"t"}`
 	const want = "this run needs 2.5 CPU, more than quota runs-quota has left (1 CPU). Stop a run, or ask your admin to raise the quota."
 
@@ -207,10 +215,17 @@ func TestCreateRun_QuotaBreachRefusesBeforeDispatch(t *testing.T) {
 	if fr.asked.CPUMillis != 2000 || fr.asked.MemoryMiB != 4096 {
 		t.Fatalf("CheckFit asked %+v, want the run's 2000m/4096Mi", fr.asked)
 	}
+	if fr.asked.DiskMiB != 10240 {
+		t.Fatalf("create asked the quota for %d MiB of disk, want the org default 10240", fr.asked.DiskMiB)
+	}
 
+	fr.asked = runner.Resources{}
 	w = do(t, srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
 	if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonNamespaceQuotaExceeded {
 		t.Fatalf("preflight: %d %q, want the same 422 (body %s)", w.Code, errorReason(w), w.Body)
+	}
+	if fr.asked.DiskMiB != 10240 {
+		t.Fatalf("preflight asked the quota for %d MiB of disk, want the org default 10240", fr.asked.DiskMiB)
 	}
 
 	// 2500m needed, 2800m left of 30000m: admitted, with the quota 99% used once the run is in.

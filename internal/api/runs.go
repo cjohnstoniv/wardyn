@@ -280,7 +280,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// The runs namespace's ResourceQuota, refused before the mint for the same reason: a run
 	// the quota cannot hold leaves no identity, no run row and no sandbox. The advisories
 	// join the 201's warnings. The quota's own admission stays the authority on a race.
-	fitWarnings, refused := s.refuseRunFit(w, r, spec)
+	fitWarnings, refused := s.refuseRunFit(w, r, s.runFitSpec(ctx, spec, ceiling))
 	if refused {
 		return
 	}

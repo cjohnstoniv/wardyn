@@ -40,23 +40,32 @@ type nodeCache struct {
 	state runner.ReadState
 }
 
-// cachedNodes returns the node list, read at most once per nodeCacheTTL.
+// cachedNodes returns the node list, read at most once per nodeCacheTTL. The lock is never
+// held across the apiserver read, so a slow List cannot serialise every other check behind it;
+// two callers racing an expired cache may each read once, and the later store wins.
 func (d *Driver) cachedNodes(ctx context.Context) ([]nodeInfo, runner.ReadState) {
 	c := &d.nodeCache
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.state != "" && time.Since(c.at) < nodeCacheTTL {
-		return c.nodes, c.state
+		nodes, state := c.nodes, c.state
+		c.mu.Unlock()
+		return nodes, state
 	}
+	c.mu.Unlock()
+
 	list, err := d.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	c.at, c.state, c.nodes = time.Now(), readState(err), nil
+	state := readState(err)
+	var nodes []nodeInfo
 	if err == nil {
 		for i := range list.Items {
 			n := &list.Items[i]
-			c.nodes = append(c.nodes, nodeInfo{name: n.Name, labels: n.Labels, taints: n.Spec.Taints, allocatable: n.Status.Allocatable})
+			nodes = append(nodes, nodeInfo{name: n.Name, labels: n.Labels, taints: n.Spec.Taints, allocatable: n.Status.Allocatable})
 		}
 	}
-	return c.nodes, c.state
+	c.mu.Lock()
+	c.at, c.state, c.nodes = time.Now(), state, nodes
+	c.mu.Unlock()
+	return nodes, state
 }
 
 // nodeShortfall answers "is there any node at all this run's pods may go to and are small
