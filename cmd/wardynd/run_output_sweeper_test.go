@@ -76,8 +76,11 @@ func TestRunOutputSweeper_RecordsItsTick(t *testing.T) {
 			if tc.wantSuccess {
 				tk = waitTick(t, ms, func(tk sweephealth.Tick) bool { return !tk.SucceededAt.IsZero() })
 			}
-			if srv.count() == 0 {
-				t.Fatal("the sweep never ran")
+			// The attempt is recorded before the body runs, so wait for the body too.
+			for deadline := time.Now().Add(5 * time.Second); srv.count() == 0; time.Sleep(2 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatal("the sweep never ran")
+				}
 			}
 			if !tc.wantSuccess && !tk.SucceededAt.IsZero() {
 				t.Fatalf("a tick that errored recorded a success: %+v", tk)
