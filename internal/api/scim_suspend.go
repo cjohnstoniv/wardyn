@@ -132,31 +132,15 @@ func jobByKey(jobs []store.DeprovisionJob, step, target string) (store.Deprovisi
 // already done writes nothing new, so an identity provider that repeats the request costs nothing.
 func (s *Server) suspendIdentity(ctx context.Context, st scimStore, id uuid.UUID, slot string) error {
 	ctx = withActor(ctx, types.ActorSystem, scimActor)
-	ident, err := st.GetIdentity(ctx, id)
+	ident, forms, keys, err := s.suspendStepOne(ctx, st, id)
+	// A sign-in that bound the row after it was read is seen under the suspension's lock: read it again, so
+	// the newly bound principal is cut, swept and has its runs killed. A binding never changes once made,
+	// so the second plan is the last one.
+	if errors.Is(err, store.ErrIdentityRebound) {
+		ident, forms, keys, err = s.suspendStepOne(ctx, st, id)
+	}
 	if err != nil {
 		return err
-	}
-	forms, err := s.leaverForms(ctx, st, ident)
-	if err != nil {
-		return err
-	}
-	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
-	if err != nil {
-		return err
-	}
-	keys := []store.JobKey{{Step: jobStepAuditDeact}, {Step: jobStepAuditDeprov}}
-	for _, t := range forms.targets {
-		keys = append(keys, store.JobKey{Step: jobStepSweep, Target: t})
-	}
-	if cutoff, ok := jobByKey(jobs, store.JobStepCutoff, ""); ident.DeactivatedAt == nil || !ok || !cutoff.Done {
-		// The pending steps commit with the deactivation, so a crash right after it leaves them for the sweeper.
-		plan := store.SuspendPlan{IdentityID: id, Principals: forms.bound, CutoffSubs: forms.cutTargets(), PendingJobs: keys}
-		if s.cfg.SCIM != nil {
-			plan.PurgeAfter = s.cfg.SCIM.PurgeAfter
-		}
-		if _, err := st.SuspendIdentity(ctx, plan); err != nil {
-			return err
-		}
 	}
 	if err := st.EnsureDeprovisionJobs(ctx, id, store.JobKindSuspend, keys); err != nil {
 		return err
@@ -174,6 +158,38 @@ func (s *Server) suspendIdentity(ctx context.Context, st scimStore, id uuid.UUID
 		return fmt.Errorf("%w: %w", errDeprovisionIncomplete, err)
 	}
 	return nil
+}
+
+// suspendStepOne reads the identity and its forms and, unless a finished suspension already covers it,
+// runs step 1 with them. It returns what steps 2 and 3 run under.
+func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID) (store.PrincipalIdentity, leaverForms, []store.JobKey, error) {
+	ident, err := st.GetIdentity(ctx, id)
+	if err != nil {
+		return ident, leaverForms{}, nil, err
+	}
+	forms, err := s.leaverForms(ctx, st, ident)
+	if err != nil {
+		return ident, forms, nil, err
+	}
+	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
+	if err != nil {
+		return ident, forms, nil, err
+	}
+	keys := []store.JobKey{{Step: jobStepAuditDeact}, {Step: jobStepAuditDeprov}}
+	for _, t := range forms.targets {
+		keys = append(keys, store.JobKey{Step: jobStepSweep, Target: t})
+	}
+	if cutoff, ok := jobByKey(jobs, store.JobStepCutoff, ""); ident.DeactivatedAt == nil || !ok || !cutoff.Done {
+		// The pending steps commit with the deactivation, so a crash right after it leaves them for the sweeper.
+		plan := store.SuspendPlan{IdentityID: id, Principal: ident.Principal, Principals: forms.bound, CutoffSubs: forms.cutTargets(), PendingJobs: keys}
+		if s.cfg.SCIM != nil {
+			plan.PurgeAfter = s.cfg.SCIM.PurgeAfter
+		}
+		if _, err := st.SuspendIdentity(ctx, plan); err != nil {
+			return ident, forms, nil, err
+		}
+	}
+	return ident, forms, keys, nil
 }
 
 // sweepStep is step 2: every pending target's tokens revoked and keys deleted.

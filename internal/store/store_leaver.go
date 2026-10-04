@@ -51,6 +51,9 @@ type IdentityUpdate struct {
 // SuspendPlan is what step 1 of a suspension writes, all in one transaction.
 type SuspendPlan struct {
 	IdentityID uuid.UUID
+	// Principal is the principal IdentityID's row bound when the plan was made ("" for none). A row that
+	// binds another under the suspension's lock is ErrIdentityRebound, and nothing is written.
+	Principal string
 	// Principals are the principals whose identity rows are deactivated with IdentityID's and whose
 	// people rows get deactivated_at.
 	Principals []string
@@ -286,6 +289,10 @@ func nonEmptyStrings(in []string) []string {
 	return out
 }
 
+// ErrIdentityRebound is a SuspendPlan made before a sign-in bound the identity row: its forms miss the
+// newly bound principal, so the caller reads the row again and makes a new plan.
+var ErrIdentityRebound = errors.New("store: the identity was bound since the suspension was planned")
+
 // SuspendIdentity is step 1 of a suspension, one transaction. It takes every row it will change
 // FOR UPDATE, in id order (so a sign-in holding one of them finishes first or is refused), writes
 // the session cutoff for every sub and email form, deactivates the identity rows and bumps their
@@ -299,7 +306,7 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 	defer func() { _ = tx.Rollback(ctx) }()
 	principals := nonEmptyStrings(p.Principals)
 	rows, err := tx.Query(ctx, `
-		SELECT id, deactivated_at IS NULL FROM principal_identities
+		SELECT id, deactivated_at IS NULL, COALESCE(principal, '') FROM principal_identities
 		 WHERE id = $1 OR principal = ANY($2::text[]) ORDER BY id FOR UPDATE`, p.IdentityID, principals)
 	if err != nil {
 		return SuspendResult{}, fmt.Errorf("store: lock identities: %w", err)
@@ -309,12 +316,17 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 	for rows.Next() {
 		var id uuid.UUID
 		var active bool
-		if err = rows.Scan(&id, &active); err != nil {
+		var bound string
+		if err = rows.Scan(&id, &active, &bound); err != nil {
 			rows.Close()
 			return SuspendResult{}, fmt.Errorf("store: lock identities: %w", err)
 		}
 		if id == p.IdentityID {
 			found, res.WasActive = true, active
+			if bound != p.Principal {
+				rows.Close()
+				return SuspendResult{}, ErrIdentityRebound
+			}
 		}
 	}
 	rows.Close()
