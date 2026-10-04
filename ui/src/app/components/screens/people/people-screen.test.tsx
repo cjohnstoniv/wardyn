@@ -176,6 +176,8 @@ describe("the person drawer", () => {
     expect(within(drawer).getByText("1 active")).toBeInTheDocument();
     expect(within(drawer).getByText("API tokens")).toBeInTheDocument();
     expect(await within(drawer).findByText("ci-bot")).toBeInTheDocument();
+    // #1477 refuses every admin-for-other mint, so the drawer offers none.
+    expect(within(drawer).queryByRole("button", { name: /mint/i })).toBeNull();
     expect(within(drawer).getByText("0 running")).toBeInTheDocument();
     expect(within(drawer).getByRole("link", { name: /View their runs/ })).toHaveAttribute("href", "/admin/runs?q=sub-ana");
     expect(within(drawer).getByRole("button", { name: "Erase" })).toBeDisabled();
@@ -222,7 +224,7 @@ describe("Add a person", () => {
     await screen.findByText("ana@example.com");
     await user.click(screen.getByRole("button", { name: "Add a person" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Add someone before their first sign-in, so you can give them tokens or a profile ahead of time.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Add someone before their first sign-in, so you can assign them a profile or key domain ahead of time. They mint their own API tokens after they sign in.")).toBeInTheDocument();
     await user.type(within(dialog).getByLabelText("Subject"), "sub-zed");
     await user.type(within(dialog).getByLabelText("Email"), "zed@example.com");
     const before = listMock.mock.calls.length;
