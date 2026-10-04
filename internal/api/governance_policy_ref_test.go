@@ -359,6 +359,60 @@ func TestDeploymentArmReadsPolicyHelpOnlyForARefusal(t *testing.T) {
 	}
 }
 
+// TestContactlessLeafBorrowsSiteHelp: a leaf that publishes no contact keeps its
+// name and borrows the site's policy_help on all three projections that carry a
+// ref; a leaf with its own contact never inherits site help; a site without
+// help leaves the bare profile ref.
+func TestContactlessLeafBorrowsSiteHelp(t *testing.T) {
+	help := &policyref.Contact{RequestURL: "https://site.example.com/help"}
+	run := func(p *types.GovernanceProfile, site types.SiteConfig) (*Server, types.AgentRun, map[string]*policyref.Ref) {
+		srv, st := runLimitsFixture(t, assignedStore(p))
+		st.siteConfig = site
+		srv.cfg.Store = &attrStore{govEscapeStore: st, profiles: []types.GovernanceProfile{*p}}
+		r := types.AgentRun{GovernanceProfileID: &p.ID}
+		ctx := context.Background()
+		return srv, r, map[string]*policyref.Ref{
+			"ceiling refusal": srv.ceilingPolicy(ctx, governanceCeiling{Profile: resolvedOf(p)}),
+			"run detail":      srv.runPolicyRef(ctx, r),
+			"dispatch":        srv.runAttribution(ctx, r, site),
+		}
+	}
+
+	t.Run("no contact borrows site help", func(t *testing.T) {
+		_, _, refs := run(limitsProfile("leased", types.GovernanceLimits{}), types.SiteConfig{PolicyHelp: help})
+		want := policyref.Ref{Source: policyref.SourceProfile, Name: "leased", RequestURL: help.RequestURL}
+		for door, ref := range refs {
+			if ref == nil || *ref != want {
+				t.Errorf("%s = %+v, want %+v", door, ref, want)
+			}
+		}
+	})
+	t.Run("own contact never inherits site help", func(t *testing.T) {
+		want := profileRefFor("ci", "alpha")
+		_, _, refs := run(taggedProfile("ci", "alpha", types.GovernanceLimits{}), types.SiteConfig{PolicyHelp: help})
+		for door, ref := range refs {
+			if ref == nil || *ref != want {
+				t.Errorf("%s = %+v, want %+v", door, ref, want)
+			}
+		}
+	})
+	t.Run("site without help leaves the bare profile ref", func(t *testing.T) {
+		want := policyref.Ref{Source: policyref.SourceProfile, Name: "leased"}
+		_, _, refs := run(limitsProfile("leased", types.GovernanceLimits{}), types.SiteConfig{})
+		for door, ref := range refs {
+			if ref == nil || *ref != want {
+				t.Errorf("%s = %+v, want %+v", door, ref, want)
+			}
+		}
+	})
+	t.Run("/me adds no read and stays the bare profile ref", func(t *testing.T) {
+		got := governanceCeiling{Profile: resolvedOf(limitsProfile("leased", types.GovernanceLimits{}))}.policyRef()
+		if want := (policyref.Ref{Source: policyref.SourceProfile, Name: "leased"}); got == nil || *got != want {
+			t.Errorf("policyRef = %+v, want %+v", got, want)
+		}
+	})
+}
+
 // TestRefuseLeavesPolicyOffHiddenAndRewrittenDecisions pins the parity law: a
 // hidden door answers byte-for-byte what a missing resource does, so attaching a
 // policy to it must change nothing, and a decision a door rewrote for the wire
