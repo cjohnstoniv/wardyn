@@ -5,6 +5,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { people } from "./people";
+import { aheadByHours } from "../test-clock";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -28,8 +29,8 @@ const json = (body: unknown, truncated = false) =>
 // one default page can be all retired rows with the live token behind them.
 describe("people.tokens", () => {
   it("reads every page while the server says more remain, so an older live token is not lost", async () => {
-    const retired = Array.from({ length: 3 }, (_, i) => ({ id: `r${i}`, name: `retired-${i}`, created_at: "2025-02-01T00:00:00Z", revoked_at: "2025-03-01T00:00:00Z" }));
-    const live = { id: "live", name: "still-active", created_at: "2025-01-01T00:00:00Z" };
+    const retired = Array.from({ length: 3 }, (_, i) => ({ id: `r${i}`, name: `retired-${i}`, created_at: aheadByHours(-48), revoked_at: aheadByHours(-24) }));
+    const live = { id: "live", name: "still-active", created_at: aheadByHours(-72) };
     const spy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(json(retired, true)).mockResolvedValueOnce(json([live]));
     const got = await people.tokens("sub-ana");
     expect(got.map((t) => t.id)).toEqual(["r0", "r1", "r2", "live"]);
@@ -39,7 +40,7 @@ describe("people.tokens", () => {
   });
 
   it("stops after one page when the server does not mark it truncated", async () => {
-    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(json([{ id: "a", name: "a", created_at: "2025-01-01T00:00:00Z" }]));
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(json([{ id: "a", name: "a", created_at: aheadByHours(-72) }]));
     expect(await people.tokens("sub-ana")).toHaveLength(1);
     expect(spy).toHaveBeenCalledTimes(1);
   });
