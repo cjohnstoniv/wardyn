@@ -185,7 +185,7 @@ func (w *Worker) process(ctx context.Context, c claimed) {
 		w.finalize(ctx, c, &facts, outcome{state: types.NotifyDead, class: classUnknownChannel})
 		return
 	}
-	body, err := buildPayload(c.id, c.tier, facts, w.console, w.masks.Masker(facts.RunID))
+	body, err := ch.render(c.id, c.tier, facts, w.console, w.masks.Masker(facts.RunID))
 	if err != nil {
 		w.finalize(ctx, c, &facts, outcome{state: types.NotifyDead, class: classStore})
 		return

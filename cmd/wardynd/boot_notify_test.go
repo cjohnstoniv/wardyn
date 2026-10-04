@@ -31,6 +31,8 @@ func TestStartApprovalNotify_RefusesBadConfigWithoutEchoingIt(t *testing.T) {
 		`{"channels":[{"id":"chat","type":"carrier-pigeon","url":"https://h.example.com/SECRETPATH","hmac_secret":"HMACVALUE"}]}`,
 		`{"channels":[{"id":"hook","type":"webhook","url":"http://h.example.com/SECRETPATH","hmac_secret":"HMACVALUE"}]}`,
 		`{"channels":[{"id":"hook","type":"webhook","url":"::SECRETPATH"`,
+		`{"channels":[{"id":"chat","type":"teams","url":"http://h.example.com/SECRETPATH?sig=HMACVALUE"}]}`,
+		`{"channels":[{"id":"chat","type":"slack","url":"http://h.example.com/SECRETPATH"}]}`,
 	} {
 		err := startApprovalNotify(context.Background(), raw, nil, nil, nil)
 		if err == nil {

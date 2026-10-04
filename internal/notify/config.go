@@ -21,11 +21,15 @@ import (
 // the label set is bounded by config and the same pattern backs the table's CHECK.
 var channelIDRe = regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
 
-// TypeWebhook is the only channel type this build implements. A new type is added here and in
-// Channel.send, nowhere else; any other value is refused at boot.
-const TypeWebhook = "webhook"
+// The channel types this build implements. A new type is added here and in Channel.render; any other
+// value is refused at boot.
+const (
+	TypeWebhook = "webhook"
+	TypeTeams   = "teams"
+	TypeSlack   = "slack"
+)
 
-var implementedTypes = []string{TypeWebhook}
+var implementedTypes = []string{TypeWebhook, TypeTeams, TypeSlack}
 
 // Config is the parsed WARDYN_APPROVAL_NOTIFY value.
 type Config struct {
@@ -41,6 +45,8 @@ type Channel struct {
 	URL         string `json:"url"`
 	HMACSecret  string `json:"hmac_secret"`
 	BearerToken string `json:"bearer_token"`
+	// RedactRequester drops the run owner's principal and email from this channel's messages.
+	RedactRequester bool `json:"redact_requester"`
 }
 
 // Parse validates raw and returns the config. An empty value means notifications are off and returns
@@ -113,6 +119,10 @@ func (ch *Channel) validate() error {
 	u, err := url.Parse(ch.URL)
 	if err != nil || ch.URL == "" || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
 		return fmt.Errorf("approval notify config: channel %q: url must be an absolute http or https URL (value withheld)", ch.ID)
+	}
+	// A Teams or Slack URL is itself the credential, so plain HTTP is never allowed for them.
+	if ch.Type != TypeWebhook && u.Scheme != "https" {
+		return fmt.Errorf("approval notify config: channel %q: a %s url must be https (value withheld)", ch.ID, ch.Type)
 	}
 	if u.Scheme != "https" && (ch.HMACSecret != "" || ch.BearerToken != "" || u.User != nil || u.RawQuery != "" || strings.Contains(ch.URL, "?")) {
 		return fmt.Errorf("approval notify config: channel %q: https is required when hmac_secret or bearer_token is set or the url carries userinfo or a query", ch.ID)
