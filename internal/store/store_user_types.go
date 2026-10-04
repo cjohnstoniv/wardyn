@@ -95,6 +95,19 @@ func UpdateUserTypeQ(ctx context.Context, q Querier, t types.UserType) (types.Us
 	return out, uniqueConflict(err)
 }
 
+// UpdateUserTypeMetadata rewrites a type's name and description and never its priority, so an edit
+// that was judged metadata-only cannot overwrite a priority change approved after it was read.
+// ErrNotFound when missing, ErrConflict on name clash.
+func (s PG) UpdateUserTypeMetadata(ctx context.Context, t types.UserType) (types.UserType, error) {
+	const stmt = `
+		UPDATE user_types
+		SET name = $2, description = $3, updated_at = now()
+		WHERE id = $1
+		RETURNING ` + userTypeCols
+	out, err := scanUserType(s.Pool.QueryRow(ctx, stmt, t.ID, t.Name, t.Description))
+	return out, uniqueConflict(err)
+}
+
 // UserTypeReferences counts the capability-grant, governance-assignment and
 // drive-grant rows that name the type as their subject.
 func (s PG) UserTypeReferences(ctx context.Context, id string) (int, error) {

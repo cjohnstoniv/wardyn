@@ -191,7 +191,13 @@ func (s *Server) handleUpdateUserType(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	saved, err := s.cfg.Store.UpdateUserType(r.Context(), t)
+	// An unchanged priority is never written: a priority change approved after current was read
+	// stays as approved, whichever of the two statements ran.
+	update := s.cfg.Store.UpdateUserType
+	if current.Priority == t.Priority {
+		update = s.cfg.Store.UpdateUserTypeMetadata
+	}
+	saved, err := update(r.Context(), t)
 	if s.writeUserTypeUpdateError(w, r, err, t) {
 		return
 	}

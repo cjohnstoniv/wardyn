@@ -140,9 +140,14 @@ func (s *Server) handlePutAvailability(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.cfg.Store.SetCapabilityRestriction(r.Context(), kind, value, *req.Restricted, principalFromRequest(r)); err != nil {
-		writeServerError(w, r, "write capability availability", err)
-		return
+	// With the switch on, an unchanged PUT never reaches the store (the admin token's break-glass
+	// excepted): the bit was read outside any transaction, so the only effect the write could have is
+	// to undo a restriction approved in between.
+	if *req.Restricted != v.Restricted || !envEnabled(envGovernanceSecondHuman) || isAdminTokenCaller(r) {
+		if err := s.cfg.Store.SetCapabilityRestriction(r.Context(), kind, value, *req.Restricted, principalFromRequest(r)); err != nil {
+			writeServerError(w, r, "write capability availability", err)
+			return
+		}
 	}
 	v.Restricted = *req.Restricted
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),

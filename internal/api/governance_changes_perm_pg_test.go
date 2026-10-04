@@ -419,3 +419,98 @@ func TestPG_GovernanceChanges_PermissionKindsLocalModeRefuses(t *testing.T) {
 		t.Errorf("local mode held %d changes", e.pendingCount())
 	}
 }
+
+// govRaceStore wraps the real store so a test can land a decision between a handler's read and its write.
+type govRaceStore struct {
+	store.Store
+	afterGetUserType func()
+	beforeSetRestr   func()
+}
+
+func (r *govRaceStore) GetUserType(ctx context.Context, id string) (types.UserType, error) {
+	t, err := r.Store.GetUserType(ctx, id)
+	if f := r.afterGetUserType; f != nil {
+		r.afterGetUserType = nil
+		f()
+	}
+	return t, err
+}
+
+func (r *govRaceStore) SetCapabilityRestriction(ctx context.Context, capability, value string, restricted bool, by string) error {
+	if f := r.beforeSetRestr; f != nil {
+		f()
+	}
+	return r.Store.SetCapabilityRestriction(ctx, capability, value, restricted, by)
+}
+
+func (e *govEnv) restricted(value string) bool {
+	e.t.Helper()
+	m, err := e.pg.ListCapabilityRestrictions(context.Background())
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return m[capAgent][value]
+}
+
+// TestPG_GovernanceChanges_UnchangedAvailabilityPutNeverReachesTheStore: with the switch on, a PUT
+// that leaves the bit as read must not write, because a restriction approved between the read and the
+// write would otherwise be deleted with no second human. The write hook stands in for that approval.
+func TestPG_GovernanceChanges_UnchangedAvailabilityPutNeverReachesTheStore(t *testing.T) {
+	e := newGovEnv(t)
+	path := "/api/v1/permissions/availability/agent/" + govAgentVal
+	called := false
+	srv := e.otherServer(func(c *Config) {
+		c.Store = &govRaceStore{Store: e.pg, beforeSetRestr: func() {
+			called = true
+			if err := e.pg.SetCapabilityRestriction(context.Background(), capAgent, govAgentVal, true, "approved"); err != nil {
+				t.Error(err)
+			}
+		}}
+	})
+
+	// Read unrestricted, request unrestricted: the restriction that lands in between survives.
+	if w := doSSO(t, srv, http.MethodPut, path, e.alice, `{"restricted":false}`); w.Code != http.StatusOK {
+		t.Fatalf("an unchanged availability PUT = %d %s, want 200", w.Code, w.Body)
+	}
+	if called {
+		t.Fatal("an unchanged availability PUT reached SetCapabilityRestriction")
+	}
+	if err := e.pg.SetCapabilityRestriction(context.Background(), capAgent, govAgentVal, true, "seed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pg.UpsertCapabilityGrant(context.Background(), types.CapabilityGrant{
+		SubjectType: types.CapabilitySubjectUserType, Subject: govTypeDev, Capability: capAgent, Value: govAgentVal,
+		Effect: types.CapabilityAllow, CreatedBy: "seed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Read restricted, request restricted: no write either, and the row stands.
+	if w := doSSO(t, srv, http.MethodPut, path, e.alice, `{"restricted":true}`); w.Code != http.StatusOK {
+		t.Fatalf("an unchanged restrict PUT = %d %s, want 200", w.Code, w.Body)
+	}
+	if called || !e.restricted(govAgentVal) {
+		t.Fatalf("restrict PUT: store reached = %v, row present = %v", called, e.restricted(govAgentVal))
+	}
+}
+
+// TestPG_GovernanceChanges_NameOnlyEditKeepsAnApprovedPriority: a name edit judged metadata-only from
+// a read taken before a priority approval commits must not write the old priority back.
+func TestPG_GovernanceChanges_NameOnlyEditKeepsAnApprovedPriority(t *testing.T) {
+	e := newGovEnv(t)
+	e.seedUserType(govTypeDev, 5)
+	path := "/api/v1/user-types/" + govTypeDev
+	ch := e.pending(e.call(e.alice, http.MethodPut, path, fmt.Sprintf(`{"name":%q,"priority":1}`, govTypeDev)))
+	srv := e.otherServer(func(c *Config) {
+		c.Store = &govRaceStore{Store: e.pg, afterGetUserType: func() { e.approve(ch.ID) }}
+	})
+	if w := doSSO(t, srv, http.MethodPut, path, e.alice, `{"name":"Renamed","description":"d","priority":5}`); w.Code != http.StatusOK {
+		t.Fatalf("a name-only edit = %d %s, want 200", w.Code, w.Body)
+	}
+	got, err := e.pg.GetUserType(context.Background(), govTypeDev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Priority != 1 || got.Name != "Renamed" {
+		t.Fatalf("after the race the type is %+v, want the approved priority 1 and the new name", got)
+	}
+}
