@@ -55,6 +55,20 @@ func readNextAttachMode(t *testing.T, c *websocket.Conn) attachModeMsg {
 	}
 }
 
+// readPromotionFrame is readNextAttachMode past any read-only frame naming the
+// departed writer: that writer's exec, once ready, re-sends its size and mode to
+// the observers queued by then (fanoutWriterResize), and that restatement can
+// reach an observer before the frame that promotes it.
+func readPromotionFrame(t *testing.T, c *websocket.Conn, departed string) attachModeMsg {
+	t.Helper()
+	for {
+		m := readNextAttachMode(t, c)
+		if !m.ReadOnly || m.Holder == nil || m.Holder.Principal != departed {
+			return m
+		}
+	}
+}
+
 // waitForActorAudit is waitForAudit narrowed to ONE principal: a promotion
 // leaves two session.detach rows on the same run, and "the departing writer
 // was driving" and "the promoted observer was driving" are different claims.
@@ -203,13 +217,7 @@ func TestAttachPromotion_WebObserverPromotedInPlace(t *testing.T) {
 		t.Fatalf("close the writer's socket: %v", err)
 	}
 
-	m3 := readNextAttachMode(t, c2)
-	// The writer's exec, once ready, re-sends its size and mode to the observers
-	// queued by then (fanoutWriterResize), so the observer may first read that
-	// restatement of the same holder; the frame after it is the promotion.
-	for m3.ReadOnly && m3.Holder != nil && m3.Holder.Principal == holderOwner {
-		m3 = readNextAttachMode(t, c2)
-	}
+	m3 := readPromotionFrame(t, c2, holderOwner)
 	if m3.ReadOnly {
 		t.Fatal("the observer was told read_only:true again; it was never promoted")
 	}
@@ -280,10 +288,10 @@ func TestAttachPromotion_WebPromotionResizesRemainingObservers(t *testing.T) {
 	if err := c1.Close(websocket.StatusNormalClosure, "done"); err != nil {
 		t.Fatalf("close the writer's socket: %v", err)
 	}
-	if m := readNextAttachMode(t, c2); m.ReadOnly {
+	if m := readPromotionFrame(t, c2, holderOwner); m.ReadOnly {
 		t.Fatal("the oldest observer was not promoted")
 	}
-	m := readNextAttachMode(t, c3)
+	m := readPromotionFrame(t, c3, holderOwner)
 	if !m.ReadOnly || m.Holder == nil || m.Holder.Principal != holderSecond {
 		t.Fatalf("the remaining observer's frame = %+v, want read_only naming the promoted client %s", m, holderSecond)
 	}
@@ -308,6 +316,7 @@ func TestAttachPromotion_TakeoverPromotesOnlyTheTaker(t *testing.T) {
 		if m := readAttachMode(t, c1); m.ReadOnly {
 			t.Fatal("the first client was told it is read-only")
 		}
+		waitForSession(t, fr, 0) // the writer's exec is Attach 0, the observer's Attach 1
 		// ...while the owner watches from a read-only socket.
 		c2 := dialAttach(t, ts, srv, run.ID, holderOwner, "")
 		if m := readAttachMode(t, c2); !m.ReadOnly {
@@ -334,7 +343,7 @@ func TestAttachPromotion_TakeoverPromotesOnlyTheTaker(t *testing.T) {
 			t.Fatalf("takeover body promoted = %v, want true (the taker had a queued observer socket)", takeoverBody.Promoted)
 		}
 
-		m := readNextAttachMode(t, c2)
+		m := readPromotionFrame(t, c2, holderSecond)
 		if m.ReadOnly || m.Holder == nil || m.Holder.Principal != holderOwner {
 			t.Fatalf("the taker's own socket was not promoted in place: read_only=%v holder=%+v", m.ReadOnly, m.Holder)
 		}
@@ -411,6 +420,7 @@ func TestAttachPromotion_TakeoverPromotesOnlyTheTaker(t *testing.T) {
 		if m := readAttachMode(t, cW); m.ReadOnly {
 			t.Fatal("the first client was told it is read-only")
 		}
+		waitForSession(t, fr, 0) // the writer's exec is Attach 0, the bystander's Attach 1
 		// ...B queues first, T second.
 		cB := dialAttach(t, ts, srv, run.ID, holderBystander, "")
 		if m := readAttachMode(t, cB); !m.ReadOnly {
@@ -461,7 +471,7 @@ func TestAttachPromotion_TakeoverPromotesOnlyTheTaker(t *testing.T) {
 		}
 
 		// T is promoted in place, on the socket it already had.
-		if m := readNextAttachMode(t, cT); m.ReadOnly || m.Holder == nil || m.Holder.Principal != holderOwner {
+		if m := readPromotionFrame(t, cT, holderSecond); m.ReadOnly || m.Holder == nil || m.Holder.Principal != holderOwner {
 			t.Fatalf("the taker's own socket was not promoted in place: read_only=%v holder=%+v", m.ReadOnly, m.Holder)
 		}
 		if got := srv.attachHolderFor(run.ID); got == nil || got.principal != holderOwner {
