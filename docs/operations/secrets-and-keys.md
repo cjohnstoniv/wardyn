@@ -220,7 +220,7 @@ set `GODEBUG=fips140=only` (the chart's `env.GODEBUG`) to make a non-approved
 algorithm fail instead of run. Under `only` the age key cannot be used: the
 `local` key's id is taken over the age key's public recipient, which is X25519,
 and `only` forbids X25519. wardynd then refuses to start with a `WARDYN_AGE_KEY`
-(or an ephemeral one) and names store mode. Run the image with non-age custody
+(or an ephemeral one) and names a key service. Run the image with non-age custody
 instead: Vault Transit (`WARDYN_KEK=transit`) or Azure Key Vault, alone or
 under store mode (`WARDYN_SECRET_STORE=vaultkv`, below). None of them needs an
 age key; store mode without a key service does, and is refused. Age is
