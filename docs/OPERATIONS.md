@@ -3081,23 +3081,151 @@ escalation on the Approvals page.
 **Governance profiles.** One profile per subject; when several match, the most
 specific wins (user beats group beats user type beats everyone; priority breaks group ties) — the
 Governance page shows the resolved answer, and `GET /policies/default` returns the
-ceiling that actually binds the caller. A standalone profile replaces the deployment
-ceiling for its subjects; a composed one (0.8.6) names a base, which is another
-profile or the deployment default, and an overlay that can only narrow it, and the
-ceiling that binds is the base narrowed by the overlay. Every reader of a profile's
-authority sees the composed result, including the doors that bind runs already going
-(attach and SSH, UI apps, revive, the limits re-clamp, end extension), so a change to a
-base reaches every profile built on it. A chain is at most three profiles deep. An overlay
-and base that nothing satisfies together (the deployment default narrowed until their
-`allowed_methods` are disjoint, say) refuses the launch and every live door with `403
-governance_overlay_unsatisfiable`, audited, until an administrator fixes it. A base that cannot be
-read, a chain that loops or runs deeper closes the launch and every live door with a `500` (a revive
-or end extension with `503`/`409`), unaudited as this reason, until an administrator fixes it; none of
-them is ever read as the deployment's policy. The profile's own name is all a member is told. A profile edit still
-reaches an already-running proxy only through the denies re-asserted at revive or restart, and
-a base edit now does so for a whole subtree at once. Deleting a profile requires unassigning it
-first, and a base that still has profiles built on it is a 409 naming them (never a silent
-widening). Stated honestly: profiles narrow by omission — a profile that omits
+ceiling that actually binds the caller. A profile is either **standalone** or **composed**
+(0.8.6). The walkthrough below covers composed profiles from authoring to rollback; the
+design record is `docs/design/0.8/0.8.6-comp.md`.
+
+*Standalone and composed.* A standalone profile replaces the deployment ceiling for its
+subjects, exactly as on 0.8.5. A composed profile stores no ceiling of its own. It names a
+**base**, which is another profile (`base_profile_id`) or, when that is null, the deployment
+default, and an **overlay** (`overlay`, plus `overlay_limits` for the limits) that can only narrow
+that base. The ceiling that binds is `ApplyOverlay(effective(base), overlay)`, computed whenever
+authority is read and never stored, so a change to a base reaches every profile built on it. A
+composed row's own `ceiling` and `limits` columns are `{}`, and the API adds a read-only
+`effective: {ceiling, limits}` beside them.
+
+*Authoring.* A profile names at most one base. A chain is at most three profiles deep, counting
+the profile itself (a baseline, a division and a team), and a chain cannot loop; a write that would
+make a cycle or push any existing descendant past three is a `409`
+(`governance_profile_cycle`, `governance_profile_depth`). An overlay lists only the fields it
+narrows; an absent field inherits the base unchanged, and a present empty list is a value
+(`allowed_domains: []` narrows to no domains, `allowed_methods: []` is refused because it would
+mean every method). The write is strict: an overlay that names something its base does not permit
+(a domain the base's `allowed_domains` does not cover under the proxy's own matcher, a method the
+base excludes, `allow_all_egress` on a base without it, a grant the base's grants do not dominate)
+is `400 governance_overlay_invalid`, and so is an overlay whose meet with the base would be empty
+rather than narrow. A `PUT` that omits `base_profile_id`, `overlay`, `overlay_limits` or
+`contact` keeps the stored value, so an older client cannot flatten a profile by accident; only an
+explicit `null` clears one, and `overlay: null` turns the profile back into a standalone one (the
+request must then carry a valid `ceiling`).
+
+*Resolution, and what the meet does.* Resolution reads the chain once and composes from the
+deployment down. Each field has its own meet, taken after the runtime's own defaults are applied
+to both sides, so a zero that means "the default" is never read as "smaller":
+
+| `RunPolicySpec` field | Unset means | Meet |
+|---|---|---|
+| `allowed_domains` | nothing allowed | each overlay entry must be covered by the base's entries; the overlay's entries are the result |
+| `denied_domains` | none | union |
+| `allow_all_egress` | false | AND (an overlay may only set it false) |
+| `first_use_approval` | `always_deny` | the stricter mode |
+| `first_use_hold_seconds` | 30 | smaller |
+| `max_holds` | 16 | smaller |
+| `allowed_methods` | every method | intersection of non-empty sets; empty on one side takes the other; disjoint is unsatisfiable |
+| `min_confinement_class` | required | the higher class |
+| `eligible_grants` | none | the overlay's grants, each re-checked against the resolved base |
+| `auto_stop_after_sec` | 0 or less never reaps | smaller positive |
+| `workspace_mounts` | none | intersection by source and target; read-only if either side is |
+| `workspace_repos` | none | intersection by identity |
+| `llm_inspection` | none | the side that sets it; both set and different is unsatisfiable |
+| `ui_apps` | none | intersection by name and port |
+| `resources` | the deployment's size | smaller, per field |
+| `tool_rules` | an unnamed tool is held | per tool named on either side, and `*`: the stricter effect |
+| `git_push_any_branch` | false | AND |
+| `push_rules.deny_paths`, `push_rules.require_review_paths` | none | union |
+| `push_rules.max_inspect_pack_mib` | 32 | smaller |
+| `push_rules.hold_seconds` | 120 | smaller |
+| `push_rules.max_file_size_mib` | off | smaller positive (off is unbounded) |
+| `push_rules.deny_new_executables` | false | OR |
+| `azure_devops_capabilities` | the provider row's default | intersection of non-empty lists; disjoint is unsatisfiable |
+
+| `GovernanceLimits` field | Unset means | Meet |
+|---|---|---|
+| `deny_task_mode_exec`, `deny_interactive`, `deny_ui_apps`, `deny_user_drive` | false | OR |
+| `max_concurrent_runs`, `max_ephemeral_disk_mib`, `max_drive_size_mib`, `max_cpu_millis`, `max_memory_mib` | 0 is unlimited | smaller positive |
+| `autonomy_rubric` | caps nothing | per field, the lower level; a field set on one side only takes that side |
+| `max_end_ahead_sec` | 0 is no limit | smaller positive |
+| `default_end_sec` | 0 is `max_end_ahead_sec` | smaller, then clamped to the resulting maximum |
+| `max_wait_sec` | 0 is the deployment's approval expiry | smaller |
+| `default_wait_sec` | 0 is the deployment's approval expiry | smaller, then clamped to the resulting maximum |
+| `allow_no_end`, `user_changes_limits` | false | AND |
+| `pause_idle_after_sec` | 0 is pause only runs waiting for a decision | smaller positive |
+
+*Worked example.* An organisation keeps three profiles. The **baseline** is a composed profile
+with no base (so the deployment default is its base) and an overlay that sets `allowed_domains` to
+the package registries and the forge, `first_use_approval` to `always_deny`, and `limits.max_cpu_millis` to
+4000. The **division** profile names the baseline as its base and an overlay that drops the forge
+host from `allowed_domains` and sets `max_concurrent_runs` to 6. The **team** profile names the
+division and an overlay that sets `allowed_methods` to `GET` and `HEAD`, `denied_domains` to one
+extra host, and `max_cpu_millis` to 2000. Assigned to the team's group, the team profile binds
+this: the registries only, the forge dropped, `GET` and `HEAD` only, the extra host denied,
+2000 millicores (the smaller of 4000 and 2000), six concurrent runs, and the baseline's
+`always_deny`. Later the baseline's owner narrows `max_cpu_millis` to 1000: the next read of
+the division and the team gives 1000, with no write to either. A baseline edit that would leave
+a descendant empty (it narrows `allowed_methods` to `POST` while the team overlay allows only `GET` and `HEAD`) is refused with
+`409 governance_overlay_unsatisfiable` naming that descendant. Widening the baseline later widens every field a descendant's overlay leaves unset, as any
+base edit does. It never switches on an overlay entry the base did not permit, because an overlay
+is checked against the base at write.
+
+*A base that moves under an overlay.* A write is strict, but a base edit, or a redeploy that
+narrows the deployment default, is someone else's act arriving later. At resolve the meet drops
+what the base no longer covers: the run's `201` lists the drop in `clamp_warnings` (naming only the member's own profile), and an administrator sees it in that profile's `effective.warnings` on `GET /governance`. If nothing
+satisfies the base and the overlay together (the deployment default narrowed until their
+`allowed_methods` are disjoint, say), the launch and every live door refuse with `403
+governance_overlay_unsatisfiable`, audited, until an administrator fixes it. A chain that cannot
+be read, or one that loops or runs deeper than three, fails the same doors with a `500` or `503`.
+Neither case is ever read as the deployment's policy. An administrator sees which profile failed on `GET /governance`
+(`effective.error`).
+
+*Every reader sees the composed answer.* Create, preflight and dispatch, and the doors that bind
+runs already going (attach and SSH, UI apps, revive, the limits re-clamp, end extension, the run
+policy view and the preview) all resolve through one code path, and a source guard fails if any
+other code reads a raw profile row. A profile edit still reaches an already-running proxy only
+through the denies re-asserted at revive or restart; a base edit now does so for a whole
+subtree at once, so one edit has a larger reach and the same delay.
+
+*What a member sees.* A member sees their own profile's name and contact, and the effective
+content: `GET /policies/default`, `/me` and denial bodies serve the profile that binds them,
+never the chain. A base's name, overlay and contact are not disclosed, and a profile with no
+`contact` falls back to the site's `policy_help` rather than inherit a base's contact, since that
+would name the base. Only an admin or a `security_admin` can read the graph (`GET /governance`). When you write
+an example for a member, show the effective result and the profile's own name; do not describe
+the structure behind it.
+
+*Deleting and unassigning.* Deleting a profile requires unassigning it first, and a base that
+still has profiles built on it is a `409` naming them (never a silent widening).
+
+*Exporting a graph (CLI and SDK).* `wardyn governance get` exports a composed graph and
+`wardyn governance set` applies it to another install; the Go client's `ApplyGovernance` does the
+same (`docs/sdk.md`, "Composed profile graphs"). Profiles are written bases first, every graph
+reference (`base_profile_id`, an assignment's `profile_id`) is remapped through the target's
+names to ids, the read-only `effective` view is never written back, and prune deletes
+descendants before bases. Under second-person approval (four-eyes) a write may return `202`:
+a child whose base is still pending, and an assignment whose profile is pending, are
+deferred and reported, not sent with a dangling id; apply again once the base is approved.
+
+*Upgrade and rollback.* The 0.8.6 migration only adds nullable columns, so every existing
+profile is standalone and resolves exactly as on 0.8.5. An older SDK or CLI sees `ceiling: {}`
+on a composed profile; its re-apply compares equal and sends nothing, and a `PUT` it does send
+omits the composition fields, which are kept. A 0.8.5 binary refuses a database with the migration
+applied, so before a downgrade convert every composed profile to standalone (a `PUT` with
+`overlay: null` and its `effective.ceiling` and `effective.limits` as the new `ceiling` and
+`limits`), then restore the pre-upgrade dump.
+
+*Residual risks.*
+
+- Running proxies keep their dispatched egress until revive or restart (above); a base edit
+  makes that reach wider, not faster.
+- A deployment redeploy that narrows `DefaultPolicy` can strand a subtree: its launches are
+  refused with a named reason rather than widened. Look at the profile's `effective` and the
+  denial stream.
+- The overlay and the proxy share one domain matcher. That removes drift, and a matcher bug
+  now affects both sides alike; an oracle test over a fixed host corpus bounds it.
+- The comparison used to exempt narrowing edits from second-person approval is conservative,
+  so some narrowing edits still need a second approver. That is the safe direction.
+- Operators resolve no profile; that is a separate predicate from composition.
+
+Stated honestly: profiles narrow by omission — a profile that omits
 secret grants revokes them for its subjects (the editor warns); a member's
 long-lived API token keeps the group snapshot it was minted with until re-minted.
 Sandbox size is the exception: a profile that omits `resources`, or leaves one of
