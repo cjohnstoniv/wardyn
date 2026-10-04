@@ -3440,7 +3440,7 @@ to both sides, so a zero that means "the default" is never read as "smaller":
 | `workspace_mounts` | none | intersection by source and target; read-only if either side is |
 | `workspace_repos` | none | intersection by identity |
 | `llm_inspection` | none | the side that sets it; both set and different is unsatisfiable |
-| `ui_apps` | none | intersection by name and port |
+| `ui_apps` | none | intersection by name, port and path (an overlay app that serves a different path than the base's is a widening) |
 | `resources` | the deployment's size | smaller, per field |
 | `tool_rules` | an unnamed tool is held | per tool named on either side, and `*`: the stricter effect |
 | `git_push_any_branch` | false | AND |

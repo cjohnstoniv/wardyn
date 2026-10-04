@@ -291,7 +291,7 @@ func TestMeetMountsReposUIApps(t *testing.T) {
 	got := mustApply(t, base, overlayOf(types.CeilingOverlay{
 		WorkspaceMounts: &[]types.WorkspaceMount{{Source: "/b", Target: "/w/b", ReadOnly: &ro}, {Source: "/c", Target: "/w/c"}},
 		WorkspaceRepos:  &[]types.WorkspaceRepo{{Repo: "org/two", Ref: "main"}, {Repo: "org/three"}},
-		UIApps:          &[]types.UIApp{{Name: "docs", Port: 8000}, {Name: "docs", Port: 9000}},
+		UIApps:          &[]types.UIApp{{Name: "docs", Port: 8000, Path: "/x"}, {Name: "docs", Port: 9000}},
 	}))
 	c := got.Ceiling
 	if len(c.WorkspaceMounts) != 1 || c.WorkspaceMounts[0].Source != "/b" || !c.WorkspaceMounts[0].ReadOnlyOrDefault() {
@@ -306,6 +306,47 @@ func TestMeetMountsReposUIApps(t *testing.T) {
 	// A read-write overlay mount over a read-only base mount is a widening.
 	wantOverlayErr(t, ValidateOverlay(base, overlayOf(types.CeilingOverlay{WorkspaceMounts: &[]types.WorkspaceMount{{Source: "/a", Target: "/w/a", ReadOnly: &rw}}})),
 		ReasonOverlayInvalid, "workspace_mounts")
+}
+
+// TestMeetUIAppsMatchLeq pins that the meet, strict validation and Leq agree on
+// a ui_app: an overlay app must serve the path the base app serves (an absent
+// path and "/" are the same path), or it is a widening.
+func TestMeetUIAppsMatchLeq(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		base, overlay string
+		wantWiden     bool
+	}{
+		{"equal paths", "/a", "/a", false},
+		{"absent and root", "", "/", false},
+		{"root and absent", "/", "", false},
+		{"differing paths", "/z", "/a", true},
+		{"base root, overlay path", "", "/a", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := Authority{Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, UIApps: []types.UIApp{{Name: "docs", Port: 8000, Path: tc.base}}}}
+			ov := overlayOf(types.CeilingOverlay{UIApps: &[]types.UIApp{{Name: "docs", Port: 8000, Path: tc.overlay}}})
+			err := ValidateOverlay(base, ov)
+			if tc.wantWiden {
+				wantOverlayErr(t, err, ReasonOverlayInvalid, "ui_apps")
+			} else if err != nil {
+				t.Fatalf("ValidateOverlay: %v", err)
+			}
+			got, warns, err := ApplyOverlay(base, ov)
+			if err != nil {
+				t.Fatalf("ApplyOverlay: %v", err)
+			}
+			if !Leq(got.Ceiling, base.Ceiling, got.Limits, base.Limits) {
+				t.Errorf("Leq(ApplyOverlay(base, ov), base) is false: result ui_apps = %+v", got.Ceiling.UIApps)
+			}
+			if tc.wantWiden != (len(warns) == 1) {
+				t.Errorf("warnings = %v, wantWiden = %v", warns, tc.wantWiden)
+			}
+			if tc.wantWiden && len(got.Ceiling.UIApps) != 0 {
+				t.Errorf("a path-mismatched app was kept: %+v", got.Ceiling.UIApps)
+			}
+		})
+	}
 }
 
 func TestMeetLimits(t *testing.T) {
