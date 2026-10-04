@@ -724,6 +724,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /scim/v2/Users":         {class: classSCIM},
 	"PATCH /scim/v2/Users/{id}":   {class: classSCIM},
 	"PUT /scim/v2/Users/{id}":     {class: classSCIM},
+	"DELETE /scim/v2/Users/{id}":  {class: classSCIM},
 	"GET /scim/v2/Groups":         {class: classSCIM},
 	"GET /scim/v2/Groups/{id}":    {class: classSCIM},
 	"POST /scim/v2/Groups":        {class: classSCIM},

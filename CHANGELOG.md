@@ -185,7 +185,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   was cut. SCIM only removes access: it never grants, never rebinds an identity (an `externalId` change on a
   bound identity is `400 invalidValue`) and is never an operator. New audit actions `scim.user.write`,
   `scim.user.deactivate` and `person.deprovision`, and `auth.fail` reasons `invalid_scim_token` and
-  `identity_deactivated`. Purge (`DELETE`) and the console card are separate changes.
+  `identity_deactivated`. The console card is a separate change.
 - **Removing a person from a group at the identity provider ends what that group gave them.** The same SCIM
   token now serves `<base path>/scim/v2/Groups` (`GET` with a `displayName` or `externalId` filter, `GET` by id,
   `POST`, `PATCH` of members and `displayName`, `DELETE`). A member removed, by either shape Entra sends, by a
@@ -197,6 +197,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   audit action `scim.group.member_remove`. Migration `0128_scim_groups` adds the tables `scim_groups`,
   `scim_group_members` and `oidc_session_cuts` (new tables only); the session cut is kept apart from the
   revocation cutoff because that one also ends tokens and keys.
+- **A person the identity provider removes can be purged over SCIM, and a suspended one is purged after a
+  delay.** `DELETE <base path>/scim/v2/Users/{id}` suspends the person if they are not already, erases their
+  stored credentials and masking copies through the erasure orchestrator (the `credentials` and `mask_copies`
+  scopes; audit fields, run tasks, outputs and recordings stay a deliberate `POST /people/{principal}/erasure`),
+  hands their workspaces to the operator, deletes their user-subject grants and assignments by a direct store
+  call (never the governance apply path), and lists their drives without reclaiming them, then answers 204.
+  The identity row stays as a permanent tombstone: `active=true` on it is `400 invalidValue` and sign-in is
+  refused. `WARDYN_SCIM_PURGE_AFTER` (default `720h`, `0` disables the automatic purge) schedules the same
+  purge after a suspension; a sweeper on the elected sweeper leader runs it, re-checking each person under a
+  row lock so a reactivation that committed first wins, and finishes any suspension or purge whose identity
+  provider stopped retrying. `WARDYN_SCIM_LEAVER_WORKSPACES` set to `keep` leaves workspaces with the person.
+  The chart gains `scim.enabled`, `scim.tokenSecretRef`, `scim.purgeAfter` and `scim.leaverWorkspaces`, and
+  `docs/OPERATIONS.md` gains the leaver runbook, "Leavers and SCIM".
 - **Sandbox pods can be placed on the nodes the operator names.** `k8s.sandbox.{nodeSelector,tolerations,affinity,priorityClassName,podAnnotations,podLabels}`
   (chart) render to `WARDYN_K8S_SANDBOX_PLACEMENT`, and the agent pod, the proxy pod and the boot-time
   NetworkPolicy canary all take it, so the canary proves enforcement on the nodes runs use. wardynd refuses

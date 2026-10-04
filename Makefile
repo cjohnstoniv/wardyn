@@ -722,6 +722,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	[ "$$(echo "$$out" | grep -c 'kind: ConfigMap')" = "0" ] || { echo "default render (no defaultPolicy set) still created a ConfigMap"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'WARDYN_DEFAULT_POLICY')" = "0" ] || { echo "default render (no defaultPolicy set) still set WARDYN_DEFAULT_POLICY"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'kind: Ingress')" = "0" ] || { echo "default render (ingress.enabled=false) still created an Ingress"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'WARDYN_SCIM')" = "0" ] || { echo "default render (scim.enabled=false) rendered a WARDYN_SCIM variable — SCIM is off by default and must mount no route"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'trusted-ca\|WARDYN_TRUSTED_CA_FILE')" = "0" ] || { echo "default render (no trustedCA set) rendered part of the corporate-CA surface — the switch is off by default and must render NONE of its five objects"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set basePath=/wardyn); \
 	echo "$$out" | grep -A1 "name: WARDYN_BASE_PATH" | grep -q 'value: "/wardyn"' || { echo "basePath did not reach wardynd as WARDYN_BASE_PATH"; exit 1; }; \
@@ -741,6 +742,8 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "mountPath: /mnt/secrets-store" || { echo "extraVolumeMounts did not render (a CSI-mounted WARDYN_*_FILE path would name nothing)"; exit 1; }; \
 	echo "$$out" | grep -q "secretName: wardyn-daemon-proxy" || { echo "all-on's daemonProxySecret.existingSecret did not render a Secret-sourced volume"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_DAEMON_PROXY_SECRET" | grep -q 'value: "/etc/wardyn/daemon-proxy-secret/proxy-url"' || { echo "all-on's daemonProxySecret.existingSecret did not wire WARDYN_DAEMON_PROXY_SECRET"; exit 1; }; \
+	echo "$$out" | grep -A4 "name: WARDYN_SCIM_TOKEN$$" | grep -q "wardyn-scim" || { echo "scim.enabled did not render WARDYN_SCIM_TOKEN from scim.tokenSecretRef"; exit 1; }; \
+	echo "$$out" | grep -A6 "name: WARDYN_SCIM_TOKEN_NEXT" | grep -q "optional: true" || { echo "scim.enabled did not render the optional WARDYN_SCIM_TOKEN_NEXT"; exit 1; }; \
 	echo "$$out" | grep -q "name: regcred" || { echo "image.pullSecrets did not render"; exit 1; }; \
 	echo "$$out" | grep -q "storageClassName: fast" || { echo "persistence.storageClass did not render"; exit 1; }; \
 	echo "$$out" | grep -q "kubernetes.io/metadata.name: ingress-nginx" || { echo "networkPolicy.ingress.from did not render"; exit 1; }; \

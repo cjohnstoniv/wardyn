@@ -67,6 +67,10 @@ type bootFlags struct {
 	// _FILE twins: the bearers the SCIM Users routes accept. Both empty (the default) mounts no
 	// SCIM route. scimConfig (boot_scim.go) is the refusal list.
 	scimToken, scimTokenNext *string
+	// scimPurgeAfter is WARDYN_SCIM_PURGE_AFTER, scimLeaverWorkspaces WARDYN_SCIM_LEAVER_WORKSPACES:
+	// what a purge does after SCIM suspends a person. Read only when a SCIM token is set.
+	scimPurgeAfter       *time.Duration
+	scimLeaverWorkspaces *string
 	// userDriveHostRoots is the SAME class of knob one level up: where an ADMIN
 	// may point a host_path user drive, whose per-person subdirectories Wardyn
 	// then binds into OTHER PEOPLE's sandboxes. Parsed by
@@ -427,6 +431,8 @@ func parseBootFlags() *bootFlags {
 		orgEnrolToken:          flagEnv("org-enrolment-token", "WARDYN_ORG_ENROLMENT_TOKEN", "", "secret enrolment token this device presents to -org-url; requires -org-url to also be set"),
 		scimToken:              flagEnv("scim-token", "WARDYN_SCIM_TOKEN", "", "secret bearer the SCIM 2.0 Users routes (/scim/v2/Users) accept, at least 32 bytes; unset (default) mounts no SCIM route. Requires OIDC on a single-tenant Entra issuer and TLS"),
 		scimTokenNext:          flagEnv("scim-token-next", "WARDYN_SCIM_TOKEN_NEXT", "", "secret second bearer the SCIM routes accept while the identity provider is switched to a new one; requires -scim-token and must differ from it"),
+		scimPurgeAfter:         flagDuration("scim-purge-after", "WARDYN_SCIM_PURGE_AFTER", 720*time.Hour, "how long after SCIM suspends a person the purge sweeper purges them: credentials erased, workspaces reassigned, grants and assignments deleted (duration; 0 disables the automatic purge, a SCIM DELETE still purges)"),
+		scimLeaverWorkspaces:   flagEnv("scim-leaver-workspaces", "WARDYN_SCIM_LEAVER_WORKSPACES", scimWorkspacesReassign, "what a purge does with the workspaces a purged person owns: reassign hands them to the operator (default), keep leaves them"),
 		userDriveHostRoots:     flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a host_path user drive may be registered inside, typically the mount point of a share the operator mounted host-side. Empty (default) means no host_path drive may be registered; never $HOME or /"),
 		governAdminRuns:        flagBool("govern-admin-runs", "WARDYN_GOVERN_ADMIN_RUNS", false, "govern every run an SSO admin or an admin-role personal token launches, like a member's; the admin token and local mode stay ungoverned and are marked governance_exempt on run.create. With OIDC unset it binds nobody (default false)"),
 		governAdminRunsExempt:  flagEnv("govern-admin-runs-exempt", "WARDYN_GOVERN_ADMIN_RUNS_EXEMPT", "", "comma-separated lanes left ungoverned under -govern-admin-runs; the only value is \"recording\" (Record Mode runs as before). Any other value is refused at boot; set without -govern-admin-runs it does nothing"),

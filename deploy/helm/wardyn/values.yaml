@@ -183,6 +183,24 @@ auth:
   # removed in 0.9) / WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST.
   ssoOnly: false
 
+# Leaver deprovisioning over SCIM 2.0 (docs/OPERATIONS.md "Leavers and SCIM"). An identity provider
+# suspends and purges a person here; SCIM only ever removes access and grants nothing. Off by default.
+# Needs OIDC on a single-tenant Entra issuer (env.WARDYN_OIDC_ISSUER) and TLS (wardynd's own, or
+# env.WARDYN_TLS_TERMINATED behind your ingress): wardynd refuses to boot otherwise.
+scim:
+  enabled: false
+  # Name of an EXISTING Secret you created out-of-band: the bearer the identity provider presents, at
+  # least 32 bytes, under `scim-token`; while rotating, the next one under `scim-token-next` (optional).
+  # Both reach the pod as WARDYN_SCIM_TOKEN and WARDYN_SCIM_TOKEN_NEXT through secretKeyRef.
+  tokenSecretRef: ""
+  # How long after SCIM suspends a person the purge sweeper purges them (WARDYN_SCIM_PURGE_AFTER):
+  # stored credentials erased, workspaces handled per leaverWorkspaces, user grants deleted. "0"
+  # disables the automatic purge; a SCIM DELETE still purges at once.
+  purgeAfter: 720h
+  # What a purge does with the workspaces the person owns (WARDYN_SCIM_LEAVER_WORKSPACES): `reassign`
+  # hands them to the operator, `keep` leaves them.
+  leaverWorkspaces: reassign
+
 secrets:
   # age X25519 identity (AGE-SECRET-KEY-...) for the secret store. Empty =>
   # wardynd generates an ephemeral key at boot (secrets do not persist a restart).

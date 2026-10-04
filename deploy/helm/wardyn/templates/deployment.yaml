@@ -259,6 +259,25 @@ spec:
                   name: {{ include "wardyn.authSecretName" . }}
                   key: {{ .Values.auth.adminToken.key }}
             {{- end }}
+            {{- if .Values.scim.enabled }}
+            # SCIM leaver deprovisioning (secret.yaml refuses a second source in env/extraEnv). The
+            # bearer rides a secretKeyRef, never a literal; the rotation token is optional.
+            - name: WARDYN_SCIM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.scim.tokenSecretRef | quote }}
+                  key: scim-token
+            - name: WARDYN_SCIM_TOKEN_NEXT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.scim.tokenSecretRef | quote }}
+                  key: scim-token-next
+                  optional: true
+            - name: WARDYN_SCIM_PURGE_AFTER
+              value: {{ .Values.scim.purgeAfter | toString | quote }}
+            - name: WARDYN_SCIM_LEAVER_WORKSPACES
+              value: {{ .Values.scim.leaverWorkspaces | quote }}
+            {{- end }}
             {{- if and .Values.basePath (not (hasKey .Values.env "WARDYN_BASE_PATH")) }}
             - name: WARDYN_BASE_PATH
               value: {{ .Values.basePath | quote }}
