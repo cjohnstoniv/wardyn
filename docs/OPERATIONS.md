@@ -6238,6 +6238,8 @@ request and limit columns, `proxy_cpu_millis` and `proxy_memory_mib`); at dispat
 is created, each run records the values its driver applied, and a run that predates it reads all NULL.
 `0125` adds `governance_profiles.base_profile_id`, `overlay` and `overlay_limits` with five CHECKs (`0052`'s table).
 `0127` (`0127_deprovision_jobs`) adds `people.deactivated_at` (`0090`'s table), beside its new `deprovision_jobs` table.
+`0130` (`0130_audit_chain_head_from_meta`) is a later `CREATE OR REPLACE` of `0047`'s chain function, which
+links each new row to the recorded head.
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.
