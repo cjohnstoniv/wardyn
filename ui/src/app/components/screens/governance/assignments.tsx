@@ -26,6 +26,7 @@
 import * as React from "react";
 import { Loader2, Users } from "lucide-react";
 import { toast } from "sonner";
+import { PendingChangeError } from "../../../lib/api/core";
 import {
   governance as api,
   previewClaims,
@@ -69,6 +70,7 @@ import {
   type PickableSubjectType,
 } from "../permissions";
 import { Note, question } from "./display";
+import { SubmittedNote } from "./submitted-note";
 
 // What PREVIEW_RESULT's {matched} says — the matching row named in the table's
 // own vocabulary (§7.3).
@@ -93,6 +95,12 @@ export function AssignmentsBlock({
 }) {
   const [toRemove, setToRemove] = React.useState<GovernanceAssignment | null>(null);
   const [busy, setBusy] = React.useState(false);
+  // A write the server held for a second person (202): nothing changed, and the note says so.
+  const [submitted, setSubmitted] = React.useState(false);
+  const held = () => {
+    setSubmitted(true);
+    onChanged();
+  };
   const profileName = (id: string) => snapshot.profiles.find((p) => p.id === id)?.name ?? id;
   const typeName = useUserTypeName();
 
@@ -101,8 +109,14 @@ export function AssignmentsBlock({
     try {
       await api.deleteAssignment(a.id);
       setToRemove(null);
+      setSubmitted(false);
       onChanged();
     } catch (e) {
+      if (e instanceof PendingChangeError) {
+        setToRemove(null);
+        held();
+        return;
+      }
       toast.error(PERM.REMOVE, { description: getErrorMessage(e) });
     } finally {
       setBusy(false);
@@ -119,6 +133,7 @@ export function AssignmentsBlock({
           <h2 className="text-sm font-medium text-foreground">{GOV.ASSIGN_TITLE}</h2>
           <p className="mt-1 text-body text-muted-foreground">{GOV.ASSIGN_LEAD}</p>
           <Note>{GOV.PRECEDENCE}</Note>
+          {submitted && <SubmittedNote />}
         </div>
         <div className="mt-4">
           {snapshot.assignments.length === 0 ? (
@@ -186,7 +201,11 @@ export function AssignmentsBlock({
             profiles={snapshot.profiles}
             disabled={disabled}
             teal={snapshot.profiles.length > 0}
-            onAdded={onChanged}
+            onAdded={() => {
+              setSubmitted(false);
+              onChanged();
+            }}
+            onSubmitted={held}
           />
         )}
       </section>
@@ -226,11 +245,13 @@ function AddAssignmentForm({
   disabled,
   teal,
   onAdded,
+  onSubmitted,
 }: {
   profiles: GovernanceProfile[];
   disabled: boolean;
   teal: boolean;
   onAdded: () => void;
+  onSubmitted: () => void;
 }) {
   const [subjectType, setSubjectType] = React.useState<PickableSubjectType>("group");
   const [subject, setSubject] = React.useState("");
@@ -253,6 +274,11 @@ function AddAssignmentForm({
       setSubject("");
       onAdded();
     } catch (e) {
+      if (e instanceof PendingChangeError) {
+        setSubject("");
+        onSubmitted();
+        return;
+      }
       toast.error(GOV.ADD_TITLE, { description: getErrorMessage(e) });
     } finally {
       setSaving(false);

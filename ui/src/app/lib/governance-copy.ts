@@ -276,6 +276,61 @@ export const GOVERNANCE = {
     "Something went wrong reaching the server. Profiles that are already assigned still bound every run — this list just can't show them right now.",
 } as const;
 
+// 0.8.6 four-eyes on governance writes (mock packet M3, S2-S4) — the Changes tab, its drawer and the
+// submitted-for-approval note shown at every covered write site. Approved strings; the console adds none
+// of its own. The server's own sentence on a refused decision renders verbatim under DECIDE_REFUSED_TITLE.
+export const CHANGES = {
+  TAB: "Changes",
+  TAB_COUNT: (n: number) => `Changes · ${n}`,
+  LEAD: "Covered governance changes waiting for a second person. A change applies only when someone other than its proposer approves it.",
+  COL_CHANGE: "Change",
+  COL_TARGET: "Target",
+  COL_BY: "Proposed by",
+  COL_PROPOSED: "Proposed",
+  COL_EXPIRES: "Expires",
+  // By target_kind. A kind this console predates shows its raw name.
+  KIND: {
+    governance_profile: "Profile",
+    governance_assignment: "Assignment",
+    capability_grant: "Capability grant",
+    capability_enforcement: "Capability enforcement",
+    capability_availability: "Capability availability",
+    user_type_priority: "User type priority",
+    role_mapping: "Role mapping",
+    key_domain_assignment: "Key domain assignment",
+  } as Record<string, string>,
+  // By op. An op this console predates shows its raw name.
+  OP: {
+    create: "New",
+    update: "Edit",
+    delete: "Delete",
+    upsert: "Set",
+    replace: "Replace",
+    set: "Set",
+  } as Record<string, string>,
+  EMPTY_TITLE: "Nothing is waiting for a second person",
+  EMPTY_BODY:
+    "When this deployment requires a second person for governance changes, they wait here until someone approves or rejects them. Decided changes are in the audit trail.",
+  META: (who: string, when: string, expires: string) => `Proposed by ${who} ${when} · expires ${expires}`,
+  DIFF_FIELD: "Field",
+  DIFF_BEFORE: "Before",
+  DIFF_AFTER: "After",
+  DIFF_UNSET: "Not set",
+  DIFF_FULL: "Show full before and after",
+  ASSIGNED_PROFILE: "Profile this assigns",
+  REASON_LABEL: "Reason (optional)",
+  REASON_HINT: "Kept on the change and in the audit trail.",
+  APPROVE: "Approve",
+  REJECT: "Reject",
+  OWN_NOTE: "You proposed this change, so someone else must approve it. You can still reject it to withdraw it.",
+  DECIDE_REFUSED_TITLE: "Couldn't decide this change",
+  TOAST_APPROVED: "Change approved",
+  TOAST_REJECTED: "Change rejected",
+  SUBMITTED_TITLE: "Submitted for approval",
+  SUBMITTED_BODY: "Nothing has changed yet. It applies when someone else approves it, and expires if nobody does.",
+  SUBMITTED_LINK: "View in Changes",
+} as const;
+
 // §7.6-§7.7 — MEMBER
 
 // §7.6's two moments render ONLY when a profile is assigned. With no

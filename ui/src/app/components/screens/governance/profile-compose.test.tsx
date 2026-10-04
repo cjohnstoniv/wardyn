@@ -70,7 +70,7 @@ const BASE = row({
 
 function renderEditor(profile: GovernanceProfile | null, profiles: GovernanceProfile[] = [BASE]) {
   const onSaved = vi.fn();
-  render(<ProfileEditor profile={profile} profiles={profiles} disabled={false} onCancel={vi.fn()} onSaved={onSaved} />);
+  render(<ProfileEditor profile={profile} profiles={profiles} disabled={false} onCancel={vi.fn()} onSaved={onSaved} onSubmitted={vi.fn()} />);
   return { onSaved };
 }
 

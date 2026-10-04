@@ -331,7 +331,12 @@ VALUES
    encode(sha256(convert_to('wdn_' || repeat('1', 64), 'UTF8')), 'hex')),
   ('69800000-0000-4000-8000-000000000002', 'e2e-security-admin', 'security-admin@e2e.wardyn.invalid',
    'security_admin', 'standard', '[]', false, 'e2e security admin',
-   encode(sha256(convert_to('wdn_' || repeat('2', 64), 'UTF8')), 'hex'))
+   encode(sha256(convert_to('wdn_' || repeat('2', 64), 'UTF8')), 'hex')),
+  -- The second human of the governance four-eyes spec: its own principal AND its own mailbox, since the
+  -- server counts one mailbox as one human.
+  ('69800000-0000-4000-8000-000000000003', 'e2e-security-admin-2', 'security-admin-2@e2e.wardyn.invalid',
+   'security_admin', 'standard', '[]', false, 'e2e security admin 2',
+   encode(sha256(convert_to('wdn_' || repeat('3', 64), 'UTF8')), 'hex'))
 ON CONFLICT (id) DO NOTHING;
 SQL
   # The fixture install is ONBOARDED. The suite's specs exercise the console,

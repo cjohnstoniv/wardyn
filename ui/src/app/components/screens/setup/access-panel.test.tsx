@@ -37,7 +37,8 @@ vi.mock("../../../lib/api/directory", async () => {
   return { ...actual, directory: { search: async () => null } };
 });
 
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, PendingChangeError } from "../../../lib/api/core";
+import { CHANGES } from "../../../lib/governance-copy";
 import { AccessCollisionError, AccessPostureFlipRequiredError } from "../../../lib/api/access";
 import { ACCESS_ERROR, ACCESS_STATE, GUARD, PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
 import type { AccessResponse } from "../../../lib/types";
@@ -844,5 +845,46 @@ describe("AccessPanel — preview panel", () => {
     await userEvent.click(screen.getByRole("button", { name: PREVIEW.OWN_SESSION_CTA }));
     expect(previewRoleMock).toHaveBeenCalledWith({ use_session: true });
     expect(await screen.findByText(PREVIEW.RESULT_MATCHED("admin", "own-session"))).toBeInTheDocument();
+  });
+});
+
+// 0.8.6 four-eyes: a role-mapping write the server holds for a second person (202) is "submitted", never saved.
+describe("AccessPanel — a 202 is submitted, never saved", () => {
+  const held = () =>
+    new PendingChangeError({
+      id: "c1",
+      target_kind: "role_mapping",
+      op: "upsert",
+      target_key: "x",
+      state: "pending",
+      proposed_by: "ana",
+      proposed_at: aheadByHours(-1),
+      expires_at: aheadByHours(20),
+      diff: { changed: [] },
+    });
+
+  it("an add held for approval shows the note, clears the form, reloads, and renders no error", async () => {
+    upsertMappingMock.mockRejectedValue(held());
+    const onReload = renderPanel(baseAccess());
+
+    await userEvent.type(screen.getByLabelText(PEOPLE.FIELD_VALUE), "eng-team");
+    await userEvent.click(screen.getByRole("button", { name: PEOPLE.ADD_CTA }));
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.getByLabelText(PEOPLE.FIELD_VALUE)).toHaveValue("");
+    expect(onReload).toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("a delete held for approval closes the dialog, reloads and shows the note", async () => {
+    deleteMappingMock.mockRejectedValue(held());
+    const onReload = renderPanel(chartPlusTwoConsole());
+
+    await userEvent.click(screen.getByRole("button", { name: `${PEOPLE.DELETE} alice@corp.example` }));
+    await userEvent.click(screen.getByRole("button", { name: /^Delete$/ }));
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(onReload).toHaveBeenCalled();
   });
 });

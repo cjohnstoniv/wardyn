@@ -15,12 +15,13 @@
 import type {
   CapabilitySubjectType,
   ConfinementClass,
+  GovernanceChange,
   PolicyContact,
   PushRulesSpec,
   ResourceLimits,
   RunPolicySpec,
 } from "../types";
-import { asJson, errEnvelope, errText, HttpError, unwrapList, wfetch } from "./core";
+import { asJson, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
 
 // types.GovernanceLimits. ALL are `omitempty` on the wire, so an unrestricted
 // profile arrives with the keys absent — optional here for the same reason,
@@ -345,6 +346,7 @@ export const governance = {
   // "already gone" — the row is absent either way, which is what was asked for.
   async deleteProfile(id: string): Promise<void> {
     const res = await wfetch(`/governance/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await throwIfPending(res);
     if (!res.ok && res.status !== 404) {
       const { message, reason } = await errEnvelope(res);
       throw new HttpError(res.status, message, reason);
@@ -364,6 +366,7 @@ export const governance = {
   // way to widen a principal back to the deployment ceiling.
   async deleteAssignment(id: string): Promise<void> {
     const res = await wfetch(`/governance/assignments/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await throwIfPending(res);
     if (!res.ok && res.status !== 404) {
       throw new HttpError(res.status, await errText(res));
     }
@@ -381,6 +384,31 @@ export const governance = {
   async previewGovernance(input: GovernancePreviewInput): Promise<GovernancePreview> {
     const res = await wfetch("/governance/preview", { method: "POST", body: JSON.stringify(input) });
     return asJson<GovernancePreview>(res);
+  },
+
+  // GET /api/v1/governance/changes -> the pending changes (the server's default state), newest first. A
+  // change of a kind the caller may not approve is not listed.
+  async listChanges(): Promise<GovernanceChange[]> {
+    const res = await wfetch("/governance/changes", { method: "GET" });
+    return unwrapList<GovernanceChange>(await asJson<GovernanceChange[] | null>(res));
+  },
+
+  // POST /api/v1/governance/changes/{id}/approve -> 200 the change, applied. The server judges who may
+  // approve (another human, with the authority to make that write): a 403 or 409 reaches the caller as an
+  // HttpError whose message is its own sentence.
+  async approveChange(id: string): Promise<GovernanceChange> {
+    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/approve`, { method: "POST" });
+    return asJson<GovernanceChange>(res);
+  },
+
+  // POST /api/v1/governance/changes/{id}/reject -> 200 the change, rejected. The reason is optional and is
+  // kept on the change and in the audit trail; the proposer may reject their own change.
+  async rejectChange(id: string, reason: string): Promise<GovernanceChange> {
+    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/reject`, {
+      method: "POST",
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+    return asJson<GovernanceChange>(res);
   },
 };
 

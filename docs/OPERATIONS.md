@@ -1500,8 +1500,10 @@ approvers find them through `wardyn governance changes list` or the API.
   into a widening neither diff shows. Not covered here: the rest of the governance-adjacent writes
   (workspace egress lists, `/policies`, `/site-config`, `/integrations`, the approval `always` scope,
   user-type create and delete, and key-domain assignments stay single-human until their own lanes).
-- **Availability.** A build whose console is not yet pending-aware refuses to boot with the switch set
-  (exit 2).
+- **In the console.** The Governance screen's Changes tab lists the pending changes with the server's
+  diff, and an approver approves or rejects there (a reason is optional). A covered write made in the console
+  that is held shows "Submitted for approval" at the place it was made, never a save. Approve is disabled on
+  your own proposal, and the server remains the authority.
 
 **The `admin-token` principal BYPASSES it**, and you should plan around that. A
 bare `WARDYN_ADMIN_TOKEN` caller is attributed `system`/`admin-token` because a

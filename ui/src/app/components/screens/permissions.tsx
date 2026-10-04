@@ -22,7 +22,7 @@
 import * as React from "react";
 import { Info, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
-import { HttpError } from "../../lib/api/core";
+import { HttpError, PendingChangeError } from "../../lib/api/core";
 import { permissions as api } from "../../lib/api/permissions";
 import { runs as runsApi } from "../../lib/api/runs";
 import { getErrorMessage, relativeTime } from "../../lib/format";
@@ -51,6 +51,7 @@ import {
 import { cn } from "../ui/utils";
 import { Field, Switch } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
+import { SubmittedNote } from "./governance/submitted-note";
 import { PageHeader } from "../wardyn/page-header";
 import { PreviewAsNewUser } from "../wardyn/user-preview";
 import { Chip } from "../wardyn/primitives";
@@ -275,6 +276,8 @@ export function PermissionsScreen() {
   const [confirm, setConfirm] = React.useState<{ kind: CapabilityKind; next: boolean } | null>(null);
   const [toRemove, setToRemove] = React.useState<CapabilityGrant | null>(null);
   const [busy, setBusy] = React.useState(false);
+  // A write the server held for a second person (202): nothing has changed yet.
+  const [submitted, setSubmitted] = React.useState(false);
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -308,7 +311,14 @@ export function PermissionsScreen() {
       const saved = await api.putEnforcement(body);
       setSnap((s) => ({ grants: s?.grants ?? [], enforcement: saved }));
       setConfirm(null);
+      setSubmitted(false);
     } catch (e) {
+      if (e instanceof PendingChangeError) {
+        setConfirm(null);
+        setSubmitted(true);
+        load();
+        return;
+      }
       toast.error("Failed to save enforcement", { description: getErrorMessage(e) });
     } finally {
       setBusy(false);
@@ -321,7 +331,14 @@ export function PermissionsScreen() {
       await api.deleteGrant(g.id);
       setSnap((s) => (s ? { ...s, grants: s.grants.filter((x) => x.id !== g.id) } : s));
       setToRemove(null);
+      setSubmitted(false);
     } catch (e) {
+      if (e instanceof PendingChangeError) {
+        setToRemove(null);
+        setSubmitted(true);
+        load();
+        return;
+      }
       toast.error("Failed to remove grant", { description: getErrorMessage(e) });
     } finally {
       setBusy(false);
@@ -338,6 +355,8 @@ export function PermissionsScreen() {
         <Fact icon={ShieldCheck}>{PERM.DOCTRINE}</Fact>
         <Fact icon={Info}>{PERM.EXEMPT}</Fact>
       </div>
+
+      {submitted && <SubmittedNote />}
 
       {/* The upgrade-from-0.5 posture: every kind off and no grants at all. */}
       {status === "ready" && nothingEnforced && snap!.grants.length === 0 && (
@@ -456,7 +475,14 @@ export function PermissionsScreen() {
         </div>
       </section>
 
-      <AddGrantForm disabled={!securityOperator} onAdded={load} />
+      <AddGrantForm
+        disabled={!securityOperator}
+        onAdded={() => {
+          setSubmitted(false);
+          load();
+        }}
+        onSubmitted={load}
+      />
 
       <section className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
         <h2 className="text-sm font-medium text-foreground">{PERM.SNAPSHOT_TITLE}</h2>
@@ -628,11 +654,14 @@ export interface FixedGrantSubject {
 export function AddGrantForm({
   disabled,
   onAdded,
+  onSubmitted,
   fixed,
   hideTitle,
 }: {
   disabled: boolean;
   onAdded: () => void;
+  /** The write was held for a second person (202): nothing was added. The form says so itself. */
+  onSubmitted?: () => void;
   fixed?: FixedGrantSubject;
   hideTitle?: boolean;
 }) {
@@ -648,6 +677,8 @@ export function AddGrantForm({
   // never a toast, so the caller never has to look away from the dialog they
   // are still looking at (the dialog itself never closes on a refusal).
   const [error, setError] = React.useState<string | null>(null);
+  // The 202 branch: held for a second person, so not added, and said in the form the caller is looking at.
+  const [submitted, setSubmitted] = React.useState(false);
 
   const copy = KIND[kind];
   const whoHint = SUBJECTS.find((s) => s.value === subjectType)?.hint ?? "";
@@ -657,6 +688,7 @@ export function AddGrantForm({
     setSaving(true);
     setDuplicate(false);
     setError(null);
+    setSubmitted(false);
     try {
       const res = await api.upsertGrant({
         subject_type: subjectType,
@@ -671,6 +703,12 @@ export function AddGrantForm({
       setValue("");
       onAdded();
     } catch (e) {
+      if (e instanceof PendingChangeError) {
+        setValue("");
+        setSubmitted(true);
+        onSubmitted?.();
+        return;
+      }
       setError(e instanceof HttpError ? e.message : getErrorMessage(e));
     } finally {
       setSaving(false);
@@ -782,6 +820,7 @@ export function AddGrantForm({
           {error}
         </Note>
       )}
+      {submitted && <SubmittedNote />}
       <AlertDialog open={confirmWall} onOpenChange={setConfirmWall}>
         <AlertDialogContent>
           <AlertDialogHeader>
