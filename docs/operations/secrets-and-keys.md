@@ -1199,8 +1199,7 @@ transaction, safe while a daemon serves; idempotent and resumable.
    ```
    Expected output: `INFO wardynd: stored secrets migrated to=vaultkv
    moved=7 soft_deleted=0`
-4. Unset `WARDYN_AGE_KEY` and restart. Boot refuses, naming the command
-   above, while any local row remains.
+4. If a key service wraps the per-person keys (`WARDYN_KEK=transit` or `azurekv`), unset `WARDYN_AGE_KEY` and restart. Boot refuses, naming the command above, while any local row remains. Without a key service, keep `WARDYN_AGE_KEY` set: it wraps the per-person keys that seal run masking copies, and wardynd refuses to start without it.
 
 `-to=local` moves every row back (it needs `WARDYN_AGE_KEY`); each value
 is removed from Vault once its row holds it locally and has committed. The
