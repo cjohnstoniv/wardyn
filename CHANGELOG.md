@@ -145,6 +145,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   decision on the run detail, the attach panel's refusal and the New Run rail's profile line show the owner and
   one link, mail address or sentence, from the server's `policy` reference. A link is built only for `https:` or one
   `mailto:` address, re-checked in the browser. The governance profile editor gains the four contact fields.
+- **Capability grants, the enforcement map, availability, user-type priority and role mappings can require a
+  second human too.** With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, a human's write to `/permissions/grants`,
+  `/permissions/enforcement`, `/permissions/availability/{kind}/*` (when the restricted bit changes),
+  `PUT /user-types/{id}` (when the priority changes) or `/access/mappings` is held as a pending change and answered
+  `202`, and applies only on a distinct approval. A role mapping needs a super admin to approve it, and its lockout
+  guard is judged against the approver. No write to these targets has a narrowing exemption.
+
 - **Governance profile and assignment writes can require a second human.** With `WARDYN_GOVERNANCE_SECOND_HUMAN`
   on, a human's write to `/governance/profiles` or `/governance/assignments` is stored as a pending change and
   answered `202` with a `pending_change` body, and applies only when a different human with the authority to make

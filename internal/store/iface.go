@@ -225,6 +225,8 @@ type Store interface {
 	GetUserType(ctx context.Context, id string) (types.UserType, error)
 	CreateUserType(ctx context.Context, t types.UserType) (types.UserType, error)
 	UpdateUserType(ctx context.Context, t types.UserType) (types.UserType, error)
+	// UpdateUserTypeMetadata is UpdateUserType without the priority column.
+	UpdateUserTypeMetadata(ctx context.Context, t types.UserType) (types.UserType, error)
 	UserTypeReferences(ctx context.Context, id string) (int, error)
 	// UserTypeTokenStamps counts the unrevoked API tokens stamped with the type.
 	UserTypeTokenStamps(ctx context.Context, id string) (int, error)

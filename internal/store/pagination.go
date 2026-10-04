@@ -16,7 +16,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -50,7 +49,7 @@ func (p Page) appendTo(q string, args []any) (string, []any) {
 // collect runs q and scans every row with scan, wrapping errors as
 // "store: <verb> <noun>" (query) or "store: iterate <noun>" (scan). Always
 // returns []T{}, never nil, matching the API's empty-array contract.
-func collect[T any](ctx context.Context, pool *pgxpool.Pool, verb, noun, q string, args []any, scan func(pgx.Row) (T, error)) ([]T, error) {
+func collect[T any](ctx context.Context, pool Querier, verb, noun, q string, args []any, scan func(pgx.Row) (T, error)) ([]T, error) {
 	rows, err := pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: %s %s: %w", verb, noun, err)

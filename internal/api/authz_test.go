@@ -2044,6 +2044,9 @@ func (s *authzStore) CreateUserType(_ context.Context, t types.UserType) (types.
 func (s *authzStore) UpdateUserType(context.Context, types.UserType) (types.UserType, error) {
 	return types.UserType{}, store.ErrNotFound
 }
+func (s *authzStore) UpdateUserTypeMetadata(context.Context, types.UserType) (types.UserType, error) {
+	return types.UserType{}, store.ErrNotFound
+}
 func (s *authzStore) UserTypeReferences(context.Context, string) (int, error)  { return 0, nil }
 func (s *authzStore) UserTypeTokenStamps(context.Context, string) (int, error) { return 0, nil }
 func (s *authzStore) DeleteUserType(context.Context, string) error             { return store.ErrNotFound }

@@ -24,6 +24,12 @@ const (
 const (
 	GovernanceTargetProfile    = "governance_profile"
 	GovernanceTargetAssignment = "governance_assignment"
+
+	GovernanceTargetCapabilityGrant        = "capability_grant"
+	GovernanceTargetCapabilityEnforcement  = "capability_enforcement"
+	GovernanceTargetCapabilityAvailability = "capability_availability"
+	GovernanceTargetUserTypePriority       = "user_type_priority"
+	GovernanceTargetRoleMapping            = "role_mapping"
 )
 
 // GovernanceChange is one governance write held for a second human (migration 0126). Payload is the

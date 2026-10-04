@@ -48,8 +48,13 @@ func (s *Server) governanceChangeTTL() time.Duration {
 // The closed set of target kinds (the table is governanceChangeKinds). A later lane adds a kind here
 // and a row there, with no DDL: migration 0126 puts no CHECK on target_kind.
 const (
-	govKindProfile    = types.GovernanceTargetProfile
-	govKindAssignment = types.GovernanceTargetAssignment
+	govKindProfile      = types.GovernanceTargetProfile
+	govKindAssignment   = types.GovernanceTargetAssignment
+	govKindGrant        = types.GovernanceTargetCapabilityGrant
+	govKindEnforcement  = types.GovernanceTargetCapabilityEnforcement
+	govKindAvailability = types.GovernanceTargetCapabilityAvailability
+	govKindUserType     = types.GovernanceTargetUserTypePriority
+	govKindRoleMapping  = types.GovernanceTargetRoleMapping
 )
 
 // govChangeTarget is the authz.denied target of every refusal a change decision gives.
@@ -122,6 +127,14 @@ type govApprover struct {
 	reason  authz.Reason
 }
 
+// operatorApprover is the tier of the operatorOnly routes: a super admin only. A security admin who
+// tries to decide a change proposed on that tier gets the same admin_surface refusal requireOperator
+// gives.
+var operatorApprover = govApprover{
+	allowed: func(s *Server, r *http.Request) bool { return s.isOperator(r.Context()) },
+	reason:  authz.ReasonAdminSurface,
+}
+
 // securityApprover is the tier of the securityOps routes: a super admin or a security admin.
 var securityApprover = govApprover{
 	allowed: func(s *Server, r *http.Request) bool { return s.isSecurityOperator(r.Context()) },
@@ -143,13 +156,22 @@ type govApplied struct {
 	action string
 	target string
 	data   map[string]any
+	// afterCommit, when set, runs once the decision has committed and returns more audit data (a
+	// role mapping's revocation of the tokens it demoted runs here, as it runs after the write today).
+	afterCommit func() map[string]any
 }
 
-// governanceChangeKinds is the single table of covered targets and who may approve each. gov4-b2
-// and key-l3.3 extend it with their own rows.
+// governanceChangeKinds is the single table of covered targets and who may approve each. key-l3.3
+// extends it with its own row. A role mapping is written on the operatorOnly tier, so only a super
+// admin approves it; every other kind is written on securityOps.
 var governanceChangeKinds = map[string]govKind{
-	govKindProfile:    {approver: securityApprover, apply: applyProfileChange},
-	govKindAssignment: {approver: securityApprover, apply: applyAssignmentChange},
+	govKindProfile:      {approver: securityApprover, apply: applyProfileChange},
+	govKindAssignment:   {approver: securityApprover, apply: applyAssignmentChange},
+	govKindGrant:        {approver: securityApprover, apply: applyGrantChange},
+	govKindEnforcement:  {approver: securityApprover, apply: applyEnforcementChange},
+	govKindAvailability: {approver: securityApprover, apply: applyAvailabilityChange},
+	govKindUserType:     {approver: securityApprover, apply: applyUserTypeChange},
+	govKindRoleMapping:  {approver: operatorApprover, apply: applyRoleMappingChange},
 }
 
 // canSeeGovernanceKind reports whether the caller may list or read changes of kind: the approver
