@@ -565,9 +565,48 @@ describe("Governance components render no copy of their own", () => {
     "governance-screen.tsx",
     "profile-editor.tsx",
     "profile-rubric.tsx",
+    "profile-overlay.tsx",
     "assignments.tsx",
     "display.tsx",
   ]);
+});
+
+describe("GovernanceScreen — composed profiles", () => {
+  const BASE = profile({ id: "pb", name: "Baseline" });
+  const CHILD = profile({ id: "pc", name: "Team A", ceiling: {} as RunPolicySpec, base_profile_id: "pb", overlay: {} });
+  const ON_DEPLOYMENT = profile({ id: "pd", name: "Division", ceiling: {} as RunPolicySpec, overlay: {} });
+  const composed = () => snapshot({ profiles: [BASE, CHILD, ON_DEPLOYMENT], assignments: [] });
+
+  it("marks a composed row with its base, and a deployment-based one with the deployment", async () => {
+    renderScreen(composed());
+    await screen.findByText(CHILD.name);
+    expect(screen.getByText(GOV.BASE_CHIP(BASE.name))).toBeInTheDocument();
+    expect(screen.getByText(GOV.BASE_CHIP(GOV.BASE_DEPLOYMENT))).toBeInTheDocument();
+    // The standalone row carries no chip.
+    expect(screen.getAllByText(/^Base ·/)).toHaveLength(2);
+  });
+
+  it("a base with children opens its delete PRE-FILLED, confirm disabled, nothing attempted", async () => {
+    renderScreen(composed());
+    await screen.findByText(BASE.name);
+    await userEvent.click(screen.getByRole("button", { name: `${GOV.DELETE} ${BASE.name}` }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(GOV.REFUSED_HAS_CHILDREN)).toBeInTheDocument();
+    expect(within(dialog).getByText(CHILD.name)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: GOV.DELETE })).toBeDisabled();
+    expect(deleteProfileMock).not.toHaveBeenCalled();
+  });
+
+  it("the race: a 409 on a profile the list saw no children for keeps the restrict heading", async () => {
+    deleteProfileMock.mockRejectedValue(new HttpError(409, "this governance profile is the base of X", "governance_profile_in_use"));
+    renderScreen(composed());
+    await screen.findByText(ON_DEPLOYMENT.name);
+    await userEvent.click(screen.getByRole("button", { name: `${GOV.DELETE} ${ON_DEPLOYMENT.name}` }));
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: GOV.DELETE }));
+    expect(await within(dialog).findByText(GOV.DELETE_RESTRICT_TITLE)).toBeInTheDocument();
+    expect(within(dialog).getByText("this governance profile is the base of X")).toBeInTheDocument();
+  });
 });
 
 describe("GovernanceScreen — the write gate", () => {
