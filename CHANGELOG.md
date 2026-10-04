@@ -53,9 +53,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   standalone and resolves exactly as on 0.8.5. A composed row stores `{}` for `ceiling` and `limits`, and its
   effective policy is computed whenever authority is read (create, preflight, dispatch, attach and SSH, UI apps,
   revive, the limits re-clamp and end extension), so a change to a base reaches every profile built on it. A
-  base that cannot be read, a chain deeper than three profiles, a loop, or an overlay and base that nothing
-  satisfies together refuses the launch and every live door with `403 governance_overlay_unsatisfiable`; it is
-  never read as the deployment's policy. Writes: `POST`/`PUT /governance/profiles` accept `base_profile_id`,
+  base that nothing satisfies together with its overlay refuses the launch and every live door with
+  `403 governance_overlay_unsatisfiable`; a base that cannot be read, a loop or a chain deeper than three
+  profiles closes the launch and every live door with a `500` (a revive or end extension with `503`/`409`), and
+  none of them is ever read as the deployment's policy. Writes: `POST`/`PUT /governance/profiles` accept `base_profile_id`,
   `overlay` and `overlay_limits`; an overlay naming anything its base does not permit, or a non-empty `ceiling`
   or `limits` beside an overlay, is `400 governance_overlay_invalid`; a change that would make a profile its own
   base is `409 governance_profile_cycle`, one that would put a profile past three deep is `409

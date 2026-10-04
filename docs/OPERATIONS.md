@@ -2616,12 +2616,13 @@ profile or the deployment default, and an overlay that can only narrow it, and t
 ceiling that binds is the base narrowed by the overlay. Every reader of a profile's
 authority sees the composed result, including the doors that bind runs already going
 (attach and SSH, UI apps, revive, the limits re-clamp, end extension), so a change to a
-base reaches every profile built on it. A chain is at most three profiles deep. A base that
-cannot be read, a chain that loops or runs deeper, or an overlay and base that nothing
-satisfies together (the deployment default narrowed until their `allowed_methods`
-are disjoint, say) refuses the launch and every live door with `403
-governance_overlay_unsatisfiable`, audited, until an administrator fixes it; it is never read as
-the deployment's policy. The profile's own name is all a member is told. A profile edit still
+base reaches every profile built on it. A chain is at most three profiles deep. An overlay
+and base that nothing satisfies together (the deployment default narrowed until their
+`allowed_methods` are disjoint, say) refuses the launch and every live door with `403
+governance_overlay_unsatisfiable`, audited, until an administrator fixes it. A base that cannot be
+read, a chain that loops or runs deeper closes the launch and every live door with a `500` (a revive
+or end extension with `503`/`409`), unaudited as this reason, until an administrator fixes it; none of
+them is ever read as the deployment's policy. The profile's own name is all a member is told. A profile edit still
 reaches an already-running proxy only through the denies re-asserted at revive or restart, and
 a base edit now does so for a whole subtree at once. Deleting a profile requires unassigning it
 first, and a base that still has profiles built on it is a 409 naming them (never a silent
