@@ -150,6 +150,11 @@ declare -A ALLOWLIST=(
   ["internal/db/audit_partition_digest_pg_test.go"]=1
   ["internal/store/auditpartition_pg_test.go"]=1
   ["ui/e2e/governed-admin.spec.ts"]=2
+  # 0.8.6 W3: the directory fake stamps CreatedAt and a listing row's
+  # LastSignInAt with a fixed instant that is only echoed into the JSON body;
+  # the hourly test's t0 seeds an injected fake clock, never the wall clock.
+  ["internal/api/people_keydomains_fake_test.go"]=2
+  ["internal/notify/worker_unit_test.go"]=1
 )
 
 fail=0
