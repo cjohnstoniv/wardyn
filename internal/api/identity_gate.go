@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -43,6 +44,8 @@ func (g storeIdentityGate) Issue(ctx context.Context, f oidc.LoginFacts) (int64,
 		return 0, oidc.ErrIdentityDeactivated
 	case errors.Is(err, store.ErrConflict):
 		return 0, oidc.ErrIdentityConflict
+	case errors.Is(err, store.ErrIdentityBindingMismatch):
+		return 0, fmt.Errorf("%w: %w", oidc.ErrIdentityBindingMismatch, err)
 	}
 	return epoch, err
 }

@@ -145,11 +145,11 @@ func TestPG_LoginIdentity_BindingIsImmutable(t *testing.T) {
 		t.Fatalf("first: %v", err)
 	}
 
-	// Same object id, another principal: the row keeps its principal.
+	// Same object id, another principal: refused, and the row keeps its principal.
 	moved := in
 	moved.Principal = "another-sub"
-	if got, err := st.UpsertLoginIdentity(ctx, moved, time.Now().UTC()); err != nil || got.ID != orig.ID || got.Principal != in.Principal {
-		t.Errorf("another principal on the object id: %+v, %v; want the original binding", got, err)
+	if _, err := st.UpsertLoginIdentity(ctx, moved, time.Now().UTC()); !errors.Is(err, store.ErrIdentityBindingMismatch) {
+		t.Errorf("another principal on the object id: %v; want ErrIdentityBindingMismatch", err)
 	}
 	// Same principal, another object id: the principal is taken, so nothing is written.
 	elsewhere := in
@@ -188,8 +188,11 @@ func TestPG_LoginIdentity_FirstSignInBindsAnUnboundRow(t *testing.T) {
 		t.Fatalf("first sign-in: %+v, %v; want the seeded row bound to %s", got, err, in.Principal)
 	}
 	in.Principal = "another-sub"
-	if got, err = st.UpsertLoginIdentity(ctx, in, time.Now().UTC()); err != nil || got.Principal != "pairwise-"+oid {
-		t.Errorf("second sign-in: %+v, %v; want the first binding kept", got, err)
+	if _, err = st.UpsertLoginIdentity(ctx, in, time.Now().UTC()); !errors.Is(err, store.ErrIdentityBindingMismatch) {
+		t.Errorf("second sign-in under another principal: %v; want ErrIdentityBindingMismatch", err)
+	}
+	if got, err = st.GetIdentityByObject(ctx, idIssuer, idTenant, oid); err != nil || got.Principal != "pairwise-"+oid {
+		t.Errorf("after the refused sign-in: %+v, %v; want the first binding kept", got, err)
 	}
 	if n := identityCount(t, pool); n != 1 {
 		t.Errorf("identity rows = %d, want 1", n)

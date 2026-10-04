@@ -933,6 +933,54 @@ func (e *scimEnv) captured(sub string) bool {
 	return slices.Contains(names, adoEntraSecretName("ado-row-1"))
 }
 
+// A suspension whose process dies right after the deactivation commits still leaves its pending work on the
+// ledger: the sweeper on another instance, with automatic purge off, finds it and finishes the suspension.
+func TestPG_SCIMSuspend_PendingWorkSurvivesCrashAfterCommit(t *testing.T) {
+	e := newSCIMEnv(t)
+	e.seedEntra("sub-crash", "crash@corp.example", oidPat)
+	id := e.postUserID(e.a, oidPat, "crash@corp.example", "crash@corp.example")
+	run := e.seedRun("sub-crash", types.RunRunning)
+	ctx := context.Background()
+	// The crash: every ledger write after the transaction that wrote the cutoff fails.
+	if _, err := e.pool.Exec(ctx, `
+		CREATE FUNCTION test_fail_after_suspend_commit() RETURNS trigger AS $$ BEGIN
+			IF NEW.step <> 'cutoff' AND NOT EXISTS (SELECT 1 FROM deprovision_jobs
+				WHERE identity_id = NEW.identity_id AND step = 'cutoff' AND xmin = pg_current_xact_id()::xid) THEN
+				RAISE EXCEPTION 'test: the process died after the suspension committed';
+			END IF;
+			RETURN NEW;
+		END; $$ LANGUAGE plpgsql;
+		CREATE TRIGGER test_fail_after_suspend_commit BEFORE INSERT ON deprovision_jobs
+			FOR EACH ROW EXECUTE FUNCTION test_fail_after_suspend_commit()`); err != nil {
+		t.Fatal(err)
+	}
+	if w := e.patch(e.a, id, patchOf("false")); w.Code/100 != 5 {
+		t.Fatalf("suspend = %d %s, want 5xx", w.Code, w.Body.String())
+	}
+	if e.identity(id).DeactivatedAt == nil {
+		t.Fatal("the suspension did not commit")
+	}
+	if _, err := e.pool.Exec(ctx, `DROP TRIGGER test_fail_after_suspend_commit ON deprovision_jobs`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(ctx, `UPDATE deprovision_jobs SET updated_at = now() - interval '1 hour' WHERE identity_id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := e.st.PendingLeavers(ctx, scimResumeIdle, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(pending, func(p store.PendingLeaver) bool { return p.ID.String() == id }) {
+		t.Fatalf("pending leavers = %+v, want the committed suspension", pending)
+	}
+	if err := e.b.srv.SweepSCIMPurge(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if e.runState(run) != types.RunKilled || !e.allJobsDone(id) {
+		t.Errorf("after the sweep: run %s, ledger done=%v; want KILLED and done", e.runState(run), e.allJobsDone(id))
+	}
+}
+
 // A sign-in in flight when a suspension lands, on another instance, ends with no usable session and no
 // captured credential, whichever step it was at: admitted (the suspension lands before issuance), or issued
 // (it lands before the capture and the cookie's first use).

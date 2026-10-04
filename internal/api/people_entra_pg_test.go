@@ -20,6 +20,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -34,7 +35,8 @@ const (
 // fake through the split-horizon issuer rewrite, so the REAL sign-in callback
 // runs against the real person store. signIn sets the next id_token the fake
 // token endpoint returns. OnLogin does what cmd/wardynd's refreshLoginStamps
-// does with the api-token and person stamps.
+// does with the api-token and person stamps. shape adjusts the authenticator's
+// config before it is built (an identity gate, a revocation store).
 type entraPeoplePG struct {
 	peoplePG
 	issuer string
@@ -42,7 +44,7 @@ type entraPeoplePG struct {
 	signIn func(sub, tid, oid string)
 }
 
-func newEntraPeoplePG(t *testing.T) entraPeoplePG {
+func newEntraPeoplePG(t *testing.T, shape ...func(peoplePG, *oidc.Config)) entraPeoplePG {
 	t.Helper()
 	e := newPeoplePG(t)
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -64,7 +66,7 @@ func newEntraPeoplePG(t *testing.T) entraPeoplePG {
 	t.Cleanup(srv.Close)
 
 	st := e.st
-	auth, err := oidc.New(context.WithValue(context.Background(), oauth2.HTTPClient, srv.Client()), oidc.Config{
+	cfg := oidc.Config{
 		IssuerURL: issuer, InternalIssuerURL: srv.URL + prefix,
 		ClientID: "wardyn-client", ClientSecret: "secret", RedirectURL: "http://localhost/auth/callback",
 		RoleMap: map[string]string{
@@ -79,7 +81,11 @@ func newEntraPeoplePG(t *testing.T) entraPeoplePG {
 				t.Error(err)
 			}
 		},
-	}, accessTestHMACKey)
+	}
+	for _, f := range shape {
+		f(e, &cfg)
+	}
+	auth, err := oidc.New(context.WithValue(context.Background(), oauth2.HTTPClient, srv.Client()), cfg, accessTestHMACKey)
 	if err != nil {
 		t.Fatalf("oidc.New against the Entra-issuer fake: %v", err)
 	}
@@ -352,6 +358,17 @@ func TestPeopleEntra_KnownSubKeepsItsPrincipal(t *testing.T) {
 				return doSSO(t, e.h.srv, http.MethodGet, "/api/v1/runs/"+run.ID.String(), second, "").Code == http.StatusOK
 			}
 		}},
+		{"a prior sign-in's identity row only", func(t *testing.T, e entraPeoplePG, _ *http.Cookie) func(*http.Cookie) bool {
+			// What the sign-in gate records at the first sign-in: the identity bound to the sub.
+			if _, err := e.st.UpsertLoginIdentity(context.Background(), store.LoginIdentity{
+				Principal: "pairwise-a", Issuer: e.issuer, TenantID: entraTenant, ObjectID: entraObject, Email: personEmail,
+			}, time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+			return func(second *http.Cookie) bool {
+				return decodeToken(t, doSSO(t, e.h.srv, http.MethodPost, "/api/v1/me/tokens", second, `{"name":"who"}`)).Principal == "pairwise-a"
+			}
+		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := newEntraPeoplePG(t)
@@ -414,5 +431,67 @@ func TestPeopleEntra_ExchangeRecordsAttachOnlyWhenAdmitted(t *testing.T) {
 	}
 	if code := exchange("portal-users"); code != http.StatusOK || len(e.auditRows("person.attach")) != 1 {
 		t.Fatalf("admitted exchange: %d, %d person.attach rows; want 200 and one", code, len(e.auditRows("person.attach")))
+	}
+}
+
+// TestPeopleEntra_LateCookieAfterSuspendIsRefused: someone known only by a
+// prior sign-in under their pairwise sub is then set up by object id, and
+// signs in again while a suspension lands between the callback's identity
+// issuance and its cookie. The cookie is still the sub's, so it carries the
+// epoch of the identity the suspension bumped, and it is refused.
+func TestPeopleEntra_LateCookieAfterSuspendIsRefused(t *testing.T) {
+	var afterLogin func()
+	var rev *pgTestRevocations
+	e := newEntraPeoplePG(t, func(p peoplePG, c *oidc.Config) {
+		rev = &pgTestRevocations{pool: p.pool, st: p.st}
+		c.Identities, c.Revocations = NewIdentityGate(p.st), rev
+		onLogin := c.OnLogin
+		c.OnLogin = func(ctx context.Context, f oidc.LoginFacts) {
+			onLogin(ctx, f)
+			if afterLogin != nil {
+				afterLogin()
+			}
+		}
+	})
+	e.h.srv.cfg.SessionRevocations = rev
+	e.h.srv.router = e.h.srv.routes()
+	ctx := context.Background()
+
+	e.signIn("pairwise-a", entraTenant, entraObject)
+	if _, c := e.callback(t); c == nil {
+		t.Fatal("first sign-in refused")
+	}
+	if w := e.createEntraPerson(t, `{"tenant_id":"`+entraTenant+`","object_id":"`+entraObject+`"}`); w.Code != http.StatusCreated {
+		t.Fatalf("object-id create: %d %s", w.Code, w.Body.String())
+	}
+	cfg := e.h.srv.cfg
+	cfg.SCIM = &SCIMConfig{Token: scimEnvToken, Issuer: e.issuer, Tenant: entraTenant}
+	other := New(cfg)
+	afterLogin = func() {
+		afterLogin = nil
+		bound, err := e.st.GetIdentityByObject(ctx, e.issuer, entraTenant, entraObject)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := other.suspendIdentity(ctx, e.st, bound.ID, "primary"); err != nil {
+			t.Fatal(err)
+		}
+		// The cookie's issued-at lands after the cutoff, so only the epoch can refuse it.
+		time.Sleep(1100 * time.Millisecond)
+	}
+	e.signIn("pairwise-a", entraTenant, entraObject)
+	_, late := e.callback(t)
+	if late == nil {
+		t.Fatal("the late sign-in was refused before its cookie; the race did not happen")
+	}
+	if afterLogin != nil {
+		t.Fatal("the suspension did not run inside the sign-in")
+	}
+	bound, err := e.st.GetIdentityByObject(ctx, e.issuer, entraTenant, entraObject)
+	if err != nil || bound.Principal != "pairwise-a" || bound.DeactivatedAt == nil {
+		t.Fatalf("identity = %+v (%v), want bound to pairwise-a and deactivated", bound, err)
+	}
+	if w := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/me/tokens", late, ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("late cookie GET /me/tokens = %d %s, want 401", w.Code, w.Body.String())
 	}
 }

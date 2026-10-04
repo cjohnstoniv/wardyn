@@ -23,6 +23,11 @@ import (
 // ErrIdentityPurged is a reactivation's refusal: a purged identity is a permanent tombstone.
 var ErrIdentityPurged = errors.New("store: identity purged")
 
+// ErrIdentityBindingMismatch is a sign-in's refusal when the identity it names is already bound to
+// another principal: issuing its session under the new one would leave it outside the identity's
+// deactivation and epoch checks. Nothing is written.
+var ErrIdentityBindingMismatch = errors.New("store: identity bound to another principal")
+
 // Job kinds and the one step name every kind shares.
 const (
 	JobKindSuspend = "suspend"
@@ -54,6 +59,9 @@ type SuspendPlan struct {
 	// PurgeAfter schedules the automatic purge that long after the deactivation. Zero schedules
 	// none; an earlier schedule is kept.
 	PurgeAfter time.Duration
+	// PendingJobs are added as pending ledger rows in the same transaction, so a crash after the
+	// commit still leaves the rest of the suspension for the sweeper. Existing rows are kept.
+	PendingJobs []JobKey
 }
 
 // SuspendResult is step 1's outcome. WasActive says the identity was active before it, so this
@@ -280,8 +288,8 @@ func nonEmptyStrings(in []string) []string {
 // SuspendIdentity is step 1 of a suspension, one transaction. It takes every row it will change
 // FOR UPDATE, in id order (so a sign-in holding one of them finishes first or is refused), writes
 // the session cutoff for every sub and email form, deactivates the identity rows and bumps their
-// authority epoch, stamps the people rows, and records the step done. A suspension of an active
-// identity first clears the ledger of any earlier one.
+// authority epoch, stamps the people rows, records the step done and the plan's pending steps. A
+// suspension of an active identity first clears the ledger of any earlier one.
 func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -348,6 +356,13 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 		   SET state = 'done', attempts = deprovision_jobs.attempts + 1, detail = EXCLUDED.detail, updated_at = now()`,
 		p.IdentityID, JobKindSuspend, JobStepCutoff, detail); err != nil {
 		return SuspendResult{}, fmt.Errorf("store: record cutoff step: %w", err)
+	}
+	for _, k := range p.PendingJobs {
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO deprovision_jobs (identity_id, kind, step, target) VALUES ($1, 'suspend', $2, $3)
+			ON CONFLICT (identity_id, kind, step, target) DO NOTHING`, p.IdentityID, k.Step, k.Target); err != nil {
+			return SuspendResult{}, fmt.Errorf("store: record pending suspension step: %w", err)
+		}
 	}
 	if err = tx.QueryRow(ctx, `SELECT authority_epoch FROM principal_identities WHERE id = $1`, p.IdentityID).Scan(&res.Epoch); err != nil {
 		return SuspendResult{}, fmt.Errorf("store: read authority epoch: %w", err)

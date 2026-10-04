@@ -152,7 +152,7 @@ func TestAdmitAsksAboutTheEntraKeyOnlyOnEntra(t *testing.T) {
 }
 
 // Issuance is the second gate: a refusal there (a suspension landed between admission and issuance), a
-// binding conflict or an unreadable store each end the login with no session, no OnLogin and no
+// binding conflict, an identity bound to another principal or an unreadable store each end the login with no session, no OnLogin and no
 // captured credential.
 func TestIssuanceRefusalsEndTheLogin(t *testing.T) {
 	for _, c := range []struct {
@@ -163,6 +163,7 @@ func TestIssuanceRefusalsEndTheLogin(t *testing.T) {
 	}{
 		{name: "suspended in flight", err: writoidc.ErrIdentityDeactivated, wantError: "sign_in_refused", wantDenied: []string{writoidc.DenialIdentityDeactivated}},
 		{name: "binding conflict", err: writoidc.ErrIdentityConflict, wantError: "sign_in_refused"},
+		{name: "bound to another principal", err: writoidc.ErrIdentityBindingMismatch, wantError: "sign_in_refused"},
 		{name: "store down", err: errors.New("pg down"), wantError: "role_check_unavailable"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
