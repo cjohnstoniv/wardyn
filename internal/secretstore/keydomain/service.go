@@ -260,14 +260,27 @@ func (s *Service) Usage(ctx context.Context) ([]Usage, error) {
 	return out, nil
 }
 
+// Querier is what an assignment read or write runs on: the pool, or a
+// transaction it joins (a held governance change applies inside the decision
+// transaction).
+type Querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // Set writes the assignment for (a.SubjectType, a.Subject), and reports whether
 // it created it. The domain must be declared (ErrUnknownDomain); Default is
 // declared and says "back to the credential key".
 func (s *Service) Set(ctx context.Context, a Assignment) (created bool, err error) {
+	return s.SetQ(ctx, s.pool, a)
+}
+
+// SetQ is Set on q.
+func (s *Service) SetQ(ctx context.Context, q Querier, a Assignment) (created bool, err error) {
 	if !s.Has(a.Domain) {
 		return false, fmt.Errorf("%w: %q", ErrUnknownDomain, a.Domain)
 	}
-	err = s.pool.QueryRow(ctx, `
+	err = q.QueryRow(ctx, `
 		INSERT INTO key_domain_assignments (subject_type, subject, domain, set_by) VALUES ($1, $2, $3, $4)
 		ON CONFLICT (subject_type, subject) DO UPDATE SET domain=EXCLUDED.domain, set_by=EXCLUDED.set_by, set_at=now()
 		RETURNING (xmax = 0)`, a.SubjectType, a.Subject, a.Domain, a.SetBy).Scan(&created)
@@ -279,7 +292,16 @@ func (s *Service) Set(ctx context.Context, a Assignment) (created bool, err erro
 
 // Get returns one assignment; false when there is none.
 func (s *Service) Get(ctx context.Context, subjectType, subject string) (Assignment, bool, error) {
-	rows, err := s.pool.Query(ctx, `SELECT subject_type, subject, domain, set_by, set_at FROM key_domain_assignments WHERE subject_type=$1 AND subject=$2`, subjectType, subject)
+	return s.GetQ(ctx, s.pool, subjectType, subject, false)
+}
+
+// GetQ is Get on q; forUpdate locks the row it finds until q's transaction ends.
+func (s *Service) GetQ(ctx context.Context, q Querier, subjectType, subject string, forUpdate bool) (Assignment, bool, error) {
+	stmt := `SELECT subject_type, subject, domain, set_by, set_at FROM key_domain_assignments WHERE subject_type=$1 AND subject=$2`
+	if forUpdate {
+		stmt += ` FOR UPDATE`
+	}
+	rows, err := q.Query(ctx, stmt, subjectType, subject)
 	if err != nil {
 		return Assignment{}, false, unavailable("read the assignment", err)
 	}
@@ -297,7 +319,12 @@ func (s *Service) Get(ctx context.Context, subjectType, subject string) (Assignm
 // there was none. Nothing already written moves: the subject's next generation
 // is placed by what is left.
 func (s *Service) Delete(ctx context.Context, subjectType, subject string) (Assignment, bool, error) {
-	rows, err := s.pool.Query(ctx, `DELETE FROM key_domain_assignments WHERE subject_type=$1 AND subject=$2
+	return s.DeleteQ(ctx, s.pool, subjectType, subject)
+}
+
+// DeleteQ is Delete on q.
+func (s *Service) DeleteQ(ctx context.Context, q Querier, subjectType, subject string) (Assignment, bool, error) {
+	rows, err := q.Query(ctx, `DELETE FROM key_domain_assignments WHERE subject_type=$1 AND subject=$2
 		RETURNING subject_type, subject, domain, set_by, set_at`, subjectType, subject)
 	if err != nil {
 		return Assignment{}, false, unavailable("delete the assignment", err)
@@ -316,8 +343,13 @@ func (s *Service) Delete(ctx context.Context, subjectType, subject string) (Assi
 // group assigned to a domain other than domain, with no user assignment of
 // their own: assigning group to domain would make them ambiguous.
 func (s *Service) AmbiguousIfGroup(ctx context.Context, group, domain string) (int, error) {
+	return s.AmbiguousIfGroupQ(ctx, s.pool, group, domain)
+}
+
+// AmbiguousIfGroupQ is AmbiguousIfGroup on q.
+func (s *Service) AmbiguousIfGroupQ(ctx context.Context, q Querier, group, domain string) (int, error) {
 	var n int
-	err := s.pool.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		SELECT count(*) FROM key_domain_login_groups l
 		WHERE l.groups @> jsonb_build_array($1::text)
 		  AND NOT EXISTS (SELECT 1 FROM key_domain_assignments u WHERE u.subject_type='user' AND u.subject = l.principal)

@@ -31,7 +31,9 @@ import (
 
 // mountKeyDomainRoutes registers /key-domains. Called with securityOps: moving
 // where a person's keys are written is the security tier's duty, beside erasing
-// a person's credentials. Four-eyes coverage of the two writes is GOV4's.
+// a person's credentials. With WARDYN_GOVERNANCE_SECOND_HUMAN on, a human's
+// write of either is held for a second security admin
+// (governance_change_keydomain_kinds.go).
 func (s *Server) mountKeyDomainRoutes(securityOps chi.Router) {
 	securityOps.Get("/key-domains", s.handleListKeyDomains)
 	securityOps.Put("/key-domains/assignments/{subject_type}/{subject}", s.handlePutKeyDomainAssignment)
@@ -105,13 +107,13 @@ func (s *Server) defaultKeyDomainKey() string {
 
 // keyDomainChange is one validated assignment write. Decoding and validating
 // it (decodeKeyDomainChange) is separate from doing it (applyKeyDomainChange),
-// so a four-eyes queue can hold a validated change and apply it once a second
-// human has agreed.
+// so a four-eyes queue can hold a validated change (it is the held payload) and
+// apply it once a second human has agreed (applyKeyDomainAssignmentChange).
 type keyDomainChange struct {
-	Delete      bool
-	SubjectType string
-	Subject     string
-	Domain      string
+	Delete      bool   `json:"delete,omitempty"`
+	SubjectType string `json:"subject_type"`
+	Subject     string `json:"subject"`
+	Domain      string `json:"domain,omitempty"`
 }
 
 // keyDomainActor is who an applied change is attributed to.
@@ -253,37 +255,58 @@ func (s *Server) handlePutKeyDomainAssignment(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	if !svc.Has(c.Domain) {
-		s.refuse(w, r, authz.Deny(authz.ReasonKeyDomainUnknown, keyDomainTarget(c), fmt.Sprintf(
-			"The key domain %q is not declared in the deployment's key domains file, so nothing was changed. Declared: %s.",
-			c.Domain, declaredKeyDomains(svc))))
+	if d, err := keyDomainSetRefusal(r.Context(), svc, svc.AmbiguousIfGroup, c); err != nil {
+		writeServerError(w, r, "check key domain membership", err)
+		return
+	} else if d != nil {
+		s.refuse(w, r, *d)
 		return
 	}
-	// Setting a group must not leave anyone with two groups in different
-	// domains and no user assignment: their next key would be refused by name.
-	if c.SubjectType == keydomain.SubjectGroup {
-		n, err := svc.AmbiguousIfGroup(r.Context(), c.Subject, c.Domain)
-		if err != nil {
-			writeServerError(w, r, "check key domain membership", err)
-			return
-		}
-		if n > 0 {
-			s.refuse(w, r, authz.Deny(authz.ReasonKeyDomainAmbiguous, keyDomainTarget(c), fmt.Sprintf(
-				"%d people last signed in with this group and another group assigned to a different domain, and have no assignment of their own, so their next key would be refused. "+
-					"Assign each of them to one domain as a user first, or give both groups the same domain. Nothing was changed.", n)))
-			return
-		}
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
+	if mode == govQueue {
+		s.holdKeyDomainChange(w, r, c)
+		return
 	}
 	out, err := s.applyKeyDomainChange(r.Context(), keyDomainActor{actorTypeFromRequest(r), principalFromRequest(r)}, c)
 	if err != nil {
 		writeServerError(w, r, "set key domain assignment", err)
 		return
 	}
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindKeyDomain, keyDomainTarget(c), "success", nil)
+	}
 	status := http.StatusOK
 	if out.Created {
 		status = http.StatusCreated
 	}
 	writeJSON(w, status, out.Assignment)
+}
+
+// keyDomainSetRefusal is why the set c may not be made as the assignments stand, or nil: a domain
+// the file does not declare, or a group whose assignment would leave someone with two groups in
+// different domains and no user assignment, whose next key would then be refused by name. ambiguous
+// counts those people, on the pool for a direct write or on the decision transaction for a held one.
+func keyDomainSetRefusal(ctx context.Context, svc *keydomain.Service, ambiguous func(ctx context.Context, group, domain string) (int, error), c keyDomainChange) (*authz.Decision, error) {
+	if !svc.Has(c.Domain) {
+		d := authz.Deny(authz.ReasonKeyDomainUnknown, keyDomainTarget(c), fmt.Sprintf(
+			"The key domain %q is not declared in the deployment's key domains file, so nothing was changed. Declared: %s.",
+			c.Domain, declaredKeyDomains(svc)))
+		return &d, nil
+	}
+	if c.SubjectType != keydomain.SubjectGroup {
+		return nil, nil
+	}
+	n, err := ambiguous(ctx, c.Subject, c.Domain)
+	if err != nil || n == 0 {
+		return nil, err
+	}
+	d := authz.Deny(authz.ReasonKeyDomainAmbiguous, keyDomainTarget(c), fmt.Sprintf(
+		"%d people last signed in with this group and another group assigned to a different domain, and have no assignment of their own, so their next key would be refused. "+
+			"Assign each of them to one domain as a user first, or give both groups the same domain. Nothing was changed.", n))
+	return &d, nil
 }
 
 func (s *Server) handleDeleteKeyDomainAssignment(w http.ResponseWriter, r *http.Request) {
@@ -294,16 +317,31 @@ func (s *Server) handleDeleteKeyDomainAssignment(w http.ResponseWriter, r *http.
 	if !ok {
 		return
 	}
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
+	if mode == govQueue {
+		s.holdKeyDomainChange(w, r, c)
+		return
+	}
 	out, err := s.applyKeyDomainChange(r.Context(), keyDomainActor{actorTypeFromRequest(r), principalFromRequest(r)}, c)
 	if err != nil {
 		writeServerError(w, r, "delete key domain assignment", err)
 		return
 	}
 	if !out.Found {
-		writeErrorReason(w, http.StatusNotFound, reasonKeyDomainAssignmentNotFound, "No such key domain assignment.")
+		writeKeyDomainAssignmentNotFound(w)
 		return
 	}
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindKeyDomain, keyDomainTarget(c), "success", nil)
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func writeKeyDomainAssignmentNotFound(w http.ResponseWriter) {
+	writeErrorReason(w, http.StatusNotFound, reasonKeyDomainAssignmentNotFound, "No such key domain assignment.")
 }
 
 // declaredKeyDomains lists the names a set may use, for the refusal sentence.
