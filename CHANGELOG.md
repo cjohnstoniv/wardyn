@@ -281,7 +281,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   operator is served, and `?partition=` with any other filter is refused (`audit_export_partition_filter`).
   `GET /audit/chain/verify` now starts from the newest attested retention drop, reports a removed newest tail
   (checked against the recorded high-water mark) and a missing expected partition, and names an unattested
-  removal `rows removed without an attested retention drop`. A role you create after the upgrade needs
+  removal `rows removed without an attested retention drop`. A removed tail stays reported after later
+  appends: each new row links to the recorded head rather than the newest row left in the table (migration
+  `0130_audit_chain_head_from_meta`), so the chain breaks at the first row appended after the removal. A role you create after the upgrade needs
   `GRANT EXECUTE` on `audit_partition_digest(text)` beside the functions in the grant recipe.
 - **Personal audit fields can be sealed, and a person's records erased by scope.** `WARDYN_AUDIT_SEAL=fields`
   (default `off`) stores the personal fields of an audit row (the table in "Sealed fields",

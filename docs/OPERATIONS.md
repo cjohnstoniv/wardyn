@@ -735,7 +735,9 @@ that drop recorded, and the result reports that drop's last `seq` as `anchor_seq
 breaks the chain, and its `reason` now says `rows removed without an attested retention drop`. Two checks cover
 what a chain cannot say about itself. The newest row must be the one `audit_partition_meta` recorded as the
 high-water mark, so rows removed from the **newest** end (which leave a shorter, valid chain) read as `the log was
-truncated at its tail`. And every partition in the expected manifest must still exist unless a drop anchor names
+truncated at its tail`. The next append does not clear that: each new row links to the recorded head, not to the
+newest row left in the table (`0130_audit_chain_head_from_meta`), so the chain then breaks at the first row appended
+after the removal. And every partition in the expected manifest must still exist unless a drop anchor names
 it; a range a `split` anchor names must exist or be accounted for by a later drop. Someone who can rewrite the
 table can rewrite the high-water mark and the anchors too: the head hash on your SIEM remains the control that
 catches that.
