@@ -321,6 +321,42 @@ func TestPATAPIRefusals(t *testing.T) {
 	}
 }
 
+// Two top-level JSON keys that differ only in case fold to one field name. The
+// check must not judge one while the forge reads the other: the body is refused,
+// every time, whichever key the map visits last.
+func TestPATAPI_MixedCaseBodyIsRefused(t *testing.T) {
+	h := newAPIHarness(t, types.PATForgeGitLab, apiGrants[types.PATForgeGitLab])
+	q := apiReq{"POST", glBase + "/merge_requests/7/notes", jsonCT, `{"BODY":"thanks","body":"thanks\n/merge"}`, nil}
+	admitted, other := 0, ""
+	for range 64 {
+		rec := h.serve(t, q)
+		if rec.Code != http.StatusForbidden {
+			admitted++
+		} else if !strings.Contains(rec.Body.String(), "differ only in case") {
+			other = rec.Body.String()
+		}
+	}
+	if admitted != 0 || h.forgeHits() != 0 || h.mints() != 0 {
+		t.Fatalf("admitted %d/64, %d forge hit(s), %d mint call(s); want none", admitted, h.forgeHits(), h.mints())
+	}
+	if other != "" {
+		t.Fatalf("refusal %s, want it to name the case collision", other)
+	}
+}
+
+// A JSON body's field joins the query's field of the same name rather than
+// replacing it, so a cross-repository head in the query is still seen.
+func TestPATAPI_JSONDoesNotEraseQueryTarget(t *testing.T) {
+	h := newAPIHarness(t, types.PATForgeGitea, apiGrants[types.PATForgeGitea])
+	rec := h.serve(t, apiReq{"POST", gtBase + "/pulls?head=outside%3Abranch", jsonCT, `{"head":"feature","base":"main","title":"t"}`, nil})
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "another repository") {
+		t.Fatalf("status %d body %s, want a 403 naming another repository", rec.Code, rec.Body.String())
+	}
+	if h.forgeHits() != 0 || h.mints() != 0 {
+		t.Fatalf("refused request cost %d forge hit(s) and %d mint call(s), want none", h.forgeHits(), h.mints())
+	}
+}
+
 // access: read admits the read rows only, and refuses a creation or a comment.
 func TestPATAPIReadAccessRefusesCreation(t *testing.T) {
 	for forge, creates := range map[string][]apiReq{
