@@ -332,7 +332,7 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 		writeErrorReason(w, authz.EffectUnavailable.Status(), string(authz.ReasonMaskStateUnavailable), maskStateSentence)
 		return
 	}
-	if err := s.cfg.Secrets.For(owner).Put(r.Context(), name, raw); err != nil {
+	if err := s.putOwned(r.Context(), owner, func() error { return s.cfg.Secrets.For(owner).Put(r.Context(), name, raw) }); err != nil {
 		writeServerError(w, r, "store model provider sign-in", err)
 		return
 	}

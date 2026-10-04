@@ -83,8 +83,12 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 		        CASE WHEN $11::bigint IS NULL THEN NULL ELSE ` + db.AppClockAgeSQL("$10") + ` + $11::bigint * interval '1 microsecond' END,
 		        NULLIF($12, ''), now())
 		RETURNING ` + apiTokenCols
-	out, err := scanAPIToken(s.Pool.QueryRow(ctx, q,
-		t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), age, lifetime, t.MintedBy))
+	var out types.APIToken
+	err = s.guarded(ctx, func(qr queryRower) (e error) {
+		out, e = scanAPIToken(qr.QueryRow(ctx, q,
+			t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), age, lifetime, t.MintedBy))
+		return e
+	})
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {

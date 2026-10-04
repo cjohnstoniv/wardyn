@@ -235,7 +235,9 @@ func (s *Server) handlePutProviderCredential(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	if err := s.cfg.Secrets.For(owner).Put(r.Context(), providerSecretName(p.UID, providerKeyPart), []byte(value)); err != nil {
+	if err := s.putOwned(r.Context(), owner, func() error {
+		return s.cfg.Secrets.For(owner).Put(r.Context(), providerSecretName(p.UID, providerKeyPart), []byte(value))
+	}); err != nil {
 		if errors.Is(err, secretstore.ErrUnavailable) {
 			// loggedMsg keeps the daemon's own record of a sealed/unreachable
 			// store on save (review finding F7) — writeServerError's log line,

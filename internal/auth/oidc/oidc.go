@@ -106,6 +106,12 @@ type Config struct {
 	// OnLogin, when set, is called synchronously after an APPROVED login with what that login
 	// established (LoginFacts). A failure inside it must never fail the login; nil is a no-op.
 	OnLogin func(ctx context.Context, facts LoginFacts)
+
+	// Identities, when set, is the per-identity gate (identity_gate.go): admission refuses a
+	// deactivated identity on every issuer, issuance records the identity row and stamps the
+	// session with its authority epoch, and a Revocations that implements IdentityRevocations
+	// refuses a cookie whose epoch a later suspension passed. nil is no gate.
+	Identities IdentityGate
 }
 
 // LoginFacts is what an approved sign-in established, handed to Config.OnLogin: who signed in as
@@ -169,6 +175,10 @@ type Session struct {
 	// IssuedAt is when CallbackHandler minted this cookie, compared against a revoke cutoff by
 	// IsSessionRevoked. omitempty: an absent key decodes to the zero time either way.
 	IssuedAt time.Time `json:"iat,omitempty"`
+	// AuthorityEpoch is the identity's authority epoch when this cookie was minted (Config.Identities).
+	// A suspension raises the epoch, so a cookie minted before it is refused at its next request, and
+	// stays refused after a reactivation. omitempty: a cookie without it is epoch 0.
+	AuthorityEpoch int64 `json:"ae,omitempty"`
 	// Groups is the LOGIN-TIME SNAPSHOT of the human's group identity (normalized union of the ID
 	// token's "roles"/"groups" claims), against which a `group`-subject grant matches. Nothing
 	// refreshes it — a group added at the IdP reaches Wardyn on the next login. NO omitempty,
@@ -486,13 +496,18 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 				}
 				// A revoked session must stop working on its VERY NEXT request, not linger until Expiry.
 				if a.cfg.Revocations != nil {
-					revoked, rerr := a.cfg.Revocations.IsSessionRevoked(r.Context(), sess.Sub, sess.Email, sess.IssuedAt)
+					status, rerr := CheckSession(r.Context(), a.cfg.Revocations, sess.Sub, sess.Email, sess.IssuedAt, sess.AuthorityEpoch)
 					if rerr != nil {
 						// Fail CLOSED: a store error must never look like "not revoked" on a security gate.
 						next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), "session_revocation_unavailable")))
 						return
 					}
-					if revoked {
+					if status == SessionDeactivated {
+						a.clearSessionCookie(w)
+						next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), "identity_deactivated")))
+						return
+					}
+					if status != SessionLive {
 						a.clearSessionCookie(w)
 						next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), "revoked_session")))
 						return

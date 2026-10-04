@@ -32,6 +32,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `principal_identities` and `principal_identity_aliases` tables, and each successful sign-in on any issuer
   writes one row for the person and keeps every email it was seen under. Nothing reads them yet and no
   authorisation decision changes; they are what removing a leaver's access will act on.
+- **A deactivated identity now signs in nowhere, on every issuer.** Migration `0127_deprovision_jobs` adds the
+  `deprovision_jobs` table and a nullable `people.deactivated_at`. A sign-in now writes its identity row and
+  reads its deactivation inside the gate, and fails closed: a database outage denies sign-ins, as an unreadable
+  role-mapping store already did. Session cookies gain an optional `ae` field; an old cookie reads as epoch 0
+  and stays valid until its person's first suspension. A downgrade to 0.8.5 ignores the new tables and stops
+  enforcing deactivation.
 - **`WARDYN_ROLE_STAMP_TTL`** (default off) makes an API token or console session whose role stamp is older
   than the TTL sign in again before it works, so a demotion made only at the identity provider reaches
   them. Migration `0115_api_tokens_identity_stamped_at` backfills each token's stamp to its `created_at`,
@@ -166,6 +172,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Approve and Reject, and every covered write there answers a held change as "Submitted for approval", never as a save.
   The switch boots; `audit_personal_fields` erasure clears the proposer and decider of a change.
 
+- **An identity provider can suspend and reactivate a person over SCIM 2.0.** Setting `WARDYN_SCIM_TOKEN`
+  (and `WARDYN_SCIM_TOKEN_NEXT` for rotation, each with a `_FILE` twin) mounts `<base path>/scim/v2/Users`:
+  `GET` with a filter (an unfiltered list is `400 invalidFilter`), `GET` by id, `POST`, `PATCH` and `PUT`. It
+  needs OIDC on a single-tenant Entra issuer and TLS, and boot refuses anything else. `active=false`
+  suspends: in one transaction the session cutoff, the deactivation and an authority-epoch bump, then the
+  person's API tokens revoked and SSH keys deleted, then every run killed with its teardown confirmed. The
+  request answers 5xx until all three are done and recorded in `deprovision_jobs`, so the identity provider
+  retries, and a run already KILLED whose teardown failed is re-killed. A suspension reaches a person under
+  their sub, their email and their `entra:` form, and a session, token, key, run or captured credential
+  minted while it was in flight is refused. `active=true` clears the deactivation and restores nothing that
+  was cut. SCIM only removes access: it never grants, never rebinds an identity (an `externalId` change on a
+  bound identity is `400 invalidValue`) and is never an operator. New audit actions `scim.user.write`,
+  `scim.user.deactivate` and `person.deprovision`, and `auth.fail` reasons `invalid_scim_token` and
+  `identity_deactivated`. Groups, purge (`DELETE`) and the console card are separate changes.
 - **Sandbox pods can be placed on the nodes the operator names.** `k8s.sandbox.{nodeSelector,tolerations,affinity,priorityClassName,podAnnotations,podLabels}`
   (chart) render to `WARDYN_K8S_SANDBOX_PLACEMENT`, and the agent pod, the proxy pod and the boot-time
   NetworkPolicy canary all take it, so the canary proves enforcement on the nodes runs use. wardynd refuses

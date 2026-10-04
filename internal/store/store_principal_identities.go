@@ -19,14 +19,19 @@ import (
 // (Issuer, TenantID, ObjectID); any other issuer has an empty TenantID and ObjectID and is keyed by
 // (Issuer, Principal). Principal is "" on a row written before the person's first sign-in.
 type PrincipalIdentity struct {
-	ID             uuid.UUID
-	Principal      string
-	Issuer         string
-	TenantID       string
-	ObjectID       string
-	EmailLower     string
+	ID         uuid.UUID
+	Principal  string
+	Issuer     string
+	TenantID   string
+	ObjectID   string
+	EmailLower string
+	// ScimExternalID and ScimUserName are the SCIM projection, not binding columns.
+	ScimExternalID string
+	ScimUserName   string
 	DeactivatedAt  *time.Time
 	AuthorityEpoch int64
+	PurgeAfter     *time.Time
+	PurgedAt       *time.Time
 	CreatedAt      time.Time
 	LastLoginAt    *time.Time
 }
@@ -60,12 +65,12 @@ type PrincipalIdentityStore interface {
 var _ PrincipalIdentityStore = PG{}
 
 const principalIdentityCols = `id, COALESCE(principal, ''), issuer, tenant_id, object_id, email_lower,
-	deactivated_at, authority_epoch, created_at, last_login_at`
+	scim_external_id, scim_user_name, deactivated_at, authority_epoch, purge_after, purged_at, created_at, last_login_at`
 
 func scanPrincipalIdentity(row pgx.Row) (PrincipalIdentity, error) {
 	var p PrincipalIdentity
 	err := row.Scan(&p.ID, &p.Principal, &p.Issuer, &p.TenantID, &p.ObjectID, &p.EmailLower,
-		&p.DeactivatedAt, &p.AuthorityEpoch, &p.CreatedAt, &p.LastLoginAt)
+		&p.ScimExternalID, &p.ScimUserName, &p.DeactivatedAt, &p.AuthorityEpoch, &p.PurgeAfter, &p.PurgedAt, &p.CreatedAt, &p.LastLoginAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PrincipalIdentity{}, ErrNotFound
 	}
@@ -76,18 +81,30 @@ func scanPrincipalIdentity(row pgx.Row) (PrincipalIdentity, error) {
 }
 
 func (s PG) UpsertLoginIdentity(ctx context.Context, in LoginIdentity, now time.Time) (PrincipalIdentity, error) {
-	if in.Principal == "" || in.Issuer == "" {
-		return PrincipalIdentity{}, errors.New("store: login identity needs a principal and an issuer")
-	}
-	email := strings.ToLower(strings.TrimSpace(in.Email))
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return PrincipalIdentity{}, fmt.Errorf("store: upsert login identity: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	out, err := upsertLoginIdentityTx(ctx, tx, in, now)
+	if err != nil {
+		return PrincipalIdentity{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return PrincipalIdentity{}, fmt.Errorf("store: commit login identity: %w", err)
+	}
+	return out, nil
+}
 
+// upsertLoginIdentityTx is UpsertLoginIdentity on the caller's transaction, so the sign-in gate can
+// hold the row it writes while it reads the row's deactivation and epoch.
+func upsertLoginIdentityTx(ctx context.Context, tx pgx.Tx, in LoginIdentity, now time.Time) (PrincipalIdentity, error) {
+	if in.Principal == "" || in.Issuer == "" {
+		return PrincipalIdentity{}, errors.New("store: login identity needs a principal and an issuer")
+	}
+	email := strings.ToLower(strings.TrimSpace(in.Email))
 	var id uuid.UUID
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		INSERT INTO principal_identities (principal, issuer, tenant_id, object_id, email_lower, created_at, last_login_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $6)
 		ON CONFLICT DO NOTHING
@@ -127,14 +144,7 @@ func (s PG) UpsertLoginIdentity(ctx context.Context, in LoginIdentity, now time.
 			return PrincipalIdentity{}, fmt.Errorf("store: record email alias: %w", err)
 		}
 	}
-	out, err := scanPrincipalIdentity(tx.QueryRow(ctx, `SELECT `+principalIdentityCols+` FROM principal_identities WHERE id = $1`, id))
-	if err != nil {
-		return PrincipalIdentity{}, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return PrincipalIdentity{}, fmt.Errorf("store: commit login identity: %w", err)
-	}
-	return out, nil
+	return scanPrincipalIdentity(tx.QueryRow(ctx, `SELECT `+principalIdentityCols+` FROM principal_identities WHERE id = $1`, id))
 }
 
 func (s PG) GetIdentityByObject(ctx context.Context, issuer, tenantID, objectID string) (PrincipalIdentity, error) {

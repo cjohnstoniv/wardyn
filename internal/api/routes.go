@@ -56,6 +56,9 @@ func (s *Server) routes() chi.Router {
 		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.isReservedPrincipal, s.auditSignInDenied))
 	}
 
+	// SCIM Users (scim_users.go): its own bearer, outside /api/v1 and every human gate.
+	s.mountSCIMRoutes(r)
+
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public admin-gated surface.
 		r.Group(func(r chi.Router) {

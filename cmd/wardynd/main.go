@@ -427,6 +427,7 @@ func run() error {
 		// WARDYN_GOVERN_ADMIN_RUNS_EXEMPT, already validated by parseGovernAdminRunsExempt.
 		GovernAdminRunsExempt: governAdminRunsExempt,
 
+		SCIM: scimConfigValidated(f, posture),
 		// §I: nil unless WARDYN_DIRECTORY_PROVIDER is set — the whole feature
 		// off, the search endpoint answering its distinct 503 and every "who"
 		// field staying free text.

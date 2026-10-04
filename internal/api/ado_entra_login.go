@@ -39,11 +39,13 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 // adoEntraSourceLogin marks a credential acquired by the organisation's console
@@ -158,6 +160,13 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 	if err == nil {
 		defer unlock()
 		err = s.storeADOEntraBlob(ctx, subject, cfg.RowID, blob)
+	}
+	if errors.Is(err, store.ErrIdentityDeactivated) {
+		// A suspension overtook this login: nothing is stored, and the cookie it is about to be
+		// given carries an epoch the suspension has already passed.
+		slog.InfoContext(ctx, "wardynd: the Azure DevOps credential this login earned was not stored; the identity was suspended mid-login",
+			slog.String("row", cfg.RowID))
+		return
 	}
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: storing the Azure DevOps credential this login earned failed; the person is signed in without one",

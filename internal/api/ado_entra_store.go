@@ -344,7 +344,7 @@ func (s *Server) storeEntraBlob(ctx context.Context, owner string, ec entraCaptu
 	if err != nil {
 		return fmt.Errorf("marshal %s sign-in blob: %w", ec.label(), err)
 	}
-	err = s.cfg.Secrets.For(owner).Put(ctx, ec.secretName, raw)
+	err = s.putOwned(ctx, owner, func() error { return s.cfg.Secrets.For(owner).Put(ctx, ec.secretName, raw) })
 	s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", owner, ec.secretName)
 	return err
 }

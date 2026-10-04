@@ -189,7 +189,7 @@ func TestDelegation_AllowListRouteWalk(t *testing.T) {
 	var refused, admitted int
 	for key, rc := range routeMatrix {
 		switch rc.class {
-		case classAnonymous, classInternal, classDevice, classPortal:
+		case classAnonymous, classInternal, classDevice, classPortal, classSCIM:
 			continue // a delegated token is not a credential there at all
 		}
 		method, pattern, _ := strings.Cut(key, " ")

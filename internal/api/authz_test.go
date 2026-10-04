@@ -110,6 +110,10 @@ const (
 	// portal's own credential alone. Every human credential — an admin's
 	// session and the admin token included — is refused with 401.
 	classPortal routeClass = "portal"
+	// classSCIM: the identity provider's SCIM connector (scim_users.go), authenticated by its own
+	// bearer alone. Every human credential, the admin token's included, is refused with 401, and a
+	// SCIM-authenticated request is never an operator (neverOperator).
+	classSCIM routeClass = "scim"
 )
 
 // routeEntity names which seeded fixture a classOwner route's path id(s) are
@@ -714,6 +718,12 @@ var routeMatrix = map[string]classifiedRoute{
 
 	// portal (a registered portal's own credential, HTTP Basic)
 	"POST /api/v1/token": {class: classPortal},
+	// scim (the identity provider's connector, its own bearer)
+	"GET /scim/v2/Users":        {class: classSCIM},
+	"GET /scim/v2/Users/{id}":   {class: classSCIM},
+	"POST /scim/v2/Users":       {class: classSCIM},
+	"PATCH /scim/v2/Users/{id}": {class: classSCIM},
+	"PUT /scim/v2/Users/{id}":   {class: classSCIM},
 	// The portal registry (#1142): registering is the super admin's alone;
 	// listing and revoking only ever subtract reach, like the device inventory.
 	"POST /api/v1/admin/delegates":        {class: classAdmin},
@@ -804,6 +814,13 @@ func authzMatrixSiteConfig() types.SiteConfig {
 // shape, when given, adjusts the config before New — the deployment-shape knobs
 // (AdminToken, SSOOnly, MemberMode) TestSSOShapeRoleMatrix walks this same
 // router under.
+// matrixSCIMToken is the SCIM bearer the matrix servers accept; classSCIM's positive control.
+const matrixSCIMToken = "matrix-scim-token-0123456789abcdef0123456789"
+
+func matrixSCIMConfig() *SCIMConfig {
+	return &SCIMConfig{Token: matrixSCIMToken, Issuer: "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0", Tenant: "11111111-2222-3333-4444-555555555555"}
+}
+
 func newAuthzMatrixServer(t *testing.T, shape ...func(*Config)) (*Server, *authzStore, *authzApprovals, *recording.FSStore) {
 	t.Helper()
 	ast := newAuthzStore()
@@ -818,6 +835,7 @@ func newAuthzMatrixServer(t *testing.T, shape ...func(*Config)) (*Server, *authz
 	}
 	cfg.RecordingStore = rs
 	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
+	cfg.SCIM = matrixSCIMConfig()
 	ast.siteCfg = authzMatrixSiteConfig()
 	for _, f := range shape {
 		f(&cfg)
@@ -831,6 +849,9 @@ func newAuthzMatrixServer(t *testing.T, shape ...func(*Config)) (*Server, *authz
 func matrixServer(cfg Config) *Server {
 	srv := New(cfg)
 	srv.runEvents.hold = time.Nanosecond
+	// The matrix refuses far more bearers per run than a real caller would send; the limiter's own
+	// bound is pinned in scim_auth_test.go.
+	srv.scimState.refused = principalLimiter{rate: 1e6, burst: 1e6, max: 1}
 	return srv
 }
 
@@ -859,6 +880,7 @@ func newAuthzMatrixServerWithUI(t *testing.T) *Server {
 	}
 	cfg.RecordingStore = fs
 	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
+	cfg.SCIM = matrixSCIMConfig()
 	ast.siteCfg = authzMatrixSiteConfig()
 	cfg.UIDir = dir
 	return matrixServer(cfg)
@@ -1045,6 +1067,24 @@ func TestAuthzMatrix(t *testing.T) {
 					"member session": doSSO(t, srv, method, pattern, memberSess, body),
 					"admin token":    do(t, srv, method, pattern, adminToken, body),
 					"no credential":  doSSO(t, srv, method, pattern, nil, body),
+				} {
+					if w.Code != http.StatusUnauthorized {
+						t.Errorf("%s: status = %d, want 401; body=%s", who, w.Code, w.Body.String())
+					}
+				}
+
+			case classSCIM:
+				// The control first: the SCIM bearer is admitted past authentication (the matrix store
+				// holds no identity rows, so the handler answers 501, never 401 or 403).
+				p := buildPath(pattern, "x1")
+				if w := do(t, srv, method, p, matrixSCIMToken, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
+					t.Errorf("the SCIM bearer: status = %d, want admitted; body=%s", w.Code, w.Body.String())
+				}
+				for who, w := range map[string]*httptest.ResponseRecorder{
+					"admin session":  doSSO(t, srv, method, p, adminSess, body),
+					"member session": doSSO(t, srv, method, p, memberSess, body),
+					"admin token":    do(t, srv, method, p, adminToken, body),
+					"no credential":  doSSO(t, srv, method, p, nil, body),
 				} {
 					if w.Code != http.StatusUnauthorized {
 						t.Errorf("%s: status = %d, want 401; body=%s", who, w.Code, w.Body.String())
