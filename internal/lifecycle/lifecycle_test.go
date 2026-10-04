@@ -6,6 +6,7 @@ package lifecycle_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -61,6 +62,10 @@ type fakeStopper struct {
 	// notAfterSeen records the notAfter arg the reaper threaded in, per run, so a
 	// test can assert the snapshot's updated_at was passed through (finding N3).
 	notAfterSeen map[uuid.UUID]time.Time
+	// maxAgeStopped is the subset of stopped that arrived through StopRunMaxAge; maxAgeCutoff is
+	// the last createdNotAfter it was given.
+	maxAgeStopped []uuid.UUID
+	maxAgeCutoff  time.Time
 }
 
 func newFakeStopper() *fakeStopper {
@@ -90,6 +95,20 @@ func (f *fakeStopper) StopRun(_ context.Context, id uuid.UUID, notAfter time.Tim
 		out.Errors = errs
 	}
 	return out, nil
+}
+
+// StopRunMaxAge records the stop in the same list as StopRun, and the cutoff it was given,
+// so a test can tell which predicate fired from the audit action and the cutoff.
+func (f *fakeStopper) StopRunMaxAge(_ context.Context, id uuid.UUID, createdNotAfter time.Time) (lifecycle.StopOutcome, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.maxAgeCutoff = createdNotAfter
+	if f.noApplyOn[id] {
+		return lifecycle.StopOutcome{Applied: false}, nil
+	}
+	f.stopped = append(f.stopped, id)
+	f.maxAgeStopped = append(f.maxAgeStopped, id)
+	return lifecycle.StopOutcome{Applied: true}, nil
 }
 
 func (f *fakeStopper) wasStopped(id uuid.UUID) bool {
@@ -745,5 +764,79 @@ func TestTick_LockHeldElsewhereRecordsNothing(t *testing.T) {
 	}
 	if got, _ := ticks.Ticks(context.Background()); len(got) != 0 {
 		t.Fatalf("a skipped tick recorded %+v, want nothing", got)
+	}
+}
+
+// maxAgeReaper is makeReaper with Config.MaxAge set.
+func maxAgeReaper(store *fakeStore, stopper *fakeStopper, rec *fakeRecorder, now time.Time, maxAge time.Duration) *lifecycle.Reaper {
+	return lifecycle.New(store, stopper, rec, lifecycle.Config{
+		Interval: time.Hour,
+		MaxAge:   maxAge,
+		Now:      func() time.Time { return now },
+	})
+}
+
+// TestMaxAgeStopsAnOldRunWhateverItsIdleness: a run past max age is stopped through the max-age
+// predicate with a run.max_age.expire row, even when it was touched a second ago and its policy
+// never idle-reaps; a younger run beside it is left alone.
+func TestMaxAgeStopsAnOldRunWhateverItsIdleness(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	store := &fakeStore{}
+	stopper := newFakeStopper()
+	rec := &fakeRecorder{}
+	old, young := uuid.New(), uuid.New()
+	store.rows = []lifecycle.RunSummary{
+		{ID: old, CreatedAt: base.Add(-25 * time.Hour), UpdatedAt: base.Add(-time.Second), PolicyAutoStopAfterSec: 0},
+		{ID: young, CreatedAt: base.Add(-time.Hour), UpdatedAt: base.Add(-time.Second), PolicyAutoStopAfterSec: 0},
+	}
+
+	maxAgeReaper(store, stopper, rec, base, 24*time.Hour).Tick(context.Background())
+
+	if !slices.Equal(stopper.maxAgeStopped, []uuid.UUID{old}) {
+		t.Fatalf("max-age stops = %v, want only %v", stopper.maxAgeStopped, old)
+	}
+	if want := base.Add(-24 * time.Hour); !stopper.maxAgeCutoff.Equal(want) {
+		t.Errorf("cutoff handed to the stopper = %v, want now - max age = %v", stopper.maxAgeCutoff, want)
+	}
+	ev, ok := rec.last()
+	if !ok || ev.Action != "run.max_age.expire" || ev.Outcome != "success" || ev.RunID == nil || *ev.RunID != old {
+		t.Fatalf("audit row = %+v, want a successful run.max_age.expire for %v", ev, old)
+	}
+	if rec.len() != 1 {
+		t.Errorf("audit rows = %d, want 1", rec.len())
+	}
+}
+
+// TestMaxAgeOffNeverStopsOnAge: with no max age configured, a run of any age is untouched.
+func TestMaxAgeOffNeverStopsOnAge(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	store := &fakeStore{}
+	stopper := newFakeStopper()
+	rec := &fakeRecorder{}
+	id := uuid.New()
+	store.rows = []lifecycle.RunSummary{{ID: id, CreatedAt: base.Add(-1000 * time.Hour), UpdatedAt: base}}
+
+	makeReaper(store, stopper, rec, base).Tick(context.Background())
+
+	if stopper.wasStopped(id) || rec.len() != 0 {
+		t.Fatalf("a run was stopped or audited with max age off: stopped=%v events=%d", stopper.wasStopped(id), rec.len())
+	}
+}
+
+// TestMaxAgeLostCompareAndSetWritesNoAudit: a run another writer ended first reports not applied,
+// and the reaper records nothing for it.
+func TestMaxAgeLostCompareAndSetWritesNoAudit(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	store := &fakeStore{}
+	stopper := newFakeStopper()
+	rec := &fakeRecorder{}
+	id := uuid.New()
+	stopper.noApplyOn[id] = true
+	store.rows = []lifecycle.RunSummary{{ID: id, CreatedAt: base.Add(-48 * time.Hour), UpdatedAt: base}}
+
+	maxAgeReaper(store, stopper, rec, base, 24*time.Hour).Tick(context.Background())
+
+	if rec.len() != 0 {
+		t.Fatalf("audit rows = %d for a stop that did not apply, want 0", rec.len())
 	}
 }

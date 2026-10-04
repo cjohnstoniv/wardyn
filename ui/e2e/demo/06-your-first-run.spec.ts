@@ -403,7 +403,7 @@ test("V06 beat 2 — the envelope, by reference", async () => {
   // enforced-barrier chip plus either clamp warnings or "No adjustments." — one
   // panel, NOT two columns (so the reuse re-draft names the chip, not a
   // side-by-side the UI never renders).
-  await act(page, page.getByRole("button", { name: "Preflight" }));
+  await act(page, page.getByRole("button", { name: "Check again" }));
   const preflight = page.getByTestId("preflight-result");
   await expect(
     preflight,

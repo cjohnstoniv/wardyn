@@ -36,11 +36,17 @@ import (
 //     the session may run as another uid, so without this git's
 //     dubious-ownership refusal (exit 128) breaks git and go's VCS stamping;
 //     config dies with the container. Lockstep: trust_mounted_repos, agent-run-lib.sh.
-var attachShell = []string{"/bin/sh", "-c",
-	`[ -n "${GOTMPDIR:-}" ] && mkdir -p "$GOTMPDIR" 2>/dev/null; ` +
-		`command -v git >/dev/null 2>&1 && git config --global --add safe.directory '*' 2>/dev/null; ` +
-		`if command -v tmux >/dev/null 2>&1; then ` + runner.TmuxAttachSh + `; ` +
-		`elif command -v bash >/dev/null 2>&1; then exec bash -i; else exec /bin/sh -i; fi`}
+var attachShell = attachShellFor(false)
+
+// attachShellFor is the attach command for one role: an observer's tmux client
+// carries ignore-size (runner.TmuxObserverAttachSh), a writer's does not.
+func attachShellFor(observer bool) []string {
+	return []string{"/bin/sh", "-c",
+		`[ -n "${GOTMPDIR:-}" ] && mkdir -p "$GOTMPDIR" 2>/dev/null; ` +
+			`command -v git >/dev/null 2>&1 && git config --global --add safe.directory '*' 2>/dev/null; ` +
+			`if command -v tmux >/dev/null 2>&1; then ` + runner.TmuxAttachShFor(observer) + `; ` +
+			`elif command -v bash >/dev/null 2>&1; then exec bash -i; else exec /bin/sh -i; fi`}
+}
 
 // Attach opens a new interactive exec inside the running sandbox ref and
 // returns a live PTY runner.Session, mirroring Exec's hijack style (Tty +
@@ -68,7 +74,7 @@ func (d *Driver) Attach(ctx context.Context, ref string, opts runner.AttachOptio
 		AttachStdin:  true,
 		AttachStdout: true,
 		AttachStderr: true,
-		Cmd:          attachShell,
+		Cmd:          attachShellFor(opts.Observer),
 		// TERM makes readline/TUIs render correctly; the image leaves it unset
 		// otherwise. UTF-8 locale is required: tmux re-encodes its cell buffer
 		// for the attach client, and without it transcodes unrepresentable

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -81,6 +82,12 @@ func rewrapMode(f *bootFlags) error {
 	if err != nil {
 		return err
 	}
+	// Every declared key domain's KEK, so its principal keys move onto its own
+	// latest version.
+	domains, err := buildKeyDomains(ctx, f.vault, f.azure, *f.trustedCAFile)
+	if err != nil {
+		return err
+	}
 	connCtx, cancelConn := context.WithTimeout(ctx, rekeyConnectTimeout)
 	defer cancelConn()
 	pool, err := db.Connect(connCtx, *f.dsn)
@@ -107,7 +114,7 @@ func rewrapMode(f *bootFlags) error {
 	}
 
 	d := secretstore.Deps{
-		Pool: pool, AgeIdentity: optionalIdentity(id), PlatformIdentity: optionalIdentity(platform), KEK: svc, KEKWrites: writes,
+		Pool: pool, AgeIdentity: optionalIdentity(id), PlatformIdentity: optionalIdentity(platform), KEK: svc, KEKWrites: writes, KeyDomains: domains,
 	}
 	d = withPlatformKEK(d, platformSvc, retire)
 	d.AdoptBootKeys = *f.rewrapAdoptBootKeys
@@ -151,6 +158,9 @@ func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) err
 			what = "credential and principal key" // the boot keys are under the platform key, reported below
 		}
 		fmt.Fprintf(os.Stdout, "every sealed %s is wrapped under %s\n", what, retireStep(res.KeyService, res.KeyVersion))
+	}
+	for _, name := range slices.Sorted(maps.Keys(res.DomainKeyVersions)) {
+		fmt.Fprintf(os.Stdout, "every principal key in key domain %q is wrapped under %s\n", name, retireStep(res.DomainKeyServices[name], res.DomainKeyVersions[name]))
 	}
 	if d.PlatformKEK != nil && !d.PlatformKEKWrites {
 		fmt.Fprintf(os.Stdout, "no boot key is wrapped under %s any more; unset WARDYN_VAULT_TRANSIT_KEY_PLATFORM (or WARDYN_AZURE_KEK_KEY_PLATFORM, WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM and WARDYN_AZURE_CLIENT_ID_PLATFORM) and restart every replica\n", d.PlatformKEK.ID())
@@ -210,6 +220,9 @@ func emitRewrapAudit(ctx context.Context, rec audit.Recorder, res secretstorepg.
 		outcome, fields["reason"] = "failure", "aborted"
 	case res.KeyVersion != "":
 		fields["key_version"] = res.KeyVersion
+	}
+	if failure == nil && len(res.DomainKeyVersions) > 0 {
+		fields["domain_key_versions"] = res.DomainKeyVersions
 	}
 	data, _ := json.Marshal(fields)
 	ev := types.AuditEvent{

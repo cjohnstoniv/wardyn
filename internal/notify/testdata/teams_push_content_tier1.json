@@ -1,0 +1,49 @@
+{
+  "attachments": [
+    {
+      "content": {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "actions": [
+          {
+            "title": "Open approvals",
+            "type": "Action.OpenUrl",
+            "url": "https://wardyn.example.com/approvals"
+          }
+        ],
+        "body": [
+          {
+            "size": "Medium",
+            "text": "Approval still waiting (escalation 1): Push review",
+            "type": "TextBlock",
+            "weight": "Bolder",
+            "wrap": true
+          },
+          {
+            "text": "Run: a1b2c3d4",
+            "type": "TextBlock",
+            "wrap": true
+          },
+          {
+            "text": "Profile: payments",
+            "type": "TextBlock",
+            "wrap": true
+          },
+          {
+            "text": "Requester: alice \\(alice\\@example\\.com\\)",
+            "type": "TextBlock",
+            "wrap": true
+          },
+          {
+            "text": "Requested: 2026-10-03 14:05 UTC",
+            "type": "TextBlock",
+            "wrap": true
+          }
+        ],
+        "type": "AdaptiveCard",
+        "version": "1.4"
+      },
+      "contentType": "application/vnd.microsoft.card.adaptive"
+    }
+  ],
+  "type": "message"
+}

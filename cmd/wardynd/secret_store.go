@@ -26,7 +26,8 @@ import (
 )
 
 // openSecretStore builds the configured external store client (if any) and
-// the audited secret store over it (buildSecretStore), as a serving boot does.
+// the audited secret store over it, as a serving boot does (buildSecretStore's
+// work, with the key-domain check between the store and its audit wrapper).
 func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags, rec audit.Recorder) (secretstore.Store, error) {
 	platform, err := readPlatformKey(*f.platformKeyFile, *f.ageKey)
 	if err != nil {
@@ -36,10 +37,14 @@ func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags, rec 
 	if err != nil {
 		return nil, err
 	}
-	st, err := buildSecretStore(ctx, pool, *f.ageKey, platform, *f.secretStoreSel, c, rec)
+	s, err := newSecretStore(ctx, pool, *f.ageKey, platform, *f.secretStoreSel, c, rec)
 	if err != nil {
 		return nil, err
 	}
+	if err := verifyKeyDomains(ctx, s); err != nil {
+		return nil, err
+	}
+	st := secretstore.Audited(s, rec)
 	if err := refuseKEKRequired(*f.vault.kekRequired, st); err != nil {
 		return nil, err
 	}
@@ -53,6 +58,21 @@ func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags, rec 
 		return nil, fmt.Errorf("refusing to start: read the site config for the Azure DevOps credential sweep: %w", err)
 	}
 	return st, sweepRetiredADOSharedCredentials(ctx, pool, st, sc, rec)
+}
+
+// verifyKeyDomains is the serving boot's check of key domains, after migrations
+// so principal_keys exists: no live principal key may name a domain the file does
+// not declare or a key its domain no longer reaches. -rewrap is the remedy for a
+// key a domain no longer reaches, so it runs only its own declared-domains check.
+func verifyKeyDomains(ctx context.Context, s secretstore.Store) error {
+	ps, ok := s.(*secretstorepg.Store)
+	if !ok {
+		return nil
+	}
+	if err := ps.VerifyKeyDomains(ctx); err != nil {
+		return fmt.Errorf("refusing to start: %w", err)
+	}
+	return nil
 }
 
 // buildStoreClients builds the configured external store client and key
@@ -74,7 +94,11 @@ func buildStoreClients(ctx context.Context, f *bootFlags) (storeClients, error) 
 	if err != nil {
 		return storeClients{}, err
 	}
-	return storeClients{ext: ext, kek: k, kekWrites: writes, platformKEK: pk, principalKeys: principal, timeout: *f.vault.timeout}, nil
+	domains, err := buildKeyDomains(ctx, f.vault, f.azure, *f.trustedCAFile)
+	if err != nil {
+		return storeClients{}, err
+	}
+	return storeClients{ext: ext, kek: k, kekWrites: writes, platformKEK: pk, principalKeys: principal, keyDomains: domains, timeout: *f.vault.timeout}, nil
 }
 
 // parsePrincipalKeys reads WARDYN_PRINCIPAL_KEYS: "on" or "off" (empty is off).
@@ -102,6 +126,9 @@ type storeClients struct {
 	platformKEK kek.KEK
 	// principalKeys is WARDYN_PRINCIPAL_KEYS=on.
 	principalKeys bool
+	// keyDomains are the key domains WARDYN_KEY_DOMAINS_FILE declares, each
+	// built and proven (buildKeyDomains), or nil.
+	keyDomains secretstore.KeyDomains
 	// timeout bounds each call to ext.
 	timeout time.Duration
 }
@@ -200,7 +227,7 @@ func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, plat
 			return nil, fmt.Errorf("parse age identity: %w", err)
 		}
 	}
-	deps := secretstore.Deps{Pool: pool, External: c.ext, ExternalTimeout: c.timeout, KEK: c.kek, KEKWrites: c.kekWrites, PrincipalKeys: c.principalKeys}
+	deps := secretstore.Deps{Pool: pool, External: c.ext, ExternalTimeout: c.timeout, KEK: c.kek, KEKWrites: c.kekWrites, PrincipalKeys: c.principalKeys, KeyDomains: c.keyDomains}
 	// Only a platform key that is actually set: a typed nil reads as a key.
 	if c.platformKEK != nil {
 		deps.PlatformKEK, deps.PlatformKEKWrites = c.platformKEK, true
@@ -334,6 +361,10 @@ type vaultFlags struct {
 	// principalKeys is WARDYN_PRINCIPAL_KEYS, "off" or "on": whether a person's
 	// credential rows are written under that person's principal key.
 	principalKeys *string
+	// keyDomainsFile is WARDYN_KEY_DOMAINS_FILE: the path of the file that
+	// declares the key domains (internal/secretstore/keydomain), a JSON object
+	// from domain name to a Transit key or a Key Vault key pair.
+	keyDomainsFile *string
 	// transitKeyPlatform is the second Transit key the boot keys alone are
 	// wrapped under, reached as rolePlatform.
 	transitKeyPlatform *string
@@ -357,6 +388,7 @@ func registerVaultFlags() vaultFlags {
 		kek:                flagEnv("kek", "WARDYN_KEK", kekLocal, `key that wraps each stored secret's data key: "local" (derived from WARDYN_AGE_KEY), "transit" (the Vault Transit key WARDYN_VAULT_TRANSIT_KEY names, over the WARDYN_VAULT_* client) or "azurekv" (the Key Vault keys WARDYN_AZURE_KEK_KEY and WARDYN_AZURE_KEK_SIGNING_KEY name, as the WARDYN_AZURE_* identity)`),
 		kekRequired:        flagBool("kek-required", "WARDYN_KEK_REQUIRED", false, "refuse to start while credentials are wrapped by the local key: a key service (WARDYN_KEK=transit|azurekv) or an external store must hold them. `wardynd -rewrap` still runs"),
 		principalKeys:      flagEnv("principal-keys", "WARDYN_PRINCIPAL_KEYS", "off", `"on" seals each person's stored credentials under a key of that person's own (envelope enc_version 3), which an erase destroys; "off" (default) keeps writing them under the credential key. Boot keys and the operator namespace never move, and store mode is unaffected. Turning it off still reads every row, but enabling it is one-way across a downgrade below 0.8.6; wardynd -rewrap-principal-keys moves existing rows. See docs/operations/secrets-and-keys.md`),
+		keyDomainsFile:     flagEnv("key-domains-file", "WARDYN_KEY_DOMAINS_FILE", "", `path of a JSON file declaring key domains: an object from domain name ("a-z0-9-", never "default") to {"transit": {"key", "role"}} or {"azurekv": {"key", "signingKey", "clientId"}}. A domain's Transit key or Key Vault pair wraps the principal keys of the people assigned to it (PUT /api/v1/key-domains/assignments/{subject_type}/{subject}); each is proven at boot. Empty (default) declares none, and every principal key is under the credential key. See docs/operations/secrets-and-keys.md`),
 		transitMount:       flagEnv("vault-transit-mount", "WARDYN_VAULT_TRANSIT_MOUNT", "transit", "mount path of Vault's Transit engine"),
 		transitKey:         flagEnv("vault-transit-key", "WARDYN_VAULT_TRANSIT_KEY", "", "Transit key (type aes256-gcm96) that wraps data keys with WARDYN_KEK=transit; set with WARDYN_KEK=local it only reads the rows sealed under it, for `wardynd -rewrap` back to the local key"),
 		transitKeyPlatform: flagEnv("vault-transit-key-platform", "WARDYN_VAULT_TRANSIT_KEY_PLATFORM", "", "second Transit key (type aes256-gcm96, same mount) that wraps wardynd's own signing, session and SSH host keys, reached as WARDYN_VAULT_ROLE_PLATFORM; WARDYN_VAULT_TRANSIT_KEY then wraps only the credentials. Needs WARDYN_KEK=transit and WARDYN_VAULT_ROLE_PLATFORM; `wardynd -rewrap -rewrap-adopt-boot-keys` moves the boot keys onto it, once; `-rewrap -rewrap-retire-platform-key` moves them back off. Empty = one key for both. See docs/operations/secrets-and-keys.md"),

@@ -58,7 +58,8 @@ import { absoluteTime, clockTime, getErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { ActorTypeChip } from "../wardyn/primitives";
-import { AuditDecision, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
+import { AuditDecision, isAttributedRefusal, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
+import { PolicyRemedy } from "../wardyn/policy-remedy";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
@@ -595,7 +596,7 @@ function RunDetailPage({ id }: { id: string }) {
           </TabsContent>
 
           <TabsContent value="audit" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
-            <AuditTab events={audit} runId={run.id} onMakePolicy={() => setProfileRunId(run.id)} />
+            <AuditTab events={audit} runId={run.id} policy={run.policy} onMakePolicy={() => setProfileRunId(run.id)} />
           </TabsContent>
 
           <TabsContent value="recording" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
@@ -800,10 +801,14 @@ function attachSessions(audit: AuditEvent[]): AuditEvent[] {
 function AuditTab({
   events,
   runId,
+  policy,
   onMakePolicy,
 }: {
   events: AuditEvent[];
   runId: string;
+  /** The run's own policy (GET /runs/{id}), never /me: an admin viewing someone
+   *  else's run must see that run's owner, not their own. */
+  policy?: RunDetail["policy"];
   onMakePolicy: () => void;
 }) {
   const securityOperator = useSecurityOperator();
@@ -867,6 +872,7 @@ function AuditTab({
                       {e.target || "—"}
                     </span>
                     <RuleSourceChip event={e} />
+                    {isAttributedRefusal(e) && <PolicyRemedy policy={policy} className="shrink-0" />}
                   </span>
                 )}
               </div>

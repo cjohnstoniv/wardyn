@@ -113,7 +113,7 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 		// still leaves ample headroom while bounding a compromised proxy: its
 		// own PID cap (fork-bomb guard) and a modest memory cap (MemorySwap
 		// pinned so the cap isn't silently doubled via swap).
-		Resources: proxyResources(),
+		Resources: proxyResources(runner.ConfigHasAzureGates(cfgJSON)),
 	}
 	if d.cfg.ProxyBinaryHostPath != "" {
 		host.Binds = []string{d.cfg.ProxyBinaryHostPath + ":/usr/local/bin/wardyn-proxy:ro"}

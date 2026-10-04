@@ -674,11 +674,14 @@ func TestAgentThreatModelDocResourceCaps(t *testing.T) {
 	}
 	lifecycle := readRepoFile(t, "internal/lifecycle/lifecycle.go")
 	def := readRepoFile(t, "examples/policies/default.json")
+	m := regexp.MustCompile(`"auto_stop_after_sec":\s*(-?\d+)`).FindStringSubmatch(def)
+	if m == nil {
+		t.Fatal("examples/policies/default.json no longer sets auto_stop_after_sec; update row 14 and this guard")
+	}
 	if strings.Contains(lifecycle, "if run.PolicyAutoStopAfterSec <= 0 {") &&
-		strings.Contains(def, `"auto_stop_after_sec": 0`) &&
-		strings.Contains(doc, "run lifetime is bounded") {
-		t.Error("AGENT-THREAT-MODEL.md row 14 says run lifetime is bounded; the reaper skips every run whose " +
-			"policy sets auto_stop_after_sec <= 0, and the shipped default policy sets 0")
+		!strings.Contains(doc, "the shipped default policy sets it to `"+m[1]+"`") {
+		t.Errorf("AGENT-THREAT-MODEL.md row 14 must say the shipped default policy sets auto_stop_after_sec "+
+			"to `%s` (examples/policies/default.json)", m[1])
 	}
 }
 

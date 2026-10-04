@@ -137,6 +137,9 @@ type ProxyConfig struct {
 	GitGrants     map[string]uuid.UUID      // git-broker per-repo allowlist; token stays proxy-side
 	PATGrants     map[string]proxy.PATGrant // git_pat broker's per-HOST allowlist; PAT minted proxy-side, never enters the sandbox
 	ADOGrant      *proxy.ADOGrantConfig     // per-person Azure DevOps grant for the proxy's REST gate
+	// AzureGates are the run's azure_foundry route gates. A non-empty set also sizes the sidecar's
+	// memory envelope up (ProxyLimitsFor): the in-flight body budget does not fit the default.
+	AzureGates []proxy.AzureGateConfig
 	// BrokeredPATGrantIDs is every git_pat grant id of the run while the PAT broker is on; the proxy refuses a raw mint of one.
 	BrokeredPATGrantIDs []uuid.UUID
 	// UpstreamProxyURL is the OPTIONAL corporate parent proxy the sidecar
@@ -150,6 +153,7 @@ type ProxyConfig struct {
 	// upstream proxy — still faces the private-IP guard and the run's policy.
 	UpstreamProxyNoProxy []string
 	LLMUpstreams         map[string]string // public vendor host -> operator model gateway base URL
+	LLMChannelHosts      map[string]string // model host -> vendor schema it is inspected as; never a gateway (proxy.Config.LLMChannelHosts)
 	LLMUnavailableDetail string            // reason for the brokered-LLM 404 when no credential backs it
 	Unattended           bool              // a run nobody is driving: a held push is refused instead
 	Attribution          *policyref.Ref    // the policy named in a policy-decided refusal; nil when none
@@ -186,6 +190,11 @@ type Resources struct {
 type AttachOptions struct {
 	Cols uint16
 	Rows uint16
+	// Observer marks a client that only watches the shared tmux session. Its
+	// tmux client is attached with the ignore-size flag (tmux >= 3.2), so it is
+	// never counted when tmux sizes the shared window; on older tmux it is
+	// seeded from the writer's live size instead (Cols/Rows).
+	Observer bool
 }
 
 // Session is a live, bidirectional interactive PTY stream into a RUNNING

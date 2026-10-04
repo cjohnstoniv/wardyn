@@ -32,6 +32,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
@@ -503,6 +504,9 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 				now := time.Now().UTC()
 				refreshLoginStamps(ctx, store.NewPG(pool), f.Sub, f.Role, f.UserType, f.Groups, f.GroupsTruncated, now)
 				recordLoginIdentity(ctx, store.NewPG(pool), f, now)
+				// The groups of this verified login are what a key-domain
+				// group assignment reads for the person's next principal key.
+				stampLoginGroups(ctx, pool, f.Sub, f.Groups, f.GroupsTruncated)
 			},
 		}, sessKey)
 		if err != nil {
@@ -920,6 +924,16 @@ func recordLoginIdentity(ctx context.Context, st store.PrincipalIdentityStore, f
 	}, now)
 	if err != nil {
 		slog.Warn("wardynd: recording the sign-in identity failed", slog.String("err", err.Error()))
+	}
+}
+
+// stampLoginGroups records the groups a verified login carried, which a key
+// domain's group assignment reads (migration 0121). Best-effort, like
+// refreshLoginStamps: a hiccup logs and the login still succeeds, leaving the
+// person's earlier groups in force until their next sign-in.
+func stampLoginGroups(ctx context.Context, pool *pgxpool.Pool, sub string, groups []string, truncated bool) {
+	if err := keydomain.NewService(pool, nil).RecordLoginGroups(ctx, sub, groups, truncated); err != nil {
+		slog.Warn("wardynd: recording a login's groups for key-domain membership failed", slog.String("err", err.Error()))
 	}
 }
 

@@ -5,7 +5,7 @@
 # Seeded test backend for the Playwright UI e2e suite (task #8).
 #
 # Boots a fast, hermetic control plane — real wardynd + real Postgres + the `none`
-# runner (no agent containers) — serving the BUILT embedded UI (ui/dist), seeded
+# runner (no agent containers) — serving the BUILT embedded UI (ui/dist-e2e), seeded
 # with deterministic fixtures via the public API + a fixed admin token. This is
 # the default Playwright gate target (NOT the full docker-compose stack), so PR
 # runs are fast and reproducible. The nightly job runs Playwright against the
@@ -33,7 +33,7 @@
 #   WARDYN_E2E_PG_DBNAME     e2e database name (default: wardyn_e2e)
 #   WARDYN_E2E_AGE_KEY       pinned age identity (default: unset, mint a fresh one per `up`)
 #   WARDYN_E2E_SKIP_BUILD    1 reuses the built .e2e-bin/wardynd instead of rebuilding it
-#   WARDYN_E2E_NO_UI_BUILD   1 reuses the existing ui/dist instead of rebuilding it
+#   WARDYN_E2E_NO_UI_BUILD   1 reuses the existing ui/dist-e2e instead of rebuilding it
 #   WARDYN_E2E_BASE_PATH     serve under this WARDYN_BASE_PATH (e.g. /wardyn) behind test/basepathproxy
 #   WARDYN_E2E_PROXY_ADDR    that proxy's listen address (default: :8090); only with WARDYN_E2E_BASE_PATH
 #   WARDYN_E2E_TMUX_BUILD    1 also builds .e2e-bin/wardynd-tmux (-tags e2etmux: the test-only local-tmux runner)
@@ -134,15 +134,15 @@ cmd_build() {
     go build -o "${BIN_DIR}/basepathproxy" ./test/basepathproxy
   fi
   # Always rebuild the UI bundle on a non-skip build so the served app reflects
-  # the current ui/src (reusing a stale ui/dist silently serves old UI — a real
+  # the current ui/src (reusing a stale ui/dist-e2e silently serves old UI — a real
   # footgun when iterating on the composer). Set WARDYN_E2E_NO_UI_BUILD=1 to reuse
   # an existing dist deliberately.
-  if [[ "${WARDYN_E2E_NO_UI_BUILD:-0}" == "1" && -d "${REPO_ROOT}/ui/dist" ]]; then
+  if [[ "${WARDYN_E2E_NO_UI_BUILD:-0}" == "1" && -d "${REPO_ROOT}/ui/dist-e2e" ]]; then
     # Guard (X2-F17): WARDYN_E2E_NO_UI_BUILD=1 skips the rebuild unconditionally,
     # so a dist built before the last edit to anything Vite actually reads is
     # served silently — exactly the footgun the comment above names. Refuse
     # when any file under ui/ (besides dist/, node_modules/, and Playwright's
-    # own test-results/) is newer than ui/dist itself: Vite's real inputs are
+    # own test-results/) is newer than ui/dist-e2e itself: Vite's real inputs are
     # not just ui/src — ui/index.html is the build ENTRY, and ui/public,
     # ui/package.json + pnpm-lock.yaml, ui/vite.config.ts, ui/tsconfig*.json
     # all change what a build produces. emptyOutDir (vite.config.ts) empties
@@ -150,15 +150,15 @@ cmd_build() {
     # mtime is a build stamp.
     # ponytail: whole-tree mtime, not a content hash — a touch with no content
     # change false-positives; rebuild once (unset the knob) to clear it.
-    stale_src="$(find "${REPO_ROOT}/ui" -path '*/node_modules' -prune -o -path '*/dist' -prune \
-      -o -path '*/test-results' -prune -o -type f -newer "${REPO_ROOT}/ui/dist" -print -quit)"
+    stale_src="$(find "${REPO_ROOT}/ui" -path '*/node_modules' -prune -o -path '*/dist' -prune -o -path '*/dist-e2e' -prune \
+      -o -path '*/test-results' -prune -o -type f -newer "${REPO_ROOT}/ui/dist-e2e" -print -quit)"
     if [[ -n "${stale_src}" ]]; then
-      die "ui/dist is stale: ${stale_src#${REPO_ROOT}/} was modified after the last ui/dist build, but WARDYN_E2E_NO_UI_BUILD=1 is reusing it — unset WARDYN_E2E_NO_UI_BUILD or rebuild with 'cd ui && pnpm build'"
+      die "ui/dist-e2e is stale: ${stale_src#${REPO_ROOT}/} was modified after the last ui/dist-e2e build, but WARDYN_E2E_NO_UI_BUILD=1 is reusing it — unset WARDYN_E2E_NO_UI_BUILD or rebuild with 'cd ui && pnpm build --mode e2e --outDir dist-e2e'"
     fi
-    log "Reusing existing ui/dist (WARDYN_E2E_NO_UI_BUILD=1)"
+    log "Reusing existing ui/dist-e2e (WARDYN_E2E_NO_UI_BUILD=1)"
   else
-    log "Building UI bundle (ui/dist)"
-    ( cd ui && pnpm install --frozen-lockfile && pnpm build )
+    log "Building UI bundle (ui/dist-e2e)"
+    ( cd ui && pnpm install --frozen-lockfile && pnpm build --mode e2e --outDir dist-e2e )
   fi
 }
 
@@ -251,7 +251,7 @@ cmd_up() {
       -ui-sandbox-listen "${UI_ADDR}" \
       -ui-sandbox-advertise "http://localhost:${UI_ADDR##*:}" \
       -internal-listen "${INTERNAL_ADDR}" \
-      -ui-dir "${REPO_ROOT}/ui/dist" \
+      -ui-dir "${REPO_ROOT}/ui/dist-e2e" \
       -default-policy "${REPO_ROOT}/examples/policies/demo.json" \
       >"${LOG_FILE}" 2>&1 &
   echo $! > "${PID_FILE}"

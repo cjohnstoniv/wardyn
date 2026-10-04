@@ -13,7 +13,8 @@ import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import type { CreateRunResult, PreflightResult } from "../../../lib/types";
 import { isCredentialRefusal, runs as runsApi } from "../../../lib/api/runs";
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, isSignedOutHold } from "../../../lib/api/core";
+import type { PolicyRef } from "../../../lib/api/health";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { getErrorMessage } from "../../../lib/format";
 import { primaryWorkspaceId, type WizardState } from "./wizard-types";
@@ -32,7 +33,25 @@ export interface UseLaunchParams {
   merged: ReturnType<typeof mergeRunSelections> | null;
   /** Called from Launch's catch block with the caught error (#386's Azure DevOps launch door). */
   onLaunchError?: (e: unknown) => void;
+  /** What the screen already knows about whether an automatic preflight may
+   *  fire and which preflight-derived rows block Launch. `local` is true only
+   *  when Launch would otherwise be pressable on the form's own say-so: a body
+   *  exists, launchGates has no problem, and neither workspaceUnavailable nor
+   *  noBarrier is set. The arms below read preflight's OWN answer, so they
+   *  gate Launch (preflightBlock) and never gate firing a check. */
+  autoCheck: { local: boolean; backendArm: boolean; modelArm: boolean };
+  /** The sign-in door is open; its closing re-checks the body. */
+  doorOpen: boolean;
 }
+
+/** A refusal this fresh still describes the body. Past it, Launch is the
+ *  server's decision again. */
+export const PREFLIGHT_FRESH_MS = 60_000;
+/** Settle time before a body is checked on its own. */
+export const PREFLIGHT_DEBOUNCE_MS = 800;
+// A refusal of these classes (and any 401) is repaired by something other than
+// an edit (a sign-in, a retry), so it is shown but never holds Launch.
+const NEVER_BLOCKS = new Set(["model_credential", "preflight_rate_limited"]);
 
 export interface UseLaunchResult {
   launching: boolean;
@@ -42,6 +61,9 @@ export interface UseLaunchResult {
   /** Bumped on every failed launch, including a repeat of the same message —
    *  so the rail's alert region remounts and gets re-announced (#459). */
   errorSeq: number;
+  /** The policy the refusal came from and how to ask for a change (the
+   *  envelope's `policy`), undefined when the failure carries none. */
+  errorPolicy: PolicyRef | undefined;
   credentialRefused: boolean;
   /** The model provider that credential refusal names (#532), "" when it
    *  names none — the door the rail opens is THAT provider's (#543). */
@@ -58,6 +80,14 @@ export interface UseLaunchResult {
   preflightErrorSeq: number;
   /** Whether preflightResult/preflightError are graded from the request buildRunInput would send RIGHT NOW. */
   preflightIsCurrent: boolean;
+  /** Current body AND graded less than PREFLIGHT_FRESH_MS ago. */
+  preflightFresh: boolean;
+  /** A fresh verdict for the current body that Launch would be refused on:
+   *  a 4xx (not model_credential, not a 429) or a missing backend / llm_access
+   *  row. 5xx, network errors and 429 never block. Disables Launch. */
+  preflightBlock: boolean;
+  /** The current body's last check was answered 429: nothing was graded. */
+  preflightNotChecked: boolean;
   preflight: () => Promise<void>;
   /** The request Launch would send right now (null while the policy document
    *  is unparseable) — the identity a click-armed relaunch is held to. */
@@ -78,7 +108,17 @@ export interface PreflightRefusal {
 // `ccTouched`/`merged` are the screen's own form state, read here rather than
 // duplicated: buildRunInput composes the wire body from exactly what the form
 // shows, so the screen and this hook can never author two different requests.
-export function useLaunch({ state, workspaces, modelProviders, useSaved, ccTouched, merged, onLaunchError }: UseLaunchParams): UseLaunchResult {
+export function useLaunch({
+  state,
+  workspaces,
+  modelProviders,
+  useSaved,
+  ccTouched,
+  merged,
+  onLaunchError,
+  autoCheck,
+  doorOpen,
+}: UseLaunchParams): UseLaunchResult {
   const navigate = useNavigate();
   const mounted = React.useRef(true);
   React.useEffect(() => {
@@ -94,6 +134,7 @@ export function useLaunch({ state, workspaces, modelProviders, useSaved, ccTouch
   const { disabled: launchDisabled, showSpinner: launchSpinning } = useDeferredBusy(launching);
   const [error, setError] = React.useState<string | null>(null);
   const [errorSeq, setErrorSeq] = React.useState(0);
+  const [errorPolicy, setErrorPolicy] = React.useState<PolicyRef | undefined>(undefined);
   const [credentialRefused, setCredentialRefused] = React.useState(false);
   const [refusedProvider, setRefusedProvider] = React.useState("");
   // Preflight is a dry-run of the SAME request Launch sends — see buildRunInput
@@ -111,7 +152,16 @@ export function useLaunch({ state, workspaces, modelProviders, useSaved, ccTouch
   // wizard field at all), the verdict stops being about the run that is about
   // to launch and must not be shown. Held as state, not a ref, so an edit made
   // WHILE a preflight is in flight also invalidates the answer when it lands.
-  const [preflightedBody, setPreflightedBody] = React.useState<string | null>(null);
+  // `at` and `status` are what the freshness and block rules read: a verdict is
+  // a 4xx only when `status` says so (2xx = 200, no answer = 0).
+  const [graded, setGraded] = React.useState<{ body: string; at: number; status: number; reason: string } | null>(null);
+  const preflightedBody = graded?.body ?? null;
+  // Forces the render that lets a verdict age out; the clock itself is read in render.
+  const [, setAgeTick] = React.useState(0);
+  const abortRef = React.useRef<AbortController | null>(null);
+  const seqRef = React.useRef(0);
+  const inFlightRef = React.useRef(false);
+  const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // The ONE request-payload builder — Launch and Preflight must send EXACTLY
   // the same body, since preflight's verdict is only true if it is a dry-run
@@ -141,6 +191,7 @@ export function useLaunch({ state, workspaces, modelProviders, useSaved, ccTouch
 
   const launch = async () => {
     setError(null);
+    setErrorPolicy(undefined);
     setCredentialRefused(false);
     setRefusedProvider("");
     setLaunching(true);
@@ -163,6 +214,7 @@ export function useLaunch({ state, workspaces, modelProviders, useSaved, ccTouch
       const sentence = server || "Failed to launch run.";
       setError(sentence);
       setErrorSeq((n) => n + 1);
+      setErrorPolicy(e instanceof HttpError ? e.policy : undefined);
       setCredentialRefused(isCredentialRefusal(e));
       setRefusedProvider(isCredentialRefusal(e) && e instanceof HttpError ? e.provider : "");
       onLaunchError?.(e);
@@ -187,6 +239,13 @@ export function useLaunch({ state, workspaces, modelProviders, useSaved, ccTouch
   // remember to clear the verdict, because a verdict graded from a different
   // body is never rendered in the first place.
   const preflightIsCurrent = preflightedBody !== null && preflightedBody === currentBody;
+  const preflightFresh = preflightIsCurrent && !!graded && Date.now() - graded.at < PREFLIGHT_FRESH_MS;
+  const preflightNotChecked = preflightIsCurrent && graded?.status === 429;
+  React.useEffect(() => {
+    if (!graded) return;
+    const t = setTimeout(() => setAgeTick((n) => n + 1), Math.max(0, graded.at + PREFLIGHT_FRESH_MS - Date.now()) + 1);
+    return () => clearTimeout(t);
+  }, [graded]);
 
   const preflight = async () => {
     // The saved lane with nothing picked has NO body to dry-run — falling
@@ -194,27 +253,99 @@ export function useLaunch({ state, workspaces, modelProviders, useSaved, ccTouch
     // never launch, breaking buildRunInput's same-body invariant. (The panel
     // disables the button in this state too; this guards the race.)
     if (useSaved && !state.selectedPolicyId) return;
-    setPreflightError(null);
-    setPreflightResult(null);
-    setPreflightRefusal(null);
-    setPreflightedBody(null);
+    // One check at a time: a newer one supersedes the older, whose answer is
+    // then never applied. The previous verdict stays on screen until the new
+    // one lands, so a re-check of the same body never un-blocks Launch.
+    abortRef.current?.abort();
+    const ctl = new AbortController();
+    abortRef.current = ctl;
+    const seq = ++seqRef.current;
+    inFlightRef.current = true;
     setPreflighting(true);
     // Grade the body we actually send, and remember exactly that one.
     const body = buildRunInput();
     const key = JSON.stringify(body);
     try {
-      setPreflightResult(await runsApi.preflightRun(body));
+      const res = await runsApi.preflightRun(body, ctl.signal);
+      if (ctl.signal.aborted) return;
+      setPreflightResult(res);
+      setPreflightError(null);
+      setPreflightRefusal(null);
+      setGraded({ body: key, at: Date.now(), status: 200, reason: "" });
     } catch (e) {
-      // The alert already speaks RAIL.PREFLIGHT_ERROR_LABEL first; a fallback
-      // that repeats it read "Preflight failed Preflight failed." (#497).
-      setPreflightError(getErrorMessage(e) || "No reason was given.");
-      setPreflightErrorSeq((n) => n + 1);
-      if (isCredentialRefusal(e)) setPreflightRefusal({ body: key, provider: e instanceof HttpError ? e.provider : "" });
+      if (ctl.signal.aborted) return;
+      const status = e instanceof HttpError ? e.status : 0;
+      setPreflightResult(null);
+      setPreflightRefusal(null);
+      // A 429 means "not checked": no alert, no block, no automatic retry.
+      if (status === 429) {
+        setPreflightError(null);
+      } else {
+        // The alert already speaks RAIL.PREFLIGHT_ERROR_LABEL first; a fallback
+        // that repeats it read "Preflight failed Preflight failed." (#497).
+        setPreflightError(getErrorMessage(e) || "No reason was given.");
+        setPreflightErrorSeq((n) => n + 1);
+        if (isCredentialRefusal(e)) setPreflightRefusal({ body: key, provider: e instanceof HttpError ? e.provider : "" });
+      }
+      setGraded({ body: key, at: Date.now(), status, reason: e instanceof HttpError ? e.reason : "" });
     } finally {
-      setPreflightedBody(key);
-      setPreflighting(false);
+      if (seqRef.current === seq) {
+        inFlightRef.current = false;
+        setPreflighting(false);
+      }
     }
   };
+
+  // Launch is held on a fresh verdict for THIS body that the server refused,
+  // or whose rows say Launch would be refused (f-f4 backend, f-f5 llm_access).
+  const answeredRefusal =
+    !!graded && graded.status >= 400 && graded.status < 500 && graded.status !== 401 && graded.status !== 429 && !NEVER_BLOCKS.has(graded.reason);
+  const rowMissing = (kind: string) =>
+    !!preflightResult?.setup_items?.some((i) => i.kind === kind && i.status === "missing");
+  const preflightBlock =
+    preflightFresh &&
+    (answeredRefusal || (autoCheck.backendArm && rowMissing("backend")) || (autoCheck.modelArm && rowMissing("llm_access")));
+
+  // Automatic preflight. Everything below goes through ONE debounce, and the
+  // gate is read when the timer fires (through refs), so a check never
+  // outlives the state that allowed it. A signed-out hold skips it: a
+  // background POST must never raise the sign-in prompt by itself.
+  const preflightRef = React.useRef(preflight);
+  preflightRef.current = preflight;
+  const localRef = React.useRef(autoCheck.local);
+  localRef.current = autoCheck.local;
+  const scheduleCheck = React.useCallback(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = null;
+      if (!mounted.current || inFlightRef.current || !localRef.current || isSignedOutHold()) return;
+      void preflightRef.current();
+    }, PREFLIGHT_DEBOUNCE_MS);
+  }, []);
+  // A body change restarts the debounce and aborts whatever was grading the old one.
+  React.useEffect(() => {
+    if (currentBody === null) return;
+    scheduleCheck();
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+      abortRef.current?.abort();
+    };
+  }, [currentBody, scheduleCheck]);
+  // The form becoming checkable without the body changing (a late provider list).
+  React.useEffect(() => {
+    if (autoCheck.local) scheduleCheck();
+  }, [autoCheck.local, scheduleCheck]);
+  // Coming back to the tab, or the sign-in door closing, re-checks the body.
+  React.useEffect(() => {
+    window.addEventListener("focus", scheduleCheck);
+    return () => window.removeEventListener("focus", scheduleCheck);
+  }, [scheduleCheck]);
+  const doorWasOpen = React.useRef(doorOpen);
+  React.useEffect(() => {
+    if (doorWasOpen.current && !doorOpen) scheduleCheck();
+    doorWasOpen.current = doorOpen;
+  }, [doorOpen, scheduleCheck]);
 
   return {
     launching,
@@ -222,6 +353,7 @@ export function useLaunch({ state, workspaces, modelProviders, useSaved, ccTouch
     launchSpinning,
     error,
     errorSeq,
+    errorPolicy,
     credentialRefused,
     refusedProvider,
     launch,
@@ -230,6 +362,9 @@ export function useLaunch({ state, workspaces, modelProviders, useSaved, ccTouch
     preflightError,
     preflightErrorSeq,
     preflightIsCurrent,
+    preflightFresh,
+    preflightBlock,
+    preflightNotChecked,
     preflight,
     currentBody,
     preflightRefusal,

@@ -725,6 +725,9 @@ it runs with:
 - **Back to the local key**, with `WARDYN_KEK=local` and
   `WARDYN_VAULT_TRANSIT_KEY` or `WARDYN_AZURE_KEK_KEY` still set: every row
   under that key service.
+- **A key domain's key at its latest version**, for the principal keys of that
+  domain alone, when `WARDYN_KEY_DOMAINS_FILE` declares it ("Key domains" below).
+  A principal key never moves between domains.
 
 Run it with the same `WARDYN_AGE_KEY`, `WARDYN_PLATFORM_KEY_FILE`,
 `WARDYN_KEK`, `WARDYN_VAULT_*` and `WARDYN_AZURE_*` settings the daemon uses
@@ -819,7 +822,10 @@ pointer.
 safe beside a serving daemon with the same settings. It moves each person's v1
 credential row into a v3 envelope under their key and exits. Each row moves in
 its own transaction, under the row's lock. Boot keys, the operator namespace and
-pointer rows are never touched, and no value is decrypted. It is not a root rotation: `-rewrap`
+pointer rows are never touched, and no value is decrypted. With key domains
+("Key domains" below) it also re-seals a v3 row sealed under an older generation
+of its owner's key (one a reassignment left behind) into the current generation;
+no principal key moves. It is not a root rotation: `-rewrap`
 moves data keys and principal keys onto a new root key, and this changes which key
 a row's data key is under. An abort names the row with every earlier row
 committed, so re-run it. A credential written under the credential key while it
@@ -842,6 +848,137 @@ That fails closed, and it is disclosed.
 does not know, by name, so once any v3 row exists a downgrade below 0.8.6
 strands it. There is no v3-to-v1 tool. Turn the setting off and stay on 0.8.6 if
 you need to stop writing v3.
+
+## Key domains: `WARDYN_KEY_DOMAINS_FILE`
+
+By default every person's principal key is wrapped under the deployment's
+credential key. A **key domain** is a tenant of the key service. It is a name
+mapped to its own Transit key and an optional Vault role, or to its own Key Vault
+key pair and an optional client id. A person assigned to a domain has their
+principal keys wrapped under that domain's key. So **a database dump plus one
+domain's key exposes only that domain**.
+
+**Domains come from deploy configuration only.** `WARDYN_KEY_DOMAINS_FILE` (chart
+`kek.domains`, rendered to a ConfigMap) is a JSON object from domain name to
+`{"transit": {"key", "role"}}` or `{"azurekv": {"key", "signingKey", "clientId"}}`.
+A name is `a-z`, `0-9` and `-`, and is never `default`, which is the credential
+key's own domain. The database never declares a domain: someone who can write
+tables could otherwise point a new key at a key they hold.
+
+```json
+{
+  "acme": {"transit": {"key": "acme-keys", "role": "wardyn-acme"}},
+  "beta": {"azurekv": {"key": "https://beta.vault.azure.net/keys/wrap",
+                       "signingKey": "https://beta.vault.azure.net/keys/sign"}}
+}
+```
+
+**Boot proves each domain.** Every domain's key is built and self-tested like the
+credential key (a round trip, and a refusal to unwrap under another row's
+binding). Boot is refused, naming what it refused, when:
+
+- a domain names the same key as another domain, the platform key or the default
+  credential key;
+- a domain names a Vault `role` while `WARDYN_VAULT_AUTH` is not `kubernetes`
+  (a token-file login ignores a role, so the domain's key would be reached with
+  the credential token), or the same role as `WARDYN_VAULT_ROLE` or
+  `WARDYN_VAULT_ROLE_PLATFORM`;
+- the file declares a domain named `default`, or a name that is empty or not
+  `a-z`, `0-9` and `-`;
+- a live `principal_keys` row names a domain the file does not declare (see
+  "Offboarding a key domain");
+- a live row names a `kek_id` its domain's key no longer reaches.
+
+A domain without its own Vault role is reached by the credential role. The
+process holds that role's token anyway, so a per-domain role only defends a
+leaked token: someone who holds only a domain's role token reaches that domain's
+key and no other. It is not a boundary against a compromised wardynd, which
+still holds every domain's access and so exposes everything.
+
+**Choosing who is in a domain.** A security admin assigns a user, a group or
+everyone to a declared domain:
+
+```
+PUT    /api/v1/key-domains/assignments/{subject_type}/{subject}   {"domain": "acme"}
+DELETE /api/v1/key-domains/assignments/{subject_type}/{subject}
+GET    /api/v1/key-domains
+```
+
+`subject_type` is `user`, `group` or `all`, the governance vocabulary. A user is
+named by subject or by an email the deployment knows; a group by the name a
+sign-in carries; for `all` the subject in the path is `all`. `"default"` is a
+valid domain and means the credential key. Each write is audited
+(`key_domain.assignment.set` and `key_domain.assignment.delete`), and a refused
+one is an `authz.denied` row (`key_domain_unknown`,
+`key_domain_ambiguous_membership`).
+
+**Resolution** for a person's next key generation is user, then group, then `all`,
+then `default`:
+
+- a user assignment wins over everything;
+- group facts are those of the person's **last verified login**;
+- two group matches in different domains refuse the new generation by name. The
+  assignment API refuses a group write that would leave anyone that way. Assign
+  such a person to one domain as a user, or give the groups the same domain;
+- a login that lost groups (a truncated snapshot) cannot place a person while
+  group assignments exist. The new generation is refused by name until they sign
+  in again or are assigned as a user;
+- `all` applies only when no user or group assignment matches.
+
+A background write by someone who has not signed in since a group changed (a
+token refresh) lands in the domain their last login placed them in, until they
+sign in again. Assign the person as a user to move them at once.
+
+**A reassignment applies to the next generation.** The generation a person's
+credentials were sealed under stays in its own domain, readable, and is never
+re-wrapped into another: that would give the new domain's key holder the person's
+whole history. The next write after a reassignment creates a new generation in
+the new domain and marks the old one superseded. `wardynd -rewrap-principal-keys`
+then re-seals the person's credential rows into the new generation, which
+re-encrypts data keys and never moves an old principal key. An erase destroys
+every generation of the person, superseded ones included.
+
+**Rotating one domain's key.** `wardynd -rewrap` and `-rotate-age-key` read
+`WARDYN_KEY_DOMAINS_FILE` and build every domain's key. Rotate domain A's key
+at its service, then run `wardynd -rewrap`: it moves only A's principal keys onto
+A's latest version and leaves B's `domain`, `kek_id` and bytes as they were. It
+prints a retirable version per domain, and the `secret.rewrap` row carries them as
+`domain_key_versions`:
+
+```
+every principal key in key domain "acme" is wrapped under transit:transit/acme-keys version 2; raising the Transit key's min_decryption_version to 2 now retires the older versions
+```
+
+A principal key never leaves its domain in a rewrap, and a live key naming an
+undeclared domain refuses the rewrap with nothing changed.
+
+### Offboarding a key domain
+
+Removing a domain from the file while a live key still names it is refused at
+boot, with the count of live keys per domain. Do it in this order:
+
+1. **Re-declare the domain** (or restore the key it names) so wardynd can start.
+2. **Erase or destroy those subjects through the API**: `DELETE
+   /api/v1/people/{principal}/credentials` destroys the person's keys in every
+   domain. Look at `GET /api/v1/key-domains` for how many live keys the domain
+   still holds. Remove the assignments that name the domain
+   (`DELETE /api/v1/key-domains/assignments/...`).
+3. **Remove the domain** from the file and restart. Boot checks that no live key
+   names it.
+
+**Never delete the `principal_keys` rows.** A deleted row is a lost key, and what
+it sealed is lost with it, silently, instead of being erased on the record. A
+destroyed generation is a tombstone that holds no key and does not count against
+the domain.
+
+**Residual: assignments are the one thing a database writer can move.** Someone
+who can write the `key_domain_assignments` table can move a subject's future
+writes into a domain whose key they hold. They cannot declare a domain or read
+anything already written. The mitigations are four-eyes on the two assignment
+writes (GOV4, `WARDYN_GOVERNANCE_SECOND_HUMAN`), the audit row each API change
+writes, and the 30-day `/setup/status` row that reports assignment changes. A
+write made straight to the table leaves no audit row of its own. A compromised
+wardynd process still exposes everything it can reach.
 
 ## Store mode: credentials in Vault
 

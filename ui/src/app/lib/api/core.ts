@@ -11,6 +11,7 @@
 import { lsGet, lsSet, ssGet, ssSet } from "../storage";
 import { CC_ORDER, type ConfinementClass } from "../types";
 import { apiURL } from "../base-path";
+import type { PolicyRef } from "./health";
 
 const TOKEN_KEY = "wardyn_admin_token";
 
@@ -36,6 +37,9 @@ let _unauthorized: ((refused: Refused) => void) | null = null;
 let _signedOutHold = false;
 export function setSignedOutHold(on: boolean): void {
   _signedOutHold = on;
+}
+export function isSignedOutHold(): boolean {
+  return _signedOutHold;
 }
 
 /** RequestInit plus `save`: the owning screen's id when this request is that
@@ -127,13 +131,26 @@ export class HttpError extends Error {
   provider: string;
   /** The refused provider's kind (#532, #535), "" when the body names none. */
   kind: string;
-  constructor(status: number, message: string, reason = "", org = "", provider = "", kind = "") {
+  /** The policy a governance refusal came from and how to ask for a change
+   *  (the envelope's `policy`, internal/policyref.Ref). Absent when the body
+   *  carries none, which is every refusal that is not a policy decision. */
+  policy?: PolicyRef;
+  constructor(
+    status: number,
+    message: string,
+    reason = "",
+    org = "",
+    provider = "",
+    kind = "",
+    policy?: PolicyRef,
+  ) {
     super(message);
     this.status = status;
     this.reason = reason;
     this.org = org;
     this.provider = provider;
     this.kind = kind;
+    if (policy) this.policy = policy;
     this.name = "HttpError";
   }
 }
@@ -303,8 +320,8 @@ export async function wfetch(
 
 export async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const { message, reason, org, provider, kind } = await errEnvelope(res);
-    throw new HttpError(res.status, message, reason, org, provider, kind);
+    const { message, reason, org, provider, kind, policy } = await errEnvelope(res);
+    throw new HttpError(res.status, message, reason, org, provider, kind, policy);
   }
   return (await res.json()) as T;
 }
@@ -331,7 +348,28 @@ function isRawBodyDisplayable(body: string): boolean {
   return body.length <= RAW_BODY_MAX_CHARS && !/^\s*</.test(body);
 }
 
-type ErrEnvelope = { message: string; reason: string; org: string; provider: string; kind: string };
+type ErrEnvelope = {
+  message: string;
+  reason: string;
+  org: string;
+  provider: string;
+  kind: string;
+  policy?: PolicyRef;
+};
+
+// The envelope's `policy` object, kept only when it is an object naming its
+// source; every contact field is kept only when it is a string.
+function policyField(v: unknown): PolicyRef | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  if (typeof o.source !== "string" || !o.source) return undefined;
+  const ref: PolicyRef = { source: o.source };
+  for (const k of ["name", "owner", "email", "request_url", "request_text"] as const) {
+    const x = o[k];
+    if (typeof x === "string" && x) ref[k] = x;
+  }
+  return ref;
+}
 
 export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
   const bare = (message: string): ErrEnvelope => ({ message, reason: "", org: "", provider: "", kind: "" });
@@ -346,6 +384,7 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
         org?: unknown;
         provider?: unknown;
         kind?: unknown;
+        policy?: unknown;
       };
       if (typeof j.error === "string" && j.error) {
         return {
@@ -354,6 +393,7 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
           org: field(j.org),
           provider: field(j.provider),
           kind: field(j.kind),
+          policy: policyField(j.policy),
         };
       }
     } catch {

@@ -102,6 +102,9 @@ type Store struct {
 	// written under their principal key (enc_version 3). It governs writes
 	// only; a v3 row is read whatever it says.
 	principalKeys bool
+	// domains are the declared key domains (Deps.KeyDomains): the KEK a
+	// principal key in each is wrapped and opened under.
+	domains secretstore.KeyDomains
 }
 
 // New constructs a Store whose KEKs are the local ones derived from identity
@@ -120,6 +123,7 @@ func New(pool *pgxpool.Pool, identity age.Identity) (*Store, error) {
 // withKEK adds the configured key service (Deps.KEK), if any.
 func (s *Store) withKEK(d secretstore.Deps) {
 	s.principalKeys = d.PrincipalKeys
+	s.domains = d.KeyDomains
 	if d.KEK != nil {
 		s.service, s.serviceWrites = d.KEK, d.KEKWrites
 	}
@@ -641,6 +645,13 @@ type RewrapResult struct {
 	// key service (Deps.PlatformKEK), which wraps the boot keys alone.
 	PlatformKeyService string
 	PlatformKeyVersion string
+	// DomainKeyServices and DomainKeyVersions are the same, per declared key
+	// domain (Deps.KeyDomains), whose key wraps that domain's principal keys
+	// alone: the domain's kek_id, and the version every principal key in it is
+	// now wrapped under, for a versioned key. A domain holding no key yet is
+	// reported at its latest version, since nothing is under an older one.
+	DomainKeyServices map[string]string
+	DomainKeyVersions map[string]string
 	// Rotated reports that a versioned key service named a newer version for
 	// a wrap than the latest one read when the run began, so a rotation landed
 	// mid-run. KeyVersion and PlatformKeyVersion are then "": run -rewrap again
@@ -697,6 +708,11 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 	s.withKEK(d)
 	if s.kek == nil && !s.serviceWrites {
 		return res, errors.New("pg secretstore: rewrap needs a key to wrap under: WARDYN_AGE_KEY, or a WARDYN_KEK key service (transit or azurekv)")
+	}
+	// A principal key naming a domain the file does not declare cannot be moved
+	// or read: refuse before anything changes.
+	if err := subjectkey.Verify(ctx, d.Pool, s.domainNames(), nil); err != nil {
+		return res, fmt.Errorf("pg secretstore: rewrap REFUSED (nothing changed): %w", err)
 	}
 	source := s.reader
 	// A boot key may still sit under an earlier key of its own purpose: the
@@ -772,9 +788,14 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 		}
 		return nil
 	}
+	// A principal key never moves between domains, so each domain's key is read
+	// at its latest version and moves only that domain's keys onto it.
+	if err := s.readDomainVersions(ctx, &res, latest); err != nil {
+		return res, err
+	}
 	rotated := map[string]bool{}
-	// Every principal key moves onto the credential KEK's latest version of its
-	// own domain; boot keys are never among them.
+	// Every principal key moves onto the latest version of its own domain's
+	// KEK; boot keys are never among them.
 	pkTarget := func(domain, _ string) (kek.KEK, error) { return s.pkWriter(domain) }
 	n, pk, err := rewrapAll(ctx, d.Pool, "rewrap", source, target, latest, guard, rotated, func(tx pgx.Tx) (int, error) {
 		return subjectkey.Rewrap(ctx, tx, s.pkReader, pkTarget, latest, rotated)
@@ -785,48 +806,9 @@ func RewrapKeys(ctx context.Context, d secretstore.Deps) (RewrapResult, error) {
 	// retire. Report none; another pass moves them and reports the truth.
 	if err == nil && len(rotated) > 0 {
 		res.Rotated = true
-		res.KeyVersion, res.PlatformKeyVersion = "", ""
+		res.KeyVersion, res.PlatformKeyVersion, res.DomainKeyVersions = "", "", nil
 	}
 	return res, err
-}
-
-// refuseMixedBootKeys refuses a rewrap that finds a boot key under any key but
-// platformID while another is already under it. Every boot key a wardynd wrote
-// or moved sits under the platform key once one does, so the other was written
-// where it sits after the move, by whoever holds that key and can write the
-// table. It changes nothing and names the rows.
-func refuseMixedBootKeys(platformID string, all []envelope) error {
-	return refuseMixed(platformID, all,
-		func(id string) bool { return id == platformID },
-		func(id string) bool { return id != platformID })
-}
-
-// refuseMixed is that check for a given split of the boot keys' kek_ids: it
-// refuses when some boot key is under a key moved accepts and another is under
-// a key planted accepts. A key service writing beside a platform file leaves
-// boot keys under the service or the file key legitimately, and only a key the
-// age key alone derives is what its holder can plant.
-func refuseMixed(platformID string, all []envelope, moved, planted func(kekID string) bool) error {
-	var under bool
-	var other []string
-	for _, e := range all {
-		if secretstore.Kind(e.ownedBy, e.name) != "platform" {
-			continue
-		}
-		switch {
-		case moved(e.kekID):
-			under = true
-		case planted(e.kekID):
-			other = append(other, fmt.Sprintf("%s under %q", rowRef(e.ownedBy, e.name), e.kekID))
-		}
-	}
-	if !under || len(other) == 0 {
-		return nil
-	}
-	return &refusal{ErrMixedBootKeys, fmt.Sprintf("pg secretstore: rewrap REFUSED (nothing changed): boot keys are already under the platform key %q, "+
-		"yet %s sit under another key, a mixed state no run of wardynd leaves. These rows were not written by Wardyn: "+
-		"find out who wrote them (updated_at, the audit log, database access logs) and restore the boot keys from a backup if they are forged",
-		platformID, strings.Join(other, ", "))}
 }
 
 // latestVersion is the version a wrap under k would name, or "" when k has no

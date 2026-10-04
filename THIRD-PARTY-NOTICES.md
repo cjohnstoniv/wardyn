@@ -163,6 +163,8 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `@xterm/addon-clipboard` | 0.2.0 | MIT |
 | `@xterm/addon-fit` | 0.11.0 | MIT |
 | `@xterm/addon-unicode11` | 0.9.0 | MIT |
+| `@xterm/addon-web-links` | 0.12.0 | MIT |
+| `@xterm/addon-webgl` | 0.19.0 | MIT |
 | `@xterm/xterm` | 6.0.0 | MIT |
 | `aria-hidden` | 1.2.6 | MIT |
 | `asciinema-player` | 3.17.0 | Apache-2.0 |
@@ -174,6 +176,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `detect-node-es` | 1.1.0 | MIT |
 | `fast-equals` | 4.0.3 | MIT |
 | `get-nonce` | 1.0.1 | MIT |
+| `jetbrains-mono` | 1.0.6 | MIT |
 | `js-base64` | 3.9.4 | BSD-3-Clause |
 | `js-tokens` | 4.0.0 | MIT |
 | `loose-envify` | 1.4.0 | MIT |
@@ -208,7 +211,9 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 ## Fonts
 
 The console bundles the Inter and JetBrains Mono typefaces (`@fontsource/inter`,
-`@fontsource/jetbrains-mono`), both under the SIL Open Font License 1.1. The OFL
+`@fontsource/jetbrains-mono`), both under the SIL Open Font License 1.1. The
+terminal uses the full JetBrains Mono build from the `jetbrains-mono` package (the
+font is OFL-1.1; the npm package that carries it declares MIT for its own packaging). The OFL
 text is in `licenses/texts/common/OFL-1.1.txt` and ships alongside the fonts in
 the built console. Reserved Font Names must not be reused by derived works.
 

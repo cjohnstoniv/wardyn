@@ -823,16 +823,21 @@ never a URL, secret or token.
   "console_url": "https://wardyn.example.com",
   "channels": [
     {"id": "sec-hook", "type": "webhook", "url": "https://hooks.example.com/wardyn",
-     "hmac_secret": "<shared secret>", "bearer_token": "<optional>"}
+     "hmac_secret": "<shared secret>", "bearer_token": "<optional>"},
+    {"id": "sec-teams", "type": "teams", "url": "<Teams Workflows trigger URL>"},
+    {"id": "sec-slack", "type": "slack", "url": "<Slack incoming-webhook URL>", "redact_requester": true}
   ]
 }
 ```
 
 - `id` is `[a-z0-9_-]{1,32}`, unique. It is the metric label and what the outbox stores; rotating a URL
   under the same `id` keeps pending rows deliverable.
-- `type` must be one this build implements: `webhook`. Any other value refuses boot.
+- `type` must be one this build implements: `webhook`, `teams` or `slack`. Any other value refuses boot.
+- `redact_requester` (optional, per channel, default false) leaves the run owner's principal and email out of that channel's messages, whatever its type.
 - HTTPS is required when `hmac_secret` or `bearer_token` is set or the URL carries userinfo or a query.
-  Plain HTTP with none of those is allowed.
+  Plain HTTP with none of those is allowed for a `webhook`. A `teams` or `slack` URL is itself the
+  credential (a Teams workflow signature in the query, a Slack hook path), so it must always be `https://`;
+  boot refuses anything else and the error never shows the URL.
 - `console_url` is optional and must be `https://` with no userinfo, query or fragment.
 
 **The webhook body, `wardyn.approval.v1`.** A `POST` of JSON with `X-Wardyn-Delivery: <delivery_id>`
@@ -842,11 +847,12 @@ and, with `hmac_secret` set, `X-Wardyn-Signature`. Only these fields are ever se
 |---|---|
 | `schema` | the literal `wardyn.approval.v1` |
 | `delivery_id` | the outbox row's id, stable across retries |
-| `event`, `tier` | `raised` at tier 0 |
+| `event`, `tier` | `raised` at tier 0, `escalated` above it |
 | `approval.id`, `approval.kind`, `approval.requested_at` | the approval |
 | `run.id` | the run that raised it |
 | `profile.id`, `profile.name` | the run's governance profile, when it has one |
-| `requester.principal`, `requester.email` | the run's owner |
+| `requester.principal`, `requester.email` | the run's owner; omitted on a channel with `redact_requester` |
+| `recipients[]` | `{role, email}` for each `notify` target of the tier that resolved to an address |
 | `console_url` | `<console_url>/approvals`, when configured |
 
 The request scope (host, tool arguments, push paths), the reason text, the run title and any credential
@@ -854,11 +860,56 @@ are never sent: the sandbox agent writes or influences them, and an approval is 
 signed in, not from the message. Every string field is control-stripped, capped at 256 bytes and passed
 through the run's secret masker before encoding.
 
+**Teams and Slack messages.** A `teams` channel posts a Teams Workflows message carrying one Adaptive
+Card; a `slack` channel posts a Block Kit incoming-webhook body. Both are built from the same
+allowlisted fields as the webhook body and nothing else, so the request scope, the reason and any
+credential are absent here too. The title is fixed text, `Approval waiting: <kind>` at tier 0 and
+`Approval still waiting (escalation <n>): <kind>` above it, where the kind reads Credential, Network
+access, Tool call, Sign-in needed or Push review. Under it come the run's short id, the profile name, the
+requester (unless `redact_requester`) and the request time in UTC. The only link is a button to
+`<console_url>/approvals`, from config. Requester and profile text is control-stripped, capped at 256
+bytes and masked, then made inert: Slack carries it in `plain_text` objects only, and the Adaptive Card
+escapes `&`, `<`, `>` and every Markdown character. Any 2xx answer is success and the reply body is never
+read (a Teams workflow may answer 202 with none). `hmac_secret` and `bearer_token` are webhook options;
+these two types are not signed.
+
 **Verifying the signature.** `X-Wardyn-Signature: t=<unix seconds>,v1=<hex>`, where `v1` is the
 HMAC-SHA256 of `<t>.<body>` (the timestamp, a dot, the exact bytes received) keyed with `hmac_secret`.
 Reject a `t` more than five minutes old. Test vector: key `whsec_test_vector`, `t` 1700000000, body
 `{"schema":"wardyn.approval.v1","delivery_id":"d"}` gives
 `v1=b851b43234ba1d1386179e9f8785cf6c37337c6dee0791f8479579e0eb1e097a`.
+
+**Routes, escalation tiers and recipients.** With `routes` absent, every approval goes to every channel
+at tier 0. With `routes` set, the first route that matches an approval chooses its channels and tiers:
+
+```json
+"routes": [
+  {"kinds": ["push_content"],
+   "tiers": [{"after": "0s",  "channels": ["sec-hook"]},
+             {"after": "30m", "channels": ["sec-hook", "mail"], "notify": ["profile_contact"]}]},
+  {"profiles": ["<governance profile id>"],
+   "tiers": [{"after": "0s", "channels": ["mail"], "notify": ["run_owner"]}]},
+  {"tiers": [{"after": "0s", "channels": ["sec-hook"]}]}
+]
+```
+
+- A route matches on `kinds` (`credential`, `egress_domain`, `tool_call`, `credential_reauth`,
+  `push_content`) and `profiles` (governance profile **ids**, never names, so a rename cannot re-route).
+  The profile is the run's leaf profile as bound at dispatch. An absent key matches anything; no match
+  means no notification.
+- A route has 1 to 5 tiers, and `after` (a duration such as `30m`) is zero or more and strictly
+  ascending. Every tier's rows are written when the approval is raised, due `after` past its request
+  time, and a tier is sent only while the approval is still pending: if it was decided first, the row is
+  cancelled unsent. A config change after a raise does not alter rows already scheduled. Boot logs a
+  warning for a tier whose `after` is at or beyond `WARDYN_APPROVAL_EXPIRY_AFTER`, because the approval
+  expires before that tier can send.
+- `notify` fills `recipients[]` (`{role, email}`) in the body: `run_owner` is the run owner's address,
+  `profile_contact` is the leaf profile's contact email after the same re-validation the console applies.
+  A target with no address is skipped.
+- A channel with `"redact_requester": true` omits `requester` from its body.
+- Boot refuses a route that names an unknown channel or kind, a profile that is not a uuid, a tier list
+  that is empty, longer than 5 or not strictly ascending, a channel listed twice in one tier, or
+  `notify: run_owner` on a channel with `redact_requester` (the owner is the requester).
 
 **At least once.** A crash between a successful send and recording it resends, so a receiver that cares
 drops duplicates on `delivery_id`. A row that is retried keeps its `delivery_id`.
@@ -1035,6 +1086,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
 | `GET /admin/runs/capacity` — the fleet's configured reservations (below, "Fleet capacity"): across every owner, so not a member read. It never execs into a sandbox or calls the runner | ⛔ admin or `security_admin` |
 | the `/user-types` routes — listing, defining, editing and removing the org's user types (`GET`/`POST /user-types`, `PUT`/`DELETE /user-types/{id}`). Defining a type is the same duty as authoring a profile; deciding who IS a type stays with the admin-only People mappings above. A type is refused removal (`409`) while the chart's role map or default role, or a permission, profile or drive row, still names it, or a live API token carries it, and the built-in `standard` type is never removable | ⛔ admin or `security_admin` |
+| the `/key-domains` routes — listing the declared key domains with how many live keys each holds, and setting or removing which domain a user, a group or everyone is assigned to (`GET /key-domains`, `PUT`/`DELETE /key-domains/assignments/{subject_type}/{subject}`). An assignment decides which declared domain's key wraps the subject's NEXT principal key; nothing already written moves. The domains themselves come from `WARDYN_KEY_DOMAINS_FILE`, never from the API. A domain the file does not declare is refused (`422`), as is a group write that would leave people in two domains (`409`) | ⛔ admin or `security_admin` |
 | the `/sources` writes — `POST /sources`, `POST /sources/{id}/scan`, `DELETE /sources/{id}`: registering, rescanning, or removing a source touches the same repo/registry topology the operator-topology reads above expose | ⛔ admin only |
 | the `/base-images` writes — `POST /base-images`, `DELETE /base-images/{id}`: adding or removing a base image changes what every future onboarded workspace can run | ⛔ admin only |
 | `PUT`/`DELETE /integrations/{id}` — editing or removing one integration credential reference outside a full whole-site-config replace | ⛔ admin only |
@@ -1047,6 +1099,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `GET /admin/delegates` and `DELETE /admin/delegates/{id}` — the registered-portal inventory and revoking one portal: the device pair's shape, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/credentials` — erasing every credential one person has stored (offboarding, 0.8): it only removes reach and returns a count, never a value | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/ssh-keys` — removing every registered SSH key for a resolved subject or email; returns the removed-key count | ⛔ admin or `security_admin` |
+| `GET /people` — the people this deployment knows (0.8.6): everyone who has signed in and everyone set up beforehand, with each one's role (what the role mappings give their email), first and last sign-in, deactivation, and counts of live sessions (0 or 1: sessions are stateless cookies, so this says whether the last sign-in could still hold one), API tokens, SSH keys, stored credentials and runs still going. Paged (`?limit`, default 50, at most 200, and an opaque `cursor`) and filtered by `?q=` (principal or email prefix) and `?state=` (`active` or `deactivated`). It discloses the email of everyone who has signed in, the audience that can already read the audit trail, so it sits on this tier. `wardyn people list` prints it | ⛔ admin or `security_admin` |
 | `POST /people` and `GET /people/{principal}/tokens` — setting up a person before their first sign-in, and listing the API tokens an admin once created for them (0.8, [Tokens for a person who never signs in](#tokens-for-a-person-who-never-signs-in)). `POST /people/{principal}/tokens` stays mounted on this tier so a non-admin is refused as ever, and answers every admin `403` `person_token_mint_removed`: no role creates a token that acts as another person (0.8.5) | ⛔ admin or `security_admin` |
 | `GET /model-providers/credentials` — the credential inventory (0.8): for each model provider, every person who holds a credential of their own for it, with its state (`stored`, or `expired` past its sign-in's expiry), where it is stored (`pg`, `vaultkv`, `azurekv`), when it was added and when a run last used it (to the minute: a sink stamps a row at most once a minute), plus counts. Each row also carries `email` and `provider_name` (CS-8, both additive and non-secret) so a `security_admin` — who has no route to the model-provider roster or an identity directory — can still read the table well enough to offboard from it. The console's own page is `/admin/credentials`. The erase's companion; read from the rows' metadata, never a value | ⛔ admin or `security_admin` |
 | `GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}` — the enrolment tokens still redeemable and cancelling one before a laptop redeems it: the same pair for tokens, returning neither a token nor its hash | ⛔ admin or `security_admin` |
@@ -1331,6 +1384,9 @@ migration `0050`)** are the second and third owned nouns after runs.
   engine's own versioning and delete-version policy.
 - **Offboarding a person, in full.** The erase removes stored credentials and
   nothing else. In order:
+  0. Find them and see what they hold: `GET /people?q=<email or subject>`
+     (`wardyn people list --q`) lists each match with its live-session, token,
+     SSH-key, credential and running-run counts, which the steps below act on.
   1. Disable the person in the identity provider, so no new sign-in succeeds.
   2. `POST /sessions/revoke` with their subject or email: ends their console
      sessions, refuses a UI-app session at its next re-check (an attach ticket
@@ -2964,6 +3020,8 @@ the owner or email, only the `reason` and `target` it always had.
 | `attach_ticket_foreign_run` | a caller who is not the run's owner — **including a `security_admin`** — asked to mint a PTY attach ticket for a run they did not create. Its own reason rather than `not_owner` so an auditor can see the security tier refused a foreign shell without inferring it from the path (`internal/api/attach_ticket.go`) | ⛔ `404` (byte-identical to missing) |
 | `run_owner_only` | 0.8.5 (#1476): a **super admin** asked for interactive entry (attach-ticket mint or consume, the cookie attach lane, a UI app, take-over) to a run that is not theirs and has a personal owner. A `403` with the body `{"error":"only the person who started this run can open it interactively","reason":"run_owner_only"}`, not the `404` above, because the admin can already see the run. A run with no personal owner (operator-owned service or local runs) stays enterable. Kill, approve, policy, grants, revoke, audit, revive, resume and end are unchanged | ⛔ `403` |
 | `recording_governed` | 0.8.6: with `WARDYN_GOVERN_ADMIN_RUNS` on, an admin whose runs are governed (an SSO admin, an admin-role personal token) asked for Record Mode (`POST /workspaces/{id}/record`). Refused first, before the ceiling read and the import-step claim, at target `workspaces.record`; the body says Record Mode is refused for admins whose runs are governed and that the operator can allow it by setting `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` to `recording`. That setting lifts it for that lane, and each recording is then marked `governance_exempt` on `run.record.start`. The admin token and local mode are never refused. See [Constrained-admin mode](operations/member-mode.md#constrained-admin-mode) | ⛔ `403` |
+| `key_domain_unknown` | 0.8.6: `PUT /key-domains/assignments/{subject_type}/{subject}` named a key domain the deployment's key domains file (`WARDYN_KEY_DOMAINS_FILE`, chart `kek.domains`) does not declare. The body names the declared domains; nothing was written. Domains come from the file alone, so the API can only choose among them | ⛔ `422` |
+| `key_domain_ambiguous_membership` | 0.8.6: a `PUT` of a group key-domain assignment would leave people who last signed in with that group and another group assigned to a different domain, and who have no assignment of their own, so their next principal key would be refused by name. The body counts them; nothing was written. Assign each of them to one domain as a user first, or give both groups the same domain | ⛔ `409` |
 | `byoi_user` | a member named a `devcontainer_repo`, or an `image` they hold no grant for | ⛔ `403` |
 | `capability_workspace` | `workspace_id`: a member named a workspace they aren't granted (`403`). Launching: an `inline_policy` `workspace_repos` entry for an ungranted workspace was dropped — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | ⛔ `403`, or 🟡 a drop |

@@ -12,13 +12,20 @@
 import * as React from "react";
 import { modalLayerOpen } from "../lib/modal-layer-open";
 
-export function useTerminalFullscreen(panelRef: React.RefObject<HTMLDivElement | null>, refit: () => void) {
+export function useTerminalFullscreen(panelRef: React.RefObject<HTMLDivElement | null>, refit: () => void, onSettled?: () => void) {
   const [fullscreen, setFullscreen] = React.useState(false);
+
+  const onSettledRef = React.useRef(onSettled);
+  onSettledRef.current = onSettled;
 
   // Refit shortly after entering/leaving fullscreen (the box just changed).
   React.useEffect(() => {
+    // Also runs on first mount, so onSettled doubles as the load-time focus.
     const id = requestAnimationFrame(() => refit());
-    const t = setTimeout(() => refit(), 60);
+    const t = setTimeout(() => {
+      refit();
+      onSettledRef.current?.();
+    }, 60);
     return () => {
       cancelAnimationFrame(id);
       clearTimeout(t);

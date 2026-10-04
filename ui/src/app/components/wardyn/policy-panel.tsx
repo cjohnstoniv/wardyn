@@ -42,6 +42,7 @@ import { FIELD_HELP } from "./policy-field-help";
 import { EFFECT_PAST, splitToolRules, ToolRulesSection } from "./policy-tool-rules";
 import { PushRulesSection } from "./policy-push-rules";
 import { ADOCapabilitiesSection } from "./policy-ado-capabilities";
+import { RAIL_CHECK } from "./copy";
 
 export type PolicyPanelInstance = "run" | "policies";
 
@@ -546,11 +547,9 @@ export function PolicyPanel({
             disabled={preflightBusy || preflightDisabled || (!usingSaved && !parsed.ok)}
           >
             <ShieldCheck className="size-4" />
-            Preflight
+            {RAIL_CHECK.BUTTON}
           </Button>
-          <span className="text-meta text-muted-foreground">
-            Checks the spec server-side and shows what would be clamped — before you launch.
-          </span>
+          <span className="text-meta text-muted-foreground">{RAIL_CHECK.HINT}</span>
         </div>
       )}
     </div>

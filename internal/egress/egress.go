@@ -17,6 +17,7 @@ package egress
 import (
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -144,10 +145,22 @@ type InjectionRule struct {
 	// session holds. Both empty = unpinned = every other rule.
 	PinPath  string            `json:"pin_path,omitempty"`
 	PinQuery map[string]string `json:"pin_query,omitempty"`
+	// PinRoutes narrows this rule's credential to a SET of method-and-path
+	// pairs: a request carries the credential only when its method and its
+	// decoded path equal one entry exactly (no prefix match; the query string
+	// is not looked at). Unlike PinPath it admits methods other than GET.
+	// When PinPath is also set, a request must satisfy both.
+	PinRoutes []PinRoute `json:"pin_routes,omitempty"`
+}
+
+// PinRoute is one method-and-path pair an InjectionRule's PinRoutes admits.
+type PinRoute struct {
+	Method string `json:"method"`
+	Path   string `json:"path"`
 }
 
 // Pinned reports whether this rule narrows its credential to one request shape.
-func (r InjectionRule) Pinned() bool { return r.PinPath != "" }
+func (r InjectionRule) Pinned() bool { return r.PinPath != "" || len(r.PinRoutes) > 0 }
 
 // AllowsInjection reports whether a request may carry this rule's credential.
 // An UNPINNED rule allows every request, which is what every rule but the
@@ -166,6 +179,14 @@ func (r InjectionRule) Pinned() bool { return r.PinPath != "" }
 func (r InjectionRule) AllowsInjection(method, path, rawQuery string) bool {
 	if !r.Pinned() {
 		return true
+	}
+	if len(r.PinRoutes) > 0 {
+		if !slices.Contains(r.PinRoutes, PinRoute{Method: method, Path: path}) {
+			return false
+		}
+		if r.PinPath == "" {
+			return true
+		}
 	}
 	if method != http.MethodGet || path != r.PinPath {
 		return false

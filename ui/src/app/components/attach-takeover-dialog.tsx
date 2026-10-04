@@ -32,6 +32,7 @@ export function TakeoverConfirmDialog({
   holderPrincipal,
   onOpenChange,
   onConfirm,
+  onCloseFocus,
 }: {
   open: boolean;
   /** Whose session this ends. The panel never opens this without one — a
@@ -39,10 +40,17 @@ export function TakeoverConfirmDialog({
   holderPrincipal: string;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
+  /** Where focus lands when the dialog closes: the terminal, not the trigger. */
+  onCloseFocus: () => void;
 }) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
+      <AlertDialogContent
+        onCloseAutoFocus={(e) => {
+          e.preventDefault();
+          onCloseFocus();
+        }}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>{RUN_COCKPIT.takeOver}</AlertDialogTitle>
           <AlertDialogDescription>{RUN_COCKPIT.takeOverConfirm(holderPrincipal)}</AlertDialogDescription>

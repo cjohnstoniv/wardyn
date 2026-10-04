@@ -210,6 +210,16 @@
     "sentence": "(audit only)"
   },
   {
+    "reason": "key_domain_ambiguous_membership",
+    "target": "keyDomainTarget(c)",
+    "sentence": "fmt.Sprintf(\"%d people last signed in with this group and another group assigned to a different domain, and have no assignment of their own, so their next key would be refused. \" + \"Assign each of them to one domain as a user first, or give both groups the same domain. Nothing was changed.\", n)"
+  },
+  {
+    "reason": "key_domain_unknown",
+    "target": "keyDomainTarget(c)",
+    "sentence": "fmt.Sprintf(\"The key domain %q is not declared in the deployment's key domains file, so nothing was changed. Declared: %s.\", c.Domain, declaredKeyDomains(svc))"
+  },
+  {
     "reason": "mask_state_unavailable",
     "target": "door",
     "sentence": "maskStateSentence"

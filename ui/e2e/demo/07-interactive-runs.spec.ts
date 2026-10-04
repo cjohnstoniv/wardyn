@@ -88,6 +88,7 @@ import { decide } from "./funnel";
 import { sweepStaleState } from "./sweep";
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll.
 import { stage } from "./stage";
+import { termText } from "../terminal-text";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -313,12 +314,12 @@ test("V07 beat 2 — inside the box", async () => {
 
   // The payoff, in the order the line claims it (lifted from the retired
   // model-access spec, assertions intact — see the file header).
-  await expect(screen).toContainText("ANTHROPIC_BASE_URL=https://api.anthropic.com", { timeout: COMMAND_ECHOES });
-  await expect(screen).toContainText("CLAUDE_CONFIG_DIR=");
-  await expect(screen).toContainText("WARDYN_CLAUDE_MANAGED_B64=");
+  await expect.poll(() => termText(screen), { timeout: COMMAND_ECHOES }).toContain("ANTHROPIC_BASE_URL=https://api.anthropic.com");
+  expect(await termText(screen)).toContain("CLAUDE_CONFIG_DIR=");
+  expect(await termText(screen)).toContain("WARDYN_CLAUDE_MANAGED_B64=");
   // "No API key" is a claim about an ABSENCE — asserted only after the grep's
   // output demonstrably landed, or an empty screen satisfies it trivially.
-  await expect(screen).not.toContainText("ANTHROPIC_API_KEY");
+  expect(await termText(screen)).not.toContain("ANTHROPIC_API_KEY");
   await caption(page, "No API key.");
   await beat(page, BEAT_SHORT);
   await caption(page, "There is a credential-shaped value here, but let's look at what it actually is.");
@@ -340,7 +341,7 @@ test("V07 beat 3 — the decoy", async () => {
   await typeInTerminal(page, "cat $CLAUDE_CONFIG_DIR/.credentials.json");
 
   // The FULL token — a Go constant, matched whole.
-  await expect(screen).toContainText(SENTINEL, { timeout: COMMAND_ECHOES });
+  await expect.poll(() => termText(screen), { timeout: COMMAND_ECHOES }).toContain(SENTINEL);
   await spotlightTerminalRow(page, "sk-ant-oat01-wardyn-inert-sentinel");
   await caption(page, "And the value inside is a decoy.");
   await beat(page, BEAT_SHORT);
@@ -413,8 +414,8 @@ test("V07 beat 4 — drive the agent", async () => {
   // "You've hit your weekly limit · resets ..." — the subscription's own
   // quota, which no preflight can detect because only a real call reveals it.
   const OUTCOME = /\b(red|yellow|blue)\b|hit your (weekly|session|usage) limit|invalid.*key|authentication_error|credit balance/i;
-  await expect(screen).toContainText(OUTCOME, { timeout: MODEL_ANSWERS });
-  const text = (await screen.textContent()) ?? "";
+  await expect.poll(() => termText(screen), { timeout: MODEL_ANSWERS }).toMatch(OUTCOME);
+  const text = await termText(screen);
   expect(
     /\b(red|yellow|blue)\b/i.test(text) && !/hit your (weekly|session|usage) limit|invalid.*key|authentication_error|credit balance/i.test(text),
     `the model call was refused, not answered — the terminal shows a quota/auth failure. ` +

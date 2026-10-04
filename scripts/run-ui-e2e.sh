@@ -32,7 +32,7 @@
 # Prereqs: the dockerized Postgres "wardyn-test-pg" on :55432 (override with
 # WARDYN_E2E_PG_HOSTPORT + WARDYN_E2E_PG_CONTAINER on a shared box where that
 # port/name is taken — see docs/ENV.md's Test/internal-only e2e table, F063)
-# and a built ui/dist + .e2e-bin/wardynd (this script builds them once unless
+# and a built ui/dist-e2e + .e2e-bin/wardynd (this script builds them once unless
 # WARDYN_E2E_SKIP_BUILD=1 / WARDYN_E2E_NO_UI_BUILD=1). Also `jq`, which reads
 # Playwright's JSON report for the zero-executed check below — the script aborts
 # up front without it rather than judge a spec on a report it cannot parse.

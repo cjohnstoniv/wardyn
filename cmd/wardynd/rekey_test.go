@@ -32,7 +32,7 @@ func rekeyFlags(dsn, storeSel, ageKey string) *bootFlags {
 		auditSpool:              new(string),
 		auditSource:             new(string),
 		trustedCAFile:           new(string),
-		vault:                   vaultFlags{kek: new(string), transitKey: new(string), transitKeyPlatform: new(string)},
+		vault:                   vaultFlags{kek: new(string), transitKey: new(string), transitKeyPlatform: new(string), keyDomainsFile: new(string)},
 		azure:                   azureFlags{kekKey: new(string), kekSigningKey: new(string), kekKeyPlatform: new(string), kekSigningKeyPlatform: new(string), clientIDPlatform: new(string)},
 		rewrapRetirePlatformKey: new(bool),
 		rewrapAdoptBootKeys:     new(bool),

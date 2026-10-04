@@ -353,3 +353,8 @@ func TestIdleCPUSignalCheck(t *testing.T) {
 		t.Errorf("off row = %+v", off)
 	}
 }
+
+func (s *recordingStopper) StopRunMaxAge(_ context.Context, id uuid.UUID, _ time.Time) (lifecycle.StopOutcome, error) {
+	s.ids = append(s.ids, id)
+	return lifecycle.StopOutcome{Applied: true}, nil
+}

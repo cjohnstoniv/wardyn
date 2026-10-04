@@ -37,6 +37,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -393,6 +394,9 @@ type Config struct {
 	// the internal injection-resolve endpoint the proxy calls at startup. Nil
 	// disables both surfaces.
 	Secrets secretstore.Store
+	// KeyDomains resolves, lists and writes the key-domain assignments behind
+	// /key-domains (migration 0121). Nil answers 501.
+	KeyDomains *keydomain.Service
 	// MaskRegistry, when non-nil, is used to mask verbatim secret values from
 	// PTY capture / asciicast uploads before they reach the RecordingStore.
 	// A nil registry disables masking (existing tests stay green).
@@ -671,6 +675,8 @@ type Server struct {
 	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is
 	// ready to use.
 	metrics metrics
+	// fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).
+	fleet fleetSnapshot
 	// capRowsScanned counts capability-grant rows compared inside capBatch (see
 	// capabilities.go). It is INSTRUMENTATION, read by nothing on any request
 	// path: the per-request cost of the capability seam is chosen partly by the
@@ -699,6 +705,9 @@ type Server struct {
 	// per-server shape as keepaliveEvery above: a test drives a dead-peer holder
 	// on a millisecond clock instead of the real 30s budget.
 	pingEvery time.Duration
+	// attachPrepare overrides attachPrepareTimeout for THIS server only (tests):
+	// the bound on one Runner.Attach.
+	attachPrepare time.Duration
 	// maskBeat overrides maskCheckEvery for THIS server only (tests): how often
 	// an in-flight consumer re-reads its run's fence.
 	maskBeat time.Duration

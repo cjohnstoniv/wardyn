@@ -95,6 +95,10 @@ type Config struct {
 	// CapacityWait is WARDYN_SANDBOX_CAPACITY_WAIT: how long a pod the scheduler has no room for waits,
 	// on top of StartTimeout. Zero turns the wait off: such a pod fails at StartTimeout.
 	CapacityWait time.Duration
+	// RunMaxAge is WARDYN_RUN_MAX_AGE. When positive, both run pods get
+	// activeDeadlineSeconds = RunMaxAge + podDeadlineGrace, so a run whose control plane has
+	// gone away still fails its pods on a bounded schedule. Zero (the default) sets no deadline.
+	RunMaxAge time.Duration
 }
 
 func (c *Config) withDefaults() {

@@ -30,7 +30,7 @@ func TestResourceRequirementsRatio(t *testing.T) {
 	if r.Limits.Cpu().MilliValue() != 1000 || r.Limits.Memory().Value() != 2048*1024*1024 {
 		t.Errorf("ratio 0.5: limits moved: %v", r.Limits)
 	}
-	p := proxyResources()
+	p := proxyResources(false)
 	if !p.Requests.Cpu().Equal(*p.Limits.Cpu()) || !p.Requests.Memory().Equal(*p.Limits.Memory()) {
 		t.Errorf("proxy requests %v != limits %v with the ratio set", p.Requests, p.Limits)
 	}

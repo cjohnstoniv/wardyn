@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -39,6 +41,7 @@ var retryBackoff = [maxAttempts - 1]time.Duration{30 * time.Second, time.Minute,
 type Worker struct {
 	pool     *pgxpool.Pool
 	channels map[string]Channel
+	cfg      *Config
 	console  string
 	masks    *secretmask.Registry
 	client   *http.Client
@@ -55,7 +58,7 @@ type Deps struct {
 // NewWorker builds a worker from a validated config. Call it after boot has applied the trusted CA, so
 // the cloned transport carries it.
 func NewWorker(d Deps) *Worker {
-	w := &Worker{pool: d.Pool, channels: map[string]Channel{}, console: d.Config.ConsoleURL, masks: d.Masks, client: d.Client}
+	w := &Worker{pool: d.Pool, channels: map[string]Channel{}, cfg: d.Config, console: d.Config.ConsoleURL, masks: d.Masks, client: d.Client}
 	for _, ch := range d.Config.Channels {
 		w.channels[ch.ID] = ch
 	}
@@ -143,18 +146,51 @@ func (w *Worker) Tick(ctx context.Context) (int, error) {
 
 const factsSQL = `
 SELECT a.state, a.kind, a.requested_at, a.run_id, r.created_by, COALESCE(p.email, ''),
-       r.governance_profile_id, COALESCE(gp.name, '')
+       r.governance_profile_id, COALESCE(gp.name, ''), gp.contact
   FROM approvals a
   JOIN agent_runs r ON r.id = a.run_id
   LEFT JOIN people p ON p.principal = r.created_by
   LEFT JOIN governance_profiles gp ON gp.id = r.governance_profile_id
  WHERE a.id = $1`
 
-func (w *Worker) loadFacts(ctx context.Context, approvalID uuid.UUID) (approvalFacts, error) {
+// loadFacts also returns the leaf profile's stored contact, raw: it is read only to resolve a
+// profile_contact target and is never sent as is.
+func (w *Worker) loadFacts(ctx context.Context, approvalID uuid.UUID) (approvalFacts, []byte, error) {
 	f := approvalFacts{ApprovalID: approvalID}
+	var contact []byte
 	err := w.pool.QueryRow(ctx, factsSQL, approvalID).Scan(
-		&f.State, &f.Kind, &f.RequestedAt, &f.RunID, &f.Principal, &f.Email, &f.ProfileID, &f.ProfileName)
-	return f, err
+		&f.State, &f.Kind, &f.RequestedAt, &f.RunID, &f.Principal, &f.Email, &f.ProfileID, &f.ProfileName, &contact)
+	return f, contact, err
+}
+
+// recipients resolves the notify targets of the tier this row belongs to. The route is found again
+// from the approval's kind and leaf profile, which the boot config fixes, so it is the route Plan
+// used. A target with no address is skipped. profile_contact takes policyref.Project's Email, which
+// re-validates the stored contact and drops a field that no longer passes.
+func (w *Worker) recipients(c claimed, f approvalFacts, contact []byte) []recipient {
+	r := w.cfg.route(f.Kind, f.ProfileID)
+	if r == nil || int(c.tier) >= len(r.Tiers) || !slices.Contains(r.Tiers[c.tier].Channels, c.channel) {
+		return nil
+	}
+	var out []recipient
+	for _, target := range r.Tiers[c.tier].Notify {
+		var email string
+		switch target {
+		case TargetRunOwner:
+			email = f.Email
+		case TargetProfileContact:
+			var ct policyref.Contact
+			if len(contact) > 0 && json.Unmarshal(contact, &ct) == nil {
+				if ref := policyref.Project(policyref.SourceProfile, f.ProfileName, &ct); ref != nil {
+					email = ref.Email
+				}
+			}
+		}
+		if email != "" {
+			out = append(out, recipient{Role: target, Email: email})
+		}
+	}
+	return out
 }
 
 // outcome is how a claimed row ends this attempt.
@@ -165,7 +201,7 @@ type outcome struct {
 }
 
 func (w *Worker) process(ctx context.Context, c claimed) {
-	facts, err := w.loadFacts(ctx, c.approvalID)
+	facts, contact, err := w.loadFacts(ctx, c.approvalID)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		w.finalize(ctx, c, nil, outcome{state: types.NotifyCancelled})
@@ -185,7 +221,9 @@ func (w *Worker) process(ctx context.Context, c claimed) {
 		w.finalize(ctx, c, &facts, outcome{state: types.NotifyDead, class: classUnknownChannel})
 		return
 	}
-	body, err := buildPayload(c.id, c.tier, facts, w.console, w.masks.Masker(facts.RunID))
+	facts.Recipients = w.recipients(c, facts, contact)
+	facts.RedactRequester = ch.RedactRequester
+	body, err := ch.render(c.id, c.tier, facts, w.console, w.masks.Masker(facts.RunID))
 	if err != nil {
 		w.finalize(ctx, c, &facts, outcome{state: types.NotifyDead, class: classStore})
 		return

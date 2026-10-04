@@ -5,6 +5,8 @@ package broker
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"sync"
 	"testing"
 
@@ -160,5 +162,70 @@ func TestPG_EnsureApproval_NotifyOffWritesNoRows(t *testing.T) {
 	}
 	if rows := outboxRows(ctx, t, pool, runID); rows != 0 {
 		t.Fatalf("outbox rows = %d with notifications off, want 0", rows)
+	}
+}
+
+// TestPG_EnsureApproval_RoutesByTheRunsLeafProfileAndEnqueuesEveryTier: the credential path reads the
+// run's profile in the approval's transaction, so a profile route matches and its tiers are all
+// enqueued with their due_at; a run on no profile matches no route and enqueues nothing.
+func TestPG_EnsureApproval_RoutesByTheRunsLeafProfileAndEnqueuesEveryTier(t *testing.T) {
+	pool := pgPool(t)
+	ctx := context.Background()
+	profileID := uuid.New()
+	cfg, err := notify.Parse(`{"channels":[
+		{"id":"hook","type":"webhook","url":"http://127.0.0.1:9/x"},
+		{"id":"mail","type":"webhook","url":"http://127.0.0.1:9/y"}],
+		"routes":[{"kinds":["credential"],"profiles":["` + profileID.String() + `"],"tiers":[
+			{"after":"0s","channels":["hook"]},
+			{"after":"45m","channels":["hook","mail"]}]}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notify.SetActive(cfg, nil)
+	t.Cleanup(func() { notify.SetActive(nil, nil) })
+	b := New(NewPgxStore(pool), nil, &fakeAudit{}, nil, nil)
+
+	profiled, plain := uuid.New(), uuid.New()
+	seedRun(ctx, t, pool, profiled)
+	seedRun(ctx, t, pool, plain)
+	if _, err := pool.Exec(ctx, `INSERT INTO governance_profiles (id, name, ceiling) VALUES ($1, $2, '{}')`, profileID, "routed-"+profileID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET governance_profile_id = $1 WHERE id = $2`, profileID, profiled); err != nil {
+		t.Fatal(err)
+	}
+
+	grantID, spec := gatedGrant(ctx, t, pool, profiled)
+	ap, err := b.ensureApproval(ctx, grantID, profiled, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT n.tier, n.channel, round(extract(epoch FROM n.due_at - a.requested_at))::int
+		  FROM approval_notifications n JOIN approvals a ON a.id = n.approval_id
+		 WHERE n.approval_id = $1 ORDER BY n.tier, n.channel`, ap.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var tier, secs int
+		var ch string
+		if err := rows.Scan(&tier, &ch, &secs); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprintf("%d/%s/%d", tier, ch, secs))
+	}
+	if want := []string{"0/hook/0", "1/hook/2700", "1/mail/2700"}; !slices.Equal(got, want) {
+		t.Fatalf("rows = %v, want %v", got, want)
+	}
+
+	grantID, spec = gatedGrant(ctx, t, pool, plain)
+	if _, err := b.ensureApproval(ctx, grantID, plain, spec); err != nil {
+		t.Fatal(err)
+	}
+	if n := outboxRows(ctx, t, pool, plain); n != 0 {
+		t.Fatalf("a run on no profile got %d outbox rows, want 0", n)
 	}
 }

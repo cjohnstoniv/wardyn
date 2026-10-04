@@ -45,6 +45,7 @@ set is the ONLY writable set:
 | `anthropic_api_key`, `anthropic_subscription`, `bedrock`, `openai_api_key` | Left the closed set in 0.8 — see "Model access is not an integration" above |
 | Generic kinds (`"jira"`, `"artifactory"`, …) | A 0.5 carry-over — no longer writable, though a row stored under an earlier release still loads, still sits in `SiteConfig`, and is still injected by `internal/api/integrations_run.go` |
 | `azure_openai` | Gone as a kind (also a 0.5 carry-over) |
+| `azure_foundry` | A model-provider kind, not an integration kind: each person's own Entra sign-in for one Azure Foundry resource. See "Azure Foundry" below |
 
 ## Where it's configured
 
@@ -171,6 +172,47 @@ owner's own key, token or sign-in, or by nothing.
   from an operator secret either (`recordSessionModelAccess`,
   `internal/api/record_model_provider.go`).
 
+## Azure Foundry (`azure_foundry`)
+
+An `azure_foundry` model provider sends a run's model calls to one Azure Foundry endpoint. It uses the
+launching person's own Entra sign-in. No key or token is ever in the sandbox. The harness holds the
+inert `wardyn-proxy-injected` sentinel. The proxy terminates TLS for the endpoint with the run's own
+certificate authority and attaches the person's token. The control plane redeems that token for the
+provider's one audience (`resolveAzureFoundryInjection`, `internal/api/injection_azure.go`).
+
+- **One row, one route, one audience.** Route `anthropic` serves the Messages harness (`claude-code`)
+  and signs in for the Foundry audience. Route `openai_v1` serves `codex-cli` and signs in for the
+  Cognitive Services audience. Each harness entry names its deployment (`model`). The Messages harness
+  may name a second deployment for its small-model alias (`fast_model`).
+- **Admin prerequisite.** The sign-in is the console's own Entra login application, so the install needs
+  Entra console login. Grant that application the delegated permission for the row's audience, with
+  admin consent. Without it every sign-in fails with `consent_required`.
+- **What dispatch writes into the sandbox.** The env names the endpoint and the deployments. The
+  Messages harness gets `CLAUDE_CODE_USE_FOUNDRY`, the `ANTHROPIC_FOUNDRY_*` variables and the
+  `ANTHROPIC_DEFAULT_*_MODEL` variables, and never `ANTHROPIC_API_KEY`. Codex gets
+  `WARDYN_CODEX_BASE_URL`, `WARDYN_CODEX_MODEL` and `CODEX_API_KEY`.
+- **What dispatch writes into the proxy.** The endpoint goes on the exact egress allowlist and is
+  TLS-terminated. A route gate holds the token to that route's inference calls on the pinned
+  deployments. The host is also marked as a model host, so the content scanner reads its dialect.
+  `/anthropic/v1/messages` is scanned. `/openai/v1/responses` is reported as uninspected, which
+  `require_inspectable_llm` refuses. The endpoint is never a gateway upstream, so the brokered
+  `/wardyn/llm/*` routes never reach it.
+- **Two private-endpoint knobs.** The proxy's private-address guard refuses an endpoint that resolves
+  to a private address. `internal_hosts` lifts the guard for that host. `upstream_proxy_no_proxy` is a
+  separate setting. It matters only when a corporate proxy is configured, and it does not lift the
+  guard. A provider write warns when the endpoint resolves privately with no `internal_hosts` entry.
+- **The requested model can still change.** A repo config or the interactive model picker can ask for
+  a model other than the pinned deployment. The route gate refuses that request with
+  `azure_route_refused`. The run's own `model` setting is only a default.
+- **When the sign-in ends mid-run.** A revoked refresh token holds the run's model request on a
+  sign-in request (HTTP 423, `credential_reauth`). So does a Conditional Access policy that asks for
+  the person. The hold ends when the person signs in to that provider again. A failure at boot fails
+  the run with the remedy as its hint.
+- **Conditional Access.** Wardyn renews the sign-in from the control plane's address. A policy that
+  needs the person's device or a fresh challenge cannot be satisfied there. The refusal names the class
+  Entra reported: multi-factor authentication, device compliance, an approved client, or a blocked
+  sign-in. No policy class is promised to work, and continuous access evaluation is not supported.
+
 ## What the New Run rail states
 
 The right-hand "What this run can do" panel is read, not asserted. Two of
@@ -188,8 +230,9 @@ credential lands, with no click:
 - Where several providers serve the agent and none is the default, the
   rail asks which.
 - Where no provider serves the agent it reads "Resolved at launch." and an
-  invitation to press **Preflight**, which dry-runs the exact body Launch
-  would send.
+  invitation to press **Check again**. Preflight runs on its own as the run
+  is edited; the button dry-runs the exact body Launch would send, and Launch
+  is blocked by a refusal for the current body graded under 60s ago.
 - With no model provider connected at all the rail shows the no-provider
   warning instead.
 - A run that makes no model call (a shell command) shows no Credentials

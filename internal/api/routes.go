@@ -91,7 +91,8 @@ func (s *Server) routes() chi.Router {
 			//   mountPermissionRoutes  (this file)  securityOps
 			//   mountAccountRoutes     (this file)  securityOps
 			//   adminRoutes            (this file)  one per group, plus
-			//       mountUserTypeRoutes (user_types.go) securityOps
+			//       mountUserTypeRoutes (user_types.go) securityOps, and
+			//       mountKeyDomainRoutes (key_domains.go) securityOps
 			//   mountLibraryRoutes     (sources.go) operatorOnly (+ member reads on r)
 			//   mountSetupMutationRoutes            operatorOnly
 			//   mountAccessRoutes      (access.go)  operatorOnly
@@ -193,7 +194,9 @@ func (s *Server) routes() chi.Router {
 			// Dry-run of the create-run resolution + gating: same resolveRunPolicy
 			// chokepoint (real 4xx errors), the enforced confinement class, and the
 			// deterministic setup checklist — mints/persists/dispatches nothing. The
-			// manual wizard fires it on the Review step (advisory, non-gating).
+			// New Run fires it on its own as the body settles. Advisory on the server: it never
+			// refuses a launch itself, but the console holds Launch over a refusal this
+			// endpoint gave for the exact same body less than 60 seconds ago.
 			r.Post("/runs/preflight", s.handlePreflightRun)
 			r.Get("/runs", s.handleListRuns)
 			r.Get("/runs/{id}", s.handleGetRun)
@@ -807,6 +810,9 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// security-tier duty as authoring a governance profile; deciding who IS a
 	// type stays on the operatorOnly /access routes.
 	s.mountUserTypeRoutes(securityOps)
+	// Key domains (migration 0121): which declared domain a person's next
+	// principal-key generation is wrapped under.
+	s.mountKeyDomainRoutes(securityOps)
 	// Sandbox sweep. SUPER, and the reason matters because an operator deciding
 	// who to trust with RoleSecurityAdmin reads exactly these lines: the sweep
 	// drives the RUNNER — Status then StopSandbox — across every run in the

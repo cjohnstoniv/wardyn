@@ -22,7 +22,7 @@ func TestContainersMatchEffectiveResources(t *testing.T) {
 			if a.NanoCPUs != sz.AgentCPULimitMillis*1_000_000 || a.Memory != sz.AgentMemoryLimitMiB<<20 {
 				t.Errorf("res %+v: agent %d nanos / %d bytes, sizing %+v", res, a.NanoCPUs, a.Memory, sz)
 			}
-			p := proxyResources()
+			p := proxyResources(false)
 			if p.NanoCPUs != sz.ProxyCPUMillis*1_000_000 || p.Memory != sz.ProxyMemoryMiB<<20 {
 				t.Errorf("proxy %d nanos / %d bytes, sizing %+v", p.NanoCPUs, p.Memory, sz)
 			}

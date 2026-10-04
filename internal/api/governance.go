@@ -259,7 +259,7 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 		})))
 	writeJSON(w, status, governanceProfileResponse{
 		Profile:  saved,
-		Warnings: governanceOmissionWarnings(saved.Ceiling, s.cfg.DefaultPolicy),
+		Warnings: governanceOmissionWarnings(saved.Ceiling, s.cfg.DefaultPolicy, saved.Limits),
 	})
 }
 

@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -23,6 +24,23 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// podDeadlineGrace is added to Config.RunMaxAge to make a run pod's
+// activeDeadlineSeconds. The control plane's own max-age stop fires first and
+// tears the run down; the deadline is the backstop for a run whose control
+// plane is gone, so the grace only has to outlast the reaper's scan interval.
+const podDeadlineGrace = 10 * time.Minute
+
+// activeDeadline returns the pod deadline for Config.RunMaxAge, or nil when no
+// max age is set. activeDeadlineSeconds fails a pod and deletes nothing: the
+// reconciler finalizes the run from the failed pod and tears the rest down.
+func (d *Driver) activeDeadline() *int64 {
+	if d.cfg.RunMaxAge <= 0 {
+		return nil
+	}
+	secs := int64((d.cfg.RunMaxAge + podDeadlineGrace) / time.Second)
+	return &secs
+}
 
 // proxyConfigSecretKey is the Secret data key CreateSandbox writes the proxy
 // config JSON under.
@@ -206,6 +224,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	proxyPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: proxyPodName(spec.RunID), Namespace: ns},
 		Spec: corev1.PodSpec{
+			ActiveDeadlineSeconds:        d.activeDeadline(),
 			AutomountServiceAccountToken: boolPtr(false),
 			// FSGroup makes proxyConfigSecretFileMode's group-read bit effective
 			// for the init container; without it, "permission denied".
@@ -226,7 +245,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 					{Name: proxyConfigStagedVolumeName, MountPath: proxyConfigStagedMountDir},
 				},
 				SecurityContext: restrictedSecurityContext(),
-				Resources:       proxyResources(),
+				Resources:       proxyResources(false),
 				// The binary logs its refusal to stderr, not /dev/termination-log;
 				// without this proxyStartFailure's error names no cause.
 				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
@@ -245,7 +264,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 					{Name: proxyConfigStagedVolumeName, MountPath: proxyConfigStagedMountDir, ReadOnly: true},
 				},
 				SecurityContext:          restrictedSecurityContext(),
-				Resources:                proxyResources(),
+				Resources:                proxyResources(len(spec.ProxyConfig.AzureGates) > 0),
 				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 			}},
 			Volumes: []corev1.Volume{
@@ -278,7 +297,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		proxyPod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
 	}
 	d.placement.apply(proxyPod, spec.RunID, componentProxy, spec.Labels)
-	if _, err := d.clientset.CoreV1().Pods(ns).Create(ctx, proxyPod, metav1.CreateOptions{}); err != nil {
+	createdProxy, err := d.clientset.CoreV1().Pods(ns).Create(ctx, proxyPod, metav1.CreateOptions{})
+	if err != nil {
 		return fail(fmt.Errorf("k8s: create proxy pod: %w", err))
 	}
 
@@ -300,8 +320,13 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			slog.Int64("pids_limit", spec.Resources.PidsLimit), slog.String("run_id", spec.RunID.String()))
 	}
 	agentPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: agentPodName(spec.RunID), Namespace: ns},
+		// The agent is owned by the proxy pod, so deleting the proxy by any route (Destroy, the
+		// sweep, kubectl, a node drain) garbage-collects the agent with it. The reference needs the
+		// proxy's UID, which exists now; the reverse (proxy owned by agent) cannot be set at create.
+		// No BlockOwnerDeletion: that would need an extra permission on pods/finalizers.
+		ObjectMeta: metav1.ObjectMeta{Name: agentPodName(spec.RunID), Namespace: ns, OwnerReferences: ownedByPod(createdProxy)},
 		Spec: corev1.PodSpec{
+			ActiveDeadlineSeconds:        d.activeDeadline(),
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
 			EnableServiceLinks:           boolPtr(false), // SECURITY: same service-topology-leak reason as the proxy pod above.
@@ -361,6 +386,15 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		d.execOutputs.Store(agentPodName(spec.RunID), spec.ExecOutput)
 	}
 	return runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced}, nil
+}
+
+// ownedByPod is the ownerReference list that makes a pod owned by owner, or nil when the API
+// returned no UID (a real API server always does; a UID-less reference would be refused).
+func ownedByPod(owner *corev1.Pod) []metav1.OwnerReference {
+	if owner == nil || owner.UID == "" {
+		return nil
+	}
+	return []metav1.OwnerReference{{APIVersion: "v1", Kind: "Pod", Name: owner.Name, UID: owner.UID}}
 }
 
 // addMainContainerVolumes attaches vols to pod and mounts them on the MAIN

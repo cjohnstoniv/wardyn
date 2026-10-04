@@ -114,6 +114,8 @@ type Proxy struct {
 	// adoGrants answers the run's Azure DevOps grant per host for the REST gate
 	// (ado_gate.go). Nil == no host gated.
 	adoGrants adoGrantsByHost
+	// azure is the run's Azure route gates (azure_gate.go). Nil == no host gated.
+	azure *azureGates
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -215,6 +217,9 @@ type Proxy struct {
 	// recognised as LLM traffic (coverage/classification only — the SSRF vet
 	// for the gateway host lives in gatewayTarget, not here).
 	gatewayVendor map[string]string
+	// channelHosts is host -> vendor for the hosts classified as model hosts without being gateways
+	// (llm_channel_hosts.go).
+	channelHosts map[string]string
 
 	now func() time.Time
 }
@@ -268,6 +273,8 @@ type Options struct {
 	BrokeredPATGrantIDs []uuid.UUID
 	// ADOGrants backs the Azure DevOps REST gate (ado_gate.go). Nil == off.
 	ADOGrants adoGrantsByHost
+	// AzureGates backs the Azure route gate (azure_gate.go). Empty == off.
+	AzureGates []AzureGateConfig
 	// ControlPlaneURL and RunToken back the local brokered routes. The run
 	// token is injected only toward the control plane and never reaches the
 	// sandbox or any LLM upstream.
@@ -305,6 +312,8 @@ type Options struct {
 	// gateway base URL (Config.LLMUpstreams, forwarded verbatim). Empty == every
 	// brokered LLM route dials the vendor host. See Proxy.llmUpstreams.
 	LLMUpstreams map[string]string
+	// LLMChannelHosts is Config.LLMChannelHosts, forwarded verbatim.
+	LLMChannelHosts map[string]string
 	// LLMUnavailableDetail is the control-plane's reason the brokered-LLM 404
 	// gives when no credential is behind the route (Config.LLMUnavailableDetail,
 	// forwarded verbatim). Empty == the generic route sentence. See llm404Detail.
@@ -446,6 +455,7 @@ func newProxy(opts Options) *Proxy {
 		patGrants:            patGrants,
 		brokeredPATGrantIDs:  opts.BrokeredPATGrantIDs,
 		adoGrants:            opts.ADOGrants,
+		azure:                newAzureGates(opts.AzureGates),
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      strings.TrimRight(opts.ControlPlaneURL, "/"),
 		runToken:             opts.RunToken,
@@ -461,6 +471,7 @@ func newProxy(opts Options) *Proxy {
 		pushHolds:            pushHolds{unattended: opts.Unattended},
 		attribution:          opts.Attribution,
 		gatewayVendor:        gatewayVendor,
+		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),
 		dial:                 dial,
 		now:                  now,
 	}
@@ -847,7 +858,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Never a blind tunnel to an Azure DevOps grant host (refuseADOTunnel).
-	if p.refuseADOTunnel(w, r, host, port) {
+	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) {
 		return
 	}
 

@@ -6,6 +6,7 @@
 // Pointer helpers for the terminal copy specs: the user's drag, double-click
 // and triple-click over xterm's grid, addressed by cell.
 import type { Locator, Page } from "@playwright/test";
+import { termRows } from "./terminal-text";
 
 export interface Grid {
   cols: number;
@@ -30,9 +31,7 @@ export async function cellPoint(screen: Locator, grid: Grid, col: number, row: n
 
 /** The row index, on the visible screen, of the first row whose text matches. */
 export async function rowOf(screen: Locator, re: RegExp): Promise<number> {
-  const i = await screen
-    .locator(".xterm-rows > div")
-    .evaluateAll((els, src) => els.findIndex((e) => new RegExp(src).test(e.textContent ?? "")), re.source);
+  const i = (await termRows(screen)).findIndex((r) => re.test(r));
   if (i < 0) throw new Error(`no screen row matches ${re}`);
   return i;
 }

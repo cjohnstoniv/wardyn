@@ -85,6 +85,8 @@ type RunCapacity struct {
 	ByOwnerTruncated   bool                         `json:"by_owner_truncated"`
 	Unschedulable      []RunCapacityUnschedulable   `json:"unschedulable"`
 	UnschedulableTotal int                          `json:"unschedulable_total"`
+	// OldestActiveSeconds is the age since created_at of the oldest holding run (0 when none).
+	OldestActiveSeconds int64 `json:"oldest_active_seconds"`
 }
 
 // RunCapacityOpts parameterises RunCapacity. CurrentKind is the deployment's runner kind; Totals
@@ -241,6 +243,9 @@ func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, er
 			}
 		}
 		out.AgeBuckets[bi].Count++
+		if sec := int64(age / time.Second); sec > out.OldestActiveSeconds {
+			out.OldestActiveSeconds = sec
+		}
 
 		if state == string(types.RunStarting) && o.UnschedulableReason != nil {
 			if reason := o.UnschedulableReason(detail); reason != "" {

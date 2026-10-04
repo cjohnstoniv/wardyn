@@ -38,6 +38,9 @@ type llmTransport struct {
 	// whose credential can lapse mid-run and be recovered by a person signing
 	// in (see internal/api/injection_awssso.go).
 	injectBedrockSSO bool
+	// azure is the resolved azure_foundry lane: the endpoint host whose person-held Entra token the
+	// proxy injects (authorAzureInjection). Nil on every other kind.
+	azure *providerAzureLane
 	// provider is the model provider this run chose and whose owner's own
 	// credential its arm authors; nil when no provider serves the run. A
 	// Bedrock provider's arm also fills the bedrock* fields above, so every
@@ -393,6 +396,9 @@ type dispatchLLMPlan struct {
 	// (authorProviderSubscriptionInjection) — all three are mutually exclusive
 	// per run, so one slice is safe.
 	bedrockMITMHosts []string
+	// azure is the azure_foundry lane's share of the proxy config: its MITM entry (a fourth producer
+	// beside the artifact, Bedrock and Azure DevOps ones), its route gate and its channel host.
+	azure azurePlan
 	// llmUnavailableDetail is the self-explaining detail the proxy's brokered-LLM
 	// 404 renders when this run reaches that route with no credential behind it
 	// (mpNoProviderDetail). Empty => the route's own generic detail.
@@ -456,7 +462,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// trust-store wiring.
 	mitmForInspect := llmInspectMITMEnabled(policy)
 	var mitmCACertPEM, mitmCAKeyPEM string
-	if llm.providerSubscription() || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject {
+	if llm.providerSubscription() || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject || llm.azureInject() {
 		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
 			return dispatchLLMPlan{}, false
 		}
@@ -502,6 +508,15 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		bedrockMITMHosts = append(bedrockMITMHosts, ssoMITMHosts...)
 	}
 
+	// The azure_foundry lane's grant, MITM entry, route gate and channel host. Same stop-on-failure
+	// contract; it needs the per-run CA minted above and refuses a run that has none.
+	var azure azurePlan
+	if llm.azureInject() {
+		if injections, azure, ok = s.authorAzureInjection(ctx, run, llm, mitmCACertPEM, mitmCAKeyPEM, policy, injections); !ok {
+			return dispatchLLMPlan{}, false
+		}
+	}
+
 	// Artifact-redirect token injections (authored in planArtifactRedirect, whose
 	// egress substitution already added each corp host to policy.AllowedDomains, so
 	// the injector's exact-allowlist check passes). Appended AFTER the grant
@@ -527,6 +542,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		llm: llm, injections: injections,
 		mitmCACertPEM: mitmCACertPEM, mitmCAKeyPEM: mitmCAKeyPEM,
 		bedrockMITMHosts:     bedrockMITMHosts,
+		azure:                azure,
 		mitmLLM:              llm.providerSubscription() || mitmForInspect,
 		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams,
 	}, true

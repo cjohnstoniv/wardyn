@@ -43,7 +43,7 @@ this same JSON through this same validator — there is no separate UI schema.
 - **The run screen's Custom policy.** An `inline_policy` on the create-run
   request, member-authored — this editor carries no operator gate.
   `composer.Clamp` is the enforcement net, and a member's clamp warnings are
-  visible before launch via the **Preflight** button (`POST /runs/preflight`).
+  visible before launch: preflight (`POST /runs/preflight`) runs on its own as the run is edited, and the **Check again** button runs it on demand. Launch is blocked by a refusal for the current body graded under 60s ago.
 - **"Make a policy from this run"**, on a run's detail page. Synthesizes a
   policy from that run's observed behavior via `handleSynthesizeProfile` (`POST
   /runs/{id}/profile/synthesize`) — the honest home for "write the policy from what

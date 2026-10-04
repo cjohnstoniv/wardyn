@@ -213,8 +213,12 @@ func TestAttachPromotion_WebObserverPromotedInPlace(t *testing.T) {
 
 	// The capability, not the announcement: its keystrokes now reach the PTY on
 	// the socket it already had — no reconnect anywhere in this test.
+	promotedSess := waitForSession(t, fr, 2)
 	wsWrite(t, c2, websocket.MessageBinary, []byte("echo promoted\r"))
-	waitFor(t, "the promoted client's keystrokes to reach the sandbox", func() bool { return observed.written() > 0 })
+	waitFor(t, "the promoted client's keystrokes to reach the sandbox", func() bool { return promotedSess.written() > 0 })
+	if n := observed.written(); n != 0 {
+		t.Errorf("the promoted client's keystrokes reached its old observer exec (%d writes)", n)
+	}
 
 	promo := waitForActorAudit(t, audit, run.ID, "session.promote", holderSecond)
 	for _, want := range []string{`"previous_holder":"` + holderOwner + `"`, `"principal":"` + holderSecond + `"`, `"source":"web"`} {
@@ -283,8 +287,12 @@ func TestAttachPromotion_TakeoverPromotesOnlyTheTaker(t *testing.T) {
 		if m.ReadOnly || m.Holder == nil || m.Holder.Principal != holderOwner {
 			t.Fatalf("the taker's own socket was not promoted in place: read_only=%v holder=%+v", m.ReadOnly, m.Holder)
 		}
+		promotedSess := waitForSession(t, fr, 2)
 		wsWrite(t, c2, websocket.MessageBinary, []byte("mine now\r"))
-		waitFor(t, "the taker's keystrokes to reach the sandbox", func() bool { return observed.written() > 0 })
+		waitFor(t, "the taker's keystrokes to reach the sandbox", func() bool { return promotedSess.written() > 0 })
+		if n := observed.written(); n != 0 {
+			t.Errorf("the taker's keystrokes reached its old observer exec (%d writes)", n)
+		}
 		if ev := waitForActorAudit(t, audit, run.ID, "session.promote", holderOwner); !strings.Contains(string(ev.Data), `"previous_holder":"`+holderSecond+`"`) {
 			t.Errorf("session.promote data = %s, want previous_holder %s", ev.Data, holderSecond)
 		}
@@ -408,8 +416,12 @@ func TestAttachPromotion_TakeoverPromotesOnlyTheTaker(t *testing.T) {
 		if got := srv.attachHolderFor(run.ID); got == nil || got.principal != holderOwner {
 			t.Fatalf("attachHolderFor = %+v, want the taker %s — not the older bystander", got, holderOwner)
 		}
+		promotedSess := waitForSession(t, fr, 3)
 		wsWrite(t, cT, websocket.MessageBinary, []byte("mine now\r"))
-		waitFor(t, "the taker's keystrokes to reach the sandbox", func() bool { return taker.written() > 0 })
+		waitFor(t, "the taker's keystrokes to reach the sandbox", func() bool { return promotedSess.written() > 0 })
+		if n := taker.written(); n != 0 {
+			t.Errorf("the taker's keystrokes reached its old observer exec (%d writes)", n)
+		}
 
 		// B stays read-only: its keystroke is dropped (ping barrier: the server
 		// answers from the read loop that consumed it) and no promotion frame
@@ -458,6 +470,9 @@ func TestAttachPromotion_SSHObserverPromoted(t *testing.T) {
 		t.Fatal("the web client was told it is read-only")
 	}
 	waitFor(t, "the web writer to register", func() bool { return srv.attachHolderFor(run.ID) != nil })
+	// The writer registers before its exec opens: wait for that exec, so it is
+	// Attach 0 and the ssh observer's is Attach 1.
+	waitForSession(t, fr, 0)
 
 	ch := newFakeSSHChannel()
 	resizeCh := make(chan sshWindowChangeMsg, 1)
@@ -474,6 +489,9 @@ func TestAttachPromotion_SSHObserverPromoted(t *testing.T) {
 	if n := observed.resizeCount(); n != 0 {
 		t.Fatalf("the ssh observer resized the shared tmux window (%d resizes) before it held anything", n)
 	}
+	if o := fr.attachOpts(1); !o.Observer || o.Cols != 80 || o.Rows != 24 {
+		t.Fatalf("the ssh observer attach options = %+v, want an observer seeded at the web writer's 80x24", o)
+	}
 
 	if err := c1.Close(websocket.StatusNormalClosure, "done"); err != nil {
 		t.Fatalf("close the web writer's socket: %v", err)
@@ -482,13 +500,21 @@ func TestAttachPromotion_SSHObserverPromoted(t *testing.T) {
 	waitFor(t, "the promoted ssh client to be told", func() bool {
 		return strings.Contains(ch.stderrString(), "you now hold this terminal")
 	})
-	waitFor(t, "the promoted ssh client's own geometry to be applied", func() bool { return observed.resizeCount() > 0 })
+	// Promotion re-attaches: a writer exec (no ignore-size) is opened at the ssh
+	// client's own 120x40, and the observer's exec is closed.
+	promotedSess := waitForSession(t, fr, 2)
+	if o := fr.attachOpts(2); o.Observer || o.Cols != 120 || o.Rows != 40 {
+		t.Fatalf("the promoted ssh client's writer exec options = %+v, want a writer at its own 120x40", o)
+	}
 	if v := srv.attachHolderFor(run.ID).view(); !v.Held || v.Principal != holderSecond || v.Source != attachSourceSSH || v.Cols != 120 {
 		t.Fatalf("attach-holder = %+v, want the promoted ssh client %s at 120 cols", v, holderSecond)
 	}
 
 	ch.clientSend("echo promoted\n")
-	waitFor(t, "the promoted ssh client's keystrokes to reach the sandbox", func() bool { return observed.written() > 0 })
+	waitFor(t, "the promoted ssh client's keystrokes to reach the sandbox", func() bool { return promotedSess.written() > 0 })
+	if n := observed.written(); n != 0 {
+		t.Errorf("the promoted ssh client's keystrokes reached its old observer exec (%d writes)", n)
+	}
 
 	_ = ch.Close()
 	select {

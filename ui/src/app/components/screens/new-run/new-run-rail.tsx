@@ -37,11 +37,13 @@ import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { ADO } from "../../../lib/ado-entra-copy";
 import type { SCMAccessPAT } from "../../../lib/types/ado-pat";
 import { PEOPLE } from "../../../lib/people-access-copy";
-import { NO_BARRIER, RAIL, RAIL_PROVIDER, RAIL_RECORDING_ON, RAIL_SETUP, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
+import { NO_BARRIER, RAIL, RAIL_CHECK, RAIL_PROVIDER, RAIL_RECORDING_ON, RAIL_SETUP, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { useOperator, useUserViewSuperAdmin } from "../../wardyn/operator-context";
 import { useViewAccess } from "../../wardyn/console-view";
 import { RailSection } from "./new-run-primitives";
+import { PolicyRemedy } from "../../wardyn/policy-remedy";
+import type { PolicyRef } from "../../../lib/api/health";
 import { CredentialFacts, ModelProviderSection } from "./new-run-rail-credentials";
 import type { ProviderGate } from "./model-provider-lane";
 import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
@@ -56,6 +58,10 @@ interface RunRailProps {
    * unassigned member's rail is byte-for-byte what it was.
    */
   governanceProfile?: string;
+  /** GET /me's governance_contact: who owns the policy bounding this caller and
+   *  how to ask for a change. Rendered beside the profile line; absent or null
+   *  renders nothing. */
+  governanceContact?: PolicyRef | null;
   /** The stored policy this run launches by reference, when there is one. */
   savedPolicy?: { name: string; spec: RunPolicySpec };
   /** The barrier the run requests (a separate wire field from the spec floor). */
@@ -88,6 +94,10 @@ interface RunRailProps {
     inFlight: boolean;
     /** Why Launch cannot be pressed — a disabled button that won't say is a dead end. */
     problem: string | null;
+    /** A fresh server refusal for THIS body holds Launch (use-launch's
+     *  preflightBlock). No text of its own: the preflight alert below already
+     *  shows the server's sentence, or the `problem` line the folded rows use. */
+    preflightBlock?: boolean;
     /** An action that rides on the `problem` line (f-f5: "Connect →"). */
     problemLink?: { to: string; label: string };
     /** #922 review F5: an ADDITIONAL disable with no text of its own — the
@@ -105,6 +115,9 @@ interface RunRailProps {
     /** Bumped on every failed launch (see use-launch.ts) so a repeated,
      *  identical failure remounts the alert region and is re-announced (#459). */
     errorSeq: number;
+    /** The launch refusal's `policy` (the error envelope), for the Request
+     *  access remedy under the alert. */
+    policy?: PolicyRef;
     /** The server refused this launch for the caller's own model credential (a
      *  422 carrying reason `model_credential`) — the one refusal a sign-in
      *  repairs, so the rail answers it with the door and launches again. */
@@ -124,6 +137,10 @@ interface RunRailProps {
     /** Preflight's own model-credential refusal: the body it graded and the
      *  provider it names, "" when none. */
     refusal?: { body: string; provider: string } | null;
+    /** A check is in flight (M1 S3). */
+    checking?: boolean;
+    /** The current body's last check was a 429 (M1 S3). */
+    notChecked?: boolean;
     error: string | null;
     /** Same remount purpose as launch.errorSeq, for the preflight alert. */
     errorSeq: number;
@@ -253,6 +270,7 @@ export function pushRulesIsSet(s: PushRulesSpec | undefined): boolean {
 
 export function RunRail({
   governanceProfile,
+  governanceContact,
   savedPolicy,
   cc,
   showModelWarning,
@@ -308,7 +326,10 @@ export function RunRail({
   // The door opens here, and the same launch fires again the moment the sign-in
   // lands, so a lapsed session costs one dialog rather than a trip to Getting
   // started. Launch stays the server's decision: nothing is pre-checked on the
-  // cached status, which can be five minutes stale. Once per click: a relaunch
+  // cached status, which can be five minutes stale. The one exception is
+  // preflight's own answer for this exact body: a 4xx it gave less than a minute
+  // ago (never model_credential, never a 429) holds Launch (preflightBlock).
+  // Once per click: a relaunch
   // refused again (a pin contradiction the same identity cannot repair) leaves
   // the sentence and waits for the person. Never over a door someone else
   // opened: openDoor overwrites the opener, and the strip's focus contract
@@ -476,6 +497,7 @@ export function RunRail({
                 {governanceProfile && (
                   <p className="mt-1 text-xs text-muted-foreground">{AUTONOMY_RAIL.PROFILE_LINE(governanceProfile)}</p>
                 )}
+                <PolicyRemedy policy={governanceContact} className="mt-1 block" />
               </>
             ) : (
               <p className="text-xs text-muted-foreground">
@@ -594,6 +616,7 @@ export function RunRail({
           </span>
         </p>
       )}
+      {launch.error && <PolicyRemedy policy={launch.policy} className="mt-1 block" />}
 
       {/* Preflight lives on the Policy panel, next to the document it checks —
           one button, not two competing ones. Its result stays here, beside
@@ -607,7 +630,7 @@ export function RunRail({
           ref={launchRef}
           type="button"
           className="flex-1"
-          disabled={launch.disabled || !!launch.problem || !!launch.workspaceUnavailable || !!launch.noBarrier}
+          disabled={launch.disabled || !!launch.problem || !!launch.workspaceUnavailable || !!launch.noBarrier || !!launch.preflightBlock}
           onClick={() => {
             autoOpened.current = false;
             clickArm.current = { body: bodyRef.current };
@@ -681,6 +704,19 @@ export function RunRail({
               </Link>
               .
             </>
+          )}
+        </p>
+      )}
+
+      {(preflight.checking || preflight.notChecked) && (
+        <p data-testid="preflight-check-state" className="mt-2 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+          {preflight.checking ? (
+            <>
+              <Loader2 className="size-3 animate-spin" />
+              {RAIL_CHECK.CHECKING}
+            </>
+          ) : (
+            RAIL_CHECK.NOT_CHECKED
           )}
         </p>
       )}

@@ -29,6 +29,8 @@ vi.mock("@xterm/xterm", () => {
     onBinary() {
       return { dispose() {} };
     }
+    modes = { mouseTrackingMode: "none" };
+    attachCustomWheelEventHandler() {}
     attachCustomKeyEventHandler() {}
     dispose() {}
   }
@@ -43,8 +45,6 @@ vi.mock("@xterm/addon-fit", () => ({
   },
 }));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
-vi.mock("@fontsource/jetbrains-mono/latin-400.css", () => ({}));
-vi.mock("@fontsource/jetbrains-mono/latin-ext-400.css", () => ({}));
 // No admin token: an operator on a cookie session takes the cookie lane, the
 // one that opens the socket directly.
 vi.mock("../lib/api/core", async (importOriginal) => ({

@@ -5,10 +5,12 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -277,10 +279,11 @@ func TestGovernanceOmissionWarnings(t *testing.T) {
 		DeniedDomains:       []string{"internal.corp.example"},
 		MinConfinementClass: types.CC2,
 		EligibleGrants:      []types.GrantSpec{{Kind: types.GrantAPIKey}},
+		Resources:           &types.ResourceLimits{CPUMillis: 1000, MemoryMiB: 2048},
 	}
 
 	t.Run("a faithful copy warns about nothing", func(t *testing.T) {
-		if got := governanceOmissionWarnings(deployment, deployment); len(got) != 0 {
+		if got := governanceOmissionWarnings(deployment, deployment, types.GovernanceLimits{}); len(got) != 0 {
 			t.Errorf("warnings = %v, want none for a ceiling identical to the deployment default", got)
 		}
 	})
@@ -293,7 +296,7 @@ func TestGovernanceOmissionWarnings(t *testing.T) {
 			MinConfinementClass: types.CC1,            // weaker than the deployment's
 			EligibleGrants:      []types.GrantSpec{},  // drops the api_key lane
 		}
-		got := governanceOmissionWarnings(profile, deployment)
+		got := governanceOmissionWarnings(profile, deployment, types.GovernanceLimits{})
 		for _, want := range []string{
 			"internal.corp.example",      // the dropped deny
 			"files.pythonhosted.org",     // the dropped allow
@@ -318,8 +321,72 @@ func TestGovernanceOmissionWarnings(t *testing.T) {
 		profile := deployment
 		profile.DeniedDomains = []string{"internal.corp.example", "also.blocked.example"}
 		profile.MinConfinementClass = types.CC3
-		if got := governanceOmissionWarnings(profile, deployment); len(got) != 0 {
+		if got := governanceOmissionWarnings(profile, deployment, types.GovernanceLimits{}); len(got) != 0 {
 			t.Errorf("warnings = %v, want none: adding a deny and raising confinement omits nothing", got)
+		}
+	})
+}
+
+// TestOmitResourcesWarning pins mock packet M10's resources sentence byte for byte.
+func TestOmitResourcesWarning(t *testing.T) {
+	deployment := &types.ResourceLimits{CPUMillis: 1000, MemoryMiB: 2048}
+	none := types.GovernanceLimits{}
+
+	t.Run("no CPU names only the CPU", func(t *testing.T) {
+		got := omitResourcesWarning(&types.ResourceLimits{MemoryMiB: 512}, deployment, none)
+		want := "this profile sets no sandbox CPU — runs under it get the deployment's 1000m CPU"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+	t.Run("no memory names only the memory", func(t *testing.T) {
+		got := omitResourcesWarning(&types.ResourceLimits{CPUMillis: 500}, deployment, none)
+		want := "this profile sets no sandbox memory — runs under it get the deployment's 2048 MiB memory"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+	t.Run("both missing reads sandbox size", func(t *testing.T) {
+		want := "this profile sets no sandbox size — runs under it get the deployment's 1000m CPU and 2048 MiB memory"
+		if got := omitResourcesWarning(nil, deployment, none); got != want {
+			t.Errorf("nil resources: got %q, want %q", got, want)
+		}
+		if got := omitResourcesWarning(&types.ResourceLimits{}, deployment, none); got != want {
+			t.Errorf("zero resources: got %q, want %q", got, want)
+		}
+	})
+	t.Run("a limit that cuts the inherited value is named", func(t *testing.T) {
+		got := omitResourcesWarning(nil, deployment, types.GovernanceLimits{MaxCPUMillis: 500, MaxMemoryMiB: 1024})
+		want := "this profile sets no sandbox size — runs under it get the deployment's 1000m CPU and 2048 MiB memory" +
+			", capped at 500m CPU and 1024 MiB memory by this profile's limits"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+		got = omitResourcesWarning(nil, deployment, types.GovernanceLimits{MaxCPUMillis: 500, MaxMemoryMiB: 4096})
+		want = "this profile sets no sandbox size — runs under it get the deployment's 1000m CPU and 2048 MiB memory" +
+			", capped at 500m CPU by this profile's limits"
+		if got != want {
+			t.Errorf("one cut: got %q, want %q", got, want)
+		}
+	})
+	t.Run("a limit on a field the profile sets is not named", func(t *testing.T) {
+		got := omitResourcesWarning(&types.ResourceLimits{CPUMillis: 500}, deployment, types.GovernanceLimits{MaxCPUMillis: 100})
+		want := "this profile sets no sandbox memory — runs under it get the deployment's 2048 MiB memory"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+	t.Run("no deployment resources falls back to the effective default", func(t *testing.T) {
+		eff := runner.EffectiveLimits()
+		want := fmt.Sprintf("this profile sets no sandbox size — runs under it get the deployment's %dm CPU and %d MiB memory",
+			eff.CPUMillis, eff.MemoryMiB)
+		if got := omitResourcesWarning(nil, nil, none); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+	t.Run("a profile that sets both says nothing", func(t *testing.T) {
+		if got := omitResourcesWarning(&types.ResourceLimits{CPUMillis: 500, MemoryMiB: 512}, deployment, none); got != "" {
+			t.Errorf("got %q, want none", got)
 		}
 	})
 }

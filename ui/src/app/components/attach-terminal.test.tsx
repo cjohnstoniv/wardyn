@@ -42,6 +42,8 @@ vi.mock("@xterm/xterm", () => {
     // mount; the keyboard-trap-escape behaviour itself is pinned in
     // attach-terminal-interaction.test.tsx, so this mock only needs to accept
     // the call without throwing.
+    modes = { mouseTrackingMode: "none" };
+    attachCustomWheelEventHandler() {}
     attachCustomKeyEventHandler() {}
     dispose() {}
   }
@@ -57,8 +59,6 @@ vi.mock("@xterm/addon-fit", () => {
   return { FitAddon };
 });
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
-vi.mock("@fontsource/jetbrains-mono/latin-400.css", () => ({}));
-vi.mock("@fontsource/jetbrains-mono/latin-ext-400.css", () => ({}));
 // Force SSO mode (no admin token) so the component actually opens a WebSocket.
 // importOriginal, not a bare stub: the component now needs the REAL HttpError
 // class, because a 409 from take-over ("nobody is attached") is a distinct
@@ -337,6 +337,27 @@ describe("AttachTerminal — role-aware attach", () => {
     );
     expect(await screen.findByText(RUN_OWNER_ONLY)).toBeInTheDocument();
     expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  // deny-f4: the refused state carries the run's own policy contact, from
+  // GET /runs/{id}, beside the sentence it never rewords.
+  it("refused state shows the Request access remedy from the run's policy, and none without one", async () => {
+    const policy = { source: "profile", owner: "Platform Security", request_url: "https://example.com/access" };
+    const { unmount } = render(
+      <OperatorProvider operator={false} principal="alice@example.com">
+        <AttachTerminal runId="run_1" createdBy="bob@example.com" policy={policy} />
+      </OperatorProvider>,
+    );
+    expect(await screen.findByText(RUN_OWNER_ONLY, { exact: false })).toBeInTheDocument();
+    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Owned by Platform Security · Request access");
+    unmount();
+    render(
+      <OperatorProvider operator={false} principal="alice@example.com">
+        <AttachTerminal runId="run_1" createdBy="bob@example.com" />
+      </OperatorProvider>,
+    );
+    expect(await screen.findByText(RUN_OWNER_ONLY, { exact: false })).toBeInTheDocument();
+    expect(screen.queryByTestId("policy-remedy")).toBeNull();
   });
 
   // P1: a member's own run must reach its terminal even when the login pane

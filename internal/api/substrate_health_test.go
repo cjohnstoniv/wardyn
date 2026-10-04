@@ -184,8 +184,8 @@ func TestSubstrateHealth_AuthStatesAreRunnerAuth(t *testing.T) {
 			if row.Status != "fail" || row.Cause != "runner_auth" || row.Blocking {
 				t.Fatalf("row = %+v, want fail/runner_auth and not Blocking", row)
 			}
-			if !strings.Contains(row.Detail, string(tc.state)) {
-				t.Errorf("detail %q does not name the classified state %q", row.Detail, tc.state)
+			if strings.Contains(row.Detail, string(tc.state)) {
+				t.Errorf("detail %q names the classified state %q, which the canon does not", row.Detail, tc.state)
 			}
 			assertNoBlockingCheck(t, st)
 		})
@@ -296,11 +296,11 @@ func TestSubstrateHealthCheck_Grades(t *testing.T) {
 		{"runner and sweeps fine", runner.SubstrateOK, true, fresh, true, "ok", "", ""},
 		{"stale sweep warns", runner.SubstrateOK, true, stale, true, "warn", "sweep_stale", "credential_expiry"},
 		{"runner unreachable fails", runner.SubstrateUnreachable, true, fresh, true, "fail", "runner_unreachable", ""},
-		{"runner failure outranks a stale sweep and names it", runner.SubstrateForbidden, true, stale, true, "fail", "runner_auth", "credential_expiry"},
+		{"runner failure outranks a stale sweep", runner.SubstrateForbidden, true, stale, true, "fail", "runner_auth", ""},
 		{"sweeps only", "", false, stale, true, "warn", "sweep_stale", "credential_expiry"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			chk, ok := substrateHealthCheck("k8s", tc.state, tc.haveRunner, tc.sweeps)
+			chk, ok := substrateHealthCheck(tc.state, tc.haveRunner, tc.sweeps)
 			if ok != tc.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
 			}
@@ -402,5 +402,39 @@ func TestHealthSweeps_StartConditions(t *testing.T) {
 	both := New(Config{AdminToken: adminToken, Runner: &fakeRunner{}, ImageBuilder: &sweepableImageBuilder{}}).HealthSweeps()
 	if len(both) != 2 || both[1].Name != sweephealth.OrphanedBuild || both[1].Interval != buildSweepInterval {
 		t.Fatalf("with a sweeping builder: %+v, want orphaned_build at %s", both, buildSweepInterval)
+	}
+}
+
+// SETUP_CHECK.SUBSTRATE_HEALTH (M10 §3), byte for byte: the label, the ok
+// detail and, for each failing cause, the detail and the Fix.
+func TestSubstrateHealthCheck_CanonCopy(t *testing.T) {
+	stale := []sweephealth.Status{
+		{Sweep: sweephealth.Sweep{Name: sweephealth.CredentialExpiry, Interval: 24 * time.Hour}, Stale: true},
+		{Sweep: sweephealth.Sweep{Name: sweephealth.RunSecret, Interval: 15 * time.Minute}, Stale: true},
+	}
+	fresh := []sweephealth.Status{{Sweep: sweephealth.Sweep{Name: sweephealth.RunSecret, Interval: 15 * time.Minute}}}
+	for _, tc := range []struct {
+		name       string
+		state      runner.SubstrateState
+		sweeps     []sweephealth.Status
+		detail, fx string
+	}{
+		{"ok", runner.SubstrateOK, fresh, "The runner answers, and every background sweep is on time.", ""},
+		{"unreachable", runner.SubstrateUnreachable, fresh,
+			"Wardyn can't reach the sandbox runner, so new runs can't start.",
+			"Check the runner: the Docker daemon on this host, or the Kubernetes API from the wardynd pod."},
+		{"auth", runner.SubstrateForbidden, fresh,
+			"The sandbox runner refuses Wardyn's credentials, so new runs can't start.",
+			"On Kubernetes, the chart's runner Role and RoleBinding must exist in the runs namespace; `helm upgrade` restores them."},
+		{"sweep stale", runner.SubstrateOK, stale,
+			"These background sweeps haven't succeeded for three of their intervals: `" + sweephealth.CredentialExpiry + "`, `" + sweephealth.RunSecret + "`. What they stop, expire or clean up waits until they run again.",
+			"Check wardynd's logs for the named sweeps; `wardyn_sweep_last_tick_seconds` shows when each last succeeded."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chk, ok := substrateHealthCheck(tc.state, true, tc.sweeps)
+			if !ok || chk.Label != "Runner health" || chk.Detail != tc.detail || chk.Fix != tc.fx {
+				t.Fatalf("check = %+v, want label %q, detail %q, fix %q", chk, "Runner health", tc.detail, tc.fx)
+			}
+		})
 	}
 }

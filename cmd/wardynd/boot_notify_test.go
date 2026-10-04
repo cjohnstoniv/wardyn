@@ -15,7 +15,7 @@ import (
 // pool is never touched, no worker.
 func TestStartApprovalNotify_UnsetInstallsNothing(t *testing.T) {
 	notify.SetActive(nil, nil)
-	if err := startApprovalNotify(context.Background(), "", nil, nil, nil); err != nil {
+	if err := startApprovalNotify(context.Background(), "", nil, nil, nil, 0); err != nil {
 		t.Fatalf("unset config refused boot: %v", err)
 	}
 	if notify.Enabled() {
@@ -31,8 +31,19 @@ func TestStartApprovalNotify_RefusesBadConfigWithoutEchoingIt(t *testing.T) {
 		`{"channels":[{"id":"chat","type":"carrier-pigeon","url":"https://h.example.com/SECRETPATH","hmac_secret":"HMACVALUE"}]}`,
 		`{"channels":[{"id":"hook","type":"webhook","url":"http://h.example.com/SECRETPATH","hmac_secret":"HMACVALUE"}]}`,
 		`{"channels":[{"id":"hook","type":"webhook","url":"::SECRETPATH"`,
+		`{"channels":[{"id":"chat","type":"teams","url":"http://h.example.com/SECRETPATH?sig=HMACVALUE"}]}`,
+		`{"channels":[{"id":"chat","type":"slack","url":"http://h.example.com/SECRETPATH"}]}`,
+		// route refusals: unknown channel reference, unknown kind, non-ascending tiers, too many tiers,
+		// and run_owner on a channel that redacts the requester
+		`{"channels":[{"id":"hook","type":"webhook","url":"http://h.example.com/SECRETPATH"}],"routes":[{"tiers":[{"after":"0s","channels":["ghost"]}]}]}`,
+		`{"channels":[{"id":"hook","type":"webhook","url":"http://h.example.com/SECRETPATH"}],"routes":[{"kinds":["ghost"],"tiers":[{"after":"0s","channels":["hook"]}]}]}`,
+		`{"channels":[{"id":"hook","type":"webhook","url":"http://h.example.com/SECRETPATH"}],"routes":[{"tiers":[{"after":"5m","channels":["hook"]},{"after":"1m","channels":["hook"]}]}]}`,
+		`{"channels":[{"id":"hook","type":"webhook","url":"http://h.example.com/SECRETPATH"}],"routes":[{"tiers":[` +
+			`{"after":"0s","channels":["hook"]},{"after":"1s","channels":["hook"]},{"after":"2s","channels":["hook"]},` +
+			`{"after":"3s","channels":["hook"]},{"after":"4s","channels":["hook"]},{"after":"5s","channels":["hook"]}]}]}`,
+		`{"channels":[{"id":"hook","type":"webhook","url":"http://h.example.com/SECRETPATH","redact_requester":true}],"routes":[{"tiers":[{"after":"0s","channels":["hook"],"notify":["run_owner"]}]}]}`,
 	} {
-		err := startApprovalNotify(context.Background(), raw, nil, nil, nil)
+		err := startApprovalNotify(context.Background(), raw, nil, nil, nil, 0)
 		if err == nil {
 			t.Fatalf("config accepted: %s", raw)
 		}

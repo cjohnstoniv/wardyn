@@ -36,6 +36,10 @@ type (
 	// AddSSHKey.
 	SSHPublicKey = types.SSHPublicKey
 
+	// PersonSummary is one row of ListPeople; PersonList is one page of it.
+	PersonSummary = types.PersonSummary
+	PersonList    = types.PersonList
+
 	// Device is one enrolled laptop in the organisation's inventory (no
 	// credential material). Returned by ListDevices.
 	Device = types.Device

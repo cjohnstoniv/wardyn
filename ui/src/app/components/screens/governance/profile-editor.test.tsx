@@ -9,7 +9,7 @@
 // boolean LimitRows and the save/cancel/error plumbing through the whole
 // screen; this file mounts the editor directly so the number rows don't need
 // a profiles table around them.
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -379,5 +379,85 @@ describe("ProfileEditor — Allowed barriers (T-7)", () => {
     const textarea = screen.getByLabelText("Spec (JSON)");
     fireEvent.change(textarea, { target: { value: "{ not json" } });
     expect(screen.getByRole("button", { name: "Vault" })).toBeDisabled();
+  });
+});
+
+// deny-f4 (mock packet M3 S5): the four access-request fields.
+// Each case renders the whole editor (policy panel, limit and run-limit rows,
+// rubric); that is about 1 s on a dev box and several times that on a loaded CI
+// runner, so this block gets an explicit budget instead of the 5 s default.
+describe("ProfileEditor — the Access requests section", { timeout: 20_000 }, () => {
+  beforeEach(() => {
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    gradePolicyMock.mockReset();
+    gradePolicyMock.mockResolvedValue({ overall_risk: "medium", risk_assessment: [] });
+    createProfileMock.mockReset();
+    updateProfileMock.mockReset();
+    updateProfileMock.mockResolvedValue({ profile: GREENFIELD, warnings: [] });
+  });
+
+  const WITH_CONTACT: GovernanceProfile = {
+    ...GREENFIELD,
+    contact: { owner: "Platform Security", email: "access@example.com", request_url: "https://example.com/access", request_text: "Include the run id." },
+  };
+
+  it("shows the stored contact under M3's labels", () => {
+    renderEditor(WITH_CONTACT);
+    expect(screen.getByText(GOV.CONTACT_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(GOV.CONTACT_LEAD)).toBeInTheDocument();
+    expect(screen.getByLabelText(GOV.CONTACT_OWNER)).toHaveValue("Platform Security");
+    expect(screen.getByLabelText(GOV.CONTACT_EMAIL)).toHaveValue("access@example.com");
+    expect(screen.getByLabelText(GOV.CONTACT_URL)).toHaveValue("https://example.com/access");
+    expect(screen.getByLabelText(GOV.CONTACT_TEXT)).toHaveValue("Include the run id.");
+  });
+
+  it("saves the four fields as typed, trimmed", async () => {
+    renderEditor(GREENFIELD);
+    const user = userEvent.setup();
+    // Set in one act, not typed key by key: every keystroke re-renders the
+    // whole editor, which is what pushed this past the test timeout on a
+    // loaded CI runner.
+    act(() => {
+      fireEvent.change(screen.getByLabelText(GOV.CONTACT_OWNER), { target: { value: "  Platform Security " } });
+      fireEvent.change(screen.getByLabelText(GOV.CONTACT_URL), { target: { value: "https://example.com/access" } });
+    });
+    await user.click(screen.getByRole("button", { name: GOV.SAVE }));
+    await waitFor(() => expect(updateProfileMock).toHaveBeenCalledTimes(1));
+    expect(updateProfileMock.mock.calls[0][1].contact).toEqual({
+      owner: "Platform Security",
+      request_url: "https://example.com/access",
+    });
+  });
+
+  it("refuses a javascript: request link client-side, before the server sees it", async () => {
+    renderEditor(GREENFIELD);
+    const user = userEvent.setup();
+    fireEvent.change(screen.getByLabelText(GOV.CONTACT_URL), { target: { value: "javascript:alert(1)" } });
+    await user.click(screen.getByRole("button", { name: GOV.SAVE }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Use an https: link or a single mailto: address, with nothing after it.");
+    expect(updateProfileMock).not.toHaveBeenCalled();
+    expect(createProfileMock).not.toHaveBeenCalled();
+  });
+
+  it("clears a stored contact with null when every field is emptied, and omits it when there was none", async () => {
+    renderEditor(WITH_CONTACT);
+    const user = userEvent.setup();
+    // Emptied in one act, so the heavy editor re-renders once, not four times.
+    act(() => {
+      for (const label of [GOV.CONTACT_OWNER, GOV.CONTACT_EMAIL, GOV.CONTACT_URL, GOV.CONTACT_TEXT]) {
+        fireEvent.change(screen.getByLabelText(label), { target: { value: "" } });
+      }
+    });
+    await user.click(screen.getByRole("button", { name: GOV.SAVE }));
+    await waitFor(() => expect(updateProfileMock).toHaveBeenCalledTimes(1));
+    expect(updateProfileMock.mock.calls[0][1].contact).toBeNull();
+  });
+
+  it("leaves contact off the request for a profile that never had one", async () => {
+    renderEditor(GREENFIELD);
+    await userEvent.setup().click(screen.getByRole("button", { name: GOV.SAVE }));
+    await waitFor(() => expect(updateProfileMock).toHaveBeenCalledTimes(1));
+    expect(updateProfileMock.mock.calls[0][1]).not.toHaveProperty("contact");
   });
 });

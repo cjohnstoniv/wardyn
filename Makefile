@@ -774,6 +774,17 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -A1 "name: WARDYN_VAULT_TOKEN_FILE" | grep -q '/vault/secrets/token' || { echo "secretStore.vault.auth=token-file did not render WARDYN_VAULT_TOKEN_FILE"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_VAULT_KV_PREFIX" | grep -q 'wardyn-ci' || { echo "secretStore.vault.kvPrefix did not render"; exit 1; }; \
 	echo "$$out" | grep -q "wardyn-vault-token" && { echo "token-file auth still projected the Kubernetes Vault token"; exit 1; } || true
+	@# metrics.serviceMonitor (o-o1): off by default (a default render holds no ServiceMonitor), and on
+	@# it renders exactly one, scraping the named http port at the base-pathed /metrics with the
+	@# operator's Secret as the bearer credential (the chart never creates that Secret).
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
+	[ "$$(echo "$$out" | grep -c 'kind: ServiceMonitor')" = "0" ] || { echo "default render (metrics.serviceMonitor.enabled=false) rendered a ServiceMonitor"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set basePath=/wardyn --set metrics.serviceMonitor.enabled=true --set metrics.serviceMonitor.bearerTokenSecret.name=wardyn-scrape --set metrics.serviceMonitor.bearerTokenSecret.key=token); \
+	[ "$$(echo "$$out" | grep -c '^kind: ServiceMonitor$$')" = "1" ] || { echo "metrics.serviceMonitor.enabled did not render exactly one ServiceMonitor"; exit 1; }; \
+	echo "$$out" | grep -q '^    - port: http$$' || { echo "ServiceMonitor does not target the named http port"; exit 1; }; \
+	echo "$$out" | grep -q 'path: "/wardyn/metrics"' || { echo "ServiceMonitor path is not /metrics under basePath"; exit 1; }; \
+	echo "$$out" | grep -A6 '^      authorization:$$' | grep -q 'name: "wardyn-scrape"' || { echo "ServiceMonitor does not carry the bearer Secret reference"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.serviceMonitor.enabled=true >/dev/null 2>&1 && { echo "ServiceMonitor rendered with no bearer Secret named — Prometheus would scrape unauthenticated"; exit 1; } || true
 	@# WARDYN_DAEMON_PROXY_SECRET from an operator Secret (#719): daemonProxySecret.existingSecret
 	@# mounts it read-only and wires WARDYN_DAEMON_PROXY_SECRET at the mounted path; a default
 	@# render (no daemonProxySecret set) touches none of it, and an env.WARDYN_DAEMON_PROXY_SECRET
@@ -910,6 +921,11 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.provider=azurekv --set kek.azurekv.key=https://kv1.vault.azure.net/keys/wardyn-kek --set kek.azurekv.signingKey=https://kv1.vault.azure.net/keys/wardyn-kek-sig --set secretStore.azure.tenantId=t --set secretStore.azure.clientId=client-1 --set kek.azurekv.keyPlatform=https://KV1.vault.azure.net/keys/Wardyn-KEK --set kek.azurekv.signingKeyPlatform=https://kv1.vault.azure.net/keys/wardyn-boot-sig --set secretStore.azure.clientIdPlatform=client-2 2>&1 | grep -q "other than kek.azurekv.key, kek.azurekv.signingKey and secretStore.azure.clientId" || { echo "chart no longer refuses a platform wrapping key equal to the credential key"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.provider=azurekv --set kek.azurekv.key=https://kv1.vault.azure.net/keys/wardyn-kek --set kek.azurekv.signingKey=https://kv1.vault.azure.net/keys/wardyn-kek-sig --set secretStore.azure.tenantId=t --set secretStore.azure.clientId=client-1 --set kek.azurekv.keyPlatform=https://kv1.vault.azure.net/keys/wardyn-boot --set kek.azurekv.signingKeyPlatform=https://kv1.vault.azure.net/keys/wardyn-boot-sig --set secretStore.azure.clientIdPlatform=CLIENT-1 2>&1 | grep -q "other than kek.azurekv.key, kek.azurekv.signingKey and secretStore.azure.clientId" || { echo "chart no longer refuses a platform client id equal to the credential client id"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.provider=azurekv --set kek.azurekv.key=https://kv1.vault.azure.net/keys/wardyn-kek --set kek.azurekv.signingKey=https://kv1.vault.azure.net/keys/wardyn-kek-sig --set secretStore.azure.tenantId=t --set secretStore.azure.clientId=client-1 --set kek.azurekv.keyPlatform=https://kv1.vault.azure.net/keys/wardyn-boot --set kek.azurekv.signingKeyPlatform=https://kv1.vault.azure.net/keys/wardyn-boot-sig 2>&1 | grep -q "are set together or not at all" || { echo "chart no longer refuses a platform pair with no platform client id"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set kek.domains.acme.transit.key=acme-keys --set kek.domains.acme.transit.role=wardyn-acme --set kek.domains.beta.azurekv.key=https://b.vault.azure.net/keys/w --set kek.domains.beta.azurekv.signingKey=https://b.vault.azure.net/keys/s) || { echo "kek.domains with two domains no longer renders"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_KEY_DOMAINS_FILE" | grep -q "key-domains/domains.json" || { echo "kek.domains did not render WARDYN_KEY_DOMAINS_FILE"; exit 1; }; \
+	echo "$$out" | grep "domains.json:" | grep -q "acme-keys" || { echo "kek.domains did not render the Transit domain into the ConfigMap"; exit 1; }; \
+	echo "$$out" | grep "domains.json:" | grep -q "keys/s" || { echo "kek.domains did not render the Key Vault domain into the ConfigMap"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set kek.domains.default.transit.key=k 2>&1 | grep -q "and never \"default\"" || { echo "chart no longer refuses a key domain named default"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.allowEphemeralAgeKey=true >/dev/null 2>&1 || { echo "secrets.allowEphemeralAgeKey no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set env.WARDYN_AGE_KEY=AGE-SECRET-KEY-EXAMPLE >/dev/null 2>&1 || { echo "an age identity wired through .Values.env no longer satisfies the refusal — the chart refuses a render that is actually fine"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set readinessProbe.path=/healthz | grep -q 'path: "/healthz"' || { echo "readinessProbe.path no longer pins the probe back to /healthz — an image <= 0.5.0 serves no /readyz, so the pod would never become Ready and the rollout would hang"; exit 1; }
@@ -1440,6 +1456,8 @@ ci: ## Daemon-free merge gate: every CI check that needs no daemon or service
 ui: ## Build the embedded web UI
 	@echo "Building embedded web UI..."
 	cd ui && pnpm install --frozen-lockfile && pnpm build
+	@# The e2e text-read seam (window.__wardynTerm) must never ship in the production bundle.
+	@! grep -rq __wardynTerm ui/dist || { echo "ui/dist carries the e2e-only __wardynTerm seam"; exit 1; }
 
 ui-typecheck: ## Typecheck the web UI (tsc --noEmit) and prove the live/demo/screenshots spec files LOAD
 	@echo "Typechecking web UI (tsc --noEmit)..."

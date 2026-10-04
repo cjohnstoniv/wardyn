@@ -179,6 +179,9 @@ export interface GovernanceProfileInput {
   name: string;
   ceiling: RunPolicySpec;
   limits: GovernanceLimits;
+  // Omitted keeps the stored contact; null clears it (internal/api: a PUT that
+  // omits `contact` keeps it, `null` or `{}` clears it).
+  contact?: PolicyContact | null;
 }
 
 // governanceProfileResponse: the saved row plus the OMISSION warnings the

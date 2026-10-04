@@ -16,6 +16,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   failing fast. `WARDYN_SANDBOX_START_TIMEOUT` (default 3 minutes) is now one absolute deadline across the
   proxy and agent pods, replacing the separate 90 second proxy bound. See "The start deadlines" in
   `docs/OPERATIONS.md`.
+- **The shipped `examples/policies/default.json` now sets `auto_stop_after_sec` to `3600`**, so a run idle for an hour is stopped.
+  Policies you already copied from it are unchanged. But the image's default `WARDYN_DEFAULT_POLICY` points at that file, so a
+  deployment that uses the shipped file as its default policy now stops idle runs on upgrade. To keep the old behaviour, point
+  `WARDYN_DEFAULT_POLICY` at a policy with `auto_stop_after_sec` set to `0`.
+  The shipped file is also the ceiling member runs are clamped to, so while it is in use a member's `auto_stop_after_sec` of `0`,
+  a negative value, or more than `3600` is capped to `3600` with a warning, including the `-1` that interactive and SSH sessions
+  use (admins are not clamped). On Kubernetes without metrics-server the CPU signal is off (see `/setup/status`), so a busy run
+  that makes no egress calls and has no attach is also stopped after an hour.
 - **Postgres 13+ required.** Migration `0107_pg13_floor` changes nothing; on a server older than 13 it
   refuses with a message naming the version, and the database is left exactly as 0.8.5 left it. Upgrade
   the database server first. Take a dump before this upgrade: the audit conversion that follows in this
@@ -67,6 +75,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   inherits the default policy's value, else the deployment default above. A profile that sets a size
   keeps it. Governance profiles also gain `limits.max_cpu_millis` and `limits.max_memory_mib` (0 is
   unlimited) to cap an assigned member's CPU and memory, and a negative `resources` field is now refused.
+  A profile that omits `disk_mib` also inherits the default policy's value; there is no platform default.
+- **Saving a profile that omits its sandbox size now says what its members get.** The save response
+  carries a sentence such as `this profile sets no sandbox size — runs under it get the deployment's
+  1000m CPU and 2048 MiB memory`, naming only the missing field and adding `, capped at … by this
+  profile's limits` when the profile's own maximums cut it. The Governance screen shows it under the
+  retitled note "Compared with the deployment ceiling".
 - **A run that is live when you upgrade is refused at five doors after the restart, until it ends.**
   0.8.6 commits each run's masking manifest at dispatch (below); a run dispatched by an earlier version has
   none, so after the upgrade restarts wardynd its recording upload, live attach, SSH shell, exec output and
@@ -119,6 +133,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   admin into the setup funnel: the `runner` row stays a `fail` but is not blocking, and points to the new row.
   The runner probe is one namespaced pod list of limit 1 on Kubernetes, which the chart's Role already grants,
   and a daemon ping on Docker. See `docs/operations/monitoring.md`.
+- **The console shows who owns a refusing policy and a Request access link.** A refused launch, a refused egress
+  decision on the run detail, the attach panel's refusal and the New Run rail's profile line show the owner and
+  one link, mail address or sentence, from the server's `policy` reference. A link is built only for `https:` or one
+  `mailto:` address, re-checked in the browser. The governance profile editor gains the four contact fields.
 - **Sandbox pods can be placed on the nodes the operator names.** `k8s.sandbox.{nodeSelector,tolerations,affinity,priorityClassName,podAnnotations,podLabels}`
   (chart) render to `WARDYN_K8S_SANDBOX_PLACEMENT`, and the agent pod, the proxy pod and the boot-time
   NetworkPolicy canary all take it, so the canary proves enforcement on the nodes runs use. wardynd refuses
@@ -183,6 +201,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   write) and `git_pat_narrowing_unsupported_host` (an Azure DevOps host, or a GitHub-brokered forge). The PAT
   itself is not narrowed. Upgrade the proxy image together with wardynd: an older proxy refuses the new
   `pat_grants` keys at start.
+- **Key domains (`WARDYN_KEY_DOMAINS_FILE`, chart `kek.domains`; migration `0121_key_domains`).** A domain
+  is a tenant of the key service, declared in deploy configuration only: a Transit key and an optional
+  Vault role, or a Key Vault key pair and an optional client id. A security admin assigns a user, a group or
+  everyone to a domain (`PUT`/`DELETE /api/v1/key-domains/assignments/{subject_type}/{subject}`, `GET
+  /api/v1/key-domains`), and that person's principal keys are wrapped under the domain's key, so a database
+  dump plus one domain's key exposes only that domain. Resolution is user, then group, then everyone, then
+  `default`; two groups in different domains refuse the new key by name. A reassignment applies to the next
+  generation: old keys stay in their domain and are never re-wrapped into another, and `wardynd
+  -rewrap-principal-keys` re-seals a person's credentials into the new generation. Every domain is proven at
+  boot, and boot refuses a domain that shares a key with another domain, the platform key or the credential
+  key, a Vault role under token-file auth or shared with `WARDYN_VAULT_ROLE`/`WARDYN_VAULT_ROLE_PLATFORM`, a
+  domain named `default` or malformed, a live key naming an undeclared domain (with the count and the
+  remedy), and a live key its domain no longer reaches. `wardynd -rewrap` and `-rotate-age-key` read the file;
+  `-rewrap` moves only the rotated domain's keys and reports a retirable key version per domain. New audit
+  actions `key_domain.assignment.set` and `key_domain.assignment.delete`, and new refusal reasons
+  `key_domain_unknown` and `key_domain_ambiguous_membership`. The migration also adds `principal_keys.superseded_at`
+  (a generation that is still readable but is no longer the one a write uses) and the table that holds the
+  groups of each person's last sign-in. Offboarding a domain is documented in
+  `docs/operations/secrets-and-keys.md`.
 - **The proxy refuses a raw mint of every `git_pat` grant id while the PAT broker is on.** The mint relay
   now answers `403` (`brokered:mint`) for any `git_pat` grant of the run, including grants shadowed by a
   same-host grant, vetoed, withheld for a brokered forge or Azure DevOps owner-only. Upgrade the proxy

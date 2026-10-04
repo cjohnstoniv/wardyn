@@ -57,6 +57,15 @@ func NewPlatformTransit(ctx context.Context, cfg Config, mount, key string) (*Tr
 	return newTransit(ctx, cfg, mount, key, "WARDYN_VAULT_TRANSIT_KEY_PLATFORM", "WARDYN_VAULT_ROLE_PLATFORM")
 }
 
+// NewDomainTransit is NewTransit for the key of one key domain
+// (WARDYN_KEY_DOMAINS_FILE); cfg.Role is the domain's own role, or the
+// credential role when the domain names none. It differs only in the setting
+// its refusals name.
+func NewDomainTransit(ctx context.Context, cfg Config, mount, key, domain string) (*Transit, error) {
+	where := fmt.Sprintf("key domain %q in WARDYN_KEY_DOMAINS_FILE", domain)
+	return newTransit(ctx, cfg, mount, key, where+" transit key", where+" transit role")
+}
+
 func newTransit(ctx context.Context, cfg Config, mount, key, keySetting, roleSetting string) (*Transit, error) {
 	if err := validSegments(mount); err != nil {
 		return nil, fmt.Errorf("WARDYN_VAULT_TRANSIT_MOUNT: %w", err)
