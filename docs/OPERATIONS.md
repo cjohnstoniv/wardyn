@@ -2133,7 +2133,8 @@ is reported as pending, with the held change named, and the rest of the file is 
 diff in a drawer; Approve is disabled on your own proposal. Nothing notifies an approver that a
 change is waiting, so name who looks, and how often, in your own runbook. There is at most one
 pending change per target: a second proposal at the same target is `409` `governance_change_pending`,
-which names the first and carries it in `pending_change`.
+which names the first and carries it in `pending_change`. A new profile's target is its name while its
+create waits, so creating the same name again (by `POST`, or `PUT` at any new id) meets the held create.
 
 **4. Expiry and stale changes.** A change nobody decides within the TTL reads as `expired` and cannot
 be approved (`409` `governance_change_not_pending`); propose it again. A change is `stale` (`409`
