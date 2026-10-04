@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -685,6 +686,97 @@ func TestPG_MaskStore_UnopenableLiveRowFencesRun(t *testing.T) {
 	e.read(t)
 	if !e.m.Covered(ctx, afterErase) {
 		t.Error("a replica that never cached a retired credential value fenced a run started after the erase")
+	}
+}
+
+// pausedKeys holds the first Key request until release is closed, after entered says it arrived:
+// a read that has its snapshot of the table and has not yet opened what it found.
+type pausedKeys struct {
+	maskstore.Keys
+	once             sync.Once
+	entered, release chan struct{}
+}
+
+func (k *pausedKeys) Key(ctx context.Context, owner, purpose string, version int) ([]byte, error) {
+	k.once.Do(func() {
+		close(k.entered)
+		select {
+		case <-k.release:
+		case <-ctx.Done():
+		}
+	})
+	return k.Keys.Key(ctx, owner, purpose, version)
+}
+
+// A read whose snapshot still has a credential value live, and that finds its key destroyed only
+// after a credentials erase retired that value, must not fence the run the person starts afterwards
+// under the next key generation: the value is retired, so no run started after the retirement can
+// hold it. Only runs a value that is still live can never be opened for are fenced.
+func TestPG_MaskStore_AStaleReadDoesNotFenceARunStartedAfterTheErase(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	k := localKEK(t)
+	ctx := t.Context()
+	a := newRegReplica(t, pool, k)
+	old := dispatchedRun(t, pool, a, regAlice)
+	if err := a.reg.AddGlobal(regAlice, "credential", time.Now(), []byte("old-global-credential-secret")); err != nil {
+		t.Fatal(err)
+	}
+
+	keys := &pausedKeys{Keys: subjectkeytest.Manager(pool, k), entered: make(chan struct{}), release: make(chan struct{})}
+	b := maskstore.New(pool, keys, secretmask.NewRegistry())
+	done := make(chan error, 1)
+	go func() { done <- b.Fresh(ctx, time.Now()) }()
+	select {
+	case <-keys.entered:
+	case <-time.After(5 * time.Second):
+		close(keys.release)
+		t.Fatal("the read never reached the key lookup")
+	}
+
+	// The credentials erase, in its order, while the read holds its snapshot: fence the person's
+	// runs, retire their credential values, destroy the key.
+	if _, err := a.m.FenceSubject(ctx, regAlice); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.reg.RetireOwnerGlobals(ctx, regAlice, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.keys.Destroy(ctx, regAlice, subjectkey.PurposeCred); err != nil {
+		t.Fatal(err)
+	}
+	later := dispatchedRun(t, pool, a, regAlice)
+	if err := a.m.Append(ctx, later, []byte("new-generation-secret-value")); err != nil {
+		t.Fatal(err)
+	}
+	if !a.m.Covered(ctx, later) {
+		t.Fatal("the run started after the erase is not covered before the stale read resumes")
+	}
+
+	close(keys.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	var oldFenced, laterFenced bool
+	for id, dst := range map[uuid.UUID]*bool{old: &oldFenced, later: &laterFenced} {
+		if err := pool.QueryRow(ctx, `SELECT fenced_at IS NOT NULL FROM run_mask_manifest WHERE run_id = $1`, id).Scan(dst); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var values int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM run_mask_values WHERE run_id = $1`, later).Scan(&values); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("old_run_fenced=%t post_erasure_run_fenced=%t new_manifest_values=%d", oldFenced, laterFenced, values)
+	if !oldFenced {
+		t.Error("the run from before the erase is not fenced")
+	}
+	if laterFenced || values != 1 {
+		t.Error("a stale read fenced the run started after the erase and deleted its manifest values")
+	}
+	c := newRegReplica(t, pool, k)
+	c.read(t)
+	if !c.m.Covered(ctx, later) {
+		t.Error("the run started after the erase is not covered on a replica that reads afterwards")
 	}
 }
 
