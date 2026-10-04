@@ -1,3 +1,7 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
 // Output flow control for one attach socket (ttyd's model). xterm's write
 // callback fires once a chunk has been parsed, so the bytes written but not yet
 // parsed are the backlog. Past HIGH the server is told to stop reading the

@@ -1,3 +1,7 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
 import { describe, expect, it } from "vitest";
 import { createOutputFlow, FLOW_HIGH_WATERMARK, FLOW_LOW_WATERMARK } from "./attach-terminal-flow";
 
