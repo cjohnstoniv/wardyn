@@ -90,6 +90,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   With no resources in the operator's governance ceiling, the default is also the cap on member-authored
   policy and profile resources, so requests above 1000m/2048Mi are cut on chart installs; to allow larger
   requests, set the knob back to 2000/4096 or set ceiling resources.
+  A `helm upgrade --reuse-values` from 0.8.5 or earlier carries no `runner` block (the previous release's
+  values replace the chart's), and the chart used to fail to render on it. It now renders, and with no
+  `runner.sandbox` set it emits no `WARDYN_SANDBOX_*` or `WARDYN_PROXY_*` sizing env at all, so the daemon
+  keeps its compiled-in 2000m/4096Mi: such an upgrade keeps the old size, not the new 1000m/2048Mi. Set the
+  `runner.sandbox` values to take the smaller size. A chart render against 0.8.5's values now runs in
+  `make helm-lint`.
 - **A profile that omits `resources` now gets the deployment's size.** Members under such a profile used
   to get the platform's 2000m/4096Mi; a profile that omits `resources`, or leaves a field zero, now
   inherits the default policy's value, else the deployment default above. A profile that sets a size

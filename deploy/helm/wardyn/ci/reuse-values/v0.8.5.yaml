@@ -1,0 +1,744 @@
+# Default values for the Wardyn control-plane chart.
+# These are the inputs the templates/ consume; every key here has a safe default.
+
+# Optional name overrides (leave empty to derive from the release/chart name).
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  # wardynd images are published to ghcr: every push to main → :latest +
+  # :sha-<7> (publish-image.yml); every vX.Y.Z release tag → the bare semver
+  # (release.yml, matching .Chart.AppVersion). The empty tag below resolves to
+  # .Chart.AppVersion — available on ghcr once that version's tag has been
+  # pushed (a maintainer dispatch with extra_tag backfills older releases).
+  # Until then, or with a private registry: --set image.tag=latest, or build +
+  # push your own (README.md "Build and push wardynd" has the exact commands).
+  repository: ghcr.io/cjohnstoniv/wardynd
+  pullPolicy: IfNotPresent
+  # Empty => .Chart.AppVersion.
+  tag: ""
+  # OPTIONAL digest pin, e.g. sha256:<64 hex>. Set it and the Deployment pulls
+  # `<repository>@<digest>` — an immutable reference, which is the distribution
+  # invariant scripts/check-image-pins.sh already enforces on every Dockerfile
+  # FROM and every compose image, and which this chart previously had no way to
+  # express (a digest in `tag` renders `repo:sha256:...`, a digest in
+  # `repository` renders `repo@sha256:...:<appVersion>`; both are unpullable, and
+  # the chart now refuses a digest that does not start with "sha256:").
+  # A non-empty `tag` is kept alongside it (`repo:tag@sha256:...`) rather than
+  # dropped — the digest is what is pulled either way. Empty (default) => the
+  # tag behaviour above, byte-identical to before.
+  digest: ""
+  # Names of imagePullSecrets for a private registry (list of {name: ...}).
+  pullSecrets: []
+
+# Leave at 1 — wardynd holds per-process state (see README /
+# docs/OPERATIONS.md#one-replica-by-construction). Anything higher is
+# REFUSED at render time by templates/deployment.yaml.
+replicas: 1
+
+# Override for the refusal above. The pin is a SAFETY control, not modesty: the
+# secret-masking registry (internal/secretmask) is in-memory per-process and
+# fails OPEN, so a second replica can persist a session recording with live
+# credentials in cleartext. Setting this true renders the manifest anyway and
+# accepts that.
+#
+# It lifts TWO controls, not one. Besides the render refusal, wardynd takes the
+# database's single-instance advisory lock at boot and refuses to start while
+# another instance holds it — the control that still applies when someone
+# `kubectl scale`s this Deployment behind the chart's back. true adds
+# `-allow-multi-instance` to the pod's args, so the second pod comes up instead
+# of exiting; leave it false and a hand-scaled replica fails closed on its own.
+allowMultiReplica: false
+
+# Readiness probe path. /readyz pings Postgres, so a dead DB takes the pod out
+# of the Service's endpoints; liveness and startup stay on /healthz either way.
+#
+# ONLY OVERRIDE THIS FOR AN OLD IMAGE. /readyz was added in 0.6, and the empty
+# image.tag above resolves to .Chart.AppVersion, which is 0.8.5 — so the default
+# install serves it. An image.tag PINNED at or below 0.5.0 does not: the probe
+# 404s forever, the pod never becomes Ready, and the rollout hangs with no other
+# symptom. Pin it back with `--set readinessProbe.path=/healthz` and accept
+# 0.5.0's ceiling: a dead Postgres then reads healthy again.
+readinessProbe:
+  path: /readyz
+
+# Sub-path the console, API, sign-in and health endpoints are served under
+# behind a reverse proxy (WARDYN_BASE_PATH), e.g. "/wardyn": a leading slash,
+# no trailing slash. The probes above follow it (readinessProbe.path stays
+# relative to it). Empty (default) serves at the host root. An ingress in
+# front forwards the path unchanged; see docs/OPERATIONS.md "Serving the
+# console under a sub-path".
+basePath: ""
+
+service:
+  type: ClusterIP
+  # port is the ONE exception to ".Values.env renders inline, verbatim" (this
+  # file's own top-of-file doc): templates/deployment.yaml passes
+  # `-listen=:{{ .Values.service.port }}` as an explicit container ARG, and a
+  # command-line flag always wins over the env-derived default FlagEnv sets
+  # (cmd/wardynd/main.go parses the flag AFTER reading the env). So an
+  # env.WARDYN_LISTEN (or extraEnv WARDYN_LISTEN) override renders onto the
+  # pod but is INERT — wardynd still binds whatever service.port says. Change
+  # the listen port here, not through env.WARDYN_LISTEN (B12b-F10).
+  port: 8080
+  # internalPort is wardynd's proxy-facing TLS listener (-internal-listen,
+  # WARDYN_INTERNAL_LISTEN): every run's proxy resolves credentials and calls
+  # /api/v1/internal/* here, over TLS pinned to wardynd's OWN internal CA. The
+  # CA is minted into wardynd's secret store on first boot (beside its signing
+  # key, age-encrypted in Postgres) — no Secret, no cert-manager, nothing to
+  # rotate by hand. WARDYN_CONTROL_PLANE_URL is rendered as https on this port.
+  # Never expose it through an Ingress.
+  internalPort: 8443
+
+# Optional Ingress fronting the console's HTTP port only (never `ui` or
+# `ssh` — see the "Console Ingress" / "UI sandbox gateway" / "Split SSH
+# exposure" README sections). Off by default — every cluster's ingress
+# controller / class / TLS story differs too much for the chart to guess a
+# working default. Gateway API HTTPRoute is deferred: no Gateway controller
+# in this chart's CI to exercise it against.
+#
+# Managed laptops (deploy/desktop's m' envelope) also enrol through THIS
+# Ingress — POST /api/v1/devices/enrol has no separate listener, so it has
+# to be reachable at whatever host you set below (README "Console Ingress").
+ingress:
+  enabled: false
+  className: ""
+  # The setup connectivity probe is one HTTP request that can legitimately
+  # take up to 90s (a sandbox launch + two curls + the recording upload).
+  # ingress-nginx's default proxy-read-timeout is 60s, so without an override
+  # the console gets a 504 instead of the verdict, e.g.:
+  #   nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+  # (use your controller's equivalent).
+  annotations: {}
+  hosts: []
+  # hosts:
+  #   - host: wardyn.example.com
+  #     paths:
+  #       - path: /
+  #         pathType: Prefix
+  tls: []
+  # tls:
+  #   - hosts: ["wardyn.example.com"]
+  #     secretName: wardyn-tls
+
+serviceAccount:
+  # Create a dedicated ServiceAccount for wardynd (recommended).
+  create: true
+  # Name to use; generated from the fullname when empty. With k8s.enabled=true
+  # AND create=false, this must be set explicitly — the chart refuses to
+  # render otherwise (templates/rbac.yaml): the k8s-runner RBAC binding would
+  # otherwise silently fall to the namespace's "default" ServiceAccount,
+  # handing pods/exec + secrets/networkpolicies create-delete to every other
+  # pod in the namespace that also uses it.
+  name: ""
+  annotations: {}
+  # wardynd does not call the API server in v0.x, so the projected token is
+  # unnecessary attack surface — do not auto-mount it by default. Applied on the
+  # POD spec too, so the posture also holds when create=false and you bring your
+  # own ServiceAccount (whose own automount default is true).
+  automount: false
+
+postgres:
+  # Postgres DSN wiring. TWO modes (see templates/secret.yaml):
+  #   1. External Secret (recommended): set dsn.secretRef.name to a Secret you
+  #      created out-of-band; the chart references it and creates no Secret.
+  #   2. Inline demo: leave dsn.secretRef.name empty and set dsn.value; the
+  #      chart creates "<fullname>-secrets" (demo-grade — DSN lands in the
+  #      release history, do not use beyond a laptop).
+  dsn:
+    # Key (within the Secret) that holds the DSN string. wardynd reads WARDYN_PG_DSN.
+    key: dsn
+    secretRef:
+      # Name of an EXISTING Secret holding the DSN under `key` above.
+      # Empty => the chart creates one from `value` below.
+      name: wardyn-postgres-dsn
+    # Inline DSN, used only when secretRef.name is empty.
+    value: ""
+
+auth:
+  # Admin bearer token gating the ENTIRE public API. Without it (and without
+  # OIDC) wardynd 401s every route while /healthz still reports Ready, so the
+  # chart REFUSES TO RENDER until one of these is set (templates/secret.yaml).
+  # Two modes, mirroring postgres.dsn and chosen independently of it:
+  #   1. External Secret (recommended): set adminToken.secretRef.name to a
+  #      Secret you created out-of-band carrying the token under `key`.
+  #   2. Inline demo: leave secretRef.name empty and set adminToken.value; the
+  #      chart creates "<fullname>-auth" (token lands in the release history).
+  # Running OIDC instead? Leave both empty and set env.WARDYN_OIDC_ISSUER —
+  # PLUS one of env.WARDYN_OIDC_OPERATOR_EMAILS, env.WARDYN_OIDC_ROLE_MAP or
+  # env.WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true. The issuer alone is refused at
+  # render, because wardynd refuses to BOOT on it (an empty operator list makes
+  # every human the IdP signs in admin-equivalent), so the incomplete recipe
+  # would apply cleanly and then crash-loop. An empty string is not "set".
+  adminToken:
+    key: admin-token
+    secretRef:
+      name: ""
+    value: ""
+  # Declare SSO the ONLY way into the console. Requires env.WARDYN_OIDC_ISSUER
+  # (plus WARDYN_OIDC_OPERATOR_EMAILS or WARDYN_OIDC_ROLE_MAP) and refuses to
+  # render — same as wardynd itself refuses to boot (validateSSOOnlyPosture,
+  # cmd/wardynd/boot_posture.go) — alongside adminToken above, or
+  # env.WARDYN_LOCAL_MODE / WARDYN_USER_DESKTOP (deprecated alias WARDYN_MEMBER_MODE,
+  # removed in 0.9) / WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST.
+  ssoOnly: false
+
+secrets:
+  # age X25519 identity (AGE-SECRET-KEY-...) for the secret store. Empty =>
+  # wardynd generates an ephemeral key at boot (secrets do not persist a restart).
+  # INLINE MODE ONLY: it both fills the chart-created Secret and is what injects
+  # WARDYN_AGE_KEY, so with an external postgres.dsn.secretRef the chart fails
+  # the render rather than silently dropping it — use ageKeyFromSecret there.
+  ageKey: ""
+  # Set true when your EXTERNAL Secret (postgres.dsn.secretRef) ALSO carries an
+  # "age-key" entry you want injected as WARDYN_AGE_KEY. REQUIRED whenever
+  # postgres.dsn.secretRef.name is set (persistent Postgres) — the chart refuses
+  # to render otherwise, because at the default (false, ephemeral key) the pod
+  # crash-loops on its SECOND restart, unable to decrypt what the first boot
+  # encrypted — and no key set afterwards recovers those rows. Wiring the key through env/extraEnv counts too, and
+  # allowEphemeralAgeKey below is the deliberate opt-out. See README
+  # "Database (DSN)".
+  ageKeyFromSecret: false
+  # Wire WARDYN_AGE_KEY from a SEPARATE, chart-unmanaged Secret — for an
+  # operator-owned Secret (e.g. one a Postgres operator manages, that would
+  # reject an extra "age-key" key added to it) that isn't postgres.dsn's
+  # own. Counts as wired for the refusal below just like ageKeyFromSecret.
+  # Mutually exclusive with ageKeyFromSecret/ageKey — the chart refuses a
+  # render naming two sources, since silently booting under whichever one
+  # wins is worse than a render that never happens.
+  ageKeySecretRef:
+    name: ""
+    key: age-key
+  # Render an external-DSN install with an EPHEMERAL age identity anyway. The
+  # combination above is refused by templates/secret.yaml because it is not a
+  # trade-off, it is a scheduled outage: the pod crash-loops on its second start
+  # and the secrets the first boot wrote are unrecoverable. Same "I accept the
+  # ceiling" escape hatch as allowMultiReplica — for a throwaway install where
+  # losing every stored secret on restart is genuinely fine.
+  allowEphemeralAgeKey: false
+
+# Store mode (docs/operations/secrets-and-keys.md "Store mode: credentials in Vault"): every
+# stored credential's value lives in your organisation's Vault KV v2 engine
+# (OpenBao is a supported endpoint), and Postgres keeps only a pointer row.
+# wardynd then holds no key: with backend vaultkv the age-key refusal above does
+# not apply, and WARDYN_AGE_KEY is needed only until `wardynd -migrate-secrets
+# -to=vaultkv` has moved the existing rows. The default NetworkPolicy denies
+# wardynd's egress: add a rule for Vault to networkPolicy.egress.extra.
+#
+# backend azurekv is the same in Azure Key Vault (docs/operations/secrets-and-keys.md "Store
+# mode: credentials in Azure Key Vault"); allow its egress to the vault and to
+# the Entra token endpoint. One external store at a time: set vault.addr or
+# azure.vaultUrl, not both.
+secretStore:
+  # "pg" (sealed in Postgres under the age key), "vaultkv" or "azurekv" (store
+  # mode).
+  backend: pg
+  vault:
+    # https:// address of Vault. Required for vaultkv; set with backend pg it
+    # lets this install READ rows written in store mode (a migration back).
+    addr: ""
+    # Vault Enterprise/HCP namespace (X-Vault-Namespace); empty = none.
+    namespace: ""
+    # "kubernetes": the chart projects a DEDICATED service-account token with
+    # the audience below at /var/run/secrets/wardyn-vault/token (independent of
+    # serviceAccount.automount, which stays false). "token-file": point
+    # tokenFile at a Vault Agent sink or CSI file you mount (podAnnotations for
+    # the Agent injector, for example). There is no token-in-env option.
+    auth: kubernetes
+    authMount: kubernetes
+    # Kubernetes-auth role; bind it to this chart's service account and the
+    # release namespace, with audience = tokenAudience.
+    role: ""
+    # Recommended: a second Kubernetes-auth role, bound to the same service
+    # account, whose policy covers only <kvPrefix>/platform/* — wardynd reads
+    # and writes its own signing, session and SSH host keys as this role, and
+    # everything else as role, whose policy then leaves platform/ out
+    # (docs/operations/secrets-and-keys.md, "Two Vault roles"). Empty = one role for both.
+    rolePlatform: ""
+    # Optional, needs rolePlatform and kek.provider transit: a second Transit key
+    # (same kek.transit.mount, type aes256-gcm96), reached as rolePlatform, that
+    # wraps wardynd's own signing, session and SSH host keys; kek.transit.key then
+    # wraps only the credentials. `wardynd -rewrap -rewrap-adopt-boot-keys` moves the boot keys onto it.
+    # Empty = one key for both.
+    transitKeyPlatform: ""
+    tokenAudience: vault
+    tokenExpirationSeconds: 3600
+    tokenFile: ""
+    # KV v2 mount and this install's path prefix (empty = the release
+    # namespace, which the documented policy is templated on).
+    kvMount: wardyn
+    kvPrefix: ""
+    # max_versions on each secret (1: a replaced value does not linger).
+    maxVersions: 1
+    # The Vault client trusts the system roots plus trustedCA (below), in a
+    # TLS config of its own.
+  azure:
+    # https://<vault>.vault.azure.net. Required for azurekv; set with backend
+    # pg it lets this install READ rows written in store mode (a migration
+    # back). A vault dedicated to Wardyn; wardynd's identity needs Key Vault
+    # Secrets Officer on it.
+    vaultUrl: ""
+    # "workload-identity" (AKS): the chart labels the pod
+    # azure.workload.identity/use=true and annotates the service account with
+    # azure.workload.identity/client-id, so the webhook projects a token that
+    # wardynd exchanges for an Entra token (a federated credential on the
+    # identity, no client secret; with serviceAccount.create=false, annotate
+    # your own service account). "managed-identity": a node's IMDS.
+    auth: workload-identity
+    tenantId: ""
+    # The app registration's or user-assigned identity's client id.
+    clientId: ""
+    # Entra authority host; empty = the public cloud's.
+    authorityHost: ""
+    # Start of every secret name (empty = the release namespace).
+    prefix: ""
+    # Versions a secret holds before the next write starts a new name.
+    maxVersions: 100
+    # "auto": purge after a delete when the vault allows it; "never": leave
+    # deleted secrets for the vault's soft-delete retention.
+    purge: auto
+
+# The key that wraps each stored credential's data key when secretStore.backend
+# is pg (docs/operations/secrets-and-keys.md "Key service: Vault Transit" and
+# "Key service: Azure Key Vault"). "local": derived from the age key.
+# "transit": your Vault's Transit key, over the secretStore.vault client (addr,
+# auth, role and TLS above). "azurekv": two Azure Key Vault keys, as the
+# secretStore.azure identity (auth, tenantId, clientId, authorityHost above;
+# vaultUrl is not needed). Either way the key never leaves the service, and
+# once `wardynd -rewrap` reports no row left under the age key, the age key
+# can be removed. One key service at a time.
+kek:
+  provider: local
+  transit:
+    mount: transit
+    # Transit key (type aes256-gcm96). Required with provider transit; set
+    # with provider local it only reads the rows sealed under it (the way
+    # back with `wardynd -rewrap`).
+    key: ""
+  azurekv:
+    # Versionless id (https://<vault>.vault.azure.net/keys/<name>) of the RSA
+    # 3072/4096 key, key_ops wrapKey and unwrapKey only, not exportable, that
+    # wraps data keys. Required with provider azurekv; set with provider local
+    # it only reads the rows sealed under it (the way back with
+    # `wardynd -rewrap`).
+    key: ""
+    # Versionless id of the EC P-256 key, sign and verify only, in the same
+    # vault, that signs every wrap. Set together with key.
+    signingKey: ""
+
+# Extra environment variables for wardynd (name: value). Use this to wire OIDC
+# (WARDYN_OIDC_*), TLS (WARDYN_TLS_*), audit sinks (WARDYN_AUDIT_SINKS), the default
+# policy (WARDYN_DEFAULT_POLICY), etc. See cmd/wardynd/main.go for the full list.
+# Values render INLINE in the pod spec — anything secret belongs in extraEnv.
+# Host-capacity admission (docs/ENV.md), off by default; e.g. refuse new runs
+# under 8 GiB free or above load 100 on the node wardynd runs on (not its
+# cgroup, and not the nodes run pods land on):
+#   env:
+#     WARDYN_HOST_MIN_MEM_AVAILABLE_MIB: "8192"
+#     WARDYN_HOST_MAX_LOAD1: "100"
+env: {}
+
+# Raw EnvVar entries appended to the container, for the WARDYN_* variables that
+# must NOT be a literal in the Deployment object (docs/ENV.md marks them 🔒):
+# WARDYN_OIDC_CLIENT_SECRET and WARDYN_AUDIT_SINKS
+# (its inline JSON carries the SIEM bearer_token). Full EnvVar schema, so
+# valueFrom.secretKeyRef / configMapKeyRef / fieldRef all work:
+#   extraEnv:
+#     - name: WARDYN_OIDC_CLIENT_SECRET
+#       valueFrom:
+#         secretKeyRef: {name: wardyn-oidc, key: client-secret}
+extraEnv: []
+
+# Boot secrets as FILES instead of env vars (for "secrets delivered at runtime"
+# controls and scanners that flag secret env vars). enabled=true mounts the
+# Secrets this chart already wires — postgres.dsn, auth.adminToken and the age
+# key, external or chart-created — read-only at mountPath (mode 0440, readable
+# through podSecurityContext.fsGroup) and hands wardynd WARDYN_PG_DSN_FILE /
+# WARDYN_ADMIN_TOKEN_FILE / WARDYN_AGE_KEY_FILE paths, so no secretKeyRef env
+# is rendered. Same Secrets, same keys: flipping it on an existing install
+# changes only the delivery. Needs a wardynd image that reads *_FILE (0.7.12 or
+# later) — an older pinned image.tag/digest would boot with no DSN, which is why
+# this stays OFF by default.
+#
+# Vault Agent injector or Secrets Store CSI instead of a Kubernetes Secret: set
+# env.WARDYN_<NAME>_FILE to the path the agent / CSI volume writes (extraVolumes
+# below for CSI) and leave the matching chart source empty — for the DSN that is
+# postgres.dsn.secretRef.name="" (it has a non-empty default). Every secret
+# setting has a _FILE twin, including WARDYN_OIDC_CLIENT_SECRET,
+# WARDYN_DIRECTORY_CLIENT_SECRET, WARDYN_AUDIT_SINKS and WARDYN_PG_MIGRATE_DSN.
+# wardynd reads each file ONCE at boot (restart to pick up a rotation) and
+# refuses to boot on a var set both ways (so does this render), or an empty,
+# unreadable, group- or world-writable file, or one wardynd's own non-root uid
+# owns that others can read. See docs/operations/secrets-and-keys.md "Secrets from files".
+secretFiles:
+  enabled: false
+  mountPath: /etc/wardyn/secrets
+
+# Extra pod volumes and wardynd volumeMounts, verbatim — e.g. a Secrets Store
+# CSI volume, or a Secret you manage mounted for a WARDYN_*_FILE path:
+#   extraVolumes:
+#     - name: boot-secrets-csi
+#       csi:
+#         driver: secrets-store.csi.k8s.io
+#         readOnly: true
+#         volumeAttributes: {secretProviderClass: wardyn-boot}
+#   extraVolumeMounts:
+#     - {name: boot-secrets-csi, mountPath: /mnt/secrets-store, readOnly: true}
+extraVolumes: []
+extraVolumeMounts: []
+
+# Optional default policy, baked into a ConfigMap and mounted read-only
+# instead of relying on the wardynd image's own baked-in default
+# (examples/policies/default.json — see README "Installation"). JSON TEXT,
+# not a YAML map: `--set-file defaultPolicy=path/to/policy.json` round-trips
+# a file unchanged, and a nested map here would invite a partial override
+# silently MERGING under `--reuse-values` instead of replacing the whole
+# document. Empty (default) => no ConfigMap, no WARDYN_DEFAULT_POLICY — the
+# image's own baked default applies. Wires WARDYN_DEFAULT_POLICY unless
+# env.WARDYN_DEFAULT_POLICY is already set (which always wins). See README
+# "Default policy" for the confinement-floor trap this can walk into.
+defaultPolicy: ""
+
+# Optional corporate CA trust (WARDYN_TRUSTED_CA_FILE): a PEM bundle of
+# additional trusted roots, baked into a ConfigMap (a certificate is public,
+# unlike defaultPolicy — no Secret involved) and mounted read-only. PEM TEXT,
+# not a YAML map: `--set-file trustedCA=path/to/corp-ca.pem` round-trips a
+# file unchanged. Empty (default) => no ConfigMap, no WARDYN_TRUSTED_CA_FILE
+# — system roots only, byte-identical to today. Wires WARDYN_TRUSTED_CA_FILE
+# unless env.WARDYN_TRUSTED_CA_FILE is already set (which always wins) — the
+# escape hatch for a CA delivered your own way (e.g. extraEnv + secretKeyRef
+# pointing at a path your own volume mounts). See README "Corporate CA trust".
+trustedCA: ""
+
+# WARDYN_DAEMON_PROXY_SECRET from a Secret you manage yourself (never one this
+# chart creates — the value is a credentialed forward-proxy URL, e.g.
+# http://user:pass@proxy.corp.example:3128): existingSecret names it,
+# existingSecretKey the key inside it holding the URL. Mounted read-only at
+# mountPath/existingSecretKey and wired as WARDYN_DAEMON_PROXY_SECRET unless
+# env.WARDYN_DAEMON_PROXY_SECRET is already set (which always wins — the
+# escape hatch for a Vault Agent / CSI shape via extraVolumes instead). Empty
+# existingSecret (default) => no volume, no env — byte-identical to today.
+# defaultMode is a RENDER-time default, not a boot-time guarantee — the mode
+# daemonProxySecretMode (cmd/wardynd/daemon_proxy.go) actually sees is
+# whatever the kubelet mounts. A Secret-volume file is ALWAYS root-owned,
+# never wardynd's own uid, so the rule's "other-readable when owned by
+# wardynd's own non-root uid" branch never fires here: 0440 (the default),
+# 0400 and even a wider 0644/0444 are all ACCEPTED. Only group- or
+# world-WRITABLE bits (e.g. 0660, 0666) are refused. Under this chart's own
+# podSecurityContext.fsGroup the kubelet additionally ORs in group-read
+# regardless of defaultMode, so 0400 and 0440 are the SAME mode wardynd
+# actually opens (0440) — 0400 only differs without an fsGroup of your own.
+# Setting both this and WARDYN_DAEMON_PROXY_URL
+# (env or extraEnv) renders fine but wardynd itself refuses to boot on it
+# (bootDaemonProxy, cmd/wardynd/daemon_proxy.go) — the two name one proxy two
+# ways, and Wardyn never picks one silently. See docs/ENV.md
+# WARDYN_DAEMON_PROXY_SECRET and README "Daemon egress proxy".
+daemonProxySecret:
+  existingSecret: ""
+  existingSecretKey: proxy-url
+  mountPath: /etc/wardyn/daemon-proxy-secret
+  defaultMode: 0440
+
+# Phase B kill switch (WARDYN_AWS_SSO_PROXY_INJECT): "on" (proxy-side AWS SSO
+# session injection, the daemon's own default) or "off" (the pre-0.7.6
+# behaviour — the SSO token is written into the sandbox). See
+# docs/OPERATIONS.md "Turning the lane off". Empty (default) => no named env
+# entry rendered, so wardynd's own compiled default ("on") applies — byte-
+# identical to today. Wires WARDYN_AWS_SSO_PROXY_INJECT unless
+# env.WARDYN_AWS_SSO_PROXY_INJECT is already set (which always wins) —
+# `scripts/kind-sso-walk.sh` pins its posture that way and keeps working
+# untouched.
+awsSSOProxyInject: ""
+
+# Kubernetes runner substrate (internal/runner/k8s, `-tags k8s`, v0.5+). Off by
+# default — the Docker Compose stack (deploy/compose/) remains a fully
+# separate, independent path. Enabling this makes wardynd itself create/manage
+# sandboxes as pods in THIS cluster instead of containers on a Docker daemon.
+k8s:
+  enabled: false
+  # Render the Role/RoleBinding/ClusterRole/ClusterRoleBinding below. Default
+  # true: wardynd still needs every one of those verbs bound to
+  # serviceAccount.name to drive the k8s runner substrate. Set false only
+  # when a platform team provisions equivalent RBAC out-of-band (e.g. via
+  # GitOps) and would rather this chart not manage it — you are then
+  # responsible for granting serviceAccount.name the exact verbs
+  # templates/rbac.yaml documents.
+  rbac:
+    create: true
+  # Namespace every sandbox's Secret/NetworkPolicies/pods are created in.
+  # Empty => the release namespace (no runs-namespace.yaml, no
+  # createRunsNamespace — the chart never creates or labels one). A DIFFERENT,
+  # pre-existing namespace gets an extra ingress peer on the control-plane
+  # NetworkPolicy below (see networkPolicy's template) and its own
+  # Role/RoleBinding (templates/rbac.yaml) — it must already exist at install
+  # time; the chart does not create it.
+  #
+  # SET IT to a dedicated namespace for anything but a demo. Empty is not just
+  # "the simple default": it puts the k8s-runner Role — pods create/delete/exec,
+  # secrets create/delete, networkpolicies create/delete — in the CONTROL-PLANE
+  # namespace, where those verbs cover every other workload that happens to share
+  # it, not only the pods wardynd created for a run. RBAC cannot narrow that (run
+  # object names are derived per-run, so `resourceNames` cannot enumerate them),
+  # so the namespace IS the blast radius. templates/rbac.yaml renders that warning
+  # into the manifest when this is empty, and it is the same class of leak as the
+  # default-ServiceAccount binding the chart already refuses outright.
+  # Empty also means run pods sit in the same namespace as wardynd, which is why
+  # the control-plane NetworkPolicy withholds ssh/uiSandbox from wardyn.managed
+  # pods (see networkPolicy.ingress.from).
+  runsNamespace: ""
+  # Accept the ceiling above. k8s.enabled with an EMPTY runsNamespace is refused
+  # at render (templates/rbac.yaml); this renders it anyway, for a laptop demo or
+  # a cluster where wardynd is the only workload in its namespace and "every other
+  # workload here" is the empty set. Same "I accept the ceiling" escape hatch as
+  # allowMultiReplica and secrets.allowEphemeralAgeKey — not a default, a choice.
+  allowRunsInReleaseNamespace: false
+  # wardyn-proxy sidecar image (WARDYN_PROXY_IMAGE) — ALSO what the boot-time
+  # egress canary launches (with -egress-canary instead of its normal
+  # entrypoint args). REQUIRED when k8s.enabled: the chart refuses to render
+  # without it (templates/deployment.yaml), matching the k8s runner substrate
+  # itself — an empty value does not boot wardynd at all and does not merely
+  # fail runs closed (internal/runner/k8s's errProxyImageUnset surfaces from
+  # Driver construction, so cmd/wardynd/main.go's boot sequence returns the
+  # error and the pod crash-loops instead of coming up).
+  proxyImage: ""
+  # Optional imagePullSecrets name (WARDYN_K8S_IMAGE_PULL_SECRET) threaded
+  # onto every pod the k8s substrate creates (agent, proxy, boot-time canary).
+  imagePullSecret: ""
+  # Confinement-Class -> RuntimeClass NAME pins (WARDYN_CONFINEMENT_MAP's k8s
+  # form, e.g. CC2=gvisor;CC3=kata-qemu). A k8s RuntimeClass object name
+  # carries no platform convention Wardyn can guess (unlike docker's runtime
+  # family names) — CC2/CC3 stay unadvertised until pinned here to an existing
+  # RuntimeClass whose .Handler clears the class's floor guard
+  # (internal/runner/k8s/driver.go's Config.ConfinementRuntimes doc).
+  runtimeClasses:
+    CC2: ""
+    CC3: ""
+  apiServer:
+    # Port(s) the control-plane NetworkPolicy's egress rule opens so wardynd
+    # can reach the Kubernetes API server (client-go, driving the k8s
+    # substrate directly). 443 is the kubernetes.default.svc Service port
+    # client-go's in-cluster config always targets — but on iptables-mode
+    # kube-proxy + Calico (this chart's own CI cluster, and most kubeadm/kind
+    # clusters), the DNAT to the apiserver's REAL backend port (6443 on a
+    # typical kubeadm/kind control plane) happens BEFORE Calico evaluates
+    # egress, so the packet Calico actually sees is already destined for
+    # 6443 — [443] alone fails this egress closed on exactly the CNI our own
+    # CI proves against (ci/all-on-values.yaml pins [443, 6443], the value
+    # verified working there). Override/extend for a different apiserver
+    # port or a CNI/dataplane that evaluates pre-DNAT.
+    ports: [443, 6443]
+    # Peers this egress is scoped to (raw NetworkPolicyPeer list, same shape
+    # as networkPolicy.egress.extra). EMPTY BY DEFAULT, which — like the
+    # Postgres rule right above it in the rendered NetworkPolicy — widens
+    # egress on these ports to ANY destination, not just the apiserver: the
+    # apiserver is frequently not a selectable pod (a managed control plane,
+    # or static pods a podSelector/namespaceSelector can't match), so there
+    # is no generically-correct peer to default to. SCOPE THIS in production:
+    # e.g. an ipBlock naming your cluster's actual apiserver/LB CIDR.
+    to: []
+
+# SSH gateway (see docs/SSH.md — native SSH/sftp/-L forwarding into a
+# running sandbox's tmux session). Off by default; a CONDITIONAL second port
+# on the wardynd Service/Deployment above (no second Service — see README
+# "Split SSH exposure" for the recipe to expose it differently from the HTTP
+# port). port + advertiseHost below drive WARDYN_SSH_LISTEN/
+# WARDYN_SSH_ADVERTISE — WARDYN_SSH_LISTEN is what actually turns the
+# gateway on; leaving it unset (this chart's own default) means no listener,
+# not even a generated host key.
+ssh:
+  enabled: false
+  port: 2222
+  # Externally-reachable host agents/operators are told to connect back to
+  # (WARDYN_SSH_ADVERTISE, combined with `port` above). Required when
+  # enabled — the chart never guesses a public address.
+  advertiseHost: ""
+
+# UI-sandbox gateway (see docs/UI-SANDBOXES.md — a governed, ticket-gated
+# relay from a browser to ONE policy-declared loopback port inside a run's
+# sandbox, e.g. a code editor). Off by default; enabled it is a CONDITIONAL
+# third port on the same Service/Deployment, driving
+# WARDYN_UI_SANDBOX_LISTEN/_ADVERTISE/_ORIGIN_TEMPLATE.
+#
+# `port` MUST differ from service.port: what the gateway serves is the
+# SANDBOX's own pages, and the separate browser origin is the only thing
+# keeping that code away from the console's session (the chart refuses to
+# render, and wardynd refuses to boot, when the two are equal). Terminating both ports on one hostname
+# defeats the same control — give the gateway its own host, and a certificate
+# that covers it, at your ingress/LoadBalancer (README "UI sandbox gateway").
+uiSandbox:
+  enabled: false
+  port: 8081
+  # Externally-reachable BASE URL of the gateway, e.g.
+  # "https://wardyn-ui.example.com" (WARDYN_UI_SANDBOX_ADVERTISE) — published
+  # on /healthz for the console's Open button. Required when enabled: the
+  # chart never guesses a public address, and the raw in-cluster bind is
+  # wrong for every real deployment.
+  advertiseURL: ""
+  # OPTIONAL per-run origin, e.g. "https://run-{run}.ui.example.com"
+  # (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) — needs wildcard DNS and a wildcard
+  # certificate, and MUST contain {run} (boot refuses it otherwise). Set, each
+  # run's apps get their own browser origin; unset, every run shares one
+  # origin separated only by a path-scoped cookie — a published residual
+  # (threatmodel/THREAT-MODEL.md §5 #18), not a detail.
+  originTemplate: ""
+
+# Default-deny NetworkPolicy (Wardyn's L0 egress posture). See templates.
+# Its podSelector governs the control-plane pod ONLY (app.kubernetes.io/
+# component: control-plane) — never a sandbox pod, however it's labeled.
+networkPolicy:
+  enabled: true
+  postgres:
+    # DB port wardynd is allowed to egress to.
+    port: 5432
+  ingress:
+    # List of NetworkPolicyPeer entries allowed to reach the HTTP port. It is
+    # NEVER applied to service.internalPort: the proxy-facing TLS listener has
+    # its own rule (this namespace + k8s.runsNamespace), so a peer you add here
+    # for the console cannot reach the port credentials are resolved on.
+    # Empty => `podSelector: {}`, i.e. all pods in THIS namespace only; add peers
+    # (e.g. your ingress controller's namespace) to widen. Do NOT widen with a
+    # bare `namespaceSelector: {}` — that means ALL namespaces, not this one.
+    #
+    # ssh.enabled / uiSandbox.enabled get a SECOND rule from this same list,
+    # with one rewrite: a bare `podSelector: {}` entry (the "keep the default
+    # same-namespace peer and add mine" idiom) becomes "every pod in this
+    # namespace EXCEPT ones labelled wardyn.managed". SSH and the UI-sandbox
+    # gateway are operator/human surfaces, and with k8s.runsNamespace empty (the
+    # default) a run's agent pod and proxy sidecar are in THIS namespace — so
+    # without that rewrite the catch-all peer hands them both ports. Every other
+    # peer shape you write (ipBlock, namespaceSelector, a podSelector with
+    # labels) is passed through untouched to both rules.
+    from: []
+  egress:
+    # Additional NetworkPolicy egress rules (e.g. OIDC issuer, SIEM webhooks).
+    extra: []
+
+podAnnotations: {}
+
+# How long Kubernetes waits after SIGTERM before SIGKILL. wardynd's orderly
+# stop needs up to ~65s: http.Server.Shutdown (15s), then the detached work it
+# waits for (a run launch, a superseded sign-in's teardown: up to 35s), then
+# the audit sinks' final flush (the webhook sink's own timeout: 15s). The
+# Kubernetes default of 30s can SIGKILL a teardown mid-KillSandbox, leaving
+# the run KILLED with its sandbox still up and no run.kill row. Keep it at 70
+# or above. 0 is not supported: the template's `| default` treats an explicit
+# 0 the same as unset and falls back to the chart default.
+terminationGracePeriodSeconds: 70
+
+# Pod-level security context. distroless:nonroot runs as uid/gid 65532.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container-level hardening: read-only root FS, drop all caps, no priv-esc.
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Persistent recording volume. Off by default (Postgres is the source of truth;
+# recordings are optional). This switch decides the recording store: enabled =>
+# WARDYN_RECORDING_STORE=fs with WARDYN_RECORDING_DIR="<mountPath>/recordings";
+# off => WARDYN_RECORDING_STORE=off, i.e. no recording and no replay. (Until
+# 0.7.1 "off" was spelled as an EMPTY WARDYN_RECORDING_DIR, which wardynd reads
+# as "keep the default" — ./data/recordings, on the read-only root FS — and the
+# pod crash-looped.) Override via env.WARDYN_RECORDING_STORE / _DIR.
+#
+# The chart pins WARDYN_RECORDING_STORE itself (fs or off, see templates/deployment.yaml),
+# because wardynd's own default (`pg`) ignores WARDYN_RECORDING_DIR entirely and
+# would make this switch a lie — a stock install would persist every PTY
+# asciicast into Postgres, unbounded. Want that instead? Set
+# env.WARDYN_RECORDING_STORE=pg and leave persistence off: the pg store needs no
+# PVC and is readable from any replica.
+#
+# F199: this switch also decides where the audit spool and its quarantine
+# sidecar (audit-spool.jsonl / audit-spool.jsonl.quarantine, templates/deployment.yaml's
+# WARDYN_AUDIT_SPOOL block) land — the always-present /tmp emptyDir when off,
+# the persistent volume when on. Off is the chart's default, so a stock install
+# keeps both ephemeral: a poisoned event moved to quarantine for an operator to
+# re-feed does not survive a reschedule until persistence is turned on.
+persistence:
+  enabled: false
+  mountPath: /data
+  size: 5Gi
+  storageClass: ""
+
+# Drives: per-person storage a run can mount at /home/agent/drive. This switch
+# is ONLY the RBAC half — it adds `persistentvolumeclaims: get, create` to the
+# k8s-runner Role (templates/rbac.yaml). The drives themselves are registered
+# and allocated in the console, not here; nothing in this block creates one.
+#
+# Renamed from `userDrives` in 0.8 (issue #658 — the wire route (/drives) and
+# the audit actions (drive.*) already said "drive"; this chart key was the one
+# holdout). A clean break, no alias, and not a silent one: a render whose values
+# still say `userDrives.enabled=true` is refused (templates/rbac.yaml) until
+# they say `drives.enabled=true` and `userDrives.enabled=false` instead — see
+# docs/sdk.md "Renamed in 0.8".
+#
+# Two Kubernetes backends, both claim-based (a pod may not bind a host path, and
+# Pod Security Standards forbids hostPath at Baseline and Restricted alike):
+#   k8s_pvc         managed — wardynd creates one claim per person, named
+#                   wardyn-drive-<drive>-<home>, on first use. Needs `create`.
+#   k8s_pvc_static  share — an admin provisions the claim (typically an NFS/SMB
+#                   export) and wardynd only looks it up. Needs `get` only, so
+#                   leave this on for ANY drive at all; a missing claim fails the
+#                   run rather than being invented as an empty volume.
+#
+# Off => ANY drive's run fails at dispatch with a hint naming this switch: the
+# lookup is the first call a drive makes, and a share makes no other.
+# The `delete` verb is a SECOND switch below, off by default: with
+# reclaim.enabled unset the Role carries get+create and nothing in this
+# deployment can destroy a claim, so reclaiming a departed person's storage is
+# an operator command (see this chart's README and docs/OPERATIONS.md).
+#
+# On size, quoted verbatim from the product's own words, because it is the one
+# thing an allocation is routinely mistaken for:
+#   "Wardyn never enforces a drive's size itself. On Kubernetes the size is the
+#   volume request and the storage class decides whether it binds — block disks
+#   do, network-share provisioners do not. On Docker a managed drive has no byte
+#   cap, the same gap disk_mib has. A share is bounded by its own quota. The
+#   size you see is the allocation, not a guarantee."
+#
+# There is deliberately NO storageClass key here. A drive's class is a per-drive
+# field in the console and rides the resolved mount to the runner, so a
+# chart-level one would be a second place to say it that nothing reads — which
+# is exactly what it was until this release removed it.
+drives:
+  enabled: false
+
+  # reclaim.enabled adds `delete` on persistentvolumeclaims — and with it the
+  # ability to DESTROY a member's stored bytes, which nothing else in this file
+  # can do and nothing undoes.
+  #
+  # OFF is the default and the safe posture. Leave it off and the Role is
+  # exactly what it has always been (get + create): the API's own reclaim verb
+  # still exists but every attempt ends in the apiserver's 403, recorded as a
+  # failed `drive.reclaim` audit row. Turn it on only when your offboarding
+  # runbook calls `POST /drives/{id}/reclaim` (super-admin only, refused while a
+  # run still holds the claim, audited on every attempt that reaches the cluster) instead of running
+  # `kubectl delete pvc` by hand. Reclaiming by hand stays supported either way.
+  #
+  # It does not weaken anything else: no run path, no teardown and no sweep can
+  # reach a claim on either setting — a drive object carries no wardyn.run-id
+  # label, which is what the per-run reaper selects on.
+  reclaim:
+    enabled: false
+
+nodeSelector: {}
+affinity: {}
+tolerations: []
