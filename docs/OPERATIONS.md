@@ -1063,10 +1063,13 @@ empty `scopes` (`erasure_scope_unknown`), a principal that does not resolve (`ow
 other bypass is).
 
 **What this does not reach.** Rows written before `WARDYN_AUDIT_SEAL=fields` was turned on, and before 0.8.6,
-are plaintext: no key covers them. A SIEM sink holds ciphertext for a sealed field, so after
-`audit_personal_fields` it holds nothing readable either; its copies of the clear `actor` and `source_ip`
-columns are outside this scope, except the `actor` of rows written under `WARDYN_AUDIT_SEAL=full`, which is a
-subject id and reads `[erased]` after the erasure. Before turning `full` on, change any SIEM rule keyed on
+are plaintext: no key covers them. A sealed field is stored as `seal2.<handle>.<ciphertext>`: the handle is a
+random id of the key, not derived from the person, and the erasure clears it from the key table, so neither the
+row nor any copy of it (spool, SIEM sink, export, federation push) holds anything in the field that names the
+person, in any encoding, and after the erasure nothing maps the handle back to them. A SIEM sink holds ciphertext
+for a sealed field, so after `audit_personal_fields` it holds nothing readable either; its copies of the clear
+`actor`, `target` and `source_ip` columns are outside this scope, except the `actor` of rows written under
+`WARDYN_AUDIT_SEAL=full`, which is a subject id and reads `[erased]` after the erasure. Before turning `full` on, change any SIEM rule keyed on
 `actor`: from that moment it sees `subject:<uuid>` for a person, and the setting applies only to rows written
 after it is on. A backup restores the wrapped key and so the field until the backup expires or
 the wrapping key version is retired. A row waiting in an audit spool under the pending key when the person is

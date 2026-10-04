@@ -577,13 +577,17 @@ key and every copy (the store, the spool, every sink, every export) stops being 
 still verifies: the row hash covers the ciphertext. Sealing sits between masking and the spool in the
 recorder chain, so nothing downstream ever sees the text.
 
-A sealed field is a JSON string `seal1.<key version>.<subject>.<ciphertext>` in place of the value (the subject
-and ciphertext are unpadded base64url). The ciphertext is AES-256-GCM (`kek.Seal`) of the original JSON value
-under the subject's `audit-seal` key (`principal_keys`), and its additional data binds the event id, the
-action, the field's JSON path, the subject and the key version, so a ciphertext moved to another row, field or
-person fails to open. Each field is sealed under the subject it describes, so a row about two people seals each
+A sealed field is a JSON string `seal2.<handle>.<ciphertext>` in place of the value. The ciphertext (unpadded
+base64url) is AES-256-GCM (`kek.Seal`) of the original JSON value under the subject's `audit-seal` key
+(`principal_keys`). The handle is a random UUID that key generation carries (`principal_keys.handle`). It names
+the key, never the person: it is not derived from anything about them, and destroying the key clears it from
+the table. So the field names no one, in the row or in any copy of it (the spool, every sink, every export,
+a federation push), and after the person's erasure nothing maps it back to them. The additional data binds the
+event id, the action, the field's JSON path and the handle, so a ciphertext moved to another row, field or key
+fails to open. Each field is sealed under the subject it describes, so a row about two people seals each
 person's field under that person's own key. A name an event carries as an email form or an `entra:` principal
-resolves through `principal_identities` to the one principal every erasure destroys by.
+resolves through `principal_identities` to the one principal every erasure destroys by, so every name a person
+goes by seals under one key and one handle. A handle no key carries reads `[erased]`, as a destroyed one does.
 
 The list is closed, per action and per JSON path, never by leaf name (`internal/audit/sealkeys.go`), and was
 finalised by reading every audit emit site against the candidate names `task`, `prompt`, `message`, `reason`,
@@ -609,7 +613,8 @@ the keys read in SQL (`data->>'jti'` and its neighbours). `person.erasure`, `cre
 and survives the key it destroys.
 
 **When a key cannot be had.** A cold key lookup that fails before the row is written never drops the row and
-never writes it in the clear: the field is sealed under the platform key `wardyn-audit-pending-key`, the row
+never writes it in the clear: the field is sealed under the platform key `wardyn-audit-pending-key`
+(`seal2p.<ciphertext>`, with the name it is for inside the ciphertext, so the sealed string names no one), the row
 carries `"pending_subject":true`, and it is written to the audit spool only. The spool drain re-seals it under
 its subject's own key before the store sees it, and keeps the line (never counting it toward quarantine) while
 that cannot be done. A field whose subject was erased while its row waited is stored as `[erased]`, not sealed

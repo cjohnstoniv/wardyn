@@ -94,10 +94,10 @@ func TestSealingRecorderUnderFullNeedsTheSealerForAnyHumanRow(t *testing.T) {
 
 type downKeys struct{}
 
-func (downKeys) Current(context.Context, string, string) (int, []byte, error) {
-	return 0, nil, errors.New("key store down")
+func (downKeys) Current(context.Context, string, string) (uuid.UUID, []byte, error) {
+	return uuid.Nil, nil, errors.New("key store down")
 }
-func (downKeys) Key(context.Context, string, string, int) ([]byte, error) {
+func (downKeys) Key(context.Context, string, uuid.UUID) ([]byte, error) {
 	return nil, errors.New("key store down")
 }
 

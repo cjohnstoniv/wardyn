@@ -277,7 +277,7 @@ func (f fakeUnsealer) Unseal(_ context.Context, evs []types.AuditEvent) ([]types
 	}
 	out := append([]types.AuditEvent(nil), evs...)
 	for i := range out {
-		out[i].Data = json.RawMessage(strings.ReplaceAll(string(out[i].Data), "seal1.sealed", "opened"))
+		out[i].Data = json.RawMessage(strings.ReplaceAll(string(out[i].Data), "seal2.sealed", "opened"))
 	}
 	return out, nil
 }
@@ -285,13 +285,13 @@ func (f fakeUnsealer) Unseal(_ context.Context, evs []types.AuditEvent) ([]types
 var _ audit.Unsealer = fakeUnsealer{}
 
 func TestAuditReadsOpenSealedFieldsAndFailOnAKeyStoreOutage(t *testing.T) {
-	evs := []types.AuditEvent{{ID: uuid.New(), Action: "approval.decide", Data: json.RawMessage(`{"reason":"seal1.sealed"}`)}}
+	evs := []types.AuditEvent{{ID: uuid.New(), Action: "approval.decide", Data: json.RawMessage(`{"reason":"seal2.sealed"}`)}}
 	s := &Server{cfg: Config{AuditUnsealer: fakeUnsealer{}}}
 	got, err := s.unsealed(t.Context(), evs, nil)
 	if err != nil || !strings.Contains(string(got[0].Data), "opened") {
 		t.Fatalf("unsealed = %s, %v, want the field opened", got[0].Data, err)
 	}
-	if string(evs[0].Data) != `{"reason":"seal1.sealed"}` {
+	if string(evs[0].Data) != `{"reason":"seal2.sealed"}` {
 		t.Error("the caller's rows were changed in place")
 	}
 	s.cfg.AuditUnsealer = fakeUnsealer{err: errors.New("key store down")}

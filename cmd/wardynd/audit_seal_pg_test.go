@@ -43,9 +43,9 @@ type flakyKeys struct {
 	down atomic.Bool
 }
 
-func (f *flakyKeys) Current(ctx context.Context, owner, purpose string) (int, []byte, error) {
+func (f *flakyKeys) Current(ctx context.Context, owner, purpose string) (uuid.UUID, []byte, error) {
 	if f.down.Load() {
-		return 0, nil, context.DeadlineExceeded
+		return uuid.Nil, nil, context.DeadlineExceeded
 	}
 	return f.SealKeys.Current(ctx, owner, purpose)
 }
@@ -194,7 +194,7 @@ func TestPG_AuditSeal_FieldsAreCiphertextEverywhereAndErasureShredsThem(t *testi
 	rg.decide("alice", "alice typed these words")
 	rg.decide("bob", "bob typed other words")
 	rg.noPlaintext("", "alice typed", "bob typed")
-	if !strings.Contains(rg.stored(), "seal1.1.") || !strings.Contains(readFileOrEmpty(rg.sinkPath), "seal1.1.") {
+	if !strings.Contains(rg.stored(), "seal2.") || !strings.Contains(readFileOrEmpty(rg.sinkPath), "seal2.") {
 		t.Fatalf("a sealed field is not in the store and the sink as ciphertext:\nstore %s\nsink %s", rg.stored(), readFileOrEmpty(rg.sinkPath))
 	}
 	// A refusal code is a machine value, never sealed (action- and path-aware).
@@ -287,7 +287,7 @@ func TestPG_AuditSeal_AColdKeyWaitsInTheSpoolThenTheDrainReseals(t *testing.T) {
 	if got := readFileOrEmpty(rg.spoolPath); strings.TrimSpace(got) != "" {
 		t.Errorf("the spool still holds %q after the drain", got)
 	}
-	if got := rg.stored(); strings.Contains(got, "pending_subject") || strings.Contains(got, "seal1p.") || strings.Contains(got, "typed") {
+	if got := rg.stored(); strings.Contains(got, "pending_subject") || strings.Contains(got, "seal2p.") || strings.Contains(got, "typed") {
 		t.Fatalf("the store holds a pending or plaintext field: %s", got)
 	}
 	got := rg.reasons(rg.a)

@@ -30,15 +30,16 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// sealKeysOf is cmd/wardynd's adapter: a destroyed generation is ErrKeyErased.
+// sealKeysOf is cmd/wardynd's adapter: a generation is named by its handle, and
+// a destroyed one is ErrKeyErased.
 type sealKeysOf struct{ m *subjectkey.Manager }
 
-func (k sealKeysOf) Current(ctx context.Context, owner, purpose string) (int, []byte, error) {
-	return k.m.Current(ctx, owner, purpose)
+func (k sealKeysOf) Current(ctx context.Context, owner, purpose string) (uuid.UUID, []byte, error) {
+	return k.m.CurrentHandle(ctx, owner, purpose)
 }
 
-func (k sealKeysOf) Key(ctx context.Context, owner, purpose string, version int) ([]byte, error) {
-	key, err := k.m.Key(ctx, owner, purpose, version)
+func (k sealKeysOf) Key(ctx context.Context, purpose string, handle uuid.UUID) ([]byte, error) {
+	key, err := k.m.KeyByHandle(ctx, purpose, handle)
 	if errors.Is(err, subjectkey.ErrDataLoss) {
 		return nil, fmt.Errorf("%w: %w", audit.ErrKeyErased, err)
 	}
