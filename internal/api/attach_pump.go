@@ -161,6 +161,7 @@ func (p *attachPumpState) output() {
 				p.end("client write failed")
 				return
 			}
+			p.holder.lastOutput.Store(time.Now().UnixNano())
 			// Tee the output into the session recording (best-effort: a
 			// recording write error must not break the live terminal).
 			if p.castTee != nil {

@@ -128,6 +128,13 @@ type attachHolder struct {
 	// (releaseAttach).
 	notify func(readOnly bool, holder *attachHolder)
 
+	// ping, when set, probes this holder's client for liveness (the WebSocket
+	// lane's Ping; the SSH lane has none and is never probed). lastOutput is
+	// when PTY output last reached the client, unix nanoseconds. Both feed the
+	// stale-writer probe (attach_stale.go).
+	ping       func(ctx context.Context) error
+	lastOutput atomic.Int64
+
 	// ready is this holder's attach state: attaching until its exec matches its
 	// role, ready after (attach_exec.go). A promotion sends it back to attaching
 	// while the observer's exec is replaced by a writer's.
@@ -498,10 +505,19 @@ func (s *Server) attachHolderFor(runID uuid.UUID) *attachHolder {
 // with no observer socket leaves the slot FREE and reconnects into it, exactly
 // as before; queued bystanders stay observers.
 func (s *Server) evictAttachHolderFor(runID uuid.UUID, taker string) (prev *attachHolder, announce func()) {
+	return s.evictAttachWriter(runID, taker, nil)
+}
+
+// evictAttachWriter is evictAttachHolderFor, optionally pinned to one writer:
+// when want is non-nil and is no longer runID's writer, nothing is evicted. The
+// stale-writer probe needs that, because the writer it judged dead may have left
+// and been replaced during the probe, and the replacement must not be displaced
+// for it.
+func (s *Server) evictAttachWriter(runID uuid.UUID, taker string, want *attachHolder) (prev *attachHolder, announce func()) {
 	reg := s.attachRegistry()
 	reg.mu.Lock()
 	ra := reg.attaches[runID]
-	if ra == nil || ra.writer == nil {
+	if ra == nil || ra.writer == nil || (want != nil && ra.writer != want) {
 		reg.mu.Unlock()
 		return nil, nil
 	}
@@ -575,6 +591,24 @@ func (s *Server) handleAttachHolder(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.attachHolderFor(id).view())
 }
 
+// recordTakeover writes the session.takeover row for prev's displacement.
+// reason is empty for a person's explicit take-over and names the cause
+// otherwise (the stale-writer probe's "stale_writer"). Callers write it after
+// the eviction decided and before displace(), so the row is never lost to the
+// teardown it describes.
+func (s *Server) recordTakeover(ctx context.Context, runID uuid.UUID, actorType types.ActorType, principal string, prev *attachHolder, reason string) {
+	data := map[string]any{
+		"previous_holder": prev.principal,
+		"previous_source": prev.source,
+		"held_since":      prev.since,
+	}
+	if reason != "" {
+		data["reason"] = reason
+	}
+	s.recordAudit(ctx, s.auditEvent(&runID, actorType, principal, "session.takeover",
+		runID.String(), "success", mustJSON(data)))
+}
+
 // handleAttachTakeover serves POST /api/v1/runs/{id}/attach/takeover — taking a
 // live terminal away from another human, which is why it is audited rather than
 // silent:
@@ -626,12 +660,7 @@ func (s *Server) handleAttachTakeover(w http.ResponseWriter, r *http.Request) {
 	if auditCtx == nil {
 		auditCtx = context.Background()
 	}
-	s.recordAudit(auditCtx, s.auditEvent(&id, actorType, principal, "session.takeover",
-		id.String(), "success", mustJSON(map[string]any{
-			"previous_holder": prev.principal,
-			"previous_source": prev.source,
-			"held_since":      prev.since,
-		})))
+	s.recordTakeover(auditCtx, id, actorType, principal, prev, "")
 
 	prev.displace(attachTakeoverReason(principal))
 	promoted := promote != nil
