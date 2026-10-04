@@ -234,6 +234,13 @@ different bundled policy, set `env.WARDYN_DEFAULT_POLICY` to any file under
 into the chart instead — an alternative to picking among the image's bundled
 ones — see [Default policy](#default-policy).
 
+The shipped `default.json` sets `auto_stop_after_sec` to `3600`, so a deployment that uses it as its default policy stops
+runs idle for an hour. To keep the old behaviour, use a policy with `auto_stop_after_sec` set to `0`.
+The shipped file is also the ceiling member runs are clamped to, so while it is in use a member's `auto_stop_after_sec` of `0`,
+a negative value, or more than `3600` is capped to `3600` with a warning, including the `-1` that interactive and SSH sessions
+use (admins are not clamped). On Kubernetes without metrics-server the CPU signal is off (see `/setup/status`), so a busy run
+that makes no egress calls and has no attach is also stopped after an hour.
+
 **Upgrade note — `/readyz` is a 0.6-and-later endpoint.** The readiness probe
 targets `/readyz`. From 0.6.0 the chart's own default image serves it: an empty
 `image.tag` resolves to `.Chart.AppVersion`, so a stock install
