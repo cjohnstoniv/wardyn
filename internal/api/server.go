@@ -687,6 +687,9 @@ type Server struct {
 	// per-server shape as keepaliveEvery above: a test drives a dead-peer holder
 	// on a millisecond clock instead of the real 30s budget.
 	pingEvery time.Duration
+	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed
+	// output pause for THIS server only (tests).
+	pauseLimit time.Duration
 	// attachPrepare overrides attachPrepareTimeout for THIS server only (tests):
 	// the bound on one Runner.Attach.
 	attachPrepare time.Duration

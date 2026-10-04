@@ -51,6 +51,15 @@ func (s *Server) attachKeepaliveEvery() time.Duration {
 // client socket cannot wedge the read pump forever.
 const attachWriteTimeout = 30 * time.Second
 
+// attachPauseLimit is how long a client may leave output paused: attachWriteTimeout
+// unless THIS server was built with an override (Server.pauseLimit, tests only).
+func (s *Server) attachPauseLimit() time.Duration {
+	if s.pauseLimit > 0 {
+		return s.pauseLimit
+	}
+	return attachWriteTimeout
+}
+
 // attachPingInterval is the liveness probe cadence for an otherwise-idle
 // attach socket.
 //
@@ -98,12 +107,13 @@ func (s *Server) attachPingEvery() time.Duration {
 // still bounding what one socket can make the daemon buffer.
 const attachReadLimit = 1 << 20
 
-// resizeMsg is the only control message the client may send out-of-band on the
-// PTY stream: a window-size change. Everything else on the client->server
+// resizeMsg is the control message the client may send out-of-band on the PTY
+// stream: a window-size change, or a pause or resume (Type only) for output flow
+// control. Everything else on the client->server
 // direction is raw PTY input (binary frames). Resize is sent as a TEXT frame so
 // it is unambiguously distinct from binary keystroke bytes.
 type resizeMsg struct {
-	Type string `json:"type"` // "resize"
+	Type string `json:"type"` // "resize", "pause" or "resume"
 	Cols uint16 `json:"cols"`
 	Rows uint16 `json:"rows"`
 }
