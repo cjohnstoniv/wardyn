@@ -17,10 +17,13 @@ import (
 
 // revokeSessionsRequest is POST /api/v1/sessions/revoke's body: exactly one
 // of Sub (revoke a single principal's sessions) or All (revoke every
-// principal's sessions) must be set — see handleRevokeSessions.
+// principal's sessions) must be set — see handleRevokeSessions. SessionsOnly
+// narrows a Sub revoke to the session cutoff: no API token is revoked and no
+// SSH key is deleted.
 type revokeSessionsRequest struct {
-	Sub string `json:"sub"`
-	All bool   `json:"all"`
+	Sub          string `json:"sub"`
+	All          bool   `json:"all"`
+	SessionsOnly bool   `json:"sessions_only"`
 }
 
 // handleRevokeSessions is the admin surface for "revoke a human now" — the
@@ -95,6 +98,10 @@ type revokeSessionsRequest struct {
 // API tokens and SSH keys are the reason the All arm is an incident
 // lever rather than a routine one: unlike sessions they do not self-heal, and
 // every automation credential must be re-minted and SSH key re-registered.
+// A sub request may set "sessions_only": the session cutoff alone, for the
+// routine "sign this person out" that must not cost them their automation
+// credentials. The audit row is the same, with both counts 0.
+//
 // Pinned by TestSecurityAdminRevokesSuperAdmin; stated for operators in
 // docs/OPERATIONS.md's security-admin section.
 func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
@@ -105,6 +112,10 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 	body.Sub = strings.TrimSpace(body.Sub)
 	if body.All == (body.Sub != "") {
 		writeErrorReason(w, http.StatusBadRequest, reasonSessionsRevokeParamInvalid, `body must set exactly one of "sub" or "all"`)
+		return
+	}
+	if body.SessionsOnly && body.All {
+		writeErrorReason(w, http.StatusBadRequest, reasonSessionsRevokeParamInvalid, `"sessions_only" applies to "sub", not "all"`)
 		return
 	}
 	scope, target := "sub", body.Sub
@@ -118,6 +129,11 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		res, err = s.revokeCredentials(actorCtx, "")
+	} else if body.SessionsOnly {
+		if err = s.cfg.SessionRevocations.RevokeSub(r.Context(), body.Sub); err != nil {
+			writeServerError(w, r, "revoke sessions", err)
+			return
+		}
 	} else {
 		res, err = s.revokePersonCredentials(actorCtx, body.Sub)
 		if !res.Stamped {
@@ -135,6 +151,9 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 	data := map[string]any{"scope": scope, "tokens_revoked": tokens, "ssh_keys_deleted": keys}
 	if !body.All {
 		data["sub"] = body.Sub
+	}
+	if body.SessionsOnly {
+		data["sessions_only"] = true
 	}
 	outcome := "success"
 	if err != nil {

@@ -2975,6 +2975,12 @@ applies all three actions deployment-wide, including the calling admin's own
 credentials. Plan to re-mint tokens and register SSH keys again after a global
 revoke.
 
+To end only a person's sessions, send `"sessions_only": true` with `sub`: the
+session cutoff is stamped and nothing else changes, so their API tokens and SSH
+keys keep working. It is refused (`sessions_revoke_param_invalid`) with `all`.
+The audit row is the usual `session.revoke`, with `sessions_only` set and both
+counts `0`. The People drawer's "Sign out everywhere" sends it.
+
 **No `role` parameter on `POST /me/tokens`.** A token always mints at the
 caller's own current role; there is no deliberately-downgraded mint. Still
 open at 0.8.
@@ -3115,6 +3121,10 @@ curl -X DELETE -H "Authorization: Bearer $TOKEN" $WARDYN/api/v1/tokens/<id>
 # the email.
 curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"sub":"alice@corp.com"}' $WARDYN/api/v1/sessions/revoke
+
+# Only her sessions; her tokens and SSH keys are left alone:
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"sub":"alice@corp.com","sessions_only":true}' $WARDYN/api/v1/sessions/revoke
 ```
 
 A revoked token is never re-stamped — it keeps whatever role it carried when it

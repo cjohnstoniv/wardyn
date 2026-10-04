@@ -80,7 +80,8 @@ test.describe("People (Admin view)", () => {
     expect(revoked).toBeNull();
     await confirm.getByRole("button", { name: "Sign out everywhere" }).click();
     await expect(confirm).toHaveCount(0);
-    expect(revoked).toEqual({ sub: person.subject });
+    // Only the sessions go: the route would otherwise revoke their tokens and delete their SSH keys too.
+    expect(revoked).toEqual({ sub: person.subject, sessions_only: true });
 
     // Remove all SSH keys: the confirm changes nothing until it is accepted.
     await drawer.getByRole("button", { name: "Remove all" }).click();
