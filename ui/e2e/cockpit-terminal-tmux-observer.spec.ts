@@ -20,6 +20,7 @@ import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { findRunningFixture, stubInteractiveRun } from "./attach-stub";
 import { RUN_COCKPIT } from "../src/app/components/wardyn/copy/run-cockpit";
 import { readGrid } from "./terminal-grid";
+import { termText } from "./terminal-text";
 
 type Size = { cols: number; rows: number };
 
@@ -28,7 +29,7 @@ type Size = { cols: number; rows: number };
 // read-only for a moment.
 async function shellSize(page: Page, tag: string): Promise<Size> {
   const screen = page.locator(".xterm-screen").first();
-  const read = async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")) as string;
+  const read = async () => (await termText(screen).catch(() => "")) as string;
   const re = new RegExp(`${tag}-(\\d+)x(\\d+)`);
   await expect
     .poll(
@@ -71,7 +72,8 @@ test("a second tab never clamps the writer's window, and a promotion sizes it to
 
   // A second tab, in a small window, watches the same run.
   const observer = await context.newPage();
-  await observer.setViewportSize({ width: 760, height: 560 });
+  // Still much smaller than the writer, and wide enough (md, 768px) for the sidebar gotoConsole waits on.
+  await observer.setViewportSize({ width: 800, height: 560 });
   await gotoConsole(observer);
   await navToRoute(observer, `/runs/${runId}`);
   await expect(observer.getByText(RUN_COCKPIT.watchingReadOnly)).toBeVisible({ timeout: 30_000 });

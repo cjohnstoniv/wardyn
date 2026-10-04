@@ -32,7 +32,8 @@ test("a read-only tab renders the writer's grid and follows the writer's resize"
   const writer = await readGrid(page);
 
   const observer = await context.newPage();
-  await observer.setViewportSize({ width: 760, height: 560 });
+  // Still much smaller than the writer, and wide enough (md, 768px) for the sidebar gotoConsole waits on.
+  await observer.setViewportSize({ width: 800, height: 560 });
   await gotoConsole(observer);
   await navToRoute(observer, `/runs/${runId}`);
   await expect(observer.getByText(RUN_COCKPIT.watchingReadOnly)).toBeVisible({ timeout: 30_000 });
