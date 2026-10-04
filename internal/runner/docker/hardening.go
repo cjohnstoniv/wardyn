@@ -465,9 +465,9 @@ func hostSupportsAppArmor(info system.Info) bool {
 // proxyResources is the proxy sidecar's cgroup envelope: a tight PID cap (fork-bomb guard) and
 // memory/CPU cap (MemorySwap pinned so swap can't double it), the same runner.ProxyLimits envelope
 // the k8s substrate applies.
-func proxyResources() container.Resources {
-	sz := runner.EffectiveResources(runner.Resources{})
-	cpuMillis, memBytes := sz.ProxyCPUMillis, sz.ProxyMemoryMiB*1024*1024
+func proxyResources(azure bool) container.Resources {
+	cpuMillis, memMiB := runner.ProxyLimitsFor(azure)
+	memBytes := memMiB * 1024 * 1024
 	pids := proxyPidsLimit
 	return container.Resources{
 		NanoCPUs:   cpuMillis * 1_000_000,

@@ -30,7 +30,7 @@ func TestDefaultSizeFollowsEffectiveLimits(t *testing.T) {
 			t.Errorf("%s: resourcesFromSpec = %d nanos / %d bytes, want %+v", tc.name, r.NanoCPUs, r.Memory, want)
 		}
 		pc, pm := runner.ProxyLimits()
-		p := proxyResources()
+		p := proxyResources(false)
 		if p.NanoCPUs != pc*1_000_000 || p.Memory != pm*1024*1024 {
 			t.Errorf("%s: proxyResources = %d nanos / %d bytes, want %d/%d", tc.name, p.NanoCPUs, p.Memory, pc, pm)
 		}

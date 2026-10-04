@@ -28,7 +28,7 @@ func TestPodMatchesEffectiveResources(t *testing.T) {
 					a.Requests.Memory().Value() != sz.AgentMemoryRequestMiB<<20 || a.Limits.Memory().Value() != sz.AgentMemoryLimitMiB<<20 {
 					t.Errorf("ratio %v res %+v: agent %v/%v, sizing %+v", ratio, res, a.Requests, a.Limits, sz)
 				}
-				p := proxyResources()
+				p := proxyResources(false)
 				if p.Limits.Cpu().MilliValue() != sz.ProxyCPUMillis || p.Limits.Memory().Value() != sz.ProxyMemoryMiB<<20 {
 					t.Errorf("proxy %v, sizing %+v", p.Limits, sz)
 				}

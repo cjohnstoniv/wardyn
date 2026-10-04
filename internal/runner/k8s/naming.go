@@ -253,11 +253,11 @@ func ephemeralScratchVolumes(diskMiB int64) ([]corev1.Volume, []corev1.VolumeMou
 
 // proxyResources is the wardyn-proxy sidecar's cgroup envelope — the same runner.ProxyLimits
 // docker applies: a tight, run-independent footprint bounding a compromised proxy.
-func proxyResources() corev1.ResourceRequirements {
-	sz := runner.EffectiveResources(runner.Resources{})
+func proxyResources(azure bool) corev1.ResourceRequirements {
+	cpuMillis, memMiB := runner.ProxyLimitsFor(azure)
 	list := corev1.ResourceList{
-		corev1.ResourceCPU:    *resource.NewMilliQuantity(sz.ProxyCPUMillis, resource.DecimalSI),
-		corev1.ResourceMemory: *resource.NewQuantity(sz.ProxyMemoryMiB*1024*1024, resource.BinarySI),
+		corev1.ResourceCPU:    *resource.NewMilliQuantity(cpuMillis, resource.DecimalSI),
+		corev1.ResourceMemory: *resource.NewQuantity(memMiB*1024*1024, resource.BinarySI),
 	}
 	return corev1.ResourceRequirements{Requests: list, Limits: list}
 }

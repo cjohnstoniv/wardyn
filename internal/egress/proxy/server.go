@@ -225,6 +225,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		PATGrants:            cfg.PATGrants,
 		BrokeredPATGrantIDs:  cfg.BrokeredPATGrantIDs,
 		ADOGrants:            newADOGrantsByHost(cfg.ADOGrant),
+		AzureGates:           cfg.AzureGates,
 		ControlPlaneURL:      cfg.ControlPlaneURL,
 		RunToken:             ts,
 		Upstream:             up,
