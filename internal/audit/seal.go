@@ -52,6 +52,11 @@ var ErrKeyErased = errors.New("audit seal: the subject's key is destroyed")
 // counted toward quarantine, because the line is not what is wrong.
 var ErrReplayDeferred = errors.New("audit replay deferred: a pending row cannot be re-sealed yet")
 
+// ErrPendingUnopenable is what Reseal returns, wrapped, for a pending field that
+// does not open under the pending key. That never heals by waiting, so the spool
+// drain counts it toward quarantine instead of deferring it.
+var ErrPendingUnopenable = errors.New("audit seal: a pending field does not open under the pending key")
+
 // SealKeys is the per-subject key service; *subjectkey.Manager (through
 // cmd/wardynd's adapter) is the production one. Current may create the
 // subject's first key; Key reads a version and fails ErrKeyErased once it is
@@ -420,7 +425,7 @@ func (s *Sealer) Reseal(ctx context.Context, ev types.AuditEvent) (types.AuditEv
 			}
 			plain, err := kek.Open(pk, ct, sealAAD(ev.ID.String(), ev.Action, f.Path, name, 0))
 			if err != nil {
-				return nil, false, fmt.Errorf("a pending field does not open under the pending key: %w", err)
+				return nil, false, fmt.Errorf("%w: %w", ErrPendingUnopenable, err)
 			}
 			defer clear(plain)
 			subject, version, key, err := s.subjectKeyUnlessGone(ctx, ev.Time, name)

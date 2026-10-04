@@ -120,6 +120,28 @@ func TestSealingRecorderReplayDefersWhatItCannotReseal(t *testing.T) {
 	}
 }
 
+// A pending field that does not open under the pending key never heals by
+// waiting: it is not a deferred error, so the drain strikes and quarantines it
+// rather than wedging the spool behind it.
+func TestSealingRecorderReplayDoesNotDeferAnUnopenablePendingRow(t *testing.T) {
+	inner := &captureRecorder{}
+	oldKey, newKey := make([]byte, 32), make([]byte, 32)
+	newKey[0] = 1
+	pendingRow, isPending, err := (&audit.Sealer{Keys: downKeys{}, Pending: func() []byte { return oldKey }}).Seal(t.Context(), decideRow("words"))
+	if err != nil || !isPending {
+		t.Fatalf("seal with the keys down: %v, pending %v", err, isPending)
+	}
+	src := newAuditSealSource(audit.SealFields)
+	src.arm(&audit.Sealer{Keys: downKeys{}, Pending: func() []byte { return newKey }})
+	err = sealingRecorder{inner: inner, replay: true, src: src}.Record(t.Context(), pendingRow)
+	if err == nil || errors.Is(err, audit.ErrReplayDeferred) || !errors.Is(err, audit.ErrPendingUnopenable) {
+		t.Errorf("pending row under another pending key: err = %v, want ErrPendingUnopenable and not ErrReplayDeferred", err)
+	}
+	if len(inner.evs) != 0 {
+		t.Errorf("an unopenable row reached the store: %d rows", len(inner.evs))
+	}
+}
+
 func TestAuditSealPurposeIsTheSubjectKeyPurpose(t *testing.T) {
 	if audit.SealPurpose != subjectkey.PurposeAuditSeal {
 		t.Fatalf("audit.SealPurpose = %q, subjectkey.PurposeAuditSeal = %q: sealed rows would be read under another purpose's key", audit.SealPurpose, subjectkey.PurposeAuditSeal)
