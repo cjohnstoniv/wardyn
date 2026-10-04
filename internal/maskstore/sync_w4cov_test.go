@@ -24,7 +24,7 @@ var (
 	w4CovRowA  = uuid.MustParse("bbbbbbbb-0000-0000-0000-00000000000a")
 	w4CovRowB  = uuid.MustParse("bbbbbbbb-0000-0000-0000-00000000000b")
 	w4CovRowC  = uuid.MustParse("bbbbbbbb-0000-0000-0000-00000000000c")
-	w4CovT0    = time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
+	w4CovT0    = time.Now().UTC().Truncate(time.Second)
 	w4CovOwner = "alice"
 )
 

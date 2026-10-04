@@ -156,7 +156,7 @@ func TestMiscCovStampCredentialUse(t *testing.T) {
 }
 
 func TestMiscCovAttachOwnCredentialMeta(t *testing.T) {
-	added := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
+	added := time.Now().UTC().Truncate(time.Second)
 	used := added.Add(48 * time.Hour)
 	key := types.ModelProvider{ID: "gw", UID: "uid-gw", Kind: types.ModelProviderAnthropicAPIKey}
 	sso := types.ModelProvider{ID: "sso", UID: "uid-sso", Kind: types.ModelProviderBedrockSSO}
@@ -317,7 +317,7 @@ func TestMiscCovCredentialInventoryWithNoProvidersReadsNoMetadata(t *testing.T) 
 // provider, leaves the operator namespace and rows of no provider out, and (with a key-domain service
 // whose database cannot be read) carries no key domain rather than a made-up one.
 func TestMiscCovCredentialInventoryListsHoldersAndCounts(t *testing.T) {
-	added := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	added := time.Now().UTC().Truncate(time.Second)
 	gw := types.ModelProvider{ID: "gw", UID: "uid-gw", Name: "Gateway", Kind: types.ModelProviderAnthropicAPIKey}
 	sso := types.ModelProvider{ID: "sso", UID: "uid-sso", Name: "AWS", Kind: types.ModelProviderBedrockSSO}
 	idle := types.ModelProvider{ID: "idle", UID: "uid-idle", Name: "Idle", Kind: types.ModelProviderAnthropicSubscription}

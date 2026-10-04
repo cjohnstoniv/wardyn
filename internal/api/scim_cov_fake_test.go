@@ -104,7 +104,7 @@ type scimCovOwnerWrite struct {
 	Owner string
 }
 
-var scimCovNow = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+var scimCovNow = time.Now().UTC().Truncate(time.Second)
 
 func newSCIMCovStore() *scimCovStore {
 	return &scimCovStore{
@@ -1244,9 +1244,7 @@ type scimCovUser struct {
 	Emails     []scim.Email `json:"emails"`
 }
 
-var scimCovErrBoom = errors.New("driver exploded: secret-dsn")
-
-func scimCovAt(t time.Time) *time.Time { return &t }
+var errSCIMCovBoom = errors.New("driver exploded: secret-dsn")
 
 // scimCovPurgeAudit refuses the person.deprovision row of a purge, and only that one.
 type scimCovPurgeAudit struct {

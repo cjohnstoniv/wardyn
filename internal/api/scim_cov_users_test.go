@@ -161,7 +161,7 @@ func TestSCIMCovListUsersRefusals(t *testing.T) {
 		t.Errorf("a refused filter reached the store: %+v", st.searches)
 	}
 
-	st.failNext("SearchIdentities", scimCovErrBoom, -1)
+	st.failNext("SearchIdentities", errSCIMCovBoom, -1)
 	w := e.scim(http.MethodGet, "/scim/v2/Users?filter="+url.QueryEscape(`userName eq "x"`), "")
 	scimCovWantRetry(t, w, "secret-dsn")
 }
@@ -182,7 +182,7 @@ func TestSCIMCovGetUser(t *testing.T) {
 			t.Errorf("GET /Users/%s: %s", id, w.Body.String())
 		}
 	}
-	st.failNext("GetIdentity", scimCovErrBoom, 1)
+	st.failNext("GetIdentity", errSCIMCovBoom, 1)
 	scimCovWantRetry(t, e.scim(http.MethodGet, "/scim/v2/Users/"+pat.ID.String(), ""), "secret-dsn")
 }
 
@@ -354,7 +354,7 @@ func TestSCIMCovCreateAnswers500WhenAStoreStepFails(t *testing.T) {
 			if c.withPerson {
 				people.people = map[string]types.Person{personKey: {Principal: personKey}}
 			}
-			st.failNext(c.method, scimCovErrBoom, -1)
+			st.failNext(c.method, errSCIMCovBoom, -1)
 			e := newSCIMCovEnv(t, people)
 			w := e.scim(http.MethodPost, "/scim/v2/Users", scimCovUserBody(scimCovOID, "Pat", true, "pat@corp.example"))
 			scimCovWantRetry(t, w, "secret-dsn")
@@ -390,7 +390,7 @@ func TestSCIMCovCreateInactiveSuspendsTheNewUser(t *testing.T) {
 
 	// A suspension that cannot finish answers 5xx so the identity provider retries, after the create stuck.
 	st2 := newSCIMCovStore()
-	st2.failNext("SuspendIdentity", scimCovErrBoom, -1)
+	st2.failNext("SuspendIdentity", errSCIMCovBoom, -1)
 	e2 := newSCIMCovEnv(t, st2)
 	scimCovWantRetry(t, e2.scim(http.MethodPost, "/scim/v2/Users", scimCovUserBody(scimCovOID, "Pat", false)), "secret-dsn")
 	if len(st2.creates) != 1 || len(e2.auditRows("scim.user.write")) != 1 {
@@ -512,7 +512,7 @@ func TestSCIMCovPatchExternalIDIsImmutable(t *testing.T) {
 	})
 	t.Run("a suspension that cannot finish is a 5xx, not the 400", func(t *testing.T) {
 		st, e, path := setup(t)
-		st.failNext("SuspendIdentity", scimCovErrBoom, -1)
+		st.failNext("SuspendIdentity", errSCIMCovBoom, -1)
 		scimCovWantRetry(t, e.scim(http.MethodPatch, path, scimCovPatch(scimCovReplace("externalId", `"`+other+`"`), scimCovReplace("active", "false"))), "secret-dsn")
 	})
 	t.Run("the bound id in another case is allowed", func(t *testing.T) {
@@ -583,7 +583,7 @@ func TestSCIMCovPatchAnswers500WhenAStoreStepFails(t *testing.T) {
 				row.Principal = ""
 			}
 			pat := st.addIdentity(row, "pat@corp.example")
-			st.failNext(c.method, scimCovErrBoom, -1)
+			st.failNext(c.method, errSCIMCovBoom, -1)
 			e := newSCIMCovEnv(t, st)
 			w := e.scim(http.MethodPatch, "/scim/v2/Users/"+pat.ID.String(), c.body)
 			scimCovWantRetry(t, w, "secret-dsn")

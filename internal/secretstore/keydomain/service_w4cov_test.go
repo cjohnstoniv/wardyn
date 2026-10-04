@@ -22,7 +22,7 @@ func TestW4CovServiceCountsFailAsUnavailableWithNoCount(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	changes, err := s.ChangesSince(ctx, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	changes, err := s.ChangesSince(ctx, time.Now().UTC().Truncate(time.Second))
 	if !errors.Is(err, secretstore.ErrUnavailable) || !strings.Contains(err.Error(), "count the assignment changes") {
 		t.Errorf("ChangesSince = %v, want ErrUnavailable naming the count", err)
 	}

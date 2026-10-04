@@ -53,7 +53,7 @@ func TestMiscCovSaveRunPAT(t *testing.T) {
 	run := uuid.MustParse("00000000-0000-4000-8000-0000000000b1")
 	keysDown := errors.New("key service down")
 	srv, closedErr := miscCovPATServer(t, miscCovFailingKeys{keysDown})
-	valid := time.Date(2026, 5, 6, 7, 8, 9, 0, time.UTC)
+	valid := time.Now().UTC().Truncate(time.Second)
 
 	t.Run("a store-less server's save is a no-op", func(t *testing.T) {
 		plain := newHarness(t).srv

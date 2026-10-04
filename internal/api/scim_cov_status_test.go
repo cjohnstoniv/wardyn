@@ -93,7 +93,7 @@ func TestSCIMCovStatusRequiresASecurityAdmin(t *testing.T) {
 
 func TestSCIMCovStatusListsDeactivatedAndPending(t *testing.T) {
 	st := newSCIMCovStore()
-	gone := time.Date(2026, 9, 29, 8, 0, 0, 0, time.FixedZone("x", 2*3600))
+	gone := time.Now().UTC().Truncate(time.Second).In(time.FixedZone("x", 2*3600))
 	purge := gone.Add(72 * time.Hour)
 	scimName := st.addIdentity(store.PrincipalIdentity{Principal: "sub-a", ScimUserName: "Ann", EmailLower: "ann@corp.example", DeactivatedAt: &gone, PurgeAfter: &purge})
 	st.addIdentity(store.PrincipalIdentity{Principal: "sub-b", EmailLower: "bob@corp.example", DeactivatedAt: &gone})
@@ -123,7 +123,7 @@ func TestSCIMCovStatusListsDeactivatedAndPending(t *testing.T) {
 	if want := []string{"Ann", "bob@corp.example", "sub-c", scimCovOID, byID.ID.String()}; fmt.Sprint(people) != fmt.Sprint(want) {
 		t.Errorf("deactivated = %v, want %v: the SCIM name, else the email, the principal, the object id, the row id (a purged person is not listed)", people, want)
 	}
-	if got := body.Deactivated[0]; got.DeactivatedAt != "2026-09-29T06:00:00Z" || got.PurgeAfter == nil || *got.PurgeAfter != "2026-10-02T06:00:00Z" {
+	if got := body.Deactivated[0]; got.DeactivatedAt != gone.UTC().Format(time.RFC3339) || got.PurgeAfter == nil || *got.PurgeAfter != purge.UTC().Format(time.RFC3339) {
 		t.Errorf("first row = %+v, want both instants in UTC", got)
 	}
 	if body.Deactivated[1].PurgeAfter != nil {
@@ -154,7 +154,7 @@ func TestSCIMCovStatusStoreFailures(t *testing.T) {
 			if c.arm != nil {
 				c.arm(st)
 			}
-			st.failNext(c.method, scimCovErrBoom, -1)
+			st.failNext(c.method, errSCIMCovBoom, -1)
 			e := newSCIMCovEnv(t, st)
 			w, _ := e.status()
 			if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "secret-dsn") {
@@ -207,7 +207,7 @@ func TestSCIMCovStatusAuditReadFailures(t *testing.T) {
 			st.drives = []types.UserDriveListItem{{UserDrive: types.UserDrive{Name: "home"}}}
 			rows := []types.AuditEvent{scimCovAudit("person.deprovision", id.ID.String(), scimCovNow, `{"kind":"purge","drives":["home"]}`)}
 			e, paged := scimCovPagedEnv(t, st, rows)
-			paged.err, paged.errAction = scimCovErrBoom, c.action
+			paged.err, paged.errAction = errSCIMCovBoom, c.action
 			w, _ := e.status()
 			if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "secret-dsn") {
 				t.Errorf("status = %d %s, want a 500 that does not leak the driver error", w.Code, w.Body.String())
@@ -223,7 +223,7 @@ func TestSCIMCovStatusDrivesToReclaim(t *testing.T) {
 	st.drives = []types.UserDriveListItem{
 		{UserDrive: types.UserDrive{Name: "alpha"}}, {UserDrive: types.UserDrive{Name: "zeta"}}, {UserDrive: types.UserDrive{Name: "omega"}},
 	}
-	t1 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.FixedZone("x", 3600))
+	t1 := time.Now().UTC().Truncate(time.Second).In(time.FixedZone("x", 3600))
 	t2 := t1.Add(-24 * time.Hour)
 	purge := func(target string, at time.Time, drives string) types.AuditEvent {
 		return scimCovAudit("person.deprovision", target, at, `{"kind":"purge","drives":`+drives+`}`)
@@ -259,7 +259,7 @@ func TestSCIMCovStatusDrivesToReclaim(t *testing.T) {
 	for _, d := range body.Drives {
 		got = append(got, drive{d.Person, d.Drive, d.PurgedAt})
 	}
-	want := []drive{{"Pat", "zeta", "2026-10-01T08:00:00Z"}, {"sam@corp.example", "alpha", "2026-09-30T08:00:00Z"}}
+	want := []drive{{"Pat", "zeta", t1.UTC().Format(time.RFC3339)}, {"sam@corp.example", "alpha", t2.UTC().Format(time.RFC3339)}}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("drives = %v, want %v: still-live drives of each purge, newest purge first, minus what a later reclaim by that person freed", got, want)
 	}
@@ -294,7 +294,7 @@ func TestSCIMCovStatusDrivesNeedsNothingWhenNoPurgeListedDrives(t *testing.T) {
 	if w, _ := e2.status(); w.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500 for a purge of a person that cannot be read", w.Code)
 	}
-	st.failNext("ListUserDrives", scimCovErrBoom, -1)
+	st.failNext("ListUserDrives", errSCIMCovBoom, -1)
 	if w, _ := e2.status(); w.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500 when the live drives cannot be read", w.Code)
 	}
@@ -304,7 +304,7 @@ func TestSCIMCovStatusDrivesNeedsNothingWhenNoPurgeListedDrives(t *testing.T) {
 	pat := st3.addIdentity(store.PrincipalIdentity{Principal: "sub-pat"})
 	st3.drives = st.drives
 	e3, _ := scimCovPagedEnv(t, st3, []types.AuditEvent{scimCovAudit("person.deprovision", pat.ID.String(), scimCovNow, `{"kind":"purge","drives":["home"]}`)})
-	st3.failAfter("GetIdentity", scimCovErrBoom, 1)
+	st3.failAfter("GetIdentity", errSCIMCovBoom, 1)
 	if w, _ := e3.status(); w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "secret-dsn") {
 		t.Errorf("status = %d %s, want 500 when the person cannot be read for the reclaim match", w.Code, w.Body.String())
 	}

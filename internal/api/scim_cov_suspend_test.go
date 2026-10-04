@@ -410,10 +410,10 @@ func TestSCIMCovSuspensionStopsAtAFailedStoreStep(t *testing.T) {
 			st := newSCIMCovStore()
 			l := scimCovSeedLeaver(st)
 			e := newSCIMCovEnv(t, st)
-			st.failNext(c.method, scimCovErrBoom, -1)
+			st.failNext(c.method, errSCIMCovBoom, -1)
 
 			err := e.srv.suspendIdentity(context.Background(), st, l.id, scimSlotPrimary)
-			if !errors.Is(err, scimCovErrBoom) {
+			if !errors.Is(err, errSCIMCovBoom) {
 				t.Fatalf("err = %v, want the store's error", err)
 			}
 			if len(st.plans) != c.wantPlans {
@@ -461,9 +461,9 @@ func TestSCIMCovARunTheLedgerCountedDoneIsKilledAgainWhenLive(t *testing.T) {
 	st2.jobs = append(st2.jobs,
 		&store.DeprovisionJob{IdentityID: ident2.ID, Kind: store.JobKindSuspend, Step: store.JobStepCutoff, Done: true},
 		&store.DeprovisionJob{IdentityID: ident2.ID, Kind: store.JobKindSuspend, Step: jobStepKillRun, Target: run2.String(), Done: true})
-	st2.failNext("ReopenDeprovisionJob", scimCovErrBoom, -1)
+	st2.failNext("ReopenDeprovisionJob", errSCIMCovBoom, -1)
 	e2 := newSCIMCovEnv(t, st2)
-	if err := e2.srv.suspendIdentity(context.Background(), st2, ident2.ID, scimSlotPrimary); !errors.Is(err, scimCovErrBoom) {
+	if err := e2.srv.suspendIdentity(context.Background(), st2, ident2.ID, scimSlotPrimary); !errors.Is(err, errSCIMCovBoom) {
 		t.Errorf("err = %v, want the reopen's error", err)
 	}
 	if st2.runState(run2) != types.RunRunning {
@@ -502,8 +502,8 @@ func TestSCIMCovTeardownRefusals(t *testing.T) {
 		wantState types.RunState
 		wantCAS   int
 	}{
-		{"a run that cannot be read", func(s *scimCovStore) { s.failNext("GetRun", scimCovErrBoom, -1) }, "read run", types.RunRunning, 0},
-		{"a kill the store refuses", func(s *scimCovStore) { s.failNext("UpdateRunStateIf", scimCovErrBoom, -1) }, "kill run", types.RunRunning, 1},
+		{"a run that cannot be read", func(s *scimCovStore) { s.failNext("GetRun", errSCIMCovBoom, -1) }, "read run", types.RunRunning, 0},
+		{"a kill the store refuses", func(s *scimCovStore) { s.failNext("UpdateRunStateIf", errSCIMCovBoom, -1) }, "kill run", types.RunRunning, 1},
 		{"a run that keeps changing state", func(s *scimCovStore) { s.casLost = 10 }, "kept changing state under the kill", types.RunRunning, teardownAttempts},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -515,7 +515,7 @@ func TestSCIMCovTeardownRefusals(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) || !strings.Contains(err.Error(), run.String()) {
 				t.Fatalf("err = %v, want %q naming the run", err, c.wantErr)
 			}
-			if c.wantErr != "kept changing state under the kill" && !errors.Is(err, scimCovErrBoom) {
+			if c.wantErr != "kept changing state under the kill" && !errors.Is(err, errSCIMCovBoom) {
 				t.Errorf("err = %v, want the store's error wrapped", err)
 			}
 			if st.runState(run) != c.wantState || e.runner.killCount() != 0 {
@@ -574,10 +574,10 @@ func TestSCIMCovALedgerReadFailureStopsOnlyItsStep(t *testing.T) {
 			st := newSCIMCovStore()
 			l := scimCovSeedLeaver(st)
 			e := newSCIMCovEnv(t, st)
-			st.failAfter("ListDeprovisionJobs:suspend", scimCovErrBoom, c.skip)
+			st.failAfter("ListDeprovisionJobs:suspend", errSCIMCovBoom, c.skip)
 
 			err := e.srv.suspendIdentity(context.Background(), st, l.id, scimSlotPrimary)
-			if !errors.Is(err, errDeprovisionIncomplete) || !errors.Is(err, scimCovErrBoom) {
+			if !errors.Is(err, errDeprovisionIncomplete) || !errors.Is(err, errSCIMCovBoom) {
 				t.Fatalf("err = %v, want errDeprovisionIncomplete wrapping the read's error", err)
 			}
 			if got := st.tokenRevoked(l.tokSub); got != c.wantSweeps {

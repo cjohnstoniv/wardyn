@@ -29,7 +29,7 @@ import (
 func TestMiscCovRunPATRow(t *testing.T) {
 	run := uuid.MustParse("00000000-0000-4000-8000-0000000000f1")
 	auth := uuid.MustParse("00000000-0000-4000-8000-0000000000f2")
-	valid := time.Date(2026, 6, 7, 8, 9, 10, 0, time.UTC)
+	valid := time.Now().UTC().Truncate(time.Second)
 	sn := adoEntraScopeSnapshot{OwnerSubject: "sub-owner", ProviderRowID: "row-1", Organisation: "contoso"}
 
 	row, err := runPATRow(run, sn, adoPAT{AuthorizationID: auth.String(), Scope: "vso.code", ValidTo: valid})

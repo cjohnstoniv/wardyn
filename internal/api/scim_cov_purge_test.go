@@ -179,14 +179,14 @@ func TestSCIMCovDeleteRefusals(t *testing.T) {
 		t.Errorf("an unknown id reached the tombstone: %v", st.purgeMarks)
 	}
 
-	st.failNext("MarkIdentityPurged", scimCovErrBoom, 1)
+	st.failNext("MarkIdentityPurged", errSCIMCovBoom, 1)
 	scimCovWantRetry(t, e.scim(http.MethodDelete, "/scim/v2/Users/"+l.id.String(), ""), "secret-dsn")
 	if st.identity(l.id).PurgedAt != nil || len(st.plans) != 0 || len(st.ownerWrites) != 0 {
 		t.Error("a failed mark was followed by the suspension or the purge steps")
 	}
 
 	// A suspension that cannot finish keeps the tombstone but touches none of what a purge removes.
-	st.failNext("SuspendIdentity", scimCovErrBoom, 1)
+	st.failNext("SuspendIdentity", errSCIMCovBoom, 1)
 	scimCovWantRetry(t, e.scim(http.MethodDelete, "/scim/v2/Users/"+l.id.String(), ""), "secret-dsn")
 	if st.identity(l.id).PurgedAt == nil {
 		t.Error("the tombstone must stand once marked")
@@ -209,7 +209,7 @@ func TestSCIMCovAFailedPurgeStepStaysPendingWhileTheOthersRun(t *testing.T) {
 			st := newSCIMCovStore()
 			l := scimCovSeedPurgee(st)
 			e := newSCIMCovEnv(t, st)
-			st.failNext(c.method, scimCovErrBoom, 1)
+			st.failNext(c.method, errSCIMCovBoom, 1)
 			path := "/scim/v2/Users/" + l.id.String()
 
 			scimCovWantRetry(t, e.scim(http.MethodDelete, path, ""), "secret-dsn")
@@ -256,7 +256,7 @@ func TestSCIMCovPurgeAuditRowWaitsForItsInputs(t *testing.T) {
 			st := newSCIMCovStore()
 			l := scimCovSeedPurgee(st)
 			e := newSCIMCovEnv(t, st)
-			st.failNext(c.method, scimCovErrBoom, -1)
+			st.failNext(c.method, errSCIMCovBoom, -1)
 
 			w := e.scim(http.MethodDelete, "/scim/v2/Users/"+l.id.String(), "")
 			scimCovWantRetry(t, w, "secret-dsn")
@@ -319,8 +319,8 @@ func TestSCIMCovReassignWorkspaces(t *testing.T) {
 		st := newSCIMCovStore()
 		scimCovSeedPurgee(st)
 		e := newSCIMCovEnv(t, st)
-		st.failNext("ListWorkspaces", scimCovErrBoom, 1)
-		if _, err := e.srv.reassignWorkspaces(ctx, []string{"sub-pat"}); !errors.Is(err, scimCovErrBoom) || len(st.ownerWrites) != 0 {
+		st.failNext("ListWorkspaces", errSCIMCovBoom, 1)
+		if _, err := e.srv.reassignWorkspaces(ctx, []string{"sub-pat"}); !errors.Is(err, errSCIMCovBoom) || len(st.ownerWrites) != 0 {
 			t.Errorf("err = %v owner writes %v", err, st.ownerWrites)
 		}
 	})
@@ -328,8 +328,8 @@ func TestSCIMCovReassignWorkspaces(t *testing.T) {
 		st := newSCIMCovStore()
 		scimCovSeedPurgee(st)
 		e := newSCIMCovEnv(t, st)
-		st.failNext("SetWorkspaceOwner", scimCovErrBoom, -1)
-		if _, err := e.srv.reassignWorkspaces(ctx, scimCovTargets); !errors.Is(err, scimCovErrBoom) {
+		st.failNext("SetWorkspaceOwner", errSCIMCovBoom, -1)
+		if _, err := e.srv.reassignWorkspaces(ctx, scimCovTargets); !errors.Is(err, errSCIMCovBoom) {
 			t.Errorf("err = %v, want the store's error", err)
 		}
 		if len(st.ownerWrites) != 1 || len(e.auditRows("workspace.reassign")) != 0 {
@@ -466,11 +466,11 @@ func TestSCIMCovSweeperContinuesPastAFailedIdentity(t *testing.T) {
 	st := newSCIMCovStore()
 	first := scimCovDeactivated(st, "sub-first", true)
 	second := scimCovDeactivated(st, "sub-second", true)
-	st.failNext("MarkIdentityPurged", scimCovErrBoom, 1)
+	st.failNext("MarkIdentityPurged", errSCIMCovBoom, 1)
 	e := scimCovSweepEnv(t, st)
 
 	err := e.srv.SweepSCIMPurge(context.Background())
-	if !errors.Is(err, scimCovErrBoom) {
+	if !errors.Is(err, errSCIMCovBoom) {
 		t.Fatalf("err = %v, want the failure reported", err)
 	}
 	if st.identity(first.ID).PurgedAt != nil || st.identity(second.ID).PurgedAt == nil {
@@ -482,11 +482,11 @@ func TestSCIMCovSweeperReportsListFailuresAndKeepsGoing(t *testing.T) {
 	st := newSCIMCovStore()
 	due := scimCovDeactivated(st, "sub-due", true)
 	e := scimCovSweepEnv(t, st)
-	st.failNext("PurgeDueIdentities", scimCovErrBoom, 1)
+	st.failNext("PurgeDueIdentities", errSCIMCovBoom, 1)
 	st.failNext("PendingLeavers", errors.New("pending list unavailable"), 1)
 
 	err := e.srv.SweepSCIMPurge(context.Background())
-	if !errors.Is(err, scimCovErrBoom) || err == nil || !strings.Contains(err.Error(), "pending list unavailable") {
+	if !errors.Is(err, errSCIMCovBoom) || err == nil || !strings.Contains(err.Error(), "pending list unavailable") {
 		t.Errorf("err = %v, want both list failures joined", err)
 	}
 	if st.identity(due.ID).PurgedAt != nil {
@@ -554,10 +554,10 @@ func TestSCIMCovPurgeStopsWhenALaterReadFails(t *testing.T) {
 			st := newSCIMCovStore()
 			l := scimCovSeedPurgee(st)
 			e := newSCIMCovEnv(t, st)
-			st.failAfter(c.method, scimCovErrBoom, c.skip)
+			st.failAfter(c.method, errSCIMCovBoom, c.skip)
 
 			purged, err := e.srv.purgeIdentity(context.Background(), st, l.id, scimSweeperSlot, false)
-			if !errors.Is(err, scimCovErrBoom) || !purged {
+			if !errors.Is(err, errSCIMCovBoom) || !purged {
 				t.Fatalf("purged %t err %v, want the read's error", purged, err)
 			}
 			if len(st.ownerWrites) != c.wantWrites || e.purgeRows() != 0 || st.identity(l.id).PurgedAt == nil {

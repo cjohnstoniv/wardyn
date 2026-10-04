@@ -107,7 +107,7 @@ func TestSCIMCovGroupsReadRefusals(t *testing.T) {
 		{"reading the members of a listed group", "ScimGroupMembers", listPath},
 	} {
 		t.Run("a failure "+c.name, func(t *testing.T) {
-			st.failNext(c.method, scimCovErrBoom, 1)
+			st.failNext(c.method, errSCIMCovBoom, 1)
 			scimCovWantRetry(t, e.scim(http.MethodGet, c.path, ""), "secret-dsn")
 		})
 	}
@@ -156,7 +156,7 @@ func TestSCIMCovCreateGroupStoreFailures(t *testing.T) {
 		t.Run(method, func(t *testing.T) {
 			st := newSCIMCovStore()
 			e := newSCIMCovEnv(t, st)
-			st.failNext(method, scimCovErrBoom, -1)
+			st.failNext(method, errSCIMCovBoom, -1)
 			scimCovWantRetry(t, e.scim(http.MethodPost, "/scim/v2/Groups", `{"externalId":"g1","displayName":"G"}`), "secret-dsn")
 		})
 	}
@@ -225,7 +225,7 @@ func TestSCIMCovPatchGroupStoreFailures(t *testing.T) {
 			st := newSCIMCovStore()
 			g := st.addGroup(scimCovGroupExternal, "Engineering", scimCovPerson(st, "sub-p").ID)
 			e := newSCIMCovEnv(t, st)
-			st.failNext(c.method, scimCovErrBoom, -1)
+			st.failNext(c.method, errSCIMCovBoom, -1)
 			w := e.scim(http.MethodPatch, "/scim/v2/Groups/"+g.ID.String(), scimCovPatch(c.body))
 			scimCovWantRetry(t, w, "secret-dsn")
 			if c.method == "GroupRemovalIdentities" && (st.callCount("StartGroupRemoval") != 0 || len(e.h.audit.snapshot()) != 0) {
@@ -386,7 +386,7 @@ func TestSCIMCovARemovalStoreFailureStopsLaterStepsAndIsRetried(t *testing.T) {
 			g := st.addGroup(scimCovGroupExternal, "Engineering", p.ID)
 			tok := scimCovTokenIn(st, "sub-p", nil, nil)
 			e := newSCIMCovEnv(t, st)
-			st.failAfter(c.method, scimCovErrBoom, c.skip)
+			st.failAfter(c.method, errSCIMCovBoom, c.skip)
 			path := "/scim/v2/Groups/" + g.ID.String()
 			body := scimCovPatch(scimCovGroupRemove(p.ID.String()))
 
@@ -479,14 +479,14 @@ func TestSCIMCovDeleteGroupFailures(t *testing.T) {
 	t.Run("the group delete failing", func(t *testing.T) {
 		st := newSCIMCovStore()
 		g := st.addGroup(scimCovGroupExternal, "Engineering")
-		st.failNext("DeleteScimGroup", scimCovErrBoom, 1)
+		st.failNext("DeleteScimGroup", errSCIMCovBoom, 1)
 		e := newSCIMCovEnv(t, st)
 		scimCovWantRetry(t, e.scim(http.MethodDelete, "/scim/v2/Groups/"+g.ID.String(), ""), "secret-dsn")
 	})
 	t.Run("listing who to remove failing", func(t *testing.T) {
 		st := newSCIMCovStore()
 		g := st.addGroup(scimCovGroupExternal, "Engineering", scimCovPerson(st, "sub-1").ID)
-		st.failNext("GroupRemovalIdentities", scimCovErrBoom, 1)
+		st.failNext("GroupRemovalIdentities", errSCIMCovBoom, 1)
 		e := newSCIMCovEnv(t, st)
 		scimCovWantRetry(t, e.scim(http.MethodDelete, "/scim/v2/Groups/"+g.ID.String(), ""), "secret-dsn")
 		if st.callCount("DeleteScimGroup") != 0 || st.callCount("StartGroupRemoval") != 0 {

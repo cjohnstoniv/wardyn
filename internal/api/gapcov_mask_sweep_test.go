@@ -53,7 +53,7 @@ func gapCovMaskServer(b *gapCovMaskBackend, now time.Time) *Server {
 }
 
 func TestGapCovSweepCommittedMasks(t *testing.T) {
-	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	cold := []uuid.UUID{uuid.MustParse("00000000-0000-0000-0000-0000000000c1")}
 	purgeErr, sweepErr := errors.New("gapcov: purge failed"), errors.New("gapcov: sweep failed")
 

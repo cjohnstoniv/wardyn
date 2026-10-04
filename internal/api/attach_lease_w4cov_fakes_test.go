@@ -57,7 +57,7 @@ type leaseCovReserve struct {
 	TTL            time.Duration
 }
 
-var leaseCovEpoch = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+var leaseCovEpoch = time.Now().UTC().Truncate(time.Second)
 
 func newLeaseCovLeases() *leaseCovLeases {
 	return &leaseCovLeases{now: leaseCovEpoch, rows: map[uuid.UUID]store.AttachLease{}, errs: map[string]error{}}

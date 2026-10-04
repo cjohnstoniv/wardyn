@@ -183,7 +183,7 @@ func TestW4CovSealOpensOnlyUnderItsOwnRow(t *testing.T) {
 }
 
 func TestW4CovExpiryHelpers(t *testing.T) {
-	early := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	early := time.Now().UTC().Truncate(time.Second)
 	late := early.Add(time.Hour)
 	for _, c := range []struct {
 		name string
@@ -244,7 +244,7 @@ func TestW4CovDueCondNumbersItsParameters(t *testing.T) {
 func TestW4CovWritersThatNeedNoPoolRefuseOrNoOp(t *testing.T) {
 	keys := w4CovNewKeys()
 	s := New(nil, keys, secretmask.NewRegistry())
-	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	puts := []secretmask.GlobalPut{{Value: []byte("a-credential-value")}}
 
 	if err := s.PutGlobal("", "cred", puts, false, now); err != nil {
@@ -266,7 +266,7 @@ func TestW4CovWritersThatNeedNoPoolRefuseOrNoOp(t *testing.T) {
 }
 
 func TestW4CovPutGlobalFailsClosedOnItsKey(t *testing.T) {
-	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	puts := []secretmask.GlobalPut{{Value: []byte("a-credential-value")}}
 
 	t.Run("the owner's key is unavailable", func(t *testing.T) {

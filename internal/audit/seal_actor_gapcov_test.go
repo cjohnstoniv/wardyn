@@ -13,16 +13,16 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-var gapCovErr = errors.New("gapcov: injected")
+var errGapCov = errors.New("gapcov: injected")
 
 // gapCovDir is a memDir whose key-destruction lookup fails.
 type gapCovDir struct{ *memDir }
 
 func (gapCovDir) AuditKeyDestroyedAt(context.Context, string) (time.Time, bool, error) {
-	return time.Time{}, false, gapCovErr
+	return time.Time{}, false, errGapCov
 }
 
-func gapCovResolveFails(context.Context, string) (string, error) { return "", gapCovErr }
+func gapCovResolveFails(context.Context, string) (string, error) { return "", errGapCov }
 
 // A name that cannot be resolved with no pending key to hold the row fails the
 // seal, wraps the cause, and creates no key for the person.
@@ -32,7 +32,7 @@ func TestGapCovSealActorResolveFailureWithoutPendingKeyFails(t *testing.T) {
 	ev := humanEvent("alice", "run.kill")
 
 	got, pending, err := s.Seal(t.Context(), ev)
-	if !errors.Is(err, gapCovErr) || pending {
+	if !errors.Is(err, errGapCov) || pending {
 		t.Fatalf("Seal = pending %v, err %v; want a failure wrapping the resolve error", pending, err)
 	}
 	if !strings.Contains(err.Error(), "no pending key to hold the row") {
@@ -127,15 +127,15 @@ func TestGapCovResealActorFailures(t *testing.T) {
 		s, _, row := gapCovPendingActorRow(t)
 		s.Resolve = gapCovResolveFails
 		got, err := s.resealActor(ctx, row, s.Pending())
-		if !errors.Is(err, gapCovErr) || got.Actor != PendingActor {
+		if !errors.Is(err, errGapCov) || got.Actor != PendingActor {
 			t.Fatalf("resealActor = %q, %v; want the resolve error and the actor still pending", got.Actor, err)
 		}
 	})
 	t.Run("erasure lookup fails", func(t *testing.T) {
 		s, _, row := gapCovPendingActorRow(t)
-		s.GoneSince = func(context.Context, string, time.Time) (bool, error) { return false, gapCovErr }
+		s.GoneSince = func(context.Context, string, time.Time) (bool, error) { return false, errGapCov }
 		got, err := s.resealActor(ctx, row, s.Pending())
-		if !errors.Is(err, gapCovErr) || got.Actor != PendingActor {
+		if !errors.Is(err, errGapCov) || got.Actor != PendingActor {
 			t.Fatalf("resealActor = %q, %v; want the lookup error and the actor still pending", got.Actor, err)
 		}
 	})
@@ -158,7 +158,7 @@ func TestGapCovUnsealFailsWhenTheKeyDestructionLookupFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Subjects = gapCovDir{dir}
-	if _, err := s.Unseal(t.Context(), []types.AuditEvent{sealed}); !errors.Is(err, gapCovErr) {
+	if _, err := s.Unseal(t.Context(), []types.AuditEvent{sealed}); !errors.Is(err, errGapCov) {
 		t.Fatalf("Unseal err = %v, want the lookup error", err)
 	}
 }
@@ -168,7 +168,7 @@ func TestGapCovStoredActorResolveFailure(t *testing.T) {
 	s, _, _ := newFullSealer(t, "alice")
 	s.Resolve = gapCovResolveFails
 	got, ok, err := s.StoredActor(t.Context(), "alice")
-	if !errors.Is(err, gapCovErr) || ok || got != "" {
+	if !errors.Is(err, errGapCov) || ok || got != "" {
 		t.Fatalf("StoredActor = %q, %v, %v; want the resolve error and no translation", got, ok, err)
 	}
 }

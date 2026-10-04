@@ -202,9 +202,10 @@ func TestGovCovCanSeeGovernanceKind(t *testing.T) {
 }
 
 func TestGovCovProposeGovernanceChange(t *testing.T) {
+	expires := time.Now().UTC().Truncate(time.Second)
 	saved := types.GovernanceChange{
 		ID: uuid.MustParse("11111111-1111-1111-1111-111111111111"), State: types.GovernanceChangePending,
-		ExpiresAt: time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC),
+		ExpiresAt: expires,
 	}
 	expiredID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
 	st := &govCovStore{proposeSaved: saved, proposeExpired: []uuid.UUID{expiredID}}
@@ -253,7 +254,7 @@ func TestGovCovProposeGovernanceChange(t *testing.T) {
 		t.Errorf("expire row = target %q data %s", exp.Target, exp.Data)
 	}
 	prop := govCovAuditData(t, govCovAudits(h, "governance.change.propose")[0])
-	if prop["op"] != "upsert" || prop["target_kind"] != govKindGrant || prop["expires_at"] != "2030-01-02T03:04:05Z" {
+	if prop["op"] != "upsert" || prop["target_kind"] != govKindGrant || prop["expires_at"] != expires.Format(time.RFC3339) {
 		t.Errorf("propose row data = %v", prop)
 	}
 }

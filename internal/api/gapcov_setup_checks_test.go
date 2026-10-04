@@ -11,7 +11,7 @@ import (
 )
 
 func TestGapCovKeyCustodyChecksSingularWording(t *testing.T) {
-	now := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	rows := keyCustodyChecks(keyCustody{
 		Domains: []string{"finance"},
 		Changes: keydomain.Changes{Count: 1, Latest: now.Add(-30 * time.Hour), LatestBy: "admin@example.test"},
@@ -37,7 +37,7 @@ func TestGapCovKeyCustodyRowsAreOmittedWhenTheCountCannotBeRead(t *testing.T) {
 	s := &Server{cfg: Config{
 		KeyDomains:    keydomain.NewService(pool, []string{"finance"}),
 		PrincipalKeys: true,
-		Now:           func() time.Time { return time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC) },
+		Now:           func() time.Time { return time.Now().UTC().Truncate(time.Second) },
 	}}
 	if rows := s.keyCustodyRows(t.Context()); rows != nil {
 		t.Fatalf("keyCustodyRows = %+v, want none when Postgres does not answer", rows)

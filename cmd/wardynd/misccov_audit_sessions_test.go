@@ -143,7 +143,7 @@ func TestMiscCovSessionRevocationsForMountsOnlyWithOIDC(t *testing.T) {
 }
 
 func TestMiscCovSessionRevocationsAppNow(t *testing.T) {
-	fixed := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	fixed := time.Now().UTC().Truncate(time.Second)
 	if got := (&pgSessionRevocations{now: func() time.Time { return fixed }}).appNow(); !got.Equal(fixed) {
 		t.Fatalf("appNow with an injected clock = %v, want %v", got, fixed)
 	}
@@ -160,7 +160,7 @@ func TestMiscCovSessionRevocationsWrapStoreErrors(t *testing.T) {
 	pool, closedErr := miscCovClosedPool(t)
 	r := &pgSessionRevocations{pool: pool}
 	ctx := t.Context()
-	issued := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	issued := time.Now().UTC().Truncate(time.Second)
 
 	calls := []struct {
 		name string
@@ -569,7 +569,7 @@ func miscCovChange(outcome string, effective int, pendingDays *int, pendingAt *t
 
 func TestMiscCovRecordAuditRetentionPolicy(t *testing.T) {
 	pendingDays := 30
-	pendingAt := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	pendingAt := time.Now().UTC().Truncate(time.Second).AddDate(0, 1, 0)
 	boom := errors.New("policy write refused")
 
 	for _, tc := range []struct {
