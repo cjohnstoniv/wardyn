@@ -250,7 +250,9 @@ func TestAttach_ObserverAtTheWritersSizeSeesColumn100AndFollowsResizes(t *testin
 
 	// The marker is assembled by the shell so its literal never appears on the
 	// command line the clients also draw. Column 101 (1-based) is column 100.
-	writer.write(`printf '\033[3;101H%s%s' MKR 100` + "\r")
+	// The read holds the cursor beside the marker, so the narrow observer's view
+	// pans to it whatever width the shell prompt that follows would have.
+	writer.write(`printf '\033[3;101H%s%s' MKR 100; read -r _` + "\r")
 	// markerColumn is the 1-based column a client was told to draw the marker at.
 	markerColumn := func(c *tmuxClient) int {
 		m := regexp.MustCompile(`\x1b\[3;([0-9]+)H(?:\x1b\[[0-9;?]*[A-Za-z])*MKR100`).FindStringSubmatch(c.output())
