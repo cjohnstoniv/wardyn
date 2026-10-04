@@ -7405,23 +7405,34 @@ therefore the per-replica cap times the replica count (cap × N):
   refresh already in flight on the old holder can still race the new holder at the
   authority and lose the credential; the person signs in again.
 - **An owner's key that does not unwrap fences that owner only.** If a person's
-  principal key cannot be unwrapped (its KEK version was retired before
-  `-rewrap-principal-keys`, or the `wrapped_key` is corrupted), a read of the shared
-  registry logs `maskstore: the owner's key does not open` at Error, naming the owner
-  and key version, then handles each of that owner's live values as a destroyed key:
-  their runs are fenced (attach, SSH shell and recording upload answer `503`
+  principal key cannot be unwrapped because its `wrapped_key` is corrupted under the
+  local key or Azure Key Vault, a read of the shared registry logs
+  `maskstore: the owner's key does not open` at Error, naming the owner and key
+  version, then handles each of that owner's live values as a destroyed key: their
+  runs are fenced (attach, SSH shell and recording upload answer `503`
   `mask_state_unavailable`) and the rows are tombstoned. Other people's values are
-  unaffected and `mask_registry_shared` stays healthy. The remedy is to restore the
-  retired KEK version and run `-rewrap-principal-keys`, or to erase that person's
-  credentials, which restores their credentials and future runs; the fenced runs stay
-  fenced. A transient failure (Postgres or the KEK service unreachable) is
-  different: the read fails and retries, and consumers fail closed until it succeeds.
-  So is a key this replica cannot reach (its own `WARDYN_KEY_DOMAINS_FILE` or KEK
-  configuration lags, or the key service refuses its access with a 401 or 403): that
-  replica fails its read instead of fencing, and heals once the configuration or the
-  access is fixed. So is a key or mount the service no longer holds (deleted,
-  soft-deleted or renamed): every replica fails its read, and consumers fail closed,
-  until the key is restored or that person's credentials are erased through the API.
+  unaffected and `mask_registry_shared` stays healthy. The remedy is to erase that
+  person's credentials through the API, which restores their credentials and future
+  runs; the fenced runs stay fenced. Only that corruption, or a destroyed key, fences.
+  Every other key failure fails the read instead, so consumers fail closed and
+  nothing is fenced or tombstoned:
+  - A transient failure (Postgres or the KEK service unreachable): the read fails and
+    retries, and consumers fail closed until it succeeds.
+  - A key this replica cannot reach (its own `WARDYN_KEY_DOMAINS_FILE` or KEK
+    configuration lags, or the key service refuses its access with a 401 or 403):
+    that replica fails its read, and heals once the configuration or the access is
+    fixed.
+  - A key or mount the service no longer holds (deleted, soft-deleted or renamed), or
+    a Key Vault version that is disabled: every replica fails its read until the key
+    is restored or that person's credentials are erased through the API.
+  - Under Vault Transit, a wrap that does not open: a version retired by
+    `min_decryption_version`, a `WARDYN_VAULT_ADDR` that names another Vault with the
+    same mount and key name, or a corrupted `wrapped_key`. A retired version comes back
+    when the floor is lowered, and Vault's answer for a corrupted wrap is the one it
+    gives another Vault's wrap, so none of these is proof about the row. Every replica
+    reading through that Vault fails its read until the floor is lowered and
+    `-rewrap-principal-keys` is run, the address is fixed, or that person's
+    credentials are erased through the API.
 - **A compromised wardynd process still sees every value it masks.** Shredding a
   person's copies is complete only after backups expire or the wrapping key version
   is retired.

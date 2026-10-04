@@ -306,6 +306,24 @@ func TestW4CovApplyAbortsWhenTheKeyServiceDoesNotHoldTheKey(t *testing.T) {
 	}
 }
 
+// A wrap the key service refuses to open (Transit: a version retired by min_decryption_version, or a
+// key that is not the one that made it) is the service's answer, not proof about the row: the read
+// aborts instead of fencing the owner, and heals once the floor is lowered or the address fixed.
+func TestW4CovApplyAbortsWhenTheKeyServiceRefusesTheWrap(t *testing.T) {
+	f := w4CovNewFixture(t)
+	injected := fmt.Errorf("transit KEK: %w: %w", kek.ErrService, kek.ErrRefused)
+	f.keys.errs[w4CovOwner] = injected
+	live := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "first-secret-value", 1)
+
+	err := f.s.apply(context.Background(), []row{live}, true)
+	if !errors.Is(err, injected) {
+		t.Fatalf("apply = %v, want the injected key error wrapped", err)
+	}
+	if len(f.snapshot()) != 0 || f.ref(w4CovRowA) != nil {
+		t.Error("a read that aborted applied rows")
+	}
+}
+
 // A key that does not unwrap never heals by retrying: the row is handled like a destroyed key
 // (here retired, so no database is needed) and the read goes on to the rows after it.
 func TestW4CovApplySkipsARowWhoseKeyDoesNotUnwrap(t *testing.T) {

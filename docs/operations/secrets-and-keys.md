@@ -517,7 +517,9 @@ raise it.
 or unreachable Vault is *transient* (the sink answers 503, "Wardyn
 couldn't reach the service that holds this run's credential"). A 403, a
 wrap that does not unwrap for its row, or a retired version is
-*definitive*.
+*definitive*. None of them fences a person's runs through the shared masking
+registry: that read fails until it is fixed ([High
+availability](../OPERATIONS.md#high-availability)).
 
 
 ## Key service: Azure Key Vault

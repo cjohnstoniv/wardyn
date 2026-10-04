@@ -55,6 +55,12 @@ var ErrAccess = errors.New("key service refuses this process's access")
 // service or this process's configuration, never the row.
 var ErrKeyMissing = errors.New("the key service does not hold the key")
 
+// ErrRefused is a Transit wrap that does not open: its version retired by min_decryption_version,
+// a key that is not the one that made it (another Vault with the same mount and key name), or a
+// corrupted wrap, which Vault's answer cannot tell from the other two. Not proof about the row: a
+// reader fails closed and destroys nothing.
+var ErrRefused = errors.New("the key service refuses to open this wrap")
+
 // Versioned is a KEK whose key has versions (Vault Transit, Key Vault): each
 // wrap names the version it was made under, and `wardynd -rewrap` moves every
 // row naming any other version onto the latest, so the others can be retired.
