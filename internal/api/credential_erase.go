@@ -73,7 +73,7 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 	// route keeps credentials only; it never reaches audit, run history or
 	// outputs.
 	var rep secretstore.EraseReport
-	_, err := s.erasureOrchestrator(&rep).Orchestrate(r.Context(), owner, []erasure.Scope{erasure.Credentials})
+	orep, err := s.erasureOrchestrator(&rep).Orchestrate(r.Context(), owner, []erasure.Scope{erasure.Credentials})
 	if errors.Is(err, errSignInConfigUnreadable) {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 			"credential.erase", owner, "failure", withSecretOwner(map[string]any{"count": 0, "reason": reasonCredentialEraseSignInConfigUnreadable}, owner, known)))
@@ -82,6 +82,9 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 		return
 	}
 	data := credentialEraseData(rep)
+	if done, ok := orep.Details[erasure.Credentials].(map[string]any); ok {
+		data = done // with runs_fenced
+	}
 	resp := maps.Clone(data)
 	if err != nil {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),

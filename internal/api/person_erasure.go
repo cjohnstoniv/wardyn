@@ -18,6 +18,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/erasure"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
@@ -58,11 +60,15 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport) *erasure.
 	if s.cfg.Secrets != nil {
 		steps[erasure.Credentials] = func(ctx context.Context, person string) (any, error) {
 			var rep secretstore.EraseReport
-			err := s.eraseCredentialsScope(ctx, person, &rep)
+			fenced, err := s.eraseCredentialsScope(ctx, person, &rep)
 			if credRep != nil {
 				*credRep = rep
 			}
-			return credentialEraseData(rep), err
+			data := credentialEraseData(rep)
+			if s.cfg.MaskManifests != nil {
+				data["runs_fenced"] = fenced
+			}
+			return data, err
 		}
 	}
 	if s.cfg.MaskManifests != nil {
@@ -94,10 +100,15 @@ func credentialEraseData(rep secretstore.EraseReport) map[string]any {
 // credentials scope. The sign-in's row id is read BEFORE anything is erased,
 // because the erase must hold the redemption lock for it: a configuration that
 // cannot be read refuses the scope rather than proceeding without the lock.
-func (s *Server) eraseCredentialsScope(ctx context.Context, owner string, rep *secretstore.EraseReport) error {
+//
+// The person's runs are fenced (FenceSubject) before the cred key goes: their
+// masking values are sealed under it, so a replica that has not opened them
+// could no longer vouch for those runs' masking. It returns how many runs it
+// fenced. Their history and sandboxes are untouched.
+func (s *Server) eraseCredentialsScope(ctx context.Context, owner string, rep *secretstore.EraseReport) (int, error) {
 	rowID, cfgErr := s.adoSignInRowID(ctx)
 	if cfgErr != nil {
-		return errSignInConfigUnreadable
+		return 0, errSignInConfigUnreadable
 	}
 	// Revoke the person's live Azure DevOps tokens first: the erase takes the
 	// sign-in that revoking them needs. That runs BEFORE and OUTSIDE the three
@@ -106,11 +117,17 @@ func (s *Server) eraseCredentialsScope(ctx context.Context, owner string, rep *s
 	// end runs even on a panic, or the person's mints would self-revoke until restart.
 	finish, err := s.beginADOSignInEnd(ctx, owner, adoPATRevokeOffboarding)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer finish()
 	s.revokeOwnerRunPATs(ctx, owner, adoPATRevokeOffboarding)
-	return s.eraseLocked(ctx, owner, rowID, rep)
+	var runs []uuid.UUID
+	if s.cfg.MaskManifests != nil && owner != "" { // "" is refused by the erase below
+		if runs, err = s.cfg.MaskManifests.FenceSubject(ctx, owner); err != nil {
+			return 0, err
+		}
+	}
+	return len(runs), s.eraseLocked(ctx, owner, rowID, rep)
 }
 
 // eraseMaskCopies is the mask_copies scope: the person's live consumers are
