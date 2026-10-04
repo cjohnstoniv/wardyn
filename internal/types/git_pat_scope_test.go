@@ -203,7 +203,8 @@ func TestDecodeGitPATScopeStrict(t *testing.T) {
 		{"control entry", `{` + base + `,"repos":["a/b\u0001"]}`, "malformed"},
 		{"double wildcard", `{` + base + `,"repos":["a/*/*"]}`, "malformed"},
 		{"api on generic", `{` + base + `,"api":true}`, "generic"},
-		{"api on gitlab, not yet available", `{` + base + `,"api":true,"forge":"gitlab"}`, "not yet available"},
+		{"api on gitlab", `{` + base + `,"api":true,"forge":"gitlab"}`, ""},
+		{"api on gitea", `{` + base + `,"api":true,"forge":"gitea"}`, ""},
 		{"api false is fine", `{` + base + `,"api":false}`, ""},
 		{"trailing data", `{` + base + `} {}`, "unexpected data"},
 	} {

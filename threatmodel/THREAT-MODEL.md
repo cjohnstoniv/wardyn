@@ -3454,14 +3454,45 @@ residuals particular to holding:
   WHEN an armed merge lands, not WHAT it carries. Creating or updating a pull
   request so that it completes, or sets auto-complete, is refused while the run
   has push rules.
-- **The GitHub App and `git_pat` lanes have no REST door.** Their brokered
-  credentials never reach the sandbox, their broker routes admit only the three
-  smart-HTTP endpoints (`validGitRest`), `api.github.com` is denied to a
-  brokered run's egress (`confineGitBrokerEgress`), and the broker's own GitHub
-  API calls are `GET`s (`forgeRepo.get`). A `github_token` grant with no
-  repository declared is not brokered at all — the helper hands its token to
-  the sandbox, and neither the git nor the REST door is governed on it, the
-  same standing ceiling as `ssh_key`.
+- **The GitHub App lane has no REST door, and a `git_pat` lane has one only
+  when its grant sets `api: true`.** The brokered credentials never reach the
+  sandbox, their broker routes admit only the three smart-HTTP endpoints
+  (`validGitRest`), `api.github.com` is denied to a brokered run's egress
+  (`confineGitBrokerEgress`), and the broker's own GitHub API calls are `GET`s
+  (`forgeRepo.get`). A `github_token` grant with no repository declared is not
+  brokered at all — the helper hands its token to the sandbox, and neither the
+  git nor the REST door is governed on it, the same standing ceiling as
+  `ssh_key`.
+- **The `git_pat` forge API door is a closed operation table.** A grant with
+  `api: true` (GitLab and Gitea; Bitbucket Server only with
+  `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`) reaches its forge's REST API through a
+  gate on the MITM path (`patAPIAdmit`, `internal/egress/proxy/pat_api.go`),
+  beside the Azure DevOps gate. The proxy terminates only the grant's own host,
+  on 443. A request is admitted only when its effective method and path equal a
+  row of the forge's table under a repository the grant's `repos` names, and
+  every field it names, in the query string or a JSON, form-urlencoded or
+  multipart body, is one the row admits. The admitted rows are creating a merge
+  or pull request, commenting on a merge or pull request or an issue, and the
+  enumerated reads of a repository's own data. The gate runs before the PAT is
+  minted and before anything is sent upstream, and the PAT is never an injection
+  rule, so a refused request spends neither: an approval-gated single-use grant
+  keeps its one mint. It refuses merge and auto-merge, writes to repository
+  files and commits (they bypass the receive-pack content and branch checks),
+  GraphQL and search, project metadata, variables, hooks, keys, tokens, members
+  and exports, a numeric project id, a body or query field that names a project
+  (`target_project_id` and the like), a cross-repository head, a method override
+  that names another method than the request line, an encoded body, a body it
+  cannot parse or read whole, and any request on the plain forward lane. What
+  remains: the PAT is exactly as broad as its issuer made it everywhere outside
+  Wardyn; `repos` narrows which repositories, not which branches; a created
+  merge or pull request is not a merge, but a human or the forge's own
+  auto-merge setting may merge it; GitLab runs a slash command at the start of a
+  comment line, so a line that starts with "/" is refused rather than
+  inspected; a request form a table does not list is refused, so a route a forge
+  adds later is outside the table until someone adds it; a policy that also
+  allows the forge host directly reaches it without the PAT, as for every
+  brokered lane; and the host must be allowed in the run's egress domains for
+  the tunnel to open at all.
 
 ### Hold-lane settings sources and managed permission rules
 

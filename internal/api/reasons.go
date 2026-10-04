@@ -396,4 +396,5 @@ const (
 	reasonGitPATNarrowingNeedsBroker     = "git_pat_narrowing_needs_broker"     // the PAT broker is off, so the PAT is resident and nothing narrows it
 	reasonGitPATNarrowingSSHConflict     = "git_pat_narrowing_ssh_conflict"     // a same-forge ssh_key is a second push path the broker cannot see
 	reasonGitPATNarrowingUnsupportedHost = "git_pat_narrowing_unsupported_host" // the host is served by a lane that ignores the narrowing axes
+	reasonGitPATAPIForgeDisabled         = "git_pat_api_forge_disabled"         // api: true on a forge whose API door is off on this deployment
 )

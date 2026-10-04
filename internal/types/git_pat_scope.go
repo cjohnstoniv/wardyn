@@ -110,7 +110,9 @@ func DecodeGitPATScope(raw json.RawMessage) (GitPATScope, error) {
 // boot policy file. Beyond DecodeGitPATScope it refuses an unknown key (a typo
 // such as "repo" would otherwise read as an omission, and an omission means
 // unnarrowed), an access or forge outside its enum, a malformed repos entry,
-// and api: true (not yet available, and never on the generic forge).
+// and api: true on the generic forge, which has no API table. Whether a
+// Bitbucket Server API grant is allowed is a deployment flag, which the api
+// package checks at write.
 func DecodeGitPATScopeStrict(raw json.RawMessage) (GitPATScope, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -142,11 +144,8 @@ func DecodeGitPATScopeStrict(raw json.RawMessage) (GitPATScope, error) {
 			}
 		}
 	}
-	if sc.API {
-		if sc.Forge == PATForgeGeneric {
-			return GitPATScope{}, errors.New("git_pat scope api: true is not available on the generic forge (set forge to gitlab or gitea)")
-		}
-		return GitPATScope{}, errors.New("git_pat scope api: true is not yet available")
+	if sc.API && sc.Forge == PATForgeGeneric {
+		return GitPATScope{}, errors.New("git_pat scope api: true is not available on the generic forge (set forge to gitlab or gitea)")
 	}
 	return sc, nil
 }

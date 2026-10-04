@@ -116,6 +116,9 @@ type Proxy struct {
 	adoGrants adoGrantsByHost
 	// azure is the run's Azure route gates (azure_gate.go). Nil == no host gated.
 	azure *azureGates
+	// patAPI is the run's git_pat grants with api: true, by host (pat_api.go): each host's
+	// connection on 443 is terminated and every request judged by its forge's operation table.
+	patAPI map[string]PATGrant
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -437,6 +440,9 @@ func newProxy(opts Options) *Proxy {
 		llmUpstreams[vendor] = llmUpstream{host: host, port: port, prefix: strings.TrimSuffix(u.Path, "/")}
 		gatewayVendor[host] = vendor
 	}
+	// A git_pat grant with api: true terminates its own host on 443 and nothing else, so the
+	// forge API is reached only through the door. An entry the operator already authored keeps its own scope.
+	patAPI := newPATAPIGrants(patGrants, mitmHosts, mitmPorts)
 	p := &Proxy{
 		runID:                opts.RunID,
 		policy:               opts.Policy,
@@ -456,6 +462,7 @@ func newProxy(opts Options) *Proxy {
 		brokeredPATGrantIDs:  opts.BrokeredPATGrantIDs,
 		adoGrants:            opts.ADOGrants,
 		azure:                newAzureGates(opts.AzureGates),
+		patAPI:               patAPI,
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      strings.TrimRight(opts.ControlPlaneURL, "/"),
 		runToken:             opts.RunToken,
@@ -858,7 +865,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Never a blind tunnel to an Azure DevOps grant host (refuseADOTunnel).
-	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) {
+	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) {
 		return
 	}
 

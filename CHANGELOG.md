@@ -91,7 +91,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   A stored scope that already used one of those four key names is enforced as that axis from this upgrade
   on, and a downgrade runs a narrowed policy unnarrowed. Policy writes,
   governance profiles, presets, inline run policies and the boot `--policy` file now answer `400` for an
-  unknown `git_pat` scope key, an out-of-enum `access` or `forge`, a malformed `repos` entry or `api: true`;
+  unknown `git_pat` scope key, an out-of-enum `access` or `forge`, a malformed `repos` entry or `api: true` on
+  the `generic` forge;
   stored rows with a stray key still load and launch. A policy with two same-host `git_pat` grants where one is
   narrowed is refused (`400` at write, `422` at launch).
 
@@ -310,6 +311,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `credential.erase` and its response now report `crypto_erased` and `deleted`, because a row written
   without it is only deleted, which holds to the backup horizon. **Turning it on is one-way across a
   downgrade:** 0.8.5 refuses `enc_version=3` rows by name, and there is no tool back.
+- **A `git_pat` grant with `api: true` reaches its forge's REST API only through a closed operation table.**
+  For GitLab and Gitea (Bitbucket Server only with the new `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`, off by
+  default; a stored such grant fails launch and Review with `git_pat_api_forge_disabled`) the proxy now
+  terminates the grant's host and admits only creating a merge or pull request, commenting, and enumerated
+  reads, under a repository the grant's `repos` names, judging the query string and the JSON, form and
+  multipart body of every request. Merge, auto-merge, repository file and commit writes, GraphQL, search,
+  project metadata, a numeric project id and a request on the plain forward lane are refused
+  (`brokered:git-pat:api:denied`) before the PAT is minted and before anything is sent upstream. The forge host
+  must be in the run's egress domains. A run with an `api` grant gets a per-run MITM certificate authority.
 - **A narrowed `git_pat` grant now binds the run at the broker.** The PAT broker refuses, before any mint, a git
   request for a repository outside the grant's `repos` (`brokered:git-pat:repo`) and, for `access: read`, both
   doors of a push (`brokered:git-pat:read-only`). A request form a forge's path table does not list is refused.
