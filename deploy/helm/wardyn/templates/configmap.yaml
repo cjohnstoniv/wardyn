@@ -48,3 +48,33 @@ metadata:
 data:
   ca.pem: {{ .Values.trustedCA | quote }}
 {{- end -}}
+{{/*
+Optional key domains (WARDYN_KEY_DOMAINS_FILE): kek.domains rendered as JSON.
+A key id and a role name are identifiers, not secrets, so a ConfigMap is right.
+The render refuses a domain name wardynd would refuse at boot (it must be
+a-z, 0-9 and "-", and is never "default") and a value that is not one transit
+key or one azurekv pair; the keys themselves are proven by wardynd at boot.
+*/}}
+{{- $domains := (.Values.kek | default dict).domains | default dict -}}
+{{- if $domains -}}
+{{- if not (kindIs "map" $domains) -}}
+{{- fail "wardyn: kek.domains must be a map from domain name to {transit: {key, role}} or {azurekv: {key, signingKey, clientId}}" -}}
+{{- end -}}
+{{- range $name, $d := $domains -}}
+{{- if or (eq $name "default") (not (regexMatch "^[a-z0-9-]{1,63}$" $name)) -}}
+{{- fail (printf "wardyn: kek.domains names a domain %q; a name is 1 to 63 characters of a-z, 0-9 and \"-\", and never \"default\"" $name) -}}
+{{- end -}}
+{{- if not (and (kindIs "map" $d) (eq (len $d) 1) (or (hasKey $d "transit") (hasKey $d "azurekv"))) -}}
+{{- fail (printf "wardyn: kek.domains.%s must hold exactly one of transit (key, role) or azurekv (key, signingKey, clientId)" $name) -}}
+{{- end -}}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wardyn.fullname" . }}-key-domains
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+data:
+  domains.json: {{ toJson $domains | quote }}
+{{- end -}}

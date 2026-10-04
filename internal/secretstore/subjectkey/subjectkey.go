@@ -35,6 +35,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -45,9 +46,9 @@ const (
 	PurposeAuditSeal = "audit-seal"
 )
 
-// DomainDefault is the deployment's credential KEK. Until key domains exist,
-// every principal key is in it.
-const DomainDefault = "default"
+// DomainDefault is the deployment's credential KEK: the domain of a subject no
+// key-domain assignment names.
+const DomainDefault = keydomain.Default
 
 // destroyActor is the audit actor of principal_key.destroyed; the person or
 // route that asked for the erase is recorded by its own event.
@@ -63,9 +64,12 @@ var ErrOperatorOwner = errors.New("subjectkey: the operator namespace has no sub
 
 // Resolver finds the KEK of a key domain. Writer is the KEK a new generation in
 // domain is wrapped under; Reader is the KEK that opens a wrap naming kekID.
+// Domain is the domain owner's next generation goes to (keydomain.Service.Domain);
+// nil puts every owner in DomainDefault.
 type Resolver struct {
 	Writer func(domain string) (kek.KEK, error)
 	Reader func(domain, kekID string) (kek.KEK, error)
+	Domain func(ctx context.Context, owner string) (string, error)
 }
 
 // Manager reads, creates and destroys subject keys over one pool. Safe for
@@ -101,49 +105,65 @@ func unavailable(op string, err error) error {
 // only to another writer's create or a Destroy, so a few is plenty.
 const createAttempts = 4
 
-// Current returns the live generation's version and a copy of its key, creating
-// generation max+1 first when there is none (a first write, or the first after
-// a Destroy). The caller owns the copy and clears it.
+// Current returns the current generation's version and a copy of its key,
+// creating generation max+1 first when there is none (a first write, or the
+// first after a Destroy) or when the one there is sits in another domain than
+// the owner's assignments now name. The caller owns the copy and clears it.
+//
+// A reassignment applies to the NEXT generation only: the generation it
+// replaces is marked superseded and stays readable in its own domain, never
+// re-wrapped into the new one, which would hand the new domain's key holder
+// the person's whole history.
 //
 // Nothing is sealed under a generated key until its row is committed and read
-// back: the create is INSERT ... ON CONFLICT DO NOTHING against the one-live
+// back: the create is INSERT ... ON CONFLICT DO NOTHING against the one-current
 // index, and the key returned is always the one read back and unwrapped from
 // the winning row, so a concurrent loser discards its own key.
 func (m *Manager) Current(ctx context.Context, owner, purpose string) (int, []byte, error) {
 	if err := check(owner, purpose); err != nil {
 		return 0, nil, err
 	}
+	domain := DomainDefault
+	if m.keks.Domain != nil {
+		var err error
+		if domain, err = m.keks.Domain(ctx, owner); err != nil {
+			return 0, nil, fmt.Errorf("subjectkey: the key domain of owner=%q: %w", owner, err)
+		}
+	}
 	for range createAttempts {
 		var version int
+		var have string
 		err := m.pool.QueryRow(ctx,
-			`SELECT version FROM principal_keys WHERE owner=$1 AND purpose=$2 AND destroyed_at IS NULL`, owner, purpose).Scan(&version)
+			`SELECT version, domain FROM principal_keys WHERE owner=$1 AND purpose=$2 AND destroyed_at IS NULL AND superseded_at IS NULL`, owner, purpose).Scan(&version, &have)
 		switch {
-		case err == nil:
+		case err == nil && have == domain:
 			key, err := m.Key(ctx, owner, purpose, version)
 			if errors.Is(err, ErrDataLoss) {
 				continue // destroyed since the read: the next lap creates the next generation
 			}
 			return version, key, err
-		case errors.Is(err, pgx.ErrNoRows):
-			if err := m.create(ctx, owner, purpose); err != nil {
+		case err == nil, errors.Is(err, pgx.ErrNoRows):
+			if err := m.create(ctx, owner, purpose, domain); err != nil {
 				return 0, nil, err
 			}
 		default:
-			return 0, nil, unavailable("read the live generation", err)
+			return 0, nil, unavailable("read the current generation", err)
 		}
 	}
 	return 0, nil, fmt.Errorf("subjectkey: no stable generation for (owner=%q, purpose=%q) after %d attempts", owner, purpose, createAttempts)
 }
 
-// create inserts generation max+1 of (owner, purpose) unless another writer's
-// live row is already there. Either outcome is success; the caller re-reads.
-func (m *Manager) create(ctx context.Context, owner, purpose string) error {
+// create inserts generation max+1 of (owner, purpose) in domain, and in the same
+// transaction supersedes the current generation of any other domain, unless
+// another writer's current row is already there. Either outcome is success; the
+// caller re-reads.
+func (m *Manager) create(ctx context.Context, owner, purpose, domain string) error {
 	var next int
 	if err := m.pool.QueryRow(ctx,
 		`SELECT COALESCE(max(version), 0) + 1 FROM principal_keys WHERE owner=$1 AND purpose=$2`, owner, purpose).Scan(&next); err != nil {
 		return unavailable("read the next generation", err)
 	}
-	w, err := m.keks.Writer(DomainDefault)
+	w, err := m.keks.Writer(domain)
 	if err != nil {
 		return fmt.Errorf("subjectkey: %w", err)
 	}
@@ -152,20 +172,36 @@ func (m *Manager) create(ctx context.Context, owner, purpose string) error {
 	if _, err := rand.Read(key); err != nil {
 		return fmt.Errorf("subjectkey: draw a key: %w", err)
 	}
-	wrapped, err := w.Wrap(ctx, key, kek.PrincipalBind(owner, purpose, next, DomainDefault))
+	wrapped, err := w.Wrap(ctx, key, kek.PrincipalBind(owner, purpose, next, domain))
 	if err != nil {
-		return fmt.Errorf("subjectkey: wrap generation %d of (owner=%q, purpose=%q): %w", next, owner, purpose, err)
+		return fmt.Errorf("subjectkey: wrap generation %d of (owner=%q, purpose=%q) in domain %q: %w", next, owner, purpose, domain, err)
 	}
-	_, err = m.pool.Exec(ctx, `
+	tx, err := m.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return unavailable("begin a generation", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx,
+		`UPDATE principal_keys SET superseded_at=now() WHERE owner=$1 AND purpose=$2 AND domain <> $3 AND destroyed_at IS NULL AND superseded_at IS NULL`,
+		owner, purpose, domain); err != nil {
+		return unavailable("supersede the current generation", err)
+	}
+	_, err = tx.Exec(ctx, `
 		INSERT INTO principal_keys (owner, purpose, version, domain, kek_id, wrapped_key)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (owner, purpose) WHERE destroyed_at IS NULL DO NOTHING`,
-		owner, purpose, next, DomainDefault, w.ID(), wrapped)
-	// The same version taken by a writer that has since been destroyed is a lost
-	// race too: the next lap reads max again.
+		ON CONFLICT (owner, purpose) WHERE destroyed_at IS NULL AND superseded_at IS NULL DO NOTHING`,
+		owner, purpose, next, domain, w.ID(), wrapped)
+	// The same version taken by another writer is a lost race too: the
+	// transaction rolls back, and the next lap reads max again.
 	var pgErr *pgconn.PgError
-	if err != nil && !(errors.As(err, &pgErr) && pgErr.Code == "23505") {
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return nil
+	}
+	if err != nil {
 		return unavailable("insert a generation", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return unavailable("commit a generation", err)
 	}
 	return nil
 }
@@ -232,6 +268,38 @@ func (m *Manager) fill(ctx context.Context, id keyID) ([]byte, error) {
 	}
 	m.cache.put(id, key)
 	return key, nil
+}
+
+// Reseal moves a data key sealed under generation from of (owner, purpose) into
+// the owner's current generation, and returns that generation and the data key
+// sealed again (AAD from toAAD(version)). Nothing about either key changes: the
+// old generation stays in its domain, unmoved. A nil result with no error means
+// from is already current. A destroyed from is ErrDataLoss. The data key is
+// opened here and never leaves it, and the value it seals is never opened.
+func (m *Manager) Reseal(ctx context.Context, owner, purpose string, from int, sealed, fromAAD []byte, toAAD func(version int) []byte) (int, []byte, error) {
+	cur, curKey, err := m.Current(ctx, owner, purpose)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer clear(curKey)
+	if cur == from {
+		return cur, nil, nil
+	}
+	oldKey, err := m.Key(ctx, owner, purpose, from)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer clear(oldKey)
+	dek, err := kek.Open(oldKey, sealed, fromAAD)
+	if err != nil {
+		return 0, nil, fmt.Errorf("subjectkey: the data key does not open under generation %d (moved, forged or corrupted): %w", from, err)
+	}
+	defer clear(dek)
+	resealed, err := kek.Seal(curKey, dek, toAAD(cur))
+	if err != nil {
+		return 0, nil, fmt.Errorf("subjectkey: seal the data key under generation %d: %w", cur, err)
+	}
+	return cur, resealed, nil
 }
 
 // Destroy tombstones every generation of (owner, purpose) in one transaction:

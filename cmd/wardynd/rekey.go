@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -117,6 +120,20 @@ func rotateAgeKeyMode(f *bootFlags, keyPath string) error {
 	}
 	if fan != nil {
 		defer func() { _ = fan.Close() }()
+	}
+
+	// A principal key in a key domain is under that domain's key service, not
+	// this age key, so no row of one moves. The domains are still built and
+	// every live key's domain checked: a rotation that ran past a key naming a
+	// domain the file lost would be one nobody could reverse.
+	rotateCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	domains, err := buildKeyDomains(rotateCtx, f.vault, f.azure, *f.trustedCAFile)
+	if err != nil {
+		return err
+	}
+	if err := subjectkey.Verify(ctx, pool, slices.Sorted(maps.Keys(domains)), nil); err != nil {
+		return fmt.Errorf("refusing to rotate: %w", err)
 	}
 
 	newID, err := age.GenerateX25519Identity()

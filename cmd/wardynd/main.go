@@ -38,6 +38,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
@@ -236,6 +237,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// The key-domain service behind /key-domains: the domains the file
+	// declares (already built and proven by the store above), and the
+	// assignments that place a person's next principal key.
+	domainFile, err := keydomain.Load(*f.vault.keyDomainsFile)
+	if err != nil {
+		return err
+	}
+	keyDomains := keydomain.NewService(pool, domainFile.Names())
 
 	// Run masking manifests: what each run was given, sealed in Postgres, so a
 	// restarted or second wardynd masks it and the doors refuse a run they
@@ -436,6 +445,7 @@ func run() error {
 		HarnessLoginMemoryMiB:    *f.harnessLoginMemoryMiB,
 		ProxyURL:                 *f.proxyURL,
 		Secrets:                  secrets,
+		KeyDomains:               keyDomains,
 		MaskRegistry:             maskReg,
 		MaskManifests:            maskManifests,
 		ExecOutputTailOff:        !*f.execOutputTail,

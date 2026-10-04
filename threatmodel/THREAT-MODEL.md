@@ -2141,7 +2141,25 @@ hiding them would repeat the failure mode we are designed to avoid.
     held a credential, and when, is still in the table (c). **A live run keeps
     what it already holds,** and whatever was sealed for it under the destroyed
     key (its masking copies) is undecryptable after a restart: the run is
-    uncovered, which fails closed and is disclosed.
+    uncovered, which fails closed and is disclosed. (f) **Key domains
+    (`WARDYN_KEY_DOMAINS_FILE`, 0.8.6)** narrow what a leaked domain key exposes:
+    a person assigned to a domain has their principal keys wrapped under that
+    domain's key, so a database dump plus one domain's key opens that domain's
+    keys and no other's. **A database writer who rewrites the
+    `key_domain_assignments` rows moves a subject's FUTURE writes into a domain
+    whose key the attacker holds.** They cannot declare a domain (domains come from
+    the deploy file alone), cannot read what was already written, and cannot move
+    an old generation (a reassignment applies to the next one, and nothing is
+    re-wrapped into another domain). The mitigations are four-eyes on the two
+    assignment writes, the audit row each API change writes
+    (`key_domain.assignment.set`, `key_domain.assignment.delete`), and the 30-day
+    `/setup/status` row that reports assignment changes. A write made straight to
+    the table leaves no audit row of its own. **A domain's Vault role separates
+    only a leaked token:** a domain without its own role is reached by the
+    credential role, and the wardynd process holds every domain's access, so a
+    compromised process still exposes everything. **A stale group fact** places a
+    background write (a token refresh) in the domain the person's last verified
+    login chose, until they sign in again.
 
 49. **One age key guards every stored credential AND the daemon's own
     signing keys: one key, one shared blast radius.** `WARDYN_AGE_KEY` (or

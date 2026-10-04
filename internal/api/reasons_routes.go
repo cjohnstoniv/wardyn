@@ -472,6 +472,15 @@ const (
 	reasonUserTypeDeleteConflict    = "user_type_delete_conflict"      // something started naming it between the read and the delete
 )
 
+// /api/v1/key-domains (key_domains.go). The unknown-domain and ambiguous-
+// membership refusals are authz reasons (authz.ReasonKeyDomainUnknown,
+// authz.ReasonKeyDomainAmbiguous).
+const (
+	reasonKeyDomainRequestInvalid     = "key_domain_request_invalid"      // the subject type, subject or body fails validation
+	reasonKeyDomainAssignmentNotFound = "key_domain_assignment_not_found" // a delete named an assignment that is not there
+	reasonKeyDomainsStoreUnavailable  = "key_domains_store_unavailable"   // no Postgres-backed key-domain service is wired
+)
+
 // POST /runs/{id}/attach (attach.go): the interactive WebSocket door.
 const (
 	reasonAttachNoRunner         = "attach_no_runner"           // this deployment configures no runner

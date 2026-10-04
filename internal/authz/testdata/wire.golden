@@ -43,3 +43,5 @@ reason role_stamp_stale
 reason user_view_preview
 reason recording_governed
 reason audit_export_partition_filter
+reason key_domain_unknown
+reason key_domain_ambiguous_membership

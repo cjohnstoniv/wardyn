@@ -79,6 +79,13 @@ const (
 	// to narrow the partition with another filter, so the digest in its footer would not cover the
 	// whole partition. Input shape, not a denial: not audited.
 	ReasonAuditExportPartitionFilter Reason = "audit_export_partition_filter"
+	// ReasonKeyDomainUnknown: a key-domain assignment named a domain the
+	// deployment's key domains file does not declare.
+	ReasonKeyDomainUnknown Reason = "key_domain_unknown"
+	// ReasonKeyDomainAmbiguous: a group assignment would leave people whose
+	// groups are assigned to different domains, with no user assignment of
+	// their own, so their next principal key would be refused.
+	ReasonKeyDomainAmbiguous Reason = "key_domain_ambiguous_membership"
 )
 
 // Refusal is one reason's registry row.
@@ -131,6 +138,8 @@ var refusals = map[Reason]Refusal{
 	ReasonMaskStateUnavailable:        {Effect: EffectUnavailable, Audit: true},
 	ReasonRoleStampStale:              {Effect: EffectUnauthenticated, Audit: true, Sentence: "this token's role is out of date: its owner must sign in again to refresh it"},
 	ReasonAuditExportPartitionFilter:  {Effect: EffectBadRequest},
+	ReasonKeyDomainUnknown:            {Effect: EffectUnprocessable, Audit: true},
+	ReasonKeyDomainAmbiguous:          {Effect: EffectConflict, Audit: true},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,
