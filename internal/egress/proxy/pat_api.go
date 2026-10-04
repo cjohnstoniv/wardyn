@@ -73,6 +73,9 @@ func patAPIAdmit(r *http.Request, g PATGrant) string {
 	if patAPIMethodMismatch(r) {
 		return "it carries a method override that names another method than the request line"
 	}
+	if len(r.Header.Values("Sudo")) > 0 {
+		return "it carries a Sudo header, which acts as another user"
+	}
 	segs, why := patAPISplit(adoRawPath(r))
 	if why != "" {
 		return why

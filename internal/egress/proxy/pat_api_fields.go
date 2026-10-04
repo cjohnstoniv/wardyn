@@ -25,11 +25,12 @@ import (
 
 // patAPITargetKeys name a project, repository or ref outside the path, or turn
 // on a method. Any of them, present anywhere with any value, refuses the request:
-// a numeric project id cannot be mapped to a granted path, and "_method" is how
-// a Rack or Rails app reads a method override from a form body.
+// a numeric project id cannot be mapped to a granted path, "_method" is how
+// a Rack or Rails app reads a method override from a form body, and "sudo" runs
+// the request as another user (GitLab and Gitea read it from the query or body).
 var patAPITargetKeys = map[string]bool{
 	"target_project_id": true, "source_project_id": true, "from_project_id": true, "project_id": true,
-	"fromrepo": true, "_method": true,
+	"fromrepo": true, "_method": true, "sudo": true,
 }
 
 // patAPIAutoMergeKeys turn on a merge that happens later, without a merge

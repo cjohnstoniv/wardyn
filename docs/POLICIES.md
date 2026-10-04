@@ -272,7 +272,7 @@ What cannot be narrowed, and so is refused rather than passed: merge and auto-me
 or by update); writes to repository files and commits, which bypass the receive-pack content and
 branch checks (push through the git broker instead); GraphQL and search; any endpoint not under
 a granted repository; a numeric project id in a path; a present `target_project_id`
-(or `source_project_id`, `from_project_id`, `project_id`); a cross-repository head; an encoded
+(or `source_project_id`, `from_project_id`, `project_id`); a `Sudo` header or `sudo` field, which acts as another user; a cross-repository head; an encoded
 body, a content type the gate does not parse, a repeated JSON key, and a body over 256 KiB.
 GitLab runs a slash command that starts a comment or description line (`/merge` among them), so
 a line starting with `/` is refused. A `repos` entry is compared exactly as the request path

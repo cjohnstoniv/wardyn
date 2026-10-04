@@ -137,6 +137,16 @@ func TestPATAPIAdmittedRows(t *testing.T) {
 		types.PATForgeGitea:  func(h http.Header) string { return h.Get("Authorization") },
 	}
 	wantVal := map[string]string{types.PATForgeGitLab: apiToken, types.PATForgeGitea: "token " + apiToken}
+	// One synthesised request per table row, so a row whose pattern the matcher
+	// cannot match is caught, and a new row cannot go untested.
+	for forge, hand := range map[string]*[]apiReq{types.PATForgeGitLab: &gl, types.PATForgeGitea: &gt} {
+		rows := patAPIForges[forge].rows
+		synth := synthPATAPIRows(forge, rows)
+		if len(synth) != len(rows) {
+			t.Fatalf("%s: synthesised %d requests for %d rows", forge, len(synth), len(rows))
+		}
+		*hand = append(*hand, synth...)
+	}
 	for forge, reqs := range map[string][]apiReq{types.PATForgeGitLab: gl, types.PATForgeGitea: gt} {
 		for _, q := range reqs {
 			t.Run(forge+" "+q.method+" "+q.target, func(t *testing.T) {
@@ -161,6 +171,36 @@ func TestPATAPIAdmittedRows(t *testing.T) {
 			})
 		}
 	}
+}
+
+// synthPATAPIRows builds one admissible request per row: each tail token is
+// replaced by a value it matches, and a write carries the minimal body.
+func synthPATAPIRows(forge string, rows []patAPIRow) []apiReq {
+	base, create := glBase, `{"source_branch":"f","target_branch":"main","title":"t"}`
+	if forge == types.PATForgeGitea {
+		base, create = gtBase, `{"head":"f","base":"main","title":"t"}`
+	}
+	subst := map[string]string{"*": "x", "**": "a/b", "{f}": "src%2Fmain.go", "{archive}": "archive.zip"}
+	out := make([]apiReq, len(rows))
+	for i, r := range rows {
+		toks := strings.Split(r.tail, "/")
+		for j, tok := range toks {
+			if v, ok := subst[tok]; ok {
+				toks[j] = v
+			} else if suffix, ok := strings.CutPrefix(tok, "{n}"); ok {
+				toks[j] = "7" + suffix
+			}
+		}
+		q := apiReq{method: r.method, target: base + "/" + strings.Join(toks, "/")}
+		if r.method == "POST" {
+			q.ctype, q.body = jsonCT, `{"body":"ok"}`
+			if r.kind == patAPICreate {
+				q.body = create
+			}
+		}
+		out[i] = q
+	}
+	return out
 }
 
 func apiMultipart(t *testing.T, fields map[string]string) (ctype, body string) {
@@ -231,6 +271,9 @@ func TestPATAPIRefusals(t *testing.T) {
 		{"creating an issue", apiReq{"POST", glBase + "/issues", jsonCT, `{"title":"t"}`, nil}, "not one of"},
 		{"encoded dot segments", apiReq{"GET", glBase + "/repository/files/%2e%2e%2fsecret/raw", "", "", nil}, "segment"},
 		{"double encoding", apiReq{"GET", glBase + "/repository/files/a%252Fb/raw", "", "", nil}, "percent sign"},
+		{"sudo in the query", apiReq{"GET", glBase + "/merge_requests?sudo=root", "", "", nil}, "sudo"},
+		{"sudo in the json body", apiReq{"POST", glBase + "/merge_requests/7/notes", jsonCT, `{"body":"x","sudo":"root"}`, nil}, "sudo"},
+		{"sudo header", apiReq{"POST", glBase + "/merge_requests/7/notes", jsonCT, `{"body":"x"}`, map[string]string{"Sudo": "root"}}, "Sudo header"},
 	}
 	gt := []tc{
 		{"other repository in the path", apiReq{"GET", "/api/v1/repos/team/other/pulls", "", "", nil}, "not granted"},
@@ -255,6 +298,9 @@ func TestPATAPIRefusals(t *testing.T) {
 		{"graphql", apiReq{"POST", "/api/graphql", jsonCT, `{}`, nil}, "GraphQL"},
 		{"search", apiReq{"GET", "/api/v1/repos/search?q=x", "", "", nil}, "search"},
 		{"method override", apiReq{"POST", gtBase + "/issues/3/comments", jsonCT, `{"body":"x"}`, map[string]string{"X-HTTP-Method-Override": "DELETE"}}, "method override"},
+		{"sudo in the query", apiReq{"GET", gtBase + "/pulls?sudo=root", "", "", nil}, "sudo"},
+		{"sudo in a form body", apiReq{"POST", gtBase + "/issues/3/comments", formCT, `body=x&sudo=root`, nil}, "sudo"},
+		{"sudo header", apiReq{"POST", gtBase + "/issues/3/comments", jsonCT, `{"body":"x"}`, map[string]string{"Sudo": "root"}}, "Sudo header"},
 	}
 	for forge, cases := range map[string][]tc{types.PATForgeGitLab: gl, types.PATForgeGitea: gt} {
 		for _, c := range cases {
