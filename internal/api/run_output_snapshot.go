@@ -111,7 +111,8 @@ func (s *Server) capturePane(ctx context.Context, st store.RunOutputStore, run t
 	}
 
 	tail := newExecOutputTail(s.cfg.RunOutputTailBytes, s.cfg.Now)
-	tail.mw = &liveMaskWriter{reg: s.cfg.MaskRegistry, runID: run.ID, dst: &tail.ring, guard: s.maskGuard(run.ID)}
+	tail.sink = &tailSink{ring: &tail.ring} // one read of the pane: nothing is mirrored into run_output_chunks
+	tail.mw = &liveMaskWriter{reg: s.cfg.MaskRegistry, runID: run.ID, dst: tail.sink, guard: s.maskGuard(run.ID)}
 	type exit struct {
 		code int
 		err  error
