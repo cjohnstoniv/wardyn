@@ -450,3 +450,13 @@ func (s *Service) RootKeyCredentials(ctx context.Context) (int, error) {
 	}
 	return n, nil
 }
+
+// ExternalCredentials counts the stored credentials of people kept as pointers into an external
+// secret store (enc_version 2): they are never sealed under a principal key, whatever the flag says.
+func (s *Service) ExternalCredentials(ctx context.Context) (int, error) {
+	var n int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM secrets WHERE owned_by <> '' AND enc_version = 2`).Scan(&n); err != nil {
+		return 0, unavailable("count the credentials kept in the external store", err)
+	}
+	return n, nil
+}

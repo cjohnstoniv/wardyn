@@ -435,6 +435,7 @@ type keyCustody struct {
 	Domains       []string // the declared domain names, sorted
 	PrincipalKeys bool
 	RootKeyCreds  int // person-owned credentials still under the credential key
+	ExternalCreds int // person-owned credentials kept in an external secret store, which no principal key seals
 	Changes       keydomain.Changes
 	Now           time.Time
 }
@@ -462,6 +463,13 @@ func keyCustodyChecks(k keyCustody) []SetupCheck {
 		pk.Status = "info"
 		pk.Detail = fmt.Sprintf("On. %d stored credentials still use this deployment's key.", k.RootKeyCreds)
 		pk.Fix = "Run wardynd -rewrap-principal-keys to re-seal them."
+	case k.ExternalCreds > 0:
+		verb := "are"
+		if k.ExternalCreds == 1 {
+			verb = "is"
+		}
+		pk.Status = "ok"
+		pk.Detail = fmt.Sprintf("On. Every stored credential held here is sealed under its owner's key. %d %s kept in the external secret store instead, outside these keys.", k.ExternalCreds, verb)
 	default:
 		pk.Status = "ok"
 		pk.Detail = "On. Every stored credential is sealed under its owner's key."
@@ -508,6 +516,9 @@ func (s *Server) keyCustodyRows(ctx context.Context) []SetupCheck {
 		return nil
 	}
 	k.RootKeyCreds = n
+	if k.ExternalCreds, err = svc.ExternalCredentials(ctx); err != nil {
+		return nil
+	}
 	if k.Changes, err = svc.ChangesSince(ctx, now.Add(-30*24*time.Hour)); err != nil {
 		return nil
 	}
