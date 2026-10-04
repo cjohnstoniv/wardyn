@@ -409,6 +409,9 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if _, err := auditSealMode(f); err != nil {
 		return err
 	}
+	if err := validateHAPosture(f); err != nil {
+		return err
+	}
 	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, *f.uiStripCookies, posture, *f.allowPlaintextListen); err != nil {
 		return err
 	}
@@ -426,6 +429,35 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	}
 	for _, w := range bootPostureWarnings(f, posture) {
 		slog.Warn(w)
+	}
+	return nil
+}
+
+// validateHAPosture is the boot half of high availability, the half that still
+// holds when someone edits the Deployment by hand or scales it with kubectl,
+// which the chart's render-time guards cannot see. WARDYN_HA skips the
+// single-instance lock, so it is refused unless everything that makes a second
+// replica safe is in place: a Kubernetes runner (the Docker driver tracks
+// sandboxes in per-process maps that a replica that did not create a sandbox
+// cannot see) and a recording store every replica reads (pg), or none (off).
+// It also refuses the removed -allow-multi-instance flag, with a pointer.
+func validateHAPosture(f *bootFlags) error {
+	if *f.allowMultiInstance {
+		return errors.New("refusing to start: -allow-multi-instance was removed in 0.8.6. Running more than one replica is a supported mode now: " +
+			"set WARDYN_HA=true (the chart's ha.enabled), which needs the Kubernetes runner and WARDYN_RECORDING_STORE=pg; " +
+			"see docs/OPERATIONS.md, \"High availability\"")
+	}
+	if !*f.ha {
+		return nil
+	}
+	if *f.runnerSel != "k8s" {
+		return fmt.Errorf("refusing to start: WARDYN_HA is set but the runner is %q. High availability is supported on the Kubernetes runner only "+
+			"(WARDYN_RUNNER=k8s): the Docker driver keeps its sandbox tracking in per-process maps, so a teardown served by a replica that did not "+
+			"create the sandbox cannot see it. Unset WARDYN_HA, or run on Kubernetes", *f.runnerSel)
+	}
+	if sel := *f.recordingSel; sel != "pg" && sel != "off" {
+		return fmt.Errorf("refusing to start: WARDYN_HA is set but WARDYN_RECORDING_STORE is %q. Every replica must read the same recordings, so the "+
+			"store must be \"pg\" (Postgres) or \"off\"; the \"fs\" store is a directory on one pod's disk", sel)
 	}
 	return nil
 }

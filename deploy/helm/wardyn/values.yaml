@@ -31,24 +31,31 @@ image:
   # Names of imagePullSecrets for a private registry (list of {name: ...}).
   pullSecrets: []
 
-# Leave at 1 — wardynd holds per-process state (see README /
-# docs/OPERATIONS.md#one-replica-by-construction). Anything higher is
-# REFUSED at render time by templates/deployment.yaml.
+# Leave at 1 unless ha.enabled is set. Anything higher without it is REFUSED at
+# render time by templates/deployment.yaml.
 replicas: 1
 
-# Override for the refusal above. The pin is a SAFETY control, not modesty: the
-# secret-masking registry (internal/secretmask) is in-memory per-process and
-# fails OPEN, so a second replica can persist a session recording with live
-# credentials in cleartext. Setting this true renders the manifest anyway and
-# accepts that.
+# High availability: two or more wardynd replicas on this cluster, so one node
+# failing does not stop the control plane. Replaces `allowMultiReplica`, which
+# is removed (a values file that still sets it true is refused, with a pointer
+# here). Sets WARDYN_HA=true on the container, lifts the `replicas > 1`
+# refusal, and adds a PodDisruptionBudget (minAvailable 1) and a preferred pod
+# anti-affinity across nodes. The upgrade strategy stays Recreate: this is node
+# failure tolerance, not zero-downtime upgrades.
 #
-# It lifts TWO controls, not one. Besides the render refusal, wardynd takes the
-# database's single-instance advisory lock at boot and refuses to start while
-# another instance holds it — the control that still applies when someone
-# `kubectl scale`s this Deployment behind the chart's back. true adds
-# `-allow-multi-instance` to the pod's args, so the second pod comes up instead
-# of exiting; leave it false and a hand-scaled replica fails closed on its own.
-allowMultiReplica: false
+# The chart refuses to render it unless:
+#   - WARDYN_RECORDING_STORE is "pg" (or "off"), read from env and extraEnv;
+#     the default derived from persistence is "fs", so set
+#     env.WARDYN_RECORDING_STORE=pg to record;
+#   - persistence.enabled is false (the volume is ReadWriteOnce and exists for
+#     the per-pod fs recording store);
+#   - WARDYN_AUDIT_SPOOL, if you set it, is under /tmp (the per-pod emptyDir).
+# wardynd refuses to boot in HA unless its runner is Kubernetes (k8s.enabled)
+# and the store is pg or off, which also holds after a `kubectl scale`.
+# Set `replicas` to the count you want; per-replica limits (connection caps,
+# rate limiters) add up across replicas. docs/OPERATIONS.md, "High availability".
+ha:
+  enabled: false
 
 # Readiness probe path. /readyz pings Postgres, so a dead DB takes the pod out
 # of the Service's endpoints; liveness and startup stay on /healthz either way.
@@ -213,7 +220,7 @@ secrets:
   # combination above is refused by templates/secret.yaml because it is not a
   # trade-off, it is a scheduled outage: the pod crash-loops on its second start
   # and the secrets the first boot wrote are unrecoverable. Same "I accept the
-  # ceiling" escape hatch as allowMultiReplica — for a throwaway install where
+  # ceiling" escape hatch as k8s.allowRunsInReleaseNamespace — for a throwaway install where
   # losing every stored secret on restart is genuinely fine.
   allowEphemeralAgeKey: false
 
@@ -543,7 +550,7 @@ k8s:
   # at render (templates/rbac.yaml); this renders it anyway, for a laptop demo or
   # a cluster where wardynd is the only workload in its namespace and "every other
   # workload here" is the empty set. Same "I accept the ceiling" escape hatch as
-  # allowMultiReplica and secrets.allowEphemeralAgeKey — not a default, a choice.
+  # secrets.allowEphemeralAgeKey — not a default, a choice.
   allowRunsInReleaseNamespace: false
   # wardyn-proxy sidecar image (WARDYN_PROXY_IMAGE) — ALSO what the boot-time
   # egress canary launches (with -egress-canary instead of its normal

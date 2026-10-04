@@ -198,7 +198,7 @@ func run() error {
 	// replicas>1 refusal is render-time only. Claimed here, immediately after
 	// the pool exists and before anything registers process-local state, and
 	// held until shutdown. See claimSingleInstance for the ceiling.
-	releaseInstance, err := claimSingleInstance(rootCtx, pool, *f.allowMultiInstance)
+	releaseInstance, err := claimSingleInstance(rootCtx, pool, *f.ha)
 	if err != nil {
 		return err
 	}
@@ -236,7 +236,7 @@ func run() error {
 	}
 
 	// Boot keys: created under a lock that serializes replicas (#754).
-	bootKeys := newBootKeyStore(secrets, pool, *f.allowMultiInstance)
+	bootKeys := newBootKeyStore(secrets, pool, *f.ha)
 	// What is sealed under the secret store's per-subject keys: the run masking
 	// manifests (what each run was given, so a restarted or second wardynd masks
 	// it and the doors refuse a run they cannot prove masked) and the audit
@@ -451,6 +451,8 @@ func run() error {
 		Secrets:                  secrets,
 		MaskRegistry:             maskReg,
 		MaskManifests:            maskManifests,
+		HA:                       *f.ha,
+		MaskSync:                 maskStore,
 		LiveBus:                  liveBus,
 		ADORunPATs:               adoRunPATs,
 		AuditUnsealer:            sealSrc.unsealer(),

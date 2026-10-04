@@ -28,7 +28,9 @@ func TestValidateBootPosture(t *testing.T) {
 			oidcIssuer, oidcInternal, oidcRedirect, controlURL, uiAdvertise := "", "", "", "https://wardynd:8443", ""
 			tail, retention := 65536, 30
 			rate, seal := 20, "off"
+			off, runner, store := false, "none", "pg"
 			f := &bootFlags{
+				ha: &off, allowMultiInstance: &off, runnerSel: &runner, recordingSel: &store,
 				auditSeal:            &seal,
 				runOutputTailBytes:   &tail,
 				runOutputRetention:   &retention,

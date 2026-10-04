@@ -11,7 +11,7 @@ corporate-network sections are written against
 state — see [Kubernetes: day-2](#kubernetes-day-2) for the chart's own backup,
 restore, upgrade and key-persistence commands.
 "[Multi-user: who can change what](#multi-user-who-can-change-what)" and
-"[One replica, by construction](#one-replica-by-construction)" apply to both
+"[High availability](#high-availability)" apply to both
 substrates identically: authorization and the per-process constraints live in
 `internal/api`, above the runner seam.
 
@@ -39,7 +39,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Renamed in 0.8](#renamed-in-08)
 - [Upgrades](#upgrades)
 - [Kubernetes: day-2](#kubernetes-day-2)
-- [One replica, by construction](#one-replica-by-construction)
+- [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md)
 - Task pages under [`docs/operations/`](operations/): [Managed laptops: hybrid enrolment](operations/hybrid-laptops.md), [Launch presets](operations/launch-presets.md), [Console branding](operations/console-branding.md)
 
@@ -452,7 +452,7 @@ not dropped: it is fsync'd, one JSON line at a time, to a local append-only spoo
 `internal/api/auditspool.go`), and a background drain replays it into Postgres
 once the store recovers. The spool is per-process by design: the fallback for one
 pod's failed write, each `wardynd` draining its own back on recovery (see
-[One replica, by construction](#one-replica-by-construction)).
+[High availability](#high-availability)).
 
 **What the drain does not restore: the off-box hash series.** The chain hashes
 are filled by the Postgres write itself (`RETURNING`, `store.InsertAuditEvent`),
@@ -4807,7 +4807,7 @@ the way back. The upgrade runbook's `pg_dump` is the rollback.
 
 ### Version combinations
 
-`claimSingleInstance` excludes a second daemon. It does not exclude an old sidecar image, an old
+`claimSingleInstance` excludes a second daemon (outside HA mode). It does not exclude an old sidecar image, an old
 browser bundle or an old CLI, so:
 
 | combination | behaviour |
@@ -5181,7 +5181,7 @@ upgrade across this release**:
 # 0. Take the Postgres dump (see Backup) AND confirm you hold the age key. The
 #    dump plus that key is the ONLY way back to an older wardynd afterwards.
 # 1. Stop EVERY older replica — one-instance locking cannot see it under
-#    -allow-multi-instance. An older binary still running keeps writing
+#    WARDYN_HA. An older binary still running keeps writing
 #    pre-envelope payloads, which the new version refuses by name ("an older
 #    wardynd is still writing"). A NEW name it wrote is converted at the next
 #    restart;
@@ -5695,7 +5695,7 @@ when it refused to start. It refuses, naming the reason, in two cases:
 
 - another session holds the single-instance lock: a serving wardynd, or another `-migrate-only`; and
 - any other client is connected to the database, whether or not a lock is held. The lock is not enough on its
-  own, because a replica started with `-allow-multi-instance` never takes it. A migrator role sees other
+  own, because a replica started with `WARDYN_HA` never takes it. A migrator role sees other
   roles' sessions by user and application name, so the check holds under a split `WARDYN_PG_MIGRATE_DSN`.
 
 A wardynd that boots while `-migrate-only` runs fails its own single-instance claim and exits, so a Job cannot be
@@ -5703,7 +5703,7 @@ raced by a pod the scheduler restarts. The migration's time bound is `WARDYN_MIG
 and the chart's startup probe window follows it: 30 seconds to connect, the timeout, and 120 seconds of slack.
 Raise it in `env` or `extraEnv` as `h`, `m` and `s` units only.
 
-**Under `allowMultiReplica`, no replica holds the lock**, so nothing the lock does stops writers there:
+**Under `ha.enabled`, no replica holds the lock**, so nothing the lock does stops writers there:
 `kubectl scale --replicas=0` is the only pre-step that does. `-migrate-only` will still refuse while any replica
 is connected, but it is the scale-down that makes the run possible.
 
@@ -6334,40 +6334,77 @@ runs the request UNCAPPED with a warning, while overlay2 over a non-xfs
 backing filesystem is handed the option anyway and the daemon REFUSES the
 create, so that run fails closed instead.
 
-## One replica, by construction
+## High availability
 
-`replicas` is not a scaling knob and it is not modesty — **the pin is a safety
-control.** No shipped topology runs more than one: compose pins `container_name`
-(`--scale wardynd=N` is rejected outright) and the Helm chart both defaults
-`replicas: 1` **and refuses to render above it**
-(`deploy/helm/wardyn/templates/deployment.yaml`; `allowMultiReplica=true` is the
-documented override, an acceptance of everything below, not a fix).
+`ha.enabled` runs two or more wardynd replicas on Kubernetes so that the loss of a
+node does not stop the control plane. It is one documented switch: the chart sets
+`WARDYN_HA=true`, the daemon skips the single-instance lock, and both refuse every
+configuration that would make a second replica unsafe. It is a node-failure
+posture, not a way to scale a busy deployment past one replica's capacity, and it
+is **not zero-downtime upgrades**: the Deployment strategy stays `Recreate`, so an
+upgrade stops the old replicas before it starts the new ones.
 
-wardynd keeps this state per-process. The first entry is why the pin is a control
-rather than a preference:
+### Turning it on
 
-- **the secret-masking registry** (`internal/secretmask`) — an in-memory
-  `map[runID][][]byte`, never persisted, and it **fails open**. Secrets are
-  registered by the request that mints or injects them (`Broker.mint` on the mint
-  route, `handleInternalInjection` on the proxy's injection call; the captured
-  AWS SSO token registers process-*globally* via `AddGlobal`), so they land on
-  whichever replica the run's proxy happened to dial. The session-recording
-  upload (`POST /runs/{id}/recording`) and the live-attach relay are DIFFERENT
-  requests that may land anywhere, and both pass the stream through unmasked when
-  the run's snapshot is empty (`buildMaskingBody`, `liveMaskWriter`). Two
-  replicas is therefore enough to persist an asciicast containing live
-  credentials in cleartext — with a `success` audit event, because nothing in the
-  path can tell "no secrets for this run" from "not my run". There is no
-  cross-replica fix short of moving the registry into shared storage, which has
-  not been built. **This is not bounded to two replicas either.** A single
-  `wardynd` process restarting mid-run (upgrade, crash-restart, OOM) wipes the
-  same in-memory map, so a run whose secrets were registered before the restart
-  and whose cast uploads after it hits the identical empty-snapshot fail-open —
-  with `replicas: 1` throughout. The pin removes the *cross-replica* case, not
-  this one. The map does not grow without bound: a background sweeper evicts a
-  run's entry once that run has been terminal for an hour (`api.RunSecretGrace`),
-  late enough for the finalize audit and the cast upload to still see it.
-  **Since 0.8.6 a registry miss fails closed for runs dispatched by 0.8.6.**
+```
+helm upgrade --install wardyn ./deploy/helm/wardyn \
+  --set ha.enabled=true --set replicas=2 \
+  --set env.WARDYN_RECORDING_STORE=pg \
+  --set k8s.enabled=true ... # the Kubernetes runner and its other required values
+```
+
+What the switch needs, and refuses to render or boot without:
+
+- **The Kubernetes runner.** The Docker driver's sandbox tracking maps (`agentExecs`,
+  `pending`, `mainProc`, `creating` in `internal/runner/docker/driver.go`) are
+  per-process by design, and a teardown served by a replica that did not create
+  the sandbox cannot see them, so a container can survive the kill it was supposed
+  to die from. HA is **supported on Kubernetes only**. `WARDYN_HA=true` on any other
+  runner exits non-zero at boot, naming the reason; compose pins `container_name`
+  and rejects `--scale` outright.
+- **A recording store every replica reads.** `WARDYN_RECORDING_STORE` is `pg` or
+  `off`. The chart derives `fs` from `persistence.enabled` and `off` without it, so
+  an HA install sets `env.WARDYN_RECORDING_STORE=pg` to record. The chart reads the
+  key from both `env` and `extraEnv` (`extraEnv` renders after `env` and wins), and
+  refuses `fs` from either; it also refuses `persistence.enabled=true`, whose
+  ReadWriteOnce volume exists for the per-pod `fs` store.
+- **An audit spool on the per-pod `tmp` emptyDir.** The chart renders
+  `WARDYN_AUDIT_SPOOL=/tmp/audit-spool.jsonl` and refuses a `WARDYN_AUDIT_SPOOL`
+  set in `env` or `extraEnv` anywhere outside `/tmp`.
+- **A PodDisruptionBudget** (`minAvailable: 1`) and a preferred **pod anti-affinity**
+  across nodes (soft, so a one-node cluster still schedules every replica; an
+  `affinity.podAntiAffinity` of your own replaces it).
+
+`allowMultiReplica` and the `-allow-multi-instance` flag are **removed**, a
+documented clean break: a values file that still sets `allowMultiReplica=true` is
+refused at render with a pointer to `ha.enabled`, and the flag is refused at boot
+with a pointer to `WARDYN_HA`. An install that set them was running an unsupported
+topology. `replicas > 1` without `ha.enabled` is refused too. The chart's refusals
+are render-time only (`kubectl scale` bypasses them), which is why the boot
+refusal exists: a Deployment edited by hand to `WARDYN_HA=true` on the Docker
+runner, or with the `fs` store, does not start. Without `WARDYN_HA` boot is
+unchanged: one instance, the single-instance lock taken, and a second wardynd
+against the same database refuses to start.
+
+`GET /setup/status` carries three rows while `WARDYN_HA` is on: `ha_mode`,
+`recording_store_shared` and `mask_registry_shared`. The last fails when this
+replica's `LISTEN` connection is down or its mask-sync cursor is behind the
+committed generation after one read, and while it fails the replica refuses
+recording uploads and new attaches and replaces live output with a placeholder.
+
+### What the replicas share
+
+Everything here is in Postgres, so a request served by any replica sees the same
+state.
+
+- **the secret-masking registry** (`internal/secretmask`). A value a run was
+  given is masked, verbatim, in every artefact Wardyn persists or relays for that
+  run, whichever replica serves the request and whether or not any replica
+  restarted. (Until 0.8.6 the registry was an in-memory map that failed open: a
+  recording uploaded to a replica other than the one that handled the run's
+  injection, or after a restart, was persisted with live credentials in it and a
+  `success` audit event. That is why a second replica was never supported.)
+  **A registry miss fails closed for runs dispatched by 0.8.6.**
   Dispatch commits each run's *masking manifest* to Postgres before the sandbox
   can see a value: the exact bytes of every rendering the run received (its
   workspace and inspection secrets and its Azure DevOps run token in all three
@@ -6410,28 +6447,6 @@ rather than a preference:
   DELETE` on `mask_values`, `SELECT, UPDATE` on `mask_gen` and `DELETE` on
   `run_mask_manifest`. **SSH exec, SFTP and direct-tcpip were never masked**
   (`sshgateway_channels.go`), so none of them is covered by any of this.
-- **the audit spool** — a local append-only file per pod
-  (`internal/api/auditspool.go`). Per-process *by design*: the fallback for a
-  failed Postgres write, each pod draining its own back into the database.
-- **the age identity, when `WARDYN_AGE_KEY` is unset** — each process mints its
-  own ephemeral one at boot (`buildSecretStore`, `cmd/wardynd`), so a secret
-  written by one pod cannot be decrypted by any other. The signing-key `Get`
-  happens during startup: once that key exists, a process with a different age
-  identity fails closed before serving, rather than starting healthy. Persisting
-  the same `WARDYN_AGE_KEY` across restarts avoids this mismatch; replacing it
-  without re-encrypting the stored secrets does not.
-- **the docker driver's sandbox tracking maps** (`agentExecs`, `pending`,
-  `mainProc`, `creating` in `internal/runner/docker/driver.go`) — the process that
-  created a sandbox is the only one that can observe its agent exec (`Wait`), and
-  `creating` is the in-memory tombstone that makes the exec-less (krun)
-  create/teardown handshake atomic. A teardown handled by a pod that did not
-  create the sandbox has neither, so a container can survive the kill it was
-  supposed to die from.
-- **the `/metrics` counters** (`internal/api/metrics.go`) — per-process, so a
-  scrape reports one pod's slice of the fleet, not the fleet.
-- **the decision-ingest `lastTouch` debounce** (`shouldTouch`,
-  `internal/api/internal.go`) — per-process, so N pods can do up to N× the
-  `TouchRun` writes the 30s debounce was sized for. Load, not correctness.
 
 Six OTHER pieces are now Postgres-backed, so they survive a crash and no longer
 break under a second replica: single-use **attach tickets**, delete-on-read
@@ -6507,11 +6522,55 @@ Since 0.8.6 the rest of a run's live state is in Postgres too (migration
   `run_output_chunks`, `SELECT, INSERT, UPDATE, DELETE` on `run_attach_leases` and
   `ado_run_pat_state`, and `SELECT, INSERT, UPDATE` on `ado_signin_ends`.
 
-None of that makes `replicas > 1` supported. It closed the six reasons a second
-replica used to drop *requests*; it did not touch the list above, and the masking
-registry is a worse failure than any of the six — those lost work, this one
-persists secrets. Keep `replicas: 1`. Going beyond it has not been built, tested,
-or released, and the chart will not render it without `allowMultiReplica=true`.
+### What stays per replica
+
+These are per-process by design, and under HA they are **per replica**. A cap is
+therefore the per-replica cap times the replica count (cap × N):
+
+- **SSH and UI connection counts**, the **rate limiters** and the auth-failure
+  coalescer (`internal/api/server.go`): each replica admits its own cap, so N
+  replicas admit up to N times it.
+- **Debounce caches**: the decision-ingest `lastTouch` debounce (`shouldTouch`,
+  `internal/api/internal.go`) and the console's re-assert debounce. N replicas can do
+  up to N times the `TouchRun` writes the 30 s debounce was sized for. Load, not
+  correctness.
+- **The `/metrics` counters** (`internal/api/metrics.go`): a scrape reports one
+  replica's slice of the fleet, not the fleet. Sweep gauges come from the shared
+  record, so a follower reports the leader's ticks.
+- **The audit spool**, a local append-only file per pod (`internal/api/auditspool.go`),
+  the fallback for a failed Postgres write; each replica drains its own back into
+  the database. **On `emptyDir` it is lost with the node**: a node failure loses
+  whatever that pod had spooled and not yet drained. The chart keeps it on `emptyDir`
+  because a persistent volume cannot be shared between replicas.
+- **The image build tracker** (Docker only), and the run-secret sweeper's local cache
+  (it drops this replica's own copy of a terminal run's values; the durable rows are
+  the leader's pass).
+- **The age identity, when `WARDYN_AGE_KEY` is unset**: each process mints its own
+  ephemeral one at boot (`buildSecretStore`, `cmd/wardynd`), so a secret written by
+  one replica cannot be decrypted by another. Set the same `WARDYN_AGE_KEY` (or a key
+  service) on every replica; the chart refuses an ephemeral key with an external DSN.
+
+### Residual risks
+
+- **SSH exec, SFTP and direct-tcpip were never masked** (`sshgateway_channels.go`), so
+  nothing above covers them. Masking is verbatim only: an encoded or narrated value
+  is not caught.
+- **Runs that predate 0.8.6 have no masking manifest.** After any restart they are
+  refused at the five doors (recording upload, live attach, exec relay, SSH shell,
+  live output read) until they end (Q-HA1). Runs dispatched by 0.8.6 survive restarts.
+- **Masking now depends on Postgres.** With it unreachable, uploads and new attaches
+  are refused and live chunks are replaced by the placeholder. That trades
+  availability for never persisting a credential.
+- **On a Postgres failover, advisory locks can overlap briefly.** Leader actions are
+  idempotent and epoch-fenced and the refresh write is a compare-and-set, but a
+  refresh already in flight on the old holder can still race the new holder at the
+  authority and lose the credential; the person signs in again.
+- **A compromised wardynd process still sees every value it masks.** Shredding a
+  person's copies is complete only after backups expire or the wrapping key version
+  is retired.
+- **The elected leader is one replica.** The approval, recording, credential, pause and
+  always-egress sweepers run there; if it dies, another takes over within one retry
+  interval (about 15 seconds).
 
 ## Kubernetes: known gaps
 

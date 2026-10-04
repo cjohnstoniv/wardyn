@@ -136,7 +136,7 @@ func TestMigrateOnly_RefusesWhileTheSingleInstanceLockIsHeld(t *testing.T) {
 func TestMigrateOnly_RefusesWhileASecondConnectionIsOpenAndNoLockIsHeld(t *testing.T) {
 	dsn := emptyDatabase(t)
 	ctx := context.Background()
-	// A replica run with -allow-multi-instance holds a connection and no lock.
+	// A replica run with WARDYN_HA holds a connection and no lock.
 	other, err := db.Connect(ctx, dsn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
@@ -144,7 +144,7 @@ func TestMigrateOnly_RefusesWhileASecondConnectionIsOpenAndNoLockIsHeld(t *testi
 	defer other.Close()
 
 	err = migrateOnlyMode(migrateOnlyFlags(dsn))
-	requireExit(t, err, exitMigrateRefused, "other client connection", "-allow-multi-instance")
+	requireExit(t, err, exitMigrateRefused, "other client connection", "WARDYN_HA")
 	if n := appliedCount(t, dsn); n != 0 {
 		t.Fatalf("a refused -migrate-only still applied %d migration(s)", n)
 	}

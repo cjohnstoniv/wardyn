@@ -148,7 +148,7 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// run history. Election is NOT free, though: claimSingleInstance
 	// (cmd/wardynd/single_instance.go) holds db.SingleInstanceLockKey for the
 	// whole process lifetime only in the DEFAULT configuration — a deployment
-	// booted with -allow-multi-instance skips that claim entirely, and a
+	// booted with WARDYN_HA skips that claim entirely, and a
 	// Postgres restart/failover can release its session under a still-running
 	// daemon while a second one boots and claims it (SingleInstanceLockKey's
 	// own HONEST CEILING). So the ticker takes its own per-tick advisory lock

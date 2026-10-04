@@ -21,6 +21,20 @@
     "runner",
     "scm_provider"
   ],
+  "with_ha": [
+    "age_key",
+    "agent_image",
+    "claude_signin_image",
+    "env_builder",
+    "ha_mode",
+    "host_proxy",
+    "llm_provider",
+    "mask_registry_shared",
+    "platform_shared",
+    "recording_store_shared",
+    "runner",
+    "scm_provider"
+  ],
   "with_k8s_runner": [
     "age_key",
     "agent_image",

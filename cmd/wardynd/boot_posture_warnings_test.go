@@ -95,7 +95,9 @@ func TestValidateBootPostureLogsTheWarnings(t *testing.T) {
 		listen, ui, ssh, tmpl, strip, base := ":8080", ":8081", "", "", "", ""
 		redirect, control, internal, org, tok := "https://wardyn.example.com/auth/callback", "https://wardynd:8443", "", "", ""
 		allow, member, tail, rate, retention, seal := false, false, 65536, 20, 30, "off"
+		off, runner, store := false, "none", "pg"
 		f := &bootFlags{
+			ha: &off, allowMultiInstance: &off, runnerSel: &runner, recordingSel: &store,
 			auditSeal:           &seal,
 			runOutputTailBytes:  &tail,
 			runOutputRetention:  &retention,

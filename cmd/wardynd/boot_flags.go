@@ -295,11 +295,15 @@ type bootFlags struct {
 
 	preflightRatePerMin *int
 
-	// allowMultiInstance is the runtime twin of the Helm chart's
-	// allowMultiReplica: it waives the single-instance boot lock
-	// (claimSingleInstance). Like rotateAgeKey it has NO WARDYN_* env pair — a
-	// stray variable in a compose .env must not silently disable a safety
-	// control, and the chart passes it as an arg where it is set deliberately.
+	// ha is WARDYN_HA, the runtime half of the chart's ha.enabled: it skips the
+	// single-instance boot lock (claimSingleInstance) and is refused unless the
+	// runner is Kubernetes and the recording store is pg or off
+	// (validateHAPosture). It has an env pair because the chart sets it there.
+	ha *bool
+	// allowMultiInstance is the REMOVED -allow-multi-instance flag. It stays
+	// declared only so a stale command line gets validateHAPosture's pointer to
+	// WARDYN_HA instead of the flag package's bare "flag provided but not
+	// defined". It has no env pair and nothing reads it but that refusal.
 	allowMultiInstance *bool
 
 	// SSH gateway (C2/C3): sshListen empty = off = no listener, no new surface
@@ -531,11 +535,10 @@ func parseBootFlags() *bootFlags {
 		// WARDYN_AGE_KEY with no Postgres.
 		genAgeKey: flagBool("gen-age-key", "WARDYN_GEN_AGE_KEY", false, "generate a fresh age X25519 identity (AGE-SECRET-KEY-...) to stdout for WARDYN_AGE_KEY, then exit; no Postgres required (default false)"),
 
-		// flag.Bool, NOT flagBool: no env pair by design — see the struct field.
-		allowMultiInstance: flag.Bool("allow-multi-instance", false,
-			"start even though another wardynd already holds this database's single-instance lock; "+
-				"a recording served by a different instance than the one that did the proxy injection is persisted with "+
-				"live credentials in cleartext, since the secret-masking registry is process-local (default false)"),
+		ha: flagBool("ha", "WARDYN_HA", false, "multi-replica mode: skip the single-instance lock so several wardynd replicas can serve one database. Refused unless the runner is Kubernetes and the recording store is pg or off; the Helm chart sets it with ha.enabled (default false)"),
+
+		// flag.Bool, NOT flagBool: removed, no env pair — see the struct field.
+		allowMultiInstance: flag.Bool("allow-multi-instance", false, "removed in 0.8.6; boot is refused with a pointer to WARDYN_HA (default false)"),
 
 		// flag.String, NOT flagEnv: no env pair by design — see the struct field.
 		// The backquoted word is deliberate: flag.PrintDefaults renders the first

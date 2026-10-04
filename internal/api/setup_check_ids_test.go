@@ -107,6 +107,9 @@ func TestSetupCheckIds_Golden(t *testing.T) {
 			Runner:     k8sRunner{networkPolicy: true},
 		})),
 
+		// WARDYN_HA adds the three high-availability rows, and only with it.
+		"with_ha": setupCheckIds(t, New(Config{AdminToken: adminToken, HA: true})),
+
 		"with_store": setupCheckIds(t, New(Config{
 			AdminToken: adminToken,
 			Store: setupCheckIdsStore{sc: types.SiteConfig{

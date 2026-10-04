@@ -42,7 +42,7 @@ type bootKeyStore struct {
 }
 
 // newBootKeyStore picks lockCreate for this process. Without
-// -allow-multi-instance, claimSingleInstance already holds
+// WARDYN_HA, claimSingleInstance already holds
 // db.SingleInstanceLockKey for the process lifetime, so no other wardynd is
 // booting beside this one and there is nothing to serialize — and a second held
 // connection would leave a pool_max_conns=2 daemon none for the create's own

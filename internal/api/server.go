@@ -410,6 +410,12 @@ type Config struct {
 	// complete is refused instead of passed through. Nil keeps no manifests
 	// and gates nothing, as a nil MaskRegistry masks nothing.
 	MaskManifests *maskmanifest.Manifests
+	// HA is WARDYN_HA: several replicas serve this database. It adds the three
+	// high-availability rows to /setup/status (setup_checks_ha.go); false adds none.
+	HA bool
+	// MaskSync reports whether this replica's copy of the shared masking
+	// registry is current (the mask_registry_shared row). Read only when HA is set.
+	MaskSync MaskSyncProbe
 	// LiveBus, when non-nil, carries the notices replicas send each other over Postgres NOTIFY:
 	// run lifecycle events, a kill for the replica creating the run's sandbox, and the end of an
 	// attach lease (live_bus.go). Nil keeps each replica to its own process, as before.
