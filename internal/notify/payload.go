@@ -30,15 +30,21 @@ const SchemaV1 = "wardyn.approval.v1"
 const maxFieldBytes = 256
 
 type payload struct {
-	Schema     string            `json:"schema"`
-	DeliveryID string            `json:"delivery_id"`
-	Event      string            `json:"event"`
-	Tier       int16             `json:"tier"`
-	Approval   payloadApproval   `json:"approval"`
-	Run        payloadRun        `json:"run"`
-	Profile    *payloadProfile   `json:"profile,omitempty"`
-	Requester  *payloadRequester `json:"requester,omitempty"`
-	ConsoleURL string            `json:"console_url,omitempty"`
+	Schema     string             `json:"schema"`
+	DeliveryID string             `json:"delivery_id"`
+	Event      string             `json:"event"`
+	Tier       int16              `json:"tier"`
+	Approval   payloadApproval    `json:"approval"`
+	Run        payloadRun         `json:"run"`
+	Profile    *payloadProfile    `json:"profile,omitempty"`
+	Requester  *payloadRequester  `json:"requester,omitempty"`
+	Recipients []payloadRecipient `json:"recipients,omitempty"`
+	ConsoleURL string             `json:"console_url,omitempty"`
+}
+
+type payloadRecipient struct {
+	Role  string `json:"role"`
+	Email string `json:"email"`
 }
 
 type payloadApproval struct {
@@ -72,7 +78,14 @@ type approvalFacts struct {
 	Email       string
 	ProfileID   *uuid.UUID
 	ProfileName string
+	// Recipients are the addresses the tier's notify targets resolved to at send time; RedactRequester
+	// is the sending channel's setting.
+	Recipients      []recipient
+	RedactRequester bool
 }
+
+// recipient is one resolved notify target: its role (a Target* name) and address.
+type recipient struct{ Role, Email string }
 
 // buildPayload renders the body for one outbox row. Every string field is control-stripped, capped and
 // passed through the run's masker BEFORE encoding, so the JSON stays well formed and a signature
@@ -100,8 +113,11 @@ func buildPayload(deliveryID uuid.UUID, tier int16, f approvalFacts, consoleURL 
 	if f.ProfileID != nil {
 		p.Profile = &payloadProfile{ID: clean(f.ProfileID.String()), Name: clean(f.ProfileName)}
 	}
-	if f.Principal != "" {
+	if f.Principal != "" && !f.RedactRequester {
 		p.Requester = &payloadRequester{Principal: clean(f.Principal), Email: clean(f.Email)}
+	}
+	for _, r := range f.Recipients {
+		p.Recipients = append(p.Recipients, payloadRecipient{Role: r.Role, Email: clean(r.Email)})
 	}
 	if consoleURL != "" {
 		p.ConsoleURL = clean(strings.TrimRight(consoleURL, "/") + "/approvals")

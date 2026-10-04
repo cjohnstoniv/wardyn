@@ -170,10 +170,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if trustedCACount > 0 {
-		slog.Info("wardynd: corporate CA trust configured (WARDYN_TRUSTED_CA_FILE)",
-			slog.Int("cert_count", trustedCACount), slog.Any("subjects", certSubjects(trustedCAPEM)))
-	}
+	logTrustedCA(trustedCACount, trustedCAPEM)
 	// installTrustedCA + WARDYN_DAEMON_PROXY_URL, both mutating the shared
 	// http.DefaultTransport in place — see installBootTransport (kept out of
 	// run() itself, which is deliberately low-branching per its doc comment).
@@ -224,7 +221,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := startApprovalNotify(rootCtx, *f.approvalNotify, pool, maskedRec, maskReg); err != nil {
+	if err := startApprovalNotify(rootCtx, *f.approvalNotify, pool, maskedRec, maskReg, *f.approvalExpiryAfter); err != nil {
 		return err
 	}
 

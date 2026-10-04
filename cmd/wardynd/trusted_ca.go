@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -131,4 +132,13 @@ func certSubjects(pemBundle string) []string {
 		subjects = append(subjects, c.Subject.String())
 	}
 	return subjects
+}
+
+// logTrustedCA is the boot line for a configured trust bundle, out of run() (whose cyclomatic budget
+// is full). Nothing is logged for an empty bundle.
+func logTrustedCA(count int, pemBundle string) {
+	if count > 0 {
+		slog.Info("wardynd: corporate CA trust configured (WARDYN_TRUSTED_CA_FILE)",
+			slog.Int("cert_count", count), slog.Any("subjects", certSubjects(pemBundle)))
+	}
 }

@@ -218,3 +218,70 @@ func TestPG_CreateApproval_InjectedFailuresLeaveNeitherRow(t *testing.T) {
 		}
 	}
 }
+
+// TestPG_CreateApproval_RoutedTiersAreAllEnqueuedWithTheirDueAt: a matching route enqueues every tier's
+// rows at insert, due `after` past requested_at; a kind no route matches enqueues nothing.
+func TestPG_CreateApproval_RoutedTiersAreAllEnqueuedWithTheirDueAt(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	cfg, err := notify.Parse(`{"channels":[
+		{"id":"hook-a","type":"webhook","url":"http://127.0.0.1:9/a"},
+		{"id":"hook-b","type":"webhook","url":"http://127.0.0.1:9/b"}],
+		"routes":[{"kinds":["push_content"],"tiers":[
+			{"after":"0s","channels":["hook-a"]},
+			{"after":"10m","channels":["hook-a","hook-b"]},
+			{"after":"90m","channels":["hook-b"]}]}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notify.SetActive(cfg, nil)
+	t.Cleanup(func() { notify.SetActive(nil, nil) })
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	st := store.NewPG(pool)
+
+	a, err := st.CreateApproval(ctx, pendingApproval(run.ID, types.ApprovalPushContent, `{"n":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT n.tier, n.channel, extract(epoch FROM n.due_at - a.requested_at), n.next_attempt_at = n.due_at
+		  FROM approval_notifications n JOIN approvals a ON a.id = n.approval_id
+		 WHERE n.approval_id = $1 ORDER BY n.tier, n.channel`, a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	type row struct {
+		tier   int
+		ch     string
+		secs   int
+		synced bool
+	}
+	var got []row
+	for rows.Next() {
+		var r row
+		var secs float64
+		if err := rows.Scan(&r.tier, &r.ch, &secs, &r.synced); err != nil {
+			t.Fatal(err)
+		}
+		r.secs = int(secs + 0.5)
+		got = append(got, r)
+	}
+	want := []row{{0, "hook-a", 0, true}, {1, "hook-a", 600, true}, {1, "hook-b", 600, true}, {2, "hook-b", 5400, true}}
+	if len(got) != len(want) {
+		t.Fatalf("rows = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("row %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	other, err := st.CreateApproval(ctx, pendingApproval(run.ID, types.ApprovalEgressDomain, `{"n":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM approval_notifications WHERE approval_id = $1`, other.ID); n != 0 {
+		t.Fatalf("an unrouted kind got %d outbox rows, want 0", n)
+	}
+}
