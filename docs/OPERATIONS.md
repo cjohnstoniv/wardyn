@@ -1855,10 +1855,12 @@ person who can act.
 
 **Optional: four-eyes on governance writes.** Set `WARDYN_GOVERNANCE_SECOND_HUMAN=1` and no
 single administrator can change a governance profile, an assignment, a capability grant, the
-enforcement map, a value's availability, a user type's priority or a role mapping alone. With it on, a
+enforcement map, a value's availability, a user type's priority, a role mapping or a key-domain
+assignment alone. With it on, a
 human's write to `POST/PUT/DELETE /governance/profiles`, `POST/DELETE /governance/assignments`,
 `POST/DELETE /permissions/grants`, `PUT /permissions/enforcement`, `PUT /permissions/availability/{kind}/*`,
-`PUT /user-types/{id}` (when the priority changes) or `POST/DELETE /access/mappings`
+`PUT /user-types/{id}` (when the priority changes), `POST/DELETE /access/mappings` or
+`PUT/DELETE /key-domains/assignments/{subject_type}/{subject}`
 is decoded and validated exactly as before and then stored as a pending change, answered `202`
 with `Location: /api/v1/governance/changes/{id}` and
 `{"pending_change": {id, target_kind, op, target_key, state, proposed_by, proposed_at, expires_at, diff}}`.
@@ -1938,7 +1940,7 @@ approvers find them through `wardyn governance changes list` or the API.
   detection, not prevention. Each change is reviewed alone: two separately approved changes can compose
   into a widening neither diff shows. Not covered here: the rest of the governance-adjacent writes
   (workspace egress lists, `/policies`, `/site-config`, `/integrations`, the approval `always` scope,
-  user-type create and delete, and key-domain assignments stay single-human until their own lanes).
+  and user-type create and delete stay single-human until their own lanes).
 - **In the console.** The Governance screen's Changes tab lists the pending changes with the server's
   diff, and an approver approves or rejects there (a reason is optional). A covered write made in the console
   that is held shows "Submitted for approval" at the place it was made, never a save. Approve is disabled on
