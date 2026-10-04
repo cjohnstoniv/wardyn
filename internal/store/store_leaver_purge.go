@@ -150,16 +150,18 @@ func (s PG) ListDeactivatedIdentities(ctx context.Context, limit int) ([]Princip
 		ORDER BY deactivated_at DESC, id LIMIT $1`, []any{limit}, scanPrincipalIdentity)
 }
 
-// ListDeprovisionFailures is the suspend and purge ledger rows that are pending with a recorded error,
-// oldest identity first, at most limit. One row per identity, kind and step: a step that fails for
+// ListDeprovisionFailures is the suspend and purge ledger rows that are pending with a recorded error
+// for an identity still deactivated or purged (the sweeper's scope: a reactivated person's leftover
+// rows are not unfinished work), oldest identity first, at most limit. One row per identity, kind and step: a step that fails for
 // several targets is listed once, with the error of the one touched last.
 func (s PG) ListDeprovisionFailures(ctx context.Context, limit int) ([]DeprovisionFailure, error) {
 	return collect(ctx, s.Pool, "list", "deprovision failures", `
-		SELECT identity_id, kind, step, (array_agg(last_error ORDER BY updated_at DESC))[1]
-		  FROM deprovision_jobs
-		 WHERE state = 'pending' AND last_error <> '' AND kind IN ('suspend', 'purge')
-		 GROUP BY identity_id, kind, step
-		 ORDER BY min(created_at), identity_id, kind, step LIMIT $1`, []any{limit}, func(r pgx.Row) (DeprovisionFailure, error) {
+		SELECT j.identity_id, j.kind, j.step, (array_agg(j.last_error ORDER BY j.updated_at DESC))[1]
+		  FROM deprovision_jobs j JOIN principal_identities i ON i.id = j.identity_id
+		 WHERE j.state = 'pending' AND j.last_error <> '' AND j.kind IN ('suspend', 'purge')
+		   AND (i.deactivated_at IS NOT NULL OR i.purged_at IS NOT NULL)
+		 GROUP BY j.identity_id, j.kind, j.step
+		 ORDER BY min(j.created_at), j.identity_id, j.kind, j.step LIMIT $1`, []any{limit}, func(r pgx.Row) (DeprovisionFailure, error) {
 		var f DeprovisionFailure
 		return f, r.Scan(&f.IdentityID, &f.Kind, &f.Step, &f.LastError)
 	})

@@ -93,6 +93,15 @@ func TestSCIMStatus(t *testing.T) {
 	if got := e.scimStatusOf(e.a); len(got.Drives) != 0 {
 		t.Errorf("drives after the reclaim = %+v, want none", got.Drives)
 	}
+
+	// A person the identity provider reinstated is not unfinished work: the sweeper no longer resumes
+	// them, so the card must not list them either.
+	if w := e.patch(e.a, stuck, patchOf("true")); w.Code != http.StatusOK {
+		t.Fatalf("reactivate = %d %s", w.Code, w.Body.String())
+	}
+	if got := e.scimStatusOf(e.a); len(got.Pending) != 0 {
+		t.Errorf("pending after reactivation = %+v, want none", got.Pending)
+	}
 }
 
 // With SCIM off the card still renders, so the read answers configured false and empty lists, not null.
