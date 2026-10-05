@@ -167,11 +167,22 @@ jobs:
         run: |
           mkdir -p test/reports/e2e
           make test-conformance-docker 2>&1 | tee test/reports/e2e/cc2-conformance.log
-      # TEMPORARY (removed before merge): the diagnostics of a green attempt too.
-      - name: Conformance diagnostics
+      # TEMPORARY (removed before merge): the two flaky cases twenty more times,
+      # with their diagnostics printed whether they pass or fail.
+      - name: Exec conformance cases, repeated
         if: always()
+        env:
+          WARDYN_TEST_DOCKER: "1"
+          WARDYN_TEST_REQUIRE_CLASS: CC2
+        shell: bash
         run: |
-          grep -o 'diagnostic: [^"]*' test/reports/go/conformance-docker/test-output.json || true
+          rc=0
+          go test -tags docker -count=20 -v -timeout 30m \
+            -run 'TestConformanceDocker$/^(WaitExitCode|ExecStreamLoopbackRelay)$' \
+            ./test/conformance/ > repeat.log 2>&1 || rc=$?
+          grep -E -- '--- FAIL|diagnostic:|listener_probe_rc|want|^(ok|FAIL)' repeat.log || true
+          if [ "$rc" -ne 0 ]; then echo "::group::full log"; cat repeat.log; echo "::endgroup::"; fi
+          exit "$rc"
       - name: Live task e2e with CC2 required (oracle lane)
         env:
           WARDYN_TEST_DOCKER: "1"
