@@ -130,10 +130,13 @@ func buildRunMounts(policy types.RunPolicySpec, member userMountPosture) []runne
 func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, siteCfg types.SiteConfig, siteCfgErr error) string {
 	if siteCfgErr != nil {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
-			runID.String(), "failure", mustJSON(map[string]any{"reason": "site-config-read-error"})))
+			runID.String(), "failure", mustJSON(map[string]any{"in_effect": false, "reason": "site-config-read-error"})))
 		return ""
 	}
 	if siteCfg.UpstreamProxyURL == "" && siteCfg.UpstreamProxySecretRef == "" {
+		// Recorded too, so "no upstream configured" is told apart from "the event is missing".
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
+			runID.String(), "success", mustJSON(map[string]any{"in_effect": false, "reason": "not-configured"})))
 		return ""
 	}
 	var getSecret func(context.Context, string) ([]byte, error)
@@ -160,10 +163,12 @@ func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, s
 	resolved, failReason := resolveUpstreamProxyURL(ctx, siteCfg.UpstreamProxyURL, siteCfg.UpstreamProxySecretRef, getSecret)
 	if failReason != "" {
 		detail["reason"] = failReason
+		detail["in_effect"] = false
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
 			runID.String(), "failure", mustJSON(detail)))
 		return ""
 	}
+	detail["in_effect"] = resolved != ""
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
 		runID.String(), "success", mustJSON(detail)))
 	return resolved

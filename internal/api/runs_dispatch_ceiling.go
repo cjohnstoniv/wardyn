@@ -548,17 +548,26 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	// denied_domains is exactly where that question is hardest to answer any
 	// other way: nothing about the dispatch changes, so this row is the ONLY
 	// evidence of which walls the run stood inside.
+	//
+	// The long sentence describes what enforcement did, so it is written only when
+	// a host was denied or a credential lane or host was withheld; otherwise the
+	// row says the profile applied and did neither. The lists marshal as [], never
+	// null, for readers that decode them into []string.
+	note := "the acting principal's governance profile applies to this run; it denied no host and withheld no credential lane"
+	if len(c.deny) > 0 || len(added) > 0 || len(droppedInjection) > 0 || len(droppedLane) > 0 {
+		note = "the acting principal's governance profile denies these hosts; the denies are unioned into the run policy " +
+			"(deny beats allow and allow_all_egress at the proxy) and every credential lane that reaches a denied host is withheld — " +
+			"the brokered git/PAT routes mint proxy-side and never consult denied_domains, so dropping the lane is the only thing that binds them"
+	}
 	data := map[string]any{
 		"profile":                 c.profile,
-		"denied_added":            added,
-		"dropped_injection_hosts": droppedInjection,
-		"dropped_broker_lanes":    droppedLane,
-		"note": "the acting principal's governance profile denies these hosts; the denies are unioned into the run policy " +
-			"(deny beats allow and allow_all_egress at the proxy) and every credential lane that reaches a denied host is withheld — " +
-			"the brokered git/PAT routes mint proxy-side and never consult denied_domains, so dropping the lane is the only thing that binds them",
+		"denied_added":            nonNilStrings(added),
+		"dropped_injection_hosts": nonNilStrings(droppedInjection),
+		"dropped_broker_lanes":    nonNilStrings(droppedLane),
+		"note":                    note,
 	}
 	// The SIZE half of the profile, present only when the profile sets one — so a
-	// profile written before 0.7.2 produces a byte-identical row. applyEphemeralDisk
+	// profile that sets no size adds no size fields to the row. applyEphemeralDisk
 	// ran just above this phase, so ephemeral_disk_mib is the effective number the
 	// sandbox gets; run.policy.resolve discloses it to everyone, and this says
 	// whose ceiling shaped it.
@@ -687,4 +696,12 @@ func narrowCeilingBedrockLane(c dispatchCeiling, llm *llmTransport, mitmHosts *[
 		*mitmHosts = nil
 	}
 	return []string{bedrockCeilingLane}
+}
+
+// nonNilStrings returns s, or an empty slice for nil, so it marshals as [].
+func nonNilStrings(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
