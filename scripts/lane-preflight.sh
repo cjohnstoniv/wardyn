@@ -41,10 +41,15 @@ log "3/5 make ui-typecheck"
 make ui-typecheck
 
 if [ "${#go_pkgs[@]}" -gt 0 ]; then
+  # A package whose files all sit behind a build tag fails `go test` setup under default tags; drop those.
+  mapfile -t go_pkgs < <(go list -e -f '{{if or .GoFiles .CgoFiles .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' "${go_pkgs[@]}")
+fi
+
+if [ "${#go_pkgs[@]}" -gt 0 ]; then
   log "4/5 go test ${go_pkgs[*]}"
   go test -p 4 -count=1 "${go_pkgs[@]}"
 else
-  log "4/5 go test: no changed Go files, skipped"
+  log "4/5 go test: no changed Go packages buildable under default tags (build-tagged ones are left to hosted CI), skipped"
 fi
 
 if [ "${#ui_files[@]}" -gt 0 ]; then
