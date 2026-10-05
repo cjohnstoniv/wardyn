@@ -359,10 +359,12 @@ func TestCompletionWatcher_TransientWaitError_FinalizesViaHandoff(t *testing.T) 
 	// WHOLE finalize, not just the state flip: the cascade wins the terminal CAS
 	// FIRST and revokes after (deliberately — C002), so a poll that stops at
 	// "terminal" can observe the run finalized microseconds before its revoke
-	// lands and read revocations=0. Wait for both, then assert exactly-once.
+	// lands and read revocations=0. The sandbox teardown comes after the revoke
+	// (finalizeRunTailOrdered: revoke, output finalise, then StopSandbox), so the
+	// stop is awaited as well. Wait for all three, then assert exactly-once.
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) &&
-		!(isTerminalRunState(st.State()) && brk.revocations(runID) > 0) {
+		!(isTerminalRunState(st.State()) && brk.revocations(runID) > 0 && rn.stopCount() > 0) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
