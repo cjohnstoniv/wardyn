@@ -10,8 +10,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [0.8.6] — 2026-10-04
 
-## [0.8.5] — 2026-10-02
-
 ### Before you upgrade
 
 - **Store mode without an age key or a key service now refuses to start.** With `WARDYN_SECRET_STORE=vaultkv`
