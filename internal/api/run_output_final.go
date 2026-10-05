@@ -240,7 +240,7 @@ func (s *Server) finishRunOutputDetached(ctx context.Context, runID uuid.UUID) {
 // possible and safe, and otherwise writes the capture_gap row (run_output_recover.go):
 // boot adoption, the reconciler, and the sweeper reach this on a restart or on
 // another replica, where the bytes are not here. A run that is unrecordable or
-// kept off the books owes nothing. graceful is true only when Wardyn is stopping
+// kept off the books, or on a runner that cannot capture output, owes nothing. graceful is true only when Wardyn is stopping
 // a live sandbox into STOPPED (the idle and max-age stops and the lease end): an
 // interactive run then keeps a snapshot of its pane (run_output_snapshot.go). Any
 // other interactive run keeps nothing here.
@@ -262,7 +262,7 @@ func (s *Server) prepareRunOutput(ctx context.Context, runID uuid.UUID, graceful
 		if graceful {
 			s.snapshotRunPane(ctx, st, run)
 		}
-	case runIsUnrecordable(run), hasTail:
+	case runIsUnrecordable(run), hasTail, s.execOutputUncaptured(ctx):
 	default:
 		s.recoverRunOutput(ctx, st, run, "no_tail")
 	}

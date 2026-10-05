@@ -42,6 +42,7 @@ type ClassSupport struct {
 	// `filesystem`, `eviction`, or `none`/empty. Aggregated as the WEAKEST.
 	EphemeralDiskEnforcement types.StorageEnforcement
 	Freeze                   map[types.ConfinementClass]bool // per-class pause/resume support; absent/false = none
+	ExecOutputUncaptured     bool                            // an exec's output cannot be captured (runner.Capabilities.ExecOutputUncaptured)
 }
 
 // Substrate is runner.Runner's lifecycle contract for ONE confinement substrate.
