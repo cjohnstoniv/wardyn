@@ -18,6 +18,9 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 for platform in linux/amd64 linux/arm64; do
+  # The local image store keeps one platform per digest: drop the one the last
+  # pass pulled, or the next platform's pull fails with "cannot overwrite digest".
+  docker image rm "$REF" >/dev/null 2>&1 || true
   cid="$(docker create --platform "$platform" "$REF" /wardynd)"
   docker cp "$cid:/wardynd" "$work/wardynd"
   docker rm "$cid" >/dev/null
