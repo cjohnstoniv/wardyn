@@ -17,7 +17,8 @@ minor, follows the manual steps. This document is that process, written down.
   `.github/workflows/ci.yml` job list: `changes`, `go`
   (a matrix job: `lint`, `unit`, `docker`, `k8s`), `build`, `diagrams`, `ui`, `ui-e2e`,
   `helm`, `helm-install-test`, `compose`, `conformance`, `conformance-k8s`,
-  `envbuild-integration`, `test-pg`, `gates`
+  `envbuild-integration`, `test-pg-shard` (a matrix job: `api`, `store`, `race`),
+  `test-pg`, `gates`
   (a matrix job: `govulncheck`, `staticcheck`, `licenses`,
   `license-headers`, `gitleaks`), `dco`, `main-red`, `notify-flaky`,
   `trivy`, and **`notices`** — the copyleft / unreviewed-dependency gate, which
