@@ -51,10 +51,25 @@ var retiredMigrations = map[string]string{
 	"0065_secret_envelope_v1.sql": "0069_secret_envelope_v1.sql",
 }
 
+// DefaultPoolMaxConns is the pool size when the DSN leaves pool_max_conns
+// unset, or the CPU count if that is larger. pgx's own default is the larger
+// of 4 and the CPU count, but on a 4-CPU host the single-instance lock, the
+// sweeper leader and the ground-truth rotator hold three connections for the
+// process lifetime, so the reaper's tick lock took the fourth and waited
+// forever for a fifth to prune, and every request after it hung.
+const DefaultPoolMaxConns = 10
+
 // Connect opens a pgxpool to dsn and performs a lightweight liveness check.
 // Returns the pool; caller owns Close().
 func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("db: open pool: %w", err)
+	}
+	if !dsnSetsPoolMaxConns(dsn) {
+		cfg.MaxConns = max(cfg.MaxConns, DefaultPoolMaxConns)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("db: open pool: %w", err)
 	}
@@ -63,6 +78,17 @@ func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("db: ping: %w", err)
 	}
 	return pool, nil
+}
+
+// dsnSetsPoolMaxConns reports whether the operator sized the pool. pgx reads
+// pool_max_conns from the connection's runtime parameters and then deletes it.
+func dsnSetsPoolMaxConns(dsn string) bool {
+	cfg, err := pgconn.ParseConfig(dsn)
+	if err != nil {
+		return false
+	}
+	_, ok := cfg.RuntimeParams["pool_max_conns"]
+	return ok
 }
 
 // Migrate applies all migrations in internal/db/migrations/*.sql in lexical order. Each migration
