@@ -70,6 +70,10 @@ func TestPicker_SignsInThePersonPicked(t *testing.T) {
 	if claims["sub"] != member.Subject || claims["email"] != member.Username || claims["preferred_username"] != member.Username {
 		t.Errorf("id_token claims = %v, want the member's", claims)
 	}
+	// Each person their own object id, not the fixed one every picked person used to share.
+	if oid, _ := claims["oid"].(string); oid == "" || oid == "00000000-1111-2222-3333-444444444444" {
+		t.Errorf("id_token oid = %q, want one of the member's own", oid)
+	}
 	status, _ = postToken(t, s, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {body["refresh_token"].(string)}})
 	if status != http.StatusOK {
 		t.Fatalf("refresh: %d", status)

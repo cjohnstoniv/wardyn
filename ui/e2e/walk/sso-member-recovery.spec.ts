@@ -493,12 +493,15 @@ test("A(rail): the New Run rail states THIS run's credential residency, with no 
   //
   // Case A left this member `expired_signin` (the pin flip). The rail names
   // the provider and where its credential lives; the lapse itself is the
-  // strip's, which the rail does not claim, so its button stays.
+  // strip's, so its button stays. The rail's own sole-provider line offers the
+  // same door, so the strip's button is read inside the strip.
   await expect(page.getByText(STRIP_EXPIRED)).toBeVisible({ timeout: 60_000 });
   // THE FINDING-1 NEGATIVE: this deployment IS connected (the provider
   // exists), so the deployment-level sentence would be a falsehood here.
   await expect(page.getByText(RAIL_MODEL_ACCESS.NO_PROVIDER)).toHaveCount(0);
-  await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("status").filter({ hasText: STRIP_EXPIRED }).getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true }),
+  ).toBeVisible();
 });
 
 // ── C — the sandbox signs itself in, and the Runs list joins that session ───
