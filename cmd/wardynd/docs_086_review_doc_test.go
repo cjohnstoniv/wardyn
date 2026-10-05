@@ -9,27 +9,15 @@ import (
 	"testing"
 )
 
-// unreleasedChangelog is the 0.8.6 work in the changelog: the [Unreleased] section, and the
-// [0.8.6] section once the release commit has moved that text under it.
-func unreleasedChangelog(t *testing.T) string {
+// changelog086 is the CHANGELOG.md [0.8.6] section, read by version so text under [Unreleased] and
+// the position of the neighbouring headings never move what these tests pin.
+func changelog086(t *testing.T) string {
 	t.Helper()
-	doc := readRepo(t, "CHANGELOG.md")
-	_, rest, ok := strings.Cut(doc, "## [Unreleased]")
+	sec, ok := changelogSections(readRepo(t, "CHANGELOG.md"))["0.8.6"]
 	if !ok {
-		t.Fatal("CHANGELOG.md has no [Unreleased] section")
+		t.Fatal("CHANGELOG.md has no [0.8.6] section")
 	}
-	end := 0
-	for {
-		i := strings.Index(rest[end:], "\n## [")
-		if i < 0 {
-			return rest
-		}
-		end += i
-		if !strings.HasPrefix(rest[end:], "\n## [0.8.6]") {
-			return rest[:end]
-		}
-		end++
-	}
+	return sec
 }
 
 func wantAll(t *testing.T, where, text string, wants ...string) {
@@ -51,13 +39,17 @@ func wantNone(t *testing.T, where, text string, bans ...string) {
 }
 
 // TestUnreleasedNamesTheOperatorFacingAdditions pins that every 0.8.6 switch an operator can trip on
-// upgrade is in the [Unreleased] changelog, and that the default-on ones are under "Before you upgrade".
+// upgrade is in the [0.8.6] changelog, and that the default-on ones are under "Before you upgrade".
 func TestUnreleasedNamesTheOperatorFacingAdditions(t *testing.T) {
-	un := unreleasedChangelog(t)
-	before, _, _ := strings.Cut(un, "\n### Added")
-	wantAll(t, "[Unreleased] Before you upgrade", before,
+	un := changelog086(t)
+	_, before, ok := strings.Cut(un, "\n### Before you upgrade")
+	if !ok {
+		t.Fatal("CHANGELOG.md [0.8.6] has no Before you upgrade subsection")
+	}
+	before, _, _ = strings.Cut(before, "\n### ")
+	wantAll(t, "CHANGELOG.md [0.8.6] Before you upgrade", before,
 		"WARDYN_PREFLIGHT_RATE_PER_MIN", "preflight_rate_limited", "WARDYN_RUN_OUTPUT_TAIL_BYTES")
-	wantAll(t, "[Unreleased]", un,
+	wantAll(t, "CHANGELOG.md [0.8.6]", un,
 		"WARDYN_RUN_MAX_AGE", "run.max_age.expire", "activeDeadlineSeconds",
 		"WARDYN_GOVERN_ADMIN_RUNS", "WARDYN_GOVERN_ADMIN_RUNS_EXEMPT", "recording_governed", "user_view_preview",
 		"WARDYN_MAX_CONCURRENT_RUNS", "WARDYN_SANDBOX_REQUEST_RATIO", "WARDYN_KEK_REQUIRED",
@@ -67,7 +59,7 @@ func TestUnreleasedNamesTheOperatorFacingAdditions(t *testing.T) {
 
 // TestUnreleasedNamesTheTerminalChanges pins the day-one terminal behaviour changes.
 func TestUnreleasedNamesTheTerminalChanges(t *testing.T) {
-	wantAll(t, "[Unreleased]", unreleasedChangelog(t),
+	wantAll(t, "CHANGELOG.md [0.8.6]", changelog086(t),
 		"tmux selection", "Shift", "right-click", "device-login", "Terminal renderer",
 		"stale_writer", "session.takeover", "session.attach")
 }
@@ -117,9 +109,9 @@ func TestNoDowngradePathIsDocumented(t *testing.T) {
 		"**it boots anyway**",
 		"nothing there refuses a schema newer than the binary")
 	// The changelog's 0.8.6 entries make the same promise: the dump is the only way back.
-	cl := strings.Join(strings.Fields(unreleasedChangelog(t)), " ")
-	wantAll(t, "CHANGELOG.md [Unreleased]", cl, "restore the pre-upgrade dump")
-	wantNone(t, "CHANGELOG.md [Unreleased]", cl,
+	cl := strings.Join(strings.Fields(changelog086(t)), " ")
+	wantAll(t, "CHANGELOG.md [0.8.6]", cl, "restore the pre-upgrade dump")
+	wantNone(t, "CHANGELOG.md [0.8.6]", cl,
 		"First turn every composed profile back into a standalone one",
 		"A downgrade to 0.8.5 ignores the new tables",
 		"a downgrade runs a narrowed policy unnarrowed",
@@ -133,8 +125,8 @@ func TestKeyDomainAssignmentsAreListedAsFourEyesCovered(t *testing.T) {
 	env := readRepo(t, "docs/ENV.md")
 	wantAll(t, "docs/ENV.md WARDYN_GOVERNANCE_SECOND_HUMAN row",
 		regexp.MustCompile("(?m)^\\| `WARDYN_GOVERNANCE_SECOND_HUMAN` \\|.*$").FindString(env), "key-domain assignment")
-	if n := strings.Count(unreleasedChangelog(t), "key-domain assignment"); n < 2 {
-		t.Errorf("[Unreleased] names a key-domain assignment as four-eyes covered %d times, want both four-eyes bullets", n)
+	if n := strings.Count(changelog086(t), "key-domain assignment"); n < 2 {
+		t.Errorf("[0.8.6] names a key-domain assignment as four-eyes covered %d times, want both four-eyes bullets", n)
 	}
 	wantAll(t, "docs/USERS.md approver table", readRepo(t, "docs/USERS.md"), "key-domain assignment")
 	wantAll(t, "threatmodel/THREAT-MODEL.md four-eyes guarantees", readRepo(t, "threatmodel/THREAT-MODEL.md"), "user-type or key-domain API;")
@@ -157,5 +149,5 @@ func TestNoPlanLabelsInShippedDocs(t *testing.T) {
 func TestConnectionBudgetCountsTheListeners(t *testing.T) {
 	wantAll(t, "docs/ENV.md WARDYN_PG_DSN row", readRepo(t, "docs/ENV.md"),
 		"`pool_max_conns` plus 8 lock connections plus 2 listener connections per replica")
-	wantAll(t, "[Unreleased]", unreleasedChangelog(t), "two more database connections", "LISTEN wardyn_mask")
+	wantAll(t, "CHANGELOG.md [0.8.6]", changelog086(t), "two more database connections", "LISTEN wardyn_mask")
 }
