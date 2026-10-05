@@ -17,14 +17,17 @@ import { SUBSTRATE_BANNER } from "../src/app/lib/substrate-banner-copy";
 const DETAIL = "The sandbox runner refuses Wardyn's credentials, so new runs can't start.";
 
 async function stubSubstrateRow(page: Page, row: Record<string, unknown> | null): Promise<void> {
+  // Cache-and-serve, not route.fetch()+refulfill per match (fixtures.ts#mockMemberRole): the shell
+  // polls /setup/status, and a real round trip per match raced Playwright disposing an in-flight
+  // route's response at teardown ("apiResponse.json: Response has been disposed").
+  let cached: Record<string, unknown> | null = null;
   await page.route("**/api/v1/setup/status*", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
-    json.checks = [
-      ...(json.checks ?? []).filter((c: { id: string }) => c.id !== "substrate_health"),
-      ...(row ? [row] : []),
-    ];
-    await route.fulfill({ response, json });
+    if (!cached) {
+      const json = (await (await route.fetch()).json()) as { checks?: Array<{ id: string }> } & Record<string, unknown>;
+      json.checks = [...(json.checks ?? []).filter((c) => c.id !== "substrate_health"), ...(row ? [row as { id: string }] : [])];
+      cached = json;
+    }
+    await route.fulfill({ json: cached! });
   });
 }
 

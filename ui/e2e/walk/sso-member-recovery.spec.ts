@@ -493,12 +493,15 @@ test("A(rail): the New Run rail states THIS run's credential residency, with no 
   //
   // Case A left this member `expired_signin` (the pin flip). The rail names
   // the provider and where its credential lives; the lapse itself is the
-  // strip's, which the rail does not claim, so its button stays.
+  // strip's, so its button stays. The rail's own sole-provider line offers the
+  // same door, so the strip's button is read inside the strip.
   await expect(page.getByText(STRIP_EXPIRED)).toBeVisible({ timeout: 60_000 });
   // THE FINDING-1 NEGATIVE: this deployment IS connected (the provider
   // exists), so the deployment-level sentence would be a falsehood here.
   await expect(page.getByText(RAIL_MODEL_ACCESS.NO_PROVIDER)).toHaveCount(0);
-  await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("status").filter({ hasText: STRIP_EXPIRED }).getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true }),
+  ).toBeVisible();
 });
 
 // ── C — the sandbox signs itself in, and the Runs list joins that session ───
@@ -1148,24 +1151,40 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
   // model_credential); the rail opens the AWS sign-in dialog ITSELF; the
   // device flow completes on the fake; the SAME click's run launches. No trip
   // to Getting started, no second click.
+  //
+  // 0.8.6: New Run checks the body on its own, and a lapsed sign-in found by
+  // that check opens the door before any click (a door whose sign-in only
+  // re-checks). So the lapse lands AFTER the automatic check has passed: the
+  // member is live while New Run checks, and lapses between that check and
+  // Launch, the window the create-time refusal exists for.
   await dexSignIn(page, MEMBER_EMAIL);
-  // ensureActionable, not a blind flip: the pin is handed back and forth by
-  // every case before this one and E2 leaves the member ALREADY actionable, so
-  // an unconditional makeMemberActionable() healed them (walk-2, L red on the
-  // opening poll). The lapse here is the pin contradiction — the create-time
-  // refusal's stored-identity arm, reason model_credential like the spent one.
-  await ensureActionable(page, request);
-  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
+  // Live first, without a sign-in: the pin is handed back and forth by every
+  // case before this one, so the member is either live or lapsed by a pin that
+  // contradicts their capture, and one flip back makes them live.
+  if ((await modelAccess(page)).state !== "live") await makeMemberActionable(request);
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
 
+  const TASK = "Reply with the single word: ready.";
+  const checked = page.waitForResponse(
+    (r) => r.url().endsWith("/api/v1/runs/preflight") && (r.request().postData() ?? "").includes(TASK),
+    { timeout: 60_000 },
+  );
   await page.goto("/runs/new");
   await page.getByRole("combobox", { name: "Title" }).fill("L launch door");
   await page.getByRole("radio", { name: /^Autonomous/ }).click();
-  await page.locator("#nr-task").fill("Reply with the single word: ready.");
+  await page.locator("#nr-task").fill(TASK);
+  expect((await checked).status(), "New Run's automatic check of this body passes while the member is live").toBe(200);
+  await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
+
+  // The lapse is the pin contradiction — the create-time refusal's
+  // stored-identity arm, reason model_credential like the spent one.
+  await makeMemberActionable(request);
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
   const urlBefore = page.url();
   const clickedAt = new Date().toISOString();
 
-  // THE CLICK IS THE CHECK. Nothing on the console pre-grades the cached
-  // status; the server's refusal is what opens the door. Driven through
+  // THE CLICK IS THE CHECK. The body's last check passed, so the server's
+  // refusal of this click is what opens the door. Driven through
   // signInThroughPane so the witness is the server's MOVED capture, not the
   // terminal node (helpers.ts explains why the DOM cannot be the witness).
   await signInThroughPane(page, async (p: Page) => {

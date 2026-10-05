@@ -21,7 +21,7 @@ const POLL_MS = 4000;
 // being written (design §3, read order 5), not a verdict.
 const SAVING_WINDOW_MS = 60_000;
 
-type Refusal = "off" | "not_kept" | "expired" | "erased" | "interactive" | "mask" | "error";
+type Refusal = "off" | "not_kept" | "expired" | "erased" | "interactive" | "not_captured" | "mask" | "error";
 
 const REFUSALS: Record<string, Refusal> = {
   run_output_off: "off",
@@ -29,6 +29,7 @@ const REFUSALS: Record<string, Refusal> = {
   run_output_expired: "expired",
   run_output_erased: "erased",
   run_output_interactive: "interactive",
+  run_output_not_captured: "not_captured",
   mask_state_unavailable: "mask",
 };
 
@@ -183,6 +184,19 @@ function refusalBody(r: Refusal, saving: boolean, onGoRecording: () => void, ret
           icon={Logs}
           title={RUN_OUTPUT.interactiveTitle}
           description={RUN_OUTPUT.interactiveDesc}
+          action={
+            <button type="button" onClick={onGoRecording} className="text-sm text-primary hover:underline">
+              {RUN_OUTPUT.interactiveLink}
+            </button>
+          }
+        />
+      );
+    case "not_captured":
+      return (
+        <EmptyState
+          icon={Logs}
+          title={RUN_OUTPUT.notCapturedTitle}
+          description={RUN_OUTPUT.notCapturedDesc}
           action={
             <button type="button" onClick={onGoRecording} className="text-sm text-primary hover:underline">
               {RUN_OUTPUT.interactiveLink}

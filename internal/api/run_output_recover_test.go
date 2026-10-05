@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -363,5 +364,50 @@ func TestRecoverRunOutput_NeverReplacesAFinalRowOrReadsForAnErasedRun(t *testing
 	g.srv.FinishRunOutput(t.Context(), g.run.ID)
 	if _, ok := g.mem.row(g.run.ID); ok || g.srv.cfg.Runner.(*recoveringRunner).recoverCount() != 0 {
 		t.Fatal("an erased run got a row or a substrate read")
+	}
+}
+
+// TestRunOutput_UncapturedRunnerSaysSo: on a runner that cannot capture an
+// exec's output (Kubernetes under the recorder) a run keeps no tail, its end
+// neither reads the substrate nor writes a row, and every read, live or after
+// the end, is refused as not captured, naming the recording, never served as a
+// complete, empty capture. A runner that captures is unchanged: a run that
+// printed nothing still reads as complete and empty.
+func TestRunOutput_UncapturedRunnerSaysSo(t *testing.T) {
+	rr := newRecoveringRunner()
+	rr.execOutputUncaptured = true
+	rr.log = "only in the recording\n"
+	f := newOutputFixture(t, func(c *Config) { c.Runner = rr })
+	if w := f.srv.openExecOutput(f.run, false); w != nil {
+		t.Fatal("openExecOutput kept a tail on a runner that cannot capture output")
+	}
+	readsNotCaptured := func(when string) {
+		t.Helper()
+		w := do(t, f.srv, http.MethodGet, "/api/v1/runs/"+f.run.ID.String()+"/output", adminToken, "")
+		var refusal errorBody
+		_ = json.Unmarshal(w.Body.Bytes(), &refusal)
+		if w.Code != http.StatusConflict || refusal.Reason != reasonRunOutputNotCaptured ||
+			refusal.Error != "Output isn't captured for Kubernetes runs yet. The run's recording has it." {
+			t.Fatalf("%s: %d %s, want 409 %s naming Kubernetes and the recording", when, w.Code, w.Body, reasonRunOutputNotCaptured)
+		}
+	}
+	readsNotCaptured("live")
+	f.st.state = types.RunCompleted
+	f.srv.FinishRunOutput(t.Context(), f.run.ID)
+	if row, ok := f.mem.row(f.run.ID); ok {
+		t.Fatalf("the run's end wrote a row %+v; nothing was captured", row)
+	}
+	if n := rr.recoverCount(); n != 0 {
+		t.Fatalf("the run's end read the substrate %d times", n)
+	}
+	readsNotCaptured("ended")
+
+	c := newOutputFixture(t)
+	c.open(t)
+	c.st.state = types.RunCompleted
+	c.srv.FinishRunOutput(t.Context(), c.run.ID)
+	c.finalRow(t)
+	if code, got := c.get(t); code != http.StatusOK || got.Output != "" || !got.Complete || got.CaptureGap || got.Incomplete {
+		t.Fatalf("capturing runner, silent run: %d %+v, want 200 complete and empty", code, got)
 	}
 }

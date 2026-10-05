@@ -309,6 +309,11 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// are impossible on k8s — but only when Config.Record is on, so a
 		// Record=false substrate never advertises an upload it won't perform.
 		SessionRecording: d.cfg.Record,
+		// Under the recorder the exec's container log is empty: wardyn-rec runs
+		// asciinema, which writes nothing to a stdout that is not a TTY, so
+		// followExecOutput would copy nothing and the run would read as a
+		// complete, empty capture. The output is in the run's recording.
+		ExecOutputUncaptured: d.cfg.Record,
 		// This substrate binds a member's drive: ensureDrivePVC creates/adopts
 		// the claim and applyDriveToPod attaches it. True only while that path
 		// exists — TestCreateSandbox_MountsAUserDrive pins the two together,

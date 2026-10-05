@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.8.6] — 2026-10-04
+
 ### Before you upgrade
 
 - **Store mode without an age key or a key service now refuses to start.** With `WARDYN_SECRET_STORE=vaultkv`
@@ -559,6 +561,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `emptyDir` is lost with its node; SSH exec, SFTP and direct-tcpip were never masked. After any restart, runs
   that predate 0.8.6 are refused at the five masking doors until they end (see the upgrade entry above). See "High
   availability" in `docs/OPERATIONS.md`.
+
+### Known limitations
+
+- **Task output is not captured on Kubernetes in this release.** On the Kubernetes runner a task runs under the
+  session recorder, which writes nothing to the container's log, so there is no output to keep. `GET
+  /api/v1/runs/{id}/output` answers `409` `run_output_not_captured`, `wardyn run output` exits non-zero with the
+  same message, and the console's Output tab says "Output isn't captured for Kubernetes runs yet. The run's
+  recording has it." The run's recording holds the full output. Kubernetes runs from 0.8.5 kept an empty row and
+  still read as complete and empty. Docker is unchanged.
 
 ## [0.8.5] — 2026-10-02
 

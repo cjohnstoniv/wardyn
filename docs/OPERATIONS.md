@@ -98,6 +98,13 @@ output of its own (its terminal is the recording's), only the pane snapshot
 below when Wardyn stops it gracefully; the managed-harness sign-in run keeps
 nothing at all, because its output is a live credential.
 
+- **Not captured on Kubernetes in this release.** The Kubernetes runner runs a
+  task under the session recorder, which writes nothing to the container's log,
+  so it keeps no output. The read answers `409 run_output_not_captured` ("Output
+  isn't captured for Kubernetes runs yet. The run's recording has it."), and the
+  run's recording holds the full output. Kubernetes runs from 0.8.5 kept an
+  empty row and still read as complete and empty. The rest of this section
+  describes the Docker runner, and a Kubernetes runner with recordings off.
 - **It is not a recording, and it is stored.** It lives outside the recording
   store and works with `WARDYN_RECORDING_STORE=off`. With
   `WARDYN_RUN_OUTPUT_PERSIST` on (the default) the final tail of each run is
@@ -156,10 +163,11 @@ nothing at all, because its output is a live credential.
   replica adopted, has its output read back from the substrate when that is
   possible and safe, and ends with a `capture_gap` row when it is not. wardynd
   never re-runs the agent to get it. The two substrates differ:
-  - **Kubernetes** keeps the agent container's log for as long as the pod
-    lives, so the new process re-reads it from its first byte into a fresh
-    tail, and a run adopted while still running resumes following it. The run
-    keeps all of its output: before the restart, during the handoff and after.
+  - **Kubernetes** with recordings off keeps the agent container's log for as
+    long as the pod lives, so the new process re-reads it from its first byte
+    into a fresh tail, and a run adopted while still running resumes following
+    it. The run keeps all of its output: before the restart, during the handoff
+    and after. With recordings on there is no output to re-read (above).
   - **Docker** keeps a log only for an exec-less agent (a krun microVM), which
     is re-read the same way. An exec agent's terminal is a hijacked stream that
     dockerd does not log and that cannot be re-attached after the process that

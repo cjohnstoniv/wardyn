@@ -886,7 +886,7 @@ func (s *Server) signIDToken(nonce string, who *Identity) (string, error) {
 		"ver":                "2.0",
 		"name":               "Fake Person",
 		"preferred_username": "fake.person@example.invalid",
-		"oid":                "00000000-1111-2222-3333-444444444444",
+		"oid":                objectID(who),
 	}
 	if who != nil {
 		claims["sub"] = who.Subject
