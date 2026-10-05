@@ -921,7 +921,7 @@ func testExecStreamLoopbackRelay(t *testing.T, r runner.Runner, opts Options) {
 // text for a diagnostic line and never fails the test: a probe that cannot run
 // says so in what it returns.
 func loopbackRelayProbe(ctx context.Context, r runner.Runner, ref string) string {
-	const script = `nc -z 127.0.0.1 ` + loopbackRelayPort + `; echo "listener_probe_rc=$?"; ps 2>&1`
+	const script = `nc -z 127.0.0.1 ` + loopbackRelayPort + `; echo "listener_probe_rc=$?"; ps -o pid,ppid,comm 2>&1`
 	sess, err := r.ExecStream(ctx, ref, runner.ExecSpec{Argv: []string{"sh", "-c", script}})
 	if err != nil {
 		return "probe did not start: " + err.Error()
