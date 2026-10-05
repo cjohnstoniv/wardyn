@@ -9,7 +9,8 @@ import (
 	"testing"
 )
 
-// unreleasedChangelog is the [Unreleased] section: from its heading to the first released one.
+// unreleasedChangelog is the 0.8.6 work in the changelog: the [Unreleased] section, and the
+// [0.8.6] section once the release commit has moved that text under it.
 func unreleasedChangelog(t *testing.T) string {
 	t.Helper()
 	doc := readRepo(t, "CHANGELOG.md")
@@ -17,10 +18,18 @@ func unreleasedChangelog(t *testing.T) string {
 	if !ok {
 		t.Fatal("CHANGELOG.md has no [Unreleased] section")
 	}
-	if i := strings.Index(rest, "\n## ["); i >= 0 {
-		rest = rest[:i]
+	end := 0
+	for {
+		i := strings.Index(rest[end:], "\n## [")
+		if i < 0 {
+			return rest
+		}
+		end += i
+		if !strings.HasPrefix(rest[end:], "\n## [0.8.6]") {
+			return rest[:end]
+		}
+		end++
 	}
-	return rest
 }
 
 func wantAll(t *testing.T, where, text string, wants ...string) {
