@@ -26,6 +26,23 @@ test("the wheel scrolls tmux history and does not recall bash history", async ({
   const read = async () => (await termText(screen).catch(() => "")) as string;
 
   await screen.click();
+  // A fresh attach can be admitted read-only for a moment, and keys typed then
+  // are dropped: retry a readiness line until the shell echoes it (as the copy
+  // spec does), and only then type the lines the test depends on.
+  await expect
+    .poll(
+      async () => {
+        if (!(await read()).includes("ready-sentinel")) {
+          await screen.click();
+          await page.keyboard.type("printf 'ready-%s\\n' sentinel");
+          await page.keyboard.press("Enter");
+        }
+        await page.waitForTimeout(500);
+        return (await read()).includes("ready-sentinel");
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
   // A history entry for the wheel to wrongly recall, then more output than one
   // screen so there is scrollback to reach.
   await page.keyboard.type("echo recall-sentinel");
