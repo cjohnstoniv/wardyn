@@ -102,8 +102,8 @@ func TestDecodeKeyDomainChange(t *testing.T) {
 
 func TestKeyDomainSetRefusal(t *testing.T) {
 	svc := keydomain.NewService(nil, []string{"vault-b", "azure-a"})
-	count := func(n int, err error) func(context.Context) (int, error) {
-		return func(context.Context) (int, error) { return n, err }
+	count := func(n int, err error) func(context.Context) (int, []string, error) {
+		return func(context.Context) (int, []string, error) { return n, nil, err }
 	}
 	amb := func(n int, err error) func(context.Context, string, string) (int, error) {
 		return func(context.Context, string, string) (int, error) { return n, err }
@@ -115,7 +115,7 @@ func TestKeyDomainSetRefusal(t *testing.T) {
 		name      string
 		c         keyDomainChange
 		ambiguous func(context.Context, string, string) (int, error)
-		truncated func(context.Context) (int, error)
+		truncated func(context.Context) (int, []string, error)
 		wantErr   error
 		reason    authz.Reason // "" = allowed
 		sentence  string
@@ -130,6 +130,11 @@ func TestKeyDomainSetRefusal(t *testing.T) {
 		{name: "ambiguity lookup fails", c: group, ambiguous: amb(0, boom), truncated: count(0, nil), wantErr: boom},
 		{name: "group while truncated sign-ins exist", c: group, ambiguous: amb(0, nil), truncated: count(2, nil),
 			reason: authz.ReasonKeyDomainAmbiguous, sentence: "2 people last signed in with a group list that was cut short"},
+		{name: "the refusal names who it is for, then how many more", c: group, ambiguous: amb(0, nil),
+			truncated: func(context.Context) (int, []string, error) {
+				return 3, []string{"alice@example.com", "bob@example.com"}, nil
+			},
+			reason: authz.ReasonKeyDomainAmbiguous, sentence: "would be refused: alice@example.com, bob@example.com and 1 more."},
 		{name: "truncation lookup fails", c: group, ambiguous: amb(0, nil), truncated: count(0, boom), wantErr: boom},
 		{name: "clean group set", c: group, ambiguous: amb(0, nil), truncated: count(0, nil)},
 	} {
