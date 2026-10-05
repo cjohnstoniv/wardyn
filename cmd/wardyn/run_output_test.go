@@ -99,6 +99,21 @@ func TestRunOutput_RefusalsNameReason(t *testing.T) {
 	}
 }
 
+// TestRunOutput_NotCapturedSaysSo: a run on the Kubernetes runner, whose output
+// is not captured, exits non-zero naming the reason and the server's sentence
+// (the recording has it), and prints no empty output as if it were complete.
+func TestRunOutput_NotCapturedSaysSo(t *testing.T) {
+	msg := "Output isn't captured for Kubernetes runs yet. The run's recording has it."
+	var out bytes.Buffer
+	_, err := runOutputCLI(t, outputServer(t, 409, map[string]string{"error": msg, "reason": "run_output_not_captured"}), &out)
+	if err == nil || !strings.Contains(err.Error(), "run_output_not_captured") || !strings.Contains(err.Error(), msg) {
+		t.Fatalf("err = %v, want it to name run_output_not_captured and say %q", err, msg)
+	}
+	if out.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", out.String())
+	}
+}
+
 func TestRunOutput_JSONDecodesIntoSDK(t *testing.T) {
 	body := map[string]any{"output": "hi", "truncated": true, "complete": true, "source": "stdout",
 		"incomplete": true, "capture_gap": false, "mask_scope": "run", "captured_at": "2026-10-03T01:02:03Z"}

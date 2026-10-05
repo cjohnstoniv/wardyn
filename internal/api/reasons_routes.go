@@ -214,6 +214,7 @@ const (
 	reasonRunOutputNotKept     = "run_output_not_kept"     // no output is kept for the run (a sign-in run, one never captured, or one still being captured)
 	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL, or the run ended past WARDYN_RUN_OUTPUT_RETENTION_DAYS
 	reasonRunOutputErased      = "run_output_erased"       // the run's output was erased (404)
+	reasonRunOutputNotCaptured = "run_output_not_captured" // the runner cannot capture a run's output (Kubernetes under the recorder); the recording has it
 )
 
 // POST /runs/{id}/resume (run_pause.go).

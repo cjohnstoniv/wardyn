@@ -47,6 +47,9 @@ type fakeRunner struct {
 	capsErr      error
 	capsResolved map[types.ConfinementClass]string
 	execErr      error
+	// execOutputUncaptured advertises a runner that cannot capture an exec's
+	// output (the Kubernetes runner under the recorder).
+	execOutputUncaptured bool
 }
 
 func (f *fakeRunner) Name() string { return "fake" }
@@ -70,8 +73,9 @@ func (f *fakeRunner) Capabilities(context.Context) (runner.Capabilities, error) 
 		// would have served.
 		UserDrives: true,
 		// Same reason: CreateSandbox accepts a spec carrying managed files.
-		ManagedFiles: !f.noManagedFiles,
-		Resolved:     f.capsResolved,
+		ManagedFiles:         !f.noManagedFiles,
+		Resolved:             f.capsResolved,
+		ExecOutputUncaptured: f.execOutputUncaptured,
 	}, nil
 }
 

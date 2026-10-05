@@ -44,6 +44,8 @@ export const RUN_OUTPUT = {
   interactiveDesc:
     "An interactive run keeps its last screen only when Wardyn stops it for you, and only the run's owner or an operator sees it.",
   interactiveLink: "Open the Recording tab →",
+  notCapturedTitle: "Output isn't captured for Kubernetes runs yet",
+  notCapturedDesc: "The run's recording has it.",
   maskUnavailable:
     "This server can't show the live output safely right now. It shows here once the run ends.",
 } as const;
