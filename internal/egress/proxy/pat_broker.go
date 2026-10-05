@@ -246,7 +246,7 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 		p.failUpstream(w, err, &egress.DecisionLog{Request: p.reqOf(r, host, 443)}, host, "git upstream error")
 		return nil, false
 	}
-	p.emitPATDecision(r, host, egress.Allow, allowSrc)
+	p.emitDialledAllow(decisionLog(p.reqOf(r, host, 443), egress.Allow, allowSrc), host)
 	return resp, true
 }
 

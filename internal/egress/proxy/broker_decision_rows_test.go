@@ -6,7 +6,6 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -37,17 +36,9 @@ func decisionRows(t *testing.T, buf *bytes.Buffer) []string {
 	return rows
 }
 
-// refusedAddr is a loopback address nothing listens on.
-func refusedAddr(t *testing.T) string {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	_ = ln.Close()
-	return addr
-}
+// refusedAddr is a loopback address nothing listens on: a reserved port, not
+// one a listener just freed, which another test can be handed back.
+func refusedAddr(*testing.T) string { return "127.0.0.1:1" }
 
 // TestBrokerDecisionRows pins one decision row per request on all three git
 // broker lanes (GitHub App, git_pat, Azure DevOps Entra): the allow row only
@@ -130,6 +121,10 @@ func TestBrokerDecisionRows(t *testing.T) {
 				}
 				if got := decisionRows(t, buf); !slices.Equal(got, c.rows) {
 					t.Errorf("rows = %q, want %q", got, c.rows)
+				}
+				// Every row here follows a forward dial, the allow included.
+				if d := lastDecision(t, buf); d.Via != viaDirect {
+					t.Errorf("via = %q on %s %s, want %q", d.Via, d.Decision, d.RuleSource, viaDirect)
 				}
 			})
 		}

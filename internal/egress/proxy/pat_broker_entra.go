@@ -182,7 +182,7 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 			drainClose(resp)
 			hdr = fresh
 			registerHeaderCredential(hdr.value)
-			p.emitPATDecision(r, host, egress.Allow, ruleSourceADOGitReresolved)
+			p.emitDialledAllow(decisionLog(p.reqOf(r, host, 443), egress.Allow, ruleSourceADOGitReresolved), host)
 			again, ok := p.forwardBrokeredGit(w, r, host, rest, replay(), allowSrc, ruleSourceADOGitDenied, authorize)
 			if !ok {
 				return
