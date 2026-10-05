@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -309,5 +310,28 @@ func TestPG_SuspendNeverSignedInTouchesNobodyElse(t *testing.T) {
 	}
 	if blocked, err := st.IdentityBlocked(ctx, "sub-bystander", -1); err != nil || blocked {
 		t.Errorf("IdentityBlocked(bystander) = %v, %v; want false", blocked, err)
+	}
+}
+
+// A captured credential's write borrows from the pool while its owner's identity rows are held, so
+// the hold takes no pool connection: on a one-connection pool the write still lands.
+func TestPG_WithIdentitySharedLeavesThePoolToFn(t *testing.T) {
+	cfg := runsPGPoolIsolated(t).Config()
+	cfg.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	st := store.NewPG(pool)
+	signedIn(t, st, "sub-shared", "shared@corp.example", "")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err = st.WithIdentityShared(ctx, store.IdentityGuard{Principal: "sub-shared", Epoch: -1}, func() error {
+		_, err := pool.Exec(ctx, `SELECT 1`)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("WithIdentityShared on a one-connection pool: %v", err)
 	}
 }

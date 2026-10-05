@@ -98,8 +98,16 @@ func (s PG) guarded(ctx context.Context, fn func(q queryRower) error) error {
 // WithIdentityShared runs fn while g's identity rows are held FOR SHARE and unchanged: the write a
 // sign-in's captured credential makes lands before a suspension takes the rows, or is refused
 // with ErrIdentityDeactivated. fn may write through another connection (the secret store).
+//
+// The rows are held on a connection dialled for this call, outside the pool: fn borrows from the
+// pool, and a hold taken from it would wait on itself once the pool is down to that one connection.
 func (s PG) WithIdentityShared(ctx context.Context, g IdentityGuard, fn func() error) error {
-	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	conn, err := pgx.ConnectConfig(ctx, s.Pool.Config().ConnConfig)
+	if err != nil {
+		return fmt.Errorf("store: connect guarded write: %w", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return fmt.Errorf("store: begin guarded write: %w", err)
 	}
