@@ -17,8 +17,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // fastLeader is a leader on its own pool with every interval shrunk, so a
@@ -180,35 +178,4 @@ func TestSweeperLeader_LostLockCancelsAndJoinsTheSweeps(t *testing.T) {
 	if cur, err := b.Current(ctx, oldEpoch); err != nil || cur {
 		t.Fatalf("Current(a's epoch %d) = %v, %v; want false", oldEpoch, cur, err)
 	}
-}
-
-// TestSweeperLeader_SoloOnATinyPool: a pool that cannot spare the lock's
-// connection leads without an election, at epoch 0, and Current agrees.
-func TestSweeperLeader_SoloOnATinyPool(t *testing.T) {
-	base := pgPool(t)
-	cfg := base.Config().Copy()
-	cfg.MaxConns = 2
-	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("pool: %v", err)
-	}
-	defer pool.Close()
-	l := NewSweeperLeader(pool, "solo")
-	ctx, stop := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { l.Run(ctx); close(done) }()
-	waitFor(t, "the solo term", 5*time.Second, func() bool {
-		_, _, end, ok := l.Join()
-		if ok {
-			end()
-		}
-		return ok
-	})
-	_, epoch, end, _ := l.Join()
-	end()
-	if cur, err := l.Current(ctx, epoch); err != nil || !cur || epoch != 0 {
-		t.Fatalf("solo epoch %d, Current = %v, %v; want epoch 0 and current", epoch, cur, err)
-	}
-	stop()
-	<-done
 }

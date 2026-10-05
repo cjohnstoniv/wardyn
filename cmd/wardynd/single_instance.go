@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -31,24 +30,12 @@ import (
 // them needs this lock.
 func claimSingleInstance(ctx context.Context, pool *pgxpool.Pool, ha bool) (func(), error) {
 	if ha {
-		// A pool below the minimum makes every replica's sweeper leader run solo
-		// (epoch 0, always current): each replica sweeps with no election and no
-		// fencing, which defeats the leader-only guarantees HA exists for.
-		if mc := pool.Config().MaxConns; mc < db.SweeperLeaderMinConns {
-			return nil, fmt.Errorf("refusing to start: WARDYN_HA is set but pool_max_conns=%d; the sweeper leader election needs a pool of at least %d so it can hold its lock. "+
-				"Raise pool_max_conns in WARDYN_PG_DSN, or run one replica without WARDYN_HA", mc, db.SweeperLeaderMinConns)
-		}
 		slog.Info("wardynd: WARDYN_HA is set; the single-instance lock is not taken, and other replicas may serve this database")
 		return func() {}, nil
 	}
-	// The lock holds ONE pooled connection for the whole process lifetime, and
-	// pgxpool.Acquire BLOCKS rather than erroring when the pool is empty — a
-	// 1-conn pool would hang every request instead of failing visibly.
-	if mc := pool.Config().MaxConns; mc < 2 {
-		slog.Warn("wardynd: pool_max_conns below 2 — the single-instance lock holds one connection for the process lifetime, leaving none for requests; queries will block waiting for a connection rather than error",
-			slog.Int("pool_max_conns", int(mc)))
-	}
-	release, ok, err := db.TryAdvisoryLock(ctx, pool, db.SingleInstanceLockKey)
+	// A connection of its own, not a pooled one: held for the process lifetime,
+	// it would leave a small pool that much shorter for every request.
+	_, release, ok, err := db.TryAdvisoryLockDedicated(ctx, pool, db.SingleInstanceLockKey)
 	if err != nil {
 		return nil, err
 	}

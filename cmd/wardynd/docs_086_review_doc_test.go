@@ -156,6 +156,6 @@ func TestNoPlanLabelsInShippedDocs(t *testing.T) {
 // connections wardynd dials outside the pool.
 func TestConnectionBudgetCountsTheListeners(t *testing.T) {
 	wantAll(t, "docs/ENV.md WARDYN_PG_DSN row", readRepo(t, "docs/ENV.md"),
-		"`pool_max_conns` plus 8 lock connections plus 2 listener connections per replica")
+		"**at least 4**", "`pool_max_conns` plus up to 3 dedicated lifetime connections per replica", "`pool_max_conns` plus 3 dedicated lifetime connections plus 8 lock connections plus 2 listener connections per replica")
 	wantAll(t, "[Unreleased]", unreleasedChangelog(t), "two more database connections", "LISTEN wardyn_mask")
 }
