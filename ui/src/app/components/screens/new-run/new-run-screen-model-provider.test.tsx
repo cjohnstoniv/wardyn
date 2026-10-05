@@ -77,6 +77,7 @@ import { NewRunScreen } from "./new-run-screen";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { baseStatus, MODEL_PROVIDERS, providerStatus } from "../../../lib/test-fixtures";
 import { RAIL_PROVIDER } from "../../wardyn/copy";
+import { setField } from "../../../../test/set-field";
 
 const { bedrock, claude, anthropicKey, gateway } = MODEL_PROVIDERS;
 const user = userEvent.setup({ pointerEventsCheck: 0 });
@@ -120,7 +121,7 @@ describe("NewRunScreen — R1: the sole candidate is sent even with no picker", 
   it("sends model_provider on the wire", async () => {
     getSetupStatusMock.mockResolvedValue(providerStatus([{ provider: bedrock, defaultFor: ["claude-code"], state: "live" }]));
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     await waitFor(() => expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(bedrock.id));
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
@@ -137,7 +138,7 @@ describe("NewRunScreen — R2: the admin default is preselected among several ca
       ]),
     );
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     await waitFor(() => expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(gateway.id));
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
@@ -164,7 +165,7 @@ describe("NewRunScreen — F2 (#612): the primary workspace's pin beats the rost
       },
     ]);
     renderScreenWithWorkspace("ws1");
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     await waitFor(() => expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(claude.id));
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
@@ -210,7 +211,7 @@ describe("NewRunScreen — F2 (#612): the primary workspace's pin beats the rost
     // polled live: a slow runner can still be busy when the pin lands, and
     // the default's window has closed by the time a live poll looks.
     expect(railProps.some((p) => p.modelProvider?.selectedId === gateway.id)).toBe(true);
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     expect(createRunMock.mock.calls[0][0].model_provider).toBe(claude.id);
@@ -242,7 +243,7 @@ describe("NewRunScreen — F2 (#612): the primary workspace's pin beats the rost
         }),
     );
     renderScreenWithWorkspace("ws1");
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     // 1. The roster default is auto-selected first.
     await waitFor(() => expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(gateway.id));
 
@@ -286,7 +287,7 @@ describe("NewRunScreen — R6 (QC-4): no default among several candidates — La
       ]),
     );
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     await waitFor(() => expect(screen.getByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toBeInTheDocument());
     expect(await screen.findByText(RAIL_PROVIDER.LAUNCH_HINT)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Launch run/ })).toBeDisabled();
@@ -324,7 +325,7 @@ describe("NewRunScreen — R5b (#1052): providers_ungranted disables Launch", ()
       }),
     );
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     expect(await screen.findByText(RAIL_PROVIDER.NOT_GRANTED("Claude Code"))).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Launch run/ })).toBeDisabled();
     expect(screen.queryByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toBeNull();
@@ -383,7 +384,7 @@ describe("NewRunScreen — #1018: a hidden pin preselects nothing", () => {
       },
     ]);
     renderScreenWithWorkspace("ws1");
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     await waitFor(() => expect(screen.getByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toBeInTheDocument());
     await waitFor(() => expect(railProps.at(-1)?.launch.workspaceUnavailable).toBe(true));
     expect(railProps.at(-1)?.modelProvider?.selectedId).toBeUndefined();
@@ -397,7 +398,7 @@ describe("NewRunScreen — R7/R8: switching the Agent field re-resolves the prov
       providerStatus([{ provider: gateway, defaultFor: ["claude-code", "codex-cli"], state: "live" }]),
     );
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     await waitFor(() => expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(gateway.id));
 
     await user.click(screen.getByRole("combobox", { name: "Agent" }));
@@ -416,7 +417,7 @@ describe("NewRunScreen — R7/R8: switching the Agent field re-resolves the prov
       ]),
     );
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     await waitFor(() => expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(anthropicKey.id));
 
     await user.click(screen.getByRole("combobox", { name: "Agent" }));
@@ -433,9 +434,9 @@ describe("NewRunScreen — a command run never carries a model provider", () => 
   it("omits model_provider even with a provider block configured", async () => {
     getSetupStatusMock.mockResolvedValue(providerStatus([{ provider: bedrock, defaultFor: ["claude-code"], state: "live" }]));
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Nightly cleanup");
+    setField(await screen.findByLabelText("Title"), "Nightly cleanup");
     await user.click(screen.getByRole("radio", { name: "Shell command" }));
-    await user.type(screen.getByLabelText("Command"), "echo hi");
+    setField(screen.getByLabelText("Command"), "echo hi");
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     expect(createRunMock.mock.calls[0][0].model_provider).toBeUndefined();
@@ -449,7 +450,7 @@ describe("NewRunScreen — a legacy install's absent model_providers", () => {
   it("renders and launches with no model_provider on the wire", async () => {
     getSetupStatusMock.mockResolvedValue({ ...baseStatus(), model_providers: undefined });
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Legacy null block");
+    setField(await screen.findByLabelText("Title"), "Legacy null block");
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     expect(createRunMock.mock.calls[0][0].model_provider).toBeUndefined();

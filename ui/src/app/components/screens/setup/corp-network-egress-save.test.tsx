@@ -16,6 +16,7 @@ import type { SiteConfig } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { CorpNetworkStep } from "./corp-network-step";
 import { baseStatus } from "../../../lib/test-fixtures";
+import { setField } from "../../../../test/set-field";
 
 vi.mock("../../../lib/api/health", () => ({ health: { testProxy: vi.fn(), testRedirect: vi.fn() } }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -43,8 +44,8 @@ function renderEgress(siteConfig: SiteConfig, saveSiteConfig: (next: SiteConfig)
 async function fillAddForm(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("combobox"));
   await user.click(await screen.findByText(FROM));
-  await user.type(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://mirror.corp.internal");
-  await user.type(screen.getByLabelText(/token secret name/i), "mirror-token");
+  setField(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://mirror.corp.internal");
+  setField(screen.getByLabelText(/token secret name/i), "mirror-token");
   await user.click(screen.getByRole("button", { name: /\+ add redirect/i }));
 }
 
@@ -77,7 +78,7 @@ describe("Egress redirection — a refused save keeps the draft (#492)", () => {
     renderEgress({ egress_redirects: [{ from: "a.example.com", to: "mirror-a.corp.internal" }] }, save);
     await user.click(screen.getByText("a.example.com"));
     const token = await screen.findByLabelText(/token secret name/i, { selector: "#eg-edit-token" });
-    await user.type(token, "edited-token");
+    setField(token, "edited-token");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
     await waitFor(() => expect(save).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByDisplayValue("edited-token")).toBeInTheDocument());

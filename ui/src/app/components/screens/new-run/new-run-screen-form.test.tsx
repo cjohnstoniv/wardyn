@@ -75,6 +75,7 @@ import { baseMe, baseStatus } from "../../../lib/test-fixtures";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
+import { setField } from "../../../../test/set-field";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -328,13 +329,13 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
 
   it("still waits for the task on an autonomous run", async () => {
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     await user.click(screen.getByRole("radio", { name: /^Autonomous/ }));
     const launch = screen.getByRole("button", { name: /Launch run/ });
     expect(launch).toBeDisabled();
     expect(screen.getByText(/needs a task to perform/)).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText("Task"), "fix the flaky test");
+    setField(screen.getByLabelText("Task"), "fix the flaky test");
     expect(launch).toBeEnabled();
   });
 
@@ -423,7 +424,7 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
     await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
     await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
     await user.click(screen.getByRole("radio", { name: "Shell command" }));
-    await user.type(screen.getByLabelText("Command"), "make test");
+    setField(screen.getByLabelText("Command"), "make test");
 
     const launch = screen.getByRole("button", { name: /Launch run/ });
     await waitFor(() => expect(launch).toBeEnabled());
@@ -557,7 +558,7 @@ describe("NewRunScreen — Title tracks the task until edited", { timeout: 20_00
     renderScreen();
     // Default mode is interactive: the task field is the optional boot seed.
     const seed = await screen.findByLabelText("Initial prompt (optional)");
-    await user.type(seed, "Refactor the payments module");
+    setField(seed, "Refactor the payments module");
     expect(screen.getByLabelText("Title")).toHaveValue("Refactor the payments module");
   });
 
@@ -579,10 +580,10 @@ describe("NewRunScreen — Title tracks the task until edited", { timeout: 20_00
   it("stops tracking once the operator clears the title, and does not re-derive it", async () => {
     renderScreen();
     const seed = await screen.findByLabelText("Initial prompt (optional)");
-    await user.type(seed, "Refactor the payments module");
+    setField(seed, "Refactor the payments module");
     const title = screen.getByLabelText("Title");
     await user.clear(title);
-    await user.type(seed, " more");
+    setField(seed, "Refactor the payments module more");
     expect(title).toHaveValue("");
   });
 });
@@ -737,7 +738,7 @@ describe("NewRunScreen — the keyboard contract", () => {
   it("never launches on Enter from the title — that key belongs to the datalist", async () => {
     renderScreen();
     const title = await screen.findByLabelText("Title");
-    await user.type(title, "Nightly audit");
+    setField(title, "Nightly audit");
 
     fireEvent.keyDown(title, { key: "Enter" });
     expect(createRunMock).not.toHaveBeenCalled();
@@ -745,10 +746,10 @@ describe("NewRunScreen — the keyboard contract", () => {
 
   it("never launches on Enter from a textarea — there it is a newline", async () => {
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     await user.click(screen.getByRole("radio", { name: /^Autonomous/ }));
     const task = screen.getByLabelText("Task");
-    await user.type(task, "fix the flaky test");
+    setField(task, "fix the flaky test");
 
     fireEvent.keyDown(task, { key: "Enter" });
     expect(createRunMock).not.toHaveBeenCalled();
@@ -762,7 +763,7 @@ describe("NewRunScreen — the keyboard contract", () => {
     expect(navigateMock).toHaveBeenCalledWith("/runs");
 
     navigateMock.mockReset();
-    await user.type(screen.getByLabelText("Title"), "Refund flow");
+    setField(screen.getByLabelText("Title"), "Refund flow");
     fireEvent.keyDown(window, { key: "Escape" });
     // Leaving is still one click on the ghost "Runs" button — it just does not
     // happen by accident with unsaved work on screen.

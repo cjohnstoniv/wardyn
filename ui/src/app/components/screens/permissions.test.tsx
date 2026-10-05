@@ -48,6 +48,7 @@ import { SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { HttpError, PendingChangeError } from "../../lib/api/core";
 import { CHANGES } from "../../lib/governance-copy";
 import { aheadByHours } from "../../lib/test-clock";
+import { setField } from "../../../test/set-field";
 
 function grant(over: Partial<CapabilityGrant> = {}): CapabilityGrant {
   return {
@@ -437,7 +438,7 @@ describe("PermissionsScreen — add a grant", () => {
 
     await user.click(screen.getByRole("combobox", { name: PERM.FIELD_WHO }));
     await user.click(await screen.findByRole("option", { name: "Portfolio manager" }));
-    await user.type(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    setField(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
     await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
 
     await waitFor(() =>
@@ -460,7 +461,7 @@ describe("PermissionsScreen — add a grant", () => {
     await user.click(screen.getByRole("button", { name: PERM.SUBJECT_USER_TYPE }));
     await user.click(screen.getByRole("combobox", { name: PERM.FIELD_WHO }));
     await user.click(await screen.findByRole("option", { name: "Portfolio manager" }));
-    await user.type(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    setField(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
     await user.click(screen.getByRole("button", { name: PERM.EFFECT_DENY }));
     await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
 
@@ -487,8 +488,8 @@ describe("PermissionsScreen — add a grant", () => {
     renderScreen();
 
     await screen.findByText(PERM.ADD_TITLE);
-    await user.type(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), "alice@corp.example");
-    await user.type(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    setField(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), "alice@corp.example");
+    setField(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
     await user.click(screen.getByRole("button", { name: PERM.EFFECT_DENY }));
     await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
     await waitFor(() => expect(upsertGrantMock).toHaveBeenCalled());
@@ -501,8 +502,8 @@ describe("PermissionsScreen — add a grant", () => {
     renderScreen();
 
     await screen.findByText(PERM.ADD_TITLE);
-    await user.type(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), "alice@corp.example");
-    await user.type(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    setField(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), "alice@corp.example");
+    setField(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
     await user.click(screen.getByRole("button", { name: PERM.SUBJECT_USER_TYPE }));
     expect(screen.getByRole("button", { name: PERM.ADD_CTA })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: PERM.SUBJECT_USER }));
@@ -515,8 +516,8 @@ describe("PermissionsScreen — add a grant", () => {
     renderScreen();
 
     await screen.findByText(PERM.ADD_TITLE);
-    await user.type(screen.getByLabelText(PERM.FIELD_WHO), "alice@corp.example");
-    await user.type(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    setField(screen.getByLabelText(PERM.FIELD_WHO), "alice@corp.example");
+    setField(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
     await user.click(screen.getByRole("button", { name: PERM.EFFECT_DENY }));
     await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
 
@@ -649,8 +650,8 @@ describe("PermissionsScreen — a 202 is submitted, never saved", () => {
     renderScreen();
 
     await screen.findByText(PERM.ADD_TITLE);
-    await user.type(screen.getByLabelText(PERM.FIELD_WHO), "alice@corp.example");
-    await user.type(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    setField(screen.getByLabelText(PERM.FIELD_WHO), "alice@corp.example");
+    setField(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
     await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
 
     expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();

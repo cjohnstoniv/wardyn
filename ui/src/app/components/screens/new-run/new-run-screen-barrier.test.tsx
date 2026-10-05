@@ -62,6 +62,7 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { ViewAccessProvider } from "../../wardyn/console-view";
 import { NO_BARRIER, RUN } from "../../wardyn/copy";
 import { TIER_PICKER } from "../../../lib/tier-picker-copy";
+import { setField } from "../../../../test/set-field";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -129,7 +130,7 @@ describe("NewRunScreen — an untouched Barrier omits confinement_class", () => 
     mockConfinementClasses = ["CC1", "CC2", "CC3"];
     renderScreen();
     await screen.findByRole("button", { name: /Launch run/ });
-    await user.type(screen.getByLabelText("Title"), "Untouched barrier");
+    setField(screen.getByLabelText("Title"), "Untouched barrier");
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     expect(createRunMock.mock.calls[0][0].confinement_class).toBeUndefined();
@@ -139,7 +140,7 @@ describe("NewRunScreen — an untouched Barrier omits confinement_class", () => 
     mockConfinementClasses = ["CC1", "CC2", "CC3"];
     renderScreen();
     await screen.findByRole("button", { name: /Launch run/ });
-    await user.type(screen.getByLabelText("Title"), "Touched barrier");
+    setField(screen.getByLabelText("Title"), "Touched barrier");
     await user.click(await screen.findByRole("radio", { name: "Wall" }));
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
@@ -493,7 +494,7 @@ describe("NewRunScreen — #214: no barrier at all on this host disables Launch"
   it("disables Launch and states the reason with a route to the Environment step", async () => {
     mockConfinementClasses = [];
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "No barrier host");
+    setField(await screen.findByLabelText("Title"), "No barrier host");
     expect(await screen.findByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toBeInTheDocument();
     const link = screen.getByRole("link", { name: NO_BARRIER.CTA });
     expect(link).toHaveAttribute("href", NO_BARRIER.ADMIN_ROUTE);
@@ -503,7 +504,7 @@ describe("NewRunScreen — #214: no barrier at all on this host disables Launch"
   it("a host WITH a barrier never shows the no-barrier reason, and Launch is not disabled by it", async () => {
     mockConfinementClasses = ["CC1"];
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Has a barrier");
+    setField(await screen.findByLabelText("Title"), "Has a barrier");
     await waitFor(() => expect(screen.getByRole("button", { name: /Launch run/ })).toBeEnabled());
     expect(screen.queryByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toBeNull();
   });
@@ -520,7 +521,7 @@ describe("NewRunScreen — #214: no barrier at all on this host disables Launch"
         </OperatorProvider>
       </MemoryRouter>,
     );
-    await user.type(await screen.findByLabelText("Title"), "No barrier host");
+    setField(await screen.findByLabelText("Title"), "No barrier host");
     expect(await screen.findByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: NO_BARRIER.CTA })).toBeNull();
   });
@@ -539,7 +540,7 @@ describe("NewRunScreen — #214: no barrier at all on this host disables Launch"
         </ViewAccessProvider>
       </MemoryRouter>,
     );
-    await user.type(await screen.findByLabelText("Title"), "No barrier host");
+    setField(await screen.findByLabelText("Title"), "No barrier host");
     expect(await screen.findByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: NO_BARRIER.CTA })).toBeNull();
   });
@@ -555,7 +556,7 @@ describe("NewRunScreen — #214: no barrier at all on this host disables Launch"
         </ViewAccessProvider>
       </MemoryRouter>,
     );
-    await user.type(await screen.findByLabelText("Title"), "No barrier host");
+    setField(await screen.findByLabelText("Title"), "No barrier host");
     expect(await screen.findByRole("link", { name: NO_BARRIER.CTA })).toHaveAttribute("href", NO_BARRIER.ADMIN_ROUTE);
   });
 });
