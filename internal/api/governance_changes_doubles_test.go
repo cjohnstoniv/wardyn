@@ -20,7 +20,7 @@ import (
 // those rows is the authorization boundary. The transactions themselves are against a real Postgres
 // (governance_changes_pg_test.go).
 
-func (s *authzStore) ProposeGovernanceChange(context.Context, types.GovernanceChange, time.Duration) (types.GovernanceChange, []uuid.UUID, error) {
+func (s *authzStore) ProposeGovernanceChange(context.Context, types.GovernanceChange, time.Duration) (types.GovernanceChange, []store.ExpiredGovernanceChange, error) {
 	return types.GovernanceChange{}, nil, errors.New("authzStore: no governance changes")
 }
 

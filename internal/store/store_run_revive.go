@@ -36,7 +36,7 @@ type RunReviver interface {
 	// perform (a lease end already cleared the pause of a run kept by its own end).
 	//
 	// false means the run went terminal, ended, was lost or revived since, or its grace or end ran
-	// out — it gets no proxy.
+	// out (an outage-kept run's end too, as revive admission requires) — it gets no proxy.
 	//
 	// startsAgent is a revive that starts the run's stopped agent (a reboot, an end, or an
 	// outage whose agent was stopped). With limit > 0 its claim takes a slot under the
@@ -86,22 +86,20 @@ func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostRea
 // markRunRevivedUnderCap is the claim of a revive that starts an agent, under the
 // deployment cap: the count and the claim share CreateRunUnderCap's transaction-scoped
 // advisory lock and its counting predicate, so a revive and a create racing at the cap
-// admit exactly the cap. The run itself is left out of the count when it is in it.
+// admit exactly the cap. It counts the OTHER runs in one statement: the run's own
+// row is never read for admission, so an extension of it landing mid-claim (which
+// takes neither lock) cannot make it look counted to one read and not to another.
+//
+// The claim does not pin the outage run's end either: admission does not depend on
+// it, and an extension the owner makes meanwhile is legitimate, not a change that
+// should fail the revive.
 func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int) (claimed bool, err error) {
 	err = s.inTx(ctx, func(q Querier) error {
-		active, err := lockAndCountActiveRuns(ctx, q)
+		others, err := lockAndCountActiveRuns(ctx, q, id)
 		if err != nil {
 			return err
 		}
-		var counted bool
-		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs WHERE id = $1 AND `+HoldsSandboxSQL+`)`, id).Scan(&counted); err != nil {
-			return fmt.Errorf("store: read revived run's slot: %w", err)
-		}
-		self := 0
-		if counted {
-			self = 1
-		}
-		if active-self >= limit {
+		if others >= limit {
 			return ErrRunCapReached
 		}
 		claimed, err = markRunRevived(ctx, q, id, from, ended)
@@ -118,8 +116,9 @@ func markRunRevived(ctx context.Context, q Querier, id uuid.UUID, from types.Los
 			paused_reason=CASE WHEN $3=$8 THEN '' ELSE paused_reason END,
 			token_renewed_at=now(), watcher_heartbeat=now(), updated_at=now()
 		WHERE id=$1 AND state=$2 AND (lost_at IS NOT NULL) = ($3 <> '') AND lost_reason=$3
-		  AND ($3 <> $4 OR (lost_at = $5 AND lost_at > $6::timestamptz AND (ends_at IS NULL OR ends_at > $7::timestamptz)))`,
-		id, string(types.RunRunning), string(from), string(types.LostEnded), lostAt, keptAfter, now, string(types.LostReboot))
+		  AND ($3 <> $4 OR (lost_at = $5 AND lost_at > $6::timestamptz AND (ends_at IS NULL OR ends_at > $7::timestamptz)))
+		  AND ($3 <> $9 OR ends_at IS NULL OR ends_at > now())`,
+		id, string(types.RunRunning), string(from), string(types.LostEnded), lostAt, keptAfter, now, string(types.LostReboot), string(types.LostOutage))
 	if err != nil {
 		return false, fmt.Errorf("store: mark run revived: %w", err)
 	}

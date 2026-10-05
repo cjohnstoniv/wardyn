@@ -221,10 +221,12 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 	case errors.As(err, &pending):
 		body := errorBody{Reason: reasonGovernanceChangePending,
 			Error: "a change to this target is already waiting for approval: " + pending.ID.String()}
-		// The held change rides in the refusal so a repeat apply reports it as pending. A read that
-		// fails or finds it gone leaves the plain refusal.
+		// The held change rides in the refusal, with whether it is this proposal, so a repeat apply
+		// of the same write reports it as pending. A read that fails or finds it gone leaves the
+		// plain refusal.
 		if held, gerr := s.cfg.Store.GetGovernanceChange(r.Context(), pending.ID); gerr == nil && held.State == types.GovernanceChangePending {
-			body.PendingChange = &held
+			matches := held.Op == p.op && samePayload(held.Payload, payload)
+			body.PendingChange, body.PendingChangeMatches = &held, &matches
 		}
 		writeJSON(w, http.StatusConflict, body)
 		return
@@ -233,14 +235,21 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	actorType, actor := actorFromRequest(r)
-	for _, id := range expired {
-		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "governance.change.expire", id.String(), "success",
-			mustJSON(map[string]any{"target_kind": p.kind, "target_key": p.key})))
+	for _, e := range expired {
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "governance.change.expire", e.ID.String(), "success",
+			mustJSON(map[string]any{"target_kind": p.kind, "target_key": e.TargetKey})))
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "governance.change.propose", saved.ID.String(), "success",
 		mustJSON(map[string]any{"target_kind": p.kind, "op": p.op, "target_key": p.key, "expires_at": saved.ExpiresAt})))
 	w.Header().Set("Location", "/api/v1/governance/changes/"+saved.ID.String())
 	writeJSON(w, http.StatusAccepted, map[string]any{"pending_change": saved})
+}
+
+// samePayload reports whether two change payloads encode the same JSON value, whatever their key
+// order or spacing (a stored payload is normalised by the database).
+func samePayload(a, b []byte) bool {
+	var x, y any
+	return json.Unmarshal(a, &x) == nil && json.Unmarshal(b, &y) == nil && sameJSON(x, y)
 }
 
 // governanceDiffBody is a change's diff column.

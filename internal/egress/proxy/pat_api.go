@@ -174,17 +174,40 @@ func (p *Proxy) servePATAPI(w http.ResponseWriter, r *http.Request, host string,
 		return
 	}
 	// The door returns before the generic forward-body scan in serveMITMRequest, so it runs the
-	// same scan here: a registered secret in an MR/PR body must not leave with the PAT attached.
-	// Before the mint, so a refused body never redeems a token.
+	// same scan here: a registered secret in an MR/PR body or query (the forge reads create params
+	// from either) must not leave with the PAT attached. Before the mint, so a refused request
+	// never redeems a token.
 	var bodyReader io.Reader = r.Body
 	var scanSummary *egress.ScanSummary
-	if p.scanner != nil && p.scanner.InspectForwardEgress() && p.scanner.Mode() != contentscan.ModeOff && hasScannableBody(r) {
-		var release func()
-		var blocked bool
-		bodyReader, scanSummary, release, blocked = p.inspectForwardBody(w, r, host, port)
-		defer release()
-		if blocked {
-			return
+	if p.scanner != nil && p.scanner.Mode() != contentscan.ModeOff {
+		if p.scanner.InspectForwardEgress() {
+			if q, err := url.QueryUnescape(r.URL.RawQuery); err == nil && q != "" {
+				res, _, serr := p.scanner.ScanRequest(contentscan.ChannelGeneric, []byte(q))
+				if p.scanner.ShouldBlock(res) {
+					p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLMBlocked, scanSummaryFrom(res, serr, p.scanner, "block", contentscan.ChannelGeneric))
+					writeScanBlocked(w, len(res.Findings), categoriesOf(res.Findings), res.SkipReason)
+					return
+				}
+				if len(res.Findings) > 0 || res.Skipped || serr != nil {
+					scanSummary = scanSummaryFrom(res, serr, p.scanner, "", contentscan.ChannelGeneric)
+				}
+			}
+			if hasScannableBody(r) {
+				var release func()
+				var blocked bool
+				var bodySummary *egress.ScanSummary
+				bodyReader, bodySummary, release, blocked = p.inspectForwardBody(w, r, host, port)
+				defer release()
+				if blocked {
+					return
+				}
+				if bodySummary != nil {
+					scanSummary = bodySummary
+				}
+			}
+		} else if hasScannableBody(r) {
+			// Say so on the allow row, as every other MITM'd generic host does.
+			scanSummary = p.skipSummary("skip", "uninspected_channel", contentscan.ChannelGeneric)
 		}
 	}
 	token, _, err := p.patToken(r.Context(), grant)
@@ -246,7 +269,7 @@ func (p *Proxy) emitPATAPIDecision(r *http.Request, host string, port int, d egr
 	}
 }
 
-// refusePATAPI is the ONE refusal point: a decision row under
+// refusePATAPI is the one refusal point for the door's own tables: a decision row under
 // brokered:git-pat:api:denied and a 403 (never 401, which clients read as "try
 // another credential") whose JSON carries the code and the sentence.
 func (p *Proxy) refusePATAPI(w http.ResponseWriter, r *http.Request, host string, port int, why string) {

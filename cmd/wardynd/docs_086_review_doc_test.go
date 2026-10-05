@@ -53,7 +53,7 @@ func TestUnreleasedNamesTheOperatorFacingAdditions(t *testing.T) {
 		"WARDYN_GOVERN_ADMIN_RUNS", "WARDYN_GOVERN_ADMIN_RUNS_EXEMPT", "recording_governed", "user_view_preview",
 		"WARDYN_MAX_CONCURRENT_RUNS", "WARDYN_SANDBOX_REQUEST_RATIO", "WARDYN_KEK_REQUIRED",
 		"WARDYN_AZURE_KEK_KEY_PLATFORM", "WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM", "WARDYN_AZURE_CLIENT_ID_PLATFORM",
-		"/admin/runs/capacity", "wardyn_runs_active", "metrics.serviceMonitor")
+		"/admin/runs/capacity", "wardyn_runs_active", "metrics.serviceMonitor", "0131_principal_key_handles")
 }
 
 // TestUnreleasedNamesTheTerminalChanges pins the day-one terminal behaviour changes.

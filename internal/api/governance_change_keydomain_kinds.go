@@ -47,6 +47,13 @@ func (s *Server) holdKeyDomainChange(w http.ResponseWriter, r *http.Request, c k
 		writeKeyDomainAssignmentNotFound(w)
 		return
 	}
+	if d, err := keyDomainDeleteRefusal(r.Context(), s.cfg.KeyDomains.TruncatedWithGroups, c); err != nil {
+		writeServerError(w, r, "hold key domain assignment", err)
+		return
+	} else if d != nil {
+		s.refuse(w, r, *d)
+		return
+	}
 	p := govProposal{kind: govKindKeyDomain, op: "upsert", key: keyDomainTarget(c), payload: c, baseState: keyDomainState(cur, found)}
 	var before, after *keyDomainDiffView
 	if found {
@@ -90,6 +97,11 @@ func applyKeyDomainAssignmentChange(s *Server, r *http.Request, q store.Querier,
 	}
 	target := keyDomainTarget(c)
 	if c.Delete {
+		if d, err := keyDomainDeleteRefusal(ctx, func(ctx context.Context, p string) (bool, error) { return svc.TruncatedWithGroupsQ(ctx, q, p) }, c); err != nil {
+			return govApplied{}, err
+		} else if d != nil {
+			return govApplied{}, &govRefusal{why: string(d.Reason), write: func(w http.ResponseWriter, r *http.Request) { s.refuse(w, r, *d) }}
+		}
 		prev, deleted, err := svc.DeleteQ(ctx, q, c.SubjectType, c.Subject)
 		if err != nil {
 			return govApplied{}, err
@@ -103,7 +115,7 @@ func applyKeyDomainAssignmentChange(s *Server, r *http.Request, q store.Querier,
 	ambiguous := func(ctx context.Context, group, domain string) (int, error) {
 		return svc.AmbiguousIfGroupQ(ctx, q, group, domain)
 	}
-	if d, err := keyDomainSetRefusal(ctx, svc, ambiguous, func(ctx context.Context) (int, error) { return svc.TruncatedUnassignedQ(ctx, q) }, c); err != nil {
+	if d, err := keyDomainSetRefusal(ctx, svc, ambiguous, func(ctx context.Context) (int, []string, error) { return svc.TruncatedUnassignedQ(ctx, q) }, c); err != nil {
 		return govApplied{}, err
 	} else if d != nil {
 		return govApplied{}, &govRefusal{why: string(d.Reason), write: func(w http.ResponseWriter, r *http.Request) { s.refuse(w, r, *d) }}

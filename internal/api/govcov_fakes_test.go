@@ -92,7 +92,7 @@ type govCovStore struct {
 	proposed       []types.GovernanceChange
 	proposedTTL    time.Duration
 	proposeSaved   types.GovernanceChange
-	proposeExpired []uuid.UUID
+	proposeExpired []store.ExpiredGovernanceChange
 	proposeErr     error
 
 	// decide: decideFn stands in for the decision transaction. decisions records what was asked.
@@ -129,7 +129,7 @@ func (s *govCovStore) GetGovernanceChange(context.Context, uuid.UUID) (types.Gov
 	return s.got, s.getErr
 }
 
-func (s *govCovStore) ProposeGovernanceChange(_ context.Context, ch types.GovernanceChange, ttl time.Duration) (types.GovernanceChange, []uuid.UUID, error) {
+func (s *govCovStore) ProposeGovernanceChange(_ context.Context, ch types.GovernanceChange, ttl time.Duration) (types.GovernanceChange, []store.ExpiredGovernanceChange, error) {
 	s.proposed = append(s.proposed, ch)
 	s.proposedTTL = ttl
 	return s.proposeSaved, s.proposeExpired, s.proposeErr

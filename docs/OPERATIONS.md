@@ -1120,7 +1120,7 @@ stored and gives no access, and roles still come from the sign-in token and the 
 | Suspend | Completed first, if it is not already |
 | Erase | The person's stored credentials and the masking copies of them, through the same erasure entry point as `POST /people/{principal}/erasure`, with the `credentials` and `mask_copies` scopes. Audit fields, run tasks, run outputs and recordings are not part of a purge: records retention usually outlives the leaver window, so erasing them stays a deliberate `POST /people/{principal}/erasure` |
 | Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, audited as `workspace.reassign`; `keep` leaves them |
-| Grants | The person's user-subject capability grants and governance assignments are deleted by a direct store call, audited in `person.deprovision`, never through the governance apply path. This deletes deny rows, which the governed path would treat as widening; it is safe for the rows keyed by the person's own principals (the sign-in subject and the object-id form) because the identity is a permanent tombstone whose subject can never authenticate again. A row keyed by an email alias is deleted only while no other principal holds that address (another active identity, or an API token or person row under a different principal); otherwise it stays, because a recycled address's new holder owns it, and `person.deprovision` counts it as `email_rows_kept` |
+| Grants | The person's user-subject capability grants and governance assignments are deleted by a direct store call, audited in `person.deprovision`, never through the governance apply path. This deletes deny rows, which the governed path would treat as widening; it is safe for the rows keyed by the person's own principals (the sign-in subject and the object-id form) because the identity is a permanent tombstone whose subject can never authenticate again. A row keyed by an email alias is deleted only while no other principal holds that address (another active identity, or a live API token or person row under a different principal: a revoked or expired token, a deactivated person row, and a principal whose identity is deactivated or purged hold nothing); otherwise it stays, because a recycled address's new holder owns it, and `person.deprovision` counts it as `email_rows_kept` |
 | Drives | Listed by name in `person.deprovision`, never reclaimed. Reclaim storage with the steps in "Reclaiming a departed person's storage" |
 
 The identity row stays as a tombstone with `purged_at` set. `PATCH active=true` on it is a 400 `invalidValue`
@@ -1153,8 +1153,8 @@ lose access now, do not wait for it:
   write and rotation without downtime are the mitigations. Rate limits are per replica, so an HA install's
   effective limit is the per-replica limit times the replica count.
 - **Email recycling.** For a person a sign-in has bound, an email alias widens the session cutoff only while no
-  other principal holds that address (another active identity, or an API token or person row under a different
-  principal), the same rule a purge uses for grants. While another principal holds it, a suspension and a SCIM
+  other principal holds that address (another active identity, or a live API token or person row under a different
+  principal: only a live holder counts, so a revoked or expired token, a deactivated person row and a principal whose identity is deactivated or purged hold nothing), the same rule a purge uses for grants. While another principal holds it, a suspension and a SCIM
   group removal write no cutoff or session cut under the address: the person's own credentials are reached through
   their subject and object-id forms and the identity deactivation, and the other principal's sessions, API tokens
   and SSH keys keep working. Under an email, a suspension revokes API tokens and deletes SSH keys, and a group
@@ -2148,12 +2148,15 @@ wardyn governance changes reject <change-id> --reason "widens egress past the re
 ```
 
 `governance set` exits 0 on a pending result and skips `--prune` until every write is decided, so
-run it again afterwards. Running it again before then is safe: a target that still has a held change
-is reported as pending, with the held change named, and the rest of the file is applied. The console does the same on the Governance screen's Changes tab, with the
+run it again afterwards. Running the SAME document again before then is safe: a target whose held change is that
+very write is reported as pending, with the held change named, and the rest of the file is applied. A
+document edited since is refused at that target (`409` `governance_change_pending`, naming the held
+change) until the held change is decided; nothing of the edit is stored. The console does the same on the Governance screen's Changes tab, with the
 diff in a drawer; Approve is disabled on your own proposal. Nothing notifies an approver that a
 change is waiting, so name who looks, and how often, in your own runbook. There is at most one
 pending change per target: a second proposal at the same target is `409` `governance_change_pending`,
-which names the first and carries it in `pending_change`. A new profile's target is its name while its
+which names the first and carries it in `pending_change`, with `pending_change_matches` saying
+whether it is the very write that was refused (same operation, same payload). A new profile's target is its name while its
 create waits, so creating the same name again (by `POST`, or `PUT` at any new id) meets the held create.
 
 **4. Expiry and stale changes.** A change nobody decides within the TTL reads as `expired` and cannot
@@ -3779,7 +3782,7 @@ the owner or email, only the `reason` and `target` it always had.
 | `run_owner_only` | 0.8.5 (#1476): a **super admin** asked for interactive entry (attach-ticket mint or consume, the cookie attach lane, a UI app, take-over) to a run that is not theirs and has a personal owner. A `403` with the body `{"error":"only the person who started this run can open it interactively","reason":"run_owner_only"}`, not the `404` above, because the admin can already see the run. A run with no personal owner (operator-owned service or local runs) stays enterable. Kill, approve, policy, grants, revoke, audit, revive, resume and end are unchanged | ⛔ `403` |
 | `recording_governed` | 0.8.6: with `WARDYN_GOVERN_ADMIN_RUNS` on, an admin whose runs are governed (an SSO admin, an admin-role personal token) asked for Record Mode (`POST /workspaces/{id}/record`). Refused first, before the ceiling read and the import-step claim, at target `workspaces.record`; the body says Record Mode is refused for admins whose runs are governed and that the operator can allow it by setting `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` to `recording`. That setting lifts it for that lane, and each recording is then marked `governance_exempt` on `run.record.start`. The admin token and local mode are never refused. See [Constrained-admin mode](operations/member-mode.md#constrained-admin-mode) | ⛔ `403` |
 | `key_domain_unknown` | 0.8.6: `PUT /key-domains/assignments/{subject_type}/{subject}` named a key domain the deployment's key domains file (`WARDYN_KEY_DOMAINS_FILE`, chart `kek.domains`) does not declare. The body names the declared domains; nothing was written. Domains come from the file alone, so the API can only choose among them | ⛔ `422` |
-| `key_domain_ambiguous_membership` | 0.8.6: a `PUT` of a group key-domain assignment would leave people who last signed in with that group and another group assigned to a different domain, and who have no assignment of their own, so their next principal key would be refused by name. The body counts them; nothing was written. Assign each of them to one domain as a user first, or give both groups the same domain. The same reason refuses any group write while someone whose last sign-in lost groups (a Microsoft Entra group overage always does) has no user assignment, since once any group is assigned that person is refused by name and signing in again does not clear it | ⛔ `409` |
+| `key_domain_ambiguous_membership` | 0.8.6: a `PUT` of a group key-domain assignment would leave people who last signed in with that group and another group assigned to a different domain, and who have no assignment of their own, so their next principal key would be refused by name. The body counts them; nothing was written. Assign each of them to one domain as a user first, or give both groups the same domain. The same reason refuses any group write while someone whose last sign-in lost groups (a Microsoft Entra group overage always does) has no user assignment, since once any group is assigned that person is refused by name and signing in again does not clear it; the body names the first of them. A person whose identity is deactivated or purged is never counted, and the same reason refuses a `DELETE` of a user assignment for a person whose last sign-in lost groups while any group is assigned | ⛔ `409` |
 | `byoi_user` | a member named a `devcontainer_repo`, or an `image` they hold no grant for | ⛔ `403` |
 | `capability_workspace` | `workspace_id`: a member named a workspace they aren't granted (`403`). Launching: an `inline_policy` `workspace_repos` entry for an ungranted workspace was dropped — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | ⛔ `403`, or 🟡 a drop |
@@ -7452,8 +7455,8 @@ therefore the per-replica cap times the replica count (cap × N):
   runs are fenced (attach, SSH shell and recording upload answer `503`
   `mask_state_unavailable`) and the rows are tombstoned. Other people's values are
   unaffected and `mask_registry_shared` stays healthy. The remedy is to erase that
-  person's credentials through the API, which restores their credentials and future
-  runs; the fenced runs stay fenced. Only a destroyed generation, or a wrap that
+  person's credentials through the API; they then store their credentials again and
+  their future runs are covered. The fenced runs stay fenced. Only a destroyed generation, or a wrap that
   provably does not open under its own key (the local key, or Key Vault), fences.
   Every other key failure fails the read instead, so consumers fail closed and
   nothing is fenced or tombstoned:

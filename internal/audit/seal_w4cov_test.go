@@ -292,7 +292,7 @@ func TestW4CovResealLeavesFieldsThatAreNotPendingStringsAlone(t *testing.T) {
 	s, mk := newSealer(t)
 	for name, data := range map[string]string{
 		"a non-string at the field":    `{"pending_subject":true,"reason":7,"other":"seal2p.zzz"}`,
-		"a string that is not pending": `{"pending_subject":true,"reason":"seal2p.not.pending","other":"seal2p.zzz"}`,
+		"a string that is not pending": `{"pending_subject":true,"reason":"a plain reason","other":"seal2p.zzz"}`,
 	} {
 		ev := decideEvent("alice", "x")
 		ev.Data = json.RawMessage(data)
@@ -310,6 +310,24 @@ func TestW4CovResealLeavesFieldsThatAreNotPendingStringsAlone(t *testing.T) {
 	}
 	if mk.currCalls != 0 {
 		t.Errorf("fields that are not pending strings asked for a key: %d", mk.currCalls)
+	}
+}
+
+// A field that carries the pending prefix but does not parse is not "some other string": it
+// is what a torn or edited spool line looks like, and the drain must quarantine it as it does
+// a pending actor, never store the junk in the chain.
+func TestW4CovResealQuarantinesAMalformedPendingField(t *testing.T) {
+	s, _ := newSealer(t)
+	for _, reason := range []string{"seal2p.not.pending", "seal2p.", "seal2p.!!!"} {
+		ev := decideEvent("alice", "x")
+		ev.Data = json.RawMessage(`{"pending_subject":true,"reason":"` + reason + `"}`)
+		out, err := s.Reseal(context.Background(), ev)
+		if !errors.Is(err, ErrPendingUnopenable) {
+			t.Errorf("reason %q: Reseal = %v, want ErrPendingUnopenable", reason, err)
+		}
+		if string(out.Data) != string(ev.Data) {
+			t.Errorf("reason %q: a refused reseal changed the data: %s", reason, out.Data)
+		}
 	}
 }
 

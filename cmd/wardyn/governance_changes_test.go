@@ -45,6 +45,7 @@ func (f *fakePendingGovernance) handler() http.HandlerFunc {
 			if f.conflict {
 				status = http.StatusConflict
 				body["error"], body["reason"] = "a change to this target is already waiting for approval", "governance_change_pending"
+				body["pending_change_matches"] = true
 			}
 			w.WriteHeader(status)
 			body["pending_change"] = map[string]any{

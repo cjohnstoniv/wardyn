@@ -12,10 +12,12 @@ package api
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
@@ -24,17 +26,23 @@ import (
 
 // frozenRunner is pauseRunner that remembers whether the sandbox is frozen and,
 // like a real runtime call, refuses a call whose context has ended. onThaw runs
-// once, before the first thaw lands.
+// once, before the first thaw lands. failFreezes fails that many freezes before
+// they reach the sandbox.
 type frozenRunner struct {
 	*pauseRunner
-	frozen atomic.Bool
-	onThaw func()
+	frozen      atomic.Bool
+	onThaw      func()
+	failFreezes atomic.Int32
 }
 
 func (r *frozenRunner) FreezeSandbox(ctx context.Context, ref string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if r.failFreezes.Add(-1) >= 0 {
+		return errors.New("injected: the runtime refused the freeze")
+	}
+	r.failFreezes.Store(0)
 	if err := r.pauseRunner.FreezeSandbox(ctx, ref); err != nil {
 		return err
 	}
@@ -57,6 +65,28 @@ func (r *frozenRunner) ThawSandbox(ctx context.Context, ref string) error {
 	return nil
 }
 
+// faultStore is the pause store A reads through: afterRead runs once, after a
+// read and before it returns, and failReads fails that many reads before they
+// reach the row.
+type faultStore struct {
+	*pauseStore
+	afterRead func()
+	failReads atomic.Int32
+}
+
+func (h *faultStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if h.failReads.Add(-1) >= 0 {
+		return types.AgentRun{}, errors.New("injected: the run read failed")
+	}
+	h.failReads.Store(0)
+	run, err := h.pauseStore.GetRun(ctx, id)
+	if fn := h.afterRead; fn != nil {
+		h.afterRead = nil
+		fn()
+	}
+	return run, err
+}
+
 // pgPauseLeaders is the pause fixture with its run lock in Postgres: a, the
 // leader whose pass ctx loseLeader ends, and b, a second replica whose pass
 // carries the next epoch. a's freeze supersedes its epoch, so a's mark is
@@ -65,7 +95,8 @@ type pgPauseLeaders struct {
 	f          *pauseFixture
 	pool       *pgxpool.Pool
 	rn         *frozenRunner
-	hook       *pauseReadHook
+	hook       *faultStore
+	lease      *fakeLease
 	b          *Server
 	ctxA, ctxB context.Context
 	loseLeader context.CancelFunc
@@ -76,7 +107,8 @@ func newPGPauseLeaders(t *testing.T) *pgPauseLeaders {
 	pool := throwawayPGPool(t)
 	var newest atomic.Int64
 	newest.Store(1)
-	f := newPauseFixture(t, time.Hour, withLease(&fakeLease{current: func(epoch int64) bool { return epoch == newest.Load() }}))
+	lease := &fakeLease{epoch: 2, termCtx: context.Background(), current: func(epoch int64) bool { return epoch == newest.Load() }}
+	f := newPauseFixture(t, time.Hour, withLease(lease))
 	f.st.open, f.st.waiting = true, true
 	rn := &frozenRunner{pauseRunner: f.rn}
 	f.srv.cfg.Runner = rn
@@ -89,12 +121,12 @@ func newPGPauseLeaders(t *testing.T) *pgPauseLeaders {
 			newest.Store(2) // B is elected while A's freeze is in flight
 		}
 	}
-	hook := &pauseReadHook{pauseStore: f.st}
+	hook := &faultStore{pauseStore: f.st}
 	f.srv.cfg.Store = hook
 	b := New(f.srv.cfg)
 	b.cfg.Store = f.st
 	b.locks.override = db.NewPGLocker(pool, 2)
-	return &pgPauseLeaders{f: f, pool: pool, rn: rn, hook: hook, b: b,
+	return &pgPauseLeaders{f: f, pool: pool, rn: rn, hook: hook, lease: lease, b: b,
 		ctxA: ctxA, ctxB: context.WithValue(t.Context(), leaseEpochKey{}, int64(2)), loseLeader: loseLeader}
 }
 
@@ -155,6 +187,9 @@ func TestPG_PauseRun_CompensationNeverUndoesANewerPause(t *testing.T) {
 		if pausedAt != nil || freezes != 1 || thaws != 1 || l.rn.frozen.Load() {
 			t.Error("want an unmarked run thawed again: freezes == thaws == 1, not paused, not frozen")
 		}
+		if n := l.f.st.owing(); n != 0 {
+			t.Errorf("%d settles left recorded after a settled compensation, want 0", n)
+		}
 	})
 
 	t.Run("the pass is cancelled, then the lock is lost before the thaw: B's pause stands", func(t *testing.T) {
@@ -173,6 +208,9 @@ func TestPG_PauseRun_CompensationNeverUndoesANewerPause(t *testing.T) {
 		if pausedAt == nil || freezes != 2 || thaws != 0 || !l.rn.frozen.Load() {
 			t.Error("A's stale compensation thawed B's committed pause: want freezes 2, thaws 0, paused and frozen")
 		}
+		if n := l.f.st.owing(); n != 0 {
+			t.Errorf("%d settles left recorded after a settled compensation, want 0", n)
+		}
 	})
 
 	t.Run("the lock is lost while the thaw is in flight: B's pause is put back", func(t *testing.T) {
@@ -190,6 +228,116 @@ func TestPG_PauseRun_CompensationNeverUndoesANewerPause(t *testing.T) {
 		}
 		if freezes != 3 || thaws != 1 {
 			t.Errorf("freezes, thaws = %d, %d; want 3, 1: A's freeze, B's, and A restoring B's under a new lock", freezes, thaws)
+		}
+		if n := l.f.st.owing(); n != 0 {
+			t.Errorf("%d settles left recorded after a settled compensation, want 0", n)
+		}
+	})
+}
+
+// state is the run's pause mark and its sandbox, as the test reads them.
+func (l *pgPauseLeaders) state() (paused, frozen bool, freezes, thaws int) {
+	pausedAt, _ := l.f.st.paused()
+	freezes, thaws = l.rn.counts()
+	return pausedAt != nil, l.rn.frozen.Load(), freezes, thaws
+}
+
+// leaderSweeps runs the pause sweep as the current leader once every recorded
+// settle is due.
+func (l *pgPauseLeaders) leaderSweeps(t *testing.T) {
+	t.Helper()
+	l.lease.mu.Lock()
+	l.lease.lead = true
+	l.lease.mu.Unlock()
+	l.f.st.settleDue()
+	l.f.sweep(t)
+}
+
+// TestPG_PauseRun_CompensationFailsClosedAndTheSweepSettles: a compensation
+// whose read of the run, or whose repair of the sandbox, fails never thaws on
+// what it could not read and never abandons the repair. A one-off failure is
+// tried again in the round; one that persists leaves the sandbox as it is with
+// the run's settle recorded, and the next leader sweep settles it under the
+// run lock: a run marked paused ends frozen, one not marked ends running.
+func TestPG_PauseRun_CompensationFailsClosedAndTheSweepSettles(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		fails int32
+	}{{"once", 1}, {"every try", pauseSettleTries}} {
+		t.Run("the run cannot be read after the lock is taken again, "+tc.name+": B's pause is never thawed", func(t *testing.T) {
+			l := newPGPauseLeaders(t)
+			// A read the run unpaused; its lock goes and B pauses; the read under
+			// A's new lock fails.
+			l.hook.afterRead = func() { l.loseRunLock(t); l.bPauses(t); l.hook.failReads.Store(tc.fails) }
+
+			l.f.srv.pauseRun(l.ctxA, l.f.st, l.f.run, types.PauseWaiting, time.Hour)
+
+			paused, frozen, freezes, thaws := l.state()
+			t.Logf("after A: freezes=%d thaws=%d paused=%t frozen=%t owing=%d", freezes, thaws, paused, frozen, l.f.st.owing())
+			if thaws != 0 || !paused || !frozen {
+				t.Fatalf("A thawed on a read it could not make: want thaws 0, paused and frozen")
+			}
+			if want := map[bool]int{true: 1, false: 0}[tc.fails == pauseSettleTries]; l.f.st.owing() != want {
+				t.Errorf("settles recorded after A = %d, want %d", l.f.st.owing(), want)
+			}
+			l.leaderSweeps(t)
+			paused, frozen, freezes, thaws = l.state()
+			t.Logf("after the sweep: freezes=%d thaws=%d paused=%t frozen=%t owing=%d", freezes, thaws, paused, frozen, l.f.st.owing())
+			if thaws != 0 || !paused || !frozen || l.f.st.owing() != 0 {
+				t.Error("after the sweep: want B's pause frozen, never thawed, and nothing left to settle")
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name  string
+		fails int32
+	}{{"once", 1}, {"every try", pauseSettleTries}} {
+		t.Run("the freeze that puts B's pause back fails "+tc.name+": it is retried, else the sweep settles it", func(t *testing.T) {
+			l := newPGPauseLeaders(t)
+			// B freezes and marks before A's thaw lands; A's repair freeze then fails.
+			l.rn.onThaw = func() { l.loseRunLock(t); l.bPauses(t); l.rn.failFreezes.Store(tc.fails) }
+
+			l.f.srv.pauseRun(l.ctxA, l.f.st, l.f.run, types.PauseWaiting, time.Hour)
+
+			paused, frozen, freezes, thaws := l.state()
+			persists := tc.fails == pauseSettleTries
+			t.Logf("after A: freezes=%d thaws=%d paused=%t frozen=%t owing=%d", freezes, thaws, paused, frozen, l.f.st.owing())
+			if !paused || frozen == persists {
+				t.Errorf("after A: paused=%t frozen=%t; want paused, frozen unless every try failed", paused, frozen)
+			}
+			if want := map[bool]int{true: 1, false: 0}[persists]; l.f.st.owing() != want {
+				t.Errorf("settles recorded after A = %d, want %d: a failed repair must stay recorded", l.f.st.owing(), want)
+			}
+			l.leaderSweeps(t)
+			paused, frozen, freezes, thaws = l.state()
+			t.Logf("after the sweep: freezes=%d thaws=%d paused=%t frozen=%t owing=%d", freezes, thaws, paused, frozen, l.f.st.owing())
+			if !paused || !frozen || l.f.st.owing() != 0 {
+				t.Error("after the sweep: want the run marked paused, its sandbox frozen, and nothing left to settle")
+			}
+		})
+	}
+
+	t.Run("the run cannot be read before the thaw: nothing thaws, and the sweep thaws the unmarked freeze", func(t *testing.T) {
+		l := newPGPauseLeaders(t)
+		l.hook.failReads.Store(pauseSettleTries)
+
+		l.f.srv.pauseRun(l.ctxA, l.f.st, l.f.run, types.PauseWaiting, time.Hour)
+
+		paused, frozen, freezes, thaws := l.state()
+		t.Logf("after A: freezes=%d thaws=%d paused=%t frozen=%t owing=%d", freezes, thaws, paused, frozen, l.f.st.owing())
+		if thaws != 0 || !frozen || paused || l.f.st.owing() != 1 {
+			t.Fatal("after A: want no thaw on a row nobody read, the freeze left as it is and its settle recorded")
+		}
+		// The request has closed, so the sweep pauses nothing anew and its only work is the settle.
+		l.f.st.mu.Lock()
+		l.f.st.open, l.f.st.waiting = false, false
+		l.f.st.mu.Unlock()
+		l.leaderSweeps(t)
+		paused, frozen, freezes, thaws = l.state()
+		t.Logf("after the sweep: freezes=%d thaws=%d paused=%t frozen=%t owing=%d", freezes, thaws, paused, frozen, l.f.st.owing())
+		if paused || frozen || freezes != thaws || l.f.st.owing() != 0 {
+			t.Error("after the sweep: want the unmarked run running again (freezes == thaws) and nothing left to settle")
 		}
 	})
 }

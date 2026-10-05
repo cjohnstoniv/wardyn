@@ -526,7 +526,9 @@ func (s *Sealer) unsealData(ctx context.Context, memo *keyMemo, ev types.AuditEv
 // each pending field is opened and sealed under its subject's own key, the
 // marker is dropped, and the row can be stored. A field whose subject was
 // erased while it waited becomes ErasedValue rather than being sealed under a
-// new key. Any failure is returned and the caller keeps the spool line.
+// new key. Any failure is returned and the caller keeps the spool line; a field
+// that carries the pending prefix but does not parse is ErrPendingUnopenable, so
+// the drain quarantines the line instead of storing the junk.
 func (s *Sealer) Reseal(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
 	fields := sealFields[ev.Action]
 	if !IsPending(ev) {
@@ -546,6 +548,9 @@ func (s *Sealer) Reseal(ctx context.Context, ev types.AuditEvent) (types.AuditEv
 			}
 			pv, ok, err := openPending(pk, ev, f.Path, str)
 			if !ok {
+				if strings.HasPrefix(str, pendingPrefix) {
+					return nil, false, fmt.Errorf("%w: the pending field at %s is malformed", ErrPendingUnopenable, f.Path)
+				}
 				return v, false, nil
 			}
 			if err != nil {
