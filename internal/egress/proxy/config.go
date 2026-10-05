@@ -378,7 +378,8 @@ func (c *Config) applyDefaultsAndValidate() error {
 				continue
 			}
 			if !noProxyRulesCoverHost(rules, h) {
-				slog.Warn("wardyn-proxy: upstream proxy is configured with an AWS SSO injection host not covered by any upstream_proxy_no_proxy entry — every SSO call on this host will CONNECT through the corporate upstream",
+				slog.Warn("wardyn-proxy: upstream proxy is configured with an AWS SSO injection host not covered by any upstream_proxy_no_proxy entry — every SSO call on this host will CONNECT through the corporate upstream; "+
+					"a bypass entry helps only if wardyn-proxy itself (not the sandbox) can resolve and reach the host; if neither hop can, the estate needs a route, not a configuration change",
 					slog.String("host", inj.Host))
 			}
 		}
