@@ -17,8 +17,9 @@
 //      see, and a COUNT-FREE 409 for the race it cannot,
 //   4. no component in this directory renders a product string of its own.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { expectNoOwnCopy } from "../../../lib/test-fixtures";
 
 // The SafetyMeter (one per profile row, plus the editor's) debounces a
@@ -36,6 +37,7 @@ const deleteProfileMock = vi.fn();
 const upsertAssignmentMock = vi.fn();
 const deleteAssignmentMock = vi.fn();
 const previewGovernanceMock = vi.fn();
+const listChangesMock = vi.fn();
 vi.mock("../../../lib/api/governance", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/governance")>("../../../lib/api/governance");
   return {
@@ -48,6 +50,7 @@ vi.mock("../../../lib/api/governance", async () => {
       upsertAssignment: (...a: unknown[]) => upsertAssignmentMock(...a),
       deleteAssignment: (...a: unknown[]) => deleteAssignmentMock(...a),
       previewGovernance: (...a: unknown[]) => previewGovernanceMock(...a),
+      listChanges: () => listChangesMock(),
     },
   };
 });
@@ -70,10 +73,10 @@ vi.mock("../../../lib/api/user-types", () => ({
   userTypes: { listUserTypes: () => listUserTypesMock() },
 }));
 
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import type { DirectoryEntry } from "../../../lib/api/directory";
 import type { GovernanceProfile, GovernanceSnapshot } from "../../../lib/api/governance";
-import { DIRECTORY, GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import { CHANGES, DIRECTORY, GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { ACCESS_STATE, PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
 import { PERM } from "../../../lib/permissions-copy";
 // R4/F035: the drives templates flow through the SAME question() helper, so the
@@ -137,7 +140,11 @@ function tealButtons(): HTMLElement[] {
 function renderScreen(snap: GovernanceSnapshot | null = snapshot()) {
   if (snap) getGovernanceMock.mockResolvedValue(snap);
   else getGovernanceMock.mockRejectedValue(new Error("boom"));
-  render(<GovernanceScreen />);
+  render(
+    <MemoryRouter>
+      <GovernanceScreen />
+    </MemoryRouter>,
+  );
 }
 
 beforeEach(() => {
@@ -151,6 +158,8 @@ beforeEach(() => {
   deleteAssignmentMock.mockReset();
   previewGovernanceMock.mockReset();
   previewGovernanceMock.mockResolvedValue({});
+  listChangesMock.mockReset();
+  listChangesMock.mockResolvedValue([]);
   directorySearchMock.mockReset();
   directorySearchMock.mockResolvedValue(null);
   listUserTypesMock.mockReset().mockResolvedValue([
@@ -283,6 +292,30 @@ describe("GovernanceScreen — profile writes", () => {
     // Non-blocking: the write went through and the editor closed.
     expect(updateProfileMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("governance-profile-editor")).not.toBeInTheDocument();
+  });
+
+  it("renders the resources omission sentence under the deployment-ceiling heading", async () => {
+    const sentence =
+      "this profile sets no sandbox size — runs under it get the deployment's 1000m CPU and 2048 MiB memory";
+    updateProfileMock.mockResolvedValueOnce({ profile: GREENFIELD, warnings: [sentence] });
+    renderScreen();
+    await screen.findByText(GREENFIELD.name);
+    await userEvent.click(screen.getByRole("button", { name: `${GOV.EDIT} ${GREENFIELD.name}` }));
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+    expect(await screen.findByText("Compared with the deployment ceiling")).toBeInTheDocument();
+    expect(screen.getByText(sentence)).toBeInTheDocument();
+
+  });
+
+  it("shows no omission note when the server sends no warnings", async () => {
+    updateProfileMock.mockResolvedValue({ profile: GREENFIELD, warnings: [] });
+    renderScreen();
+    await screen.findByText(GREENFIELD.name);
+    await userEvent.click(screen.getByRole("button", { name: `${GOV.EDIT} ${GREENFIELD.name}` }));
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+    await waitFor(() => expect(updateProfileMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByTestId("governance-profile-editor")).not.toBeInTheDocument());
+    expect(screen.queryByText(GOV.OMISSION_TITLE)).not.toBeInTheDocument();
   });
 
   it("a grant-bound 400 renders the server's message under the frozen heading, editor still open", async () => {
@@ -565,9 +598,48 @@ describe("Governance components render no copy of their own", () => {
     "governance-screen.tsx",
     "profile-editor.tsx",
     "profile-rubric.tsx",
+    "profile-overlay.tsx",
     "assignments.tsx",
     "display.tsx",
   ]);
+});
+
+describe("GovernanceScreen — composed profiles", () => {
+  const BASE = profile({ id: "pb", name: "Baseline" });
+  const CHILD = profile({ id: "pc", name: "Team A", ceiling: {} as RunPolicySpec, base_profile_id: "pb", overlay: {} });
+  const ON_DEPLOYMENT = profile({ id: "pd", name: "Division", ceiling: {} as RunPolicySpec, overlay: {} });
+  const composed = () => snapshot({ profiles: [BASE, CHILD, ON_DEPLOYMENT], assignments: [] });
+
+  it("marks a composed row with its base, and a deployment-based one with the deployment", async () => {
+    renderScreen(composed());
+    await screen.findByText(CHILD.name);
+    expect(screen.getByText(GOV.BASE_CHIP(BASE.name))).toBeInTheDocument();
+    expect(screen.getByText(GOV.BASE_CHIP(GOV.BASE_DEPLOYMENT))).toBeInTheDocument();
+    // The standalone row carries no chip.
+    expect(screen.getAllByText(/^Base ·/)).toHaveLength(2);
+  });
+
+  it("a base with children opens its delete PRE-FILLED, confirm disabled, nothing attempted", async () => {
+    renderScreen(composed());
+    await screen.findByText(BASE.name);
+    await userEvent.click(screen.getByRole("button", { name: `${GOV.DELETE} ${BASE.name}` }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(GOV.REFUSED_HAS_CHILDREN)).toBeInTheDocument();
+    expect(within(dialog).getByText(CHILD.name)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: GOV.DELETE })).toBeDisabled();
+    expect(deleteProfileMock).not.toHaveBeenCalled();
+  });
+
+  it("the race: a 409 on a profile the list saw no children for keeps the restrict heading", async () => {
+    deleteProfileMock.mockRejectedValue(new HttpError(409, "this governance profile is the base of X", "governance_profile_in_use"));
+    renderScreen(composed());
+    await screen.findByText(ON_DEPLOYMENT.name);
+    await userEvent.click(screen.getByRole("button", { name: `${GOV.DELETE} ${ON_DEPLOYMENT.name}` }));
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: GOV.DELETE }));
+    expect(await within(dialog).findByText(GOV.DELETE_RESTRICT_TITLE)).toBeInTheDocument();
+    expect(within(dialog).getByText("this governance profile is the base of X")).toBeInTheDocument();
+  });
 });
 
 describe("GovernanceScreen — the write gate", () => {
@@ -577,9 +649,11 @@ describe("GovernanceScreen — the write gate", () => {
     // never from an unwrapped default.
     getGovernanceMock.mockResolvedValue(snapshot());
     render(
-      <OperatorProvider operator={false} securityOperator={false}>
-        <GovernanceScreen />
-      </OperatorProvider>,
+      <MemoryRouter>
+        <OperatorProvider operator={false} securityOperator={false}>
+          <GovernanceScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
     );
     await screen.findByText(GREENFIELD.name);
 
@@ -789,13 +863,121 @@ describe("GovernanceScreen — the run-limits summary chip", () => {
 describe("GovernanceScreen — a 403 is a tier, not an outage", () => {
   it("renders the tier sentence with no Retry, and still offers Retry on a 500", async () => {
     getGovernanceMock.mockRejectedValue(new HttpError(403, "forbidden"));
-    render(<GovernanceScreen />);
+    render(
+    <MemoryRouter>
+      <GovernanceScreen />
+    </MemoryRouter>,
+  );
     expect(await screen.findByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: ACCESS_STATE.FETCH_FAILED_RETRY })).toBeNull();
 
     cleanup();
     getGovernanceMock.mockRejectedValue(new HttpError(500, "boom"));
-    render(<GovernanceScreen />);
+    render(
+    <MemoryRouter>
+      <GovernanceScreen />
+    </MemoryRouter>,
+  );
     expect(await screen.findByRole("button", { name: ACCESS_STATE.FETCH_FAILED_RETRY })).toBeInTheDocument();
+  });
+});
+
+// 0.8.6 four-eyes: a covered write the server holds for a second person (202) is "submitted", never saved.
+const HELD = new PendingChangeError({
+  id: "c1",
+  target_kind: "governance_profile",
+  op: "update",
+  target_key: "x",
+  state: "pending",
+  proposed_by: "ana",
+  proposed_at: aheadByHours(-1),
+  expires_at: aheadByHours(20),
+  diff: { changed: [] },
+});
+
+describe("GovernanceScreen — the Changes tab", () => {
+  it("counts the pending changes in the tab, and shows them when it is opened", async () => {
+    listChangesMock.mockResolvedValue([
+      { ...HELD.change, id: "c1", target_key: "team-a" },
+      { ...HELD.change, id: "c2", target_key: "team-b" },
+    ]);
+    renderScreen();
+    const tab = await screen.findByRole("tab", { name: CHANGES.TAB_COUNT(2) });
+    await userEvent.click(tab);
+    expect(await screen.findByText(CHANGES.LEAD)).toBeInTheDocument();
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: GOV.PROFILES_TITLE })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByText("team-a")).toBeInTheDocument();
+    expect(screen.getByText("team-b")).toBeInTheDocument();
+  });
+
+  it("reads Changes with no count when nothing waits", async () => {
+    renderScreen();
+    expect(await screen.findByRole("tab", { name: CHANGES.TAB })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: GOV.PROFILES_TITLE })).toBeInTheDocument();
+  });
+
+  it("keeps the profiles readable when the list of changes cannot be read", async () => {
+    listChangesMock.mockRejectedValue(new HttpError(500, "boom"));
+    renderScreen();
+    expect(await screen.findByText(GREENFIELD.name)).toBeInTheDocument();
+  });
+});
+
+describe("GovernanceScreen — a 202 is submitted, never saved", () => {
+  it("a profile save held for approval shows the note, closes the editor and reads the list again", async () => {
+    updateProfileMock.mockRejectedValue(HELD);
+    renderScreen();
+    await screen.findByText(GREENFIELD.name);
+    getGovernanceMock.mockClear();
+
+    await userEvent.click(screen.getByRole("button", { name: `${GOV.EDIT} ${GREENFIELD.name}` }));
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(CHANGES.SUBMITTED_BODY)).toBeInTheDocument();
+    expect(screen.queryByTestId("governance-profile-editor")).not.toBeInTheDocument();
+    expect(screen.queryByText(GOV.OMISSION_TITLE)).toBeNull();
+    expect(getGovernanceMock).toHaveBeenCalled();
+  });
+
+  it("a profile delete held for approval closes the dialog and shows the note", async () => {
+    deleteProfileMock.mockRejectedValue(HELD);
+    renderScreen();
+    await screen.findByText(GREENFIELD.name);
+
+    await userEvent.click(screen.getByRole("button", { name: `${GOV.DELETE} ${GREENFIELD.name}` }));
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: GOV.DELETE }));
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("an assignment held for approval shows the note beside the assignments", async () => {
+    upsertAssignmentMock.mockRejectedValue(HELD);
+    renderScreen();
+    await screen.findByText(GOV.ASSIGN_TITLE);
+
+    await userEvent.type(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), "g1");
+    await userEvent.click(screen.getByRole("combobox"));
+    await userEvent.click(await screen.findByRole("option", { name: PLATFORM.name }));
+    await userEvent.click(screen.getByRole("button", { name: GOV.ADD_CTA }));
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.queryByText(/failed|Couldn/i)).toBeNull();
+  });
+
+  it("an unassign held for approval closes the dialog and shows the note", async () => {
+    deleteAssignmentMock.mockRejectedValue(HELD);
+    renderScreen();
+    await screen.findByText("wardyn.platform");
+
+    await userEvent.click(screen.getByRole("button", { name: `${PERM.REMOVE} wardyn.platform` }));
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: PERM.REMOVE }));
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });

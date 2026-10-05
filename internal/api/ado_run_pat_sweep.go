@@ -27,6 +27,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -43,7 +44,12 @@ func (s *Server) revokeRunPATs(ctx context.Context, runID uuid.UUID, reason stri
 	if !ok {
 		return
 	}
-	e, unlock := s.adoRunPATs.lock(runID)
+	ctx, e, unlock, lerr := s.lockRunPAT(ctx, runID)
+	if lerr != nil {
+		slog.WarnContext(ctx, "wardynd: a run's Azure DevOps token lock could not be taken; its tokens are not revoked now and the sweep retries",
+			slog.String("run_id", runID.String()), slog.Any("err", lerr))
+		return
+	}
 	defer unlock()
 	rows, err := st.ListUnrevokedRunPATs(ctx, store.RunPATFilter{RunID: runID})
 	if err != nil {
@@ -55,9 +61,19 @@ func (s *Server) revokeRunPATs(ctx context.Context, runID uuid.UUID, reason stri
 	}
 	if reason == adoPATRevokePause {
 		e.cur, e.caps, e.paused = adoPAT{}, nil, true
+		if e.owner == "" && len(rows) > 0 {
+			e.owner = rows[0].Owner
+		}
+		if err := s.saveRunPAT(ctx, runID, e); err != nil {
+			slog.WarnContext(ctx, "wardynd: a paused run's Azure DevOps token state was not recorded; the next resolve may create a token the sweep then revokes",
+				slog.String("run_id", runID.String()), slog.Any("err", err))
+		}
 		return
 	}
-	s.adoRunPATs.drop(runID, e)
+	if err := s.dropRunPAT(ctx, runID); err != nil {
+		slog.WarnContext(ctx, "wardynd: a run's Azure DevOps token state was not dropped",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
+	}
 }
 
 // revokeOwnerRunPATs revokes every live token created in owner's name, run by
@@ -209,7 +225,10 @@ func (s *Server) sweepRunPATs(ctx context.Context) error {
 // (LastError is only ever set by that failure on an open row). A row without
 // one is a renewal's or a widening's older token and is left alone.
 func (s *Server) sweepLiveRunPATs(ctx context.Context, st store.RunPATStore, runID uuid.UUID, rows []store.RunPAT) {
-	_, unlock := s.adoRunPATs.lock(runID)
+	ctx, unlock, ok := s.tryLock(ctx, db.ADORunTokenLockClass, runID.String())
+	if !ok {
+		return // held elsewhere: the next pass
+	}
 	defer unlock()
 	for _, p := range rows {
 		if !p.ValidTo.After(s.cfg.Now()) {

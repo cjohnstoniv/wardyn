@@ -24,6 +24,7 @@ import (
 // exactly for that.
 type dockerAPI interface {
 	Info(ctx context.Context, options client.InfoOptions) (client.SystemInfoResult, error)
+	Ping(ctx context.Context, options client.PingOptions) (client.PingResult, error) // backs ProbeSubstrate: the daemon answers, nothing listed or created
 
 	ImageList(ctx context.Context, options client.ImageListOptions) (client.ImageListResult, error)
 	ImagePull(ctx context.Context, ref string, options client.ImagePullOptions) (client.ImagePullResponse, error)
@@ -48,6 +49,9 @@ type dockerAPI interface {
 	// disk and established TCP connections keep state — without stopping or removing it.
 	ContainerPause(ctx context.Context, containerID string, options client.ContainerPauseOptions) (client.ContainerPauseResult, error)
 	ContainerUnpause(ctx context.Context, containerID string, options client.ContainerUnpauseOptions) (client.ContainerUnpauseResult, error)
+	// ContainerStats backs runner.ActivitySampler: one non-streaming read of the agent container's CPU
+	// counters, with the daemon's own earlier sample so the reading is a rate. Nothing runs in the sandbox.
+	ContainerStats(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error)
 	// ContainerWait blocks for a terminal condition and yields the exit code; used by Wait for EXEC-LESS
 	// runtimes (krun microVMs) whose agent workload is the container's MAIN process, not a docker exec.
 	ContainerWait(ctx context.Context, containerID string, options client.ContainerWaitOptions) client.ContainerWaitResult

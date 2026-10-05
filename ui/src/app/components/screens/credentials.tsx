@@ -16,7 +16,7 @@ import { AlertTriangle, KeyRound, Loader2 } from "lucide-react";
 import { credentials as credentialsApi, type CredentialInventory, type CredentialRow } from "../../lib/api/credentials";
 import { HttpError } from "../../lib/api/core";
 import { getErrorMessage, relativeTime, absoluteTime } from "../../lib/format";
-import { useOperator } from "../wardyn/operator-context";
+import { useOperator, useSecurityOperator } from "../wardyn/operator-context";
 import { useShellSetupStatus } from "../wardyn/model-access-context";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -28,8 +28,10 @@ import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatu
 import { PageHeader } from "../wardyn/page-header";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { MODEL_PROVIDERS } from "../../lib/model-providers-copy";
-import { INVENTORY, ERASE } from "../wardyn/copy/credentials";
+import { INVENTORY, ERASE, ERASE_DATA, KEY_DOMAINS } from "../wardyn/copy/credentials";
+import { EraseDataDialog } from "./erase-data-dialog";
 import { AdminMintedTokens } from "./credentials-minted-tokens";
+import { KeyDomainsSection } from "./credentials-key-domains";
 
 // The server's canon 503 (credInventoryNoMeta, internal/api/credential_inventory.go)
 // — its own empty card, no Retry, distinguished from every other read failure.
@@ -78,16 +80,48 @@ function eraseRetentionLine(storage: string | undefined): string {
   }
 }
 
+// M5 S3: "{domain} · {source}" for a person's next key, or a danger chip when two groups disagree.
+function KeyDomainCell({ row }: { row: CredentialRow }) {
+  switch (row.key_domain_source) {
+    case undefined:
+      return null;
+    case "conflict":
+      return (
+        <Chip tone="danger" title={KEY_DOMAINS.CONFLICT} srLabel={KEY_DOMAINS.CONFLICT}>
+          {KEY_DOMAINS.CONFLICT_CHIP}
+        </Chip>
+      );
+    default: {
+      const source =
+        row.key_domain_source === "user"
+          ? KEY_DOMAINS.SOURCE_USER
+          : row.key_domain_source === "group"
+            ? KEY_DOMAINS.SOURCE_GROUP(row.key_domain_group ?? "")
+            : row.key_domain_source === "all"
+              ? KEY_DOMAINS.SOURCE_ALL
+              : KEY_DOMAINS.SOURCE_DEFAULT;
+      return row.key_domain ? (
+        <>
+          <span className="font-mono">{row.key_domain}</span> <span className="text-muted-foreground">· {source}</span>
+        </>
+      ) : null;
+    }
+  }
+}
+
 type EraseTarget = { principal: string; label: string } | "by-email";
 
 export function CredentialsScreen() {
   const operator = useOperator();
+  // The by-scope erase (POST /people/{principal}/erasure) is the security tier's.
+  const securityOperator = useSecurityOperator();
   const { status } = useShellSetupStatus();
   const [inv, setInv] = React.useState<CredentialInventory | null>(null);
   const [screenStatus, setStatus] = React.useState<ScreenStatus | "no_meta">("loading");
   const [errorMessage, setErrorMessage] = React.useState<string | undefined>(undefined);
   const [filter, setFilter] = React.useState<string | null>(null);
   const [eraseTarget, setEraseTarget] = React.useState<EraseTarget | null>(null);
+  const [eraseDataOpen, setEraseDataOpen] = React.useState(false);
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -116,6 +150,8 @@ export function CredentialsScreen() {
   const filtered = filter ? rows.filter((r) => r.provider === filter) : rows;
   const stores = new Set(rows.map((r) => r.store));
   const mixedStores = stores.size > 1;
+  // The column only exists on a deployment that has the key-domain service (the server then names a domain for every row).
+  const hasKeyDomains = rows.some((r) => r.key_domain_source !== undefined);
   const groups = React.useMemo(() => groupByPerson(filtered), [filtered]);
   // The footer's own store name: the EXTERNAL store present, if
   // any — the "Stored in" column (mixedStores) is the per-row distinction;
@@ -132,9 +168,16 @@ export function CredentialsScreen() {
         title={INVENTORY.TITLE}
         description={INVENTORY.LEDE}
         actions={
-          <Button variant="outline" onClick={() => setEraseTarget("by-email")}>
-            {INVENTORY.ERASE_BY_EMAIL}
-          </Button>
+          <>
+            {securityOperator && (
+              <Button variant="outline" onClick={() => setEraseDataOpen(true)}>
+                {ERASE_DATA.BUTTON}
+              </Button>
+            )}
+            <Button variant="outline" onClick={() => setEraseTarget("by-email")}>
+              {INVENTORY.ERASE_BY_EMAIL}
+            </Button>
+          </>
         }
       />
 
@@ -200,6 +243,7 @@ export function CredentialsScreen() {
                       {mixedStores && <TableHead>{INVENTORY.COL_STORE}</TableHead>}
                       <TableHead>{INVENTORY.COL_ADDED}</TableHead>
                       <TableHead>{INVENTORY.COL_LAST_USED}</TableHead>
+                      {hasKeyDomains && <TableHead>{INVENTORY.COL_DOMAIN}</TableHead>}
                       <TableHead />
                     </TableRow>
                   </TableHeader>
@@ -232,6 +276,11 @@ export function CredentialsScreen() {
                           >
                             {r.last_used_at ? relativeTime(r.last_used_at) : INVENTORY.NEVER_USED}
                           </TableCell>
+                          {i === 0 && hasKeyDomains && (
+                            <TableCell rowSpan={g.rows.length} className="whitespace-nowrap align-top">
+                              <KeyDomainCell row={r} />
+                            </TableCell>
+                          )}
                           {i === 0 && (
                             <TableCell rowSpan={g.rows.length} className="align-top">
                               <Button
@@ -261,9 +310,16 @@ export function CredentialsScreen() {
         </div>
       )}
 
-      {/* Another admin-only read: only once the screen has resolved as allowed. */}
+      {/* Further admin-only reads: only once the screen has resolved as allowed. */}
+      {screenStatus !== "forbidden" && screenStatus !== "loading" && <KeyDomainsSection />}
       {screenStatus !== "forbidden" && screenStatus !== "loading" && <AdminMintedTokens />}
 
+      <EraseDataDialog
+        open={eraseDataOpen}
+        retentionLine={eraseRetentionLine(status?.credential_storage)}
+        onOpenChange={setEraseDataOpen}
+        onErased={load}
+      />
       <EraseDialog
         target={eraseTarget}
         credentialStorage={status?.credential_storage}

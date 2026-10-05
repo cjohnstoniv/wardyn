@@ -30,8 +30,19 @@ const (
 	mpBRPortal      = "your AWS sign-in is for a different AWS access portal than the one it names"
 	mpBRRenewing    = "renewing your AWS sign-in did not complete, because AWS did not answer the token request"
 	mpBRRemedyRetry = "your sign-in is still good; launch again in a moment."
-	mpBRReadFailed  = "Wardyn couldn't read your AWS credential for model provider %s just now — nothing was started. Try again in a moment."
+	// The two 503s of a create-time renewal (awsSSORefreshStoreUnwritableSentence,
+	// awsSSORefreshPersistFailedSentence): no run row exists for either.
+	mpBRStoreUnwritable = "Wardyn's secret store did not accept a write, so your AWS sign-in was not renewed"
+	mpBRPersistFailed   = "your AWS sign-in was renewed but could not be saved, so it must be signed in again"
+	mpBRReadFailed      = "Wardyn couldn't read your AWS credential for model provider %s just now — nothing was started. Try again in a moment."
+	mpBRMaskFailed      = "Wardyn couldn't record your AWS credential for model provider %s for masking just now — nothing was started. Try again in a moment."
 )
+
+// providerUnavailable is a liveness error that is a 503 with its own sentence,
+// rather than providerReadFailed's: a transient store failure, no door.
+type providerUnavailable struct{ msg string }
+
+func (e providerUnavailable) Error() string { return e.msg }
 
 // awsScope is the credential scope of a chosen Bedrock provider: always the
 // run owner's own namespace, under the provider's UID-keyed names.
@@ -131,8 +142,13 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 	if refresh {
 		var failure string
 		if blob, failure = s.refreshAWSSSOBlob(ctx, scope, blob); failure != "" {
-			if failure == awsSSORefreshSpentSentence {
+			switch failure {
+			case awsSSORefreshSpentSentence:
 				return refuse(connectDenial(p.ID, mpBRNotSignedIn))
+			case awsSSORefreshStoreUnwritableSentence:
+				return awsSSOBlob{}, providerDenial{}, providerUnavailable{fmt.Sprintf(mpRunRefusal, p.ID, mpBRStoreUnwritable, mpBRRemedyRetry)}
+			case awsSSORefreshPersistFailedSentence:
+				return awsSSOBlob{}, providerDenial{}, providerUnavailable{fmt.Sprintf(mpRunRefusal, p.ID, mpBRPersistFailed, mpRunRemedySignIn)}
 			}
 			return refuse(stateDenial(p.ID, mpBRRenewing, mpBRRemedyRetry))
 		}

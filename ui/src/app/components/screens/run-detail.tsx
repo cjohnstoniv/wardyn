@@ -13,6 +13,7 @@ import {
   ArrowRight,
   FileText,
   LayoutDashboard,
+  Logs,
   RotateCw,
   ScrollText,
   ShieldCheck,
@@ -36,7 +37,7 @@ import {
   type Recording,
   type RunDetail,
 } from "../../lib/types";
-import { isTerminalRunState } from "../../lib/types";
+import { ERASED_VALUE, isTerminalRunState } from "../../lib/types";
 import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
 import {
@@ -58,7 +59,9 @@ import { absoluteTime, clockTime, getErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { ActorTypeChip } from "../wardyn/primitives";
-import { AuditDecision, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
+import { AuditDecision, ErasedFields, isAttributedRefusal, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
+import { PolicyRemedy } from "../wardyn/policy-remedy";
+import { AUDIT } from "./audit-copy";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
@@ -67,6 +70,7 @@ import { useOperator, useOperatorResolved, usePrincipal, useSecurityOperator } f
 import { useConsoleMode, type ConsoleView } from "../wardyn/console-view";
 import {
   RUN_COCKPIT,
+  RUN_OUTPUT,
   VIEWER_APPROVAL_BLOCKS_NOTE,
 } from "../wardyn/copy";
 import { ProfileReview } from "./profile-review";
@@ -83,6 +87,7 @@ import { TerminalPane } from "./run-detail/terminal-notice";
 import { PolicyTab } from "./run-detail/policy-tab";
 import { POLICY_TAB } from "./run-detail/policy-tab-copy";
 import { RecordingTab } from "./run-detail/recording-tab";
+import { OutputTab } from "./run-detail/output-tab";
 import { cloneFromAudit, CLONE_UNREADABLE } from "./new-run/wizard-types";
 import type { WidgetContext } from "./run-detail/widget-registry";
 
@@ -91,7 +96,7 @@ const DETAIL_POLL_MS = 4000;
 // How long after a KILLED run ended its page keeps asking whether the kill row has landed.
 const KILL_SETTLE_MS = 120_000;
 
-type Tab = "overview" | "approvals" | "policy" | "audit" | "recording";
+type Tab = "overview" | "approvals" | "policy" | "audit" | "recording" | "output";
 
 // The route's component. KEYED by the route id on both run routes (/runs/:id
 // and /admin/runs/:id), so moving from run A to run B REMOUNTS the page: A's
@@ -554,6 +559,9 @@ function RunDetailPage({ id }: { id: string }) {
                 <TabsTrigger value="recording" className="h-7 gap-1.5 text-xs">
                   <SquareTerminal className="size-3.5" /> Recording
                 </TabsTrigger>
+                <TabsTrigger value="output" className="h-7 gap-1.5 text-xs">
+                  <Logs className="size-3.5" /> {RUN_OUTPUT.tab}
+                </TabsTrigger>
               </TabsList>
             }
           />
@@ -595,7 +603,7 @@ function RunDetailPage({ id }: { id: string }) {
           </TabsContent>
 
           <TabsContent value="audit" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
-            <AuditTab events={audit} runId={run.id} onMakePolicy={() => setProfileRunId(run.id)} />
+            <AuditTab events={audit} runId={run.id} policy={run.policy} onMakePolicy={() => setProfileRunId(run.id)} />
           </TabsContent>
 
           <TabsContent value="recording" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
@@ -611,6 +619,15 @@ function RunDetailPage({ id }: { id: string }) {
                 setRecState("idle");
               }}
               onRetry={() => setRecState("idle")}
+            />
+          </TabsContent>
+
+          <TabsContent value="output" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
+            <OutputTab
+              runId={run.id}
+              live={!terminal}
+              endedAt={run.ended_at}
+              onGoRecording={() => setTab("recording")}
             />
           </TabsContent>
         </Tabs>
@@ -800,10 +817,14 @@ function attachSessions(audit: AuditEvent[]): AuditEvent[] {
 function AuditTab({
   events,
   runId,
+  policy,
   onMakePolicy,
 }: {
   events: AuditEvent[];
   runId: string;
+  /** The run's own policy (GET /runs/{id}), never /me: an admin viewing someone
+   *  else's run must see that run's owner, not their own. */
+  policy?: RunDetail["policy"];
   onMakePolicy: () => void;
 }) {
   const securityOperator = useSecurityOperator();
@@ -863,10 +884,18 @@ function AuditTab({
                   <AuditDecision event={e} className="flex min-w-0 flex-1 items-center gap-2 text-xs" />
                 ) : (
                   <span className="flex min-w-0 flex-1 items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target}>
-                      {e.target || "—"}
-                    </span>
+                    {e.target === ERASED_VALUE ? (
+                      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={AUDIT.ERASED_HINT}>
+                        {AUDIT.ERASED}
+                      </span>
+                    ) : (
+                      <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target}>
+                        {e.target || "—"}
+                      </span>
+                    )}
                     <RuleSourceChip event={e} />
+                    {isAttributedRefusal(e) && <PolicyRemedy policy={policy} className="shrink-0" />}
+                    <ErasedFields event={e} className="shrink-0 text-xs" />
                   </span>
                 )}
               </div>

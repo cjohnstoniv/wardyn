@@ -7,7 +7,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -575,11 +577,11 @@ func TestSetupFixHelmCommandsAreRunnable(t *testing.T) {
 // In store mode there is no local key to be durable: the age-key row gives
 // way to store_external, which names the store (design §3).
 func TestSecretStoreCheck_StoreModeReplacesTheAgeKeyRow(t *testing.T) {
-	chks := secretStoreChecks("Vault at vault.example:8200", "", true, true, false)
+	chks := secretStoreChecks("Vault at vault.example:8200", "", true, true, false, false)
 	if len(chks) != 1 || chks[0].ID != "store_external" || chks[0].Status != "ok" || !strings.Contains(chks[0].Detail, "Vault at vault.example:8200") {
 		t.Fatalf("store mode rows = %+v", chks)
 	}
-	if got := secretStoreChecks("", "", false, false, true); len(got) != 1 || got[0].ID != "age_key" || got[0].Status != "warn" {
+	if got := secretStoreChecks("", "", false, false, true, false); len(got) != 1 || got[0].ID != "age_key" || got[0].Status != "warn" {
 		t.Fatalf("local mode rows = %+v, want the age-key warning unchanged", got)
 	}
 }
@@ -588,45 +590,45 @@ func TestSecretStoreCheck_StoreModeReplacesTheAgeKeyRow(t *testing.T) {
 // install adds the amber kek_local row (design §3, K3), and a single-user one
 // does not.
 func TestSecretStoreChecks_KeyServiceAndLocalKey(t *testing.T) {
-	chks := secretStoreChecks("", "Vault Transit at vault.example:8200", true, true, false)
+	chks := secretStoreChecks("", "Vault Transit at vault.example:8200", true, true, false, false)
 	// SETUP_CHECK.KEK_SERVICE (owner decision 2026-09-25), byte for byte.
-	if len(chks) != 1 || chks[0].ID != "kek_service" || chks[0].Status != "ok" ||
+	if len(chks) != 2 || chks[0].ID != "kek_service" || chks[0].Status != "ok" || chks[1].ID != "platform_split" ||
 		chks[0].Detail != "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in Vault Transit at vault.example:8200 and never leaves it. Wardyn holds no copy; each unlock is a Transit decrypt in Vault's audit log." {
 		t.Fatalf("key service rows = %+v", chks)
 	}
 	// SETUP_CHECK.KEK_SERVICE, Azure (owner decision 2026-09-30), byte for byte.
-	chks = secretStoreChecks("", "Key Vault myvault", true, true, false)
-	if len(chks) != 1 || chks[0].ID != "kek_service" || chks[0].Status != "ok" ||
+	chks = secretStoreChecks("", "Key Vault myvault", true, true, false, false)
+	if len(chks) != 2 || chks[0].ID != "kek_service" || chks[0].Status != "ok" || chks[1].ID != "platform_split" ||
 		chks[0].Detail != "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in Key Vault myvault and never leaves it. Wardyn holds no copy; each unlock is an unwrap in Key Vault's logs." {
 		t.Fatalf("Key Vault key service rows = %+v", chks)
 	}
 	if got := credentialStorageMode("", "Key Vault myvault"); got != "key_service_key_vault" {
 		t.Fatalf("credentialStorageMode with a Key Vault key service = %q, want key_service_key_vault", got)
 	}
-	chks = secretStoreChecks("", "", true, true, true)
+	chks = secretStoreChecks("", "", true, true, true, false)
 	if len(chks) != 2 || chks[0].ID != "age_key" || chks[1].ID != "kek_local" || chks[1].Status != "warn" ||
 		chks[1].Detail != "Credentials are encrypted with a key this deployment holds. Anyone with both the database and that key can read them. Connect a key service to keep the two apart." {
 		t.Fatalf("multi-user local key rows = %+v", chks)
 	}
-	if got := secretStoreChecks("", "", true, false, true); len(got) != 1 || got[0].ID != "age_key" {
+	if got := secretStoreChecks("", "", true, false, true, false); len(got) != 1 || got[0].ID != "age_key" {
 		t.Fatalf("single-user local key rows = %+v, want the age-key row alone", got)
 	}
 }
 
 // TestSecretStoreRows_PlatformShared is SETUP_CHECK.PLATFORM_SHARED (design
 // §3): amber in local mode while the age key protects the boot keys too, gone
-// once they have a key of their own, live in the organisation's store, or are
-// wrapped by a key service.
+// once they have a key of their own or live in the organisation's store. Under
+// a key service it is the platform_split row, tested below.
 func TestSecretStoreRows_PlatformShared(t *testing.T) {
-	rows := secretStoreChecks("", "", true, false, false)
+	rows := secretStoreChecks("", "", true, false, false, false)
 	if len(rows) != 2 || rows[0].ID != "age_key" {
-		t.Fatalf("local mode, one key = %+v, want the age-key row then platform_shared", rows)
+		t.Fatalf("local mode, one key = %+v, want the age-key row then platform_split", rows)
 	}
 	chk := rows[1]
-	if chk.ID != "platform_shared" || chk.Status != "warn" ||
+	if chk.ID != "platform_split" || chk.Status != "warn" ||
 		chk.Detail != "Wardyn's own signing and session keys are protected by the same key as people's credentials." ||
 		!strings.Contains(chk.Fix, "WARDYN_PLATFORM_KEY_FILE") || !strings.Contains(chk.Fix, "wardynd -rewrap") {
-		t.Fatalf("platform_shared = %+v", chk)
+		t.Fatalf("platform_split = %+v", chk)
 	}
 	for label, c := range map[string]struct {
 		external, keyService string
@@ -634,9 +636,8 @@ func TestSecretStoreRows_PlatformShared(t *testing.T) {
 	}{
 		"a separate platform key": {"", "", true},
 		"store mode":              {"Vault at vault.example:8200", "", false},
-		"a key service":           {"", "Vault Transit at vault.example:8200", false},
 	} {
-		if rows := secretStoreChecks(c.external, c.keyService, true, false, c.separate); len(rows) != 1 {
+		if rows := secretStoreChecks(c.external, c.keyService, true, false, c.separate, false); len(rows) != 1 {
 			t.Errorf("%s: rows %+v, want only the store's own row", label, rows)
 		}
 	}
@@ -739,11 +740,12 @@ var setupCheckBlockingStatus = map[string]string{
 // Blocking decision recorded here must fail the build, not default quietly
 // to non-blocking.
 var setupCheckNeverBlocks = map[string]bool{
-	"env_builder": true, "k8s_egress_containment": true, "age_key": true, "store_external": true, "platform_shared": true,
+	"env_builder": true, "k8s_egress_containment": true, "age_key": true, "store_external": true, "platform_split": true,
+	"key_domains": true, "principal_keys": true, "key_domain_changes": true,
 	"kek_service": true, "kek_local": true,
-	"site_config": true, "internal_hosts": true, "tls_cookie_posture": true,
+	"site_config": true, "internal_hosts": true, "tls_cookie_posture": true, "approval_notify": true,
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
-	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true,
+	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true, "audit_partitions": true,
 	"agent_image":        true,
 	"github_ref_ruleset": true, "platform_wsl": true, "platform_macos": true,
 	// providerAccessCheck's llm_provider:<provider id>, as its test names it.
@@ -826,9 +828,9 @@ func TestSetupCheckBlocking(t *testing.T) {
 	assertSetupCheckBlocking(t, ageKeyCheck(true))
 	assertSetupCheckBlocking(t, ageKeyCheck(false))
 	for _, chks := range [][]SetupCheck{
-		secretStoreChecks("Vault at vault.example:8200", "", true, true, false),
-		secretStoreChecks("", "Vault Transit at vault.example:8200", true, true, false),
-		secretStoreChecks("", "", true, true, false),
+		secretStoreChecks("Vault at vault.example:8200", "", true, true, false, false),
+		secretStoreChecks("", "Vault Transit at vault.example:8200", true, true, false, false),
+		secretStoreChecks("", "", true, true, false, false),
 	} {
 		for _, chk := range chks {
 			assertSetupCheckBlocking(t, chk)
@@ -875,4 +877,98 @@ func TestSetupCheckBlocking(t *testing.T) {
 
 	assertSetupCheckBlocking(t, refRulesetCheck("acme/widgets", false, "detail", nil))
 	assertSetupCheckBlocking(t, refRulesetCheck("acme/widgets", true, "detail", nil))
+}
+
+// kek_required_unmet reports the posture and never blocks; a key service or
+// store mode, which the flag accepts, shows no such row.
+func TestSecretStoreChecks_KEKRequiredUnmet(t *testing.T) {
+	has := func(rows []SetupCheck) *SetupCheck {
+		for i := range rows {
+			if rows[i].ID == "kek_required_unmet" {
+				return &rows[i]
+			}
+		}
+		return nil
+	}
+	if got := has(secretStoreChecks("", "", true, false, true, true)); got == nil || got.Status != "fail" || got.Blocking {
+		t.Fatalf("local key with the flag set: row = %+v; want a non-blocking fail", got)
+	}
+	for _, rows := range [][]SetupCheck{
+		secretStoreChecks("", "", true, false, true, false),
+		secretStoreChecks("", "Vault Transit at vault.example:8200", true, false, true, true),
+		secretStoreChecks("Vault at vault.example:8200", "", true, false, true, true),
+	} {
+		if has(rows) != nil {
+			t.Fatalf("unexpected kek_required_unmet in %+v", rows)
+		}
+	}
+}
+
+// TestPlatformSplitRow is M5 S5's platform_split row under a key service: amber, naming the key
+// service's own setting, until the boot keys have a key and identity of their own, then ok.
+func TestPlatformSplitRow(t *testing.T) {
+	for label, c := range map[string]struct {
+		keyService, fix string
+	}{
+		"transit":   {"Vault Transit at vault.example:8200", "WARDYN_VAULT_TRANSIT_KEY_PLATFORM"},
+		"key vault": {"Key Vault myvault", "WARDYN_AZURE_KEK_KEY_PLATFORM, WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM and WARDYN_AZURE_CLIENT_ID_PLATFORM"},
+	} {
+		rows := secretStoreChecks("", c.keyService, true, true, false, false)
+		if len(rows) != 2 || rows[0].ID != "kek_service" || rows[1].ID != "platform_split" || rows[1].Status != "warn" ||
+			rows[1].Detail != platformSplitShared || !strings.Contains(rows[1].Fix, c.fix) || !strings.Contains(rows[1].Fix, "-rewrap-adopt-boot-keys") {
+			t.Errorf("%s unsplit: %+v", label, rows)
+		}
+		rows = secretStoreChecks("", c.keyService, true, true, true, false)
+		want := "Wardyn's own signing and session keys use a separate key and identity in " + c.keyService + "; the credential identity can't reach them."
+		if len(rows) != 2 || rows[1].ID != "platform_split" || rows[1].Status != "ok" || rows[1].Detail != want || rows[1].Fix != "" {
+			t.Errorf("%s split: %+v", label, rows)
+		}
+	}
+}
+
+// TestKeyCustodyRows is M5 S5's three key-custody rows, text for text.
+func TestKeyCustodyRows(t *testing.T) {
+	now := time.Now().UTC()
+	row := func(k keyCustody, id string) SetupCheck {
+		k.Now = now
+		for _, c := range keyCustodyChecks(k) {
+			if c.ID == id {
+				return c
+			}
+		}
+		t.Fatalf("no %s row", id)
+		return SetupCheck{}
+	}
+	if c := row(keyCustody{}, "key_domains"); c.Status != "info" || c.Detail != "Only default: everyone's keys use this deployment's credential key." {
+		t.Errorf("no domains: %+v", c)
+	}
+	if c := row(keyCustody{Domains: []string{"finance", "research"}}, "key_domains"); c.Status != "ok" || c.Detail != "2 key domains, each proven at boot: finance, research." {
+		t.Errorf("two domains: %+v", c)
+	}
+	if c := row(keyCustody{}, "principal_keys"); c.Status != "info" || c.Fix != "" ||
+		c.Detail != "Off: credentials written now use this deployment's key, or the external secret store when one is set. Audit records use per-person keys either way." {
+		t.Errorf("principal keys off: %+v", c)
+	}
+	if c := row(keyCustody{PrincipalKeys: true, RootKeyCreds: 4}, "principal_keys"); c.Status != "info" ||
+		c.Detail != "On. 4 stored credentials still use this deployment's key." || c.Fix != "Run wardynd -rewrap-principal-keys to re-seal them." {
+		t.Errorf("principal keys on, 4 left: %+v", c)
+	}
+	if c := row(keyCustody{PrincipalKeys: true, ExternalCreds: 2}, "principal_keys"); c.Status != "ok" || c.Fix != "" ||
+		c.Detail != "On. Every stored credential held here is sealed under its owner's key. 2 are kept in the external secret store instead, outside these keys." {
+		t.Errorf("principal keys on, 2 external: %+v", c)
+	}
+	if c := row(keyCustody{PrincipalKeys: true}, "principal_keys"); c.Status != "ok" || c.Detail != "On. Every stored credential is sealed under its owner's key." {
+		t.Errorf("principal keys on, none left: %+v", c)
+	}
+	if c := row(keyCustody{}, "key_domain_changes"); c.Status != "ok" || c.Detail != "No key-domain assignment changed in the last 30 days." || c.Fix != "" {
+		t.Errorf("no changes: %+v", c)
+	}
+	c := row(keyCustody{Changes: keydomain.Changes{Count: 3, Latest: now.Add(-49 * time.Hour), LatestBy: "admin@example.com"}}, "key_domain_changes")
+	if c.Status != "warn" || c.Detail != "3 key-domain assignment changes in the last 30 days, the latest 2 days ago by admin@example.com. Each one moves where that person's next keys are made." ||
+		c.Fix != "Check each in Audit: key_domain.assignment.set and key_domain.assignment.delete." {
+		t.Errorf("3 changes: %+v", c)
+	}
+	if c := row(keyCustody{Changes: keydomain.Changes{Count: 1, Latest: now.Add(-time.Hour), LatestBy: "a"}}, "key_domain_changes"); !strings.Contains(c.Detail, "1 key-domain assignment change in") || !strings.Contains(c.Detail, "the latest today by a.") {
+		t.Errorf("1 change: %+v", c)
+	}
 }

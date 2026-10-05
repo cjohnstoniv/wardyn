@@ -30,6 +30,7 @@ export const TOKEN_KEY = "wardyn_admin_token";
 // Synthetic credentials: e2e-backend.sh stores only their SHA-256 hashes.
 export const MEMBER_TOKEN = `wdn_${"1".repeat(64)}`;
 const SECURITY_ADMIN_TOKEN = `wdn_${"2".repeat(64)}`;
+const SECURITY_ADMIN_2_TOKEN = `wdn_${"3".repeat(64)}`;
 export const MEMBER_PRINCIPAL = "e2e-member";
 
 // T-68 — page-health teardown gate. A spec whose page threw an uncaught JS
@@ -122,6 +123,8 @@ export { expect };
 export type NavLabel =
   | "Runs"
   | "Approvals"
+  // 0.8.6 (ppl-p2) — right after Approvals, both admin tiers.
+  | "People"
   | "Workspaces"
   | "Policies"
   // 0.7 — sits between Policies and Permissions (app-shell.tsx's NAV_ITEMS), so
@@ -252,6 +255,12 @@ export async function asRealMember(page: Page): Promise<void> {
 
 export async function asRealSecurityAdmin(page: Page): Promise<void> {
   await asRealPerson(page, SECURITY_ADMIN_TOKEN, "e2e-security-admin", "security_admin");
+}
+
+// The second security admin, a different human from asRealSecurityAdmin's: its own principal and mailbox.
+// The governance four-eyes spec needs a proposer and an approver who are two people.
+export async function asRealSecurityAdmin2(page: Page): Promise<void> {
+  await asRealPerson(page, SECURITY_ADMIN_2_TOKEN, "e2e-security-admin-2", "security_admin");
 }
 
 // Render-only splices for specs that supply deliberately hypothetical states.

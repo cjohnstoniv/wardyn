@@ -38,9 +38,8 @@ const dayWarningMinLease = 48 * time.Hour
 // sweepRunLeases is one pass of the lease over every RUNNING run that has an
 // end or is kept. Every write it makes to the store is a conditional UPDATE or
 // state CAS, so each warning, end and teardown still happens once. Re-asserting
-// a kept run's stop is not a store write: it runs under the run's in-process
-// lock (run_oplock.go), against a revive in this same daemon, so it is the one
-// piece of the lease that assumes a single replica.
+// a kept run's stop is not a store write: it runs under the run's
+// cross-replica lock (locks.go), against a revive of the same run on any replica.
 func (s *Server) sweepRunLeases(ctx context.Context) error {
 	leaser, ok := s.cfg.Store.(store.RunLeaser)
 	if !ok || s.cfg.Runner == nil {
@@ -64,12 +63,6 @@ func (s *Server) sweepRunLeases(ctx context.Context) error {
 			return true
 		})
 	}
-	s.runOps.Range(func(id, _ any) bool {
-		if !listed[id.(uuid.UUID)] {
-			s.dropRunOp(id.(uuid.UUID))
-		}
-		return true
-	})
 	return nil
 }
 
@@ -104,7 +97,7 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 		// pass. The expiry teardown above stays outside this, so a run cannot
 		// dodge it by being revived again and again. The busy mark covers the
 		// instant between a revive's mark and its lock.
-		unlock, ok := s.tryLockRunOp(run.ID)
+		ctx, unlock, ok := s.tryLockRunOp(ctx, run.ID)
 		if !ok {
 			return
 		}
@@ -285,7 +278,7 @@ func (s *Server) stopKeptRun(ctx context.Context, leaser store.RunLeaser, run ty
 	if terminal.IsTerminal() {
 		s.metrics.runTerminal(terminal)
 	}
-	s.finalizeRunTail(ctx, run.ID, run.SandboxRef, action, "success", data)
+	s.finalizeRunTailOrdered(ctx, run.ID, run.SandboxRef, action, "success", data, false, terminal == types.RunStopped)
 }
 
 // revokeRunBroker is revokeRunCascade's broker half alone, for the end: a kept

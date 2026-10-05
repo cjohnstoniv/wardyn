@@ -53,6 +53,26 @@ env doesn't already set it), basePath otherwise. Same precedence both places,
 so the probes and the daemon can never disagree. */ -}}
 {{- $basePath := (get .Values.env "WARDYN_BASE_PATH") | default .Values.basePath | default "" -}}
 {{- /*
+startupProbe budget: wardynd's /healthz binds only after its fixed 30s connect and its migration
+(WARDYN_MIGRATE_TIMEOUT, default 5m) finish, so the probe window must outlast both or the kubelet
+kills the pod mid-migration. The timeout is read the way the container gets it: an extraEnv entry
+(rendered later, so it wins) over env, else wardynd's own 5m. Only h, m and s units are accepted, so
+the sum is exact; a spelling this cannot read fails the render rather than guessing a window.
+failureThreshold = (30s connect + migrate + 120s slack) / the 5s probe period, rounded up; the default 5m gives 90.
+*/ -}}
+{{- $migrateTimeout := (get .Values.env "WARDYN_MIGRATE_TIMEOUT") | default "5m" | toString -}}
+{{- range .Values.extraEnv }}{{ if and (eq (.name | toString) "WARDYN_MIGRATE_TIMEOUT") .value }}{{ $migrateTimeout = .value | toString }}{{ end }}{{ end -}}
+{{- if not (regexMatch `^([0-9]+(\.[0-9]+)?[hms])+$` $migrateTimeout) -}}
+{{- fail (printf "wardyn: WARDYN_MIGRATE_TIMEOUT %q is not readable by the chart; spell it with h, m and s only, e.g. 5m, 90s or 1h30m, so the startupProbe window can follow it" $migrateTimeout) -}}
+{{- end -}}
+{{- $migrateSeconds := 0.0 -}}
+{{- range regexFindAll `[0-9]+(\.[0-9]+)?[hms]` $migrateTimeout -1 -}}
+{{- $n := float64 (regexFind `^[0-9.]+` .) -}}
+{{- $unit := regexFind `[hms]$` . -}}
+{{- if eq $unit "h" }}{{ $migrateSeconds = addf $migrateSeconds (mulf $n 3600.0) }}{{ else if eq $unit "m" }}{{ $migrateSeconds = addf $migrateSeconds (mulf $n 60.0) }}{{ else }}{{ $migrateSeconds = addf $migrateSeconds $n }}{{ end -}}
+{{- end -}}
+{{- $startupFailureThreshold := int (ceil (divf (addf $migrateSeconds 150.0) 5.0)) -}}
+{{- /*
 secretFiles mode: the three Secrets the chart already wires (DSN, admin token,
 age key) are projected into ONE read-only volume and wardynd gets
 WARDYN_*_FILE paths instead of secretKeyRef env (cmd/wardynd resolveSecretFiles).
@@ -78,8 +98,43 @@ which is why the DSN entry is conditional at all (secret.yaml refuses the rest).
 {{- if and $digest (not (hasPrefix "sha256:" $digest)) -}}
 {{- fail (printf "wardyn: image.digest=%q must be a full digest beginning with \"sha256:\" (sha256: followed by 64 hex characters). It is appended as <repository>@<digest>, so a bare hex string renders `<repository>@<that string>`, which no kubelet can pull — and the pod ImagePullBackOffs with nothing else to go on. Putting a digest in image.tag or image.repository does not work either: they render `repo:sha256:...` and `repo@sha256:...:<appVersion>` respectively, which is why this key exists." $digest) -}}
 {{- end -}}
-{{- if and (gt (int .Values.replicas) 1) (not .Values.allowMultiReplica) -}}
-{{- fail "wardyn: replicas > 1 is refused. wardynd keeps state per-process that a second pod cannot see; the sharpest is the secret-masking registry (internal/secretmask) — an in-memory, process-local map that FAILS OPEN. Secrets are registered on whichever replica served the run's proxy injection; a session recording uploaded to any other replica finds an empty snapshot and is persisted VERBATIM, live credentials in cleartext, with a `success` audit event. The same holds for the live-attach cast. Run one replica (docs/OPERATIONS.md, \"One replica, by construction\"); set allowMultiReplica=true to render anyway and accept that. Note this refusal is only the FIRST of two controls: wardynd itself takes the database's single-instance advisory lock at boot and refuses to start while another instance holds it, so a second pod exits rather than serving — which is what still protects you when someone scales this Deployment by hand instead of through the chart. allowMultiReplica=true passes -allow-multi-instance to the process too, lifting both together." -}}
+{{- /*
+High availability (ha.enabled -> WARDYN_HA=true). The one switch for running more than one wardynd
+replica; it replaces allowMultiReplica, which is refused with a pointer. $eff is every container
+env entry by name as the pod will see it: .Values.env first, then extraEnv, which renders after it
+and wins (k8s env: last-defined-wins). A guard that read only .Values.env would pass while extraEnv
+set the same key to the unsafe value, so every guard below reads $eff. An extraEnv entry with no
+literal value (valueFrom) reads as "<valueFrom>", which no guard accepts: HA needs values the
+chart can read.
+*/ -}}
+{{- if .Values.allowMultiReplica -}}
+{{- fail "wardyn: allowMultiReplica was removed in 0.8.6. Running more than one replica is now a supported mode with its own switch: set ha.enabled=true (it sets WARDYN_HA=true, adds a PodDisruptionBudget and pod anti-affinity, and needs a Kubernetes runner and WARDYN_RECORDING_STORE=pg). The -allow-multi-instance flag it used to pass is refused by wardynd with the same pointer. See docs/OPERATIONS.md, \"High availability\"." -}}
+{{- end -}}
+{{- $haValues := .Values.ha | default dict -}}
+{{- $ha := $haValues.enabled | default false -}}
+{{- $eff := dict -}}
+{{- range $k, $v := .Values.env }}{{ $_ := set $eff $k (toString $v) }}{{ end -}}
+{{- range .Values.extraEnv }}{{ if hasKey . "value" }}{{ $_ := set $eff (.name | toString) (toString .value) }}{{ else }}{{ $_ := set $eff (.name | toString) "<valueFrom>" }}{{ end }}{{ end -}}
+{{- if hasKey $eff "WARDYN_HA" -}}
+{{- fail "wardyn: WARDYN_HA is set through env or extraEnv. Do not set it by hand: the chart's multi-replica guards read ha.enabled, so a hand-set WARDYN_HA would lift the daemon's single-instance lock without them. Set ha.enabled=true instead." -}}
+{{- end -}}
+{{- if and (gt (int .Values.replicas) 1) (not $ha) -}}
+{{- fail "wardyn: replicas > 1 is refused without ha.enabled. A second wardynd replica needs the shared masking registry, the cross-replica locks and the elected sweeper leader, all of which wardynd turns on only in high-availability mode, and the chart's guards for it (a Postgres recording store, no persistence, a /tmp audit spool). Set ha.enabled=true to run several replicas; leave replicas at 1 otherwise. wardynd itself also takes the database's single-instance advisory lock at boot and refuses to start while another instance holds it, so a replica added by `kubectl scale` without WARDYN_HA exits rather than serving. See docs/OPERATIONS.md, \"High availability\"." -}}
+{{- end -}}
+{{- if $ha -}}
+{{- $store := "" -}}
+{{- if hasKey $eff "WARDYN_RECORDING_STORE" -}}{{ $store = index $eff "WARDYN_RECORDING_STORE" }}{{ else if .Values.persistence.enabled }}{{ $store = "fs" }}{{ else }}{{ $store = "off" }}{{ end -}}
+{{- if not (has $store (list "pg" "off")) -}}
+{{- fail (printf "wardyn: ha.enabled needs WARDYN_RECORDING_STORE to be \"pg\" or \"off\", and the chart reads %q. The \"fs\" store is a directory on one pod's disk, so a replay or upload that lands on another replica cannot find the recording. Set env.WARDYN_RECORDING_STORE=pg (or off) and remove any WARDYN_RECORDING_STORE entry from extraEnv; the chart reads both." $store) -}}
+{{- end -}}
+{{- if .Values.persistence.enabled -}}
+{{- fail "wardyn: ha.enabled refuses persistence.enabled=true. The persistent volume is ReadWriteOnce, so a second replica cannot mount it, and it exists to hold the per-pod fs recording store, which HA does not support. Leave persistence off and set env.WARDYN_RECORDING_STORE=pg." -}}
+{{- end -}}
+{{- $spool := "/tmp/audit-spool.jsonl" -}}
+{{- if hasKey $eff "WARDYN_AUDIT_SPOOL" }}{{ $spool = index $eff "WARDYN_AUDIT_SPOOL" }}{{ end -}}
+{{- if not (hasPrefix "/tmp/" $spool) -}}
+{{- fail (printf "wardyn: ha.enabled needs WARDYN_AUDIT_SPOOL under /tmp, and the chart reads %q. Each replica spools audit rows to the per-pod tmp emptyDir while Postgres is unreachable; a path anywhere else is the read-only root filesystem or a volume another replica shares. Remove WARDYN_AUDIT_SPOOL from env and extraEnv to take the chart's default /tmp/audit-spool.jsonl." $spool) -}}
+{{- end -}}
 {{- end -}}
 {{- if and .Values.k8s.enabled (not .Values.serviceAccount.automount) -}}
 {{- fail "wardyn: k8s.enabled requires serviceAccount.automount=true. The k8s runner substrate (internal/runner/k8s) drives the Kubernetes API directly via client-go, which needs the pod's own projected ServiceAccount token to authenticate — automount=false (the chart's own default, since wardynd calls no API server otherwise) leaves it completely unable to. Set serviceAccount.automount=true." -}}
@@ -105,33 +160,18 @@ metadata:
   labels:
     {{- include "wardyn.labels" . | nindent 4 }}
 spec:
-  # replicas stays at 1, and the fail above ENFORCES it (allowMultiReplica is the
-  # only way past). Five defects that used to make >1 drop requests — attach
-  # tickets, compose results, the lifecycle reaper, run watchers, session
-  # recordings, and the ground-truth token rotator — are closed at the code level
-  # (Postgres state, leases, leader election). What is NOT closed is the
-  # secret-masking registry, which fails open across replicas; docs/OPERATIONS.md
-  # "One replica, by construction" carries the full remaining list. The value
-  # stays templated for a future build that ships multi-replica for real.
+  # replicas stays at 1 unless ha.enabled is set; the fail above ENFORCES it.
+  # ha.enabled is the supported way to run more: the masking registry, the
+  # locks and the sweepers are shared through Postgres, and docs/OPERATIONS.md
+  # "High availability" carries what stays per replica.
   replicas: {{ .Values.replicas }}
-  # Recreate, not Kubernetes' default RollingUpdate. TWO reasons, either alone
-  # sufficient:
-  #   1. A rolling update starts the NEW pod before terminating the old one — a
-  #      second replica for the window between them, on every `helm upgrade`,
-  #      even though `replicas` never leaves 1 — exactly the secret-masking
-  #      exposure the refusal above exists to prevent.
-  #   2. It could not converge anyway. wardynd holds the database's
-  #      single-instance advisory lock and refuses to start while another
-  #      instance holds it, so under RollingUpdate the new pod would refuse,
-  #      never become Ready, and therefore never let the old pod (which holds
-  #      the lock) be terminated — a rollout deadlocked on itself, with the
-  #      only symptom a CrashLoopBackOff whose log says another instance is
-  #      running.
-  # Recreate tears the old pod down first, releasing the lock with its
-  # connection, so there is never a second one live and the new one always
-  # starts clean. The cost is a brief gap with no control plane during an
-  # upgrade, which is the correct trade for a daemon that is single-instance by
-  # construction.
+  # Recreate, not Kubernetes' default RollingUpdate, with or without ha.enabled.
+  # HA here means a node failure does not take the control plane down; it does
+  # not mean zero-downtime upgrades. Without HA a rolling update would start a
+  # second pod while the old one holds the single-instance lock, and never
+  # converge. With HA the replicas could roll, but a mixed-version window across
+  # a migration is not something this release supports, so an upgrade stops the
+  # old replicas first and starts the new ones.
   strategy:
     type: Recreate
   selector:
@@ -153,6 +193,9 @@ spec:
       {{- end }}
       {{- if .Values.trustedCA }}
       {{- $podAnnotations = merge (dict "checksum/trusted-ca" (sha256sum (toString .Values.trustedCA))) $podAnnotations }}
+      {{- end }}
+      {{- if ($.Values.kek | default dict).domains }}
+      {{- $podAnnotations = merge (dict "checksum/key-domains" (sha256sum (toJson $.Values.kek.domains))) $podAnnotations }}
       {{- end }}
       {{- with $podAnnotations }}
       annotations:
@@ -195,18 +238,6 @@ spec:
             # The proxy-facing TLS listener (internal CA, minted into the secret
             # store on first boot): every run's proxy resolves credentials here.
             - -internal-listen=:{{ $internalPort }}
-            {{- if .Values.allowMultiReplica }}
-            # wardynd takes the database's single-instance advisory lock at boot
-            # and REFUSES to start when another wardynd already holds it — the
-            # runtime half of the one-replica rule, and the half that survives
-            # someone editing this Deployment by hand or scaling it with
-            # `kubectl scale`, which no render-time refusal can see. An operator
-            # who set allowMultiReplica has already accepted that ceiling here,
-            # so the acceptance is handed to the process rather than made a
-            # second, separately-remembered switch: without it every replica but
-            # the first would exit at boot and the rollout would never converge.
-            - -allow-multi-instance
-            {{- end }}
           env:
             {{- if and $chartDSN $sf.enabled }}
             # secretFiles.enabled: every chart-wired secret below is a PATH into
@@ -235,6 +266,26 @@ spec:
                 secretKeyRef:
                   name: {{ include "wardyn.authSecretName" . }}
                   key: {{ .Values.auth.adminToken.key }}
+            {{- end }}
+            {{- $scim := .Values.scim | default dict }}
+            {{- if $scim.enabled }}
+            # SCIM leaver deprovisioning (secret.yaml refuses a second source in env/extraEnv). The
+            # bearer rides a secretKeyRef, never a literal; the rotation token is optional.
+            - name: WARDYN_SCIM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $scim.tokenSecretRef | quote }}
+                  key: scim-token
+            - name: WARDYN_SCIM_TOKEN_NEXT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $scim.tokenSecretRef | quote }}
+                  key: scim-token-next
+                  optional: true
+            - name: WARDYN_SCIM_PURGE_AFTER
+              value: {{ $scim.purgeAfter | toString | quote }}
+            - name: WARDYN_SCIM_LEAVER_WORKSPACES
+              value: {{ $scim.leaverWorkspaces | quote }}
             {{- end }}
             {{- if and .Values.basePath (not (hasKey .Values.env "WARDYN_BASE_PATH")) }}
             - name: WARDYN_BASE_PATH
@@ -322,6 +373,23 @@ spec:
             {{- end }}
             {{- end }}
             {{- $azkek := ($.Values.kek | default dict).azurekv | default dict }}
+            {{- if ($.Values.kek | default dict).required }}
+            - name: WARDYN_KEK_REQUIRED
+              value: "true"
+            {{- end }}
+            {{- /* An unquoted on in a values file is YAML's boolean true: render it as on. */}}
+            {{- $pkeys := ($.Values.kek | default dict).principalKeys | default "off" }}
+            {{- if kindIs "bool" $pkeys }}{{ $pkeys = ternary "on" "off" $pkeys }}{{ end }}
+            {{- if ne (toString $pkeys) "off" }}
+            - name: WARDYN_PRINCIPAL_KEYS
+              value: {{ $pkeys | toString | quote }}
+            {{- end }}
+            {{- if ($.Values.kek | default dict).domains }}
+            # The key domains kek.domains declares, rendered into a ConfigMap
+            # and mounted read-only; wardynd builds and proves each at boot.
+            - name: WARDYN_KEY_DOMAINS_FILE
+              value: "/etc/wardyn/key-domains/domains.json"
+            {{- end }}
             {{- with $.Values.kek }}
             {{- if eq .provider "transit" }}
             # Data keys wrapped by Vault Transit (docs/operations/secrets-and-keys.md "Key
@@ -347,6 +415,16 @@ spec:
             - name: WARDYN_AZURE_KEK_SIGNING_KEY
               value: {{ $azkek.signingKey | quote }}
             {{- end }}
+            {{- if $azkek.keyPlatform }}
+            # A second Key Vault key pair, reached as secretStore.azure.clientIdPlatform,
+            # wraps and signs wardynd's own signing, session and SSH host keys
+            # (docs/operations/secrets-and-keys.md "Key service: Azure Key Vault");
+            # kek.azurekv.key then wraps only the credentials.
+            - name: WARDYN_AZURE_KEK_KEY_PLATFORM
+              value: {{ $azkek.keyPlatform | quote }}
+            - name: WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM
+              value: {{ $azkek.signingKeyPlatform | quote }}
+            {{- end }}
             {{- end }}
             {{- if and .azure .azure.vaultUrl }}
             # Store mode's Key Vault client (docs/operations/secrets-and-keys.md "Store mode:
@@ -360,7 +438,7 @@ spec:
             - name: WARDYN_AZURE_KV_PURGE
               value: {{ .azure.purge | quote }}
             {{- end }}
-            {{- if and .azure (or .azure.vaultUrl $azkek.key) }}
+            {{- if and .azure (include "wardyn.azureConsumer" $) }}
             # The Entra identity the Key Vault store and KEK share. With workload
             # identity the webhook sets AZURE_FEDERATED_TOKEN_FILE, which wardynd reads.
             - name: WARDYN_AZURE_AUTH
@@ -373,11 +451,23 @@ spec:
             - name: WARDYN_AZURE_CLIENT_ID
               value: {{ . | quote }}
             {{- end }}
+            {{- if $azkek.keyPlatform }}
+            - name: WARDYN_AZURE_CLIENT_ID_PLATFORM
+              value: {{ .azure.clientIdPlatform | quote }}
+            {{- end }}
             {{- with .azure.authorityHost }}
             - name: WARDYN_AZURE_AUTHORITY_HOST
               value: {{ . | quote }}
             {{- end }}
             {{- end }}
+            {{- end }}
+            {{- if $ha }}
+            # High availability: skips the single-instance lock and makes wardynd
+            # refuse to boot unless the runner is Kubernetes and the recording
+            # store is pg or off. The render guards above are the first half; this
+            # is the half that still holds after `kubectl scale`.
+            - name: WARDYN_HA
+              value: "true"
             {{- end }}
             {{- if not (hasKey .Values.env "WARDYN_RECORDING_STORE") }}
             # persistence.enabled is the SINGLE recording switch it is documented
@@ -458,6 +548,35 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+            {{- /* `default dict`: a `--reuse-values` upgrade from before 0.8.6 carries no runner block. An absent
+            value renders no env, so wardynd keeps its compiled-in sizes (2000m/4096Mi agent, the proxy defaults). */}}
+            {{- $sb := ((.Values.runner | default dict).sandbox | default dict) }}
+            {{- $dr := $sb.defaultResources | default dict }}
+            {{- $pr := $sb.proxyResources | default dict }}
+            {{- if and $dr.cpuMillis (not (hasKey .Values.env "WARDYN_SANDBOX_DEFAULT_CPU_MILLIS")) }}
+            - name: WARDYN_SANDBOX_DEFAULT_CPU_MILLIS
+              value: {{ $dr.cpuMillis | quote }}
+            {{- end }}
+            {{- if and $dr.memoryMiB (not (hasKey .Values.env "WARDYN_SANDBOX_DEFAULT_MEMORY_MIB")) }}
+            - name: WARDYN_SANDBOX_DEFAULT_MEMORY_MIB
+              value: {{ $dr.memoryMiB | quote }}
+            {{- end }}
+            {{- if and $sb.requestRatio (not (hasKey .Values.env "WARDYN_SANDBOX_REQUEST_RATIO")) }}
+            - name: WARDYN_SANDBOX_REQUEST_RATIO
+              value: {{ $sb.requestRatio | quote }}
+            {{- end }}
+            {{- if and $pr.cpuMillis (not (hasKey .Values.env "WARDYN_PROXY_CPU_MILLIS")) }}
+            - name: WARDYN_PROXY_CPU_MILLIS
+              value: {{ $pr.cpuMillis | quote }}
+            {{- end }}
+            {{- if and $pr.memoryMiB (not (hasKey .Values.env "WARDYN_PROXY_MEMORY_MIB")) }}
+            - name: WARDYN_PROXY_MEMORY_MIB
+              value: {{ $pr.memoryMiB | quote }}
+            {{- end }}
+            {{- if and (gt (int .Values.maxConcurrentRuns) 0) (not (hasKey .Values.env "WARDYN_MAX_CONCURRENT_RUNS")) }}
+            - name: WARDYN_MAX_CONCURRENT_RUNS
+              value: {{ .Values.maxConcurrentRuns | int | quote }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             # Raw EnvVar entries, so secret-bearing WARDYN_* (OIDC client secret,
             # composer API key, audit-sink JSON) ride a secretKeyRef instead of
@@ -480,6 +599,29 @@ spec:
             {{- if .Values.k8s.imagePullSecret }}
             - name: WARDYN_K8S_IMAGE_PULL_SECRET
               value: {{ .Values.k8s.imagePullSecret | quote }}
+            {{- end }}
+            {{- $placement := dict -}}
+            {{- $k8sSandbox := (.Values.k8s.sandbox | default dict) -}}
+            {{- range $key := list "nodeSelector" "tolerations" "affinity" "priorityClassName" "podAnnotations" "podLabels" -}}
+            {{- with index $k8sSandbox $key }}{{- $_ := set $placement $key . -}}{{- end -}}
+            {{- end }}
+            {{- /* A bare `--set key=true` is a YAML bool; annotation and label values are strings. */ -}}
+            {{- range $key := list "podAnnotations" "podLabels" -}}
+            {{- if hasKey $placement $key }}
+            {{- $strs := dict -}}
+            {{- range $k, $v := get $placement $key }}{{- $_ := set $strs $k (toString $v) -}}{{- end -}}
+            {{- $_ := set $placement $key $strs -}}
+            {{- end -}}
+            {{- end }}
+            {{- if $placement }}
+            # One JSON value for the agent, proxy and canary pods (internal/runner/k8s/placement.go).
+            - name: WARDYN_K8S_SANDBOX_PLACEMENT
+              value: {{ toJson $placement | quote }}
+            {{- end }}
+            {{- if .Values.k8s.readNodes }}
+            # The node-size advisory (internal/runner/k8s/fit_nodes.go); rbac.yaml grants the matching nodes list.
+            - name: WARDYN_K8S_READ_NODES
+              value: "true"
             {{- end }}
             {{- $rtc := list -}}
             {{- with .Values.k8s.runtimeClasses.CC2 }}{{- $rtc = append $rtc (printf "CC2=%s" .) -}}{{- end }}
@@ -570,7 +712,8 @@ spec:
               path: {{ printf "%s/healthz" $basePath }}
               port: http
             periodSeconds: 5
-            failureThreshold: 90
+            # 5s periods over 30s connect + WARDYN_MIGRATE_TIMEOUT + 120s slack (see $startupFailureThreshold).
+            failureThreshold: {{ $startupFailureThreshold }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:
@@ -594,6 +737,11 @@ spec:
             {{- if .Values.trustedCA }}
             - name: trusted-ca
               mountPath: /etc/wardyn/trusted-ca
+              readOnly: true
+            {{- end }}
+            {{- if ($.Values.kek | default dict).domains }}
+            - name: key-domains
+              mountPath: /etc/wardyn/key-domains
               readOnly: true
             {{- end }}
             {{- if eq (include "wardyn.vaultProjectedToken" .) "true" }}
@@ -631,6 +779,11 @@ spec:
         - name: trusted-ca
           configMap:
             name: {{ include "wardyn.fullname" . }}-trusted-ca
+        {{- end }}
+        {{- if ($.Values.kek | default dict).domains }}
+        - name: key-domains
+          configMap:
+            name: {{ include "wardyn.fullname" . }}-key-domains
         {{- end }}
         {{- if eq (include "wardyn.vaultProjectedToken" .) "true" }}
         # A token for Vault alone: its audience is Vault's, so it is useless
@@ -702,7 +855,12 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- $affinity := .Values.affinity | default dict }}
+      {{- if and $ha (not (hasKey $affinity "podAntiAffinity")) }}
+      {{- /* Prefer a different node per replica, so one node failure takes out one replica. Soft, so a one-node cluster still schedules both. An affinity.podAntiAffinity of your own replaces this. */ -}}
+      {{- $affinity = merge (deepCopy $affinity) (dict "podAntiAffinity" (dict "preferredDuringSchedulingIgnoredDuringExecution" (list (dict "weight" 100 "podAffinityTerm" (dict "topologyKey" "kubernetes.io/hostname" "labelSelector" (dict "matchLabels" (fromYaml (include "wardyn.selectorLabels" .)))))))) }}
+      {{- end }}
+      {{- with $affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}

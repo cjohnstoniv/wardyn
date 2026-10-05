@@ -134,6 +134,26 @@ func TestADOStandingAtTheDoors(t *testing.T) {
 			t.Fatalf("preflight = %d %s", w.Code, w.Body.String())
 		}
 	})
+	// adoStandingAtDoor is pure in-memory: a dry run asks it with every outbound
+	// client replaced by one that fails the test on use, and still hears the
+	// narrowing, so the per-person lane really ran.
+	t.Run("preflight makes no outbound call", func(t *testing.T) {
+		fail := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			t.Errorf("outbound call during preflight: %s %s", r.Method, r.URL)
+			return nil, fmt.Errorf("no outbound calls in a dry run")
+		})
+		prevDefault, prevOwnPAT, prevClient := http.DefaultTransport, adoOwnPATTransport, http.DefaultClient.Transport
+		http.DefaultTransport, adoOwnPATTransport, http.DefaultClient.Transport = fail, fail, fail
+		t.Cleanup(func() {
+			http.DefaultTransport, adoOwnPATTransport, http.DefaultClient.Transport = prevDefault, prevOwnPAT, prevClient
+		})
+		w, _, _ := post(t, "/api/v1/runs/preflight", `["code_read","pr"]`)
+		var resp preflightResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK ||
+			countEqual(resp.Warnings, sentence) != 1 {
+			t.Fatalf("preflight = %d %s", w.Code, w.Body.String())
+		}
+	})
 	t.Run("preflight refuses a list nothing of which may stand", func(t *testing.T) {
 		w, _, _ := post(t, "/api/v1/runs/preflight", `["pr"]`)
 		if w.Code != http.StatusUnprocessableEntity {

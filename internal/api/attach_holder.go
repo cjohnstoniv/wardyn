@@ -115,14 +115,37 @@ type attachHolder struct {
 	// resize write.
 	writable atomic.Bool
 
-	// notify tells THIS client its mode changed — today only read-only ->
-	// writable, on promotion. Transport-specific (a second attach-mode frame on
-	// the WebSocket, the client's own geometry plus a stderr line on the SSH
-	// channel) and NEVER called with the registry lock held: a client write can
-	// block for the full attachWriteTimeout, which would stall every other
-	// attach on the daemon behind one unresponsive peer. The registry hands the
-	// caller a closure to run on its own goroutine instead (releaseAttach).
+	// notify tells THIS client something about its mode, in two cases.
+	// readOnly=false: it was promoted (read-only -> writable). The transport
+	// re-attaches it as a writer first (establishExec), and only then tells the
+	// client: a second attach-mode frame on the WebSocket, a stderr line on the
+	// SSH channel. readOnly=true: the writer's geometry changed, and `holder` is
+	// that writer, so the observer's browser can re-pin its grid (the SSH lane
+	// has nothing to say). NEVER called with the registry lock held: a client
+	// write can block for the full attachWriteTimeout, which would stall every
+	// other attach on the daemon behind one unresponsive peer. The registry
+	// hands the caller a closure to run on its own goroutine instead
+	// (releaseAttach).
 	notify func(readOnly bool, holder *attachHolder)
+
+	// ping, when set, probes this holder's client for liveness (the WebSocket
+	// lane's Ping; the SSH lane has none and is never probed). lastOutput is
+	// when PTY output last reached the client, unix nanoseconds. Both feed the
+	// stale-writer probe (attach_stale.go).
+	ping       func(ctx context.Context) error
+	lastOutput atomic.Int64
+
+	// ready is this holder's attach state: attaching until its exec matches its
+	// role, ready after (attach_exec.go). A promotion sends it back to attaching
+	// while the observer's exec is replaced by a writer's.
+	ready attachReady
+	// mux is the session the pumps read and write: the holder's current exec.
+	mux muxSession
+	// openMu serialises establishExec; the three fields below are its state.
+	openMu     sync.Mutex
+	execOpened bool
+	execWriter bool // the current exec was opened without ignore-size
+	execCancel context.CancelFunc
 
 	// evicted flips the instant a take-over removes this holder from the
 	// registry, and it is what actually REVOKES write authority.
@@ -147,6 +170,15 @@ type attachHolder struct {
 	// atomic, not mu: the pumps read it on every frame and must never contend
 	// with a resize write.
 	evicted atomic.Bool
+
+	// id and lease are this client's claim on the run's cross-replica writer lease
+	// (attach_lease.go). Both are zero for a store that keeps no leases, and the lease is
+	// part of canWrite.
+	id    uuid.UUID
+	lease *attachLease
+	// waitRemote: this observer is queued behind a lease another replica's holder had, so a
+	// free lease goes to it (firstWaiting).
+	waitRemote atomic.Bool
 }
 
 // canWrite reports whether this holder may still drive the PTY: it must hold
@@ -154,7 +186,7 @@ type attachHolder struct {
 // and must not have been displaced (evicted AT EVICTION, not whenever its
 // socket happens to finish dying). A nil holder is nobody and never writes.
 func (h *attachHolder) canWrite() bool {
-	return h != nil && h.writable.Load() && !h.evicted.Load()
+	return h != nil && h.writable.Load() && !h.evicted.Load() && h.lease.live()
 }
 
 // attachWriteChunk bounds ONE Session.Write issued on a client's behalf, and so
@@ -206,16 +238,23 @@ func (h *attachHolder) writeGated(sess runner.Session, p []byte) error {
 	return nil
 }
 
+// promote hands this observer the write slot. The caller holds the registry
+// lock. The holder goes back to attaching, because its exec is still the
+// observer's: input stays held until the transport has replaced it.
+func (h *attachHolder) promote() {
+	h.writable.Store(true)
+	h.ready.setAttaching()
+}
+
 func (h *attachHolder) setSize(cols, rows uint16) {
 	h.mu.Lock()
 	h.cols, h.rows = cols, rows
 	h.mu.Unlock()
 }
 
-// size is the client's own last-known geometry, which a promoted observer has
-// to re-apply: it never resized the shared tmux window while it was watching
-// (that would clamp the writer's terminal), so the window it inherits is the
-// departed writer's.
+// size is the client's own last-known geometry, recorded for observers too: a
+// promoted observer opens its writer exec at it, because its own resizes never
+// reached the shared tmux window while it was watching.
 func (h *attachHolder) size() (cols, rows uint16) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -294,14 +333,11 @@ func writeAttachMode(ctx context.Context, c *websocket.Conn, readOnly bool, hold
 // attachHolderRegistry is the per-daemon map of run id -> attach state: the
 // current PTY writer and the observers queued behind it.
 //
-// Ceiling: it is IN-PROCESS. A multi-replica control plane sees only its OWN
-// replica's holders, so "held:false" means "nobody is attached through this
-// daemon" — the UI copy must not claim more than that. Wardyn refuses
-// replicas>1 by construction today (deployment.yaml, same assumption as
-// Server.siteConfigMu and secretmask.Registry), so this is exact, not hopeful.
-// ponytail: in-process holder registry, single-daemon truth. Upgrade path is a
-// store row keyed by run id (holder principal + since + source + a heartbeat to
-// expire a holder whose replica died) if wardynd ever runs multi-replica.
+// The registry is IN-PROCESS: it holds this replica's clients, the queue of its
+// observers and who among them may write. Which replica's client may write is the
+// run's attach lease (attach_lease.go), a Postgres row every replica agrees on;
+// canWrite asks it. A client that is the writer here is the writer everywhere, and
+// GET /runs/{id}/attach/holder names a holder on another replica from the lease.
 type attachHolderRegistry struct {
 	mu       sync.Mutex
 	attaches map[uuid.UUID]*runAttach
@@ -347,6 +383,7 @@ func (s *Server) attachRegistry() *attachHolderRegistry { return &s.attachHolder
 // attachWriteTimeout — under the registry lock it would stall every other
 // attach on the daemon behind one unresponsive peer.
 func (s *Server) registerAttachHolder(runID uuid.UUID, h *attachHolder) (readOnly bool, release func() (announce func())) {
+	s.bindAttachLease(runID, h)
 	reg := s.attachRegistry()
 	reg.mu.Lock()
 	// Lazily built so the zero Server is ready to use (every other per-run map
@@ -368,6 +405,11 @@ func (s *Server) registerAttachHolder(runID uuid.UUID, h *attachHolder) (readOnl
 		readOnly = true
 	}
 	reg.mu.Unlock()
+	// The slot here is the writer's only with the lease: another replica's holder may have it.
+	if h.lease != nil && !readOnly && !s.acquireAttachLease(runID, h, uuid.Nil) {
+		s.demoteWriter(runID, h)
+		readOnly = true
+	}
 
 	return readOnly, func() (announce func()) {
 		reg.mu.Lock()
@@ -377,7 +419,8 @@ func (s *Server) registerAttachHolder(runID uuid.UUID, h *attachHolder) (readOnl
 			return nil // already released (release is deferred AND called)
 		}
 		var promoted *attachHolder
-		if ra.writer == h {
+		wasWriter := ra.writer == h
+		if wasWriter {
 			ra.writer = nil
 			// FIFO: the oldest observer still on its socket takes the slot.
 			// A promoted observer whose socket is ALREADY dead holds it until
@@ -387,7 +430,7 @@ func (s *Server) registerAttachHolder(runID uuid.UUID, h *attachHolder) (readOnl
 			if len(ra.observers) > 0 {
 				promoted, ra.observers = ra.observers[0], ra.observers[1:]
 				ra.writer = promoted
-				promoted.writable.Store(true)
+				promoted.promote()
 			}
 		} else {
 			ra.observers = slices.DeleteFunc(ra.observers, func(o *attachHolder) bool { return o == h })
@@ -396,6 +439,9 @@ func (s *Server) registerAttachHolder(runID uuid.UUID, h *attachHolder) (readOnl
 			delete(reg.attaches, runID)
 		}
 		reg.mu.Unlock()
+		if wasWriter && h.lease != nil && !s.handoffAttachLease(runID, h, promoted, "") {
+			promoted = nil
+		}
 		return s.announceAttachPromotion(runID, promoted, h.principal)
 	}
 }
@@ -475,10 +521,19 @@ func (s *Server) attachHolderFor(runID uuid.UUID) *attachHolder {
 // with no observer socket leaves the slot FREE and reconnects into it, exactly
 // as before; queued bystanders stay observers.
 func (s *Server) evictAttachHolderFor(runID uuid.UUID, taker string) (prev *attachHolder, announce func()) {
+	return s.evictAttachWriter(runID, taker, nil)
+}
+
+// evictAttachWriter is evictAttachHolderFor, optionally pinned to one writer:
+// when want is non-nil and is no longer runID's writer, nothing is evicted. The
+// stale-writer probe needs that, because the writer it judged dead may have left
+// and been replaced during the probe, and the replacement must not be displaced
+// for it.
+func (s *Server) evictAttachWriter(runID uuid.UUID, taker string, want *attachHolder) (prev *attachHolder, announce func()) {
 	reg := s.attachRegistry()
 	reg.mu.Lock()
 	ra := reg.attaches[runID]
-	if ra == nil || ra.writer == nil {
+	if ra == nil || ra.writer == nil || (want != nil && ra.writer != want) {
 		reg.mu.Unlock()
 		return nil, nil
 	}
@@ -498,7 +553,7 @@ func (s *Server) evictAttachHolderFor(runID uuid.UUID, taker string) (prev *atta
 			promoted = o
 			ra.observers = slices.Delete(ra.observers, i, i+1)
 			ra.writer = promoted
-			promoted.writable.Store(true)
+			promoted.promote()
 			break
 		}
 	}
@@ -506,6 +561,9 @@ func (s *Server) evictAttachHolderFor(runID uuid.UUID, taker string) (prev *atta
 		delete(reg.attaches, runID)
 	}
 	reg.mu.Unlock()
+	if prev.lease != nil && !s.handoffAttachLease(runID, prev, promoted, taker) {
+		promoted = nil
+	}
 	return prev, s.announceAttachPromotion(runID, promoted, prev.principal)
 }
 
@@ -549,7 +607,32 @@ func (s *Server) handleAttachHolder(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.getRunAuthorized(w, r, id); !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, s.attachHolderFor(id).view())
+	view := s.attachHolderFor(id).view()
+	if !view.Held {
+		// Nobody holds it through this replica: another replica's lease may.
+		if remote := s.remoteAttachHolderView(r.Context(), id); remote != nil {
+			view = *remote
+		}
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// recordTakeover writes the session.takeover row for prev's displacement.
+// reason is empty for a person's explicit take-over and names the cause
+// otherwise (the stale-writer probe's "stale_writer"). Callers write it after
+// the eviction decided and before displace(), so the row is never lost to the
+// teardown it describes.
+func (s *Server) recordTakeover(ctx context.Context, runID uuid.UUID, actorType types.ActorType, principal string, prev *attachHolder, reason string) {
+	data := map[string]any{
+		"previous_holder": prev.principal,
+		"previous_source": prev.source,
+		"held_since":      prev.since,
+	}
+	if reason != "" {
+		data["reason"] = reason
+	}
+	s.recordAudit(ctx, s.auditEvent(&runID, actorType, principal, "session.takeover",
+		runID.String(), "success", mustJSON(data)))
 }
 
 // handleAttachTakeover serves POST /api/v1/runs/{id}/attach/takeover — taking a
@@ -585,6 +668,9 @@ func (s *Server) handleAttachTakeover(w http.ResponseWriter, r *http.Request) {
 
 	prev, promote := s.evictAttachHolderFor(id, principal)
 	if prev == nil {
+		prev, promote = s.evictRemoteAttachHolder(id, principal)
+	}
+	if prev == nil {
 		writeErrorReason(w, http.StatusConflict, reasonAttachTakeoverNoHolder, "nobody is attached to this run; nothing to take over")
 		return
 	}
@@ -603,12 +689,7 @@ func (s *Server) handleAttachTakeover(w http.ResponseWriter, r *http.Request) {
 	if auditCtx == nil {
 		auditCtx = context.Background()
 	}
-	s.recordAudit(auditCtx, s.auditEvent(&id, actorType, principal, "session.takeover",
-		id.String(), "success", mustJSON(map[string]any{
-			"previous_holder": prev.principal,
-			"previous_source": prev.source,
-			"held_since":      prev.since,
-		})))
+	s.recordTakeover(auditCtx, id, actorType, principal, prev, "")
 
 	prev.displace(attachTakeoverReason(principal))
 	promoted := promote != nil

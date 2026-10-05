@@ -153,6 +153,18 @@ describe("SummaryHeader — command bar", () => {
   });
 });
 
+describe("SummaryHeader — the short run id", () => {
+  it("shows 8 characters and keeps the full id on the title", () => {
+    const id = "7f3c9a21-5b6d-4e8f-9a0b-1c2d3e4f5a6b";
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={{ ...runningInteractive, id }} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByTitle(id).textContent).toBe("· 7f3c9a21");
+  });
+});
+
 // `truncate` on an `inline-flex` Chip clips mid-word with NO
 // ellipsis — the anonymous flex child (the text node) gets min-content
 // sizing regardless of the parent's own overflow-hidden. The chip's text

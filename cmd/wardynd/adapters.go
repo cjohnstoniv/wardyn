@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -26,22 +25,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
-
-var _ oidc.SessionRevocations = (*pgSessionRevocations)(nil)
-
-// sessionRevocationsFor returns the D16 pg-backed revocations store when OIDC
-// is actually configured (authn != nil), else nil — mirrors "OIDC:
-// feats.authn" on api.Config being nil exactly when OIDC is unconfigured, so
-// the admin revoke-sessions surface never mounts with no session mechanism
-// for it to act on. A second, independent *pgSessionRevocations instance from
-// the one buildOptionalFeatures wires into oidc.Config.Revocations — both are
-// stateless wrappers over the same pool, so two instances cost nothing.
-func sessionRevocationsFor(authn *oidc.Authenticator, pool *pgxpool.Pool) oidc.SessionRevocations {
-	if authn == nil {
-		return nil
-	}
-	return &pgSessionRevocations{pool: pool}
-}
 
 // pgRevocations is the pg-backed embedded.RevocationStore: jti-level OR
 // run-level revocation over the identity_revocations table. Verify consults it
@@ -96,133 +79,6 @@ func (r *pgRevocations) RevokeJTI(ctx context.Context, jti string, runID uuid.UU
 		ON CONFLICT (jti) DO NOTHING`
 	if _, err := r.pool.Exec(ctx, q, jti, runID); err != nil {
 		return fmt.Errorf("wardynd: revoke jti: %w", err)
-	}
-	return nil
-}
-
-// globalRevokeSub is the reserved oidc_session_revocations.sub sentinel for a
-// revoke-all — see the migration's doc comment.
-const globalRevokeSub = ""
-
-// pgSessionRevocations is the pg-backed oidc.SessionRevocations (D16): a
-// per-principal (and global) revoke CUTOFF over oidc_session_revocations,
-// checked by internal/auth/oidc's Middleware on every authenticated request
-// once wired. Distinct from pgRevocations above, which is the per-run SPIFFE
-// identity denylist — a different table, a different session concept
-// entirely (a stateless signed cookie has no row of its own to delete).
-type pgSessionRevocations struct {
-	pool *pgxpool.Pool
-	// now is the APP clock IsSessionRevoked measures a credential's age on; nil
-	// means time.Now. A test injects a clock that runs ahead of the database's,
-	// which is the only honest way to simulate the F289 skew: the age helper
-	// clamps a stamp from its own future to zero, so handing IsSessionRevoked an
-	// issuedAt ahead of the real clock does not model a fast wardynd — it models
-	// a stamp the app itself could never have written.
-	now func() time.Time
-}
-
-func (r *pgSessionRevocations) appNow() time.Time {
-	if r.now != nil {
-		return r.now()
-	}
-	return time.Now()
-}
-
-// IsSessionRevoked reports revoked when issuedAt is at-or-before the LATER of
-// the cutoffs matching this human and the global one — a single query (MAX
-// over the candidate rows) so a caller with no wired revocations at all (the
-// common case: no row for either identity or globally) pays one lookup and
-// gets back SQL NULL, which is "never revoked", not a zero-time false alarm.
-//
-// THREE candidate keys, because a revoke may name either identity (see
-// oidc.SessionRevocations): the sub EXACTLY — an OIDC sub is opaque and
-// case-sensitive, so folding it could collide two distinct principals — the
-// email CASE-INSENSITIVELY, since that is how a human types one and the admin
-// naming a target has no reason to match the IdP's casing, and the reserved ""
-// global row.
-//
-// An empty email needs NO guard, and adding one would be unpinnable defensive
-// code: lower(sub) = lower(”) selects exactly the sub = ” row, which is the
-// global row the third arm already selects. The two arms return the same
-// cutoff, so a session with no email claim behaves identically either way —
-// verified by removing a NULLIF guard and finding no test could tell the
-// difference, because there is no difference to tell.
-//
-// lower(sub) defeats the index on this arm. Deliberate: oidc_session_revocations
-// holds one row per revoked principal plus the global one — tens of rows on a
-// real deployment, not a scan worth an expression index — and the alternative
-// (folding at write time) cannot work, since the writer does not know whether
-// the caller named a sub or an email.
-func (r *pgSessionRevocations) IsSessionRevoked(ctx context.Context, sub, email string, issuedAt time.Time) (bool, error) {
-	// Asked on both clocks, and either answer of "revoked" wins.
-	//
-	// revoked_at is stamped by POSTGRES. issuedAt is stamped by WARDYND — and by
-	// wardynd in two different senses, which is why this cannot simply pick one
-	// clock and convert: an SSO cookie's `iat` is a wall-clock reading taken when
-	// the cookie was minted, while an API token's created_at is now written on
-	// the database's own clock (store.CreateAPIToken). This function is handed
-	// both and cannot tell them apart, and there is no signature here to widen —
-	// the interface is internal/auth/oidc's.
-	//
-	// So it asks the question twice and takes the earlier-revoking answer:
-	// directly against the cutoff (exact when issuedAt is already on the database
-	// clock), and against the database's now() minus the age wardynd measured for
-	// it (exact when issuedAt is an app wall-clock reading). Under a skew of d
-	// the two disagree by at most d, and OR-ing them means the disagreement
-	// always resolves toward REVOKED. That asymmetry is the whole point: a revoke
-	// that fires d early during a clock skew is a session re-authenticating; a
-	// revoke that fires d late is the admin's "revoke every session for this
-	// human" silently not doing it, which is the finding.
-	//
-	// The age is measured entirely on wardynd's clock (now minus issuedAt), so no
-	// skew rides in on it — see db.AppClockAgeMicros, whose contract is that both
-	// of its arguments come from one clock.
-	q := `
-		SELECT MAX(revoked_at), MAX(revoked_at) >= ` + db.AppClockAgeSQL("$4") + `
-		FROM oidc_session_revocations
-		WHERE sub = $1
-		   OR lower(sub) = lower($2)
-		   OR sub = $3`
-	var cutoff sql.NullTime
-	var byDBClock sql.NullBool
-	age := db.AppClockAgeMicros(issuedAt, r.appNow())
-	if err := r.pool.QueryRow(ctx, q, sub, email, globalRevokeSub, age).Scan(&cutoff, &byDBClock); err != nil {
-		return false, fmt.Errorf("wardynd: is-session-revoked query: %w", err)
-	}
-	if !cutoff.Valid {
-		return false, nil // no revocation on record for this sub or globally
-	}
-	// issuedAt.IsZero() (a pre-D16 cookie with no iat) sorts before EVERY real
-	// cutoff, so it reads as revoked the moment any matching row exists at
-	// all — see oidc.SessionRevocations' doc comment for why that is
-	// deliberate rather than a bug. Said here rather than left to the arithmetic:
-	// db.AppClockAgeMicros CLAMPS an age at a century, so the zero time would
-	// otherwise be answered by a clamp rather than by the rule.
-	if issuedAt.IsZero() {
-		return true, nil
-	}
-	return !issuedAt.After(cutoff.Time) || byDBClock.Bool, nil
-}
-
-// RevokeSub stamps sub's cutoff at now, invalidating every current session
-// for that principal. Idempotent (repeat revokes just move the cutoff later).
-func (r *pgSessionRevocations) RevokeSub(ctx context.Context, sub string) error {
-	return r.upsertCutoff(ctx, sub)
-}
-
-// RevokeAll stamps the global cutoff at now, invalidating every current
-// session for every principal.
-func (r *pgSessionRevocations) RevokeAll(ctx context.Context) error {
-	return r.upsertCutoff(ctx, globalRevokeSub)
-}
-
-func (r *pgSessionRevocations) upsertCutoff(ctx context.Context, sub string) error {
-	const q = `
-		INSERT INTO oidc_session_revocations (sub, revoked_at)
-		VALUES ($1, now())
-		ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`
-	if _, err := r.pool.Exec(ctx, q, sub); err != nil {
-		return fmt.Errorf("wardynd: revoke session cutoff: %w", err)
 	}
 	return nil
 }
@@ -373,6 +229,18 @@ func (s *approvalService) CountPendingApprovalsByRunCreator(ctx context.Context,
 
 var _ store.ApprovalsForRunsPager = (*approvalService)(nil)
 
+// ApprovalEscalations / ApprovalNotifyChannelStats back the approvals list's escalation chips and
+// GET /approval-notify/status. Pure delegation, promoted from the embedded store.PG.
+func (s *approvalService) ApprovalEscalations(ctx context.Context, ids []uuid.UUID, now time.Time) (map[uuid.UUID]types.ApprovalEscalation, error) {
+	return s.st.ApprovalEscalations(ctx, ids, now)
+}
+
+func (s *approvalService) ApprovalNotifyChannelStats(ctx context.Context, now time.Time) ([]types.ApprovalNotifyChannelStat, error) {
+	return s.st.ApprovalNotifyChannelStats(ctx, now)
+}
+
+var _ store.ApprovalNotifyReader = (*approvalService)(nil)
+
 // Audit fanout
 
 // buildAuditFanout parses the -audit-sinks JSON config into a Fanout and starts
@@ -466,6 +334,9 @@ func (f fanoutRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
 type maskingRecorder struct {
 	inner audit.Recorder
 	reg   *secretmask.Registry
+	// scope labels a run's rows "mask_scope":"globals_only" while this process
+	// does not hold the run's complete masking manifest. Nil labels nothing.
+	scope *maskScope
 }
 
 var _ audit.Recorder = maskingRecorder{}
@@ -480,6 +351,9 @@ func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 	// Before the masker, not after: masking a megabyte of attacker-chosen path
 	// is work nobody asked for, and the mask is per-byte either way.
 	ev.Target = store.CapAuditTarget(ev.Target)
+	if ev.RunID != nil && m.scope.uncovered(*ev.RunID) {
+		ev.Data = withMaskScope(ev.Data)
+	}
 	if m.reg != nil {
 		// A run-less event (ev.RunID == nil —
 		// policy.inline.apply, secret.*, an admin action) must still fall back to the
@@ -586,14 +460,16 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	//
 	// A KEPT run (lost_at set: its lease ended it) is not idle, it is stopped;
 	// the ended-run grace decides when its files go, not auto_stop_after_sec.
+	// The one exception is a run kept after an outage whose agent still runs
+	// (store.HoldsSandboxSQL): it is listed as Kept, for the max age alone.
 	//
 	// An EMPTY scan returns the zero time, which the reaper reads as "no clock":
 	// there are no rows to measure, so there is nothing for it to be wrong about,
 	// and a second round trip to fetch a clock nobody would use is not worth it.
 	const q = `
-		SELECT id, updated_at, auto_stop_after_sec, now()
+		SELECT id, created_at, updated_at, auto_stop_after_sec, lost_at IS NOT NULL, now()
 		FROM agent_runs
-		WHERE state = $1 AND lost_at IS NULL`
+		WHERE state = $1 AND ` + store.HoldsSandboxSQL
 	rows, err := l.pool.Query(ctx, q, string(types.RunRunning))
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("wardynd: list running with policy: %w", err)
@@ -604,7 +480,7 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	var dbNow time.Time
 	for rows.Next() {
 		var s lifecycle.RunSummary
-		if err := rows.Scan(&s.ID, &s.UpdatedAt, &s.PolicyAutoStopAfterSec, &dbNow); err != nil {
+		if err := rows.Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt, &s.PolicyAutoStopAfterSec, &s.Kept, &dbNow); err != nil {
 			return nil, time.Time{}, fmt.Errorf("wardynd: scan run summary: %w", err)
 		}
 		out = append(out, s)
@@ -713,6 +589,13 @@ type lifecycleStopper struct {
 	// could get wrong; and the store this reaper holds is a pool, not the
 	// approval service the API server already owns.
 	cancelApprovals func(context.Context, uuid.UUID)
+	// finishOutput is the run-output finalisation contract (api.Server's
+	// FinishRunOutput), reached through the server rather than copied here.
+	// Nil-safe, like cancelApprovals.
+	finishOutput func(context.Context, uuid.UUID)
+	// snapshotPane is api.Server's SnapshotRunPane: an interactive run's pane
+	// snapshot, taken after the revocations and before StopSandbox. Nil-safe.
+	snapshotPane func(context.Context, uuid.UUID)
 }
 
 // runRevoker is the minimal revocation surface the idle reaper needs so a run
@@ -726,6 +609,21 @@ type runRevoker interface {
 var _ lifecycle.Stopper = lifecycleStopper{}
 
 func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter time.Time) (lifecycle.StopOutcome, error) {
+	return l.stop(ctx, runID, func() (bool, error) {
+		return store.NewPG(l.pool).UpdateRunStateIfIdle(ctx, runID, types.RunRunning, types.RunStopped, notAfter)
+	})
+}
+
+// StopRunMaxAge is StopRun for a run past WARDYN_RUN_MAX_AGE: the same teardown
+// and revocation, behind a transition guarded on the run's age alone.
+func (l lifecycleStopper) StopRunMaxAge(ctx context.Context, runID uuid.UUID, createdNotAfter time.Time) (lifecycle.StopOutcome, error) {
+	return l.stop(ctx, runID, func() (bool, error) {
+		return store.NewPG(l.pool).UpdateRunStateIfCreatedBefore(ctx, runID, types.RunRunning, types.RunStopped, createdNotAfter)
+	})
+}
+
+// stop wins transition (a guarded RUNNING->STOPPED), then tears down and revokes.
+func (l lifecycleStopper) stop(ctx context.Context, runID uuid.UUID, transition func() (bool, error)) (lifecycle.StopOutcome, error) {
 	run, err := store.NewPG(l.pool).GetRun(ctx, runID)
 	if err != nil {
 		return lifecycle.StopOutcome{}, fmt.Errorf("wardynd: lifecycle get run: %w", err)
@@ -739,7 +637,7 @@ func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter
 	// keepalive. If a concurrent kill/complete already moved the run terminal, or
 	// an open request is still inside its wait (store.openHoldSQL), the CAS also
 	// no-ops and we leave the run and any teardown/revocation untouched.
-	applied, uerr := store.NewPG(l.pool).UpdateRunStateIfIdle(ctx, runID, types.RunRunning, types.RunStopped, notAfter)
+	applied, uerr := transition()
 	if uerr != nil {
 		return lifecycle.StopOutcome{}, fmt.Errorf("wardynd: lifecycle update state: %w", uerr)
 	}
@@ -768,15 +666,9 @@ func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter
 		l.cancelApprovals(ctx, runID)
 	}
 	errs := map[string]string{}
-	if l.runner != nil && run.SandboxRef != "" {
-		if serr := l.runner.StopSandbox(ctx, run.SandboxRef); serr != nil {
-			slog.ErrorContext(ctx, "wardynd: lifecycle idle-stop sandbox teardown FAILED -- sandbox may still be routable",
-				slog.String("run_id", runID.String()),
-				slog.Any("err", serr),
-			)
-			errs["teardown_error"] = serr.Error()
-		}
-	}
+	// Revocations BEFORE the teardown, so the pane snapshot's seconds never
+	// extend a live credential: finalizeRunTail's order (revoke, snapshot,
+	// StopSandbox, finish). The CAS above still decides first whether any of it runs.
 	if l.identity != nil {
 		if rerr := l.identity.RevokeRun(ctx, runID); rerr != nil {
 			slog.ErrorContext(ctx, "wardynd: lifecycle idle-stop identity revoke FAILED -- run token may still be usable",
@@ -795,170 +687,26 @@ func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter
 			errs["broker_error"] = rerr.Error()
 		}
 	}
+	if l.snapshotPane != nil {
+		l.snapshotPane(ctx, runID)
+	}
+	if l.runner != nil && run.SandboxRef != "" {
+		if serr := l.runner.StopSandbox(ctx, run.SandboxRef); serr != nil {
+			slog.ErrorContext(ctx, "wardynd: lifecycle idle-stop sandbox teardown FAILED -- sandbox may still be routable",
+				slog.String("run_id", runID.String()),
+				slog.Any("err", serr),
+			)
+			errs["teardown_error"] = serr.Error()
+		}
+	}
+	if l.finishOutput != nil {
+		l.finishOutput(ctx, runID)
+	}
 	out := lifecycle.StopOutcome{Applied: true}
 	if len(errs) > 0 {
 		out.Errors = errs
 	}
 	return out, nil
-}
-
-// runApprovalSweeper periodically transitions PENDING approvals older than
-// `after` to EXPIRED via approval.ExpireStale, until ctx is cancelled. It mirrors
-// the lifecycle reaper's goroutine shape; the first sweep runs after one tick.
-// reauthExpiryCounter is the ONE thing the sweeper reports upward: how many
-// credential_reauth rows it aged out. An interface rather than *api.Server so
-// the sweeper keeps taking only what it needs, and nil is a no-op.
-type reauthExpiryCounter interface {
-	RecordCredentialReauthExpired(n int)
-}
-
-// st is the INTERFACE the sweep already uses, not the concrete adapter: the
-// body only ever hands it to approval.ExpireStaleByKind. Widening it is what
-// lets the credential re-auth expiry counter be pinned against this loop with a
-// fake store instead of a live Postgres (round-2 F2) — the wiring it counts is
-// three lines here, and a metric nobody can test is a metric nobody can trust.
-func runApprovalSweeper(ctx context.Context, st approval.Store, interval, after time.Duration, m reauthExpiryCounter) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			n, byKind, err := approval.ExpireStaleByKind(ctx, st, after)
-			if err != nil {
-				// NOT a `continue`: since the sweep collects per-row failures
-				// instead of aborting on the first one, a non-nil error and a
-				// non-zero count are both true on the same tick, and skipping
-				// the count here would hide the work the sweep DID do behind
-				// one wedged row.
-				slog.ErrorContext(ctx, "wardynd: approval sweep error", slog.Any("err", err))
-			}
-			// At the transition: this is where a credential re-auth request
-			// actually becomes EXPIRED, and the only place that can count it
-			// honestly — the sidecar holding for it has long since given up, so
-			// no later resolve will ever meet the row. AWS SSO re-auth rows
-			// only (approval.TallyReauthAWSSSO), the series' HELP: an Azure
-			// DevOps sign-in or consent row is credential_reauth too, and is
-			// not — the same split CancelForRun's own tally already makes for
-			// outcome="cancelled".
-			if m != nil && byKind[approval.TallyReauthAWSSSO] > 0 {
-				m.RecordCredentialReauthExpired(byKind[approval.TallyReauthAWSSSO])
-			}
-			if n > 0 {
-				slog.InfoContext(ctx, "wardynd: approval sweep expired stale PENDING approvals",
-					slog.Int("expired", n),
-				)
-			}
-		}
-	}
-}
-
-// runSecretSweepInterval is how often the run-secret eviction lane ticks. Well
-// under api.RunSecretGrace so a cold run's corpus is dropped promptly once it
-// qualifies, and cheap enough to leave unconfigured: one run listing per tick,
-// and none at all while the registry holds nothing.
-const runSecretSweepInterval = 15 * time.Minute
-
-// runSecretSweeper periodically evicts the plaintext masking corpus of runs
-// that have been terminal past api.RunSecretGrace, until ctx is cancelled. Same
-// goroutine shape as runApprovalSweeper; the first sweep runs after one tick.
-func runSecretSweeper(ctx context.Context, srv *api.Server, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if n := srv.SweepRunSecrets(ctx); n > 0 {
-				slog.InfoContext(ctx, "wardynd: evicted masking secrets for cold terminal runs",
-					slog.Int("runs", n),
-				)
-			}
-		}
-	}
-}
-
-// credentialSweepInterval is how often expired stored credentials are deleted
-// (credential-storage design §2.7): daily, so a lapsed sign-in outlives its
-// expiry by at most a day.
-const credentialSweepInterval = 24 * time.Hour
-
-// runCredentialSweeper deletes expired stored credentials once at start and
-// then every interval, until ctx is cancelled. Unlike the sweepers above the
-// first sweep does not wait a tick: a daemon restarted daily would otherwise
-// never sweep. Several replicas may sweep at once; each row is deleted, and
-// audited, by the one that wins its lock.
-func runCredentialSweeper(ctx context.Context, srv *api.Server, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		if n := srv.SweepExpiredCredentials(ctx); n > 0 {
-			slog.InfoContext(ctx, "wardynd: deleted expired stored credentials", slog.Int("deleted", n))
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
-// recordingSweepable is satisfied structurally by BOTH recording.FSStore and
-// recording.PGStore. Sweep is deliberately NOT on recording.Store itself (see
-// the package doc on internal/recording/store.go): retention is a
-// storage-backend concern, and a future object-storage backend would use its
-// bucket's own lifecycle rules instead of an app-level sweep. This unexported
-// interface — rather than promoting Sweep to recording.Store, or duplicating
-// the goroutine-launch code below per concrete type — is the smaller diff for
-// the ONE call site (startBackgroundWorkers' type-assert in boot_serve.go)
-// that needs to sweep whichever concrete store is selected.
-type recordingSweepable interface {
-	Sweep(olderThan time.Duration) (int, error)
-}
-
-// runRecordingSweeper periodically deletes stored session recordings older
-// than `after`, until ctx is cancelled. Only started when the operator sets a
-// retention window (WARDYN_RECORDING_RETENTION_DAYS); unset = keep forever,
-// because a recording is governance evidence and deleting one is an operator
-// decision, not a default.
-//
-// Deletions are audited: a sweep that removed anything emits one
-// recording.retention.sweep event, so the disappearance of evidence is itself
-// evidence. The first sweep runs after one tick, mirroring the other sweepers.
-func runRecordingSweeper(ctx context.Context, s recordingSweepable, rec audit.Recorder, interval, after time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			n, err := s.Sweep(after)
-			if err != nil {
-				slog.ErrorContext(ctx, "wardynd: recording sweep error", slog.Any("err", err))
-			}
-			if n == 0 {
-				continue
-			}
-			slog.InfoContext(ctx, "wardynd: recording sweep deleted expired recordings", slog.Int("deleted", n))
-			data, _ := json.Marshal(map[string]any{"deleted": n, "retention_sec": int64(after.Seconds())})
-			ev := types.AuditEvent{
-				ID:        uuid.New(),
-				Time:      time.Now().UTC(),
-				ActorType: types.ActorSystem,
-				Actor:     "wardyn/recording-sweeper",
-				Action:    "recording.retention.sweep",
-				Target:    "recordings",
-				Outcome:   "success",
-				Data:      json.RawMessage(data),
-			}
-			if rerr := rec.Record(ctx, ev); rerr != nil {
-				audit.LogWriteFailure(ctx, ev, rerr)
-			}
-		}
-	}
 }
 
 // attachLoginGrantSink joins the console login to the credential capture, and

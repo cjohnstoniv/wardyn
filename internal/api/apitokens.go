@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -137,7 +138,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		// created_at. Without it POST /sessions/revoke was a race the sweep
 		// could lose FOREVER: revokeAPITokensFor takes a ListAPITokens snapshot,
 		// and a mint whose INSERT commits after that snapshot is never reachable
-		// by that revoke again — api_tokens has no expiry, so the escaped row is
+		// by that revoke again — a token minted without an expiry never ages out, so the escaped row is
 		// a permanent credential. Closing it on the READ side rather than by
 		// locking the writer also removes the sweep's dependence on winning the
 		// race at all: the sweep still runs (it is what makes GET /api/v1/tokens
@@ -157,7 +158,9 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		// be perfectly good, this deployment simply cannot decide, and the SSO
 		// lane now answers the identical condition the identical way.
 		if s.cfg.SessionRevocations != nil {
-			revoked, rerr := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), t.Principal, t.Email, t.CreatedAt)
+			// The same read asks whether the owner's identity is deactivated (a token has no epoch of
+			// its own: a suspension revokes the tokens it can see, and the mint guard refuses the rest).
+			status, rerr := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, t.Principal, t.Email, t.CreatedAt, -1)
 			if rerr != nil {
 				slog.ErrorContext(r.Context(), "api: session-revocation lookup failed; this api token could not be authenticated",
 					"error", rerr, "path", r.URL.Path)
@@ -165,10 +168,16 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 				writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "api token lookup failed")
 				return
 			}
-			if revoked {
+			if status != oidc.SessionLive {
+				if status == oidc.SessionDeactivated {
+					r = r.WithContext(oidc.WithSessionRejected(r.Context(), authFailedIdentityDeactivated))
+				}
 				fallback.ServeHTTP(w, r)
 				return
 			}
+		}
+		if s.refuseStaleRoleStamp(w, r, t) {
+			return
 		}
 		// Best effort by contract (see Store.TouchAPIToken): a failed touch must
 		// never fail an otherwise-valid request. "Last used" is an operator
@@ -202,6 +211,36 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 // createAPITokenRequest is the POST /api/v1/me/tokens body.
 type createAPITokenRequest struct {
 	Name string `json:"name"`
+	// TTLSeconds is the token's requested lifetime in seconds. Omitted or zero
+	// means the deployment's WARDYN_API_TOKEN_MAX_TTL when one is set, else no
+	// expiry; above that cap it is clamped to it; negative is a 400.
+	TTLSeconds int64 `json:"ttl_seconds,omitempty"`
+}
+
+// apiTokenMaxTTLSeconds bounds a requested lifetime so the arithmetic below
+// cannot overflow a Duration; a hundred years is no expiry in practice.
+const apiTokenMaxTTLSeconds = 100 * 365 * 24 * 60 * 60
+
+// apiTokenLifetime resolves a mint's requested TTL against the deployment cap.
+// It returns the lifetime to stamp (0 = none), the lifetime that was asked for
+// when the cap cut it down (0 = not clamped), and false after a 400.
+func (s *Server) apiTokenLifetime(w http.ResponseWriter, requested int64) (life, clampedFrom time.Duration, ok bool) {
+	if requested < 0 || requested > apiTokenMaxTTLSeconds {
+		writeErrorReason(w, http.StatusBadRequest, reasonAPITokenTTLInvalid,
+			fmt.Sprintf("ttl_seconds: must be between 0 and %d", apiTokenMaxTTLSeconds))
+		return 0, 0, false
+	}
+	life = time.Duration(requested) * time.Second
+	maxTTL := s.cfg.APITokenMaxTTL
+	switch {
+	case maxTTL <= 0:
+		return life, 0, true
+	case life == 0:
+		return maxTTL, 0, true
+	case life > maxTTL:
+		return maxTTL, life, true
+	}
+	return life, 0, true
 }
 
 // handleCreateAPIToken is POST /api/v1/me/tokens: mint a token for the caller's
@@ -293,6 +332,10 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name, ok := apiTokenName(w, req.Name)
+	if !ok {
+		return
+	}
+	lifetime, clampedFrom, ok := s.apiTokenLifetime(w, req.TTLSeconds)
 	if !ok || s.apiTokenCapReached(w, r, sub) {
 		return
 	}
@@ -372,6 +415,11 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var expiresAt *time.Time
+	if lifetime > 0 {
+		t := authorizedAt.Add(lifetime)
+		expiresAt = &t
+	}
 	created, ok := s.insertAPIToken(w, r, types.APIToken{
 		Principal:       sub,
 		Email:           oidcEmailFromContext(ctx),
@@ -381,13 +429,20 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		GroupsTruncated: &groupsTruncated,
 		Name:            name,
 		CreatedAt:       authorizedAt,
+		ExpiresAt:       expiresAt,
 	})
 	if !ok {
 		return
 	}
+	detail := map[string]any{"name": created.Name, "role": created.Role, "user_type": created.UserType}
+	if created.ExpiresAt != nil {
+		detail["expires_at"] = created.ExpiresAt
+	}
+	if clampedFrom > 0 {
+		detail["ttl_clamped_from_seconds"] = int64(clampedFrom / time.Second)
+	}
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"token.create", created.ID.String(), "success",
-		mustJSON(map[string]any{"name": created.Name, "role": created.Role, "user_type": created.UserType})))
+		"token.create", created.ID.String(), "success", mustJSON(detail)))
 	writeJSON(w, http.StatusCreated, created)
 }
 
@@ -413,7 +468,7 @@ func (s *Server) apiTokenCapReached(w http.ResponseWriter, r *http.Request, prin
 	}
 	live := 0
 	for _, e := range existing {
-		if e.RevokedAt == nil {
+		if e.RevokedAt == nil && (e.ExpiresAt == nil || e.ExpiresAt.After(s.cfg.Now())) {
 			live++
 		}
 	}
@@ -432,7 +487,7 @@ func (s *Server) apiTokenCapReached(w http.ResponseWriter, r *http.Request, prin
 func (s *Server) insertAPIToken(w http.ResponseWriter, r *http.Request, t types.APIToken) (types.APIToken, bool) {
 	plaintext := newBearer(apiTokenPrefix)
 	t.ID = uuid.New()
-	created, err := s.cfg.Store.CreateAPIToken(r.Context(), t, plaintext)
+	created, err := s.cfg.Store.CreateAPIToken(guardOwner(r.Context(), t.Principal), t, plaintext)
 	if err != nil {
 		writeServerError(w, r, "create api token", err)
 		return types.APIToken{}, false
@@ -703,6 +758,7 @@ func (s *Server) roleSnapshotDrops(stamped, derived string) bool {
 // the change has not reached the outstanding tokens.
 func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, before, after []oidc.RoleMapping, userTypes []types.UserType) (int, error) {
 	ctx := r.Context()
+	actorCtx := withRequestActor(r)
 	if s.cfg.Store == nil || s.cfg.OIDC == nil || value == "" {
 		return 0, nil
 	}
@@ -737,7 +793,7 @@ func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, befor
 	revoked := 0
 	var failed error
 	for _, p := range principals {
-		n, rerr := s.revokeAPITokensFor(r, p)
+		n, rerr := s.revokeAPITokensFor(actorCtx, p)
 		revoked += n
 		if rerr != nil {
 			slog.WarnContext(ctx, "api: could not revoke every api token of a demoted or re-typed principal",

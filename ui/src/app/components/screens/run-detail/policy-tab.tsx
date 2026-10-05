@@ -22,7 +22,8 @@ import type {
   RunPolicyView,
 } from "../../../lib/types";
 import { adoCapName } from "../../../lib/ado-access-copy";
-import { CAPABILITY, POLICY_UI_APPS } from "../../wardyn/copy";
+import { readPATScope } from "../../../lib/git-pat-scope";
+import { CAPABILITY, GIT_PAT_SCOPE, POLICY_UI_APPS } from "../../wardyn/copy";
 import { CC_META } from "../../wardyn/cc-meta";
 import { CopyButton } from "../../wardyn/copy-button";
 import { toYaml, YamlBlock } from "../../wardyn/code-block";
@@ -369,6 +370,40 @@ function grantScope(scope: Record<string, unknown> | undefined): string {
   return typeof scope?.host === "string" ? scope.host : "";
 }
 
+// What the run's git access token is narrowed to (packet M7, S4): chips for
+// Read-only and Forge API, then the repositories or the everything line. The
+// honesty sentence rides the chips' tooltip.
+function PATNarrowing({ scope }: { scope: Record<string, unknown> | undefined }) {
+  const s = readPATScope(scope);
+  return (
+    <>
+      {(s.access === "read" || s.api) && (
+        <Item>
+          {s.access === "read" && (
+            <span title={GIT_PAT_SCOPE.HONESTY_TOKEN}>
+              <Chip tone="neutral">{SUMMARY.readOnly}</Chip>
+            </span>
+          )}
+          {s.api && (
+            <span title={GIT_PAT_SCOPE.HONESTY_TOKEN}>
+              <Chip tone="neutral">{GIT_PAT_SCOPE.RUN_API}</Chip>
+            </span>
+          )}
+        </Item>
+      )}
+      <Item>
+        {s.repos === undefined ? (
+          GIT_PAT_SCOPE.RUN_REPOS_ALL
+        ) : s.repos.length === 0 ? (
+          GIT_PAT_SCOPE.REPOS_NONE
+        ) : (
+          <Mono>{s.repos.join(", ")}</Mono>
+        )}
+      </Item>
+    </>
+  );
+}
+
 function cpuText(millis?: number): string {
   return millis ? SUMMARY.cpuValue(String(Number((millis / 1000).toFixed(2)))) : SUMMARY.standardLimit;
 }
@@ -412,9 +447,11 @@ function PolicySummary({ spec, run, marks }: { spec: NonNullable<RunPolicyView["
           grants.map((g, i) => (
             <Row key={i} label={SUMMARY.grantKinds[g.kind] ?? g.kind}>
               <Item>
-                <Mono>{grantScope(g.scope)}</Mono>
+                {/* A git_pat's scope.repos narrows it; the row keeps naming the host. */}
+                <Mono>{g.kind === "git_pat" ? readPATScope(g.scope).host : grantScope(g.scope)}</Mono>
                 {g.requires_approval && <Chip tone="warning">{SUMMARY.needsApproval}</Chip>}
               </Item>
+              {g.kind === "git_pat" && <PATNarrowing scope={g.scope} />}
             </Row>
           ))
         )}

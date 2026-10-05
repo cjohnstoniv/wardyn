@@ -533,6 +533,7 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 	// The same repair for an Azure DevOps consent or sign-in request: the
 	// person's new sign-in is the resolution (injection_ado_signin.go).
 	ap = s.reconcileADOReauthOnRead(r.Context(), ap)
+	ap = s.reconcileAzureReauthOnRead(r.Context(), ap)
 	writeJSON(w, http.StatusOK, ap)
 }
 

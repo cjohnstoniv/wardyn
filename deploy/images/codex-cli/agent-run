@@ -36,11 +36,16 @@
 #   validation without a live task.
 #
 # LLM credential note:
-#   Codex CLI reads OPENAI_API_KEY from env.  Wardyn does NOT set this in the
-#   sandbox (secrets never in env, invariant 1).  Operators configure an api_key
-#   CredentialGrant; the proxy mints the key at startup and injects it into
-#   requests to api.openai.com via an InjectionRule.  The /wardyn/llm/openai
-#   route is served (runs_dispatch_llm.go sets OPENAI_BASE_URL to it).
+#   The sandbox holds only the inert sentinel `wardyn-proxy-injected`; the real
+#   key is minted and injected by the proxy (secrets never in env, invariant 1).
+#   Dispatch sets WARDYN_CODEX_BASE_URL (the brokered /wardyn/llm/openai route
+#   plus the path its upstream needs) and CODEX_API_KEY (the sentinel).  Codex
+#   0.149.1 reads neither OPENAI_BASE_URL nor OPENAI_API_KEY, so
+#   prepare_codex_config below turns the two into what it does read: an
+#   `openai_base_url` line in config.toml, and an auth.json written by
+#   `codex login --with-api-key` for the interactive tool (task mode reads
+#   CODEX_API_KEY itself).  OPENAI_BASE_URL/OPENAI_API_KEY stay set for an
+#   operator image carrying an older codex.
 set -euo pipefail
 
 # Shared functions (install_mitm_ca, install_artifact_config,
@@ -56,6 +61,47 @@ source /usr/local/bin/agent-run-lib.sh
 # proxy, the confinement class) and by nothing inside this container.  Said out
 # loud on every launch rather than left to be inferred from an absent file.
 echo "agent-run: no managed agent-side settings — codex reads no managed-policy file, so autonomy level ${WARDYN_AUTONOMY_LEVEL:-none} is enforced at the Wardyn boundary and not inside this sandbox" >&2
+
+# ── codex config ─────────────────────────────────────────────────────────────
+# codex_set_toml_key FILE KEY VALUE: make `KEY = "VALUE"` the one top-level line
+# for KEY in FILE.  Only the top-level KEY line is deleted, and the new line goes
+# BEFORE the first `[` table: codex writes `[projects."<path>"]` tables into the
+# same file, and a key appended after one would be read as that table's key, so
+# neither can a revive leave a duplicate behind.  Other lines are untouched.
+codex_set_toml_key() {
+    local file="$1" key="$2" val="$3" tmp
+    val="${val//\\/\\\\}"; val="${val//\"/\\\"}"
+    [[ -f "$file" ]] || : > "$file"
+    tmp="$(mktemp "$file.XXXXXX")"
+    CODEX_TOML_KEY="$key" CODEX_TOML_LINE="$key = \"$val\"" awk '
+        BEGIN { key = ENVIRON["CODEX_TOML_KEY"]; line = ENVIRON["CODEX_TOML_LINE"]; top = 1; put = 0 }
+        /^[[:space:]]*\[/ { if (top && !put) { print line; put = 1 } top = 0 }
+        top && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" { next }
+        { print }
+        END { if (!put) print line }
+    ' "$file" > "$tmp"
+    mv "$tmp" "$file"
+}
+
+# prepare_codex_config: point codex at its route through the config it reads
+# (and, when dispatch pins one, its model), and authenticate it with the inert
+# sentinel.  Each piece is written only when its variable is non-empty, so a run
+# dispatch gave none leaves config.toml and auth.json exactly as they were.  Run
+# by task mode and --idle, before prep-done.
+prepare_codex_config() {
+    local cfg_dir="${CODEX_HOME:-$HOME/.codex}"
+    mkdir -p "$cfg_dir"
+    if [[ -n "${WARDYN_CODEX_BASE_URL:-}" ]]; then
+        codex_set_toml_key "$cfg_dir/config.toml" openai_base_url "$WARDYN_CODEX_BASE_URL"
+    fi
+    if [[ -n "${WARDYN_CODEX_MODEL:-}" ]]; then
+        codex_set_toml_key "$cfg_dir/config.toml" model "$WARDYN_CODEX_MODEL"
+    fi
+    if [[ -n "${CODEX_API_KEY:-}" ]]; then
+        printf '%s' "$CODEX_API_KEY" | codex login --with-api-key >&2 \
+            || echo "agent-run: WARNING codex login --with-api-key failed; an interactive codex will ask to sign in" >&2
+    fi
+}
 
 # ── selftest ─────────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--selftest" ]]; then
@@ -151,6 +197,7 @@ if [[ "${1:-}" == "--idle" || "${1:-}" == "--revive" ]]; then
     prepare_claude_config_dir  # no-op unless CLAUDE_CONFIG_DIR is set (RO cred mount)
     install_artifact_config
     materialize_aws_sso_config
+    prepare_codex_config
     provision_git_helper_secret
     workdir="${HOME}/work"
     mkdir -p "$workdir"
@@ -204,8 +251,8 @@ fi
 # Tool use is SUPERVISED by default: `codex "<prompt>"` opens the TUI on that
 # prompt under codex's own default approval policy, so it parks its approval
 # prompt in this pane until the human joins.  WARDYN_SEED_AUTO_TOOLS=1 is the
-# explicit per-run opt-out.  No anthropic-style auth wiring exists for codex (the
-# proxy injects the OpenAI key), so there is none to do here.
+# explicit per-run opt-out.  Codex's route and sentinel login were written by
+# prepare_codex_config in --idle's prep, which this pane waits for.
 if [[ "${1:-}" == "--boot-seed" ]]; then
     : "${HOME:=/home/agent}"; export HOME
     seed="${WARDYN_INTERACTIVE_SEED:-}"
@@ -238,6 +285,7 @@ if [[ "${1:-}" == "--boot-seed" ]]; then
     if [[ "${WARDYN_INTERACTIVE_START:-}" == "agent" ]]; then
         echo "agent-run: boot seed — starting codex on the run's prompt" >&2
         seed_argv=(codex)
+        if [[ -n "${WARDYN_CODEX_MODEL:-}" ]]; then seed_argv+=(-m "$WARDYN_CODEX_MODEL"); fi
         if [[ "${WARDYN_SEED_AUTO_TOOLS:-}" == "1" ]]; then
             # VERIFIED against the codex in this image (codex-cli 0.147.0, npm
             # @openai/codex, unpinned at build time): there is NO --full-auto flag;
@@ -289,6 +337,7 @@ prepare_claude_config_dir  # no-op unless CLAUDE_CONFIG_DIR is set (RO cred moun
 # unless WARDYN_ARTIFACT_CONFIG_B64 is set) before clone/install.
 install_artifact_config
 materialize_aws_sso_config
+prepare_codex_config
 
 # Provision the git credential helper caller-auth secret BEFORE any git runs
 # (the clone below and the agent's own git both need it).  Called directly so the
@@ -337,4 +386,6 @@ maybe_exec_task_mode "$task"
 # Run Codex CLI in non-interactive exec mode.
 # `codex exec "<prompt>"` runs a single task without REPL interaction.
 # The exit code from `codex` propagates to the caller.
-exec codex exec "$task"
+exec_argv=(codex exec)
+if [[ -n "${WARDYN_CODEX_MODEL:-}" ]]; then exec_argv+=(-m "$WARDYN_CODEX_MODEL"); fi
+exec "${exec_argv[@]}" "$task"

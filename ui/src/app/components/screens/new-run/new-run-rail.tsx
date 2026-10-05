@@ -37,11 +37,13 @@ import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { ADO } from "../../../lib/ado-entra-copy";
 import type { SCMAccessPAT } from "../../../lib/types/ado-pat";
 import { PEOPLE } from "../../../lib/people-access-copy";
-import { NO_BARRIER, RAIL, RAIL_PROVIDER, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
+import { NO_BARRIER, RAIL, RAIL_CHECK, RAIL_PROVIDER, RAIL_RECORDING_ON, RAIL_SETUP, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { useOperator, useUserViewSuperAdmin } from "../../wardyn/operator-context";
 import { useViewAccess } from "../../wardyn/console-view";
 import { RailSection } from "./new-run-primitives";
+import { PolicyRemedy } from "../../wardyn/policy-remedy";
+import type { PolicyRef } from "../../../lib/api/health";
 import { CredentialFacts, ModelProviderSection } from "./new-run-rail-credentials";
 import type { ProviderGate } from "./model-provider-lane";
 import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
@@ -56,12 +58,19 @@ interface RunRailProps {
    * unassigned member's rail is byte-for-byte what it was.
    */
   governanceProfile?: string;
+  /** GET /me's governance_contact: who owns the policy bounding this caller and
+   *  how to ask for a change. Rendered beside the profile line; absent or null
+   *  renders nothing. */
+  governanceContact?: PolicyRef | null;
   /** The stored policy this run launches by reference, when there is one. */
   savedPolicy?: { name: string; spec: RunPolicySpec };
   /** The barrier the run requests (a separate wire field from the spec floor). */
   cc: ConfinementClass;
   /** An agent run with no model path launches, then fails its first model call. */
   showModelWarning: boolean;
+  /** Launch is already blocked on the missing model: the block sentence speaks, so this
+   *  rail adds neither the no-provider advice nor "Resolved at launch.". */
+  modelBlocked?: boolean;
   /** What happens the moment this launches, in one sentence. */
   startup: string;
   /** Autonomous + held tool approvals: every call parks for a human. */
@@ -85,6 +94,12 @@ interface RunRailProps {
     inFlight: boolean;
     /** Why Launch cannot be pressed — a disabled button that won't say is a dead end. */
     problem: string | null;
+    /** A fresh server refusal for THIS body holds Launch (use-launch's
+     *  preflightBlock). No text of its own: the preflight alert below already
+     *  shows the server's sentence, or the `problem` line the folded rows use. */
+    preflightBlock?: boolean;
+    /** An action that rides on the `problem` line (f-f5: "Connect →"). */
+    problemLink?: { to: string; label: string };
     /** #922 review F5: an ADDITIONAL disable with no text of its own — the
      *  workspace picker's own advisory line (workspace-card.tsx) already
      *  names the reason, so Launch disables without the rail repeating the
@@ -100,6 +115,9 @@ interface RunRailProps {
     /** Bumped on every failed launch (see use-launch.ts) so a repeated,
      *  identical failure remounts the alert region and is re-announced (#459). */
     errorSeq: number;
+    /** The launch refusal's `policy` (the error envelope), for the Request
+     *  access remedy under the alert. */
+    policy?: PolicyRef;
     /** The server refused this launch for the caller's own model credential (a
      *  422 carrying reason `model_credential`) — the one refusal a sign-in
      *  repairs, so the rail answers it with the door and launches again. */
@@ -108,8 +126,21 @@ interface RunRailProps {
      *  one that opens (#543). Optional so a caller with no provider block
      *  passes nothing. */
     refusedProvider?: string;
+    /** The request Launch would send right now. A click-armed relaunch after
+     *  sign-in only fires while this still equals the body the click was for. */
+    body?: string | null;
   };
   preflight: {
+    /** Re-runs preflight on the current body — a preflight-origin sign-in's
+     *  only action (it never launches). */
+    onPreflight?: () => void | Promise<void>;
+    /** Preflight's own model-credential refusal: the body it graded and the
+     *  provider it names, "" when none. */
+    refusal?: { body: string; provider: string } | null;
+    /** A check is in flight (M1 S3). */
+    checking?: boolean;
+    /** The current body's last check was a 429 (M1 S3). */
+    notChecked?: boolean;
     error: string | null;
     /** Same remount purpose as launch.errorSeq, for the preflight alert. */
     errorSeq: number;
@@ -239,9 +270,11 @@ export function pushRulesIsSet(s: PushRulesSpec | undefined): boolean {
 
 export function RunRail({
   governanceProfile,
+  governanceContact,
   savedPolicy,
   cc,
   showModelWarning,
+  modelBlocked,
   startup,
   showHoldNote,
   toolRules,
@@ -258,6 +291,9 @@ export function RunRail({
   const operator = useOperator();
   const userViewSuperAdmin = useUserViewSuperAdmin();
   const access = useViewAccess();
+  const canSetUpBarrier = operator || (access === "session-user" && userViewSuperAdmin);
+  // M1 S1: only rows that need attention; `satisfied` stays hidden.
+  const setupRows = (preflight.result?.setup_items ?? []).filter((i) => i.status === "missing" || i.status === "unverified");
   // Both of finding 1's facts, read rather than asserted: where the model
   // credential lands, and whether this deployment records anything at all.
   // `recordingDisabled` is tri-state — undefined until /healthz answers.
@@ -290,7 +326,10 @@ export function RunRail({
   // The door opens here, and the same launch fires again the moment the sign-in
   // lands, so a lapsed session costs one dialog rather than a trip to Getting
   // started. Launch stays the server's decision: nothing is pre-checked on the
-  // cached status, which can be five minutes stale. Once per click: a relaunch
+  // cached status, which can be five minutes stale. The one exception is
+  // preflight's own answer for this exact body: a 4xx it gave less than a minute
+  // ago (never model_credential, never a 429) holds Launch (preflightBlock).
+  // Once per click: a relaunch
   // refused again (a pin contradiction the same identity cannot repair) leaves
   // the sentence and waits for the person. Never over a door someone else
   // opened: openDoor overwrites the opener, and the strip's focus contract
@@ -303,6 +342,15 @@ export function RunRail({
   // that click asked for and lands on it.
   const onLaunchRef = React.useRef(launch.onLaunch);
   onLaunchRef.current = launch.onLaunch;
+  const onPreflightRef = React.useRef(preflight.onPreflight);
+  onPreflightRef.current = preflight.onPreflight;
+  // This screen's current body, read at fire time — the door is the shell's and
+  // outlives the route, so it cannot be trusted to forget a stale closure.
+  const bodyRef = React.useRef(launch.body);
+  bodyRef.current = launch.body;
+  // Only the Launch button's click arms a launch-after-sign-in; it records the
+  // body the click was for, and the effect below hands it to the door once.
+  const clickArm = React.useRef<{ body: string | null | undefined } | null>(null);
   const autoOpened = React.useRef(false);
   const refusedProvider = launch.refusedProvider ?? "";
   React.useEffect(() => {
@@ -314,12 +362,42 @@ export function RunRail({
     // click (#146's ruling). A provider this person has no door for, or a
     // refusal naming no provider (a sign-in renewal that did not complete),
     // opens nothing (resolveDoor's null) and the sentence stands.
+    const armed = clickArm.current;
+    clickArm.current = null;
     if (refusedProvider) {
-      door.openDoor({ for: { provider: refusedProvider }, returnTo: launchRef.current, onSignedIn: () => onLaunchRef.current() });
+      let fired = false;
+      door.openDoor({
+        for: { provider: refusedProvider },
+        returnTo: launchRef.current,
+        // Launches only the body the click was for, once; anything else is a
+        // re-check of what is on screen now. Not disarmed by onClosed, which
+        // also runs on a successful sign-in.
+        onSignedIn: () => {
+          if (armed && !fired && armed.body === bodyRef.current) {
+            fired = true;
+            return onLaunchRef.current();
+          }
+          return onPreflightRef.current?.();
+        },
+      });
     }
     // The strip catches up with what the server just said.
     void door.refresh();
   }, [launch.credentialRefused, refusedProvider, door]);
+
+  // A preflight-origin refusal opens the same door, but its sign-in only
+  // re-checks. At most once per body and provider, never over another door.
+  const preflightOpened = React.useRef("");
+  const refusal = preflight.refusal ?? null;
+  React.useEffect(() => {
+    if (!refusal?.provider) return;
+    const key = `${refusal.provider}\n${refusal.body}`;
+    if (preflightOpened.current === key) return;
+    preflightOpened.current = key;
+    if (door.open) return;
+    door.openDoor({ for: { provider: refusal.provider }, returnTo: launchRef.current, onSignedIn: () => onPreflightRef.current?.() });
+    void door.refresh();
+  }, [refusal, door]);
 
   // A run with no model credential to describe (a shell command — the screen
   // withholds agentRow for one), no model-access line and no warning to raise
@@ -335,7 +413,7 @@ export function RunRail({
   // connected. This run launches; its first model call fails." Nothing
   // resolves at launch when there is nothing to resolve. A resolved credential
   // still states itself — that sentence is read off the verdict, not guessed.
-  const showCredentialFacts = !!cred || (!!agentRow && !showModelWarning);
+  const showCredentialFacts = !!cred || (!!agentRow && !showModelWarning && !modelBlocked);
   // #181 review finding 6 — pushRulesIsSet(pushRules) alone is true for a
   // policy that sets ONLY max_inspect_pack_mib (no deny_paths/
   // require_review_paths at all): there is nothing to say about PATHS in
@@ -419,6 +497,7 @@ export function RunRail({
                 {governanceProfile && (
                   <p className="mt-1 text-xs text-muted-foreground">{AUTONOMY_RAIL.PROFILE_LINE(governanceProfile)}</p>
                 )}
+                <PolicyRemedy policy={governanceContact} className="mt-1 block" />
               </>
             ) : (
               <p className="text-xs text-muted-foreground">
@@ -446,7 +525,7 @@ export function RunRail({
               harnessLabel={modelProvider.harnessLabel}
             />
           )}
-          {!hasProviderCandidates && showModelWarning && (
+          {!hasProviderCandidates && showModelWarning && !modelBlocked && (
             <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
               {RAIL_MODEL_ACCESS.NO_PROVIDER}{" "}
               {/* The action that fills the gap rides next to the
@@ -537,6 +616,7 @@ export function RunRail({
           </span>
         </p>
       )}
+      {launch.error && <PolicyRemedy policy={launch.policy} className="mt-1 block" />}
 
       {/* Preflight lives on the Policy panel, next to the document it checks —
           one button, not two competing ones. Its result stays here, beside
@@ -550,9 +630,10 @@ export function RunRail({
           ref={launchRef}
           type="button"
           className="flex-1"
-          disabled={launch.disabled || !!launch.problem || !!launch.workspaceUnavailable || !!launch.noBarrier}
+          disabled={launch.disabled || !!launch.problem || !!launch.workspaceUnavailable || !!launch.noBarrier || !!launch.preflightBlock}
           onClick={() => {
             autoOpened.current = false;
+            clickArm.current = { body: bodyRef.current };
             void launch.onLaunch();
           }}
         >
@@ -575,7 +656,28 @@ export function RunRail({
           gate is also active, since it's a separate reason nothing has
           launched yet. */}
       {launch.problem && !launch.inFlight && launch.problem !== gateSentence(modelProvider) && (
-        <p className="mt-2 text-center text-xs text-muted-foreground">{launch.problem}</p>
+        <p className="mt-2 text-center text-xs text-muted-foreground">
+          {launch.problem}
+          {/* f-f4: the same CTA, under the same operator/super-admin rule, as
+              the no-barrier line below. */}
+          {launch.problem === RAIL_SETUP.BACKEND_BLOCK && canSetUpBarrier && (
+            <>
+              {" "}
+              <Link to={NO_BARRIER.ADMIN_ROUTE} className="font-medium text-info hover:underline">
+                {NO_BARRIER.CTA}
+              </Link>
+              .
+            </>
+          )}
+          {launch.problemLink && (
+            <>
+              {" "}
+              <Link to={launch.problemLink.to} className="font-medium text-info hover:underline">
+                {launch.problemLink.label}
+              </Link>
+            </>
+          )}
+        </p>
       )}
       {/* #214 — the one control that genuinely cannot work says so beside
           itself, not in a tooltip, with a route to the step that fixes it.
@@ -594,7 +696,7 @@ export function RunRail({
       {launch.noBarrier && !launch.inFlight && (
         <p className="mt-2 text-center text-xs text-muted-foreground">
           {NO_BARRIER.LAUNCH_REASON}
-          {(operator || (access === "session-user" && userViewSuperAdmin)) && (
+          {canSetUpBarrier && (
             <>
               {" "}
               <Link to={NO_BARRIER.ADMIN_ROUTE} className="font-medium text-info hover:underline">
@@ -602,6 +704,19 @@ export function RunRail({
               </Link>
               .
             </>
+          )}
+        </p>
+      )}
+
+      {(preflight.checking || preflight.notChecked) && (
+        <p data-testid="preflight-check-state" className="mt-2 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+          {preflight.checking ? (
+            <>
+              <Loader2 className="size-3 animate-spin" />
+              {RAIL_CHECK.CHECKING}
+            </>
+          ) : (
+            RAIL_CHECK.NOT_CHECKED
           )}
         </p>
       )}
@@ -627,6 +742,19 @@ export function RunRail({
             {preflight.result.overall_risk && <RiskBadge level={preflight.result.overall_risk} />}
             <ConfinementChip value={preflight.result.enforced_confinement_class} />
           </div>
+          {setupRows.length > 0 && (
+            <div className="mb-1.5">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{RAIL_SETUP.HEADING}</p>
+              <ul className="space-y-0.5 text-xs">
+                {setupRows.map((r) => (
+                  <li key={r.id} className={r.kind === "backend" && r.status === "missing" ? "text-danger" : "text-warning"}>
+                    {r.label}
+                    {r.detail ? ` — ${r.detail}` : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {preflight.result.warnings && preflight.result.warnings.length > 0 ? (
             <ul className="list-disc space-y-0.5 pl-4 text-xs text-warning">
               {preflight.result.warnings.map((w, i) => (

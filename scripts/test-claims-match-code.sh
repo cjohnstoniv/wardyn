@@ -258,8 +258,10 @@ rbac="${ROOT}/deploy/helm/wardyn/templates/rbac.yaml"
 # not a verb wardynd ever issues (and granting pvc:list would be wrong).
 k8s_files="$(find "${k8s_src}" -maxdepth 1 -name '*.go' ! -name '*_test.go' | sort)"
 [ -n "${k8s_files}" ] || fail "no non-test .go files under internal/runner/k8s — this guard would check nothing (R-02)"
+# Namespaced accessors only (they take the namespace): a cluster-scoped list such as Nodes() is
+# the ClusterRole's to grant, never this Role's.
 # shellcheck disable=SC2086
-grep -hoE '(CoreV1|NetworkingV1|RbacV1)\(\)\.[A-Za-z]+\([^)]*\)\.List\(' ${k8s_files} \
+grep -hoE '(CoreV1|NetworkingV1|RbacV1)\(\)\.[A-Za-z]+\([^)]+\)\.List\(' ${k8s_files} \
   | sed -E 's/.*\(\)\.([A-Za-z]+)\(.*/\1/' | sort -u > "${WORK}/k8s-list-kinds"
 [ -s "${WORK}/k8s-list-kinds" ] || fail "no .List( call found in internal/runner/k8s — this guard would check nothing (R-02)"
 # The Role's rules only (not the cluster-scoped ClusterRole): granting a verb

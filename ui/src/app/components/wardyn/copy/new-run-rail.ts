@@ -38,6 +38,22 @@ export const RAIL = {
   PREFLIGHT_ERROR_LABEL: "Preflight failed",
 } as const;
 
+// M1 (approved 2026-10-03) — preflight's setup rows. The row text is the
+// server's own (the same label and detail `wardyn run --dry-run` prints), so
+// only the heading and the Launch reason are written here.
+export const RAIL_SETUP = {
+  HEADING: "Setup",
+  BACKEND_BLOCK: "This host can't build the barrier this run needs.",
+} as const;
+
+// M1 (approved 2026-10-03) — the automatic check's states and its manual button.
+export const RAIL_CHECK = {
+  CHECKING: "Checking this run…",
+  NOT_CHECKED: "Not checked — too many checks this minute. It retries on your next edit.",
+  BUTTON: "Check again",
+  HINT: "Checked as you edit. A refusal holds Launch for up to a minute.",
+} as const;
+
 export const RAIL_CREDENTIAL = {
   // residency "proxy": late-bound, swapped onto the wire, never resident.
   // U-15: "minted" was true of the Bedrock exchange this lane is NOT — a static
@@ -59,7 +75,7 @@ export const RAIL_CREDENTIAL = {
   // …and therefore the way to find out, said where the absence is. Without it
   // "Resolved at launch." reads as "nothing to see", when the precise answer is
   // one click away on the panel directly to the left.
-  RUN_PREFLIGHT_HINT: "Run Preflight to see where this run's model credential will live.",
+  RUN_PREFLIGHT_HINT: "Press Check again to see where this run's model credential will live.",
 } as const;
 
 // #542 (design §5.6, packet MP-C — approved as drawn 2026-09-25) — the New Run

@@ -23,14 +23,18 @@ import type {
   SetupProviderAccess,
   Workspace,
 } from "../../../lib/types";
-import { RAIL_PROVIDER, RUN } from "../../wardyn/copy";
-import { savedPolicyGone } from "./policy-lane";
-import { workspaceUnavailableToCaller, type WizardState } from "./wizard-types";
+import { RAIL_SETUP } from "../../wardyn/copy";
+import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
+import { launchGates } from "./new-run-launch-gates";
+import type { WizardState } from "./wizard-types";
 import { RunRail } from "./new-run-rail";
 import type { ProviderGate } from "./model-provider-lane";
+import type { PolicyRef } from "../../../lib/api/health";
 
 export interface NewRunLaunchPanelProps {
   governanceProfile: string | undefined;
+  /** GET /me's governance_contact, for the remedy beside the profile line. */
+  governanceContact?: PolicyRef;
   savedPolicy: { id: string; name: string; spec: RunPolicySpec } | undefined;
   cc: ConfinementClass;
   showModelWarning: boolean;
@@ -59,9 +63,20 @@ export interface NewRunLaunchPanelProps {
   launching: boolean;
   error: string | null;
   errorSeq: number;
+  /** The launch refusal's own `policy`, for the remedy under the alert. */
+  errorPolicy?: PolicyRef;
   credentialRefused: boolean;
   refusedProvider: string | undefined;
+  /** The request Launch would send right now — see RunRailProps.launch.body. */
+  launchBody: string | null;
+  /** Re-runs preflight on the current body: what a preflight-origin sign-in does. */
+  onPreflight: () => Promise<void>;
+  preflightRefusal: { body: string; provider: string } | null;
   noBarrier: boolean;
+  /** The barrier probe read no class list: no runner is configured, or the
+   *  status read failed. Create-run skips its capability gate with no runner,
+   *  so a `missing` backend row then predicts no refusal and never blocks. */
+  runnerUnknown?: boolean;
 
   /** The screen's ONE validation rule (RunRail's `launch.problem`) and the
    *  #922 workspace-availability disable (`launch.workspaceUnavailable`) —
@@ -81,6 +96,13 @@ export interface NewRunLaunchPanelProps {
 
   /** RunRail's `preflight` object, flattened. */
   preflightIsCurrent: boolean;
+  /** Current body AND graded less than a minute ago (use-launch.ts). */
+  preflightFresh: boolean;
+  /** A fresh refusal for this body holds Launch (use-launch's preflightBlock). */
+  preflightBlock: boolean;
+  /** A check is in flight / the current body's last check was a 429. */
+  preflightChecking: boolean;
+  preflightNotChecked: boolean;
   preflightError: string | null;
   preflightErrorSeq: number;
   preflightResult: PreflightResult | null;
@@ -103,6 +125,7 @@ export interface NewRunLaunchPanelProps {
 
 export function NewRunLaunchPanel({
   governanceProfile,
+  governanceContact,
   savedPolicy,
   cc,
   showModelWarning,
@@ -119,9 +142,14 @@ export function NewRunLaunchPanel({
   launching,
   error,
   errorSeq,
+  errorPolicy,
   credentialRefused,
   refusedProvider,
+  launchBody,
+  onPreflight,
+  preflightRefusal,
   noBarrier,
+  runnerUnknown,
   mode,
   task,
   useSaved,
@@ -134,6 +162,10 @@ export function NewRunLaunchPanel({
   caps,
   modelProviders,
   preflightIsCurrent,
+  preflightFresh,
+  preflightBlock,
+  preflightChecking,
+  preflightNotChecked,
   preflightError,
   preflightErrorSeq,
   preflightResult,
@@ -163,83 +195,66 @@ export function NewRunLaunchPanel({
 
   const showHoldNote = !isInteractive && isAgent && agent === "claude-code" && toolApprovals !== "hold";
 
-  // The screen's ONE validation rule. Deliberately a local derivation rather
-  // than a shared validator: it answers "can this button be pressed", which is
-  // this screen's question, and a second general-purpose answer living
-  // elsewhere is what drifts out of sync with the form it describes.
-  const needsTask = !isAgent || mode === "batch";
-  // #922: the CHOSEN workspace, resolved the same way workspace-card.tsx's own
-  // per-reason advisory lines resolve it (state.workspaces[0] is the primary
-  // selection) — folded into ONE generic reason via workspaceUnavailableToCaller,
-  // never the picker's own more specific copy (that stays put, unchanged).
-  //
-  // review F2: the model-provider arm is gated on `isAgent` — a Shell/exec run
-  // sends no `agent`, and the server's own model-provider door only ever asks
-  // for a model run (run_model_provider.go's `needsModel`/`createDoorIsModelRun`,
-  // runs_dispatch_llm.go's `taskMode != "exec"`); applying it to every run type
-  // was a false-disable for a command the server would happily admit. The
-  // WORKSPACE and git-provider arms (#1267's `available_to_you`) are NOT
-  // gated — they refuse regardless of run type, because the server excludes
-  // the model-provider pin from that flag for the identical reason.
-  const pickedWorkspace = workspaces.find((w) => w.id === selectedWorkspaceId);
-  const workspaceUnavailable =
-    !!pickedWorkspace && workspaceUnavailableToCaller(pickedWorkspace, caps, modelProviders, isAgent);
-  // #1197 L2: Title dropped out of this chain — the server never required
-  // one (runs_create_validate.go's own doc comment), only the console did,
-  // and the console default now derives one from the task instead of asking.
-  //
-  // review F5: `workspaceUnavailable` is NOT a clause here — it disables
-  // Launch through the rail's own `workspaceUnavailable` prop instead (below),
-  // so the sentence renders exactly once, on the workspace picker's own
-  // advisory line (workspace-card.tsx), never a second time in the rail's
-  // problem slot.
-  const problem = needsTask && !task.trim()
-    ? isAgent
-      ? "An autonomous run needs a task to perform."
-      : "Enter a command to run."
-    : // A Custom policy that doesn't parse has nothing to send. The saved
-      // lane launches by reference, so its body is never on the wire.
-      !useSaved && !specParsedOk
-      ? "The policy spec isn't valid JSON."
-      : savedPolicyGone(useSaved, selectedPolicyId, savedPolicy, policiesLoaded) // F2-F5
-        ? RUN.POLICY_GONE
-        : useSaved && !selectedPolicyId
-          ? "Pick a saved policy, or write a custom one."
-          : // R5b (#1052) — no provider serves this person for this agent at
-            // all, though at least one serves it org-wide. Launch is refused,
-            // never silently left on R9's "nothing to see" shape.
-            providerGateState?.kind === "not_granted"
-            ? RAIL_PROVIDER.NOT_GRANTED(agentName)
-            : // R5c (#542 rail-gap packet) — the admin's own default is
-              // disabled. Named regardless of how many other candidates
-              // remain, until an explicit pick lands (same "silent once
-              // chosen" rule as R7's changeNote).
-              providerGateState?.kind === "default_off" && !selectedModelProviderId
-            ? providerCandidates.length > 0
-              ? RAIL_PROVIDER.DEFAULT_OFF(
-                  providerGateState.provider.name ?? providerGateState.provider.id,
-                  agentName,
-                )
-              : RAIL_PROVIDER.DEFAULT_OFF_ONLY(
-                  providerGateState.provider.name ?? providerGateState.provider.id,
-                  agentName,
-                )
-            : // R6 (QC-4): several candidates, none granted as this agent's
-              // default (or the default isn't one of them) — Wardyn never
-              // silently substitutes, so Launch waits for an explicit pick.
-              // Rule (3): a workspace pin already answers "why wait" its own
-              // way (the server's own named refusal on launch), so this
-              // generic hint stays silent whenever one is set.
-              providerCandidates.length > 1 && !selectedModelProviderId && !pin
-              ? RAIL_PROVIDER.LAUNCH_HINT
-              : null;
+  // The screen's ONE validation rule lives in launchGates, the same pure
+  // derivation the screen reads to decide whether an automatic preflight may
+  // fire. `workspaceUnavailable` is NOT a `problem` clause: it disables Launch
+  // through the rail's own prop, so the sentence renders once, on the workspace
+  // picker's own advisory line (review F5).
+  const gates = launchGates({
+    isAgent,
+    mode,
+    task,
+    useSaved,
+    specParsedOk,
+    selectedPolicyId,
+    savedPolicy,
+    policiesLoaded,
+    pin,
+    workspaces,
+    selectedWorkspaceId,
+    caps,
+    modelProviders,
+    providerGateState,
+    providerCandidates,
+    selectedModelProviderId,
+    agentName,
+  });
+  const workspaceUnavailable = gates.workspaceUnavailable;
+  // f-f4: preflight's `backend` row says this runner cannot enforce the run's
+  // barrier; Launch would 422 on it, so the rail says so first. Only a FRESH
+  // verdict for the CURRENT body counts (use-launch's preflightFresh), and only
+  // `missing`: an `unverified` row never blocks. Not when `noBarrier`: a host
+  // with no barrier at all has its own host-wide line in the rail. Not when
+  // `runnerUnknown` either: with no runner configured Launch is not refused,
+  // so neither is it blocked here.
+  const backendMissing =
+    !noBarrier &&
+    !runnerUnknown &&
+    preflightFresh &&
+    !!preflightResult?.setup_items?.some((i) => i.kind === "backend" && i.status === "missing");
+  // f-f5: mirrors the server's runNeedsModelWarning. An unattended agent run
+  // with no reachable model waits. Interactive bodies are exempt. The verdict
+  // is the current body's own fresh preflight `llm_access` row.
+  const modelBlocked =
+    isAgent &&
+    !isInteractive &&
+    preflightFresh &&
+    !!preflightResult?.setup_items?.some((i) => i.kind === "llm_access" && i.status === "missing");
+  const problem = backendMissing
+    ? RAIL_SETUP.BACKEND_BLOCK
+    : (gates.problem ?? (modelBlocked ? RAIL_MODEL_ACCESS.UNATTENDED_BLOCK(agentName) : null));
+  // The Connect link belongs to the unattended-block sentence only; an
+  // earlier arm that wins while modelBlocked is true keeps its own sentence.
+  const modelBlockShown = modelBlocked && problem === RAIL_MODEL_ACCESS.UNATTENDED_BLOCK(agentName);
 
   return (
     <RunRail
       governanceProfile={governanceProfile}
+      governanceContact={governanceContact}
       savedPolicy={savedPolicy}
       cc={cc}
       showModelWarning={showModelWarning}
+      modelBlocked={modelBlocked}
       startup={startup}
       showHoldNote={showHoldNote}
       toolRules={toolRules}
@@ -248,6 +263,8 @@ export function NewRunLaunchPanel({
       launch={{
         onLaunch,
         disabled: launchDisabled,
+        preflightBlock,
+        problemLink: modelBlockShown ? { to: "/account", label: RAIL_MODEL_ACCESS.NO_PROVIDER_CTA } : undefined,
         spinning: launchSpinning,
         inFlight: launching,
         problem,
@@ -259,13 +276,15 @@ export function NewRunLaunchPanel({
         noBarrier,
         error,
         errorSeq,
+        policy: errorPolicy,
         credentialRefused,
         refusedProvider,
+        body: launchBody,
       }}
       preflight={
         preflightIsCurrent
-          ? { error: preflightError, errorSeq: preflightErrorSeq, result: preflightResult }
-          : { error: null, errorSeq: preflightErrorSeq, result: null }
+          ? { error: preflightError, errorSeq: preflightErrorSeq, result: preflightResult, onPreflight, refusal: preflightRefusal, checking: preflightChecking, notChecked: preflightNotChecked }
+          : { error: null, errorSeq: preflightErrorSeq, result: null, onPreflight, refusal: preflightRefusal, checking: preflightChecking, notChecked: false }
       }
       agentRow={agentRow}
       modelProvider={

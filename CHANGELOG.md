@@ -12,6 +12,560 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- **Store mode without an age key or a key service now refuses to start.** With `WARDYN_SECRET_STORE=vaultkv`
+  or `azurekv`, no `WARDYN_AGE_KEY` and no key service, the per-person keys that seal run masking copies had
+  nothing to wrap under, so a run silently lost its credentials (an `env_secret` grant was left out; an Azure
+  DevOps token was refused). wardynd now refuses to serve, and the Helm chart refuses the render. Remedy: set
+  `WARDYN_AGE_KEY` (`wardynd -gen-age-key`) or a key service (`WARDYN_KEK=transit` or `azurekv`; chart
+  `kek.provider`). The maintenance modes (`-migrate-secrets`, `-rewrap`) still run.
+- **An unplaceable Kubernetes run now waits for room.** A run whose pods no machine has room for used to
+  fail at 90 seconds (the proxy's IP bound); it now stays `STARTING`, showing "Waiting for a machine with
+  room for this sandbox.", for up to `WARDYN_SANDBOX_CAPACITY_WAIT` (15 minutes). Set it to `0` to keep
+  failing fast. `WARDYN_SANDBOX_START_TIMEOUT` (default 3 minutes) is now one absolute deadline across the
+  proxy and agent pods, replacing the separate 90 second proxy bound. See "The start deadlines" in
+  `docs/OPERATIONS.md`.
+- **The shipped `examples/policies/default.json` now sets `auto_stop_after_sec` to `3600`**, so a run idle for an hour is stopped.
+  Policies you already copied from it are unchanged. But the image's default `WARDYN_DEFAULT_POLICY` points at that file, so a
+  deployment that uses the shipped file as its default policy now stops idle runs on upgrade. To keep the old behaviour, point
+  `WARDYN_DEFAULT_POLICY` at a policy with `auto_stop_after_sec` set to `0`.
+  The shipped file is also the ceiling member runs are clamped to, so while it is in use a member's `auto_stop_after_sec` of `0`,
+  a negative value, or more than `3600` is capped to `3600` with a warning, including the `-1` that interactive and SSH sessions
+  use (admins are not clamped). On Kubernetes without metrics-server the CPU signal is off (see `/setup/status`), so a busy run
+  that makes no egress calls and has no attach is also stopped after an hour.
+- **Postgres 13+ required.** Migration `0107_pg13_floor` changes nothing; on a server older than 13 it
+  refuses with a message naming the version, and the database is left exactly as 0.8.5 left it. Upgrade
+  the database server first. Take a dump before this upgrade: the audit conversion that follows in this
+  release is one-way.
+- **Every sign-in now records an identity row.** Migration `0113_principal_identities` adds the
+  `principal_identities` and `principal_identity_aliases` tables, and each successful sign-in on any issuer
+  writes one row for the person and keeps every email it was seen under. The People directory, the
+  sign-in gate and SCIM read them, and a deactivated identity signs in nowhere (see the next entry).
+- **A deactivated identity now signs in nowhere, on every issuer.** Migration `0127_deprovision_jobs` adds the
+  `deprovision_jobs` table and a nullable `people.deactivated_at`. A sign-in now writes its identity row and
+  reads its deactivation inside the gate, and fails closed: a database outage denies sign-ins, as an unreadable
+  role-mapping store already did. Session cookies gain an optional `ae` field; an old cookie reads as epoch 0
+  and stays valid until its person's first suspension. There is no downgrade: a 0.8.5 binary refuses a
+  database this migration has touched, so the way back is to restore the pre-upgrade dump.
+- **A sign-in is refused when its identity row is bound to another principal.** Each identity row keeps the
+  principal its first sign-in bound it to. An Entra person known here only by an earlier sign-in under their
+  pairwise sub now keeps that sub when an admin adds them on People by object id, as one who owned tokens or
+  keys already did. A sign-in that would still carry a session under a different principal is refused
+  ("sign-in refused"; the log names both principals at error), where it used to get a session that the
+  identity's suspension did not reach. This refuses a person whose identity is bound to their
+  `entra:<tenant>:<object id>` principal once their People entry is removed (remedy: add them again by object
+  id), and an Entra person whose pairwise sub changed, for example after the app registration was replaced.
+- **`WARDYN_ROLE_STAMP_TTL`** (default off) makes an API token or console session whose role stamp is older
+  than the TTL sign in again before it works, so a demotion made only at the identity provider reaches
+  them. Migration `0115_api_tokens_identity_stamped_at` backfills each token's stamp to its `created_at`,
+  so turning the TTL on asks every token holder to sign in once. Unset, nothing changes.
+- **`wardynd -migrate-only`** runs the schema migration alone and exits, for an upgrade that must run under
+  stopped writers. It refuses (exit 3) while another wardynd holds the single-instance lock or any other
+  client is connected to the database, and exits 1 when the migration fails. See "Stopped-writer upgrade"
+  in `docs/OPERATIONS.md`.
+- **Move the proxy image pin in the same step as wardynd, image first.** From 0.8.6 wardynd writes
+  `attribution` into the proxy's config for every run launched under a governance profile (contact or not)
+  and for every run when `policy_help` is set. A 0.8.5 proxy refuses that key at startup and the run fails
+  to launch, so the proxy image must be the 0.8.6 image before wardynd is upgraded on any deployment that
+  assigns a governance profile. If you pin `WARDYN_PROXY_IMAGE` or `k8s.proxyImage` by digest, move the
+  pin with wardynd.
+- **The audit log becomes a monthly-partitioned table, and every audit write goes through the database
+  function `audit_append`** (`0111_audit_partitioned`, `0112_audit_chain_partitioned`). The conversion is
+  one-way and needs stopped writers: a 0.8.5 binary's direct `INSERT` is refused afterwards, and 0.8.5 will not
+  start against the converted schema. History and hashes are untouched and verify as before. A split-role app
+  role that held `INSERT` on `audit_events` is granted `EXECUTE` on `audit_append` and `audit_ensure_partitions`
+  (and, from the retention migration, the retention functions) by the migration and loses `INSERT`; a role you add later needs that grant, and wardynd refuses to start
+  without it. Conversion time by row count is in "What the audit conversion does", `docs/OPERATIONS.md`.
+- **Dry-run audit rows are marked and summarised.** Every audit row written while serving `POST /runs/preflight`
+  now carries `dry_run: true`, and a repeated identical refusal inside ten minutes is counted into one appended
+  `preflight.denial.coalesce` row instead of one `authz.denied` row per keystroke. Rows written before this
+  release carry no marker, so a SIEM rule over `authz.denied` sees fewer dry-run rows and a new summary action
+  (`count` includes the first row). The windows are per replica. Launch refusals are unchanged.
+- The chart's startup probe window now follows `WARDYN_MIGRATE_TIMEOUT` (30 s connect, the timeout, 120 s of
+  slack). A value spelled with anything but `h`, `m` and `s` fails the render.
+- **Chart installs get a smaller default sandbox (1000m CPU, 2048 MiB).** A run whose policy sets no
+  resources used to get 2000m/4096Mi; the Helm chart now ships `runner.sandbox.defaultResources` at
+  1000m/2048Mi so a run fits a shared node. Set `runner.sandbox.defaultResources.cpuMillis=2000` and
+  `memoryMiB=4096` to keep the old size. A daemon with no knob (Docker Compose) keeps 2000m/4096Mi.
+  The default is read from `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`, and the
+  proxy sidecar's envelope from `WARDYN_PROXY_CPU_MILLIS` / `WARDYN_PROXY_MEMORY_MIB`. The Docker proxy sidecar
+  now also carries the 500m CPU limit the Kubernetes one already had.
+  With no resources in the operator's governance ceiling, the default is also the cap on member-authored
+  policy and profile resources, so requests above 1000m/2048Mi are cut on chart installs; to allow larger
+  requests, set the knob back to 2000/4096 or set ceiling resources.
+  A `helm upgrade --reuse-values` from 0.8.5 or earlier carries no `runner` block (the previous release's
+  values replace the chart's), and the chart used to fail to render on it. It now renders, and with no
+  `runner.sandbox` set it emits no `WARDYN_SANDBOX_*` or `WARDYN_PROXY_*` sizing env at all, so the daemon
+  keeps its compiled-in 2000m/4096Mi: such an upgrade keeps the old size, not the new 1000m/2048Mi. Set the
+  `runner.sandbox` values to take the smaller size. A chart render against 0.8.5's values now runs in
+  `make helm-lint`.
+- **A profile that omits `resources` now gets the deployment's size.** Members under such a profile used
+  to get the platform's 2000m/4096Mi; a profile that omits `resources`, or leaves a field zero, now
+  inherits the default policy's value, else the deployment default above. A profile that sets a size
+  keeps it. Governance profiles also gain `limits.max_cpu_millis` and `limits.max_memory_mib` (0 is
+  unlimited) to cap an assigned member's CPU and memory, and a negative `resources` field is now refused.
+  A profile that omits `disk_mib` also inherits the default policy's value; there is no platform default.
+- **Saving a profile that omits its sandbox size now says what its members get.** The save response
+  carries a sentence such as `this profile sets no sandbox size — runs under it get the deployment's
+  1000m CPU and 2048 MiB memory`, naming only the missing field and adding `, capped at … by this
+  profile's limits` when the profile's own maximums cut it. The Governance screen shows it under the
+  retitled note "Compared with the deployment ceiling".
+- **A run that is live when you upgrade is refused at five doors after the restart, until it ends.**
+  0.8.6 commits each run's masking manifest at dispatch (below); a run dispatched by an earlier version has
+  none, so after the upgrade restarts wardynd its recording upload, live attach, SSH shell, exec output and
+  live output read answer `503` `mask_state_unavailable` (the SSH shell closes with an error line). Let
+  such runs end, or end them, before you restart; runs dispatched by 0.8.6 survive restarts. Before 0.8.6
+  the same restart passed that output through unmasked.
+- **`allowMultiReplica` and `-allow-multi-instance` are removed; running more than one replica is now
+  `ha.enabled`.** A values file that still sets `allowMultiReplica=true` is refused at render with a pointer to
+  `ha.enabled`, and wardynd refuses the `-allow-multi-instance` flag at boot with a pointer to `WARDYN_HA`. An
+  install that set either was running an unsupported topology; if you did, move to `ha.enabled=true` (it needs
+  the Kubernetes runner and `env.WARDYN_RECORDING_STORE=pg`, and refuses persistence) or go back to one replica.
+  A `--reuse-values` upgrade from a release whose values carry `allowMultiReplica: false` is not refused.
+- **A `git_pat` scope now carries `repos`, `access`, `api` and `forge`, and a stray key is refused at write.**
+  A stored scope that already used one of those four key names is enforced as that axis from this upgrade
+  on. A 0.8.5 binary refuses a database this release has migrated, so the way back is to restore the
+  pre-upgrade dump. Policy writes,
+  governance profiles, presets, inline run policies and the boot `--policy` file now answer `400` for an
+  unknown `git_pat` scope key, an out-of-enum `access` or `forge`, a malformed `repos` entry or `api: true` on
+  the `generic` forge;
+  stored rows with a stray key still load and launch. A policy with two same-host `git_pat` grants where one is
+  narrowed is refused (`400` at write, `422` at launch).
+
+- **Run output now reaches Postgres and its backups.** Migration `0122_run_outputs` adds `run_outputs` and
+  `run_output_erasures`. With `WARDYN_RUN_OUTPUT_PERSIST` on (the default), the final masked tail of every
+  non-interactive run is written to Postgres when the run ends and kept `WARDYN_RUN_OUTPUT_RETENTION_DAYS`
+  days (default `30`; `0` keeps it forever), so "nothing reaches Postgres or a backup" no longer holds. Set
+  `WARDYN_RUN_OUTPUT_PERSIST` to `off` to keep the 0.8.5 behaviour of an in-memory tail only. A secret a
+  command prints that Wardyn never registered is kept like any log line, and is now persisted. See
+  `docs/OPERATIONS.md` "Run output".
+- **`POST /runs/preflight` is now rate limited, on by default.** `WARDYN_PREFLIGHT_RATE_PER_MIN` (default `20`,
+  burst 5) lets one person (an SSO session, a local-mode principal or the person behind a `wdn_` token) make that
+  many preflight calls a minute; the next is refused `429` `preflight_rate_limited` before any gate runs, and no
+  audit row is written. The limit is per person and per wardynd replica. A CI pipeline that preflights more than
+  20 times a minute under one token fails on upgrade: raise the value, or set it to `0` to turn the limit off.
+  The admin token is exempt and `POST /runs` is never limited. See `docs/ENV.md`.
+- **The kept run output tail grows from 8 KiB to 64 KiB.** `WARDYN_RUN_OUTPUT_TAIL_BYTES` (default `65536`,
+  between `1024` and `1048576`) sizes the tail of every non-interactive run (0.8.5 kept 8 KiB, for `task_mode=exec`
+  runs only) and caps `GET /api/v1/runs/{id}/output?tail=`. The tail is now also what is persisted (previous entry),
+  and memory per live run grows with it. See `docs/OPERATIONS.md` "Run output".
+- **The terminal behaves differently on day one.** A plain drag in the console terminal is now a tmux selection with a
+  copy offer (Shift+drag, Option+drag on macOS, keeps the browser's native selection), right-click stays with the
+  browser, and the wheel scrolls tmux history. Every link a terminal prints asks for confirmation before it opens,
+  except the two device-login pages (`https://github.com/login/device` and `https://microsoft.com/devicelogin`).
+  A person's second tab is admitted read-only behind their first, and when that first tab's writer stops answering
+  the stale tab is evicted and the new one promoted. Sandboxes already running from 0.8.5 images get the tmux
+  settings at their next attach. No migration, environment or chart change.
+
+### Added
+
+- **A second wardynd sees a run's live output, attach ownership, events, kills and Azure DevOps run
+  token.** Migration `0129_ha_live_state` adds `run_output_chunks`, `run_attach_leases`,
+  `ado_run_pat_state` and `ado_signin_ends`; it alters no existing table. `GET /runs/{id}/output` is served
+  from the masked chunks the dispatching replica writes (bytes are masked before they are inserted, about one
+  tail per run is kept, the final row replaces them, an erasure deletes them and a write after it is refused),
+  so any replica reads a live run's tail and a replica that died leaves what it printed; when no replica can
+  re-read the substrate, the run's row is written from them as an incomplete `capture_gap`. The attach
+  writer slot is a Postgres lease: input and resize are fenced by it, a take-over served by any replica
+  displaces the holder wherever it is and keeps the slot for the taker, and a waiting client on any replica
+  is promoted when it is released. Run events and a kill reach the other replicas over `NOTIFY` (a lost
+  notice costs promptness only: the events stream re-reads the store each beat, and dispatch's STARTING to
+  RUNNING compare still tears down a sandbox whose run was killed). A `minted_pat` run's token is kept in
+  `ado_run_pat_state` sealed under the run owner's key, its mint and revoke take a per-run lock after the run
+  operation lock, and the sign-in end counter is shared, so two replicas never create one run's token twice.
+  A person's erasure (`mask_copies`, `run_outputs`) deletes the token and chunk rows, and nothing writes them
+  back. A server whose database cannot be reached for this state refuses the work rather than guessing: `503`.
+  **After an upgrade or a restart a client that attaches while the previous process's lease is still live
+  is read-only for up to about six seconds, then promoted.** Each replica holds two more database connections,
+  for `LISTEN wardyn_live` and `LISTEN wardyn_mask`, outside `pool_max_conns`. See `docs/OPERATIONS.md` "Replicas".
+- **API tokens can expire.** Migration `0114_api_tokens_expires_at` adds a nullable `api_tokens.expires_at`;
+  every existing token keeps no expiry. `POST /api/v1/me/tokens` takes an optional `ttl_seconds`, a negative
+  value is a `400 api_token_ttl_invalid`, and the response and both token lists carry `expires_at`. An
+  expired token gets the same `401` as a revoked one. `WARDYN_API_TOKEN_MAX_TTL` (default: no cap) caps every
+  new token: a mint that asks for no TTL, as the console's form does, gets the cap, a longer one is clamped to
+  it, and the `token.create` audit row records `ttl_clamped_from_seconds`. The cap never shortens a token
+  already minted.
+- **A governance profile can carry a contact, and the site config a `policy_help` block.** Migration
+  `0116_governance_profile_contact` adds one nullable `governance_profiles.contact` column and changes no
+  existing row. `contact` and `policy_help` hold `owner`, `email`, `request_url` (https or one mailto
+  address) and `request_text`, and a bad value is refused with `400`. A `PUT` that omits `contact` or
+  `policy_help` keeps the stored value, `null` or `{}` clears it. `policy_help` is not published by `/healthz`.
+- **A refusal by the governance ceiling now names the policy and how to ask for a change.** The `403` and
+  `422` bodies of `governance_profile`, `run_quota` and `record_ceiling_limit` gain a `policy` object: the
+  leaf profile's name and contact, or the deployment's `policy_help` for a member no profile binds. The
+  `error` text, `reason` and status are unchanged, and a hidden door stays byte-identical to a missing
+  resource. `GET /me` gains `governance_contact` (`null` for an operator or when the ceiling cannot be
+  resolved), `GET /runs/{id}` gains `policy`, the Go SDK's `APIError` gains `Policy`, and `wardyn` prints one
+  `governed by …, to request a change: …` line after the error. Exit codes are unchanged.
+- **A sandbox refused by its run's policy is told which policy and where to ask for a change.** The egress
+  proxy's `policy:denied`, `policy:default-deny`, `policy:method` and `approval:denied` refusals, and the
+  git, PAT and Azure DevOps broker refusals the policy decides, carry `X-Wardyn-Policy` and
+  `X-Wardyn-Policy-Request` headers and one body line ("This run is governed by the profile ... To request a
+  change: ..."). The line names the profile and the route, never the owner. Faults (`builtin:*`,
+  `policy:evaluator-error`, an uninspectable push) and every decision-log row are unchanged. See the proxy
+  image note under "Before you upgrade".
+- **A broken substrate or a stalled background sweep shows on a gauge and a `/setup/status` row, and `/readyz`
+  is unchanged.** Migration `0120_sweep_ticks` adds the `sweep_ticks` table, one row per sweep, shared by every
+  replica. `wardyn_runner_up` (per replica) reads 0 when the runner's substrate is unreachable or refuses the
+  control plane, and `wardyn_sweep_last_tick_seconds{sweep,result}` carries each sweep's last attempt and last
+  success. The new `substrate_health` row fails with cause `runner_unreachable` or `runner_auth`, and warns with
+  cause `sweep_stale` once a sweep goes three of its intervals without a success; it is never blocking and
+  members never see it. A runner that is configured but cannot report its capabilities no longer sends every
+  admin into the setup funnel: the `runner` row stays a `fail` but is not blocking, and points to the new row.
+  The runner probe is one namespaced pod list of limit 1 on Kubernetes, which the chart's Role already grants,
+  and a daemon ping on Docker. See `docs/operations/monitoring.md`.
+- **The console shows who owns a refusing policy and a Request access link.** A refused launch, a refused egress
+  decision on the run detail, the attach panel's refusal and the New Run rail's profile line show the owner and
+  one link, mail address or sentence, from the server's `policy` reference. A link is built only for `https:` or one
+  `mailto:` address, re-checked in the browser. The governance profile editor gains the four contact fields.
+- **Capability grants, the enforcement map, availability, user-type priority, role mappings and key-domain
+  assignments can require a second human too.** With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, a human's write to `/permissions/grants`,
+  `/permissions/enforcement`, `/permissions/availability/{kind}/*` (when the restricted bit changes),
+  `PUT /user-types/{id}` (when the priority changes), `/access/mappings` or `/key-domains/assignments/{subject_type}/{subject}`
+  is held as a pending change and answered `202`, and applies only on a distinct approval. A key-domain assignment set
+  or delete is held always and approved by a security admin or super admin. A role mapping needs a super admin to approve it, and its lockout
+  guard is judged against the approver. No write to these targets has a narrowing exemption.
+
+- **Governance profile and assignment writes can require a second human.** With `WARDYN_GOVERNANCE_SECOND_HUMAN`
+  on, a human's write to `/governance/profiles` or `/governance/assignments` is stored as a pending change and
+  answered `202` with a `pending_change` body, and applies only when a different human with the authority to make
+  that write approves it (`POST /governance/changes/{id}/approve`, `/reject`, `GET /governance/changes`), in one
+  transaction and only against the state the approver reviewed. A change nobody decides expires after
+  `WARDYN_GOVERNANCE_CHANGE_TTL` (default `72h`). A profile update proven narrowing and a rename apply directly;
+  the `admin-token` principal is the break-glass (`governance.change.bypass`) and local mode answers `503`. Migration
+  `0126_governance_changes` adds one table and changes no existing row. With the switch unset every route answers as
+  before. Upgrade the CLI and SDK callers before turning it on: a client older than 0.8.6 reads the `202` as an empty
+  profile. A key-domain assignment write is held the same way (see the previous entry). The console shows the held changes on a Changes tab of the Governance screen, with the server's diff and
+  Approve and Reject, and every covered write there answers a held change as "Submitted for approval", never as a save.
+  The switch boots; `audit_personal_fields` erasure clears the proposer and decider of a change.
+
+- **An identity provider can suspend and reactivate a person over SCIM 2.0.** Setting `WARDYN_SCIM_TOKEN`
+  (and `WARDYN_SCIM_TOKEN_NEXT` for rotation, each with a `_FILE` twin) mounts `<base path>/scim/v2/Users`:
+  `GET` with a filter (an unfiltered list is `400 invalidFilter`), `GET` by id, `POST`, `PATCH` and `PUT`. It
+  needs OIDC on a single-tenant Entra issuer and TLS, and boot refuses anything else. `active=false`
+  suspends: in one transaction the session cutoff, the deactivation and an authority-epoch bump, then the
+  person's API tokens revoked and SSH keys deleted, then every run killed with its teardown confirmed. The
+  request answers 5xx until all three are done and recorded in `deprovision_jobs`, so the identity provider
+  retries, and a run already KILLED whose teardown failed is re-killed. A suspension reaches a person under
+  their sub, their email and their `entra:` form, and a session, token, key, run or captured credential
+  minted while it was in flight is refused. `active=true` clears the deactivation and restores nothing that
+  was cut. SCIM only removes access: it never grants, never rebinds an identity (an `externalId` change on a
+  bound identity is `400 invalidValue`) and is never an operator. New audit actions `scim.user.write`,
+  `scim.user.deactivate` and `person.deprovision`, and `auth.fail` reasons `invalid_scim_token` and
+  `identity_deactivated`. Settings shows where it stands in the "SCIM provisioning" card (see the Settings entry below).
+- **Removing a person from a group at the identity provider ends what that group gave them.** The same SCIM
+  token now serves `<base path>/scim/v2/Groups` (`GET` with a `displayName` or `externalId` filter, `GET` by id,
+  `POST`, `PATCH` of members and `displayName`, `DELETE`). A member removed, by either shape Entra sends, by a
+  remove of every member or by deleting the group, cuts that person's browser sessions and revokes their own
+  API tokens whose login-time group snapshot holds the group's `externalId` (the Entra group object id, matched
+  without regard to case, never the display name) or whose snapshot was truncated or never recorded. Their other
+  tokens and SSH keys, and everyone else's credentials, are untouched. The request answers 5xx until the removal
+  is recorded as done in `deprovision_jobs`. A group created or a member added is stored and grants nothing. New
+  audit action `scim.group.member_remove`. Migration `0128_scim_groups` adds the tables `scim_groups`,
+  `scim_group_members` and `oidc_session_cuts` (new tables only); the session cut is kept apart from the
+  revocation cutoff because that one also ends tokens and keys.
+- **A person the identity provider removes can be purged over SCIM, and a suspended one is purged after a
+  delay.** `DELETE <base path>/scim/v2/Users/{id}` suspends the person if they are not already, erases their
+  stored credentials and masking copies through the erasure orchestrator (the `credentials` and `mask_copies`
+  scopes; audit fields, run tasks, outputs and recordings stay a deliberate `POST /people/{principal}/erasure`),
+  hands their workspaces to the operator, deletes their user-subject grants and assignments by a direct store
+  call (never the governance apply path), and lists their drives without reclaiming them, then answers 204.
+  The identity row stays as a permanent tombstone: `active=true` on it is `400 invalidValue` and sign-in is
+  refused. `WARDYN_SCIM_PURGE_AFTER` (default `720h`, `0` disables the automatic purge) schedules the same
+  purge after a suspension; a sweeper on the elected sweeper leader runs it, re-checking each person under a
+  row lock so a reactivation that committed first wins, and finishes any suspension or purge whose identity
+  provider stopped retrying. `WARDYN_SCIM_LEAVER_WORKSPACES` set to `keep` leaves workspaces with the person.
+  The chart gains `scim.enabled`, `scim.tokenSecretRef`, `scim.purgeAfter` and `scim.leaverWorkspaces`, and
+  `docs/OPERATIONS.md` gains the leaver runbook, "Leavers and SCIM".
+- **Settings shows where leaver deprovisioning stands.** A "SCIM provisioning" card on Settings reads the new
+  read-only `GET /api/v1/scim/status` (admin or `security_admin`): whether SCIM is set up, which token slot
+  matched last, the purge delay, the deactivated people, the deprovisioning steps still failing with their last
+  error, and the drives a purge listed that are still to reclaim. With SCIM off the card says so and links the
+  runbook.
+- **Sandbox pods can be placed on the nodes the operator names.** `k8s.sandbox.{nodeSelector,tolerations,affinity,priorityClassName,podAnnotations,podLabels}`
+  (chart) render to `WARDYN_K8S_SANDBOX_PLACEMENT`, and the agent pod, the proxy pod and the boot-time
+  NetworkPolicy canary all take it, so the canary proves enforcement on the nodes runs use. wardynd refuses
+  to boot on a placement label that is reserved (`wardyn.managed`, `wardyn.run-id`, `wardyn.component`) or on
+  any `kubernetes.io/` or `k8s.io/` annotation or label other than
+  `cluster-autoscaler.kubernetes.io/safe-to-evict`, naming the key. Nothing is set by default.
+- **Approval notifications over a signed webhook (`WARDYN_APPROVAL_NOTIFY`).** Off by default. When set,
+  every approval raised gets a durable outbox row in the same transaction, and a worker on each replica
+  delivers it at least once to the named webhook channels, with an `X-Wardyn-Signature` HMAC when a secret
+  is set. A dead notification writes an `approval.notify.failed` audit row and counts in
+  `wardyn_approval_notify_failed_total{channel}`; a run is held to 25 notifications an hour. Migration
+  `0118_approval_notifications` only adds the `approval_notifications` table, and a 0.8.5 binary refuses a
+  database that has applied it, so a downgrade is a restore from the pre-upgrade dump. See "Approval
+  notifications" in `docs/OPERATIONS.md`.
+- **Audit retention: an attested partition drop and a persisted policy** (migration `0123_audit_retention`).
+  `audit_retention_drop(partition, digest, actor)` removes the oldest closed monthly partition, and only when it is
+  past the retention window, holds no row of a live run, and the digest supplied equals the one the database
+  recomputes; in one transaction it writes a chained `audit.retention.partition_dropped` event and an
+  `audit_chain_anchors` row, then drops. `GET /audit/chain/verify` starts from that anchor.
+  `WARDYN_AUDIT_RETENTION_DAYS` (default `0`, keep forever) is recorded at boot by `audit_retention_set_policy`:
+  an increase applies at once, a decrease (including `0` to a finite value) takes effect 30 days after the boot that
+  first saw it and a restart never moves the date. `GET /audit/retention` and `POST /audit/retention/drop` (security
+  tier; five distinct `409` refusals), `wardyn audit retention` and `wardyn audit retention drop`. The leader sweeper
+  keeps twelve months of partitions ahead daily (`wardyn_audit_partitions_ahead`, and an `audit_partitions` warning on
+  `/setup/status` below 3 months); `WARDYN_AUDIT_RETENTION_AUTODROP` (default off) lets it drop eligible partitions
+  itself, unattested. See "Audit retention" in `docs/OPERATIONS.md`.
+- **`wardynd -audit-split-legacy` splits the pre-0.8.6 audit history.** The one legacy partition becomes
+  seq-contiguous ranges (`audit_events_legacy_<YYYYMM>`) that retention drops one at a time, without changing a row
+  hash. The ranges follow the running maximum of `time` in `seq` order, never `time` alone, so a spool-replayed row
+  cannot scatter a month. A one-shot, offline mode on the migrator DSN: it refuses (exit 3, naming the reason) while the
+  single-instance lock is held, while any other client is connected, or on a role that does not own the audit tables;
+  each range's digest is proved against its source rows and the chain must verify over the same rows before and after,
+  inside one transaction. Take a dump first: "Split the pre-0.8.6 audit history" in `docs/OPERATIONS.md`.
+- **Audit partition digest, export and anchor-aware verify.** `audit_partition_digest(partition)` (migration
+  `0119_audit_partition_digest`) is a bounded, canonical digest of one closed audit partition, folded in `seq` order in constant
+  memory. `GET /audit/export?partition=<name>` (and `wardyn audit export-partition`) streams a closed partition
+  with its manifest and the same digest in a footer, in a readable form or a raw archive form you can re-hash
+  with no Wardyn code ("Verifying an exported audit partition by hand", `docs/OPERATIONS.md`); only a security
+  operator is served, and `?partition=` with any other filter is refused (`audit_export_partition_filter`).
+  `GET /audit/chain/verify` now starts from the newest attested retention drop, reports a removed newest tail
+  (checked against the recorded high-water mark) and a missing expected partition, and names an unattested
+  removal `rows removed without an attested retention drop`. A removed tail stays reported after later
+  appends: each new row links to the recorded head rather than the newest row left in the table (migration
+  `0130_audit_chain_head_from_meta`), so the chain breaks at the first row appended after the removal. A role you create after the upgrade needs
+  `GRANT EXECUTE` on `audit_partition_digest(text)` beside the functions in the grant recipe.
+- **Personal audit fields can be sealed, and a person's records erased by scope.** `WARDYN_AUDIT_SEAL=fields`
+  (default `off`) stores the personal fields of an audit row (the table in "Sealed fields",
+  `docs/AUDIT-ACTIONS.md`) as ciphertext under the person's own key, in the store, the spool and every audit
+  sink, so a SIEM receives ciphertext for them; audit reads and the readable export open them. A key that cannot
+  be had never drops the row or writes it in the clear: it waits in the spool under the new platform key
+  `wardyn-audit-pending-key` and the drain re-seals it. Rows written before it is turned on stay plaintext.
+  Migration `0131_principal_key_handles` gives each `principal_keys` generation a random `handle`; a sealed field is
+  stored as `seal2.<handle>.<ciphertext>` and names the key, never the person (see "Sealed fields" in
+  `docs/AUDIT-ACTIONS.md`).
+  `POST /people/{principal}/erasure` (`wardyn person erase`) erases one person's `credentials`,
+  `audit_personal_fields`, `run_tasks`, `run_outputs`, `recordings` (opt-in) and `mask_copies` by explicit
+  scope in one audited `person.erasure` act, reports complete only when every scope asked for is, names the
+  scopes left after a partial failure, and refuses a security admin erasing themself for any scope but
+  `credentials`. `DELETE /people/{principal}/credentials` still erases credentials only.
+- **`WARDYN_AUDIT_SEAL=full` stores a human actor as `subject:<uuid>`.** After the person is erased their rows
+  no longer name them and the chain still verifies; reads and the readable export show the person while their
+  key exists and `[erased]` after, and `?actor=<person>` finds both forms. Off by default. **SIEM rules keyed on
+  `actor` see subject ids once it is on**, and it applies to rows written after that. `subject:` is now a
+  reserved principal prefix (`reserved_principal`) whatever the setting is.
+
+- **A run's output is persisted once, after its last bytes, and read from any replica.** Every way a run
+  ends (completion, failure, kill, idle stop, lease end, reconciliation, a failed dispatch) goes through one
+  finalisation: wait up to 5 seconds for the runner's copy of the output to end, flush the masker's
+  holdback, seal the tail, and write one masked row. A byte that arrives later is dropped and marks the row
+  `incomplete`; a process that holds no tail for the run (a restart, or an adopting replica) reads it back from
+  the substrate when it can (Kubernetes: the exec container's log, followed on a live adoption; Docker: an
+  exec-less agent's log) and only for a run whose masking manifest is complete, bounded to 10 seconds, and
+  otherwise writes a `capture_gap` row (a Docker exec agent, a sandbox already gone, a run with no complete
+  manifest, which includes runs alive across the upgrade). The agent is never re-run. A failed write is retried with backoff and audited as `run.output.finalize`
+  (only for a capture that is not clean); an hourly leader-gated sweep deletes rows past retention
+  (`run.output.retention.sweep`) and is the `run_output` row of `wardyn_sweep_last_tick_seconds`.
+  `GET /runs/{id}/output` gains `source`, `incomplete`, `capture_gap`, `mask_scope` and `captured_at`.
+- **A run's output can be erased for good.** `EraseRunOutputs` writes a tombstone and deletes the rows in one
+  transaction, and every write and read checks the tombstone in its own transaction, so no replica recreates
+  or serves the output afterwards: reads answer `404` `run_output_erased`, and a replica still holding the
+  tail drops and zeroes it on its next touch. Person erasure (`POST
+  /people/{principal}/erasure`, scope `run_outputs`) calls it; `DELETE /people/{principal}/credentials` does not.
+- **A governance profile can be composed: a base plus an overlay that can only narrow it.** Migration
+  `0125_governance_profile_composition` adds the nullable `governance_profiles.base_profile_id`, `overlay`
+  and `overlay_limits` columns and five CHECK constraints, and changes no existing row: every profile stays
+  standalone and resolves exactly as on 0.8.5. A composed row stores `{}` for `ceiling` and `limits`, and its
+  effective policy is computed whenever authority is read (create, preflight, dispatch, attach and SSH, UI apps,
+  revive, the limits re-clamp and end extension), so a change to a base reaches every profile built on it. A
+  base that nothing satisfies together with its overlay refuses the launch and every live door with
+  `403 governance_overlay_unsatisfiable`; a base that cannot be read, a loop or a chain deeper than three
+  profiles closes the launch and every live door with a `500` (a revive or end extension with `503`/`409`), and
+  none of them is ever read as the deployment's policy. Writes: `POST`/`PUT /governance/profiles` accept `base_profile_id`,
+  `overlay` and `overlay_limits`; an overlay naming anything its base does not permit, or a non-empty `ceiling`
+  or `limits` beside an overlay, is `400 governance_overlay_invalid`; a change that would make a profile its own
+  base is `409 governance_profile_cycle`, one that would put a profile past three deep is `409
+  governance_profile_depth`, and a base edit that leaves a profile built on it unsatisfiable is `409
+  governance_overlay_unsatisfiable` naming it. Deleting a base that still has profiles built on it is a `409` naming
+  them. A `PUT` that omits a composition field keeps it, so an older client cannot flatten a composed profile; it
+  sees `ceiling: {}` and does not know `effective`. **Rollback:** a 0.8.5 binary refuses a database with this
+  migration applied, and converting composed profiles to standalone first changes nothing it sees. Restore the
+  pre-upgrade dump, which holds no composed profile. A profile edit still reaches an already-running proxy only through the denies re-asserted at revive or
+  restart, as before; a base edit now narrows a whole subtree at once.
+- **A run that cannot fit the runs namespace's ResourceQuota is refused before it is created.** On
+  Kubernetes, `POST /runs` and `POST /runs/preflight` list the namespace's `ResourceQuota` objects and count
+  both run pods, the request and limit axes, and the `Terminating` and `PriorityClass` scopes. A breach is a
+  `422 namespace_quota_exceeded` naming the quota and the numbers, with no run row and no sandbox; a run that
+  would fill a quota to 90% or more is admitted with a warning. A quota list the Role may not read, or the
+  cluster cannot answer, is reported as that, not as an empty list. The chart's runner Role gains `list` on
+  `resourcequotas`. With `k8s.readNodes` (`WARDYN_K8S_READ_NODES`, off by default; adds `list` on `nodes` to the
+  ClusterRole), a run bigger than every node its placement allows also gets a warning. That compares requests
+  to node size, not free capacity, and the scheduler stays the authority.
+- **An absolute run-age cap, `WARDYN_RUN_MAX_AGE`** (a duration, off by default). The lifecycle reaper stops a RUNNING
+  run older than this, busy or not, and writes a `run.max_age.expire` audit row. On Kubernetes it also sets
+  `activeDeadlineSeconds` on the proxy pod and the agent pod (the value plus 10 minutes), so a run whose control plane
+  is gone still ends. See `docs/ENV.md` and `docs/OPERATIONS.md` "Run output".
+- **Constrained-admin mode, `WARDYN_GOVERN_ADMIN_RUNS`** (off by default). Every run an SSO admin or an admin-role
+  personal token launches is governed like a member's; the admin token and local mode stay ungoverned and are marked
+  `governance_exempt` on `run.create`. Record Mode is refused for a governed admin (`403` `recording_governed`) unless
+  `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` is set to `recording`, and an admin's User view onto another user type is a
+  read-only preview whose writes are refused `409` `user_view_preview`. See "Constrained-admin mode" in
+  `docs/operations/member-mode.md`.
+- **Fleet capacity.** `WARDYN_MAX_CONCURRENT_RUNS` (default `0`, unlimited) caps non-terminal runs across the
+  deployment (`422` `run_quota`; a kept run whose agent has stopped does not count, and reviving one takes a slot, so it is refused the same way at the cap); `WARDYN_SANDBOX_REQUEST_RATIO` (Kubernetes, unset by default) sets the agent pod's
+  requests as a fraction of its limits so more runs fit a node; `GET /api/v1/admin/runs/capacity` reports the
+  configured reservations, and `wardyn_runs_active`, `wardyn_runs_unschedulable`, `wardyn_runs_cpu_millis_held`,
+  `wardyn_runs_memory_mib_held` and `wardyn_runs_oldest_active_seconds` export them. The chart's
+  `metrics.serviceMonitor.enabled` (default `false`) renders a `ServiceMonitor`. See "Fleet capacity" in
+  `docs/OPERATIONS.md` and `docs/operations/monitoring.md`.
+- **Key custody options.** `WARDYN_KEK_REQUIRED` (default off; chart `kek.required`) refuses to start while the local key
+  wraps credentials. With Azure Key Vault, `WARDYN_AZURE_KEK_KEY_PLATFORM`, `WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM`
+  and `WARDYN_AZURE_CLIENT_ID_PLATFORM` (all unset by default, set together) split wardynd's own signing, session
+  and SSH host keys onto a second key pair and Entra identity, so the credential identity wraps no boot key. See
+  `docs/operations/secrets-and-keys.md`.
+- **Terminal.** The console gains a per-browser "Terminal renderer" setting (Auto, GPU or Compatible). `session.attach`
+  rows carry a `state` (`attaching`, then `ready`), and `session.takeover` a `reason`: `stale_writer` when a person's
+  stale tab is evicted. See `docs/AUDIT-ACTIONS.md`.
+
+### Security
+
+- **A run's secrets are masked from a sealed manifest, and a registry miss fails closed (migration
+  `0109_run_mask_manifest`).** At dispatch, before the sandbox can see a value, wardynd commits the exact
+  bytes of every rendering the run received to Postgres (`run_mask_manifest`, `run_mask_values`): its
+  workspace and inspection secrets, its Azure DevOps run token in all three renderings, and every run token
+  minted later (a renewal, widening or resume appends before the token is returned; a failed append fails
+  the mint). Each value is sealed under the run owner's per-subject key. A restarted or second wardynd loads
+  the manifest, so a secret rotated after dispatch is still masked, and the recording upload, live attach,
+  exec relay, SSH shell and live output read refuse a run it cannot prove complete (`503`
+  `mask_state_unavailable`, with a denied `authz.denied` row). An attach, shell or upload in flight ends within
+  about two seconds when the run is fenced. Audit rows of an uncovered run carry `"mask_scope":"globals_only"`.
+  SSH exec, SFTP and direct-tcpip were never masked and still are not. A split migrator and app role install
+  grants the app role `SELECT, INSERT, UPDATE` on `run_mask_manifest` and `SELECT, INSERT, DELETE` on
+  `run_mask_values`.
+- **Every wardynd masks with one shared registry in Postgres, and one that cannot prove its copy is current
+  fails closed (migration `0124_mask_values`).** A value registered after dispatch (a minted token, an injected
+  key, an AWS SSO or Azure DevOps sign-in token) is committed to `mask_values` before the call returns,
+  sealed under its owner's per-subject key, so a second wardynd, or one that restarted, masks it too; before
+  this a restart lost every per-owner sign-in token from the registry. A registration that cannot be committed
+  fails the injection: the route answers `503` `mask_state_unavailable` and hands out nothing. Replicas read
+  the table by a generation cursor that is a committed prefix, and a consumer waits for a read that began
+  after its chunk arrived; with Postgres down an upload answers `503`, a new attach is refused, and a live
+  chunk is replaced by `<secret-hidden>`. The run leader deletes a terminal run's rows and manifest after
+  `RunSecretGrace`, and `mask_copies` erasure tombstones every row of the person (no ciphertext is left).
+  It applies to a single-replica install too: there is no in-memory-only mode, and wardynd refuses to start
+  when it cannot read the table. A credential in the operator namespace (no owner) still has no subject key
+  and stays in the process that registered it; none exists today. A split migrator and app role install
+  grants the app role `SELECT, INSERT, UPDATE, DELETE` on `mask_values`, `SELECT` and `UPDATE` on `mask_gen`,
+  and `DELETE` on `run_mask_manifest`.
+- **A per-subject key table, `principal_keys` (migration `0108_principal_keys`).** Each (person, purpose,
+  generation) has one 32-byte key wrapped under the deployment's credential key (local, Vault Transit or
+  Key Vault), and destroying a person's key is a tombstone that a replica with a warm cache notices at its
+  next use. Masking manifests already mint and wrap a per-person key here (`maskmanifest`), so the
+  table is live on every deployment; `WARDYN_PRINCIPAL_KEYS` (default off) controls only whether stored
+  credentials move to v3, and nothing rewrites existing credentials automatically. `wardynd -rewrap` and
+  `-rotate-age-key` now move its rows with the secrets, `secret.rewrap` gains a `principal_keys` count, and
+  a key version is reported safe to retire only once both are at it. The audit action
+  `principal_key.destroyed` names the owner, purpose and generation numbers and never key material. A split
+  migrator and app role install grants the app role `SELECT, INSERT, UPDATE` on `principal_keys`.
+- **Per-person credential keys, off by default (`WARDYN_PRINCIPAL_KEYS`, chart `kek.principalKeys`).** With
+  it `on`, a person's stored credential is sealed under a key of that person's own (`enc_version=3`, `kek_id`
+  `pk:v<n>`) and erasing the person destroys the key, so those rows cannot be read again even from a backup
+  of the table. Boot keys, the operator namespace and store mode are unaffected, and every row format is
+  read with it off. `wardynd -rewrap-principal-keys` moves existing credentials into the new form.
+  `credential.erase` and its response now report `crypto_erased` and `deleted`, because a row written
+  without it is only deleted, which holds to the backup horizon. **Turning it on is one-way across a
+  downgrade:** 0.8.5 refuses `enc_version=3` rows by name, and there is no tool back; the way back is to
+  restore the pre-upgrade dump.
+- **A `git_pat` grant with `api: true` reaches its forge's REST API only through a closed operation table.**
+  For GitLab and Gitea (Bitbucket Server only with the new `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`, off by
+  default; a stored such grant fails launch and Review with `git_pat_api_forge_disabled`) the proxy now
+  terminates the grant's host and admits only creating a merge or pull request, commenting, and enumerated
+  reads, under a repository the grant's `repos` names, judging the query string and the JSON, form and
+  multipart body of every request. Merge, auto-merge, repository file and commit writes, GraphQL, search,
+  project metadata, a numeric project id and a request on the plain forward lane are refused
+  (`brokered:git-pat:api:denied`) before the PAT is minted and before anything is sent upstream. The forge host
+  must be in the run's egress domains. A run with an `api` grant gets a per-run MITM certificate authority.
+- **A narrowed `git_pat` grant now binds the run at the broker.** The PAT broker refuses, before any mint, a git
+  request for a repository outside the grant's `repos` (`brokered:git-pat:repo`) and, for `access: read`, both
+  doors of a push (`brokered:git-pat:read-only`). A request form a forge's path table does not list is refused.
+  A run whose narrowing cannot be enforced is refused at launch and by Review: `git_pat_narrowing_needs_broker`
+  (the PAT broker is off), `git_pat_narrowing_ssh_conflict` (a same-forge `ssh_key`, also refused at policy
+  write) and `git_pat_narrowing_unsupported_host` (an Azure DevOps host, or a GitHub-brokered forge). The PAT
+  itself is not narrowed. Upgrade the proxy image together with wardynd: an older proxy refuses the new
+  `pat_grants` keys at start.
+- **Key custody in the console.** Admin, Credentials gains a Key domains card (each declared domain, where
+  its key is, whether boot proved it, and Assign a domain / Remove for assignments) and a Key domain column
+  in Stored credentials saying where each person's next key is made and why; two groups that name different
+  domains show a conflict. `GET /api/v1/key-domains` adds `key`, `proven` and `principal_keys`, and
+  `GET /api/v1/model-providers/credentials` adds `key_domain`, `key_domain_source` and `key_domain_group`.
+  `/setup/status` adds `key_domains`, `principal_keys` and `key_domain_changes` (amber while an assignment
+  changed in the last 30 days), and the `platform_shared` row is now `platform_split`: under a key service it
+  is amber until the boot keys have a second key and identity there, and green once they do. This is a
+  rename of a row id.
+- **Key domains (`WARDYN_KEY_DOMAINS_FILE`, chart `kek.domains`; migration `0121_key_domains`).** A domain
+  is a tenant of the key service, declared in deploy configuration only: a Transit key and an optional
+  Vault role, or a Key Vault key pair and an optional client id. A security admin assigns a user, a group or
+  everyone to a domain (`PUT`/`DELETE /api/v1/key-domains/assignments/{subject_type}/{subject}`, `GET
+  /api/v1/key-domains`), and that person's principal keys are wrapped under the domain's key, so a database
+  dump plus one domain's key exposes only that domain. Resolution is user, then group, then everyone, then
+  `default`; two groups in different domains refuse the new key by name. A reassignment applies to the next
+  generation: old keys stay in their domain and are never re-wrapped into another, and `wardynd
+  -rewrap-principal-keys` re-seals a person's credentials into the new generation. Every domain is proven at
+  boot, and boot refuses a domain that shares a key with another domain, the platform key or the credential
+  key, a Vault role under token-file auth or shared with `WARDYN_VAULT_ROLE`/`WARDYN_VAULT_ROLE_PLATFORM`, a
+  domain named `default` or malformed, a live key naming an undeclared domain (with the count and the
+  remedy), and a live key its domain no longer reaches. `wardynd -rewrap` and `-rotate-age-key` read the file;
+  `-rewrap` moves only the rotated domain's keys and reports a retirable key version per domain. New audit
+  actions `key_domain.assignment.set` and `key_domain.assignment.delete`, and new refusal reasons
+  `key_domain_unknown` and `key_domain_ambiguous_membership`. The migration also adds `principal_keys.superseded_at`
+  (a generation that is still readable but is no longer the one a write uses) and the table that holds the
+  groups of each person's last sign-in. Offboarding a domain is documented in
+  `docs/operations/secrets-and-keys.md`.
+- **The proxy refuses a raw mint of every `git_pat` grant id while the PAT broker is on.** The mint relay
+  now answers `403` (`brokered:mint`) for any `git_pat` grant of the run, including grants shadowed by a
+  same-host grant, vetoed, withheld for a brokered forge or Azure DevOps owner-only. Upgrade the proxy
+  image together with wardynd: an older proxy refuses the new `brokered_pat_grant_ids` config key at start.
+- **The SDK and CLI treat a pending governance change as pending, not applied.** A `202` with a
+  `pending_change` body is returned as `*client.PendingApprovalError` instead of being decoded as a saved
+  object. `ApplyGovernance` returns that error when anything is pending, and the new
+  `ApplyGovernanceResult` returns the pending changes and the deferred assignments as data; an assignment
+  naming a pending profile is not sent, and `--prune` does not run after a pending write.
+  `wardyn governance set` lists them and exits 0. New `ListGovernanceChanges`, `GetGovernanceChange`,
+  `ApproveGovernanceChange` and `RejectGovernanceChange`, and `wardyn governance changes list|approve|reject`.
+  A CLI or SDK older than this release misreads a pending change; see "Pending approval" in `docs/sdk.md`.
+
+### Changed
+
+- **`complete` on `GET /runs/{id}/output` now means a final capture.** It used to mean the run had finished,
+  so a read could still gain bytes after it said `complete`. It is true only for a stored final row, or an
+  in-memory tail whose drain barrier closed and whose holdback was flushed. A run that has just finished
+  reads `complete: false` until then.
+- **The sweepers that must run once now run on one elected replica.** The approval expiry, recording
+  retention, credential expiry, always-egress reconcile and run pause sweeps run only on the replica that
+  holds a Postgres advisory lock (`db.SweeperLeaderLockKey`); the others retry and take over within about 15
+  seconds of the leader's session ending. The run-secret sweeper still runs on every replica. Each
+  acquisition bumps a durable epoch (migration `0110_sweeper_leader`), and a leader that loses its lock
+  stops its sweeps before releasing it. A pause whose mark loses the compare to another leader's no longer
+  thaws the run the other leader just paused. The lock holds one more connection for the process lifetime:
+  size `pool_max_conns` at least 3 (5 with the ground-truth rotator); `docs/ENV.md` has the detail.
+- **A pause that cannot finish undoing its own freeze leaves the run for the pause sweep, never a thaw on a
+  guess.** Migration `0132_run_pause_settles` adds `run_pause_settles`; it alters no existing table. A pause
+  whose mark is refused records the run there before it thaws, and thaws only a run it has just read as not
+  paused, under a run lock it has proven held around the thaw. A read, a freeze or a thaw that still fails
+  after three tries, or a run lock it cannot take again, leaves the sandbox as it is and keeps the record.
+  Once about 15 seconds have passed, the leader's next pause sweep settles the run under its lock: it freezes
+  a run marked paused, thaws one that is not, and deletes the record. A run such a compensation left reading
+  paused with its agent running, or frozen without a pause mark, now lasts only until that sweep.
+
+- **Several replicas are a supported topology on Kubernetes (`ha.enabled`).** The chart sets `WARDYN_HA=true`,
+  lifts the `replicas > 1` refusal and adds a PodDisruptionBudget (`minAvailable: 1`) and a preferred pod
+  anti-affinity. It refuses to render HA unless `WARDYN_RECORDING_STORE` is `pg` or `off` (read from both `env`
+  and `extraEnv`), with persistence on, or with a `WARDYN_AUDIT_SPOOL` outside `/tmp`; the audit spool stays on
+  the per-pod `tmp` emptyDir. wardynd with `WARDYN_HA=true` does not take the single-instance lock and refuses
+  to boot unless the runner is Kubernetes and the recording store is `pg` or `off`, which holds after a
+  `kubectl scale`. `/setup/status` gains `ha_mode`, `recording_store_shared` and `mask_registry_shared`, the
+  last failing while a replica cannot confirm it holds the latest secret-masking list. The strategy stays
+  `Recreate`: this tolerates a node failure, it is not zero-downtime upgrades. What stays per replica
+  (connection caps, rate limiters, debounce caches) multiplies by the replica count; an audit spool on
+  `emptyDir` is lost with its node; SSH exec, SFTP and direct-tcpip were never masked. After any restart, runs
+  that predate 0.8.6 are refused at the five masking doors until they end (see the upgrade entry above). See "High
+  availability" in `docs/OPERATIONS.md`.
+
+## [0.8.5] — 2026-10-02
+
+### Before you upgrade
+
 Migration `0106_attach_ticket_authority` runs on the first start; it adds two nullable columns to
 `attach_tickets` and changes no existing row.
 

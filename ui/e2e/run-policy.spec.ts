@@ -5,7 +5,8 @@
 
 import { randomUUID } from "node:crypto";
 import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole, navTo, navToRoute, sql } from "./fixtures";
-import { CHANGE_HEADING, POLICY_TAB } from "../src/app/components/screens/run-detail/policy-tab-copy";
+import { CHANGE_HEADING, POLICY_TAB, SUMMARY } from "../src/app/components/screens/run-detail/policy-tab-copy";
+import { GIT_PAT_SCOPE } from "../src/app/components/wardyn/copy";
 import type { Page } from "@playwright/test";
 
 // E2E coverage for "Make a policy from this run" (X2-F6) — run-detail.tsx's
@@ -159,9 +160,8 @@ test.describe("Run detail — the Policy tab (#1425)", () => {
       });
       const workspaceAdd = JSON.stringify({ kind: "workspace", added_domains: ["registry.npmjs.org"] });
       sql(
-        `INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data) VALUES ` +
-          `(gen_random_uuid(), now(), '${runId}', 'system', 'wardynd', 'run.egress.add', '${runId}', 'success', '${workspaceAdd}'::jsonb), ` +
-          `(gen_random_uuid(), now(), '${runId}', 'system', 'wardynd', 'run.policy.resolve', '${runId}', 'success', '${resolved}'::jsonb)`,
+        `SELECT audit_append(gen_random_uuid(), now(), '${runId}', 'system', 'wardynd', 'run.egress.add', '${runId}', 'success', '', '${workspaceAdd}'::jsonb), ` +
+          `audit_append(gen_random_uuid(), now(), '${runId}', 'system', 'wardynd', 'run.policy.resolve', '${runId}', 'success', '', '${resolved}'::jsonb)`,
       );
       const edited = await request.put(`/api/v1/policies/${policyId}`, {
         headers: auth,
@@ -214,6 +214,51 @@ test.describe("Run detail — the Policy tab (#1425)", () => {
     } finally {
       expect((await request.delete(`/api/v1/policies/${policyId}`, { headers: auth })).ok()).toBe(true);
     }
+  });
+
+  // The narrowing the run got on its stored token: chips, the repositories, and
+  // the honesty sentence on the chip. The resolved spec is spliced like the
+  // member read below (the seeded runs never dispatch).
+  test("shows a stored token's narrowing, and says every repository when it has none", async ({ page }) => {
+    await spliceRunPolicy(page, {
+      ...RECORDED,
+      changes: [],
+      stored_policy_now: undefined,
+      spec: {
+        ...RECORDED.spec,
+        eligible_grants: [
+          {
+            kind: "git_pat",
+            requires_approval: false,
+            scope: {
+              host: "gitlab.example.com",
+              secret_name: "git-pat-gitlab-example-com",
+              forge: "gitlab",
+              repos: ["group/app", "group/libs/*"],
+              access: "read",
+              api: true,
+            },
+          },
+          { kind: "git_pat", requires_approval: false, scope: { host: "git.example.com", secret_name: "git-pat-git-example-com" } },
+        ],
+      },
+    });
+    await openFixture(page, "e2e fixture 2");
+    await page.getByRole("tab", { name: POLICY_TAB.tab }).click();
+    const tab = page.getByTestId("run-policy-tab");
+
+    const narrowed = tab.locator("dd").filter({ hasText: "gitlab.example.com" });
+    await expect(narrowed.getByText(SUMMARY.readOnly, { exact: true })).toBeVisible();
+    await expect(narrowed.getByText(GIT_PAT_SCOPE.RUN_API, { exact: true })).toBeVisible();
+    await expect(narrowed).toContainText("group/app, group/libs/*");
+    await expect(narrowed.getByText(SUMMARY.readOnly, { exact: true }).locator("xpath=ancestor::span[@title][1]")).toHaveAttribute(
+      "title",
+      GIT_PAT_SCOPE.HONESTY_TOKEN,
+    );
+
+    const open = tab.locator("dd").filter({ hasText: "git.example.com" });
+    await expect(open).toContainText(GIT_PAT_SCOPE.RUN_REPOS_ALL);
+    await expect(open.getByText(SUMMARY.readOnly, { exact: true })).toHaveCount(0);
   });
 
   test("a run that stopped before its sandbox was set up says no policy was applied", async ({ page }) => {

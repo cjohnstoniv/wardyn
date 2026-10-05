@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
@@ -89,7 +90,9 @@ type SandboxSpec struct {
 	Interactive bool
 	// ExecOutput, non-nil, receives a copy of the agent exec's combined
 	// stdout/stderr (GET /runs/{id}/output). Its Write must never block or
-	// fail: the driver drains the exec through it.
+	// fail: the driver drains the exec through it. A writer that also
+	// implements OutputDrainer, or io.Closer, is told when each copy into it
+	// ends (BeginOutputDrain), so its owner can wait for the last bytes.
 	ExecOutput io.Writer `json:"-"`
 }
 
@@ -136,6 +139,11 @@ type ProxyConfig struct {
 	GitGrants     map[string]uuid.UUID      // git-broker per-repo allowlist; token stays proxy-side
 	PATGrants     map[string]proxy.PATGrant // git_pat broker's per-HOST allowlist; PAT minted proxy-side, never enters the sandbox
 	ADOGrant      *proxy.ADOGrantConfig     // per-person Azure DevOps grant for the proxy's REST gate
+	// AzureGates are the run's azure_foundry route gates. A non-empty set also sizes the sidecar's
+	// memory envelope up (ProxyLimitsFor): the in-flight body budget does not fit the default.
+	AzureGates []proxy.AzureGateConfig
+	// BrokeredPATGrantIDs is every git_pat grant id of the run while the PAT broker is on; the proxy refuses a raw mint of one.
+	BrokeredPATGrantIDs []uuid.UUID
 	// UpstreamProxyURL is the OPTIONAL corporate parent proxy the sidecar
 	// chains egress through; control-plane calls bypass it. Empty => direct dial.
 	UpstreamProxyURL string
@@ -147,8 +155,10 @@ type ProxyConfig struct {
 	// upstream proxy — still faces the private-IP guard and the run's policy.
 	UpstreamProxyNoProxy []string
 	LLMUpstreams         map[string]string // public vendor host -> operator model gateway base URL
+	LLMChannelHosts      map[string]string // model host -> vendor schema it is inspected as; never a gateway (proxy.Config.LLMChannelHosts)
 	LLMUnavailableDetail string            // reason for the brokered-LLM 404 when no credential backs it
 	Unattended           bool              // a run nobody is driving: a held push is refused instead
+	Attribution          *policyref.Ref    // the policy named in a policy-decided refusal; nil when none
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).
@@ -162,7 +172,12 @@ type InjectionGrant struct {
 type Resources struct {
 	CPUMillis int64
 	MemoryMiB int64
-	PidsLimit int64 // fork-bomb guard; zero => driver default
+	// CPURequestMillis/MemoryRequestMiB are the k8s scheduling requests; 0 means
+	// "same as the limit". Never policy-authored: EffectiveRequests fills them from
+	// the deployment ratio. The Docker substrate ignores them.
+	CPURequestMillis int64
+	MemoryRequestMiB int64
+	PidsLimit        int64 // fork-bomb guard; zero => driver default
 	// DiskMiB caps writable storage; WHAT BINDS IT DIFFERS BY SUBSTRATE (see
 	// Capabilities.EphemeralDiskEnforcement): docker quotas only when
 	// supported, else uncapped; k8s enforces via kubelet EVICTION.
@@ -177,6 +192,11 @@ type Resources struct {
 type AttachOptions struct {
 	Cols uint16
 	Rows uint16
+	// Observer marks a client that only watches the shared tmux session. Its
+	// tmux client is attached with the ignore-size flag (tmux >= 3.2), so it is
+	// never counted when tmux sizes the shared window; on older tmux it is
+	// seeded from the writer's live size instead (Cols/Rows).
+	Observer bool
 }
 
 // Session is a live, bidirectional interactive PTY stream into a RUNNING
@@ -366,6 +386,31 @@ type Freezer interface {
 // ErrFreezeUnsupported is Freezer's answer from a router that cannot pause ref.
 var ErrFreezeUnsupported = errors.New("runner: this substrate cannot freeze a sandbox")
 
+// ActivitySampler is an OPTIONAL Runner capability: the CPU the agent of each
+// sandbox is using, read from the substrate, never by running anything inside
+// the sandbox. It is a workload-activity signal and nothing more: a ref with no
+// reading is "no reading", neither idle nor gone, and it is never evidence
+// that a runner is alive.
+//
+// SampleCPU returns each ref's agent CPU use in percent of one core. A ref
+// missing from the result has no reading. ErrActivityUnavailable means the
+// substrate cannot report CPU at all right now (a cluster with no metrics API,
+// or one the runner's Role may not read); any other error is a failed read
+// that says nothing about whether the signal exists. A nil refs asks only
+// whether the signal exists, at the cost of one read.
+//
+// BatchSample reports that one call reads every sandbox at the cost of one
+// read (Kubernetes: one PodMetrics list). When false each ref costs a read of
+// its own, and the caller bounds how many it asks for.
+type ActivitySampler interface {
+	SampleCPU(ctx context.Context, refs []string) (map[string]float64, error)
+	BatchSample() bool
+}
+
+// ErrActivityUnavailable is ActivitySampler's answer when the substrate has no
+// CPU signal to give.
+var ErrActivityUnavailable = errors.New("runner: this substrate cannot report sandbox CPU use")
+
 // ImageChecker is an OPTIONAL Runner capability: a substrate whose local image
 // cache can go stale (the docker driver) implements this so a stale cache can
 // be detected and fallen through to a rebuild. A substrate that pulls fresh
@@ -414,6 +459,29 @@ type DriveProber interface {
 	// uid, bounded by ctx. Called BEFORE a sandbox exists and MUST honour
 	// ctx's deadline.
 	ProbeDrive(ctx context.Context, mount types.DriveMount) (DriveProbe, error)
+}
+
+// SubstrateState is the closed set of answers a SubstrateProber gives about
+// whether the control plane can use its substrate right now. Three failure
+// classes, not one bool, because the remedies differ: a substrate that cannot
+// be reached is a network or daemon fault, a refused credential is a token to
+// renew, and a refused verb is a missing grant.
+type SubstrateState string
+
+const (
+	SubstrateOK           SubstrateState = "ok"
+	SubstrateUnreachable  SubstrateState = "unreachable"  // no answer, a transport error, or the probe's deadline
+	SubstrateUnauthorized SubstrateState = "unauthorized" // the substrate refused the credential (401)
+	SubstrateForbidden    SubstrateState = "forbidden"    // the credential is valid but may not do this (403, a permission error)
+)
+
+// SubstrateProber is an OPTIONAL Runner capability, in the shape of
+// DriveProber: a cheap read-only call that proves the control plane can reach
+// and use its substrate (Kubernetes: one namespaced pod list; Docker: a daemon
+// ping). It never creates anything. The implementation classifies its own
+// errors, and MUST honour ctx's deadline; a ctx that ended is SubstrateUnreachable.
+type SubstrateProber interface {
+	ProbeSubstrate(ctx context.Context) SubstrateState
 }
 
 // DriveReclaimOutcome is the closed set of answers a DriveReclaimer gives for

@@ -13,7 +13,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"maps"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -89,6 +91,13 @@ func (s *Server) providerLiveness(ctx context.Context, p types.ModelProvider, ag
 		}
 		d, err := s.providerSubscriptionRefusal(secretstore.WithPurpose(ctx, purpose), p, owner)
 		return awsSSOBlob{}, d, err
+	case p.Kind == types.ModelProviderAzureFoundry:
+		purpose := secretstore.PurposeStatus
+		if refresh {
+			purpose = secretstore.PurposeDispatch
+		}
+		d, err := s.providerAzureRefusal(secretstore.WithPurpose(ctx, purpose), p, agent, owner)
+		return awsSSOBlob{}, d, err
 	case p.Kind.IsBedrock():
 		// A status read, unless this pass may renew.
 		purpose := secretstore.PurposeStatus
@@ -111,6 +120,8 @@ func providerReadFailed(p types.ModelProvider) string {
 		return fmt.Sprintf(mpSubReadFailed, p.ID)
 	case p.Kind.IsBedrock():
 		return fmt.Sprintf(mpBRReadFailed, p.ID)
+	case p.Kind == types.ModelProviderAzureFoundry:
+		return fmt.Sprintf(mpAZReadFailed, p.ID)
 	}
 	return fmt.Sprintf(mpRunCredUnreadable, p.ID)
 }
@@ -200,8 +211,9 @@ type providerDispatch struct {
 // run": nothing credentials it.
 type providerLane struct {
 	chosen *chosenProvider
-	key    providerKeyLane // the key and endpoint kinds'
-	blob   awsSSOBlob      // bedrock_sso's: the owner's live, renewed session
+	key    providerKeyLane   // the key and endpoint kinds'
+	blob   awsSSOBlob        // bedrock_sso's: the owner's live, renewed session
+	azure  providerAzureLane // azure_foundry's
 }
 
 // hosts is every host the lane's arm credentials or reaches its model on: the
@@ -223,6 +235,8 @@ func (l providerLane) hosts(s *Server) []string {
 			hosts = append(hosts, ssoPortalHost(l.blob.Region, s.cfg.AWSSSOEndpointOverride))
 		}
 		return hosts
+	case p.Kind == types.ModelProviderAzureFoundry:
+		return []string{l.azure.host}
 	}
 	return []string{l.key.host}
 }
@@ -289,6 +303,11 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 		return llmTransport{}, injections, providerDispatch{}, true
 	}
 	llm := s.applyProviderEnv(ctx, run, lane, policy, sandboxEnv, proxyURL)
+	if err := llm.bedrock.maskErr; err != nil {
+		slog.WarnContext(ctx, "wardynd: the AWS SSO credential could not be recorded for masking", slog.String("run", run.ID.String()), slog.Any("err", err))
+		s.refuseProviderDispatch(ctx, run, lane.chosen.provider.Kind, providerDenial{msg: fmt.Sprintf(mpBRMaskFailed, lane.chosen.provider.ID)}, nil)
+		return llmTransport{}, injections, providerDispatch{}, false
+	}
 	if lane.chosen == nil {
 		return llm, injections, providerDispatch{detail: mpNoProviderDetail}, true
 	}
@@ -333,6 +352,13 @@ func (s *Server) providerLaneForRun(ctx context.Context, run types.AgentRun, sit
 			return providerLane{}, p.Kind, notServing
 		}
 		lane.key.owner = lane.chosen.owner
+	}
+	if p.Kind == types.ModelProviderAzureFoundry {
+		var ok bool
+		if lane.azure, ok = providerAzureLaneFor(p, run.Agent); !ok {
+			return providerLane{}, p.Kind, notServing
+		}
+		lane.azure.owner = lane.chosen.owner
 	}
 	blob, d, err := s.providerLiveness(ctx, p, run.Agent, lane.chosen.owner, true)
 	if err != nil {
@@ -437,6 +463,8 @@ func (s *Server) applyProviderEnv(ctx context.Context, run types.AgentRun, lane 
 			return s.providerSubscriptionTransport(run, sandboxEnv, *c)
 		case c.provider.Kind.IsBedrock():
 			return s.providerBedrockTransport(ctx, run, policy, sandboxEnv, *c, lane.blob)
+		case c.provider.Kind == types.ModelProviderAzureFoundry:
+			return s.providerAzureTransport(sandboxEnv, *c, lane.azure)
 		}
 	}
 	switch run.Agent {
@@ -446,10 +474,30 @@ func (s *Server) applyProviderEnv(ctx context.Context, run types.AgentRun, lane 
 			sandboxEnv[envAnthropicModel] = model
 		}
 	case "codex-cli":
+		// codex 0.149.1 reads neither OPENAI_* variable: its base URL comes
+		// from config.toml and its key from CODEX_API_KEY (task mode) or
+		// auth.json (interactive), both of which the image's prep writes
+		// from these two. The OPENAI_* pair stays for an older codex.
+		sandboxEnv[envCodexBaseURL] = codexBaseURL(proxyURL, lane.key.upstream)
+		sandboxEnv[envCodexAPIKey] = "wardyn-proxy-injected"
 		sandboxEnv[envOpenAIBaseURL] = proxyURL + "/wardyn/llm/openai"
 		sandboxEnv[envOpenAIAPIKey] = "wardyn-proxy-injected"
 	}
 	return llmTransport{provider: lane.chosen}
+}
+
+// codexBaseURL is the base URL codex is configured with: the brokered openai
+// route plus the path its final upstream needs. codex appends `responses`, the
+// proxy strips /wardyn/llm/openai and prepends a configured gateway's own path
+// prefix, so the vendor host (no gateway) and a gateway whose base URL has an
+// empty path both need the `/v1` here, and a gateway that carries a prefix
+// must not get a second one.
+func codexBaseURL(proxyURL, gateway string) string {
+	base := proxyURL + "/wardyn/llm/openai"
+	if u, err := url.Parse(gateway); gateway != "" && err == nil && strings.TrimSuffix(u.Path, "/") != "" {
+		return base
+	}
+	return base + "/v1"
 }
 
 // authorProviderKeyInjection writes the key arm's one model-credential grant:

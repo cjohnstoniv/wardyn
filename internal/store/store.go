@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/notify"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 )
@@ -90,6 +91,101 @@ var createRunSQL = `
 
 // CreateRun inserts a new run and returns the persisted row.
 func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, error) {
+	args, err := s.createRunArgs(r)
+	if err != nil {
+		return types.AgentRun{}, err
+	}
+	var out types.AgentRun
+	err = s.guarded(ctx, func(q queryRower) (e error) {
+		out, e = scanRun(q.QueryRow(ctx, createRunSQL, args...))
+		return e
+	})
+	return out, err
+}
+
+// ErrRunCapReached is CreateRunUnderCap's refusal: the deployment already holds
+// its cap of non-terminal runs.
+var ErrRunCapReached = errors.New("store: deployment run cap reached")
+
+// CreateRunUnderCap is CreateRun with a deployment-wide ceiling on non-terminal
+// runs (WARDYN_MAX_CONCURRENT_RUNS). The count and the insert share one
+// transaction-scoped advisory lock, so two replicas racing at the cap admit
+// exactly the cap. limit <= 0 is unlimited and takes no lock. Rows are counted,
+// not kept in a counter, so a crashed path cannot drift it.
+func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) (types.AgentRun, error) {
+	if limit <= 0 {
+		return s.CreateRun(ctx, r)
+	}
+	args, err := s.createRunArgs(r)
+	if err != nil {
+		return types.AgentRun{}, err
+	}
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return types.AgentRun{}, err
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	if g, ok := identityGuardFrom(ctx); ok {
+		if err := checkIdentityGuard(ctx, tx, g); err != nil {
+			return types.AgentRun{}, err
+		}
+	}
+	active, err := lockAndCountActiveRuns(ctx, tx, uuid.Nil)
+	if err != nil {
+		return types.AgentRun{}, err
+	}
+	if active >= limit {
+		return types.AgentRun{}, ErrRunCapReached
+	}
+	created, err := scanRun(tx.QueryRow(ctx, createRunSQL, args...))
+	if err != nil {
+		return types.AgentRun{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.AgentRun{}, err
+	}
+	return created, nil
+}
+
+// lockAndCountActiveRuns takes the deployment cap's transaction-scoped advisory
+// lock and counts the runs it holds (CountNonTerminalRuns' predicate) other than
+// except (uuid.Nil for none), in one statement. Every writer that adds a run to
+// that count (a create, a kept run's revive) holds the lock from this count to its
+// commit. q must be a pgx.Tx.
+func lockAndCountActiveRuns(ctx context.Context, q Querier, except uuid.UUID) (int, error) {
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.RunCapLockClass); err != nil {
+		return 0, err
+	}
+	var active int
+	if err := q.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames(), except).Scan(&active); err != nil {
+		return 0, fmt.Errorf("store: count active runs: %w", err)
+	}
+	return active, nil
+}
+
+// HoldsSandboxSQL is TRUE when the agent_runs row's agent is still running: the run
+// is not kept, or it was kept after a control-plane outage and has not reached its
+// end, so only its proxy was stopped (api stopLostSandbox). A run kept after its
+// end or a reboot, or an outage-kept run past its end, has its agent stopped. It is
+// the one rule for a live run under WARDYN_MAX_CONCURRENT_RUNS, in the fleet
+// capacity view and under WARDYN_RUN_MAX_AGE.
+const HoldsSandboxSQL = `(lost_at IS NULL OR (lost_reason = '` + string(types.LostOutage) + `' AND (ends_at IS NULL OR ends_at > now())))`
+
+const activeRunsCountSQL = `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND id <> $2 AND ` + HoldsSandboxSQL
+
+// CountNonTerminalRuns is the number of non-terminal run rows that hold a sandbox
+// (HoldsSandboxSQL), the quantity CreateRunUnderCap holds under the cap. It takes no
+// lock: a pre-flight read for a refusal that must come before an identity is minted,
+// never the authority.
+func (s PG) CountNonTerminalRuns(ctx context.Context) (int, error) {
+	var n int
+	if err := s.Pool.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames(), uuid.Nil).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count active runs: %w", err)
+	}
+	return n, nil
+}
+
+func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 	// updated_at is stamped on the DATABASE's clock like every other writer,
 	// back-dated by the row's own age so an app-clock write here can't skew the
 	// idle reaper's DB-clock idleness measurement (30s TouchDebounce margin).
@@ -99,17 +195,16 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 	}
 	limitsJSON, err := json.Marshal(r.RunLimits)
 	if err != nil {
-		return types.AgentRun{}, fmt.Errorf("store: marshal run limits: %w", err)
+		return nil, fmt.Errorf("store: marshal run limits: %w", err)
 	}
-	row := s.Pool.QueryRow(ctx, createRunSQL,
+	return []any{
 		r.ID, r.CreatedAt, updatedAge, r.CreatedBy, r.Agent, r.Repo, r.Task,
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
 		r.SPIFFEID, r.RunnerTarget, r.SandboxRef, r.Interactive, r.WorkspacePath, r.WorkspaceID, r.SourceID, r.Image, r.AutoStopAfterSec,
 		r.AgentExecID, r.Title, r.Description, r.WorkspaceIDs, string(r.AutonomyLevel),
 		r.EndsAt, r.WaitBudgetSec, limitsJSON, r.GovernanceProfileID, r.ModelProviderID, r.UserType,
 		r.Preset, r.PresetVersion, r.OperatorOwned, r.CreatedVia, r.DiskMiB,
-	)
-	return scanRun(row)
+	}, nil
 }
 
 // GetRun returns the run for id, or ErrNotFound.
@@ -190,6 +285,25 @@ func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, t
 	return tag.RowsAffected() > 0, nil
 }
 
+// UpdateRunStateIfCreatedBefore transitions a run only when still in fromState,
+// created_at is at or before createdNotAfter, and its agent still runs
+// (HoldsSandboxSQL: not kept, or kept after an outage before its end; a run kept
+// with its agent stopped is left to its files grace). The
+// max-age stop's own predicate on the run's age: it carries neither the idleness
+// guard nor the open-request guard of UpdateRunStateIfIdle, because an absolute
+// age cap exists to end a run that is not going to finish by itself.
+func (s PG) UpdateRunStateIfCreatedBefore(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, createdNotAfter time.Time) (bool, error) {
+	tag, err := s.Pool.Exec(ctx,
+		`UPDATE agent_runs SET state=$1, updated_at=now(), ended_at=CASE WHEN $5 THEN now() ELSE ended_at END
+		 WHERE id=$2 AND state=$3 AND created_at <= $4 AND `+HoldsSandboxSQL,
+		string(toState), id, string(fromState), createdNotAfter, toState.IsTerminal(),
+	)
+	if err != nil {
+		return false, fmt.Errorf("store: conditional age update run state: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // openHoldSQL is TRUE when agent_runs (the outer query's row) has a PENDING
 // approval that has not yet reached its own min(requested_at+wait, ends_at)
 // expiry — an "open request within its wait". A boolean expression, not a full
@@ -242,6 +356,29 @@ func (s PG) SetRunImage(ctx context.Context, id uuid.UUID, image string) error {
 func (s PG) SetRunDiskMiB(ctx context.Context, id uuid.UUID, mib int) error {
 	return s.execRun(ctx, "set run disk mib",
 		`UPDATE agent_runs SET disk_mib=$1, updated_at=now() WHERE id=$2`, mib, id)
+}
+
+// RunSizing is the configured reservation recorded at dispatch (migration 0117). A nil
+// ProxyCPUMillis means the proxy had no CPU cap.
+type RunSizing struct {
+	RunnerKind            string
+	AgentCPURequestMillis int64
+	AgentCPULimitMillis   int64
+	AgentMemoryRequestMiB int64
+	AgentMemoryLimitMiB   int64
+	ProxyCPUMillis        *int64
+	ProxyMemoryMiB        int64
+}
+
+// SetRunSizing scoped-writes ONLY the dispatch-time sizing columns. It does not bump
+// updated_at: the record is not activity, and the idle clock reads updated_at.
+func (s PG) SetRunSizing(ctx context.Context, id uuid.UUID, z RunSizing) error {
+	return s.execRun(ctx, "set run sizing",
+		`UPDATE agent_runs SET runner_kind=$1, agent_cpu_request_millis=$2, agent_cpu_limit_millis=$3,
+		   agent_memory_request_mib=$4, agent_memory_limit_mib=$5, proxy_cpu_millis=$6, proxy_memory_mib=$7
+		 WHERE id=$8`,
+		z.RunnerKind, z.AgentCPURequestMillis, z.AgentCPULimitMillis, z.AgentMemoryRequestMiB,
+		z.AgentMemoryLimitMiB, z.ProxyCPUMillis, z.ProxyMemoryMiB, id)
 }
 
 // SetRunAgentExecID scoped-writes ONLY agent_exec_id, once the driver execs the
@@ -464,11 +601,25 @@ func scanGrant(row pgx.Row) (types.CredentialGrant, error) {
 
 // ApprovalRequest
 
-// CreateApproval inserts a new approval request.
+// CreateApproval inserts a new approval request. With approval notifications configured it also
+// inserts the approval's outbox rows in the same transaction, so no crash can leave an approval nobody
+// was told about; without them the INSERT is the only write.
 func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error) {
 	scopeJSON, err := json.Marshal(a.RequestedScope)
 	if err != nil {
 		return types.ApprovalRequest{}, fmt.Errorf("store: marshal approval scope: %w", err)
+	}
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return types.ApprovalRequest{}, fmt.Errorf("store: begin approval tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var profileID *uuid.UUID
+	if notify.Enabled() {
+		// Read in the approval's own transaction, so a concurrent profile change cannot route it by stale data.
+		if err := tx.QueryRow(ctx, notify.ProfileSQL, a.RunID).Scan(&profileID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return types.ApprovalRequest{}, fmt.Errorf("store: read run profile: %w", err)
+		}
 	}
 	// INSERT omits decision_scope/decision_expires_at: their SQL DEFAULTs already
 	// mean "no decision"; RETURNING names them so the caller sees those defaults.
@@ -476,20 +627,34 @@ func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.
 		INSERT INTO approvals (` + approvalInsertCols + `)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		RETURNING ` + approvalCols
-	out, err := scanApproval(s.Pool.QueryRow(ctx, q,
+	out, err := scanApproval(tx.QueryRow(ctx, q,
 		a.ID, a.RunID, a.GrantID, string(a.Kind), scopeJSON, string(a.State), a.RequestedAt,
 		a.DecidedAt, a.DecidedBy, a.MintedJTI, a.Reason,
 	))
 	if err != nil {
 		// A partial unique index rejecting the insert means a concurrent raise
 		// already persisted the open PENDING row; surface a sentinel so
-		// RequestApproval can dedup to the winner instead of erroring.
+		// RequestApproval can dedup to the winner instead of erroring. The deferred
+		// rollback is what makes the loser enqueue nothing.
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return types.ApprovalRequest{}, ErrDuplicatePending
 		}
 		return types.ApprovalRequest{}, err
 	}
+	enq := notify.NewEnqueue(out.Kind, profileID)
+	var raised, queued int64
+	if enq.On() {
+		const src = `WITH ins AS (SELECT $1::uuid AS id, $2::uuid AS run_id, $3::timestamptz AS requested_at)`
+		args := append([]any{out.ID, out.RunID, out.RequestedAt}, enq.Args()...)
+		if err := tx.QueryRow(ctx, src+enq.Tail(4), args...).Scan(&raised, &queued); err != nil {
+			return types.ApprovalRequest{}, fmt.Errorf("store: enqueue approval notifications: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.ApprovalRequest{}, fmt.Errorf("store: commit approval: %w", err)
+	}
+	enq.Done(ctx, out.ID, out.RunID, raised, queued)
 	return out, nil
 }
 
@@ -605,10 +770,11 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 // so an external SIEM ends up holding a head hash Wardyn cannot later disown.
 //
 // Runs in a transaction because pg_advisory_xact_lock must be held across the
-// INSERT: this caller's seq allocation and head read must not interleave with
-// another writer's, keeping seq order and chain order identical. The DB trigger
-// takes the same lock, binding writers this package knows nothing about; the
-// lock here is re-entrant and free.
+// append: this caller's seq allocation and head read must not interleave with
+// another writer's, keeping seq order and chain order identical. audit_append
+// takes the same lock itself (the only way a row enters the table since 0111);
+// the lock here is re-entrant and free, and keeps the bounded wait below in
+// front of it.
 func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEvent) error {
 	// The cap lives at the one INSERT every audit writer reaches (api server,
 	// broker, identity, approval sweeper, spool drain), not in Server.auditEvent,
@@ -639,13 +805,13 @@ func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEv
 		return fmt.Errorf("store: lock audit chain (waited up to %s; another transaction that inserted into audit_events may still be open): %w",
 			db.AuditChainLockTimeout, err)
 	}
-	// COALESCE: the genesis row's prev_hash is SQL NULL, which won't scan into a
-	// string; empty string and NULL both mean "nothing before this row".
+	// audit_append is the only way a row enters audit_events: it allocates seq and recorded_at under
+	// the chain lock and the chain trigger refuses a row it did not allocate. COALESCE: the genesis
+	// row's prev_hash is SQL NULL, which won't scan into a string; empty string and NULL both mean
+	// "nothing before this row".
 	const q = `
-		INSERT INTO audit_events
-			(` + auditCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-		RETURNING COALESCE(prev_hash,''), COALESCE(row_hash,'')`
+		SELECT COALESCE(prev_hash,''), COALESCE(row_hash,'')
+		FROM audit_append($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
 	if err := tx.QueryRow(ctx, q,
 		ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
 		ev.Target, ev.Outcome, ev.SourceIP, dataJSON,

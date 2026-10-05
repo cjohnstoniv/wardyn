@@ -20,7 +20,10 @@ package client
 //
 // internal/types remains the single source of truth; these add no new types.
 
-import "github.com/cjohnstoniv/wardyn/internal/types"
+import (
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
 
 // Domain nouns returned or accepted by Client methods.
 type (
@@ -32,6 +35,10 @@ type (
 	// authorized_keys line plus its fingerprint). Returned by ListSSHKeys and
 	// AddSSHKey.
 	SSHPublicKey = types.SSHPublicKey
+
+	// PersonSummary is one row of ListPeople; PersonList is one page of it.
+	PersonSummary = types.PersonSummary
+	PersonList    = types.PersonList
 
 	// Device is one enrolled laptop in the organisation's inventory (no
 	// credential material). Returned by ListDevices.
@@ -164,6 +171,16 @@ type (
 	// governance_profiles row), carried in GovernanceDocument.Profiles.
 	// Returned by GetGovernance and ApplyGovernance.
 	GovernanceProfile = types.GovernanceProfile
+
+	// PolicyContact is the contact a GovernanceProfile (and SiteConfig.PolicyHelp)
+	// publishes: owner, email, request_url and request_text, validated by the
+	// server on write.
+	PolicyContact = policyref.Contact
+
+	// PolicyRef is the policy a ceiling refusal names: the leaf profile (or the
+	// deployment) that bound the caller, plus the contact it published.
+	// APIError.Policy carries one.
+	PolicyRef = policyref.Ref
 
 	// GovernanceAssignment binds one profile to one subject
 	// (GovernanceDocument.Assignments). Returned by GetGovernance and

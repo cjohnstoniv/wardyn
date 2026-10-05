@@ -38,6 +38,44 @@ const SecretRowLockClass int32 = 0x57534543 // ASCII "WSEC"
 // inserts serialize, so the per-run cap it counts is the cap it enforces.
 const PushPathListLockClass int32 = 0x57505054 // ASCII "WPPT"
 
+// RunOutputLockClass is the classid of the TRANSACTION-scoped two-argument
+// lock store.PG's run_outputs writers, readers and erasure take, keyed to one
+// run: an erasure's tombstone and a writer's tombstone check are serialized, so
+// no writer commits a row the erasure has already ruled out. A leaf: taken last
+// inside the one transaction and never held while taking another lock, so it
+// sits outside LockOrder.
+const RunOutputLockClass int32 = 0x57524F55 // ASCII "WROU"
+
+// RunCapLockClass is the classid of the TRANSACTION-scoped two-argument lock
+// store.PG.CreateRunUnderCap takes (second key 0): one capped run insert at a
+// time across replicas, so the count it checks is the cap it enforces.
+const RunCapLockClass int32 = 0x57525243 // ASCII "WRRC"
+
+// GovernanceGraphLockClass is the classid of the TRANSACTION-scoped two-argument lock
+// store.PG.WriteGovernanceProfile and DeleteGovernanceProfile take (second key 0): one write to the
+// governance profile graph at a time, so the cycle and depth checks they make are the ones the
+// stored graph keeps.
+const GovernanceGraphLockClass int32 = 0x57474750 // ASCII "WGGP"
+
+// GovernanceAssignmentLockClass is the classid of the TRANSACTION-scoped two-argument lock keyed to one
+// governance assignment's natural key (hashtext of subject_type and subject). The assignment upsert and
+// the approval of a held assignment change both take it, so a create that was absent when it was
+// proposed cannot be overwritten by an upsert that landed in between.
+const GovernanceAssignmentLockClass int32 = 0x57474153 // ASCII "WGAS"
+
+// GovernanceTargetLockClass is the classid of the TRANSACTION-scoped two-argument lock keyed to one
+// target of a held governance change (hashtext of the kind and its natural key), for the kinds whose
+// row may be absent: a capability grant, a restriction, the enforcement map, a role mapping. The direct
+// write and the approval of a held change to that target both take it, so a write that landed between
+// the approval's staleness check and its own write cannot be overwritten.
+const GovernanceTargetLockClass int32 = 0x57474754 // ASCII "WGGT"
+
+// KeyDomainAssignmentLockClass is the classid of the TRANSACTION-scoped two-argument lock (second key
+// 0) every key-domain assignment write takes, the direct write and the approval of a held one alike:
+// one write at a time, so the membership check a set makes (two groups of one person in different
+// domains) sees every assignment written before it, including another group's.
+const KeyDomainAssignmentLockClass int32 = 0x574B4441 // ASCII "WKDA"
+
 // LoginSupersedeLockWait is the TOTAL budget one caller spends trying to take
 // a keyed lock before being REFUSED (retry) rather than let through unlocked;
 // only ErrAdvisoryLockNoCapacity proceeds unlocked. Matches

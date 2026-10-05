@@ -41,6 +41,10 @@ auth:
   adminToken:
     value: not-a-real-token
 
+scim:
+  enabled: true
+  tokenSecretRef: wardyn-scim
+
 secrets:
   # Deliberately NOT bech32-shaped: the chart never parses it, and a realistic
   # AGE-SECRET-KEY-1... would need its own gitleaks fingerprint forever.
@@ -125,6 +129,7 @@ k8s:
   runsNamespace: wardyn-runs
   proxyImage: ghcr.io/example/wardyn-proxy:ci-test
   imagePullSecret: k8s-regcred
+  readNodes: true
   runtimeClasses:
     CC2: gvisor
     CC3: kata-qemu
@@ -192,6 +197,18 @@ resources:
 podAnnotations:
   prometheus.io/scrape: "true"
 
+# The Prometheus Operator route to the same /metrics: one ServiceMonitor that
+# names the operator-created scrape-credential Secret (the chart never makes it).
+metrics:
+  serviceMonitor:
+    enabled: true
+    bearerTokenSecret:
+      name: wardyn-scrape
+      key: token
+    labels:
+      release: prometheus
+    interval: 30s
+
 # Raised above the 70s default; the render must carry the operator's value.
 terminationGracePeriodSeconds: 90
 
@@ -253,3 +270,14 @@ extraVolumeMounts:
 # actually exists in a cluster.
 daemonProxySecret:
   existingSecret: wardyn-daemon-proxy
+
+# Sandbox sizing knobs (WARDYN_SANDBOX_DEFAULT_* / WARDYN_PROXY_*), set off the chart default so the render proves they reach the env.
+runner:
+  sandbox:
+    defaultResources:
+      cpuMillis: 1500
+      memoryMiB: 3072
+    proxyResources:
+      cpuMillis: 400
+      memoryMiB: 192
+maxConcurrentRuns: 25

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
@@ -403,6 +404,15 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := refuseRetiredModelEnv(os.Environ()); err != nil {
 		return err
 	}
+	if *f.preflightRatePerMin < 0 {
+		return fmt.Errorf("refusing to start: WARDYN_PREFLIGHT_RATE_PER_MIN is %d; want 0 (off) or a positive number", *f.preflightRatePerMin)
+	}
+	if _, err := auditSealMode(f); err != nil {
+		return err
+	}
+	if err := validateHAPosture(f); err != nil {
+		return err
+	}
 	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, *f.uiStripCookies, posture, *f.allowPlaintextListen); err != nil {
 		return err
 	}
@@ -412,8 +422,65 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateHybridPosture(*f.orgURL, *f.orgEnrolToken, *f.memberMode, *f.allowPlaintextListen); err != nil {
 		return err
 	}
+	if err := validateRunOutputTailBytes(*f.runOutputTailBytes); err != nil {
+		return err
+	}
+	if err := validateRunOutputRetentionDays(*f.runOutputRetention); err != nil {
+		return err
+	}
+	if _, err := scimConfig(f, posture); err != nil {
+		return err
+	}
 	for _, w := range bootPostureWarnings(f, posture) {
 		slog.Warn(w)
+	}
+	return nil
+}
+
+// validateHAPosture is the boot half of high availability, the half that still
+// holds when someone edits the Deployment by hand or scales it with kubectl,
+// which the chart's render-time guards cannot see. WARDYN_HA skips the
+// single-instance lock, so it is refused unless everything that makes a second
+// replica safe is in place: a Kubernetes runner (the Docker driver tracks
+// sandboxes in per-process maps that a replica that did not create a sandbox
+// cannot see) and a recording store every replica reads (pg), or none (off).
+// It also refuses the removed -allow-multi-instance flag, with a pointer.
+func validateHAPosture(f *bootFlags) error {
+	if *f.allowMultiInstance {
+		return errors.New("refusing to start: -allow-multi-instance was removed in 0.8.6. Running more than one replica is a supported mode now: " +
+			"set WARDYN_HA=true (the chart's ha.enabled), which needs the Kubernetes runner and WARDYN_RECORDING_STORE=pg; " +
+			"see docs/OPERATIONS.md, \"High availability\"")
+	}
+	if !*f.ha {
+		return nil
+	}
+	if *f.runnerSel != "k8s" {
+		return fmt.Errorf("refusing to start: WARDYN_HA is set but the runner is %q. High availability is supported on the Kubernetes runner only "+
+			"(WARDYN_RUNNER=k8s): the Docker driver keeps its sandbox tracking in per-process maps, so a teardown served by a replica that did not "+
+			"create the sandbox cannot see it. Unset WARDYN_HA, or run on Kubernetes", *f.runnerSel)
+	}
+	if sel := *f.recordingSel; sel != "pg" && sel != "off" {
+		return fmt.Errorf("refusing to start: WARDYN_HA is set but WARDYN_RECORDING_STORE is %q. Every replica must read the same recordings, so the "+
+			"store must be \"pg\" (Postgres) or \"off\"; the \"fs\" store is a directory on one pod's disk", sel)
+	}
+	return nil
+}
+
+// validateRunOutputTailBytes refuses a WARDYN_RUN_OUTPUT_TAIL_BYTES outside
+// 1 KiB to 1 MiB: smaller keeps too little to be useful, larger lets one run
+// hold a megabyte-scale buffer for every run in the TTL window.
+func validateRunOutputTailBytes(n int) error {
+	if n < 1024 || n > 1<<20 {
+		return fmt.Errorf("WARDYN_RUN_OUTPUT_TAIL_BYTES is %d; it must be between 1024 and 1048576", n)
+	}
+	return nil
+}
+
+// validateRunOutputRetentionDays refuses a negative WARDYN_RUN_OUTPUT_RETENTION_DAYS:
+// 0 keeps persisted output forever, a positive number is the window in days.
+func validateRunOutputRetentionDays(n int) error {
+	if n < 0 {
+		return fmt.Errorf("WARDYN_RUN_OUTPUT_RETENTION_DAYS is %d; it must be 0 (keep forever) or a positive number of days", n)
 	}
 	return nil
 }
@@ -545,4 +612,37 @@ func parseMountCeilings(f *bootFlags) (runner.UserMountPolicy, []string, error) 
 		slog.Warn("wardynd: mount ceilings overlap — " + warn)
 	}
 	return memberMounts, driveHostRoots, nil
+}
+
+// warnGovernAdminRunsUnbound says at boot that WARDYN_GOVERN_ADMIN_RUNS binds
+// nobody when OIDC is not configured. Without OIDC (local mode, or admin-token-only
+// mode) no request carries a person, so every launch is the break-glass admin: it
+// is ungoverned and carries governance_exempt on run.create. The second-human
+// switches warn only in local mode because they fail closed in token mode; this
+// one fails open there, so it warns in both.
+func warnGovernAdminRunsUnbound(governAdminRuns, oidcConfigured bool) {
+	if governAdminRuns && !oidcConfigured {
+		slog.Warn("wardynd: WARDYN_GOVERN_ADMIN_RUNS is set but OIDC is not configured, so the switch binds nobody — every launch is the admin token or local mode, which stays ungoverned and carries governance_exempt on run.create. Configure SSO to govern admin runs, or unset it.")
+	}
+}
+
+// parseGovernAdminRunsExempt validates WARDYN_GOVERN_ADMIN_RUNS_EXEMPT: a CSV
+// whose only value is "recording". Any other value is refused with exit 2 (the
+// code the flag package uses for a bad flag), so a typo cannot silently leave a
+// lane governed or exempt. Set without the switch it does nothing, and boot
+// says so.
+func parseGovernAdminRunsExempt(csv string, governAdminRuns bool) ([]string, error) {
+	var out []string
+	for _, v := range splitCSV(csv) {
+		if v != "recording" {
+			return nil, &exitCodeError{code: 2, err: fmt.Errorf("WARDYN_GOVERN_ADMIN_RUNS_EXEMPT: %q is not a lane; the only value is \"recording\"", v)}
+		}
+		if !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	if len(out) > 0 && !governAdminRuns {
+		slog.Warn("wardynd: WARDYN_GOVERN_ADMIN_RUNS_EXEMPT is set but WARDYN_GOVERN_ADMIN_RUNS is not, so it does nothing.")
+	}
+	return out, nil
 }

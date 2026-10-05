@@ -150,6 +150,8 @@ func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, worksp
 // mints the run identity, and (if a runner is wired) dispatches the sandbox.
 // Without a runner the run stays PENDING with a clear status message (headless
 // API-only operation is allowed for v0).
+//
+//nolint:funlen // Deliberate: one linear gate sequence whose ORDER is the contract (TestPreflightMirrorsLaunchGates reads it), and that test only sees gates called from this body, so a gate cannot be folded into a helper to save lines. Each gate already lives in its own function; low branching, passes gocyclo/gocognit, just long.
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if s.refuseAdminViewLaunch(w, r) {
@@ -228,7 +230,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Ahead of the autonomy gate because that gate grades THIS resolution: the
 	// Bedrock model credential is handed to the run at dispatch, and a secrets
 	// axis graded without it froze the level a rung too high (#504).
-	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs)
+	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs, true)
 	if !ok {
 		return
 	}
@@ -265,6 +267,21 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Host capacity, the last refusal and before the mint, the same siting as
 	// the autonomy gate: a refusal leaves no identity and no run row.
 	if writeHostCapacityRefusal(w, r, s.admitHostCapacity(r.Context(), principalFromRequest(r), "runs", true)) {
+		return
+	}
+
+	// The deployment run cap, refused before the mint for the same reason: no
+	// identity.mint row and no live token for a run that gets no row.
+	// CreateRunUnderCap (createRun) still decides a race at the cap.
+	if s.refuseRunCapFull(w, r) {
+		return
+	}
+
+	// The runs namespace's ResourceQuota, refused before the mint for the same reason: a run
+	// the quota cannot hold leaves no identity, no run row and no sandbox. The advisories
+	// join the 201's warnings. The quota's own admission stays the authority on a race.
+	fitWarnings, refused := s.refuseRunFit(w, r, s.runFitSpec(ctx, spec, ceiling))
+	if refused {
 		return
 	}
 
@@ -320,6 +337,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	s.captureRunLimits(&run, ceiling)
 	created, err := s.createRun(ctx, run)
 	if err != nil {
+		s.cfg.Identity.RevokeRun(context.WithoutCancel(ctx), runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
 		writeServerError(w, r, "create run", err)
 		return
 	}
@@ -359,6 +377,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// The two things provider admission ADMITTED rather than refused; see
 	// repoSourceWarnings.
 	warnings = append(warnings, s.repoSourceWarnings(ctx, runID, spec, req)...)
+	warnings = append(warnings, fitWarnings...)
 
 	// The requirements fold that ran ABOVE the confinement floor, audited now
 	// that the run id exists. See recordCreateFolds.
@@ -396,6 +415,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	createData := createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
 	createData["policy_source"] = policySource
+	s.markGovernanceExempt(ctx, createData)
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createData))))
 

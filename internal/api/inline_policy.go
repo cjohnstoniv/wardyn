@@ -68,7 +68,7 @@ const (
 // which dispatch is the authority on — this call is what makes the member's
 // PREVIEW of it agree, see composer.Clamp).
 func (s *Server) boundUserSpec(ctx context.Context, w http.ResponseWriter, r *http.Request, spec types.RunPolicySpec, ceiling governanceCeiling, errPrefix string, dryRun bool) (types.RunPolicySpec, []string, bool) {
-	spec, warns := composer.Clamp(spec, ceiling.Spec, ceiling.Limits.MaxEphemeralDiskMiB)
+	spec, warns := composer.Clamp(spec, ceiling.Spec, ceiling.Limits)
 	kept, grantWarns, code, gerr := s.filterUserGrants(ctx, s.secretOwnerFromRequest(r), spec.AllowedDomains, spec.EligibleGrants)
 	if gerr != nil {
 		writeErrorReason(w, code, reasonInlinePolicyInvalid, errPrefix+gerr.Error())
@@ -204,7 +204,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		// RoleSecurityAdmin), in lockstep with denyUserRequest: a security
 		// admin's OWN run is clamped like anyone else's. They author the
 		// ceiling; they do not stand outside it.
-		if !s.isOperator(r.Context()) {
+		if !s.runUngoverned(r.Context()) {
 			// A member's inline_policy can never smuggle wider grants/
 			// egress/confinement than THEIR ceiling allows — the governance
 			// profile an admin assigned them, or Config.DefaultPolicy when
@@ -221,6 +221,9 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			}
 			clampWarnings = append(clampWarnings, warns...)
 		}
+		if refusePATNarrowedDuplicates(w, "invalid inline_policy: ", spec) {
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
+		}
 		if err := validatePolicySpec(spec); err != nil {
 			writeErrorReason(w, http.StatusBadRequest, specRefusalReason(err, reasonInlinePolicyInvalid), "invalid inline_policy: "+err.Error())
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
@@ -233,7 +236,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		// below: composer.Clamp bounds a member's disk_mib by the PROFILE, but
 		// the org's default_disk_mib/max_disk_mib are dispatch's and reach no
 		// preview at all without this. A no-op on launch (see the helper).
-		clampWarnings = append(clampWarnings, s.boundEphemeralDisk(ctx, r, &spec, ceiling, dryRun)...)
+		clampWarnings = append(clampWarnings, s.boundResources(ctx, r, &spec, ceiling, dryRun)...)
 		clampWarnings = append(clampWarnings, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
 		// Audit the use of an inline (non-stored) policy. The run id is not yet
 		// minted at this point, so this event carries a nil run id (like the
@@ -313,7 +316,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// rule whether body or row id" claim would be false at exactly the
 	// grant-bearing rows, which are the ones that matter. Dropping the unlisted
 	// pairing is filterUserGrants' job, stage 2.
-	if policyID != nil && ceiling.Profile != nil && !s.isOperator(r.Context()) {
+	if policyID != nil && ceiling.Profile != nil && !s.runUngoverned(r.Context()) {
 		var warns []string
 		var bounded bool
 		spec, warns, bounded = s.boundUserSpec(ctx, w, r, spec, ceiling, "invalid policy: ", dryRun)
@@ -329,8 +332,11 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// than the limit standing beside it. That member previewed a scratch size
 	// their run does not get, and a dispatch-side log line is not a disclosure to
 	// them. Both arms call the SAME helper (runs_dispatch_ceiling.go).
-	storedWarns = append(storedWarns, s.boundEphemeralDisk(ctx, r, &spec, ceiling, dryRun)...)
+	storedWarns = append(storedWarns, s.boundResources(ctx, r, &spec, ceiling, dryRun)...)
 	storedWarns = append(storedWarns, s.boundUIApps(ctx, r, &spec, ceiling, dryRun)...)
+	if refusePATNarrowedDuplicates(w, "invalid policy: ", spec) {
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
+	}
 	if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec); err != nil {
 		writeErrorReason(w, code, reasonInlinePolicyInvalid, "invalid policy: "+err.Error())
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, false
@@ -785,8 +791,8 @@ func storedSecretGrantPairing(g types.GrantSpec) (host, secretRef, knownHostsRef
 		r, e := injectionRuleFromScope(g.Scope)
 		return r.Host, r.SecretName, "", true, e
 	case types.GrantGitPAT:
-		h, sn, _, e := gitPATScopeFields(g.Scope)
-		return h, sn, "", true, e
+		sc, e := types.DecodeGitPATScope(g.Scope)
+		return sc.Host, sc.SecretName, "", true, e
 	case types.GrantSSHKey:
 		h, kr, _, khr, e := sshKeyScopeFields(g.Scope)
 		return h, kr, khr, true, e
@@ -893,10 +899,11 @@ func (s *Server) secretRefsOf(spec types.RunPolicySpec) ([]neededSecret, error) 
 			}
 			needed = append(needed, neededSecret{rule.SecretName, types.GrantAPIKey, g.OwnerOnly, ""})
 		case types.GrantGitPAT:
-			patHost, secretName, _, derr := gitPATScopeFields(g.Scope)
+			pat, derr := types.DecodeGitPATScope(g.Scope)
 			if derr != nil {
 				return nil, fmt.Errorf("git_pat grant scope invalid: %w", derr)
 			}
+			patHost, secretName := pat.Host, pat.SecretName
 			// nameSinkReservedSecret, not sinkReservedSecret (#1048): this kind
 			// returns the raw value into the sandbox, so it needs the wider guard
 			// that also refuses a wardyn-provider-*-key name. api_key above stays

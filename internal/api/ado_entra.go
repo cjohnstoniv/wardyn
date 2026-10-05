@@ -196,6 +196,22 @@ type ADOEntraSource func(ctx context.Context) (ADOEntraConfig, bool, error)
 // validate holds a resolved configuration to what every door needs before it
 // composes a URL or a store name.
 func (c ADOEntraConfig) validate() error {
+	if err := c.validateApp(); err != nil {
+		return err
+	}
+	if len(c.Scopes) == 0 {
+		return fmt.Errorf("azure devops sign-in: the provider row names no scopes")
+	}
+	if err := adoCapture(c).checkRequested(c.Scopes); err != nil {
+		return fmt.Errorf("azure devops sign-in: %w", err)
+	}
+	return c.validateTokenMode()
+}
+
+// validateApp is the part of validate every kind's capture shares: a usable
+// row key and a usable application, tenant and redirect. Scopes are the kind's
+// own policy (entraCapture.checkRequested), so they are not checked here.
+func (c ADOEntraConfig) validateApp() error {
 	switch {
 	case !adoEntraValidRowID(c.RowID):
 		return fmt.Errorf("azure devops sign-in: provider row id %q is not usable as a store name", c.RowID)
@@ -205,13 +221,8 @@ func (c ADOEntraConfig) validate() error {
 		return fmt.Errorf("azure devops sign-in: client id %q is not a usable client identifier", c.ClientID)
 	case c.RedirectURL == "":
 		return fmt.Errorf("azure devops sign-in: no redirect URL is configured")
-	case len(c.Scopes) == 0:
-		return fmt.Errorf("azure devops sign-in: the provider row names no scopes")
 	}
-	if err := adoEntraCheckRequestedScopes(c.Scopes); err != nil {
-		return fmt.Errorf("azure devops sign-in: %w", err)
-	}
-	return c.validateTokenMode()
+	return nil
 }
 
 // entraIDSafe is a HOST-AND-PATH-SHAPE check: the tenant id is concatenated
@@ -386,6 +397,7 @@ func (s *Server) mountAzureDevOpsSignInRoutes(r chi.Router) {
 	r.Get("/scm/azure-devops/signin", s.handleADOSignIn)
 	r.Get(adoSignInCallbackRoute, s.handleADOCallback)
 	r.Delete("/scm/azure-devops/connection", s.handleADODisconnect) // ado_pat_console.go
+	s.mountAzureFoundrySignInRoutes(r)                              // azure_foundry_entra.go; its callback is the one above
 }
 
 // resolveADOEntra resolves this deployment's Azure DevOps configuration and
@@ -600,6 +612,13 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusForbidden, reasonADOSignInNoSession, adoSignInNoSessionRefusal)
 		return
 	}
+	// One registered redirect URI serves both flows: an Azure Foundry capture
+	// announces itself by its own state cookie, matched against the returned
+	// state, and everything else is this handler's.
+	if stamp, ok := s.azureFoundryFlow(r); ok {
+		s.handleAzureFoundryCallback(w, r, subject, stamp)
+		return
+	}
 	cfg, ok := s.resolveADOEntra(w, r)
 	if !ok {
 		return
@@ -647,7 +666,15 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	// The access token is let go one grace after its expiry (#151).
 	now := s.cfg.Now()
 	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
-	s.cfg.MaskRegistry.MergeGlobalUntil(subject, adoEntraSecretName(cfg.RowID), accessExpiry, []byte(resp.AccessToken), []byte(resp.RefreshToken))
+	if err := s.cfg.MaskRegistry.MergeGlobalUntil(subject, adoEntraSecretName(cfg.RowID), accessExpiry, []byte(resp.AccessToken), []byte(resp.RefreshToken)); err != nil {
+		slog.ErrorContext(ctx, "wardynd: the Azure DevOps sign-in tokens could not be recorded for masking; not stored",
+			slog.String("row", cfg.RowID), slog.Any("err", err))
+		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
+			"reason": reasonStoreError, "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
+		})
+		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+reasonStoreError, http.StatusFound)
+		return
+	}
 
 	if reason, ok := s.bindADOEntraIdentity(ctx, cfg, resp.IDToken, nonce, subject); !ok {
 		// The refusal SENTENCE stays server-side, logged for whoever reads this
@@ -689,9 +716,12 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	// Under the per-owner lock a renewal holds from its read to its write, so
 	// the renewal cannot write its copy of the old sign-in over this one.
-	unlock := s.adoEntra.lock(subject, cfg.RowID)
-	defer unlock()
-	if err := s.storeADOEntraBlob(ctx, subject, cfg.RowID, blob); err != nil {
+	ctx, unlock, err := s.lockADOSignIn(ctx, subject, cfg.RowID)
+	if err == nil {
+		defer unlock()
+		err = s.storeADOEntraBlob(ctx, subject, cfg.RowID, blob)
+	}
+	if err != nil {
 		// The cause is logged, never put on the row: the trail and its SIEM
 		// export carry a fixed reason only, like every other store failure.
 		slog.ErrorContext(ctx, "wardynd: storing the captured Azure DevOps sign-in failed",
@@ -705,7 +735,11 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Stored: this sign-in is now the credential, and the one it replaced is not.
-	s.cfg.MaskRegistry.AddGlobalUntil(subject, adoEntraSecretName(cfg.RowID), s.cfg.Now(), blob.ExpiresAt, []byte(resp.AccessToken), []byte(resp.RefreshToken))
+	// The Merge above put both tokens on record; this retires what the sign-in
+	// replaced, and a failure leaves the old values masked longer.
+	if err := s.cfg.MaskRegistry.AddGlobalUntil(subject, adoEntraSecretName(cfg.RowID), s.cfg.Now(), blob.ExpiresAt, []byte(resp.AccessToken), []byte(resp.RefreshToken)); err != nil {
+		slog.WarnContext(ctx, "wardynd: the replaced Azure DevOps sign-in tokens could not be retired", slog.String("row", cfg.RowID), slog.Any("err", err))
+	}
 	s.auditADOCapture(ctx, subject, cfg.RowID, "success", map[string]any{
 		"tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		"scopes": granted, "source": adoEntraSourceSignIn,

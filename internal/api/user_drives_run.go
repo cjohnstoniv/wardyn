@@ -208,7 +208,7 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 // site it applies to rather than inferred from a caller three files away. An
 // operator's drive still RESOLVES; only the door does not apply to them.
 func (s *Server) driveDoorProfile(ctx context.Context, ceiling governanceCeiling) (string, bool) {
-	if s.isOperator(ctx) {
+	if s.runUngoverned(ctx) {
 		return "", false
 	}
 	return driveDoorShut(ceiling)
@@ -258,7 +258,7 @@ func (s *Server) denyUserDrive(w http.ResponseWriter, r *http.Request, ceiling g
 	}
 	// The mock round's frozen member copy, reproduced byte-exact: the console
 	// never rewords a server refusal, so this line is where that string ships.
-	return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.drive", driveDeniedByProfileMsg(profile)))
+	return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.drive", driveDeniedByProfileMsg(profile)).WithPolicy(s.ceilingPolicy(r.Context(), ceiling)))
 }
 
 // driveIsMountableHere is the pair of refusals that are about the DEPLOYMENT

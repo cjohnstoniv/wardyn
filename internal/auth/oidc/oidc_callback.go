@@ -272,7 +272,14 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 		return
 	}
 	sess, denied := a.admit(r, idToken.Subject, cc, reserved, onDenied)
+	var epoch int64
+	if denied == "" {
+		epoch, denied = a.issueIdentity(r, a.loginFacts(sess, cc), onDenied)
+	}
 	if denied != "" {
+		if denied == DenialIdentityDeactivated {
+			denied = authErrorSignInRefused // the page never says the identity is deactivated
+		}
 		// A denied login must not leave a pre-existing session cookie still valid.
 		a.clearCookie(w, sessionCookieName)
 		a.redirectAuthError(w, r, denied)
@@ -281,18 +288,21 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 
 	// OnLogin fires once the login is approved but before the session cookie
 	// is written. Best-effort: nil is a no-op; the integrator's callback is
-	// responsible for not letting a backend hiccup fail the login. groups/
-	// groupsTruncated are the same values the session below carries.
+	// responsible for not letting a backend hiccup fail the login. The role,
+	// user type and groups are the same values the session below carries.
 	if a.cfg.OnLogin != nil {
-		a.cfg.OnLogin(r.Context(), sess.Sub, sess.Role, sess.UserType, sess.Groups, sess.GroupsTruncated)
+		a.cfg.OnLogin(r.Context(), a.loginFacts(sess, cc))
 	}
 	// The login-grant sink runs here for the same reason as OnLogin: a
 	// refused login never yields a downstream credential, and a credential
 	// that fails to store must not cost this person the session they just
-	// earned (login_grant.go). The session itself carries no token.
-	a.captureLoginGrant(r.Context(), sess.Sub, token)
+	// earned (login_grant.go). The session itself carries no token. The sink
+	// learns the epoch the login was issued under, so a capture that a
+	// suspension overtook stores nothing.
+	a.captureLoginGrant(WithAuthorityEpoch(r.Context(), epoch), sess.Sub, token)
 
 	// (6) Create a Wardyn session.
+	sess.AuthorityEpoch = epoch
 	sess.Expiry = idToken.Expiry
 	sess.IssuedAt = time.Now().UTC() // The cutoff SessionRevocations compares against.
 	if sess.Expiry.IsZero() {
@@ -306,6 +316,23 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	a.RecordAttach(r, sess)
 	http.SetCookie(w, cookie)
 	http.Redirect(w, r, a.cfg.BasePath+"/", http.StatusFound)
+}
+
+// loginFacts is what an admitted sign-in hands OnLogin. Only an Entra token carrying a well-formed
+// object id and a tenant is keyed by them; any other sign-in leaves both empty.
+func (a *Authenticator) loginFacts(sess Session, cc callbackClaims) LoginFacts {
+	f := LoginFacts{
+		Sub: sess.Sub, Role: sess.Role, UserType: sess.UserType,
+		Groups: sess.Groups, GroupsTruncated: sess.GroupsTruncated,
+		Issuer: cc.issuer, Email: cc.email,
+	}
+	if f.Issuer == "" {
+		f.Issuer = a.cfg.IssuerURL
+	}
+	if a.entra && cc.tid != "" && sess.ObjectID != "" {
+		f.TenantID, f.ObjectID = cc.tid, sess.ObjectID
+	}
+	return f
 }
 
 // emailVerifiedEnv names the setting that put the email_verified gate in force,
@@ -346,6 +373,10 @@ func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, re
 	subj := Subject{Issuer: cc.issuer, Sub: sub, TenantID: cc.tid, ObjectID: cc.oid}
 	sub, denied := a.resolvePerson(r, subj, reserved, onDenied)
 	if denied != "" {
+		return Session{}, denied
+	}
+	// A deactivated identity is refused on every issuer, before any derivation reads the token.
+	if denied = a.admitIdentity(r, a.identityRef(sub, cc), onDenied); denied != "" {
 		return Session{}, denied
 	}
 	// (4) email_verified and domain checks — fail closed. The verified gate

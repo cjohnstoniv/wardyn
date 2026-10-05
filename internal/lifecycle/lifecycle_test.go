@@ -6,6 +6,7 @@ package lifecycle_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -60,6 +62,10 @@ type fakeStopper struct {
 	// notAfterSeen records the notAfter arg the reaper threaded in, per run, so a
 	// test can assert the snapshot's updated_at was passed through (finding N3).
 	notAfterSeen map[uuid.UUID]time.Time
+	// maxAgeStopped is the subset of stopped that arrived through StopRunMaxAge; maxAgeCutoff is
+	// the last createdNotAfter it was given.
+	maxAgeStopped []uuid.UUID
+	maxAgeCutoff  time.Time
 }
 
 func newFakeStopper() *fakeStopper {
@@ -89,6 +95,23 @@ func (f *fakeStopper) StopRun(_ context.Context, id uuid.UUID, notAfter time.Tim
 		out.Errors = errs
 	}
 	return out, nil
+}
+
+// StopRunMaxAge records the stop in the same list as StopRun, and the cutoff it was given,
+// so a test can tell which predicate fired from the audit action and the cutoff.
+func (f *fakeStopper) StopRunMaxAge(_ context.Context, id uuid.UUID, createdNotAfter time.Time) (lifecycle.StopOutcome, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.maxAgeCutoff = createdNotAfter
+	if err, ok := f.errOn[id]; ok {
+		return lifecycle.StopOutcome{}, err
+	}
+	if f.noApplyOn[id] {
+		return lifecycle.StopOutcome{Applied: false}, nil
+	}
+	f.stopped = append(f.stopped, id)
+	f.maxAgeStopped = append(f.maxAgeStopped, id)
+	return lifecycle.StopOutcome{Applied: true}, nil
 }
 
 func (f *fakeStopper) wasStopped(id uuid.UUID) bool {
@@ -663,5 +686,220 @@ func TestTickLockAcquiredReleasesExactlyOnce(t *testing.T) {
 
 	if got := lock.releaseCount(); got != 1 {
 		t.Errorf("release() called %d times, want exactly 1", got)
+	}
+}
+
+// sweepTicks is a Tracker over an in-memory shared record, for the idle_reaper
+// tick tests below.
+func sweepTicks(clk func() time.Time) (*sweephealth.Tracker, *sweephealth.MemStore) {
+	st := sweephealth.NewMemStore()
+	return sweephealth.New(st, "replica-1", clk), st
+}
+
+// A tick that won the lock and scanned cleanly is an attempt and a success; a
+// tick whose scan failed is an attempt and an error, with the success kept.
+func TestTick_RecordsIdleReaperHealth(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	now := base
+	tracker, ticks := sweepTicks(func() time.Time { return now })
+	store := &fakeStore{}
+	r := lifecycle.New(store, newFakeStopper(), &fakeRecorder{}, lifecycle.Config{
+		Interval: time.Hour, Now: func() time.Time { return now }, Sweeps: tracker,
+	})
+
+	if err := r.Tick(context.Background()); err != nil {
+		t.Fatalf("clean tick: %v", err)
+	}
+	got, _ := ticks.Ticks(context.Background())
+	if !got[sweephealth.IdleReaper].SucceededAt.Equal(base) {
+		t.Fatalf("clean tick: %+v, want a success at %s", got[sweephealth.IdleReaper], base)
+	}
+
+	now = base.Add(time.Minute)
+	store.err = errors.New("postgres unavailable")
+	if err := r.Tick(context.Background()); err == nil {
+		t.Fatal("a tick whose scan failed returned no error")
+	}
+	got, _ = ticks.Ticks(context.Background())
+	if tk := got[sweephealth.IdleReaper]; !tk.AttemptedAt.Equal(now) || !tk.SucceededAt.Equal(base) {
+		t.Fatalf("failed scan: %+v, want the attempt at %s and the success kept at %s", tk, now, base)
+	}
+}
+
+// A run the reaper cannot stop is a tick error, but the other runs are still
+// stopped.
+func TestTick_StopFailureIsATickError(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	tracker, ticks := sweepTicks(func() time.Time { return base })
+	stuck, fine := uuid.New(), uuid.New()
+	stopper := newFakeStopper()
+	stopper.errOn[stuck] = errors.New("container wedged")
+	idle := func(id uuid.UUID) lifecycle.RunSummary {
+		return lifecycle.RunSummary{ID: id, UpdatedAt: base.Add(-time.Hour), PolicyAutoStopAfterSec: 1800}
+	}
+	r := lifecycle.New(&fakeStore{rows: []lifecycle.RunSummary{idle(stuck), idle(fine)}}, stopper, &fakeRecorder{}, lifecycle.Config{
+		Interval: time.Hour, Now: func() time.Time { return base }, Sweeps: tracker,
+	})
+
+	if err := r.Tick(context.Background()); err == nil {
+		t.Fatal("a stop that failed outright returned no tick error")
+	}
+	if !stopper.wasStopped(fine) {
+		t.Error("the run that could be stopped was not")
+	}
+	got, _ := ticks.Ticks(context.Background())
+	if tk := got[sweephealth.IdleReaper]; tk.AttemptedAt.IsZero() || !tk.SucceededAt.IsZero() {
+		t.Fatalf("%+v, want an attempt and no success", tk)
+	}
+}
+
+// A tick another control plane holds the lock for did no work here, so it
+// records nothing: the replica that won the lock is the one that attempts.
+func TestTick_LockHeldElsewhereRecordsNothing(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	tracker, ticks := sweepTicks(func() time.Time { return base })
+	r := lifecycle.New(&fakeStore{}, newFakeStopper(), &fakeRecorder{}, lifecycle.Config{
+		Interval: time.Hour, Now: func() time.Time { return base }, Sweeps: tracker,
+		TickLock: (&fakeTickLock{held: true}).acquire,
+	})
+	if err := r.Tick(context.Background()); err != nil {
+		t.Fatalf("a skipped tick is not an error: %v", err)
+	}
+	if got, _ := ticks.Ticks(context.Background()); len(got) != 0 {
+		t.Fatalf("a skipped tick recorded %+v, want nothing", got)
+	}
+}
+
+// maxAgeReaper is makeReaper with Config.MaxAge set.
+func maxAgeReaper(store *fakeStore, stopper *fakeStopper, rec *fakeRecorder, now time.Time, maxAge time.Duration) *lifecycle.Reaper {
+	return lifecycle.New(store, stopper, rec, lifecycle.Config{
+		Interval: time.Hour,
+		MaxAge:   maxAge,
+		Now:      func() time.Time { return now },
+	})
+}
+
+// TestMaxAgeStopsAnOldRunWhateverItsIdleness: a run past max age is stopped through the max-age
+// predicate with a run.max_age.expire row, even when it was touched a second ago and its policy
+// never idle-reaps; a younger run beside it is left alone.
+func TestMaxAgeStopsAnOldRunWhateverItsIdleness(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	store := &fakeStore{}
+	stopper := newFakeStopper()
+	rec := &fakeRecorder{}
+	old, young := uuid.New(), uuid.New()
+	store.rows = []lifecycle.RunSummary{
+		{ID: old, CreatedAt: base.Add(-25 * time.Hour), UpdatedAt: base.Add(-time.Second), PolicyAutoStopAfterSec: 0},
+		{ID: young, CreatedAt: base.Add(-time.Hour), UpdatedAt: base.Add(-time.Second), PolicyAutoStopAfterSec: 0},
+	}
+
+	maxAgeReaper(store, stopper, rec, base, 24*time.Hour).Tick(context.Background())
+
+	if !slices.Equal(stopper.maxAgeStopped, []uuid.UUID{old}) {
+		t.Fatalf("max-age stops = %v, want only %v", stopper.maxAgeStopped, old)
+	}
+	if want := base.Add(-24 * time.Hour); !stopper.maxAgeCutoff.Equal(want) {
+		t.Errorf("cutoff handed to the stopper = %v, want now - max age = %v", stopper.maxAgeCutoff, want)
+	}
+	ev, ok := rec.last()
+	if !ok || ev.Action != "run.max_age.expire" || ev.Outcome != "success" || ev.RunID == nil || *ev.RunID != old {
+		t.Fatalf("audit row = %+v, want a successful run.max_age.expire for %v", ev, old)
+	}
+	if rec.len() != 1 {
+		t.Errorf("audit rows = %d, want 1", rec.len())
+	}
+}
+
+// TestMaxAgeStopFailureFailsTheTick: a failed max-age stop is a failed tick like a failed idle
+// stop: Tick returns the error, the sweep records an attempt without a success, no max-age audit
+// row is written for it, and a healthy over-age run later in the same scan is still stopped.
+func TestMaxAgeStopFailureFailsTheTick(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	tracker, ticks := sweepTicks(func() time.Time { return base })
+	store := &fakeStore{}
+	stopper := newFakeStopper()
+	rec := &fakeRecorder{}
+	bad, good := uuid.New(), uuid.New()
+	stopper.errOn[bad] = errors.New("synthetic update failure")
+	store.rows = []lifecycle.RunSummary{
+		{ID: bad, CreatedAt: base.Add(-25 * time.Hour), UpdatedAt: base},
+		{ID: good, CreatedAt: base.Add(-26 * time.Hour), UpdatedAt: base},
+	}
+	r := lifecycle.New(store, stopper, rec, lifecycle.Config{
+		Interval: time.Hour, MaxAge: 24 * time.Hour, Now: func() time.Time { return base }, Sweeps: tracker,
+	})
+
+	err := r.Tick(context.Background())
+
+	if err == nil || !strings.Contains(err.Error(), bad.String()) {
+		t.Fatalf("Tick error = %v, want the failed max-age stop of %v", err, bad)
+	}
+	tk, _ := ticks.Ticks(context.Background())
+	got := tk[sweephealth.IdleReaper]
+	if got.AttemptedAt.IsZero() || !got.SucceededAt.IsZero() {
+		t.Fatalf("sweep tick = %+v, want an attempt and no success", got)
+	}
+	if !slices.Equal(stopper.maxAgeStopped, []uuid.UUID{good}) {
+		t.Fatalf("max-age stops = %v, want only the healthy run %v", stopper.maxAgeStopped, good)
+	}
+	if rec.len() != 1 {
+		t.Errorf("audit rows = %d, want 1 (the healthy run only)", rec.len())
+	}
+}
+
+// TestMaxAgeStopsAKeptRunThatIsNeverIdleReaped: a run kept after an outage with its agent still
+// running is ended by the max age, but never by idleness, however long it was untouched.
+func TestMaxAgeStopsAKeptRunThatIsNeverIdleReaped(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	store := &fakeStore{}
+	stopper := newFakeStopper()
+	rec := &fakeRecorder{}
+	old, idle := uuid.New(), uuid.New()
+	store.rows = []lifecycle.RunSummary{
+		{ID: old, CreatedAt: base.Add(-25 * time.Hour), UpdatedAt: base.Add(-25 * time.Hour), PolicyAutoStopAfterSec: 60, Kept: true},
+		{ID: idle, CreatedAt: base.Add(-time.Hour), UpdatedAt: base.Add(-time.Hour), PolicyAutoStopAfterSec: 60, Kept: true},
+	}
+
+	maxAgeReaper(store, stopper, rec, base, 24*time.Hour).Tick(context.Background())
+
+	if !slices.Equal(stopper.maxAgeStopped, []uuid.UUID{old}) {
+		t.Fatalf("max-age stops = %v, want only %v", stopper.maxAgeStopped, old)
+	}
+	if stopper.wasStopped(idle) {
+		t.Fatalf("the idle kept run %v was idle-reaped", idle)
+	}
+}
+
+// TestMaxAgeOffNeverStopsOnAge: with no max age configured, a run of any age is untouched.
+func TestMaxAgeOffNeverStopsOnAge(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	store := &fakeStore{}
+	stopper := newFakeStopper()
+	rec := &fakeRecorder{}
+	id := uuid.New()
+	store.rows = []lifecycle.RunSummary{{ID: id, CreatedAt: base.Add(-1000 * time.Hour), UpdatedAt: base}}
+
+	makeReaper(store, stopper, rec, base).Tick(context.Background())
+
+	if stopper.wasStopped(id) || rec.len() != 0 {
+		t.Fatalf("a run was stopped or audited with max age off: stopped=%v events=%d", stopper.wasStopped(id), rec.len())
+	}
+}
+
+// TestMaxAgeLostCompareAndSetWritesNoAudit: a run another writer ended first reports not applied,
+// and the reaper records nothing for it.
+func TestMaxAgeLostCompareAndSetWritesNoAudit(t *testing.T) {
+	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	store := &fakeStore{}
+	stopper := newFakeStopper()
+	rec := &fakeRecorder{}
+	id := uuid.New()
+	stopper.noApplyOn[id] = true
+	store.rows = []lifecycle.RunSummary{{ID: id, CreatedAt: base.Add(-48 * time.Hour), UpdatedAt: base}}
+
+	maxAgeReaper(store, stopper, rec, base, 24*time.Hour).Tick(context.Background())
+
+	if rec.len() != 0 {
+		t.Fatalf("audit rows = %d for a stop that did not apply, want 0", rec.len())
 	}
 }

@@ -329,8 +329,8 @@ func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, 
 	if len(groups) == 0 {
 		ceiling, err = s.ceilingWithUnusableGroups(r.Context(), users, userType, deployment)
 	} else {
-		p, _, rerr := s.cfg.Store.ResolveGovernanceProfile(r.Context(), users, groups, userType)
-		ceiling, err = s.ceilingFromProfile(p, rerr, deployment)
+		p, _, rerr := s.resolveAssignedProfile(r.Context(), users, groups, userType)
+		ceiling, err = s.ceilingFromProfile(r.Context(), p, rerr, deployment)
 	}
 	if err != nil {
 		writeCeilingError(w, r, err)

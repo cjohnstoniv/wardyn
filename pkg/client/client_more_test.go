@@ -799,3 +799,23 @@ func TestListDevices_DecodesAndRevokeDeviceTargetsTheID(t *testing.T) {
 		t.Fatalf("revoke: %v", err)
 	}
 }
+
+// TestRunOutput_DecodesEveryField decodes a recorded server body (wire names) so a renamed tag fails here.
+func TestRunOutput_DecodesEveryField(t *testing.T) {
+	at := time.Now().UTC().Truncate(time.Second)
+	recorded := `{"output":"tail","truncated":true,"complete":true,"source":"pane_snapshot","incomplete":true,"capture_gap":true,"mask_scope":"globals_only","captured_at":"` + at.Format(time.RFC3339) + `"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(recorded))
+	}))
+	defer srv.Close()
+	got, err := newTestClient(srv).RunOutput(context.Background(), uuid.New(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Output != "tail" || !got.Truncated || !got.Complete || got.Source != "pane_snapshot" ||
+		!got.Incomplete || !got.CaptureGap || got.MaskScope != "globals_only" ||
+		got.CapturedAt == nil || !got.CapturedAt.Equal(at) {
+		t.Errorf("got %+v", got)
+	}
+}

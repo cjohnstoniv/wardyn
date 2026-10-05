@@ -5,9 +5,7 @@ package api
 
 import (
 	"context"
-	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,6 +26,58 @@ type pauseStore struct {
 	*dispatchTestStore
 	open, waiting bool
 	stamps        int
+	settles       map[uuid.UUID]time.Time // run_pause_settles: run id to due_at
+}
+
+func (s *pauseStore) NotePauseSettle(_ context.Context, id uuid.UUID, after time.Duration) (time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.settles == nil {
+		s.settles = map[uuid.UUID]time.Time{}
+	}
+	due := time.Now().Add(after)
+	if cur, ok := s.settles[id]; ok && cur.After(due) {
+		due = cur
+	}
+	s.settles[id] = due
+	return due, nil
+}
+
+func (s *pauseStore) DuePauseSettles(context.Context) ([]store.PauseSettle, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.PauseSettle
+	for id, due := range s.settles {
+		if !due.After(time.Now()) {
+			out = append(out, store.PauseSettle{RunID: id, DueAt: due})
+		}
+	}
+	return out, nil
+}
+
+func (s *pauseStore) ClearPauseSettle(_ context.Context, id uuid.UUID, due time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cur, ok := s.settles[id]; ok && cur.Equal(due) {
+		delete(s.settles, id)
+	}
+	return nil
+}
+
+// owing is how many runs have a settle recorded.
+func (s *pauseStore) owing() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.settles)
+}
+
+// settleDue makes every recorded settle due: the compensation's deadline has passed.
+func (s *pauseStore) settleDue() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id := range s.settles {
+		s.settles[id] = time.Now().Add(-time.Second)
+	}
 }
 
 func (s *pauseStore) ListPauseCandidates(ctx context.Context) ([]store.PauseCandidate, time.Time, error) {
@@ -88,11 +138,47 @@ func (s *pauseStore) paused() (*time.Time, types.PauseReason) {
 type pauseRunner struct {
 	*fakeRunner
 	freeze         map[types.ConfinementClass]bool
-	cpu            string // runResourcesScript output; "" fails the exec
-	gone           bool   // Status reads the sandbox as no longer running
+	cpu            *float64 // SampleCPU's reading for every ref; nil: no reading
+	cpuErr         error    // SampleCPU's error, with no readings
+	batch          bool     // BatchSample: one call reads every ref
+	gone           bool     // Status reads the sandbox as no longer running
 	onFreeze       func()
 	mu             sync.Mutex
 	freezes, thaws int
+	sampleCalls    int
+	sampled        [][]string
+}
+
+// pct is a canned CPU reading, in percent of one core.
+func pct(v float64) *float64 { return &v }
+
+func (r *pauseRunner) BatchSample() bool { return r.batch }
+
+func (r *pauseRunner) SampleCPU(_ context.Context, refs []string) (map[string]float64, error) {
+	r.mu.Lock()
+	r.sampleCalls++
+	r.sampled = append(r.sampled, refs)
+	r.mu.Unlock()
+	if r.cpuErr != nil {
+		return nil, r.cpuErr
+	}
+	out := map[string]float64{}
+	if r.cpu != nil {
+		for _, ref := range refs {
+			out[ref] = *r.cpu
+		}
+	}
+	return out, nil
+}
+
+// samples is how many SampleCPU calls the runner served and how many refs they asked for.
+func (r *pauseRunner) samples() (calls, refs int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, s := range r.sampled {
+		refs += len(s)
+	}
+	return r.sampleCalls, refs
 }
 
 func (r *pauseRunner) Capabilities(ctx context.Context) (runner.Capabilities, error) {
@@ -106,13 +192,6 @@ func (r *pauseRunner) Status(ctx context.Context, ref string) (runner.Status, er
 		return runner.Status{State: types.RunStopped, Message: "container not found"}, nil
 	}
 	return r.fakeRunner.Status(ctx, ref)
-}
-
-func (r *pauseRunner) ExecStream(context.Context, string, runner.ExecSpec) (*runner.ExecSession, error) {
-	if r.cpu == "" {
-		return nil, errors.New("exec failed")
-	}
-	return &runner.ExecSession{Stdout: strings.NewReader(r.cpu)}, nil
 }
 
 func (r *pauseRunner) FreezeSandbox(context.Context, string) error {
@@ -136,13 +215,6 @@ func (r *pauseRunner) counts() (freezes, thaws int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.freezes, r.thaws
-}
-
-// cpuReading is runResourcesScript output for pct percent of one core over a
-// one-second window.
-func cpuReading(pct int) string {
-	return "cpu_usage_usec_1=1000000\nuptime_1=100.00\n" +
-		"cpu_usage_usec_2=" + strconv.Itoa(1000000+pct*10000) + "\nuptime_2=101.00\n"
 }
 
 const pauseOwner = "sub-pause-owner"
@@ -278,13 +350,13 @@ func TestRunPause_IdleNeedsAQuietCPU(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		quiet time.Duration
-		cpu   string
+		cpu   *float64
 		pause bool
 	}{
-		{"quiet", time.Hour, cpuReading(2), true},
-		{"busy", time.Hour, cpuReading(40), false},
-		{"unreadable", time.Hour, "", false},
-		{"inside the floor", pauseDelayFloor - time.Minute, cpuReading(0), false},
+		{"quiet", time.Hour, pct(2), true},
+		{"busy", time.Hour, pct(40), false},
+		{"unreadable", time.Hour, nil, false},
+		{"inside the floor", pauseDelayFloor - time.Minute, pct(0), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newPauseFixture(t, tc.quiet)
@@ -319,7 +391,7 @@ func TestRunPause_IdleNeverLandsOnAnOpenRequest(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newPauseFixture(t, time.Hour)
 			f.st.run.RunLimits.PauseIdleAfterSec = 60
-			f.rn.cpu = cpuReading(0)
+			f.rn.cpu = pct(0)
 			f.st.open = tc.openAtListing
 			f.rn.onFreeze = func() { f.st.open = true }
 			f.sweep(t)
@@ -517,9 +589,9 @@ func TestResumeRun_AVanishedSandboxStaysPaused(t *testing.T) {
 }
 
 // probeRunner models one sandbox whose CPU is shared by every exec in it: the
-// run page's disk walk (script arm "") and the idle sampler (arm "filesystem")
-// run against the same cgroup, so a sample taken while a walk is under way reads
-// busy. walk and sample, when set, run as that exec starts, and may block it.
+// run page's disk walk (script arm "") and the idle sampler run against the same
+// cgroup, so a sample taken while a walk is under way reads busy. walk and
+// sample, when set, run as that exec or read starts, and may block it.
 type probeRunner struct {
 	*pauseRunner
 	walking       atomic.Int32
@@ -530,24 +602,29 @@ type probeRunner struct {
 	armsMu        sync.Mutex
 }
 
+func (r *probeRunner) SampleCPU(_ context.Context, refs []string) (map[string]float64, error) {
+	if r.sampleStarted != nil {
+		close(r.sampleStarted)
+	}
+	if r.sample != nil {
+		r.sample()
+	}
+	reading := 1.0
+	if r.walking.Load() > 0 {
+		reading = 40
+	}
+	out := map[string]float64{}
+	for _, ref := range refs {
+		out[ref] = reading
+	}
+	return out, nil
+}
+
 func (r *probeRunner) ExecStream(_ context.Context, _ string, spec runner.ExecSpec) (*runner.ExecSession, error) {
 	arm := spec.Argv[4]
 	r.armsMu.Lock()
 	r.arms = append(r.arms, arm)
 	r.armsMu.Unlock()
-	if arm == "filesystem" {
-		if r.sampleStarted != nil {
-			close(r.sampleStarted)
-		}
-		if r.sample != nil {
-			r.sample()
-		}
-		busy := r.walking.Load() > 0
-		if busy {
-			return &runner.ExecSession{Stdout: strings.NewReader(cpuReading(40))}, nil
-		}
-		return &runner.ExecSession{Stdout: strings.NewReader(cpuReading(1))}, nil
-	}
 	if arm == "skip" && r.skip != nil {
 		r.skip()
 	}
@@ -626,8 +703,8 @@ func TestRunPause_NoWalkStartsInsideTheIdleSample(t *testing.T) {
 	}
 	pr.armsMu.Lock()
 	defer pr.armsMu.Unlock()
-	if got := strings.Join(pr.arms, ","); got != "filesystem,skip" {
-		t.Errorf("script arms = %q, want the sample then a poll that walked nothing", got)
+	if got := strings.Join(pr.arms, ","); got != "skip" {
+		t.Errorf("script arms = %q, want a poll that walked nothing", got)
 	}
 }
 

@@ -12,17 +12,15 @@ package api
 import (
 	"cmp"
 	"fmt"
-	"log/slog"
 	"maps"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
-	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -318,7 +316,7 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	if err := validateUpstreamProxyNoProxy(cfg.UpstreamProxyNoProxy); err != nil {
 		return err
 	}
-	if err := validateSignInHelp(cfg.SignInHelpText, cfg.SignInHelpURL); err != nil {
+	if err := cmp.Or(validateSignInHelp(cfg.SignInHelpText, cfg.SignInHelpURL), validatePolicyHelp(cfg.PolicyHelp)); err != nil {
 		return err
 	}
 	// The workspace-provider block, when the body carries one: ONE validator for
@@ -346,70 +344,6 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	return validateWorkspaceProviders(cfg.WorkspaceProviders, false)
 }
 
-// validateInternalHosts enforces SiteConfig.InternalHosts's write-time
-// invariant: every declared CIDR must lie ENTIRELY inside ipguard.Liftable
-// (RFC1918, fc00::/7, or 100.64.0.0/10) — never loopback, link-local, metadata,
-// multicast, or any other reserved range, which the proxy's blockKind
-// classification keeps un-liftable regardless of what an operator declares
-// here. A bare host_suffix must be a real host (validSiteHost); an entry with
-// no CIDRs is valid (it lifts the full Liftable set for that host).
-func validateInternalHosts(hosts []types.InternalHost) error {
-	for i, h := range hosts {
-		if !validSiteHost(h.HostSuffix) {
-			return fmt.Errorf("internal_hosts[%d].host_suffix: invalid host %q", i, h.HostSuffix)
-		}
-		for j, c := range h.CIDRs {
-			prefix, err := netip.ParsePrefix(c)
-			liftable := err == nil && slices.ContainsFunc(ipguard.Liftable, func(l netip.Prefix) bool {
-				return l.Bits() <= prefix.Bits() && l.Contains(prefix.Addr())
-			})
-			if !liftable {
-				return fmt.Errorf("internal_hosts[%d].cidrs[%d]: %q must lie inside RFC1918, fc00::/7 or 100.64.0.0/10", i, j, c)
-			}
-		}
-	}
-	return nil
-}
-
-// logWarnInternalHostsDeclared is the loud, unmissable log an internal-host
-// declaration earns: it is the ONLY operator override of the proxy's
-// unconditional private/reserved-IP SSRF guard, so the deployment's log must
-// name exactly which suffixes and ranges are lifted — an operator reading it
-// back later cannot be left to infer the guard's shape from a count. Mirrors
-// logWarnUnenforcedNetPolOptOut's contract (internal/runner/k8s/driver.go): the
-// declaration itself, then what it does and does not lift.
-//
-// A warn, not an acknowledgement flag: the write is operator-only,
-// audited and Liftable-validated, and it grants no policy allow — the host must
-// still pass allowed_domains separately. No declarations => silent.
-func logWarnInternalHostsDeclared(hosts []types.InternalHost) {
-	if len(hosts) == 0 {
-		return
-	}
-	slog.Warn("wardynd: "+internalHostsDeclaredSentence(hosts), slog.Int("internal_hosts_count", len(hosts)))
-}
-
-// internalHostsDeclaredSentence is the ONE sentence naming what an
-// InternalHosts declaration does and does not lift — shared by the write-time
-// deployment log above and the console's own dedicated internal_hosts check
-// row (internalHostsCheck, setup_checks.go), so an operator reads the
-// identical claim on whichever surface they are looking at. Callers check
-// len(hosts) > 0 themselves; this renders unconditionally.
-func internalHostsDeclaredSentence(hosts []types.InternalHost) string {
-	decls := make([]string, 0, len(hosts))
-	for _, h := range hosts {
-		scope := "the full RFC1918/ULA/CGNAT set"
-		if len(h.CIDRs) > 0 {
-			scope = strings.Join(h.CIDRs, ", ")
-		}
-		decls = append(decls, h.HostSuffix+" => "+scope)
-	}
-	return "site config declares INTERNAL HOSTS — the proxy's private/reserved-IP SSRF guard is LIFTED for these host suffixes, " +
-		"scoped to the ranges named: " + strings.Join(decls, "; ") + ". Loopback, link-local, the cloud-metadata address, unspecified, multicast and " +
-		"NAT64-embedded addresses stay denied regardless of what is declared here, and a policy's allowed_domains must still allow the host separately — " +
-		"this lifts the built-in guard only. Remove the entry to restore the unconditional deny."
-}
-
 // maxAuditEgressRedirectPairs bounds how many from→to pairs site_config.write's
 // datum embeds — egress_redirects_count stays the honest, UNBOUNDED
 // total, so truncation costs review detail only, mirroring maxAuditFindings'
@@ -433,21 +367,6 @@ func auditEgressRedirectPairs(redirects []types.EgressRedirect) ([]string, bool)
 		return pairs[:maxAuditEgressRedirectPairs], true
 	}
 	return pairs, false
-}
-
-// auditInternalHostSuffixes renders saved.InternalHosts as sorted host
-// suffixes for site_config.write's datum — a suffix is exactly what
-// logWarnInternalHostsDeclared already puts in the deployment's own log, so
-// this adds nothing an operator couldn't already read there, just makes it
-// reviewable from the audit trail too. CIDRs are left out: the scoping detail
-// belongs to the log line above, not a row every SIEM sink fans out to.
-func auditInternalHostSuffixes(hosts []types.InternalHost) []string {
-	suffixes := make([]string, 0, len(hosts))
-	for _, h := range hosts {
-		suffixes = append(suffixes, h.HostSuffix)
-	}
-	slices.Sort(suffixes)
-	return suffixes
 }
 
 // foldLegacyArtifactOverrides folds a legacy request body's ArtifactOverrides
@@ -579,7 +498,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 // have decided which side of this line it sits on.
 var siteConfigFieldsAfter066 = []string{
 	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
-	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding",
+	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding", "policy_help",
 }
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
@@ -637,6 +556,7 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	if !present["sign_in_help_url"] {
 		cfg.SignInHelpURL = existing.SignInHelpURL
 	}
+	carryForwardPolicyHelp(cfg, existing, present) // same terms as the sign-in help pair
 	// branding (#1215), on the same terms: a file written before the key existed
 	// must not drop the logo_path the org named (an absent key also leaves the
 	// stored logo untouched — only a body that names the block acts on it).
@@ -666,6 +586,22 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 		wp.GitPatBrokerEnabled = nil
 		cfg.WorkspaceProviders = &wp
 	}
+}
+
+// validateSiteConfigBody runs PUT /site-config's shape checks on the normalized body, in order;
+// any error is the request's 400. It returns the model-provider block's advisories, which are
+// reported, never refused.
+func (s *Server) validateSiteConfigBody(cfg types.SiteConfig) ([]string, error) {
+	if err := validateAgentProviders(cfg.AgentProviders, s.cfg.AgentImages); err != nil {
+		return nil, err
+	}
+	if err := validateSiteConfig(cfg); err != nil {
+		return nil, err
+	}
+	if err := s.validateADOTokenModes(cfg.WorkspaceProviders); err != nil {
+		return nil, err
+	}
+	return validateModelProviders(cfg.ModelProviders, s.providerWriteEnv(cfg.InternalHosts))
 }
 
 // handlePutSiteConfig validates and persists the operator-wide site config.
@@ -731,19 +667,8 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// ScmHosts / EgressRedirects[].{From,To} / UpstreamProxyURL on the
 	// same terms — see normalizeSiteConfigTopology's doc.
 	normalizeSiteConfigTopology(&cfg)
-	if err := validateAgentProviders(cfg.AgentProviders, s.cfg.AgentImages); err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
-		return
-	}
-	if err := validateSiteConfig(cfg); err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
-		return
-	}
-	if err := s.validateADOTokenModes(cfg.WorkspaceProviders); err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
-		return
-	}
-	if err := validateModelProviders(cfg.ModelProviders, s.cfg.AllowTestEndpoints); err != nil {
+	providerWarnings, err := s.validateSiteConfigBody(cfg)
+	if err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
 		return
 	}
@@ -759,14 +684,17 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// Integrations forward from its own read, below) against the three
 	// integration-write handlers' own RMWs on the same document
 	// (setup_integrations.go) — see handlePutIntegration's SEAM-1 comment.
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
 	existing, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
 		writeServerError(w, r, "get existing site config", err)
 		return
 	}
-	// Checked under siteConfigMu, against the SAME read this handler's own
+	// Checked under the site-config lock, against the SAME read this handler's own
 	// integrations-carry-forward uses below — no other writer can land between
 	// this check and the Put that follows it.
 	if !ifMatchSatisfied(r, computeETag(existing)) {
@@ -882,6 +810,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		"sign_in_help_text": saved.SignInHelpText,
 		"sign_in_help_url":  saved.SignInHelpURL,
 	}
+	auditPolicyHelp(datum, saved.PolicyHelp, present["policy_help"])
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true
 	}
@@ -933,6 +862,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		SourcesNoLongerAdmitted:      narrowed,
 		SSHLaneWidePastPath:          sshWideRows,
 		BrandingLogoPending:          logoPending,
+		ModelProviderWarnings:        providerWarnings,
 	})
 }
 
@@ -988,6 +918,9 @@ type siteConfigPutResponse struct {
 	// logo. Reported, not refused — see site_config_branding.go — and the next
 	// apply after the card is saved attaches it.
 	BrandingLogoPending bool `json:"branding_logo_pending,omitempty"`
+	// ModelProviderWarnings: the model-provider block's advisories (an azure_foundry endpoint on an
+	// uncovered private address); reported, never refused.
+	ModelProviderWarnings []string `json:"model_provider_warnings,omitempty"`
 }
 
 // siteConfigAppliesFromNextDispatch is the ONE value AppliesFrom takes today:

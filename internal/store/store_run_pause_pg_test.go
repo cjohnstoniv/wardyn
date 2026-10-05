@@ -180,7 +180,7 @@ func TestPG_RunPause_ClearedByLostAndRevive(t *testing.T) {
 		t.Fatalf("force a stale pause mark: %v", err)
 	}
 
-	if ok, err := pg.MarkRunRevived(ctx, run.ID, types.LostReboot, nil); err != nil || !ok {
+	if ok, err := pg.MarkRunRevived(ctx, run.ID, types.LostReboot, nil, 0, false); err != nil || !ok {
 		t.Fatalf("MarkRunRevived = %v, %v; want true", ok, err)
 	}
 	revived, err := pg.GetRun(ctx, run.ID)
@@ -249,7 +249,7 @@ func TestPG_RunPause_SurvivesALiveRestart(t *testing.T) {
 		t.Fatalf("MarkRunPaused = %v, %v; want true", ok, err)
 	}
 
-	if ok, err := pg.MarkRunRevived(ctx, run.ID, "", nil); err != nil || !ok {
+	if ok, err := pg.MarkRunRevived(ctx, run.ID, "", nil, 0, false); err != nil || !ok {
 		t.Fatalf("MarkRunRevived(live) = %v, %v; want true", ok, err)
 	}
 	restarted, err := pg.GetRun(ctx, run.ID)
@@ -306,4 +306,67 @@ func pauseCandidate(t *testing.T, pg store.PG, id uuid.UUID) *store.PauseCandida
 		}
 	}
 	return nil
+}
+
+// TestPG_RunPauseSettles pins migration 0132 through store.PauseSettler: a note
+// is due only after its delay, a second note moves due_at forward and never
+// back, a clear naming a due_at that is no longer the row's leaves it, and the
+// run's deletion takes the row with it.
+func TestPG_RunPauseSettles(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	run := newRun(types.RunRunning)
+	run.SandboxRef = "ref-settle"
+	persistRun(t, ctx, pool, run)
+
+	due := func() []store.PauseSettle {
+		t.Helper()
+		got, err := pg.DuePauseSettles(ctx)
+		if err != nil {
+			t.Fatalf("DuePauseSettles: %v", err)
+		}
+		return got
+	}
+	first, err := pg.NotePauseSettle(ctx, run.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("NotePauseSettle: %v", err)
+	}
+	if got := due(); len(got) != 0 {
+		t.Fatalf("a settle due in an hour is listed due now: %+v", got)
+	}
+	if again, err := pg.NotePauseSettle(ctx, run.ID, time.Minute); err != nil || !again.Equal(first) {
+		t.Errorf("a sooner note = %v, %v; want due_at kept at %v", again, err, first)
+	}
+	later, err := pg.NotePauseSettle(ctx, run.ID, 2*time.Hour)
+	if err != nil || !later.After(first) {
+		t.Fatalf("a later note = %v, %v; want due_at moved past %v", later, err, first)
+	}
+	if err := pg.ClearPauseSettle(ctx, run.ID, first); err != nil {
+		t.Fatalf("ClearPauseSettle: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE run_pause_settles SET due_at = due_at - interval '3 hours' WHERE run_id = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	got := due()
+	if len(got) != 1 || got[0].RunID != run.ID {
+		t.Fatalf("due settles = %+v; want the run's, which a clear naming an older due_at must not delete", got)
+	}
+	if err := pg.ClearPauseSettle(ctx, run.ID, got[0].DueAt); err != nil {
+		t.Fatalf("ClearPauseSettle: %v", err)
+	}
+	if got := due(); len(got) != 0 {
+		t.Fatalf("a clear naming the row's due_at left %+v", got)
+	}
+
+	if _, err := pg.NotePauseSettle(ctx, run.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM agent_runs WHERE id = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM run_pause_settles`).Scan(&left); err != nil || left != 0 {
+		t.Errorf("settles left after the run's deletion = %d (%v), want 0", left, err)
+	}
 }

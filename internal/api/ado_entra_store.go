@@ -37,9 +37,9 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -189,7 +189,7 @@ type adoEntraBlob struct {
 	RenewedAt time.Time `json:"renewed_at,omitempty"`
 	// DeadAt is when a renewal last met a refusal no renewal gets past while
 	// the refresh token lives: a Conditional Access policy wants the person
-	// present. (A dead refresh token is deleted instead, noteADOEntraSignInEnded;
+	// present. (A dead refresh token is deleted instead, noteEntraSignInEnded;
 	// a blob stored before 0.8 may still carry dead_credential.) It lives on the blob, not in a table, so /me/scm-access and the
 	// launch gate can say expired_signin before the next run fails at its
 	// sidecar's boot. A fresh capture writes a blob without it; a renewal that
@@ -263,11 +263,35 @@ func (s *Server) readADOEntraBlob(ctx context.Context, owner, rowID string) (ado
 	if !adoEntraValidRowID(rowID) {
 		return adoEntraBlob{}, false, fmt.Errorf("azure devops provider row id %q is not a usable store name", rowID)
 	}
-	name := adoEntraSecretName(rowID)
+	return s.readEntraBlob(ctx, owner, adoCapture(ADOEntraConfig{RowID: rowID}))
+}
+
+// entraRevision is the revision of owner's own stored sign-in row, for the
+// compare-and-set of the Put that follows a redemption. guarded is false when
+// the store keeps none (a test double) or there is no owner to read for.
+func (s *Server) entraRevision(ctx context.Context, owner string, ec entraCapture) (rev string, guarded bool, err error) {
+	if s.cfg.Secrets == nil || owner == "" {
+		return "", false, nil
+	}
+	rev, guarded, err = secretstore.RevisionOf(ctx, s.cfg.Secrets.For(owner), ec.secretName)
+	if err != nil {
+		return "", false, fmt.Errorf("read %s sign-in revision: %w", ec.label(), err)
+	}
+	return rev, guarded, nil
+}
+
+// readEntraBlob is readADOEntraBlob's body for any kind's capture: the same
+// own-namespace list-then-get, keyed by the capture's sealed name.
+func (s *Server) readEntraBlob(ctx context.Context, owner string, ec entraCapture) (adoEntraBlob, bool, error) {
+	if s.cfg.Secrets == nil || owner == "" {
+		return adoEntraBlob{}, false, nil
+	}
+	name := ec.secretName
+	label := ec.label()
 	st := s.cfg.Secrets.For(owner)
 	own, err := st.List(ctx)
 	if err != nil {
-		return adoEntraBlob{}, false, fmt.Errorf("list own azure devops sign-in: %w", err)
+		return adoEntraBlob{}, false, fmt.Errorf("list own %s sign-in: %w", label, err)
 	}
 	if !slices.Contains(own, name) {
 		return adoEntraBlob{}, false, nil
@@ -277,13 +301,13 @@ func (s *Server) readADOEntraBlob(ctx context.Context, owner, rowID string) (ado
 		return adoEntraBlob{}, false, nil
 	}
 	if err != nil {
-		slog.ErrorContext(ctx, "wardynd: read the captured azure devops sign-in from the secret store failed",
-			slog.String("row", rowID), slog.Any("err", err))
-		return adoEntraBlob{}, false, fmt.Errorf("read azure devops sign-in: %w", err)
+		slog.ErrorContext(ctx, "wardynd: read the captured sign-in from the secret store failed",
+			slog.String("kind", string(ec.kind)), slog.String("row", ec.logRow()), slog.Any("err", err))
+		return adoEntraBlob{}, false, fmt.Errorf("read %s sign-in: %w", label, err)
 	}
 	var blob adoEntraBlob
 	if err := json.Unmarshal(raw, &blob); err != nil {
-		return adoEntraBlob{}, false, fmt.Errorf("parse azure devops sign-in blob: %w", err)
+		return adoEntraBlob{}, false, fmt.Errorf("parse %s sign-in blob: %w", label, err)
 	}
 	if !blob.valid() {
 		return adoEntraBlob{}, false, nil
@@ -305,12 +329,23 @@ func (s *Server) storeADOEntraBlob(ctx context.Context, owner, rowID string, blo
 	if !adoEntraValidRowID(rowID) {
 		return fmt.Errorf("azure devops provider row id %q is not a usable store name", rowID)
 	}
+	return s.storeEntraBlob(ctx, owner, adoCapture(ADOEntraConfig{RowID: rowID}), blob)
+}
+
+// storeEntraBlob is storeADOEntraBlob's body for any kind's capture.
+func (s *Server) storeEntraBlob(ctx context.Context, owner string, ec entraCapture, blob adoEntraBlob) error {
+	if s.cfg.Secrets == nil {
+		return fmt.Errorf("no secret store configured")
+	}
+	if owner == "" {
+		return fmt.Errorf("a captured %s sign-in has no owner to store it under", ec.label())
+	}
 	raw, err := json.Marshal(blob)
 	if err != nil {
-		return fmt.Errorf("marshal azure devops sign-in blob: %w", err)
+		return fmt.Errorf("marshal %s sign-in blob: %w", ec.label(), err)
 	}
-	err = s.cfg.Secrets.For(owner).Put(ctx, adoEntraSecretName(rowID), raw)
-	s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", owner, adoEntraSecretName(rowID))
+	err = s.putOwned(ctx, owner, func() error { return s.cfg.Secrets.For(owner).Put(ctx, ec.secretName, raw) })
+	s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", owner, ec.secretName)
 	return err
 }
 
@@ -332,31 +367,27 @@ type ADOEntraAccess struct {
 	ExpiresAt   time.Time
 }
 
-// adoEntraFlight is the per-owner single-flight registry. Keyed by owner AND
-// row, so two people redeeming at once never serialise behind each other while
-// two redemptions for the SAME person and row always do — which is what keeps
-// one rotating refresh token from being spent twice. Process-local, correct for
-// the same reason every other in-memory bound in this package is: more than one
-// replica is refused by construction.
-type adoEntraFlight struct {
-	mu    sync.Mutex
-	locks map[string]*sync.Mutex
+// lockADOSignIn is the per-owner single-flight lock, across replicas. Keyed by
+// owner AND row, so two people redeeming at once never serialise behind each
+// other while two redemptions for the SAME person and row always do — which is
+// what keeps one rotating refresh token from being spent twice. It returns the
+// context the guarded work must use (cancelled if the lock is lost) and the
+// release. A lock that cannot be taken is an error, never a pass-through; a
+// redemption turns it into ErrADOEntraUnavailable (lockADOSignInRedeem).
+func (s *Server) lockADOSignIn(ctx context.Context, owner, rowID string) (context.Context, func(), error) {
+	return s.lock(ctx, db.ADOSignInLockClass, owner, rowID)
 }
 
-func (f *adoEntraFlight) lock(owner, rowID string) func() {
-	f.mu.Lock()
-	if f.locks == nil {
-		f.locks = map[string]*sync.Mutex{}
+// lockADOSignInRedeem is lockADOSignIn for a redemption: a lock it cannot take
+// is the transient ErrADOEntraUnavailable, the same answer an authority that
+// did not respond gets, so the credential is not graded dead and the caller
+// retries.
+func (s *Server) lockADOSignInRedeem(ctx context.Context, owner, rowID string) (context.Context, func(), error) {
+	lctx, unlock, err := s.lockADOSignIn(ctx, owner, rowID)
+	if err != nil {
+		return ctx, nil, fmt.Errorf("%w: could not take the sign-in renewal lock: %w", ErrADOEntraUnavailable, err)
 	}
-	key := owner + "\x00" + rowID
-	mu := f.locks[key]
-	if mu == nil {
-		mu = &sync.Mutex{}
-		f.locks[key] = mu
-	}
-	f.mu.Unlock()
-	mu.Lock()
-	return mu.Unlock
+	return lctx, unlock, nil
 }
 
 // RedeemADOEntraAccess mints an Azure DevOps access token for owner, REQUESTING
@@ -391,9 +422,12 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 	if err := adoEntraRedeemable(cfg, owner, scopes); err != nil {
 		return ADOEntraAccess{}, err
 	}
-	unlock := s.adoEntra.lock(owner, cfg.RowID)
+	lctx, unlock, err := s.lockADOSignInRedeem(ctx, owner, cfg.RowID)
+	if err != nil {
+		return ADOEntraAccess{}, err
+	}
 	defer unlock()
-	return s.redeemADOEntraAccessLocked(ctx, cfg, owner, scopes)
+	return s.redeemADOEntraAccessLocked(lctx, cfg, owner, scopes)
 }
 
 // adoEntraRedeemable is what a redemption checks before it takes the lock.
@@ -408,9 +442,26 @@ func adoEntraRedeemable(cfg ADOEntraConfig, owner string, scopes []string) error
 }
 
 // redeemADOEntraAccessLocked is RedeemADOEntraAccess's body. The caller holds
-// s.adoEntra.lock(owner, cfg.RowID) and has checked adoEntraRedeemable.
+// the sign-in lock for (owner, cfg.RowID) and has checked adoEntraRedeemable.
 func (s *Server) redeemADOEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig, owner string, scopes []string) (ADOEntraAccess, error) {
-	blob, found, err := s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeADORefresh), owner, cfg.RowID)
+	return s.redeemEntraAccessLocked(ctx, cfg, adoCapture(cfg), owner, scopes)
+}
+
+// redeemEntraAccessLocked is the redemption for any kind's capture: the caller
+// holds the sign-in lock for (owner, <row key>) and has checked the requested scopes
+// against ec's policy. The kind decides only what counts as consented, what is
+// sent as `scope`, and what is stored back; the rotation, masking and
+// persistence discipline is one implementation.
+func (s *Server) redeemEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig, ec entraCapture, owner string, scopes []string) (ADOEntraAccess, error) {
+	// The row's revision comes BEFORE the read, so a write landing between the
+	// two can only make the rotation's Put refuse, never overwrite.
+	rev, guarded, rerr := s.entraRevision(ctx, owner, ec)
+	var blob adoEntraBlob
+	var found bool
+	err := rerr
+	if err == nil {
+		blob, found, err = s.readEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeADORefresh), owner, ec)
+	}
 	switch {
 	case errors.Is(err, secretstore.ErrUnavailable):
 		return ADOEntraAccess{}, fmt.Errorf("%w: %w", ErrADOEntraUnavailable, err)
@@ -424,10 +475,8 @@ func (s *Server) redeemADOEntraAccessLocked(ctx context.Context, cfg ADOEntraCon
 	// recorded. Refusing here saves a round trip and, more importantly, names
 	// the cause: a scope the consent never covered is a consent question, and
 	// the authority would answer it with the same AADSTS number this returns.
-	for _, want := range scopes {
-		if !slices.Contains(blob.Scopes, want) {
-			return ADOEntraAccess{}, fmt.Errorf("%w: %q is outside the scopes this sign-in was captured with", ErrADOEntraConsentRequired, want)
-		}
+	if want, ok := ec.consentCovers(blob.Scopes, scopes); !ok {
+		return ADOEntraAccess{}, fmt.Errorf("%w: %q is outside the scopes this sign-in was captured with", ErrADOEntraConsentRequired, want)
 	}
 
 	resp, err := s.postADOEntraToken(ctx, cfg, url.Values{
@@ -436,7 +485,13 @@ func (s *Server) redeemADOEntraAccessLocked(ctx context.Context, cfg ADOEntraCon
 		"scope":         {strings.Join(scopes, " ")},
 	})
 	if err != nil {
-		s.noteADOEntraSignInEnded(ctx, owner, cfg.RowID, blob, ADOEntraClassify(err))
+		// Guarded by the revision read above, like the rotation's Put: a holder
+		// that lost the lock must not delete or mark dead a newer row.
+		nctx := ctx
+		if guarded {
+			nctx = secretstore.WithIfRevision(ctx, rev)
+		}
+		s.noteEntraSignInEnded(nctx, owner, ec, blob, ADOEntraClassify(err))
 		return ADOEntraAccess{}, err
 	}
 
@@ -452,7 +507,9 @@ func (s *Server) redeemADOEntraAccessLocked(ctx context.Context, cfg ADOEntraCon
 	}
 	now := s.cfg.Now()
 	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
-	s.cfg.MaskRegistry.AddGlobalUntil(owner, adoEntraSecretName(cfg.RowID), now, accessExpiry, []byte(resp.AccessToken), []byte(keep))
+	if err := s.cfg.MaskRegistry.AddGlobalUntil(owner, ec.secretName, now, accessExpiry, []byte(resp.AccessToken), []byte(keep)); err != nil {
+		return ADOEntraAccess{}, fmt.Errorf("%w: the new tokens could not be recorded for masking: %v", ErrADOEntraUnavailable, err)
+	}
 
 	granted := strings.Fields(resp.Scope)
 	if len(granted) == 0 {
@@ -480,34 +537,45 @@ func (s *Server) redeemADOEntraAccessLocked(ctx context.Context, cfg ADOEntraCon
 		next.ExpiresAt = access.ExpiresAt
 		next.RenewedAt = s.cfg.Now().UTC()
 		next.DeadAt, next.DeadReason = time.Time{}, ""
-		if perr := s.storeADOEntraBlob(ctx, owner, cfg.RowID, next); perr != nil {
+		// Detached from the lock's context, which is cancelled when the lock is
+		// lost: the token is already redeemed, so the store is attempted either
+		// way, and the compare-and-set is what keeps a holder that lost its lock
+		// from overwriting a newer pair.
+		pctx := context.WithoutCancel(ctx)
+		if guarded {
+			pctx = secretstore.WithIfRevision(pctx, rev)
+		}
+		if perr := s.storeEntraBlob(pctx, owner, ec, next); errors.Is(perr, secretstore.ErrRevisionChanged) {
+			slog.WarnContext(ctx, "wardynd: the stored azure sign-in changed while it was being renewed; keeping the newer row, serving this caller from memory",
+				slog.String("row", ec.logRow()))
+		} else if perr != nil {
 			slog.ErrorContext(ctx, "wardynd: persisting the rotated azure devops refresh token failed; serving this caller from memory",
-				slog.String("row", cfg.RowID), slog.Any("err", perr))
+				slog.String("row", ec.logRow()), slog.Any("err", perr))
 		}
 	}
 	return access, nil
 }
 
-// noteADOEntraSignInEnded answers a renewal refusal only a new sign-in can
-// answer. A dead refresh token is deleted (deleteDeadCredential): nothing can
-// renew it. An interaction refusal leaves the token live, so it is recorded on
-// the stored blob instead. Best-effort: the caller's own answer does not depend
-// on it, and a failed write only means the next launch learns it at boot.
-// Called under the redemption lock, on the blob read inside it, so it cannot
-// delete or overwrite a rotation.
-func (s *Server) noteADOEntraSignInEnded(ctx context.Context, owner, rowID string, blob adoEntraBlob, class ADOEntraFailure) {
+// noteEntraSignInEnded answers a renewal refusal only a new sign-in can
+// answer, for any kind's capture. A dead refresh token is deleted
+// (deleteDeadCredential): nothing can renew it. An interaction refusal leaves
+// the token live, so it is recorded on the stored blob instead. Best-effort: the
+// caller's own answer does not depend on it, and a failed write only means the
+// next launch learns it at boot. Called under the redemption lock, on the blob
+// read inside it, so it cannot delete or overwrite a rotation.
+func (s *Server) noteEntraSignInEnded(ctx context.Context, owner string, ec entraCapture, blob adoEntraBlob, class ADOEntraFailure) {
 	switch class {
 	case ADOEntraFailureDeadCredential:
-		s.deleteDeadCredential(ctx, s.cfg.Secrets.For(owner), owner, adoEntraSecretName(rowID), adoEntraProviderPrefix)
+		s.deleteDeadCredential(ctx, s.cfg.Secrets.For(owner), owner, ec.secretName, ec.auditProvider())
 		return
 	case ADOEntraFailureInteractionRequired:
 	default:
 		return
 	}
 	blob.DeadAt, blob.DeadReason = s.cfg.Now().UTC(), class
-	if err := s.storeADOEntraBlob(ctx, owner, rowID, blob); err != nil {
+	if err := s.storeEntraBlob(ctx, owner, ec, blob); err != nil {
 		slog.WarnContext(ctx, "wardynd: could not record that an azure devops sign-in has ended",
-			slog.String("row", rowID), slog.Any("err", err))
+			slog.String("row", ec.logRow()), slog.Any("err", err))
 	}
 }
 
@@ -621,12 +689,23 @@ func classifyADOEntraError(code, desc string) error {
 	case code == entraOAuthConsentRequired || strings.Contains(desc, entraConsentRequiredCode):
 		return fmt.Errorf("%w: %s (%s)", ErrADOEntraConsentRequired, code, entraConsentRequiredCode)
 	case code == entraOAuthInteractionRequired:
-		return fmt.Errorf("%w: %s", ErrADOEntraInteractionRequired, code)
+		return fmt.Errorf("%w: %s%s", ErrADOEntraInteractionRequired, code, aadstsSuffix(desc))
 	case code == "invalid_grant" || code == "invalid_client" || code == "unauthorized_client":
 		return fmt.Errorf("%w: %s", ErrADOEntraDeadCredential, code)
 	default:
 		return fmt.Errorf("%w: the authority refused with %s", ErrADOEntraUnavailable, code)
 	}
+}
+
+// aadstsPattern is the AADSTS number Entra puts in an error description. The OAuth code alone says
+// "interaction_required"; the number says which policy asked, which the azure_foundry hold names.
+var aadstsPattern = regexp.MustCompile(`AADSTS\d{5,6}`)
+
+func aadstsSuffix(desc string) string {
+	if m := aadstsPattern.FindString(desc); m != "" {
+		return " (" + m + ")"
+	}
+	return ""
 }
 
 // adoCaptureScopes is what a capture stores from a token response's granted

@@ -10,6 +10,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 )
 
 // terminalSandboxSweepInterval is how often the ticker sweeps one page of
@@ -66,7 +67,7 @@ type terminalSandboxPager interface {
 // Needed because claimSingleInstance (single_instance.go) is not mutual
 // exclusion: it holds db.SingleInstanceLockKey for the process lifetime only
 // in the DEFAULT configuration — a deployment booted with
-// -allow-multi-instance skips that claim, and a Postgres restart/failover can
+// WARDYN_HA skips that claim, and a Postgres restart/failover can
 // release its session under a still-running daemon while a second one boots
 // and claims it (SingleInstanceLockKey's own HONEST CEILING). Either way, two
 // tickers running at once would both re-run teardown for the same aged KILLED
@@ -91,7 +92,10 @@ type terminalSandboxPager interface {
 // skipped this tick and caught on a later one, exactly like every other pass
 // over run state here. startBackgroundWorkers still starts this AFTER calling
 // ReconcileOnBoot, so the ordering is structural, not only a timing argument.
-func runTerminalSandboxSweeper(ctx context.Context, pager terminalSandboxPager, tickLock func(context.Context) (func(), bool), interval time.Duration) {
+//
+// ticks records each tick that took the lock and did the sweep as the
+// terminal_sandbox sweep (nil records nothing).
+func runTerminalSandboxSweeper(ctx context.Context, pager terminalSandboxPager, tickLock func(context.Context) (func(), bool), interval time.Duration, ticks *sweephealth.Tracker) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	offset := 0
@@ -100,7 +104,7 @@ func runTerminalSandboxSweeper(ctx context.Context, pager terminalSandboxPager, 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			offset = terminalSandboxSweepLockedTick(ctx, pager, tickLock, offset)
+			offset, _ = terminalSandboxSweepLockedTick(ctx, pager, tickLock, offset, ticks)
 		}
 	}
 }
@@ -118,17 +122,22 @@ func runTerminalSandboxSweeper(ctx context.Context, pager terminalSandboxPager, 
 // connection until it returns — either way holding
 // db.TerminalSandboxSweepLockKey, and with it every other control plane's
 // sweep, indefinitely.
-func terminalSandboxSweepLockedTick(ctx context.Context, pager terminalSandboxPager, tickLock func(context.Context) (func(), bool), offset int) int {
+func terminalSandboxSweepLockedTick(ctx context.Context, pager terminalSandboxPager, tickLock func(context.Context) (func(), bool), offset int, ticks *sweephealth.Tracker) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, terminalSandboxSweepTickTimeout)
 	defer cancel()
 	if tickLock != nil {
 		release, ok := tickLock(ctx)
 		if !ok {
-			return offset // another control plane holds the lock this tick; skip, don't queue
+			return offset, nil // another control plane holds the lock this tick; skip, don't queue
 		}
 		defer release()
 	}
-	return terminalSandboxSweepTick(ctx, pager, offset)
+	next := offset
+	err := ticks.Tick(ctx, sweephealth.TerminalSandbox, func(ctx context.Context) (err error) {
+		next, err = terminalSandboxSweepTick(ctx, pager, offset)
+		return err
+	})
+	return next, err
 }
 
 // terminalSandboxSweepTick runs one page and returns the next tick's offset:
@@ -136,19 +145,19 @@ func terminalSandboxSweepLockedTick(ctx context.Context, pager terminalSandboxPa
 // terminalSandboxSweepPageSize (the end of the table). A failed tick keeps
 // the current offset, so the same page is retried next time rather than
 // silently skipped.
-func terminalSandboxSweepTick(ctx context.Context, pager terminalSandboxPager, offset int) int {
+func terminalSandboxSweepTick(ctx context.Context, pager terminalSandboxPager, offset int) (int, error) {
 	swept, pageLen, err := pager.SweepTerminalSandboxesPage(ctx, store.Page{Limit: terminalSandboxSweepPageSize, Offset: offset})
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: terminal sandbox sweep tick failed", slog.Any("err", err))
-		return offset
+		return offset, err
 	}
 	if swept > 0 {
 		slog.InfoContext(ctx, "wardynd: terminal sandbox sweep tick", slog.Int("swept", swept), slog.Int("offset", offset))
 	}
 	if pageLen < terminalSandboxSweepPageSize {
-		return 0 // short page: reached the end of the table — wrap
+		return 0, nil // short page: reached the end of the table — wrap
 	}
-	return offset + terminalSandboxSweepPageSize
+	return offset + terminalSandboxSweepPageSize, nil
 }
 
 // terminalSandboxBackgrounder is the *api.Server surface
@@ -167,9 +176,9 @@ type terminalSandboxBackgrounder interface {
 // teardown; see boot_serve.go). Extracted from startBackgroundWorkers so a
 // test can prove that registration without waiting a full interval or
 // standing up the rest of it.
-func startTerminalSandboxSweeper(ctx context.Context, srv terminalSandboxBackgrounder, tickLock func(context.Context) (func(), bool), interval time.Duration) {
+func startTerminalSandboxSweeper(ctx context.Context, srv terminalSandboxBackgrounder, tickLock func(context.Context) (func(), bool), interval time.Duration, ticks *sweephealth.Tracker) {
 	srv.GoBackground(func() {
-		goSafe("terminal_sandbox.sweeper", func() { runTerminalSandboxSweeper(ctx, srv, tickLock, interval) })
+		goSafe("terminal_sandbox.sweeper", func() { runTerminalSandboxSweeper(ctx, srv, tickLock, interval, ticks) })
 	})
 	slog.Info("wardynd: terminal sandbox sweeper started", slog.Duration("interval", interval))
 }

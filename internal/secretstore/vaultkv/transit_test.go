@@ -104,23 +104,99 @@ func TestTransit_Classification(t *testing.T) {
 	f.mu.Lock()
 	f.revoked = true
 	f.mu.Unlock()
-	if _, err := tr.Unwrap(ctx, w, kek.Bind("", "k")); err == nil || errors.Is(err, secretstore.ErrUnavailable) || !strings.Contains(err.Error(), "403") {
-		t.Fatalf("Unwrap with the policy revoked = %v; want a definitive 403", err)
+	if _, err := tr.Unwrap(ctx, w, kek.Bind("", "k")); err == nil || errors.Is(err, secretstore.ErrUnavailable) || !strings.Contains(err.Error(), "403") || !errors.Is(err, kek.ErrAccess) {
+		t.Fatalf("Unwrap with the policy revoked = %v; want a definitive 403 that is kek.ErrAccess", err)
 	}
 	f.mu.Lock()
 	f.revoked = false
 	f.transit.minDecrypt = 2
 	f.mu.Unlock()
-	if _, err := tr.Unwrap(ctx, w, kek.Bind("", "k")); err == nil || errors.Is(err, secretstore.ErrUnavailable) || !strings.Contains(err.Error(), "too old") {
-		t.Fatalf("Unwrap of a retired version = %v; want a definitive refusal", err)
+	if _, err := tr.Unwrap(ctx, w, kek.Bind("", "k")); err == nil || errors.Is(err, secretstore.ErrUnavailable) || !strings.Contains(err.Error(), "too old") || errors.Is(err, kek.ErrAccess) || !errors.Is(err, kek.ErrRefused) {
+		t.Fatalf("Unwrap of a retired version = %v; want a definitive refusal that is kek.ErrRefused", err)
+	}
+	// A key or mount the service no longer holds is about the service, not the row.
+	f.mu.Lock()
+	f.transit.minDecrypt = 0
+	f.transit.name = "other"
+	f.mu.Unlock()
+	if _, err := tr.Unwrap(ctx, w, kek.Bind("", "k")); err == nil || !errors.Is(err, kek.ErrKeyMissing) || errors.Is(err, kek.ErrAccess) || errors.Is(err, secretstore.ErrUnavailable) {
+		t.Fatalf("Unwrap under a key Vault does not hold = %v; want kek.ErrKeyMissing and neither ErrAccess nor ErrUnavailable", err)
 	}
 	// A row that holds no Transit ciphertext never reaches Vault.
 	before := f.callCount("POST transit/decrypt")
-	if _, err := tr.Unwrap(ctx, []byte("local-wrap-bytes"), kek.Bind("", "k")); err == nil {
-		t.Fatal("Unwrap of a non-Transit blob succeeded")
+	if _, err := tr.Unwrap(ctx, []byte("local-wrap-bytes"), kek.Bind("", "k")); err == nil || !errors.Is(err, kek.ErrRefused) {
+		t.Fatalf("Unwrap of a non-Transit blob = %v; want kek.ErrRefused, as for any other wrap Transit does not open", err)
 	}
 	if f.callCount("POST transit/decrypt") != before {
 		t.Fatal("Unwrap sent a non-Transit blob to Vault")
+	}
+}
+
+// Every 400 Vault gives a decrypt is its refusal, not proof about the row: a different Vault with the
+// same mount and key name answers "message authentication failed", a version it never had "invalid
+// ciphertext". Both are kek.ErrRefused, as a retired version is, so a reader fails closed instead of
+// destroying anything.
+func TestTransit_DecryptRefusalsAreTheServices(t *testing.T) {
+	ctx := t.Context()
+	other := newFakeTransit(t, newFakeVault(t))
+	f := newFakeVault(t)
+	tr := newFakeTransit(t, f)
+	elsewhere, err := other.Wrap(ctx, testDEK(), kek.Bind("", "k"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mine, err := tr.Wrap(ctx, testDEK(), kek.Bind("", "k"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		what, says string
+		wrap       []byte
+	}{
+		{"a wrap another Vault made under the same mount and key name", "message authentication failed", elsewhere},
+		{"a wrap naming a version this Vault never had", "invalid ciphertext", []byte("vault:v9:" + strings.SplitN(string(mine), ":", 3)[2])},
+	} {
+		_, err := tr.Unwrap(ctx, c.wrap, kek.Bind("", "k"))
+		if err == nil || !strings.Contains(err.Error(), c.says) || !errors.Is(err, kek.ErrRefused) || !errors.Is(err, kek.ErrService) ||
+			errors.Is(err, secretstore.ErrUnavailable) || errors.Is(err, kek.ErrAccess) || errors.Is(err, kek.ErrKeyMissing) {
+			t.Errorf("Unwrap of %s = %v; want Vault's %q as kek.ErrRefused and kek.ErrService only", c.what, err, c.says)
+		}
+	}
+	// A key Vault does not hold stays kek.ErrKeyMissing.
+	f.mu.Lock()
+	f.transit.name = "other"
+	f.mu.Unlock()
+	if _, err := tr.Unwrap(ctx, mine, kek.Bind("", "k")); !errors.Is(err, kek.ErrKeyMissing) || errors.Is(err, kek.ErrRefused) {
+		t.Errorf("Unwrap under a key Vault does not hold = %v; want kek.ErrKeyMissing, not kek.ErrRefused", err)
+	}
+}
+
+// A decrypt status nothing classifies (a DR secondary's 472, a performance standby's 473, an Enterprise
+// 412) is Vault's answer, not proof about the row: never kek.ErrCorrupt, and not transient either.
+func TestTransit_UnclassifiedDecryptAnswersAreNotCorrupt(t *testing.T) {
+	f := newFakeVault(t)
+	tr := newFakeTransit(t, f)
+	ctx := t.Context()
+	w, err := tr.Wrap(ctx, testDEK(), kek.Bind("", "k"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, code := range []int{472, 473, 412} {
+		f.mu.Lock()
+		f.force = []int{code}
+		f.mu.Unlock()
+		_, err := tr.Unwrap(ctx, w, kek.Bind("", "k"))
+		if err == nil || !errors.Is(err, kek.ErrService) || errors.Is(err, kek.ErrCorrupt) || errors.Is(err, secretstore.ErrUnavailable) {
+			t.Errorf("Unwrap answered %d = %v; want kek.ErrService, not kek.ErrCorrupt", code, err)
+		}
+	}
+	for _, c := range []struct {
+		what string
+		wrap []byte
+	}{{"a non-Transit blob", []byte("local-wrap-bytes")}, {"a wrap under another row", w}} {
+		if _, err := tr.Unwrap(ctx, c.wrap, kek.Bind("bob", "k")); err == nil || errors.Is(err, kek.ErrCorrupt) {
+			t.Errorf("Unwrap of %s = %v; Transit never answers kek.ErrCorrupt", c.what, err)
+		}
 	}
 }
 

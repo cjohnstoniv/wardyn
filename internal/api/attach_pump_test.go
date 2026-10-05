@@ -6,7 +6,10 @@ package api
 import (
 	"bytes"
 	"context"
+	"errors"
+	"github.com/google/uuid"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,5 +116,160 @@ func TestAttachWS_ShellExitSendsNormalClosure(t *testing.T) {
 		t.Fatal("client Read returned no error after the shell exited; want a close frame")
 	} else if got := websocket.CloseStatus(err); got != websocket.StatusNormalClosure {
 		t.Fatalf("close status = %v (%v), want StatusNormalClosure — the client must see a real close frame, not a bare drop", got, err)
+	}
+}
+
+// flowPumpClient dials an attach on the gated runner and returns the client, the
+// holder's session and the run, with Session.Write already parked on a paste so
+// every control frame sent after it proves it is not queued behind that write.
+func flowPumpClient(t *testing.T, srv *Server, gr *gatedRunner, ts *httptest.Server, runID uuid.UUID) (*websocket.Conn, *gatedSession) {
+	t.Helper()
+	c := dialAttach(t, ts, srv, runID, holderOwner, "")
+	if mode := readAttachMode(t, c); mode.ReadOnly {
+		t.Fatal("the first client was told it is read-only")
+	}
+	waitFor(t, "the holder's session to open", func() bool { return gr.session(0) != nil })
+	return c, gr.session(0)
+}
+
+// clientFrames reads the client socket on its own goroutine (Ping needs a
+// concurrent reader) and delivers each binary frame; the channel closes with the
+// socket, and the read error is left in *errp before that.
+func clientFrames(c *websocket.Conn, errp *error) <-chan []byte {
+	out := make(chan []byte, 16)
+	go func() {
+		defer close(out)
+		for {
+			typ, data, err := c.Read(context.Background())
+			if err != nil {
+				*errp = err
+				return
+			}
+			if typ == websocket.MessageBinary {
+				out <- data
+			}
+		}
+	}()
+	return out
+}
+
+func recvWithin(ch <-chan []byte, d time.Duration) ([]byte, bool) {
+	select {
+	case b, ok := <-ch:
+		return b, ok
+	case <-time.After(d):
+		return nil, false
+	}
+}
+
+// TestAttachPump_ControlWhileWriteBlocked: with Session.Write parked on a paste,
+// pause, resume, pong and close are still processed. Stopping output reads alone
+// would pass the big-output case and still strand these behind the write.
+func TestAttachPump_ControlWhileWriteBlocked(t *testing.T) {
+	srv, gr, _, run := f5Server(t)
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
+	defer ts.Close()
+	c, sess := flowPumpClient(t, srv, gr, ts, run.ID)
+	defer close(sess.release)
+
+	wsWrite(t, c, websocket.MessageBinary, []byte("paste"))
+	waitEntered(t, sess, "the paste")
+
+	var rerr error
+	frames := clientFrames(c, &rerr)
+	wsWrite(t, c, websocket.MessageText, []byte(`{"type":"pause"}`))
+	wsPing(t, c) // pong: the reader is alive behind the parked write
+	go func() { _, _ = sess.w.Write([]byte("held")) }()
+	if _, ok := recvWithin(frames, 300*time.Millisecond); ok {
+		t.Fatal("output reached a paused client")
+	}
+	wsWrite(t, c, websocket.MessageText, []byte(`{"type":"resume"}`))
+	if got, ok := recvWithin(frames, 3*time.Second); !ok || string(got) != "held" {
+		t.Fatalf("after resume got %q ok=%v, want the held output", got, ok)
+	}
+
+	// close: the handshake completes while the write is still parked.
+	if err := c.Close(websocket.StatusNormalClosure, "bye"); err != nil {
+		t.Fatalf("close handshake behind a blocked write: %v", err)
+	}
+}
+
+// TestAttachPump_RevokeWhilePaused: a take-over decided while output is paused
+// closes the displaced socket with the take-over reason.
+func TestAttachPump_RevokeWhilePaused(t *testing.T) {
+	srv, gr, _, run := f5Server(t)
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
+	defer ts.Close()
+	c, sess := flowPumpClient(t, srv, gr, ts, run.ID)
+	defer close(sess.release)
+
+	var rerr error
+	frames := clientFrames(c, &rerr)
+	wsWrite(t, c, websocket.MessageText, []byte(`{"type":"pause"}`))
+	wsPing(t, c)
+	prev := srv.evictAttachHolder(run.ID)
+	if prev == nil {
+		t.Fatal("no holder to evict")
+	}
+	prev.displace(attachTakeoverReason("someone"))
+
+	select {
+	case _, ok := <-frames:
+		if ok {
+			t.Fatal("output reached a revoked, paused client")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the displaced socket stayed open while paused")
+	}
+	var ce websocket.CloseError
+	if !errors.As(rerr, &ce) || ce.Code != websocket.StatusPolicyViolation {
+		t.Fatalf("read after a revocation while paused = %v, want a 1008 close", rerr)
+	}
+}
+
+// TestAttachPump_PauseStall: a pause never followed by a resume, from a peer
+// that no longer answers pings, ends the pump with the reason "client stalled".
+func TestAttachPump_PauseStall(t *testing.T) {
+	srv, gr, rec, run := f5Server(t)
+	srv.pauseLimit = 100 * time.Millisecond
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
+	defer ts.Close()
+	c, sess := flowPumpClient(t, srv, gr, ts, run.ID)
+	defer close(sess.release)
+	// The client never reads again, so it never answers the stall probe.
+
+	wsWrite(t, c, websocket.MessageText, []byte(`{"type":"pause"}`))
+	ev := waitForAudit(t, rec, run.ID, "session.detach", "success")
+	if ev == nil {
+		t.Fatal("no session.detach after an unresumed pause")
+	}
+	if !strings.Contains(string(ev.Data), `"reason":"client stalled"`) {
+		t.Fatalf("detach data = %s, want reason client stalled", ev.Data)
+	}
+}
+
+// TestAttachPump_PausedLivePeerSurvives: a client paused past the stall bound
+// that still answers pings (a hidden browser tab: timers throttled, network
+// layer alive) keeps its socket, and its late resume releases the held output.
+func TestAttachPump_PausedLivePeerSurvives(t *testing.T) {
+	srv, gr, rec, run := f5Server(t)
+	srv.pauseLimit = 100 * time.Millisecond
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
+	defer ts.Close()
+	c, sess := flowPumpClient(t, srv, gr, ts, run.ID)
+	defer close(sess.release)
+
+	var rerr error
+	frames := clientFrames(c, &rerr) // reads, so it answers every ping
+	wsWrite(t, c, websocket.MessageText, []byte(`{"type":"pause"}`))
+	wsPing(t, c)
+	go func() { _, _ = sess.w.Write([]byte("held")) }()
+	time.Sleep(600 * time.Millisecond) // several stall bounds
+	if ev := findAudit(rec.snapshot(), run.ID, "session.detach", "success"); ev != nil {
+		t.Fatalf("a paused client that answers pings was detached: %s", ev.Data)
+	}
+	wsWrite(t, c, websocket.MessageText, []byte(`{"type":"resume"}`))
+	if got, ok := recvWithin(frames, 3*time.Second); !ok || string(got) != "held" {
+		t.Fatalf("after a late resume got %q ok=%v, want the held output", got, ok)
 	}
 }

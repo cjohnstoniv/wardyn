@@ -28,6 +28,7 @@ vi.mock("@xterm/xterm", () => {
   class Terminal {
     cols = 80;
     rows = 24;
+    unicode = { activeVersion: "6" };
     loadAddon() {}
     open() {}
     write() {}
@@ -42,6 +43,8 @@ vi.mock("@xterm/xterm", () => {
     onBinary() {
       return { dispose() {} };
     }
+    modes = { mouseTrackingMode: "none" };
+    attachCustomWheelEventHandler() {}
     attachCustomKeyEventHandler(fn: (e: KeyboardEvent) => boolean) {
       keyHandler = fn;
     }
@@ -59,8 +62,6 @@ vi.mock("@xterm/addon-fit", () => {
   return { FitAddon };
 });
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
-vi.mock("@fontsource/jetbrains-mono/latin-400.css", () => ({}));
-vi.mock("@fontsource/jetbrains-mono/latin-ext-400.css", () => ({}));
 // Force SSO mode (no admin token) so the component opens a WebSocket directly.
 vi.mock("../lib/api/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api/core")>()),
@@ -149,7 +150,7 @@ function stubTerminalEnv() {
   FakeWebSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
   if (!("fonts" in document)) {
-    Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve() } });
+    Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve(), load: () => Promise.resolve([]) } });
   }
   vi.stubGlobal(
     "ResizeObserver",

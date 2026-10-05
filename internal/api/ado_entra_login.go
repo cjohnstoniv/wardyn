@@ -39,11 +39,13 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 // adoEntraSourceLogin marks a credential acquired by the organisation's console
@@ -127,7 +129,15 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 
 	// Mask BEFORE anything can log or persist it, merged until the store write
 	// succeeds: a failed write leaves the credential already stored live.
-	s.cfg.MaskRegistry.MergeGlobal(subject, adoEntraSecretName(cfg.RowID), []byte(grant.RefreshToken))
+	if err := s.cfg.MaskRegistry.MergeGlobal(subject, adoEntraSecretName(cfg.RowID), []byte(grant.RefreshToken)); err != nil {
+		slog.ErrorContext(ctx, "wardynd: the Azure DevOps sign-in token could not be recorded for masking; not stored",
+			slog.String("row", cfg.RowID), slog.Any("err", err))
+		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
+			"reason": "store_error", "source": adoEntraSourceLogin,
+			"tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
+		})
+		return
+	}
 
 	now := s.cfg.Now()
 	expiresAt := grant.Expiry.UTC()
@@ -146,9 +156,19 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 	}
 	// Under the same per-owner lock a redemption takes, so a login landing
 	// while a redemption is persisting its rotation cannot interleave with it.
-	unlock := s.adoEntra.lock(subject, cfg.RowID)
-	defer unlock()
-	if err := s.storeADOEntraBlob(ctx, subject, cfg.RowID, blob); err != nil {
+	ctx, unlock, err := s.lockADOSignIn(ctx, subject, cfg.RowID)
+	if err == nil {
+		defer unlock()
+		err = s.storeADOEntraBlob(ctx, subject, cfg.RowID, blob)
+	}
+	if errors.Is(err, store.ErrIdentityDeactivated) {
+		// A suspension overtook this login: nothing is stored, and the cookie it is about to be
+		// given carries an epoch the suspension has already passed.
+		slog.InfoContext(ctx, "wardynd: the Azure DevOps credential this login earned was not stored; the identity was suspended mid-login",
+			slog.String("row", cfg.RowID))
+		return
+	}
+	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: storing the Azure DevOps credential this login earned failed; the person is signed in without one",
 			slog.String("row", cfg.RowID), slog.Any("err", err))
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
@@ -157,7 +177,10 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 		})
 		return
 	}
-	s.cfg.MaskRegistry.AddGlobal(subject, adoEntraSecretName(cfg.RowID), s.cfg.Now(), []byte(grant.RefreshToken))
+	// The Merge above put the token on record; this retires what it replaced.
+	if err := s.cfg.MaskRegistry.AddGlobal(subject, adoEntraSecretName(cfg.RowID), s.cfg.Now(), []byte(grant.RefreshToken)); err != nil {
+		slog.WarnContext(ctx, "wardynd: the replaced Azure DevOps sign-in token could not be retired", slog.String("row", cfg.RowID), slog.Any("err", err))
+	}
 	s.auditADOCapture(ctx, subject, cfg.RowID, "success", map[string]any{
 		"tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		"scopes": usable, "source": adoEntraSourceLogin,

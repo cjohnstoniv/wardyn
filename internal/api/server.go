@@ -15,7 +15,7 @@ package api
 import (
 	"context"
 	"crypto/ed25519"
-	"io"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"sync"
@@ -25,17 +25,22 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adorunpat"
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
-	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/directory"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/livebus"
+	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
@@ -53,87 +58,18 @@ const internalAudience = "wardyn-internal"
 // events" and nothing else.
 const groundtruthAudience = "wardyn-groundtruth"
 
-// ApprovalService is the narrow approval FSM surface the API depends on. It is
-// satisfied by package-level wrappers over internal/approval (see wardynd wiring),
-// keeping the API decoupled from concrete storage.
-type ApprovalService interface {
-	Request(ctx context.Context, req types.ApprovalRequest) (types.ApprovalRequest, error)
-	// Decide transitions an approval to decision.State (APPROVED or DENIED —
-	// the caller picks; there is no separate approve bool, since
-	// types.ApprovalDecision.State already says which). decidedByType is kept
-	// as its own parameter rather than folded into ApprovalDecision: it is
-	// audit attribution (who/what decided), not a property of the decision
-	// itself.
-	Decide(ctx context.Context, id uuid.UUID, decidedByType types.ActorType, decision types.ApprovalDecision) (types.ApprovalRequest, error)
-	Get(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error)
-	List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error)
-	// CancelForRun moves every still-PENDING approval of a run that has just
-	// reached a terminal state to CANCELLED, returning how many moved per kind. It is
-	// part of the terminal cascade, beside identity/broker revocation: an
-	// approval whose run has ended is a control that cannot function, and a row
-	// left PENDING renders live Approve/Deny buttons in the console. reason names
-	// the transition ("run_killed", "run_completed", ...). Idempotent by
-	// construction — a second call finds nothing PENDING and emits nothing.
-	CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[string]int, error)
-	// ExpireOne moves one still-PENDING approval to EXPIRED (a no-op once decided):
-	// wardyn-toolgate's give-up signal (#811). actor is the withdrawing agent.
-	ExpireOne(ctx context.Context, id uuid.UUID, actor, reason string) error
-	// CountForRun returns how many approvals a run has raised, in ANY state —
-	// the per-run cap handleInternalRequestApproval enforces. A sandbox chooses
-	// the hosts it asks about, so without that cap the number of rows one run can
-	// create is bounded by nothing.
-	CountForRun(ctx context.Context, runID uuid.UUID) (int, error)
-}
-
-// MintBroker is the credential-mint surface the API depends on (internal/broker).
-type MintBroker interface {
-	MintForGrant(ctx context.Context, caller *identity.Claims, grantID uuid.UUID) (broker.Minted, error)
-	RevokeRun(ctx context.Context, runID uuid.UUID) error
-}
-
-// RefRulesetVerifier answers whether GitHub itself confines the App's writes on
-// a repo to the run branch namespace. Satisfied by broker.GitHubMinter. It is a
-// SEPARATE, optional Config field rather than a method on MintBroker because it
-// is the only thing in the API layer that calls an external network service, and
-// the /setup/status checklist must degrade to "unknown" — never "fail" — when it
-// is absent or errors.
-type RefRulesetVerifier interface {
-	VerifyRefRuleset(ctx context.Context, repo string) (confined bool, detail string, err error)
-}
-
-// ImageBuilder builds a per-run sandbox image from a devcontainer repo. It is
-// target-agnostic (the parity rule): the concrete envbuilder implementation is
-// wired in wardynd behind the "docker" build tag, so the control-plane default
-// build carries zero target-specific code. Nil disables devcontainer builds.
-type ImageBuilder interface {
-	// BuildDevcontainer builds the devcontainer for repoURL@ref and returns the
-	// local image reference to run. outputTag is the deterministic per-run tag
-	// the result is committed under. logSink, when non-nil, receives build
-	// output lines as they happen (e.g. the wizard Build step's in-memory log);
-	// nil preserves the implementation's own default (wardynd's slog).
-	BuildDevcontainer(ctx context.Context, repoURL, ref, outputTag string, logSink io.Writer) (imageRef string, err error)
-	// BuildFromDevcontainerFiles builds an image from IN-MEMORY generated
-	// devcontainer files (relative path -> content, e.g.
-	// ".devcontainer/devcontainer.json") rather than a repo checkout, returning
-	// the local image reference. It drives the SAME hardened envbuilder path as
-	// BuildDevcontainer. Used for an onboarded workspace WITHOUT a wired
-	// devcontainer, where internal/workspacescan generates a minimal one from the
-	// detected profile. outputTag is the deterministic profile-hash-keyed tag
-	// the result is committed under. logSink: see BuildDevcontainer.
-	BuildFromDevcontainerFiles(ctx context.Context, files map[string]string, outputTag string, logSink io.Writer) (imageRef string, err error)
-	// FinalizeBase wraps an arbitrary USER-supplied base image (Bring Your Own
-	// Image) with Wardyn's runner tools + a cleared ENTRYPOINT, returning the
-	// runnable local image reference. No untrusted build, no registry push — just
-	// the trusted FROM+COPY finalize stage; the base is pulled only if absent, so
-	// a host-pre-pulled private image works. outputTag is the per-run tag.
-	// logSink: see BuildDevcontainer.
-	FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer) (imageRef string, err error)
-}
-
 // Config holds the API server's non-secret configuration and injected
 // collaborators. All interface fields except Runner are required; Runner may be
 // nil for headless API-only operation (runs stay PENDING with a clear message).
 type Config struct {
+	// SweeperLease, when set, gates the sweeps that must run on one replica (the
+	// run pause) to the elected leader and fences them by lease epoch. Nil means
+	// this process is the only one sweeping: every pass runs and no fence applies.
+	SweeperLease SweeperLease
+	// SweepHealth records each background sweep's ticks in the shared sweep_ticks
+	// record and reads them back for the sweep gauges and the substrate_health
+	// setup row. Nil records nothing and reports no sweep.
+	SweepHealth *sweephealth.Tracker
 	// Store is the abstract persistence seam (run/policy/grant/approval/audit
 	// CRUD + reads). The control plane talks to this instead of *pgxpool.Pool
 	// directly, so a future pure-Go backend can be swapped in. Defaults to a
@@ -171,6 +107,19 @@ type Config struct {
 	// spooling chain) the spool drain replays into. It must bypass the spool to
 	// avoid a re-spool loop / lock re-entry; a nil recorder disables the drain.
 	AuditDrainRecorder audit.Recorder
+	// AuditUnsealer opens the sealed personal fields of the audit rows the
+	// audit reads serve (WARDYN_AUDIT_SEAL, internal/audit/seal.go). Nil serves
+	// rows as stored.
+	AuditUnsealer audit.Unsealer
+	// AuditActorSubject is the actor a human caller is stored under on a row
+	// written outside the recorder chain (the retention drop's chained event
+	// and anchor): under WARDYN_AUDIT_SEAL=full the person's "subject:<id>".
+	// Nil stores the principal as it is.
+	AuditActorSubject func(ctx context.Context, principal string) (string, error)
+	// SubjectKeys is the per-subject key service; person erasure destroys a
+	// person's audit-seal key through it. Nil makes the audit_personal_fields
+	// scope unavailable.
+	SubjectKeys *subjectkey.Manager
 	// AuditSinkDrops, when set, reports per-sink audit-delivery drop counts for
 	// the wardyn_audit_sink_drops_total metric (cmd/wardynd wires it to the audit
 	// Fanout's DropsByName). Nil omits the metric — a deployment with no SIEM
@@ -209,6 +158,14 @@ type Config struct {
 	// reads to drop the admin-token form and the role-derivation caveat — can
 	// never overclaim.
 	SSOOnly bool
+	// GovernAdminRuns mirrors WARDYN_GOVERN_ADMIN_RUNS: an SSO admin's or an
+	// admin-role personal token's runs are governed like a member's (see
+	// runUngoverned in govern_admin.go). The admin token and local mode stay
+	// ungoverned either way.
+	GovernAdminRuns bool
+	// GovernAdminRunsExempt mirrors WARDYN_GOVERN_ADMIN_RUNS_EXEMPT: the lanes
+	// left ungoverned under the switch. The only value is "recording".
+	GovernAdminRunsExempt []string
 	// TrustDomain is surfaced in /healthz and used for run SPIFFE ids.
 	TrustDomain string
 	// DefaultPolicy is applied to runs created without an explicit policy_id.
@@ -374,17 +331,57 @@ type Config struct {
 	// the internal injection-resolve endpoint the proxy calls at startup. Nil
 	// disables both surfaces.
 	Secrets secretstore.Store
+	// KeyDomains resolves, lists and writes the key-domain assignments behind
+	// /key-domains (migration 0121). Nil answers 501.
+	KeyDomains *keydomain.Service
+	// KeyDomainKeys names, for each declared key domain, the key that holds it
+	// ("Transit key finance", "Key Vault key https://...") for the console's
+	// domains table. A domain missing here shows no key.
+	KeyDomainKeys map[string]string
+	// PrincipalKeys is WARDYN_PRINCIPAL_KEYS=on; /setup/status shows principal_keys.
+	PrincipalKeys bool
 	// MaskRegistry, when non-nil, is used to mask verbatim secret values from
 	// PTY capture / asciicast uploads before they reach the RecordingStore.
 	// A nil registry disables masking (existing tests stay green).
 	MaskRegistry *secretmask.Registry
-	// ExecOutputTailOff is WARDYN_EXEC_OUTPUT_TAIL=off: no task_mode=exec run
+	// MaskManifests, when non-nil, keeps each dispatched run's masking
+	// manifest in Postgres and gates the five doors that relay or persist a
+	// run's output on it (mask_manifest.go): a run whose corpus it cannot prove
+	// complete is refused instead of passed through. Nil keeps no manifests
+	// and gates nothing, as a nil MaskRegistry masks nothing.
+	MaskManifests *maskmanifest.Manifests
+	// HA is WARDYN_HA: several replicas serve this database. It adds the three
+	// high-availability rows to /setup/status (setup_checks_ha.go); false adds none.
+	HA bool
+	// MaskSync reports whether this replica's copy of the shared masking
+	// registry is current (the mask_registry_shared row). Read only when HA is set.
+	MaskSync MaskSyncProbe
+	// LiveBus, when non-nil, carries the notices replicas send each other over Postgres NOTIFY:
+	// run lifecycle events, a kill for the replica creating the run's sandbox, and the end of an
+	// attach lease (live_bus.go). Nil keeps each replica to its own process, as before.
+	LiveBus *livebus.Bus
+	// ADORunPATs, when non-nil, keeps each `minted_pat` run's current token in Postgres so every
+	// replica serves the one any replica created (ado_run_pat_cache.go). Nil keeps it in this
+	// process.
+	ADORunPATs *adorunpat.Store
+	// ExecOutputTailOff is WARDYN_EXEC_OUTPUT_TAIL=off: no non-interactive run
 	// keeps an output tail for GET /runs/{id}/output (run_output.go).
 	ExecOutputTailOff bool
+	// RunOutputTailBytes is WARDYN_RUN_OUTPUT_TAIL_BYTES: each run's tail size
+	// and the cap on ?tail=. Zero defaults to defaultRunOutputTailBytes in New.
+	RunOutputTailBytes int
 	// ExecOutputTailTTL is WARDYN_EXEC_OUTPUT_TAIL_TTL: how long a run's output
 	// tail is kept after its last output. Zero defaults to
 	// defaultExecOutputTailTTL in New.
 	ExecOutputTailTTL time.Duration
+	// RunOutputPersistOff is WARDYN_RUN_OUTPUT_PERSIST=off: the final tail stays
+	// in memory only and nothing reaches run_outputs (run_output_final.go). A
+	// store that keeps no run outputs behaves the same.
+	RunOutputPersistOff bool
+	// RunOutputRetention is WARDYN_RUN_OUTPUT_RETENTION_DAYS as a duration: final
+	// rows older than it are deleted by the retention sweeper. Zero keeps them
+	// forever.
+	RunOutputRetention time.Duration
 	// ADOEntra resolves the Azure DevOps Entra app registration the per-user
 	// sign-in runs against (see ado_entra.go). Nil — the default — means this
 	// deployment offers no Azure DevOps sign-in and both of its routes refuse.
@@ -395,8 +392,18 @@ type Config struct {
 	// first, so a token created through a row an admin has since disabled can
 	// still be revoked (ado_run_pat_sweep.go). Nil: the revoke uses ADOEntra.
 	ADOEntraByRow func(ctx context.Context, rowID string) (ADOEntraConfig, bool, error)
+	// AzureFoundryEntra resolves the Entra application an azure_foundry provider
+	// row signs people in against, by the row's uid (azure_foundry_entra.go). It
+	// answers found=false for a uid that is not an azure_foundry row. The
+	// application is always the console's own sign-in application, so a
+	// deployment without Entra console login answers an unusable configuration
+	// and both legs refuse. Nil: no Azure sign-in is offered.
+	AzureFoundryEntra func(ctx context.Context, rowUID string) (ADOEntraConfig, bool, error)
 	// ADOLoginFacts is the console's own OIDC client, tenant and whether it holds a secret (S1; nil: none).
 	ADOLoginFacts func() (clientID, tenantID string, hasSecret bool)
+	// HostResolver is how the model-provider write boundary resolves an azure_foundry endpoint host for its
+	// private-address advisory. Nil: the system resolver, bounded to three seconds.
+	HostResolver func(host string) ([]net.IP, error)
 	// AuditCoalesceWindow folds IDENTICAL consecutive auth.fail audit rows —
 	// same boundary, reason, path and peer — into the first row plus one summary
 	// row carrying count/first_seen/last_seen (env WARDYN_AUDIT_COALESCE_WINDOW,
@@ -410,6 +417,15 @@ type Config struct {
 	// window folds the device routes' failure rows (device_audit_bounds.go).
 	AuditCoalesceWindow time.Duration
 	HostCapacityConfig
+	// MaxConcurrentRuns caps non-terminal runs across the whole deployment, every
+	// replica and every creation door (env WARDYN_MAX_CONCURRENT_RUNS); 0 or less
+	// is unlimited. Past it every door answers 422 run_quota (createRun); POST /runs
+	// refuses before minting and audits nothing for it, bar a create that loses
+	// the race at the cap, which keeps its identity.mint row.
+	MaxConcurrentRuns int
+	// PreflightRatePerMin is WARDYN_PREFLIGHT_RATE_PER_MIN: the per-person
+	// POST /runs/preflight rate (burst 5). 0 turns the limit off.
+	PreflightRatePerMin int
 	// Now is overridable in tests; defaults to time.Now.
 	Now func() time.Time
 	// OrgFederation is the hybrid audit forwarder's status (cmd/wardynd's
@@ -439,7 +455,11 @@ type Config struct {
 	SecretStoreExternal string
 	// SecretKeyService: the key service wrapping every stored data key ("Vault Transit at host"), or "" for the local key; set, /setup/status shows kek_service.
 	SecretKeyService string
-	// PlatformKeySeparate: WARDYN_PLATFORM_KEY_FILE gives the boot keys their own local key; false in local mode, /setup/status shows platform_shared (§2.13 c).
+	// KEKRequired: WARDYN_KEK_REQUIRED; /setup/status shows kek_required_unmet while neither a key service nor an external store holds the credentials.
+	KEKRequired bool
+	// PlatformKeySeparate: the boot keys have a key of their own: WARDYN_PLATFORM_KEY_FILE in local mode only
+	// (under a key service the file counts for nothing), the platform key (and identity) of the key service
+	// otherwise. False shows platform_split as a warning (§2.13 c).
 	PlatformKeySeparate bool
 	// LocalLoopback reports whether the HTTP listen address binds only loopback.
 	// It feeds SetupAuth.LocalLoopback so the wizard can explain the local-mode
@@ -512,6 +532,9 @@ type Config struct {
 	// BasePath is WARDYN_BASE_PATH ("" = the host root): the prefix Handler
 	// mounts every console route under (base_path.go).
 	BasePath string
+	// SCIM, when non-nil, mounts the SCIM 2.0 Users routes under /scim/v2 (scim_users.go): the way
+	// an identity provider suspends and reactivates a person. nil (default) mounts nothing.
+	SCIM *SCIMConfig
 	// ScanAIAdvisor, when non-nil, enables the ADVISORY AI workspace-scan fallback
 	// (internal/workspacescan/ai.go): after the deterministic DeriveProfile, when
 	// the profile is low-confidence or left unrecognized samples (ShouldAdvise),
@@ -551,6 +574,20 @@ type Config struct {
 	// same posture production does rather than an accidental zero-tolerance
 	// TTL that fails every override.
 	SSHRoleTTL time.Duration
+	// APITokenMaxTTL is WARDYN_API_TOKEN_MAX_TTL: the longest lifetime a newly
+	// minted API token may have. Zero (the default) means no cap. A mint that
+	// asks for no TTL gets this one; a mint that asks for more is clamped to it.
+	// It never touches a token already minted.
+	APITokenMaxTTL time.Duration
+	// RoleStampTTL is WARDYN_ROLE_STAMP_TTL: the oldest an API token's role and
+	// group stamp (api_tokens.identity_stamped_at) may be before apiTokenAuth
+	// refuses it until its owner signs in again. Zero, the default, is off: no
+	// token is refused for the age of its stamp.
+	RoleStampTTL time.Duration
+	// GovernanceChangeTTL is WARDYN_GOVERNANCE_CHANGE_TTL: how long a governance change held for a
+	// second human (WARDYN_GOVERNANCE_SECOND_HUMAN) waits before it expires. Zero means the 72h
+	// default.
+	GovernanceChangeTTL time.Duration
 	// UIListenAddr is WARDYN_UI_SANDBOX_LISTEN: the address the UI-sandbox
 	// gateway binds (e.g. ":8081"). Empty = off = no listener, no new surface,
 	// mirroring SSHListenAddr. It MUST NOT equal the console's -listen: relayed
@@ -612,6 +649,8 @@ type Server struct {
 	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is
 	// ready to use.
 	metrics metrics
+	// fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).
+	fleet fleetSnapshot
 	// capRowsScanned counts capability-grant rows compared inside capBatch (see
 	// capabilities.go). It is INSTRUMENTATION, read by nothing on any request
 	// path: the per-request cost of the capability seam is chosen partly by the
@@ -620,11 +659,11 @@ type Server struct {
 	// capability_batch_test.go's growth law reads it. One atomic add per row
 	// already being compared. Zero value is ready to use.
 	capRowsScanned atomic.Int64
-	// auditChainSweep admits ONE verify sweep at a time (handleVerifyAuditChain).
-	// The sweep re-hashes an unprunable table, so concurrent GETs would multiply
-	// one operator action into N full passes each holding a pool connection.
-	// Zero value is ready to use.
-	auditChainSweep sync.Mutex
+	// locks is the in-process fallback for the cross-replica locks (locks.go).
+	// The audit chain verify sweep, the site-config and capability-enforcement
+	// writers, the per-run operation lock and the two refresh single-flights
+	// all take theirs there. Zero value is ready to use.
+	locks lockState
 	// lastTouch debounces the decision-ingest TouchRun UPDATEs per run (see
 	// shouldTouch in internal.go). Zero value is ready to use.
 	lastTouchMu sync.Mutex
@@ -640,9 +679,31 @@ type Server struct {
 	// per-server shape as keepaliveEvery above: a test drives a dead-peer holder
 	// on a millisecond clock instead of the real 30s budget.
 	pingEvery time.Duration
+	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed
+	// output pause for THIS server only (tests).
+	pauseLimit time.Duration
+	// attachPrepare overrides attachPrepareTimeout for THIS server only (tests):
+	// the bound on one Runner.Attach.
+	attachPrepare time.Duration
+	// maskBeat overrides maskCheckEvery for THIS server only (tests): how often
+	// an in-flight consumer re-reads its run's fence.
+	maskBeat time.Duration
+	// runOutputDrainWaitOverride and runOutputRetryBaseOverride shrink the
+	// output finaliser's drain barrier and retry backoff for a test; zero uses
+	// runOutputDrainWait and runOutputRetryBase (run_output_final.go).
+	runOutputDrainWaitOverride, runOutputRetryBaseOverride time.Duration
+	// runOutputRecoverWaitOverride shrinks runOutputRecoverWait for a test.
+	runOutputRecoverWaitOverride time.Duration
+	// paneSnapshotTimeoutOverride shrinks the pane snapshot's bound for a test;
+	// zero uses paneSnapshotTimeout (run_output_snapshot.go).
+	paneSnapshotTimeoutOverride time.Duration
 	// refRuleset caches the ONE outbound GitHub call the setup checklist makes,
 	// so polling /setup/status (which the wizard does) cannot turn into a
 	// per-poll API call or a rate-limit. Zero value is ready to use.
+	// substrateProbe is this replica's cached probe of the runner's substrate,
+	// read by /metrics and /setup/status (substrate_health.go).
+	substrateProbe substrateProbeCache
+
 	refRulesetMu   sync.Mutex
 	refRulesetAt   time.Time
 	refRulesetRow  SetupCheck
@@ -657,28 +718,6 @@ type Server struct {
 	// builds tracks per-workspace image builds (the wizard's Build step).
 	// Zero value is ready to use.
 	builds buildTracker
-	// siteConfigMu serializes the single site-config document's four
-	// read-modify-write writers (PUT /site-config, PUT/DELETE/POST-adopt
-	// /integrations/{id}) — an unconditional Postgres upsert (store.go's
-	// PutSiteConfig) with no CAS, so two overlapping RMWs on one process can
-	// otherwise silently erase each other's write (SEAM-1: a hand-authored
-	// integration row, a default_for:[agent_runs] mark, or the just-saved
-	// corp proxy/redirect config). Correct because replicas>1 is refused by
-	// construction (deployment.yaml) — a single in-process mutex covers every
-	// writer that can ever exist. Zero value is ready to use. ponytail:
-	// promote to a PG advisory lock (gt_rotator.go's pattern) if
-	// allowMultiReplica ever becomes real.
-	siteConfigMu sync.Mutex
-	// capEnforcementMu is siteConfigMu's sibling for the OTHER whole-document
-	// replace this package added If-Match/ETag optimistic concurrency to
-	// (etag.go): PUT /permissions/enforcement reads the current enforcement
-	// map to check If-Match against, then writes the new one, and this mutex
-	// is what keeps that check-then-write atomic against a second overlapping
-	// PUT on the same process — same reasoning as siteConfigMu above (single
-	// replica by construction), just a second lock because the two documents
-	// live in different tables and a writer on one must never block a writer
-	// on the other. Zero value is ready to use.
-	capEnforcementMu sync.Mutex
 	// attachHolders tracks who currently holds each run's SHARED tmux PTY, so a
 	// second client can be admitted read-only instead of silently competing for
 	// the same terminal (see attach_holder.go). Process-local like sshSessions
@@ -686,9 +725,13 @@ type Server struct {
 	// refused by construction (deployment.yaml). Zero value is ready to use.
 	attachHolders attachHolderRegistry
 	// creates lets a kill cancel a STARTING run's CreateSandbox (runs_create_cancel.go).
-	creates   inflightCreates
-	runEvents runEventHub // each run's lifecycle event ring (run_events.go)
-	// execOutputs holds each task_mode=exec run's output tail (run_output.go).
+	creates inflightCreates
+	// replica is this server's identity when no LiveBus names one (replicaName).
+	replica         string
+	replicaOnce     sync.Once
+	leaseKeeperOnce sync.Once   // starts attachLeaseKeeper (attach_lease.go)
+	runEvents       runEventHub // each run's lifecycle event ring (run_events.go)
+	// execOutputs holds each non-interactive run's output tail (run_output.go).
 	execOutputs execOutputTails
 	// uiConns counts concurrent UI-gateway relay connections per run, enforcing
 	// maxUIConnsPerRun (uigateway.go) — each one is a live socat exec in the
@@ -729,16 +772,23 @@ type Server struct {
 	// dirLimiter rate-bounds GET /access/directory/search PER PRINCIPAL — it is
 	// hit once per keystroke, and each miss is an upstream Graph call
 	// (directory_search.go). Zero value is ready to use.
-	dirLimiter       principalLimiter
+	dirLimiter principalLimiter
+	// preflightLimiter rate-bounds POST /runs/preflight per person
+	// (preflight.go); nil when Config.PreflightRatePerMin is 0 (off).
+	preflightLimiter *principalLimiter
 	deviceRouteState // the device routes' process state (server_devices.go)
+	scimState        // the SCIM routes' rate limiters (scim_auth.go)
 	runLeaseState    // the run lease sweep's process state (run_lease_server.go)
 	// pause is the pause sweep's process-local state (run_pause.go).
 	pause pauseClocks
-	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
-	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
-	// that encloses re-read -> expiry check -> CreateToken -> Put, so two
-	// dispatches of the same principal cannot both redeem one rotating refresh
-	// token (the second re-reads inside the lock and finds it already renewed);
+	// activity is the CPU signal's last read, for the idle detection row (run_activity.go).
+	activity activitySignal
+	// ssoRefreshMu guards ssoRefreshSpent, which the control-plane AWS SSO
+	// refresher owns (awssso_refresh.go). The refresh is single-flight per owner
+	// through a cross-replica lock (locks.go) that encloses re-read -> expiry
+	// check -> CreateToken -> Put, so two dispatches of the same principal, on
+	// this or another replica, cannot both redeem one rotating refresh token
+	// (the second re-reads inside the lock and finds it already renewed).
 	// ssoRefreshSpent records the fingerprints of refresh tokens the OIDC
 	// endpoint has already told us are gone, keyed to the TOKEN rather than the
 	// credential, so a later capture is never pre-marked dead. Process-local
@@ -751,13 +801,7 @@ type Server struct {
 	// ponytail: ssoRefreshSpent grows one small entry per spent token per daemon
 	// lifetime — bound it only if that ever stops being negligible.
 	ssoRefreshMu    sync.Mutex
-	ssoRefreshLocks map[string]*sync.Mutex
 	ssoRefreshSpent map[string]bool
-	// adoEntra is the per-owner single-flight registry the Azure DevOps
-	// sign-in's redemption takes before it redeems a rotating refresh token
-	// (see ado_entra_store.go). Process-local for the same reason as the locks
-	// above, and its zero value is ready to use.
-	adoEntra adoEntraFlight
 	// adoEntraTokens reuses a minted Azure DevOps access token across the
 	// per-host grants of one run (injection_ado.go), so a sidecar's boot does
 	// not rotate one person's refresh token once per host.
@@ -804,6 +848,9 @@ func New(cfg Config) *Server {
 	if cfg.UISessionTTL <= 0 {
 		cfg.UISessionTTL = defaultUISessionTTL
 	}
+	if cfg.RunOutputTailBytes <= 0 {
+		cfg.RunOutputTailBytes = defaultRunOutputTailBytes
+	}
 	if cfg.ExecOutputTailTTL <= 0 {
 		cfg.ExecOutputTailTTL = defaultExecOutputTailTTL
 	}
@@ -816,7 +863,12 @@ func New(cfg Config) *Server {
 			ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
 		},
 	}
+	s.scimState = newSCIMState()
+	if cfg.PreflightRatePerMin > 0 {
+		s.preflightLimiter = &principalLimiter{rate: float64(cfg.PreflightRatePerMin) / 60, burst: preflightBurst, max: preflightLimiterMaxPeople}
+	}
 	s.router = s.routes()
+	s.registerLiveBus()
 	// drain the durable audit-fallback spool back into the store once it
 	// recovers, so a PG outage no longer leaves spooled events permanently invisible
 	// to /audit and `wardyn audit`. Uses BaseCtx (daemon lifetime) so it survives

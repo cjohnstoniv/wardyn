@@ -12,19 +12,18 @@
 #   - System gitconfig wires the credential helper GLOBALLY (all hosts).
 #
 # LLM BROKERING NOTE:
-#   Codex CLI reads OPENAI_API_KEY from the environment. Because the Wardyn
-#   sandbox env must NOT contain secrets (invariant 1), the recommended path is:
-#     1. Create an api_key CredentialGrant for the run with host=api.openai.com.
-#     2. The proxy mints the key at startup and injects it via an InjectionRule.
-#     3. Configure codex to route through the proxy (HTTP_PROXY env is set by
-#        dispatch; Codex honours it for plain HTTP; for HTTPS the CONNECT tunnel
-#        passes through and the proxy injects credentials on plain-HTTP legs only).
-#   The openai LLM route (/wardyn/llm/openai/<rest>) SHIPS: dispatch points
-#   OPENAI_BASE_URL at it for every non-subscription codex-cli run
-#   (runs_dispatch_llm.go), and the proxy serves it in local_routes.go —
-#   no relay, no key in the sandbox.
-#   This image does NOT set OPENAI_API_KEY — the absence of the key causes codex
-#   to fail closed if no grant is configured, which is the correct default.
+#   The Wardyn sandbox env must NOT contain secrets (invariant 1), so the real
+#   key never reaches it: the proxy mints it at startup and injects it on the
+#   brokered openai LLM route (/wardyn/llm/openai/<rest>, local_routes.go).
+#   Codex 0.149.1 reads neither OPENAI_BASE_URL nor OPENAI_API_KEY. Dispatch
+#   (runs_dispatch_provider.go) sets WARDYN_CODEX_BASE_URL, the route plus the
+#   path its upstream needs, and CODEX_API_KEY, the inert sentinel
+#   `wardyn-proxy-injected`; agent-run's prepare_codex_config writes the first
+#   into config.toml as `openai_base_url` and logs the sentinel in for the
+#   interactive tool, so the sandbox holds only the sentinel. OPENAI_BASE_URL
+#   and OPENAI_API_KEY are still set, for an operator image with an older codex.
+#   This image sets none of them: with no route configured codex has none to
+#   reach, which is the correct default.
 
 # ── Stage 1: Go builder ───────────────────────────────────────────────────────
 # --platform=$BUILDPLATFORM: runs on the BUILDER's arch and cross-compiles to
@@ -200,6 +199,9 @@ COPY --from=builder /out/wardyn-scan       /usr/local/bin/wardyn-scan
 
 # agent-run launcher.
 # agent-run-lib.sh: functions shared with every other agent image's agent-run.
+# tmux config for the persistent attach session: no status bar (clean terminal,
+# no xterm.js line-drawing artifacts), truecolor, tmux-owned mouse wheel, large scrollback.
+COPY deploy/images/common/tmux.conf /etc/tmux.conf
 COPY deploy/images/common/agent-run-lib.sh /usr/local/bin/agent-run-lib.sh
 COPY deploy/images/codex-cli/agent-run /usr/local/bin/agent-run
 # Interactive attach shell sources this: waits for the workspace clone to finish +

@@ -23,13 +23,16 @@
 //   - workspaces (/api/v1/workspaces):   CreateWorkspace, GetWorkspace, ListWorkspaces,
 //     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
-//   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents
+//   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
+//     ExportAuditPartition, AuditRetention, DropAuditPartition
 //   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, ListSecretsScoped,
 //     ListSecretsScopedPage, SetSecret, DeleteSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives
 //   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
-//   - governance (/api/v1/governance):   GetGovernance, ApplyGovernance
+//   - governance (/api/v1/governance):   GetGovernance, ApplyGovernance, ApplyGovernanceResult
+//   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
+//     ApproveGovernanceChange, RejectGovernanceChange
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
 //   - identity (/api/v1/me):             Me — and, on the same prefix, ListSSHKeys/
 //     ListSSHKeysPage/AddSSHKey/DeleteSSHKey (/api/v1/me/ssh-keys). The rest of
@@ -37,6 +40,7 @@
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
 //   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDeviceEnrolmentTokens, RevokeDeviceEnrolmentToken, ListDevices, RevokeDevice
+//   - people (/api/v1/people):           ListPeople, and ErasePerson (a person's retained records, by scope, 0.8.6); the other writes below stay unwrapped
 //
 // NOT covered — drive these with the CLI or raw HTTP. This half is a CENSUS of
 // every registered route family the SDK does not wrap, not a list of
@@ -45,11 +49,15 @@
 // list of what it wraps and what it does not" was exact about neither.
 //
 //   - /api/v1/user-types     — the org's user types (0.8)
+//   - /api/v1/key-domains    — which declared key domain wraps a person's next principal key (0.8.6). Security tier
+//   - /api/v1/approval-notify — each approval notification channel's delivery health (0.8.6).
+//     Security tier, and read by the console's Settings card rather than by tooling
 //   - /api/v1/permissions    — capability grants and per-kind enforcement (0.7)
 //   - /api/v1/access         — directory search and group->role mappings (0.7)
 //   - /api/v1/tokens         — admin-tier API tokens (0.7); /api/v1/me/tokens is the
 //     self-service half, also unwrapped
-//   - /api/v1/people         — erasing a person's stored credentials (0.8, offboarding)
+//   - /api/v1/people         — the writes: creating a person, erasing their stored credentials (0.8, offboarding)
+//   - /api/v1/scim           — the Settings SCIM card's read-only status (0.8.6); the SCIM server itself is /scim/v2
 //   - /api/v1/workspace-providers — the org's git-provider policy (allowed base
 //     URLs, credential lanes) and storage ceilings (0.7.2). Admin-only, and
 //     authored through the console's providers page rather than by tooling
@@ -72,8 +80,15 @@
 //     reason the SSO leg above is — it is a browser redirect dance whose whole
 //     point is a human at a keyboard consenting, and it binds to a browser
 //     session an SDK caller does not have.
+//   - /api/v1/model-providers-entra — the per-row Azure Foundry sign-in door (0.8.6):
+//     a browser redirect dance whose callback is the /api/v1/scm one above.
+//     Unwrapped for the same reason.
 //   - the attach lane under /api/v1/runs/{id} — attach, attach/ticket,
 //     attach/holder, attach/takeover, resources. A WebSocket and its ticket.
+//   - /scim/v2/Users, /scim/v2/Users/{id}, /scim/v2/Groups, /scim/v2/Groups/{id} — the
+//     identity provider's SCIM connector (0.8.6): suspend and reactivate a person, and
+//     remove one from a group. Authenticated by its own bearer
+//     (WARDYN_SCIM_TOKEN), never by an operator's credential, so no SDK caller holds it.
 //   - /api/v1/branding       — console branding (#1125): the sign-in page's anonymous
 //     read and logo, and the Admin view Branding card's save; a console surface
 //   - /metrics, /readyz      — the operator's scrape and readiness probes
@@ -556,6 +571,10 @@ func (c *Client) RecordWorkspaceTask(ctx context.Context, wsID uuid.UUID, taskKe
 // broke JSON decoding (the original finding).
 const maxErrBody = 2048
 
+// maxPendingErrBody bounds the error body doPending reads: a 409 governance_change_pending carries
+// the held change, payload and diff included, which can pass maxErrBody.
+const maxPendingErrBody = 1 << 20
+
 // newRequest builds an authenticated request against the control plane. Every
 // method routes through it, so the auth/principal headers have ONE owner (the
 // raw-stream methods must not hand-copy them).
@@ -692,30 +711,51 @@ func (c *Client) GetRecording(ctx context.Context, runID uuid.UUID, session ...s
 // body (if non-nil) is JSON-encoded as the request body.
 // out (if non-nil) is JSON-decoded from a 2xx response body.
 // Any non-2xx response is returned as *APIError.
+// A 202 whose body carries a pending_change (a governance write held for a
+// second approver) is returned as *PendingApprovalError and never decoded into
+// out: the write has NOT been applied, and out would otherwise read as a
+// zero-value success.
 // headerOut, if a non-nil *http.Header is passed (at most one — variadic only
 // to keep this optional for every existing zero-arg call site), receives the
 // raw response header on return, success or error alike — the sole mechanism
 // AuditEventsPage uses to surface X-Wardyn-Truncated to a caller.
 func (c *Client) do(ctx context.Context, method, path string, body, out any, headerOut ...*http.Header) error {
+	pending, err := c.doPending(ctx, method, path, body, out, headerOut...)
+	if err != nil {
+		return err
+	}
+	if pending != nil {
+		return &PendingApprovalError{Changes: []GovernanceChange{*pending}}
+	}
+	return nil
+}
+
+// doPending is do for a caller that handles a pending change itself: it returns
+// the pending change (out untouched) when the server answered 202 with a
+// pending_change body, or a 409 governance_change_pending carrying the held
+// change, and (nil, nil) for every other success. Detection keys
+// on the body's pending_change field, never on the 202 alone: KillRun,
+// RecordWorkspaceTask and the scan routes also answer 202 and decode into out.
+func (c *Client) doPending(ctx context.Context, method, path string, body, out any, headerOut ...*http.Header) (*GovernanceChange, error) {
 	// Encode the request body.
 	var reqBody io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("marshal request body: %w", err)
+			return nil, fmt.Errorf("marshal request body: %w", err)
 		}
 		reqBody = bytes.NewReader(b)
 	}
 
 	req, err := c.newRequest(ctx, method, path, reqBody, body != nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
-		return fmt.Errorf("http: %w", err)
+		return nil, fmt.Errorf("http: %w", err)
 	}
 	defer resp.Body.Close()
 	if len(headerOut) > 0 && headerOut[0] != nil {
@@ -723,18 +763,55 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any, hea
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
-		return NewAPIError(resp.StatusCode, raw)
+		// Read past maxErrBody so a held change's body parses whole; Body is capped after.
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxPendingErrBody))
+		apiErr := NewAPIError(resp.StatusCode, raw)
+		if len(apiErr.Body) > maxErrBody {
+			apiErr.Body = apiErr.Body[:maxErrBody]
+		}
+		// A 409 governance_change_pending that says the held change is this very proposal is
+		// still-pending, the same result the first proposal got, so a repeat apply carries on. A
+		// different held change stays the refusal: the proposal itself was never stored.
+		if resp.StatusCode == http.StatusConflict && apiErr.Reason == "governance_change_pending" {
+			var env struct {
+				PendingChange        *GovernanceChange `json:"pending_change"`
+				PendingChangeMatches bool              `json:"pending_change_matches"`
+			}
+			if json.Unmarshal(raw, &env) == nil && env.PendingChange != nil && env.PendingChangeMatches {
+				return env.PendingChange, nil
+			}
+		}
+		return nil, apiErr
 	}
 
 	// Success path: decode the FULL body (no 2 KiB cap). Streaming via
 	// json.NewDecoder avoids buffering the whole body up front; an empty body
 	// (e.g. 204) leaves out untouched and returns nil. io.EOF is the normal
 	// "no body" signal and is not an error here.
+	var src io.Reader = resp.Body
+	if resp.StatusCode == http.StatusAccepted {
+		// Only a 202 can be a pending change, and the probe needs the whole
+		// body, so this one status is buffered; its bodies are small.
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
+		var probe struct {
+			PendingChange json.RawMessage `json:"pending_change"`
+		}
+		if json.Unmarshal(raw, &probe) == nil && len(probe.PendingChange) > 0 && string(probe.PendingChange) != "null" {
+			var change GovernanceChange
+			if err := json.Unmarshal(probe.PendingChange, &change); err != nil {
+				return nil, fmt.Errorf("decode pending change: %w", err)
+			}
+			return &change, nil
+		}
+		src = bytes.NewReader(raw)
+	}
 	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil && err != io.EOF {
-			return fmt.Errorf("decode response: %w", err)
+		if err := json.NewDecoder(src).Decode(out); err != nil && err != io.EOF {
+			return nil, fmt.Errorf("decode response: %w", err)
 		}
 	}
-	return nil
+	return nil, nil
 }

@@ -143,9 +143,12 @@ func (s *Server) adoEntraAccessFor(ctx context.Context, cfg ADOEntraConfig, owne
 	// The put is under the redemption lock too, so a disconnect or an erase
 	// (eraseADOSignIn) that deletes the sign-in and forgets the cache under
 	// it cannot be followed by a token cached from the sign-in it deleted.
-	unlock := s.adoEntra.lock(owner, cfg.RowID)
+	lctx, unlock, err := s.lockADOSignInRedeem(ctx, owner, cfg.RowID)
+	if err != nil {
+		return ADOEntraAccess{}, err
+	}
 	defer unlock()
-	a, err := s.redeemADOEntraAccessLocked(ctx, cfg, owner, scopes)
+	a, err := s.redeemADOEntraAccessLocked(lctx, cfg, owner, scopes)
 	if err != nil {
 		return ADOEntraAccess{}, err
 	}
@@ -320,9 +323,8 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	// sentinel's rule: a crossed-wire grant must not put a live bearer in some
 	// other header.
 	value := formatInjectionValue(adoEntraInjectFormat, []byte(access.AccessToken))
-	if s.cfg.MaskRegistry != nil {
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(access.AccessToken))
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(value))
+	if s.refuseUnmasked(w, r, claims, "injection.resolve", []byte(access.AccessToken), []byte(value)) {
+		return true
 	}
 	data := map[string]any{
 		"purpose": "proxy-injection-ado", "grant_id": grantID, "jti": minted.JTI,

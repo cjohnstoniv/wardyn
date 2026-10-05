@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -101,6 +102,9 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, denied := s.cfg.OIDC.VerifySubjectToken(r, subjectToken, d.IdPClientID, s.isReservedPrincipal)
 	if denied != "" {
+		if denied == oidc.DenialIdentityDeactivated {
+			s.auditAuthFailedAs(r, oidcCallbackActor, authFailedIdentityDeactivated)
+		}
 		deny(http.StatusBadRequest, "invalid_grant", "", denied)
 		return
 	}

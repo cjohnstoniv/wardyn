@@ -75,6 +75,11 @@ type dispatchCeiling struct {
 	// authored on POLICIES (a refusal would break every stored policy the day an
 	// admin first writes a limit — internal/types/governance.go says so).
 	maxEphemeralDiskMiB int
+	// maxCPUMillis and maxMemoryMiB are GovernanceLimits.MaxCPUMillis/MaxMemoryMiB, 0 =
+	// unlimited, carried for the same reason: applySandboxSize is a dispatch phase and
+	// re-applies what create and preflight already bound, so a lane that resolved its
+	// spec some other way still cannot hand out more than the profile allows.
+	maxCPUMillis, maxMemoryMiB int
 	// adoEntra is what the autonomy gate RESOLVED about this run's per-person
 	// Azure DevOps lane at create (adoEntraGrade, runs_dispatch_ado_inject.go).
 	//
@@ -122,7 +127,8 @@ func ceilingForDispatch(c governanceCeiling, ado adoEntraGrade, bedrock bedrockC
 	}
 	return dispatchCeiling{
 		resolved: true, deny: c.Spec.DeniedDomains, profile: c.Profile.Name,
-		maxEphemeralDiskMiB: c.Limits.MaxEphemeralDiskMiB, adoEntra: ado, bedrock: bedrock, adoStanding: standing,
+		maxEphemeralDiskMiB: c.Limits.MaxEphemeralDiskMiB, maxCPUMillis: c.Limits.MaxCPUMillis,
+		maxMemoryMiB: c.Limits.MaxMemoryMiB, adoEntra: ado, bedrock: bedrock, adoStanding: standing,
 	}
 }
 
@@ -219,6 +225,21 @@ func applyEphemeralDisk(ctx context.Context, run types.AgentRun, policy *types.R
 	return false
 }
 
+// applySandboxSize is the dispatch half of the profile's CPU/memory maximums: the same
+// composer.CapResources create and preflight ran, applied once more to the policy the sandbox
+// is about to be built from. It writes a FRESH block (see CapResources), never the caller's.
+func applySandboxSize(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, c dispatchCeiling) {
+	capped, changed := composer.CapResources(policy.Resources,
+		types.GovernanceLimits{MaxCPUMillis: c.maxCPUMillis, MaxMemoryMiB: c.maxMemoryMiB})
+	if !changed {
+		return
+	}
+	policy.Resources = capped
+	slog.InfoContext(ctx, "wardynd: "+composer.WarnResourcesCapped,
+		slog.String("run_id", run.ID.String()), slog.Int("cpu_millis", capped.CPUMillis), slog.Int("memory_mib", capped.MemoryMiB),
+		slog.Int("profile_max_cpu_millis", c.maxCPUMillis), slog.Int("profile_max_memory_mib", c.maxMemoryMiB))
+}
+
 // ephemeralDiskFor is §6.3's precedence, as ONE expression with TWO callers that
 // must never disagree: applyEphemeralDisk above (what the sandbox gets) and
 // previewEphemeralDisk (what POST /runs/preflight reports). request/policy
@@ -254,11 +275,11 @@ func orgEphemeralOf(siteCfg types.SiteConfig) types.EphemeralProvider {
 	return types.EphemeralProvider{}
 }
 
-// boundEphemeralDisk is the ephemeral-disk half of resolveRunPolicy, called
+// boundResources is the sandbox-size half of resolveRunPolicy (ephemeral disk, CPU, memory), called
 // identically from its inline arm and its stored/default arm (the drift that
 // let one of them preview a size the other did not).
 //
-// Scope, per ceiling: the profile's MaxEphemeralDiskMiB binds an ASSIGNED MEMBER
+// Scope, per ceiling: the profile's MaxEphemeralDiskMiB, MaxCPUMillis and MaxMemoryMiB bind an ASSIGNED MEMBER
 // only — an operator short-circuits at effectiveCeiling's step 1 and an
 // unassigned member resolves no limits — so it is ZEROED for anyone else rather
 // than the block being skipped, because the ORG's numbers bind every caller.
@@ -271,18 +292,26 @@ func orgEphemeralOf(siteCfg types.SiteConfig) types.EphemeralProvider {
 // alone — written into a spec that goes on to launch it would reach the driver
 // as a POLICY-AUTHORED size and be refused at create on every overlay2-over-ext4
 // host, which is the whole reason runner.Resources carries DiskMiBFilled.
-func (s *Server) boundEphemeralDisk(ctx context.Context, r *http.Request, spec *types.RunPolicySpec,
+func (s *Server) boundResources(ctx context.Context, r *http.Request, spec *types.RunPolicySpec,
 	ceiling governanceCeiling, dryRun bool,
 ) []string {
 	profileMax := 0
-	if ceiling.Profile != nil && !s.isOperator(r.Context()) {
+	var limits types.GovernanceLimits
+	if ceiling.Profile != nil && !s.runUngoverned(r.Context()) {
 		profileMax = ceiling.Limits.MaxEphemeralDiskMiB
+		limits = types.GovernanceLimits{MaxCPUMillis: ceiling.Limits.MaxCPUMillis, MaxMemoryMiB: ceiling.Limits.MaxMemoryMiB}
 	}
+	// CPU and memory first, and on BOTH arms of both call sites: the member who sent no policy
+	// never reaches composer.Clamp (it would drop their workspace mounts), so this resource-only
+	// bound is the only thing between their ceiling's own size and their sandbox.
 	capped := false
+	if bounded, changed := composer.CapResources(spec.Resources, limits); changed {
+		spec.Resources, capped = bounded, true
+	}
 	if dryRun {
-		capped = s.previewEphemeralDisk(ctx, spec, profileMax)
+		capped = s.previewEphemeralDisk(ctx, spec, profileMax) || capped
 	} else {
-		capped = capEphemeralDiskPreview(spec, profileMax)
+		capped = capEphemeralDiskPreview(spec, profileMax) || capped
 	}
 	if capped {
 		return []string{composer.WarnResourcesCapped}

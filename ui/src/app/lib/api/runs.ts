@@ -8,6 +8,7 @@
 // that never touches runs drops this module from its chunk.
 import type {
   AdminProxyWindowResult,
+  RunCapacityResponse,
   AdminRestartResponse,
   AgentRun,
   AttachHolder,
@@ -325,11 +326,13 @@ export const runs = {
   // POST /api/v1/runs/preflight — a DRY-RUN of createRun's resolution + gating:
   // mints/persists/dispatches NOTHING, just returns the deterministic setup
   // checklist and the enforced confinement class (post floor + blast-radius
-  // raise). The wizard fires this when the operator enters Review, sending the
+  // raise). New Run fires this as the body settles, sending the
   // SAME body createRun would, so the checklist and any 4xx (unknown-secret 422,
-  // XOR, invalid spec) are the real launch verdicts. Advisory: callers render an
-  // error as a quiet "preflight unavailable" and never block Review.
-  async preflightRun(input: RunWireInput): Promise<PreflightResult> {
+  // XOR, invalid spec) are the real launch verdicts. Callers show an error as
+  // a danger alert beside Launch (the server's own sentence). A fresh 4xx, or a
+  // `missing` backend or llm_access row, holds Launch (use-launch.ts's
+  // preflightBlock); every other row is advisory.
+  async preflightRun(input: RunWireInput, signal?: AbortSignal): Promise<PreflightResult> {
     // LAUNCH_DEADLINE_MS, not the default: this runs the SAME resolution
     // (mounts, grants, the blast-radius raise) against the same store that
     // createRun's own dispatch does — createRun itself dropped this deadline
@@ -338,7 +341,7 @@ export const runs = {
     // bound on a real launch needs it on the dry run too.
     const res = await wfetch(
       "/runs/preflight",
-      { method: "POST", body: JSON.stringify(runWireBody(input)) },
+      { method: "POST", body: JSON.stringify(runWireBody(input)), signal },
       LAUNCH_DEADLINE_MS,
     );
     return asJson<PreflightResult>(res);
@@ -504,6 +507,14 @@ export const runs = {
     const res = await wfetch("/admin/runs/proxy-window", { method: "GET" });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
     return asJson<AdminProxyWindowResult>(res);
+  },
+
+  // GET /api/v1/admin/runs/capacity — security operator only. The fleet's
+  // configured reservations (not measurements), computed on request.
+  async getAdminRunCapacity(): Promise<RunCapacityResponse> {
+    const res = await wfetch("/admin/runs/capacity", { method: "GET" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return asJson<RunCapacityResponse>(res);
   },
 
   // POST /api/v1/admin/runs/restart { run_ids } — operator only. Restarts

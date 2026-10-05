@@ -51,7 +51,16 @@ func LoadPolicySpec(path string) (types.RunPolicySpec, error) {
 
 // validatePolicySpec enforces the minimal structural invariants a policy must
 // satisfy before any run can be scheduled against it.
-func validatePolicySpec(spec types.RunPolicySpec) error {
+func validatePolicySpec(spec types.RunPolicySpec) error { return validatePolicySpecMode(spec, true) }
+
+// validatePolicySpecLenient is validatePolicySpec for a spec built from stored
+// grant specs (record-mode synthesis): a git_pat scope is read leniently there,
+// as every read is, so a stored row with a stray key still loads.
+func validatePolicySpecLenient(spec types.RunPolicySpec) error {
+	return validatePolicySpecMode(spec, false)
+}
+
+func validatePolicySpecMode(spec types.RunPolicySpec, strict bool) error {
 	if spec.MinConfinementClass == "" {
 		return fmt.Errorf("min_confinement_class is required")
 	}
@@ -104,11 +113,17 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 		}
 	}
 	for i, g := range spec.EligibleGrants {
-		if err := validateEligibleGrant(i, g); err != nil {
+		if err := validateEligibleGrantMode(i, g, strict); err != nil {
 			return err
 		}
 	}
 	if err := validateGrantLaneExclusivity(spec.EligibleGrants); err != nil {
+		return err
+	}
+	if err := validatePATNarrowedDuplicates(spec.EligibleGrants); err != nil {
+		return err
+	}
+	if err := validatePATNarrowingSSHConflict(spec.EligibleGrants); err != nil {
 		return err
 	}
 	if err := validatePolicyWorkspaces(spec); err != nil {
@@ -123,7 +138,28 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 	if err := validatePushRules(spec.PushRules); err != nil {
 		return err
 	}
+	if err := validateResources(spec.Resources); err != nil {
+		return err
+	}
 	return validateADOCapabilities(spec.AzureDevOpsCapabilities)
+}
+
+// validateResources refuses a negative size. Zero means "the deployment's default" and every positive
+// size is the clamp's to cap, so a negative is the one value with no reading: it would otherwise
+// reach a cgroup limit as garbage.
+func validateResources(r *types.ResourceLimits) error {
+	if r == nil {
+		return nil
+	}
+	for _, f := range []struct {
+		name string
+		v    int
+	}{{"cpu_millis", r.CPUMillis}, {"memory_mib", r.MemoryMiB}, {"pids_limit", r.PidsLimit}, {"disk_mib", r.DiskMiB}} {
+		if f.v < 0 {
+			return fmt.Errorf("resources.%s: %d is not a size — use 0 for the deployment default", f.name, f.v)
+		}
+	}
+	return nil
 }
 
 // errADOCapabilityUnknown marks validatePolicySpec's refusal of an
@@ -151,6 +187,9 @@ func validateADOCapabilities(caps []adoscope.Capability) error {
 func specRefusalReason(err error, bucket string) string {
 	if errors.Is(err, errADOCapabilityUnknown) {
 		return reasonADOCapabilityUnknown
+	}
+	if errors.Is(err, errPATNarrowingSSHConflict) {
+		return reasonGitPATNarrowingSSHConflict
 	}
 	return bucket
 }
@@ -448,6 +487,12 @@ func validInjectionFormat(format string) error {
 // eligible_grants entry (extracted from validatePolicySpec to keep each
 // function under the gocyclo gate; behavior is identical).
 func validateEligibleGrant(i int, g types.GrantSpec) error {
+	return validateEligibleGrantMode(i, g, true)
+}
+
+// validateEligibleGrantMode is validateEligibleGrant with the git_pat scope
+// decode chosen: strict for a write, lenient for record-mode synthesis.
+func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 	switch g.Kind {
 	case types.GrantGitHubToken, types.GrantCloudSTS, types.GrantAPIKey, types.GrantGitPAT,
 		types.GrantSSHKey, types.GrantEnvSecret:
@@ -519,28 +564,10 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 			return fmt.Errorf("eligible_grants[%d]: api_key %w", i, err)
 		}
 	}
-	// A git_pat grant returns the stored PAT value to the git credential
-	// helper (unlike api_key, whose value never leaves the broker). Require
-	// host + secret_name and reject a reserved platform-internal secret at
-	// WRITE time — fail closed so a policy can never exfiltrate
-	// wardyn-signing-key/session-key as a git password. The broker sink
-	// (mintGitPAT) enforces the same invariant defense-in-depth.
-	//
-	// nameSinkReservedSecret, not sinkReservedSecret (#1048): this kind returns
-	// the raw value into the sandbox, same as env_secret/llm_inspection below,
-	// so it needs the WIDER guard that also refuses a wardyn-provider-*-key
-	// name — sinkReservedSecret alone let one through at write time (the
-	// broker's own reservedBrokerSecret still refused it at mint, so nothing
-	// leaked, but the run failed at clone time with no 400 up front). api_key
-	// stays on the narrower sinkReservedSecret above: the provider arm
-	// legitimately names a -key there.
+	// A git_pat grant's scope is checked by validatePATGrantScope (git_pat_scope.go).
 	if g.Kind == types.GrantGitPAT {
-		_, secretName, _, derr := gitPATScopeFields(g.Scope)
-		if derr != nil {
-			return fmt.Errorf("eligible_grants[%d]: git_pat scope invalid: %w", i, derr)
-		}
-		if nameSinkReservedSecret(secretName) {
-			return fmt.Errorf("eligible_grants[%d]: git_pat references reserved secret name %q", i, secretName)
+		if err := validatePATGrantScope(i, g, strict); err != nil {
+			return err
 		}
 	}
 	// An ssh_key grant materializes a RESIDENT private key (see GrantSSHKey).
@@ -659,10 +686,11 @@ func validateGrantLaneExclusivity(grants []types.GrantSpec) error {
 				"drop the ssh_key grant to keep the brokered, branch-confined lane, or drop the github_token grant to push with your own "+
 				"key, unbrokered and unbound", i, host)
 		case types.GrantGitPAT:
-			host, _, _, derr := gitPATScopeFields(g.Scope)
-			if derr != nil || !brokeredForgeHost(host) {
+			pat, derr := types.DecodeGitPATScope(g.Scope)
+			if derr != nil || !brokeredForgeHost(pat.Host) {
 				continue
 			}
+			host := pat.Host
 			return fmt.Errorf("eligible_grants[%d]: this policy declares BOTH a github_token grant and a git_pat grant for %q — "+
 				"a brokered forge is single-lane: the git-broker route is its only route by name, so every push it carries is parsed and "+
 				"confined to refs/heads/wardyn/<run-id>/, while a git_pat puts a resident token in the sandbox whose pushes are an opaque "+

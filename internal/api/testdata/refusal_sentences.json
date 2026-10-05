@@ -35,6 +35,36 @@
     "sentence": "\"run not found\""
   },
   {
+    "reason": "audit_export_partition_filter",
+    "target": "\"audit.export\"",
+    "sentence": "\"a partition export covers the whole partition; remove the other filter parameters\""
+  },
+  {
+    "reason": "audit_retention_digest_mismatch",
+    "target": "\"audit.retention\"",
+    "sentence": "\"the digest does not match the partition's own; export it again and recompute it\""
+  },
+  {
+    "reason": "audit_retention_inside_window",
+    "target": "\"audit.retention\"",
+    "sentence": "\"the partition is inside the retention window (or retention is set to forever)\""
+  },
+  {
+    "reason": "audit_retention_live_run",
+    "target": "\"audit.retention\"",
+    "sentence": "\"the partition holds audit rows of a run that is still live\""
+  },
+  {
+    "reason": "audit_retention_not_closed",
+    "target": "\"audit.retention\"",
+    "sentence": "\"the partition can still receive rows, so it cannot be dropped\""
+  },
+  {
+    "reason": "audit_retention_not_oldest",
+    "target": "\"audit.retention\"",
+    "sentence": "\"only the oldest audit partition can be dropped\""
+  },
+  {
     "reason": "byoi_user",
     "target": "\"runs.image\"",
     "sentence": "\"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image\""
@@ -130,6 +160,16 @@
     "sentence": "fmt.Sprintf(\"too many open event streams (max %d) — close one and retry\", maxRunEventStreams)"
   },
   {
+    "reason": "governance_overlay_unsatisfiable",
+    "target": "\"governance.ceiling\"",
+    "sentence": "u.Error()"
+  },
+  {
+    "reason": "governance_overlay_unsatisfiable",
+    "target": "target",
+    "sentence": "u.Error()"
+  },
+  {
     "reason": "governance_profile",
     "target": "\"runs.agent\"",
     "sentence": "fmt.Sprintf(\"%s is not supported under your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), which routes an \" + \"unattended run's tool calls to a Wardyn approval, and this agent has no external tool-approval contract. Launch a different agent, or launch interactively.\", autonomyAgentLabel(req.Agent), name, level, bound)"
@@ -142,7 +182,7 @@
   {
     "reason": "governance_profile",
     "target": "\"runs.attach\"",
-    "sentence": "fmt.Sprintf(\"attaching is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.\", name)"
+    "sentence": "fmt.Sprintf(\"attaching is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.\", p.Name)"
   },
   {
     "reason": "governance_profile",
@@ -205,6 +245,36 @@
     "sentence": "(audit only)"
   },
   {
+    "reason": "key_domain_ambiguous_membership",
+    "target": "keyDomainTarget(c)",
+    "sentence": "fmt.Sprintf(\"%d people last signed in with a group list that was cut short, as a Microsoft Entra group overage does, and have no assignment of their own, so once any group is assigned their next key would be refused: %s. \" + \"Assign each of them to one domain as a user first. Nothing was changed.\", n, who)"
+  },
+  {
+    "reason": "key_domain_ambiguous_membership",
+    "target": "keyDomainTarget(c)",
+    "sentence": "fmt.Sprintf(\"%d people last signed in with this group and another group assigned to a different domain, and have no assignment of their own, so their next key would be refused. \" + \"Assign each of them to one domain as a user first, or give both groups the same domain. Nothing was changed.\", n)"
+  },
+  {
+    "reason": "key_domain_ambiguous_membership",
+    "target": "keyDomainTarget(c)",
+    "sentence": "fmt.Sprintf(\"%s last signed in with a group list that was cut short, as a Microsoft Entra group overage does, and a group is assigned, so without their own assignment their next key would be refused. \" + \"Assign them to another domain instead of deleting it. Nothing was changed.\", c.Subject)"
+  },
+  {
+    "reason": "key_domain_unknown",
+    "target": "keyDomainTarget(c)",
+    "sentence": "fmt.Sprintf(\"The key domain %q is not declared in the deployment's key domains file, so nothing was changed. Declared: %s.\", c.Domain, declaredKeyDomains(svc))"
+  },
+  {
+    "reason": "kind.approver.reason",
+    "target": "govChangeTarget",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "mask_state_unavailable",
+    "target": "door",
+    "sentence": "maskStateSentence"
+  },
+  {
     "reason": "model_provider_unavailable",
     "target": "\"runs.model_provider\"",
     "sentence": "msg"
@@ -236,6 +306,11 @@
   },
   {
     "reason": "not_owner",
+    "target": "id.String()",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "not_owner",
     "target": "run.ID.String()",
     "sentence": "\"run not found\""
   },
@@ -250,6 +325,16 @@
     "sentence": "(audit only)"
   },
   {
+    "reason": "recording_governed",
+    "target": "\"workspaces.record\"",
+    "sentence": "recordingGovernedRefusal"
+  },
+  {
+    "reason": "role_stamp_stale",
+    "target": "\"api_token\"",
+    "sentence": "\"this token's role is out of date: its owner must sign in again to refresh it\" (registry)"
+  },
+  {
     "reason": "run_owner_only",
     "target": "run.ID.String()",
     "sentence": "\"only the person who started this run can open it interactively\" (registry)"
@@ -258,6 +343,11 @@
     "reason": "run_quota",
     "target": "\"runs.quota\"",
     "sentence": "fmt.Sprintf(\"too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.\", limit, ceiling.Profile.Name, active)"
+  },
+  {
+    "reason": "second_human_required",
+    "target": "govChangeTarget",
+    "sentence": "envGovernanceSecondHuman + \" is set: a second human must approve this — you proposed it, so someone else approves it (you may reject it)\""
   },
   {
     "reason": "second_human_required",
@@ -283,6 +373,11 @@
     "reason": "user_type_unknown",
     "target": "\"user_type\"",
     "sentence": "userTypeUnknownMsg"
+  },
+  {
+    "reason": "user_view_preview",
+    "target": "r.URL.Path",
+    "sentence": "userViewPreviewRefusal(viewed, stamped)"
   },
   {
     "reason": "user_view_type_deleted",

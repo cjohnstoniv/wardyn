@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -176,7 +177,13 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// upload racing a dispatch-time renewal of the same credential is serialised
 	// too, and two different people's uploads still never wait on each other.
 	// Held through the store so the check and the write are one critical section.
-	unlock := s.lockAWSSSOOwner(scope.owner)
+	lctx, unlock, lerr := s.lockAWSSSOOwner(r.Context(), scope.owner)
+	if lerr != nil {
+		slog.WarnContext(r.Context(), "wardynd: could not take the AWS SSO credential lock; refusing the capture", slog.Any("err", lerr))
+		s.refuseCapture(w, r, claims, http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg, &scope)
+		return
+	}
+	r = r.WithContext(lctx)
 	defer unlock()
 
 	// Once only. Even a correctly-bound blob must not be replaceable: the login
@@ -238,6 +245,9 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	if changed, err := s.storeProviderSignIn(r.Context(), stamp, scope, blob); changed {
 		s.refuseCapture(w, r, claims, http.StatusConflict, reasonCaptureProviderChanged, mpsCaptureChanged, &scope)
 		return
+	} else if db.LockRefused(err) {
+		s.refuseCapture(w, r, claims, http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg, &scope)
+		return
 	} else if err != nil {
 		// Audited like every other refusal on this route: the provenance is
 		// already stamped but NOTHING is persisted, so "the capture did not
@@ -262,9 +272,8 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// dispatch that actually selects this credential, so the global registration
 	// follows the SERVER's decision to use the credential rather than the
 	// sandbox's decision to name a string. Add is nil-safe.
-	s.cfg.MaskRegistry.Add(claims.RunID, []byte(blob.AccessToken))
-	if blob.RefreshToken != "" {
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(blob.RefreshToken))
+	if s.refuseUnmasked(w, r, claims, "credential.capture", []byte(blob.AccessToken), []byte(blob.RefreshToken)) {
+		return
 	}
 
 	// owner + credential_source say WHOSE credential landed, and

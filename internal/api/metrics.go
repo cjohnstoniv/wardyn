@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/notify"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -484,6 +486,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	var body bytes.Buffer
 	s.metrics.write(&body)
 	s.writeHealthGauges(r, &body)
+	s.writeFleetGauges(r, &body)
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	_, _ = w.Write(body.Bytes())
 }
@@ -527,10 +530,29 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 		fmt.Fprintf(w, "# HELP wardyn_org_federation_lag Local audit rows the organisation has not yet acknowledged (hybrid laptops only).\n"+
 			"# TYPE wardyn_org_federation_lag gauge\nwardyn_org_federation_lag %d\n", s.cfg.OrgFederation().Lag())
 	}
+	s.writePartitionsAhead(ctx, w)
 	s.writeSinkDrops(w)
+	writeApprovalNotify(w)
+	s.writeSubstrateGauges(ctx, w)
 	// The eBPF sensor's cumulative counts, moved off the anonymous
 	// /healthz onto this gated scrape where every other volume series lives.
 	s.writeEbpfGroundtruthCounters(ctx, w)
+}
+
+// writePartitionsAhead emits wardyn_audit_partitions_ahead: how many months past the current one already
+// have an audit partition. Omitted on a store with no partitions, and when the read fails (the store_up
+// gauge beside it already says the store is down).
+func (s *Server) writePartitionsAhead(ctx context.Context, w io.Writer) {
+	rs, ok := s.cfg.Store.(store.AuditRetention)
+	if !ok {
+		return
+	}
+	n, err := rs.AuditPartitionsAhead(ctx)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(w, "# HELP wardyn_audit_partitions_ahead Months past the current one that already have an audit partition. An audit write into a month with no partition fails and waits in the spool; /setup/status warns below 3.\n"+
+		"# TYPE wardyn_audit_partitions_ahead gauge\nwardyn_audit_partitions_ahead %d\n", n)
 }
 
 // writeSinkDrops emits the per-SIEM-sink delivery-drop counter: events a
@@ -552,6 +574,30 @@ func (s *Server) writeSinkDrops(w io.Writer) {
 		"# TYPE wardyn_audit_sink_drops_total counter\n")
 	for _, name := range names {
 		fmt.Fprintf(w, "wardyn_audit_sink_drops_total{sink=%q} %d\n", name, drops[name])
+	}
+}
+
+// writeApprovalNotify emits the two per-channel approval-notification counters: rows that went dead
+// (delivery gave up) and raises the per-run budget kept out of the outbox. Omitted entirely when
+// notifications are not configured; channel ids are the config's bounded [a-z0-9_-] ids. Every
+// configured channel gets a series, zero included, so an alert on rate() has something to read.
+func writeApprovalNotify(w io.Writer) {
+	channels := notify.Channels()
+	if len(channels) == 0 {
+		return
+	}
+	c := notify.Snapshot()
+	for _, m := range []struct {
+		name, help string
+		vals       map[string]int64
+	}{
+		{"wardyn_approval_notify_failed_total", "Approval notifications that went dead (retries exhausted, non-retryable failure, or unsent an hour after due), by channel.", c.Failed},
+		{"wardyn_approval_notify_suppressed_total", "Approval raises that enqueued no notification because the run exceeded its hourly budget, by channel.", c.Suppressed},
+	} {
+		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s counter\n", m.name, m.help, m.name)
+		for _, ch := range slices.Sorted(slices.Values(channels)) {
+			fmt.Fprintf(w, "%s{channel=%q} %d\n", m.name, ch, m.vals[ch])
+		}
 	}
 }
 

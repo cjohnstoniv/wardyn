@@ -232,6 +232,15 @@ const (
 	reasonGovernanceProfileNameConflict   = "governance_profile_name_conflict"   // a profile by that name already exists
 	reasonGovernanceProfileInUse          = "governance_profile_in_use"          // the profile is still assigned; delete its assignments first
 	reasonGovernanceAssignmentInvalid     = "governance_assignment_invalid"      // the assignment fails validation
+	// Composed profiles (migration 0125). The first three are write refusals. The fourth is the SAME
+	// string as authz's registered reason of that name: a 409 at a profile write that would leave a
+	// descendant with a policy nothing satisfies, and the 403 at every launch and live door when a
+	// composition cannot be applied (see adHocReasonLiterals["reasons.go:governance_overlay_unsatisfiable"]
+	// in refusal_test.go, and documentedDuplicateReasonValues).
+	reasonGovernanceOverlayInvalid       = "governance_overlay_invalid"       // the overlay names something its base does not permit, or does not decode
+	reasonGovernanceProfileCycle         = "governance_profile_cycle"         // the write would make a profile its own base
+	reasonGovernanceProfileDepth         = "governance_profile_depth"         // the write would put a profile more than three deep
+	reasonGovernanceOverlayUnsatisfiable = "governance_overlay_unsatisfiable" // nothing satisfies a profile and its base together
 	// reasonGovernancePreviewClaimsInvalid is shared by GET /governance/preview
 	// and the user-drive naming preview (user_drives_preview.go): both feed the
 	// same normalizeGovernancePreviewClaims validator over user_subjects/groups.
@@ -253,6 +262,7 @@ const (
 	reasonPersonEmailInvalid      = "person_email_invalid"      // email fails validation
 	reasonPersonCollision         = "person_collision"          // the principal or email collides with an existing person
 	reasonPersonEmailTaken        = "person_email_taken"        // another subject is already known by this email
+	reasonPeopleListParamInvalid  = "people_list_param_invalid" // GET /people: state or cursor is not one the endpoint accepts
 	// reasonPersonMintNoHuman / reasonAPITokenFromAPIToken are shared: minting a
 	// token needs a signed-in human, and neither an API token nor a delegated
 	// token may mint another — the SAME two shapes apitokens.go's own
@@ -270,6 +280,7 @@ const (
 	reasonAPITokenFromDelegatedToken = "api_token_from_delegated_token" // a delegated (portal) token cannot mint an API token
 	reasonAPITokenMemberModeMint     = "api_token_member_mode_mint"     // a member-mode session cannot mint a token that would outlive the view
 	reasonAPITokenNameInvalid        = "api_token_name_invalid"         // name exceeds the length cap or has a control character
+	reasonAPITokenTTLInvalid         = "api_token_ttl_invalid"          // ttl_seconds is negative or implausibly large
 	reasonAPITokenCapReached         = "api_token_cap_reached"          // the principal already holds the maximum number of live tokens
 	reasonSessionsRevokeParamInvalid = "sessions_revoke_param_invalid"  // the body must set exactly one of sub/all
 
@@ -377,4 +388,13 @@ const (
 	// many runs are still asking. Shared with userDriveWriteRefusal's OWN
 	// org-switch check (user_drives.go): the identical cause, one route apart.
 	driveRefusalDrivesDisabled = "drives_disabled"
+)
+
+// git_pat narrowing (runs_dispatch_pat_scope.go): a run is refused when a
+// narrowed git_pat grant's repos, access or api could not be enforced.
+const (
+	reasonGitPATNarrowingNeedsBroker     = "git_pat_narrowing_needs_broker"     // the PAT broker is off, so the PAT is resident and nothing narrows it
+	reasonGitPATNarrowingSSHConflict     = "git_pat_narrowing_ssh_conflict"     // a same-forge ssh_key is a second push path the broker cannot see
+	reasonGitPATNarrowingUnsupportedHost = "git_pat_narrowing_unsupported_host" // the host is served by a lane that ignores the narrowing axes
+	reasonGitPATAPIForgeDisabled         = "git_pat_api_forge_disabled"         // api: true on a forge whose API door is off on this deployment
 )

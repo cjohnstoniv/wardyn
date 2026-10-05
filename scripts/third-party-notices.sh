@@ -108,7 +108,9 @@ done < <( { cut -d, -f3 "$tmp/go.csv"; jq -r '.[][] | .license // empty' "$tmp/u
   echo "## Fonts"
   echo
   echo "The console bundles the Inter and JetBrains Mono typefaces (\`@fontsource/inter\`,"
-  echo "\`@fontsource/jetbrains-mono\`), both under the SIL Open Font License 1.1. The OFL"
+  echo "\`@fontsource/jetbrains-mono\`), both under the SIL Open Font License 1.1. The"
+  echo "terminal uses the full JetBrains Mono build from the \`jetbrains-mono\` package (the"
+  echo "font is OFL-1.1; the npm package that carries it declares MIT for its own packaging). The OFL"
   echo "text is in \`licenses/texts/common/OFL-1.1.txt\` and ships alongside the fonts in"
   echo "the built console. Reserved Font Names must not be reused by derived works."
   echo

@@ -56,16 +56,32 @@ const roleMappingCols = `id, value, role, COALESCE(user_type, ''), migrated_from
 // TestPG_RoleMappings_UpsertClearsMigratedFromMemberOnAdminFlip pins this
 // call.
 func (s PG) UpsertRoleMapping(ctx context.Context, m types.RoleMapping) (types.RoleMapping, error) {
+	var out types.RoleMapping
+	err := s.inTx(ctx, func(q Querier) error {
+		// The lock an approval of a held change to this value takes too.
+		if err := LockGovernanceTarget(ctx, q, "role_mapping", m.Value); err != nil {
+			return err
+		}
+		var err error
+		out, err = UpsertRoleMappingQ(ctx, q, m)
+		return err
+	})
+	return out, err
+}
+
+// UpsertRoleMappingQ is UpsertRoleMapping's statement on q (the doc above is its contract). A held
+// governance change applies through it inside the decision transaction.
+func UpsertRoleMappingQ(ctx context.Context, q Querier, m types.RoleMapping) (types.RoleMapping, error) {
 	if m.ID == uuid.Nil {
 		m.ID = uuid.New()
 	}
-	const q = `
+	const stmt = `
 		INSERT INTO role_mappings (id, value, role, user_type, created_by)
 		VALUES ($1,$2,$3,NULLIF($4,''),$5)
 		ON CONFLICT (value) DO UPDATE
 			SET role = EXCLUDED.role, user_type = EXCLUDED.user_type, migrated_from_member = false
 		RETURNING ` + roleMappingCols
-	saved, err := scanRoleMapping(s.Pool.QueryRow(ctx, q, m.ID, m.Value, m.Role, m.UserType, m.CreatedBy))
+	saved, err := scanRoleMapping(q.QueryRow(ctx, stmt, m.ID, m.Value, m.Role, m.UserType, m.CreatedBy))
 	if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == "23503" {
 		return types.RoleMapping{}, ErrNotFound
 	}
@@ -76,7 +92,12 @@ func (s PG) UpsertRoleMapping(ctx context.Context, m types.RoleMapping) (types.R
 // matched — admin-only surface, so there is no principal to scope the delete
 // to and no existence oracle to worry about, exactly DeleteCapabilityGrant.
 func (s PG) DeleteRoleMapping(ctx context.Context, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM role_mappings WHERE id = $1`, id)
+	return DeleteRoleMappingQ(ctx, s.Pool, id)
+}
+
+// DeleteRoleMappingQ is DeleteRoleMapping's statement on q.
+func DeleteRoleMappingQ(ctx context.Context, q Querier, id uuid.UUID) error {
+	tag, err := q.Exec(ctx, `DELETE FROM role_mappings WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("store: delete role mapping: %w", err)
 	}
@@ -91,8 +112,13 @@ func (s PG) DeleteRoleMapping(ctx context.Context, id uuid.UUID) error {
 // the whole table in one call; there is no per-caller scoping to filter on,
 // this is deployment-wide config.
 func (s PG) ListRoleMappings(ctx context.Context) ([]types.RoleMapping, error) {
-	const q = `SELECT ` + roleMappingCols + ` FROM role_mappings ORDER BY created_at`
-	return collect(ctx, s.Pool, "list", "role mappings", q, nil, scanRoleMapping)
+	return ListRoleMappingsQ(ctx, s.Pool)
+}
+
+// ListRoleMappingsQ is ListRoleMappings on q.
+func ListRoleMappingsQ(ctx context.Context, q Querier) ([]types.RoleMapping, error) {
+	const stmt = `SELECT ` + roleMappingCols + ` FROM role_mappings ORDER BY created_at`
+	return collect(ctx, q, "list", "role mappings", stmt, nil, scanRoleMapping)
 }
 
 func scanRoleMapping(row pgx.Row) (types.RoleMapping, error) {

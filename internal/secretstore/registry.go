@@ -45,10 +45,24 @@ type Deps struct {
 	// `-rewrap` opens a boot key only under the key a boot opens it under.
 	AdoptBootKeys bool
 	External      External
+	// PrincipalKeys is WARDYN_PRINCIPAL_KEYS=on: a Put of a person's credential
+	// seals its data key under that person's principal key (enc_version 3)
+	// instead of the root KEK. Boot keys and the operator namespace never do,
+	// and in store mode a Put is unaffected.
+	PrincipalKeys bool
+	// KeyDomains are the key domains WARDYN_KEY_DOMAINS_FILE declares, each
+	// proven at boot: the KEK a principal key in that domain is wrapped and
+	// opened under. Nil declares none, and every principal key is in the
+	// default domain (the credential KEK).
+	KeyDomains KeyDomains
 	// ExternalTimeout is WARDYN_SECRET_STORE_TIMEOUT, the bound on each call
 	// to External (0: its 5s default); a store-mode write is bounded at 6x it.
 	ExternalTimeout time.Duration
 }
+
+// KeyDomains maps each declared key domain to its KEK. Never holds "default",
+// which is the credential KEK.
+type KeyDomains map[string]kek.KEK
 
 // Constructor builds a Store from Deps.
 type Constructor func(Deps) (Store, error)

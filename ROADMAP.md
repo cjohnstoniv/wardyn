@@ -154,7 +154,9 @@ shipped behavior; none is scheduled.
   CHANGELOG.md's `[0.6.0]` entry) — which is authorization detail on top of
   those two roles, not a tenancy model, and 0.6 added per-user `wdn_` API
   tokens (personal, independently revocable — same entry). What's still
-  speculative, no design in the tree: SAML/SCIM provisioning, an
+  speculative, no design in the tree: SAML, SCIM provisioning of joiners and
+  movers (SCIM removes leavers only: suspend and purge, see
+  docs/OPERATIONS.md "Leavers and SCIM"), an
   organization/tenant structure, and CUSTOM roles beyond admin/member. The
   admin token and local mode remain the
   same shared credential they always were: always-admin, no per-human identity,

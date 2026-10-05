@@ -27,6 +27,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -84,9 +85,30 @@ type Config struct {
 	// enforcement: ClassSupport.NetworkPolicy stays false either way (see
 	// NetworkPolicyAcknowledged instead).
 	AckAmbientDefaultDeny bool
+	// SandboxPlacement is WARDYN_K8S_SANDBOX_PLACEMENT, the JSON form of Placement (placement.go):
+	// node selector, tolerations, affinity, PriorityClass, annotations and labels for the agent,
+	// proxy and canary pods. Empty places nothing. An invalid value refuses to boot.
+	SandboxPlacement string
+	// StartTimeout is WARDYN_SANDBOX_START_TIMEOUT: the absolute budget for a sandbox's proxy and agent
+	// pods to start. Zero means runner.DefaultSandboxStartTimeout.
+	StartTimeout time.Duration
+	// CapacityWait is WARDYN_SANDBOX_CAPACITY_WAIT: how long a pod the scheduler has no room for waits,
+	// on top of StartTimeout. Zero turns the wait off: such a pod fails at StartTimeout.
+	CapacityWait time.Duration
+	// RunMaxAge is WARDYN_RUN_MAX_AGE. When positive, both run pods get
+	// activeDeadlineSeconds = RunMaxAge + podDeadlineGrace, so a run whose control plane has
+	// gone away still fails its pods on a bounded schedule. Zero (the default) sets no deadline.
+	RunMaxAge time.Duration
+	// ReadNodes is WARDYN_K8S_READ_NODES: list the cluster's nodes (a ClusterRole the chart grants only
+	// under k8s.readNodes) so preflight and create can warn when no node a run may be placed on is large
+	// enough. Off by default: nodes are cluster-scoped and a shared-cluster tenant may not be granted them.
+	ReadNodes bool
 }
 
 func (c *Config) withDefaults() {
+	if c.StartTimeout <= 0 {
+		c.StartTimeout = runner.DefaultSandboxStartTimeout
+	}
 	if c.Namespace == "" {
 		c.Namespace = "default"
 	}
@@ -97,6 +119,10 @@ type Driver struct {
 	clientset  kubernetes.Interface
 	restConfig *rest.Config
 	cfg        Config
+	// placement is cfg.SandboxPlacement, parsed and validated once at construction.
+	placement Placement
+	// nodeCache is the last node list, shared by every fit check (fit_nodes.go).
+	nodeCache nodeCache
 
 	// apiserverHostPort is resolved once at construction from restConfig.Host
 	// — the egress canary's dial target.
@@ -121,6 +147,10 @@ type Driver struct {
 	// caller-supplied remotecommand.Executor. Nil in production.
 	execFactory func(podName, container string, cmd []string, stdin, tty bool) (remotecommand.Executor, error)
 
+	// metricsRead is the test seam readPodMetrics defers to when set: the real
+	// read is a raw GET that a fake clientset cannot serve. Nil in production.
+	metricsRead func(ctx context.Context, namespace, labelSelector string) ([]byte, error)
+
 	// execOutputs maps a sandbox ref to its SandboxSpec.ExecOutput (an
 	// io.Writer), which Exec streams the agent container's log into. The one
 	// in-memory state here: the buffer it feeds is in memory too, so a
@@ -129,6 +159,7 @@ type Driver struct {
 }
 
 var _ substrate.Substrate = (*Driver)(nil)
+var _ runner.ActivitySampler = (*Driver)(nil)
 
 // New constructs a Driver against the cluster client-go's standard config
 // loading resolves (in-cluster, else kubeconfig), running the boot-time
@@ -179,7 +210,11 @@ func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.C
 	if err != nil {
 		return nil, err
 	}
-	d := &Driver{clientset: cs, restConfig: restCfg, cfg: cfg, apiserverHostPort: hostPort}
+	placement, err := parsePlacement(cfg.SandboxPlacement)
+	if err != nil {
+		return nil, err
+	}
+	d := &Driver{clientset: cs, restConfig: restCfg, cfg: cfg, placement: placement, apiserverHostPort: hostPort}
 
 	verdict, cerr := d.runEgressCanary(ctx)
 	switch verdict {

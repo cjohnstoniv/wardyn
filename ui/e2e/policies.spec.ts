@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, mockMemberRole, mockSecurityAdminRole, navTo, navToRoute } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole, mockSecurityAdminRole, navTo, navToRoute } from "./fixtures";
 import { DRIVE_MEMBER } from "../src/app/lib/user-drives-copy";
-import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
+import { GIT_PAT_SCOPE, OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import type { RunPolicySpec } from "../src/app/lib/types";
 import type { Page } from "@playwright/test";
@@ -589,5 +589,108 @@ test.describe("Policies — member and security-admin reads", () => {
     await expect(page.getByRole("heading", { name: "Policies", level: 1 })).toBeVisible();
     await expect(page.getByText(OPERATOR_ONLY_REASON).first()).toBeVisible();
     await expect(page.getByRole("button", { name: "New policy" })).toBeDisabled();
+  });
+});
+
+// Stored-token narrowing (gpat-g3, packet M7): repos, access, api and forge on a
+// stored-token grant, authored in the editor's "Git access tokens" section and
+// read back from what the server stored. Each test creates and deletes its own
+// policy, so the file's empty-table invariant holds.
+test.describe("Policies — stored token narrowing", () => {
+  const PAT = { host: "gitlab.example.com", secret_name: "git-pat-gitlab-example-com" };
+  const PAT_SPEC = JSON.stringify(
+    {
+      allowed_domains: [],
+      first_use_approval: "always_deny",
+      min_confinement_class: "CC2",
+      eligible_grants: [{ kind: "git_pat", scope: PAT, ttl_seconds: 3600, requires_approval: false }],
+    },
+    null,
+    2,
+  );
+
+  test("saves forge, repositories, access and API, and reads all four back", async ({ page, request }) => {
+    const name = uniqueName("e2e-pat-narrow");
+    await gotoConsole(page, "admin");
+    await navTo(page, "Policies");
+    await openCreate(page);
+    const dialog = editorDialog(page);
+    await fillEditor(page, name, PAT_SPEC);
+
+    // The honesty lines are on screen before anything is narrowed.
+    const honesty = dialog.getByTestId("git-pat-honesty");
+    await expect(honesty.getByText(GIT_PAT_SCOPE.HONESTY_TOKEN)).toBeVisible();
+    await expect(honesty.getByText(GIT_PAT_SCOPE.HONESTY_API)).toBeVisible();
+    await expect(honesty.getByText(GIT_PAT_SCOPE.HONESTY_BROKER)).toBeVisible();
+
+    // The generic forge has no API door: the box is off and says why.
+    await expect(dialog.getByLabel(GIT_PAT_SCOPE.FORGE, { exact: true })).toHaveValue("generic");
+    await expect(dialog.getByRole("checkbox", { name: GIT_PAT_SCOPE.API })).toBeDisabled();
+    await expect(dialog.getByText(GIT_PAT_SCOPE.API_NEEDS_FORGE)).toBeVisible();
+
+    await dialog.getByLabel(GIT_PAT_SCOPE.FORGE, { exact: true }).selectOption("gitlab");
+    await dialog.getByLabel(GIT_PAT_SCOPE.REPOS, { exact: true }).fill("group/app\ngroup/libs/*");
+    await dialog.getByRole("button", { name: "Read-only", exact: true }).click();
+    await dialog.getByRole("checkbox", { name: GIT_PAT_SCOPE.API }).click();
+
+    const spec = JSON.parse(await dialog.getByLabel("Spec (JSON)").inputValue()) as RunPolicySpec;
+    expect(spec.eligible_grants?.[0].scope).toEqual({
+      ...PAT,
+      forge: "gitlab",
+      repos: ["group/app", "group/libs/*"],
+      access: "read",
+      api: true,
+    });
+
+    const created = page.waitForResponse((r) => r.url().includes("/api/v1/policies") && r.request().method() === "POST");
+    await dialog.getByRole("button", { name: "Create policy" }).click();
+    const res = await created;
+    expect(res.status()).toBe(201);
+    const stored = (await res.json()) as { id: string; spec: RunPolicySpec };
+    try {
+      expect(stored.spec.eligible_grants?.[0].scope).toMatchObject({
+        forge: "gitlab",
+        repos: ["group/app", "group/libs/*"],
+        access: "read",
+        api: true,
+      });
+      await expect(dialog).toBeHidden();
+
+      // Reopen from the row: the fields show what the server stored.
+      await policyRow(page, name).click();
+      await page.getByRole("dialog").filter({ hasText: name }).getByRole("button", { name: "Edit policy" }).click();
+      const edit = editEditorDialog(page);
+      await expect(edit).toBeVisible();
+      await expect(edit.getByLabel(GIT_PAT_SCOPE.FORGE, { exact: true })).toHaveValue("gitlab");
+      await expect(edit.getByLabel(GIT_PAT_SCOPE.REPOS, { exact: true })).toHaveValue("group/app\ngroup/libs/*");
+      await expect(edit.getByRole("button", { name: "Read-only", exact: true })).toHaveAttribute("aria-pressed", "true");
+      await expect(edit.getByRole("checkbox", { name: GIT_PAT_SCOPE.API })).toBeChecked();
+      await edit.getByRole("button", { name: "Cancel" }).click();
+      await expect(edit).toBeHidden();
+    } finally {
+      const del = await request.delete(`/api/v1/policies/${stored.id}`, { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` } });
+      expect(del.ok()).toBe(true);
+    }
+  });
+
+  test("a refusal that names an axis lands on that field", async ({ page }) => {
+    const name = uniqueName("e2e-pat-axis");
+    await gotoConsole(page, "admin");
+    await navTo(page, "Policies");
+    await openCreate(page);
+    const dialog = editorDialog(page);
+    await fillEditor(page, name, PAT_SPEC);
+
+    const repos = dialog.getByLabel(GIT_PAT_SCOPE.REPOS, { exact: true });
+    await repos.fill("group/../elsewhere");
+    await dialog.getByRole("button", { name: "Create policy" }).click();
+
+    // The server's own sentence, under Repositories, with the field marked invalid.
+    await expect(repos).toHaveAttribute("aria-invalid", "true");
+    await expect(dialog.getByRole("alert").filter({ hasText: "repos entry" }).first()).toBeVisible();
+    await expect(dialog.getByLabel(GIT_PAT_SCOPE.FORGE, { exact: true })).not.toHaveAttribute("aria-invalid", "true");
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(editorDialog(page)).toBeHidden();
+    await expect(policyRow(page, name)).toHaveCount(0);
   });
 });

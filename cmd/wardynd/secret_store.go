@@ -26,7 +26,8 @@ import (
 )
 
 // openSecretStore builds the configured external store client (if any) and
-// the audited secret store over it (buildSecretStore), as a serving boot does.
+// the audited secret store over it, as a serving boot does (buildSecretStore's
+// work, with the key-domain check between the store and its audit wrapper).
 func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags, rec audit.Recorder) (secretstore.Store, error) {
 	platform, err := readPlatformKey(*f.platformKeyFile, *f.ageKey)
 	if err != nil {
@@ -36,8 +37,15 @@ func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags, rec 
 	if err != nil {
 		return nil, err
 	}
-	st, err := buildSecretStore(ctx, pool, *f.ageKey, platform, *f.secretStoreSel, c, rec)
+	s, err := newSecretStore(ctx, pool, *f.ageKey, platform, *f.secretStoreSel, c, rec)
 	if err != nil {
+		return nil, err
+	}
+	if err := verifyKeyDomains(ctx, s); err != nil {
+		return nil, err
+	}
+	st := secretstore.Audited(s, rec)
+	if err := refuseKEKRequired(*f.vault.kekRequired, st); err != nil {
 		return nil, err
 	}
 	if err := sweepRetiredModelCredentials(ctx, st, rec); err != nil {
@@ -52,6 +60,21 @@ func openSecretStore(ctx context.Context, pool *pgxpool.Pool, f *bootFlags, rec 
 	return st, sweepRetiredADOSharedCredentials(ctx, pool, st, sc, rec)
 }
 
+// verifyKeyDomains is the serving boot's check of key domains, after migrations
+// so principal_keys exists: no live principal key may name a domain the file does
+// not declare or a key its domain no longer reaches. -rewrap is the remedy for a
+// key a domain no longer reaches, so it runs only its own declared-domains check.
+func verifyKeyDomains(ctx context.Context, s secretstore.Store) error {
+	ps, ok := s.(*secretstorepg.Store)
+	if !ok {
+		return nil
+	}
+	if err := ps.VerifyKeyDomains(ctx); err != nil {
+		return fmt.Errorf("refusing to start: %w", err)
+	}
+	return nil
+}
+
 // buildStoreClients builds the configured external store client and key
 // service, as both a serving boot and a maintenance mode open them.
 func buildStoreClients(ctx context.Context, f *bootFlags) (storeClients, error) {
@@ -63,11 +86,48 @@ func buildStoreClients(ctx context.Context, f *bootFlags) (storeClients, error) 
 	if err != nil {
 		return storeClients{}, err
 	}
-	pk, err := buildPlatformKEK(ctx, f.vault, *f.trustedCAFile, false)
+	pk, err := buildPlatformKEK(ctx, f.vault, f.azure, *f.trustedCAFile, false)
 	if err != nil {
 		return storeClients{}, err
 	}
-	return storeClients{ext: ext, kek: k, kekWrites: writes, platformKEK: pk, timeout: *f.vault.timeout}, nil
+	principal, err := parsePrincipalKeys(*f.vault.principalKeys)
+	if err != nil {
+		return storeClients{}, err
+	}
+	domains, err := buildKeyDomains(ctx, f.vault, f.azure, *f.trustedCAFile)
+	if err != nil {
+		return storeClients{}, err
+	}
+	return storeClients{ext: ext, kek: k, kekWrites: writes, platformKEK: pk, principalKeys: principal, keyDomains: domains, timeout: *f.vault.timeout}, nil
+}
+
+// parsePrincipalKeys reads WARDYN_PRINCIPAL_KEYS: "on" or "off" (empty is off).
+func parsePrincipalKeys(v string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "off":
+		return false, nil
+	case "on":
+		return true, nil
+	}
+	return false, fmt.Errorf("refusing to start: WARDYN_PRINCIPAL_KEYS is %q; it must be \"on\" or \"off\"", v)
+}
+
+// principalKeysOn is WARDYN_PRINCIPAL_KEYS read as parsePrincipalKeys does, after boot has
+// accepted it: anything but "on" is off.
+func principalKeysOn(v string) bool {
+	on, _ := parsePrincipalKeys(v)
+	return on
+}
+
+// platformKeySeparate reports whether the boot keys have a key of their own. In local mode that is the
+// platform key file. Under a key service the file separates nothing (boot-key rows go to the credential
+// key service until a platform key service is set), so only the service's second key counts: Transit or
+// Key Vault, each of which buildPlatformKEK refuses to accept without its identity.
+func platformKeySeparate(f *bootFlags, keyService bool) bool {
+	if keyService {
+		return strings.TrimSpace(*f.vault.transitKeyPlatform) != "" || azurePlatformNamed(f.azure)
+	}
+	return strings.TrimSpace(*f.platformKeyFile) != ""
 }
 
 // storeClients are the configured clients a secret store is built over.
@@ -80,8 +140,13 @@ type storeClients struct {
 	kek       kek.KEK
 	kekWrites bool
 	// platformKEK is the second key service that wraps the boot keys alone
-	// (WARDYN_VAULT_TRANSIT_KEY_PLATFORM), or nil.
+	// (WARDYN_VAULT_TRANSIT_KEY_PLATFORM or WARDYN_AZURE_KEK_KEY_PLATFORM), or nil.
 	platformKEK kek.KEK
+	// principalKeys is WARDYN_PRINCIPAL_KEYS=on.
+	principalKeys bool
+	// keyDomains are the key domains WARDYN_KEY_DOMAINS_FILE declares, each
+	// built and proven (buildKeyDomains), or nil.
+	keyDomains secretstore.KeyDomains
 	// timeout bounds each call to ext.
 	timeout time.Duration
 }
@@ -180,7 +245,7 @@ func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, plat
 			return nil, fmt.Errorf("parse age identity: %w", err)
 		}
 	}
-	deps := secretstore.Deps{Pool: pool, External: c.ext, ExternalTimeout: c.timeout, KEK: c.kek, KEKWrites: c.kekWrites}
+	deps := secretstore.Deps{Pool: pool, External: c.ext, ExternalTimeout: c.timeout, KEK: c.kek, KEKWrites: c.kekWrites, PrincipalKeys: c.principalKeys, KeyDomains: c.keyDomains}
 	// Only a platform key that is actually set: a typed nil reads as a key.
 	if c.platformKEK != nil {
 		deps.PlatformKEK, deps.PlatformKEKWrites = c.platformKEK, true
@@ -268,6 +333,17 @@ func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519
 	return refuseIdleAgeKey(ctx, ps)
 }
 
+// refuseKEKRequired refuses a serving boot when WARDYN_KEK_REQUIRED is set and
+// neither a key service wraps the credentials nor an external store holds them,
+// so the local key (set or ephemeral) would. It sits in the serving path, not in
+// newSecretStore, so `wardynd -rewrap`, the remedy, still runs.
+func refuseKEKRequired(required bool, s secretstore.Store) error {
+	if !required || keyService(s) != "" || storesExternally(s) != "" {
+		return nil
+	}
+	return fmt.Errorf("refusing to start: WARDYN_KEK_REQUIRED is set but credentials are wrapped by the local key — set WARDYN_KEK=transit|azurekv and run `wardynd -rewrap` to move them onto it")
+}
+
 // refuseIdleAgeKey refuses boot when a key service wraps every write
 // (WARDYN_KEK=transit or azurekv) and WARDYN_AGE_KEY is set with no stored row left under
 // it: the key then only lets whoever also holds the database forge a row the
@@ -298,6 +374,15 @@ type vaultFlags struct {
 	// kek is WARDYN_KEK; transitMount and transitKey name the Transit key it
 	// selects (or, with kek=local, reads).
 	kek, transitMount, transitKey *string
+	// kekRequired is WARDYN_KEK_REQUIRED: refuse a serving boot on the local key.
+	kekRequired *bool
+	// principalKeys is WARDYN_PRINCIPAL_KEYS, "off" or "on": whether a person's
+	// credential rows are written under that person's principal key.
+	principalKeys *string
+	// keyDomainsFile is WARDYN_KEY_DOMAINS_FILE: the path of the file that
+	// declares the key domains (internal/secretstore/keydomain), a JSON object
+	// from domain name to a Transit key or a Key Vault key pair.
+	keyDomainsFile *string
 	// transitKeyPlatform is the second Transit key the boot keys alone are
 	// wrapped under, reached as rolePlatform.
 	transitKeyPlatform *string
@@ -319,6 +404,9 @@ func registerVaultFlags() vaultFlags {
 		maxVersions:        flagIntEnv("vault-kv-max-versions", "WARDYN_VAULT_KV_MAX_VERSIONS", 1, "max_versions set on each secret the vaultkv store creates (1: a replaced value does not linger)"),
 		timeout:            flagDuration("secret-store-timeout", "WARDYN_SECRET_STORE_TIMEOUT", 5*time.Second, "timeout of each call to an external secret store"),
 		kek:                flagEnv("kek", "WARDYN_KEK", kekLocal, `key that wraps each stored secret's data key: "local" (derived from WARDYN_AGE_KEY), "transit" (the Vault Transit key WARDYN_VAULT_TRANSIT_KEY names, over the WARDYN_VAULT_* client) or "azurekv" (the Key Vault keys WARDYN_AZURE_KEK_KEY and WARDYN_AZURE_KEK_SIGNING_KEY name, as the WARDYN_AZURE_* identity)`),
+		kekRequired:        flagBool("kek-required", "WARDYN_KEK_REQUIRED", false, "refuse to start while credentials are wrapped by the local key: a key service (WARDYN_KEK=transit|azurekv) or an external store must hold them. `wardynd -rewrap` still runs"),
+		principalKeys:      flagEnv("principal-keys", "WARDYN_PRINCIPAL_KEYS", "off", `"on" seals each person's stored credentials under a key of that person's own (envelope enc_version 3), which an erase destroys; "off" (default) keeps writing them under the credential key. Boot keys and the operator namespace never move, and store mode is unaffected. Turning it off still reads every row, but enabling it is one-way across a downgrade below 0.8.6; wardynd -rewrap-principal-keys moves existing rows. See docs/operations/secrets-and-keys.md`),
+		keyDomainsFile:     flagEnv("key-domains-file", "WARDYN_KEY_DOMAINS_FILE", "", `path of a JSON file declaring key domains: an object from domain name ("a-z0-9-", never "default") to {"transit": {"key", "role"}} or {"azurekv": {"key", "signingKey", "clientId"}}. A domain's Transit key or Key Vault pair wraps the principal keys of the people assigned to it (PUT /api/v1/key-domains/assignments/{subject_type}/{subject}); each is proven at boot. Empty (default) declares none, and every principal key is under the credential key. See docs/operations/secrets-and-keys.md`),
 		transitMount:       flagEnv("vault-transit-mount", "WARDYN_VAULT_TRANSIT_MOUNT", "transit", "mount path of Vault's Transit engine"),
 		transitKey:         flagEnv("vault-transit-key", "WARDYN_VAULT_TRANSIT_KEY", "", "Transit key (type aes256-gcm96) that wraps data keys with WARDYN_KEK=transit; set with WARDYN_KEK=local it only reads the rows sealed under it, for `wardynd -rewrap` back to the local key"),
 		transitKeyPlatform: flagEnv("vault-transit-key-platform", "WARDYN_VAULT_TRANSIT_KEY_PLATFORM", "", "second Transit key (type aes256-gcm96, same mount) that wraps wardynd's own signing, session and SSH host keys, reached as WARDYN_VAULT_ROLE_PLATFORM; WARDYN_VAULT_TRANSIT_KEY then wraps only the credentials. Needs WARDYN_KEK=transit and WARDYN_VAULT_ROLE_PLATFORM; `wardynd -rewrap -rewrap-adopt-boot-keys` moves the boot keys onto it, once; `-rewrap -rewrap-retire-platform-key` moves them back off. Empty = one key for both. See docs/operations/secrets-and-keys.md"),
@@ -332,6 +420,10 @@ type azureFlags struct {
 	vaultURL, auth, tenantID, clientID, federatedTokenFile, authorityHost, prefix, purge *string
 	maxVersions                                                                          *int
 	kekKey, kekSigningKey                                                                *string
+	// kekKeyPlatform, kekSigningKeyPlatform and clientIDPlatform are the second
+	// key pair the boot keys alone are wrapped and signed under, and the second
+	// Entra identity that reaches it.
+	kekKeyPlatform, kekSigningKeyPlatform, clientIDPlatform *string
 }
 
 func registerAzureFlags() azureFlags {
@@ -347,6 +439,10 @@ func registerAzureFlags() azureFlags {
 		purge:              flagEnv("azure-kv-purge", "WARDYN_AZURE_KV_PURGE", azurekv.PurgeAuto, `"auto": purge a deleted secret when the vault allows it; "never": leave it soft-deleted for the vault's retention`),
 		kekKey:             flagEnv("azure-kek-key", "WARDYN_AZURE_KEK_KEY", "", "versionless id (https://<vault>.vault.azure.net/keys/<name>) of the Key Vault RSA 3072/4096 key, key_ops wrapKey and unwrapKey only, not exportable, that wraps data keys with WARDYN_KEK=azurekv; set with WARDYN_KEK=local it only reads the rows sealed under it, for `wardynd -rewrap` back to the local key"),
 		kekSigningKey:      flagEnv("azure-kek-signing-key", "WARDYN_AZURE_KEK_SIGNING_KEY", "", "versionless id of the EC P-256 key, sign and verify only, in the same vault, that signs every wrap WARDYN_AZURE_KEK_KEY makes; set together with it"),
+
+		kekKeyPlatform:        flagEnv("azure-kek-key-platform", "WARDYN_AZURE_KEK_KEY_PLATFORM", "", "versionless id of a second RSA 3072/4096 Key Vault key (wrapKey and unwrapKey only) that wraps wardynd's own signing, session and SSH host keys, reached as WARDYN_AZURE_CLIENT_ID_PLATFORM; WARDYN_AZURE_KEK_KEY then wraps only the credentials. Set together with WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM; needs WARDYN_KEK=azurekv and WARDYN_AZURE_CLIENT_ID_PLATFORM; `wardynd -rewrap -rewrap-adopt-boot-keys` moves the boot keys onto it, once; `-rewrap -rewrap-retire-platform-key` moves them back off. Empty = one key pair for both. See docs/operations/secrets-and-keys.md"),
+		kekSigningKeyPlatform: flagEnv("azure-kek-signing-key-platform", "WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM", "", "versionless id of the EC P-256 key (sign and verify only), in the same vault as WARDYN_AZURE_KEK_KEY_PLATFORM, that signs every wrap that key makes; set together with it"),
+		clientIDPlatform:      flagEnv("azure-client-id-platform", "WARDYN_AZURE_CLIENT_ID_PLATFORM", "", "client id of the second Entra identity (app registration or user-assigned identity) wardynd reaches WARDYN_AZURE_KEK_KEY_PLATFORM as; it must differ from WARDYN_AZURE_CLIENT_ID and hold no role on the credential keys"),
 	}
 }
 
@@ -408,28 +504,44 @@ func buildKEK(ctx context.Context, v vaultFlags, az azureFlags, trustedCAFile st
 // buildAzureKEK builds the Key Vault KEK over the store's identity settings.
 // It needs no WARDYN_AZURE_KV_URL: the vault is the one the keys name.
 func buildAzureKEK(ctx context.Context, v vaultFlags, az azureFlags, trustedCAFile string, writes bool) (kek.KEK, bool, error) {
-	k, err := azurekv.NewKEK(ctx, azurekv.KEKConfig{
-		Key: strings.TrimSpace(*az.kekKey), SigningKey: strings.TrimSpace(*az.kekSigningKey),
-		Auth: strings.TrimSpace(*az.auth), TenantID: strings.TrimSpace(*az.tenantID), ClientID: strings.TrimSpace(*az.clientID),
-		FederatedTokenFile: strings.TrimSpace(*az.federatedTokenFile), AuthorityHost: strings.TrimSpace(*az.authorityHost),
-		CACertFile: strings.TrimSpace(trustedCAFile), Timeout: *v.timeout,
+	k, err := newAzureKEK(ctx, v, az, trustedCAFile, azurekv.KEKConfig{
+		Key: strings.TrimSpace(*az.kekKey), SigningKey: strings.TrimSpace(*az.kekSigningKey), ClientID: strings.TrimSpace(*az.clientID),
 	})
-	if err != nil {
-		return nil, false, fmt.Errorf("refusing to start: %w", err)
-	}
-	return k, writes, nil
+	return k, writes, err
 }
 
-// buildPlatformKEK returns the Transit key the boot keys alone are wrapped
-// under (WARDYN_VAULT_TRANSIT_KEY_PLATFORM), or nil when none is named. It is
-// reached as WARDYN_VAULT_ROLE_PLATFORM, so a token that reaches the
-// credential key never reaches it. Like buildKEK it is proven at boot.
+// newAzureKEK completes cfg's keys and client id with the shared identity
+// settings and builds the KEK, which proves its keys at boot.
+func newAzureKEK(ctx context.Context, v vaultFlags, az azureFlags, trustedCAFile string, cfg azurekv.KEKConfig) (kek.KEK, error) {
+	cfg.Auth, cfg.TenantID = strings.TrimSpace(*az.auth), strings.TrimSpace(*az.tenantID)
+	cfg.FederatedTokenFile, cfg.AuthorityHost = strings.TrimSpace(*az.federatedTokenFile), strings.TrimSpace(*az.authorityHost)
+	cfg.CACertFile, cfg.Timeout = strings.TrimSpace(trustedCAFile), *v.timeout
+	k, err := azurekv.NewKEK(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("refusing to start: %w", err)
+	}
+	return k, nil
+}
+
+// buildPlatformKEK returns the key service the boot keys alone are wrapped
+// under, or nil when none is named: the Transit key
+// WARDYN_VAULT_TRANSIT_KEY_PLATFORM, reached as WARDYN_VAULT_ROLE_PLATFORM, or
+// the Key Vault pair WARDYN_AZURE_KEK_KEY_PLATFORM and
+// WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM, reached as
+// WARDYN_AZURE_CLIENT_ID_PLATFORM. A token that reaches the credential key
+// never reaches it. Like buildKEK it is proven at boot.
 //
 // retire is `wardynd -rewrap-retire-platform-key` alone: the key is built to be
-// read, for the boot keys still under it, so it does not need WARDYN_KEK=transit
-// (the boot keys may be moving back to the local key). A normal start and a
-// plain -rewrap never pass it.
-func buildPlatformKEK(ctx context.Context, v vaultFlags, trustedCAFile string, retire bool) (kek.KEK, error) {
+// read, for the boot keys still under it, so it does not need WARDYN_KEK to
+// select its service (the boot keys may be moving back to the local key). A
+// normal start and a plain -rewrap never pass it.
+func buildPlatformKEK(ctx context.Context, v vaultFlags, az azureFlags, trustedCAFile string, retire bool) (kek.KEK, error) {
+	if azurePlatformNamed(az) {
+		if strings.TrimSpace(*v.transitKeyPlatform) != "" {
+			return nil, fmt.Errorf("refusing to start: WARDYN_VAULT_TRANSIT_KEY_PLATFORM and WARDYN_AZURE_KEK_KEY_PLATFORM both name a platform key; configure one — a move between Transit and Key Vault goes through the local key (docs/operations/secrets-and-keys.md)")
+		}
+		return buildAzurePlatformKEK(ctx, v, az, trustedCAFile, retire)
+	}
 	key := strings.TrimSpace(*v.transitKeyPlatform)
 	if key == "" {
 		return nil, nil
@@ -461,6 +573,53 @@ func buildPlatformKEK(ctx context.Context, v vaultFlags, trustedCAFile string, r
 		return nil, fmt.Errorf("refusing to start: %w", err)
 	}
 	return t, nil
+}
+
+// azurePlatformNamed reports whether any Key Vault platform setting is set.
+func azurePlatformNamed(az azureFlags) bool {
+	return strings.TrimSpace(*az.kekKeyPlatform) != "" || strings.TrimSpace(*az.kekSigningKeyPlatform) != "" || strings.TrimSpace(*az.clientIDPlatform) != ""
+}
+
+// buildAzurePlatformKEK is buildPlatformKEK's Key Vault arm. The split only
+// separates anything when the second pair and the second identity are not the
+// first's, so equality is refused here, on the normalised identity: Key Vault
+// treats key names and hosts case-insensitively, and a client id is a GUID.
+func buildAzurePlatformKEK(ctx context.Context, v vaultFlags, az azureFlags, trustedCAFile string, retire bool) (kek.KEK, error) {
+	const keySetting, sigSetting, clientSetting = "WARDYN_AZURE_KEK_KEY_PLATFORM", "WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM", "WARDYN_AZURE_CLIENT_ID_PLATFORM"
+	key, sig, client := strings.TrimSpace(*az.kekKeyPlatform), strings.TrimSpace(*az.kekSigningKeyPlatform), strings.TrimSpace(*az.clientIDPlatform)
+	switch {
+	case key == "" || sig == "":
+		return nil, fmt.Errorf("refusing to start: %s and %s are set together or not at all", keySetting, sigSetting)
+	case client == "":
+		return nil, fmt.Errorf("refusing to start: %s and %s need %s, the second Entra identity that reaches them", keySetting, sigSetting, clientSetting)
+	case strings.TrimSpace(*v.kek) != kekAzure && !retire:
+		return nil, fmt.Errorf("refusing to start: %s needs WARDYN_KEK=azurekv", keySetting)
+	}
+	for _, c := range []struct{ setting, platform, credSetting, cred string }{
+		{keySetting, key, "WARDYN_AZURE_KEK_KEY", strings.TrimSpace(*az.kekKey)},
+		{sigSetting, sig, "WARDYN_AZURE_KEK_SIGNING_KEY", strings.TrimSpace(*az.kekSigningKey)},
+	} {
+		p, err := azurekv.KeyIdentity(c.setting, c.platform)
+		if err != nil {
+			return nil, fmt.Errorf("refusing to start: %w", err)
+		}
+		if c.cred == "" {
+			continue
+		}
+		cr, err := azurekv.KeyIdentity(c.credSetting, c.cred)
+		if err != nil {
+			return nil, fmt.Errorf("refusing to start: %w", err)
+		}
+		if p == cr {
+			return nil, fmt.Errorf("refusing to start: %s is the same key as %s, which separates nothing; name a second key", c.setting, c.credSetting)
+		}
+	}
+	if strings.EqualFold(client, strings.TrimSpace(*az.clientID)) {
+		return nil, fmt.Errorf("refusing to start: %s is the same identity as WARDYN_AZURE_CLIENT_ID, which separates nothing; name the second identity", clientSetting)
+	}
+	return newAzureKEK(ctx, v, az, trustedCAFile, azurekv.KEKConfig{
+		Key: key, SigningKey: sig, ClientID: client, KeySetting: keySetting, SigningKeySetting: sigSetting,
+	})
 }
 
 // vaultConfig is the Vault client configuration both the KV store and the

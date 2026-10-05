@@ -155,23 +155,40 @@ func TestProviderDispatch_EndpointAndRouteThrough(t *testing.T) {
 	}
 	routed := mpKeyProvider("anthropic", "uid-a", types.ModelProviderAnthropicAPIKey, types.ProviderHarness{Harness: "claude-code"})
 	routed.BaseURL = "https://route.corp.example"
+	openaiRouted := func(base string) types.ModelProvider {
+		p := mpKeyProvider("openai-gw", "uid-og", types.ModelProviderOpenAIAPIKey, types.ProviderHarness{Harness: "codex-cli"})
+		p.BaseURL = base
+		return p
+	}
 	for _, tc := range []struct {
 		name                 string
 		agent                string
 		p                    types.ModelProvider
 		host, header, format string
 		upstreams            map[string]string
+		// codexPath is what follows the brokered route in WARDYN_CODEX_BASE_URL:
+		// the /v1 the public host needs, absent when the gateway carries its own
+		// prefix. TestCodexBrokeredRoute_FinalUpstreamPath pins that each shape
+		// reaches its upstream as /v1/responses.
+		codexPath string
 	}{
 		{"endpoint on claude-code", "claude-code", endpoint(types.ProviderHarness{Harness: "claude-code", Path: "/anthropic"}),
-			"gw.corp.example", "Authorization", "Bearer %s", map[string]string{"api.anthropic.com": "https://gw.corp.example/anthropic"}},
+			"gw.corp.example", "Authorization", "Bearer %s", map[string]string{"api.anthropic.com": "https://gw.corp.example/anthropic"}, ""},
 		{"endpoint on codex-cli with a per-harness header", "codex-cli",
 			endpoint(types.ProviderHarness{Harness: "codex-cli", Path: "/v1", AuthHeader: "X-Token", AuthFormat: "%s"}),
-			"gw.corp.example", "X-Token", "%s", map[string]string{"api.openai.com": "https://gw.corp.example/v1"}},
+			"gw.corp.example", "X-Token", "%s", map[string]string{"api.openai.com": "https://gw.corp.example/v1"}, ""},
+		{"endpoint on codex-cli with an empty path", "codex-cli",
+			endpoint(types.ProviderHarness{Harness: "codex-cli"}),
+			"gw.corp.example", "Authorization", "Bearer %s", map[string]string{"api.openai.com": "https://gw.corp.example"}, "/v1"},
+		{"openai key through a gateway with an empty path", "codex-cli", openaiRouted("https://route.corp.example"),
+			"route.corp.example", "Authorization", "Bearer %s", map[string]string{"api.openai.com": "https://route.corp.example"}, "/v1"},
+		{"openai key through a gateway with a path prefix", "codex-cli", openaiRouted("https://route.corp.example/openai/"),
+			"route.corp.example", "Authorization", "Bearer %s", map[string]string{"api.openai.com": "https://route.corp.example/openai/"}, ""},
 		{"key kind routed through a gateway", "claude-code", routed,
-			"route.corp.example", "x-api-key", "%s", map[string]string{"api.anthropic.com": "https://route.corp.example"}},
+			"route.corp.example", "x-api-key", "%s", map[string]string{"api.anthropic.com": "https://route.corp.example"}, ""},
 		{"openai key on the vendor host", "codex-cli",
 			mpKeyProvider("openai", "uid-o", types.ModelProviderOpenAIAPIKey, types.ProviderHarness{Harness: "codex-cli"}),
-			"api.openai.com", "Authorization", "Bearer %s", nil},
+			"api.openai.com", "Authorization", "Bearer %s", nil, "/v1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := &bearerGuardStore{
@@ -194,8 +211,17 @@ func TestProviderDispatch_EndpointAndRouteThrough(t *testing.T) {
 			if len(plan.llmUpstreams) != len(tc.upstreams) || !mapsEqual(plan.llmUpstreams, tc.upstreams) {
 				t.Errorf("upstreams = %v, want %v", plan.llmUpstreams, tc.upstreams)
 			}
-			if tc.agent == "codex-cli" && env["OPENAI_BASE_URL"] != "http://wardyn-proxy:3128/wardyn/llm/openai" {
-				t.Errorf("OPENAI_BASE_URL = %q, want the brokered route", env["OPENAI_BASE_URL"])
+			if tc.agent == "codex-cli" {
+				if want := "http://wardyn-proxy:3128/wardyn/llm/openai" + tc.codexPath; env["WARDYN_CODEX_BASE_URL"] != want {
+					t.Errorf("WARDYN_CODEX_BASE_URL = %q, want %q", env["WARDYN_CODEX_BASE_URL"], want)
+				}
+				if env["CODEX_API_KEY"] != "wardyn-proxy-injected" {
+					t.Errorf("CODEX_API_KEY = %q, want the inert sentinel", env["CODEX_API_KEY"])
+				}
+				// Inert for codex 0.149.1, kept for an operator image with an older one.
+				if env["OPENAI_BASE_URL"] != "http://wardyn-proxy:3128/wardyn/llm/openai" || env["OPENAI_API_KEY"] != "wardyn-proxy-injected" {
+					t.Errorf("OPENAI_BASE_URL/OPENAI_API_KEY = %q/%q, want the 0.8.5 pair unchanged", env["OPENAI_BASE_URL"], env["OPENAI_API_KEY"])
+				}
 			}
 		})
 	}

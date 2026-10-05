@@ -84,13 +84,13 @@ func refusalBody(t *testing.T, w *httptest.ResponseRecorder) string {
 func TestEffectiveToolApprovals(t *testing.T) {
 	assigned := governanceCeiling{
 		Spec:    holdProfile("walled").Ceiling,
-		Profile: holdProfile("walled"),
+		Profile: resolvedOf(holdProfile("walled")),
 	}
 	// The same rules, reached through Config.DefaultPolicy with no profile bound.
 	unassigned := governanceCeiling{Spec: holdProfile("walled").Ceiling}
 	allowOnly := governanceCeiling{
 		Spec:    types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "*", Effect: types.ToolAllow}}},
-		Profile: holdProfile("yolo"),
+		Profile: resolvedOf(holdProfile("yolo")),
 	}
 
 	for _, tc := range []struct {

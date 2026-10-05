@@ -35,6 +35,7 @@ import {
 import { Link } from "react-router-dom";
 import { SectionCard } from "./new-run-primitives";
 import { policies as policiesApi } from "../../../lib/api/policies";
+import { health as healthApi, type PolicyRef } from "../../../lib/api/health";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { ADOAccessSummary } from "../../wardyn/ado-access-summary";
@@ -69,6 +70,7 @@ import {
 import {
   agentLabel,
   initialWizardState,
+  seedAllowedDomains,
   primaryWorkspaceId,
   resolvedModelProviders,
   titleFromTask,
@@ -76,7 +78,9 @@ import {
   type RunPrefill,
   type WizardState,
 } from "./wizard-types";
+import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import { useLaunch } from "./use-launch";
+import { launchGates } from "./new-run-launch-gates";
 import { providerCandidates as candidatesForAgent, providerGate } from "./model-provider-lane";
 import { useModelProviderPick } from "./use-model-provider-pick";
 import { WhatToRunStep } from "./step-bodies";
@@ -174,6 +178,9 @@ export function NewRunScreen() {
   // ceiling section simply does not render, never claiming a ceiling it
   // could not confirm.
   const [governanceProfile, setGovernanceProfile] = React.useState<string | undefined>(undefined);
+  // GET /me's governance_contact: who to ask about the policy bounding this
+  // caller. Undefined until /me answers, and when it answers null or fails.
+  const [governanceContact, setGovernanceContact] = React.useState<PolicyRef | undefined>(undefined);
   // #1200 — the SAME read's min_confinement_class, the governance ceiling's
   // own floor (composer.Clamp raises the run to it, internal/composer/clamp.go).
   // Undefined for the same two reasons governanceProfile is; the Barrier
@@ -211,6 +218,21 @@ export function NewRunScreen() {
     if (titleUserEdited) return;
     setState((s) => ({ ...s, title: titleFromTask(s.task) }));
   }, [state.task, titleUserEdited]);
+
+  // An untouched form opens on the starters that follow the model providers,
+  // once /setup/status has named them: the policy body and the Network seed.
+  React.useEffect(() => {
+    if (!modelProviders) return;
+    const seeded = defaultSpecText(modelProviders);
+    const was = pristineSpec.current;
+    setSpecText((prev) => (prev === was ? seeded : prev));
+    pristineSpec.current = seeded;
+    if (!prefill?.state.allowedDomains) {
+      setState((s) => (JSON.stringify(s.allowedDomains) === JSON.stringify(seedAllowedDomains()) ? { ...s, allowedDomains: seedAllowedDomains(modelProviders) } : s));
+    }
+    // prefill is read once, like the useState seeds above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelProviders]);
 
   // ONE /setup/status read for everything this screen needs: model-access
   // readiness, the harness catalog, and which barriers this host can build —
@@ -300,6 +322,16 @@ export function NewRunScreen() {
       });
   }, []);
 
+  React.useEffect(() => {
+    let alive = true;
+    void healthApi.whoami().then((me) => {
+      if (alive) setGovernanceContact(me?.governance_contact ?? undefined);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   // useWorkspaceList does NOT fetch on mount — every caller loads it itself.
   // Without this, a workspace onboarded elsewhere (Getting started, the
   // Workspaces screen) could never be attached to a run from this page.
@@ -347,6 +379,7 @@ export function NewRunScreen() {
     // floor and offer a tier the server then refuses.
     operator: operator && operatorResolved,
     workspaces,
+    modelProviders,
     pristineCc,
   });
 
@@ -397,6 +430,29 @@ export function NewRunScreen() {
     patch,
   });
 
+  // The same local gates the launch panel renders: an automatic preflight may
+  // fire only when Launch would otherwise be pressable.
+  const gates = launchGates({
+    isAgent,
+    mode: state.mode,
+    task: state.task,
+    useSaved,
+    specParsedOk: policy.parsed.ok,
+    selectedPolicyId: state.selectedPolicyId,
+    savedPolicy: policy.selectedPolicy,
+    policiesLoaded,
+    pin,
+    workspaces,
+    selectedWorkspaceId: state.workspaces[0]?.workspaceId,
+    caps,
+    modelProviders,
+    providerGateState,
+    providerCandidates,
+    selectedModelProviderId: state.modelProviderId,
+    agentName,
+  });
+  const modelAccessDoor = useModelAccessDoor();
+
   // Launch + preflight state and actions — see use-launch.ts's header for why
   // this lane is a hook rather than a pure function like policy-lane.ts's.
   const {
@@ -405,6 +461,7 @@ export function NewRunScreen() {
     launchSpinning,
     error,
     errorSeq,
+    errorPolicy,
     credentialRefused,
     refusedProvider,
     launch,
@@ -413,14 +470,27 @@ export function NewRunScreen() {
     preflightError,
     preflightErrorSeq,
     preflightIsCurrent,
+    preflightFresh,
+    preflightBlock,
+    preflightNotChecked,
     preflight,
+    currentBody,
+    preflightRefusal,
   } = useLaunch({
     state,
     workspaces,
+    modelProviders,
     useSaved,
     ccTouched,
     merged: policy.merged,
     onLaunchError: policy.adoDoor.notifyLaunchError,
+    autoCheck: {
+      local: !gates.problem && !gates.workspaceUnavailable && !policy.noBarrierOnHost,
+      // No runner configured: Launch is not refused, so the backend row never holds it.
+      backendArm: !policy.noBarrierOnHost && !!availableClasses,
+      modelArm: isAgent && !isInteractive,
+    },
+    doorOpen: modelAccessDoor.open,
   });
 
   const added = policy.added;
@@ -463,7 +533,7 @@ export function NewRunScreen() {
   const dirty =
     useSaved ||
     specText !== pristineSpec.current ||
-    JSON.stringify(state) !== JSON.stringify(initialWizardState(pristineCc.current));
+    JSON.stringify(state) !== JSON.stringify(initialWizardState(pristineCc.current, undefined, modelProviders));
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // defaultPrevented is load-bearing: Radix's DismissableLayer preventDefaults
@@ -651,10 +721,11 @@ export function NewRunScreen() {
                 preflightDisabled={useSaved && !state.selectedPolicyId}
                 interactive={isInteractive}
                 adoCeiling={adoCeiling}
+                modelProviders={modelProviders}
                 savedPolicy={{
                   active: useSaved,
                   onActiveChange: (v: boolean) => {
-                    const c = clearedSpecOnCustomSwitch(v, securityOperator && operatorResolved, !!state.selectedPolicyId);
+                    const c = clearedSpecOnCustomSwitch(v, securityOperator && operatorResolved, !!state.selectedPolicyId, modelProviders);
                     if (c) setSpecText(c);
                     setUseSaved(v);
                   },
@@ -766,6 +837,7 @@ export function NewRunScreen() {
             sends another. */}
         <NewRunLaunchPanel
           governanceProfile={governanceProfile}
+          governanceContact={governanceContact}
           savedPolicy={policy.selectedPolicy}
           cc={cc}
           showModelWarning={isAgent && llmReady === false}
@@ -792,11 +864,20 @@ export function NewRunScreen() {
           caps={caps}
           modelProviders={modelProviders}
           noBarrier={policy.noBarrierOnHost}
+          runnerUnknown={!availableClasses}
           error={error}
           errorSeq={errorSeq}
+          errorPolicy={errorPolicy}
           credentialRefused={credentialRefused}
           refusedProvider={refusedProvider}
+          launchBody={currentBody}
+          onPreflight={preflight}
+          preflightRefusal={preflightRefusal}
           preflightIsCurrent={preflightIsCurrent}
+          preflightFresh={preflightFresh}
+          preflightBlock={preflightBlock}
+          preflightChecking={preflighting}
+          preflightNotChecked={preflightNotChecked}
           preflightError={preflightError}
           preflightErrorSeq={preflightErrorSeq}
           preflightResult={preflightResult}

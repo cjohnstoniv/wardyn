@@ -94,6 +94,7 @@ import {
 import { stage } from "./stage";
 import { APPROVAL_APPEARS, decide } from "./funnel";
 import { sweepStaleState } from "./sweep";
+import { termText } from "../terminal-text";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -522,7 +523,7 @@ test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () =>
   const term200 = card.locator(".xterm-screen").first();
   try {
     await expect
-      .poll(async () => (await term200.innerText().catch(() => "<no .xterm-screen>")), {
+      .poll(async () => (await termText(term200).catch(() => "<no .xterm-screen>")), {
         timeout: 60_000,
         message: `the held ${HELD_HOST} request never completed with a 200`,
       })
@@ -530,7 +531,7 @@ test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () =>
   } catch (e) {
     const screens = await card.locator(".xterm-screen").count().catch(() => -1);
     const over = await demoOver(card).isVisible().catch(() => false);
-    const txt = await term200.innerText().catch(() => "<unreadable>");
+    const txt = await termText(term200).catch(() => "<unreadable>");
     console.warn(
       `[v10] payoff diagnostic: screens=${screens} demoOver=${over} innerText=${JSON.stringify(txt.slice(0, 200))}`,
     );
@@ -648,7 +649,7 @@ test("beats 0-5 — the wait-for-review hold, and the scope ladder", async () =>
   // no bets on which polls survive take context.
   const lapseTerm = card.locator(".xterm-screen").first();
   await expect
-    .poll(async () => (await lapseTerm.innerText().catch(() => "<no .xterm-screen>")), {
+    .poll(async () => (await termText(lapseTerm).catch(() => "<no .xterm-screen>")), {
       timeout: 45_000,
       message: `${TELEMETRY_HOST}'s held request never lapsed with its own curl: (56) — the fail-closed beat has nothing to point at`,
     })
@@ -942,14 +943,14 @@ test("beat 8 — a new run, and nothing to click", async () => {
   const proofTerm = page.locator(".xterm-screen").first();
   try {
     await expect
-      .poll(async () => (await proofTerm.innerText().catch(() => "<no .xterm-screen>")), {
+      .poll(async () => (await termText(proofTerm).catch(() => "<no .xterm-screen>")), {
         timeout: 60_000,
         message: `${HELD_HOST} did not answer on the proof run — the workspace grant never reached this run's allowlist`,
       })
       .toMatch(RESPONDED);
   } catch (e) {
     const over = await page.getByText(RUN_OVER).first().isVisible().catch(() => false);
-    const txt = await proofTerm.innerText().catch(() => "<unreadable>");
+    const txt = await termText(proofTerm).catch(() => "<unreadable>");
     console.warn(`[v10] proof-run diagnostic: runOver=${over} innerText=${JSON.stringify(txt.slice(0, 200))}`);
     throw e;
   }

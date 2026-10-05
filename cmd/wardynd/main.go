@@ -27,16 +27,23 @@ import (
 	"filippo.io/age"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adorunpat"
 	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/hostcapacity"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/livebus"
 	"github.com/cjohnstoniv/wardyn/internal/nodump"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -73,7 +80,7 @@ func main() {
 	}
 	if err := run(); err != nil {
 		slog.Error("wardynd: fatal", slog.Any("err", err))
-		os.Exit(1)
+		os.Exit(exitCodeOf(err))
 	}
 }
 
@@ -165,10 +172,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if trustedCACount > 0 {
-		slog.Info("wardynd: corporate CA trust configured (WARDYN_TRUSTED_CA_FILE)",
-			slog.Int("cert_count", trustedCACount), slog.Any("subjects", certSubjects(trustedCAPEM)))
-	}
+	logTrustedCA(trustedCACount, trustedCAPEM)
 	// installTrustedCA + WARDYN_DAEMON_PROXY_URL, both mutating the shared
 	// http.DefaultTransport in place — see installBootTransport (kept out of
 	// run() itself, which is deliberately low-branching per its doc comment).
@@ -193,7 +197,7 @@ func run() error {
 	// replicas>1 refusal is render-time only. Claimed here, immediately after
 	// the pool exists and before anything registers process-local state, and
 	// held until shutdown. See claimSingleInstance for the ceiling.
-	releaseInstance, err := claimSingleInstance(rootCtx, pool, *f.allowMultiInstance)
+	releaseInstance, err := claimSingleInstance(rootCtx, pool, *f.ha)
 	if err != nil {
 		return err
 	}
@@ -213,8 +217,14 @@ func run() error {
 	maskReg := secretmask.NewRegistry()
 	// The masked + fanned-out + spooling recorder chain shared by EVERY audit
 	// writer (API, broker, identity, approvals, sweeper) — see buildAuditChain.
-	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg)
+	denials := &audit.DenialCoalescer{}
+	maskScopes := &maskScope{}
+	sealSrc := newAuditSealSource(sealModeOf(f)) // validated by validateBootPosture above
+	maskedRec, fan, auditSpool, auditDrainRec, err := buildAuditChain(rootCtx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, maskReg, sealSrc, serveChain{scope: maskScopes, denials: denials})
 	if err != nil {
+		return err
+	}
+	if err := startApprovalNotify(rootCtx, *f.approvalNotify, pool, maskedRec, maskReg, *f.approvalExpiryAfter); err != nil {
 		return err
 	}
 
@@ -227,12 +237,39 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// The key-domain service behind /key-domains: the domains the file
+	// declares (already built and proven by the store above), and the
+	// assignments that place a person's next principal key.
+	domainFile, err := keydomain.Load(*f.vault.keyDomainsFile)
+	if err != nil {
+		return err
+	}
+	keyDomains := keydomain.NewService(pool, domainFile.Names())
+	keyDomainKeys := domainFile.KeyDescriptions()
+
+	// Boot keys: created under a lock that serializes replicas (#754).
+	bootKeys := newBootKeyStore(secrets, pool, *f.ha)
+	// What is sealed under the secret store's per-subject keys: the run masking
+	// manifests (what each run was given, so a restarted or second wardynd masks
+	// it and the doors refuse a run they cannot prove masked) and the audit
+	// fields WARDYN_AUDIT_SEAL seals, whose recorder was built before the store.
+	maskManifests, maskStore, err := armSubjectKeyed(bootCtx, pool, secrets, maskReg, maskScopes, sealSrc, bootKeys)
+	if err != nil {
+		return err
+	}
+	// Another replica's erasure fences a manifest this one holds: drop it at the
+	// background cadence instead of waiting for a door to ask.
+	maskStore.OnBackgroundRead(maskManifests.DropFenced)
+	maskStore.Start(rootCtx)
+	// The live state replicas share (ha-l2.4): the notices they send each other over NOTIFY, and
+	// each minted_pat run's token, sealed under the owner's key, in Postgres.
+	liveBus := livebus.New(pool, uuid.NewString())
+	liveBus.Start(rootCtx)
+	adoRunPATs := adorunpat.New(pool, subjectKeysOf(secrets))
 
 	// Embedded identity provider: signing key persisted in the secret store,
 	// generated on first boot. The pg-backed revocation store is the kill-switch
 	// denylist (identity_revocations).
-	// Boot keys: created under a lock that serializes replicas (#754).
-	bootKeys := newBootKeyStore(secrets, pool, *f.allowMultiInstance)
 	signKey, err := loadOrCreateSigningKey(bootCtx, bootKeys)
 	if err != nil {
 		return err
@@ -258,14 +295,7 @@ func run() error {
 	// middleware ignores the run claims and checks only the audience. Print and
 	// exit so this slots cleanly into a compose token-seeding step.
 	if *f.printGroundtruthToken {
-		mintCtx, mintCancel := context.WithTimeout(rootCtx, 10*time.Second)
-		defer mintCancel()
-		ri, merr := idp.MintRunIdentity(mintCtx, groundtruthSensorRunID, groundtruthSensorSub, groundtruthSensorSub, groundtruthAudience, false)
-		if merr != nil {
-			return fmt.Errorf("mint groundtruth token: %w", merr)
-		}
-		fmt.Println(ri.Token)
-		return nil
+		return printGroundtruthToken(rootCtx, idp)
 	}
 
 	// Token broker: GitHub minter only when the App credentials are present;
@@ -303,6 +333,11 @@ func run() error {
 	// fail-closed confinement pins. The pg-backed RefStore makes the
 	// orchestrator's ref->substrate routing (and thus the kill switch) durable
 	// across control-plane restarts.
+	runner.SetDefaultLimits(int64(*f.sandboxDefaultCPUMillis), int64(*f.sandboxDefaultMemoryMiB))
+	runner.SetProxyLimits(int64(*f.proxyCPUMillis), int64(*f.proxyMemoryMiB))
+	if err := applyRequestRatio(*f.sandboxRequestRatio); err != nil {
+		return err
+	}
 	run, runnerTarget, err := buildRunnerFromFlags(f, store.NewPG(pool), driveHostRoots)
 	if err != nil {
 		return err
@@ -319,9 +354,7 @@ func run() error {
 		return err
 	}
 
-	// WARDYN_DEMO_VIDEO_BASE_URL: validated once at boot, fail closed on a
-	// malformed value.
-	demoVideoBaseURL, err := api.ValidateDemoVideoBaseURL(*f.demoVideoBaseURL)
+	demoVideoBaseURL, governAdminRunsExempt, err := parseServeKnobs(f)
 	if err != nil {
 		return err
 	}
@@ -337,6 +370,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	warnGovernAdminRunsUnbound(*f.governAdminRuns, feats.authn != nil)
 
 	// MEMBER-MODE DESKTOP posture (validateHybridPosture already ran above,
 	// beside validateConfig). Checked here, not there, because both of its
@@ -352,11 +386,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	holder := sweeperHolder()
+	leader := db.NewSweeperLeader(pool, holder)
+	ticks := sweephealth.New(db.NewSweepTicks(pool), holder, nil)
 	srv := api.New(api.Config{
-		Store:     st,
-		Identity:  idp,
-		Approvals: approvals,
-		Broker:    brk,
+		SweeperLease: leader,
+		SweepHealth:  ticks,
+		Store:        st,
+		Identity:     idp,
+		Approvals:    approvals,
+		Broker:       brk,
 		// The wait ceiling a run's captured wait folds under; the approval
 		// sweeper (runApprovalSweeper) enforces the same value, and dispatch
 		// mirrors it onto a hold-mode run's sandbox (RL-1).
@@ -379,6 +418,7 @@ func run() error {
 		LocalMode:           lm.enabled,
 		MemberMode:          *f.memberMode,
 		SSOOnly:             *f.ssoOnly,
+		GovernAdminRuns:     *f.governAdminRuns,
 		LocalOperator:       lm.operator,
 		TrustDomain:         *f.trustDomain,
 		DefaultPolicy:       defaultPolicy,
@@ -390,6 +430,11 @@ func run() error {
 		ControlPlaneCAPEM:   feats.hop.caCertPEM(),
 		RecordingStore:      feats.recStore,
 		OIDC:                feats.authn,
+
+		// WARDYN_GOVERN_ADMIN_RUNS_EXEMPT, already validated by parseGovernAdminRunsExempt.
+		GovernAdminRunsExempt: governAdminRunsExempt,
+
+		SCIM: scimConfigValidated(f, posture),
 		// §I: nil unless WARDYN_DIRECTORY_PROVIDER is set — the whole feature
 		// off, the search endpoint answering its distinct 503 and every "who"
 		// field staying free text.
@@ -412,11 +457,27 @@ func run() error {
 		HarnessLoginMemoryMiB:    *f.harnessLoginMemoryMiB,
 		ProxyURL:                 *f.proxyURL,
 		Secrets:                  secrets,
+		KeyDomains:               keyDomains,
+		KeyDomainKeys:            keyDomainKeys,
+		PrincipalKeys:            principalKeysOn(*f.vault.principalKeys),
 		MaskRegistry:             maskReg,
+		MaskManifests:            maskManifests,
+		HA:                       *f.ha,
+		MaskSync:                 maskStore,
+		LiveBus:                  liveBus,
+		ADORunPATs:               adoRunPATs,
+		AuditUnsealer:            sealSrc.unsealer(),
+		AuditActorSubject:        sealSrc.actorSubject(),
+		SubjectKeys:              subjectKeysOf(secrets),
 		ExecOutputTailOff:        !*f.execOutputTail,
 		ExecOutputTailTTL:        *f.execOutputTailTTL,
+		RunOutputTailBytes:       *f.runOutputTailBytes,
+		RunOutputPersistOff:      !*f.runOutputPersist,
+		RunOutputRetention:       time.Duration(*f.runOutputRetention) * 24 * time.Hour,
+		PreflightRatePerMin:      *f.preflightRatePerMin,
 		ADOEntra:                 adoEntraSourceFromFlags(st, f), // ado_entra_source.go
 		ADOEntraByRow:            adoEntraByRow(st, adoEntraLoginFromFlags(f)),
+		AzureFoundryEntra:        azureFoundryEntraByRow(st, adoEntraLoginFromFlags(f)), // ado_entra_source.go
 		ADOLoginFacts:            adoLoginFactsFromFlags(f),
 		Components:               componentsInfo(f, runnerTarget, feats.recStore),
 		ScanAIAdvisor:            feats.scanAdvisor,
@@ -429,7 +490,8 @@ func run() error {
 		AgeKeyDurable:         secretsDurable(*f.ageKey, secrets),
 		SecretStoreExternal:   storesExternally(secrets),
 		SecretKeyService:      keyService(secrets),
-		PlatformKeySeparate:   strings.TrimSpace(*f.platformKeyFile) != "",
+		KEKRequired:           *f.vault.kekRequired,
+		PlatformKeySeparate:   platformKeySeparate(f, keyService(secrets) != ""),
 		LocalLoopback:         lm.loopback,
 		LocalTrustForwarder:   *f.localTrustFwd,
 		OIDCRoleMapConfigured: strings.TrimSpace(*f.oidcRoleMap) != "",
@@ -444,6 +506,11 @@ func run() error {
 		SSHAdvertiseAddr: *f.sshAdvertise,
 		SSHHostKey:       feats.sshHostKey,
 		SSHRoleTTL:       *f.sshRoleTTL,
+		APITokenMaxTTL:   *f.apiTokenMaxTTL,
+		RoleStampTTL:     *f.roleStampTTL,
+		// How long a governance change held for a second human waits (the switch itself is read
+		// per request by internal/api).
+		GovernanceChangeTTL: *f.governanceChangeTTL,
 		// UI-sandbox gateway (pillar 4): same "empty = off" shape as SSH above —
 		// UISessionKey is nil unless -ui-sandbox-listen is set, and the gateway
 		// checks both.
@@ -456,6 +523,7 @@ func run() error {
 		RunConfigKey:     feats.runConfigKey,
 		// Admits every run unless a WARDYN_HOST_* limit is set.
 		HostCapacityConfig: api.HostCapacityConfig{HostCapacity: hostcapacity.New(f.hostCapacity.limits(), hostcapacity.ReadProc)},
+		MaxConcurrentRuns:  *f.hostCapacity.maxConcurrentRuns,
 		// rootCtx is the daemon-lifetime base context for detached background
 		// work (the run completion watcher) that must outlive the create-run
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.
@@ -472,7 +540,7 @@ func run() error {
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
-	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore)
+	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore, leader, ticks)
 
 	// SSH gateway accept loop (own goroutine, like the periodic workers above,
 	// and extracted the same way — see startSSHGateway's own doc comment).
@@ -485,7 +553,7 @@ func run() error {
 	// Serve until signal/error, then drain: HTTP first, audit sinks last, the
 	// org federation forwarder (if any) joined so it never outlives the
 	// process (issue #1131).
-	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, feats.hop, orgFederation)
+	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, denials, feats.hop, orgFederation)
 }
 
 // tlsPosture is the validated TLS/cookie posture derived from the resolved
@@ -749,3 +817,27 @@ var (
 	flagIntEnv   = cliutil.FlagIntEnv
 	splitCSV     = cliutil.SplitCSV
 )
+
+// printGroundtruthToken mints the host-sensor token and prints it, so the -print-groundtruth-token
+// path slots into a compose token-seeding step and exits.
+func printGroundtruthToken(ctx context.Context, idp identity.Provider) error {
+	mintCtx, mintCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer mintCancel()
+	ri, err := idp.MintRunIdentity(mintCtx, groundtruthSensorRunID, groundtruthSensorSub, groundtruthSensorSub, groundtruthAudience, false)
+	if err != nil {
+		return fmt.Errorf("mint groundtruth token: %w", err)
+	}
+	fmt.Println(ri.Token)
+	return nil
+}
+
+// parseServeKnobs validates the two free-text knobs api.Config carries parsed, once at boot,
+// failing closed on a malformed value: WARDYN_DEMO_VIDEO_BASE_URL and
+// WARDYN_GOVERN_ADMIN_RUNS_EXEMPT.
+func parseServeKnobs(f *bootFlags) (demoVideoBaseURL string, governAdminRunsExempt []string, err error) {
+	if demoVideoBaseURL, err = api.ValidateDemoVideoBaseURL(*f.demoVideoBaseURL); err != nil {
+		return "", nil, err
+	}
+	governAdminRunsExempt, err = parseGovernAdminRunsExempt(*f.governAdminRunsExempt, *f.governAdminRuns)
+	return demoVideoBaseURL, governAdminRunsExempt, err
+}

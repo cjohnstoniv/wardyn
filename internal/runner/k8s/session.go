@@ -33,8 +33,14 @@ import (
 // Env list. Duplicated rather than hoisted, since docker's attachShell lives
 // in a `//go:build docker` file this package cannot import — keep the two in
 // lockstep if the shell chain ever changes.
-const attachShellScript = `export TERM=xterm-256color LANG=C.UTF-8 LC_ALL=C.UTF-8
-if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s wardyn bash; elif command -v bash >/dev/null 2>&1; then exec bash -i; else exec /bin/sh -i; fi`
+var attachShellScript = attachShellScriptFor(false)
+
+// attachShellScriptFor is the attach script for one role: an observer's tmux
+// client carries ignore-size (runner.TmuxObserverAttachSh), a writer's does not.
+func attachShellScriptFor(observer bool) string {
+	return `export TERM=xterm-256color LANG=C.UTF-8 LC_ALL=C.UTF-8
+if command -v tmux >/dev/null 2>&1; then ` + runner.TmuxAttachShFor(observer) + `; elif command -v bash >/dev/null 2>&1; then exec bash -i; else exec /bin/sh -i; fi`
+}
 
 // resolveExecContainer picks the Attach/ExecStream target: the ephemeral
 // "wardyn-agent" exec container if Exec already added one (so the session
@@ -66,7 +72,7 @@ func (d *Driver) Attach(ctx context.Context, ref string, opts runner.AttachOptio
 	}
 	container := resolveExecContainer(pod)
 
-	exec, err := d.newExecutor(ref, container, []string{"/bin/sh", "-c", attachShellScript}, true, true)
+	exec, err := d.newExecutor(ref, container, []string{"/bin/sh", "-c", attachShellScriptFor(opts.Observer)}, true, true)
 	if err != nil {
 		return nil, err
 	}

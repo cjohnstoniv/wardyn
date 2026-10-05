@@ -174,6 +174,9 @@ func siteConfigSetCmd(client clientFn) *cobra.Command {
 			if res.BrandingLogoPending {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: branding.logo_path was not attached — the console has no branding yet; save the Branding card (Admin view, Settings), then apply this file again\n")
 			}
+			for _, msg := range res.ModelProviderWarnings {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", msg)
+			}
 			return emitJSON(cmd.OutOrStdout(), out)
 		},
 	}

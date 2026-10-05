@@ -17,6 +17,7 @@ vi.mock("@xterm/xterm", () => {
     cols = 80;
     rows = 24;
     resize() {}
+    unicode = { activeVersion: "6" };
     loadAddon() {}
     open() {}
     write() {}
@@ -28,6 +29,8 @@ vi.mock("@xterm/xterm", () => {
     onBinary() {
       return { dispose() {} };
     }
+    modes = { mouseTrackingMode: "none" };
+    attachCustomWheelEventHandler() {}
     attachCustomKeyEventHandler() {}
     dispose() {}
   }
@@ -42,8 +45,6 @@ vi.mock("@xterm/addon-fit", () => ({
   },
 }));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
-vi.mock("@fontsource/jetbrains-mono/latin-400.css", () => ({}));
-vi.mock("@fontsource/jetbrains-mono/latin-ext-400.css", () => ({}));
 // No admin token: an operator on a cookie session takes the cookie lane, the
 // one that opens the socket directly.
 vi.mock("../lib/api/core", async (importOriginal) => ({
@@ -97,7 +98,7 @@ beforeEach(() => {
   FakeWebSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
   if (!("fonts" in document)) {
-    Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve() } });
+    Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve(), load: () => Promise.resolve([]) } });
   }
   vi.stubGlobal(
     "ResizeObserver",

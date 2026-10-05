@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -133,7 +134,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	grantID, granted := p.gitGrants[orgRepo]
 	if !granted {
 		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
-		http.Error(w, "repository not granted to this run", http.StatusForbidden)
+		p.denyAttributed(w, "repository not granted to this run", http.StatusForbidden)
 		return
 	}
 	if !validGitRest(r.Method, rest, r.URL.Query().Get("service")) {
@@ -273,6 +274,25 @@ func (p *Proxy) isBrokeredGitGrant(body []byte) bool {
 		}
 	}
 	return false
+}
+
+// isBrokeredPATGrant reports whether a sandbox-supplied mint body names one of
+// THIS run's git_pat grants while the PAT broker is on: the guard that keeps a
+// stored PAT out of the sandbox through the raw mint relay. It decodes exactly
+// as isBrokeredGitGrant does and fails open on an undecodable body for the same
+// reason. handlePATBroker's own mint bypasses this (brokeredToken ->
+// forwardToControlPlane directly).
+func (p *Proxy) isBrokeredPATGrant(body []byte) bool {
+	if len(p.brokeredPATGrantIDs) == 0 {
+		return false
+	}
+	var req struct {
+		GrantID uuid.UUID `json:"grant_id"`
+	}
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&req); err != nil || req.GrantID == uuid.Nil {
+		return false
+	}
+	return slices.Contains(p.brokeredPATGrantIDs, req.GrantID)
 }
 
 // gitToken returns a cached (or freshly minted) installation token for grantID.
@@ -589,7 +609,7 @@ func (p *Proxy) confinePush(w http.ResponseWriter, r *http.Request, subject slog
 		// on the paths that show server messages, and always shows the 403).
 		// A sideband report-status would read better but means claiming
 		// "unpack ok" for a pack we never forwarded.
-		http.Error(w, "wardyn: "+err.Error()+
+		p.denyAttributed(w, "wardyn: "+err.Error()+
 			"\nthis run may push only to "+prefix+"*", http.StatusForbidden)
 		return nil, false
 	}

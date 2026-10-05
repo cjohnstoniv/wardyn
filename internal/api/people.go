@@ -46,9 +46,11 @@ func (s *Server) mountPeopleRoutes(securityOps chi.Router) {
 	if ps, ok := s.cfg.Store.(store.PersonStore); ok && s.cfg.OIDC != nil {
 		s.cfg.OIDC.AttachPersonKeying(peopleKeying{s: s, ps: ps})
 	}
+	securityOps.Get("/people", s.handleListPeople)
 	securityOps.Post("/people", s.handleCreatePerson)
-	securityOps.Post("/people/{principal}/tokens", s.handleMintPersonAPIToken)
-	securityOps.Get("/people/{principal}/tokens", s.handleListPersonAPITokens)
+	securityOps.With(s.refuseSubjectPrincipalParam).Post("/people/{principal}/tokens", s.handleMintPersonAPIToken)
+	securityOps.With(s.refuseSubjectPrincipalParam).Get("/people/{principal}/tokens", s.handleListPersonAPITokens)
+	securityOps.With(s.refuseSubjectPrincipalParam).Post("/people/{principal}/erasure", s.handleErasePerson)
 }
 
 func (s *Server) personStoreOr501(w http.ResponseWriter) (store.PersonStore, bool) {
@@ -318,14 +320,22 @@ func (k peopleKeying) PrincipalFor(ctx context.Context, subj oidc.Subject) (stri
 	return p.Principal, false, nil
 }
 
-// subKnown reports whether sub already names someone here: a person record,
-// or an API token, SSH key, run, workspace or stored secret they own. Read only when a sign-in
-// matches an object-id person, so an ordinary sign-in pays nothing.
+// subKnown reports whether sub already names someone here: an identity a
+// prior sign-in bound to it, a person record, or an API token, SSH key, run,
+// workspace or stored secret they own. Read only when a sign-in matches an
+// object-id person, so an ordinary sign-in pays nothing.
 func (k peopleKeying) subKnown(ctx context.Context, sub string) (bool, error) {
+	st := k.s.cfg.Store
+	// A bound identity never moves: a session under another principal would
+	// escape its deactivation and epoch checks.
+	if ids, ok := st.(store.PrincipalIdentityStore); ok {
+		if rows, err := ids.IdentitiesByPrincipal(ctx, sub); err != nil || len(rows) > 0 {
+			return len(rows) > 0, err
+		}
+	}
 	if _, err := k.ps.GetPerson(ctx, sub); !errors.Is(err, store.ErrNotFound) {
 		return err == nil, err
 	}
-	st := k.s.cfg.Store
 	if toks, err := st.ListAPITokensByPrincipal(ctx, sub); err != nil || len(toks) > 0 {
 		return len(toks) > 0, err
 	}

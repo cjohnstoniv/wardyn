@@ -22,6 +22,10 @@ type APIError struct {
 	// on WHY a call failed reads Reason, never Error()'s prose: the human
 	// sentence is free to reword without notice, the reason string is not.
 	Reason string
+	// Policy names the governance policy whose ceiling refused the request and
+	// how to ask for a change (internal/api's errorBody.Policy), nil when the
+	// refusal is not a ceiling refusal or the server sent none.
+	Policy *PolicyRef
 }
 
 // NewAPIError builds an *APIError from a non-2xx status and its raw body,
@@ -33,10 +37,11 @@ type APIError struct {
 func NewAPIError(status int, raw []byte) *APIError {
 	e := &APIError{Status: status, Body: string(raw)}
 	var env struct {
-		Reason string `json:"reason"`
+		Reason string     `json:"reason"`
+		Policy *PolicyRef `json:"policy"`
 	}
 	if json.Unmarshal(raw, &env) == nil {
-		e.Reason = env.Reason
+		e.Reason, e.Policy = env.Reason, env.Policy
 	}
 	return e
 }

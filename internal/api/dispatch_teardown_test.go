@@ -38,6 +38,14 @@ type dispatchTestStore struct {
 	run         types.AgentRun
 	state       types.RunState
 	failureHint string
+	grants      []types.CredentialGrant // what ListGrantsByRun returns
+	grantsErr   error                   // when set, ListGrantsByRun fails with it
+}
+
+func (s *dispatchTestStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.grants, s.grantsErr
 }
 
 func (s *dispatchTestStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
@@ -260,6 +268,17 @@ func TestDispatch_ExecFailureTeardownFailure_AuditsTeardownError(t *testing.T) {
 	if ev := findAudit(audit.events, run.ID, "run.exec", "failure"); ev == nil {
 		t.Fatal("no run.exec/failure event emitted")
 	}
+	// The teardown row shares the action and outcome; the Exec failure is the one with an error.
+	stamped := false
+	for _, e := range audit.events {
+		if e.Action == "run.exec" && e.Outcome == "failure" && strings.Contains(string(e.Data), `"reason":"agent_start"`) &&
+			strings.Contains(string(e.Data), "OCI runtime error") {
+			stamped = true
+		}
+	}
+	if !stamped {
+		t.Errorf("the Exec failure row must carry reason agent_start, got %s", auditDump(audit.events, run.ID))
+	}
 	ev := findTeardownError(audit.events, run.ID)
 	if ev == nil {
 		t.Fatalf("a failed teardown on the exec-failure path must be audited with teardown_error; the run is FAILED (terminal) so no boot reconciles the live sandbox — events=%s", auditDump(audit.events, run.ID))
@@ -340,10 +359,12 @@ func TestCompletionWatcher_TransientWaitError_FinalizesViaHandoff(t *testing.T) 
 	// WHOLE finalize, not just the state flip: the cascade wins the terminal CAS
 	// FIRST and revokes after (deliberately — C002), so a poll that stops at
 	// "terminal" can observe the run finalized microseconds before its revoke
-	// lands and read revocations=0. Wait for both, then assert exactly-once.
+	// lands and read revocations=0. The sandbox teardown comes after the revoke
+	// (finalizeRunTailOrdered: revoke, output finalise, then StopSandbox), so the
+	// stop is awaited as well. Wait for all three, then assert exactly-once.
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) &&
-		!(isTerminalRunState(st.State()) && brk.revocations(runID) > 0) {
+		!(isTerminalRunState(st.State()) && brk.revocations(runID) > 0 && rn.stopCount() > 0) {
 		time.Sleep(20 * time.Millisecond)
 	}
 

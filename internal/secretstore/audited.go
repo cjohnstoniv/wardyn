@@ -183,6 +183,10 @@ type audited struct {
 
 func (a *audited) Name() string { return a.inner.Name() }
 
+// Unwrap is the store this one records reads for, so a caller can reach a
+// capability the audit wrapper does not forward (the pg store's SubjectKeys).
+func (a *audited) Unwrap() Store { return a.inner }
+
 func (a *audited) Put(ctx context.Context, name string, value []byte) error {
 	return a.inner.Put(ctx, name, value)
 }
@@ -193,6 +197,17 @@ func (a *audited) List(ctx context.Context) ([]string, error) { return a.inner.L
 
 func (a *audited) DeleteEverywhere(ctx context.Context, names []string) (int, error) {
 	return a.inner.DeleteEverywhere(ctx, names)
+}
+
+// Revision forwards the wrapped store's row revision (Revisioned), or answers
+// ErrNoRevision. A guarded Put needs no forwarding: its context reaches the
+// wrapped Put unchanged. Not audited: it reads no value.
+func (a *audited) Revision(ctx context.Context, name string) (string, error) {
+	r, ok := a.inner.(Revisioned)
+	if !ok {
+		return "", ErrNoRevision
+	}
+	return r.Revision(ctx, name)
 }
 
 // Holders is not audited: it reads which namespaces hold a row, never a value.
@@ -252,6 +267,15 @@ func (a *audited) MetadataEverywhere(ctx context.Context, names []string) ([]Met
 		return nil, ErrNoMetadata
 	}
 	return m.MetadataEverywhere(ctx, names)
+}
+
+// DestroyCredentialKey forwards to the wrapped store when it seals credentials
+// under per-person keys, and is a no-op otherwise: there is nothing to destroy.
+func (a *audited) DestroyCredentialKey(ctx context.Context, owner string) ([]int, error) {
+	if d, ok := a.inner.(CredentialKeyDestroyer); ok {
+		return d.DestroyCredentialKey(ctx, owner)
+	}
+	return nil, nil
 }
 
 // KeyService forwards the wrapped store's description of the key service that

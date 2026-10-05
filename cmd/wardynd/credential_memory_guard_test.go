@@ -201,16 +201,26 @@ func recvTypeName(e ast.Expr) string {
 // "file|function|primitive", with why it may. Exactly what is there today;
 // nothing added for headroom.
 var decryptSites = map[string]string{
-	"internal/secretstore/kek/kek.go|Open|AEAD.Open":                      "the envelope's AES-256-GCM open, the one definition every local-mode read goes through",
-	"internal/secretstore/kek/kek.go|Local.Unwrap|kek.Open":               "the local KEK unwraps a row's data key",
-	"internal/secretstore/pg/pg.go|Store.open|KEK.Unwrap":                 "a local-mode Get unwraps the row's data key, bound to the row's owner and name",
-	"internal/secretstore/pg/pg.go|Store.open|kek.Open":                   "a local-mode Get opens the value, bound to the row's owner and name",
-	"internal/secretstore/pg/pg.go|rewrap|KEK.Unwrap":                     "-rotate-age-key rewraps a data key; the value itself is never opened",
-	"internal/secretstore/pg/convert.go|ageDecrypt|age.Decrypt":           "the one-time conversion of a pre-envelope (age) row to envelope v1",
-	"internal/secretstore/pg/external.go|Store.openExternal|External.Get": "a store-mode Get reads the value from the organisation's store, after the pointer row is checked",
-	"internal/secretstore/vaultkv/transit.go|Transit.selfTest|KEK.Unwrap": "the Transit boot self-test unwraps a random probe data key it just wrapped, never a stored one",
-	"internal/secretstore/azurekv/kek.go|KEK.selfTest|KEK.Unwrap":         "the Key Vault KEK boot self-test unwraps a random probe data key it just wrapped, never a stored one",
-	"internal/api/run_proxy_config.go|Server.loadRunProxyConfig|kek.Open": "a revive or an extend opens its run's stored proxy config (#1176), bound to the run, to rebuild the proxy it hands the config to",
+	"internal/secretstore/kek/kek.go|Open|AEAD.Open":                               "the envelope's AES-256-GCM open, the one definition every local-mode read goes through",
+	"internal/secretstore/kek/kek.go|Local.Unwrap|kek.Open":                        "the local KEK unwraps a row's data key",
+	"internal/secretstore/pg/pg.go|Store.open|KEK.Unwrap":                          "a local-mode Get unwraps the row's data key, bound to the row's owner and name",
+	"internal/secretstore/pg/pg.go|Store.open|kek.Open":                            "a local-mode Get opens the value, bound to the row's owner and name",
+	"internal/secretstore/pg/pg.go|rewrap|KEK.Unwrap":                              "-rotate-age-key rewraps a data key; the value itself is never opened",
+	"internal/secretstore/pg/principal_rows.go|Store.openPrincipal|kek.Open":       "a Get of a row under its owner's principal key (enc_version 3) opens the data key, then the value, each bound to the row",
+	"internal/secretstore/pg/principal_rows.go|Store.sealV1ToPrincipal|KEK.Unwrap": "-rewrap-principal-keys unwraps a v1 data key to wrap it under the owner's principal key; the value itself is never opened",
+	"internal/secretstore/subjectkey/subjectkey.go|Manager.Reseal|kek.Open":        "-rewrap-principal-keys opens a data key under an owner's earlier key generation to seal it under the current one; the value the data key seals is never opened",
+	"internal/secretstore/pg/convert.go|ageDecrypt|age.Decrypt":                    "the one-time conversion of a pre-envelope (age) row to envelope v1",
+	"internal/secretstore/pg/external.go|Store.openExternal|External.Get":          "a store-mode Get reads the value from the organisation's store, after the pointer row is checked",
+	"internal/secretstore/vaultkv/transit.go|Transit.selfTest|KEK.Unwrap":          "the Transit boot self-test unwraps a random probe data key it just wrapped, never a stored one",
+	"internal/secretstore/azurekv/kek.go|KEK.selfTest|KEK.Unwrap":                  "the Key Vault KEK boot self-test unwraps a random probe data key it just wrapped, never a stored one",
+	"internal/secretstore/subjectkey/subjectkey.go|Manager.fill|KEK.Unwrap":        "a use opens a per-subject key, bound to its owner, purpose, version and domain; it is the key that seals a person's rows, never a stored credential value",
+	"internal/secretstore/subjectkey/rewrap.go|Rewrap|KEK.Unwrap":                  "-rewrap and -rotate-age-key move a per-subject key's wrap onto the current KEK; no sealed value is opened",
+	"internal/api/run_proxy_config.go|Server.loadRunProxyConfig|kek.Open":          "a revive or an extend opens its run's stored proxy config (#1176), bound to the run, to rebuild the proxy it hands the config to",
+	"internal/audit/seal.go|Sealer.unsealData|kek.Open":                            "a read opens a sealed audit field under its subject's key, bound to the event, action, path and key handle; the value is a person's own text from one audit row, never a stored credential",
+	"internal/audit/seal.go|openPending|kek.Open":                                  "the spool drain opens a pending audit field, or a pending human actor, under the platform pending key, to seal it under its subject's own key (or store the actor as the subject id) before the store sees the row; a person's own text or name from one audit row, never a stored credential",
+	"internal/adorunpat/adorunpat.go|Store.Load|kek.Open":                          "a load opens a minted_pat run's current Azure DevOps token, sealed under the run owner's per-subject key and bound to the run, the rendering and the key version, so a resolve served by any replica hands out the token another created; the token is one the run already holds and is registered for masking, never read through Store.Get",
+	"internal/maskmanifest/maskmanifest.go|Manifests.load|kek.Open":                "a load opens a run's sealed masking-manifest values, bound to the run, the value's ordinal and the key version, under the run owner's per-subject key, to put them in the masking registry; each is a rendering the run already holds, never read through Store.Get",
+	"internal/maskstore/sync.go|Store.open|kek.Open":                               "a read of the shared masking registry opens a value another replica committed, bound to its bucket, row, owner, run or credential name and the key version, under the owner's per-subject key, to put it in this process's masking registry; the value is one a run or a sign-in already holds, never read through Store.Get",
 }
 
 // testSupportFiles are the files the scan skips: test support that calls a

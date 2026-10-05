@@ -36,6 +36,20 @@ const ReaperAdvisoryLockKey int64 = 0x5741524459_524541 // ASCII "WARDYREA"
 // reuse this key.
 const GroundTruthRotatorLockKey int64 = 0x5741524459_475452 // ASCII "WARDYGTR"
 
+// SweeperLeaderLockKey elects the one replica that runs the sweepers which must
+// run once (approvals, recordings, credentials, the always-egress reconcile and
+// the run pause). Acquired ONCE and held for the process lifetime by
+// SweeperLeader; followers retry on a backoff and take over when the leader's
+// session ends.
+//
+// HONEST CEILING, as for GroundTruthRotatorLockKey: an advisory lock dies with
+// its SESSION, so a Postgres failover can release it under a still-running
+// leader. Unlike the rotator, this lock IS used for work that needs fencing, so
+// each acquisition bumps the durable epoch in sweeper_leader (0110) and a
+// multi-step operation re-checks its epoch (SweeperLeader.Current) before it
+// writes.
+const SweeperLeaderLockKey int64 = 0x5741524459_53574C // ASCII "WARDYSWL"
+
 // SingleInstanceLockKey is the RUNTIME half of the one-replica safety control
 // (the Helm chart's `replicas > 1` render refusal is the other half). Taken
 // once at boot, held for the process lifetime: a second instance refuses to start.
@@ -61,7 +75,7 @@ const SingleInstanceLockKey int64 = 0x5741524459_494E53 // ASCII "WARDYINS"
 const SecretRekeyLockKey int64 = 0x5741524459_524B59 // ASCII "WARDYRKY"
 
 // BootKeyLockKey serializes the CREATE path of cmd/wardynd's boot keys across
-// -allow-multi-instance replicas: without it, two booting against an empty
+// WARDYN_HA replicas: without it, two booting against an empty
 // store each generate a key and the loser serves one nobody else holds.
 const BootKeyLockKey int64 = 0x5741524459_424B59 // ASCII "WARDYBKY"
 
@@ -75,7 +89,7 @@ const SecretConvertLockKey int64 = 0x5741524459_454E56 // ASCII "WARDYENV"
 // ReaperAdvisoryLockKey and for the same reason SingleInstanceLockKey alone
 // is not enough: that lock is at most one steady-state instance, not mutual
 // exclusion (its own HONEST CEILING) — a deployment booted with
-// -allow-multi-instance skips the claim entirely, and a Postgres
+// WARDYN_HA skips the claim entirely, and a Postgres
 // restart/failover can release its session under a still-running daemon
 // while a second one boots and claims it. Either way, two tickers running at
 // once would both re-run teardown for the same aged KILLED run, doubling its
@@ -97,6 +111,13 @@ const TerminalSandboxSweepLockKey int64 = 0x5741524459_545353 // ASCII "WARDYTSS
 // write volume is nowhere near contention. Upgrade only if that changes:
 // per-partition chains with a key per partition.
 const AuditChainLockKey int64 = 0x5741524459_434841 // ASCII "WARDYCHA"
+
+// AuditPartitionLockKey serializes the creators of audit_events partitions: two replicas booting at
+// once, or a boot beside the daily sweeper, would otherwise both create the same month.
+// audit_ensure_partitions takes it inside the database as a transaction lock; the literal in
+// 0111_audit_partitioned.sql must equal this. It is deliberately NOT AuditChainLockKey: creating a
+// month must not queue behind (or hold up) an append.
+const AuditPartitionLockKey int64 = 0x5741524459_415054 // ASCII "WARDYAPT"
 
 // AuditChainLockTimeout bounds how long ANY writer waits for AuditChainLockKey.
 // Since 0056 the trigger takes it on every audit_events insert, including
@@ -135,20 +156,28 @@ func AuditChainLockTimeoutSQL() string {
 // release, so the caller's own queries need a second conn — requires
 // pool_max_conns >= 2 (a 1-conn pool self-deadlocks).
 func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64) (release func(), ok bool, err error) {
-	conn, err := pool.Acquire(ctx)
+	_, release, ok, err = TryAdvisoryLockConn(ctx, pool, key)
+	return release, ok, err
+}
+
+// TryAdvisoryLockConn is TryAdvisoryLock that also hands back the connection holding the lock, for
+// the caller that must run its own statements on that same session (wardynd -migrate-only). The
+// conn is only valid until release is called; the caller must not Release it itself.
+func TryAdvisoryLockConn(ctx context.Context, pool *pgxpool.Pool, key int64) (conn *pgxpool.Conn, release func(), ok bool, err error) {
+	conn, err = pool.Acquire(ctx)
 	if err != nil {
-		return nil, false, fmt.Errorf("db: acquire advisory lock conn: %w", err)
+		return nil, nil, false, fmt.Errorf("db: acquire advisory lock conn: %w", err)
 	}
 	var got bool
 	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&got); err != nil {
 		conn.Release()
-		return nil, false, fmt.Errorf("db: try advisory lock: %w", err)
+		return nil, nil, false, fmt.Errorf("db: try advisory lock: %w", err)
 	}
 	if !got {
 		conn.Release()
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
-	return func() {
+	return conn, func() {
 		// Background context: ctx is typically cancelled at shutdown, exactly
 		// when releasing matters most. Best-effort — lock also dies with the
 		// session when the conn closes.

@@ -8,10 +8,19 @@
 // Idleness is wall-clock age of agent_runs.updated_at, reset only by a write
 // through the store (state transitions, sandbox_ref updates, TouchRun). The
 // proxy's decision-ingest touch is coalesced to one UPDATE per TouchDebounce
-// window, so thresholdFor adds TouchDebounce as slack. Activity that never
-// leaves the sandbox (CPU, file writes) does NOT reset the clock, so a busy
-// run can still be reaped; operators needing an unbounded session use the
-// never-reap escape hatch (AutoStopAfterSec <= 0).
+// window, so thresholdFor adds TouchDebounce as slack. CPU work inside the
+// sandbox reaches the clock through TouchRun too: internal/api's pause sweep
+// reads each candidate's CPU from the substrate and touches a busy one. Where
+// that signal is off (no metrics-server) and for file writes, activity that
+// never leaves the sandbox does NOT reset the clock, so a busy run can still
+// be reaped; operators needing an unbounded session use the never-reap
+// escape hatch (AutoStopAfterSec <= 0).
+//
+// Config.MaxAge (WARDYN_RUN_MAX_AGE) is a separate, absolute cap on a RUNNING
+// run's age since creation. It is its own predicate: not ends_at (which a
+// person may extend), not the idle compare-and-set, and it applies to a run
+// whose policy never idle-reaps. It stops a run even with a request open,
+// because bounding a hung run is its whole purpose.
 //
 // AutoStopAfterSec (policy auto_stop_after_sec): >0 idle timeout in seconds;
 // 0 DISABLED/never reaped (default, matches docs/POLICIES.md); <0 also never
@@ -21,12 +30,14 @@ package lifecycle
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -46,11 +57,15 @@ const TouchDebounce = 30 * time.Second
 // RunSummary is the minimal projection a Store must return for idle detection.
 type RunSummary struct {
 	ID        uuid.UUID
+	CreatedAt time.Time
 	UpdatedAt time.Time
 	// PolicyAutoStopAfterSec: 0 or negative means never reap, positive is the
 	// idle timeout in seconds. Store must JOIN to the policy table; zero is
 	// intentional, not a missing join.
 	PolicyAutoStopAfterSec int
+	// Kept is a run kept after a control-plane outage whose agent still runs: the
+	// max age still ends it, and idle reaping does not apply (its lost mark governs it).
+	Kept bool
 }
 
 // Store is the narrow persistence interface the Reaper requires; the real
@@ -92,6 +107,12 @@ type Stopper interface {
 	// a run touched by an active attach since the snapshot is NOT stopped. A
 	// non-nil error means the stop failed outright and the reaper logs/skips.
 	StopRun(ctx context.Context, runID uuid.UUID, notAfter time.Time) (StopOutcome, error)
+
+	// StopRunMaxAge stops a run that has outlived Config.MaxAge: the same
+	// RUNNING->STOPPED transition and teardown as StopRun, guarded on the run's
+	// created_at being at or before createdNotAfter instead of on idleness (and
+	// ignoring open requests). Idempotent like StopRun.
+	StopRunMaxAge(ctx context.Context, runID uuid.UUID, createdNotAfter time.Time) (StopOutcome, error)
 }
 
 // Recorder matches audit.Recorder exactly so a store.Recorder can be passed directly.
@@ -103,6 +124,9 @@ type Recorder interface {
 type Config struct {
 	// Interval is how often the reaper scans. Default: 1 minute.
 	Interval time.Duration
+	// MaxAge, when positive, ends any RUNNING run created longer ago than this
+	// (WARDYN_RUN_MAX_AGE). Zero or negative is off.
+	MaxAge time.Duration
 	// Now overrides the wall clock. Nil means use real time.
 	Now func() time.Time
 	// TickLock, when non-nil, makes each tick single-flight across control
@@ -111,6 +135,10 @@ type Config struct {
 	// a Postgres try-advisory-lock; kept as a func so lifecycle has no DB
 	// dependency. Nil = ungated (single-process default; what tests use).
 	TickLock func(ctx context.Context) (release func(), ok bool)
+	// Sweeps, when non-nil, records each tick that does real work (the one that
+	// won TickLock) as the idle_reaper sweep: an attempt when it starts and a
+	// success only when it finishes without error. Nil records nothing.
+	Sweeps *sweephealth.Tracker
 }
 
 // Reaper is the idle-workspace garbage collector: a periodic loop that finds
@@ -123,7 +151,9 @@ type Reaper struct {
 	recorder Recorder
 	now      func() time.Time
 	interval time.Duration
+	maxAge   time.Duration
 	tickLock func(ctx context.Context) (func(), bool)
+	sweeps   *sweephealth.Tracker
 	logger   *slog.Logger
 }
 
@@ -135,7 +165,9 @@ func New(store Store, stopper Stopper, recorder Recorder, cfg Config) *Reaper {
 		recorder: recorder,
 		now:      cfg.Now,
 		interval: cfg.Interval,
+		maxAge:   cfg.MaxAge,
 		tickLock: cfg.TickLock,
+		sweeps:   cfg.Sweeps,
 		logger:   slog.Default().With("component", "lifecycle.reaper"),
 	}
 	if r.now == nil {
@@ -164,13 +196,15 @@ func (r *Reaper) Run(ctx context.Context) {
 }
 
 // Tick is one reap scan, gated by Config.TickLock when wired. Exported for
-// integration callers/tests to drive directly; production code uses Run.
+// integration callers/tests to drive directly; production code uses Run. The
+// error is the tick's: the scan could not list runs, or a stop failed. A tick
+// another control plane holds the lock for is skipped, which is not an error.
 //
 // Deadline is Interval+defaultStopTimeout, not just Interval: a child
 // context.WithTimeout can only shorten its parent's deadline, so budgeting at
 // bare Interval would silently cap every per-stop deadline short of the full
 // defaultStopTimeout the constant promises.
-func (r *Reaper) Tick(ctx context.Context) {
+func (r *Reaper) Tick(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, r.interval+defaultStopTimeout)
 	defer cancel()
 	if r.tickLock != nil {
@@ -179,19 +213,22 @@ func (r *Reaper) Tick(ctx context.Context) {
 			// TRY lock semantics: skip rather than queue, since the scan is
 			// idempotent and the next tick is one Interval away.
 			r.logger.DebugContext(ctx, "lifecycle: tick skipped (reap lock held elsewhere)")
-			return
+			return nil
 		}
 		defer release()
 	}
-	r.reap(ctx)
+	return r.sweeps.Tick(ctx, sweephealth.IdleReaper, r.reap)
 }
 
-// reap is the tick body — the scan itself, with no locking of its own.
-func (r *Reaper) reap(ctx context.Context) {
+// reap is the tick body — the scan itself, with no locking of its own. It
+// returns the list failure, or the stops that failed outright: a run the reaper
+// cannot stop keeps its credentials live, which is what a stale idle_reaper
+// sweep should say.
+func (r *Reaper) reap(ctx context.Context) error {
 	runs, storeNow, err := r.store.ListRunningWithPolicy(ctx)
 	if err != nil {
 		r.logger.ErrorContext(ctx, "lifecycle: list running runs failed", "err", err)
-		return
+		return fmt.Errorf("lifecycle: list running runs: %w", err)
 	}
 
 	// Measure age against the store's clock, since UpdatedAt came from it; a
@@ -201,7 +238,17 @@ func (r *Reaper) reap(ctx context.Context) {
 		now = r.now()
 	}
 
+	var stopErrs []error
 	for _, run := range runs {
+		if r.maxAge > 0 && now.Sub(run.CreatedAt) >= r.maxAge {
+			if err := r.stopMaxAge(ctx, run, now); err != nil {
+				stopErrs = append(stopErrs, err)
+			}
+			continue
+		}
+		if run.Kept {
+			continue
+		}
 		// AutoStopAfterSec <= 0 means never reap regardless of idle time (0 =
 		// disabled default; negative = explicit unbounded-attach escape hatch).
 		if run.PolicyAutoStopAfterSec <= 0 {
@@ -228,6 +275,7 @@ func (r *Reaper) reap(ctx context.Context) {
 				"threshold", threshold,
 				"err", err,
 			)
+			stopErrs = append(stopErrs, fmt.Errorf("lifecycle: stop run %s: %w", runID, err))
 			continue
 		}
 		if !out.Applied {
@@ -248,6 +296,30 @@ func (r *Reaper) reap(ctx context.Context) {
 			r.emitRevokeFailure(ctx, runID, out.Errors)
 		}
 	}
+	return errors.Join(stopErrs...)
+}
+
+// stopMaxAge ends one run past Config.MaxAge and audits it. Same per-stop
+// deadline and failure handling as the idle path (the error fails the tick); a
+// lost compare-and-set (the run already ended) writes nothing.
+func (r *Reaper) stopMaxAge(ctx context.Context, run RunSummary, now time.Time) error {
+	stopCtx, cancel := context.WithTimeout(ctx, defaultStopTimeout)
+	defer cancel()
+	// The cutoff is the scan's clock minus the cap, so created_at is compared
+	// on the one clock that stamped it.
+	out, err := r.stopper.StopRunMaxAge(stopCtx, run.ID, now.Add(-r.maxAge))
+	if err != nil {
+		r.logger.ErrorContext(ctx, "lifecycle: max-age stop failed", "run_id", run.ID, "err", err)
+		return fmt.Errorf("lifecycle: max-age stop %s: %w", run.ID, err)
+	}
+	if !out.Applied {
+		return nil
+	}
+	r.emitMaxAgeStop(ctx, run.ID, now.Sub(run.CreatedAt))
+	if len(out.Errors) > 0 {
+		r.emitRevokeFailure(ctx, run.ID, out.Errors)
+	}
+	return nil
 }
 
 // thresholdFor returns the idle threshold for a run: policy AutoStopAfterSec
@@ -282,6 +354,33 @@ func (r *Reaper) emitAutoStop(ctx context.Context, runID uuid.UUID, idleFor, thr
 	}
 	if err := r.recorder.Record(ctx, ev); err != nil {
 		r.logger.ErrorContext(ctx, "lifecycle: emit autostop audit event failed",
+			"run_id", runID,
+			"err", fmt.Sprintf("%v", err),
+		)
+	}
+}
+
+// emitMaxAgeStop writes a "run.max_age.expire" audit event; like emitAutoStop,
+// a failure to record is logged and swallowed.
+func (r *Reaper) emitMaxAgeStop(ctx context.Context, runID uuid.UUID, age time.Duration) {
+	data, _ := json.Marshal(map[string]any{
+		"age_sec":     int64(age.Seconds()),
+		"max_age_sec": int64(r.maxAge.Seconds()),
+		"reason":      "max_age",
+	})
+	ev := types.AuditEvent{
+		ID:        uuid.New(),
+		Time:      r.now(),
+		RunID:     &runID,
+		ActorType: types.ActorSystem,
+		Actor:     "wardyn/lifecycle-reaper",
+		Action:    "run.max_age.expire",
+		Target:    runID.String(),
+		Outcome:   "success",
+		Data:      json.RawMessage(data),
+	}
+	if err := r.recorder.Record(ctx, ev); err != nil {
+		r.logger.ErrorContext(ctx, "lifecycle: emit max-age stop audit event failed",
 			"run_id", runID,
 			"err", fmt.Sprintf("%v", err),
 		)

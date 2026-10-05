@@ -17,6 +17,7 @@ import {
   AlertTriangle,
   CircleUser,
   Compass,
+  Contact,
   Fingerprint,
   FolderOpen,
   HardDrive,
@@ -71,6 +72,7 @@ import {
   type ViewUserType,
 } from "../wardyn/view-switch";
 import { CONSOLE_VIEW, NAV } from "../wardyn/copy/console-view";
+import { PEOPLE_PAGE } from "../wardyn/copy/people";
 import { NAV as SETTINGS_NAV } from "../../lib/unsaved-copy";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
 // importing it eagerly pulled all of that into the entry chunk even though the
@@ -364,6 +366,9 @@ interface NavItem {
 const ADMIN_NAV: NavItem[] = [
   { to: "/admin/runs", label: "Runs", icon: Activity, badge: "attention" },
   { to: "/admin/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
+  // 0.8.6 (ppl-p2, M12 D1): right after Approvals, because leaver work is frequent and urgent. securityOps
+  // server-side, so both admin tiers see it.
+  { to: "/admin/people", label: PEOPLE_PAGE.NAV, icon: Contact },
   { to: "/admin/workspaces", label: "Workspaces", icon: FolderOpen },
   { to: "/admin/policies", label: "Policies", icon: UserCog },
   // GOVERNANCE_NAV_TITLE is one string for the nav and the screen's heading.
@@ -461,6 +466,15 @@ const ConfinementPostureBanner = React.lazy(() =>
 // #484 — same lazy rationale; mounted between the two bands above.
 const EveryoneAdminBanner = React.lazy(() =>
   import("../wardyn/everyone-admin-banner").then((m) => ({ default: m.EveryoneAdminBanner })),
+);
+// Constrained-admin mode (mock M10) — same lazy rationale; mounted after the
+// everyone-is-an-admin band, ahead of the confinement note.
+const GovernedAdminBanner = React.lazy(() =>
+  import("../wardyn/governed-admin-banner").then((m) => ({ default: m.GovernedAdminBanner })),
+);
+// M10 (o-o2b) — same lazy rationale; mounted after GovernedAdminBanner.
+const SubstrateHealthBanner = React.lazy(() =>
+  import("../wardyn/substrate-health-banner").then((m) => ({ default: m.SubstrateHealthBanner })),
 );
 // #659 Q2 — same lazy rationale; mounted FIRST in the stack, ahead of every
 // deployment-wide band: it answers what the person just did (a redirect they
@@ -875,6 +889,16 @@ export function AppShell({
               before the cluster-wide confinement note. */}
               <React.Suspense fallback={null}>
                 <EveryoneAdminBanner />
+              </React.Suspense>
+              {/* M10 — Admin view, admins only: the substrate_health row as the
+              server graded it. */}
+              <React.Suspense fallback={null}>
+                <SubstrateHealthBanner view={view} />
+              </React.Suspense>
+              {/* Constrained-admin mode (mock M10): Admin view only, an info
+              band beside the everyone-is-an-admin one. */}
+              <React.Suspense fallback={null}>
+                <GovernedAdminBanner view={view} />
               </React.Suspense>
               {/* #162 — last in the stack (mock-approval ruling 3): the four
               bands above are each the better explanation of what you are

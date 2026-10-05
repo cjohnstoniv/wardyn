@@ -45,6 +45,10 @@ type AuditFilter struct {
 	ActorType    types.ActorType // human / agent / system
 	Outcome      string          // success / failure / warn
 	Origin       string          // AuditOriginDevice or AuditOriginOrganisation
+	// ActorAlt is a second stored actor that also matches Actor: the "subject:<id>"
+	// a row holds for the person Actor names under WARDYN_AUDIT_SEAL=full. Rows
+	// written before it was turned on keep the name, so both must match.
+	ActorAlt string
 	// DataContains is a JSON object the row's data must contain (Postgres
 	// `data @> $n::jsonb`): every key present with an equal value, objects
 	// recursively. A string, not a map, so the filter stays comparable (IsZero).
@@ -72,7 +76,7 @@ func (f AuditFilter) Matches(ev types.AuditEvent) bool {
 		return false
 	case f.ActionPrefix != "" && !strings.HasPrefix(ev.Action, f.ActionPrefix):
 		return false
-	case f.Actor != "" && ev.Actor != f.Actor:
+	case f.Actor != "" && ev.Actor != f.Actor && (f.ActorAlt == "" || ev.Actor != f.ActorAlt):
 		return false
 	case f.ActorType != "" && ev.ActorType != f.ActorType:
 		return false
@@ -171,7 +175,12 @@ func (f AuditFilter) where(args []any) ([]string, []any) {
 		add("starts_with(action, $%d)", f.ActionPrefix)
 	}
 	if f.Actor != "" {
-		add("actor = $%d", f.Actor)
+		if f.ActorAlt != "" {
+			args = append(args, f.Actor, f.ActorAlt)
+			clauses = append(clauses, fmt.Sprintf("actor IN ($%d, $%d)", len(args)-1, len(args)))
+		} else {
+			add("actor = $%d", f.Actor)
+		}
 	}
 	if f.ActorType != "" {
 		add("actor_type = $%d", string(f.ActorType))

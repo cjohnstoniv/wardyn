@@ -106,6 +106,7 @@ import {
   seen,
   signInThroughPane,
 } from "./helpers";
+import { termText } from "../terminal-text";
 
 test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TEST_K8S=1 (scripts/kind-sso-walk.sh)");
 test.describe.configure({ mode: "serial" });
@@ -645,16 +646,17 @@ test("E (login-pane): a sign-in held 65 s in STARTING reads as slow, never as un
   // THE HOLD IS MANUFACTURED BY A NODE TAINT, and the pod it parks is the
   // PROXY's, not the agent's. CreateSandbox creates `wardyn-proxy-<run id>`
   // FIRST and waits for its pod IP before the agent pod exists at all
-  // (internal/runner/k8s's sandbox creation, `podIPWaitTimeout`), so under a
+  // (internal/runner/k8s's sandbox creation, startwait.go), so under a
   // taint nothing schedules, the proxy pod sits Pending and `wardyn-agent-<id>`
   // is never created. An earlier draft of this case watched for the AGENT pod
   // and would have polled a name that cannot exist.
   //
-  // AND THE BOUND IS THAT 90 s POD-IP WAIT, not the 3-minute canary: at 90 s
-  // the RUN FAILS. So the hold is 65 s measured from RUN CREATION — five
-  // seconds past the 60 s at which the slow-start sentence appears, and ~25 s
-  // of margin before the run dies — and the untaint happens the instant the
-  // assertions are made, not at the end of the case.
+  // AN UNSCHEDULABLE TAINT NOW WAITS under WARDYN_SANDBOX_CAPACITY_WAIT
+  // (internal/runner/start_deadlines.go) instead of failing at 90 s, so the run
+  // survives the hold. The hold is still 65 s measured from RUN CREATION — five
+  // seconds past the 60 s at which the slow-start sentence appears — and the
+  // untaint happens the instant the assertions are made, not at the end of the
+  // case.
   kubectl("taint", "nodes", KUBE_NODE, COLDPULL_TAINT);
 
   await dexSignIn(page, MEMBER_EMAIL);
@@ -724,7 +726,7 @@ test("E (login-pane): a sign-in held 65 s in STARTING reads as slow, never as un
   await expect(page.getByText(LOGIN_SANDBOX_UNREADABLE)).toHaveCount(0);
   await expect(page.getByText(LOGIN_SANDBOX_READ_RETRYING)).toHaveCount(0);
 
-  // IMMEDIATELY — every second after this is spent against the 90 s bound.
+  // IMMEDIATELY — every second after this is spent waiting on the capacity wait.
   kubectl("taint", "nodes", KUBE_NODE, "wardyn-coldpull-");
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: LOGIN_DONE }).toBe("live");
 });
@@ -796,9 +798,9 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
 
   // Step 4 — the ONLY screen, and the one a human is meant to see.
   await expect
-    .poll(async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")), { timeout: SANDBOX_UP })
+    .poll(async () => (await termText(screen).catch(() => "")), { timeout: SANDBOX_UP })
     .toContain("Accessing workspace:");
-  const trustScreen = await screen.innerText({ timeout: 1_000 });
+  const trustScreen = await termText(screen);
   expect(trustScreen).toContain("Yes, I trust this folder");
   // …and NOT the product tour the image now pre-answers.
   expect(trustScreen).not.toContain("Choose the text style");
@@ -812,12 +814,12 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
 
   // Step 6 — the CLI's own input prompt, on the Bedrock lane.
   await expect
-    .poll(async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")), { timeout: 120_000 })
+    .poll(async () => (await termText(screen).catch(() => "")), { timeout: 120_000 })
     .toContain("Amazon Bedrock");
   // Polled, not read once: the footer paints on its own schedule, and an
   // unpolled read here fails on a frame that simply had not landed yet.
   await expect
-    .poll(async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")), { timeout: 60_000 })
+    .poll(async () => (await termText(screen).catch(() => "")), { timeout: 60_000 })
     .toContain("manual mode on");
 
   // THE APPROVALS CHECK BELONGS AFTER THE ENTER, not before it. Everything the

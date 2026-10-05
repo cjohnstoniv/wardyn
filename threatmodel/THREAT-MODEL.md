@@ -112,7 +112,12 @@ invitation, not an embarrassment.
    for it, and dispatch's `api.dropBrokeredGrants` withholds any already-stored
    `ssh_key` **or** `git_pat` grant from the sandbox env (audited
    `run.ssh.drop`) on top of denying the endpoint — the key is never
-   resident, not merely unreachable. (This reverses an earlier decision recorded in
+   resident, not merely unreachable. With the PAT broker on, the proxy also
+   refuses a raw mint of every `git_pat` grant id of the run
+   (`isBrokeredPATGrant`, `brokered:mint`): the set is every `git_pat` row, since
+   a shadowed, vetoed or withheld grant is absent from the per-host allowlist yet
+   still mintable by id, and a revive recomputes it so a pre-upgrade run is
+   covered. (This reverses an earlier decision recorded in
    the same review; `confineGitBrokerEgress`,
    `internal/api/runs_dispatch_gitbroker.go`, says why deliberately.) An
    **unbrokered** SSH credential — an `ssh_key` for a forge holding no
@@ -340,20 +345,31 @@ forms, which no verbatim matcher catches.
   fallback bypasses the control plane and delivers UNMASKED casts (masking is
   structurally control-plane-side — `wardyn-rec` holds no secret values). Do not
   use it where recordings are viewer-exposed.
-- **The registry is process-local and fails OPEN.** `secretmask.Registry` is an
-  in-memory map, never persisted, populated on whichever wardynd process served
-  the run's injection/mint request; the cast upload and the live-attach relay are
-  separate requests, and both fall back to unmasked pass-through when the run's
-  snapshot is empty (`buildMaskingBody`, `liveMaskWriter`). One process, one
-  replica — the shipped topology — makes the CROSS-REPLICA form inert, which is
-  why `replicas: 1` is a SAFETY control: the Helm chart refuses more
-  (`deploy/helm/wardyn/templates/deployment.yaml`) and compose's `container_name`
-  rejects `--scale`. Run a second replica anyway and a cast landing on the wrong
-  pod is persisted verbatim, live credentials in cleartext, with a `success`
-  audit event. **The single-process case is not inert**: a `wardynd` restart
-  (upgrade, crash) mid-run empties the same map, so a run whose secrets
-  registered pre-restart and whose cast uploads post-restart hits the identical
-  empty-snapshot fail-open at `replicas: 1`.
+- **The registry is shared through Postgres and fails closed; four things stay
+  outside it.** `secretmask.Registry` holds every value a run was given, and each
+  replica's in-memory copy is a cache of what is committed. Dispatch commits a
+  sealed per-run masking manifest (the exact bytes of every rendering the run
+  received) before the sandbox starts; values registered later, and the per-owner
+  sign-in tokens, are committed to `mask_values` before the call that hands them out
+  returns. Both are sealed under the run owner's key, so destroying that key leaves
+  them undecryptable. Every replica masks with that corpus, whichever replica
+  served the request and across restarts. The five doors that relay or persist
+  sandbox output (the recording upload, live attach, exec relay, SSH shell and live
+  output read) answer `503` `mask_state_unavailable` for a run whose manifest they
+  cannot prove complete, and a consumer that cannot prove its copy current replaces
+  a live chunk with the placeholder, answers an upload `503` and refuses an attach.
+  This is what makes several replicas (`ha.enabled`) a supported topology; the
+  Helm chart and the daemon each refuse a second replica without it. Residuals:
+  - **Runs that predate 0.8.6 have no manifest**, so after any restart they are
+    refused at those doors rather than masked, until they end.
+  - **SSH exec, SFTP and direct-tcpip were never masked**
+    (`sshgateway_channels.go`), and masking is verbatim only.
+  - **Masking depends on Postgres.** With it unreachable, uploads and new attaches
+    are refused and live output shows the placeholder: availability is traded for
+    never persisting a credential.
+  - **A compromised wardynd process still sees every value it masks**, and a
+    refresh in flight on an old lock holder can still race a new holder across a
+    Postgres failover (the person signs in again).
 
 ### 4.2 The unconditional IP guard, and its two admin-authored exceptions
 
@@ -1064,10 +1080,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     by design — it writes policy, site-config, secrets and the role map, and
     nothing above it offers more than attribution. There is no per-resource
     permission model, no custom roles, and no tenant or org column. One optional
-    four-eyes rule exists, on two acts only (`WARDYN_EGRESS_SECOND_HUMAN` for
-    egress approvals and `WARDYN_CAPABILITY_SECOND_HUMAN` for Azure DevOps
-    capability escalations, § "Four-eyes on egress approvals"), and both are
-    bypassable by the admin token by design. So: separation of duty BETWEEN the two admin tiers is shipped and
+    four-eyes rule exists, on three acts (`WARDYN_EGRESS_SECOND_HUMAN` for
+    egress approvals, `WARDYN_CAPABILITY_SECOND_HUMAN` for Azure DevOps
+    capability escalations, § "Four-eyes on egress approvals", and
+    `WARDYN_GOVERNANCE_SECOND_HUMAN` for governance writes, § "Four-eyes on
+    governance writes"), and all are bypassable by the admin token by design. So: separation of duty BETWEEN the two admin tiers is shipped and
     testable; separation of duty WITHIN the super admin tier remains `ROADMAP.md`'s
     v1.0 item. `SECURITY.md` scopes its out-of-scope disclosure to match — an
     escalation ACROSS the `security_admin`/super-admin boundary, or a bypass of the
@@ -1764,14 +1781,20 @@ hiding them would repeat the failure mode we are designed to avoid.
     genuinely incomplete snapshot still reads as truncated downstream, never
     silently flipped to complete by the refresh itself.
 
-    What did NOT move: the table still carries `created_at`, `last_used_at`
-    and `revoked_at` and **no expiry column**, there is no TTL the way
-    `WARDYN_SSH_ROLE_TTL` bounds a key, and a human who never signs in again is
-    re-stamped never. So a power that derives from a stale group snapshot — a
+    What did NOT move: unless the operator sets `WARDYN_ROLE_STAMP_TTL` (off by
+    default; it refuses a token whose stamp is older until its owner signs in
+    again) nothing bounds the stamp's age the way `WARDYN_SSH_ROLE_TTL` bounds a
+    key, and a human who never signs in again is re-stamped never. Since 0.8.6 a
+    token can end on a clock instead (`api_tokens.expires_at`, capped for new
+    tokens by `WARDYN_API_TOKEN_MAX_TTL`), but only one minted with a TTL or under
+    a cap: every token minted before 0.8.6, and every token minted with neither a
+    requested `ttl_seconds` nor a deployment cap, never expires.
+    So a power that derives from a stale group snapshot — a
     capability grant or governance profile bound to a group they have left, or
     an admin/`security_admin` role they were demoted out of — survives exactly
-    until that human's next login, and for someone who has left the
-    organization and will never sign in again, that is indefinitely. Since 0.7
+    until that human's next login or the token's expiry, and for someone who has
+    left the organization and will never sign in again, that is indefinitely
+    for a token with no expiry. Since 0.7
     stamps `security_admin` verbatim, a human demoted out of that tier keeps —
     through any token minted while they held it, until their next sign-in or an
     explicit revoke — profile authoring and assignment, capability-grant
@@ -1824,11 +1847,12 @@ hiding them would repeat the failure mode we are designed to avoid.
     `session.revoke` row's `tokens_revoked` count is the receipt that the
     identifier matched a person: sessions are stateless and cannot be counted, so
     a zero there against someone you believe holds tokens means you named them
-    wrong. Nothing ages a token out short of a sign-in, so offboarding — or any
-    change that must take effect before that human's next login — must revoke
-    explicitly (`docs/OPERATIONS.md`, "Per-user API tokens"). Closing this fully
-    means a TTL on the stamp itself, the same open half `WARDYN_SSH_ROLE_TTL`
-    narrows for the SSH lane; none is built for tokens.
+    wrong. Unless `WARDYN_ROLE_STAMP_TTL` is set, nothing ages a token out short of
+    a sign-in, so offboarding — or any change that must take effect before that
+    human's next login — must revoke explicitly (`docs/OPERATIONS.md`, "Per-user
+    API tokens"). The TTL bounds the stamp's age, not its freshness: a demotion made
+    only at the IdP still waits for the TTL or the next sign-in, and Wardyn holds no
+    IdP credential to re-derive a role sooner.
 
 39. **A group claim the IdP FILTERS is indistinguishable from a complete one, so
     a shrink-the-claim workaround loses grants silently.** Wardyn marks a group
@@ -2093,9 +2117,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     Crypto Officer alike — and the vault dedicated to Wardyn is load-bearing,
     not hygiene. Crypto Officer is a full-trust role: it can also import a
     signing-key version whose private key it holds, rotate and disable keys.
-    **Boot keys and credentials share one Entra identity and one key pair**: a
-    leaked identity token, or the vault's crypto operators, can unwrap both and
-    sign (so forge) both; there is no platform split like Transit's.
+    **By default boot keys and credentials share one Entra identity and one key
+    pair**: a leaked identity token, or the vault's crypto operators, can unwrap
+    both and sign (so forge) both. The platform split
+    (`WARDYN_AZURE_KEK_KEY_PLATFORM`, residual 49(d)) gives the boot keys a pair
+    and an identity of their own.
     **One key pair per deployment:** the bind names the vault host and both key
     names but not the install, so two Wardyn databases on the same vault and
     key names accept each other's rows for the same `(owned_by, name)` — (a)'s
@@ -2104,7 +2130,42 @@ hiding them would repeat the failure mode we are designed to avoid.
     backup taken now could have its data keys unwrapped by a future adversary
     who can factor the public modulus; the local key and Transit (AES-256) do
     not have this exposure. (a) holds unchanged: a restored row opens until its
-    wrapping-key version is disabled in Key Vault.
+    wrapping-key version is disabled in Key Vault. (e) **Crypto-erasure
+    (`WARDYN_PRINCIPAL_KEYS=on`, envelope enc_version 3, 0.8.6)** narrows (b) for
+    the rows it covers, and for no others. A person's credential written with it
+    on has its data key under that person's own `cred` principal key, and an erase
+    destroys that key, so the row cannot be read on any replica at its next use,
+    whatever a backup holds of the row. **The scope is exactly the v3 rows:** a v1
+    row, a row written while the setting was off, an external-store pointer (the
+    value lives in the organisation's store), the operator namespace and the boot
+    keys are only deleted, and `credential.erase` reports the two apart
+    (`crypto_erased`, `deleted`). **The backup horizon moves, it does not vanish:** a
+    destroyed `principal_keys` row restored from a backup before the tombstone
+    unwraps while the wrapping key's version lives (the shape of (a)), so shredding
+    is complete only once backups taken before the erase expire or that
+    key-encryption-key version is retired. **Metadata stays in the clear:** who
+    held a credential, and when, is still in the table (c). **A live run keeps
+    what it already holds,** and whatever was sealed for it under the destroyed
+    key (its masking copies) is undecryptable after a restart: the run is
+    uncovered, which fails closed and is disclosed. (f) **Key domains
+    (`WARDYN_KEY_DOMAINS_FILE`, 0.8.6)** narrow what a leaked domain key exposes:
+    a person assigned to a domain has their principal keys wrapped under that
+    domain's key, so a database dump plus one domain's key opens that domain's
+    keys and no other's. **A database writer who rewrites the
+    `key_domain_assignments` rows moves a subject's FUTURE writes into a domain
+    whose key the attacker holds.** They cannot declare a domain (domains come from
+    the deploy file alone), cannot read what was already written, and cannot move
+    an old generation (a reassignment applies to the next one, and nothing is
+    re-wrapped into another domain). The mitigations are four-eyes on the two
+    assignment writes, the audit row each API change writes
+    (`key_domain.assignment.set`, `key_domain.assignment.delete`), and the 30-day
+    `/setup/status` row that reports assignment changes. A write made straight to
+    the table leaves no audit row of its own. **A domain's Vault role separates
+    only a leaked token:** a domain without its own role is reached by the
+    credential role, and the wardynd process holds every domain's access, so a
+    compromised process still exposes everything. **A stale group fact** places a
+    background write (a token refresh) in the domain the person's last verified
+    login chose, until they sign in again.
 
 49. **One age key guards every stored credential AND the daemon's own
     signing keys: one key, one shared blast radius.** `WARDYN_AGE_KEY` (or
@@ -2151,7 +2212,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     vouches for the boot keys. A pre-envelope boot key found beside the platform
     key is refused at boot rather than converted under it, so the only
     adoption is the operator's. Unset,
-    the residual stands and `/setup/status` shows `platform_shared`. (b) **store
+    the residual stands and `/setup/status` shows `platform_split`. (b) **store
     mode:** the boot keys live under `platform/` in the organisation's store;
     with ONE Vault role that separates audit and filtering only (the one token
     reaches both), and the recommended second role
@@ -2190,6 +2251,33 @@ hiding them would repeat the failure mode we are designed to avoid.
     database alone is pass one wrap off as another's: each wrap's
     `associated_data` binds `kek_id`, owner and name, so a wrap moved to another
     row, or to the other key, does not unwrap.
+    (d) **Key Vault mode** (`WARDYN_KEK=azurekv`): with ONE key pair and ONE
+    Entra identity, that identity's token (or the vault's crypto operators)
+    wraps, signs and unwraps the boot keys and the credentials alike, and `sign`
+    plants a boot key (residual 48(d)). The split mirrors Transit's:
+    `WARDYN_AZURE_KEK_KEY_PLATFORM` and `WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM`
+    (chart `kek.azurekv.keyPlatform` and `kek.azurekv.signingKeyPlatform`) wrap
+    and sign the boot keys under a second pair that only a second Entra identity
+    (`WARDYN_AZURE_CLIENT_ID_PLATFORM`, chart `secretStore.azure.clientIdPlatform`)
+    reaches, and the first pair wraps the credentials. A leaked Entra access token
+    for the credential identity, with or without the database, then wraps, signs
+    and unwraps no boot key, and a serving wardynd opens no boot key that token
+    planted: it opens a boot key under the platform pair alone and refuses one
+    under the credential pair. Boot refuses a platform wrapping key, signing key
+    or client id that equals its credential counterpart, compared on the
+    normalised identity (lowercase vault host and key name; client ids
+    case-insensitively), so a spelling that differs only by case does not defeat
+    it. Adoption and retirement are (c)'s operator steps
+    (`-rewrap-adopt-boot-keys`, `-rewrap-retire-platform-key`), with the same
+    trust root: the operator's word. What the split does not do: under workload
+    identity both client ids exchange the same projected service-account token, so
+    it defends against a leaked Entra access token for the credential identity,
+    not against a leaked service-account token or a compromised wardynd process,
+    which reaches both; it holds only while the platform identity's role
+    assignment is scoped to the platform keys and the credential identity has none
+    on them, which Wardyn cannot check; and `sign` on the platform signing key
+    plants boot keys, so the platform identity, and any Key Vault role that grants
+    `sign` on those keys, is credential-equivalent.
 
 50. **A device's self-reported audit rows are LINK-verified, not
     COMPLETENESS-verified (issue #103, hybrid enrolment).** `handleDeviceAuditIngest`
@@ -2425,8 +2513,9 @@ hiding them would repeat the failure mode we are designed to avoid.
     Entra refresh token, obtained with only `vso.pats` and `vso.pats_manage` on
     Wardyn's own sign-in app, and uses it to create one organisation-scoped PAT
     per run in that person's name, scoped to the run's capabilities, at most
-    `pat_max_hours` long (default 8, at most 168). The PAT is held in wardynd
-    memory, crosses the pinned hop to the run's proxy, and is injected there as
+    `pat_max_hours` long (default 8, at most 168). The PAT is kept sealed under the
+    run owner's key in Postgres (`ado_run_pat_state`, so every replica serves it and an
+    erasure deletes it; destroying the key leaves it undecryptable), crosses the pinned hop to the run's proxy, and is injected there as
     Basic; it is mask-registered in its raw, base64 and header forms and never
     enters the sandbox. Renewal and widening create a newer PAT and leave the
     older to its own expiry; pause and every end path revoke them all, and a
@@ -2513,6 +2602,29 @@ hiding them would repeat the failure mode we are designed to avoid.
 
     Offboarding a person revokes their live PATs before their stored grant is
     deleted. None of the audit rows for this lane carries a token value.
+
+63. **A narrowed `git_pat` grant narrows the run, not the PAT, and three things stay
+    outside it (0.8.6).** With the PAT broker on, a `git_pat` grant's `repos` and
+    `access: read` bind at the broker route: a request for a repository outside
+    `repos`, and both doors of a push under `access: read`, are refused before the
+    push rules and before any mint, so a refusal spends nothing. The credential is
+    exactly as broad as its issuer made it everywhere outside Wardyn. The residuals:
+    - **Direct egress by name.** A run whose policy also allows the forge host
+      directly can reach it without the PAT, with whatever credential the sandbox
+      holds of its own. That is the standing "by name" caveat of every broker lane
+      (see `docs/POLICIES.md`), not a new one.
+    - **Branches and content are separate.** `repos` narrows which repositories, not
+      which branches. Branch confinement stays `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`'s
+      `pat` scope (off by default for this lane) and content stays `push_rules`.
+    - **Path tables can lag a forge.** A request form a forge's table does not list is
+      refused; a forge that later serves a new alias of an existing path is outside the
+      table until someone adds it. The failure is a refusal, not a pass. `generic` and
+      the named forges all compare the path exactly (no case-folding, no `.git`
+      stripping), because the compared string is the string the proxy forwards.
+    A narrowing the broker cannot enforce is refused at launch rather than carried as a
+    fiction: the broker off, a same-forge `ssh_key` (a second push path), and an Azure
+    DevOps or GitHub-brokered host (another lane serves it) each fail the run with a
+    named reason.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
@@ -2972,6 +3084,84 @@ Local mode carries the same shape under a different label — the injected opera
 IS a verified human, so a self-decision there is refused like any other, which is
 why this switch is not one to turn on for a single-dev machine.
 
+### Constrained-admin mode is not separation of duties, and its break-glass is the admin token
+
+`WARDYN_GOVERN_ADMIN_RUNS` (off by default) governs an SSO admin's and an
+admin-role personal token's own runs like a member's: the governance profile, the
+capability grants, the quotas and the run doors all apply to them. It changes who
+stands outside governance when a run launches, and nothing else. Two residuals
+stay, and the mode does not claim otherwise.
+
+**An admin still governs the governance.** Profiles, assignments, capability
+grants and role mappings are security-operator writes, and a super admin is a
+security operator. A constrained admin can widen their own profile and then launch
+inside it. Every such write is audited, but nothing stops it: the mode is not
+separation of duties on its own, and it needs a four-eyes rule on governance
+changes beside it. The same holds for the surfaces the mode leaves alone:
+site-config hosts, provider rows and a workspace's approved egress feed every
+run's egress, and a deployment's environment, which can turn the switch off, is
+the platform team's change control.
+
+**The admin token and local mode stay break-glass.** Neither carries a person to
+resolve a profile for, so whoever holds the admin token runs ungoverned. With the
+switch on, each such launch carries `governance_exempt: true` on `run.create`, so
+a SIEM rule can alert on one; that is disclosure, not prevention, exactly as for
+the four-eyes bypass above, and the gate is only as strong as the handling of the
+token (SSO configured, token held out of band). With no sign-in configured the
+switch binds nobody, and boot says so. `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` set to
+`recording` is the one deliberate exemption: Record Mode then runs for a governed
+admin with open egress and the operator's credential injections, and each
+recording is marked `governance_exempt` on `run.record.start`.
+
+### Four-eyes on governance writes: what it guarantees, and nine residuals
+
+`WARDYN_GOVERNANCE_SECOND_HUMAN` (off by default) holds an authority-changing write as a pending
+change until a second, distinct human with the authority to make that write approves it. The
+covered set, the exemptions and the approver table are in `docs/OPERATIONS.md` "Four-eyes on
+governance writes: a walkthrough". It is published here because of what it leaves open.
+
+**What it guarantees**, with SSO configured and the admin token held out of band:
+
+- no single human changes the effect of a covered target through the governance, permissions, access,
+  user-type or key-domain API;
+- every change carries two named humans in the audit chain, a proposer and a distinct approver with
+  the authority to make the write;
+- every change applies against exactly the state the approver reviewed, or not at all.
+
+**Residuals**, stated rather than discovered:
+
+1. **The admin token is the break-glass.** Its writes and approvals are single-human, and audited as
+   `governance.change.bypass`. A deployment that wants the gate to bind holds the token out of band,
+   as for the egress switch above.
+2. **Local mode cannot enforce it.** Local mode authenticates nobody, so the proposer and the
+   approver are both client-supplied. With the switch on every covered write and every approve or
+   reject is refused `503`, and boot warns.
+3. **The database is not four-eyed.** A database writer can change the target tables directly. The
+   audit chain then shows a target row with no `propose`/`approve` pair beside it: detection, not
+   prevention.
+4. **Two authorised humans who collude defeat it,** as with any four-eyes control. Two principals with
+   one mailbox are not two humans (the comparison is principal and email), but two people are.
+5. **Each change is reviewed alone.** Two separately approved changes can compose into a widening
+   neither diff shows, for example a grant plus an enforcement flip. The diff shows the target, not
+   every person it reaches; the reach of a group assignment is the reviewer's judgment.
+6. **A single-super-admin deployment cannot approve a role-mapping change** without a second super
+   admin or the admin token.
+7. **Pending changes notify nobody.** Notifications cover approval requests, not governance changes.
+   An approver finds a change in the console's Changes tab or with `wardyn governance changes list`,
+   and a change nobody looks at expires.
+8. **Approver authority is the stamped role.** For an SSO session that is the role stamped at sign-in:
+   a person demoted only at the identity provider keeps it until the session ends. An API token's role
+   and revocation are re-read inside the approval transaction.
+9. **Governance-adjacent writes stay single-human.**
+   - `PUT /workspaces/{id}/approved-egress` and `/denied-egress`, and record-egress promotion;
+   - `/policies`, `/site-config` and `/integrations`;
+   - the approval `always` scope;
+   - user-type create and delete (a new type takes effect only through a covered role-mapping write,
+     and a type a mapping references cannot be deleted);
+   - the SCIM purge, which deletes the departed person's user-subject governance assignments and
+     capability grants directly, without a pending change: the identity provider is the single
+     authority for that write.
+
 ### Coalesced `auth.fail` rows: the peer address is not the bound
 
 Since 0.7.2 the control plane folds IDENTICAL consecutive `auth.fail` audit rows
@@ -3266,14 +3456,45 @@ residuals particular to holding:
   WHEN an armed merge lands, not WHAT it carries. Creating or updating a pull
   request so that it completes, or sets auto-complete, is refused while the run
   has push rules.
-- **The GitHub App and `git_pat` lanes have no REST door.** Their brokered
-  credentials never reach the sandbox, their broker routes admit only the three
-  smart-HTTP endpoints (`validGitRest`), `api.github.com` is denied to a
-  brokered run's egress (`confineGitBrokerEgress`), and the broker's own GitHub
-  API calls are `GET`s (`forgeRepo.get`). A `github_token` grant with no
-  repository declared is not brokered at all — the helper hands its token to
-  the sandbox, and neither the git nor the REST door is governed on it, the
-  same standing ceiling as `ssh_key`.
+- **The GitHub App lane has no REST door, and a `git_pat` lane has one only
+  when its grant sets `api: true`.** The brokered credentials never reach the
+  sandbox, their broker routes admit only the three smart-HTTP endpoints
+  (`validGitRest`), `api.github.com` is denied to a brokered run's egress
+  (`confineGitBrokerEgress`), and the broker's own GitHub API calls are `GET`s
+  (`forgeRepo.get`). A `github_token` grant with no repository declared is not
+  brokered at all — the helper hands its token to the sandbox, and neither the
+  git nor the REST door is governed on it, the same standing ceiling as
+  `ssh_key`.
+- **The `git_pat` forge API door is a closed operation table.** A grant with
+  `api: true` (GitLab and Gitea; Bitbucket Server only with
+  `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`) reaches its forge's REST API through a
+  gate on the MITM path (`patAPIAdmit`, `internal/egress/proxy/pat_api.go`),
+  beside the Azure DevOps gate. The proxy terminates only the grant's own host,
+  on 443. A request is admitted only when its effective method and path equal a
+  row of the forge's table under a repository the grant's `repos` names, and
+  every field it names, in the query string or a JSON, form-urlencoded or
+  multipart body, is one the row admits. The admitted rows are creating a merge
+  or pull request, commenting on a merge or pull request or an issue, and the
+  enumerated reads of a repository's own data. The gate runs before the PAT is
+  minted and before anything is sent upstream, and the PAT is never an injection
+  rule, so a refused request spends neither: an approval-gated single-use grant
+  keeps its one mint. It refuses merge and auto-merge, writes to repository
+  files and commits (they bypass the receive-pack content and branch checks),
+  GraphQL and search, project metadata, variables, hooks, keys, tokens, members
+  and exports, a numeric project id, a body or query field that names a project
+  (`target_project_id` and the like), a cross-repository head, a method override
+  that names another method than the request line, an encoded body, a body it
+  cannot parse or read whole, and any request on the plain forward lane. What
+  remains: the PAT is exactly as broad as its issuer made it everywhere outside
+  Wardyn; `repos` narrows which repositories, not which branches; a created
+  merge or pull request is not a merge, but a human or the forge's own
+  auto-merge setting may merge it; GitLab runs a slash command at the start of a
+  comment line, so a line that starts with "/" is refused rather than
+  inspected; a request form a table does not list is refused, so a route a forge
+  adds later is outside the table until someone adds it; a policy that also
+  allows the forge host directly reaches it without the PAT, as for every
+  brokered lane; and the host must be allowed in the run's egress domains for
+  the tunnel to open at all.
 
 ### Hold-lane settings sources and managed permission rules
 

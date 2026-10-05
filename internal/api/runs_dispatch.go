@@ -8,7 +8,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -46,6 +48,7 @@ type dispatchParams struct {
 	// that defaults to the weaker posture is a control whose default is "off by
 	// omission", and the omission is invisible.
 	PATBroker        bool
+	PATAPI           bool                    // set by dispatchRun, never a caller: a git_pat grant sets api, so the run needs the MITM CA
 	GitPATGrants     map[string]string       // {host: grant_id} for non-GitHub PAT hosts
 	SSHGrants        map[string]string       // {host: grant_id} for SSH clone hosts
 	Injections       []runner.InjectionGrant // proxy-side credential injections
@@ -192,6 +195,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 
+	// The run's masking manifest opens before any value is resolved and completes
+	// before the sandbox exists (mask_manifest.go).
+	if !s.beginMaskManifest(ctx, run) {
+		return
+	}
+
 	// CC3 host-eBPF blindness, surfaced AUTOMATICALLY. The host Tetragon sensor
 	// cannot see inside a Kata microVM guest, so a CC3 run is blind to the
 	// ground-truth stream. wardynd knows the resolved confinement class here, so
@@ -251,6 +260,21 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// directly rather than through dispatchRun.
 	patKept, droppedPAT := dropBrokeredGrants(p.GitPATGrants, p.GitGrants, brokeredForgeHost)
 	p.GitPATGrants = patKept
+	// The run's stored grants, read ONCE: the set of every git_pat grant id (see
+	// brokeredPATGrantIDs) and each winning grant's scope (dispatchPATGrants) both
+	// come from these rows.
+	grantRows, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
+	if err != nil {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": "list the run's grants: " + err.Error()})))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "This run was not launched: its git_pat grants could not be read to keep their PATs out of the sandbox")
+		return
+	}
+	p.PATAPI = patAPIDoor(grantRows)
+	var brokeredPATIDs []uuid.UUID
+	if p.PATBroker {
+		brokeredPATIDs = patGrantIDsOf(grantRows)
+	}
 	droppedSSH, _ := applyDispatchModeEnv(sandboxEnv, run, p)
 	s.auditBrokeredGrantDrop(ctx, run.ID, "ssh_key", "run.ssh.drop", droppedSSH,
 		"this run is brokered for a repo on this forge, so the git-broker route is its only route to it BY NAME "+
@@ -365,6 +389,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 	injections = ado.injections
+	// A narrowed git_pat grant this run could not enforce refuses the run here
+	// (runs_dispatch_pat_scope.go).
+	if !s.enforceablePATNarrowing(ctx, run, p, grantRows, siteCfg, adoRun, adoInject) {
+		return
+	}
 
 	// Brokered git: make the broker route the only route to the managed host names.
 	// Last of the policy
@@ -399,17 +428,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// min(provider maximum, this profile's maximum). Never a refusal, and a zero
 	// request with no org default stays unbounded.
 	diskFilled := applyEphemeralDisk(ctx, run, &policy, siteCfg, ceiling)
-	// Persist the resolved cap for the run page's disk-used reading (RL-13:
-	// best-effort, like SetRunImage above it — a failed write must not block
-	// dispatch, it just leaves that run's cap unknown to the resources widget).
-	effectiveDiskMiB := 0
-	if policy.Resources != nil {
-		effectiveDiskMiB = policy.Resources.DiskMiB
-	}
-	if err := s.cfg.Store.SetRunDiskMiB(ctx, run.ID, effectiveDiskMiB); err != nil {
-		slog.WarnContext(ctx, "wardynd: persist run disk cap failed",
-			slog.String("run_id", run.ID.String()), slog.Any("err", err))
-	}
+	applySandboxSize(ctx, run, &policy, ceiling)
+	s.recordRunDiskCap(ctx, run.ID, policy.Resources)
+	// Record the reservation the driver will apply (best-effort, like the disk cap above).
+	s.recordRunSizing(ctx, run.ID, resourceLimitsToRunner(policy.Resources))
 	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts)
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
@@ -441,6 +463,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 
 	resources := resourceLimitsToRunner(policy.Resources)
 	resources.DiskMiBFilled = diskFilled
+	// The git_pat allowlist AFTER the ceiling re-assertion narrowed p.GitPATGrants,
+	// with each narrowed grant's scope read from its stored row.
+	patGrants, ok := s.scopedPATGrants(ctx, run, p, grantRows)
+	if !ok {
+		return
+	}
 
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
@@ -481,7 +509,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// TLS-MITM (beyond the built-in LLM hosts) so a registry token injects on
 			// the wire. Only hosts with a resolved token injection appear here — a
 			// tight per-host allowlist, never a blanket. See isMITMHost widening.
-			MITMHosts: append(append(append([]string{}, artifactPlan.mitmHosts...), plan.bedrockMITMHosts...), ado.mitmHosts...),
+			MITMHosts: slices.Concat(artifactPlan.mitmHosts, plan.bedrockMITMHosts, ado.mitmHosts, plan.azure.mitmHosts),
 			// MITM the BUILT-IN LLM hosts only when that's actually intended for this
 			// run — subscription OAuth injection or intercept_tls content inspection.
 			// The CA above may also be minted purely for artifact-token injection, so
@@ -500,10 +528,17 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// p.GitPATGrants is the map dropBrokeredGrants already filtered above,
 			// not the caller's: a brokered forge's PAT is withheld from BOTH halves
 			// of dispatch or from neither.
-			PATGrants: patBrokerGrants(p.GitPATGrants, p.PATBroker),
+			PATGrants: patGrants,
+			// Every git_pat grant id of the run, which the proxy refuses at the
+			// raw mint relay (empty with the broker off).
+			BrokeredPATGrantIDs: brokeredPATIDs,
 			// The per-person Azure DevOps REST gate's grant (runs_dispatch_ado_inject.go).
 			// Nil for every run not on that lane, which leaves the gate off.
 			ADOGrant: ado.gate,
+			// The azure_foundry lane's route gate and channel host (provider_azure.go). Empty for every
+			// run not on that lane, which leaves both off.
+			AzureGates:      plan.azure.gates,
+			LLMChannelHosts: plan.azure.channelHosts,
 			// Resolved above from site-config.UpstreamProxySecretRef; "" when
 			// unconfigured or unresolvable (direct dial, backward-compatible).
 			UpstreamProxyURL: upstreamProxyURL,
@@ -528,6 +563,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// policy has review paths, the one thing it changes: an older
 			// proxy refuses the key, and must not refuse every task run.
 			Unattended: !p.Interactive && policy.PushRules != nil && len(policy.PushRules.RequireReviewPaths) > 0,
+			// The policy a refusal names (runs_dispatch_attribution.go); nil when
+			// the run has no profile and the site sets no policy_help, because an
+			// older proxy refuses the key.
+			Attribution: s.runAttribution(ctx, run, siteCfg),
 		},
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/
@@ -564,17 +603,22 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskFilled,
 		})))
 
-	// Stamped BEFORE CreateSandbox, not after: the row still carries the
+	// Held BEFORE CreateSandbox, not after: the row still carries the
 	// heartbeat it was born with, which any image build/pull longer than the
-	// stale window has already let expire — so without an early stamp the next
+	// stale window has already let expire — so without an early lease the next
 	// reconcile sweep on any replica can adopt a run this dispatch is still
-	// setting up (reconcile.go). CreateSandbox can block for canaryWaitTimeout
-	// (the k8s substrate's agent-pod readiness wait, on top of whatever image
-	// pull it was already doing), so stamping first covers that latency too
-	// instead of leaving the run entirely un-leased while it waits.
-	// stampRunWatcherLease only touches run.ID (idempotent heartbeat write; no
-	// dependency on sb.Ref), so moving it earlier is safe.
-	s.stampRunWatcherLease(ctx, run.ID)
+	// setting up (reconcile.go). CreateSandbox can block for the whole of the
+	// sandbox start deadline plus the capacity wait (WARDYN_SANDBOX_START_TIMEOUT,
+	// WARDYN_SANDBOX_CAPACITY_WAIT: 18 minutes by default on k8s, far past the
+	// 90s stale window), on top of whatever image pull it was already doing, so
+	// the lease is HELD, heartbeating, for exactly as long as CreateSandbox
+	// blocks, not stamped once. It is released the moment CreateSandbox returns;
+	// the hold below takes over from there. holdRunWatcherLease only touches
+	// run.ID (no dependency on sb.Ref), so taking it earlier is safe.
+	// sync.OnceFunc + defer: the explicit calls below stop it at the earliest point, and the
+	// defer stops the heartbeat if CreateSandbox panics (ctx is WithoutCancel, so nothing else would).
+	stopCreateLease := sync.OnceFunc(s.holdRunWatcherLease(ctx, run.ID))
+	defer stopCreateLease()
 
 	// What the substrate says it is waiting on, while it is still waiting; the
 	// closer ends the last stretch wardyn_run_start_wait_seconds is timing, so
@@ -582,6 +626,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// The proxy config is stored before any proxy holds it (#1176): a revive
 	// rebuilds the proxy from this row alone.
 	if err := s.keepRunProxyConfig(ctx, run.ID, spec.ProxyConfig); err != nil {
+		stopCreateLease()
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's proxy config could not be stored")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
@@ -589,16 +634,20 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	}
 	onWaiting, endStartWait := s.runStatusDetailWriter(ctx, run.ID)
 	spec.OnWaiting = s.runEvents.onWaiting(run.ID, onWaiting)
-	spec.ExecOutput = s.openExecOutput(run.ID, p.TaskMode, p.Interactive)
+	if !s.completeMaskManifest(ctx, run) {
+		return
+	}
+	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
 	sb, err := s.cfg.Runner.CreateSandbox(createCtx, spec)
 	endStartWait()
+	stopCreateLease()
 	if err != nil {
 		// Conditional: only mark FAILED if still STARTING. A kill landing between the
 		// entry claim and this failure moved the run to KILLED — don't clobber that
 		// terminal state (mirrors the STARTING->RUNNING guard below).
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the sandbox could not be created: "+err.Error())
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": "sandbox_create"})))
 		return
 	}
 
@@ -761,7 +810,7 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 		execID, xerr := s.cfg.Runner.Exec(ctx, ref, argv)
 		if xerr != nil {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
-				run.ID.String(), "failure", mustJSON(map[string]any{"error": xerr.Error()})))
+				run.ID.String(), "failure", mustJSON(map[string]any{"error": xerr.Error(), "reason": "agent_start"})))
 			s.stopSandboxOrAudit(ctx, run.ID, ref, "run.exec")
 			// Conditional: a concurrent kill may have moved RUNNING->KILLED; don't
 			// clobber it with FAILED.
@@ -863,80 +912,6 @@ func runToolchainNeeds(wsRefs []types.Workspace) *toolchainNeeds {
 	}
 	goNeeded, jvmNeeded := workspacescan.ToolchainNeeds(profiles...)
 	return &toolchainNeeds{goTools: goNeeded, jvmTools: jvmNeeded}
-}
-
-// byoiExecLessRefused refuses a BYOI image outright, before it can even
-// ATTEMPT the selftest, on an exec-less (krun microVM) substrate.
-// runAsMainProcess (internal/runner/docker/driver.go) makes the
-// sandbox's container process ITSELF the agent on that substrate — there is
-// no separate exec slot — so byoiSelftest's own Exec would consume the
-// sandbox's one process, guaranteeing the task Exec that follows it fails
-// against an already-exited container (Exec would be called twice: once for
-// the selftest, once for the task). Refuses up front (audit + teardown +
-// FAILED) instead of wasting the slot finding that out the hard way.
-// Capabilities().Resolved[cc] carries an "oci/krun" runtime label on that
-// substrate (Kata/CC3 stays exec-capable: its Resolved label carries no such
-// prefix). Reports whether it refused; the caller must return immediately.
-func (s *Server) byoiExecLessRefused(ctx context.Context, run types.AgentRun, ref string) bool {
-	caps, cerr := s.cfg.Runner.Capabilities(ctx)
-	if cerr != nil || !strings.HasPrefix(caps.Resolved[run.ConfinementClass], "oci/krun") {
-		return false
-	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
-		run.ID.String(), "failure", mustJSON(map[string]any{
-			"confinement_class": run.ConfinementClass,
-			"detail": "BYOI images are refused on an exec-less (krun) runtime: the selftest's own exec " +
-				"would consume the sandbox's only process, guaranteeing the task exec that follows it fails",
-		})))
-	s.stopSandboxOrAudit(ctx, run.ID, ref, "run.selftest")
-	s.failAndRevoke(ctx, run.ID, types.RunRunning,
-		"BYOI images are not supported on this exec-less (krun) runtime")
-	return true
-}
-
-// byoiSelftest runs `agent-run --selftest` inside a BYOI sandbox and waits for
-// its exit, auditing the outcome. It relies on the runner's "latest Exec wins"
-// contract: this exec is tracked and Wait'd BEFORE the real task exec replaces
-// it, so the subsequent task's completion watcher is unaffected. Returns true
-// when the selftest passed (exit 0). failClosed only governs the audit tone —
-// the caller decides what to do with a false (fail the batch run, or warn-only
-// for interactive). A selftest that cannot even start (missing shell/binary,
-// exit 127) surfaces as a non-nil Exec/Wait error → returns false.
-// byoiSelftestTimeout bounds the fail-closed BYOI selftest gate so a hostile or
-// broken base image whose agent-run --selftest hangs cannot block the dispatch
-// goroutine forever — on timeout the gate fails closed (returns false).
-const byoiSelftestTimeout = 2 * time.Minute
-
-func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref string, failClosed bool) bool {
-	ctx, cancel := context.WithTimeout(ctx, byoiSelftestTimeout)
-	defer cancel()
-	if _, xerr := s.cfg.Runner.Exec(ctx, ref, []string{"/usr/local/bin/agent-run", "--selftest"}); xerr != nil {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
-			run.ID.String(), "failure", mustJSON(map[string]any{
-				"error": xerr.Error(), "fail_closed": failClosed,
-				"detail": "BYOI image could not run agent-run --selftest (missing shell or harness binary?)",
-			})))
-		return false
-	}
-	code, werr := s.cfg.Runner.Wait(ctx, ref)
-	if werr != nil {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
-			run.ID.String(), "failure", mustJSON(map[string]any{
-				"error": werr.Error(), "fail_closed": failClosed,
-			})))
-		return false
-	}
-	if code != 0 {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
-			run.ID.String(), "failure", mustJSON(map[string]any{
-				"exit_code": code, "fail_closed": failClosed,
-				"detail": "BYOI image failed the agent-run contract selftest",
-			})))
-		return false
-	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
-		run.ID.String(), "success", mustJSON(map[string]any{"exit_code": 0})))
-	return true
 }
 
 // patBrokerGrants converts the run's {host: grant_id} PAT grants into the

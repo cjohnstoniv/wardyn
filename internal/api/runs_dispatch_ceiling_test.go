@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -76,6 +77,7 @@ func runWalledDispatch(t *testing.T, d walledDispatch) (types.RunPolicySpec, run
 	srv.cfg.Store = ceilingDispatchStore{dispatchTestStore: st, site: d.site}
 	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{govCeilingSecret: []byte("v")}}
 	run.Task = "" // no agent exec / completion watcher: this is about composition
+	st.grants = patRowsFor(run.ID, d.patGrants)
 
 	var firstGitHub *uuid.UUID
 	for _, id := range d.gitGrants {
@@ -87,7 +89,7 @@ func runWalledDispatch(t *testing.T, d walledDispatch) (types.RunPolicySpec, run
 	if len(d.deny) > 0 {
 		ceiling = ceilingForDispatch(governanceCeiling{
 			Spec:    types.RunPolicySpec{DeniedDomains: d.deny},
-			Profile: &types.GovernanceProfile{Name: "walled"},
+			Profile: &ResolvedProfile{Name: "walled"},
 		}, adoEntraUngraded(), bedrockCredUngraded())
 	}
 	srv.dispatchRun(context.Background(), run, ceiling, dispatchParams{
@@ -311,6 +313,17 @@ type ceilingRecordStore struct {
 
 func (s ceilingRecordStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	return s.profile, types.CapabilitySubjectUser, nil
+}
+
+// ListGovernanceProfiles answers none: dispatch reads the run's profile for its
+// refusal attribution, and the embedded store has no such table.
+func (s ceilingRecordStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
+	return nil, nil
+}
+
+// GetGovernanceProfileChain finds none, for the same reason.
+func (s ceilingRecordStore) GetGovernanceProfileChain(context.Context, uuid.UUID) ([]types.GovernanceProfile, error) {
+	return nil, store.ErrNotFound
 }
 
 func (s ceilingRecordStore) HasGroupTierAssignments(context.Context) (bool, error) {

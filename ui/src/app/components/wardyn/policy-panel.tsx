@@ -28,7 +28,9 @@
 // by new-run-screen.tsx's "Policy" SectionCard.
 import * as React from "react";
 import { CircleCheck, CircleX, Globe, Plus, ShieldCheck, Timer } from "lucide-react";
-import type { ConfinementClass, RunPolicySpec } from "../../lib/types";
+import type { ConfinementClass, RunPolicySpec, SetupModelProvider } from "../../lib/types";
+import { POLICY_TEMPLATE_COPY as C } from "./copy/policy-templates";
+import { templateProviders } from "./policy-template-providers";
 import { getErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
@@ -40,6 +42,8 @@ import { FIELD_HELP } from "./policy-field-help";
 import { EFFECT_PAST, splitToolRules, ToolRulesSection } from "./policy-tool-rules";
 import { PushRulesSection } from "./policy-push-rules";
 import { ADOCapabilitiesSection } from "./policy-ado-capabilities";
+import { RAIL_CHECK } from "./copy";
+import { GitPATSection } from "./policy-git-pat";
 
 export type PolicyPanelInstance = "run" | "policies";
 
@@ -70,17 +74,19 @@ export interface PolicyTemplate {
 // click, and a 3600 there would collapse it to one high. ci/model-provider
 // inherit 3600 from their source examples; minimal/registries gain it here for
 // the meter. Absent still coalesces to 0 = never reaped (internal/lifecycle).
-export const POLICY_TEMPLATES: readonly PolicyTemplate[] = [
+export function policyTemplates(providers?: readonly SetupModelProvider[]): readonly PolicyTemplate[] {
+  const tp = templateProviders(providers);
+  return [
   {
     id: "minimal",
-    label: "Minimal",
-    hint: "The model provider and nothing else; unlisted hosts raise an approval.",
+    label: C.MINIMAL,
+    hint: tp.minimalHint,
     // The shipped starter (policies.tsx's STARTER_SPEC, and the run wizard's
     // fresh Custom-policy prefill via new-run-screen's MINIMAL.spec) — a valid,
     // editable floor, not a blank document. The 3600 idle cap is the meter fix:
     // it keeps the starter grading "Guarded", not "Elevated" for an omitted cap.
     spec: {
-      allowed_domains: ["api.anthropic.com"],
+      allowed_domains: tp.hosts,
       first_use_approval: "deny_with_review",
       min_confinement_class: "CC2",
       auto_stop_after_sec: 3600,
@@ -89,40 +95,28 @@ export const POLICY_TEMPLATES: readonly PolicyTemplate[] = [
   },
   {
     id: "model-provider",
-    label: "Model provider only",
-    hint: "One host, one proxy-injected API key. Nothing else is reachable.",
+    label: C.MODEL_PROVIDER,
+    hint: tp.modelProviderHint,
     // examples/policies/ci-claude-llm.json, auto_stop included: this is the one
     // template carrying a minted credential, so the source's idle cap matters
     // most here — without it a non-interactive run holds the key forever and
     // preflight grades it RiskHigh. Idle-stop only fires after a genuinely
     // silent hour (lifecycle TouchDebounce keeps active sessions alive).
     spec: {
-      allowed_domains: ["api.anthropic.com"],
+      allowed_domains: tp.hosts,
       denied_domains: [],
       allow_all_egress: false,
       first_use_approval: "always_deny",
       allowed_methods: [],
       min_confinement_class: "CC1",
       auto_stop_after_sec: 3600,
-      eligible_grants: [
-        {
-          kind: "api_key",
-          scope: {
-            host: "api.anthropic.com",
-            header: "x-api-key",
-            format: "%s",
-            secret_name: "anthropic-api-key",
-          },
-          ttl_seconds: 3600,
-          requires_approval: false,
-        },
-      ],
+      eligible_grants: tp.grants,
     },
   },
   {
     id: "registries",
-    label: "Package registries",
-    hint: "Model providers plus the language package registries — the build-and-install set.",
+    label: C.REGISTRIES,
+    hint: C.REGISTRIES_HINT,
     // examples/policies/default.json's egress set. Its github_token grant is
     // deliberately not carried: any repo-covering github_token makes the run
     // brokered and unconditionally removes github.com and friends from egress
@@ -131,8 +125,7 @@ export const POLICY_TEMPLATES: readonly PolicyTemplate[] = [
     // no cap) for the same meter reason as minimal — see the array header.
     spec: {
       allowed_domains: [
-        "api.anthropic.com",
-        "api.openai.com",
+        ...tp.registryHosts,
         "registry.npmjs.org",
         "registry.yarnpkg.com",
         "pypi.org",
@@ -153,8 +146,8 @@ export const POLICY_TEMPLATES: readonly PolicyTemplate[] = [
   },
   {
     id: "ci",
-    label: "CI baseline",
-    hint: "No egress, no grants, stopped after an idle hour — the unattended default.",
+    label: C.CI,
+    hint: C.CI_HINT,
     // examples/policies/ci.json verbatim. The 3600 stays: a non-interactive run
     // that is never reaped holds its minted credentials indefinitely, which the
     // product's own risk grade calls high (internal/composer/risk.go).
@@ -171,8 +164,8 @@ export const POLICY_TEMPLATES: readonly PolicyTemplate[] = [
   },
   {
     id: "allow-all",
-    label: "Allow-all — observe first",
-    hint: "Reaches almost any site (except a block-list); watch the audit log, then tighten.",
+    label: C.ALLOW_ALL,
+    hint: C.ALLOW_ALL_HINT,
     // Authored here, not seeded: no shipped example sets allow_all_egress.
     // first_use_approval is inert under allow-all, so it is stated as the
     // honest always_deny rather than implying a review that never fires.
@@ -186,6 +179,15 @@ export const POLICY_TEMPLATES: readonly PolicyTemplate[] = [
     },
   },
 ];
+}
+
+// The no-provider set: today's templates.
+export const POLICY_TEMPLATES: readonly PolicyTemplate[] = policyTemplates();
+
+// The starter spec Policies, the governance editor and a fresh Custom policy open with.
+export function minimalSpec(providers?: readonly SetupModelProvider[]): RunPolicySpec {
+  return policyTemplates(providers)[0].spec;
+}
 
 export function templateText(t: PolicyTemplate): string {
   return JSON.stringify(t.spec, null, 2);
@@ -311,11 +313,16 @@ export interface PolicyPanelProps {
   /** The Azure DevOps row's capability_ceiling (/setup/status scm_access);
    *  capabilities off it render locked. Undefined = unknown, nothing locked. */
   adoCeiling?: readonly string[];
+  /** The editor's last save refusal; one naming an axis of a git_pat grant is
+   *  shown on that field (policy-git-pat.tsx). */
+  serverError?: string | null;
   /**
    * Run instance: the "Reuse a saved policy" half of the mode row. The screen
    * owns the policy list and the selection; this is only where it renders and
    * which half of the row is lit.
    */
+  /** /setup/status model_providers; the template chips follow them. Absent = the no-provider set. */
+  modelProviders?: readonly SetupModelProvider[];
   savedPolicy?: {
     active: boolean;
     onActiveChange: (active: boolean) => void;
@@ -333,9 +340,13 @@ export function PolicyPanel({
   preflightDisabled,
   interactive,
   adoCeiling,
+  modelProviders,
+  serverError,
   savedPolicy,
   className,
 }: PolicyPanelProps) {
+  const templates = React.useMemo(() => policyTemplates(modelProviders), [modelProviders]);
+  const providerNames = templateProviders(modelProviders).names;
   const parsed = parseSpec(value);
   const egress = parsed.ok ? egressSummary(parsed.spec) : null;
   const usingSaved = savedPolicy?.active ?? false;
@@ -368,9 +379,9 @@ export function PolicyPanel({
       ) : (
         <>
           <div>
-            <SectionLabel className="mb-1.5">Start from a template</SectionLabel>
+            <SectionLabel className="mb-1.5">{C.START}</SectionLabel>
             <div className="flex flex-wrap gap-1.5">
-              {POLICY_TEMPLATES.map((t) => (
+              {templates.map((t) => (
                 <Button
                   key={t.id}
                   type="button"
@@ -383,6 +394,9 @@ export function PolicyPanel({
                 </Button>
               ))}
             </div>
+            {providerNames.length > 0 && (
+              <p className="mt-1.5 text-meta text-muted-foreground">{C.FROM_PROVIDERS(providerNames)}</p>
+            )}
           </div>
 
           <Field label="Spec (JSON)" htmlFor={specId} required>
@@ -463,6 +477,16 @@ export function PolicyPanel({
             />
           )}
 
+          {/* git_pat narrowing (repos, access, api, forge): one block per
+              stored-token grant, with the honesty lines packet M7 fixes. */}
+          {parsed.ok && (
+            <GitPATSection
+              spec={parsed.spec}
+              serverError={serverError}
+              onSpecChange={(next) => onChange(JSON.stringify(next, null, 2))}
+            />
+          )}
+
           {/* The safety meter grades the DOCUMENT as typed (debounced, advisory),
               distinct from the run instance's Preflight of the RESOLVED run — so
               on the run instance the meter's title says the difference. A parse
@@ -538,11 +562,9 @@ export function PolicyPanel({
             disabled={preflightBusy || preflightDisabled || (!usingSaved && !parsed.ok)}
           >
             <ShieldCheck className="size-4" />
-            Preflight
+            {RAIL_CHECK.BUTTON}
           </Button>
-          <span className="text-meta text-muted-foreground">
-            Checks the spec server-side and shows what would be clamped — before you launch.
-          </span>
+          <span className="text-meta text-muted-foreground">{RAIL_CHECK.HINT}</span>
         </div>
       )}
     </div>

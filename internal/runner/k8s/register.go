@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 )
 
@@ -22,10 +23,16 @@ import (
 // with recording off still wrapped every exec in wardyn-rec and still logged
 // a brokered:recording deny for a feature that was switched off.
 func buildConfig(d substrate.Deps) Config {
+	startTimeout, capacityWait := runner.SandboxStartDeadlines()
 	return Config{
+		StartTimeout:        startTimeout,
+		CapacityWait:        capacityWait,
 		Namespace:           resolveNamespace(os.Getenv("WARDYN_K8S_NAMESPACE")),
 		ProxyImage:          d.ProxyImage,
 		ImagePullSecret:     os.Getenv("WARDYN_K8S_IMAGE_PULL_SECRET"),
+		SandboxPlacement:    os.Getenv("WARDYN_K8S_SANDBOX_PLACEMENT"),
+		RunMaxAge:           cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0),
+		ReadNodes:           cliutil.EnvBool("WARDYN_K8S_READ_NODES", false),
 		Record:              d.Record,
 		ConfinementRuntimes: d.ConfinementRuntimes,
 		// cliutil.EnvBool, not a literal "1" compare (#202): the shared

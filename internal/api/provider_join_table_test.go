@@ -71,7 +71,8 @@ func joinKinds() []joinKind {
 			Harnesses: []types.ProviderHarness{{Harness: "codex-cli"}}},
 			agent: "codex-cli", store: putKey, credState: mpRunNoKey,
 			grantHost: "api.openai.com", grantName: providerSecretName("uid-ok", providerKeyPart),
-			env:   map[string]string{"OPENAI_API_KEY": joinPlaceholder, "OPENAI_BASE_URL": joinProxyURL + "/wardyn/llm/openai"},
+			env: map[string]string{"OPENAI_API_KEY": joinPlaceholder, "OPENAI_BASE_URL": joinProxyURL + "/wardyn/llm/openai",
+				"CODEX_API_KEY": joinPlaceholder, "WARDYN_CODEX_BASE_URL": joinProxyURL + "/wardyn/llm/openai/v1"},
 			noEnv: []string{"ANTHROPIC_API_KEY"}},
 		{p: endpoint, agent: "claude-code", store: putKey, credState: mpRunNoToken,
 			grantHost: "gw.corp.example", grantName: providerSecretName("uid-gw", providerKeyPart),
@@ -340,7 +341,8 @@ func assertJoinNoProvider(t *testing.T, k joinKind, st *subStore, plan dispatchL
 	}
 	placeholder := map[string]map[string]string{
 		"claude-code": {"ANTHROPIC_API_KEY": joinPlaceholder},
-		"codex-cli":   {"OPENAI_API_KEY": joinPlaceholder, "OPENAI_BASE_URL": joinProxyURL + "/wardyn/llm/openai"},
+		"codex-cli": {"OPENAI_API_KEY": joinPlaceholder, "OPENAI_BASE_URL": joinProxyURL + "/wardyn/llm/openai",
+			"CODEX_API_KEY": joinPlaceholder, "WARDYN_CODEX_BASE_URL": joinProxyURL + "/wardyn/llm/openai/v1"},
 	}[k.agent]
 	assertJoinEnv(t, env, placeholder, []string{"CLAUDE_CODE_USE_BEDROCK", "WARDYN_CLAUDE_MANAGED_B64", "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_BASE_URL"})
 }
@@ -449,7 +451,7 @@ func joinCreate(t *testing.T, k joinKind, sc joinScenario, path, body string, po
 			t.Fatal(err)
 		}
 		w := httptest.NewRecorder()
-		if _, ok := srv.enforceRunModelProvider(w, httptest.NewRequest(http.MethodPost, path, nil), req, types.RunPolicySpec{}, nil); ok {
+		if _, ok := srv.enforceRunModelProvider(w, httptest.NewRequest(http.MethodPost, path, nil), req, types.RunPolicySpec{}, nil, false); ok {
 			t.Fatal("an unreadable provider block admitted the run")
 		}
 		return w

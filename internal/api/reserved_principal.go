@@ -6,12 +6,16 @@ package api
 import (
 	"net/http"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 )
 
 // isReservedPrincipal reports whether p names an identity that is not a
 // person: the admin token, the local-mode operator (the configured seat, or any
 // "local:" name — the default seat is "local:<os-user>", and a run it created
-// outlives a later switch to SSO), a device, or a registered portal. Authorization compares the
+// outlives a later switch to SSO), a device, a registered portal, or a person's
+// audit subject ("subject:<id>", the actor WARDYN_AUDIT_SEAL=full stores, refused
+// whether or not it is on). Authorization compares the
 // caller's principal to these strings, so a human whose identity-provider
 // subject — or whose wdn_ token's replayed principal — equals one would be
 // treated as that identity: owning its runs, skipping its re-checks (#1162).
@@ -25,7 +29,22 @@ func (s *Server) isReservedPrincipal(p string) bool {
 	p = strings.ToLower(strings.TrimSpace(p))
 	op := strings.ToLower(strings.TrimSpace(s.cfg.LocalOperator))
 	return p == adminTokenPrincipal || (op != "" && p == op) ||
-		strings.HasPrefix(p, "local:") || strings.HasPrefix(p, "device:") || strings.HasPrefix(p, delegateActorPrefix)
+		strings.HasPrefix(p, "local:") || strings.HasPrefix(p, "device:") || strings.HasPrefix(p, delegateActorPrefix) ||
+		strings.HasPrefix(p, audit.SubjectActorPrefix)
+}
+
+// refuseSubjectPrincipalParam answers 422 reserved_principal, before the
+// handler runs, for a /people/{principal} path naming a person's audit subject.
+// The person routes resolve a name by directory lookup, and "subject:<id>" is
+// not a name: it must never reach one.
+func (s *Server) refuseSubjectPrincipalParam(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(principalParam(r))), audit.SubjectActorPrefix) {
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonReservedPrincipal, "principal: that name is reserved for a person's audit subject, not a person")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // refuseReservedPrincipal answers 401 with msg, and records auth.fail

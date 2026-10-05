@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/runner/sizing"
 )
 
 // Sandbox-launch primitives shared by every substrate (SECURITY-RELEVANT
@@ -30,9 +31,9 @@ const ProxyListenPort = 3128
 // fork-bomb the host PID space, or fill host storage and take sibling runs
 // down with it (see types.ResourceLimits). A policy value always overrides.
 const (
-	DefaultCPUMillis int64 = 2000 // 2 vCPU
-	DefaultMemoryMiB int64 = 4096 // 4 GiB hard memory cap
-	DefaultPidsLimit int64 = 512  // max processes/threads (fork-bomb guard)
+	DefaultCPUMillis = sizing.DefaultCPUMillis // 2 vCPU
+	DefaultMemoryMiB = sizing.DefaultMemoryMiB // 4 GiB hard memory cap
+	DefaultPidsLimit = sizing.DefaultPidsLimit // max processes/threads (fork-bomb guard)
 )
 
 // AgentIdleScript is the agent sandbox's main (idle) process for
@@ -187,14 +188,18 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		MITMLLM:              pc.MITMLLM,
 		GitGrants:            pc.GitGrants,
 		PATGrants:            pc.PATGrants,
+		BrokeredPATGrantIDs:  pc.BrokeredPATGrantIDs,
 		ADOGrant:             pc.ADOGrant,
+		AzureGates:           pc.AzureGates,
 		UpstreamProxyURL:     pc.UpstreamProxyURL,
 		TrustedCAPEM:         pc.TrustedCAPEM,
 		InternalHosts:        pc.InternalHosts,
 		UpstreamProxyNoProxy: pc.UpstreamProxyNoProxy,
 		LLMUpstreams:         pc.LLMUpstreams,
+		LLMChannelHosts:      pc.LLMChannelHosts,
 		LLMUnavailableDetail: pc.LLMUnavailableDetail,
 		Unattended:           pc.Unattended,
+		Attribution:          pc.Attribution,
 	}
 	return json.Marshal(cfg)
 }

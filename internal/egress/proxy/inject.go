@@ -31,7 +31,7 @@ import (
 var procRegistry = secretmask.NewRegistry()
 
 // procMask registers v with procRegistry for the process's life (filed under uuid.Nil, never evicted).
-func procMask(v []byte) { procRegistry.Add(uuid.Nil, v) }
+func procMask(v []byte) { _ = procRegistry.Add(uuid.Nil, v) } // process-local: no Backend, so it cannot fail
 
 // InjectionConfig pairs an egress.InjectionRule with the credential grant the proxy mints from at
 // startup. SECURITY: the minted secret lives only in proxy memory, never exposed to the sandbox.

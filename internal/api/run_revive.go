@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -183,17 +184,21 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		return reviveResult{}, rerr
 	}
 	defer s.reviving.Delete(run.ID)
-	// The run's lock (run_oplock.go) is held from here to the settle, so a lease
+	// The run's lock (locks.go) is held from here to the settle, so a lease
 	// pass that read the run's lost mark before the claim cannot stop the proxy
 	// this revive starts. It is released after the settle, and after the
 	// compensation of a failed one.
-	defer s.lockRunOp(run.ID)()
+	ctx, unlockRun, err := s.lockRunOp(ctx, run.ID)
+	if err != nil {
+		return reviveResult{}, reviveRefused(http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
+	}
+	defer unlockRun()
 
 	c, rerr := s.reviveCeiling(ctx, run)
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
-	cfg, rerr := s.reviveSourceConfig(ctx, rv, run)
+	cfg, rerr := s.reviveSourceConfig(ctx, rv, run, actorType, actor)
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
@@ -230,12 +235,8 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// the row as read here, so a run read live still had its old proxy running.
 	// It also refreshes the watcher lease, so the watcher sweep does not find
 	// a rebooted agent not yet started and lose the run again.
-	claimed, err := reviver.MarkRunRevived(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()))
-	if err != nil {
-		return reviveResult{}, reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, "claim the run for revive: "+err.Error())
-	}
-	if !claimed {
-		return reviveResult{}, reviveRefused(http.StatusConflict, reasonReviveRunChanged, "the run changed while it was being revived (it ended, was lost or was revived); try again")
+	if rerr := s.claimRevive(ctx, reviver, run, rebooted); rerr != nil {
+		return reviveResult{}, rerr
 	}
 	// From the claim on, the revive finishes or compensates whatever becomes of
 	// the request: a person closing the tab stops waiting for the answer, not
@@ -320,6 +321,24 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	return reviveResult{RunID: run.ID, DeniedAdded: re.added, ProxyRelease: version.Version, AgentStarted: rebooted}, nil
 }
 
+// claimRevive is reviveRunProxy's claim (store.RunReviver.MarkRunRevived). A
+// revive that starts the run's stopped agent (startsAgent, reviveNeedsAgentStart)
+// takes a slot under WARDYN_MAX_CONCURRENT_RUNS, under the cap's lock, and at the
+// cap is refused as a create is, the run left kept.
+func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run types.AgentRun, startsAgent bool) *reviveError {
+	claimed, err := reviver.MarkRunRevived(ctx, run.ID, run.LostReason, s.endedKept(run, s.cfg.Now()), s.cfg.MaxConcurrentRuns, startsAgent)
+	if errors.Is(err, store.ErrRunCapReached) {
+		return reviveRefused(http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)
+	}
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, "claim the run for revive: "+err.Error())
+	}
+	if !claimed {
+		return reviveRefused(http.StatusConflict, reasonReviveRunChanged, "the run changed while it was being revived (it ended, was lost or was revived); try again")
+	}
+	return nil
+}
+
 // reviveFailedAfterClaim is the end of a revive whose proxy replace or agent
 // start failed after the claim: the run is put back to lost, and the answer says
 // "lost" only when that was persisted. When the lost mark could not be written
@@ -340,7 +359,7 @@ func (s *Server) reviveFailedAfterClaim(ctx context.Context, run types.AgentRun,
 // reviveSourceConfig is the config a revive starts from: the run's stored
 // one (run_proxy_config.go), never the proxy container's (#1176), once the
 // run's substrate says it can replace a proxy at all.
-func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver, run types.AgentRun) (*proxy.Config, *reviveError) {
+func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver, run types.AgentRun, actorType types.ActorType, actor string) (*proxy.Config, *reviveError) {
 	if err := rv.CanReplaceProxy(ctx, run.SandboxRef); err != nil {
 		if errors.Is(err, runner.ErrReviveUnsupported) {
 			return nil, reviveUnsupported()
@@ -359,7 +378,46 @@ func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver,
 	if err != nil {
 		return nil, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad, "the run's proxy config does not load: "+err.Error())
 	}
+	grants, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
+	if err != nil {
+		return nil, reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable,
+			"read the run's git_pat grants: "+err.Error())
+	}
+	if rerr := s.revivePATNarrowing(ctx, run, cfg, grants, actorType, actor); rerr != nil {
+		return nil, rerr
+	}
+	// A config rendered under 0.8.5 has no brokered_pat_grant_ids, so the set is
+	// recomputed rather than trusted, whatever the stored value says.
+	cfg.BrokeredPATGrantIDs = brokeredPATGrantIDs(grants, !s.cfg.DisableGitPATBroker)
 	return cfg, nil
+}
+
+// revivePATNarrowing asks dispatch's narrowing refusals (patNarrowingRefusal)
+// again under the deployment as it is now. A narrowed git_pat grant revived
+// after the PAT broker was turned off would keep its narrowed lane but lose the
+// raw-mint refusal, so the PAT would reach the sandbox unnarrowed; the revive is
+// refused and audited instead. A run with no git_pat grant reads nothing more.
+func (s *Server) revivePATNarrowing(ctx context.Context, run types.AgentRun, cfg *proxy.Config,
+	grants []types.CredentialGrant, actorType types.ActorType, actor string,
+) *reviveError {
+	if len(patGrantIDsOf(grants)) == 0 {
+		return nil
+	}
+	site, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable,
+			"re-check the run's git_pat narrowing: read site config: "+err.Error())
+	}
+	adoRun, adoOn := resolveADOEntraRun(site, repoLocatorsOf(cfg.Policy.WorkspaceRepos), runIdentitySubject(ctx, run.CreatedBy))
+	env := patNarrowingEnvOf(!s.cfg.DisableGitPATBroker, cfg.GitGrants, site, adoRun, adoOn)
+	reason, detail := patNarrowingRefusal(patGrantSpecs(grants), env)
+	if reason == "" {
+		return nil
+	}
+	detail = "the run cannot be revived as it was dispatched: " + detail
+	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure",
+		mustJSON(map[string]any{"subject": run.CreatedBy, "reason": reason, "error": detail})))
+	return reviveRefused(http.StatusConflict, reason, detail)
 }
 
 // stripRevivedModelInjections is dispatch's strip (dropLegacyModelInjections)

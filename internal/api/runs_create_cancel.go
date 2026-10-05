@@ -14,8 +14,9 @@ import (
 // CreateSandbox, so a kill of a STARTING run stops the create instead of
 // leaving it to hold cluster room until its own readiness wait expires.
 // Dispatch runs detached (context.WithoutCancel), so nothing else can reach it.
-// Process-local like sshSessions: replicas>1 is refused by construction, so the
-// kill always lands in the process that is dispatching. Zero value is ready.
+// A kill served by another replica reaches it over NOTIFY (cancelCreate, live_bus.go);
+// if that notice is lost, dispatch's STARTING to RUNNING compare still tears the
+// sandbox down. Zero value is ready.
 type inflightCreates struct{ m sync.Map } // uuid.UUID -> context.CancelFunc
 
 // track registers the run BEFORE dispatch's PENDING->STARTING claim, so a kill

@@ -57,6 +57,7 @@ export function Lane({
   id,
   title,
   hint,
+  note,
   connected,
   connectedDetail,
   selected,
@@ -68,6 +69,8 @@ export function Lane({
   id: string;
   title: string;
   hint: string;
+  /** A second line under the hint that stays when the lane is connected. */
+  note?: string;
   connected: boolean;
   connectedDetail?: string;
   selected: boolean;
@@ -121,6 +124,7 @@ export function Lane({
           <span className="mt-0.5 block text-meta leading-snug text-muted-foreground">
             {connected && connectedDetail ? connectedDetail : hint}
           </span>
+          {note && <span className="mt-0.5 block text-meta leading-snug text-muted-foreground">{note}</span>}
         </span>
       </button>
     </div>

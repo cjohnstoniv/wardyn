@@ -16,7 +16,7 @@
 // `canAttach` (who) picks the copy, `attachable` (state too) picks the pane.
 import * as React from "react";
 import { SquareTerminal } from "lucide-react";
-import type { AgentRun, Recording } from "../../../lib/types";
+import type { Recording, RunDetail } from "../../../lib/types";
 import { AttachTerminal } from "../../attach-terminal";
 import { TerminalPlayer } from "../../wardyn/terminal-player";
 import { Chip } from "../../wardyn/primitives";
@@ -35,7 +35,7 @@ export function TerminalPane({
   onGoRecording,
   execMode,
 }: {
-  run: AgentRun;
+  run: RunDetail;
   terminal: boolean;
   recording: Recording | null;
   recState: "idle" | "loading" | "error" | "ready";
@@ -57,7 +57,7 @@ export function TerminalPane({
   if (attachable) {
     // fill: the pane owns the height. h-[70vh] was a guess that predates this
     // layout and stays the default for every other mount site.
-    return <AttachTerminal fill runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} />;
+    return <AttachTerminal fill runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} policy={run.policy} />;
   }
 
   // Finished run: the pane becomes the replay surface in place rather than a

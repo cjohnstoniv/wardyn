@@ -13,10 +13,18 @@
 import * as React from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { createOutputFlow } from "./attach-terminal-flow";
 import { decideKey } from "./attach-terminal-keys";
+import { terminalLinkHandlers } from "./attach-terminal-links";
+import { exposeTerminalForE2E } from "./attach-terminal-e2e-seam";
+import { createRenderer, type RendererControl, type RendererPref, type RendererState } from "./attach-terminal-renderer";
+import { createCopyGate, isMacPlatform, type CopyGate, type CopyOffer, type GateTerm } from "./attach-terminal-clipboard";
 import { runs } from "../lib/api/runs";
 import { wsURL } from "../lib/base-path";
 import { entryErrorMessage } from "../lib/run-entry";
+import { attachWheelCoalescer } from "./attach-terminal-wheel";
 import type { AttachHolder, AttachModeMsg } from "../lib/types/runs";
 
 export type ConnState = "connecting" | "open" | "reconnecting" | "closed" | "error";
@@ -58,9 +66,16 @@ const TAKEN_OVER_CLOSE_CODE = 1008;
 const TAKEN_OVER_REASON_PREFIX = "taken over by ";
 
 // Helpers
-function buildWsUrl(runId: string, ticket?: string): string {
+function buildWsUrl(runId: string, ticket?: string, cols?: number, rows?: number): string {
+  const q = new URLSearchParams();
+  if (ticket) q.set("ticket", ticket);
+  if (cols && rows && cols > 0 && rows > 0) {
+    q.set("cols", String(cols));
+    q.set("rows", String(rows));
+  }
   const base = wsURL(`/runs/${encodeURIComponent(runId)}/attach`);
-  return ticket ? `${base}?ticket=${encodeURIComponent(ticket)}` : base;
+  const qs = q.toString();
+  return qs ? `${base}?${qs}` : base;
 }
 
 export interface UseAttachSessionArgs {
@@ -84,12 +99,26 @@ export interface UseAttachSessionArgs {
   reclaimRef: React.MutableRefObject<() => void>;
   manualReconnectRef: React.MutableRefObject<() => void>;
   refit: (force?: boolean) => void;
+  /** The writer's grid an observer's terminal is pinned to; null = fit the container. */
+  observerPinRef: React.MutableRefObject<{ cols: number; rows: number } | null>;
   setConnState: React.Dispatch<React.SetStateAction<ConnState>>;
   setErrorMsg: React.Dispatch<React.SetStateAction<string>>;
   setMode: React.Dispatch<React.SetStateAction<{ readOnly: boolean; holder?: AttachHolder } | null>>;
   setTakenOverBy: React.Dispatch<React.SetStateAction<string | null>>;
   setReconnectAttempt: React.Dispatch<React.SetStateAction<number>>;
   setReconnectExhausted: React.Dispatch<React.SetStateAction<boolean>>;
+  /** The clipboard gate (attach-terminal-clipboard.ts): its offer and notice state, and its handle. */
+  setCopyOffer: React.Dispatch<React.SetStateAction<CopyOffer | null>>;
+  setCopyNotice: React.Dispatch<React.SetStateAction<string | null>>;
+  copyGateRef: React.MutableRefObject<CopyGate | null>;
+  /** Set while an offer card is up: Cmd/Ctrl+C in the terminal copies the offer. */
+  offerCopyRef: React.MutableRefObject<(() => void) | null>;
+  /** A clicked link that needs the confirm dialog (attach-terminal-links.ts). */
+  setLinkTarget: React.Dispatch<React.SetStateAction<URL | null>>;
+  /** The renderer (attach-terminal-renderer.ts): its live handle, the stored choice, and what is in use. */
+  rendererRef: React.MutableRefObject<RendererControl | null>;
+  rendererPrefRef: React.RefObject<RendererPref>;
+  setRenderer: React.Dispatch<React.SetStateAction<RendererState>>;
 }
 
 export function useAttachSession(args: UseAttachSessionArgs) {
@@ -112,13 +141,30 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     reclaimRef,
     manualReconnectRef,
     refit,
+    observerPinRef,
     setConnState,
     setErrorMsg,
     setMode,
     setTakenOverBy,
     setReconnectAttempt,
     setReconnectExhausted,
+    setCopyOffer,
+    setCopyNotice,
+    copyGateRef,
+    offerCopyRef,
+    setLinkTarget,
+    rendererRef,
+    rendererPrefRef,
+    setRenderer,
   } = args;
+
+  // Read at each (re)connect, not keyed on: /me landing late must not rebuild
+  // the terminal (one socket and one ticket per page load). Teardown on a
+  // changed authorisation still rides `mayEnter` and `signedOut` below.
+  const operatorRef = React.useRef(operator);
+  const operatorResolvedRef = React.useRef(operatorResolved);
+  operatorRef.current = operator;
+  operatorResolvedRef.current = operatorResolved;
 
   React.useEffect(() => {
     // Fail-open default (operator-context.tsx) means this stays exactly
@@ -136,10 +182,19 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     if (!mount) return;
 
     // xterm setup
+    const links = terminalLinkHandlers(setLinkTarget);
     const term = new Terminal({
       cursorBlink: true,
       scrollback: 50000,
-      fontFamily: "'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace",
+      // The unicode addon uses xterm's proposed API.
+      allowProposedApi: true,
+      // Box-drawing and block glyphs are drawn exactly, not taken from the font.
+      customGlyphs: true,
+      // Option+drag keeps xterm's native selection on macOS while tmux owns the mouse.
+      macOptionClickForcesSelection: true,
+      // OSC 8 links share the detected-link policy.
+      linkHandler: links.osc8,
+      fontFamily: "'JetBrains Mono Terminal', 'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace",
       fontSize: 13,
       theme: {
         background: "#0d1117",
@@ -165,17 +220,37 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       },
     });
 
+    let disposedFont = false;
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
+    // Unicode 11 widths match tmux and glibc (emoji take two cells); the default table is Unicode 6.
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = "11";
+    term.loadAddon(new WebLinksAddon(links.detected));
     term.open(mount);
     termRef.current = term;
+    // After open: the GPU addon needs the DOM renderer in place to fall back to.
+    const renderer = createRenderer(term, rendererPrefRef.current ?? "auto", setRenderer);
+    rendererRef.current = renderer;
+    const unexpose = exposeTerminalForE2E(term);
     fitAddonRef.current = fitAddon;
+    // Measure now so the attach URL carries the real geometry.
+    refit();
 
     // Initial fit after the browser has laid the container out.
     const rafId = requestAnimationFrame(() => refit());
-    // Refit once the bundled font has loaded so xterm's cell metrics match the
-    // real glyph width (a fit measured against the fallback font would misalign).
-    document.fonts.ready.then(() => refit()).catch(() => {});
+    // The web font is font-display: swap, so xterm may have measured cells
+    // against the fallback (17px vs 15px). fit() resizes only when the grid
+    // dimensions change, so once the font is in, nudge cols-1 to make the next
+    // refit a real change and re-measure the cells.
+    document.fonts
+      .load("13px 'JetBrains Mono Terminal'")
+      .then(() => {
+        if (disposedFont || termRef.current !== term) return;
+        if (term.cols > 1) term.resize(term.cols - 1, term.rows);
+        refit();
+      })
+      .catch(() => {});
 
     // WebSocket (with bounded reconnect)
     // The terminal/xterm instance above persists across reconnects; only the
@@ -199,6 +274,16 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     // client's real size. null on the first frame so an initial writer
     // connect (never "was read-only") does not spuriously force-refit.
     let lastReadOnly: boolean | null = null;
+    // The socket the server last announced as the WRITER, and only that one: an
+    // observer, or the gap between sockets, is never entitled to a copy offer.
+    let writerWs: WebSocket | null = null;
+    const copyGate = createCopyGate({
+      term: term as unknown as GateTerm,
+      isWriter: () => writerWs !== null && writerWs === wsRef.current && writerWs.readyState === WebSocket.OPEN,
+      onOffer: setCopyOffer,
+      onNotice: setCopyNotice,
+    });
+    copyGateRef.current = copyGate;
 
     const send = (payload: ArrayBufferView | string) => {
       const cur = wsRef.current;
@@ -238,14 +323,14 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       // worked was never tried. Preferring the ticket lane when unsure costs an
       // admin nothing: minting is itself owner-or-admin (handleAttachTicket,
       // attach_ticket.go), so the lane serves both.
-      if (tokenOnlyMode || !operator || !operatorResolved) {
+      if (tokenOnlyMode || !operatorRef.current || !operatorResolvedRef.current) {
         // Mint a fresh single-use ticket per (re)connect — the previous one was
         // consumed by the last handshake — then open the WS with ?ticket=.
         runs
           .attachTicket(runId)
           .then((ticket) => {
             if (disposed) return;
-            openSocket(buildWsUrl(runId, ticket));
+            openSocket(buildWsUrl(runId, ticket, term.cols, term.rows));
           })
           .catch((e: unknown) => {
             if (disposed) return;
@@ -257,7 +342,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           });
         return;
       }
-      openSocket(buildWsUrl(runId));
+      openSocket(buildWsUrl(runId, undefined, term.cols, term.rows));
     };
 
     const openSocket = (url: string) => {
@@ -265,6 +350,12 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       const ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
+      // A new connection starts with no writer standing and no offer.
+      writerWs = null;
+      copyGate.reset();
+      const outFlow = createOutputFlow(term, (type) => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type }));
+      });
 
       // Arm the deadline for THIS attempt. Closing a socket still in CONNECTING
       // fires onclose with an abnormal code — the one path that already knows
@@ -296,10 +387,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
         setReconnectAttempt(0);
         setReconnectExhausted(false);
         setConnState("open");
-        // Fit + send the real size once the PTY is attached. Forced, so an
-        // attach that lands while another client has the window clamped starts
-        // from this client's own size rather than inheriting the filler.
-        requestAnimationFrame(() => refit(true));
+        // Fit + send the real size once the PTY is attached (deduped per socket).
+        requestAnimationFrame(() => refit());
         // Auto-type the convenience command ONCE, after the shell prompt has had
         // a moment to render. Guarded so a reconnect never re-types it.
         if (!autoRunSent && autoRunRef.current) {
@@ -314,7 +403,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       ws.onmessage = (ev) => {
         if (ev.data instanceof ArrayBuffer) {
           const bytes = new Uint8Array(ev.data);
-          term.write(bytes);
+          outFlow.write(bytes);
           // Mirror the decoded text to the optional observer (token detection).
           const cb = onOutputRef.current;
           if (cb) cb(outDecoder.decode(bytes, { stream: true }));
@@ -329,6 +418,12 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           const msg = JSON.parse(ev.data) as AttachModeMsg;
           if (msg?.type === "attach-mode") {
             const nowReadOnly = !!msg.read_only;
+            // Re-pinned on EVERY frame: the server re-sends the writer's size
+            // to observers each time the writer resizes. Set before the
+            // promotion refit below so that one fits the container again.
+            const h = msg.holder;
+            observerPinRef.current = nowReadOnly && h?.cols && h?.rows ? { cols: h.cols, rows: h.rows } : null;
+            if (observerPinRef.current) refit();
             if (lastReadOnly === true && !nowReadOnly) {
               // Promoted in place: force the resize nudge (refit's own doc)
               // so THIS client's size wins over the geometry it inherited.
@@ -345,6 +440,9 @@ export function useAttachSession(args: UseAttachSessionArgs) {
               term.focus();
             }
             lastReadOnly = nowReadOnly;
+            // A role change voids whatever was offered under the old one.
+            if ((writerWs === ws) !== !nowReadOnly) copyGate.reset();
+            writerWs = nowReadOnly ? null : ws;
             setMode({ readOnly: nowReadOnly, holder: msg.holder });
           }
         } catch {
@@ -354,6 +452,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
 
       ws.onclose = (ev) => {
         clearConnectTimer();
+        writerWs = null;
+        copyGate.reset();
         if (disposed) return;
         // Displaced — checked before the reconnect path, because it is the one
         // close that looks unexpected and must never be retried. See
@@ -463,6 +563,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       send(new TextEncoder().encode(data));
     });
 
+    const wheelDispose = attachWheelCoalescer(term, send, () => writerWs !== null && writerWs === wsRef.current);
+
     // Binary paste (e.g. via selection) → WebSocket binary frame.
     const binaryDispose = term.onBinary((data) => {
       send(Uint8Array.from(data, (c) => c.charCodeAt(0)));
@@ -489,6 +591,20 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           navigator.clipboard?.readText?.().then(sendPaste).catch(() => {});
           return false;
         default:
+          // A pending copy offer owns Cmd/Ctrl+C (xterm keeps focus, so typing
+          // is never swallowed); with none pending, Ctrl+C is the interrupt.
+          if (
+            offerCopyRef.current &&
+            (isMacPlatform() ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) &&
+            !e.altKey &&
+            !e.shiftKey &&
+            e.key.toLowerCase() === "c" &&
+            !term.hasSelection()
+          ) {
+            e.preventDefault();
+            offerCopyRef.current();
+            return false;
+          }
           return true;
       }
     });
@@ -508,16 +624,27 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     // Resize wiring
     // Observe the terminal's own (flex-grown) box so any layout change — panel
     // resize, fullscreen toggle, window resize — refits and re-sizes the PTY.
-    const resizeObserver = new ResizeObserver(() => refit());
+    // ResizeObserver and window resize coalesce into one frame, one refit.
+    let resizeRaf = 0;
+    const scheduleRefit = () => {
+      if (resizeRaf) return;
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = 0;
+        refit();
+      });
+    };
+    const resizeObserver = new ResizeObserver(scheduleRefit);
     resizeObserver.observe(mount);
-    const onWinResize = () => refit();
+    const onWinResize = scheduleRefit;
     window.addEventListener("resize", onWinResize);
 
     // Cleanup
     return () => {
+      if (resizeRaf) cancelAnimationFrame(resizeRaf);
       // Stop any pending backoff from spawning a new socket after unmount, and
       // mark the close as intentional (so the in-flight ws.onclose won't retry).
       disposed = true;
+      disposedFont = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (autoRunTimer) clearTimeout(autoRunTimer);
       if (connectTimer) clearTimeout(connectTimer);
@@ -525,7 +652,13 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       window.removeEventListener("resize", onWinResize);
       mount.removeEventListener("paste", onPaste, true);
       inputDispose.dispose();
+      wheelDispose();
       binaryDispose.dispose();
+      copyGate.dispose();
+      copyGateRef.current = null;
+      unexpose();
+      renderer.dispose();
+      rendererRef.current = null;
       resizeObserver.disconnect();
       const ws = wsRef.current;
       if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
@@ -536,15 +669,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       fitAddonRef.current = null;
       wsRef.current = null;
     };
-    // operator/mayEnter are added deliberately: in the single-operator/default
-    // case they never change value, so this never causes an extra run there —
-    // today's behavior is untouched. They matter for the (rare) case where
-    // /me resolves to a non-owning viewer shortly after an optimistic mount;
-    // the early return above then tears the effect back down via its own
-    // cleanup before running again.
-    // operatorResolved rides with operator for the same reason: when /me lands
-    // late, the lane the socket picked on the fail-open default must be
-    // re-decided against the answer.
+    // mayEnter is keyed on deliberately: a confirmed non-owner tears the
+    // terminal down. operator and operatorResolved are read through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refs and setters are stable identities (useRef/useState in the caller); these deps are unchanged from the effect this hook was extracted from
-  }, [runId, tokenOnlyMode, refit, operator, operatorResolved, mayEnter, refusal, signedOut]);
+  }, [runId, tokenOnlyMode, refit, mayEnter, refusal, signedOut]);
 }

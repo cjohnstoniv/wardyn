@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -18,8 +19,9 @@ import (
 // manual wizard fires this when the operator enters Review so the checklist
 // (secrets/workspaces/backend/egress), the silent-CC3 raise, and the risk
 // assessment the composer already surfaces are all visible on the manual path
-// too. Advisory only — the UI renders any error as a quiet "preflight
-// unavailable" and never blocks Review.
+// too. The console shows an error as a danger alert beside Launch. A fresh
+// 4xx, or a `missing` backend or llm_access row, holds Launch for that exact
+// body for up to 60s (use-launch.ts preflightBlock); every other row is advisory.
 type preflightResponse struct {
 	SetupItems               []SetupItem            `json:"setup_items"`
 	EnforcedConfinementClass types.ConfinementClass `json:"enforced_confinement_class"`
@@ -70,6 +72,28 @@ type preflightResponse struct {
 	GitCredential *SCMAccess `json:"git_credential,omitempty"`
 }
 
+// preflightBurst and preflightLimiterMaxPeople size the per-person preflight
+// limiter: a burst of five, and a map cap for a deployment's people rather
+// than the directory limiter's admins.
+const (
+	preflightBurst            = 5
+	preflightLimiterMaxPeople = 16384
+)
+
+// refusePreflightRate answers 429 when this person is over the preflight rate, true when it has
+// answered. A person only; the admin token is one shared actor name, so limiting it would pool
+// every CI job into one bucket.
+func (s *Server) refusePreflightRate(w http.ResponseWriter, r *http.Request) bool {
+	if s.preflightLimiter == nil {
+		return false
+	}
+	if t, who := actorFromRequest(r); t != types.ActorHuman || s.preflightLimiter.allow(who, s.cfg.Now()) {
+		return false
+	}
+	writeErrorReason(w, http.StatusTooManyRequests, reasonPreflightRateLimited, "too many preflight checks; slow down")
+	return true
+}
+
 // handlePreflightRun is a DRY-RUN of handleCreateRun's resolution + gating: it
 // resolves the run policy through the EXACT same resolveRunPolicy chokepoint (so
 // an XOR violation, an unknown-secret 422, or an invalid inline spec surface as
@@ -81,17 +105,21 @@ type preflightResponse struct {
 // reproduces is a real gate, and a gate that REFUSES a member writes its
 // authz.denied audit row — refuse, from inside the shared code path.
 // So a dry run that is refused (task_mode, the drive door, any other profile
-// limit) leaves exactly one row per refused door per call, with run_id NULL
-// because there is no run. A dry run that PASSES writes nothing at all.
+// limit) writes a row per refused door, with run_id NULL because there is no
+// run. A dry run that PASSES writes nothing at all.
 //
 // It stays that way deliberately rather than being suppressed: the row is the
 // record that this principal was refused this capability, which is true whether
 // or not they went on to launch, and the alternative — a gate that audits at
 // one door and not at the identical door one handler over — is the drift the
-// shared path exists to prevent. What it costs is that Review's re-resolve on
-// every edit can write a row per keystroke for a member editing against a
-// closed door; the run_id NULL is what tells those apart from the denials that
-// actually bounded a run.
+// shared path exists to prevent. Every row written under this request carries
+// data.dry_run: true, stamped by audit.DryRunRecorder from the context mark set
+// below, because a NULL run_id does not tell a dry run apart: a launch refused
+// before its run row exists carries one too. Review's re-resolve on every edit
+// would write a row per keystroke for a member editing against a closed door,
+// so audit.DenialCoalescer keeps the first identical refusal in full and
+// appends one preflight.denial.coalesce row counting the repeats of the next
+// ten minutes (per replica; docs/OPERATIONS.md).
 //
 // The runner-capability 422 launch hard-gates on is deliberately NOT duplicated
 // here: deriveSetupItems' backend row reports that honestly instead, so a host
@@ -111,7 +139,15 @@ type preflightResponse struct {
 // rather than excepting the whole wrapper, so this inventory is executable gate
 // by gate instead of wrapper by wrapper.
 func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
+	// Marked before any gate runs, refuseAdminViewLaunch included: every audit row
+	// written under this request carries dry_run (audit.DryRunRecorder).
+	r = r.WithContext(audit.WithDryRun(r.Context()))
 	ctx := r.Context()
+	// First, before the decode and every gate: a limited call costs no work and
+	// writes no row.
+	if s.refusePreflightRate(w, r) {
+		return
+	}
 	if s.refuseAdminViewLaunch(w, r) {
 		return
 	}
@@ -277,7 +313,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// SAME refusal launch would. Review has no run row to freeze the choice
 	// onto; it keeps it only for the model-access row below and for the model
 	// credential the autonomy gate grades with.
-	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs)
+	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs, false)
 	if !ok {
 		return
 	}
@@ -310,10 +346,29 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if narrowed != "" {
 		clampWarnings = append(clampWarnings, narrowed)
 	}
+	// Dispatch's git_pat narrowing refusals (runs_dispatch_pat_scope.go), the
+	// same reasons and sentences, so a narrowing the run could not enforce shows
+	// before the click.
+	if reason, detail := s.patNarrowingAtDoor(r, spec, scmSite); reason != "" {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reason, detail)
+		return
+	}
 	// Host capacity, launch's last refusal and in the same place: the same 503,
 	// reason and Retry-After, so a busy host shows before the click. false:
 	// Review writes no audit row.
 	if writeHostCapacityRefusal(w, r, s.admitHostCapacity(r.Context(), principalFromRequest(r), "runs", false)) {
+		return
+	}
+	// The deployment run cap, launch's pre-mint refusal: the same 422 run_quota,
+	// so a full deployment shows before the click. Review writes no audit row.
+	if s.refuseRunCapFull(w, r) {
+		return
+	}
+	// The runs namespace's ResourceQuota, launch's refusal after the cap and in the same place:
+	// the same 422, so a run that cannot fit shows before the click. Its advisories join the
+	// warnings below.
+	fitWarnings, refused := s.refuseRunFit(w, r, s.runFitSpec(r.Context(), spec, ceiling))
+	if refused {
 		return
 	}
 
@@ -369,6 +424,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// show a rosier picture than the launch it previews. WARN, never refuse:
 	// nothing above this line changed.
 	warnings, _ := appendCredentialConfinementAdvisory(clampWarnings, spec, enforced, modelCred.Kind)
+	warnings = append(warnings, fitWarnings...)
 
 	// A zero residency means no provider was chosen (none serves the agent, or a
 	// non-model run) — omitted rather than published as a guess.

@@ -12,7 +12,7 @@ import (
 
 // The runtime half of the fix's SECOND round. Round 1 replaced clampGrants' kind-keyed
 // map with a pairing search, which closed the original widening but left the clamp
-// and the write-time comparator (internal/api's governanceGrantWithinCeiling) still
+// and the write-time comparator (GrantWithin) still
 // disagreeing in two executed ways — both pinned here, and both a consequence of the
 // clamp MEETING every candidate ceiling grant where the comparator asks whether ONE
 // of them dominates:
@@ -117,8 +117,8 @@ func TestClampDuplicatePairingIsOrderIndependent(t *testing.T) {
 }
 
 // TestClampNegativeTTLResolvesToTheCap pins the third divergence, the one
-// normalizeGrantTTLSeconds (internal/api/governance_grantbound.go) wrote down in
-// its own doc comment rather than fixed: the comparator resolves a NEGATIVE
+// GrantWithin's TTL normalisation (grantwithin.go) wrote down in its own doc
+// comment rather than fixed: the comparator resolves a NEGATIVE
 // ttl_seconds to the broker maximum (so a ceiling of 300 refuses it), while the
 // clamp tested only `== 0` and passed the negative through untouched. A negative
 // TTL that survives the clamp is a grant the comparator would refuse.
@@ -229,7 +229,7 @@ func TestClampApprovalAxisKeepsTheProposalOnTheMeet(t *testing.T) {
 // output cap.
 //
 // A negative ttl_seconds means the broker maximum, exactly as
-// internal/api's normalizeGrantTTLSeconds reads it. So a proposal at -1 asks for
+// GrantWithin reads it. So a proposal at -1 asks for
 // 3600 and is dominated by NEITHER a 300s nor a 600s ceiling entry, and the
 // clamp meets them: repos intersect down to the narrow set.
 //
@@ -268,7 +268,7 @@ func TestClampNegativeTTLIsNotDominatedByAShorterCeiling(t *testing.T) {
 // TestNormalizeClampTTLReadsEveryNonPositiveAsTheMaximum states the rule the two
 // cases above depend on, directly, so a change to it is a change to a documented
 // contract and not a silent re-partitioning of which grants dominate which.
-// internal/api's normalizeGrantTTLSeconds gives the identical reading; that is
+// GrantWithin gives the identical reading; that is
 // what makes the clamp and the write-time comparator comparable at all.
 func TestNormalizeClampTTLReadsEveryNonPositiveAsTheMaximum(t *testing.T) {
 	for _, ttl := range []int{0, -1, -300, maxGrantTTLSeconds + 1} {
@@ -296,7 +296,7 @@ func TestClampApprovalAxisThroughTheExportedClamp(t *testing.T) {
 		githubGrant(t, []string{"org/alpha", "org/beta"}, map[string]string{"contents": "read"}, false, 600),
 	}}
 
-	out, warns := Clamp(proposed, ceiling, 0)
+	out, warns := Clamp(proposed, ceiling, types.GovernanceLimits{})
 	if len(out.EligibleGrants) != 1 {
 		t.Fatalf("Clamp returned %d grants, want 1 (warns=%q)", len(out.EligibleGrants), warns)
 	}

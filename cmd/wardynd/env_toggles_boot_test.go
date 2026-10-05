@@ -28,6 +28,7 @@ func TestParseBootFlagsRefusesGarbageEnvToggle(t *testing.T) {
 	for _, name := range []string{
 		"WARDYN_EGRESS_SECOND_HUMAN",
 		"WARDYN_CAPABILITY_SECOND_HUMAN",
+		"WARDYN_GOVERNANCE_SECOND_HUMAN",
 		"WARDYN_ALLOW_MEMBER_ENV_SECRET",
 		"WARDYN_ALLOW_AGENT_TELEMETRY",
 	} {

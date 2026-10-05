@@ -19,6 +19,7 @@ import (
 // handleRevokeSessions's tests.
 type fakeSessionRevocations struct {
 	revokedSubs []string
+	cutSubs     []string
 	revokedAll  int
 }
 
@@ -29,12 +30,19 @@ func (f *fakeSessionRevocations) RevokeSub(_ context.Context, sub string) error 
 	f.revokedSubs = append(f.revokedSubs, sub)
 	return nil
 }
+func (f *fakeSessionRevocations) CutSessions(_ context.Context, sub string) error {
+	f.cutSubs = append(f.cutSubs, sub)
+	return nil
+}
 func (f *fakeSessionRevocations) RevokeAll(context.Context) error {
 	f.revokedAll++
 	return nil
 }
 
-var _ oidc.SessionRevocations = (*fakeSessionRevocations)(nil)
+var (
+	_ oidc.SessionRevocations = (*fakeSessionRevocations)(nil)
+	_ oidc.SessionCutter      = (*fakeSessionRevocations)(nil)
+)
 
 // sessionsTestServer builds a Server with OIDC + a fake SessionRevocations
 // store wired, so POST /api/v1/sessions/revoke mounts (routes.go gates it on

@@ -56,6 +56,9 @@ func (s *Server) routes() chi.Router {
 		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.isReservedPrincipal, s.auditSignInDenied))
 	}
 
+	// SCIM Users (scim_users.go): its own bearer, outside /api/v1 and every human gate.
+	s.mountSCIMRoutes(r)
+
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public admin-gated surface.
 		r.Group(func(r chi.Router) {
@@ -91,7 +94,8 @@ func (s *Server) routes() chi.Router {
 			//   mountPermissionRoutes  (this file)  securityOps
 			//   mountAccountRoutes     (this file)  securityOps
 			//   adminRoutes            (this file)  one per group, plus
-			//       mountUserTypeRoutes (user_types.go) securityOps
+			//       mountUserTypeRoutes (user_types.go) securityOps, and
+			//       mountKeyDomainRoutes (key_domains.go) securityOps
 			//   mountLibraryRoutes     (sources.go) operatorOnly (+ member reads on r)
 			//   mountSetupMutationRoutes            operatorOnly
 			//   mountAccessRoutes      (access.go)  operatorOnly
@@ -193,7 +197,9 @@ func (s *Server) routes() chi.Router {
 			// Dry-run of the create-run resolution + gating: same resolveRunPolicy
 			// chokepoint (real 4xx errors), the enforced confinement class, and the
 			// deterministic setup checklist — mints/persists/dispatches nothing. The
-			// manual wizard fires it on the Review step (advisory, non-gating).
+			// New Run fires it on its own as the body settles. Advisory on the server: it never
+			// refuses a launch itself, but the console holds Launch over a refusal this
+			// endpoint gave for the exact same body less than 60 seconds ago.
 			r.Post("/runs/preflight", s.handlePreflightRun)
 			r.Get("/runs", s.handleListRuns)
 			r.Get("/runs/{id}", s.handleGetRun)
@@ -440,7 +446,7 @@ func (s *Server) routes() chi.Router {
 			// varies with whether the id exists — owning a workspace does not
 			// let a member disown it.
 			operatorOnly.Post("/workspaces/{id}/reassign", s.handleReassignWorkspace)
-			operatorOnly.Post("/workspaces/{id}/record", s.handleRecordWorkspace)
+			operatorOnly.Post("/workspaces/{id}/record", s.handleRecordGoverned)
 			securityOps.Post("/workspaces/{id}/record/{task}/promote-egress", s.handlePromoteRecordEgress)
 			// Committable env-as-code (devcontainer.json/AGENTS.md) from the
 			// scanned profile. GET re-generates it any time (repo workspaces have
@@ -696,8 +702,9 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	r.Delete("/me/tokens/{id}", s.handleRevokeAPIToken)
 	securityOps.Get("/tokens", s.handleListAllAPITokens)
 	securityOps.Delete("/tokens/{id}", s.handleAdminRevokeAPIToken)
-	securityOps.Delete("/people/{principal}/ssh-keys", s.handleAdminDeleteSSHKeys)
+	securityOps.With(s.refuseSubjectPrincipalParam).Delete("/people/{principal}/ssh-keys", s.handleAdminDeleteSSHKeys)
 	s.mountPeopleRoutes(securityOps)
+	s.mountSCIMStatusRoute(securityOps)
 	// Run-detail widget layout: per-user, per-preset, server-synced so a
 	// layout survives a new machine (localStorage would not). Scoped to
 	// the caller's OWN principal at the store, exactly like the ssh-keys
@@ -748,7 +755,7 @@ func (s *Server) mountSecretRoutes(r, securityOps chi.Router) {
 	r.Put("/secrets/{name}", s.handlePutSecret)
 	r.Delete("/secrets/{name}", s.handleDeleteSecret)
 	r.Get("/secrets", s.handleListSecrets)
-	securityOps.Delete("/people/{principal}/credentials", s.handleErasePersonCredentials)
+	securityOps.With(s.refuseSubjectPrincipalParam).Delete("/people/{principal}/credentials", s.handleErasePersonCredentials)
 	securityOps.Get("/model-providers/credentials", s.handleCredentialInventory)
 }
 
@@ -799,10 +806,20 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// whole-fleet audit VOLUME is the same disclosure that keeps /metrics
 	// gated. Operator-INVOKED by design: wardynd never verifies at boot.
 	securityOps.Get("/audit/chain/verify", s.handleVerifyAuditChain)
+	// Fleet capacity (runs_capacity.go): configured reservations summed from the run rows.
+	// securityOps because it reconstructs nothing GET /runs?view=admin does not already show
+	// that tier; fleet volume stays off members. No exec and no runner call.
+	securityOps.Get("/admin/runs/capacity", s.handleRunCapacity)
+	// Retention (migration 0123): the policy and every partition's eligibility, and the attested drop.
+	s.mountAuditRetentionRoutes(securityOps)
 	// User types (migration 0071_user_types): defining a type is the same
 	// security-tier duty as authoring a governance profile; deciding who IS a
 	// type stays on the operatorOnly /access routes.
 	s.mountUserTypeRoutes(securityOps)
+	// Key domains (migration 0121): which declared domain a person's next
+	// principal-key generation is wrapped under.
+	s.mountKeyDomainRoutes(securityOps)
+	s.mountApprovalNotifyRoutes(securityOps)
 	// Sandbox sweep. SUPER, and the reason matters because an operator deciding
 	// who to trust with RoleSecurityAdmin reads exactly these lines: the sweep
 	// drives the RUNNER — Status then StopSandbox — across every run in the

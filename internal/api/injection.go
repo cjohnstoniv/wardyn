@@ -121,6 +121,13 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	if s.resolveADOOwnPATInjection(w, r, claims, minted, grantID) || s.resolveADOInjection(w, r, claims, minted, grantID) {
 		return
 	}
+	// PER-PERSON AZURE FOUNDRY: the run owner's own captured Entra sign-in for the provider the run
+	// chose, redeemed for the snapshot's audience and pinned to the provider's own endpoint host — see
+	// resolveAzureFoundryInjection. Before the provider-key arm below, which would read a
+	// wardyn-provider-<uid>-* name as a key.
+	if s.resolveAzureFoundryInjection(w, r, claims, minted, grantID) {
+		return
+	}
 
 	// Defense-in-depth at the SINK: never resolve a sink-reserved secret (signing/
 	// session key or a resident AWS Bedrock SigV4 credential) into an injectable header
@@ -191,22 +198,19 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		writeErrorReason(w, status, reason, body)
 		return
 	}
-	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-		"secret.read", minted.Injection.SecretName, "success",
-		mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub}, row))))
-
 	formattedValue := formatInjectionValue(minted.Injection.Format, secret)
 
 	// Register the raw secret and formatted value with the mask registry so
 	// both forms are masked from PTY/asciicast streams. The formatted value
 	// (e.g. "Bearer sk-...") is what the agent might observe in proxy error
 	// messages; the raw value covers direct leakage. A nil registry is a no-op.
-	if s.cfg.MaskRegistry != nil {
-		s.cfg.MaskRegistry.Add(claims.RunID, secret)
-		if formattedValue != string(secret) {
-			s.cfg.MaskRegistry.Add(claims.RunID, []byte(formattedValue))
-		}
+	// A value that is not on record is not handed out.
+	if s.refuseUnmasked(w, r, claims, "injection.resolve", secret, []byte(formattedValue)) {
+		return
 	}
+	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+		"secret.read", minted.Injection.SecretName, "success",
+		mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub}, row))))
 
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host:      minted.Injection.Host,

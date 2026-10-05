@@ -244,9 +244,8 @@ func (s *Server) resolveProviderSubscriptionInjection(w http.ResponseWriter, r *
 	}
 	// One correct wire shape, whatever the grant says (see the legacy arm).
 	formatted := formatInjectionValue("Bearer %s", []byte(tok.Value))
-	if s.cfg.MaskRegistry != nil {
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(tok.Value))
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(formatted))
+	if s.refuseUnmasked(w, r, claims, "injection.resolve", []byte(tok.Value), []byte(formatted)) {
+		return true
 	}
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", name, "success",

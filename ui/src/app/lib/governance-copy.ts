@@ -28,6 +28,7 @@
 // it is rendered inside.
 
 import { PEOPLE } from "./people-access-copy";
+import { SIGNIN_HELP_LINK_LABEL } from "./sign-in-copy";
 import {
   AUTONOMY_LEVEL_ORDER,
   AUTONOMY_RUBRIC_ROW_KEYS,
@@ -101,7 +102,7 @@ export const GOVERNANCE = {
   // "Governance profiles" label. Lives in nav-copy.ts (see its own comment)
   // so app-shell's eager sidebar isn't the reason this whole table ships early.
   TITLE: GOVERNANCE_NAV_TITLE,
-  LEAD: "Named ceilings, assigned to people and groups. An assigned profile replaces the deployment ceiling for its subjects; anyone with no assignment keeps the deployment ceiling.",
+  LEAD: "Named ceilings, assigned to people and groups. A profile stands alone or narrows a base. An assigned profile replaces the deployment ceiling for its subjects; anyone with no assignment keeps the deployment ceiling.",
   PROFILES_TITLE: "Profiles",
   PROFILES_LEAD:
     "A profile is one ceiling: the policy every run under it is bounded by, plus the launch modes its subjects may not use at all.",
@@ -136,6 +137,26 @@ export const GOVERNANCE = {
   FIELD_NAME: "Name",
   NAME_HINT:
     "What this profile is called on the assignments below, and in the run of anyone assigned to it. Names are unique.",
+  // ---- 0.8.6 profile composition (mock packet M3, S5) ----
+  FIELD_BASE: "Base",
+  BASE_HINT: "A profile with a base can only narrow it. Edits to the base flow through to this profile.",
+  BASE_NONE: "None — standalone",
+  BASE_DEPLOYMENT: "Deployment ceiling",
+  BASE_TOO_DEEP: "Can't be the base: the chain would be deeper than 3 profiles.",
+  BASE_DESCENDANT: "Can't be the base: it is based on this profile.",
+  OVERLAY_LEAD: "Only what you set to Narrow changes anything. The rest is inherited and follows the base.",
+  OVERLAY_NARROW: "Narrow",
+  OVERLAY_LIMITS_MOVED:
+    "This profile's own limits and rubric were moved into the narrowing rows below, so they still apply on top of the base. Review them before saving.",
+  OVERLAY_INHERITED: (v: string) => `Inherited: ${v}`,
+  EFFECTIVE_TITLE: "Effective ceiling and limits",
+  EFFECTIVE_LEAD: "What runs under this profile are bounded by: the base, narrowed here. Read-only.",
+  BASE_CHIP: (name: string) => `Base · ${name}`,
+  REFUSED_OVERLAY_INVALID: "This narrows past its base",
+  REFUSED_CYCLE: "This would make a loop of bases",
+  REFUSED_DEPTH: "This chain would be deeper than 3 profiles",
+  REFUSED_UNSATISFIABLE: "A profile based on this one would be left with nothing allowed",
+  REFUSED_HAS_CHILDREN: "Other profiles are based on this one",
   CEILING_TITLE: "Ceiling",
   CEILING_LEAD:
     "Every run under this profile is bounded by this spec. A member's own policy is clamped to it, and so is a saved policy they pick.",
@@ -168,6 +189,19 @@ export const GOVERNANCE = {
   LIMIT_DRIVE_SIZE_HINT:
     "Clamps the drive size a person under this profile resolves to. On a share it bounds the number shown, not the share. Leave blank for no limit.",
   SAVE_ERROR: "Couldn't save this profile.",
+  // ---- deny-f4 (mock packet M3): the profile's contact, shown to the people it refuses ----
+  CONTACT_TITLE: "Access requests",
+  CONTACT_LEAD:
+    "Shown to the people this profile binds when it refuses them, and to their runs. Put nothing here they may not share. A base's contact is never used. With none set, they see the deployment's contact, if there is one.",
+  CONTACT_OWNER: "Owner",
+  CONTACT_OWNER_HINT: "Who owns this profile, such as a team name.",
+  CONTACT_EMAIL: "Email",
+  CONTACT_EMAIL_HINT: "One address, with no name and no list.",
+  CONTACT_URL: "Request link",
+  CONTACT_URL_HINT: "An https: page, or one mailto: address. Where the Request access link goes.",
+  CONTACT_TEXT: "Request instructions",
+  CONTACT_TEXT_HINT: "Shown when there is no link or email.",
+  CONTACT_URL_REFUSED: "Use an https: link or a single mailto: address, with nothing after it.",
 
   // ---- §7.3 assignments and the resolved preview ----
   ASSIGN_TITLE: "Assignments",
@@ -243,7 +277,7 @@ export const GOVERNANCE = {
   DELETE_RESTRICT_TITLE: "This profile is still assigned",
   DELETE_RESTRICT_BODY: (name: string, n: number) =>
     `"${name}" still has ${n} assignment${n === 1 ? "" : "s"}. Deleting it would widen those subjects back to the deployment ceiling without anyone deciding that — remove the assignments first.`,
-  OMISSION_TITLE: "This profile narrows by omission",
+  OMISSION_TITLE: "Compared with the deployment ceiling",
   // Q6's acknowledge-before-save variant only. The recommended variant renders
   // OMISSION_TITLE over the warning list after a SUCCESSFUL save and never
   // blocks it.
@@ -256,6 +290,61 @@ export const GOVERNANCE = {
   FETCH_FAILED_TITLE: "Couldn't load governance profiles",
   FETCH_FAILED_BODY:
     "Something went wrong reaching the server. Profiles that are already assigned still bound every run — this list just can't show them right now.",
+} as const;
+
+// 0.8.6 four-eyes on governance writes (mock packet M3, S2-S4) — the Changes tab, its drawer and the
+// submitted-for-approval note shown at every covered write site. Approved strings; the console adds none
+// of its own. The server's own sentence on a refused decision renders verbatim under DECIDE_REFUSED_TITLE.
+export const CHANGES = {
+  TAB: "Changes",
+  TAB_COUNT: (n: number) => `Changes · ${n}`,
+  LEAD: "Covered governance changes waiting for a second person. A change applies only when someone other than its proposer approves it.",
+  COL_CHANGE: "Change",
+  COL_TARGET: "Target",
+  COL_BY: "Proposed by",
+  COL_PROPOSED: "Proposed",
+  COL_EXPIRES: "Expires",
+  // By target_kind. A kind this console predates shows its raw name.
+  KIND: {
+    governance_profile: "Profile",
+    governance_assignment: "Assignment",
+    capability_grant: "Capability grant",
+    capability_enforcement: "Capability enforcement",
+    capability_availability: "Capability availability",
+    user_type_priority: "User type priority",
+    role_mapping: "Role mapping",
+    key_domain_assignment: "Key domain assignment",
+  } as Record<string, string>,
+  // By op. An op this console predates shows its raw name.
+  OP: {
+    create: "New",
+    update: "Edit",
+    delete: "Delete",
+    upsert: "Set",
+    replace: "Replace",
+    set: "Set",
+  } as Record<string, string>,
+  EMPTY_TITLE: "Nothing is waiting for a second person",
+  EMPTY_BODY:
+    "When this deployment requires a second person for governance changes, they wait here until someone approves or rejects them. Decided changes are in the audit trail.",
+  META: (who: string, when: string, expires: string) => `Proposed by ${who} ${when} · expires ${expires}`,
+  DIFF_FIELD: "Field",
+  DIFF_BEFORE: "Before",
+  DIFF_AFTER: "After",
+  DIFF_UNSET: "Not set",
+  DIFF_FULL: "Show full before and after",
+  ASSIGNED_PROFILE: "Profile this assigns",
+  REASON_LABEL: "Reason (optional)",
+  REASON_HINT: "Kept on the change and in the audit trail.",
+  APPROVE: "Approve",
+  REJECT: "Reject",
+  OWN_NOTE: "You proposed this change, so someone else must approve it. You can still reject it to withdraw it.",
+  DECIDE_REFUSED_TITLE: "Couldn't decide this change",
+  TOAST_APPROVED: "Change approved",
+  TOAST_REJECTED: "Change rejected",
+  SUBMITTED_TITLE: "Submitted for approval",
+  SUBMITTED_BODY: "Nothing has changed yet. It applies when someone else approves it, and expires if nobody does.",
+  SUBMITTED_LINK: "View in Changes",
 } as const;
 
 // §7.6-§7.7 — MEMBER
@@ -533,6 +622,15 @@ export function runLimitsChip(l: RunLimits | undefined): string | null {
   if (l.user_changes_limits) parts.push("people may change these");
   return parts.length ? parts.join(" · ") : null;
 }
+
+// ---- deny-f4 (mock packet M10 S4): the Request access remedy beside a policy refusal.
+// request_text is shown verbatim and has no key.
+export const POLICY_REMEDY = {
+  OWNER: (owner: string) => `Owned by ${owner}`,
+  LINK: SIGNIN_HELP_LINK_LABEL,
+  EMAIL: (address: string) => `Email ${address}`,
+  SEP: " · ",
+} as const;
 
 // ---- the New Run rail's Autonomy section + the run header (new-run-rail.tsx
 // / run-detail-summary-header.tsx) ----

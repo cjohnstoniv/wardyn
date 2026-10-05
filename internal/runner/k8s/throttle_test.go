@@ -65,7 +65,7 @@ func TestWaitContainerRunningThrottledDeadlineNamesPodReason(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	err := d.waitContainerRunning(ctx, pod.Name, mainContainerName, nil)
+	err := d.waitContainerRunning(ctx, d.newStartClock(), pod.Name, mainContainerName, nil)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want a timeout (context.DeadlineExceeded)", err)
 	}
@@ -116,7 +116,7 @@ func TestTwoConcurrentStartsKeepThePodReason(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs[i] = d.waitContainerRunning(ctx, pod.Name, mainContainerName, nil)
+			errs[i] = d.waitContainerRunning(ctx, d.newStartClock(), pod.Name, mainContainerName, nil)
 		}()
 	}
 	wg.Wait()

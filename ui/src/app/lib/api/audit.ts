@@ -5,12 +5,21 @@
 
 // Audit log + the egress projection derived from audit events (the backend has
 // no /egress endpoint — egress decisions are read off audit rows).
-import type { AuditEvent, EgressDecision, Outcome, RunEnding, RunEndingKind, RunState } from "../types";
+import type {
+  AuditEvent,
+  AuditRetentionDrop,
+  AuditRetentionStatus,
+  EgressDecision,
+  Outcome,
+  RunEnding,
+  RunEndingKind,
+  RunState,
+} from "../types";
 // The tool-rule decision lives with the audit shapes it reads (lib/types/audit.ts)
 // so both the egress projection below and wardyn/audit-decision.tsx take it from
 // one place — lib/api must not import from components/.
 import { toolRuleDecision } from "../types";
-import { asJson, num, str, unwrapList, wfetch, withLimit } from "./core";
+import { asJson, errEnvelope, HttpError, num, str, unwrapList, wfetch, withLimit } from "./core";
 
 // The SOLE named table of pre-0.8 audit action names Wardyn's OWN readers of
 // PERSISTED rows still accept (owner ruling, 2026-09-25, #1062 — the TS twin
@@ -196,6 +205,12 @@ const FAILED_CAUSE: Record<string, RunEndingKind> = {
 // sentence.
 const CREDENTIAL_REASON = "model_credential";
 
+// The reasons dispatch stamps on the sandbox-create and agent-start failure
+// rows (internal/api/runs_dispatch.go). Matched exactly, never by message text:
+// a provider refusal also writes run.create/failure and must stay unclassified.
+const SANDBOX_CREATE_REASON = "sandbox_create";
+const AGENT_START_REASON = "agent_start";
+
 /** The FIRST event matching `pick` — the root cause, not the last symptom. */
 function firstEvent(events: AuditEvent[], pick: (e: AuditEvent) => boolean): AuditEvent | undefined {
   return events.find(pick);
@@ -253,7 +268,7 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
   }
   if (state !== "FAILED") return undefined;
   // fail_closed:false is a WARN-ONLY selftest — an interactive BYOI run runs it
-  // for the warning and carries on (runs_dispatch.go's byoiSelftest(…, false)).
+  // for the warning and carries on (runs_dispatch_byoi.go's byoiSelftest(…, false)).
   // Its run.selftest/failure row is not why a run that later failed for its own
   // reason failed, and "refused before any task ran" would be a false diagnosis
   // of a run that ran. Only an explicit false disqualifies a row: the key is
@@ -283,8 +298,24 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
       ...(str(credential.data?.provider) ? { provider: str(credential.data?.provider) } : {}),
     };
   }
+  const dispatch = firstEvent(
+    events,
+    (e) =>
+      e.outcome === "failure" &&
+      ((e.action === "run.create" && str(e.data?.reason) === SANDBOX_CREATE_REASON) ||
+        (e.action === "run.exec" && str(e.data?.reason) === AGENT_START_REASON)),
+  );
+  if (dispatch) {
+    return from(dispatch.action === "run.create" ? "sandbox_create" : "agent_start", dispatch, dispatch.action);
+  }
   return { kind: "unknown", action: "" };
 }
+
+// A partition export streams every row of it: far past the default 60s bound
+// for the legacy partition of a long-lived install.
+const EXPORT_DEADLINE_MS = 600_000;
+
+export type PartitionExportForm = "readable" | "raw";
 
 export type AuditListFilter = { action?: string; actionPrefix?: string };
 
@@ -307,5 +338,35 @@ export const audit = {
     const qs = params.toString() ? `?${params.toString()}` : "";
     const res = await wfetch(withLimit(`/audit${qs}`), { method: "GET" });
     return unwrapList<AuditEvent>(await asJson<unknown>(res));
+  },
+  // GET /api/v1/audit/retention (security tier): the policy, the cutover, the
+  // partitions with the server's own eligibility, and the months ahead.
+  async getRetention(): Promise<AuditRetentionStatus> {
+    return asJson<AuditRetentionStatus>(await wfetch("/audit/retention", { method: "GET" }));
+  },
+
+  // POST /api/v1/audit/retention/drop. A refusal is a 409 whose `reason` is
+  // the rule that refused (audit_retention_*); the HttpError carries it.
+  async dropPartition(partition: string, digest: string): Promise<AuditRetentionDrop> {
+    const res = await wfetch("/audit/retention/drop", {
+      method: "POST",
+      body: JSON.stringify({ partition, digest }),
+    });
+    return asJson<AuditRetentionDrop>(res);
+  },
+
+  // GET /api/v1/audit/export?partition=&form=: one closed partition as NDJSON,
+  // manifest first and the digest fold in the footer.
+  async exportPartition(partition: string, form: PartitionExportForm): Promise<Blob> {
+    const res = await wfetch(
+      `/audit/export?partition=${encodeURIComponent(partition)}&form=${form}`,
+      { method: "GET", headers: { Accept: "application/x-ndjson" } },
+      EXPORT_DEADLINE_MS,
+    );
+    if (!res.ok) {
+      const { message, reason } = await errEnvelope(res);
+      throw new HttpError(res.status, message, reason);
+    }
+    return res.blob();
   },
 };

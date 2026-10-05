@@ -343,7 +343,7 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob aw
 	if at := blob.lastUsable(); !at.IsZero() {
 		ctx = secretstore.WithExpiry(ctx, at)
 	}
-	err = st.Put(ctx, scope.ssoSecret(), raw)
+	err = s.putOwned(ctx, owner, func() error { return st.Put(ctx, scope.ssoSecret(), raw) })
 	s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", owner, scope.ssoSecret())
 	return err
 }
@@ -407,8 +407,8 @@ func (s *Server) deleteSpentAWSSSOBlob(ctx context.Context, scope awsSSOScope) {
 // still record who attached, when, and why — no provenance is lost.)
 // Conservative small defaults for the sign-in sandbox (#1100): it drives only a
 // CLI device-code flow (no workload, no mounts, no injections), so it has no
-// business inheriting runner.DefaultCPUMillis/DefaultMemoryMiB (2 vCPU / 4 GiB —
-// sized for an agent run). A namespace LimitRange sized for a small node refuses
+// business inheriting runner.EffectiveLimits() (the deployment's default agent-run
+// size, 2 vCPU / 4 GiB unless configured). A namespace LimitRange sized for a small node refuses
 // that default outright, stranding a member's own sign-in. Configurable via
 // Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB
 // (WARDYN_HARNESS_LOGIN_CPU_MILLIS/WARDYN_HARNESS_LOGIN_MEMORY_MIB); zero (unset)

@@ -9,7 +9,9 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -31,8 +33,9 @@ import (
 // Blocking decides ONE thing: whether the console must not open on
 // this install at all — setupGateActive (the console's setup gate) redirects
 // every route into the funnel while any row carries it, until onboarding
-// completes. It is set on exactly three arms: runnerCheck's fail (no runner, so
-// no run can happen), confinementFloorCheck's warn (a floor the runner cannot
+// completes. It is set on exactly three arms: runnerCheck's fail (no runner configured, so
+// no run can happen; a configured runner whose Capabilities() errored is a
+// substrate fault and never blocks), confinementFloorCheck's warn (a floor the runner cannot
 // meet refuses every run before it launches), and ssoRBACCheck's warn (OIDC
 // with no role mapping makes every signed-in human an admin, and the funnel's
 // People step is where that is fixed).
@@ -59,8 +62,9 @@ type SetupCheck struct {
 	// Cause narrows a row that can warn for more than one reason, the same
 	// shape as SCMAccess.cause on the wire (ui/src/app/lib/types/setup.ts) — a
 	// machine key, never prose, so a console reader can pick per-cause copy
-	// without string-matching Detail. Only sso_rbac sets it today ("default_role",
-	// #491): #484's original no-role-map-and-no-admin-list warn leaves it empty.
+	// without string-matching Detail. sso_rbac sets it ("default_role", #491:
+	// #484's original no-role-map-and-no-admin-list warn leaves it empty), and so
+	// does substrate_health ("runner_unreachable", "runner_auth", "sweep_stale").
 	Cause string `json:"cause,omitempty"`
 }
 
@@ -68,6 +72,16 @@ type SetupCheck struct {
 // FAIL on the checklist — runs cannot launch at all. CC2+ is ok; a CC1-only host
 // is "info", not a warning: runs work, just at the weakest isolation.
 func runnerCheck(rnr SetupRunner) SetupCheck {
+	// A runner that is configured but could not report its capabilities is a
+	// substrate fault, not a missing runner: sending every admin into the setup
+	// funnel (Blocking) during an outage would hide the console that shows it.
+	if rnr.Driver != "none" && rnr.capsUnreadable {
+		return SetupCheck{
+			ID: "runner", Label: "Sandbox runner", Status: "fail",
+			Detail: "The sandbox runner is configured but did not report its capabilities, so runs cannot launch until it does.",
+			Fix:    "The substrate_health row says what is wrong with the runner's substrate.",
+		}
+	}
 	if rnr.Driver == "none" || len(rnr.ConfinementClasses) == 0 {
 		return SetupCheck{
 			ID: "runner", Label: "Sandbox runner", Status: "fail",
@@ -174,6 +188,32 @@ func envBuilderCheck(wired bool) SetupCheck {
 	}
 }
 
+// sandboxStartCheck states the Kubernetes sandbox start deadlines (canon SETUP_CHECK.SANDBOX_START,
+// mock packet M10). Always info: it describes a setting, it grades nothing. Absent off Kubernetes.
+func sandboxStartCheck(d *SetupSandboxStart) (SetupCheck, bool) {
+	if d == nil {
+		return SetupCheck{}, false
+	}
+	start := formatStartDeadline(d.StartTimeoutSeconds)
+	detail := "A sandbox has " + start + " to start. If no machine has room for it, it waits up to " +
+		formatStartDeadline(d.CapacityWaitSeconds) + ", then fails."
+	if d.CapacityWaitSeconds == 0 {
+		detail = "A sandbox has " + start + " to start. Capacity wait is off, so a sandbox no machine has room for fails when that deadline passes."
+	}
+	return SetupCheck{ID: "sandbox_start", Label: "Sandbox start deadlines", Status: "info", Detail: detail}, true
+}
+
+// formatStartDeadline renders whole seconds as the shortest exact "1h", "15m", "90s" form.
+func formatStartDeadline(seconds int) string {
+	switch {
+	case seconds > 0 && seconds%3600 == 0:
+		return fmt.Sprintf("%dh", seconds/3600)
+	case seconds > 0 && seconds%60 == 0:
+		return fmt.Sprintf("%dm", seconds/60)
+	}
+	return fmt.Sprintf("%ds", seconds)
+}
+
 // k8sEgressContainmentCheck grades the k8s substrate's boot-time NetworkPolicy
 // canary verdict (netpolProven, computed in setupRunnerInfo from
 // ClassSupport.NetworkPolicy — a local value, not a wire field: nothing else
@@ -238,6 +278,27 @@ func k8sEgressContainmentCheck(driver, netpolProven string) (SetupCheck, bool) {
 				"so egress containment cannot be confirmed.",
 			Fix: "Upgrade wardynd to a build that reports the canary verdict, and check its boot logs for the egress-canary result.",
 		}, true
+	}
+}
+
+// idleCPUSignalCheck is the "Idle detection" row (M10, SETUP_CHECK.IDLE_CPU_SIGNAL),
+// pinned byte for byte by TestIdleCPUSignalCheck. Off is a warn, not an info:
+// a run busy inside its sandbox with no attach and no egress can be stopped as
+// idle, and its work lost.
+func idleCPUSignalCheck(off bool) SetupCheck {
+	const id, label = "idle_cpu_signal", "Idle detection"
+	if off {
+		return SetupCheck{
+			ID: id, Label: label, Status: "warn",
+			Detail: "Wardyn can't read this cluster's metrics API, so idle auto-stop sees only attaches and network traffic. " +
+				"A run busy inside its sandbox with neither can be stopped as idle.",
+			Fix: "Install metrics-server. If it is installed, check that the runner Role allows `list` on `pods` in " +
+				"`metrics.k8s.io` (the chart adds it).",
+		}
+	}
+	return SetupCheck{
+		ID: id, Label: label, Status: "ok",
+		Detail: "Idle auto-stop counts CPU work inside a sandbox, so a run that is busy but quiet isn't stopped.",
 	}
 }
 
@@ -309,7 +370,7 @@ func ageKeyCheck(durable bool) SetupCheck {
 // service wraps every data key; else the age-key row, kek_local on a multi-user install (whoever holds the database and the local key
 // reads every credential), and platform_shared while no WARDYN_PLATFORM_KEY_FILE is set (§2.13 c: one leak of
 // the age key then also forges run identities and sessions).
-func secretStoreChecks(external, keyService string, durable, multiUser, platformSeparate bool) []SetupCheck {
+func secretStoreChecks(external, keyService string, durable, multiUser, platformSeparate, kekRequired bool) []SetupCheck {
 	if external != "" {
 		return []SetupCheck{{ID: "store_external", Label: "Credential storage", Status: "ok",
 			Detail: "Credentials are stored in " + external + ". Wardyn holds no key; every use is logged there."}}
@@ -321,9 +382,17 @@ func secretStoreChecks(external, keyService string, durable, multiUser, platform
 		}
 		return []SetupCheck{{ID: "kek_service", Label: "Credential storage", Status: "ok",
 			Detail: "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in " + keyService +
-				" and never leaves it. Wardyn holds no copy; each unlock is " + unlock + "."}}
+				" and never leaves it. Wardyn holds no copy; each unlock is " + unlock + "."},
+			platformSplitCheck(keyService, platformSeparate)}
 	}
 	checks := []SetupCheck{ageKeyCheck(durable)}
+	if kekRequired {
+		checks = append(checks, SetupCheck{
+			ID: "kek_required_unmet", Label: "Credential key custody", Status: "fail",
+			Detail: "This deployment requires a key service, but credentials are wrapped by the local key. This reports the posture; wardynd refuses to start in it.",
+			Fix:    "Set WARDYN_KEK=transit or azurekv, then run `wardynd -rewrap`.",
+		})
+	}
 	if durable && multiUser {
 		checks = append(checks, SetupCheck{
 			ID: "kek_local", Label: "Credential key", Status: "warn",
@@ -332,13 +401,128 @@ func secretStoreChecks(external, keyService string, durable, multiUser, platform
 		})
 	}
 	if !platformSeparate {
-		checks = append(checks, SetupCheck{
-			ID: "platform_shared", Label: "Platform key separation", Status: "warn",
-			Detail: "Wardyn's own signing and session keys are protected by the same key as people's credentials.",
-			Fix:    "Mint a second key with `wardynd -gen-age-key`, point WARDYN_PLATFORM_KEY_FILE at it, run `wardynd -rewrap -rewrap-adopt-boot-keys` once (it says you have never moved the boot keys before), then restart wardynd with it set.",
-		})
+		checks = append(checks, platformSplitCheck("", false))
 	}
 	return checks
+}
+
+// platformSplitShared is the platform_split warning's detail, local or key service.
+const platformSplitShared = "Wardyn's own signing and session keys are protected by the same key as people's credentials."
+
+// platformSplitCheck is the platform_split row (M5 S5, label "Platform key separation"). keyService
+// is "" in local mode, where the boot keys' own key is WARDYN_PLATFORM_KEY_FILE; under a key service
+// the split is a second key and identity there, which the credential identity cannot reach. In local
+// mode the row is emitted only while the split is absent (secretStoreChecks).
+func platformSplitCheck(keyService string, separate bool) SetupCheck {
+	c := SetupCheck{ID: "platform_split", Label: "Platform key separation", Status: "warn", Detail: platformSplitShared}
+	switch {
+	case keyService == "" && !separate:
+		c.Fix = "Mint a second key with `wardynd -gen-age-key`, point WARDYN_PLATFORM_KEY_FILE at it, run `wardynd -rewrap -rewrap-adopt-boot-keys` once (it says you have never moved the boot keys before), then restart wardynd with it set."
+	case separate:
+		c.Status, c.Fix = "ok", ""
+		c.Detail = "Wardyn's own signing and session keys use a separate key and identity in " + keyService +
+			"; the credential identity can't reach them."
+	case strings.HasPrefix(keyService, "Key Vault"):
+		c.Fix = "Set WARDYN_AZURE_KEK_KEY_PLATFORM, WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM and WARDYN_AZURE_CLIENT_ID_PLATFORM to a second key pair and identity, run `wardynd -rewrap -rewrap-adopt-boot-keys` once, then restart."
+	default:
+		c.Fix = "Set WARDYN_VAULT_TRANSIT_KEY_PLATFORM and WARDYN_VAULT_ROLE_PLATFORM to a second Transit key and role, run `wardynd -rewrap -rewrap-adopt-boot-keys` once, then restart."
+	}
+	return c
+}
+
+// keyCustody is what the three key-custody rows are graded from.
+type keyCustody struct {
+	Domains       []string // the declared domain names, sorted
+	PrincipalKeys bool
+	RootKeyCreds  int // person-owned credentials still under the credential key
+	ExternalCreds int // person-owned credentials kept in an external secret store, which no principal key seals
+	Changes       keydomain.Changes
+	Now           time.Time
+}
+
+// keyCustodyChecks are the key_domains, principal_keys and key_domain_changes rows (M5 S5). The
+// changes row is amber while any assignment changed in the last 30 days: it is the mitigation for a
+// database writer moving where a person's next keys are made.
+func keyCustodyChecks(k keyCustody) []SetupCheck {
+	domains := SetupCheck{ID: "key_domains", Label: "Key domains", Status: "info",
+		Detail: "Only default: everyone's keys use this deployment's credential key."}
+	if n := len(k.Domains); n > 0 {
+		noun := "key domains, each proven at boot: "
+		if n == 1 {
+			noun = "key domain, proven at boot: "
+		}
+		domains.Status = "ok"
+		domains.Detail = fmt.Sprintf("%d %s%s.", n, noun, strings.Join(k.Domains, ", "))
+	}
+	pk := SetupCheck{ID: "principal_keys", Label: "Per-person keys"}
+	switch {
+	case !k.PrincipalKeys:
+		pk.Status = "info"
+		pk.Detail = "Off: credentials written now use this deployment's key, or the external secret store when one is set. Audit records use per-person keys either way."
+	case k.RootKeyCreds > 0:
+		pk.Status = "info"
+		pk.Detail = fmt.Sprintf("On. %d stored credentials still use this deployment's key.", k.RootKeyCreds)
+		pk.Fix = "Run wardynd -rewrap-principal-keys to re-seal them."
+	case k.ExternalCreds > 0:
+		verb := "are"
+		if k.ExternalCreds == 1 {
+			verb = "is"
+		}
+		pk.Status = "ok"
+		pk.Detail = fmt.Sprintf("On. Every stored credential held here is sealed under its owner's key. %d %s kept in the external secret store instead, outside these keys.", k.ExternalCreds, verb)
+	default:
+		pk.Status = "ok"
+		pk.Detail = "On. Every stored credential is sealed under its owner's key."
+	}
+	ch := SetupCheck{ID: "key_domain_changes", Label: "Key domain changes", Status: "ok",
+		Detail: "No key-domain assignment changed in the last 30 days."}
+	if n := k.Changes.Count; n > 0 {
+		s := "s"
+		if n == 1 {
+			s = ""
+		}
+		ch.Status = "warn"
+		ch.Detail = fmt.Sprintf("%d key-domain assignment change%s in the last 30 days, the latest %s by %s. Each one moves where that person's next keys are made.",
+			n, s, keyChangeWhen(k.Now, k.Changes.Latest), k.Changes.LatestBy)
+		ch.Fix = "Check each in Audit: key_domain.assignment.set and key_domain.assignment.delete."
+	}
+	return []SetupCheck{domains, pk, ch}
+}
+
+// keyChangeWhen says how long ago t was, in days.
+func keyChangeWhen(now, t time.Time) string {
+	switch d := int(now.Sub(t) / (24 * time.Hour)); {
+	case d <= 0:
+		return "today"
+	case d == 1:
+		return "1 day ago"
+	default:
+		return fmt.Sprintf("%d days ago", d)
+	}
+}
+
+// keyCustodyRows reads the key-custody inputs for a security-tier caller: a member's checks are
+// discarded, so they are not read for one. A read that fails leaves its row out rather than showing a
+// guess.
+func (s *Server) keyCustodyRows(ctx context.Context) []SetupCheck {
+	svc := s.cfg.KeyDomains
+	if svc == nil || !s.isSecurityOperator(ctx) {
+		return nil
+	}
+	now := s.cfg.Now()
+	k := keyCustody{Domains: svc.Declared(), PrincipalKeys: s.cfg.PrincipalKeys, Now: now}
+	n, err := svc.RootKeyCredentials(ctx)
+	if err != nil {
+		return nil
+	}
+	k.RootKeyCreds = n
+	if k.ExternalCreds, err = svc.ExternalCredentials(ctx); err != nil {
+		return nil
+	}
+	if k.Changes, err = svc.ChangesSince(ctx, now.Add(-30*24*time.Hour)); err != nil {
+		return nil
+	}
+	return keyCustodyChecks(k)
 }
 
 // credentialStorageMode names the kind of store this deployment keeps
@@ -770,4 +954,30 @@ func permissionsPostureCheck(enforcement map[string]bool) SetupCheck {
 			"%d of %d permission kinds enforced. Enforced: %s. Fail-open (default allow, matching pre-0.6 behavior): %s.",
 			len(on), len(capabilityKinds), joined(on), joined(off)),
 	}
+}
+
+// governAdminRunsCheck is the Admin runs row (mock M10, SETUP_CHECK.GOVERN_ADMIN_RUNS),
+// shown only while WARDYN_GOVERN_ADMIN_RUNS is on. Info while it governs
+// someone; warn when no sign-in is configured, because then it governs no one
+// and every launch is the admin, marked governance_exempt.
+func governAdminRunsCheck(on, recordingExempt, oidcConfigured bool) (SetupCheck, bool) {
+	if !on {
+		return SetupCheck{}, false
+	}
+	if !oidcConfigured {
+		return SetupCheck{
+			ID: "govern_admin_runs", Label: "Admin runs", Status: "warn",
+			Detail: "`WARDYN_GOVERN_ADMIN_RUNS` is on, but nobody signs in to this deployment, so it governs no one: every run is launched as the admin and marked `governance_exempt`.",
+			Fix:    "Configure single sign-on, or unset `WARDYN_GOVERN_ADMIN_RUNS`.",
+		}, true
+	}
+	recording := "Record Mode is refused for them."
+	if recordingExempt {
+		recording = "Record Mode is exempt; each recording is marked `governance_exempt` in the audit trail."
+	}
+	return SetupCheck{
+		ID: "govern_admin_runs", Label: "Admin runs", Status: "info",
+		Detail: "Admins' own runs are governed: each is bounded by the governance profile and grants that apply to that person. " + recording +
+			" The admin token stays outside, as break-glass, and its runs are marked `governance_exempt` in the audit trail.",
+	}, true
 }

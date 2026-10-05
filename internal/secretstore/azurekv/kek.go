@@ -5,6 +5,7 @@ package azurekv
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -37,6 +38,10 @@ type KEKConfig struct {
 	Key, SigningKey                                                         string
 	Auth, TenantID, ClientID, FederatedTokenFile, AuthorityHost, CACertFile string
 	Timeout                                                                 time.Duration
+	// KeySetting and SigningKeySetting name the settings Key and SigningKey
+	// came from, for the boot errors; empty = WARDYN_AZURE_KEK_KEY and
+	// WARDYN_AZURE_KEK_SIGNING_KEY. The platform pair sets its own.
+	KeySetting, SigningKeySetting string
 }
 
 // KEK is the Azure Key Vault KEK (WARDYN_KEK=azurekv). Each data key is
@@ -106,19 +111,20 @@ func NewKEK(ctx context.Context, cfg KEKConfig) (*KEK, error) {
 }
 
 func newKEK(cfg KEKConfig) (*KEK, error) {
-	wrapURL, wrapName, err := parseKeyID("WARDYN_AZURE_KEK_KEY", cfg.Key)
+	keySetting, sigSetting := cmp.Or(cfg.KeySetting, "WARDYN_AZURE_KEK_KEY"), cmp.Or(cfg.SigningKeySetting, "WARDYN_AZURE_KEK_SIGNING_KEY")
+	wrapURL, wrapName, err := parseKeyID(keySetting, cfg.Key)
 	if err != nil {
 		return nil, err
 	}
-	signURL, signName, err := parseKeyID("WARDYN_AZURE_KEK_SIGNING_KEY", cfg.SigningKey)
+	signURL, signName, err := parseKeyID(sigSetting, cfg.SigningKey)
 	if err != nil {
 		return nil, err
 	}
 	if wrapURL.Scheme != signURL.Scheme || !strings.EqualFold(wrapURL.Host, signURL.Host) {
-		return nil, fmt.Errorf("WARDYN_AZURE_KEK_SIGNING_KEY is in %s, WARDYN_AZURE_KEK_KEY in %s; both keys must be in the same vault", signURL.Host, wrapURL.Host)
+		return nil, fmt.Errorf("%s is in %s, %s in %s; both keys must be in the same vault", sigSetting, signURL.Host, keySetting, wrapURL.Host)
 	}
 	if wrapName == signName {
-		return nil, errors.New("WARDYN_AZURE_KEK_KEY and WARDYN_AZURE_KEK_SIGNING_KEY name the same key; the wrapping key and the signing key are two keys")
+		return nil, fmt.Errorf("%s and %s name the same key; the wrapping key and the signing key are two keys", keySetting, sigSetting)
 	}
 	c, err := newClient(Config{
 		VaultURL: wrapURL.Scheme + "://" + wrapURL.Host, Auth: cfg.Auth, TenantID: cfg.TenantID, ClientID: cfg.ClientID,
@@ -160,6 +166,19 @@ func parseKeyID(setting, raw string) (*url.URL, string, error) {
 		return nil, "", fmt.Errorf("%s %q: the key name must be 1-127 letters, digits and \"-\"", setting, raw)
 	}
 	return u, strings.ToLower(name), nil
+}
+
+// KeyIdentity is the normalised identity of a versionless key id: its
+// lowercase vault host and lowercase key name, which is how Key Vault tells
+// two keys apart. Two spellings that differ only by case name one key, so a
+// check that two settings name different keys compares these, never the raw
+// strings.
+func KeyIdentity(setting, raw string) (string, error) {
+	u, name, err := parseKeyID(setting, raw)
+	if err != nil {
+		return "", err
+	}
+	return strings.ToLower(u.Host) + "/" + name, nil
 }
 
 func (k *KEK) start(ctx context.Context) error {
@@ -250,22 +269,26 @@ func (k *KEK) Wrap(ctx context.Context, dek []byte, bind map[string]string) ([]b
 // Unwrap implements kek.KEK: parse, verify the signature for this row, and
 // only then unwrapkey. A malformed, moved or forged wrap is a definitive
 // refusal with no Key Vault call (a signing-key version not yet seen costs
-// one GET per missTTL).
+// one GET per missTTL), and kek.ErrCorrupt: the versions a wrap names are
+// globally unique, so it is proof about the row.
 func (k *KEK) Unwrap(ctx context.Context, wrapped []byte, bind map[string]string) ([]byte, error) {
 	aad, err := kek.WrapAAD(bind, k.id)
 	if err != nil {
 		return nil, fmt.Errorf("azurekv KEK: %w", err)
 	}
 	b, err := parseWrap(wrapped)
-	if err != nil {
-		return nil, fmt.Errorf("azurekv KEK %s: the row holds %w", k.id, err)
+	switch {
+	case errors.Is(err, errUnknownFormat):
+		return nil, fmt.Errorf("azurekv KEK %s: the row holds %w", k.id, err) // not proof about the row: a reader fails closed
+	case err != nil:
+		return nil, fmt.Errorf("azurekv KEK %s: %w: the row holds %w", k.id, kek.ErrCorrupt, err)
 	}
 	pub, err := k.signingVersion(ctx, b.sv)
 	if err != nil {
 		return nil, err
 	}
 	if !verify(pub, sigMsg(aad, b.wv, b.sv, b.c), b.sig) {
-		return nil, fmt.Errorf("azurekv KEK %s: the wrap is not signed for this row: moved, forged or corrupted", k.id)
+		return nil, fmt.Errorf("azurekv KEK %s: %w: the wrap is not signed for this row: moved, forged or corrupted", k.id, kek.ErrCorrupt)
 	}
 	dek, err := k.crypt(ctx, k.wrapName, b.wv, "unwrapkey", "RSA-OAEP-256", b.c)
 	if err != nil {
@@ -305,13 +328,15 @@ type wrap struct {
 	c, sig []byte
 }
 
+var errUnknownFormat = errors.New("a wrap whose format is not " + blobLabel + ": written by a newer wardynd, or not a Key Vault wrap")
+
 func parseWrap(w []byte) (wrap, error) {
 	fs, err := decodeFields(w)
 	switch {
 	case err != nil:
 		return wrap{}, fmt.Errorf("no Key Vault wrap: %w", err)
 	case len(fs) == 0 || fs[0] != blobLabel:
-		return wrap{}, fmt.Errorf("a wrap whose format is not %s: written by a newer wardynd, or not a Key Vault wrap", blobLabel)
+		return wrap{}, errUnknownFormat
 	case len(fs) != 5:
 		return wrap{}, fmt.Errorf("a Key Vault wrap of %d fields, want 5", len(fs))
 	case !versionRE.MatchString(fs[1]) || !versionRE.MatchString(fs[2]):
@@ -528,7 +553,7 @@ func (k *KEK) signingVersion(ctx context.Context, sv string) (*ecdsa.PublicKey, 
 	}
 	kb, _, err := k.getKey(ctx, k.signName, sv)
 	if err == nil && !kb.Attributes.Enabled {
-		err = fmt.Errorf("%s version %s is disabled", k.signName, sv)
+		err = fmt.Errorf("%w: %s version %s is disabled", kek.ErrKeyMissing, k.signName, sv)
 	}
 	if err == nil {
 		pub, err = k.p256(sv, kb)
@@ -583,7 +608,7 @@ func (k *KEK) call(ctx context.Context, method, path string, in, out any) error 
 	case err != nil:
 		return k.serviceErr(err)
 	case status == http.StatusNotFound:
-		return k.serviceErr(fmt.Errorf("key vault %s %s: 404 (no such key or version)", method, path))
+		return fmt.Errorf("azurekv KEK %s: %w: %w: key vault %s %s: 404 (no such key or version)", k.id, kek.ErrService, kek.ErrKeyMissing, method, path)
 	}
 	return nil
 }

@@ -332,3 +332,55 @@ test.describe("Run header — PENDING's own queued sentence (#125)", () => {
     await expect(page.getByText(PENDING_NO_DETAIL, { exact: true })).toHaveCount(0);
   });
 });
+
+// h-h1: the run id is the 8-character short form and never paints under the
+// state badge, even with every shrink-0 chip beside it. Fixture 1 is STARTING.
+for (const [w, h] of [
+  [1536, 900],
+  [1920, 1080],
+]) {
+  test.describe(`Run header — the id stays clear of the state badge at ${w}px`, () => {
+    test.use({ viewport: { width: w, height: h } });
+    test("a STARTING run with a long title and every chip keeps the id intact", async ({ page }) => {
+      await page.route("**/api/v1/runs/*", async (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        const response = await route.fetch();
+        const json = await response.json();
+        if (json.task === "e2e fixture 1") {
+          json.task = "e2e fixture 1 with a deliberately long title that competes with every chip for the row";
+          json.status_detail = "agent: ContainerCreating";
+          json.status_reason = "ContainerCreating";
+          json.autonomy_level = "L1";
+          json.interactive = true;
+        }
+        await route.fulfill({ response, json });
+      });
+      await openRuns(page);
+      await page.getByText(/^e2e fixture 1/).first().click();
+      await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
+
+      const header = page.getByTestId("run-summary-header");
+      const idSpan = header.locator("span[title]").filter({ hasText: /^· [0-9a-f]{8}$/ });
+      await expect(idSpan).toBeVisible();
+      const badge = header.getByText("Starting", { exact: true });
+      const copy = header.getByRole("button", { name: "Copy link to this run" });
+      const m = await page.evaluate(
+        ([idEl, badgeEl, copyEl]) => {
+          const r = (e: Element) => e.getBoundingClientRect();
+          const id = idEl as HTMLElement;
+          const group = id.parentElement as HTMLElement;
+          return {
+            idRight: r(id).right,
+            badgeLeft: r(badgeEl as Element).left,
+            overflow: id.scrollWidth > id.clientWidth,
+            copyInside: r(copyEl as Element).right <= r(group).right + 0.5 && r(copyEl as Element).left >= r(group).left,
+          };
+        },
+        [await idSpan.elementHandle(), await badge.elementHandle(), await copy.elementHandle()],
+      );
+      expect(m.idRight).toBeLessThanOrEqual(m.badgeLeft);
+      expect(m.overflow).toBe(false);
+      expect(m.copyInside).toBe(true);
+    });
+  });
+}

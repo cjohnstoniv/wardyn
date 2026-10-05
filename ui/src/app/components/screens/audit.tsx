@@ -19,7 +19,7 @@ import {
   CircleX,
 } from "lucide-react";
 import type { AuditEvent, ActorType, AgentRun } from "../../lib/types";
-import { runHeadline } from "../../lib/types";
+import { ERASED_VALUE, runHeadline } from "../../lib/types";
 import { AUDIT } from "./audit-copy";
 import { audit as api } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
@@ -46,8 +46,11 @@ import {
 } from "../wardyn/primitives";
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
-import { AuditDecision, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
+import { AuditDecision, ErasedFields, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
 import { PageHeader } from "../wardyn/page-header";
+import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
+import { RETENTION } from "../wardyn/copy/audit-retention";
+import { AuditRetention } from "./audit-retention";
 import { cn } from "../ui/utils";
 import { useSecurityOperator } from "../wardyn/operator-context";
 import { runPath, useConsoleMode, type ConsoleView } from "../wardyn/console-view";
@@ -199,6 +202,8 @@ function capitalize(s: string): string {
 // llm.scan.* are dynamic families (the suffix is the decision/scan outcome), so
 // they're handled directly rather than enumerated in ACTION_VERB.
 function describeEvent(e: AuditEvent): string {
+  // An erased target reads as erased, never as the sentinel (surface D).
+  if (e.target === ERASED_VALUE) e = { ...e, target: AUDIT.ERASED };
   if (e.action.startsWith("egress.")) {
     const decision = e.action.slice("egress.".length);
     const verb =
@@ -277,6 +282,10 @@ export function AuditScreen() {
     (id: string) => setSearchParams(id ? { run_id: id } : {}, { replace: true }),
     [setSearchParams],
   );
+  // The Retention tab (mock packet M4) is the security tier's; everyone else
+  // has the feed alone.
+  const [tab, setTab] = React.useState<"events" | "retention">("events");
+  const showRetention = securityOperator && tab === "retention";
   const [kindFilter, setKindFilter] = React.useState<EventKind | "all">("all");
   const [actorFilter, setActorFilter] = React.useState<ActorType | "all">("all");
   const [groundTruth, setGroundTruth] = React.useState<{ state?: string; reason?: string }>();
@@ -337,7 +346,7 @@ export function AuditScreen() {
         setPollStale(true);
       });
   }, [fetchEvents]);
-  usePoll(tick, AUDIT_POLL_MS, status !== "ready");
+  usePoll(tick, AUDIT_POLL_MS, status !== "ready" || showRetention);
 
   // Monotonic guard: the runFilter effect below and a manual Retry can each
   // start a fetch, and either can still be in flight when the other starts
@@ -429,6 +438,19 @@ export function AuditScreen() {
         description="Append-only. Every egress decision, credential broker, approval, and enforcement action — across every run."
       />
 
+      {securityOperator && (
+        <Tabs value={tab} onValueChange={(v) => setTab(v as "events" | "retention")} className="mb-4">
+          <TabsList>
+            <TabsTrigger value="events">{RETENTION.TAB_EVENTS}</TabsTrigger>
+            <TabsTrigger value="retention">{RETENTION.TAB}</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      )}
+
+      {showRetention ? (
+        <AuditRetention />
+      ) : (
+      <>
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <div className="relative w-full max-w-sm">
           <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -577,6 +599,8 @@ export function AuditScreen() {
             </div>
           ))}
         </div>
+      )}
+      </>
       )}
 
     </div>
@@ -738,6 +762,7 @@ function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: stri
             {describeEvent(event)}
           </span>
           <RuleSourceChip event={event} />
+          <ErasedFields event={event} className="shrink-0 text-xs" />
         </span>
       )}
       {event.run_id && (

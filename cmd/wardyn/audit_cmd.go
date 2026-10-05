@@ -9,6 +9,9 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -96,5 +99,46 @@ func auditCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&filter.Actor, "actor", "", "only events by this principal (e.g. alice@corp.example)")
 	cmd.Flags().StringVar(&filter.ActorType, "actor-type", "", "only events from this actor type (human|agent|system)")
 	cmd.Flags().StringVar(&filter.Outcome, "outcome", "", "only events with this outcome (success|denied|failure)")
+	cmd.AddCommand(auditExportPartitionCmd(client), auditRetentionCmd(client))
+	return cmd
+}
+
+// auditExportPartitionCmd downloads one closed audit partition, for the operator who checks its digest
+// before submitting it to a retention drop. The write is atomic like `run recording -o`: the file is
+// whole or absent.
+func auditExportPartitionCmd(client clientFn) *cobra.Command {
+	var outPath string
+	var raw bool
+	cmd := &cobra.Command{
+		Use:   "export-partition <partition>",
+		Short: "Download one closed audit partition as NDJSON with its digest (security admin; stdout unless -o)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rc, err := client().ExportAuditPartition(cmd.Context(), args[0], raw)
+			if err != nil {
+				return err
+			}
+			defer rc.Close()
+			if outPath == "" {
+				_, err = io.Copy(cmd.OutOrStdout(), rc)
+				return err
+			}
+			f, err := os.CreateTemp(filepath.Dir(outPath), ".wardyn-audit-partition-*.part")
+			if err != nil {
+				return err
+			}
+			_, copyErr := io.Copy(f, rc)
+			if closeErr := f.Close(); copyErr == nil {
+				copyErr = closeErr
+			}
+			if err := finalizePartFile(f.Name(), outPath, copyErr); err != nil {
+				return fmt.Errorf("audit partition export %s did not complete: %w", args[0], err)
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "wrote %s\n", outPath)
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&outPath, "output", "o", "", "write the export here instead of stdout")
+	cmd.Flags().BoolVar(&raw, "raw", false, "the stored, hash-covered archive form instead of the readable one")
 	return cmd
 }

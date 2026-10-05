@@ -51,7 +51,7 @@ func TestClamp_GovernanceEphemeralDiskLimitIsPreviewParity(t *testing.T) {
 	got, warns := Clamp(types.RunPolicySpec{
 		MinConfinementClass: types.CC2,
 		Resources:           &types.ResourceLimits{DiskMiB: 40960},
-	}, ceiling, 4096)
+	}, ceiling, types.GovernanceLimits{MaxEphemeralDiskMiB: 4096})
 	if got.Resources == nil || got.Resources.DiskMiB != 4096 {
 		t.Fatalf("DiskMiB = %v, want 4096 (clamped to the profile's MaxEphemeralDiskMiB)", got.Resources)
 	}
@@ -61,7 +61,7 @@ func TestClamp_GovernanceEphemeralDiskLimitIsPreviewParity(t *testing.T) {
 
 	// A ZERO request under the same limit stays zero — the limit bounds a
 	// request, and only the org's default_disk_mib (at dispatch) ever fills one.
-	got, _ = Clamp(types.RunPolicySpec{MinConfinementClass: types.CC2}, ceiling, 4096)
+	got, _ = Clamp(types.RunPolicySpec{MinConfinementClass: types.CC2}, ceiling, types.GovernanceLimits{MaxEphemeralDiskMiB: 4096})
 	if got.Resources != nil && got.Resources.DiskMiB != 0 {
 		t.Errorf("DiskMiB = %d, want 0 — a maximum must never fill a request-less run", got.Resources.DiskMiB)
 	}
@@ -70,7 +70,7 @@ func TestClamp_GovernanceEphemeralDiskLimitIsPreviewParity(t *testing.T) {
 	got, _ = Clamp(types.RunPolicySpec{
 		MinConfinementClass: types.CC2,
 		Resources:           &types.ResourceLimits{DiskMiB: 40960},
-	}, ceiling, 0)
+	}, ceiling, types.GovernanceLimits{})
 	if got.Resources == nil || got.Resources.DiskMiB != 40960 {
 		t.Errorf("DiskMiB = %v, want 40960 left alone when the profile sets no limit", got.Resources)
 	}

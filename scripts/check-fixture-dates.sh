@@ -58,10 +58,20 @@ literal_dates() {
 declare -A ALLOWLIST=(
   ["cmd/wardyn-aws-sso/main_test.go"]=2
   ["cmd/wardyn/commands_test.go"]=6
+  ["cmd/wardyn/people_test.go"]=3 # display only: personDay formats LastSignedInAt, never compared to the clock
   ["cmd/wardyn/policyio_test.go"]=2
   ["cmd/wardyn/siteconfig_test.go"]=4
   ["cmd/wardynd/login_stamp_test.go"]=1
   ["cmd/wardynd/rekey_test.go"]=1
+  # ar-l1.2's partition tests: the 2200-01-01 sentinel is a far-future bound passed through as data,
+  # never compared against the clock.
+  ["internal/api/audit_partition_export_test.go"]=1
+  ["internal/db/audit_partition_digest_pg_test.go"]=1
+  ["internal/store/auditpartition_pg_test.go"]=1
+  # ar-l1.6's retention tab test: the partition bounds and the pending date are display data the
+  # table renders in the packet's own wording ("3 Oct 2026", "Oct 2026"), asserted as literal
+  # strings so the canon wording is pinned. Nothing compares them against the clock.
+  ["ui/src/app/components/screens/audit-retention.test.tsx"]=13
   ["internal/api/access_test.go"]=1
   ["internal/api/ado_entra_test.go"]=1
   ["internal/api/auth_failed_coalesce_test.go"]=1
@@ -80,6 +90,7 @@ declare -A ALLOWLIST=(
   ["internal/egress/egress_test.go"]=1
   ["internal/egress/proxy/llm_unavailable_detail_test.go"]=3
   ["internal/egress/proxy/tool_rules_test.go"]=1
+  ["internal/notify/render_test.go"]=1 # display only: the golden body prints RequestedAt, never compared to the clock
   ["internal/runner/k8s/drives_test.go"]=2
   ["internal/types/types_test.go"]=1
   ["pkg/client/client_more_test.go"]=2
@@ -108,6 +119,14 @@ declare -A ALLOWLIST=(
   # change's `at` are display data rendered into the tab (S-21 prints the
   # restart date); nothing compares them against the clock.
   ["ui/src/app/components/screens/run-detail/policy-tab.test.tsx"]=3
+  # 0.8.6 W4: a run output's captured_at is printed as a clock time ("Captured
+  # 14:02") or decoded and passed through (the CLI's --json), and a key-domain
+  # assignment's set_at is passed through and never rendered; nothing compares
+  # either against the clock.
+  ["cmd/wardyn/run_output_test.go"]=1
+  ["ui/e2e/run-output.spec.ts"]=1
+  ["ui/src/app/components/screens/run-detail/output-tab.test.tsx"]=1
+  ["ui/src/app/components/screens/credentials-key-domains.test.tsx"]=2
   # #541 fix review: connectionRowCopy's C5 (expiring) test pins a LITERAL
   # expected string for absoluteTime's clock-time rendering, deliberately not
   # a recomputation through absoluteTime itself (that would let the
@@ -120,6 +139,22 @@ declare -A ALLOWLIST=(
   # assertion compares the rendered string against the clock, so the literal
   # dates themselves never go stale.
   ["ui/src/app/components/screens/credentials.test.tsx"]=2
+  # 0.8.6 W2a: the seed of an injected fake clock (sweep health, substrate
+  # health), never compared against the wall clock; the audit-partition tests'
+  # '2200-01-01' high-water mark, which only has to sit after every partition
+  # bound; and a mocked workspace's created_at/updated_at, rendered, never graded.
+  ["cmd/wardynd/sweep_health_test.go"]=5
+  ["internal/api/substrate_health_test.go"]=2
+  ["internal/sweephealth/sweephealth_test.go"]=2
+  ["internal/api/audit_partition_export_test.go"]=1
+  ["internal/db/audit_partition_digest_pg_test.go"]=1
+  ["internal/store/auditpartition_pg_test.go"]=1
+  ["ui/e2e/governed-admin.spec.ts"]=2
+  # 0.8.6 W3: the directory fake stamps CreatedAt and a listing row's
+  # LastSignInAt with a fixed instant that is only echoed into the JSON body;
+  # the hourly test's t0 seeds an injected fake clock, never the wall clock.
+  ["internal/api/people_keydomains_fake_test.go"]=2
+  ["internal/notify/worker_unit_test.go"]=1
 )
 
 fail=0

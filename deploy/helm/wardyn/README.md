@@ -87,11 +87,13 @@ install.
   [Console Ingress](#console-ingress).
 - **ConfigMap** (`defaultPolicy` only) — a baked default policy, mounted
   read-only; see [Default policy](#default-policy).
+- **ConfigMap** (`kek.domains` only) — the key domains file, mounted
+  read-only; see [Key domains](#key-domains).
 
 ## Prerequisites
 
 Platform requirements, in one breath: **Kubernetes 1.20+, Helm 3, a
-NetworkPolicy-enforcing CNI, and Postgres 12+.** Everything else the control
+NetworkPolicy-enforcing CNI, and Postgres 13+.** Everything else the control
 plane needs (ServiceAccount, namespaced RBAC, NetworkPolicies, Secrets
 wiring) is rendered by this chart. In detail:
 
@@ -107,10 +109,16 @@ wiring) is rendered by this chart. In detail:
   SEPARATE trap below (an ambient default-deny already present in
   `k8s.runsNamespace`), and only when the canary pod actually ran and could
   not connect.
-- **Postgres 12+** (external or managed).
+- **Postgres 13+** (external or managed).
 - A wardynd image: the chart's default pulls the CI-published one for a
   released version (see the callout at the top), or **build and push your
   own** (see below) for a fork, a private registry, or an unreleased change.
+  Each release also publishes `ghcr.io/cjohnstoniv/wardynd-fips`, the same
+  daemon built against a pinned Go cryptographic module snapshot: set
+  `image.repository` to it, give it non-age key custody (`kek.provider`
+  `transit` or `azurekv`, or store mode), and see
+  [Secrets and keys](../../../docs/operations/secrets-and-keys.md) for what it
+  does and does not claim.
 - Optional: **RuntimeClasses** delivering gVisor/Kata isolation, pinned via
   `k8s.runtimeClasses.CC2`/`.CC3`, to advertise the stronger confinement
   tiers — CC1 works out of the box. An **OIDC issuer** for SSO and
@@ -225,6 +233,13 @@ different bundled policy, set `env.WARDYN_DEFAULT_POLICY` to any file under
 `/examples/policies/` (`demo.json`, ...). To bake a cluster-specific policy
 into the chart instead — an alternative to picking among the image's bundled
 ones — see [Default policy](#default-policy).
+
+The shipped `default.json` sets `auto_stop_after_sec` to `3600`, so a deployment that uses it as its default policy stops
+runs idle for an hour. To keep the old behaviour, use a policy with `auto_stop_after_sec` set to `0`.
+The shipped file is also the ceiling member runs are clamped to, so while it is in use a member's `auto_stop_after_sec` of `0`,
+a negative value, or more than `3600` is capped to `3600` with a warning, including the `-1` that interactive and SSH sessions
+use (admins are not clamped). On Kubernetes without metrics-server the CPU signal is off (see `/setup/status`), so a busy run
+that makes no egress calls and has no attach is also stopped after an hour.
 
 **Upgrade note — `/readyz` is a 0.6-and-later endpoint.** The readiness probe
 targets `/readyz`. From 0.6.0 the chart's own default image serves it: an empty
@@ -413,6 +428,38 @@ with no admin token left to sign in with. Create and populate the target
 Secret yourself (as in [Installation](#installation) above) **before** the
 upgrade that sets `secretRef.name`, never after.
 
+## Leaver deprovisioning (SCIM)
+
+`scim.enabled=true` lets an identity provider suspend and purge a person over SCIM 2.0
+(`<base path>/scim/v2/Users`). SCIM only removes access: it never grants a role or rebinds an identity. The
+leaver runbook, the purge steps and the residual risks are in
+[docs/OPERATIONS.md "Leavers and SCIM"](../../../docs/OPERATIONS.md#leavers-and-scim).
+
+1. Create a Secret you own, with a bearer of at least 32 bytes under `scim-token` (and, only while rotating,
+   the next one under `scim-token-next`):
+
+   ```sh
+   kubectl -n wardyn create secret generic wardyn-scim --from-literal=scim-token="$(openssl rand -hex 32)"
+   ```
+
+2. Install with `--set scim.enabled=true --set scim.tokenSecretRef=wardyn-scim`. The chart renders
+   `WARDYN_SCIM_TOKEN` and `WARDYN_SCIM_TOKEN_NEXT` from that Secret (the second is optional), plus
+   `WARDYN_SCIM_PURGE_AFTER` from `scim.purgeAfter` and `WARDYN_SCIM_LEAVER_WORKSPACES` from
+   `scim.leaverWorkspaces`.
+
+| Value | Default | Meaning |
+|---|---|---|
+| `scim.enabled` | `false` | Mount the SCIM routes. Off renders no `WARDYN_SCIM_*` variable |
+| `scim.tokenSecretRef` | `""` | Name of your Secret holding `scim-token` and, optionally, `scim-token-next`. Required when enabled |
+| `scim.purgeAfter` | `720h` | Delay from suspension to the automatic purge. `0` disables it; a SCIM `DELETE` still purges |
+| `scim.leaverWorkspaces` | `reassign` | `reassign` hands a purged person's workspaces to the operator; `keep` leaves them |
+
+The render refuses `scim.enabled` without `scim.tokenSecretRef`, and refuses a `WARDYN_SCIM_*` variable (or a
+`_FILE` twin) in `env` or `extraEnv` beside it, because wardynd refuses to boot with a secret set both ways. To
+deliver the bearer as a file instead, leave `scim.enabled` false and set `WARDYN_SCIM_TOKEN_FILE` in
+`extraEnv`. Wardynd also refuses to boot, whatever delivers the token, without OIDC on a single-tenant Entra
+issuer and without TLS (set `env.WARDYN_TLS_TERMINATED=true` when the ingress terminates it).
+
 ## Kubernetes runner substrate (`k8s.enabled`)
 
 Off by default. Turning it on makes wardynd itself create/manage sandboxes as
@@ -523,6 +570,26 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   (`WARDYN_K8S_IMAGE_PULL_SECRET`) threaded onto every pod the substrate
   creates (agent, proxy, canary) — separate from `image.pullSecrets`, which is
   only for wardynd's own image.
+- `k8s.sandbox.{nodeSelector,tolerations,affinity,priorityClassName,podAnnotations,podLabels}`: where every
+  sandbox pod goes (`WARDYN_K8S_SANDBOX_PLACEMENT`). The agent pod, the proxy pod and the boot-time canary all
+  take it; the top-level `nodeSelector`, `affinity` and `tolerations` place wardynd only. wardynd refuses to
+  boot, naming the key, on a reserved label (`wardyn.managed`, `wardyn.run-id`, `wardyn.component`) or on any
+  `kubernetes.io/` or `k8s.io/` annotation or label except
+  `cluster-autoscaler.kubernetes.io/safe-to-evict`, which is never set by default.
+- `k8s.readNodes` (`WARDYN_K8S_READ_NODES`, default `false`): adds `list` on `nodes` to the ClusterRole so preflight and
+  create can warn that no node a run may be placed on is large enough. It compares a run's requests to node size,
+  honouring `k8s.sandbox.*`, never to free capacity: pods of other namespaces are invisible to wardynd, and the
+  scheduler stays the authority. Without it the warning is absent. Separately and always on, the runner Role has
+  `list` on `resourcequotas`: a run that cannot fit the runs namespace's quota is refused before it is created
+  (`namespace_quota_exceeded`), and one that would fill a quota to 90% or more is warned; a quota wardynd may not
+  read is reported as unreadable, never as empty.
+- `runner.sandbox.defaultResources.cpuMillis` / `.memoryMiB`: the size of a run whose policy sets no
+  resources (`WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`). Ships at 1000m/2048Mi so
+  a run fits a shared node; set 2000/4096 to keep the pre-0.8.6 size. `runner.sandbox.proxyResources` sizes each
+  run's `wardyn-proxy` sidecar (500m/256Mi).
+- `runner.sandbox.requestRatio` (`WARDYN_SANDBOX_REQUEST_RATIO`): agent pod requests as a fraction of limits, in
+  (0, 1]; empty (default) keeps requests equal to limits. Below 1 the pod is Burstable and a pod over its memory
+  request is an eviction and OOM-kill candidate under node pressure. The proxy pod stays Guaranteed.
 - `k8s.runtimeClasses.CC2` / `.CC3`: pins a Confinement Class to a RuntimeClass
   NAME already registered in the cluster (`WARDYN_CONFINEMENT_MAP`), e.g.
   `--set k8s.runtimeClasses.CC2=gvisor`. Unlike Docker's well-known runtime
@@ -562,7 +629,7 @@ body, RBAC cannot scope a list by label, and wardynd never reads a Secret back.
 whose pods are both gone, and it is asked for best-effort — a Role without it
 degrades the sweep rather than killing it; `events` list only, so an image
 pull reads as "Downloading the image" rather than ContainerCreating — a Role
-without it keeps the old wording and nothing else changes); the cluster-scoped ClusterRole covers
+without it keeps the old wording and nothing else changes; `pods` list in the `metrics.k8s.io` group, one namespaced PodMetrics read per sweep tick, so idle auto-stop counts CPU work inside a sandbox — a Role without it, or a cluster without metrics-server, keeps idleness on attaches and egress and the setup checklist's Idle detection row says so); the cluster-scoped ClusterRole covers
 `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver
 only ever resolves one by name). One rule is conditional, and it is the only
 one switched twice: `persistentvolumeclaims` get+create, rendered only with
@@ -674,9 +741,9 @@ the chart to set — see `resourceRequirements` in
 is node-wide by design. Also **no in-sandbox DNS** (a fast-failing loopback-only resolver —
 only `wardyn-proxy` resolves hostnames, matching Compose's proxy-only egress),
 **no k8s ground-truth correlator** (the Tetragon host-sensor pipeline has no
-k8s-substrate equivalent), and **`replicas` stays 1**, same reason as every
-other substrate (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s
-"One replica, by construction").
+k8s-substrate equivalent), and **`replicas` stays 1 unless `ha.enabled` is set** (see
+[docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s
+"High availability").
 
 **Narrowed in 0.7.5, further in 0.8 (#164): `DiskMiB` now bounds an AUTONOMOUS (task-mode) run's
 writes to `/tmp`, its workdir `/home/agent/work`, and its toolchain cache root
@@ -877,6 +944,46 @@ policy) restricts pod-to-pod ports, allow the runs namespace to reach wardynd
 on this port. Details, the per-shape table and rotation:
 [docs/OPERATIONS.md § Control-plane to proxy TLS](../../../docs/OPERATIONS.md#control-plane-to-proxy-tls).
 
+## Key domains
+
+`kek.domains` declares key domains: tenants of the key service. Each is a name
+(`a-z`, `0-9` and `-`, never `default`, which is the credential key) mapped to
+a Transit key and an optional Vault role, or to a Key Vault key pair and an
+optional client id. The chart renders the map to a ConfigMap, mounts it
+read-only and sets `WARDYN_KEY_DOMAINS_FILE`; a render refuses a bad name or a
+value that is not exactly one `transit` or `azurekv`, and `wardynd` proves every
+key at boot.
+
+```yaml
+kek:
+  provider: transit
+  principalKeys: "on"
+  transit: {key: wardyn-credentials}
+  domains:
+    acme:
+      transit: {key: acme-keys, role: wardyn-acme}
+    beta:
+      azurekv:
+        key: https://beta.vault.azure.net/keys/wrap
+        signingKey: https://beta.vault.azure.net/keys/sign
+  # An azurekv domain shares the Entra identity below, so it needs these too.
+secretStore:
+  azure:
+    tenantId: 00000000-0000-0000-0000-000000000000
+    clientId: 00000000-0000-0000-0000-000000000000
+```
+
+The people in a domain are chosen by API, not by the chart: `PUT
+/api/v1/key-domains/assignments/{subject_type}/{subject}` (security tier) for a
+user, a group or everyone. A domain's Vault `role` needs `secretStore.vault.auth`
+set to `kubernetes` and must differ from `secretStore.vault.role` and
+`rolePlatform`; a domain with no role is reached as the credential role. A
+domain's Transit key must be its own, not the credential key or the platform
+key. Never remove a domain while a live key names it: boot refuses, and the
+remedy is in [docs/operations/secrets-and-keys.md "Offboarding a key
+domain"](../../../docs/operations/secrets-and-keys.md#offboarding-a-key-domain).
+A change to `kek.domains` rolls the pod.
+
 ## Corporate CA trust
 
 `trustedCA` bakes a PEM bundle of additional trusted roots into a ConfigMap
@@ -997,9 +1104,78 @@ podAnnotations:
   prometheus.io/scrape: "true"
 ```
 
-`ci/all-on-values.yaml` renders exactly that pair. The chart ships no
-ServiceMonitor: it would bind this chart to a specific operator's CRD, and the
-annotation plus the peer above is what a stock Prometheus needs.
+`ci/all-on-values.yaml` renders exactly that pair. A stock Prometheus needs the
+annotation plus the peer above and a bearer token of its own. A cluster running
+the Prometheus Operator can use the opt-in ServiceMonitor below instead.
+
+## Scraping `/metrics` with a ServiceMonitor
+
+`metrics.serviceMonitor.enabled=true` renders one `monitoring.coreos.com/v1`
+`ServiceMonitor`. It selects this chart's Service, scrapes the named `http` port
+at `/metrics` under `basePath`, and sends the Secret you name as the bearer
+credential. It is off by default, it renders on the flag alone (no
+`.Capabilities` gate, so offline and GitOps renders carry it), and the chart
+never creates the Secret: a Secret built from values would put an admin
+credential in the Helm release history.
+
+```yaml
+metrics:
+  serviceMonitor:
+    enabled: true
+    bearerTokenSecret:
+      name: wardyn-scrape   # a Secret in THIS release's namespace
+      key: token
+    labels:
+      release: prometheus   # must match the Prometheus serviceMonitorSelector
+    interval: 30s           # optional
+```
+
+The credential is emitted as `endpoints[].authorization.credentials` with type
+`Bearer`, the field the `monitoring.coreos.com/v1` API documents for it. The
+older `bearerTokenSecret` endpoint field is deprecated there and is not used.
+A ServiceMonitor resolves secret references in its own namespace, so a Secret
+created anywhere but the release namespace fails at scrape time as "target
+down".
+
+**The scrape credential carries full admin authority.** `GET /metrics` is gated
+by `requireOperator` (`internal/api/routes.go`), the same gate as the rest of
+the operator API, and there is no narrower metrics-reader token class yet (a
+follow-up). The Prometheus Operator copies the credential into the Prometheus
+configuration Secret and into the Prometheus pod, in the Prometheus namespace.
+Everyone with Secret read or `exec` there, and the Operator's ServiceAccount,
+therefore holds admin authority over the Wardyn API. Treat the Prometheus
+namespace as part of the admin trust boundary.
+
+**Mint a dedicated credential, never the shared admin token.** Use a dedicated
+admin identity that exists only for scraping, and mint a personal API token for
+it ([docs/OPERATIONS.md](../../../docs/OPERATIONS.md), "Per-user API tokens:
+stop sharing the admin token"): sign in as that identity in admin mode and mint
+the token from its own session (`POST /api/v1/me/tokens`; a token cannot mint a
+token, and member mode refuses the mint), with a `ttl_seconds` no longer than
+`WARDYN_API_TOKEN_MAX_TTL` allows. Then create the Secret in the release
+namespace:
+
+```bash
+kubectl -n <release-namespace> create secret generic wardyn-scrape \
+  --from-literal=token="$WARDYN_SCRAPE_TOKEN"
+```
+
+Never put `auth.adminToken` in it. A leaked scrape credential is then revoked by
+deleting that one token (`DELETE /api/v1/tokens/{id}`), without rotating the
+deployment-wide admin token.
+
+**The scrape stops on its own, and you rotate the Secret.** A personal token
+stops authenticating at its expiry (`WARDYN_API_TOKEN_MAX_TTL`, see
+[docs/ENV.md](../../../docs/ENV.md)). With `WARDYN_ROLE_STAMP_TTL` set, a token
+whose role stamp is older is refused `401` `role_stamp_stale` until its owner
+signs in again. Each of these makes the target go down until the Secret holds a
+fresh token, so put the rotation on a calendar shorter than both.
+
+**Two selectors must match, or the target never appears.**
+`networkPolicy.ingress.from` must admit the Prometheus namespace (see the
+previous section: it replaces the same-namespace default), and
+`metrics.serviceMonitor.labels` must match the Prometheus
+`serviceMonitorSelector`.
 
 ## UI sandbox gateway
 
@@ -1112,7 +1288,8 @@ See `values.yaml` for all options. Key settings:
 - `image.repository` / `image.tag`: wardynd container image. The defaults
   resolve to a real image once `Chart.yaml`'s `appVersion` has been released
   (see the callout at the top) — override both for a locally built image or
-  an unreleased commit. `image.tag` empty => `.Chart.AppVersion`.
+  an unreleased commit. `image.tag` empty => `.Chart.AppVersion`. The
+  published `ghcr.io/cjohnstoniv/wardynd-fips` takes the same tags.
 - `image.pullSecrets`: list of `{name: ...}` pull secrets for a private registry
 - `ingress.*`: optional Ingress for the console, off by default — see
   [Console Ingress](#console-ingress) above.
@@ -1145,13 +1322,20 @@ See `values.yaml` for all options. Key settings:
   Mutually exclusive with `ageKeyFromSecret`/`ageKey` — the chart refuses a
   render naming two sources.
 - `secrets.allowEphemeralAgeKey`: override for the refusal above, the same
-  acknowledge-the-ceiling shape as `allowMultiReplica`. Default `false`.
+  acknowledge-the-ceiling shape as `k8s.allowRunsInReleaseNamespace`. Default `false`.
+- `scim.*`: leaver deprovisioning over SCIM, off by default — see
+  [Leaver deprovisioning (SCIM)](#leaver-deprovisioning-scim) above.
 - `defaultPolicy`: JSON text baking a default policy into a ConfigMap,
   mounted read-only — see [Default policy](#default-policy) above. Empty
   (default) => no ConfigMap, image's own baked default applies.
 - `trustedCA`: PEM text baking a corporate CA bundle into a ConfigMap,
   mounted read-only — see [Corporate CA trust](#corporate-ca-trust) above.
   Empty (default) => no ConfigMap, system roots only.
+- `kek.domains`: a map from key-domain name to `transit: {key, role}` or
+  `azurekv: {key, signingKey, clientId}`, rendered to a ConfigMap and mounted
+  read-only as `WARDYN_KEY_DOMAINS_FILE` — see [Key domains](#key-domains)
+  above. Empty (default) => no ConfigMap, every principal key under the
+  credential key.
 - `awsSSOProxyInject`: `"on"`/`"off"`, the Phase B kill switch — see
   [docs/OPERATIONS.md "Turning the lane
   off"](../../../docs/OPERATIONS.md#turning-the-lane-off). Empty (default) =>
@@ -1210,24 +1394,28 @@ See `values.yaml` for all options. Key settings:
   not a chart value.
 - `ssh.*`: SSH access into a running sandbox, off by default — see
   [Split SSH exposure](#split-ssh-exposure) above.
-- `replicas`: **leave at 1 — the chart refuses anything higher.** A render with
-  `replicas > 1` fails with an explicit message unless you also set
-  `allowMultiReplica=true`. This chart-render pin is the first of two
-  controls: wardynd also takes a Postgres advisory lock at boot
-  (`cmd/wardynd/single_instance.go`) and refuses to serve if it can't get it
-  — `allowMultiReplica` sets `-allow-multi-instance` on the container args,
-  which lifts BOTH. The pin is a safety control: wardynd's
-  secret-masking registry is in-memory, per-process, and fails OPEN, so a
-  session recording uploaded to a replica that did not handle that run's
-  credential injection is persisted verbatim — live credentials in cleartext,
-  with a `success` audit event. The per-process defects that used to make a
-  second replica drop *requests* — attach tickets, compose-result uploads, run
-  watchers, session recordings, and the ground-truth token rotator — are closed
-  at the code level (Postgres-backed state, leases, and leader election); the
-  masking registry is not, and neither are the other per-process items
-  enumerated in [docs/OPERATIONS.md#one-replica-by-construction](../../../docs/OPERATIONS.md#one-replica-by-construction)
-  ("One replica, by construction"). `allowMultiReplica` is an acceptance of
-  that, not a fix.
-- `allowMultiReplica`: override for the refusal above. Default `false`.
+- `replicas`: **leave at 1 unless `ha.enabled=true`.** A render with `replicas > 1`
+  and no `ha.enabled` fails with an explicit message. wardynd also takes a Postgres
+  advisory lock at boot (`cmd/wardynd/single_instance.go`) and refuses to serve if it
+  can't get it, so a replica added by `kubectl scale` without HA mode exits instead of
+  serving.
+- `ha.enabled`: **high availability.** Runs two or more replicas so that one node
+  failing does not stop the control plane. Sets `WARDYN_HA=true`, lifts the
+  `replicas > 1` refusal, adds a PodDisruptionBudget (`minAvailable: 1`) and a preferred
+  pod anti-affinity across nodes (an `affinity.podAntiAffinity` of your own replaces
+  it), and keeps the audit spool on the per-pod `/tmp` emptyDir. Default `false`.
+  It replaces `allowMultiReplica`, a documented clean break: a values file that still
+  sets `allowMultiReplica=true` is refused with a pointer here, and wardynd refuses the
+  `-allow-multi-instance` flag with a pointer to `WARDYN_HA`. The chart refuses to
+  render HA unless `WARDYN_RECORDING_STORE` is `pg` or `off` (read from both `env` and
+  `extraEnv`; the chart's own default is `fs` with `persistence.enabled` and `off`
+  without, so set `env.WARDYN_RECORDING_STORE=pg` to record), unless
+  `persistence.enabled` is `false`, and unless any `WARDYN_AUDIT_SPOOL` you set is
+  under `/tmp`. It also refuses a hand-set `WARDYN_HA` in `env` or `extraEnv`. wardynd
+  itself refuses `WARDYN_HA` unless the runner is Kubernetes (`k8s.enabled`) and the
+  store is `pg` or `off`, which is the half that still holds after a `kubectl scale`.
+  The strategy stays `Recreate`: this is node-failure tolerance, not zero-downtime
+  upgrades. Per-replica limits (connection caps, rate limiters) add up across replicas.
+  See [docs/OPERATIONS.md#high-availability](../../../docs/OPERATIONS.md#high-availability).
 
 Where this chart is headed: [ROADMAP.md](../../../ROADMAP.md).

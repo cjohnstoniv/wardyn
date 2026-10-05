@@ -16,14 +16,40 @@ import (
 // was rejected, for the integrator's auth-failure audit emit.
 type sessionRejectedCtxKey struct{}
 
+// SessionRoleStampStale is the rejection reason for a session whose role stamp is older than
+// Config.RoleStampTTL.
+const SessionRoleStampStale = "role_stamp_stale"
+
 func withSessionRejected(ctx context.Context, reason string) context.Context {
 	return context.WithValue(ctx, sessionRejectedCtxKey{}, reason)
 }
 
+// WithSessionRejected is how another credential lane (an API token whose owner is deactivated)
+// hands the reason it refused to the same auth.fail emit a rejected cookie reaches.
+func WithSessionRejected(ctx context.Context, reason string) context.Context {
+	return withSessionRejected(ctx, reason)
+}
+
+type authorityEpochCtxKey struct{}
+
+// WithAuthorityEpoch carries the authority epoch a sign-in was issued under to the login-grant sink.
+func WithAuthorityEpoch(ctx context.Context, epoch int64) context.Context {
+	return context.WithValue(ctx, authorityEpochCtxKey{}, epoch)
+}
+
+// AuthorityEpochFromContext is the authority epoch of the verified session cookie (Middleware) or
+// of the sign-in being issued (WithAuthorityEpoch); false when neither put one on ctx, as on the
+// API-token and admin-token lanes.
+func AuthorityEpochFromContext(ctx context.Context) (int64, bool) {
+	e, ok := ctx.Value(authorityEpochCtxKey{}).(int64)
+	return e, ok
+}
+
 // SessionRejectedFromContext returns why Middleware rejected a presented
 // session cookie: "invalid_session", "expired_session", "revoked_session",
-// or "session_revocation_unavailable" (fail-closed) when Revocations is
-// wired; "" when no cookie was presented or it decoded fine.
+// "identity_deactivated" (the identity was deactivated, or a suspension passed
+// the cookie's authority epoch), "role_stamp_stale" when RoleStampTTL is set, or "session_revocation_unavailable"
+// (fail-closed) when Revocations is wired; "" when no cookie was presented or it decoded fine.
 func SessionRejectedFromContext(ctx context.Context) string {
 	reason, _ := ctx.Value(sessionRejectedCtxKey{}).(string)
 	return reason
@@ -175,6 +201,7 @@ func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	ctx = context.WithValue(ctx, objectIDCtxKey{}, sess.ObjectID)
 	ctx = context.WithValue(ctx, groupsCtxKey{}, sess.Groups)
 	ctx = context.WithValue(ctx, groupsTruncatedCtxKey{}, sess.GroupsTruncated)
+	ctx = WithAuthorityEpoch(ctx, sess.AuthorityEpoch)
 	// THE MEMBER-MODE CLAMP — the only place it's applied. This is the sole
 	// read of sess.Role in the product, so clamping here clamps everything
 	// downstream by construction. DOWNWARD ONLY: sess.Role is never

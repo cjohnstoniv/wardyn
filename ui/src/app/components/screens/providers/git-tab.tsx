@@ -16,6 +16,7 @@
 import * as React from "react";
 import type { ADOEntraConfig, GitLane, GitProvider, GitProviderKind, LegacyGitLane } from "../../../lib/api/providers";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { GIT_PAT_SCOPE } from "../../wardyn/copy";
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { PERM } from "../../../lib/permissions-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
@@ -399,6 +400,7 @@ function Row({
                     ? "The simplest lane — stored once; brokered at the proxy by default, so it never enters the sandbox."
                     : "The simplest lane — stored once; a per-run helper hands it to git inside the sandbox at clone time."
                 }
+                note={patBrokerEnabled ? undefined : GIT_PAT_SCOPE.BROKER_OFF_NARROWING}
                 connected={!!host && present.includes(patName)}
                 connectedDetail={`${host} · stored as ${patName}`}
                 selected={!!host && credLane === "pat"}

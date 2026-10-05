@@ -86,6 +86,7 @@ vi.mock("sonner", () => ({ toast: { warning: vi.fn(), error: vi.fn(), success: v
 import { RunDetailScreen } from "./run-detail";
 import { RUN_COCKPIT, SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { OperatorProvider } from "../wardyn/operator-context";
+import { ATTRIBUTED_RULE_SOURCES } from "../wardyn/audit-decision";
 import { toast } from "sonner";
 
 beforeEach(() => {
@@ -528,5 +529,115 @@ describe("RunDetailScreen — the Policy tab", () => {
     await userEvent.setup({ pointerEventsCheck: 0 }).click(await screen.findByRole("button", { name: "View" }));
     expect(await screen.findByTestId("run-policy-tab")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /policy/i })).toHaveAttribute("data-state", "active");
+  });
+});
+
+// deny-f4: beside a refused decision the Audit tab shows who owns the run's
+// policy and how to ask for a change, from the RUN's own `policy`. Only the
+// refusals the policy decided carry it: a builtin guard, an evaluator error and an
+// allow row never do.
+describe("RunDetailScreen — Audit tab Request access remedy", () => {
+  const POLICY = {
+    source: "profile",
+    name: "Contractors",
+    owner: "Platform Security",
+    request_url: "https://example.com/access",
+  };
+  const row = (id: string, action: string, ruleSource: string) => ({
+    id,
+    time: new Date().toISOString(),
+    actor_type: "system",
+    actor: "proxy",
+    action,
+    outcome: "deny",
+    run_id: "run-1",
+    target: `${id}.example.com`,
+    data: { rule_source: ruleSource },
+  });
+  const open = async (run: Record<string, unknown>, rows: unknown[]) => {
+    listAuditMock.mockImplementation((_id: string, action?: unknown) => Promise.resolve(action ? [] : rows));
+    renderRun(run);
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(await screen.findByRole("tab", { name: /audit/i }));
+  };
+
+  it.each([...ATTRIBUTED_RULE_SOURCES])(
+    "renders the remedy beside a refused %s row",
+    async (source) => {
+      await open({ ...RUN, policy: POLICY }, [row("a", "egress.deny", source)]);
+      expect(await screen.findByText(/Owned by Platform Security/)).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: /Request access/ })).toHaveAttribute("href", "https://example.com/access");
+    },
+  );
+
+  it.each(["policy:evaluator-error", "builtin:private-ip", "builtin:dial-failed"])(
+    "renders none beside a refused %s row",
+    async (source) => {
+      await open({ ...RUN, policy: POLICY }, [row("b", "egress.deny", source)]);
+      await screen.findByText("b.example.com");
+      expect(screen.queryByTestId("policy-remedy")).toBeNull();
+    },
+  );
+
+  it("renders none on an allow row that shares a broker rule source, or when the run has no policy", async () => {
+    await open({ ...RUN, policy: POLICY }, [row("c", "egress.allow", "brokered:git")]);
+    await screen.findByText("c.example.com");
+    expect(screen.queryByTestId("policy-remedy")).toBeNull();
+    cleanup();
+    await open(RUN, [row("d", "egress.deny", "policy:denied")]);
+    await screen.findByText("d.example.com");
+    expect(screen.queryByTestId("policy-remedy")).toBeNull();
+  });
+});
+
+// Mock packet M4 (approved 2026-10-03), surface D: a field whose key was
+// destroyed reads "Erased" on the run's own Audit tab, muted and not mono, with
+// the explanation as its title. Nothing else on the row changes.
+describe("RunDetailScreen — erased values on the Audit tab (M4 D)", () => {
+  it("an erased target and an erased data field render as Erased, never as the wire value", async () => {
+    listAuditMock.mockResolvedValue([
+      {
+        id: "e1",
+        time: new Date().toISOString(),
+        run_id: "run-1",
+        actor_type: "human",
+        actor: "me",
+        action: "approval.decide",
+        target: "[erased]",
+        outcome: "success",
+        data: { decision: "APPROVED", reason: "[erased]" },
+      },
+    ]);
+    renderRun(RUN);
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(await screen.findByRole("tab", { name: /audit/i }));
+    const target = await screen.findByText("Erased");
+    expect(target).toHaveAttribute("title", "Erased on request. The event and its place in the log remain.");
+    expect(target).toHaveClass("text-muted-foreground");
+    expect(target).not.toHaveClass("font-mono");
+    expect(screen.getByText("reason: Erased")).toHaveAttribute(
+      "title",
+      "Erased on request. The event and its place in the log remain.",
+    );
+    expect(screen.queryByText("[erased]")).toBeNull();
+    expect(screen.getByText("approval.decide")).toBeInTheDocument();
+  });
+
+  it("a row with nothing erased shows no Erased note", async () => {
+    listAuditMock.mockResolvedValue([
+      {
+        id: "e2",
+        time: new Date().toISOString(),
+        run_id: "run-1",
+        actor_type: "human",
+        actor: "me",
+        action: "approval.decide",
+        target: "api.github.com",
+        outcome: "success",
+        data: { decision: "APPROVED", reason: "looks fine" },
+      },
+    ]);
+    renderRun(RUN);
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(await screen.findByRole("tab", { name: /audit/i }));
+    expect(await screen.findByText("api.github.com")).toBeInTheDocument();
+    expect(screen.queryByText(/Erased/)).toBeNull();
   });
 });

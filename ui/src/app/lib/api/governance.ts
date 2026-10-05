@@ -12,8 +12,16 @@
 // holding four interfaces nothing else imports is a file to keep in sync for no
 // reader. Move them to lib/types/governance.ts the day a second domain needs
 // them.
-import type { CapabilitySubjectType, ConfinementClass, RunPolicySpec } from "../types";
-import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
+import type {
+  CapabilitySubjectType,
+  ConfinementClass,
+  GovernanceChange,
+  PolicyContact,
+  PushRulesSpec,
+  ResourceLimits,
+  RunPolicySpec,
+} from "../types";
+import { asJson, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
 
 // types.GovernanceLimits. ALL are `omitempty` on the wire, so an unrestricted
 // profile arrives with the keys absent — optional here for the same reason,
@@ -31,6 +39,10 @@ export interface GovernanceLimits extends RunLimits {
   deny_user_drive?: boolean;
   // 0/absent is unlimited (R4/F032). The editor's LimitNumberRow writes this.
   max_concurrent_runs?: number;
+  // types.GovernanceLimits.MaxCPUMillis / MaxMemoryMiB — the sandbox CPU and
+  // memory ceilings. 0/absent is unlimited. A CLAMP, like the disk one below.
+  max_cpu_millis?: number;
+  max_memory_mib?: number;
   // types.GovernanceLimits.MaxEphemeralDiskMiB (0.7.2) — the ephemeral scratch
   // ceiling. 0/absent is unlimited. A CLAMP, not a refusal: a run asking for
   // more is capped at dispatch and warned, never 403'd.
@@ -140,7 +152,34 @@ export interface AutonomyResolution {
   bound_by?: AutonomyRubricRowKey[];
 }
 
-// types.GovernanceProfile — one named, assignable ceiling.
+// types.CeilingOverlay (0.8.6) — the part of a RunPolicySpec a composed profile narrows. Every member
+// is optional because PRESENCE is the meaning: absent inherits the base, present (even an empty list) is
+// a value. allowed_methods and azure_devops_capabilities may not be empty (an empty list reads as
+// "everything"; the server refuses it). resources and push_rules are narrowed per field.
+export type CeilingOverlay = Partial<Omit<RunPolicySpec, "resources" | "push_rules">> & {
+  resources?: ResourceLimits;
+  push_rules?: PushRulesSpec;
+};
+
+// types.LimitsOverlay (0.8.6) — CeilingOverlay's counterpart for GovernanceLimits, run-limit fields
+// flat on the object as they are on `limits`.
+export type LimitsOverlay = GovernanceLimits;
+
+// governanceEffective (0.8.6) — what a profile resolves to once composed from its chain. On a
+// standalone profile it is the stored ceiling and limits as resolved. ADMIN surfaces only: `warnings`
+// and `error` carry base-level detail (a base's name) that never reaches a member. `error` is set, and
+// ceiling and limits empty, when the chain cannot be composed.
+export interface GovernanceEffective {
+  ceiling: RunPolicySpec;
+  limits: GovernanceLimits;
+  warnings?: string[];
+  error?: string;
+}
+
+// types.GovernanceProfile — one named, assignable ceiling. A composed profile (overlay set) stores
+// `ceiling: {}` and `limits: {}` and states its policy as base_profile_id (absent: the deployment
+// default) plus overlay and overlay_limits; `effective` is what binds. A write that omits
+// base_profile_id, overlay or overlay_limits keeps the stored value and null clears it.
 export interface GovernanceProfile {
   id: string;
   name: string;
@@ -149,6 +188,12 @@ export interface GovernanceProfile {
   created_at: string;
   updated_at: string;
   created_by?: string;
+  contact?: PolicyContact;
+  base_profile_id?: string;
+  overlay?: CeilingOverlay;
+  overlay_limits?: LimitsOverlay;
+  // governanceProfileView.Effective: on GET /governance and the write responses.
+  effective?: GovernanceEffective;
 }
 
 // types.GovernanceAssignment — one subject bound to one profile.
@@ -174,6 +219,13 @@ export interface GovernanceProfileInput {
   name: string;
   ceiling: RunPolicySpec;
   limits: GovernanceLimits;
+  // Omitted keeps the stored contact; null clears it (internal/api: a PUT that
+  // omits `contact` keeps it, `null` or `{}` clears it).
+  contact?: PolicyContact | null;
+  // Composition (0.8.6): absent keeps the stored value on a PUT, null clears it.
+  base_profile_id?: string | null;
+  overlay?: CeilingOverlay | null;
+  overlay_limits?: LimitsOverlay | null;
 }
 
 // governanceProfileResponse: the saved row plus the OMISSION warnings the
@@ -297,8 +349,10 @@ export const governance = {
   // "already gone" — the row is absent either way, which is what was asked for.
   async deleteProfile(id: string): Promise<void> {
     const res = await wfetch(`/governance/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await throwIfPending(res);
     if (!res.ok && res.status !== 404) {
-      throw new HttpError(res.status, await errText(res));
+      const { message, reason } = await errEnvelope(res);
+      throw new HttpError(res.status, message, reason);
     }
   },
 
@@ -315,6 +369,7 @@ export const governance = {
   // way to widen a principal back to the deployment ceiling.
   async deleteAssignment(id: string): Promise<void> {
     const res = await wfetch(`/governance/assignments/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await throwIfPending(res);
     if (!res.ok && res.status !== 404) {
       throw new HttpError(res.status, await errText(res));
     }
@@ -332,6 +387,31 @@ export const governance = {
   async previewGovernance(input: GovernancePreviewInput): Promise<GovernancePreview> {
     const res = await wfetch("/governance/preview", { method: "POST", body: JSON.stringify(input) });
     return asJson<GovernancePreview>(res);
+  },
+
+  // GET /api/v1/governance/changes -> the pending changes (the server's default state), newest first. A
+  // change of a kind the caller may not approve is not listed.
+  async listChanges(): Promise<GovernanceChange[]> {
+    const res = await wfetch("/governance/changes", { method: "GET" });
+    return unwrapList<GovernanceChange>(await asJson<GovernanceChange[] | null>(res));
+  },
+
+  // POST /api/v1/governance/changes/{id}/approve -> 200 the change, applied. The server judges who may
+  // approve (another human, with the authority to make that write): a 403 or 409 reaches the caller as an
+  // HttpError whose message is its own sentence.
+  async approveChange(id: string): Promise<GovernanceChange> {
+    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/approve`, { method: "POST" });
+    return asJson<GovernanceChange>(res);
+  },
+
+  // POST /api/v1/governance/changes/{id}/reject -> 200 the change, rejected. The reason is optional and is
+  // kept on the change and in the audit trail; the proposer may reject their own change.
+  async rejectChange(id: string, reason: string): Promise<GovernanceChange> {
+    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/reject`, {
+      method: "POST",
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+    return asJson<GovernanceChange>(res);
   },
 };
 

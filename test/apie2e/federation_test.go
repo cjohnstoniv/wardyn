@@ -409,6 +409,14 @@ func TestFederation_OneAuditStream(t *testing.T) {
 		return
 	}
 
+	// resetLaptopAudit is the reset that also restarts the laptop's seq. Since 0111 seq comes from a
+	// standalone sequence and the chain's high-water mark lives in audit_partition_meta, so TRUNCATE ...
+	// RESTART IDENTITY restarts neither; a laptop restored from a backup (the case this models) gets the
+	// sequence and the high-water row back along with the table, which is what the three statements do.
+	const resetLaptopAudit = `TRUNCATE audit_events;
+		ALTER SEQUENCE audit_events_seq RESTART;
+		UPDATE audit_partition_meta SET hw_seq = 0, hw_row_hash = NULL, hw_recorded_at = cutover`
+
 	// purge is a superuser's reset of the laptop's audit table followed by n
 	// new rows: the organisation must record it as a chain reset and hold every
 	// new row, and both cursors must name the new head. reusesSeqs is the case
@@ -458,17 +466,20 @@ func TestFederation_OneAuditStream(t *testing.T) {
 	}
 
 	if !t.Run("a truncated laptop table is a visible chain reset and ingest resumes", func(t *testing.T) {
-		purge(t, `TRUNCATE audit_events`, 5, false, true, 1, fedRows)
+		// The recorded head goes too: the trigger links a new row to it (0130), so a bare
+		// TRUNCATE would chain the new rows to the removed head, not start a genesis.
+		purge(t, `TRUNCATE audit_events;
+			UPDATE audit_partition_meta SET hw_seq = 0, hw_row_hash = NULL, hw_recorded_at = cutover`, 5, false, true, 1, fedRows)
 	}) {
 		return
 	}
 	if !t.Run("a truncate that restarts the laptop's seq is a chain reset, never rows dropped as re-sends", func(t *testing.T) {
-		purge(t, `TRUNCATE audit_events RESTART IDENTITY`, 5, true, false, 2, fedRows+5)
+		purge(t, resetLaptopAudit, 5, true, false, 2, fedRows+5)
 	}) {
 		return
 	}
 	// The cursor is now the fifth post-purge row; eight new rows reach past it.
 	t.Run("a truncate that restarts the laptop's seq and refills past the cursor is a chain reset, never a halt", func(t *testing.T) {
-		purge(t, `TRUNCATE audit_events RESTART IDENTITY`, 8, true, true, 3, fedRows+10)
+		purge(t, resetLaptopAudit, 8, true, true, 3, fedRows+10)
 	})
 }

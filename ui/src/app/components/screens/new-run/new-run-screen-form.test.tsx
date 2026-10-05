@@ -9,8 +9,8 @@
 // the check-file-size.sh ceiling. Its own copy of the screen's mock harness:
 // NewRunScreen imports setup/policies/runs/workspaces/capabilities
 // regardless of which suite mounts it.
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
+import { configure, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -590,11 +590,34 @@ describe("NewRunScreen — Title tracks the task until edited", { timeout: 20_00
 // Phase 3: preflightRun wired into a real caller. Same request payload as
 // Launch (buildRunInput), rendered inline next to the actions instead of
 // blocking them.
-describe("NewRunScreen — Preflight", () => {
+// Budgets measured, not guessed: one of these cases costs ~0.8s of pure render
+// CPU on an idle core, and 6-12s with one or two busy neighbours on it, split
+// between mounting the screen and the re-render that follows each check. The
+// 1s default for findBy/waitFor is shorter than that single re-render on a
+// loaded CI runner, so this block waits up to 10s for the screen to catch up.
+describe("NewRunScreen — Preflight", { timeout: 20_000 }, () => {
+  let savedAsyncUtilTimeout: number | undefined;
+  beforeAll(() => {
+    configure((c) => {
+      savedAsyncUtilTimeout = c.asyncUtilTimeout;
+      return { asyncUtilTimeout: 10_000 };
+    });
+  });
+  afterAll(() => configure({ asyncUtilTimeout: savedAsyncUtilTimeout }));
+
+  // The error alert is re-mounted by every failed check (it keys on an error
+  // counter), and the automatic check fires 800ms after the title edit and
+  // fails the same way, so a node found by findBy can be detached before the
+  // matcher runs. Every error assertion here retries via waitFor instead.
+  //
+  // Looked up at the moment of use, never held across an await: the screen
+  // re-renders as its async reads settle, and on a loaded runner the button
+  // grabbed up front was already detached when pressed, so no check started.
+  const checkAgain = () => screen.getByRole("button", { name: /^Check again$/ });
   async function readyScreen() {
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
-    return screen.getByRole("button", { name: /^Preflight$/ });
+    // One change event, not eleven keystrokes (each re-renders the whole screen).
+    fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Refund flow" } });
   }
 
   it("renders the warnings, risk grade, and enforced confinement class on success", async () => {
@@ -604,8 +627,8 @@ describe("NewRunScreen — Preflight", () => {
       overall_risk: "medium",
       warnings: ["Egress narrowed to api.anthropic.com by member policy."],
     });
-    const button = await readyScreen();
-    await user.click(button);
+    await readyScreen();
+    fireEvent.click(checkAgain());
 
     const result = await screen.findByTestId("preflight-result");
     expect(within(result).getByText("Egress narrowed to api.anthropic.com by member policy.")).toBeInTheDocument();
@@ -620,8 +643,8 @@ describe("NewRunScreen — Preflight", () => {
       overall_risk: "low",
       warnings: [],
     });
-    const button = await readyScreen();
-    await user.click(button);
+    await readyScreen();
+    fireEvent.click(checkAgain());
 
     const result = await screen.findByTestId("preflight-result");
     expect(within(result).getByText(AGENTS.EFFECTIVE_NONE)).toBeInTheDocument();
@@ -631,21 +654,20 @@ describe("NewRunScreen — Preflight", () => {
 
   it("renders the server's field-path error verbatim on a 4xx", async () => {
     preflightRunMock.mockRejectedValue(new Error('workspaces[0]: unknown secret "prod-db"'));
-    const button = await readyScreen();
-    await user.click(button);
+    await readyScreen();
+    fireEvent.click(checkAgain());
 
-    expect(await screen.findByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument());
   });
 
   // #497: the alert speaks the sr-only "Preflight failed" first, so the
   // fallback for an error with no message must not repeat it.
   it("an error with no message falls back to a sentence that doesn't repeat the spoken prefix", async () => {
     preflightRunMock.mockRejectedValue(new Error(""));
-    const button = await readyScreen();
-    await user.click(button);
+    await readyScreen();
+    fireEvent.click(checkAgain());
 
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(/^Preflight failed No reason was given\.$/);
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/^Preflight failed No reason was given\.$/));
   });
 
   it("disables the button and shows a loading spinner while in flight", async () => {
@@ -655,12 +677,12 @@ describe("NewRunScreen — Preflight", () => {
         resolve = r;
       }),
     );
-    const button = await readyScreen();
-    await user.click(button);
+    await readyScreen();
+    fireEvent.click(checkAgain());
 
-    expect(button).toBeDisabled();
+    expect(checkAgain()).toBeDisabled();
     resolve({ setup_items: [], enforced_confinement_class: "CC1", warnings: [] });
-    await waitFor(() => expect(button).toBeEnabled());
+    await waitFor(() => expect(checkAgain()).toBeEnabled());
   });
 
   // The verdict sits directly above Launch, "the last thing read
@@ -675,23 +697,23 @@ describe("NewRunScreen — Preflight", () => {
       overall_risk: "low",
       warnings: [],
     });
-    const button = await readyScreen();
-    await user.click(button);
+    await readyScreen();
+    fireEvent.click(checkAgain());
     expect(await screen.findByTestId("preflight-result")).toBeInTheDocument();
 
     // Any field that reaches the wire body — the title is the cheapest one.
-    await user.type(screen.getByLabelText("Title"), " v2 PROD");
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Refund flow v2 PROD" } });
 
     await waitFor(() => expect(screen.queryByTestId("preflight-result")).toBeNull());
   });
 
   it("drops a preflight ERROR on the same edit — it graded a body that no longer exists", async () => {
     preflightRunMock.mockRejectedValue(new Error('workspaces[0]: unknown secret "prod-db"'));
-    const button = await readyScreen();
-    await user.click(button);
-    expect(await screen.findByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument();
+    await readyScreen();
+    fireEvent.click(checkAgain());
+    await waitFor(() => expect(screen.getByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument());
 
-    await user.type(screen.getByLabelText("Title"), " v2 PROD");
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Refund flow v2 PROD" } });
 
     await waitFor(() =>
       expect(screen.queryByText('workspaces[0]: unknown secret "prod-db"')).toBeNull(),

@@ -11,10 +11,9 @@
 import { CC_ORDER, type ConfinementClass } from "../../../lib/types";
 import { ccRank } from "./new-run-primitives";
 import { CC_META } from "../../wardyn/cc-meta";
-import { POLICY_TEMPLATES } from "../../wardyn/policy-panel";
+import { minimalSpec } from "../../wardyn/policy-panel";
+import type { SetupModelProvider } from "../../../lib/types";
 import type { WizardAgent, WizardState } from "./wizard-types";
-
-const MINIMAL = POLICY_TEMPLATES.find((t) => t.id === "minimal")!;
 
 // The body a fresh Custom policy opens with, and what a cleared saved-policy
 // selection resets to: a valid, editable floor rather than a blank document
@@ -23,8 +22,8 @@ const MINIMAL = POLICY_TEMPLATES.find((t) => t.id === "minimal")!;
 // at or above the floor), and CC1 is the one floor every host can build, so
 // the document this opens with is never itself the reason a fresh Custom
 // edit can't launch.
-export function defaultSpecText(): string {
-  return JSON.stringify({ ...MINIMAL.spec, min_confinement_class: "CC1" }, null, 2);
+export function defaultSpecText(providers?: readonly SetupModelProvider[]): string {
+  return JSON.stringify({ ...minimalSpec(providers), min_confinement_class: "CC1" }, null, 2);
 }
 
 // A saved-policy body comes back REDACTED for anyone who is NOT security-tier
@@ -45,9 +44,10 @@ export function clearedSpecOnCustomSwitch(
   active: boolean,
   keepsRealBody: boolean,
   hadSelection: boolean,
+  providers?: readonly SetupModelProvider[],
 ): string | undefined {
   if (active || keepsRealBody || !hadSelection) return undefined;
-  return defaultSpecText();
+  return defaultSpecText(providers);
 }
 
 // codex-cli has no external tool-approval contract (buildSpec already

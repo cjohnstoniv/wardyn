@@ -373,7 +373,7 @@ func (s *Server) stepRunCeilingLimits(ctx context.Context, actor string, gov ste
 	// it — there is no request shape here to inspect.
 	if ceiling.Limits.DenyInteractive && gov.interactive {
 		//lint:ignore ST1005 canon member sentence (docs/design/governance-prompt.md limits table), pinned verbatim by governance_limits_test.go; it ends the way the doc writes it
-		return fmt.Errorf("%w: interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.", errRecordCeilingLimit, name)
+		return recordCeilingError{fmt.Errorf("%w: interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.", errRecordCeilingLimit, name), s.ceilingPolicy(ctx, ceiling)}
 	}
 	if limit := ceiling.Limits.MaxConcurrentRuns; limit > 0 && gov.counted {
 		active, err := s.cfg.Store.CountActiveRunsBy(ctx, actor)
@@ -382,7 +382,7 @@ func (s *Server) stepRunCeilingLimits(ctx context.Context, actor string, gov ste
 		}
 		if active >= limit {
 			//lint:ignore ST1005 canon member sentence (docs/design/governance-prompt.md limits table), pinned verbatim by governance_limits_test.go; it ends the way the doc writes it
-			return fmt.Errorf("%w: too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.", errRecordCeilingLimit, limit, name, active)
+			return recordCeilingError{fmt.Errorf("%w: too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.", errRecordCeilingLimit, limit, name, active), s.ceilingPolicy(ctx, ceiling)}
 		}
 	}
 	return nil

@@ -20,11 +20,27 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// podDeadlineGrace is added to Config.RunMaxAge to make a run pod's
+// activeDeadlineSeconds. The control plane's own max-age stop fires first and
+// tears the run down; the deadline is the backstop for a run whose control
+// plane is gone, so the grace only has to outlast the reaper's scan interval.
+const podDeadlineGrace = 10 * time.Minute
+
+// activeDeadline returns the pod deadline for Config.RunMaxAge, or nil when no
+// max age is set. activeDeadlineSeconds fails a pod and deletes nothing: the
+// reconciler finalizes the run from the failed pod and tears the rest down.
+func (d *Driver) activeDeadline() *int64 {
+	if d.cfg.RunMaxAge <= 0 {
+		return nil
+	}
+	secs := int64((d.cfg.RunMaxAge + podDeadlineGrace) / time.Second)
+	return &secs
+}
 
 // proxyConfigSecretKey is the Secret data key CreateSandbox writes the proxy
 // config JSON under.
@@ -206,8 +222,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 
 	// (4) Proxy pod, then poll until it is ready and has its CNI-assigned IP.
 	proxyPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: proxyPodName(spec.RunID), Namespace: ns, Labels: wardynLabels(spec.RunID, componentProxy, spec.Labels)},
+		ObjectMeta: metav1.ObjectMeta{Name: proxyPodName(spec.RunID), Namespace: ns},
 		Spec: corev1.PodSpec{
+			ActiveDeadlineSeconds:        d.activeDeadline(),
 			AutomountServiceAccountToken: boolPtr(false),
 			// FSGroup makes proxyConfigSecretFileMode's group-read bit effective
 			// for the init container; without it, "permission denied".
@@ -228,7 +245,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 					{Name: proxyConfigStagedVolumeName, MountPath: proxyConfigStagedMountDir},
 				},
 				SecurityContext: restrictedSecurityContext(),
-				Resources:       proxyResources(),
+				Resources:       proxyResources(false),
 				// The binary logs its refusal to stderr, not /dev/termination-log;
 				// without this proxyStartFailure's error names no cause.
 				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
@@ -247,7 +264,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 					{Name: proxyConfigStagedVolumeName, MountPath: proxyConfigStagedMountDir, ReadOnly: true},
 				},
 				SecurityContext:          restrictedSecurityContext(),
-				Resources:                proxyResources(),
+				Resources:                proxyResources(len(spec.ProxyConfig.AzureGates) > 0),
 				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 			}},
 			Volumes: []corev1.Volume{
@@ -279,11 +296,14 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if d.cfg.ImagePullSecret != "" {
 		proxyPod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
 	}
-	if _, err := d.clientset.CoreV1().Pods(ns).Create(ctx, proxyPod, metav1.CreateOptions{}); err != nil {
+	d.placement.apply(proxyPod, spec.RunID, componentProxy, spec.Labels)
+	createdProxy, err := d.clientset.CoreV1().Pods(ns).Create(ctx, proxyPod, metav1.CreateOptions{})
+	if err != nil {
 		return fail(fmt.Errorf("k8s: create proxy pod: %w", err))
 	}
 
-	proxyIP, err := d.waitPodIP(ctx, proxyPodName(spec.RunID), spec.NotifyWaiting)
+	clock := d.newStartClock()
+	proxyIP, err := d.waitPodIP(ctx, clock, proxyPodName(spec.RunID), spec.NotifyWaiting)
 	if err != nil {
 		return fail(fmt.Errorf("k8s: proxy pod never became ready: %w", err))
 	}
@@ -300,8 +320,13 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			slog.Int64("pids_limit", spec.Resources.PidsLimit), slog.String("run_id", spec.RunID.String()))
 	}
 	agentPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: agentPodName(spec.RunID), Namespace: ns, Labels: wardynLabels(spec.RunID, componentAgent, spec.Labels)},
+		// The agent is owned by the proxy pod, so deleting the proxy by any route (Destroy, the
+		// sweep, kubectl, a node drain) garbage-collects the agent with it. The reference needs the
+		// proxy's UID, which exists now; the reverse (proxy owned by agent) cannot be set at create.
+		// No BlockOwnerDeletion: that would need an extra permission on pods/finalizers.
+		ObjectMeta: metav1.ObjectMeta{Name: agentPodName(spec.RunID), Namespace: ns, OwnerReferences: ownedByPod(createdProxy)},
 		Spec: corev1.PodSpec{
+			ActiveDeadlineSeconds:        d.activeDeadline(),
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
 			EnableServiceLinks:           boolPtr(false), // SECURITY: same service-topology-leak reason as the proxy pod above.
@@ -344,6 +369,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if d.cfg.ImagePullSecret != "" {
 		agentPod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
 	}
+	d.placement.apply(agentPod, spec.RunID, componentAgent, spec.Labels)
 	if _, err := d.clientset.CoreV1().Pods(ns).Create(ctx, agentPod, metav1.CreateOptions{}); err != nil {
 		return fail(fmt.Errorf("k8s: create agent pod: %w", err))
 	}
@@ -352,7 +378,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// the sandbox out: a k8s Pod Create is purely declarative, unlike
 	// docker's ContainerStart, so a caller racing straight into
 	// Attach/ExecStream would hit "container not found" against a pod still Pending.
-	if err := d.waitContainerRunning(ctx, agentPodName(spec.RunID), mainContainerName, spec.NotifyWaiting); err != nil {
+	if err := d.waitContainerRunning(ctx, clock, agentPodName(spec.RunID), mainContainerName, spec.NotifyWaiting); err != nil {
 		return fail(fmt.Errorf("k8s: agent pod's main container never started: %w", err))
 	}
 
@@ -360,6 +386,15 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		d.execOutputs.Store(agentPodName(spec.RunID), spec.ExecOutput)
 	}
 	return runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced}, nil
+}
+
+// ownedByPod is the ownerReference list that makes a pod owned by owner, or nil when the API
+// returned no UID (a real API server always does; a UID-less reference would be refused).
+func ownedByPod(owner *corev1.Pod) []metav1.OwnerReference {
+	if owner == nil || owner.UID == "" {
+		return nil
+	}
+	return []metav1.OwnerReference{{APIVersion: "v1", Kind: "Pod", Name: owner.Name, UID: owner.UID}}
 }
 
 // addMainContainerVolumes attaches vols to pod and mounts them on the MAIN
@@ -378,8 +413,8 @@ func addMainContainerVolumes(pod *corev1.Pod, vols []corev1.Volume, mounts []cor
 }
 
 // waitContainerRunning polls podName until its named container reports
-// Running, using canaryWaitTimeout (not the tighter podIPWaitTimeout) since
-// the agent image, unlike the proxy's, may need a fresh first pull.
+// Running, bounded by clock: the sandbox's one absolute start deadline, which the
+// proxy's wait has already been spending (see startClock).
 //
 // On timeout it reports WHY via the captured lastPod, since a re-fetch on a
 // dead context returns nothing and a pod stuck Pending has no container
@@ -387,20 +422,22 @@ func addMainContainerVolumes(pod *corev1.Pod, vols []corev1.Volume, mounts []cor
 //
 // onWaiting (nil-safe) gets that reason while waiting, once per change — see
 // runner.SandboxSpec.OnWaiting.
-func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerName string, onWaiting func(string)) error {
+func (d *Driver) waitContainerRunning(ctx context.Context, clock *startClock, podName, containerName string, onWaiting func(string)) error {
 	var lastPod *corev1.Pod
+	var lastGetErr error
 	// Last reason REPORTED, so the report fires on change, not on a tick.
 	var lastReason string
 	var pulls pullWatch
-	err := wait.PollUntilContextTimeout(ctx, k8sPollInterval, canaryWaitTimeout, true, func(pollCtx context.Context) (bool, error) {
+	err := clock.poll(ctx, func(pollCtx context.Context) (bool, bool, error) {
 		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(pollCtx, podName, metav1.GetOptions{})
-		if isClientThrottled(gerr) {
-			return false, nil
+		if tolerateGetError(gerr, &lastGetErr) {
+			return false, false, nil
 		}
 		if gerr != nil {
-			return false, gerr
+			return false, false, gerr
 		}
 		lastPod = pod
+		room := clock.observe(pod)
 		reason := waitingReason(pod)
 		if pulling := d.pullingDetail(pollCtx, pod, containerName, &pulls); pulling != "" {
 			reason = pulling
@@ -416,19 +453,19 @@ func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerNam
 				continue
 			}
 			if cs.State.Running != nil {
-				return true, nil
+				return true, room, nil
 			}
 			// A container that crashes before ever reaching Running must fail
 			// fast here, or it burns the full timeout polling.
 			if t := cs.State.Terminated; t != nil {
-				return false, fmt.Errorf("%s container terminated before ever reaching Running (exit code %d): %s", containerName, t.ExitCode, t.Message)
+				return false, room, fmt.Errorf("%s container terminated before ever reaching Running (exit code %d): %s", containerName, t.ExitCode, t.Message)
 			}
 			if w := cs.State.Waiting; w != nil && terminalWaitingReasons[w.Reason] {
-				return false, fmt.Errorf("%s container stuck waiting (%s): %s", containerName, w.Reason, w.Message)
+				return false, room, fmt.Errorf("%s container stuck waiting (%s): %s", containerName, w.Reason, w.Message)
 			}
 			break
 		}
-		return false, nil
+		return false, room, nil
 	})
 	// Only a TIMEOUT is enriched: the poll's own errors already name their
 	// cause, and a Get failure is about the apiserver, not the pod.
@@ -437,15 +474,7 @@ func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerNam
 			return fmt.Errorf("%w (%s)", err, why)
 		}
 	}
-	return err
-}
-
-// isClientThrottled reports client-go's own rate-limiter refusal, which does
-// not wrap context.DeadlineExceeded; treated as "not yet" so the poll ends on
-// its own deadline and enrichment still runs. String match on client-go's
-// wrapper text; degrades to pass-through if upstream renames it.
-func isClientThrottled(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "client rate limiter Wait returned an error")
+	return withLastGetError(err, lastGetErr)
 }
 
 // podStuckReason renders why a pod never started, from the last status the
@@ -529,21 +558,24 @@ func (d *Driver) resolveRuntimeClassName(ctx context.Context, class types.Confin
 // CreateSandbox blocks on, so on a cluster with nowhere to schedule it's the
 // one a person sits through.
 //
-// Two bounds: the IP (scheduling) within podIPWaitTimeout, then Ready within
-// canaryWaitTimeout overall, the agent image's pull bound — a node the boot
-// canary never ran on pulls the proxy image cold, possibly queued behind
-// another run's agent pull.
-func (d *Driver) waitPodIP(ctx context.Context, podName string, onWaiting func(string)) (string, error) {
+// One bound, clock's: absolute across the proxy and the agent, so an
+// unplaceable proxy waits for room under the same deadlines the agent does
+// rather than failing on a deadline of its own.
+func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, podName string, onWaiting func(string)) (string, error) {
 	var ip string
 	var lastPod *corev1.Pod
+	var lastGetErr error
 	var lastReason string
-	ipDeadline := time.Now().Add(podIPWaitTimeout)
-	err := wait.PollUntilContextTimeout(ctx, k8sPollInterval, canaryWaitTimeout, true, func(pollCtx context.Context) (bool, error) {
+	err := clock.poll(ctx, func(pollCtx context.Context) (bool, bool, error) {
 		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(pollCtx, podName, metav1.GetOptions{})
+		if tolerateGetError(gerr, &lastGetErr) {
+			return false, false, nil
+		}
 		if gerr != nil {
-			return false, gerr
+			return false, false, gerr
 		}
 		lastPod = pod
+		room := clock.observe(pod)
 		if reason := waitingReason(pod); reason != lastReason {
 			lastReason = reason
 			if onWaiting != nil {
@@ -551,21 +583,18 @@ func (d *Driver) waitPodIP(ctx context.Context, podName string, onWaiting func(s
 			}
 		}
 		if err := proxyStartFailure(pod); err != nil {
-			return false, err
+			return false, room, err
 		}
 		if pod.Status.PodIP == "" {
-			if time.Now().After(ipDeadline) {
-				return false, fmt.Errorf("proxy pod got no IP within %s: %w", podIPWaitTimeout, context.DeadlineExceeded)
-			}
-			return false, nil
+			return false, room, nil
 		}
 		for _, cs := range pod.Status.ContainerStatuses {
 			if cs.Name == proxyContainerName && cs.Ready {
 				ip = pod.Status.PodIP
-				return true, nil
+				return true, room, nil
 			}
 		}
-		return false, nil
+		return false, room, nil
 	})
 	if errors.Is(err, context.DeadlineExceeded) && lastPod != nil {
 		// A container's own Waiting reason first: podStuckReason reads only the
@@ -574,7 +603,7 @@ func (d *Driver) waitPodIP(ctx context.Context, podName string, onWaiting func(s
 			return "", fmt.Errorf("%w (%s)", err, why)
 		}
 	}
-	return ip, err
+	return ip, withLastGetError(err, lastGetErr)
 }
 
 // proxyStartFailure is non-nil once the proxy pod is in a state waiting cannot

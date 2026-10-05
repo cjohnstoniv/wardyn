@@ -30,6 +30,7 @@ import path from "node:path";
 
 import { expect, type Locator, type Page } from "@playwright/test";
 import { act, beat, caption, centerInFrame, ffwdEnd, ffwdStart, PACE, spotlight } from "./overlay";
+import { termText } from "../terminal-text";
 
 // Sandboxes are real containers — every deep-driven demo launches one. Minutes,
 // not seconds. Ceilings for waiting on the PRODUCT; the pacing the viewer sees
@@ -225,7 +226,7 @@ export async function startAndBoot(page: Page, card: Locator, id: string): Promi
  *  innerText is the exact signal the viewer sees. */
 export async function pollScreen(screen: Locator, re: RegExp, message: string): Promise<void> {
   await expect
-    .poll(async () => await screen.innerText().catch(() => "<no .xterm-screen>"), { timeout: COMMAND_ECHOES, message })
+    .poll(async () => await termText(screen).catch(() => "<no .xterm-screen>"), { timeout: COMMAND_ECHOES, message })
     .toMatch(re);
 }
 

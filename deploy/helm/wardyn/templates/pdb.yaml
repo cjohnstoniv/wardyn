@@ -1,0 +1,16 @@
+{{- if and .Values.ha .Values.ha.enabled }}
+# High availability: a voluntary disruption (a node drain) never takes the last
+# ready replica. It does not help a node that fails outright, which anti-affinity
+# and the replica count cover.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "wardyn.fullname" . }}
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "wardyn.selectorLabels" . | nindent 6 }}
+{{- end }}

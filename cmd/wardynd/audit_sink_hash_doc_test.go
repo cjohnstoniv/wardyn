@@ -49,7 +49,7 @@ func TestAuditSinkHashClaimIsQualified(t *testing.T) {
 	// A nil pool is enough: nothing here writes to Postgres, and the drain
 	// recorder's identity is decided at wiring time.
 	_, fan, _, drainRec, err := buildAuditChain(context.Background(), string(cfg),
-		filepath.Join(dir, "spool.jsonl"), "", nil, nil)
+		filepath.Join(dir, "spool.jsonl"), "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildAuditChain: %v", err)
 	}
@@ -59,6 +59,11 @@ func TestAuditSinkHashClaimIsQualified(t *testing.T) {
 
 	// (1) The drain replays into the raw store recorder, so a spooled event is
 	// never streamed a second time, chained or otherwise.
+	// The drain recorder is the store recorder behind sealingRecorder's replay mode,
+	// which only re-seals rows that waited under the pending key.
+	if sr, ok := drainRec.(sealingRecorder); ok && sr.replay {
+		drainRec = sr.inner
+	}
 	if _, isFanout := drainRec.(fanoutRecorder); isFanout {
 		t.Error("the spool drain now records through the fanout — spooled events DO reach the sinks on replay, " +
 			"so OPERATIONS.md's qualified claim understates the guarantee; re-widen the doc deliberately")

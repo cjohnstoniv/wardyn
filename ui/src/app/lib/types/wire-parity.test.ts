@@ -217,6 +217,30 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 
+  // 0.8.6 fleet-fl4: GET /admin/runs/capacity. The store structs (RunCapacityRunner
+  // embeds RunCapacitySums, so its own tag set is `basis`, and the TS interface
+  // extends the sums), then the handler's envelope: an anonymous struct embedding
+  // store.RunCapacity, so the response's keys are RunCapacity's plus its two.
+  it.each([
+    ["RunCapacitySums", "RunCapacitySums"],
+    ["RunCapacityRunner", "RunCapacityRunner"],
+    ["RunCapacityOwner", "RunCapacityOwner"],
+    ["RunCapacityAge", "RunCapacityAge"],
+    ["RunCapacityUnschedulable", "RunCapacityUnschedulable"],
+    ["RunCapacity", "RunCapacity"],
+  ])("%s (GET /admin/runs/capacity): full parity with the TS mirror", (goName, tsName) => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/store/store_run_capacity.go"), "utf8"), goName);
+    expect(goTags.length).toBeGreaterThanOrEqual(1);
+    expect(new Set(tsInterfaceTopKeys(runsTs, tsName))).toEqual(new Set(goTags));
+  });
+
+  it("RunCapacityResponse (GET /admin/runs/capacity): the handler adds generated_at and basis to RunCapacity", () => {
+    const handlerGo = readFileSync(join(root, "internal/api/runs_capacity.go"), "utf8");
+    expect(handlerGo).toMatch(/GeneratedAt time\.Time\s+`json:"generated_at"`/);
+    expect(handlerGo).toMatch(/Basis\s+string\s+`json:"basis"`\n\t\tstore\.RunCapacity\n/);
+    expect(new Set(tsInterfaceTopKeys(runsTs, "RunCapacityResponse"))).toEqual(new Set(["generated_at", "basis"]));
+  });
+
   // #1215: GET /branding/settings is the public subset (brandingPublic, embedded)
   // plus brandingSettings' own keys, which is everything the TS Branding mirror
   // declares — logo_from_file, the read-only file-delivered mark, included.
@@ -288,5 +312,26 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(goTags.length).toBeGreaterThanOrEqual(2);
     const adoPatTs = readFileSync(join(root, "ui/src/app/lib/types/ado-pat.ts"), "utf8");
     expect(new Set(tsInlineKeys(adoPatTs, "ADOPATAccess", "last_token"))).toEqual(new Set(goTags));
+  });
+
+  // GET /runs/{id}/output: RunOutput mirrors runOutputResponse.
+  it("runOutputResponse (GET /runs/{id}/output): full parity with the TS RunOutput mirror", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/api/run_output.go"), "utf8"), "runOutputResponse");
+    expect(goTags.length).toBeGreaterThanOrEqual(7);
+    const outTs = readFileSync(join(root, "ui/src/app/lib/types/run-output.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(outTs, "RunOutput"))).toEqual(new Set(goTags));
+  });
+
+  // Key custody (key-l3.4): GET /key-domains and the key-domain fields of the credential inventory.
+  it.each([
+    ["internal/api/key_domains.go", "keyDomainRow", "key-domains.ts", "KeyDomainRow"],
+    ["internal/api/key_domains.go", "keyDomainsResponse", "key-domains.ts", "KeyDomains"],
+    ["internal/secretstore/keydomain/service.go", "Assignment", "key-domains.ts", "KeyDomainAssignment"],
+    ["internal/api/credential_inventory.go", "credentialInventoryRow", "credentials.ts", "CredentialRow"],
+  ])("%s %s: full parity with the TS %s mirror", (goFile, goName, tsFile, tsName) => {
+    const goTags = goJSONTags(readFileSync(join(root, goFile), "utf8"), goName);
+    expect(goTags.length).toBeGreaterThanOrEqual(3);
+    const ts = readFileSync(join(root, "ui/src/app/lib/api", tsFile), "utf8");
+    expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
   });
 });

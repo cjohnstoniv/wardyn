@@ -41,6 +41,7 @@ var adminTokenCompareAllowed = map[string]string{
 	"internal/api/reserved_principal.go|return p == adminTokenPrincipal || (op != \"\" && p == op) ||":                                                        "the reserved set itself",
 	"internal/api/approvals_second_human.go|if actorType == types.ActorSystem && principal == adminTokenPrincipal {":                                          "break-glass, paired with the typed ActorSystem",
 	"internal/api/approvals_decidable.go|if actorType == types.ActorSystem && principal == adminTokenPrincipal {":                                             "#1197: mayDecide's read-only mirror of the same break-glass, paired with the typed ActorSystem",
+	"internal/api/governance_change_gate.go|return actorType == types.ActorSystem && principal == adminTokenPrincipal":                                        "the governance four-eyes break-glass, copied from requireSecondHuman and paired with the typed ActorSystem",
 	"internal/api/model_provider_credentials.go|if owner == \"\" || (s.cfg.OIDC != nil && owner == adminTokenPrincipal) {":                                    "refuses the mechanism a credential of its own",
 	"internal/api/provider_access.go|return owner == \"\" || (s.cfg.OIDC != nil && owner == adminTokenPrincipal)":                                             "grades the mechanism as holding no credential",
 	"internal/api/provider_bedrock.go|case owner == \"\" || (s.cfg.OIDC != nil && owner == adminTokenPrincipal):":                                             "refuses the mechanism a Bedrock credential",

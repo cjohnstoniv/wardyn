@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -350,6 +351,10 @@ func canonicalGrantValue(capability, value string) (string, error) {
 // happened: 201 for a genuinely new row, 200 when an existing one was
 // updated (the console's DUPLICATE copy). securityOps (routes.go).
 func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Request) {
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
 	var req grantWriteRequest
 	if !decodeStrict(w, r, &req) {
 		return
@@ -371,6 +376,10 @@ func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Requ
 	// A fresh candidate id: UpsertCapabilityGrant returns the EXISTING row's id
 	// on a natural-key conflict, never this one — comparing the two is how the
 	// handler tells created from updated without a separate existence read.
+	if mode == govQueue {
+		s.holdGrantUpsert(w, r, g)
+		return
+	}
 	g.ID = uuid.New()
 	g.CreatedBy = principalFromRequest(r)
 	saved, err := s.cfg.Store.UpsertCapabilityGrant(r.Context(), g)
@@ -383,13 +392,10 @@ func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Requ
 		action, status = "capability.grant.update", http.StatusOK
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		action, saved.ID.String(), "success", mustJSON(map[string]any{
-			"subject_type": saved.SubjectType,
-			"subject":      saved.Subject,
-			"capability":   saved.Capability,
-			"value":        saved.Value,
-			"effect":       saved.Effect,
-		})))
+		action, saved.ID.String(), "success", mustJSON(grantAuditData(saved))))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindGrant, saved.ID.String(), "success", nil)
+	}
 	writeJSON(w, status, saved)
 }
 
@@ -398,8 +404,17 @@ func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Requ
 // unknown id is the whole story (no existence oracle to protect: an admin
 // already sees the full table via GET /permissions).
 func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Request) {
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
 	id, ok := parseIDParam(w, r, "id", "capability grant")
 	if !ok {
+		return
+	}
+	if mode == govQueue {
+		// Never exempt: deleting a deny grant widens.
+		s.holdGrantDelete(w, r, id)
 		return
 	}
 	if err := s.cfg.Store.DeleteCapabilityGrant(r.Context(), id); err != nil {
@@ -411,6 +426,9 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"capability.grant.delete", id.String(), "success", nil))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindGrant, id.String(), "success", nil)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -427,10 +445,14 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 // If-Match (etag.go) is optional optimistic concurrency on top of this
 // whole-map replace: an absent header behaves exactly as before, a present
 // one that no longer matches GET /permissions's current Enforcement ETag is
-// refused with 412 before the write reaches the store. capEnforcementMu
-// (server.go) makes the check-then-write atomic against a second overlapping
-// PUT on this process.
+// refused with 412 before the write reaches the store. the
+// capability-enforcement lock (locks.go) makes the check-then-write atomic
+// against a second overlapping PUT on any replica.
 func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.Request) {
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
 	var body map[string]bool
 	if !decodeStrict(w, r, &body) {
 		return
@@ -441,8 +463,16 @@ func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.R
 			return
 		}
 	}
-	s.capEnforcementMu.Lock()
-	defer s.capEnforcementMu.Unlock()
+	if mode == govQueue {
+		// Turning enforcement on lets grants through, so no replacement is exempt.
+		s.holdEnforcement(w, r, body)
+		return
+	}
+	r, unlock, ok := s.lockDoor(w, r, db.CapEnforcementLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
 	existing, err := s.cfg.Store.GetCapabilityEnforcement(r.Context())
 	if err != nil {
 		writeServerError(w, r, "get existing capability enforcement", err)
@@ -460,6 +490,9 @@ func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.R
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"capability.enforcement.write", "capability_enforcement", "success", mustJSON(saved)))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindEnforcement, govEnforcementKey, "success", nil)
+	}
 	w.Header().Set("ETag", computeETag(saved))
 	writeJSON(w, http.StatusOK, saved)
 }

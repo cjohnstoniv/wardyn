@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -209,8 +210,11 @@ func (s *Server) createADOPAT(ctx context.Context, cfg ADOEntraConfig, owner, or
 	case err == nil:
 		// Masked process-wide under its own name until it expires: one name per
 		// token, so registering it never retires the sign-in's own values.
-		if s.cfg.MaskRegistry != nil {
-			s.cfg.MaskRegistry.AddGlobalUntil(owner, "ado-pat-"+pat.AuthorizationID, s.cfg.Now(), pat.ValidTo, []byte(pat.Token))
+		if merr := s.cfg.MaskRegistry.AddGlobalUntil(owner, "ado-pat-"+pat.AuthorizationID, s.cfg.Now(), pat.ValidTo, []byte(pat.Token)); merr != nil {
+			// The token exists at Azure DevOps but is not on record for masking, so
+			// it is not handed out; it lapses at its own expiry.
+			slog.ErrorContext(ctx, "wardynd: a minted Azure DevOps token could not be recorded for masking; discarding it", slog.Any("err", merr))
+			return adoPAT{}, fmt.Errorf("%w: %v", ErrADOEntraUnavailable, merr)
 		}
 		s.noteADOMintBlocked(ctx, cfg.RowID, owner, false)
 	}
@@ -234,7 +238,11 @@ func (s *Server) revokeADOPAT(ctx context.Context, cfg ADOEntraConfig, owner, or
 // under the redemption lock and on a fresh read, so it cannot overwrite a
 // rotation. Best-effort: the caller's answer does not depend on it.
 func (s *Server) noteADOMintBlocked(ctx context.Context, rowID, owner string, blocked bool) {
-	unlock := s.adoEntra.lock(owner, rowID)
+	ctx, unlock, err := s.lockADOSignIn(ctx, owner, rowID)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: could not take the sign-in lock to record a blocked mint; leaving the mark as it was", slog.Any("err", err))
+		return
+	}
 	defer unlock()
 	blob, found, err := s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeADORefresh), owner, rowID)
 	if err != nil || !found || (!blocked && blob.MintBlockedAt.IsZero()) {

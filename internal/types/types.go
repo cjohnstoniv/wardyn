@@ -348,6 +348,11 @@ type ApprovalRequest struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	Held      bool       `json:"held,omitempty"` // Held/HeldUntil project approval.Hold(this, now) at response time, never stored; both zero on a DECIDED row
 	HeldUntil *time.Time `json:"held_until,omitempty"`
+	// EscalationTier is the highest notification tier whose due time has passed, and SLADueAt is the
+	// next tier's due time. Both are projected from approval_notifications at response time on PENDING
+	// rows only, never stored; tier 0 (the first notice) and "no later tier" leave them zero.
+	EscalationTier int16      `json:"escalation_tier,omitempty"`
+	SLADueAt       *time.Time `json:"sla_due_at,omitempty"`
 }
 
 // ApprovalDecision is what a human (or the sweeper, for a stale-PENDING expiry) is deciding,
@@ -436,8 +441,12 @@ type APIToken struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt       *time.Time `json:"revoked_at,omitempty"`
-	MintedBy        string     `json:"minted_by,omitempty"` // admin who minted this for its owner; empty when the owner minted it
-	Token           string     `json:"token,omitempty"`     // plaintext, create response ONLY
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"` // nil = never expires; an expired token authenticates nothing
+	MintedBy        string     `json:"minted_by,omitempty"`  // admin who minted this for its owner; empty when the owner minted it
+	Token           string     `json:"token,omitempty"`      // plaintext, create response ONLY
+	// IdentityStampedAt is when Role and Groups were last stamped: at mint, then at each sign-in of
+	// the owner. Nil reads as stale under WARDYN_ROLE_STAMP_TTL. Never on the wire.
+	IdentityStampedAt *time.Time `json:"-"`
 }
 
 // Person is an identity an admin created or confirmed before its first sign-in, keyed by the
@@ -452,6 +461,33 @@ type Person struct {
 	CreatedBy       string     `json:"created_by"`
 	CreatedAt       time.Time  `json:"created_at"`
 	FirstSignedInAt *time.Time `json:"first_signed_in_at,omitempty"`
+}
+
+// PersonSummary is one row of GET /people: a person this deployment knows, with the counts behind
+// the leaver actions. ActiveSessions is 0 or 1: sessions are stateless cookies, so it says whether
+// the last sign-in could still hold a live one, not how many cookies are out. Role is the role the
+// person's email and last verified groups derive: "denied" when sign-in would refuse them, "unknown"
+// when that sign-in's groups were truncated, and empty when sign-in is not SSO.
+type PersonSummary struct {
+	Principal       string     `json:"principal"`
+	Email           string     `json:"email,omitempty"`
+	IssuerKind      string     `json:"issuer_kind"`
+	PreCreated      bool       `json:"pre_created"`
+	FirstSignedInAt *time.Time `json:"first_signed_in_at,omitempty"`
+	LastSignedInAt  *time.Time `json:"last_signed_in_at,omitempty"`
+	DeactivatedAt   *time.Time `json:"deactivated_at,omitempty"`
+	Role            string     `json:"role,omitempty"`
+	ActiveSessions  int        `json:"active_sessions"`
+	APITokens       int        `json:"api_tokens"`
+	SSHKeys         int        `json:"ssh_keys"`
+	Credentials     int        `json:"credentials"`
+	ActiveRuns      int        `json:"active_runs"`
+}
+
+// PersonList is one page of GET /people. NextCursor is empty on the last page.
+type PersonList struct {
+	People     []PersonSummary `json:"people"`
+	NextCursor string          `json:"next_cursor,omitempty"`
 }
 
 // RecordingMaxParts bounds how many parts one run's session recording may be

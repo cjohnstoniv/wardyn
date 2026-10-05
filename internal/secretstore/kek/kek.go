@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"filippo.io/age"
@@ -46,6 +47,26 @@ type KEK interface {
 // transient: an unreachable service is secretstore.ErrUnavailable instead.
 var ErrService = errors.New("key service error")
 
+// ErrAccess is a key service refusing this process (401/403): definitive for rule 21, but about
+// the caller, not the wrap.
+var ErrAccess = errors.New("key service refuses this process's access")
+
+// ErrKeyMissing is a key service that does not hold the key or mount a wrap names: about the
+// service or this process's configuration, never the row.
+var ErrKeyMissing = errors.New("the key service does not hold the key")
+
+// ErrRefused is a Transit wrap that does not open: its version retired by min_decryption_version,
+// a key that is not the one that made it (another Vault with the same mount and key name), or a
+// corrupted wrap, which Vault's answer cannot tell from the other two. Not proof about the row: a
+// reader fails closed and destroys nothing.
+var ErrRefused = errors.New("the key service refuses to open this wrap")
+
+// ErrCorrupt is a wrap that provably does not open under its own key for this row: the local key's
+// AES-GCM refuses it, or a Key Vault wrap is malformed or not signed for this row (its versions are
+// globally unique). The one key failure that is proof about the row, so the only one a reader may
+// destroy anything on.
+var ErrCorrupt = errors.New("the wrap does not open under its key for this row")
+
 // Versioned is a KEK whose key has versions (Vault Transit, Key Vault): each
 // wrap names the version it was made under, and `wardynd -rewrap` moves every
 // row naming any other version onto the latest, so the others can be retired.
@@ -56,6 +77,20 @@ type Versioned interface {
 	WrapVersion(wrapped []byte) (string, error)
 	// LatestVersion is the version a wrap made now would name.
 	LatestVersion(ctx context.Context) (string, error)
+}
+
+// Behind reports whether wrapped, made under the versioned KEK k, names a
+// version other than latest. Unversioned, or with latest "", it never does.
+func Behind(k KEK, wrapped []byte, latest string) (bool, error) {
+	v, ok := k.(Versioned)
+	if !ok || latest == "" {
+		return false, nil
+	}
+	n, err := v.WrapVersion(wrapped)
+	if err != nil {
+		return false, err
+	}
+	return n != latest, nil
 }
 
 // The kek_id prefixes of the key services. A row under one holds nothing an
@@ -72,15 +107,25 @@ func IsServiceID(id string) bool {
 }
 
 // The bind keys: KMS encryption context / Transit associated data a
-// provider is handed.
+// provider is handed. A data-key wrap binds owner and name; a principal-key
+// wrap (PrincipalBind) binds owner, purpose, version and domain instead.
 const (
-	BindOwner = "wardyn:owner"
-	BindName  = "wardyn:name"
+	BindOwner   = "wardyn:owner"
+	BindName    = "wardyn:name"
+	BindPurpose = "wardyn:purpose"
+	BindVersion = "wardyn:version"
+	BindDomain  = "wardyn:domain"
 )
 
 // Bind is the bind map for the row (owner, name). owner "" is the operator.
 func Bind(owner, name string) map[string]string {
 	return map[string]string{BindOwner: owner, BindName: name}
+}
+
+// PrincipalBind is the bind map for one generation of a subject's key. owner
+// is never "": the operator namespace holds boot keys, which are not subject keys.
+func PrincipalBind(owner, purpose string, version int, domain string) map[string]string {
+	return map[string]string{BindOwner: owner, BindPurpose: purpose, BindVersion: strconv.Itoa(version), BindDomain: domain}
 }
 
 // DEKSize is the data key length: AES-256.
@@ -206,7 +251,7 @@ func NewLocalPurpose(identity *age.X25519Identity, purpose string) (*Local, erro
 func localRecipient(identity *age.X25519Identity) (string, error) {
 	recipient := identity.Recipient().String()
 	if _, err := age.ParseX25519Recipient(recipient); err != nil {
-		return "", errors.New("local KEK: the age identity has no public recipient (X25519 failed; GODEBUG=fips140=only forbids it) — the local key cannot run in FIPS 140-only mode; use a store mode (WARDYN_SECRET_STORE=vaultkv), which needs no WARDYN_AGE_KEY")
+		return "", errors.New("local KEK: the age identity has no public recipient (X25519 failed; GODEBUG=fips140=only forbids it) — the local key cannot run in FIPS 140-only mode; use a key service (WARDYN_KEK=transit or azurekv), alone or with a store mode, which needs no WARDYN_AGE_KEY")
 	}
 	return recipient, nil
 }
@@ -237,7 +282,7 @@ func (l *Local) Wrap(_ context.Context, dek []byte, bind map[string]string) ([]b
 }
 
 // Unwrap: a wrap moved to another row, or made under another key, fails
-// authentication.
+// authentication: ErrCorrupt.
 func (l *Local) Unwrap(_ context.Context, wrapped []byte, bind map[string]string) ([]byte, error) {
 	aad, err := l.aad(bind)
 	if err != nil {
@@ -245,7 +290,7 @@ func (l *Local) Unwrap(_ context.Context, wrapped []byte, bind map[string]string
 	}
 	dek, err := Open(l.key, wrapped, aad)
 	if err != nil {
-		return nil, fmt.Errorf("local KEK %s: unwrap: %w", l.id, err)
+		return nil, fmt.Errorf("local KEK %s: unwrap: %w: %w", l.id, ErrCorrupt, err)
 	}
 	return dek, nil
 }
@@ -258,12 +303,28 @@ func (l *Local) aad(bind map[string]string) ([]byte, error) {
 	return aad, nil
 }
 
-// WrapAAD is AAD_kek = Encode("wardyn/kek/v1", owner, name, kek_id): what
-// every provider binds a wrap to. A bind missing either key is refused rather
-// than defaulted, since a zero value here would seal a DEK to the wrong row.
+// pkWrapLabel is the AAD domain label of a principal-key wrap. It differs from
+// localInfo, so a principal-key wrap can never verify as a data-key wrap.
+const pkWrapLabel = "wardyn/pk-wrap/v1"
+
+// WrapAAD is what every provider binds a wrap to: AAD_kek =
+// Encode("wardyn/kek/v1", owner, name, kek_id) for a data key, and for a
+// principal key Encode("wardyn/pk-wrap/v1", owner, purpose, version, domain,
+// kek_id). A bind missing a key of its shape, or mixing the two shapes, is
+// refused rather than defaulted, since a zero value here would seal a key to
+// the wrong row.
 func WrapAAD(bind map[string]string, kekID string) ([]byte, error) {
 	owner, okO := bind[BindOwner]
 	name, okN := bind[BindName]
+	purpose, okP := bind[BindPurpose]
+	version, okV := bind[BindVersion]
+	domain, okD := bind[BindDomain]
+	if okP || okV || okD {
+		if !okO || !okP || !okV || !okD || okN {
+			return nil, errors.New("a principal-key bind must carry " + BindOwner + ", " + BindPurpose + ", " + BindVersion + " and " + BindDomain + ", and no " + BindName)
+		}
+		return Encode(pkWrapLabel, owner, purpose, version, domain, kekID), nil
+	}
 	if !okO || !okN {
 		return nil, errors.New("bind must carry both " + BindOwner + " and " + BindName)
 	}

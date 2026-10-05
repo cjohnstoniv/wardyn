@@ -153,17 +153,19 @@ export {
 export type { CredentialKind } from "./copy/approvals";
 export { credentialKind } from "./copy/approvals";
 export { RUN_COCKPIT } from "./copy/run-cockpit";
+export { RUN_OUTPUT } from "./copy/run-output";
 export { UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX, POLICY_UI_APPS } from "./copy/ui-apps";
 export { MEMBER_GETTING_STARTED, RUNS_MEMBER_EMPTY } from "./copy/getting-started";
 export { EPISODES_COPY, FIRST_RUN_DEMOS_SUBTITLE } from "./copy/episodes";
 export { PEOPLE_STEP, SETUP, SITE } from "./copy/setup-steps";
 export { SHELL, UNSAVED_GUARD } from "./copy/shell";
 export { RUN, NO_BARRIER } from "./copy/run-clone";
+export { GIT_PAT_SCOPE } from "./copy/git-pat";
 
 // Moved to copy/terminal.ts (the target path for the later barrel split of
 // this file) — re-exported here so every existing `from "./copy"` import
 // keeps working unchanged.
-export { TERMINAL } from "./copy/terminal";
+export { TERMINAL, TERMINAL_COPY, TERMINAL_LINK, TERMINAL_RENDERER } from "./copy/terminal";
 
 export {
   RECORDING_DISABLED_TITLE,
@@ -172,4 +174,6 @@ export {
   RAIL_CREDENTIAL,
   RAIL_PROVIDER,
   RAIL_RECORDING_ON,
+  RAIL_CHECK,
+  RAIL_SETUP,
 } from "./copy/new-run-rail";

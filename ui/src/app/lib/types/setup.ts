@@ -324,6 +324,14 @@ export interface SetupStatus {
   auth: {
     mode: "local" | "sso" | "token" | "disabled";
     local_loopback: boolean;
+    /** WARDYN_GOVERN_ADMIN_RUNS: an admin's own runs are governed like a
+     *  member's. Kept through redaction, so every signed-in person can read
+     *  it. Optional for fixture compatibility with an older daemon; absent
+     *  reads as off. */
+    govern_admin_runs?: boolean;
+    /** The lanes WARDYN_GOVERN_ADMIN_RUNS_EXEMPT leaves ungoverned: the only
+     *  value is "recording". Absent when none. */
+    govern_admin_runs_exempt?: string[];
   };
   runner: {
     driver: "docker" | "k8s" | "none" | (string & {});
@@ -346,6 +354,10 @@ export interface SetupStatus {
     // because `driver` is blanked for them and the Vault remedy differs by
     // substrate. Absent on an older daemon or off Kubernetes.
     kubernetes?: boolean;
+    // How long a Kubernetes sandbox has to start, and how much longer one that no machine
+    // has room for waits (internal/api/setup.go, SetupSandboxStart). Kept in a member's
+    // redacted body: the run page's overdue bound follows it. Absent off Kubernetes.
+    sandbox_start?: { start_timeout_seconds: number; capacity_wait_seconds: number };
   };
   providers: SetupProvider[];
   secrets: { present: string[]; github_app: boolean };

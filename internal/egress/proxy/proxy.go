@@ -24,6 +24,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -107,9 +108,17 @@ type Proxy struct {
 	// grant to mint from. Empty/nil == no host brokered (the route always 403s),
 	// which is also what a deployment with the lane switched off looks like.
 	patGrants map[string]PATGrant
+	// brokeredPATGrantIDs is every git_pat grant id of the run while the PAT
+	// broker is on; the mint relay refuses a body naming one (isBrokeredPATGrant).
+	brokeredPATGrantIDs []uuid.UUID
 	// adoGrants answers the run's Azure DevOps grant per host for the REST gate
 	// (ado_gate.go). Nil == no host gated.
 	adoGrants adoGrantsByHost
+	// azure is the run's Azure route gates (azure_gate.go). Nil == no host gated.
+	azure *azureGates
+	// patAPI is the run's git_pat grants with api: true, by host (pat_api.go): each host's
+	// connection on 443 is terminated and every request judged by its forge's operation table.
+	patAPI map[string]PATGrant
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -203,11 +212,17 @@ type Proxy struct {
 	llmUnavailableDetail string
 	// pushHolds is the held-push state (push_hold.go).
 	pushHolds pushHolds
+	// attribution is Options.Attribution: the policy named in a policy-decided
+	// refusal, nil when there is none to name.
+	attribution *policyref.Ref
 	// gatewayVendor is the REVERSE of llmUpstreams (gateway host -> vendor
 	// public host), feeding isLLMHost/channelForHost so gateway traffic is
 	// recognised as LLM traffic (coverage/classification only — the SSRF vet
 	// for the gateway host lives in gatewayTarget, not here).
 	gatewayVendor map[string]string
+	// channelHosts is host -> vendor for the hosts classified as model hosts without being gateways
+	// (llm_channel_hosts.go).
+	channelHosts map[string]string
 
 	now func() time.Time
 }
@@ -257,8 +272,12 @@ type Options struct {
 	// See Config.PATGrants and pat_broker.go for why it is per-host rather than
 	// per-repo.
 	PATGrants map[string]PATGrant
+	// BrokeredPATGrantIDs backs isBrokeredPATGrant. See Config.BrokeredPATGrantIDs.
+	BrokeredPATGrantIDs []uuid.UUID
 	// ADOGrants backs the Azure DevOps REST gate (ado_gate.go). Nil == off.
 	ADOGrants adoGrantsByHost
+	// AzureGates backs the Azure route gate (azure_gate.go). Empty == off.
+	AzureGates []AzureGateConfig
 	// ControlPlaneURL and RunToken back the local brokered routes. The run
 	// token is injected only toward the control plane and never reaches the
 	// sandbox or any LLM upstream.
@@ -296,12 +315,16 @@ type Options struct {
 	// gateway base URL (Config.LLMUpstreams, forwarded verbatim). Empty == every
 	// brokered LLM route dials the vendor host. See Proxy.llmUpstreams.
 	LLMUpstreams map[string]string
+	// LLMChannelHosts is Config.LLMChannelHosts, forwarded verbatim.
+	LLMChannelHosts map[string]string
 	// LLMUnavailableDetail is the control-plane's reason the brokered-LLM 404
 	// gives when no credential is behind the route (Config.LLMUnavailableDetail,
 	// forwarded verbatim). Empty == the generic route sentence. See llm404Detail.
 	LLMUnavailableDetail string
 	// Unattended is Config.Unattended: a review-path push is refused, not held.
 	Unattended bool
+	// Attribution is Config.Attribution, already re-projected by LoadConfigBytes.
+	Attribution *policyref.Ref
 	// Dial overrides the connection dialer (tests). Production leaves it nil
 	// and a net.Dialer is used.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -320,25 +343,6 @@ type Options struct {
 // request context so the transport dials it directly instead of re-resolving
 // the hostname (TOCTOU / DNS-rebinding guard).
 type vettedIPKey struct{}
-
-// parseInternalHostCIDRs parses a SiteConfig.InternalHosts entry's CIDR
-// list, failing the WHOLE entry (ok=false) the moment one fails to parse —
-// never returning a partial list. liftInternalHost treats zero CIDRs as "no
-// CIDRs declared" and lifts the FULL liftable set for the suffix, so
-// silently dropping only the one bad CIDR out of several would widen an
-// entry meant to be narrow into that full-set default, the opposite of what
-// a parse failure should do.
-func parseInternalHostCIDRs(raw []string) (cidrs []*net.IPNet, ok bool) {
-	cidrs = make([]*net.IPNet, 0, len(raw))
-	for _, c := range raw {
-		_, n, err := net.ParseCIDR(c)
-		if err != nil {
-			return nil, false
-		}
-		cidrs = append(cidrs, n)
-	}
-	return cidrs, true
-}
 
 func newProxy(opts Options) *Proxy {
 	dial := opts.Dial
@@ -377,23 +381,7 @@ func newProxy(opts Options) *Proxy {
 			patGrants[k] = g
 		}
 	}
-	// Compile each declared internal host: lowercase + trim the suffix (same
-	// normalization VetHost applies to the request host, so the comparison in
-	// liftInternalHost is exact), parse its CIDRs (already validated at
-	// site-config write time and at proxy Config load) via
-	// parseInternalHostCIDRs, which drops the WHOLE entry on a parse failure.
-	internalHosts := make([]internalHostRule, 0, len(opts.InternalHosts))
-	for _, h := range opts.InternalHosts {
-		suffix := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h.HostSuffix)), ".")
-		if suffix == "" {
-			continue
-		}
-		cidrs, ok := parseInternalHostCIDRs(h.CIDRs)
-		if !ok {
-			continue
-		}
-		internalHosts = append(internalHosts, internalHostRule{suffix: suffix, cidrs: cidrs})
-	}
+	internalHosts := compileInternalHosts(opts.InternalHosts)
 	// Compile the LLM-gateway table + its reverse lookup. LLMUpstreams is
 	// already validated (api.ValidateLLMGateways at boot, applyDefaultsAndValidate
 	// at config load) — a parse failure here just drops that one entry (falls
@@ -417,6 +405,9 @@ func newProxy(opts Options) *Proxy {
 		llmUpstreams[vendor] = llmUpstream{host: host, port: port, prefix: strings.TrimSuffix(u.Path, "/")}
 		gatewayVendor[host] = vendor
 	}
+	// A git_pat grant with api: true terminates its own host on 443 and nothing else, so the
+	// forge API is reached only through the door. An entry the operator already authored keeps its own scope.
+	patAPI := newPATAPIGrants(patGrants, mitmHosts, mitmPorts)
 	p := &Proxy{
 		runID:                opts.RunID,
 		policy:               opts.Policy,
@@ -433,7 +424,10 @@ func newProxy(opts Options) *Proxy {
 		mitmLLM:              opts.MITMLLM,
 		gitGrants:            gitGrants,
 		patGrants:            patGrants,
+		brokeredPATGrantIDs:  opts.BrokeredPATGrantIDs,
 		adoGrants:            opts.ADOGrants,
+		azure:                newAzureGates(opts.AzureGates),
+		patAPI:               patAPI,
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      strings.TrimRight(opts.ControlPlaneURL, "/"),
 		runToken:             opts.RunToken,
@@ -447,7 +441,9 @@ func newProxy(opts Options) *Proxy {
 		llmUpstreams:         llmUpstreams,
 		llmUnavailableDetail: opts.LLMUnavailableDetail,
 		pushHolds:            pushHolds{unattended: opts.Unattended},
+		attribution:          opts.Attribution,
 		gatewayVendor:        gatewayVendor,
+		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),
 		dial:                 dial,
 		now:                  now,
 	}
@@ -834,7 +830,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Never a blind tunnel to an Azure DevOps grant host (refuseADOTunnel).
-	if p.refuseADOTunnel(w, r, host, port) {
+	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) {
 		return
 	}
 
@@ -962,39 +958,4 @@ func writeApprovalPending(w http.ResponseWriter, log *egress.DecisionLog) {
 	}
 	// {"wardyn":"approval-pending","approval_id":...}
 	_, _ = fmt.Fprintf(w, `{"wardyn":"approval-pending","approval_id":%q}`, id)
-}
-
-// hopByHopHeaders are stripped before forwarding (RFC 7230 §6.1).
-var hopByHopHeaders = []string{
-	"Connection",
-	"Proxy-Connection",
-	"Keep-Alive",
-	"Proxy-Authenticate",
-	"Proxy-Authorization",
-	"Te",
-	"Trailer",
-	"Transfer-Encoding",
-	"Upgrade",
-}
-
-func removeHopByHop(h http.Header) {
-	// Headers named in Connection are also hop-by-hop.
-	for _, name := range h.Values("Connection") {
-		for _, tok := range strings.Split(name, ",") {
-			if t := strings.TrimSpace(tok); t != "" {
-				h.Del(t)
-			}
-		}
-	}
-	for _, hh := range hopByHopHeaders {
-		h.Del(hh)
-	}
-}
-
-func copyHeader(dst, src http.Header) {
-	for k, vs := range src {
-		for _, v := range vs {
-			dst.Add(k, v)
-		}
-	}
 }

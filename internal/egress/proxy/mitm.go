@@ -229,6 +229,8 @@ func (p *Proxy) channelForHost(host string) contentscan.Channel {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
 	if vendor, ok := p.gatewayVendor[h]; ok {
 		h = vendor
+	} else if vendor, ok := p.channelHosts[h]; ok {
+		h = vendor
 	}
 	switch h {
 	case openaiHost:
@@ -363,6 +365,12 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		return
 	}
 
+	// A git_pat API host is served by its own door alone: judged, minted, forwarded (pat_api.go).
+	if grant, ok := p.patAPI[patAPIHost(host)]; ok {
+		p.servePATAPI(w, r, host, port, grant)
+		return
+	}
+
 	rest := strings.TrimPrefix(r.URL.Path, "/")
 	channel := p.channelForHost(host)
 	// Decision-log source: distinguishes LLM inspection/injection from corp
@@ -375,6 +383,12 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	if mitmSource == "" {
 		return
 	}
+	// The Azure gate runs before the injector resolves, so a refused request never redeems the token.
+	mitmSource, releaseAzure, ok := p.gateAzure(w, r, host, port, mitmSource)
+	if !ok {
+		return
+	}
+	defer releaseAzure()
 	rearmBodyDeadline(w) // the gate may have held the request (awaitADOCapability)
 
 	// Dial target: through the corp proxy (by hostname) when configured — egressDial chains
@@ -429,6 +443,10 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 			// SECURITY: client gone via its own cancellation was never refused — writing a 401/deny
 			// here would log an expiry that didn't happen. The hold itself continues (it belongs to
 			// the workflow), so the owner's sign-in still lands for whoever is left.
+			return
+		}
+		if p.isAzureLane(host) {
+			p.refuseAzureCredential(w, r, host, port, ierr)
 			return
 		}
 		if p.isADOLane(host) {

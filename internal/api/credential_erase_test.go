@@ -164,7 +164,7 @@ func TestSweepExpiredCredentials_ReachesThroughTheAuditedWrapper(t *testing.T) {
 	inner := &sweepSecrets{memSecrets: &memSecrets{m: map[string][]byte{}},
 		gone: []secretstore.Expired{{Owner: "bob", Name: "wardyn-harness-aws-oauth", ExpiresAt: time.Now().Add(-time.Hour)}}}
 	h.srv.cfg.Secrets = secretstore.Audited(inner, nil)
-	if n := h.srv.SweepExpiredCredentials(context.Background()); n != 1 {
+	if n, _ := h.srv.SweepExpiredCredentials(context.Background()); n != 1 {
 		t.Fatalf("swept %d through the audited wrapper, want 1", n)
 	}
 }
@@ -182,7 +182,7 @@ func TestSweepExpiredCredentials_WrappedStoreWithoutSweepLogsOnce(t *testing.T) 
 	h := newHarness(t)
 	h.srv.cfg.Secrets = secretstore.Audited(&memSecrets{m: map[string][]byte{}}, nil)
 	for range 2 {
-		if n := h.srv.SweepExpiredCredentials(context.Background()); n != 0 {
+		if n, _ := h.srv.SweepExpiredCredentials(context.Background()); n != 0 {
 			t.Fatalf("swept %d with a store that cannot sweep, want 0", n)
 		}
 	}
@@ -200,7 +200,7 @@ func TestSweepExpiredCredentials_AuditsEachDeletion(t *testing.T) {
 	h.srv.cfg.Secrets = &sweepSecrets{memSecrets: &memSecrets{m: map[string][]byte{}},
 		gone: []secretstore.Expired{{Owner: "bob", Name: "wardyn-harness-aws-oauth", ExpiresAt: at}},
 		err:  errors.New("one row was kept")}
-	if n := h.srv.SweepExpiredCredentials(context.Background()); n != 1 {
+	if n, _ := h.srv.SweepExpiredCredentials(context.Background()); n != 1 {
 		t.Fatalf("swept %d, want 1", n)
 	}
 	ev := lastAuditEvent(t, h.audit.events, "credential.expired.delete")
@@ -212,7 +212,7 @@ func TestSweepExpiredCredentials_AuditsEachDeletion(t *testing.T) {
 	}
 
 	h.srv.cfg.Secrets = &memSecrets{m: map[string][]byte{}}
-	if n := h.srv.SweepExpiredCredentials(context.Background()); n != 0 {
+	if n, _ := h.srv.SweepExpiredCredentials(context.Background()); n != 0 {
 		t.Fatalf("a store without a sweep swept %d", n)
 	}
 }

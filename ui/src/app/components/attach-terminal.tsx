@@ -35,23 +35,32 @@ import * as React from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-// Bundle a real terminal font (same-origin, no external load) so the TUI gets
-// true fixed-advance cells instead of whatever monospace the OS picks. Same
-// latin/latin-ext subsets as styles/index.css — the other four subsets carry no
-// glyph xterm draws (box-drawing U+2500.. and block elements U+2580.. are in
-// NONE of the fontsource subsets; those already come from the OS fallback).
-import "@fontsource/jetbrains-mono/latin-400.css";
-import "@fontsource/jetbrains-mono/latin-ext-400.css";
+// A full JetBrains Mono build, self-hosted (same-origin, no external load), so the
+// TUI gets true fixed-advance cells and its box-drawing glyphs come from the font.
+import "../../styles/terminal-font.css";
 import { getToken, HttpError } from "../lib/api/core";
 import { runs } from "../lib/api/runs";
 import type { AttachHolder } from "../lib/types/runs";
+import type { PolicyRef } from "../lib/api/health";
+import { PolicyRemedy } from "./wardyn/policy-remedy";
 import { getErrorMessage } from "../lib/format";
 import { Eye, Loader2, TriangleAlert, Maximize2, Minimize2, RotateCw } from "lucide-react";
 import { cn } from "./ui/utils";
 import { Button } from "./ui/button";
 import { TakeoverConfirmDialog } from "./attach-takeover-dialog";
+import { LinkConfirmDialog } from "./attach-link-dialog";
 import { TerminalConnectionStatus } from "./attach-terminal-status";
-import { RUN_COCKPIT, TERMINAL } from "./wardyn/copy";
+import { CopyBlockedNotice, CopyOfferToast } from "./attach-terminal-copy-offer";
+import {
+  readRendererPref,
+  writeRendererPref,
+  type RendererControl,
+  type RendererPref,
+  type RendererState,
+} from "./attach-terminal-renderer";
+import { RendererFellBackNotice, RendererMenu } from "./attach-terminal-renderer-menu";
+import { isMacPlatform, type CopyGate, type CopyOffer } from "./attach-terminal-clipboard";
+import { RUN_COCKPIT, TERMINAL, TERMINAL_COPY } from "./wardyn/copy";
 import { useOperator, useOperatorResolved, usePrincipal } from "./wardyn/operator-context";
 import { entryErrorMessage, mayEnterRun, RUN_OWNER_ONLY } from "../lib/run-entry";
 import { OPERATOR_ONLY_REASON } from "./wardyn/copy";
@@ -127,6 +136,9 @@ export interface AttachTerminalProps {
    *  admin may enter it. Absent on a person's run, where entry is the owner's
    *  alone (#1476). */
   operatorOwned?: boolean;
+  /** The run's own policy (GET /runs/{id}), for the Request access remedy
+   *  beside a refusal. Never an error envelope. */
+  policy?: PolicyRef;
 }
 
 export interface AttachTerminalHandle {
@@ -135,7 +147,7 @@ export interface AttachTerminalHandle {
 }
 
 export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTerminalProps>(function AttachTerminal(
-  { runId, onClose, autoRun, onOutput, ptyCols, heightClass = "h-[70vh]", fill, createdBy, operatorOwned },
+  { runId, onClose, autoRun, onOutput, ptyCols, heightClass = "h-[70vh]", fill, createdBy, operatorOwned, policy },
   ref,
 ) {
   // Attach is owner-or-admin, not operator-only: the WS's cookie lane is
@@ -188,6 +200,32 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // #216 — mirrors the connect effect's `reconnectAttempts` var for render.
   const [reconnectAttempt, setReconnectAttempt] = React.useState(0);
   const [reconnectExhausted, setReconnectExhausted] = React.useState(false);
+  // The clipboard gate's verified copy offer and its quiet "blocked" notice.
+  const [copyOffer, setCopyOffer] = React.useState<CopyOffer | null>(null);
+  const [copyNotice, setCopyNotice] = React.useState<string | null>(null);
+  // The card's Copy, for the terminal's Cmd/Ctrl+C.
+  const offerCopyRef = React.useRef<(() => void) | null>(null);
+  const selectHint =TERMINAL_COPY.SELECT_HINT(TERMINAL_COPY.NATIVE_CHORD(isMacPlatform()));
+  const copyGateRef = React.useRef<CopyGate | null>(null);
+  // A clicked terminal link awaiting the confirm dialog.
+  const [linkTarget, setLinkTarget] = React.useState<URL | null>(null);
+  // Renderer: the per-browser choice, the live control, and what is actually drawing.
+  const [rendererPref, setRendererPref] = React.useState<RendererPref>(readRendererPref);
+  const rendererPrefRef = React.useRef(rendererPref);
+  const rendererRef = React.useRef<RendererControl | null>(null);
+  const [renderer, setRenderer] = React.useState<RendererState>({ active: "compatible", fellBack: false });
+  const [fellBackSeen, setFellBackSeen] = React.useState(false);
+  React.useEffect(() => {
+    if (renderer.fellBack) setFellBackSeen(true);
+  }, [renderer.fellBack]);
+  const pickRenderer = (pref: RendererPref) => {
+    writeRendererPref(pref);
+    rendererPrefRef.current = pref;
+    setRendererPref(pref);
+    setFellBackSeen(false);
+    rendererRef.current?.set(pref);
+    termRef.current?.focus();
+  };
 
   // Keep onClose in a ref so a fresh closure on every parent render does NOT
   // re-run the connect effect (which would tear down + reconnect the terminal
@@ -241,24 +279,37 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // container) so the PTY and xterm always agree — see the ptyCols doc.
   // refit(force) — measure the container, resize the local grid, tell the PTY.
   //
-  // `force` sends a ONE-COLUMN-SMALLER size first, then the real one. That looks
-  // pointless and is not: the session is tmux, tmux clamps a shared window to
-  // the SMALLEST attached client, and it re-evaluates on a client size CHANGE.
+  // A resize frame goes out only when {socket, cols, rows} differs from the last
+  // one sent, so a same-size refit is silent and a fresh socket still gets its
+  // first size. A zero-size box (hidden pane) is skipped, not measured.
+  //
+  // `force` bypasses that dedup and sends a ONE-COLUMN-SMALLER size first, then
+  // the real one. That looks pointless and is not: the session is tmux, and
+  // tmux (3.5a defaults to `window-size latest`) sizes the shared window from a
+  // client's most recent size, re-evaluating on a client size CHANGE.
   // So when a second client (a `wardyn run attach` from another terminal) attaches
   // small, the browser's grid fills with tmux's `·` filler — and when that
-  // client leaves, the filler STAYS, because the browser's own size never
+  // client leaves, the filler can STAY, because the browser's own size never
   // changed and a same-size resize frame is a no-op tmux ignores.
   //
   // Measured: 0 dots before a second client, 1001 while attached, still 1001
   // after it detached, and 0 again the moment the viewport actually changed
   // size. The nudge manufactures that change on demand.
+  const lastSentRef = React.useRef<{ ws: WebSocket; cols: number; rows: number } | null>(null);
+  // An observer's grid is pinned to the writer's (attach-mode holder size).
+  const observerPinRef = React.useRef<{ cols: number; rows: number } | null>(null);
   const refit = React.useCallback((force = false) => {
     const fit = fitAddonRef.current;
     const term = termRef.current;
     const ws = wsRef.current;
     if (!fit || !term) return;
+    const box = term.element?.parentElement;
+    if (box && (box.clientWidth === 0 || box.clientHeight === 0)) return;
+    const pin = observerPinRef.current;
     try {
-      if (ptyColsRef.current) {
+      if (pin) {
+        term.resize(pin.cols, pin.rows);
+      } else if (ptyColsRef.current) {
         const dims = fit.proposeDimensions();
         term.resize(ptyColsRef.current, dims && dims.rows > 0 ? dims.rows : term.rows);
       } else {
@@ -272,11 +323,15 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     // the CELL grid identical, and a fresh object every time would re-render
     // the panel for nothing.
     setGeom((g) => (g && g.cols === term.cols && g.rows === term.rows ? g : { cols: term.cols, rows: term.rows }));
-    if (ws && ws.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
+    // A pinned observer's resize frames are dropped server-side; send none.
+    if (!pin && ws && ws.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
+      const last = lastSentRef.current;
+      if (!force && last && last.ws === ws && last.cols === term.cols && last.rows === term.rows) return;
       if (force && term.cols > 1) {
         ws.send(JSON.stringify({ type: "resize", cols: term.cols - 1, rows: term.rows }));
       }
       ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+      lastSentRef.current = { ws, cols: term.cols, rows: term.rows };
     }
   }, []);
 
@@ -299,18 +354,43 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     reclaimRef,
     manualReconnectRef,
     refit,
+    observerPinRef,
     setConnState,
     setErrorMsg,
     setMode,
     setTakenOverBy,
     setReconnectAttempt,
     setReconnectExhausted,
+    setCopyOffer,
+    setCopyNotice,
+    copyGateRef,
+    offerCopyRef,
+    setLinkTarget,
+    rendererRef,
+    rendererPrefRef,
+    setRenderer,
   });
 
   // Fullscreen (native API, Escape fallback, refit-on-toggle) — see
   // use-attach-terminal-fullscreen.ts for the reasoning; split into its own
   // hook purely to keep this file under its line cap.
-  const { fullscreen, toggleFullscreen } = useTerminalFullscreen(panelRef, refit);
+  // Focus the terminal only when the page has nothing better to give focus to:
+  // nothing focused, or focus already inside this panel. Never steals from a
+  // control elsewhere on the page (Q-T6; observers included).
+  const focusTermIfFree = React.useCallback(() => {
+    const a = document.activeElement;
+    if (a && a !== document.body && !panelRef.current?.contains(a)) return;
+    termRef.current?.focus();
+  }, []);
+  // When the card goes (copied, dismissed, expired), focus returns to the
+  // terminal only if it was still in this panel: an offer that expires while the
+  // user types in another control must not move their keystrokes into the shell.
+  const hadOffer = React.useRef(false);
+  React.useEffect(() => {
+    if (hadOffer.current && !copyOffer) focusTermIfFree();
+    hadOffer.current = !!copyOffer;
+  }, [copyOffer, focusTermIfFree]);
+  const { fullscreen, toggleFullscreen } = useTerminalFullscreen(panelRef, refit, focusTermIfFree);
 
   // Holder / take-over
   // Spectator: the server admitted us read-only because someone else holds the
@@ -364,7 +444,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // dialog — because fullscreen goes through the native API (see
   // toggleFullscreen) rather than a `fixed inset-0` overlay that any ancestor
   // could capture. Portaling on toggle would NOT have been safe: the xterm setup
-  // effect is keyed on [runId, tokenOnlyMode, refit, operator, mayEnter] and not on
+  // effect is keyed on [runId, tokenOnlyMode, refit, mayEnter] and not on
   // fullscreen, so React would rebuild this container under the new parent
   // without re-running term.open() and leave a permanently blank terminal.
   return (
@@ -427,18 +507,26 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           <span className="hidden font-mono text-meta text-muted-foreground sm:inline">
             {TERMINAL.ESCAPE_CHORD_HINT}
           </span>
+          {/* M11 S1: the native-selection hint, for observers too. Below lg it
+              lives in the grid's aria-description only. */}
+          <span className="hidden font-mono text-meta text-muted-foreground lg:inline">· {selectHint}</span>
           {(connState === "connecting" || connState === "reconnecting") && (
             <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
           )}
           {connState === "open" && (
             <span className="inline-flex size-2 rounded-full bg-success" title="Connected" />
           )}
+          <RendererMenu pref={rendererPref} active={renderer.active} onPick={pickRenderer} />
           {/* Redraw. The browser cannot observe another client detaching, so it
               cannot know the tmux window is still clamped to a size that left —
               see refit's note. One click forces the size change that clears it. */}
           <button
             type="button"
-            onClick={() => refit(true)}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              refit(true);
+              termRef.current?.focus();
+            }}
             title="Redraw (fixes a terminal left clamped by another attached client)"
             aria-label="Redraw terminal"
             className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -447,6 +535,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           </button>
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={toggleFullscreen}
             title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
             aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
@@ -461,7 +550,9 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       {connState === "error" && (
         <div className="flex items-start gap-3 p-4 text-sm text-danger">
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-          <p>{errorMsg}</p>
+          <p>
+            {errorMsg} <PolicyRemedy policy={policy} className="block" />
+          </p>
         </div>
       )}
 
@@ -472,29 +563,43 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           a CHILD of the element xterm owns. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div
-          ref={containerRef}
-          className={cn("min-h-0 flex-1 p-1", ptyCols && "overflow-x-auto")}
-          // R4-F144: the same sentence the title bar shows, for the reader who
-          // cannot see it — 2.1.2's "advised on entry" has to hold for a screen
-          // reader landing in the grid, not only for a sighted user.
-          aria-description={TERMINAL.ESCAPE_CHORD_HINT}
+          data-testid="run-terminal-wrapper"
+          className={cn("min-h-0 flex-1 p-1", (ptyCols || (readOnly && mode?.holder?.cols)) && "overflow-x-auto")}
           // D3: xterm only focuses itself on a click that lands exactly on its
-          // own `.xterm-screen` canvas layer — a click on this container's
-          // padding, or in the dead space below the last row, lands nowhere,
-          // which reads as "needs a double click" (the first click was wasted
-          // here) or "only works in one area". Focusing on ANY mousedown in
-          // this container covers the whole clickable surface; xterm's own
-          // click-to-focus still fires too (harmless — focusing twice is a
-          // no-op). Kept on THIS container, deliberately NOT the panel root:
-          // the root also renders the title-bar Redraw/Fullscreen buttons and
-          // the footer's Take-over button, and stealing focus back from a
-          // just-pressed button on every click would be its own bug; the root
-          // also owns the tabIndex={-1} landing pad the escape chord targets.
+          // own `.xterm-screen` canvas layer. A click on this wrapper's padding
+          // or in the dead space below the last row would otherwise take the
+          // browser's own focus step, which moves focus to the tabIndex={-1}
+          // panel. preventDefault cancels that step and we focus the terminal
+          // ourselves, so any click in the terminal area focuses it. Kept on
+          // THIS wrapper, not the panel root: the root also holds the title-bar
+          // buttons and the footer's Take-over button, and the tabIndex={-1}
+          // landing pad the escape chord targets.
           onMouseDown={(e) => {
             e.stopPropagation();
+            e.preventDefault();
             termRef.current?.focus();
           }}
-        />
+        >
+          {/* FitAddon measures the PARENT of `.xterm`; under border-box sizing a
+              padded parent over-counts rows and clips the last one. The mount
+              is therefore an unpadded child of the padded wrapper above. */}
+          <div
+            ref={containerRef}
+            className="h-full min-h-0"
+            // R4-F144: the same sentence the title bar shows, for the reader who
+            // cannot see it — 2.1.2's "advised on entry" has to hold for a screen
+            // reader landing in the grid, not only for a sighted user.
+            aria-description={`${TERMINAL.ESCAPE_CHORD_HINT} · ${selectHint}`}
+          />
+        </div>
+        {copyOffer ? (
+          <CopyOfferToast
+            key={copyOffer.id}
+            offer={copyOffer}
+            onDone={() => copyGateRef.current?.dismiss()}
+            copyRef={offerCopyRef}
+          />
+        ) : null}
         {readOnly && (
           // pointer-events-none: this is a label, not a shield. The input it
           // describes is dropped SERVER-side; blocking clicks here would also
@@ -525,6 +630,9 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           onReconnect={() => manualReconnectRef.current()}
         />
       )}
+
+      {copyNotice && <CopyBlockedNotice onDismiss={() => setCopyNotice(null)} />}
+      {fellBackSeen && <RendererFellBackNotice onDismiss={() => setFellBackSeen(false)} />}
 
       {/* Holder footer — only in the two states that have an action. A driving
           terminal keeps its existing chrome (every dialog embed depends on the
@@ -563,6 +671,12 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
         holderPrincipal={holderPrincipal}
         onOpenChange={(o) => !o && setConfirmTakeover(false)}
         onConfirm={() => void doTakeover()}
+        onCloseFocus={() => termRef.current?.focus()}
+      />
+      <LinkConfirmDialog
+        url={linkTarget}
+        onClose={() => setLinkTarget(null)}
+        onCloseFocus={() => termRef.current?.focus()}
       />
     </div>
   );

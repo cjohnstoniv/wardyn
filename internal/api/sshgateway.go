@@ -305,7 +305,7 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 	// attach does (governance_run_doors.go). A super admin reaches this point
 	// only on their own run or an operator-owned one, so the exemption cannot
 	// reach a person's run.
-	if s.sshOverrideRefusal(rec) != "" {
+	if s.sshOverrideRefusal(rec) != "" || !s.adminDoorExempt(run) {
 		name, err := s.interactiveDeniedProfile(ctx, run)
 		if err != nil {
 			s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, "governance profile unreadable")
@@ -548,12 +548,15 @@ func (s *Server) sshKeyRevocationRefusal(ctx context.Context, key types.SSHPubli
 		return ""
 	}
 	// SSH rows carry the subject, so email revocation also stamps its resolved subject.
-	revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(ctx, key.Principal, "", key.CreatedAt)
+	status, err := oidc.CheckSession(ctx, s.cfg.SessionRevocations, key.Principal, "", key.CreatedAt, -1)
 	if err != nil {
 		return "SSH session cutoff lookup failed"
 	}
-	if revoked {
+	switch status {
+	case oidc.SessionRevoked:
 		return "SSH key predates session revocation"
+	case oidc.SessionDeactivated:
+		return "SSH key owner's identity is deactivated"
 	}
 	return ""
 }

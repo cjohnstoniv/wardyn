@@ -8,6 +8,7 @@
 // one documented exception, in a different domain module).
 
 import type { AutonomyLevel, AutonomyResolution, RunLimits } from "../api/governance";
+import type { PolicyRef } from "../api/health";
 import type { RunPolicySpec } from "./policy";
 import type { SCMAccess } from "./setup";
 
@@ -187,6 +188,8 @@ export interface AgentRun {
   // no end), the wait for a decision (absent = the deployment's approval
   // expiry), the owner's profile run limits and that profile's id (absent for
   // an unassigned or super-admin owner). Optional: a pre-0.8 daemon sends none.
+  // wait_budget_sec does not bound a run's start; see Start deadlines in
+  // docs/OPERATIONS.md (#the-start-deadlines).
   ends_at?: string | null;
   wait_budget_sec?: number;
   run_limits?: RunLimits;
@@ -372,6 +375,9 @@ export interface RunDetail extends AgentRun {
   model_provider_deleted?: boolean;
   created_via_name?: string;
   kept_until?: string;
+  // The policy the run was launched under and how to ask for a change to it
+  // (GET /runs/{id}, internal/policyref.Ref). Absent when none applies.
+  policy?: PolicyRef;
 }
 
 // GET /api/v1/runs/{id}/policy — the policy a run actually got (the run page's
@@ -737,17 +743,16 @@ export interface SetupItem {
 // production credential). risk_assessment/overall_risk are the SAME
 // composer.Grade/OverallLevel output — optional for older-server tolerance:
 // an absent value renders no risk panel and no acknowledgment gate rather
-// than crashing. Advisory only, never a gate.
+// than crashing.
 //
-// Where these are read, honestly: the sole consumer is the new-run rail's
-// preflight block (new-run-rail.tsx's RunRail), which renders overall_risk,
-// enforced_confinement_class and warnings. `setup_items` has NO consumer — the
-// five-step wizard's Review step (step-review.tsx) that used to render it was
-// deleted with the wizard, and nothing replaced that surface. It is fetched on
-// every Review and discarded; the field and its SetupItem subtree stay declared
-// because they are a live server contract (compose_setup.go) and the mirror
-// rule forbids dropping a wire field the daemon still sends. Whether to
-// render it again is an open question, not decided here.
+// Where these are read: the new-run rail's preflight block
+// (new-run-rail.tsx's RunRail) renders overall_risk, enforced_confinement_class,
+// warnings and the `missing`/`unverified` setup_items rows; a `missing` backend
+// row, like a fresh 4xx or a `missing` llm_access row, holds Launch for that
+// exact body for up to 60s (use-launch.ts preflightBlock); every other row is
+// advisory. The field is a live server
+// contract (compose_setup.go) read by the CLI and CI scripts too, and the
+// mirror rule forbids dropping a wire field the daemon still sends.
 export interface PreflightResult {
   setup_items: SetupItem[];
   enforced_confinement_class: ConfinementClass;
@@ -792,4 +797,73 @@ export interface ModelCredential {
   provider?: string;
   kind?: string;
   residency: ModelCredentialResidency;
+}
+
+// internal/store.RunCapacitySums — one set of configured-reservation sums
+// (GET /admin/runs/capacity). `unknown` counts holding runs whose reservation
+// was never recorded; they add to no sum.
+export interface RunCapacitySums {
+  holding: number;
+  unknown: number;
+  agent_cpu_request_millis: number;
+  agent_cpu_limit_millis: number;
+  agent_memory_request_mib: number;
+  agent_memory_limit_mib: number;
+  proxy_cpu_millis: number;
+  proxy_memory_mib: number;
+  proxy_cpu_uncapped: number;
+  held_cpu_millis: number;
+  held_memory_mib: number;
+}
+
+// internal/store.RunCapacityRunner: `requests` (Kubernetes) or `caps` (Docker).
+export interface RunCapacityRunner extends RunCapacitySums {
+  basis: "requests" | "caps";
+}
+
+export interface RunCapacityOwner {
+  owner: string;
+  holding: number;
+  by_runner: Record<string, RunCapacitySums>;
+}
+
+export interface RunCapacityAge {
+  bucket: string;
+  count: number;
+}
+
+// internal/store.RunCapacityUnschedulable; null columns are unrecorded.
+export interface RunCapacityUnschedulable {
+  id: string;
+  owner: string;
+  waited_seconds: number;
+  reason: string;
+  runner_kind: string | null;
+  agent_cpu_request_millis: number | null;
+  agent_memory_request_mib: number | null;
+  proxy_cpu_millis: number | null;
+  proxy_memory_mib: number | null;
+}
+
+// internal/store.RunCapacity.
+export interface RunCapacity {
+  states: Record<string, number>;
+  paused: number;
+  kept: number;
+  totals: RunCapacityRunner;
+  age_buckets: RunCapacityAge[];
+  by_runner: Record<string, RunCapacityRunner>;
+  by_owner: RunCapacityOwner[];
+  by_owner_truncated: boolean;
+  unschedulable: RunCapacityUnschedulable[];
+  unschedulable_total: number;
+  /** Age in seconds since created_at of the oldest holding run (0 when none). */
+  oldest_active_seconds: number;
+}
+
+// GET /api/v1/admin/runs/capacity: RunCapacity plus generated_at and basis
+// (the handler envelope in internal/api/runs_capacity.go).
+export interface RunCapacityResponse extends RunCapacity {
+  generated_at: string;
+  basis: "configured_reservations";
 }
