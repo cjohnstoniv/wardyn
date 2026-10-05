@@ -43,6 +43,10 @@ type Capabilities struct {
 	// Freeze reports, PER CLASS, pause/resume support; runsc/Kata pause is
 	// UNVERIFIED and never claimed here. Callers MUST check per the run's class.
 	Freeze map[types.ConfinementClass]bool `json:"freeze,omitempty"`
+	// ExecOutputUncaptured: the driver cannot capture an exec's output into
+	// SandboxSpec.ExecOutput, so the control plane hands it no writer and says
+	// so to a reader rather than serving an empty capture. OR-aggregated.
+	ExecOutputUncaptured bool `json:"-"`
 }
 
 // SandboxSpec is everything a driver needs to create one governed sandbox.

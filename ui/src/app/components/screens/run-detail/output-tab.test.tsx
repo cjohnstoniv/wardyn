@@ -209,6 +209,22 @@ describe("OutputTab — refusals", () => {
     expect(goRecording).toHaveBeenCalledTimes(1);
   });
 
+  it("not captured (Kubernetes): says so, names the recording, links to it, does not poll", async () => {
+    vi.useFakeTimers();
+    refuse("run_output_not_captured", 409);
+    const onGoRecording = vi.fn();
+    await mount({ live: true, onGoRecording });
+    expect(screen.getByText(RUN_OUTPUT.notCapturedTitle)).toBeInTheDocument();
+    expect(screen.getByText(RUN_OUTPUT.notCapturedDesc)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_OUTPUT.emptyFinal)).toBeNull();
+    screen.getByRole("button", { name: RUN_OUTPUT.interactiveLink }).click();
+    expect(onGoRecording).toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(1);
+  });
+
   it("503 mask_state_unavailable: the load-error title and the mask line", async () => {
     refuse("mask_state_unavailable", 503);
     await mount();

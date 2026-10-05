@@ -262,6 +262,7 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 		caps.NetworkPolicy = caps.NetworkPolicy || cs.NetworkPolicy
 		caps.NetworkPolicyAcknowledged = caps.NetworkPolicyAcknowledged || cs.NetworkPolicyAcknowledged
 		caps.SessionRecording = caps.SessionRecording || cs.SessionRecording
+		caps.ExecOutputUncaptured = caps.ExecOutputUncaptured || cs.ExecOutputUncaptured
 		drives = drives && cs.UserDrives
 		managed = managed && cs.ManagedFiles
 		if i == 0 || ephemeralRank(cs.EphemeralDiskEnforcement) < ephemeralRank(enforcement) {
