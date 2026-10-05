@@ -227,6 +227,9 @@ function Strip({ ctx }: { ctx: WidgetContext }) {
   // The live number rides the context, from the one isHeld derivation.
   const held = ctx.heldCount;
   const deny = ctx.egress.filter((e) => e.decision === "deny").length;
+  // A network fault is neither a refusal nor a hold; counted on its own, and
+  // shown only when there is one, so the strip never drops those rows.
+  const failed = ctx.egress.filter((e) => e.decision === "failed").length;
   // The outcome filter is load-bearing, not decorative: the broker audits
   // DENIED mint attempts under this same action, and rendering one as
   // "brokered" would claim a credential that was never issued.
@@ -240,6 +243,12 @@ function Strip({ ctx }: { ctx: WidgetContext }) {
         {RUN_COCKPIT.egress} <span className="text-success">{RUN_COCKPIT.allow(allow)}</span> ·{" "}
         <span className="text-warning">{RUN_COCKPIT.held(held)}</span> ·{" "}
         <span className="text-danger">{RUN_COCKPIT.deny(deny)}</span>
+        {failed > 0 && (
+          <>
+            {" · "}
+            <span className="text-warning">{RUN_COCKPIT.failed(failed)}</span>
+          </>
+        )}
       </span>
       <span className="text-muted-foreground">
         {RUN_COCKPIT.credentials} <span>{RUN_COCKPIT.eligible(ctx.grants.length)}</span> ·{" "}
