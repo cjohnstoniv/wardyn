@@ -196,8 +196,8 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `react-style-singleton` | 2.2.3 | MIT |
 | `resize-observer-polyfill` | 1.5.1 | MIT |
 | `scheduler` | 0.23.2 | MIT |
-| `seroval` | 1.5.4 | MIT |
-| `seroval-plugins` | 1.5.4 | MIT |
+| `seroval` | 1.6.8 | MIT |
+| `seroval-plugins` | 1.6.8 | MIT |
 | `set-cookie-parser` | 2.7.2 | MIT |
 | `solid-js` | 1.9.13 | MIT |
 | `solid-transition-group` | 0.2.3 | MIT |
