@@ -9,9 +9,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/cjohnstoniv/wardyn/internal/db"
 )
 
 // ErrIdentityDeactivated is the refusal of anything that would give a deactivated, purged or
@@ -101,17 +105,36 @@ func (s PG) guarded(ctx context.Context, fn func(q queryRower) error) error {
 //
 // The rows are held on a connection dialled for this call, outside the pool: fn borrows from the
 // pool, and a hold taken from it would wait on itself once the pool is down to that one connection.
+// The dials are bounded like the lock connections: at most db.LockPoolMaxConns at once per pool,
+// process-wide, and a call that finds them all in use waits db.LockPoolAcquireWait and is then
+// refused with db.ErrLockNoCapacity.
 func (s PG) WithIdentityShared(ctx context.Context, g IdentityGuard, fn func() error) error {
+	sem := guardDialSlots(s.Pool)
+	wait := time.NewTimer(db.LockPoolAcquireWait)
+	defer wait.Stop()
+	select {
+	case sem <- struct{}{}:
+		defer func() { <-sem }()
+	case <-wait.C:
+		return fmt.Errorf("store: guarded write: %w (%d in use)", db.ErrLockNoCapacity, cap(sem))
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	conn, err := pgx.ConnectConfig(ctx, s.Pool.Config().ConnConfig)
 	if err != nil {
 		return fmt.Errorf("store: connect guarded write: %w", err)
 	}
-	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	// Closing the session ends an uncommitted transaction, so no rollback is sent: a server that
+	// stopped answering cannot hold the connection, or its slot, open past the close budget.
+	defer func() {
+		bg, cancel := context.WithTimeout(context.Background(), guardCloseBudget)
+		defer cancel()
+		_ = conn.Close(bg)
+	}()
 	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return fmt.Errorf("store: begin guarded write: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	if err := checkIdentityGuard(ctx, tx, g); err != nil {
 		return err
 	}
@@ -119,6 +142,18 @@ func (s PG) WithIdentityShared(ctx context.Context, g IdentityGuard, fn func() e
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// guardCloseBudget bounds the close of a WithIdentityShared connection, as lockConn.close does.
+const guardCloseBudget = 2 * time.Second
+
+var guardDialSlotsByPool sync.Map // *pgxpool.Pool -> chan struct{}
+
+// guardDialSlots is the process's one slot channel for pool, sized db.LockPoolMaxConns when first
+// used: every PG copy over one pool shares it.
+func guardDialSlots(pool *pgxpool.Pool) chan struct{} {
+	v, _ := guardDialSlotsByPool.LoadOrStore(pool, make(chan struct{}, db.LockPoolMaxConns))
+	return v.(chan struct{})
 }
 
 // IssueLoginIdentity is the issuance half of the sign-in gate: in one transaction it upserts and

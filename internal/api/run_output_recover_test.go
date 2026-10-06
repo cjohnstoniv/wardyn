@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"sync"
@@ -410,4 +411,37 @@ func TestRunOutput_UncapturedRunnerSaysSo(t *testing.T) {
 	if code, got := c.get(t); code != http.StatusOK || got.Output != "" || !got.Complete || got.CaptureGap || got.Incomplete {
 		t.Fatalf("capturing runner, silent run: %d %+v, want 200 complete and empty", code, got)
 	}
+}
+
+// TestRunOutput_UnknownCaptureIsNotKept: when the runner's capability lookup fails, the answer is
+// neither "captures" nor "cannot capture": no tail is kept, the run's end reads and writes nothing,
+// and every read is refused as not kept, never served as a complete, empty capture and never given
+// the Kubernetes message a runner that captures must not get.
+func TestRunOutput_UnknownCaptureIsNotKept(t *testing.T) {
+	rr := newRecoveringRunner()
+	rr.log = "printed, but the runner cannot say whether it captures\n"
+	f := newOutputFixture(t, func(c *Config) { c.Runner = rr })
+	rr.capsErr = errors.New("capabilities lookup failed")
+	if w := f.srv.openExecOutput(f.run, false); w != nil {
+		t.Fatal("openExecOutput kept a tail on a runner whose capabilities are unknown")
+	}
+	readsNotKept := func(when string) {
+		t.Helper()
+		w := do(t, f.srv, http.MethodGet, "/api/v1/runs/"+f.run.ID.String()+"/output", adminToken, "")
+		var refusal errorBody
+		_ = json.Unmarshal(w.Body.Bytes(), &refusal)
+		if w.Code != http.StatusConflict || refusal.Reason != reasonRunOutputNotKept {
+			t.Fatalf("%s: %d %s, want 409 %s", when, w.Code, w.Body, reasonRunOutputNotKept)
+		}
+	}
+	readsNotKept("live")
+	f.st.state = types.RunCompleted
+	f.srv.FinishRunOutput(t.Context(), f.run.ID)
+	if row, ok := f.mem.row(f.run.ID); ok {
+		t.Fatalf("the run's end wrote a row %+v; nothing was captured", row)
+	}
+	if n := rr.recoverCount(); n != 0 {
+		t.Fatalf("the run's end read the substrate %d times", n)
+	}
+	readsNotKept("ended")
 }
