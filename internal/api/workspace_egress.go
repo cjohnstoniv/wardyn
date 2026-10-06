@@ -4,6 +4,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net"
 	"net/http"
 	neturl "net/url"
@@ -466,6 +467,11 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 			if host == "" || skip[host] || !hostrules.ValidApprovedHost(host) {
 				continue
 			}
+			// Policy allowed these hosts and the network lost the connection:
+			// promoting one into an allow-list would fix nothing.
+			if rs := auditRuleSource(ev); rs == ruleSourceDialFailed || rs == ruleSourceTunnelFailed {
+				continue
+			}
 			denied[host] = struct{}{}
 		}
 	}
@@ -494,4 +500,13 @@ func runUsesWorkspace(run types.AgentRun, ws types.Workspace) bool {
 		}
 	}
 	return false
+}
+
+// auditRuleSource reads the rule_source an egress decision row recorded.
+func auditRuleSource(ev types.AuditEvent) string {
+	var d struct {
+		RuleSource string `json:"rule_source"`
+	}
+	_ = json.Unmarshal(ev.Data, &d)
+	return d.RuleSource
 }

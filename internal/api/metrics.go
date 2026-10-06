@@ -348,6 +348,12 @@ func (m *metrics) egressDenied() {
 //     opposite direction: an identical retry does not fix it, so it is
 //     also DELIBERATELY absent from the exclusion list below and counts as a
 //     denial like any other.
+//   - builtin:tunnel-failed — a connection policy ALLOWED and the proxy opened
+//     that died after it opened (the tunnel broke mid-stream). Like
+//     builtin:dial-failed it is a network fault, not a denial of anything, so it
+//     keeps its egress.deny audit row and does not move the series.
+//     builtin:resolve-failed, a name that did not resolve, is DELIBERATELY absent
+//     from the exclusion list below and counts as a denial like any other.
 //   - egress:dropped-decisions-<n> — decisions.go's synthetic summary for
 //     decision records the buffer had to drop. An audit-FIDELITY alert about a
 //     wedged control plane, not a denial of anything; the count rides in the
@@ -362,9 +368,8 @@ func (m *metrics) egressDenied() {
 //     series an operator actually wants for it.
 const (
 	ruleSourceDialFailed       = "builtin:dial-failed"
+	ruleSourceTunnelFailed     = "builtin:tunnel-failed"
 	ruleSourceDroppedDecisions = "egress:dropped-decisions-"
-	// Mirrors internal/egress/proxy's ruleSourceTunnelFailed.
-	ruleSourceTunnelFailed = "builtin:tunnel-failed"
 	// Mirrors internal/egress/proxy's ruleSourceCredentialReauthTimeout; the
 	// two packages do not import each other, and the decision arrives here as
 	// a string on the wire.
@@ -380,8 +385,7 @@ const (
 // brokered:git-pat:denied, scan:blocked, site-config:*, …) and a new one is one
 // feature away. An allowlist would silently UNDERCOUNT real denials — a security
 // counter failing quiet — while this list fails toward counting: a source nobody
-// classified still moves the series, and only the four known non-denials do not
-// (tunnel-failed is the post-200 twin of dial-failed: the tunnel opened, then died).
+// classified still moves the series, and only the four known non-denials do not.
 func isPolicyDeny(ruleSource string) bool {
 	return ruleSource != ruleSourceDialFailed &&
 		ruleSource != ruleSourceTunnelFailed &&

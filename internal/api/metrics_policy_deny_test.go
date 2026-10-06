@@ -36,7 +36,7 @@ func TestEgressDeniesTotalCountsPolicyDeniesOnly(t *testing.T) {
 		"policy",                      // a real policy deny — counts
 		"builtin:private-ip",          // a builtin GUARD deny — still a denial, counts
 		"builtin:dial-failed",         // the upstream dial lost it — must NOT count
-		"builtin:tunnel-failed",       // the tunnel died after its 200 — must NOT count
+		"builtin:tunnel-failed",       // a connection that died after it opened — must NOT count
 		"egress:dropped-decisions-42", // audit-fidelity summary — must NOT count
 		"builtin:gateway-vet-failed",  // a guard refusal of the model gateway — counts
 	} {
