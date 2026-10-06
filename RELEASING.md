@@ -492,45 +492,49 @@ gh api -X PATCH repos/cjohnstoniv/wardyn/branches/main/protection/required_statu
 {
   "strict": true,
   "contexts": [
-    "build", "ui", "dco",
+    "build", "ui", "dco", "diagrams", "compose",
     "gates (govulncheck)", "gates (staticcheck)", "gates (gitleaks)",
     "gates (licenses)", "gates (license-headers)",
     "notices",
-    "trivy (wardynd)", "trivy (wardynd-fips)", "trivy (wardyn-proxy)", "trivy (agent-base)",
+    "test-pg", "conformance", "conformance-k8s", "envbuild-integration",
+    "helm", "helm-install-test",
+    "trivy (wardynd)", "trivy (wardyn-proxy)", "trivy (agent-base)",
     "trivy (agent-codex-cli)", "trivy (agent-aws-sso)",
-    "trivy (agent-vscode)", "trivy (agent-novnc)"
+    "trivy (agent-vscode)", "trivy (agent-novnc)",
+    "trivy (wardynd-fips)"
   ]
 }
 JSON
 ```
 
-`notices` and the eight `trivy` checks are in that list because the Prerequisites
-section above already calls them gates and both report on every pull request, as
-skipped when the change cannot affect them (docs/CI.md, "Incremental CI"), so
-both are eligible contexts. Until the PATCH
-above is applied they are advisory only: `notices` is the copyleft /
-unreviewed-dependency gate, and `trivy` is the only CVE scan of the eight images
-a release publishes, so with either red a PR still merges. Each image has its
-own `trivy-<image>` job reporting as `trivy (<image>)` — adding an image to
+The first 24 contexts are the ones `main` requires today, read back on 2026-10-06
+with the command below. The last, **`trivy (wardynd-fips)`, is not required
+today**: its job runs and reports on every pull request, but a red
+`trivy (wardynd-fips)` does not block a merge until the owner runs this PATCH. Run
+as written, the command drops nothing that is required now and adds that one
+context. The PATCH replaces the whole list, so read the live list back first: a
+context that is live and missing from this body would be dropped.
+
+Every context in the list reports on every pull request, as skipped when the
+change cannot affect it (docs/CI.md, "Incremental CI"), so each is an eligible
+context. `notices` is the copyleft / unreviewed-dependency gate, and the `trivy`
+checks are the only CVE scan of the eight images a release publishes. Each image
+has its own `trivy-<image>` job reporting as `trivy (<image>)` — adding an image to
 `.github/workflows/ci.yml` means adding its job, adding its context here **and**
 re-running the PATCH, or that image merges unscanned.
 `scripts/test-claims-match-code.sh` (C6) fails if this list and those jobs drift
 apart.
 
-`trivy (wardynd-fips)` is the same case: the PATCH has to be re-run by the owner
-before that context is required, and after the FIRST real tag that builds it the
-owner confirms `ghcr.io/cjohnstoniv/wardynd-fips` is a PUBLIC package (a
+For `trivy (wardynd-fips)` the PATCH has to be re-run by the owner (never by an
+agent) before that context is required, and after the FIRST real tag that builds
+it the owner confirms `ghcr.io/cjohnstoniv/wardynd-fips` is a PUBLIC package (a
 newly-created GHCR package can default to private, which silently breaks every
 documented pull). `ghcr.io/cjohnstoniv/staging/wardynd-fips` may stay private:
 only the workflow reads it.
 
-**#141 (`agent-vscode`/`agent-novnc` join the publish matrix) is exactly this
-case, and it is not yet done.** This document names `trivy (agent-vscode)` and
-`trivy (agent-novnc)` as required contexts, but the live branch protection
-still lists only the prior five — the PATCH above has to be re-run by the
-owner (never by an agent) before either context is actually required, or both
-merge unscanned in the meantime. Two more owner steps belong with it, both
-after the FIRST real tag that runs `images-ui-sandbox`: confirm
+`trivy (agent-vscode)` and `trivy (agent-novnc)` (#141, `agent-vscode`/`agent-novnc`
+joining the publish matrix) are required today. Two owner steps belong with
+#141, both after the FIRST real tag that runs `images-ui-sandbox`: confirm
 `ghcr.io/cjohnstoniv/agent-vscode` and `ghcr.io/cjohnstoniv/agent-novnc` are
 PUBLIC packages (a newly-created GHCR package can default to private, which
 silently breaks every documented pull), and re-check this section's PATCH
@@ -545,9 +549,12 @@ A job conditional on `push`, a schedule, or a path filter must **not** be a requ
 context: GitHub does not treat a never-reported required context as passing, so
 the PR sits at "Expected — waiting for status to be reported" and cannot be
 merged. Every `nightly.yml` job is such a job, `buildx-smoke` (the multi-arch
-build) included. `ci.yml`'s change classifier (#932) never skips a required job:
-one whose work a change cannot affect still runs, skips its steps and reports
-success (docs/CI.md, "Incremental CI"). A job's check name is its `name:` when it sets one, otherwise
+build) included. `ci.yml`'s change classifier (#932) is not such a filter: a
+required job whose work a change cannot affect is skipped by a job-level `if:`
+and reports as skipped, which branch protection accepts, and it runs whenever the
+classification is missing. The one required matrix job, `gates`, never skips that
+way: a skipped matrix reports a single check with its name unexpanded, never the
+per-cell contexts (docs/CI.md, "Incremental CI"). A job's check name is its `name:` when it sets one, otherwise
 its job id, so renaming either is the same protection change as deleting the
 job.
 
