@@ -35,6 +35,7 @@ import { SshKeysPane } from "./ssh-keys";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { DENIED } from "../../lib/permissions-copy";
 import type { MeCapabilities } from "../../lib/types";
+import { setField } from "../../../test/set-field";
 
 function renderScreen() {
   return render(
@@ -146,8 +147,8 @@ describe("SshKeysPane — add key", () => {
     await screen.findByText("No keys yet.");
 
     await user.click(screen.getAllByRole("button", { name: /add key/i })[0]);
-    await user.type(screen.getByLabelText(/name/i), "new key");
-    await user.type(screen.getByLabelText(/public key/i), "ssh-ed25519 AAAA");
+    setField(screen.getByLabelText(/name/i), "new key");
+    setField(screen.getByLabelText(/public key/i), "ssh-ed25519 AAAA");
 
     listKeysMock.mockResolvedValue([
       { fingerprint: "SHA256:new", principal: "alice@example.com", name: "new key", public_key: "", created_at: aheadByHours(-1) },
@@ -165,7 +166,7 @@ describe("SshKeysPane — add key", () => {
     await screen.findByText("No keys yet.");
 
     await user.click(screen.getAllByRole("button", { name: /add key/i })[0]);
-    await user.type(screen.getByLabelText(/public key/i), "-----BEGIN OPENSSH PRIVATE KEY-----");
+    setField(screen.getByLabelText(/public key/i), "-----BEGIN OPENSSH PRIVATE KEY-----");
     await user.click(screen.getByRole("button", { name: /^add key$/i }));
 
     await screen.findByText(/paste your public key instead/i);

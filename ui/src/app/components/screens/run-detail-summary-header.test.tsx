@@ -32,6 +32,7 @@ import {
   PENDING_NO_DETAIL,
   STARTING_CONTAINER_CREATING,
 } from "./run-status-detail";
+import { setField } from "../../../test/set-field";
 
 // SummaryHeader now renders a "Runs" breadcrumb <Link> (react-router-dom),
 // which throws outside a Router context — wrap every render the same way
@@ -742,7 +743,7 @@ describe("SummaryHeader — Rename draft seeding and empty-submit", () => {
     await user.click(screen.getByRole("button", { name: "Rename" }));
     const input = screen.getByLabelText("Title");
     await user.clear(input);
-    await user.type(input, "A real new title");
+    setField(input, "A real new title");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(onRename).toHaveBeenCalledWith("A real new title");
   });
