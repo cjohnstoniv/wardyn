@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -443,6 +444,7 @@ func (p *Proxy) httpErrorAWSAware(w http.ResponseWriter, host, plainMsg string, 
 		if withStage {
 			msg = p.causeSentence(err)
 		}
+		slog.Warn("proxy error returned to the sandbox", "msg", plainMsg, "status", status, "err", msg)
 		writeAWSSDKError(w, status, errType, msg)
 		return
 	}
