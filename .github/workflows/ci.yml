@@ -66,6 +66,21 @@ jobs:
   # job level on an explicit 'false': GitHub reports it as skipped, which
   # branch protection accepts, and it never waits for a runner just to do
   # nothing.
+  #
+  # Start order. The account runs 20 jobs at once and a change to Go asks for
+  # about 35, so some wait, and GitHub picks which among the jobs that became
+  # ready together. The long jobs (go, ui, ui-e2e, helm-install-test, both
+  # conformance jobs, envbuild-integration, test-pg-shard) need only this job.
+  # The short ones (gates, notices, the trivy scans) also need `diagrams`, a
+  # 45-second job that starts with this one: they become ready about half a
+  # minute after the long jobs, which by then hold their runners, and share
+  # what is left. Nothing reads its result: each of them runs on
+  # `!cancelled()`, whether diagrams passed or failed. It has to be a job that
+  # starts with the run. Waiting on one that itself needs this job (helm,
+  # say) would put the short jobs through the queue a third time when the
+  # account is busy. Without any of this, a nine-minute job can sit behind
+  # eight two-minute scans (run 37403763766: conformance queued 98 s, go
+  # (unit) 90 s).
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1434,7 +1449,7 @@ jobs:
   # rationale (distroless, no OS package surface) was true of two of them.
   trivy-wardynd:
     name: trivy (wardynd)
-    needs: changes
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -1519,7 +1534,7 @@ jobs:
   # Dockerfile's own GOFIPS140 check runs on every PR.
   trivy-wardynd-fips:
     name: trivy (wardynd-fips)
-    needs: changes
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -1530,7 +1545,7 @@ jobs:
     steps: *trivy_steps
   trivy-wardyn-proxy:
     name: trivy (wardyn-proxy)
-    needs: changes
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -1541,7 +1556,7 @@ jobs:
     steps: *trivy_steps
   trivy-agent-base:
     name: trivy (agent-base)
-    needs: changes
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -1552,7 +1567,7 @@ jobs:
     steps: *trivy_steps
   trivy-agent-codex-cli:
     name: trivy (agent-codex-cli)
-    needs: changes
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -1563,7 +1578,7 @@ jobs:
     steps: *trivy_steps
   trivy-agent-aws-sso:
     name: trivy (agent-aws-sso)
-    needs: changes
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -1574,7 +1589,7 @@ jobs:
     steps: *trivy_steps
   trivy-agent-vscode:
     name: trivy (agent-vscode)
-    needs: changes
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -1585,7 +1600,7 @@ jobs:
     steps: *trivy_steps
   trivy-agent-novnc:
     name: trivy (agent-novnc)
-    needs: changes
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -1633,7 +1648,7 @@ jobs:
   # 'false' (docs, console source, Go test files): a skipped required check
   # without a matrix reports as skipped, which branch protection accepts.
   notices:
-    needs: changes
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.notices != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -1680,6 +1695,8 @@ jobs:
           key: go-notices-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
 
   gates:
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
