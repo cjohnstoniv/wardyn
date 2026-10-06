@@ -505,7 +505,10 @@ jobs:
       # module-relative path, a ?raw or glob import), so these are the test
       # files that do, plus the callers of the two helpers that read a path
       # their caller passes (copy-doc-parity.ts, test-fixtures.ts's
-      # expectNoOwnCopy). It fails closed: if any OTHER module under src/ reads
+      # expectNoOwnCopy). A relative path counts as leaving ui/ when it climbs
+      # to the name of any entry at the repository root other than ui: the
+      # names are read from the tree, so a new top-level directory is covered
+      # the day it is added. It fails closed: if any OTHER module under src/ reads
       # files or names a path outside ui/, a test could read through it unseen,
       # so the whole suite runs instead. Finding no test at all means the
       # pattern broke, and fails. No coverage: a subset's profile means nothing.
@@ -514,7 +517,9 @@ jobs:
         working-directory: ui
         run: |
           set -euo pipefail
-          reads=$'[\'"](node:)?(fs(/promises)?|child_process)[\'"]|process\\.cwd\\(\\)|import\\.meta\\.(url|glob)|__dirname|\\?raw[\'"]|[\'"`](\\.\\./)+(docs|internal|cmd|deploy|scripts|threatmodel|examples|test|\\.github)/'
+          # Every root entry but ui, as one alternation (a failed listing fails the step).
+          tops="$(git ls-tree --full-tree --name-only HEAD | grep -vx ui | sed 's/[^A-Za-z0-9_-]/\\&/g' | paste -sd'|')"
+          reads=$'[\'"](node:)?(fs(/promises)?|child_process)[\'"]|process\\.cwd\\(\\)|import\\.meta\\.(url|glob)|__dirname|\\?raw[\'"]|[\'"`](\\.\\./)+('"$tops"$')([/\'"`?]|$)'
           helpers="$(git grep -l -E "$reads" -- 'src/*.ts' 'src/*.tsx' ':!*.test.ts' ':!*.test.tsx' || true)"
           if [ "$(echo $helpers)" != "src/app/lib/copy-doc-parity.ts src/app/lib/test-fixtures.ts" ]; then
             echo "::notice::a module outside the two known helpers reads files or names a path outside ui/ ($helpers); running the whole suite"

@@ -574,7 +574,10 @@ race + coverage pass per tag set (#467):
    cwd- or module-relative path, a `?raw` or glob import), so the step runs the test files
    that do, plus the callers of the two helpers that read a path their caller passes
    (`copy-doc-parity.ts`, and `test-fixtures.ts`'s `expectNoOwnCopy`): 76 of 341 files,
-   71 s where the whole suite takes 547 s, without coverage. It fails closed: if any other
+   71 s where the whole suite takes 547 s, without coverage. A relative path counts as
+   leaving `ui/` when it climbs to the name of any entry at the repository root other than
+   `ui`; the step reads those names from the tree, so a new top-level directory needs no
+   edit here. It fails closed: if any other
    module under `ui/src` reads files or names a path outside `ui/`, a test could read through
    it unseen, so the whole suite runs instead; and finding no test at all fails.
 3. **Docker layer cache.** `helm-install-test` (wardynd, wardyn-proxy), `conformance-k8s` (wardyn-proxy) and
