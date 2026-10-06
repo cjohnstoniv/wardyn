@@ -500,19 +500,43 @@ race + coverage pass per tag set (#467):
    `make cover-check` enforces locally.
 2. **Skip what a change cannot affect.** The `changes` job classifies the pull request's
    changed paths (`git diff --name-only --no-renames HEAD^1 HEAD` on GitHub's merge commit,
-   so a moved file counts at both its old and its new path) into five outputs, each `true`
-   when at least one changed path sets it:
+   so a moved file counts at both its old and its new path). Each path gets one class, by
+   the first rule that matches, so where a file lives decides before its extension does:
+
+   | Order | Paths | Class |
+   |---|---|---|
+   | 1 | `deploy/**` and `LICENSING.md` | backend |
+   | 2 | `docs/**`, `threatmodel/**` | docs |
+   | 3 | `ui/**` | ui |
+   | 4 | anything else under a directory, `.md` files included | backend |
+   | 5 | a `.md` at the repository root | docs |
+   | 6 | any other file at the repository root | backend |
+
+   Rules 1 and 4 are why a `.md` is documentation only at the repository root. Helm renders
+   every file under `deploy/helm/wardyn/templates/` as a manifest, whatever its extension, and
+   every Dockerfile copies `LICENSING.md` and `deploy/images/README.md`. When any `.md` counted
+   as docs, a NetworkPolicy written in `templates/x.md` skipped `helm`, `helm-install-test`,
+   both conformance jobs, `test-pg`, the image scans and `notices`, and deleting a copied `.md`
+   broke every image build with none built on the pull request.
+   `TestCIClassifierPutsWhereAFileLivesBeforeItsExtension` pins the order.
+   `scripts/check-helm-templates.sh` holds the chart half without the classifier: it refuses
+   any file under `templates/` that is not a `*.yaml`, a `*.tpl` or `NOTES.txt`, from
+   `make lint` on every change and again from `make helm-lint`.
+   (`THIRD-PARTY-NOTICES.md`, the third `.md` the Dockerfiles copy, stays docs: it sets
+   `notices`, and `make notices` fails when the file is missing.)
+
+   The classes set five outputs, each `true` when at least one changed path sets it:
 
    | Output | Set by | Read by |
    |---|---|---|
-   | `code` | any path outside `docs/**`, `threatmodel/**` and `*.md` | `ui-e2e`, `helm-install-test` |
-   | `backend` | any path outside those and `ui/**` (Go, `deploy/**`, `scripts/**`, `.github/**`, …) | `go` (full suites or guard packages), `build` (union), `test-pg-shard`, `test-pg`, `conformance`, `conformance-k8s`, `envbuild-integration`, `helm`, `helm-install-test`'s kind half |
+   | `code` | any ui or backend path | `ui-e2e`, `helm-install-test` |
+   | `backend` | any backend path (Go, `deploy/**`, `scripts/**`, `.github/**`, …) | `go` (full suites or guard packages), `build` (union), `test-pg-shard`, `test-pg`, `conformance`, `conformance-k8s`, `envbuild-integration`, `helm`, `helm-install-test`'s kind half |
    | `ui` | `ui/**`, the `Makefile`, `.github/workflows/ci.yml` | `ui` (whole vitest suite, or only the files that read outside `ui/`) |
    | `images` | a `backend` path other than a Go `*_test.go` file | the eight `trivy (<image>)` jobs |
    | `notices` | `images`, `ui/package.json`, `ui/pnpm-lock.yaml`, `THIRD-PARTY-NOTICES.md` | `notices` |
 
-   A path that matches no pattern counts as backend, so a new directory runs everything until
-   someone classifies it. A push, a merge queue run, a pull request from a `train/*` branch
+   A path that matches no earlier rule counts as backend, so a new directory runs everything
+   until someone classifies it. A push, a merge queue run, a pull request from a `train/*` branch
    and a pull request into `release/*` always run everything. So, for example, a docs-only
    change skips `ui-e2e`, `helm-install-test`, both conformance jobs, `envbuild-integration`,
    `helm`, `test-pg`, `notices` and every `trivy` scan; a console-only change skips the same

@@ -305,3 +305,72 @@ func ciJobBlock(t *testing.T, wf, job string) string {
 	}
 	return rest[:next[0]]
 }
+
+// TestCIClassifierPutsWhereAFileLivesBeforeItsExtension pins the order of the
+// path rules in ci.yml's `changes` job. Its docs rule once read
+// `docs/*|threatmodel/*|*.md` and came first, so ANY .md was documentation, and
+// a docs-only change skips helm, helm-install-test, both conformance jobs,
+// test-pg, the image scans and notices. Two things made that a hole:
+//
+//   - Helm renders every file under deploy/helm/wardyn/templates whatever its
+//     extension, so a NetworkPolicy written in templates/x.md would have merged
+//     with none of those jobs run;
+//   - every Dockerfile COPYs LICENSING.md and deploy/images/README.md, so
+//     deleting or renaming one broke each image build, with no image built on
+//     the pull request to say so.
+//
+// So the directory rules lead and only a .md at the repository root is
+// documentation by its extension: `deploy/*|LICENSING.md` is the first arm,
+// and `*/*` (every other directory) precedes `*.md`. The template half is also
+// held without the classifier, by scripts/check-helm-templates.sh, which this
+// guard keeps wired into both `make lint` (every change) and `make helm-lint`.
+func TestCIClassifierPutsWhereAFileLivesBeforeItsExtension(t *testing.T) {
+	root := repoRoot(t)
+	wf, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatalf("read ci.yml: %v", err)
+	}
+	changes := ciJobBlock(t, string(wf), "changes")
+
+	const firstArm = "            case \"$f\" in\n" +
+		"              deploy/*|LICENSING.md) class=backend; code=true; backend=true ;;\n"
+	if !strings.Contains(changes, firstArm) {
+		t.Errorf("the changes job's path rules no longer open with `deploy/*|LICENSING.md) class=backend`: "+
+			"a file Helm renders or a Dockerfile copies could be classed by its extension first:\n%s", changes)
+	}
+	arms := []string{
+		"\n              deploy/*|LICENSING.md) class=backend; code=true; backend=true ;;\n",
+		"\n              docs/*|threatmodel/*) class=docs ;;\n",
+		"\n              */*) class=backend; code=true; backend=true ;;\n",
+		"\n              *.md) class=docs ;;\n",
+	}
+	last := -1
+	for _, arm := range arms {
+		if n := strings.Count(changes, arm); n != 1 {
+			t.Fatalf("the changes job must carry the path rule %q exactly once, found %d:\n%s", arm, n, changes)
+		}
+		at := strings.Index(changes, arm)
+		if at < last {
+			t.Errorf("the path rule %q comes too early: the order must be deploy/ and LICENSING.md, the docs "+
+				"directories, every other directory, then root-level *.md:\n%s", arm, changes)
+		}
+		last = at
+	}
+	// Two rules name the docs class, and both are pinned above. A third could
+	// only be a way to call some other path documentation.
+	if n := strings.Count(changes, "class=docs"); n != 2 {
+		t.Errorf("the changes job classes a path as docs in %d places, want the 2 pinned above (docs/ and "+
+			"threatmodel/, and root-level *.md):\n%s", n, changes)
+	}
+
+	mk, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatalf("read Makefile: %v", err)
+	}
+	for _, target := range []string{"lint", "helm-lint"} {
+		if recipe := makeRecipeLines(t, string(mk), target); !strings.Contains(recipe, "./scripts/check-helm-templates.sh\n") {
+			t.Errorf("`make %s` no longer runs scripts/check-helm-templates.sh, so a manifest in a "+
+				"non-template file under the chart's templates/ is not refused there:\n%s", target, recipe)
+		}
+	}
+}

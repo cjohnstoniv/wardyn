@@ -41,7 +41,9 @@ concurrency:
 jobs:
   # ── which jobs a change can affect (#932) ─────────────────────────────────
   # Classifies the changed paths once. Five outputs, each 'true' or 'false':
-  #   code    — something outside the docs changed (docs/**, threatmodel/**, *.md)
+  #   code    — something outside the docs changed. The docs are docs/**,
+  #             threatmodel/** and the *.md files at the repository root, less
+  #             LICENSING.md. A .md anywhere else is classed by its directory.
   #   backend — something outside the docs AND outside ui/** changed
   #   ui      — something under ui/** changed, or the Makefile or this workflow,
   #             which say how the console is built and tested
@@ -116,9 +118,18 @@ jobs:
           code=false backend=false ui=false images=false notices=false
           while IFS= read -r f; do
             [ -n "$f" ] || continue
+            # Where a file lives decides its class before its extension does.
+            # Helm renders every file under a chart's templates/, .md included,
+            # and every Dockerfile copies LICENSING.md and deploy/images/README.md,
+            # so the deploy/ rule comes first. The */* rule then does the same
+            # for every other directory: only a .md at the repository root is
+            # documentation by its extension alone.
             case "$f" in
-              docs/*|threatmodel/*|*.md) class=docs ;;
+              deploy/*|LICENSING.md) class=backend; code=true; backend=true ;;
+              docs/*|threatmodel/*) class=docs ;;
               ui/*) class=ui; code=true; ui=true ;;
+              */*) class=backend; code=true; backend=true ;;
+              *.md) class=docs ;;
               *) class=backend; code=true; backend=true ;;
             esac
             case "$f" in
