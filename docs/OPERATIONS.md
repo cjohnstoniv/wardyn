@@ -4372,14 +4372,16 @@ set both fields.
 **A bypass entry helps only if `wardyn-proxy` itself can resolve and reach the name.** A bypassed
 name is resolved and dialled by the proxy, not by your corporate proxy, so a name that only the
 corporate proxy can resolve fails there. A lookup from inside the sandbox proves nothing about this:
-on Kubernetes the sandbox has no DNS by design. With an upstream configured, the proxy resolves
-only bypassed names in order to dial them, so a `builtin:resolve-failed` row that carries `via: direct` and a `cause` saying the name is on
-the upstream proxy's bypass list and did not resolve at the proxy is that case, and not your
+on Kubernetes the sandbox has no DNS by design. With an upstream configured, the only names the proxy
+resolves in order to dial are the bypassed ones (it still looks up every other name for its address
+guard, and a failed lookup there denies nothing), so a `builtin:resolve-failed` row that carries
+`via: direct` and a `cause` saying the name is on the upstream proxy's bypass list and did not resolve at the proxy is that case, and not your
 corporate proxy failing to find the name. Either fix the proxy's own resolution, or take the name off
 the bypass list so the corporate proxy resolves it. If neither hop can resolve and reach the name,
 the estate needs a route, not a configuration change. The proxy says the same at startup, once per
-AWS SSO injection host the bypass list does not cover (`kubectl logs wardyn-proxy-<run-id>` on
-Kubernetes): "a bypass entry helps only if wardyn-proxy itself (not the sandbox) can resolve and
+AWS SSO injection host the bypass list does not cover (on Kubernetes,
+`kubectl -n "$WARDYN_NS" logs wardyn-proxy-<run-id>`, with `$WARDYN_NS` the namespace the run's pods are
+in): "a bypass entry helps only if wardyn-proxy itself (not the sandbox) can resolve and
 reach the host; if neither hop can, the estate needs a route, not a configuration change".
 
 ### Phase B: the SSO/Bedrock MITM lane and the upstream proxy
@@ -4411,14 +4413,16 @@ bare `builtin:dial-failed` as every other dial failure in this section.
 connections took and why one died, and the proxy's log adds a fourth.
 
 - **`run.upstream_proxy.resolve` says whether an upstream proxy was in effect for the run.** It is
-  written on every dispatch, and again when a revived run's proxy config is refreshed from the
-  deployment. `in_effect: true` (outcome `success`) means the run's proxy config carries an upstream
-  URL. `in_effect: false` with `reason: not-configured` (outcome `success`) means none is
-  configured, so an absent row no longer has to be read as "none configured". `in_effect: false`
-  with any other `reason` (outcome `failure`: `site-config-read-error`, `unsupported-scheme`,
-  `unloadable-upstream-url`, `reserved-secret-name`, `no-secret-store`, `secret-not-found`) means one
-  was configured and was dropped, and the run's egress is direct. `in_effect` says what the run was
-  given. Which hop carried one connection is `via`.
+  written on every dispatch that gets as far as building the run's proxy config, and again when a
+  revived run's proxy config is refreshed from the deployment. `in_effect: true` (outcome `success`)
+  means the run's proxy config carries an upstream URL. `in_effect: false` with `reason:
+  not-configured` (outcome `success`) means none is configured, so an absent row now means the
+  dispatch failed before that point, not "none configured". `in_effect: false` with outcome `failure`
+  means the run's egress is direct although it may not have been meant to be: `site-config-read-error`
+  says the site config could not be read, so whether an upstream is configured is unknown;
+  `unsupported-scheme`, `unloadable-upstream-url`, `reserved-secret-name`, `no-secret-store` and
+  `secret-not-found` say one was configured and was dropped. `in_effect` says what the run was given.
+  Which hop carried one connection is `via`.
 - **`via` on an `egress.allow` row says which hop carried that connection**: `upstream-proxy` or
   `direct`, a class and never an address. A bypassed name reads `direct` even with an upstream in
   effect. The allow of a CONNECT tunnel the proxy terminates itself (this lane's CONNECT) carries no
@@ -4431,22 +4435,23 @@ connections took and why one died, and the proxy's log adds a fourth.
   answered a TLS hello with something that was not TLS, for example `HTTP 502`, or wrote an HTTP
   response before the sandbox sent a byte, or reset or closed without answering, or the sandbox closed
   before any reply), `tunnel tls handshake:` (the hop's whole answer to the TLS hello was a TLS
-  alert, with its description number) or `client tls handshake (sandbox to wardyn-proxy):` followed by
+  alert, with its description number when that byte arrived) or `client tls handshake (sandbox to wardyn-proxy):` followed by
   the error (the sandbox's TLS handshake with the terminating proxy failed after it sent at least one
   byte; for example a client that does not trust the CA the proxy signs with). When `via` is
   `upstream-proxy` the cause also keeps the status line's reason phrase from your own proxy, in
   parentheses (`HTTP 502 (Bad Gateway)`); for a `direct` hop it keeps the status code only. A tunnel the sandbox opened with a TLS
-  hello is no longer handed whatever non-TLS bytes the hop sends back: they are refused, nothing is
-  relayed, and the sandbox sees the connection close. A tunnel the sandbox opens with anything other
+  hello is no longer handed a first answer from the hop that is not a TLS record: it is refused,
+  nothing is relayed, and the sandbox sees the connection close. A tunnel the sandbox opens with anything other
   than a TLS hello (ssh over 443, plain HTTP, a websocket upgrade) is relayed untouched. A tunnel that
   carried an answer leaves no row, and neither does one the sandbox never wrote into, unless the hop
   spoke HTTP first.
   The row is not counted on `wardyn_egress_denies_total` and the console reads it as `failed`, as it
   does `builtin:dial-failed`. See [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md) for the row.
 - **On an AWS endpoint (the SSO portal or Bedrock) the proxy answers the SDK with a modelled JSON
-  error body, and now also logs it.** The proxy's log carries `proxy error returned to the sandbox`
-  with `msg`, `status` and `err` (the masked, topology-redacted error), so
-  `kubectl logs wardyn-proxy-<run-id>` shows what the SDK was told.
+  error body, and for a dial, vet or credential-refresh failure now also logs it.** The proxy's log
+  carries `proxy error returned to the sandbox` with `msg`, `status` and `err` (the masked,
+  topology-redacted error), so `kubectl -n "$WARDYN_NS" logs wardyn-proxy-<run-id>` shows what the SDK
+  was told.
 
 ### wardynd behind a corporate proxy
 
@@ -5028,8 +5033,9 @@ capturing their OWN session.
 **The sign-in run carries its own allow-list, and a governance profile's `denied_domains` still
 binds it.** The sign-in sandbox's `allowed_domains` are its own: `*.awsapps.com` (the access portal)
 and the provider's region-scoped AWS SSO hosts (`oidc.<region>`, `portal.sso.<region>` and
-`device.sso.<region>` under `amazonaws.com`). Any other host it dials is held for review
-(`deny_with_review`) rather than silently refused. A governance
+`device.sso.<region>` under `amazonaws.com`). Any other host it dials is refused and raised
+as a pending approval for review (`deny_with_review`), not refused silently; once approved, a retry
+passes. A governance
 profile's `allowed_domains` is not intersected into it, so narrowing a profile's `allowed_domains`
 does not lock the people under it out of signing in. A profile's `denied_domains` is: the sign-in
 run is dispatched under the signing-in person's ceiling like any other run, the profile's denies are

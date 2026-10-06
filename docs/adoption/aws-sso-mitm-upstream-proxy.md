@@ -235,13 +235,14 @@ What 0.8.7 changes on this path:
   is your own upstream proxy), its whole answer was a TLS alert, it reset or closed without
   answering, or the sandbox closed first. A lane the proxy terminates itself records a failed client
   handshake the same way. The row is not counted on `wardyn_egress_denies_total`.
-- **Non-TLS bytes in answer to a TLS hello are no longer relayed.** The proxy refuses them and the
+- **A first answer to a TLS hello that is not TLS is no longer relayed.** The proxy refuses it and the
   sandbox sees the connection close. Tunnels the sandbox opens with anything other than a TLS hello
   are relayed untouched.
-- **Every allow that followed a forward dial carries `via`** (`upstream-proxy` or `direct`), so a
+- **The allow recorded for each forward dial carries `via`** (`upstream-proxy` or `direct`; the extra
+  marker allows some lanes write beside it, such as an Azure DevOps refusal class, carry none), so a
   trail shows whether the upstream proxy was in the path, and a `builtin:resolve-failed` with an
   upstream configured says the name is on the bypass list and did not resolve at the proxy.
-- **`run.upstream_proxy.resolve` is written on every dispatch**, with `in_effect`, so a run with no
+- **`run.upstream_proxy.resolve` is written on every dispatch that reaches the proxy config**, with `in_effect`, so a run with no
   upstream configured has a row saying so.
 - **The sidecar's warning about an AWS SSO host the bypass list does not cover** now says a bypass
   entry helps only when `wardyn-proxy` itself can resolve and reach the host.

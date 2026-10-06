@@ -16,15 +16,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   The allow stays. It is a network fault and not a policy denial: it is not counted on
   `wardyn_egress_denies_total`, as `builtin:dial-failed` is not, and the console reads it as `failed`. A SIEM
   rule over the `egress.deny` action will see it; match on `rule_source` to tell it from a policy denial.
-- **`egress.allow` rows gain `via`.** An allow that followed a forward dial (the CONNECT tunnel, a plain
+- **`egress.allow` rows gain `via`.** The allow recorded for each forward dial (the CONNECT tunnel, a plain
   forward, a relayed model call, and the git, token and forge-API broker lanes) now carries `via`:
-  `upstream-proxy` or `direct`, never an address. The allow of a CONNECT tunnel the proxy terminates itself
-  carries none. A `builtin:resolve-failed` row written with an upstream proxy configured now also carries `via`
-  and a `cause`.
+  `upstream-proxy` or `direct`, never an address; the extra marker allows some lanes write beside it, such as
+  an Azure DevOps refusal class, carry none. The allow of a CONNECT tunnel the proxy terminates itself carries
+  none. A `builtin:resolve-failed` row written with an upstream proxy configured now also carries `via` and a
+  `cause`. So does the deny for a request inside a tunnel the proxy terminates whose upstream could not be
+  vetted (its `rule_source` is the request's lane, such as `scan:mitm`).
 - **`run.upstream_proxy.resolve` is now written on every dispatch, and on a revive's deployment-config
-  refresh.** It used to be written only when an upstream proxy was configured. A run with none configured now
-  gets one more row, outcome `success`, `in_effect` `false`, `reason` `not-configured`; every row of the action
-  now carries `in_effect`. Expect one more audit row per run, and per revive.
+  refresh.** It used to be written only when an upstream proxy was configured or the site config could not be
+  read. A run with none configured now gets a row, outcome `success`, `in_effect` `false`, `reason`
+  `not-configured`; every row of the action now carries `in_effect`. On a deployment with no upstream proxy
+  configured, expect one more audit row per dispatch and per revive.
 - **The database pool minimum is now 4, and the process-lifetime locks no longer take a pooled connection.**
   The single-instance lock, the sweeper leader's lock and the ground-truth rotator's lock each hold a
   connection of their own, dialled from the same DSN, so a Postgres `max_connections` budget needs up to 3
@@ -44,12 +47,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   tunnel, in one of three cases, each with a fixed `cause` sentence and `via`: the proxy refused the dialled
   hop's first bytes (the sandbox opened with a TLS hello and the answer was not a TLS record, or the hop wrote
   an HTTP response before the sandbox sent anything); the hop's whole answer to the TLS hello was a TLS alert;
-  or the sandbox sent bytes and none came back, the sentence saying which side closed first. A tunnel the
-  sandbox never wrote into, and one that carried an answer, leave no row. The `cause` carries no sandbox
+  or the sandbox sent bytes and none came back, the sentence saying which side closed first. A tunnel that
+  carried an answer leaves no row, and neither does one the sandbox never wrote into, unless the hop spoke
+  HTTP first. The `cause` carries no sandbox
   bytes; from the hop it carries only a strictly parsed `HTTP/1.x` status code, an alert's description number,
   and the reason phrase when `via` is `upstream-proxy`, the operator's own hop. See `docs/AUDIT-ACTIONS.md` and
   "Phase B" in `docs/OPERATIONS.md`.
-- **The proxy refuses non-TLS bytes into a tunnel the sandbox opened with a TLS hello.** A hop that
+- **The proxy refuses a non-TLS first answer into a tunnel the sandbox opened with a TLS hello.** A hop that
   acknowledged the CONNECT and then answered the hello in plaintext (an error page, a captive portal) used to
   have that relayed to a client that could only report a TLS decode error. The bytes are now refused, nothing is
   relayed and the sandbox sees the connection close, with the row above naming what the hop sent. A hop that
@@ -59,17 +63,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   handshake with the proxy fails after it sent at least one byte, `builtin:tunnel-failed` is written with a
   `cause` beginning `client tls handshake (sandbox to wardyn-proxy):`, followed by the masked,
   topology-redacted error. A sandbox that sent nothing leaves no row.
-- **The proxy logs the errors it returns on an AWS endpoint.** On the AWS SSO portal and Bedrock hosts the
-  proxy answers an SDK with a modelled JSON error body; it now also logs `proxy error returned to the sandbox`
-  with `msg`, `status` and `err`, so the proxy's log shows what the SDK was told.
+- **The proxy logs the dial, vet and credential-refresh errors it returns on an AWS endpoint.** On the AWS
+  SSO portal and Bedrock hosts the proxy answers an SDK with a modelled JSON error body; for those it now
+  also logs `proxy error returned to the sandbox` with `msg`, `status` and `err`, so the proxy's log shows
+  what the SDK was told.
 
 ### Changed
 
-- **The `note` of `run.ceiling.reassert` now says only what the run's enforcement did.** The long sentence
+- **The `note` of `run.ceiling.reassert` is now one of two fixed sentences.** The long sentence
   (the profile denies these hosts, the denies are unioned into the run policy, every credential lane that
-  reaches a denied host is withheld) is written only when a host was denied or a credential lane or host was
-  withheld; otherwise the row carries a short sentence saying the profile applies and denied and withheld
-  nothing. `denied_added`, `dropped_injection_hosts` and `dropped_broker_lanes` are `[]` when empty, never
+  reaches a denied host is withheld) is written whenever the profile's `denied_domains` is not empty, whether
+  or not this run already carried those denies (`denied_added` can be `[]` on such a row); the code tests that
+  list, the hosts added, and the injection hosts and credential lanes withheld, and the last three arise only
+  when the list is not empty. A profile that denies no host leaves a short sentence saying it applies and
+  denied and withheld nothing. `denied_added`, `dropped_injection_hosts` and `dropped_broker_lanes` are `[]` when empty, never
   `null`. A rule that matched the long sentence on every row no longer does.
 - **The sidecar's warning about an AWS SSO host the bypass list does not cover is qualified.** It now ends by
   saying a bypass entry helps only if `wardyn-proxy` itself (not the sandbox) can resolve and reach the host,
@@ -88,11 +95,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   per process, and a write that finds all 8 in use waits two seconds and is then refused. Closing that
   connection is bounded at two seconds and sends no rollback (closing the session ends the transaction), so a
   database that stopped answering cannot hold the connection, or its slot, open past that.
-- **Run output is refused when the runner's capabilities cannot be read.** A run output read
-  now answers `409` `run_output_not_kept` ("no output is kept for this run: the runner's capture capability
-  could not be read") instead of an empty, complete answer, and no tail or row is written for the run, because
-  the daemon cannot tell a runner that captures output from one that does not (the Kubernetes runner under
-  the session recorder). A runner that says it does not capture still answers `409` `run_output_not_captured`.
+- **A run whose runner's capabilities could not be read keeps no output, and a read says so.** When the
+  lookup fails, no tail or row is written for the run, and a read that finds nothing kept answers `409`
+  `run_output_not_kept` ("no output is kept for this run: the runner's capture capability could not be read")
+  instead of an empty, complete answer; output already kept is still served. The daemon cannot tell a runner
+  that captures output from one that does not (the Kubernetes runner under the session recorder). A runner
+  that says it does not capture still answers `409` `run_output_not_captured`.
 
 ### Fixed
 
