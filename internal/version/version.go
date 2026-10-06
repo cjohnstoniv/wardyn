@@ -11,7 +11,7 @@ import "runtime/debug"
 // Version is the shipped release; cmd/wardyn/version_test.go pins it to the
 // newest CHANGELOG.md section and the other shipped version strings
 // (deploy/helm/wardyn/Chart.yaml, ui/package.json) — bump them together.
-const Version = "0.8.6"
+const Version = "0.8.7"
 
 // releaseBuild is stamped "true" via -ldflags -X, only by release.yml's
 // binaries job and Dockerfile.wardynd's RELEASE_BUILD arg (never by
