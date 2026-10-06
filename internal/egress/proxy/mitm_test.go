@@ -549,6 +549,10 @@ func TestMITMCorpHost_DecisionCarriesRealPort(t *testing.T) {
 		t.Fatalf("mirror request must forward, got %d %q", resp.StatusCode, rb)
 	}
 
+	// The CONNECT allow of a terminated tunnel dialled nothing, so it names no hop.
+	if c := findDecision(t, buf, "policy:allowed"); c.Request.Method != http.MethodConnect || c.Via != "" {
+		t.Errorf("CONNECT allow = %s via %q, want the CONNECT row with no via", c.Request.Method, c.Via)
+	}
 	d := findDecision(t, buf, ruleSourceArtifactMITM)
 	if d.Request.Port != 5000 {
 		t.Fatalf("decision port = %d, want 5000 (the CONNECT's real port). A row saying 443 "+

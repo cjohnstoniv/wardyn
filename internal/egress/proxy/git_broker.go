@@ -235,7 +235,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 		p.failUpstream(w, err, &egress.DecisionLog{Request: p.reqOf(r, githubHost, 443)}, githubHost, "git upstream error")
 		return
 	}
-	p.emitGitDecision(r, egress.Allow, allowSrc)
+	p.emitDialledAllow(decisionLog(p.reqOf(r, githubHost, 443), egress.Allow, allowSrc), githubHost)
 	defer func() { _ = resp.Body.Close() }()
 
 	if noThin {

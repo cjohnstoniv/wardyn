@@ -363,6 +363,8 @@ func (m *metrics) egressDenied() {
 const (
 	ruleSourceDialFailed       = "builtin:dial-failed"
 	ruleSourceDroppedDecisions = "egress:dropped-decisions-"
+	// Mirrors internal/egress/proxy's ruleSourceTunnelFailed.
+	ruleSourceTunnelFailed = "builtin:tunnel-failed"
 	// Mirrors internal/egress/proxy's ruleSourceCredentialReauthTimeout; the
 	// two packages do not import each other, and the decision arrives here as
 	// a string on the wire.
@@ -378,9 +380,11 @@ const (
 // brokered:git-pat:denied, scan:blocked, site-config:*, …) and a new one is one
 // feature away. An allowlist would silently UNDERCOUNT real denials — a security
 // counter failing quiet — while this list fails toward counting: a source nobody
-// classified still moves the series, and only the three known non-denials do not.
+// classified still moves the series, and only the four known non-denials do not
+// (tunnel-failed is the post-200 twin of dial-failed: the tunnel opened, then died).
 func isPolicyDeny(ruleSource string) bool {
 	return ruleSource != ruleSourceDialFailed &&
+		ruleSource != ruleSourceTunnelFailed &&
 		ruleSource != ruleSourceCredentialReauthTimeout &&
 		!strings.HasPrefix(ruleSource, ruleSourceDroppedDecisions)
 }

@@ -79,8 +79,8 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.Repeat > 0 {
 		fields["repeat"] = dl.Repeat
 	}
-	// Cause/Via ride a dial-shaped refusal only (egress.DecisionLog's own doc
-	// comments) — absent on every ordinary decision, same as repeat above.
+	// Cause/Via ride only the rows egress.DecisionLog's own doc comments
+	// name — absent on every other decision, same as repeat above.
 	if dl.Cause != "" {
 		fields["cause"] = dl.Cause
 	}
