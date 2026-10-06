@@ -270,6 +270,39 @@ type readerConn struct {
 
 func (c *readerConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
+// spokeConn notes whether the client has sent a byte. Handshake reads on one goroutine, and
+// mitmConnect reads it on that goroutine afterwards, so the flag needs no lock.
+type spokeConn struct {
+	net.Conn
+	spoke bool
+}
+
+func (c *spokeConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n > 0 {
+		c.spoke = true
+	}
+	return n, err
+}
+
+// emitVetFailed writes the deny for an inner request whose upstream could not be vetted, with the
+// masked, topology-redacted reason and the hop class.
+func (p *Proxy) emitVetFailed(r *http.Request, host string, port int, ruleSource string, err error) {
+	if p.sink == nil {
+		return
+	}
+	dl := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSource)
+	dl.Cause = p.dialFailureCause(err)
+	dl.Via = p.viaHop(host)
+	p.sink.emit(dl)
+}
+
+// clientHandshakeCause is the Cause of the row a client whose TLS handshake with the terminating
+// proxy failed leaves behind: the stage, then the error masked and topology-redacted.
+func (p *Proxy) clientHandshakeCause(err error) string {
+	return "client tls handshake (sandbox to wardyn-proxy): " + p.dialFailureCause(err)
+}
+
 func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string, port int) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
@@ -293,7 +326,8 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 	//
 	// Every read goes through the hijack's own buffered reader, so nothing already sent is lost —
 	// the peek below can put its byte back.
-	buffered := p.countActivity(&readerConn{Conn: clientConn, r: brw.Reader})
+	spoke := &spokeConn{Conn: &readerConn{Conn: clientConn, r: brw.Reader}}
+	buffered := p.countActivity(spoke)
 	// Order matters: a TLS entry must never reach the peek — peeking waits for a byte the client
 	// hasn't sent, while a TLS client waits for the server to go first.
 	served := net.Conn(buffered)
@@ -307,6 +341,14 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 			},
 		})
 		if err := tlsConn.Handshake(); err != nil {
+			// The CONNECT's allow stands: the tunnel opened. A client that never sent a byte (a
+			// browser-style preconnect, closed unused) is no failure and leaves no row.
+			if spoke.spoke && p.sink != nil {
+				dl := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSourceTunnelFailed)
+				dl.Cause = p.clientHandshakeCause(err)
+				dl.Via = p.viaHop(host)
+				p.sink.emit(dl)
+			}
 			_ = clientConn.Close()
 			return
 		}
@@ -396,7 +438,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	// for this hop; see dialThroughUpstream).
 	target, _, terr := p.egressTarget(host, port)
 	if terr != nil {
-		p.emitLLMDecision(r, host, port, egress.Deny, mitmSource, nil)
+		p.emitVetFailed(r, host, port, mitmSource, terr)
 		// AWS lane: modelled, valid-JSON error body — MITM-terminated sibling of
 		// llm_routes.go's vet-failed site.
 		p.httpErrorAWSAware(w, host, "llm upstream vet failed", terr, false, http.StatusInternalServerError, "InternalServerException")

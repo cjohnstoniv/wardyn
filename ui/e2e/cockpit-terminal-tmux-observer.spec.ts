@@ -19,7 +19,7 @@ import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { findRunningFixture, stubInteractiveRun } from "./attach-stub";
 import { RUN_COCKPIT } from "../src/app/components/wardyn/copy/run-cockpit";
-import { readGrid } from "./terminal-grid";
+import { readGrid, settledGrid } from "./terminal-grid";
 import { termText } from "./terminal-text";
 
 type Size = { cols: number; rows: number };
@@ -51,7 +51,7 @@ async function shellSize(page: Page, tag: string): Promise<Size> {
 
 const settle = async (page: Page) => {
   await page.addStyleTag({ content: "*{transition:none!important;animation:none!important}" });
-  await page.waitForTimeout(800);
+  await settledGrid(page, page.locator(".xterm-screen").first());
 };
 
 test("a second tab never clamps the writer's window, and a promotion sizes it to the promoted tab", async ({ page, context }) => {

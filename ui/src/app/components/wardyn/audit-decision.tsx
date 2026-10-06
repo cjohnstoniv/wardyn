@@ -145,6 +145,11 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   if (source === "builtin:resolve-failed") {
     return { label: "Refused because the name did not resolve, not by policy or the address rule", tone: "danger" };
   }
+  // builtin:tunnel-failed is not a refusal at all: the proxy allowed the
+  // connection, it opened, and the network then killed it. Named before the
+  // generic bucket so it does not read as a guard hit; the tone stays that of
+  // its neighbours.
+  if (source === "builtin:tunnel-failed") return { label: "Connection died after it opened", tone: "danger" };
   // builtin:* is the proxy's own guard family (dial-failed, gateway-vet-failed,
   // …) — every remaining value here is a refusal (builtin:upstream-proxy, the
   // one ALLOW in the family, is handled above and never reaches this line).

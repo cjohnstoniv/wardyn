@@ -274,6 +274,26 @@ describe("Focus mode — the bottom strip states the facts", () => {
     expect(strip().getByText(RUN_COCKPIT.deny(1))).toBeInTheDocument();
   });
 
+  it("counts a network-fault row as failed, not as deny, and hides the count when there is none", () => {
+    const { unmount } = render(
+      <FocusMode
+        ctx={ctx({
+          egress: [
+            { id: "x1", time: aheadByHours(-1), domain: "a.example.com", decision: "failed" },
+            { id: "x2", time: aheadByHours(-1), domain: "b.example.com", decision: "deny" },
+          ],
+        })}
+        onExit={() => {}}
+      />,
+    );
+    expect(strip().getByText(RUN_COCKPIT.failed(1))).toBeInTheDocument();
+    expect(strip().getByText(RUN_COCKPIT.deny(1))).toBeInTheDocument();
+    unmount();
+
+    render(<FocusMode ctx={ctx({ egress })} onExit={() => {}} />);
+    expect(strip().queryByText(RUN_COCKPIT.failed(0))).toBeNull();
+  });
+
   it("does NOT count a denied credential.mint as brokered", () => {
     render(
       <FocusMode

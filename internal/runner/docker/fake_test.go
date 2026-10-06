@@ -143,15 +143,26 @@ type fakeDocker struct {
 	// than after it, which is the whole value of the report. Called without
 	// f.mu held.
 	onPull func(ref string)
-	// execInspectErrs / waitErrs make the next N ExecInspect / ContainerWait
+	// execInspectErrs / waitErrs make the next N ExecInspectRaw / ContainerWait
 	// probes fail with a transient (non-not-found) error, modelling a daemon blip.
 	execInspectErrs int
 	waitErrs        int
 	// execExitCode is reported once execInspectErrs is exhausted; when
-	// execExited is true ExecInspect reports the process as finished.
+	// execExited is true ExecInspectRaw reports the process as finished.
 	execExitCode int
 	execExited   bool
-	// execGone is an exec id ExecInspect reports as not-found (the authoritative
+	// execUnstarted makes the next N ExecInspectRaw probes report an exec the
+	// daemon has created but not started: not running, a null exit code, no pid.
+	execUnstarted int
+	// execStartRefused reports a start the daemon refused (binary missing, not
+	// executable): finished with execExitCode and no pid.
+	execStartRefused bool
+	// execPIDZeroedOnExit models Podman's Docker-compatible API, which zeroes
+	// an exec's pid when it exits (and always sends an exit code).
+	execPIDZeroedOnExit bool
+	// execInspects counts the exec inspects served.
+	execInspects int
+	// execGone is an exec id ExecInspectRaw reports as not-found (the authoritative
 	// "it is really gone", as opposed to the transient execInspectErrs blip).
 	execGone string
 
@@ -839,18 +850,34 @@ func (f *fakeDocker) ExecStart(ctx context.Context, execID string, opts client.E
 	return client.ExecStartResult{}, nil
 }
 
-func (f *fakeDocker) ExecInspect(ctx context.Context, execID string, _ client.ExecInspectOptions) (client.ExecInspectResult, error) {
+func (f *fakeDocker) ExecInspectRaw(ctx context.Context, execID string) (execInspect, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.execInspects++
 	if f.execGone != "" && execID == f.execGone {
-		return client.ExecInspectResult{}, fakeNotFound{msg: "no such exec: " + execID}
+		return execInspect{}, fakeNotFound{msg: "no such exec: " + execID}
 	}
 	if f.execInspectErrs > 0 {
 		f.execInspectErrs--
 		// A daemon blip: NOT a not-found (the exec still exists).
-		return client.ExecInspectResult{}, fmt.Errorf("Cannot connect to the Docker daemon: EOF")
+		return execInspect{}, fmt.Errorf("Cannot connect to the Docker daemon: EOF")
 	}
-	return client.ExecInspectResult{ID: execID, Running: !f.execExited, ExitCode: f.execExitCode}, nil
+	if f.execUnstarted > 0 {
+		f.execUnstarted--
+		return execInspect{}, nil
+	}
+	code := f.execExitCode
+	if f.execStartRefused {
+		return execInspect{ExitCode: &code}, nil
+	}
+	if !f.execExited {
+		return execInspect{Running: true, Pid: 4242}, nil
+	}
+	if f.execPIDZeroedOnExit {
+		return execInspect{ExitCode: &code}, nil
+	}
+	// Docker keeps a started exec's pid after it exits.
+	return execInspect{ExitCode: &code, Pid: 4242}, nil
 }
 
 func (f *fakeDocker) ExecResize(ctx context.Context, execID string, opts client.ExecResizeOptions) (client.ExecResizeResult, error) {

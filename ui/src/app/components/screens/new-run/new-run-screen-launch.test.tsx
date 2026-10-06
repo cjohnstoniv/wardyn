@@ -101,6 +101,7 @@ import { DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { HttpError } from "../../../lib/api/core";
 import { ADO } from "../../../lib/ado-entra-copy";
+import { setField } from "../../../../test/set-field";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -169,7 +170,7 @@ describe("NewRunScreen — the member's drive reaches the wire", { timeout: 20_0
     renderScreen(withDrive);
     await user.click(await screen.findByLabelText(DM.NR_CHECKBOX));
     await user.click(screen.getByLabelText(DM.NR_READONLY_TOGGLE));
-    await user.type(screen.getByLabelText("Title"), "Refund flow");
+    setField(screen.getByLabelText("Title"), "Refund flow");
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     expect(createRunMock.mock.calls[0][0].drive).toEqual({ enabled: true, read_only: true });
@@ -179,7 +180,7 @@ describe("NewRunScreen — the member's drive reaches the wire", { timeout: 20_0
     renderScreen(withDrive);
     // The offer is on screen — this is a declined offer, not a missing one.
     expect(await screen.findByLabelText(DM.NR_CHECKBOX)).toBeInTheDocument();
-    await user.type(screen.getByLabelText("Title"), "Refund flow");
+    setField(screen.getByLabelText("Title"), "Refund flow");
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     expect(createRunMock.mock.calls[0][0].drive).toBeUndefined();
@@ -194,7 +195,7 @@ describe("NewRunScreen — the member's drive reaches the wire", { timeout: 20_0
     createRunMock.mockRejectedValue(new Error(DM.REFUSED_WRITABLE));
     renderScreen(withDrive);
     await user.click(await screen.findByLabelText(DM.NR_CHECKBOX));
-    await user.type(screen.getByLabelText("Title"), "Refund flow");
+    setField(screen.getByLabelText("Title"), "Refund flow");
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     expect(await screen.findByText(DM.REFUSED_WRITABLE)).toBeInTheDocument();
   });
@@ -230,7 +231,7 @@ describe("NewRunScreen — the member's drive reaches the wire", { timeout: 20_0
     // The narrowing rides the MOUNT: it is offered once this run has a mount
     // to narrow, never over an unticked checkbox that sends no `drive` at all.
     expect(screen.getByLabelText(DM.NR_READONLY_TOGGLE)).toBeInTheDocument();
-    await user.type(screen.getByLabelText("Title"), "Refund flow");
+    setField(screen.getByLabelText("Title"), "Refund flow");
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     // read_only is ABSENT, not false: the member did not narrow this run, and
@@ -259,7 +260,7 @@ describe("NewRunScreen — Preflight sends the body Launch sends", () => {
     });
     renderScreen(baseMe({ user_drive: baseMeDrive() }));
     await user.click(await screen.findByLabelText(DM.NR_CHECKBOX));
-    await user.type(screen.getByLabelText("Title"), "Refund flow");
+    setField(screen.getByLabelText("Title"), "Refund flow");
 
     await user.click(screen.getByRole("button", { name: /^Check again$/ }));
     await waitFor(() => expect(preflightRunMock).toHaveBeenCalled());
@@ -283,7 +284,7 @@ describe("NewRunScreen — Preflight sends the body Launch sends", () => {
     });
     renderScreen(baseMe({ user_drive: baseMeDrive() }));
     await user.click(await screen.findByLabelText(DM.NR_CHECKBOX));
-    await user.type(screen.getByLabelText("Title"), "Refund flow");
+    setField(screen.getByLabelText("Title"), "Refund flow");
 
     await user.click(screen.getByRole("button", { name: /^Check again$/ }));
     await waitFor(() => expect(preflightRunMock).toHaveBeenCalled());
@@ -361,7 +362,7 @@ describe("NewRunScreen — a 2xx launch always navigates, in the same tick", () 
   async function launchWith(warnings?: string[]) {
     createRunMock.mockResolvedValue({ id: "run_9", warnings });
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
   }
 
@@ -405,7 +406,7 @@ describe("NewRunScreen — the server's credential refusal reaches the rail", ()
   const lastRail = () => railProps[railProps.length - 1];
   async function titled() {
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     return screen.getByRole("button", { name: /Launch run/ });
   }
 
@@ -451,7 +452,7 @@ describe("NewRunScreen — a network failure never claims a run was created (F4)
   it("createRun rejecting with TypeError('Failed to fetch') shows the raw error, opens nothing, and navigates nowhere", async () => {
     createRunMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
 
     expect(await screen.findByText("Failed to fetch")).toBeInTheDocument();
@@ -483,7 +484,7 @@ describe("NewRunScreen — the derived-hold note follows the server's own deriva
   it("auto chosen at L1, non-interactive: the note shows", async () => {
     mockPreflightAtL1();
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     await user.click(await screen.findByRole("radio", { name: /^Autonomous/ }));
     // toolApprovals defaults to "auto" — never touched.
     await user.click(screen.getByRole("button", { name: /^Check again$/ }));
@@ -493,7 +494,7 @@ describe("NewRunScreen — the derived-hold note follows the server's own deriva
   it("hold chosen: the note does not claim a derivation", async () => {
     mockPreflightAtL1();
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     await user.click(await screen.findByRole("radio", { name: /^Autonomous/ }));
     await user.click(screen.getByRole("radio", { name: /^Hold in Wardyn/ }));
     await user.click(screen.getByRole("button", { name: /^Check again$/ }));
@@ -505,7 +506,7 @@ describe("NewRunScreen — the derived-hold note follows the server's own deriva
     mockPreflightAtL1();
     renderScreen();
     // Interactive is the default (initialWizardState) — left untouched.
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     await user.click(screen.getByRole("button", { name: /^Check again$/ }));
     await screen.findByTestId("preflight-result");
     expect(screen.queryByText(AUTONOMY_RAIL.DERIVED_HOLD_NOTE)).toBeNull();
@@ -519,7 +520,7 @@ describe("NewRunScreen — the derived-hold note follows the server's own deriva
 describe("NewRunScreen — the git_credential refusal opens the Connect Azure DevOps dialog", () => {
   async function titled() {
     renderScreen();
-    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    setField(await screen.findByLabelText("Title"), "Refund flow");
     return screen.getByRole("button", { name: /Launch run/ });
   }
 

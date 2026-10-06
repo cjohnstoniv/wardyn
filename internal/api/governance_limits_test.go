@@ -925,3 +925,42 @@ func TestGovernanceLimitsMaxConcurrentRuns(t *testing.T) {
 		}
 	})
 }
+
+// TestCeilingReassertNoteAndEmptyLists pins the run.ceiling.reassert row's two
+// note sentences and that empty action lists marshal as [], never null.
+func TestCeilingReassertNoteAndEmptyLists(t *testing.T) {
+	read := func(t *testing.T, deny []string) (note string, raw map[string]json.RawMessage) {
+		t.Helper()
+		events, runID := r3bWalledRun(t, "p", deny)
+		ev := findAudit(events, runID, "run.ceiling.reassert", "success")
+		if ev == nil {
+			t.Fatalf("no run.ceiling.reassert row; events=%s", auditDump(events, runID))
+		}
+		if err := json.Unmarshal(ev.Data, &raw); err != nil {
+			t.Fatalf("row data is not an object: %v (%s)", err, ev.Data)
+		}
+		if err := json.Unmarshal(raw["note"], &note); err != nil {
+			t.Fatalf("note is not a string: %v (%s)", err, ev.Data)
+		}
+		return note, raw
+	}
+
+	t.Run("nothing denied or withheld reads the short sentence with [] lists", func(t *testing.T) {
+		note, raw := read(t, nil)
+		if want := "the acting principal's governance profile applies to this run; it denied no host and withheld no credential lane"; note != want {
+			t.Errorf("note = %q, want %q", note, want)
+		}
+		for _, k := range []string{"denied_added", "dropped_injection_hosts", "dropped_broker_lanes"} {
+			if got := string(raw[k]); got != "[]" {
+				t.Errorf("%s = %s, want []", k, got)
+			}
+		}
+	})
+
+	t.Run("a denied host reads the long sentence", func(t *testing.T) {
+		note, _ := read(t, []string{"*.corp.example"})
+		if !strings.HasPrefix(note, "the acting principal's governance profile denies these hosts;") {
+			t.Errorf("note = %q, want the long denies sentence", note)
+		}
+	})
+}

@@ -259,7 +259,9 @@ func (p *Proxy) servePATAPI(w http.ResponseWriter, r *http.Request, host string,
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
-	p.emitLLMDecision(r, host, port, egress.Allow, ruleSourcePATAPI, scanSummary)
+	allow := decisionLog(p.reqOf(r, host, port), egress.Allow, ruleSourcePATAPI)
+	allow.Scan = scanSummary
+	p.emitDialledAllow(allow, host)
 	relay(w, resp)
 }
 

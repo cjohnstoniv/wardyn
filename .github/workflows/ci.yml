@@ -40,26 +40,58 @@ concurrency:
 # maximum, with a ten-minute floor (docs/CI.md); raise it with the measurement.
 jobs:
   # ── which jobs a change can affect (#932) ─────────────────────────────────
-  # Classifies the changed paths once. Two outputs, each 'true' or 'false':
-  #   code    — something outside the docs changed (docs/**, threatmodel/**, *.md)
+  # Classifies the changed paths once. Five outputs, each 'true' or 'false':
+  #   code    — something outside the docs changed. The docs are docs/**,
+  #             threatmodel/** and the *.md files at the repository root, less
+  #             LICENSING.md. A .md anywhere else is classed by its directory.
   #   backend — something outside the docs AND outside ui/** changed
+  #   ui      — something under ui/** changed, or the Makefile or this workflow,
+  #             which say how the console is built and tested
+  #   images  — a backend path other than a Go *_test.go file: every published
+  #             image compiles Go from this tree (`COPY . .`), so only a test
+  #             file cannot change what trivy finds in one
+  #   notices — images, or a UI dependency manifest, or THIRD-PARTY-NOTICES.md
   # Push, merge_group and train/* pull requests are always 'true': they run
   # everything. The rules fail closed: a path in no class counts as backend, so
   # a new directory runs every job until someone decides otherwise. The Go
   # suites never skip: dozens of guard tests read the docs, the CHANGELOG,
-  # ui/src and the workflows. A docs-only change narrows them to those guard
-  # packages instead (see the go job; docs/CI.md, "Incremental CI").
+  # ui/src and the workflows. A docs- or console-only change narrows them to
+  # those guard packages instead (see the go job; docs/CI.md, "Incremental CI").
   #
   # A job that consumes these outputs must also run when this job FAILED
   # (`!cancelled()`) and compare with != 'false', so a missing output runs the
-  # work instead of skipping it. REQUIRED jobs never skip at the job level:
-  # they run and skip their steps, so their check still reports success.
+  # work instead of skipping it. A required job with a matrix (gates) never
+  # skips at the job level: a skipped matrix is reported as one check with its
+  # name unexpanded, so `gates (gitleaks)` would never report and the pull
+  # request would wait on it forever. That is why the trivy scans are one job
+  # per image and not a matrix. A required job without a matrix may skip at the
+  # job level on an explicit 'false': GitHub reports it as skipped, which
+  # branch protection accepts, and it never waits for a runner just to do
+  # nothing.
+  #
+  # Start order. The account runs 20 jobs at once and a change to Go asks for
+  # about 35, so some wait, and GitHub picks which among the jobs that became
+  # ready together. The long jobs (go, ui, ui-e2e, helm-install-test, both
+  # conformance jobs, envbuild-integration, test-pg-shard) need only this job.
+  # The short ones (gates, notices, the trivy scans) also need `diagrams`, a
+  # 45-second job that starts with this one: they become ready about half a
+  # minute after the long jobs, which by then hold their runners, and share
+  # what is left. Nothing reads its result: each of them runs on
+  # `!cancelled()`, whether diagrams passed or failed. It has to be a job that
+  # starts with the run. Waiting on one that itself needs this job (helm,
+  # say) would put the short jobs through the queue a third time when the
+  # account is busy. Without any of this, a nine-minute job can sit behind
+  # eight two-minute scans (run 37403763766: conformance queued 98 s, go
+  # (unit) 90 s).
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       code: ${{ steps.classify.outputs.code }}
       backend: ${{ steps.classify.outputs.backend }}
+      ui: ${{ steps.classify.outputs.ui }}
+      images: ${{ steps.classify.outputs.images }}
+      notices: ${{ steps.classify.outputs.notices }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -76,33 +108,56 @@ jobs:
           set -euo pipefail
           if [ "$EVENT" != pull_request ] || [[ "$HEAD_REF" == train/* ]] || [[ "$BASE_REF" == release/* ]]; then
             echo "$EVENT${HEAD_REF:+ from $HEAD_REF}: running everything"
-            printf 'code=true\nbackend=true\n' >> "$GITHUB_OUTPUT"
+            printf 'code=true\nbackend=true\nui=true\nimages=true\nnotices=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # An assignment, not `< <(git diff …)`: set -e ignores a failing
           # process substitution, which would read an unreadable diff as
           # "nothing changed" and skip everything.
           changed="$(git diff --name-only --no-renames HEAD^1 HEAD)"
-          code=false backend=false
+          code=false backend=false ui=false images=false notices=false
           while IFS= read -r f; do
             [ -n "$f" ] || continue
+            # Where a file lives decides its class before its extension does.
+            # Helm renders every file under a chart's templates/, .md included,
+            # and every Dockerfile copies LICENSING.md and deploy/images/README.md,
+            # so the deploy/ rule comes first. The */* rule then does the same
+            # for every other directory: only a .md at the repository root is
+            # documentation by its extension alone.
             case "$f" in
-              docs/*|threatmodel/*|*.md) class=docs ;;
-              ui/*) class=ui; code=true ;;
+              deploy/*|LICENSING.md) class=backend; code=true; backend=true ;;
+              docs/*|threatmodel/*) class=docs ;;
+              ui/*) class=ui; code=true; ui=true ;;
+              */*) class=backend; code=true; backend=true ;;
+              *.md) class=docs ;;
               *) class=backend; code=true; backend=true ;;
+            esac
+            case "$f" in
+              Makefile|.github/workflows/ci.yml) ui=true ;;
+            esac
+            if [ "$class" = backend ]; then
+              case "$f" in *_test.go) ;; *) images=true ;; esac
+            fi
+            case "$f" in
+              ui/package.json|ui/pnpm-lock.yaml|THIRD-PARTY-NOTICES.md) notices=true ;;
             esac
             echo "$class  $f"
           done <<< "$changed"
-          echo "code=$code backend=$backend"
-          printf 'code=%s\nbackend=%s\n' "$code" "$backend" >> "$GITHUB_OUTPUT"
+          if [ "$images" = true ]; then notices=true; fi
+          echo "code=$code backend=$backend ui=$ui images=$images notices=$notices"
+          printf 'code=%s\nbackend=%s\nui=%s\nimages=%s\nnotices=%s\n' "$code" "$backend" "$ui" "$images" "$notices" >> "$GITHUB_OUTPUT"
       # A run that runs everything records the tree it tested, so a release will
       # accept this run by tree (#1461 R6, scripts/green-by-tree.sh). On a pull_request HEAD
       # is GitHub's merge commit, so this is the tree actually tested — the run
       # API's head_commit.tree_id is the PR head's tree, which differs whenever
-      # the base has moved.
+      # the base has moved. Every output must be 'true': a run that narrowed any
+      # job did not test everything.
       - name: Record the tree this run tests (release evidence)
         id: tree
-        if: steps.classify.outputs.code == 'true' && steps.classify.outputs.backend == 'true'
+        if: >-
+          steps.classify.outputs.code == 'true' && steps.classify.outputs.backend == 'true' &&
+          steps.classify.outputs.ui == 'true' && steps.classify.outputs.images == 'true' &&
+          steps.classify.outputs.notices == 'true'
         run: |
           set -euo pipefail
           t="$(git rev-parse 'HEAD^{tree}')"; printf '%s\n' "$t" > tested-tree.txt; echo "tree=$t" >> "$GITHUB_OUTPUT"
@@ -143,11 +198,13 @@ jobs:
   # conformance-k8s below is the k8s equivalent (WARDYN_TEST_K8S=1 against a
   # live kind cluster).
   #
-  # A docs-only change (changes.outputs.code == 'false') cannot change compiled
-  # code, race behaviour or coverage, only what the doc-reading guard tests
-  # read. The three test legs then run just those guard packages, found from
-  # the test sources at run time, with plain `go test`; `build` skips the union.
-  # Any other value, including a missing one, runs the full suites.
+  # A docs- or console-only change (changes.outputs.backend == 'false') cannot
+  # change compiled Go, race behaviour or coverage, only what the guard tests
+  # that read docs/, ui/ and the workflows read. The three test legs then run
+  # just those guard packages, found from the test sources at run time, with
+  # plain `go test`; `build` skips the union. Any other value, including a
+  # missing one, runs the full suites. The lint leg always runs in full: it
+  # carries the console's ESLint.
   go:
     name: go (${{ matrix.suite }})
     needs: changes
@@ -224,7 +281,7 @@ jobs:
       # ESLint needs no browser; PUPPETEER_SKIP_DOWNLOAD skips the mermaid-cli
       # chromium download.
       - name: make ${{ matrix.target }}
-        if: matrix.suite == 'lint' || needs.changes.outputs.code != 'false'
+        if: matrix.suite == 'lint' || needs.changes.outputs.backend != 'false'
         run: make ${{ matrix.target }}
         env:
           PUPPETEER_SKIP_DOWNLOAD: '1'
@@ -233,8 +290,8 @@ jobs:
       # files built under its tag (their packages run with -tags; the rest ran in
       # the tagless leg), so it may legitimately find none. The tagless leg
       # finding none means the pattern broke, and fails rather than pass empty.
-      - name: Docs-only change — the doc-reading guard packages only (no race, no coverage)
-        if: matrix.suite != 'lint' && needs.changes.outputs.code == 'false'
+      - name: Docs- or console-only change — the guard packages only (no race, no coverage)
+        if: matrix.suite != 'lint' && needs.changes.outputs.backend == 'false'
         env:
           TAGS: ${{ matrix.tags }}
         run: |
@@ -261,7 +318,7 @@ jobs:
       # if-no-files-found: error, so a leg that wrote no reports goes red itself
       # rather than leaving `build` to fail later on a missing directory.
       - name: Upload the suite's reports and coverage profile
-        if: always() && matrix.suite != 'lint' && needs.changes.outputs.code != 'false'
+        if: always() && matrix.suite != 'lint' && needs.changes.outputs.backend != 'false'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: go-test-reports-${{ matrix.suite }}
@@ -283,9 +340,10 @@ jobs:
   # coverage profiles clears the floor. `!cancelled()` so a failed leg still
   # runs this job, which then fails on the first step; with the default
   # `success()` it would be SKIPPED, and a skipped required check can read as
-  # passing. On a docs-only change (changes.outputs.code == 'false') the legs
-  # ran only the guard packages and wrote no profiles, so the union steps skip;
-  # any other value, including a missing one, requires the union.
+  # passing. On a docs- or console-only change (changes.outputs.backend ==
+  # 'false') the legs ran only the guard packages and wrote no profiles, so the
+  # union steps skip; any other value, including a missing one, requires the
+  # union.
   build:
     needs: [changes, go]
     if: ${{ !cancelled() }}
@@ -298,14 +356,14 @@ jobs:
         run: |
           [ "$LEGS" = success ] || { echo "::error::a go leg did not pass (result: $LEGS); see the go (…) checks"; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: needs.changes.outputs.code != 'false'
+        if: needs.changes.outputs.backend != 'false'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        if: needs.changes.outputs.code != 'false'
+        if: needs.changes.outputs.backend != 'false'
         with:
           go-version-file: go.mod
           cache: false
       - name: Download the three suites' profiles
-        if: needs.changes.outputs.code != 'false'
+        if: needs.changes.outputs.backend != 'false'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: go-test-reports-*
@@ -313,13 +371,13 @@ jobs:
       # download-artifact puts each artifact in a directory named after it; the
       # union reads test/reports/go/<suite>/, where `make cover-check` writes it.
       - name: Put each profile where the union reads it
-        if: needs.changes.outputs.code != 'false'
+        if: needs.changes.outputs.backend != 'false'
         run: for s in unit docker k8s; do mv "test/reports/go/go-test-reports-$s" "test/reports/go/$s"; done
       # The same floor and union `make cover-check` enforces locally, over the
       # profiles the legs produced (scripts/cover-union.sh documents what counts).
       - name: Enforce the union coverage floor
         id: union
-        if: needs.changes.outputs.code != 'false'
+        if: needs.changes.outputs.backend != 'false'
         run: make cover-union
       - name: Upload the union coverage report
         id: upload_go_union_report
@@ -387,7 +445,14 @@ jobs:
   # The React admin UI previously had ZERO CI coverage (a HIGH finding). This
   # job typechecks (tsc was entirely broken before), runs vitest with coverage,
   # and builds the embedded bundle.
+  #
+  # Required, so it never skips: when no console file changed
+  # (changes.outputs.ui == 'false') it still installs, audits, typechecks and
+  # builds, and narrows only vitest (see that step). Any other value, including
+  # a missing one, runs the whole suite with coverage.
   ui:
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -432,7 +497,39 @@ jobs:
       - name: Typecheck
         run: make ui-typecheck
       - name: Unit/component tests (vitest + coverage)
+        if: needs.changes.outputs.ui != 'false'
         run: make ui-test
+      # No console file changed, so a vitest verdict can move only in a test that
+      # reads outside ui/: the Go wire-parity tests and the docs/design canon
+      # pins. A test reads a file through node:fs (or child_process, a cwd- or
+      # module-relative path, a ?raw or glob import), so these are the test
+      # files that do, plus the callers of the two helpers that read a path
+      # their caller passes (copy-doc-parity.ts, test-fixtures.ts's
+      # expectNoOwnCopy). A relative path counts as leaving ui/ when it climbs
+      # to the name of any entry at the repository root other than ui: the
+      # names are read from the tree, so a new top-level directory is covered
+      # the day it is added. It fails closed: if any OTHER module under src/ reads
+      # files or names a path outside ui/, a test could read through it unseen,
+      # so the whole suite runs instead. Finding no test at all means the
+      # pattern broke, and fails. No coverage: a subset's profile means nothing.
+      - name: No console change — the vitest files that read outside ui/ only (no coverage)
+        if: needs.changes.outputs.ui == 'false'
+        working-directory: ui
+        run: |
+          set -euo pipefail
+          # Every root entry but ui, as one alternation (a failed listing fails the step).
+          tops="$(git ls-tree --full-tree --name-only HEAD | grep -vx ui | sed 's/[^A-Za-z0-9_-]/\\&/g' | paste -sd'|')"
+          reads=$'[\'"](node:)?(fs(/promises)?|child_process)[\'"]|process\\.cwd\\(\\)|import\\.meta\\.(url|glob)|__dirname|\\?raw[\'"]|[\'"`](\\.\\./)+('"$tops"$')([/\'"`?]|$)'
+          helpers="$(git grep -l -E "$reads" -- 'src/*.ts' 'src/*.tsx' ':!*.test.ts' ':!*.test.tsx' || true)"
+          if [ "$(echo $helpers)" != "src/app/lib/copy-doc-parity.ts src/app/lib/test-fixtures.ts" ]; then
+            echo "::notice::a module outside the two known helpers reads files or names a path outside ui/ ($helpers); running the whole suite"
+            exec make -C .. ui-test
+          fi
+          files="$(git grep -l -E "$reads|copy-doc-parity|expectNoOwnCopy\(" -- 'src/*.test.ts' 'src/*.test.tsx')" || true
+          [ -n "$files" ] || { echo "::error::no vitest file reads outside ui/; the discovery pattern regressed"; exit 1; }
+          echo "$files"
+          # shellcheck disable=SC2086 # one word per file
+          pnpm exec vitest run --maxWorkers=4 $files
       - name: Build UI bundle
         run: make ui
       - name: Upload UI test reports
@@ -457,14 +554,29 @@ jobs:
   # deterministic fixtures. Each spec runs against a freshly-seeded backend
   # (scripts/run-ui-e2e.sh) so mutating specs never contaminate each other. The
   # full live compose stack is exercised by the nightly workflow instead.
-  # One job, not shards: it is not the critical path (`build` is), a shard adds
-  # a check and repeats the setup, and the per-spec reseed costs about a second
-  # (docs/CI.md has the measurements).
+  #
+  # Two shards (WARDYN_E2E_SHARD, scripts/run-ui-e2e.sh): each runner takes every
+  # other spec of the sorted list, with the same three lanes and the same fresh
+  # seed per spec. As one job its Playwright step took 518-531 s and the job
+  # about 10.5 minutes, the longest of a pull request once test-pg was split;
+  # a shard is about half the specs plus ~1.5 minutes of setup. Not a required
+  # check, so no aggregator: `needs: ui-e2e` (notify-flaky, main-red) waits for
+  # both. The four-eyes run and the e2etmux harness pins run once, in shard 1.
   ui-e2e:
+    name: ui-e2e (${{ matrix.shard }}/2)
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    # One key per shard: a matrix shares its outputs, and the last writer of a
+    # shared key would win. notify-flaky reads both.
+    outputs:
+      flaky_1: ${{ steps.flaky.outputs.flaky_1 }}
+      flaky_2: ${{ steps.flaky.outputs.flaky_2 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -508,6 +620,7 @@ jobs:
       # The e2etmux tag is used by no other job: this pins the harness's copied
       # attach command to internal/runner/docker/session.go and the real PTY size.
       - name: Local-tmux harness pins (attach script == docker/session.go; real PTY size)
+        if: matrix.shard == 1
         run: |
           go test -tags e2etmux ./internal/runner/localtmux/
           go vet -tags e2etmux ./internal/runner/localtmux/ ./cmd/wardynd/
@@ -526,11 +639,13 @@ jobs:
         # every other spec's writes, so here it skips by name and the next step runs it with the switch on.
         env:
           WARDYN_E2E_LANES: 3
+          WARDYN_E2E_SHARD: ${{ matrix.shard }}/2
           WARDYN_E2E_ALLOW_ALL_SKIPPED: governance-changes
         run: make test-e2e-ui
       - name: Run Playwright UI e2e, governance four-eyes (switch on)
         # The second-human switch turns every covered governance write into a held change, so only this
-        # spec runs with it on; its tests are executed here, not skipped.
+        # spec runs with it on; its tests are executed here, not skipped. Once per run: shard 1.
+        if: matrix.shard == 1
         env:
           WARDYN_GOVERNANCE_SECOND_HUMAN: "true"
         run: scripts/run-ui-e2e.sh governance-changes
@@ -545,24 +660,34 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.shard }}
           path: |
             ui/playwright-report/**
             ui/test-results/**
       - name: Say so if playwright-report did not upload
         if: always() && steps.upload_playwright_report.outcome == 'failure'
-        run: echo "::warning title=Reports missing::playwright-report did not upload; this job's result stands on its tests, but the reports are not attached to this run."
+        run: echo "::warning title=Reports missing::playwright-report-${{ matrix.shard }} did not upload; this job's result stands on its tests, but the reports are not attached to this run."
       # One line per flaky test (scripts/run-ui-e2e.sh); notify-flaky reads it.
       - name: Upload the flaky-test list
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: e2e-flaky
+          name: e2e-flaky-${{ matrix.shard }}
           path: test/reports/e2e/flaky.tsv
           if-no-files-found: ignore
+      # 'false' only when the list was written and is empty. Anything else (a
+      # flake, or a run that died before writing it) leaves the output unset,
+      # and notify-flaky runs.
+      - name: Say so when this shard saw no flaky test
+        id: flaky
+        if: always()
+        run: |
+          if [ -f test/reports/e2e/flaky.tsv ] && [ ! -s test/reports/e2e/flaky.tsv ]; then
+            echo "flaky_${{ matrix.shard }}=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Save Go build cache (push to main only)
-        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: success() && matrix.shard == 1 && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -576,18 +701,15 @@ jobs:
   # it so it can never regress to "renders nothing" again (was a CRITICAL gap).
   helm:
     needs: changes
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: needs.changes.outputs.backend != 'false'
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
-        if: needs.changes.outputs.backend != 'false'
         with:
           version: latest
       - name: helm lint + template (must render load-bearing objects)
-        if: needs.changes.outputs.backend != 'false'
         run: make helm-lint
 
   # ── deploy: kind Helm install-test + desktop envelope (merged — #472) ─────
@@ -873,7 +995,7 @@ jobs:
   # round 2, M8: the step name below used to imply otherwise).
   conformance-k8s:
     needs: changes
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
     runs-on: ubuntu-latest
     # 35, not 25: the Makefile recipe's own `-timeout` is 25m since the eviction case
     # gained its second fill target AND a margin for the rest of the suite
@@ -883,18 +1005,14 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: needs.changes.outputs.backend != 'false'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        if: needs.changes.outputs.backend != 'false'
         with:
           go-version-file: go.mod
           cache: false
       - name: Go build cache key date (one cache generation per job per day)
-        if: needs.changes.outputs.backend != 'false'
         id: cache-date
         run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
       - name: Restore Go build cache
-        if: needs.changes.outputs.backend != 'false'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -908,11 +1026,9 @@ jobs:
       # Cached image build: see helm-install-test's build step.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         id: buildx
-        if: needs.changes.outputs.backend != 'false'
         with:
           use: false
       - name: Build wardyn-proxy image (local only — publishing is publish-image.yml)
-        if: needs.changes.outputs.backend != 'false'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           builder: ${{ steps.buildx.outputs.name }}
@@ -928,27 +1044,22 @@ jobs:
       # and the gate never proved recording works. See the Makefile target's
       # own doc and deploy/kind/Dockerfile.conformance-agent.
       - name: Build the conformance agent image (busybox:1.36 + wardyn-rec)
-        if: needs.changes.outputs.backend != 'false'
         run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
       - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
-        if: needs.changes.outputs.backend != 'false'
         with:
           cluster_name: wardyn-conformance-k8s
           config: deploy/kind/conformance-kind-config.yaml
           wait: 90s
       - name: Load images into kind (no registry pull)
-        if: needs.changes.outputs.backend != 'false'
         run: |
           kind load docker-image wardyn/wardyn-proxy:kind-test --name wardyn-conformance-k8s
           kind load docker-image wardyn/conformance-agent:kind-test --name wardyn-conformance-k8s
       - name: Install Calico (single-file, version-pinned manifest — NetworkPolicy enforcement)
-        if: needs.changes.outputs.backend != 'false'
         run: |
           kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
           kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
           kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=180s
       - name: Label a PSS-restricted namespace for runs
-        if: needs.changes.outputs.backend != 'false'
         run: |
           kubectl create namespace wardyn-conformance
           kubectl label namespace wardyn-conformance \
@@ -958,7 +1069,6 @@ jobs:
           # (kind-action's default at the time this job was written) — bump
           # together if that ever changes (review round 2, L5).
       - name: Repoint KUBECONFIG at the node's internal IP (see the job comment above)
-        if: needs.changes.outputs.backend != 'false'
         run: |
           NODE_IP=$(kubectl get nodes wardyn-conformance-k8s-control-plane -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
           kind get kubeconfig --name wardyn-conformance-k8s --internal \
@@ -966,7 +1076,6 @@ jobs:
             > "$RUNNER_TEMP/kubeconfig-internal.yaml"
           echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig-internal.yaml" >> "$GITHUB_ENV"
       - name: Run k8s conformance (make target — WARDYN_TEST_K8S=1; canary + exec + recording live, RBAC render-asserted elsewhere)
-        if: needs.changes.outputs.backend != 'false'
         env:
           WARDYN_TEST_K8S: "1"
           WARDYN_K8S_NAMESPACE: wardyn-conformance
@@ -1025,7 +1134,7 @@ jobs:
   # first-use approval would silently never run.
   conformance:
     needs: changes
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
     runs-on: ubuntu-latest
     # Two image builds (one of them a trixie + node + `npm install -g` layer)
     # in front of a suite whose own `go test -timeout` is 20m, plus the ~6m
@@ -1033,18 +1142,14 @@ jobs:
     timeout-minutes: 55
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: needs.changes.outputs.backend != 'false'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        if: needs.changes.outputs.backend != 'false'
         with:
           go-version-file: go.mod
           cache: false
       - name: Go build cache key date (one cache generation per job per day)
-        if: needs.changes.outputs.backend != 'false'
         id: cache-date
         run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
       - name: Restore Go build cache
-        if: needs.changes.outputs.backend != 'false'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -1056,23 +1161,19 @@ jobs:
             go-conformance-docker-${{ hashFiles('go.sum', 'Makefile') }}-
             go-conformance-docker-
       - name: Docker smoke check
-        if: needs.changes.outputs.backend != 'false'
         run: docker run --rm hello-world
       # T-33: the Vault Transit KEK and the Vault KV store against the official
       # hashicorp/vault and openbao/openbao dev images (a paused server must be
       # transient, a deleted key definitive, every read one audited decrypt).
       # Needs no image build, so it runs first.
       - name: Key-service conformance (Vault + OpenBao dev servers)
-        if: needs.changes.outputs.backend != 'false'
         run: make test-kek-conformance
       # Cached image build: see helm-install-test's build step.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         id: buildx
-        if: needs.changes.outputs.backend != 'false'
         with:
           use: false
       - name: Build wardyn-proxy image (local only — the boot-egress sidecar)
-        if: needs.changes.outputs.backend != 'false'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           builder: ${{ steps.buildx.outputs.name }}
@@ -1083,7 +1184,6 @@ jobs:
           cache-from: type=gha,scope=wardyn-proxy
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=wardyn-proxy' || '' }}
       - name: Build agent-claude-code image (local only — the boot under measurement)
-        if: needs.changes.outputs.backend != 'false'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           builder: ${{ steps.buildx.outputs.name }}
@@ -1094,10 +1194,8 @@ jobs:
           cache-from: type=gha,scope=agent-claude-code
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=agent-claude-code' || '' }}
       - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
-        if: needs.changes.outputs.backend != 'false'
         run: make build-conformance-agent-image
       - name: Run conformance tests (docker)
-        if: needs.changes.outputs.backend != 'false'
         env:
           WARDYN_TEST_DOCKER: "1"
         run: make test-conformance-docker
@@ -1109,7 +1207,6 @@ jobs:
           name: conformance-docker-test-reports
           path: test/reports/go/conformance-docker/**
       - name: Published 0.7.11 wardynd fails closed over a converted secret store (docker)
-        if: needs.changes.outputs.backend != 'false'
         env:
           WARDYN_TEST_DOCKER: "1"
         run: go test -count=1 -v -run '^TestPG_OldBinaryAgainstV1Store$' ./cmd/wardynd/
@@ -1187,11 +1284,47 @@ jobs:
   # test/apie2e) against a real Postgres. This ran in NO per-PR workflow
   # before (a HIGH finding) — only the nightly `integration-pg` job exercised
   # it. Mirrors that job's postgres service (postgres:17, matching compose/prod).
-  test-pg:
+  #
+  # Three shards, each with its OWN Postgres service, so the ~12-minute suite and
+  # the ~5-minute race proofs stop queueing behind each other. -p 1 stays inside
+  # each shard: its packages still share ONE database whose singleton state
+  # (site_config) internal/api and test/apie2e both mutate. The shard package
+  # lists are the old `make test-report-pg` list split in two; with
+  # `make test-race-pg` they run exactly what the single job ran.
+  #   api   — internal/api and test/apie2e
+  #   store — store, db, secretstore, broker, recording, cmd/wardynd
+  #   race  — `make test-race-pg` (the three -race -p 1 passes)
+  # The required context `test-pg` is the aggregator below, which reports the
+  # shards' combined result.
+  test-pg-shard:
+    name: test-pg-shard (${{ matrix.shard }})
     needs: changes
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: api
+            suite: pg-api
+            run: make test-report-pg PG_REPORT=pg-api PG_PKGS='./internal/api/... ./test/apie2e/...'
+            superuser: "1"
+          - shard: store
+            suite: pg-store
+            run: make test-report-pg PG_REPORT=pg-store PG_PKGS='./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... ./internal/recording/... ./cmd/wardynd/...'
+            superuser: "1"
+          # The `race` job above strips the DSN (Makefile: `WARDYN_TEST_PG= go test
+          # -race ./...`), so the WARDYN_TEST_PG-gated tests are SKIPPED there — and
+          # the two shards above, the only ones that set the DSN for a report, run
+          # without -race. The broker's exactly-once concurrency proofs are
+          # therefore the tests most in need of the detector and the ones no gate
+          # was pointing it at. This shard is that gate (F137). It writes no report
+          # directory, so it uploads none.
+          - shard: race
+            suite: ''
+            run: make test-race-pg
+            superuser: ''
     services:
       postgres:
         image: postgres:17
@@ -1205,55 +1338,39 @@ jobs:
           --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: needs.changes.outputs.backend != 'false'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        if: needs.changes.outputs.backend != 'false'
         with:
           go-version-file: go.mod
           cache: false
       - name: Go build cache key date (one cache generation per job per day)
-        if: needs.changes.outputs.backend != 'false'
         id: cache-date
         run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
       - name: Restore Go build cache
-        if: needs.changes.outputs.backend != 'false'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-test-pg-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-test-pg-${{ matrix.shard }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
           restore-keys: |
-            go-test-pg-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-test-pg-
+            go-test-pg-${{ matrix.shard }}-${{ hashFiles('go.sum', 'Makefile') }}-
+            go-test-pg-${{ matrix.shard }}-
       # WARDYN_TEST_PG_SUPERUSER asserts what this lane already is: `postgres`,
       # over a URL-form DSN, which can satisfy every precondition the append-only
       # probes guard on. With it set, a probe that would have SKIPPED (and so
       # reported `ok` and exit 0 while proving nothing) FAILS instead — and
       # test-report.sh's skip floor catches the same class from the other side,
       # over the JSON event stream, in case a guard is ever added that does not
-      # consult the marker.
-      - name: Postgres-gated integration suite (with reports)
-        if: needs.changes.outputs.backend != 'false'
+      # consult the marker. The race shard does not set it, as before.
+      - name: Postgres-gated suite (${{ matrix.shard }})
         env:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
-          WARDYN_TEST_PG_SUPERUSER: "1"
-        run: make test-report-pg
-      # The `race` job above strips the DSN (Makefile: `WARDYN_TEST_PG= go test
-      # -race ./...`), so the WARDYN_TEST_PG-gated tests are SKIPPED there — and
-      # the step above, the only one that sets the DSN, runs without -race. The
-      # broker's exactly-once concurrency proofs are therefore the tests most in
-      # need of the detector and the ones no gate was pointing it at. This step
-      # is that gate (F137).
-      - name: PG concurrency proofs (race detector)
-        if: needs.changes.outputs.backend != 'false'
-        env:
-          WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
-        run: make test-race-pg
+          WARDYN_TEST_PG_SUPERUSER: ${{ matrix.superuser }}
+        run: ${{ matrix.run }}
       - name: Upload PG test reports
         id: upload_pg_test_reports
-        if: always() && needs.changes.outputs.backend != 'false'
+        if: always() && matrix.suite != ''
         # A storage-side error must not fail a job whose tests passed: a 403 from
         # the artifact service reddened a REQUIRED check with all 175 UI test files
         # green, and only a manual re-run cleared it (#372). The step below says so
@@ -1262,11 +1379,11 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: pg-test-reports
-          path: test/reports/go/pg/**
-      - name: Say so if pg-test-reports did not upload
+          name: pg-test-reports-${{ matrix.shard }}
+          path: test/reports/go/${{ matrix.suite }}/**
+      - name: Say so if the PG test reports did not upload
         if: always() && steps.upload_pg_test_reports.outcome == 'failure'
-        run: echo "::warning title=Reports missing::pg-test-reports did not upload; this job's result stands on its tests, but the reports are not attached to this run."
+        run: echo "::warning title=Reports missing::pg-test-reports-${{ matrix.shard }} did not upload; this job's result stands on its tests, but the reports are not attached to this run."
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1275,7 +1392,27 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-test-pg-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-test-pg-${{ matrix.shard }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+
+  # The required check. Branch protection requires a context named `test-pg`,
+  # and this is it: green only when every shard above passed. `!cancelled()` so
+  # a failed shard still runs this job, which then fails on its one step; with
+  # the default `success()` it would be SKIPPED when a shard fails, and a
+  # skipped required check can read as passing. Same shape as `build` over the
+  # `go` legs. It skips, with the shards, only on an explicit
+  # changes.outputs.backend == 'false' (docs and console only): then no shard
+  # ran, and a skipped `test-pg` is what branch protection accepts.
+  test-pg:
+    needs: [changes, test-pg-shard]
+    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Every Postgres shard passed
+        env:
+          SHARDS: ${{ needs.test-pg-shard.result }}
+        run: |
+          [ "$SHARDS" = success ] || { echo "::error::a Postgres shard did not pass (result: $SHARDS); see the test-pg-shard (…) checks"; exit 1; }
 
   # ── supply-chain: trivy image scan (OS + language packages) ───────────────
   # D3. Covers a surface no existing gate does: `govulncheck` reads Go modules,
@@ -1310,50 +1447,46 @@ jobs:
   # Native amd64 build (no QEMU, no platforms list): a CVE in a Debian package
   # is not arch-specific, so scanning one arch finds the same advisories.
   #
+  # One job per image, not a matrix, so each can skip at the job level and
+  # take no runner: on changes.outputs.images == 'false' (docs, console source,
+  # Go test files only) all eight report as skipped, which branch protection
+  # accepts. Those inputs cannot change a scan: the images compile Go from this
+  # tree and copy deploy/images/, and none carries the console's npm packages.
+  # A skipped MATRIX would not do: GitHub reports it as one check with the
+  # name unexpanded, and `trivy (wardynd)` would never report. The check names
+  # are the ones branch protection requires; the steps are written once, on the
+  # first job, and the other seven reuse them (`*trivy_steps`). Each job's
+  # TRIVY_IMAGE is what scripts/check-image-pins.sh compares with the images
+  # release.yml publishes.
+  #
   # Scans EVERY image the release publishes, not one of them. Previously only
   # agent-claude-code was scanned — which, after 0.6.2, is the one image we no
   # longer publish. wardynd, wardyn-proxy, agent-codex-cli and agent-aws-sso were
   # shipped to a public registry having never been scanned at all, and the stated
   # rationale (distroless, no OS package surface) was true of two of them.
-  trivy:
-    name: trivy (${{ matrix.name }})
+  trivy-wardynd:
+    name: trivy (wardynd)
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: wardynd
-            dockerfile: deploy/compose/Dockerfile.wardynd
-          # Built with the pin, so the scanned image is the published one and the
-          # Dockerfile's own GOFIPS140 check runs on every PR.
-          - name: wardynd-fips
-            dockerfile: deploy/compose/Dockerfile.wardynd
-            build-args: --build-arg GOFIPS140=v1.0.0-c2097c7c
-          - name: wardyn-proxy
-            dockerfile: deploy/compose/Dockerfile.proxy
-          - name: agent-base
-            dockerfile: deploy/images/base/Dockerfile
-          - name: agent-codex-cli
-            dockerfile: deploy/images/codex-cli/Dockerfile
-          - name: agent-aws-sso
-            dockerfile: deploy/images/aws-sso/Dockerfile
-          - name: agent-vscode
-            dockerfile: deploy/images/vscode/Dockerfile
-          - name: agent-novnc
-            dockerfile: deploy/images/novnc/Dockerfile
-    steps:
+    env:
+      TRIVY_IMAGE: wardynd
+      TRIVY_DOCKERFILE: deploy/compose/Dockerfile.wardynd
+      TRIVY_BUILD_ARGS: ''
+    steps: &trivy_steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build the image locally (scan target — never pushed)
         run: |
           # agent-vscode/agent-novnc default FROM wardyn/agent-base:local (never
-          # a registry pull) — build that first when this row needs it. Every
-          # other row's Dockerfile stands alone.
-          case "${{ matrix.name }}" in
+          # a registry pull) — build that first when this job needs it. Every
+          # other job's Dockerfile stands alone.
+          case "$TRIVY_IMAGE" in
             agent-vscode|agent-novnc)
               docker build -f deploy/images/base/Dockerfile -t wardyn/agent-base:local . ;;
           esac
-          docker build ${{ matrix.build-args }} -f ${{ matrix.dockerfile }} -t wardyn/${{ matrix.name }}:trivy-scan .
+          # shellcheck disable=SC2086 # TRIVY_BUILD_ARGS is zero or more words
+          docker build $TRIVY_BUILD_ARGS -f "$TRIVY_DOCKERFILE" -t "wardyn/$TRIVY_IMAGE:trivy-scan" .
       # The aws-sso image's --selftest, against the image that was actually
       # BUILT. Everything it checks (tmux present; both coding-agent shims
       # present AND refusing) is otherwise exercised only by source-level Go
@@ -1368,8 +1501,8 @@ jobs:
         # codex-cli too: 0.7.5 restructured its PUBLISHED agent-run around the shared
         # boot-session functions in agent-run-lib.sh, and a syntax break in that lib
         # would otherwise ship in an image CI built and never ran.
-        if: matrix.name == 'agent-aws-sso' || matrix.name == 'agent-codex-cli'
-        run: docker run --rm --entrypoint agent-run wardyn/${{ matrix.name }}:trivy-scan --selftest
+        if: env.TRIVY_IMAGE == 'agent-aws-sso' || env.TRIVY_IMAGE == 'agent-codex-cli'
+        run: docker run --rm --entrypoint agent-run "wardyn/$TRIVY_IMAGE:trivy-scan" --selftest
       # trivy-action's built-in cache (on by default) restores AND saves the
       # vulnerability DB on every event, so each PR run wrote seven PR-scoped
       # entries (issue #470). It is off here; the DB is restored below and saved
@@ -1386,7 +1519,7 @@ jobs:
             cache-trivy-
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: wardyn/${{ matrix.name }}:trivy-scan
+          image-ref: wardyn/${{ env.TRIVY_IMAGE }}:trivy-scan
           format: table
           severity: CRITICAL
           ignore-unfixed: true
@@ -1399,7 +1532,7 @@ jobs:
       - name: Trivy strict scan (CRITICAL, fixed or not)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: wardyn/${{ matrix.name }}:trivy-scan
+          image-ref: wardyn/${{ env.TRIVY_IMAGE }}:trivy-scan
           format: table
           severity: CRITICAL
           ignore-unfixed: false
@@ -1413,6 +1546,86 @@ jobs:
         with:
           path: ${{ github.workspace }}/.cache/trivy
           key: cache-trivy-${{ steps.cache-date.outputs.date }}
+
+  # Built with the pin, so the scanned image is the published one and the
+  # Dockerfile's own GOFIPS140 check runs on every PR.
+  trivy-wardynd-fips:
+    name: trivy (wardynd-fips)
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TRIVY_IMAGE: wardynd-fips
+      TRIVY_DOCKERFILE: deploy/compose/Dockerfile.wardynd
+      TRIVY_BUILD_ARGS: --build-arg GOFIPS140=v1.0.0-c2097c7c
+    steps: *trivy_steps
+  trivy-wardyn-proxy:
+    name: trivy (wardyn-proxy)
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TRIVY_IMAGE: wardyn-proxy
+      TRIVY_DOCKERFILE: deploy/compose/Dockerfile.proxy
+      TRIVY_BUILD_ARGS: ''
+    steps: *trivy_steps
+  trivy-agent-base:
+    name: trivy (agent-base)
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TRIVY_IMAGE: agent-base
+      TRIVY_DOCKERFILE: deploy/images/base/Dockerfile
+      TRIVY_BUILD_ARGS: ''
+    steps: *trivy_steps
+  trivy-agent-codex-cli:
+    name: trivy (agent-codex-cli)
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TRIVY_IMAGE: agent-codex-cli
+      TRIVY_DOCKERFILE: deploy/images/codex-cli/Dockerfile
+      TRIVY_BUILD_ARGS: ''
+    steps: *trivy_steps
+  trivy-agent-aws-sso:
+    name: trivy (agent-aws-sso)
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TRIVY_IMAGE: agent-aws-sso
+      TRIVY_DOCKERFILE: deploy/images/aws-sso/Dockerfile
+      TRIVY_BUILD_ARGS: ''
+    steps: *trivy_steps
+  trivy-agent-vscode:
+    name: trivy (agent-vscode)
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TRIVY_IMAGE: agent-vscode
+      TRIVY_DOCKERFILE: deploy/images/vscode/Dockerfile
+      TRIVY_BUILD_ARGS: ''
+    steps: *trivy_steps
+  trivy-agent-novnc:
+    name: trivy (agent-novnc)
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TRIVY_IMAGE: agent-novnc
+      TRIVY_DOCKERFILE: deploy/images/novnc/Dockerfile
+      TRIVY_BUILD_ARGS: ''
+    steps: *trivy_steps
 
   # ── supply-chain gates ────────────────────────────────────────────────────
   # One matrix job in place of five near-identical checkout + setup-go + one-
@@ -1445,7 +1658,15 @@ jobs:
   # cannot ride the setup-go-only `gates` matrix below. It is also the gate that stops
   # an unreviewed dependency landing: a new dep produces new UNTRACKED licence text,
   # this goes red, and the licence lands in the PR diff for CODEOWNERS to read.
+  #
+  # Its inputs are what ./cmd/... links (Go source outside *_test.go, go.mod,
+  # go.sum), the UI's production manifests, licenses/ and the generator, so it
+  # skips at the job level only on an explicit changes.outputs.notices ==
+  # 'false' (docs, console source, Go test files): a skipped required check
+  # without a matrix reports as skipped, which branch protection accepts.
   notices:
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() && needs.changes.outputs.notices != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -1491,6 +1712,8 @@ jobs:
           key: go-notices-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
 
   gates:
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -1585,10 +1808,15 @@ jobs:
   # flaky.tsv (`spec<TAB>title<TAB>new|quarantined`). One issue per test, found by
   # exact title, so a test that keeps flaking appends to one issue. continue-on-error:
   # a notifier error must not fail the run the release gate reads. Never on a fork,
-  # whose token cannot write issues.
+  # whose token cannot write issues. It takes a runner only when there may be
+  # something to say: it skips when BOTH ui-e2e shards said their list was
+  # empty, and runs on any other answer, including none.
   notify-flaky:
     needs: [ui-e2e]
-    if: ${{ !cancelled() && needs.ui-e2e.result != 'skipped' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: >-
+      ${{ !cancelled() && needs.ui-e2e.result != 'skipped'
+      && (needs.ui-e2e.outputs.flaky_1 != 'false' || needs.ui-e2e.outputs.flaky_2 != 'false')
+      && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1596,11 +1824,12 @@ jobs:
       issues: write
       actions: read
     steps:
-      - name: Download the flaky-test list
+      # One list per ui-e2e shard, each in its own directory (flaky/e2e-flaky-<n>/).
+      - name: Download the flaky-test lists
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: e2e-flaky
+          pattern: e2e-flaky-*
           path: flaky
       - name: Open or update one issue per flaky test
         env:
@@ -1610,7 +1839,8 @@ jobs:
           ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
-          [ -s flaky/flaky.tsv ] || { echo "no flaky tests"; exit 0; }
+          cat flaky/*/flaky.tsv > flaky.tsv 2>/dev/null || true
+          [ -s flaky.tsv ] || { echo "no flaky tests"; exit 0; }
           while IFS=$'\t' read -r spec name state; do
             [ -n "$spec" ] || continue
             title="flaky: ${spec} › ${name}"
@@ -1633,7 +1863,7 @@ jobs:
                 || gh issue create --title "${title:0:250}" --body "$body" \
                 || echo "::warning::could not open an issue for $spec"
             fi
-          done < flaky/flaky.tsv
+          done < flaky.tsv
 
   # ── the notification a red push run on main never had ──────────────────────
   # A PR's red run blocks only that PR — the required-checks gate at the branch
@@ -1644,7 +1874,32 @@ jobs:
   # run trips it; scoped to push-to-main only (`if:`, not the trigger list) so
   # a red PR or merge-queue run never opens one.
   main-red:
-    needs: [changes, go, build, diagrams, ui, ui-e2e, notify-flaky, helm, helm-install-test, compose, conformance, conformance-k8s, envbuild-integration, test-pg, trivy, notices, gates, dco]
+    needs:
+      - changes
+      - go
+      - build
+      - diagrams
+      - ui
+      - ui-e2e
+      - notify-flaky
+      - helm
+      - helm-install-test
+      - compose
+      - conformance
+      - conformance-k8s
+      - envbuild-integration
+      - test-pg
+      - trivy-wardynd
+      - trivy-wardynd-fips
+      - trivy-wardyn-proxy
+      - trivy-agent-base
+      - trivy-agent-codex-cli
+      - trivy-agent-aws-sso
+      - trivy-agent-vscode
+      - trivy-agent-novnc
+      - notices
+      - gates
+      - dco
     if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10

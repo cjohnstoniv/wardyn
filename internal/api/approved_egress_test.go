@@ -195,10 +195,12 @@ func TestObservedEgress(t *testing.T) {
 		events: map[uuid.UUID][]types.AuditEvent{
 			runA: {
 				{Action: "egress.deny", Target: "feeds.datagolf.com"},
-				{Action: "egress.deny", Target: "registry.npmjs.org"},   // already allowed → excluded
-				{Action: "egress.deny", Target: "already.example.com"},  // already approved → excluded
-				{Action: "egress.allow", Target: "api.anthropic.com"},   // not a deny → excluded
-				{Action: "egress.deny", Target: "https://bad-scheme/x"}, // invalid host → excluded
+				{Action: "egress.deny", Target: "registry.npmjs.org"},                                                               // already allowed → excluded
+				{Action: "egress.deny", Target: "already.example.com"},                                                              // already approved → excluded
+				{Action: "egress.allow", Target: "api.anthropic.com"},                                                               // not a deny → excluded
+				{Action: "egress.deny", Target: "https://bad-scheme/x"},                                                             // invalid host → excluded
+				{Action: "egress.deny", Target: "dial-lost.example.com", Data: []byte(`{"rule_source":"builtin:dial-failed"}`)},     // allowed, then the dial failed → excluded
+				{Action: "egress.deny", Target: "tunnel-lost.example.com", Data: []byte(`{"rule_source":"builtin:tunnel-failed"}`)}, // allowed, then the tunnel died → excluded
 			},
 			runOther: {{Action: "egress.deny", Target: "should-not-appear.example.com"}},
 		},
@@ -216,7 +218,7 @@ func TestObservedEgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Join(got.Denied, ",") != "feeds.datagolf.com" {
-		t.Errorf("denied = %v, want [feeds.datagolf.com] (allowed/approved/allow/invalid all excluded)", got.Denied)
+		t.Errorf("denied = %v, want [feeds.datagolf.com] (allowed/approved/allow/invalid/dial-failed/tunnel-failed all excluded)", got.Denied)
 	}
 	if got.RunsExamined != 1 {
 		t.Errorf("runs_examined = %d, want 1 (only the run using this workspace)", got.RunsExamined)

@@ -14,6 +14,7 @@
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { findRunningFixture, stubInteractiveRun } from "./attach-stub";
+import { settledGrid } from "./terminal-grid";
 import { termText } from "./terminal-text";
 
 type Size = { cols: number; rows: number };
@@ -87,14 +88,14 @@ test("the shell sees the grid xterm shows: on load, after a resize, after a relo
 
   // On load, once the layout has settled.
   await page.addStyleTag({ content: "*{transition:none!important;animation:none!important}" });
-  await page.waitForTimeout(800);
+  await settledGrid(page, screen());
   expect(await shellSize()).toEqual(await reported());
 
   // A real change in the pane's height reaches the shell.
   const before = await reported();
   await page.getByTestId("run-terminal-pane").evaluate((el) => el.style.setProperty("height", "300px", "important"));
   await expect.poll(async () => (await reported()).rows).not.toBe(before.rows);
-  await page.waitForTimeout(500);
+  await settledGrid(page, screen());
   const resized = await shellSize();
   expect(resized).toEqual(await reported());
 
@@ -103,7 +104,7 @@ test("the shell sees the grid xterm shows: on load, after a resize, after a relo
   await page.reload();
   await expect(screen()).toBeVisible();
   await page.addStyleTag({ content: "*{transition:none!important;animation:none!important}" });
-  await page.waitForTimeout(800);
+  await settledGrid(page, screen());
   await expect.poll(() => urlSizes.length).toBeGreaterThan(1);
   expect(urlSizes[urlSizes.length - 1], "the re-attach URL carries cols and rows").toBeDefined();
   const after = await shellSize();

@@ -218,6 +218,11 @@ test-report: ## Go unit suite with per-suite JSON + coverage artifacts, under th
 	@echo "Running Go unit suite with detailed reports (-race)..."
 	WARDYN_TEST_PG= ./scripts/test-report.sh unit -race ./...
 
+# PG_REPORT names the report directory and PG_PKGS the packages; ci.yml's
+# test-pg-shard matrix runs this target once per shard with a package subset.
+PG_REPORT ?= pg
+PG_PKGS ?= ./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... \
+	./internal/api/... ./test/apie2e/... ./internal/recording/... ./cmd/wardynd/...
 test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # -p 1: every package in this suite shares ONE database (the WARDYN_TEST_PG
 # DSN), and singleton state — site_config above all — is mutated by tests in
@@ -226,9 +231,7 @@ test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # PUT). Serializing packages costs ~1 min; per-package throwaway databases are
 # the real fix if that minute ever matters.
 	@echo "Running Postgres-gated suite with reports (requires WARDYN_TEST_PG)..."
-	./scripts/test-report.sh pg -p 1 \
-		./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... \
-		./internal/api/... ./test/apie2e/... ./internal/recording/... ./cmd/wardynd/...
+	WARDYN_TEST_REPORT_NAME=$(PG_REPORT) ./scripts/test-report.sh pg -p 1 $(PG_PKGS)
 
 # The whole tree under -tags docker, so the container-hardening driver
 # (internal/runner/docker), internal/envbuild and the wardynd wiring that calls
@@ -569,6 +572,8 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	./scripts/check-image-pins.sh
 	@echo "Running workflow-artifact gate (scripts/check-workflow-artifacts.sh)..."
 	./scripts/check-workflow-artifacts.sh
+	@echo "Running Helm template-file gate (scripts/check-helm-templates.sh)..."
+	./scripts/check-helm-templates.sh
 	@echo "Running migration-numbering gate (scripts/check-migration-numbers.sh)..."
 	./scripts/check-migration-numbers.sh
 	@echo "Running actionlint $(ACTIONLINT_VERSION) (workflow YAML)..."
@@ -699,6 +704,7 @@ licenses: ## Every Go dependency licence must be on licenses/ALLOWED-LICENSES.tx
 # discipline scripts/check-image-pins.sh exists to enforce.
 helm-lint: ## Lint + template-render the Helm chart (default + all-on values + the refusals)
 	@echo "Linting + rendering the Helm chart..."
+	./scripts/check-helm-templates.sh
 	helm lint ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
 	echo "$$out" | grep -q "kind: Deployment" || { echo "chart rendered no Deployment"; exit 1; }; \

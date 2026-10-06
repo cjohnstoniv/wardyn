@@ -166,8 +166,8 @@ func TestPATAPIAdmittedRows(t *testing.T) {
 				if want, _, _ := strings.Cut(q.target, "?"); !strings.HasPrefix(h.up.gitURI, want) {
 					t.Fatalf("forge saw %q, want the compared path %q", h.up.gitURI, want)
 				}
-				if d := findDecision(t, h.log, ruleSourcePATAPI); d.Decision != egress.Allow {
-					t.Fatalf("decision %v, want allow", d.Decision)
+				if d := findDecision(t, h.log, ruleSourcePATAPI); d.Decision != egress.Allow || d.Via != viaDirect {
+					t.Fatalf("decision %v via %q, want an allow via %q", d.Decision, d.Via, viaDirect)
 				}
 			})
 		}

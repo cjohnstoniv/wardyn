@@ -43,6 +43,7 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 import { HttpError } from "../../../lib/api/core";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { PeopleScreen } from "./people-screen";
+import { setField } from "../../../../test/set-field";
 
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 const HOUR = 3_600_000;
@@ -132,7 +133,7 @@ describe("the people table", () => {
     const user = userEvent.setup();
     renderScreen();
     await screen.findByText("ana@example.com");
-    await user.type(screen.getByRole("textbox", { name: "Search people" }), "ana");
+    setField(screen.getByRole("textbox", { name: "Search people" }), "ana");
     await waitFor(() => expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ q: "ana" })));
     await user.click(screen.getByRole("button", { name: "Deactivated" }));
     await waitFor(() => expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ q: "ana", state: "deactivated" })));
@@ -268,8 +269,8 @@ describe("Add a person", () => {
     await user.click(screen.getByRole("button", { name: "Add a person" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Add someone before their first sign-in, so you can assign them a profile or key domain ahead of time. They mint their own API tokens after they sign in.")).toBeInTheDocument();
-    await user.type(within(dialog).getByLabelText("Subject"), "sub-zed");
-    await user.type(within(dialog).getByLabelText("Email"), "zed@example.com");
+    setField(within(dialog).getByLabelText("Subject"), "sub-zed");
+    setField(within(dialog).getByLabelText("Email"), "zed@example.com");
     const before = listMock.mock.calls.length;
     await user.click(within(dialog).getByRole("button", { name: "Add a person" }));
     await waitFor(() => expect(createMock).toHaveBeenCalledWith("sub-zed", "zed@example.com"));
@@ -283,7 +284,7 @@ describe("Add a person", () => {
     await screen.findByText("ana@example.com");
     await user.click(screen.getByRole("button", { name: "Add a person" }));
     const dialog = await screen.findByRole("dialog");
-    await user.type(within(dialog).getByLabelText("Subject"), "sub-zed");
+    setField(within(dialog).getByLabelText("Subject"), "sub-zed");
     await user.click(within(dialog).getByRole("button", { name: "Add a person" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(/already known by this email/);
   });

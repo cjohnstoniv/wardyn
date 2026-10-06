@@ -84,7 +84,24 @@ func TestConformanceDocker(t *testing.T) {
 		// as the uid every agent image uses instead.
 		AgentUserImage: agentUserImage(t, "busybox:latest"),
 		UserDrives:     drives,
+		ExecState:      dockerExecState,
 	})
+}
+
+// dockerExecState is the daemon's own record of an exec, for the Wait
+// exit-code case's diagnostic. A pid of 0 with no exit code is an exec the
+// daemon has not started yet.
+func dockerExecState(ctx context.Context, execID string) string {
+	cli, err := dockerclient.New(dockerclient.FromEnv)
+	if err != nil {
+		return "exec inspect: " + err.Error()
+	}
+	defer func() { _ = cli.Close() }()
+	insp, err := cli.ExecInspect(ctx, execID, dockerclient.ExecInspectOptions{})
+	if err != nil {
+		return "exec inspect: " + err.Error()
+	}
+	return "running=" + strconv.FormatBool(insp.Running) + " exit=" + strconv.Itoa(insp.ExitCode) + " pid=" + strconv.Itoa(insp.PID)
 }
 
 // requireStrongestClass fails the leg when WARDYN_TEST_REQUIRE_CLASS is set and

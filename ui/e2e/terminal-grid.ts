@@ -5,7 +5,7 @@
 
 // Pointer helpers for the terminal copy specs: the user's drag, double-click
 // and triple-click over xterm's grid, addressed by cell.
-import type { Locator, Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { termRows } from "./terminal-text";
 
 export interface Grid {
@@ -18,6 +18,27 @@ export async function readGrid(page: Page): Promise<Grid> {
   const text = await page.getByTestId("run-terminal-pane").getByText(/^\d+×\d+$/).first().innerText();
   const [cols, rows] = text.split("×").map(Number);
   return { cols, rows };
+}
+
+// The web font swaps in after first paint and refits the grid (the header
+// re-wraps too), so a cell read before that lands is a different cell by the
+// time a drag arrives. Hold until the grid and the screen's box have not moved
+// for 600 ms, and return the grid as it settled.
+export async function settledGrid(page: Page, screen: Locator): Promise<Grid> {
+  let last = "";
+  let steady = 0;
+  await expect
+    .poll(
+      async () => {
+        const now = `${await page.getByTestId("run-terminal-pane").getByText(/^\d+×\d+$/).first().innerText()} ${JSON.stringify(await screen.boundingBox())}`;
+        steady = now === last ? steady + 1 : 0;
+        last = now;
+        return steady;
+      },
+      { intervals: [100] },
+    )
+    .toBeGreaterThanOrEqual(6);
+  return readGrid(page);
 }
 
 /** The viewport point at the centre of cell (col, row) of the screen. */

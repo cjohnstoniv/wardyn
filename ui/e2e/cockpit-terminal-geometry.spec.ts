@@ -11,10 +11,13 @@
  */
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { findRunningFixture, stubAttachSocket, stubAttachTicket, stubInteractiveRun } from "./attach-stub";
+import { settledGrid } from "./terminal-grid";
 
 const HEIGHTS = Array.from({ length: 33 }, (_, i) => 300 + i * 7); // 300..524
 
 test("the terminal grid stays inside its padded wrapper at every panel height", async ({ page }) => {
+  // 33 heights, each held until the grid has been still for 600 ms.
+  test.setTimeout(90_000);
   const { id: runId } = await findRunningFixture(page);
   await stubInteractiveRun(page, runId);
   await stubAttachTicket(page, runId);
@@ -31,7 +34,7 @@ test("the terminal grid stays inside its padded wrapper at every panel height", 
   for (const h of HEIGHTS) {
     await pane.evaluate((el, height) => el.style.setProperty("height", `${height}px`, "important"), h);
     // Let the ResizeObserver-driven fit settle.
-    await page.waitForTimeout(250);
+    await settledGrid(page, screen);
     const m = await pane.evaluate((el) => {
       const wrap = el.querySelector<HTMLElement>('[data-testid="run-terminal-wrapper"]');
       const scr = el.querySelector<HTMLElement>(".xterm-screen");

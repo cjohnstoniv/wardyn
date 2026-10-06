@@ -52,6 +52,7 @@ import { NewRunScreen } from "./new-run-screen";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RUN } from "../../wardyn/copy";
 import { PUSH } from "../../wardyn/copy/push";
+import { setField } from "../../../../test/set-field";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -134,7 +135,7 @@ describe("NewRunScreen — the saved-policy lane", { timeout: 20_000 }, () => {
     renderAsMember();
     await pickSavedPolicy(REDACTED_POLICY.name);
     await user.click(screen.getByRole("button", { name: /Custom policy/ }));
-    await user.type(screen.getByLabelText("Title"), "member custom");
+    setField(screen.getByLabelText("Title"), "member custom");
     await user.click(screen.getByRole("button", { name: "Launch run" }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     expect(JSON.stringify(createRunMock.mock.calls[0][0])).not.toContain("<redacted>");
@@ -161,7 +162,7 @@ describe("NewRunScreen — the saved-policy lane", { timeout: 20_000 }, () => {
     );
     await pickSavedPolicy(REDACTED_POLICY.name);
     await user.click(screen.getByRole("button", { name: /Custom policy/ }));
-    await user.type(screen.getByLabelText("Title"), "unresolved me");
+    setField(screen.getByLabelText("Title"), "unresolved me");
     await user.click(screen.getByRole("button", { name: "Launch run" }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     expect(JSON.stringify(createRunMock.mock.calls[0][0])).not.toContain("<redacted>");
@@ -182,7 +183,7 @@ describe("NewRunScreen — the saved-policy lane", { timeout: 20_000 }, () => {
     );
     await pickSavedPolicy(REDACTED_POLICY.name);
     await user.click(screen.getByRole("button", { name: /Custom policy/ }));
-    await user.type(screen.getByLabelText("Title"), "security admin");
+    setField(screen.getByLabelText("Title"), "security admin");
     await user.click(screen.getByRole("button", { name: "Launch run" }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     // Not cleared: whatever the fixture carried (here, the literal string a
@@ -219,7 +220,7 @@ describe("NewRunScreen — the saved-policy lane", { timeout: 20_000 }, () => {
       </MemoryRouter>,
     );
     await screen.findByRole("combobox", { name: "Saved policy" });
-    await user.type(screen.getByLabelText("Title"), "clone gone");
+    setField(screen.getByLabelText("Title"), "clone gone");
     expect(screen.queryByText(RUN.POLICY_GONE)).not.toBeInTheDocument();
 
     settle([]); // resolves with no match — now it is actually gone.

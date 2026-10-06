@@ -51,7 +51,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+# The cases have passed or failed by the time this runs, so it must not decide
+# the verdict: under `set -e` a failing `rm` in the trap turned a green run red
+# (`rm: cannot remove '.../case7/.git': Directory not empty`, after "All DCO
+# cases behaved as expected."). One retry covers a file written while rm walks
+# the tree; a directory that still will not go is named and left behind.
+cleanup() {
+	rm -rf "$TMP" 2>/dev/null && return 0
+	sleep 1
+	rm -rf "$TMP" || echo "test-dco: could not remove $TMP" >&2
+}
+trap cleanup EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -110,6 +120,12 @@ mkrepo() {
 	git -C "$dir" init -q -b main
 	git -C "$dir" config user.name "Test Dev"
 	git -C "$dir" config user.email "test@example.com"
+	# No background git in a repo the EXIT trap is about to delete: a commit
+	# or merge may leave `git maintenance run --auto` (or gc) writing under
+	# .git after the command has returned. Local config, so the git that
+	# `make dco` runs in this repo obeys it too.
+	git -C "$dir" config gc.auto 0
+	git -C "$dir" config maintenance.auto false
 	echo base >"$dir/f.txt"
 	git -C "$dir" add f.txt
 	git -C "$dir" commit -q -m "base"

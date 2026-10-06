@@ -56,15 +56,21 @@ type DecisionLog struct {
 	// Cause is the masked, topology-redacted sentence naming WHY a builtin
 	// dial-shaped refusal happened and at what STAGE (TCP dial, TLS
 	// handshake, upstream-proxy CONNECT). It runs through the same masking
-	// passes a sandbox-facing error body does before reaching this field, and
-	// is empty on every decision that is not a dial-shaped refusal.
-	// builtin:upstream-protocol-mismatch is the one exception: that round
-	// trip COMPLETED, so Cause there is a fixed sentence naming the protocol
-	// answered, never a stage prefix.
+	// passes a sandbox-facing error body does before reaching this field.
+	// Three other rows carry one, each a fixed sentence and not a stage plus
+	// an error text: builtin:upstream-protocol-mismatch (that round trip
+	// COMPLETED, so it names the protocol answered), builtin:tunnel-failed
+	// (what ended a CONNECT tunnel after its 200) and a
+	// builtin:resolve-failed written with an upstream proxy configured (the
+	// name is bypassed and did not resolve at the proxy). Empty on every
+	// other decision.
 	Cause string `json:"cause,omitempty"`
-	// Via names the CLASS of hop a dial-shaped refusal attempted
-	// ("upstream-proxy" or "direct"), never an address — Cause's redaction
-	// pass exists to strip that, and Via must not reopen the hole.
+	// Via names the CLASS of hop that carried the request, or that a refusal
+	// attempted ("upstream-proxy" or "direct"), never an address — Cause's
+	// redaction pass exists to strip that, and Via must not reopen the hole.
+	// It rides every row that has a Cause, and every allow that followed a
+	// forward dial. An allow that dialled nothing (the CONNECT allow of a
+	// tunnel the proxy terminates itself) has none.
 	Via string `json:"via,omitempty"`
 	// UpstreamFault names the AWS error class when Bedrock's data plane
 	// refused a call the proxy ALLOWED and relayed, or "recovered" on the

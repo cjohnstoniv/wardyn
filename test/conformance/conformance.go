@@ -31,6 +31,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -91,6 +92,10 @@ type Options struct {
 	// is skipped (the must-pass floor in scripts/test-report.sh reddens that
 	// skip on a real substrate). See UserDriveFixture.
 	UserDrives *UserDriveFixture
+	// ExecState, when non-nil, returns the substrate's own record of the exec
+	// Exec returned (running, exit code, pid). Diagnostic only: the Wait
+	// exit-code case logs it when the code is wrong, and asserts nothing on it.
+	ExecState func(ctx context.Context, execID string) string
 }
 
 func (o Options) timeout() time.Duration {
@@ -325,16 +330,31 @@ func testWaitExitCode(t *testing.T, r runner.Runner, opts Options) {
 	// FAILED from COMPLETED. Use a distinctive code so a spurious 0/1 cannot
 	// pass by accident.
 	const wantCode = 42
-	if _, err := r.Exec(ctx, sb.Ref, opts.ExitArgv(wantCode)); err != nil {
+	execID, err := r.Exec(ctx, sb.Ref, opts.ExitArgv(wantCode))
+	if err != nil {
 		t.Fatalf("Exec(exit %d): %v", wantCode, err)
 	}
 
+	waitStart := time.Now()
 	got, err := r.Wait(ctx, sb.Ref)
+	waited := time.Since(waitStart)
 	if err != nil {
 		t.Fatalf("Wait returned error: %v", err)
 	}
 	if got != wantCode {
 		t.Errorf("Wait exit code = %d, want %d", got, wantCode)
+		// Name the cause: a Wait that returned before the process ran is
+		// answered differently a moment later; a lost exit code is not.
+		state := func() string {
+			if opts.ExecState == nil {
+				return "(no ExecState for this driver)"
+			}
+			return opts.ExecState(ctx, execID)
+		}
+		t.Logf("diagnostic: Wait returned after %s; exec state then: %s", waited, state())
+		time.Sleep(2 * time.Second)
+		again, aerr := r.Wait(ctx, sb.Ref)
+		t.Logf("diagnostic: 2s later a second Wait = %d (err %v); exec state: %s", again, aerr, state())
 	}
 }
 
@@ -785,7 +805,9 @@ func testExecStreamLoopbackRelay(t *testing.T, r runner.Runner, opts Options) {
 	if err := starter.Stdin.Close(); err != nil {
 		t.Fatalf("listener Stdin.Close: %v", err)
 	}
+	startWait := time.Now()
 	code, err := starter.Wait()
+	startWaited := time.Since(startWait)
 	if err != nil {
 		t.Fatalf("listener Wait: %v", err)
 	}
@@ -797,6 +819,11 @@ func testExecStreamLoopbackRelay(t *testing.T, r runner.Runner, opts Options) {
 	default:
 		t.Fatalf("in-sandbox listener did not come up (exit %d; 92=doc root, 93=httpd refused, 94=port never opened). Output:\n%s", code, startOut())
 	}
+
+	// Diagnostic only, asserts nothing: what the sandbox says about the
+	// listener just before the dial, printed if the case goes red.
+	t.Logf("diagnostic: listener exec reported exit %d after a %s Wait; probe before the dial:\n%s",
+		code, startWaited, loopbackRelayProbe(ctx, r, sb.Ref))
 
 	// ── 2. dial it over a SECOND ExecStream, stdin left OPEN ────────────────
 	sess, err := r.ExecStream(ctx, sb.Ref, runner.ExecSpec{Argv: []string{"nc", "127.0.0.1", loopbackRelayPort}})
@@ -811,6 +838,7 @@ func testExecStreamLoopbackRelay(t *testing.T, r runner.Runner, opts Options) {
 	// alongside it — a substrate that demultiplexes stdout/stderr through a
 	// pipe pair (docker's stdcopy) stalls BOTH streams if only one is read.
 	respCh := make(chan string, 1)
+	var stdoutErr error // why the read loop stopped; set before respCh delivers
 	go func() {
 		var buf bytes.Buffer
 		tmp := make([]byte, 4096)
@@ -824,12 +852,45 @@ func testExecStreamLoopbackRelay(t *testing.T, r runner.Runner, opts Options) {
 				}
 			}
 			if rerr != nil {
+				stdoutErr = rerr
 				respCh <- buf.String()
 				return
 			}
 		}
 	}()
-	go func() { _, _ = io.Copy(io.Discard, sess.Stderr) }()
+	var dialStderr bytes.Buffer
+	stderrDone := make(chan struct{})
+	go func() {
+		defer close(stderrDone)
+		_, _ = io.Copy(&dialStderr, sess.Stderr)
+	}()
+	// A red run names its cause: the dialer's own stderr and exit code, and
+	// the listener probed again. Runs after the assertions and adds none.
+	gotResp := false
+	defer func() {
+		if !t.Failed() {
+			return
+		}
+		_ = sess.Stdin.Close()
+		exit := "not read within 10s"
+		waitCh := make(chan string, 1)
+		go func() {
+			c, werr := sess.Wait()
+			waitCh <- fmt.Sprintf("%d (err %v)", c, werr)
+		}()
+		select {
+		case exit = <-waitCh:
+		case <-time.After(10 * time.Second):
+		}
+		_ = sess.Close() // ends the stderr copy if the dialer is still alive
+		<-stderrDone
+		readEnd := "still reading at the timeout"
+		if gotResp {
+			readEnd = fmt.Sprint(stdoutErr)
+		}
+		t.Logf("diagnostic: dialer exit code %s; stdout read ended with: %s; dialer stderr:\n%s", exit, readEnd, dialStderr.String())
+		t.Logf("diagnostic: probe after the failure:\n%s", loopbackRelayProbe(ctx, r, sb.Ref))
+	}()
 
 	// HTTP/1.0: the listener answers and closes its side, so the response is
 	// complete without a Content-Length walk. Stdin is deliberately NEVER
@@ -842,6 +903,7 @@ func testExecStreamLoopbackRelay(t *testing.T, r runner.Runner, opts Options) {
 	var resp string
 	select {
 	case resp = <-respCh:
+		gotResp = true
 	case <-time.After(opts.timeout()):
 		t.Fatal("timed out reading the relayed response — the exec lane did not deliver bytes back while stdin was still open (full-duplex requirement of the UI relay)")
 	}
@@ -852,6 +914,22 @@ func testExecStreamLoopbackRelay(t *testing.T, r runner.Runner, opts Options) {
 	if !strings.Contains(resp, loopbackRelayMarker) {
 		t.Errorf("relayed response = %q, want it to carry the listener's body %q byte for byte", resp, loopbackRelayMarker)
 	}
+}
+
+// loopbackRelayProbe asks the sandbox, over its own exec, whether the relay
+// listener answers on its port and which processes are alive. It returns the
+// text for a diagnostic line and never fails the test: a probe that cannot run
+// says so in what it returns.
+func loopbackRelayProbe(ctx context.Context, r runner.Runner, ref string) string {
+	const script = `nc -z 127.0.0.1 ` + loopbackRelayPort + `; echo "listener_probe_rc=$?"; ps -o pid,ppid,comm 2>&1`
+	sess, err := r.ExecStream(ctx, ref, runner.ExecSpec{Argv: []string{"sh", "-c", script}})
+	if err != nil {
+		return "probe did not start: " + err.Error()
+	}
+	defer func() { _ = sess.Close() }()
+	out := drainBoth(sess)
+	_ = sess.Stdin.Close()
+	return out()
 }
 
 // drainBoth reads an ExecSession's stdout and stderr concurrently so neither

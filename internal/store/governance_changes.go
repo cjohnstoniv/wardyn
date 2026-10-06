@@ -122,6 +122,8 @@ func (s PG) ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChan
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			// Give the failed transaction's connection back before pendingRefusal asks the pool for one.
+			tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // the transaction has already failed
 			return types.GovernanceChange{}, nil, s.pendingRefusal(ctx, ch)
 		}
 		return types.GovernanceChange{}, nil, err

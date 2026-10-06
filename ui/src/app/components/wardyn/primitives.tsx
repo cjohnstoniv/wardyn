@@ -436,7 +436,7 @@ export function RiskBadge({ level }: { level: RiskLevel }) {
 }
 
 /* Egress decision. */
-export function EgressDecisionChip({ decision }: { decision: "allow" | "deny" | "pending" }) {
+export function EgressDecisionChip({ decision }: { decision: "allow" | "deny" | "pending" | "failed" }) {
   const tone: Tone = decision === "allow" ? "success" : decision === "deny" ? "danger" : "warning";
   return <Chip tone={tone} dot mono>{decision}</Chip>;
 }

@@ -447,7 +447,7 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	}
 
 	if row.grantSpec.Kind == types.GrantCloudSTS {
-		b.auditMint(ctx, caller, grantID, row.approvalID, "", row.grantSpec.Scope, "denied")
+		b.auditRefusedMint(ctx, tx, caller, grantID, row.approvalID, row.grantSpec.Scope, "denied")
 		return Minted{}, ErrRequiresSPIRE
 	}
 
@@ -472,7 +472,7 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	// passing a Nil approval hint would otherwise auto-mint an approval-gated
 	// grant that has no approval row). Fail closed.
 	if row.grantSpec.RequiresApproval && !row.hasApproval {
-		b.auditMint(ctx, caller, grantID, uuid.Nil, "", row.grantSpec.Scope, "denied")
+		b.auditRefusedMint(ctx, tx, caller, grantID, uuid.Nil, row.grantSpec.Scope, "denied")
 		return Minted{}, ErrNotApproved
 	}
 
@@ -493,7 +493,7 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 		// No-widening: the approver saw exactly requested_scope; it must
 		// deep-equal the grant spec scope.
 		if !jsonScopeEqual(row.requestedScope, row.grantSpec.Scope) {
-			b.auditMint(ctx, caller, grantID, row.approvalID, "", row.grantSpec.Scope, "denied")
+			b.auditRefusedMint(ctx, tx, caller, grantID, row.approvalID, row.grantSpec.Scope, "denied")
 			return Minted{}, ErrScopeMismatch
 		}
 	}
@@ -507,14 +507,14 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	if revoked, err := runRevoked(ctx, tx, row.grantRunID); err != nil {
 		return Minted{}, err
 	} else if revoked {
-		b.auditMint(ctx, caller, grantID, row.approvalID, "", row.grantSpec.Scope, "denied")
+		b.auditRefusedMint(ctx, tx, caller, grantID, row.approvalID, row.grantSpec.Scope, "denied")
 		return Minted{}, ErrRunRevoked
 	}
 
 	// Mint the kind-specific credential.
 	minted, err := b.mintKind(ctx, caller, row.grantSpec)
 	if err != nil {
-		b.auditMint(ctx, caller, grantID, row.approvalID, "", row.grantSpec.Scope, "failure")
+		b.auditRefusedMint(ctx, tx, caller, grantID, row.approvalID, row.grantSpec.Scope, "failure")
 		return Minted{}, err
 	}
 	minted.GrantID = grantID
@@ -571,7 +571,7 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 			// A concurrent mint already claimed this approval. The token minted
 			// above is discarded (never returned); audit the loss so the throwaway
 			// mint is visible in the trail rather than silent.
-			b.auditMint(ctx, caller, grantID, row.approvalID, "", row.grantSpec.Scope, "denied")
+			b.auditRefusedMint(ctx, tx, caller, grantID, row.approvalID, row.grantSpec.Scope, "denied")
 			return Minted{}, ErrAlreadyMinted
 		}
 	}
@@ -939,19 +939,6 @@ func mintEvent(caller *identity.Claims, grantID, approvalID uuid.UUID, jti strin
 		Target:    grantID.String(),
 		Outcome:   outcome,
 		Data:      data,
-	}
-}
-
-// auditMint emits a credential.mint audit event via the Recorder chain. Used for
-// the DENIED and FAILURE outcomes, which all fire on error paths where the mint
-// tx has ALREADY rolled back — so they cannot ride the tx, and the Recorder's own
-// spooling fallback is the durability they get. The SUCCESS outcome does NOT go
-// through here: it rides the mint tx (insertAuditEventTx) so the audit row and the
-// minted_jti burn commit atomically.
-func (b *Broker) auditMint(ctx context.Context, caller *identity.Claims, grantID, approvalID uuid.UUID, jti string, scope json.RawMessage, outcome string) {
-	ev := mintEvent(caller, grantID, approvalID, jti, scope, outcome)
-	if err := b.audit.Record(ctx, ev); err != nil {
-		audit.LogWriteFailure(ctx, ev, err)
 	}
 }
 

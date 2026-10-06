@@ -7,13 +7,18 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
+	"path"
 	"strings"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
@@ -78,11 +83,16 @@ func (d *Driver) prepareRecordingDirs(ctx context.Context, ref string) {
 
 // waitExec briefly polls a one-shot exec to completion so a subsequent Exec
 // (which races right after) observes the prepared directories. Bounded so a
-// stuck exec can't stall sandbox bring-up.
+// stuck exec can't stall sandbox bring-up. An exec the daemon has not started
+// yet (no exit code, see execInspect) is polled past, inside the same bound:
+// returning on it let the next Exec run before the directories existed.
 func (d *Driver) waitExec(ctx context.Context, execID string) {
 	for i := 0; i < 50; i++ {
-		insp, ierr := d.cli.ExecInspect(ctx, execID, client.ExecInspectOptions{})
-		if ierr != nil || !insp.Running {
+		insp, ierr := d.cli.ExecInspectRaw(ctx, execID)
+		if ierr != nil {
+			return
+		}
+		if _, exited := insp.exited(); exited {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -330,21 +340,32 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 	return d.pollExecExit(ctx, execID)
 }
 
-// pollExecExit polls execID via ExecInspect until it stops running and
-// returns its exit code (Running flips false once the process exits,
-// ExitCode then authoritative). Poll cadence matches waitExec, but this loop
+// pollExecExit polls execID's inspect until it has exited and returns its
+// exit code. Poll cadence matches waitExec, but this loop
 // is unbounded (bound only by ctx). Factored out of Wait so ExecStream's
 // returned ExecSession.Wait closure can observe a DIFFERENT exec's
 // completion via the same, already-proven polling contract.
+//
+// "Not running" has two meanings and only one is an exit. The daemon answers
+// an attach before it starts the exec, so an inspect that follows the attach
+// closely can see an exec that has not started: not running, and no exit code
+// yet. Returning then reported exit 0 for a process that had yet to run. That
+// state is polled past, for the same budget as a daemon blip; an exec that
+// still has not started by then is an error, never a silent 0.
 func (d *Driver) pollExecExit(ctx context.Context, execID string) (int, error) {
-	errs := 0
+	errs, unstarted := 0, 0
 	for {
-		insp, err := d.cli.ExecInspect(ctx, execID, client.ExecInspectOptions{})
+		insp, err := d.cli.ExecInspectRaw(ctx, execID)
 		switch {
 		case err == nil:
 			errs = 0
+			if code, exited := insp.exited(); exited {
+				return code, nil
+			}
 			if !insp.Running {
-				return insp.ExitCode, nil
+				if unstarted++; unstarted >= waitMaxProbeErrors {
+					return 0, fmt.Errorf("docker: exec wait: exec %s was never started (%d polls)", execID, unstarted)
+				}
 			}
 		case isNotFound(err):
 			return 0, fmt.Errorf("docker: exec wait: exec inspect: %w", err)
@@ -359,6 +380,88 @@ func (d *Driver) pollExecExit(ctx context.Context, execID string) (int, error) {
 		case <-time.After(pollInterval):
 		}
 	}
+}
+
+// execInspect is the part of an exec's inspect the driver reads.
+//
+// ExitCode is nil until the exec has exited: the Engine API sends null for an
+// exec it has created but not started and for one that is running, and a
+// number, 0 included, from the exit on. That is the one field that tells "not
+// started yet" from "exited 0". The pid does not: Docker keeps it after the
+// exit, Podman's Docker-compatible API zeroes it. Podman always sends a number,
+// so an exec that is not running reads there as exited.
+type execInspect struct {
+	Running  bool `json:"Running"`
+	ExitCode *int `json:"ExitCode"`
+	Pid      int  `json:"Pid"`
+}
+
+// exited reports whether the exec has exited, and with what code: not running,
+// and an exit code present. Not running with no exit code is an exec the
+// daemon has yet to start.
+func (e execInspect) exited() (int, bool) {
+	if e.Running || e.ExitCode == nil {
+		return 0, false
+	}
+	return *e.ExitCode, true
+}
+
+// engineClient is the Docker client plus ExecInspectRaw, the one read the
+// client does not offer.
+type engineClient struct {
+	*client.Client
+	raw *http.Client // plain HTTP over the client's own dialer (socket, TCP or TLS)
+}
+
+func newEngineClient(cli *client.Client) engineClient {
+	return engineClient{Client: cli, raw: &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return cli.Dialer()(ctx) },
+	}}}
+}
+
+// ExecInspectRaw asks through the client first, which negotiates the API
+// version and classifies errors, and settles the one answer the client makes
+// ambiguous (not running, exit code 0: exited cleanly, or null flattened) with
+// a second read of the same endpoint that keeps the null.
+func (c engineClient) ExecInspectRaw(ctx context.Context, execID string) (execInspect, error) {
+	res, err := c.Client.ExecInspect(ctx, execID, client.ExecInspectOptions{})
+	if err != nil {
+		return execInspect{}, err
+	}
+	if res.Running {
+		return execInspect{Running: true, Pid: res.PID}, nil
+	}
+	if res.ExitCode != 0 {
+		return execInspect{ExitCode: &res.ExitCode, Pid: res.PID}, nil
+	}
+	p := "/exec/" + execID + "/json"
+	if v := c.ClientVersion(); v != "" {
+		p = "/v" + strings.TrimPrefix(v, "v") + p
+	}
+	if u, perr := client.ParseHostURL(c.DaemonHost()); perr == nil {
+		p = path.Join(u.Path, p)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker"+p, nil)
+	if err != nil {
+		return execInspect{}, fmt.Errorf("docker: exec inspect: %w", err)
+	}
+	resp, err := c.raw.Do(req)
+	if err != nil {
+		return execInspect{}, fmt.Errorf("docker: exec inspect: %w", err)
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		return execInspect{}, fmt.Errorf("docker: exec inspect %s: %w", execID, errdefs.ErrNotFound)
+	default:
+		return execInspect{}, fmt.Errorf("docker: exec inspect %s: daemon answered %s", execID, resp.Status)
+	}
+	var insp execInspect
+	if err := json.NewDecoder(resp.Body).Decode(&insp); err != nil {
+		return execInspect{}, fmt.Errorf("docker: exec inspect %s: %w", execID, err)
+	}
+	return insp, nil
 }
 
 // waitMainProcess blocks on the exec-less agent container's exit and returns its
@@ -436,7 +539,7 @@ func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runn
 	if agentExecID == "" || agentExecID == mainProcessExecID {
 		return d.Status(ctx, ref)
 	}
-	insp, err := d.cli.ExecInspect(ctx, agentExecID, client.ExecInspectOptions{})
+	insp, err := d.cli.ExecInspectRaw(ctx, agentExecID)
 	if err != nil {
 		if isNotFound(err) {
 			// Only definitive when the container is also gone/stopped.
@@ -447,9 +550,14 @@ func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runn
 		}
 		return runner.Status{}, fmt.Errorf("docker: agent exec inspect: %w", err)
 	}
-	if insp.Running {
+	// Running, or created and the daemon has yet to start it (no exit code):
+	// alive, not an exit 0. A start the daemon refused is not that state (it
+	// carries a code: 126 or 127; 128 on Kata), and an unstarted exec is
+	// not-found once its container stops, so neither reads as running for
+	// longer than the sandbox lives.
+	code, exited := insp.exited()
+	if !exited {
 		return runner.Status{State: types.RunRunning}, nil
 	}
-	code := insp.ExitCode
 	return runner.Status{State: types.RunStopped, ExitCode: &code}, nil
 }
