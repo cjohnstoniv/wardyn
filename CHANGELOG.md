@@ -92,7 +92,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   as a deny.
 - **The guarded write that stores a credential under a person's identity is bounded.** `WithIdentityShared`
   (a sign-in's capture is one) dials a connection of its own for the length of the write; at most 8 (`db.LockPoolMaxConns`) may be open at once
-  per process, and a write that finds all 8 in use waits two seconds and is then refused. Closing that
+  per process, and a write that finds all 8 in use waits two seconds and is then refused with `503`
+  `lock_unavailable` and a `Retry-After`. Closing that
   connection is bounded at two seconds and sends no rollback (closing the session ends the transaction), so a
   database that stopped answering cannot hold the connection, or its slot, open past that.
 - **A run whose runner's capabilities could not be read keeps no output, and a read says so.** When the
