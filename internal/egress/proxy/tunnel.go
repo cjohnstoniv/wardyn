@@ -111,12 +111,11 @@ const (
 // the upstream's first bytes. Nothing was relayed.
 var errTunnelRefused = errors.New("proxy: the upstream's first bytes were refused")
 
-// tunnelRefusal is what the guard refused. Only status (three digits) and
-// reason come from the upstream's bytes.
+// tunnelRefusal is what the guard refused. Only status (three digits) comes
+// from the upstream's bytes.
 type tunnelRefusal struct {
 	armed  bool   // refused as the answer to a TLS hello, not as an unprompted HTTP response
 	status string // "" when the bytes were not an HTTP/1.x status line
-	reason string // never set when armed: see refuse
 }
 
 // tunnelWatch wraps the dialled side of a CONNECT tunnel. It notes what went
@@ -232,22 +231,17 @@ func isTLSRecordHeader(head []byte) bool {
 
 // statusLineRe is the STRICT parse of an HTTP/1.x status line: the only
 // upstream text, beside an alert's description byte, that may reach a Cause.
-// The reason phrase is printable ASCII and capped.
-var statusLineRe = regexp.MustCompile(`^HTTP/1\.[0-9] ([0-9]{3})(?: ([ -~]{0,64}))?\r?\n`)
+// Only the status code is captured. The reason phrase must still be printable
+// ASCII and capped for the line to parse, and is never kept.
+var statusLineRe = regexp.MustCompile(`^HTTP/1\.[0-9] ([0-9]{3})(?: [ -~]{0,64})?\r?\n`)
 
 // refuse records what the upstream sent instead of TLS, from the flight
-// already buffered, and returns the error that ends the relay. An armed
-// refusal keeps the status code and drops the reason phrase: bytes that
-// answer the client's hello came through the tunnel, so the destination
-// behind the hop may have written them.
+// already buffered, and returns the error that ends the relay.
 func (w *tunnelWatch) refuse(armed bool) error {
 	r := &tunnelRefusal{armed: armed}
 	flight, _ := w.br.Peek(w.br.Buffered())
 	if m := statusLineRe.FindSubmatch(flight); m != nil {
 		r.status = string(m[1])
-		if !armed {
-			r.reason = string(bytes.TrimSpace(m[2]))
-		}
 	}
 	w.refused.Store(r)
 	return errTunnelRefused
@@ -257,15 +251,14 @@ func (w *tunnelWatch) refuse(armed bool) error {
 // tunnel that needs none: one the client never wrote into, and any tunnel
 // that carried an answer. upstreamFirst says which direction ended first and
 // err what ended it. No client byte reaches it, and from the upstream only refuse's strict status
-// parse and the alert's description byte do; the reason phrase is kept only
-// when the hop is the operator's own proxy (via), whose wording is theirs,
-// and it spoke before any client byte reached it (refuse drops it otherwise).
-func (w *tunnelWatch) failure(via string, upstreamFirst bool, err error) string {
+// parse and the alert's description byte do. No reason phrase is ever kept,
+// on any hop: a sandbox can reach a host of its choosing through the
+// operator's proxy without sending a byte, so the phrase is never known to be
+// the operator's wording.
+func (w *tunnelWatch) failure(upstreamFirst bool, err error) string {
 	if r := w.refused.Load(); r != nil {
 		got := "bytes that are not a TLS record"
 		switch {
-		case r.status != "" && r.reason != "" && via == viaUpstreamProxy:
-			got = "HTTP " + r.status + " (" + r.reason + ")"
 		case r.status != "":
 			got = "HTTP " + r.status
 		case !r.armed:
@@ -304,14 +297,13 @@ func (p *Proxy) tunnelEnded(seen *egress.DecisionLog, host string, w *tunnelWatc
 	if seen == nil || p.sink == nil {
 		return
 	}
-	via := p.viaHop(host)
-	cause := w.failure(via, first == net.Conn(w), err)
+	cause := w.failure(first == net.Conn(w), err)
 	if cause == "" {
 		return
 	}
 	dl := decisionLog(seen.Request, egress.Deny, ruleSourceTunnelFailed)
 	dl.Cause = p.redactTopology(string(maskDecisionBytes([]byte(cause))))
-	dl.Via = via
+	dl.Via = p.viaHop(host)
 	p.sink.emit(dl)
 }
 
