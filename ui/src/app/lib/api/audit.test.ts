@@ -34,6 +34,17 @@ describe("egressFromAudit", () => {
     expect(out.map((d) => d.decision)).toEqual(["allow", "deny", "pending"]);
   });
 
+  it("maps a dial-failed and a tunnel-failed deny to failed; an ordinary deny stays deny", () => {
+    const out = egressFromAudit([
+      ev({ id: "f1", target: "a.example.com:443", data: { rule_source: "builtin:dial-failed" } }),
+      ev({ id: "f2", target: "b.example.com:443", data: { rule_source: "builtin:tunnel-failed" } }),
+      ev({ id: "d1", target: "c.example.com:443", data: { rule_source: "policy:denied" } }),
+      ev({ id: "d2", target: "d.example.com:443", data: { rule_source: "builtin:private-ip" } }),
+      ev({ id: "d3", target: "e.example.com:443" }),
+    ]);
+    expect(out.map((d) => d.decision)).toEqual(["failed", "failed", "deny", "deny", "deny"]);
+  });
+
   it("ignores every non-egress action (does not leak unrelated audit rows)", () => {
     const out = egressFromAudit([
       ev({ action: "run.create" }),
