@@ -151,6 +151,9 @@ type fakeDocker struct {
 	// execExited is true ExecInspect reports the process as finished.
 	execExitCode int
 	execExited   bool
+	// execUnstarted makes the next N ExecInspect probes report an exec the
+	// daemon has created but not started: not running, no exit code, no pid.
+	execUnstarted int
 	// execGone is an exec id ExecInspect reports as not-found (the authoritative
 	// "it is really gone", as opposed to the transient execInspectErrs blip).
 	execGone string
@@ -850,7 +853,12 @@ func (f *fakeDocker) ExecInspect(ctx context.Context, execID string, _ client.Ex
 		// A daemon blip: NOT a not-found (the exec still exists).
 		return client.ExecInspectResult{}, fmt.Errorf("Cannot connect to the Docker daemon: EOF")
 	}
-	return client.ExecInspectResult{ID: execID, Running: !f.execExited, ExitCode: f.execExitCode}, nil
+	if f.execUnstarted > 0 {
+		f.execUnstarted--
+		return client.ExecInspectResult{ID: execID}, nil
+	}
+	// A started exec has a pid, and keeps it after it exits.
+	return client.ExecInspectResult{ID: execID, Running: !f.execExited, ExitCode: f.execExitCode, PID: 4242}, nil
 }
 
 func (f *fakeDocker) ExecResize(ctx context.Context, execID string, opts client.ExecResizeOptions) (client.ExecResizeResult, error) {
