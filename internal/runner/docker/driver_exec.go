@@ -379,7 +379,7 @@ func (d *Driver) pollExecExit(ctx context.Context, execID string) (int, error) {
 // yet started. The client flattens the API's absent exit code to 0, so the pid
 // is what tells this from a clean exit: the daemon reports a pid from the
 // moment the process exists and keeps reporting it after the exit, and an exec
-// that failed to start carries a non-zero code (126/127).
+// that failed to start carries a non-zero code (126 or 127; 128 on Kata).
 func execNotStarted(insp client.ExecInspectResult) bool {
 	return !insp.Running && insp.ExitCode == 0 && insp.PID == 0
 }
@@ -474,9 +474,10 @@ func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runn
 		return runner.Status{State: types.RunRunning}, nil
 	}
 	// Created, and the daemon has yet to start it: alive, not an exit 0. A
-	// start the daemon refused is not this state (it carries 126 or 127), and
-	// an unstarted exec is not-found once its container stops, so neither
-	// reads as running for longer than the sandbox lives.
+	// start the daemon refused is not this state (it carries a non-zero code:
+	// 126 or 127; 128 on Kata), and an unstarted exec is not-found once its
+	// container stops, so neither reads as running for longer than the sandbox
+	// lives.
 	if execNotStarted(insp) {
 		return runner.Status{State: types.RunRunning}, nil
 	}
