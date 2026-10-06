@@ -366,7 +366,7 @@ its entry says so:
 
 ## This repository's own CI
 
-Everything above is about running Wardyn in *your* pipeline. This section is the
+Everything above covers running Wardyn in *your* pipeline. This section is the
 budget for Wardyn's own [`ci.yml`](../.github/workflows/ci.yml), which runs on
 every pull request and every push to `main`. What it runs short of is runner
 slots, not the length of any one run: with many pull requests open, a run waits
