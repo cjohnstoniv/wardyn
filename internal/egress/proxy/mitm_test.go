@@ -15,7 +15,9 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -729,5 +731,113 @@ func TestMITMReauthClientDisconnectWritesNothing(t *testing.T) {
 	inj.reauth.mu.Unlock()
 	if wf == nil || wf.finished() {
 		t.Error("the disconnect ended the hold; the next retry would open a second one for the same lapse")
+	}
+}
+
+// openMITMTunnel issues a CONNECT for the MITM'd LLM host through a proxy served by
+// serveTunnelProxy and requires the proxy's 200.
+func openMITMTunnel(t *testing.T, proxyURL string) net.Conn {
+	t.Helper()
+	conn, resp := connectThrough(t, proxyURL, anthropicHost+":443")
+	t.Cleanup(func() { _ = conn.Close() })
+	if !strings.HasPrefix(resp, "HTTP/1.1 200") {
+		t.Fatalf("CONNECT answer = %q, want the proxy's 200", resp)
+	}
+	return conn
+}
+
+// TestMITMClientHandshakeFailureLeavesOneRow pins that a client whose handshake with the
+// terminating path fails after it sent bytes leaves one builtin:tunnel-failed row naming the
+// stage, and that a client that sent nothing leaves none.
+func TestMITMClientHandshakeFailureLeavesOneRow(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		send     []byte
+		wantRows int
+	}{
+		{"malformed_first_flight", []byte("\x16\x03\x01\x00\x05" + clientMarker), 1},
+		{"silent_preconnect", nil, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p, _, _ := mitmProxy(t, "alert", captureUpstream(t, true, "ok").srv)
+			proxyURL, done := serveTunnelProxy(t, p)
+			conn := openMITMTunnel(t, proxyURL)
+			if c.send != nil {
+				if _, err := conn.Write(c.send); err != nil {
+					t.Fatalf("write: %v", err)
+				}
+			}
+			_ = conn.Close()
+
+			rows := tunnelFailedRows(awaitDecision(t, p, done))
+			if len(rows) != c.wantRows {
+				t.Fatalf("%s rows = %d, want %d", tunnelFailedSource, len(rows), c.wantRows)
+			}
+			if c.wantRows == 0 {
+				return
+			}
+			d := rows[0]
+			if d.Decision != egress.Deny {
+				t.Errorf("decision = %q, want deny", d.Decision)
+			}
+			if !strings.HasPrefix(d.Cause, "client tls handshake (sandbox to wardyn-proxy)") {
+				t.Errorf("cause = %q, want the stage prefix", d.Cause)
+			}
+			if d.Via != viaDirect {
+				t.Errorf("via = %q, want %q", d.Via, viaDirect)
+			}
+			if strings.Contains(d.Cause, clientMarker) {
+				t.Errorf("cause = %q carries a client byte", d.Cause)
+			}
+		})
+	}
+}
+
+// TestMITMVetFailureRowCarriesCauseAndVia pins the deny row serveMITMRequest writes when the
+// upstream cannot be vetted.
+func TestMITMVetFailureRowCarriesCauseAndVia(t *testing.T) {
+	buf := &bytes.Buffer{}
+	p := newProxy(Options{
+		RunID:    uuid.New(),
+		Policy:   CompilePolicy(types.RunPolicySpec{}),
+		Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+		Resolver: fakeResolver{err: errors.New("dns down")},
+	})
+	rec := httptest.NewRecorder()
+	p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://"+corpHost+"/", nil), corpHost, 443)
+
+	d := lastDecision(t, buf)
+	if d.Decision != egress.Deny {
+		t.Fatalf("decision = %q, want deny", d.Decision)
+	}
+	if !strings.Contains(d.Cause, "dns down") {
+		t.Errorf("cause = %q, want the vet failure", d.Cause)
+	}
+	if d.Via != viaDirect {
+		t.Errorf("via = %q, want %q", d.Via, viaDirect)
+	}
+}
+
+// TestHTTPErrorAWSAwareLogsOnTheAWSBranch pins that the AWS branch warns once on the proxy, as
+// httpError does, and that the body the sandbox gets is the modelled one.
+func TestHTTPErrorAWSAwareLogsOnTheAWSBranch(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{})})
+	rec := httptest.NewRecorder()
+	p.httpErrorAWSAware(rec, awsHost, "llm upstream vet failed", errors.New("dns down"), false, http.StatusInternalServerError, "InternalServerException")
+
+	if got := strings.Count(logs.String(), "level=WARN"); got != 1 {
+		t.Errorf("warnings = %d, want 1; log=%q", got, logs.String())
+	}
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+	body := decodeAWSSDKError(t, rec.Body.Bytes())
+	if body["__type"] != "InternalServerException" || !strings.Contains(body["message"], "dns down") {
+		t.Errorf("body = %v, want the modelled InternalServerException carrying the cause", body)
 	}
 }
