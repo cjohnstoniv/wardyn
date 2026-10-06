@@ -84,9 +84,10 @@ const KeyDomainAssignmentLockClass int32 = 0x574B4441 // ASCII "WKDA"
 var LoginSupersedeLockWait = 5 * time.Second
 
 // ErrAdvisoryLockNoCapacity is AdvisoryLockKeyed's one STRUCTURAL refusal: the
-// pool can't spare advisoryLockFreeConnsNeeded connections (every call, on a
-// pool at the documented floor of 2). The caller proceeds unlocked and audits
-// it; every other error is a wait or a database fault, and refuses.
+// pool can't spare advisoryLockFreeConnsNeeded connections (every call at
+// pool_max_conns=1; transiently on a busy larger pool). The caller proceeds
+// unlocked and audits it; every other error is a wait or a database fault, and
+// refuses.
 var ErrAdvisoryLockNoCapacity = errors.New("db: pool cannot spare a connection for an advisory lock")
 
 // advisoryLockAcquireWait bounds the POOL ACQUIRE specifically: Acquire on an
@@ -98,7 +99,10 @@ const advisoryLockAcquireWait = 250 * time.Millisecond
 // advisoryLockFreeConnsNeeded: connections the pool must have spare before a
 // keyed lock is taken at all — ONE for the hold, one more for the guarded
 // work (which needs the pool again while the hold is live). Without this
-// check the lock self-deadlocks at the documented minimum pool size (2).
+// check a hold that takes the pool's last free connection leaves the guarded
+// work waiting on the pool: forever at pool_max_conns=1, a self-deadlock, and
+// at the documented minimum of 4 (docs/ENV.md, WARDYN_PG_DSN) for as long as
+// the other three stay out.
 // A racy snapshot, acceptable only because advisoryLockGate caps this process
 // at one hold and advisoryLockAcquireWait bounds any other race to 250ms.
 const advisoryLockFreeConnsNeeded = 2

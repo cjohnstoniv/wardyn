@@ -78,11 +78,13 @@ func (d *Driver) prepareRecordingDirs(ctx context.Context, ref string) {
 
 // waitExec briefly polls a one-shot exec to completion so a subsequent Exec
 // (which races right after) observes the prepared directories. Bounded so a
-// stuck exec can't stall sandbox bring-up.
+// stuck exec can't stall sandbox bring-up. An exec the daemon has not started
+// yet (execNotStarted) is polled past, inside the same bound: returning on it
+// let the next Exec run before the directories existed.
 func (d *Driver) waitExec(ctx context.Context, execID string) {
 	for i := 0; i < 50; i++ {
 		insp, ierr := d.cli.ExecInspect(ctx, execID, client.ExecInspectOptions{})
-		if ierr != nil || !insp.Running {
+		if ierr != nil || (!insp.Running && !execNotStarted(insp)) {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -377,7 +379,7 @@ func (d *Driver) pollExecExit(ctx context.Context, execID string) (int, error) {
 // yet started. The client flattens the API's absent exit code to 0, so the pid
 // is what tells this from a clean exit: the daemon reports a pid from the
 // moment the process exists and keeps reporting it after the exit, and an exec
-// that failed to start carries a non-zero code (126/127).
+// that failed to start carries a non-zero code (126 or 127; 128 on Kata).
 func execNotStarted(insp client.ExecInspectResult) bool {
 	return !insp.Running && insp.ExitCode == 0 && insp.PID == 0
 }
@@ -469,6 +471,14 @@ func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runn
 		return runner.Status{}, fmt.Errorf("docker: agent exec inspect: %w", err)
 	}
 	if insp.Running {
+		return runner.Status{State: types.RunRunning}, nil
+	}
+	// Created, and the daemon has yet to start it: alive, not an exit 0. A
+	// start the daemon refused is not this state (it carries a non-zero code:
+	// 126 or 127; 128 on Kata), and an unstarted exec is not-found once its
+	// container stops, so neither reads as running for longer than the sandbox
+	// lives.
+	if execNotStarted(insp) {
 		return runner.Status{State: types.RunRunning}, nil
 	}
 	code := insp.ExitCode
