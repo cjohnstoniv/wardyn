@@ -550,7 +550,7 @@ race + coverage pass per tag set (#467):
    cwd- or module-relative path, a `?raw` or glob import), so the step runs the test files
    that do, plus the callers of the two helpers that read a path their caller passes
    (`copy-doc-parity.ts`, and `test-fixtures.ts`'s `expectNoOwnCopy`): 76 of 341 files,
-   about 11% of the suite's test time, without coverage. It fails closed: if any other
+   71 s where the whole suite takes 547 s, without coverage. It fails closed: if any other
    module under `ui/src` reads files or names a path outside `ui/`, a test could read through
    it unseen, so the whole suite runs instead; and finding no test at all fails.
 3. **Docker layer cache.** `helm-install-test` (wardynd, wardyn-proxy), `conformance-k8s` (wardyn-proxy) and
@@ -626,13 +626,34 @@ time (see above), so the "after" rows are measured, not predicted.
 |---|---|---|---|---|---|
 | Before: 35918188245, push to main | 22.0 min | 13.1 min | 8.0 min | 6.2 min | 41.1 min |
 | After: 36043678020, full pull-request run | `go` legs: 3.2 (lint), 6.0 (unit), 5.1 (docker), 5.8 (k8s) min | 13.0 min | 11.2 min | 7.0 min | 14.0 min |
-| After: docs-only pull request | to be measured | | | | |
-| After: ui-only pull request | to be measured | | | | |
 
 Run 36043678020 changed Go and `ci.yml`, so every job ran. A pull request that touches one Go
 package, or a train pull request, runs the same full set of jobs. `build` is now only the
-aggregator, and `conformance-k8s` is the new critical path. The docs-only and ui-only rows
-are still to be measured.
+aggregator, and `conformance-k8s` is the new critical path.
+
+**By kind of change (2026-10-06).** One pull request of each kind, each run on its own
+(nothing else running in the account), against the last run of that kind before the
+classification gained `ui`, `images` and `notices`. "Jobs" counts the jobs that took a
+runner; a skipped job takes none.
+
+| Change | Run | Jobs | Runner-minutes | Wall | Longest job |
+|---|---|---|---|---|---|
+| Everything, before: push to main | 37269326378 | 32 | 116.9 | 18.3 min | `test-pg` 17.4 min |
+| Go only, after | 37405900397 | 35 | 108.2 | 9.1 min | `conformance-k8s` 8.9 min |
+| Console only, before | 37392974500 | 31 | 70.0 | 41.9 min, of which up to 29.8 queued | `ui-e2e` 10.3 min |
+| Console only, after | 37406693248 | 18 | 39.6 | 10.5 min | `ui` 10.3 min |
+| Docs only, before | 36789150048 | 27 | 33.5 | 11.3 min, of which up to 7.7 queued | `ui` 6.6 min |
+| Docs only, after | 37407613617 | 15 | 18.1 | 4.1 min | `go (unit)` 3.8 min |
+
+A change to Go still asks for 35 runners. Branch protection requires 24 contexts and a
+change to Go can affect every one of them, so that count moves only if contexts are merged
+(the eight image scans into one or two jobs, the five `gates` into one), which is a
+branch-protection change. What changed for it is the wall time: `test-pg` and `ui-e2e` are
+split, the long jobs get their runners first, and vitest runs 76 files (71 s) where it ran
+341 (547 s). A console-only change is held at 10.5 minutes by the whole vitest suite in
+`ui`; two vitest shards behind a `ui` aggregator would bring it to about 7.5 minutes for two
+more jobs. A run of everything (a push to `main`, a `train/*` pull request) runs that same
+`ui` job, so `ui` is its longest job as well.
 
 ## Driving an existing control plane instead
 
