@@ -77,7 +77,7 @@ func covers(glob, dir string) bool {
 //     carries no -race.
 //
 // This guard holds the property in both directions, so neither half can be
-// removed quietly: the pg job must run a race pass over the pg lane, and
+// removed quietly: a pg shard must run a race pass over the pg lane, and
 // the three cover-check suites must keep both -race (they are the tree's only
 // race passes; dropping it from one silently removes race detection for that
 // tag set) and the DSN strip (if they ever stopped stripping it, the pg lane
@@ -172,16 +172,16 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 		}
 	}
 
-	// (c) CI actually runs it, in the job that has a Postgres service and sets
-	// the DSN. A target nothing invokes is not a gate.
-	job := ciJobBlock(t, string(wf), "test-pg")
-	if !strings.Contains(job, "make test-race-pg") {
-		t.Errorf("ci.yml's test-pg job never runs `make test-race-pg`, so the broker's exactly-once "+
-			"concurrency proofs are still never race-checked by any gate:\n%s", job)
+	// (c) CI actually runs it, in a shard of the test-pg-shard matrix, which has
+	// a Postgres service and sets the DSN. A target nothing invokes is not a gate.
+	job := ciJobBlock(t, string(wf), "test-pg-shard")
+	if !strings.Contains(job, "run: make test-race-pg\n") {
+		t.Errorf("ci.yml's test-pg-shard job has no race shard running `make test-race-pg`, so the broker's "+
+			"exactly-once concurrency proofs are still never race-checked by any gate:\n%s", job)
 	}
-	if strings.Count(job, "WARDYN_TEST_PG:") < 2 {
-		t.Errorf("the race step in ci.yml's test-pg job does not set WARDYN_TEST_PG, so every pg-gated "+
-			"test it runs would SKIP and the step would pass vacuously:\n%s", job)
+	if !strings.Contains(job, "WARDYN_TEST_PG:") {
+		t.Errorf("the shards in ci.yml's test-pg-shard job do not set WARDYN_TEST_PG, so every pg-gated "+
+			"test they run would SKIP and the race shard would pass vacuously:\n%s", job)
 	}
 
 	// (d) every TestPG_ function that spawns a goroutine is actually raced: some

@@ -434,7 +434,8 @@ split below; timings for the current aggregator and the new jobs remain pending:
 | `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
 | `ui-e2e` | 42 | 9.2 | 10.1 | 25 |
-| `test-pg` | 31 | 5.0 | 5.2 | 15 |
+| `test-pg-shard` (api, store, race matrix) | – | pending | pending | 20 |
+| `test-pg` (aggregator) | – | pending | pending | 10 |
 | `ui` | 60 | 4.5 | 4.8 | 20 |
 | `conformance` | 60 | 4.2 | 4.7 | 45 |
 | `envbuild-integration` | 60 | 3.6 | 4.0 | 20 |
@@ -538,7 +539,7 @@ race + coverage pass per tag set (#467):
 that is skipped because `changes` *failed* would pass without running anything. So no
 required job is skipped at the job level:
 
-- `test-pg`, `conformance`, `conformance-k8s` and `helm` always run (`if: !cancelled()`) and
+- `test-pg` (through its `test-pg-shard` matrix, whose aggregator fails unless every shard passed), `conformance`, `conformance-k8s` and `helm` always run (`if: !cancelled()`) and
   put `if: needs.changes.outputs.backend != 'false'` on every step. When a change cannot affect
   them the job still reports success after a few seconds with its steps skipped. The
   comparison is `!= 'false'`, so a failed or missing classification runs the work.

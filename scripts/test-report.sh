@@ -15,6 +15,7 @@
 #   scripts/test-report.sh docker -tags docker ./internal/runner/...
 #
 # Honors env: GOFLAGS, WARDYN_TEST_PG, WARDYN_TEST_DOCKER, WARDYN_TEST_K8S (passed through to go test).
+# WARDYN_TEST_REPORT_NAME renames the report directory only (the suite name still scopes the skip floor).
 # WARDYN_TEST_REPORT_COVER=0 drops the coverage flags (and the three coverage files).
 # Exit code mirrors the test run (non-zero if any test failed).
 set -uo pipefail
@@ -25,7 +26,7 @@ shift
 PKGS=("$@")
 if [ ${#PKGS[@]} -eq 0 ]; then PKGS=("./..."); fi
 
-OUT="$ROOT/test/reports/go/$SUITE"
+OUT="$ROOT/test/reports/go/${WARDYN_TEST_REPORT_NAME:-$SUITE}"
 mkdir -p "$OUT"
 
 echo ">> running suite '$SUITE': go test -json ${PKGS[*]}"

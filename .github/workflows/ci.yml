@@ -1187,11 +1187,46 @@ jobs:
   # test/apie2e) against a real Postgres. This ran in NO per-PR workflow
   # before (a HIGH finding) — only the nightly `integration-pg` job exercised
   # it. Mirrors that job's postgres service (postgres:17, matching compose/prod).
-  test-pg:
+  #
+  # Three shards, each with its OWN Postgres service, so the ~12-minute suite and
+  # the ~5-minute race proofs stop queueing behind each other. -p 1 stays inside
+  # each shard: its packages still share ONE database whose singleton state
+  # (site_config) internal/api and test/apie2e both mutate. The shard package
+  # lists are the old `make test-report-pg` list split in two; with
+  # `make test-race-pg` they run exactly what the single job ran.
+  #   api   — internal/api and test/apie2e
+  #   store — store, db, secretstore, broker, recording, cmd/wardynd
+  #   race  — `make test-race-pg` (the three -race -p 1 passes)
+  # The required context `test-pg` is the aggregator below, which reports the
+  # shards' combined result.
+  test-pg-shard:
     needs: changes
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: api
+            suite: pg-api
+            run: make test-report-pg PG_REPORT=pg-api PG_PKGS='./internal/api/... ./test/apie2e/...'
+            superuser: "1"
+          - shard: store
+            suite: pg-store
+            run: make test-report-pg PG_REPORT=pg-store PG_PKGS='./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... ./internal/recording/... ./cmd/wardynd/...'
+            superuser: "1"
+          # The `race` job above strips the DSN (Makefile: `WARDYN_TEST_PG= go test
+          # -race ./...`), so the WARDYN_TEST_PG-gated tests are SKIPPED there — and
+          # the two shards above, the only ones that set the DSN for a report, run
+          # without -race. The broker's exactly-once concurrency proofs are
+          # therefore the tests most in need of the detector and the ones no gate
+          # was pointing it at. This shard is that gate (F137). It writes no report
+          # directory, so it uploads none.
+          - shard: race
+            suite: ''
+            run: make test-race-pg
+            superuser: ''
     services:
       postgres:
         image: postgres:17
@@ -1223,37 +1258,26 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-test-pg-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-test-pg-${{ matrix.shard }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
           restore-keys: |
-            go-test-pg-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-test-pg-
+            go-test-pg-${{ matrix.shard }}-${{ hashFiles('go.sum', 'Makefile') }}-
+            go-test-pg-${{ matrix.shard }}-
       # WARDYN_TEST_PG_SUPERUSER asserts what this lane already is: `postgres`,
       # over a URL-form DSN, which can satisfy every precondition the append-only
       # probes guard on. With it set, a probe that would have SKIPPED (and so
       # reported `ok` and exit 0 while proving nothing) FAILS instead — and
       # test-report.sh's skip floor catches the same class from the other side,
       # over the JSON event stream, in case a guard is ever added that does not
-      # consult the marker.
-      - name: Postgres-gated integration suite (with reports)
+      # consult the marker. The race shard does not set it, as before.
+      - name: Postgres-gated suite (${{ matrix.shard }})
         if: needs.changes.outputs.backend != 'false'
         env:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
-          WARDYN_TEST_PG_SUPERUSER: "1"
-        run: make test-report-pg
-      # The `race` job above strips the DSN (Makefile: `WARDYN_TEST_PG= go test
-      # -race ./...`), so the WARDYN_TEST_PG-gated tests are SKIPPED there — and
-      # the step above, the only one that sets the DSN, runs without -race. The
-      # broker's exactly-once concurrency proofs are therefore the tests most in
-      # need of the detector and the ones no gate was pointing it at. This step
-      # is that gate (F137).
-      - name: PG concurrency proofs (race detector)
-        if: needs.changes.outputs.backend != 'false'
-        env:
-          WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
-        run: make test-race-pg
+          WARDYN_TEST_PG_SUPERUSER: ${{ matrix.superuser }}
+        run: ${{ matrix.run }}
       - name: Upload PG test reports
         id: upload_pg_test_reports
-        if: always() && needs.changes.outputs.backend != 'false'
+        if: always() && needs.changes.outputs.backend != 'false' && matrix.suite != ''
         # A storage-side error must not fail a job whose tests passed: a 403 from
         # the artifact service reddened a REQUIRED check with all 175 UI test files
         # green, and only a manual re-run cleared it (#372). The step below says so
@@ -1262,11 +1286,11 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: pg-test-reports
-          path: test/reports/go/pg/**
-      - name: Say so if pg-test-reports did not upload
+          name: pg-test-reports-${{ matrix.shard }}
+          path: test/reports/go/${{ matrix.suite }}/**
+      - name: Say so if the PG test reports did not upload
         if: always() && steps.upload_pg_test_reports.outcome == 'failure'
-        run: echo "::warning title=Reports missing::pg-test-reports did not upload; this job's result stands on its tests, but the reports are not attached to this run."
+        run: echo "::warning title=Reports missing::pg-test-reports-${{ matrix.shard }} did not upload; this job's result stands on its tests, but the reports are not attached to this run."
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1275,7 +1299,25 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-test-pg-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-test-pg-${{ matrix.shard }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+
+  # The required check. Branch protection requires a context named `test-pg`,
+  # and this is it: green only when every shard above passed. `!cancelled()` so
+  # a failed shard still runs this job, which then fails on its one step; with
+  # the default `success()` it would be SKIPPED when a shard fails, and a
+  # skipped required check can read as passing. Same shape as `build` over the
+  # `go` legs.
+  test-pg:
+    needs: test-pg-shard
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Every Postgres shard passed
+        env:
+          SHARDS: ${{ needs.test-pg-shard.result }}
+        run: |
+          [ "$SHARDS" = success ] || { echo "::error::a Postgres shard did not pass (result: $SHARDS); see the test-pg-shard (…) checks"; exit 1; }
 
   # ── supply-chain: trivy image scan (OS + language packages) ───────────────
   # D3. Covers a surface no existing gate does: `govulncheck` reads Go modules,
