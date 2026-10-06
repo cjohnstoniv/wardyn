@@ -3,7 +3,7 @@
 
 // Package version holds Wardyn's one shipped version string, kept out of
 // cmd/* so the CLI, daemon startup log, and /healthz all report the same
-// build — needed to diagnose CLI/server skew after a rolling upgrade.
+// build, needed to diagnose CLI/server skew after a rolling upgrade.
 package version
 
 import "runtime/debug"
