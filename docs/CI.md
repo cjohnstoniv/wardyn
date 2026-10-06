@@ -435,7 +435,7 @@ split below; timings for the current aggregator and the new jobs remain pending:
 | `go` (lint, unit, docker, k8s matrix) | – | pending | pending | 40 |
 | `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
-| `ui-e2e` (1/2, 2/2 matrix) | – | pending | pending | 25 |
+| `ui-e2e` (1/2, 2/2 matrix) | 1 | 7.0 | 7.0 | 25 |
 | `test-pg-shard` (api, store, race matrix) | – | pending | pending | 20 |
 | `test-pg` (aggregator) | – | pending | pending | 10 |
 | `ui` | 60 | 4.5 | 4.8 | 20 |
@@ -443,14 +443,17 @@ split below; timings for the current aggregator and the new jobs remain pending:
 | `envbuild-integration` | 60 | 3.6 | 4.0 | 20 |
 | `gates (staticcheck)` | 60 | 2.7 | 2.9 | 15 |
 | `helm-install-test` | – | pending | pending | 20 |
-| `trivy (wardynd)` | 60 | 1.8 | 2.0 | 40 |
+| `trivy-wardynd` (check `trivy (wardynd)`) | 50 | 2.0 | 2.5 | 40 |
+| `trivy-wardynd-fips` (check `trivy (wardynd-fips)`) | 49 | 2.0 | 2.3 | 40 |
+| `trivy-agent-novnc` (check `trivy (agent-novnc)`) | 51 | 1.6 | 2.2 | 40 |
+| `trivy-agent-vscode` (check `trivy (agent-vscode)`) | 50 | 1.6 | 2.0 | 40 |
 | `notices` | 60 | 1.5 | 1.9 | 15 |
 | `gates (licenses)` | 60 | 1.4 | 2.0 | 15 |
-| `trivy (agent-codex-cli)` | 60 | 1.2 | 1.6 | 40 |
-| `trivy (agent-base)` | 60 | 1.1 | 1.4 | 40 |
-| `trivy (agent-aws-sso)` | 60 | 1.1 | 1.6 | 40 |
+| `trivy-agent-codex-cli` (check `trivy (agent-codex-cli)`) | 51 | 1.4 | 1.7 | 40 |
+| `trivy-agent-base` (check `trivy (agent-base)`) | 50 | 1.3 | 1.6 | 40 |
+| `trivy-agent-aws-sso` (check `trivy (agent-aws-sso)`) | 52 | 1.3 | 1.8 | 40 |
 | `gates (gitleaks)` | 60 | 0.8 | 1.0 | 15 |
-| `trivy (wardyn-proxy)` | 60 | 0.7 | 1.1 | 40 |
+| `trivy-wardyn-proxy` (check `trivy (wardyn-proxy)`) | 53 | 0.9 | 1.2 | 40 |
 | `gates (govulncheck)` | 60 | 0.7 | 1.0 | 15 |
 | `diagrams` | 60 | 0.6 | 0.9 | 10 |
 | `compose` | 60 | 0.3 | 0.5 | 10 |
@@ -505,7 +508,7 @@ race + coverage pass per tag set (#467):
    | `code` | any path outside `docs/**`, `threatmodel/**` and `*.md` | `ui-e2e`, `helm-install-test` |
    | `backend` | any path outside those and `ui/**` (Go, `deploy/**`, `scripts/**`, `.github/**`, …) | `go` (full suites or guard packages), `build` (union), `test-pg-shard`, `test-pg`, `conformance`, `conformance-k8s`, `envbuild-integration`, `helm`, `helm-install-test`'s kind half |
    | `ui` | `ui/**`, the `Makefile`, `.github/workflows/ci.yml` | `ui` (whole vitest suite, or only the files that read outside `ui/`) |
-   | `images` | a `backend` path other than a Go `*_test.go` file | `trivy (…)` |
+   | `images` | a `backend` path other than a Go `*_test.go` file | the eight `trivy (<image>)` jobs |
    | `notices` | `images`, `ui/package.json`, `ui/pnpm-lock.yaml`, `THIRD-PARTY-NOTICES.md` | `notices` |
 
    A path that matches no pattern counts as backend, so a new directory runs everything until
@@ -514,7 +517,10 @@ race + coverage pass per tag set (#467):
    change skips `ui-e2e`, `helm-install-test`, both conformance jobs, `envbuild-integration`,
    `helm`, `test-pg`, `notices` and every `trivy` scan; a console-only change skips the same
    except `ui-e2e` and `helm-install-test`'s desktop-envelope half; a change to Go test files
-   only skips `trivy` and `notices`.
+   only skips the `trivy` scans and `notices`. Go source counts as an image input: of the 52
+   pull requests that changed non-test Go among the last 66, 43 changed an import of a
+   module-qualified package, which is what decides which modules a binary links and so what
+   `trivy` and `notices` report.
    The Go jobs (`go`, `build`) never skip, whatever changed. Dozens of Go test files read
    the docs, the CHANGELOG, `ui/src` or the workflows (the citation, CHANGELOG-freeze,
    RELEASING job-list and copy-parity guards among them), so skipping Go on a docs-only
@@ -553,29 +559,33 @@ race + coverage pass per tag set (#467):
    push to `main`, like the Go caches, so pull requests read main's layers and add no cache
    entries of their own. Not cached: `trivy` (a cached `apt-get` layer would scan older
    packages than the release builds, which changes what the gate says), the conformance agent image (`make build-conformance-agent-image`)
-   and `trivy`'s `agent-vscode`/`agent-novnc` rows, which build `FROM` a local image that a
+   and `trivy`'s `agent-vscode`/`agent-novnc` jobs, which build `FROM` a local image that a
    buildx builder cannot see.
 
 **Required checks and skipped jobs.** GitHub reports a job skipped by a job-level `if:` as
-"skipped", and branch protection accepts that as passing. Two rules keep that safe:
+"skipped", and branch protection accepts that as passing (pull request #1863, a console-only
+change, was mergeable with `envbuild-integration` skipped). A skipped job takes no runner,
+where a job that only skips its steps still waits for one: in run 37392974500, a
+console-only pull request, `conformance` queued 1426 s to run for 6 s, `helm` 1779 s and
+`test-pg` 1785 s. So a job that a change cannot affect skips at the job level, under two
+rules:
 
-- A required job reads the classification only as `!cancelled() && … != 'false'`. If
-  `changes` *failed*, every output is empty, so the job runs instead of skipping.
+- A job reads the classification only as `!cancelled() && … != 'false'`. If `changes`
+  *failed*, every output is empty, so the job runs instead of skipping.
 - A required job with a **matrix** never skips at the job level. GitHub does not expand a
-  skipped matrix: it reports one check with the name unexpanded (`trivy (${{ matrix.name }})`,
-  the same row `scripts/green-by-tree.sh` documents for the nightly), so `trivy (wardynd)`
-  would never report and the pull request would wait on it forever. `trivy (…)` and
-  `gates (…)` therefore always run; `trivy` puts `if: needs.changes.outputs.images != 'false'`
-  on every step, so a cell that has nothing to scan reports success in seconds.
+  skipped matrix: it reports one check with the name unexpanded (`gates (${{ matrix.gate }})`,
+  the same row `scripts/green-by-tree.sh` documents for the nightly), so `gates (gitleaks)`
+  would never report and the pull request would wait on it forever. This is why the image
+  scans are eight jobs (`trivy-wardynd` … `trivy-agent-novnc`, reporting as
+  `trivy (<image>)`) and not a matrix: their steps are written once and shared through a YAML
+  anchor, and each job skips on `images == 'false'`.
 
 So:
 
 - `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard
-  passed), `conformance`, `conformance-k8s`, `helm` and `envbuild-integration` skip at the job
-  level on `backend == 'false'`, `notices` on `notices == 'false'`. A skipped job needs no
-  runner, where a job that only skipped its steps still waited for one: in run 37392974500, a
-  console-only pull request, `conformance` queued 1426 s to run for 6 s, `helm` 1779 s, and
-  `test-pg` 1785 s.
+  passed), `conformance`, `conformance-k8s`, `helm` and `envbuild-integration` skip on
+  `backend == 'false'`, `notices` on `notices == 'false'`, the eight `trivy (<image>)` jobs on
+  `images == 'false'`.
 - `build` needs every `go` leg and runs with `if: !cancelled()`. Its first step fails unless
   every leg passed, so the `build` context is green only when all four legs and the union floor
   are. The union steps carry `if: needs.changes.outputs.backend != 'false'`, so only an
@@ -584,9 +594,11 @@ So:
 - `ui` always runs and narrows only vitest (above).
 - Non-required jobs (`ui-e2e`, `helm-install-test`) skip at the job level on `code`.
   `helm-install-test` puts `backend != 'false'` on its kind half's steps, so a console-only
-  change runs just its desktop-envelope half.
+  change runs just its desktop-envelope half. `notify-flaky` skips when both `ui-e2e` shards
+  said their flaky list was empty, and runs on any other answer, including none.
 - `compose`, `dco`, `diagrams` and `gates (…)` do not read the classification and run on
-  every change.
+  every change. (`helm` stays on `backend`, not on the chart's own paths: `make helm-lint`
+  also renders `examples/policies/demo.json` and `cmd/wardynd/testdata/values-0.7.yaml`.)
 - Only a run whose five outputs are all `true` uploads the `ci-full-tree-<tree>` marker that
   `scripts/green-by-tree.sh` accepts as release evidence: a run that narrowed anything did not
   test everything, even where every check it reported is green.

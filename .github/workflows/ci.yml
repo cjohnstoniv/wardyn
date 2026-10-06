@@ -58,13 +58,14 @@ jobs:
   #
   # A job that consumes these outputs must also run when this job FAILED
   # (`!cancelled()`) and compare with != 'false', so a missing output runs the
-  # work instead of skipping it. A required job with a matrix (trivy, gates)
-  # never skips at the job level: a skipped matrix is reported as one check
-  # with its name unexpanded, so `trivy (wardynd)` would never report and the
-  # pull request would wait on it forever. Those run and skip their steps. A
-  # required job without a matrix may skip at the job level on an explicit
-  # 'false': GitHub reports it as skipped, which branch protection accepts, and
-  # it never waits for a runner just to do nothing.
+  # work instead of skipping it. A required job with a matrix (gates) never
+  # skips at the job level: a skipped matrix is reported as one check with its
+  # name unexpanded, so `gates (gitleaks)` would never report and the pull
+  # request would wait on it forever. That is why the trivy scans are one job
+  # per image and not a matrix. A required job without a matrix may skip at the
+  # job level on an explicit 'false': GitHub reports it as skipped, which
+  # branch protection accepts, and it never waits for a runner just to do
+  # nothing.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -124,7 +125,7 @@ jobs:
       # is GitHub's merge commit, so this is the tree actually tested — the run
       # API's head_commit.tree_id is the PR head's tree, which differs whenever
       # the base has moved. Every output must be 'true': a run that narrowed any
-      # job (a step-skipped trivy cell reports success) did not test everything.
+      # job did not test everything.
       - name: Record the tree this run tests (release evidence)
         id: tree
         if: >-
@@ -540,6 +541,11 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2]
+    # One key per shard: a matrix shares its outputs, and the last writer of a
+    # shared key would win. notify-flaky reads both.
+    outputs:
+      flaky_1: ${{ steps.flaky.outputs.flaky_1 }}
+      flaky_2: ${{ steps.flaky.outputs.flaky_2 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -639,6 +645,16 @@ jobs:
           name: e2e-flaky-${{ matrix.shard }}
           path: test/reports/e2e/flaky.tsv
           if-no-files-found: ignore
+      # 'false' only when the list was written and is empty. Anything else (a
+      # flake, or a run that died before writing it) leaves the output unset,
+      # and notify-flaky runs.
+      - name: Say so when this shard saw no flaky test
+        id: flaky
+        if: always()
+        run: |
+          if [ -f test/reports/e2e/flaky.tsv ] && [ ! -s test/reports/e2e/flaky.tsv ]; then
+            echo "flaky_${{ matrix.shard }}=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Save Go build cache (push to main only)
         if: success() && matrix.shard == 1 && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1399,60 +1415,46 @@ jobs:
   # Native amd64 build (no QEMU, no platforms list): a CVE in a Debian package
   # is not arch-specific, so scanning one arch finds the same advisories.
   #
-  # A required matrix job, so it never skips at the job level (see `changes`):
-  # on changes.outputs.images == 'false' (docs, console source, Go test files
-  # only) every step skips and each cell reports success in seconds. Those
-  # inputs cannot change a scan: the images compile Go from this tree and copy
-  # deploy/images/, and none carries the console's npm packages.
+  # One job per image, not a matrix, so each can skip at the job level and
+  # take no runner: on changes.outputs.images == 'false' (docs, console source,
+  # Go test files only) all eight report as skipped, which branch protection
+  # accepts. Those inputs cannot change a scan: the images compile Go from this
+  # tree and copy deploy/images/, and none carries the console's npm packages.
+  # A skipped MATRIX would not do: GitHub reports it as one check with the
+  # name unexpanded, and `trivy (wardynd)` would never report. The check names
+  # are the ones branch protection requires; the steps are written once, on the
+  # first job, and the other seven reuse them (`*trivy_steps`). Each job's
+  # TRIVY_IMAGE is what scripts/check-image-pins.sh compares with the images
+  # release.yml publishes.
   #
   # Scans EVERY image the release publishes, not one of them. Previously only
   # agent-claude-code was scanned — which, after 0.6.2, is the one image we no
   # longer publish. wardynd, wardyn-proxy, agent-codex-cli and agent-aws-sso were
   # shipped to a public registry having never been scanned at all, and the stated
   # rationale (distroless, no OS package surface) was true of two of them.
-  trivy:
-    name: trivy (${{ matrix.name }})
+  trivy-wardynd:
+    name: trivy (wardynd)
     needs: changes
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: wardynd
-            dockerfile: deploy/compose/Dockerfile.wardynd
-          # Built with the pin, so the scanned image is the published one and the
-          # Dockerfile's own GOFIPS140 check runs on every PR.
-          - name: wardynd-fips
-            dockerfile: deploy/compose/Dockerfile.wardynd
-            build-args: --build-arg GOFIPS140=v1.0.0-c2097c7c
-          - name: wardyn-proxy
-            dockerfile: deploy/compose/Dockerfile.proxy
-          - name: agent-base
-            dockerfile: deploy/images/base/Dockerfile
-          - name: agent-codex-cli
-            dockerfile: deploy/images/codex-cli/Dockerfile
-          - name: agent-aws-sso
-            dockerfile: deploy/images/aws-sso/Dockerfile
-          - name: agent-vscode
-            dockerfile: deploy/images/vscode/Dockerfile
-          - name: agent-novnc
-            dockerfile: deploy/images/novnc/Dockerfile
-    steps:
+    env:
+      TRIVY_IMAGE: wardynd
+      TRIVY_DOCKERFILE: deploy/compose/Dockerfile.wardynd
+      TRIVY_BUILD_ARGS: ''
+    steps: &trivy_steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: needs.changes.outputs.images != 'false'
       - name: Build the image locally (scan target — never pushed)
-        if: needs.changes.outputs.images != 'false'
         run: |
           # agent-vscode/agent-novnc default FROM wardyn/agent-base:local (never
-          # a registry pull) — build that first when this row needs it. Every
-          # other row's Dockerfile stands alone.
-          case "${{ matrix.name }}" in
+          # a registry pull) — build that first when this job needs it. Every
+          # other job's Dockerfile stands alone.
+          case "$TRIVY_IMAGE" in
             agent-vscode|agent-novnc)
               docker build -f deploy/images/base/Dockerfile -t wardyn/agent-base:local . ;;
           esac
-          docker build ${{ matrix.build-args }} -f ${{ matrix.dockerfile }} -t wardyn/${{ matrix.name }}:trivy-scan .
+          # shellcheck disable=SC2086 # TRIVY_BUILD_ARGS is zero or more words
+          docker build $TRIVY_BUILD_ARGS -f "$TRIVY_DOCKERFILE" -t "wardyn/$TRIVY_IMAGE:trivy-scan" .
       # The aws-sso image's --selftest, against the image that was actually
       # BUILT. Everything it checks (tmux present; both coding-agent shims
       # present AND refusing) is otherwise exercised only by source-level Go
@@ -1467,18 +1469,16 @@ jobs:
         # codex-cli too: 0.7.5 restructured its PUBLISHED agent-run around the shared
         # boot-session functions in agent-run-lib.sh, and a syntax break in that lib
         # would otherwise ship in an image CI built and never ran.
-        if: needs.changes.outputs.images != 'false' && (matrix.name == 'agent-aws-sso' || matrix.name == 'agent-codex-cli')
-        run: docker run --rm --entrypoint agent-run wardyn/${{ matrix.name }}:trivy-scan --selftest
+        if: env.TRIVY_IMAGE == 'agent-aws-sso' || env.TRIVY_IMAGE == 'agent-codex-cli'
+        run: docker run --rm --entrypoint agent-run "wardyn/$TRIVY_IMAGE:trivy-scan" --selftest
       # trivy-action's built-in cache (on by default) restores AND saves the
       # vulnerability DB on every event, so each PR run wrote seven PR-scoped
       # entries (issue #470). It is off here; the DB is restored below and saved
       # only from a green push to main. TRIVY_CACHE_DIR is always this path.
       - name: Trivy DB cache key date
-        if: needs.changes.outputs.images != 'false'
         id: cache-date
         run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
       - name: Restore trivy DB cache
-        if: needs.changes.outputs.images != 'false'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.cache/trivy
@@ -1486,9 +1486,8 @@ jobs:
           restore-keys: |
             cache-trivy-
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        if: needs.changes.outputs.images != 'false'
         with:
-          image-ref: wardyn/${{ matrix.name }}:trivy-scan
+          image-ref: wardyn/${{ env.TRIVY_IMAGE }}:trivy-scan
           format: table
           severity: CRITICAL
           ignore-unfixed: true
@@ -1499,10 +1498,9 @@ jobs:
       # trivy the step above installed and the DB it already pulled into
       # TRIVY_CACHE_DIR, so nothing is installed or downloaded twice.
       - name: Trivy strict scan (CRITICAL, fixed or not)
-        if: needs.changes.outputs.images != 'false'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: wardyn/${{ matrix.name }}:trivy-scan
+          image-ref: wardyn/${{ env.TRIVY_IMAGE }}:trivy-scan
           format: table
           severity: CRITICAL
           ignore-unfixed: false
@@ -1516,6 +1514,86 @@ jobs:
         with:
           path: ${{ github.workspace }}/.cache/trivy
           key: cache-trivy-${{ steps.cache-date.outputs.date }}
+
+  # Built with the pin, so the scanned image is the published one and the
+  # Dockerfile's own GOFIPS140 check runs on every PR.
+  trivy-wardynd-fips:
+    name: trivy (wardynd-fips)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TRIVY_IMAGE: wardynd-fips
+      TRIVY_DOCKERFILE: deploy/compose/Dockerfile.wardynd
+      TRIVY_BUILD_ARGS: --build-arg GOFIPS140=v1.0.0-c2097c7c
+    steps: *trivy_steps
+  trivy-wardyn-proxy:
+    name: trivy (wardyn-proxy)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TRIVY_IMAGE: wardyn-proxy
+      TRIVY_DOCKERFILE: deploy/compose/Dockerfile.proxy
+      TRIVY_BUILD_ARGS: ''
+    steps: *trivy_steps
+  trivy-agent-base:
+    name: trivy (agent-base)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TRIVY_IMAGE: agent-base
+      TRIVY_DOCKERFILE: deploy/images/base/Dockerfile
+      TRIVY_BUILD_ARGS: ''
+    steps: *trivy_steps
+  trivy-agent-codex-cli:
+    name: trivy (agent-codex-cli)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TRIVY_IMAGE: agent-codex-cli
+      TRIVY_DOCKERFILE: deploy/images/codex-cli/Dockerfile
+      TRIVY_BUILD_ARGS: ''
+    steps: *trivy_steps
+  trivy-agent-aws-sso:
+    name: trivy (agent-aws-sso)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TRIVY_IMAGE: agent-aws-sso
+      TRIVY_DOCKERFILE: deploy/images/aws-sso/Dockerfile
+      TRIVY_BUILD_ARGS: ''
+    steps: *trivy_steps
+  trivy-agent-vscode:
+    name: trivy (agent-vscode)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TRIVY_IMAGE: agent-vscode
+      TRIVY_DOCKERFILE: deploy/images/vscode/Dockerfile
+      TRIVY_BUILD_ARGS: ''
+    steps: *trivy_steps
+  trivy-agent-novnc:
+    name: trivy (agent-novnc)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TRIVY_IMAGE: agent-novnc
+      TRIVY_DOCKERFILE: deploy/images/novnc/Dockerfile
+      TRIVY_BUILD_ARGS: ''
+    steps: *trivy_steps
 
   # ── supply-chain gates ────────────────────────────────────────────────────
   # One matrix job in place of five near-identical checkout + setup-go + one-
@@ -1696,10 +1774,15 @@ jobs:
   # flaky.tsv (`spec<TAB>title<TAB>new|quarantined`). One issue per test, found by
   # exact title, so a test that keeps flaking appends to one issue. continue-on-error:
   # a notifier error must not fail the run the release gate reads. Never on a fork,
-  # whose token cannot write issues.
+  # whose token cannot write issues. It takes a runner only when there may be
+  # something to say: it skips when BOTH ui-e2e shards said their list was
+  # empty, and runs on any other answer, including none.
   notify-flaky:
     needs: [ui-e2e]
-    if: ${{ !cancelled() && needs.ui-e2e.result != 'skipped' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: >-
+      ${{ !cancelled() && needs.ui-e2e.result != 'skipped'
+      && (needs.ui-e2e.outputs.flaky_1 != 'false' || needs.ui-e2e.outputs.flaky_2 != 'false')
+      && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1757,7 +1840,32 @@ jobs:
   # run trips it; scoped to push-to-main only (`if:`, not the trigger list) so
   # a red PR or merge-queue run never opens one.
   main-red:
-    needs: [changes, go, build, diagrams, ui, ui-e2e, notify-flaky, helm, helm-install-test, compose, conformance, conformance-k8s, envbuild-integration, test-pg, trivy, notices, gates, dco]
+    needs:
+      - changes
+      - go
+      - build
+      - diagrams
+      - ui
+      - ui-e2e
+      - notify-flaky
+      - helm
+      - helm-install-test
+      - compose
+      - conformance
+      - conformance-k8s
+      - envbuild-integration
+      - test-pg
+      - trivy-wardynd
+      - trivy-wardynd-fips
+      - trivy-wardyn-proxy
+      - trivy-agent-base
+      - trivy-agent-codex-cli
+      - trivy-agent-aws-sso
+      - trivy-agent-vscode
+      - trivy-agent-novnc
+      - notices
+      - gates
+      - dco
     if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10

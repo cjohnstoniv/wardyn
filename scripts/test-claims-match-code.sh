@@ -12,7 +12,7 @@
 #     C3   docs/VERIFY.md's verification commands stay parameterised on
 #          $WARDYN_VERSION, never a hard-coded release number.
 #     C6   RELEASING.md's required-status-checks `contexts` cover `notices`
-#          and every cell of ci.yml's `trivy` matrix (F121).
+#          and every one of ci.yml's `trivy (<image>)` jobs (F121).
 #     C7   ENV.md/VERIFY.md/THREAT-MODEL/OPERATIONS.md each match the code or
 #          compose file they describe (F081/F091/F155).
 #     C8a  docs/ci/github-actions.yml and azure-pipelines.yml pin the wardyn
@@ -91,18 +91,18 @@ RELEASING="${ROOT}/RELEASING.md"
 CI_YML="${ROOT}/.github/workflows/ci.yml"
 contexts="$(awk '/"contexts": \[/{f=1} f{print} f&&/\]/{exit}' "${RELEASING}")"
 [ -n "${contexts}" ] || fail "RELEASING.md no longer carries a required_status_checks \"contexts\" array — the one place the merge gate is written down (F121)"
-trivy_cells="$(awk '/^  trivy:/{f=1} f&&/^  [a-z]/&&!/^  trivy:/{f=0} f' "${CI_YML}" \
-               | grep -oE '^[[:space:]]+- name: [a-z0-9-]+$' | awk '{print $3}' | sort -u || true)"
-[ -n "${trivy_cells}" ] || fail "could not derive ci.yml's trivy matrix — this guard would compare against an empty list"
+trivy_cells="$(grep -oE '^[[:space:]]+name: trivy \([a-z0-9-]+\)$' "${CI_YML}" \
+               | sed -E 's/.*\(([a-z0-9-]+)\)$/\1/' | sort -u || true)"
+[ -n "${trivy_cells}" ] || fail "could not derive ci.yml's trivy jobs — this guard would compare against an empty list"
 for want in notices; do
   printf '%s' "${contexts}" | grep -qF "\"${want}\"" \
     || fail "RELEASING.md's required contexts omit '${want}' — the copyleft / unreviewed-dependency gate merges red (F121)"
 done
 for cell in ${trivy_cells}; do
   printf '%s' "${contexts}" | grep -qF "\"trivy (${cell})\"" \
-    || fail "RELEASING.md's required contexts omit 'trivy (${cell})' — ci.yml scans that image and branch protection would let it merge red. A matrix job reports one context per cell (F121)"
+    || fail "RELEASING.md's required contexts omit 'trivy (${cell})' — ci.yml scans that image and branch protection would let it merge red. Each trivy job reports its own context (F121)"
 done
-pass "C6 RELEASING.md's required contexts cover notices + every ci.yml trivy matrix cell"
+pass "C6 RELEASING.md's required contexts cover notices + every ci.yml trivy job"
 
 # ── C7: three doc claims, each checked against the thing it describes ──────
 COMPOSE_YAML="${ROOT}/deploy/compose/docker-compose.yaml"
