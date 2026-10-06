@@ -200,7 +200,7 @@ func New(cfg Config) (*Driver, error) {
 	if err != nil {
 		return nil, fmt.Errorf("docker: new client: %w", err)
 	}
-	d := newWithClient(cli, cfg)
+	d := newWithClient(newEngineClient(cli), cfg)
 	d.proxySettle = proxyStartSettle
 	return d, nil
 }

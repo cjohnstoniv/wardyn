@@ -19,9 +19,9 @@ import (
 )
 
 // dockerAPI is the narrow slice of the Docker client the driver uses, so lifecycle logic can run against a
-// fake with no daemon present. *client.Client satisfies it directly (asserted below); the moby v29 client's
-// options/result shape (args collapse into one options struct, returns into a result struct) is mirrored
-// exactly for that.
+// fake with no daemon present. engineClient, the real client plus ExecInspectRaw, satisfies it (asserted
+// below); the moby v29 client's options/result shape (args collapse into one options struct, returns into a
+// result struct) is mirrored exactly for that.
 type dockerAPI interface {
 	Info(ctx context.Context, options client.InfoOptions) (client.SystemInfoResult, error)
 	Ping(ctx context.Context, options client.PingOptions) (client.PingResult, error) // backs ProbeSubstrate: the daemon answers, nothing listed or created
@@ -65,7 +65,9 @@ type dockerAPI interface {
 	ExecCreate(ctx context.Context, containerID string, options client.ExecCreateOptions) (client.ExecCreateResult, error)
 	ExecAttach(ctx context.Context, execID string, options client.ExecAttachOptions) (client.ExecAttachResult, error)
 	ExecStart(ctx context.Context, execID string, options client.ExecStartOptions) (client.ExecStartResult, error)
-	ExecInspect(ctx context.Context, execID string, options client.ExecInspectOptions) (client.ExecInspectResult, error)
+	// ExecInspectRaw is the exec inspect with the exit code as the daemon sends it: null until the exec has
+	// exited. The client's own ExecInspect flattens that null to 0, which reads as a clean exit.
+	ExecInspectRaw(ctx context.Context, execID string) (execInspect, error)
 	ExecResize(ctx context.Context, execID string, options client.ExecResizeOptions) (client.ExecResizeResult, error) // honours attach-session PTY window-size changes
 
 	// VolumeInspect / VolumeCreate back MANAGED user drives: a per-person named volume, created on first
@@ -77,7 +79,7 @@ type dockerAPI interface {
 	VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
 }
 
-var _ dockerAPI = (*client.Client)(nil) // the real client must implement our slice
+var _ dockerAPI = engineClient{} // the real client must implement our slice
 
 // isNotFound reports whether err is a Docker "no such object" error; teardown paths treat this as success
 // so Stop/Kill are idempotent on a gone sandbox. Classified via errdefs.IsNotFound since the v29 client
