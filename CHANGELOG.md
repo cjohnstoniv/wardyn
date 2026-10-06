@@ -50,8 +50,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   or the sandbox sent bytes and none came back, the sentence saying which side closed first. A tunnel that
   carried an answer leaves no row, and neither does one the sandbox never wrote into, unless the hop spoke
   HTTP first. The `cause` carries no sandbox
-  bytes; from the hop it carries only a strictly parsed `HTTP/1.x` status code, an alert's description number,
-  and the reason phrase when `via` is `upstream-proxy`, the operator's own hop. See `docs/AUDIT-ACTIONS.md` and
+  bytes; from the hop it carries only a strictly parsed three-digit HTTP status code (such as `HTTP 503`) or a
+  TLS alert's description number, never the status line's reason phrase, on any hop. See `docs/AUDIT-ACTIONS.md` and
   "Phase B" in `docs/OPERATIONS.md`.
 - **The proxy refuses a non-TLS first answer into a tunnel the sandbox opened with a TLS hello.** A hop that
   acknowledged the CONNECT and then answered the hello in plaintext (an error page, a captive portal) used to
@@ -113,7 +113,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   attach before it starts the exec, and an exit poll that landed in that gap read the exec as finished with
   code 0 (seen under gVisor about once in twenty, as a process that then ran and exited non-zero). The poll
   now tells an exec that has not started from one that exited, and an exec that never starts within the probe
-  budget is an error, not a zero.
+  budget is an error, not a zero. The driver's agent status probe and the sandbox setup wait make the same
+  distinction: an exec not yet started reads as running, not as stopped with exit 0 (which the reconciler
+  would finalize as completed), and the setup wait no longer returns before the setup exec has run. A start
+  the daemon refused still reads as an exit.
 
 ## [0.8.6] — 2026-10-04
 

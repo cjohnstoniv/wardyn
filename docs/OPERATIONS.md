@@ -4432,14 +4432,14 @@ connections took and why one died, and the proxy's log adds a fourth.
   `egress.allow` row stands (the dial succeeded and the sandbox was told `200 Connection
   Established`) and one `egress.deny` follows it, never `builtin:dial-failed`, which says the tunnel
   never opened. Its `cause` is a fixed sentence beginning `tunnel first bytes:` (the dialled hop
-  answered a TLS hello with something that was not TLS, for example `HTTP 502`, or wrote an HTTP
+  answered a TLS hello with something that was not TLS, for example `HTTP 503`, or wrote an HTTP
   response before the sandbox sent a byte, or reset or closed without answering, or the sandbox closed
   before any reply), `tunnel tls handshake:` (the hop's whole answer to the TLS hello was a TLS
   alert, with its description number when that byte arrived) or `client tls handshake (sandbox to wardyn-proxy):` followed by
   the error (the sandbox's TLS handshake with the terminating proxy failed after it sent at least one
-  byte; for example a client that does not trust the CA the proxy signs with). When `via` is
-  `upstream-proxy` the cause also keeps the status line's reason phrase from your own proxy, in
-  parentheses (`HTTP 502 (Bad Gateway)`); for a `direct` hop it keeps the status code only. A tunnel the sandbox opened with a TLS
+  byte; for example a client that does not trust the CA the proxy signs with). From the hop the cause
+  carries only a strictly parsed three-digit status code or an alert's description number, never the
+  status line's reason phrase, whichever hop it is. A tunnel the sandbox opened with a TLS
   hello is no longer handed a first answer from the hop that is not a TLS record: it is refused,
   nothing is relayed, and the sandbox sees the connection close. A tunnel the sandbox opens with anything other
   than a TLS hello (ssh over 443, plain HTTP, a websocket upgrade) is relayed untouched. A tunnel that

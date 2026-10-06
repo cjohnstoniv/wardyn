@@ -231,8 +231,7 @@ What 0.8.7 changes on this path:
 
 - **A tunnel that dies after its `200` leaves one `egress.deny` row, `builtin:tunnel-failed`**, after
   the allow, with a fixed `cause` naming what ended it and `via` naming the hop: the hop answered the
-  TLS hello with something that was not TLS (its HTTP status code, and the reason phrase when the hop
-  is your own upstream proxy), its whole answer was a TLS alert, it reset or closed without
+  TLS hello with something that was not TLS (its HTTP status code only, never the reason phrase), its whole answer was a TLS alert, it reset or closed without
   answering, or the sandbox closed first. A lane the proxy terminates itself records a failed client
   handshake the same way. The row is not counted on `wardyn_egress_denies_total`.
 - **A first answer to a TLS hello that is not TLS is no longer relayed.** The proxy refuses it and the
