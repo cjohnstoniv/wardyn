@@ -15,7 +15,7 @@
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { findRunningFixture, stubInteractiveRun } from "./attach-stub";
-import { clickCell, dragCells, readGrid, rowOf } from "./terminal-grid";
+import { clickCell, dragCells, rowOf, settledGrid } from "./terminal-grid";
 import { termText } from "./terminal-text";
 
 async function open(page: Page) {
@@ -54,7 +54,7 @@ test("a dragged line becomes an offer, and Copy writes exactly what was selected
   await page.keyboard.type("printf 'alpha beta gamma\\n'");
   await page.keyboard.press("Enter");
   await expect.poll(async () => (await read()).split("\n").some((l) => l.trim() === "alpha beta gamma")).toBe(true);
-  const grid = await readGrid(page);
+  const grid = await settledGrid(page, screen);
   const row = await rowOf(screen, /^alpha beta gamma\s*$/);
 
   // Nothing was copied by tmux's own copy path alone.
@@ -75,7 +75,7 @@ test("a double-click copies the word and a triple-click the line", async ({ page
   await page.keyboard.type("printf 'alpha beta gamma\\n'");
   await page.keyboard.press("Enter");
   await expect.poll(async () => (await read()).split("\n").some((l) => l.trim() === "alpha beta gamma")).toBe(true);
-  const grid = await readGrid(page);
+  const grid = await settledGrid(page, screen);
   const row = await rowOf(screen, /^alpha beta gamma\s*$/);
   const offer = page.getByTestId("terminal-copy-offer");
   const text = page.getByTestId("terminal-copy-offer-text");

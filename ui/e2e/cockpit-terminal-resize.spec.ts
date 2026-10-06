@@ -9,6 +9,7 @@
  * none.
  */
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
+import { settledGrid } from "./terminal-grid";
 import { findRunningFixture, stubAttachSocket, stubAttachTicket, stubInteractiveRun } from "./attach-stub";
 
 test("one resize frame per real size change, none for a same-size refit", async ({ page }) => {
@@ -65,6 +66,6 @@ test("one resize frame per real size change, none for a same-size refit", async 
   await page.addStyleTag({ content: "*{transition:none!important;animation:none!important}" });
   await pane.evaluate((el) => el.style.setProperty("height", "300px", "important"));
   await expect.poll(() => frames.length).toBe(settled + 1);
-  await page.waitForTimeout(500);
+  await settledGrid(page, pane.locator(".xterm-screen").first());
   expect(frames.length).toBe(settled + 1);
 });
