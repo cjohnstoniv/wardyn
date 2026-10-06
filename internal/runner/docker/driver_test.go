@@ -1238,6 +1238,65 @@ func TestWaitExec_PollsPastAnUnstartedExec(t *testing.T) {
 	})
 }
 
+// TestExecExit_ReadFromTheExitCodeNotThePid: whether an exec has exited is read
+// from the exit code the daemon reports, absent until the exit, and never from
+// the pid. Podman's Docker-compatible API zeroes the pid when an exec exits, so
+// a pid rule read every clean exit there as an exec that had not started: Wait
+// errored after its budget and the status probe reported running for good.
+func TestExecExit_ReadFromTheExitCodeNotThePid(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name      string
+		pidZeroed bool
+		code      int
+	}{
+		{"Podman: exit 0, pid zeroed", true, 0},
+		{"Podman: exit 3, pid zeroed", true, 3},
+		{"Docker: exit 0, pid kept", false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			newExited := func() *fakeDocker {
+				f := newFakeDocker()
+				f.images["busybox:latest"] = true
+				f.execPIDZeroedOnExit, f.execExited, f.execExitCode = tc.pidZeroed, true, tc.code
+				return f
+			}
+
+			d := newTestDriver(newExited())
+			sb, err := d.CreateSandbox(ctx, testSpec())
+			if err != nil {
+				t.Fatalf("CreateSandbox: %v", err)
+			}
+			if _, err := d.Exec(ctx, sb.Ref, []string{"agent-run"}); err != nil {
+				t.Fatalf("Exec: %v", err)
+			}
+			wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			code, err := d.Wait(wctx, sb.Ref)
+			if err != nil || code != tc.code {
+				t.Errorf("Wait = %d, %v; want %d promptly", code, err, tc.code)
+			}
+
+			st, err := newTestDriver(newExited()).AgentStatus(ctx, "wardyn-agent-x", "exec-1")
+			if err != nil {
+				t.Fatalf("AgentStatus: %v", err)
+			}
+			if st.State != types.RunStopped || st.ExitCode == nil || *st.ExitCode != tc.code {
+				t.Errorf("AgentStatus = %+v, want STOPPED with exit %d", st, tc.code)
+			}
+
+			f := newExited()
+			newTestDriver(f).waitExec(ctx, "exec-1")
+			f.mu.Lock()
+			got := f.execInspects
+			f.mu.Unlock()
+			if got != 1 {
+				t.Errorf("waitExec made %d inspects of an exited exec, want 1", got)
+			}
+		})
+	}
+}
+
 // TestWait_NotFoundFailsFast: the retry budget must not blunt teardown. A
 // not-found exec is authoritative (the container is gone), so Wait returns at
 // once rather than polling out its transient-error budget.

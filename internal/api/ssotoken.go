@@ -246,6 +246,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		s.refuseCapture(w, r, claims, http.StatusConflict, reasonCaptureProviderChanged, mpsCaptureChanged, &scope)
 		return
 	} else if db.LockRefused(err) {
+		w.Header().Set("Retry-After", "5")
 		s.refuseCapture(w, r, claims, http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg, &scope)
 		return
 	} else if err != nil {
