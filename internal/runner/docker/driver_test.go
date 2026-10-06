@@ -1169,6 +1169,75 @@ func TestWait_UnstartedExecIsNotAnExit(t *testing.T) {
 	}
 }
 
+// TestAgentStatus_UnstartedExecIsRunning: the same unstarted state read by the
+// reconciler's probe. Reported as an exit 0 it finalizes the run COMPLETED
+// before the agent has run. A start the daemon refused is a different answer
+// (its code, no pid) and must stay an exit, or the run would read as running
+// for as long as its sandbox lives.
+func TestAgentStatus_UnstartedExecIsRunning(t *testing.T) {
+	ctx := context.Background()
+	t.Run("created, not started yet", func(t *testing.T) {
+		f := newFakeDocker()
+		f.execUnstarted = 1
+		f.execExited, f.execExitCode = true, 42
+		d := newTestDriver(f)
+		st, err := d.AgentStatus(ctx, "wardyn-agent-x", "exec-1")
+		if err != nil {
+			t.Fatalf("AgentStatus: %v", err)
+		}
+		if st.State != types.RunRunning || st.ExitCode != nil {
+			t.Errorf("unstarted exec = %+v, want RUNNING with no exit code", st)
+		}
+		// Once it has started and exited, the next probe carries its code.
+		st, err = d.AgentStatus(ctx, "wardyn-agent-x", "exec-1")
+		if err != nil {
+			t.Fatalf("AgentStatus: %v", err)
+		}
+		if st.State != types.RunStopped || st.ExitCode == nil || *st.ExitCode != 42 {
+			t.Errorf("exited exec = %+v, want STOPPED with exit 42", st)
+		}
+	})
+	t.Run("start refused by the daemon", func(t *testing.T) {
+		f := newFakeDocker()
+		f.execStartRefused, f.execExitCode = true, 127
+		st, err := newTestDriver(f).AgentStatus(ctx, "wardyn-agent-x", "exec-1")
+		if err != nil {
+			t.Fatalf("AgentStatus: %v", err)
+		}
+		if st.State != types.RunStopped || st.ExitCode == nil || *st.ExitCode != 127 {
+			t.Errorf("refused start = %+v, want STOPPED with exit 127", st)
+		}
+	})
+}
+
+// TestWaitExec_PollsPastAnUnstartedExec: the setup execs' bounded wait must not
+// take "not started yet" for "finished", and must still give up on an exec
+// that never starts.
+func TestWaitExec_PollsPastAnUnstartedExec(t *testing.T) {
+	remaining := func(f *fakeDocker) int {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.execUnstarted
+	}
+	t.Run("waits for the start", func(t *testing.T) {
+		f := newFakeDocker()
+		f.execUnstarted = 2
+		f.execExited = true
+		newTestDriver(f).waitExec(context.Background(), "exec-1")
+		if got := remaining(f); got != 0 {
+			t.Errorf("waitExec returned with %d unstarted inspects unread, want 0", got)
+		}
+	})
+	t.Run("gives up on an exec that never starts", func(t *testing.T) {
+		f := newFakeDocker()
+		f.execUnstarted = 1000
+		newTestDriver(f).waitExec(context.Background(), "exec-1")
+		if got := remaining(f); got != 950 {
+			t.Errorf("waitExec made %d inspects of an exec that never started, want its bound of 50", 1000-got)
+		}
+	})
+}
+
 // TestWait_NotFoundFailsFast: the retry budget must not blunt teardown. A
 // not-found exec is authoritative (the container is gone), so Wait returns at
 // once rather than polling out its transient-error budget.

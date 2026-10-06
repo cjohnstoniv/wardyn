@@ -78,11 +78,13 @@ func (d *Driver) prepareRecordingDirs(ctx context.Context, ref string) {
 
 // waitExec briefly polls a one-shot exec to completion so a subsequent Exec
 // (which races right after) observes the prepared directories. Bounded so a
-// stuck exec can't stall sandbox bring-up.
+// stuck exec can't stall sandbox bring-up. An exec the daemon has not started
+// yet (execNotStarted) is polled past, inside the same bound: returning on it
+// let the next Exec run before the directories existed.
 func (d *Driver) waitExec(ctx context.Context, execID string) {
 	for i := 0; i < 50; i++ {
 		insp, ierr := d.cli.ExecInspect(ctx, execID, client.ExecInspectOptions{})
-		if ierr != nil || !insp.Running {
+		if ierr != nil || (!insp.Running && !execNotStarted(insp)) {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -469,6 +471,13 @@ func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runn
 		return runner.Status{}, fmt.Errorf("docker: agent exec inspect: %w", err)
 	}
 	if insp.Running {
+		return runner.Status{State: types.RunRunning}, nil
+	}
+	// Created, and the daemon has yet to start it: alive, not an exit 0. A
+	// start the daemon refused is not this state (it carries 126 or 127), and
+	// an unstarted exec is not-found once its container stops, so neither
+	// reads as running for longer than the sandbox lives.
+	if execNotStarted(insp) {
 		return runner.Status{State: types.RunRunning}, nil
 	}
 	code := insp.ExitCode
