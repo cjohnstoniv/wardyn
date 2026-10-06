@@ -83,11 +83,10 @@ EOF
 # ci.yml scans wardynd and nothing else.
 cat > "$TMP/.github/workflows/ci.yml" <<'EOF'
 jobs:
-  trivy:
-    strategy:
-      matrix:
-        include:
-          - name: wardynd
+  trivy-wardynd:
+    name: trivy (wardynd)
+    env:
+      TRIVY_IMAGE: wardynd
   notices:
     runs-on: ubuntu-latest
 EOF
@@ -108,7 +107,7 @@ write_release_wf '          '
 out="$(gate_says || true)"
 case "$out" in
   *"published by"*"never scanned"*"agent-unscanned"*) ;;
-  *) fail "an image published but absent from ci.yml's trivy matrix must be NAMED at the canonical indent. Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+  *) fail "an image published but absent from ci.yml's trivy jobs must be NAMED at the canonical indent. Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
 esac
 echo "ok  unscanned published image is named at the 10-space indent"
 
@@ -117,7 +116,7 @@ write_release_wf '      '
 out="$(gate_says || true)"
 case "$out" in
   *"published by"*"never scanned"*"agent-unscanned"*) ;;
-  *) fail "the scan-coverage cross-check went BLIND at a 6-space indent — a published image was never compared against the trivy matrix (F214). Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+  *) fail "the scan-coverage cross-check went BLIND at a 6-space indent — a published image was never compared against the trivy jobs (F214). Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
 esac
 echo "ok  unscanned published image is named at a non-canonical indent"
 
@@ -134,6 +133,23 @@ case "$out" in
   *) fail "a release.yml whose image names the gate cannot parse must say so — an unguarded empty list either compares nothing or dies under set -e with no message at all (F214). Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
 esac
 echo "ok  an unparseable published-image list fails loudly"
+
+# 6a. a trivy job named for one image and scanning another: the required
+#     `trivy (wardynd)` check would be green for an image nothing scanned.
+write_release_wf '          '
+cat > "$TMP/.github/workflows/ci.yml" <<'EOF'
+jobs:
+  trivy-wardynd:
+    name: trivy (wardynd)
+    env:
+      TRIVY_IMAGE: agent-unscanned
+EOF
+out="$(gate_says || true)"
+case "$out" in
+  *"named for one image and scans another"*"trivy (wardynd) scans agent-unscanned"*) ;;
+  *) fail "a trivy job whose name and TRIVY_IMAGE disagree must be named. Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+esac
+echo "ok  a trivy job named for one image and scanning another fails"
 
 # ── #357: the GPL offer's hand-listed websockify entry tracks the Dockerfile ─
 #

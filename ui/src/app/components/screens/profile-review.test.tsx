@@ -27,6 +27,7 @@ vi.mock("../../lib/api/policies", () => ({
 }));
 
 import { ProfileReview } from "./profile-review";
+import { setField } from "../../../test/set-field";
 
 function proposal(overrides: Partial<ProfileProposal> = {}): ProfileProposal {
   return {
@@ -144,7 +145,7 @@ describe("ProfileReview", () => {
     // The name dialog appears, prefilled; rename and save.
     const nameField = await screen.findByLabelText(/policy name/i);
     await user.clear(nameField);
-    await user.type(nameField, "acme-recorded");
+    setField(nameField, "acme-recorded");
     await user.click(screen.getByRole("button", { name: /^save policy$/i }));
 
     await waitFor(() => expect(createPolicyMock).toHaveBeenCalledTimes(1));

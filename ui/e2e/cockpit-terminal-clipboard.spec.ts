@@ -12,10 +12,10 @@
  * may write the browser clipboard, and a payload only becomes an offer when it
  * equals what the user's own drag spanned (the tmux bytes: an EMPTY selector).
  */
-import type { Locator, Page, WebSocketRoute } from "@playwright/test";
+import type { Page, WebSocketRoute } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { attachModeFrame, findRunningFixture, stubAttachSocket, stubAttachTicket, stubInteractiveRun } from "./attach-stub";
-import { dragCells, readGrid, rowOf } from "./terminal-grid";
+import { dragCells, rowOf, settledGrid } from "./terminal-grid";
 import { termText } from "./terminal-text";
 
 const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
@@ -42,28 +42,6 @@ async function open(page: Page, onConnect: (ws: WebSocketRoute) => void) {
   await expect(screen).toBeVisible();
   return screen;
 }
-// The web font swaps in after first paint and refits the grid (the header
-// re-wraps too), so a cell read before that lands is a different cell by the
-// time the drag arrives, and the gate then sees a selection that is not the
-// payload. Hold until the grid and the screen's box have not moved for 600 ms,
-// and return the grid as it settled.
-async function settledGrid(page: Page, screen: Locator) {
-  let last = "";
-  let steady = 0;
-  await expect
-    .poll(
-      async () => {
-        const now = `${await pane(page).getByText(/^\d+×\d+$/).first().innerText()} ${JSON.stringify(await screen.boundingBox())}`;
-        steady = now === last ? steady + 1 : 0;
-        last = now;
-        return steady;
-      },
-      { intervals: [100] },
-    )
-    .toBeGreaterThanOrEqual(6);
-  return readGrid(page);
-}
-const pane = (page: Page) => page.getByTestId("run-terminal-pane");
 const writes = (page: Page) => page.evaluate(() => (window as unknown as { __writes: string[] }).__writes);
 
 test("hostile OSC 52 while the user only types makes no offer and writes nothing", async ({ page }) => {

@@ -18,6 +18,7 @@ import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_EXTRA } from "./lib/reauth-copy";
 import { PROVIDERS_EXTRA } from "./lib/workspace-providers-copy";
 import { SHELL } from "./components/wardyn/copy";
 import { UNSAVED } from "./lib/unsaved-copy";
+import { setField } from "../test/set-field";
 
 const mockState = vi.hoisted(() => ({ claim: true }));
 
@@ -145,7 +146,7 @@ async function lapseMidPage(path = "/runs") {
       <App />
     </MemoryRouter>,
   );
-  await user.type(await screen.findByLabelText("Note"), "hello");
+  setField(await screen.findByLabelText("Note"), "hello");
   daemon.dead = true;
   await user.click(screen.getByRole("button", { name: "Save note" }));
   await screen.findByRole("dialog");
@@ -154,7 +155,7 @@ async function lapseMidPage(path = "/runs") {
 async function signInWithToken() {
   daemon.dead = false;
   const dialog = screen.getByRole("dialog");
-  await user.type(within(dialog).getByLabelText("Admin token"), "good-token");
+  setField(within(dialog).getByLabelText("Admin token"), "good-token");
   await user.click(within(dialog).getByRole("button", { name: REAUTH_BAR.CTA }));
 }
 
@@ -326,7 +327,7 @@ describe("App — a session that ends mid-page (#483)", () => {
         <App />
       </MemoryRouter>,
     );
-    await user.type(await screen.findByLabelText("Note"), "hello");
+    setField(await screen.findByLabelText("Note"), "hello");
     daemon.dead = true;
     await user.click(screen.getByRole("button", { name: "Grade note" }));
     await screen.findByRole("dialog");
@@ -360,7 +361,7 @@ describe("App — a session that ends mid-page (#483)", () => {
     await lapseMidPage();
     const dialog = screen.getByRole("dialog");
     daemon.down = true;
-    await user.type(within(dialog).getByLabelText("Admin token"), "good-token");
+    setField(within(dialog).getByLabelText("Admin token"), "good-token");
     await user.click(within(dialog).getByRole("button", { name: REAUTH_BAR.CTA }));
     expect(await within(dialog).findByText(REAUTH_DIALOG.UNREACHABLE)).toBeInTheDocument();
     expect(screen.getByLabelText("Note")).toHaveValue("hello");

@@ -131,6 +131,19 @@ export function toolRuleDecision(e: AuditEvent): RuleDecision | null {
   return effect ? { effect, source } : null;
 }
 
+// NETWORK_FAULT_SOURCES are the egress.deny rows that are not a refusal: the
+// proxy let the connection through its guards and the network then failed it
+// (the dial never completed, or the tunnel died after it opened).
+const NETWORK_FAULT_SOURCES = new Set(["builtin:dial-failed", "builtin:tunnel-failed"]);
+
+// isNetworkFault reports whether an egress.deny row records a connection that
+// failed rather than one Wardyn refused. Keyed on rule_source, never on label
+// text, so a copy change cannot silently turn a fault back into a denial.
+export function isNetworkFault(e: AuditEvent): boolean {
+  const source = e.data?.rule_source;
+  return e.action === "egress.deny" && typeof source === "string" && NETWORK_FAULT_SOURCES.has(source);
+}
+
 // rule_source console labels (6a): ruleSourceLabel and RuleSourceLabel moved
 // to wardyn/audit-decision.tsx (bundle-split fix, #181) — unlike
 // toolRuleDecision above, RuleSourceChip (audit-decision.tsx) is its ONLY
@@ -158,7 +171,7 @@ export interface EgressDecision {
   id: string;
   time: string;
   domain: string;
-  decision: "allow" | "deny" | "pending";
+  decision: "allow" | "deny" | "pending" | "failed";
   bytes?: number;
   // B3: the approval an `egress.hold` row raised (the audit row's own
   // data.approval_id — docs/AUDIT-ACTIONS.md). Absent on allow/deny rows and on

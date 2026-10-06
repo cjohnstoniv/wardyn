@@ -26,6 +26,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/cjohnstoniv/wardyn/internal/db"
 )
 
@@ -81,6 +83,54 @@ func TestSingleInstanceLock_SecondBootRefusesUntilTheFirstReleases(t *testing.T)
 
 	// A clean shutdown hands the lock on — a restart must not have to wait for
 	// Postgres to notice a dead session.
+	releaseA()
+	releaseB, err := claimSingleInstance(ctx, poolB, false)
+	if err != nil {
+		t.Fatalf("the next boot was still refused after a clean release: %v", err)
+	}
+	releaseB()
+}
+
+// TestSingleInstanceLock_HoldsNoPoolConnectionOnAPoolOfOne: the lock lives on a
+// connection of its own, so a pool of one still serves requests under it, and
+// a second boot on an equally small pool is still refused.
+func TestSingleInstanceLock_HoldsNoPoolConnectionOnAPoolOfOne(t *testing.T) {
+	base := pgPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	poolOfOne := func() *pgxpool.Pool {
+		cfg := base.Config().Copy()
+		cfg.MaxConns = 1
+		pool, err := pgxpool.NewWithConfig(ctx, cfg)
+		if err != nil {
+			t.Fatalf("pool: %v", err)
+		}
+		t.Cleanup(pool.Close)
+		return pool
+	}
+	poolA, poolB := poolOfOne(), poolOfOne()
+
+	releaseA, err := claimSingleInstance(ctx, poolA, false)
+	if err != nil {
+		t.Fatalf("first boot was refused on an uncontended lock: %v", err)
+	}
+	releaseA = once(releaseA)
+	defer releaseA()
+
+	if n := poolA.Stat().AcquiredConns(); n != 0 {
+		t.Fatalf("the single-instance lock holds %d pool connection(s), want 0", n)
+	}
+	qctx, qcancel := context.WithTimeout(ctx, 2*time.Second)
+	defer qcancel()
+	var one int
+	if err := poolA.QueryRow(qctx, `SELECT 1`).Scan(&one); err != nil {
+		t.Fatalf("a pool of one did not answer while its process holds the lock: %v", err)
+	}
+
+	if _, err := claimSingleInstance(ctx, poolB, false); err == nil || !strings.Contains(err.Error(), "single-instance lock") {
+		t.Fatalf("second boot on a pool of one = %v; want the single-instance refusal", err)
+	}
+
 	releaseA()
 	releaseB, err := claimSingleInstance(ctx, poolB, false)
 	if err != nil {

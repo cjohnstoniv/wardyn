@@ -79,8 +79,8 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.Repeat > 0 {
 		fields["repeat"] = dl.Repeat
 	}
-	// Cause/Via ride a dial-shaped refusal only (egress.DecisionLog's own doc
-	// comments) — absent on every ordinary decision, same as repeat above.
+	// Cause/Via ride a dial- or tunnel-shaped failure only (egress.DecisionLog's
+	// own doc comments) — absent on every ordinary decision, same as repeat above.
 	if dl.Cause != "" {
 		fields["cause"] = dl.Cause
 	}
@@ -99,15 +99,13 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
 	// wardyn_egress_denies_total is exposed as "denied by policy", and it
-	// is the only egress counter Wardyn has. A builtin:dial-failed (a flaky
-	// upstream, on a request policy ALLOWED) and the synthetic
-	// egress:dropped-decisions-<n> audit-fidelity summary both arrive here as
-	// egress.Deny; counting them would page operators for policy denials that
-	// never happened and make the true deny rate unreadable off the series. Both
-	// still record their egress.deny AUDIT row unchanged — only the counter is
-	// scoped. See isPolicyDeny (metrics.go): llm_routes.go's gatewayTarget GUARD
-	// refusal has its own rule_source, so it counts here like any other guard
-	// denial.
+	// is the only egress counter Wardyn has. Some rows arrive here as
+	// egress.Deny without being a denial by policy; isPolicyDeny (metrics.go)
+	// lists every one and says why. Counting them would page operators for
+	// policy denials that never happened and make the true deny rate unreadable
+	// off the series. Each still records its egress.deny AUDIT row unchanged —
+	// only the counter is scoped. llm_routes.go's gatewayTarget GUARD refusal
+	// has its own rule_source, so it counts here like any other guard denial.
 	if dl.Decision == egress.Deny && isPolicyDeny(dl.RuleSource) {
 		s.metrics.egressDenied()
 	}

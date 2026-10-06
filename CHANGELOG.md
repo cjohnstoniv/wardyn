@@ -8,6 +8,126 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- **A new `egress.deny` row, `builtin:tunnel-failed`, appears in the audit stream.** A CONNECT tunnel that
+  Wardyn allowed, that opened (the sandbox was told `200 Connection Established`) and that then died before
+  it carried an answer now leaves one `egress.deny` row after its `egress.allow`, with a `cause` and a `via`.
+  The allow stays. It is a network fault and not a policy denial: it is not counted on
+  `wardyn_egress_denies_total`, as `builtin:dial-failed` is not, and the console reads it as `failed`. A SIEM
+  rule over the `egress.deny` action will see it; match on `rule_source` to tell it from a policy denial.
+- **`egress.allow` rows gain `via`.** The allow recorded for each forward dial (the CONNECT tunnel, a plain
+  forward, a relayed model call, and the git, token and forge-API broker lanes) now carries `via`:
+  `upstream-proxy` or `direct`, never an address; the extra marker allows that some lanes write beside it, such as
+  an Azure DevOps refusal class, carry none. The allow of a CONNECT tunnel the proxy terminates itself carries
+  none. A `builtin:resolve-failed` row written with an upstream proxy configured now also carries `via` and a
+  `cause`. So does the deny for a request inside a tunnel the proxy terminates whose upstream could not be
+  vetted (its `rule_source` is the request's lane, such as `scan:mitm`).
+- **`run.upstream_proxy.resolve` is now written on every dispatch, and on a revive's deployment-config
+  refresh.** It used to be written only when an upstream proxy was configured or the site config could not be
+  read. A run with none configured now gets a row, outcome `success`, `in_effect` `false`, `reason`
+  `not-configured`; every row of the action now carries `in_effect`. On a deployment with no upstream proxy
+  configured, expect one more audit row per dispatch and per revive.
+- **The database pool minimum is now 4, and the process-lifetime locks no longer take a pooled connection.**
+  The single-instance lock, the sweeper leader's lock and the ground-truth rotator's lock each hold a
+  connection of their own, dialled from the same DSN, so a Postgres `max_connections` budget needs up to 3
+  more per replica on top of `pool_max_conns`. `pool_max_conns` should be at least 4 (it was 3, or 5 with the
+  rotator): the lifecycle reaper's tick and the terminal-sandbox sweep's tick can overlap, each holding one
+  connection for its lock while its queries take another. Below 4 wardynd warns at boot, naming the pool size.
+  One person's concurrent sign-ins are serialized only while the pool has two connections free: never at
+  `pool_max_conns=1` (it was 2), and below 6 not while both ticks run; each unserialized pass writes an
+  `auth.signin_unserialized` row. `WARDYN_HA` no longer refuses to boot on a pool below 3, and the sweeper
+  leader is elected on a pool of any size instead of sweeping without an election on a small one. See the
+  `WARDYN_PG_DSN` row of `docs/ENV.md`. Raise Postgres `max_connections`, or your pooler's per-database limit, by 3
+  per replica before rolling if the budget is tight.
+- **No schema change.** Rolling back is a redeploy of 0.8.6.
+
+### Added
+
+- **A tunnel that dies after it opens leaves an audit row.** `builtin:tunnel-failed` is written once per
+  tunnel, in one of three cases, each with a fixed `cause` sentence and `via`: the proxy refused the dialled
+  hop's first bytes (the sandbox opened with a TLS hello and the answer was not a TLS record, or the hop wrote
+  an HTTP response before the sandbox sent anything); the hop's whole answer to the TLS hello was a TLS alert;
+  or the sandbox sent bytes and none came back, the sentence saying which side closed first. A tunnel that
+  carried an answer leaves no row, and neither does one the sandbox never wrote into, unless the hop spoke
+  HTTP first. The `cause` carries no sandbox
+  bytes; from the hop it carries only a strictly parsed three-digit HTTP status code (such as `HTTP 503`) or a
+  TLS alert's description number, never the status line's reason phrase, on any hop. See `docs/AUDIT-ACTIONS.md` and
+  "Phase B" in `docs/OPERATIONS.md`.
+- **The proxy refuses a non-TLS first answer into a tunnel the sandbox opened with a TLS hello.** A hop that
+  acknowledged the CONNECT and then answered the hello in plaintext (an error page, a captive portal) used to
+  have that relayed to a client that could only report a TLS decode error. The bytes are now refused, nothing is
+  relayed and the sandbox sees the connection close, with the row above naming what the hop sent. A hop that
+  writes `HTTP/` before the sandbox has sent a byte is refused the same way. A tunnel the sandbox opens with
+  anything other than a TLS hello (ssh over 443, plain HTTP, a websocket upgrade) is relayed untouched.
+- **A failed client handshake on the TLS-terminating path leaves the same row.** When the sandbox's TLS
+  handshake with the proxy fails after it sent at least one byte, `builtin:tunnel-failed` is written with a
+  `cause` beginning `client tls handshake (sandbox to wardyn-proxy):`, followed by the masked,
+  topology-redacted error. A sandbox that sent nothing leaves no row.
+- **The proxy logs the dial, vet and credential-refresh errors it returns on an AWS endpoint.** On the AWS
+  SSO portal and Bedrock hosts the proxy answers an SDK with a modelled JSON error body; for those it now
+  also logs `proxy error returned to the sandbox` with `msg`, `status` and `err`, so the proxy's log shows
+  what the SDK was told.
+
+### Changed
+
+- **The `note` of `run.ceiling.reassert` is now one of two fixed sentences.** The long sentence
+  (the profile denies these hosts, the denies are unioned into the run policy, every credential lane that
+  reaches a denied host is withheld) is written whenever the profile's `denied_domains` is not empty, whether
+  or not this run already carried those denies (`denied_added` can be `[]` on such a row); the code tests that
+  list, the hosts added, and the injection hosts and credential lanes withheld, and the last three arise only
+  when the list is not empty. A profile that denies no host leaves a short sentence saying it applies and
+  denied and withheld nothing. `denied_added`, `dropped_injection_hosts` and `dropped_broker_lanes` are `[]` when empty, never
+  `null`. A rule that matched the long sentence on every row no longer does.
+- **The sidecar's warning about an AWS SSO host the bypass list does not cover is qualified.** It now ends by
+  saying a bypass entry helps only if `wardyn-proxy` itself (not the sandbox) can resolve and reach the host,
+  and that if neither hop can, the estate needs a route, not a configuration change. "Upstream proxy: the
+  bypass list" in `docs/OPERATIONS.md` says the same.
+- **The console reads a connection that died as `failed`, not `denied`.** A `builtin:dial-failed` or
+  `builtin:tunnel-failed` row reads "Failed egress to <host>" with outcome `failed` on the Audit screen, and
+  `failed` in the run page's Egress tile; focus mode's egress summary gains an `N failed` count when there is
+  one. `builtin:tunnel-failed` is labelled "Connection died after it opened". A policy denial reads as before.
+- **The workspace's list of denied hosts to consider allowing leaves network faults out.** A host whose only
+  `egress.deny` rows are `builtin:dial-failed` or `builtin:tunnel-failed` is no longer offered, since adding it
+  to an allow-list fixes neither. Record Mode is unchanged: it keys on the action and still counts either row
+  as a deny.
+- **The guarded write that stores a credential under a person's identity is bounded.** `WithIdentityShared`
+  (a sign-in's capture is one) dials a connection of its own for the length of the write; at most 8 (`db.LockPoolMaxConns`) may be open at once
+  per process, and a write that finds all 8 in use waits two seconds and is then refused with `503`
+  `lock_unavailable` and a `Retry-After`. Closing that
+  connection is bounded at two seconds and sends no rollback (closing the session ends the transaction), so a
+  database that stopped answering cannot hold the connection, or its slot, open past that.
+- **A run whose runner's capabilities could not be read keeps no output, and a read says so.** When the
+  lookup fails, no tail or row is written for the run, and a read that finds nothing kept answers `409`
+  `run_output_not_kept` ("no output is kept for this run: the runner's capture capability could not be read")
+  instead of an empty, complete answer; output already kept is still served. The daemon cannot tell a runner
+  that captures output from one that does not (the Kubernetes runner under the session recorder). A runner
+  that says it does not capture still answers `409` `run_output_not_captured`.
+
+### Fixed
+
+- **A denied or failed credential mint no longer holds two pool connections.** Every denial and failure arm
+  of a mint wrote its `credential.mint` audit row while the mint transaction was still open, and the row's
+  writer borrows its own connection, so a refusal held two and a pool of one waited on itself. The arms now
+  end the transaction first. The rows are unchanged; a successful mint still commits its row with the
+  one-time-use burn.
+- **A Docker exec that the daemon had not started was reported as exit 0.** The daemon answers an exec's
+  attach before it starts the exec, and an exit poll that landed in that gap read the exec as finished with
+  code 0 (seen under gVisor about once in twenty, as a process that then ran and exited non-zero). The poll
+  now tells an exec that has not started from one that exited, and an exec that never starts within the probe
+  budget is an error, not a zero. The driver's agent status probe and the sandbox setup wait make the same
+  distinction: an exec not yet started reads as running, not as stopped with exit 0 (which the reconciler
+  would finalize as completed), and the setup wait no longer returns before the setup exec has run. A start
+  the daemon refused still reads as an exit.
+
+### Security
+
+- **code-server in `agent-vscode` is 4.139.1 (it was 4.138.0).** 4.138.0 bundled `proxy-addr` 2.0.7
+  (CVE-2026-90711, CRITICAL; fixed in 2.0.8). Both architectures' sha256 pins moved with it.
+- **The console pins `seroval` and `seroval-plugins` to 1.6.8.** `asciinema-player`, which plays session
+  recordings, brought in `seroval` 1.5.4 through `solid-js`: GHSA-p6vx-979v-rg4c (critical) and
+  GHSA-jp82-f5mq-hwhp (high), fixed in 1.6.2 and 1.6.3 (`ui/package.json` overrides).
+
 ## [0.8.6] — 2026-10-04
 
 ### Before you upgrade

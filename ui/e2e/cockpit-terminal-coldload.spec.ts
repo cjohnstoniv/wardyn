@@ -17,6 +17,7 @@ import {
   stubAttachSocket,
   stubInteractiveRun,
 } from "./attach-stub";
+import { settledGrid } from "./terminal-grid";
 import { RUN_COCKPIT } from "../src/app/components/wardyn/copy";
 
 test("a cold load opens one ticket and one socket, focus mode opens none, leaving closes it", async ({ page }) => {
@@ -50,10 +51,11 @@ test("a cold load opens one ticket and one socket, focus mode opens none, leavin
   await page.getByRole("button", { name: RUN_COCKPIT.enterFocus }).click({ force: true });
   await expect(page.getByRole("button", { name: RUN_COCKPIT.exitFocus })).toBeVisible();
   await expect(page.locator(".xterm-screen")).toHaveCount(1);
+  // Focus mode has no run-terminal-pane tile, so there is no grid header for settledGrid to read.
   await page.waitForTimeout(500);
   await page.getByRole("button", { name: RUN_COCKPIT.exitFocus }).dispatchEvent("click");
   await expect(pane.locator(".xterm-screen").first()).toBeVisible();
-  await page.waitForTimeout(500);
+  await settledGrid(page, pane.locator(".xterm-screen").first());
   expect(tickets).toBe(1);
   expect(sockets.opens()).toBe(1);
   expect(closes).toBe(0);

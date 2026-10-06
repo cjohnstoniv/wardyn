@@ -28,22 +28,41 @@ func lazyPool(t *testing.T, maxConns int) *pgxpool.Pool {
 	return pool
 }
 
-func TestClaimSingleInstance_HARefusesSmallPool(t *testing.T) {
-	_, err := claimSingleInstance(context.Background(), lazyPool(t, 2), true)
-	if err == nil {
-		t.Fatal("WARDYN_HA booted on pool_max_conns=2: every replica would sweep as an unfenced solo leader")
-	}
-	for _, want := range []string{"pool_max_conns=2", "at least 3", "WARDYN_PG_DSN"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("refusal never says %q:\n%s", want, err.Error())
-		}
-	}
-}
-
-func TestClaimSingleInstance_HAAcceptsElectablePool(t *testing.T) {
-	release, err := claimSingleInstance(context.Background(), lazyPool(t, 3), true)
+// WARDYN_HA takes no lock and puts no floor on the pool: the sweeper leader
+// elects on a connection of its own, so a pool of one still fences.
+func TestClaimSingleInstance_HAAcceptsAPoolOfOne(t *testing.T) {
+	release, err := claimSingleInstance(context.Background(), lazyPool(t, 1), true)
 	if err != nil {
-		t.Fatalf("WARDYN_HA was refused on pool_max_conns=3: %v", err)
+		t.Fatalf("WARDYN_HA was refused on pool_max_conns=1: %v", err)
 	}
 	release()
+}
+
+// The boot warning is about the two tick locks only: below 4 it fires, names
+// the threshold and the sign-in note, and has nothing to say about the rotator,
+// which no longer borrows from the pool.
+func TestWarnSmallPool_BelowFourAndNoRotatorBranch(t *testing.T) {
+	buf := captureSlog(t)
+	warnSmallPool(4)
+	if buf.Len() != 0 {
+		t.Fatalf("pool_max_conns=4 warned:\n%s", buf.String())
+	}
+	warnSmallPool(3)
+	out := buf.String()
+	for _, want := range []string{"level=WARN", "pool_max_conns below 4", "pool_max_conns=3", "Below 6", "auth.signin_unserialized"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("warning never says %q:\n%s", want, out)
+		}
+	}
+	for _, gone := range []string{"rotator", "single-instance", "sweeper leader"} {
+		if strings.Contains(out, gone) {
+			t.Errorf("warning still names %q, which holds no pool connection:\n%s", gone, out)
+		}
+	}
+	// The call is unconditional: it must not sit inside the rotator's branch.
+	src := readRepo(t, "cmd/wardynd/boot_serve.go")
+	call, branch := strings.Index(src, "warnSmallPool(pool.Config().MaxConns)"), strings.Index(src, `os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")`)
+	if call < 0 || branch < 0 || call > branch {
+		t.Errorf("warnSmallPool is not called ahead of the rotator branch (call at %d, branch at %d)", call, branch)
+	}
 }

@@ -1135,6 +1135,168 @@ func TestWait_TolerantOfTransientProbeErrors(t *testing.T) {
 	}
 }
 
+// TestWait_UnstartedExecIsNotAnExit: the daemon answers the attach before it
+// starts the exec, so the first inspects after Exec can see an exec that is not
+// running and has no exit code and no pid. Wait must poll past that state: it
+// used to return exit 0 for a process that had not run yet, which the control
+// plane records as COMPLETED.
+func TestWait_UnstartedExecIsNotAnExit(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	ctx := context.Background()
+
+	sb, err := d.CreateSandbox(ctx, testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if _, err := d.Exec(ctx, sb.Ref, []string{"agent-run"}); err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+
+	f.mu.Lock()
+	f.execUnstarted = 2 // two inspects land before the daemon starts the exec
+	f.execExited = true
+	f.execExitCode = 42
+	f.mu.Unlock()
+
+	code, err := d.Wait(ctx, sb.Ref)
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if code != 42 {
+		t.Errorf("Wait code = %d, want 42 (0 is the unstarted exec read as an exit)", code)
+	}
+}
+
+// TestAgentStatus_UnstartedExecIsRunning: the same unstarted state read by the
+// reconciler's probe. Reported as an exit 0 it finalizes the run COMPLETED
+// before the agent has run. A start the daemon refused is a different answer
+// (its code, no pid) and must stay an exit, or the run would read as running
+// for as long as its sandbox lives.
+func TestAgentStatus_UnstartedExecIsRunning(t *testing.T) {
+	ctx := context.Background()
+	t.Run("created, not started yet", func(t *testing.T) {
+		f := newFakeDocker()
+		f.execUnstarted = 1
+		f.execExited, f.execExitCode = true, 42
+		d := newTestDriver(f)
+		st, err := d.AgentStatus(ctx, "wardyn-agent-x", "exec-1")
+		if err != nil {
+			t.Fatalf("AgentStatus: %v", err)
+		}
+		if st.State != types.RunRunning || st.ExitCode != nil {
+			t.Errorf("unstarted exec = %+v, want RUNNING with no exit code", st)
+		}
+		// Once it has started and exited, the next probe carries its code.
+		st, err = d.AgentStatus(ctx, "wardyn-agent-x", "exec-1")
+		if err != nil {
+			t.Fatalf("AgentStatus: %v", err)
+		}
+		if st.State != types.RunStopped || st.ExitCode == nil || *st.ExitCode != 42 {
+			t.Errorf("exited exec = %+v, want STOPPED with exit 42", st)
+		}
+	})
+	t.Run("start refused by the daemon", func(t *testing.T) {
+		f := newFakeDocker()
+		f.execStartRefused, f.execExitCode = true, 127
+		st, err := newTestDriver(f).AgentStatus(ctx, "wardyn-agent-x", "exec-1")
+		if err != nil {
+			t.Fatalf("AgentStatus: %v", err)
+		}
+		if st.State != types.RunStopped || st.ExitCode == nil || *st.ExitCode != 127 {
+			t.Errorf("refused start = %+v, want STOPPED with exit 127", st)
+		}
+	})
+}
+
+// TestWaitExec_PollsPastAnUnstartedExec: the setup execs' bounded wait must not
+// take "not started yet" for "finished", and must still give up on an exec
+// that never starts.
+func TestWaitExec_PollsPastAnUnstartedExec(t *testing.T) {
+	remaining := func(f *fakeDocker) int {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.execUnstarted
+	}
+	t.Run("waits for the start", func(t *testing.T) {
+		f := newFakeDocker()
+		f.execUnstarted = 2
+		f.execExited = true
+		newTestDriver(f).waitExec(context.Background(), "exec-1")
+		if got := remaining(f); got != 0 {
+			t.Errorf("waitExec returned with %d unstarted inspects unread, want 0", got)
+		}
+	})
+	t.Run("gives up on an exec that never starts", func(t *testing.T) {
+		f := newFakeDocker()
+		f.execUnstarted = 1000
+		newTestDriver(f).waitExec(context.Background(), "exec-1")
+		if got := remaining(f); got != 950 {
+			t.Errorf("waitExec made %d inspects of an exec that never started, want its bound of 50", 1000-got)
+		}
+	})
+}
+
+// TestExecExit_ReadFromTheExitCodeNotThePid: whether an exec has exited is read
+// from the exit code the daemon reports, absent until the exit, and never from
+// the pid. Podman's Docker-compatible API zeroes the pid when an exec exits, so
+// a pid rule read every clean exit there as an exec that had not started: Wait
+// errored after its budget and the status probe reported running for good.
+func TestExecExit_ReadFromTheExitCodeNotThePid(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name      string
+		pidZeroed bool
+		code      int
+	}{
+		{"Podman: exit 0, pid zeroed", true, 0},
+		{"Podman: exit 3, pid zeroed", true, 3},
+		{"Docker: exit 0, pid kept", false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			newExited := func() *fakeDocker {
+				f := newFakeDocker()
+				f.images["busybox:latest"] = true
+				f.execPIDZeroedOnExit, f.execExited, f.execExitCode = tc.pidZeroed, true, tc.code
+				return f
+			}
+
+			d := newTestDriver(newExited())
+			sb, err := d.CreateSandbox(ctx, testSpec())
+			if err != nil {
+				t.Fatalf("CreateSandbox: %v", err)
+			}
+			if _, err := d.Exec(ctx, sb.Ref, []string{"agent-run"}); err != nil {
+				t.Fatalf("Exec: %v", err)
+			}
+			wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			code, err := d.Wait(wctx, sb.Ref)
+			if err != nil || code != tc.code {
+				t.Errorf("Wait = %d, %v; want %d promptly", code, err, tc.code)
+			}
+
+			st, err := newTestDriver(newExited()).AgentStatus(ctx, "wardyn-agent-x", "exec-1")
+			if err != nil {
+				t.Fatalf("AgentStatus: %v", err)
+			}
+			if st.State != types.RunStopped || st.ExitCode == nil || *st.ExitCode != tc.code {
+				t.Errorf("AgentStatus = %+v, want STOPPED with exit %d", st, tc.code)
+			}
+
+			f := newExited()
+			newTestDriver(f).waitExec(ctx, "exec-1")
+			f.mu.Lock()
+			got := f.execInspects
+			f.mu.Unlock()
+			if got != 1 {
+				t.Errorf("waitExec made %d inspects of an exited exec, want 1", got)
+			}
+		})
+	}
+}
+
 // TestWait_NotFoundFailsFast: the retry budget must not blunt teardown. A
 // not-found exec is authoritative (the container is gone), so Wait returns at
 // once rather than polling out its transient-error budget.

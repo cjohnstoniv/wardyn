@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/google/uuid"
@@ -186,5 +187,30 @@ func TestUpstreamProxyURL_PortIsGatedByTheSidecarsOwnLoader(t *testing.T) {
 	sec := &memSecrets{m: map[string][]byte{"corp-proxy-url": []byte("http://user:pass@proxy.corp:8080")}}
 	if url, reason := resolveUpstreamProxyURL(context.Background(), "", "corp-proxy-url", sec.Get); reason != "" || url == "" {
 		t.Fatalf("a valid credentialed secret URL must still resolve, got (%q, %q)", url, reason)
+	}
+}
+
+// TestResolveRunUpstreamProxy_NotConfiguredIsAudited: a run with no upstream proxy
+// configured still records run.upstream_proxy.resolve, so an operator can tell
+// "no upstream configured" from "the event is missing".
+func TestResolveRunUpstreamProxy_NotConfiguredIsAudited(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	if got := h.srv.resolveRunUpstreamProxy(context.Background(), runID, types.SiteConfig{}, nil); got != "" {
+		t.Fatalf("resolveRunUpstreamProxy = %q, want \"\" (direct egress)", got)
+	}
+	ev := findAudit(h.audit.events, runID, "run.upstream_proxy.resolve", "success")
+	if ev == nil {
+		t.Fatalf("no run.upstream_proxy.resolve success event; events=%s", auditDump(h.audit.events, runID))
+	}
+	var data struct {
+		InEffect *bool  `json:"in_effect"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.Unmarshal(ev.Data, &data); err != nil {
+		t.Fatalf("event data is not an object: %v (%s)", err, ev.Data)
+	}
+	if data.InEffect == nil || *data.InEffect || data.Reason != "not-configured" {
+		t.Errorf("event data = %s, want in_effect false and reason not-configured", ev.Data)
 	}
 }

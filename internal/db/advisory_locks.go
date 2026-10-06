@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -183,6 +184,44 @@ func TryAdvisoryLockConn(ctx context.Context, pool *pgxpool.Pool, key int64) (co
 		// session when the conn closes.
 		conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, key) //nolint:errcheck // best-effort release
 		conn.Release()
+	}, true, nil
+}
+
+// dedicatedLockReleaseWait bounds a dedicated lock's release: the unlock and
+// the close together.
+const dedicatedLockReleaseWait = 2 * time.Second
+
+// TryAdvisoryLockDedicated is TryAdvisoryLockConn for a lock held for the
+// PROCESS LIFETIME: the session is dialled for this lock from pool's own
+// connection settings and never comes out of the pool, so a long hold cannot
+// starve the queries the pool serves (pgxpool.Acquire blocks on an empty pool
+// rather than erroring). Each hold is one more server connection on top of
+// pool_max_conns.
+//
+// conn is for the holder's own statements on that session and is not safe for
+// concurrent use; it is valid until release, which unlocks and then closes it
+// within dedicatedLockReleaseWait. Unlock comes first so the lock is free when
+// release returns, not when the server notices the socket is gone.
+func TryAdvisoryLockDedicated(ctx context.Context, pool *pgxpool.Pool, key int64) (conn *pgx.Conn, release func(), ok bool, err error) {
+	conn, err = pgx.ConnectConfig(ctx, pool.Config().ConnConfig.Copy())
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("db: dial advisory lock conn: %w", err)
+	}
+	var got bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&got); err != nil || !got {
+		conn.Close(context.WithoutCancel(ctx)) //nolint:errcheck // best-effort; nothing is held on it
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("db: try advisory lock: %w", err)
+		}
+		return nil, nil, false, nil
+	}
+	return conn, func() {
+		// Background context: ctx is typically cancelled at shutdown, exactly
+		// when releasing matters most.
+		bg, cancel := context.WithTimeout(context.Background(), dedicatedLockReleaseWait)
+		defer cancel()
+		conn.Exec(bg, `SELECT pg_advisory_unlock($1)`, key) //nolint:errcheck // best-effort; closing the session drops it anyway
+		conn.Close(bg)                                      //nolint:errcheck // best-effort
 	}, true, nil
 }
 

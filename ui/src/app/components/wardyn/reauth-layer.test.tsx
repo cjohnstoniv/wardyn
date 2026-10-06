@@ -18,6 +18,7 @@ import { ReauthLayer } from "./reauth-layer";
 import { OperatorProvider } from "./operator-context";
 import { ReauthContext, type Reauth } from "../../lib/reauth";
 import { TOKEN_LABEL } from "../screens/sign-in";
+import { setField } from "../../../test/set-field";
 
 vi.mock("../../lib/api/health", () => ({
   health: { health: () => Promise.resolve({}) },
@@ -73,7 +74,7 @@ describe("ReauthLayer — succeed() and an unresolved identity (SF-29)", () => {
     const user = userEvent.setup();
     const { reloadAs, setPhase } = renderDialog();
 
-    await user.type(screen.getByLabelText(TOKEN_LABEL), "a-token");
+    setField(screen.getByLabelText(TOKEN_LABEL), "a-token");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => expect(reloadAs).toHaveBeenCalledWith("/runs"));
@@ -104,7 +105,7 @@ describe("ReauthLayer — succeed() and an unresolved identity (SF-29)", () => {
         </OperatorProvider>
       </MemoryRouter>,
     );
-    await user.type(screen.getByLabelText(TOKEN_LABEL), "a-token");
+    setField(screen.getByLabelText(TOKEN_LABEL), "a-token");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => expect(reloadAs).toHaveBeenCalled());

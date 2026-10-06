@@ -44,10 +44,9 @@ type bootKeyStore struct {
 // newBootKeyStore picks lockCreate for this process. Without
 // WARDYN_HA, claimSingleInstance already holds
 // db.SingleInstanceLockKey for the process lifetime, so no other wardynd is
-// booting beside this one and there is nothing to serialize — and a second held
-// connection would leave a pool_max_conns=2 daemon none for the create's own
-// Get and Put. With it, every create waits on db.BootKeyLockKey and fails the
-// boot closed if it cannot get it.
+// booting beside this one and there is nothing to serialize. With it, every
+// create waits on db.BootKeyLockKey and fails the boot closed if it cannot get
+// it.
 func newBootKeyStore(secrets secretKeyStore, pool *pgxpool.Pool, multiInstance bool) bootKeyStore {
 	if !multiInstance {
 		return bootKeyStore{secrets, holdsSingleInstanceLock}

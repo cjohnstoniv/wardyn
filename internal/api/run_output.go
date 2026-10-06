@@ -314,7 +314,8 @@ type runOutputResponse struct {
 // with nothing to read (409, read again shortly);
 // an interactive run (409, which is also what a pane snapshot's non-reader
 // gets: only recordingReader's callers are served one); a run on a runner that
-// cannot capture output (409, run_output_not_captured); a run that ended longer ago than the retention
+// cannot capture output (409, run_output_not_captured); a runner whose capabilities
+// cannot be read (409, run_output_not_kept); a run that ended longer ago than the retention
 // window (410); otherwise not kept (409).
 func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "run")
@@ -400,6 +401,7 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	uncaptured, captureKnown := s.execOutputCapture(r.Context())
 	switch {
 	case found:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept,
@@ -407,9 +409,12 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	case run.Interactive:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputInteractive,
 			"an interactive run keeps no output here: its terminal is the recording's to keep")
-	case s.execOutputUncaptured(r.Context()):
+	case uncaptured:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotCaptured,
 			"Output isn't captured for Kubernetes runs yet. The run's recording has it.")
+	case !captureKnown:
+		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept,
+			"no output is kept for this run: the runner's capture capability could not be read")
 	case s.runOutputExpiredByRetention(run):
 		writeErrorReason(w, http.StatusGone, reasonRunOutputExpired,
 			"this run's output has expired: it is kept for WARDYN_RUN_OUTPUT_RETENTION_DAYS after the run ended")
@@ -418,17 +423,30 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// execOutputUncaptured reports whether the runner says it cannot capture an
-// exec's output (runner.Capabilities.ExecOutputUncaptured): the Kubernetes
-// runner under the session recorder. Its runs keep no tail, and a read says the
-// output was not captured instead of serving an empty, complete one. A run that
-// printed nothing on a runner that captures still reads as complete.
-func (s *Server) execOutputUncaptured(ctx context.Context) bool {
+// execOutputCapture asks the runner whether it can capture an exec's output
+// (runner.Capabilities.ExecOutputUncaptured): uncaptured is true for the
+// Kubernetes runner under the session recorder, whose runs keep no tail, so a
+// read says the output was not captured instead of serving an empty, complete
+// one. known is false when the lookup failed: the answer is then neither
+// "captured" nor "uncaptured". A run that printed nothing on a runner that
+// captures still reads as complete.
+func (s *Server) execOutputCapture(ctx context.Context) (uncaptured, known bool) {
 	if s.cfg.Runner == nil {
-		return false
+		return false, true
 	}
 	caps, err := s.cfg.Runner.Capabilities(ctx)
-	return err == nil && caps.ExecOutputUncaptured
+	if err != nil {
+		return false, false
+	}
+	return caps.ExecOutputUncaptured, true
+}
+
+// execOutputUncaptured is true when the runner does not say it captures: it
+// keeps no tail and writes no row for a runner that cannot capture or that
+// cannot be asked.
+func (s *Server) execOutputUncaptured(ctx context.Context) bool {
+	uncaptured, known := s.execOutputCapture(ctx)
+	return uncaptured || !known
 }
 
 // tailUnsealed reports whether this process holds runID's tail and it is still

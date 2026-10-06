@@ -19,6 +19,7 @@ import { SESSION_ENDED_REASON } from "./lib/api/core";
 import { RoleProvider, type Role } from "./components/wardyn/operator-context";
 import { baseStatus } from "./lib/test-fixtures";
 import type { SetupStatus } from "./lib/types";
+import { setField } from "../test/set-field";
 
 // H1/H2/M2 — full App mount, real onUnauthorized wiring, mocked fetch. The
 // board itself (RunsScreen) is stubbed: these cases only care about the
@@ -365,7 +366,7 @@ describe("App — the setup-status poll behind the model-access door", () => {
       landingRead.resolve(jsonResponse(200, SETUP_STATUS_READY));
     });
 
-    await user.type(screen.getByLabelText("Admin token"), "any-token");
+    setField(screen.getByLabelText("Admin token"), "any-token");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
     // The next person's landing decision waits for THEIR OWN read: with the

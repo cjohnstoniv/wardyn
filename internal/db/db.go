@@ -54,9 +54,11 @@ var retiredMigrations = map[string]string{
 // DefaultPoolMaxConns is the pool size when the DSN leaves pool_max_conns
 // unset, or the CPU count if that is larger. pgx's own default is the larger
 // of 4 and the CPU count, but on a 4-CPU host the single-instance lock, the
-// sweeper leader and the ground-truth rotator hold three connections for the
-// process lifetime, so the reaper's tick lock took the fourth and waited
-// forever for a fifth to prune, and every request after it hung.
+// sweeper leader and the ground-truth rotator held three pooled connections
+// for the process lifetime, so the reaper's tick lock took the fourth and
+// waited forever for a fifth to prune, and every request after it hung. Since
+// 0.8.7 those three hold connections of their own, outside the pool
+// (TryAdvisoryLockDedicated); the default stays 10.
 const DefaultPoolMaxConns = 10
 
 // Connect opens a pgxpool to dsn and performs a lightweight liveness check.
@@ -68,6 +70,9 @@ func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	}
 	if !dsnSetsPoolMaxConns(dsn) {
 		cfg.MaxConns = max(cfg.MaxConns, DefaultPoolMaxConns)
+	}
+	if nestedAcquireGuardOn() {
+		cfg.ConnConfig.Tracer = newNestedAcquireGuard()
 	}
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

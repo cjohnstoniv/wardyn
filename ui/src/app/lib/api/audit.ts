@@ -18,7 +18,7 @@ import type {
 // The tool-rule decision lives with the audit shapes it reads (lib/types/audit.ts)
 // so both the egress projection below and wardyn/audit-decision.tsx take it from
 // one place — lib/api must not import from components/.
-import { toolRuleDecision } from "../types";
+import { isNetworkFault, toolRuleDecision } from "../types";
 import { asJson, errEnvelope, HttpError, num, str, unwrapList, wfetch, withLimit } from "./core";
 
 // The SOLE named table of pre-0.8 audit action names Wardyn's OWN readers of
@@ -51,7 +51,7 @@ export function canonicalAuditAction(a: string): string {
 // that already hold a run's audit events can derive egress WITHOUT a second
 // /audit round-trip.
 export function egressFromAudit(events: AuditEvent[]): EgressDecision[] {
-  const map: Record<string, "allow" | "deny" | "pending"> = {
+  const map: Record<string, EgressDecision["decision"]> = {
     "egress.allow": "allow",
     "egress.deny": "deny",
     "egress.hold": "pending",
@@ -73,7 +73,9 @@ export function egressFromAudit(events: AuditEvent[]): EgressDecision[] {
         id: e.id,
         time: e.time,
         domain,
-        decision: map[action],
+        // A dial-failed / tunnel-failed row is an egress.deny on the wire but a
+        // network fault, not a refusal: it reads "failed".
+        decision: isNetworkFault(e) ? "failed" : map[action],
         bytes: num(d.bytes),
         // B3: only egress.hold stamps one (docs/AUDIT-ACTIONS.md); str()
         // answers undefined for the other two actions and for an older trail.

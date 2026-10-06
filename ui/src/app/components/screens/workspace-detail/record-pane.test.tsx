@@ -34,6 +34,7 @@ vi.mock("../../../lib/api/approvals", () => ({
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 
 import { RecordPane } from "./record-pane";
+import { setField } from "../../../../test/set-field";
 
 const obs = (over: Partial<ProfileObservations> = {}): ProfileObservations => ({
   domains: [],
@@ -200,7 +201,7 @@ describe("RecordPane — new session", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     const input = within(screen.getByTestId("record-new-session")).getByLabelText(/session name/i);
     await user.clear(input);
-    await user.type(input, "agent dev loop");
+    setField(input, "agent dev loop");
     await user.click(screen.getByRole("button", { name: /start recording/i }));
     expect(onRecord).toHaveBeenCalledWith("agent dev loop");
   });

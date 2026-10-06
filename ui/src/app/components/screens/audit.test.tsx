@@ -617,6 +617,38 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.getByText("policy:tool-deny")).toBeInTheDocument();
     expect(screen.queryByText("Refused by the built-in guard")).not.toBeInTheDocument();
   });
+
+  // A connection Wardyn allowed and the network then failed rides an egress.deny
+  // row, but it is not a refusal: the sentence and the outcome cell say "failed".
+  // A policy deny beside it keeps "Denied" and the danger tone.
+  it("reads a tunnel-failed row as Failed, and a policy deny still as Denied", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({
+        id: "fault",
+        action: "egress.deny",
+        outcome: "denied",
+        target: "flaky.example.com:443",
+        data: { rule_source: "builtin:tunnel-failed" },
+      }),
+      ev({
+        id: "refused",
+        action: "egress.deny",
+        outcome: "denied",
+        target: "evil.example.com:443",
+        data: { rule_source: "policy:denied" },
+      }),
+    ]);
+    renderScreen();
+
+    expect(await screen.findByText("Failed egress to flaky.example.com:443")).toBeInTheDocument();
+    expect(screen.queryByText("Denied egress to flaky.example.com:443")).not.toBeInTheDocument();
+    expect(screen.getByText("Denied egress to evil.example.com:443")).toBeInTheDocument();
+
+    const failed = screen.getByText("failed");
+    expect(failed).toHaveClass("text-warning");
+    expect(failed).not.toHaveClass("text-danger");
+    expect(screen.getByText("deny")).toHaveClass("text-danger");
+  });
 });
 
 // R4-F132: the live-tail deliberately swallows a failed tick to keep the last

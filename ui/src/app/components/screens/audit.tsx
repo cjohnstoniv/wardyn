@@ -19,7 +19,7 @@ import {
   CircleX,
 } from "lucide-react";
 import type { AuditEvent, ActorType, AgentRun } from "../../lib/types";
-import { ERASED_VALUE, runHeadline } from "../../lib/types";
+import { ERASED_VALUE, isNetworkFault, runHeadline } from "../../lib/types";
 import { AUDIT } from "./audit-copy";
 import { audit as api } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
@@ -206,8 +206,13 @@ function describeEvent(e: AuditEvent): string {
   if (e.target === ERASED_VALUE) e = { ...e, target: AUDIT.ERASED };
   if (e.action.startsWith("egress.")) {
     const decision = e.action.slice("egress.".length);
-    const verb =
-      decision === "allow" ? "Allowed egress to" : decision === "deny" ? "Denied egress to" : "Deferred egress to";
+    const verb = isNetworkFault(e)
+      ? "Failed egress to"
+      : decision === "allow"
+        ? "Allowed egress to"
+        : decision === "deny"
+          ? "Denied egress to"
+          : "Deferred egress to";
     return `${verb} ${e.target || "an unknown host"}`;
   }
   if (e.action.startsWith("llm.scan.")) {
@@ -683,7 +688,10 @@ function EventOutcome({ e }: { e: AuditEvent }) {
     return <Chip tone="danger" className="border-danger bg-danger text-danger-foreground">Killed</Chip>;
   }
   if (e.action.startsWith("egress.")) {
-    const decision = e.action.slice("egress.".length);
+    // A network-fault deny prints "failed", not "deny": the connection was
+    // allowed and then broke. It takes the warning tone (a fault to look at, not
+    // a refusal), the same tone a held request uses.
+    const decision = isNetworkFault(e) ? "failed" : e.action.slice("egress.".length);
     const tone =
       decision === "allow" ? "text-success" : decision === "deny" ? "text-danger" : "text-warning";
     return <span className={cn("font-mono text-xs font-semibold", tone)}>{decision}</span>;

@@ -8,7 +8,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -741,6 +740,12 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		// fault. Both still fail closed — only the attribution differs.
 		if errors.Is(terr, errHostUnresolved) {
 			log := decisionLog(req, egress.Deny, "builtin:resolve-failed")
+			// With an upstream configured, only a BYPASSED name is resolved
+			// here to be dialled: say the upstream was skipped, or the row
+			// reads as if the corp proxy could not find the name.
+			if p.upstream != nil {
+				log.Via, log.Cause = viaDirect, resolveBypassedCause
+			}
 			return egress.Deny, "", &log
 		}
 		log := decisionLog(req, egress.Deny, "builtin:private-ip")
@@ -890,7 +895,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	// Tunnel dial succeeded: NOW record the allow.
 	if log != nil {
-		p.sink.emit(*log)
+		p.emitDialledAllow(*log, host)
 	}
 
 	clientConn, _, err := hj.Hijack()
@@ -903,49 +908,9 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		_ = clientConn.Close()
 		return
 	}
-	tunnel(p.countActivity(clientConn), upstream)
-}
-
-// tunnel pipes bytes in both directions until EITHER side finishes, then closes
-// both connections — the standard CONNECT-proxy shape.
-//
-// Why the first finisher closes and not both: waiting (wg.Wait()) for
-// BOTH io.Copy calls before closing anything would let either direction pin
-// the tunnel forever. When the sandbox side goes away the client->upstream
-// copy returns and half-closes the upstream write side, but the
-// upstream->client copy stays blocked in Read until the upstream sends or
-// closes. An upstream that never does — an attacker-controlled allowed host, a
-// hung TLS endpoint, a dropped FIN — would pin that goroutine, its 32 KiB copy
-// buffer, the hijacked client socket and the upstream socket FOREVER: the
-// listener's IdleTimeout (server.go) does not apply to a hijacked connection,
-// and nothing else deadlines or caps an opaque tunnel (the inner MITM server
-// has ReadHeaderTimeout/ReadTimeout/IdleTimeout, mitm.go — this lane has
-// none of its own). A prompt-injected process in the sandbox could open and
-// abandon tunnels in a loop, measured at 2 goroutines + both sockets retained
-// per tunnel, inside a sidecar sized at 256 MiB.
-//
-// Closing on the first finisher bounds that to the lifetime of whichever
-// direction ends first, and costs nothing a CONNECT tunnel relies on: the
-// half-close below still fires first, so a peer that is merely done SENDING
-// sees EOF exactly as before, and a TLS session (every real user of this lane)
-// is over for both directions once either endpoint is gone. The second copy
-// goroutine returns as soon as Close unblocks its Read; done is buffered so it
-// can never block on a receiver that has already left.
-func tunnel(a, b net.Conn) {
-	done := make(chan struct{}, 2)
-	cp := func(dst, src net.Conn) {
-		_, _ = io.Copy(dst, src)
-		// Half-close the write side if supported so the peer sees EOF.
-		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
-		}
-		done <- struct{}{}
-	}
-	go cp(a, b)
-	go cp(b, a)
-	<-done
-	_ = a.Close()
-	_ = b.Close()
+	watch := newTunnelWatch(upstream)
+	first, err := tunnel(p.countActivity(clientConn), watch)
+	p.tunnelEnded(log, host, watch, first, err)
 }
 
 // writeApprovalPending returns the first-use 403 body the sandbox client sees.

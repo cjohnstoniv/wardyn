@@ -189,16 +189,27 @@ if [ -f "$RELEASE_WF" ] && [ -f "$CI_WF" ]; then
   # gate but detects nothing and prints no reason. The emptiness check below is
   # what turns that into a stated failure.
   published=$(grep -oE '^[[:space:]]+- name: [a-z0-9-]+$' "$RELEASE_WF" | awk '{print $3}' | sort -u || true)
-  scanned=$(awk '/^  trivy:/{f=1} f&&/^  [a-z]/&&!/^  trivy:/{f=0} f' "$CI_WF" \
-            | grep -oE '^[[:space:]]+- name: [a-z0-9-]+$' | awk '{print $3}' | sort -u || true)
+  # ci.yml scans one image per `trivy (<image>)` job; TRIVY_IMAGE is the image
+  # that job builds and scans.
+  scanned=$(grep -oE '^[[:space:]]+TRIVY_IMAGE: [a-z0-9-]+$' "$CI_WF" | awk '{print $2}' | sort -u || true)
   if [ -z "$published" ]; then
-    echo "FAIL: $RELEASE_WF exists but no '- name:' image entries were found — the scan-coverage cross-check's published-image list derivation has broken, and this gate would silently compare an empty list against the trivy matrix." >&2
+    echo "FAIL: $RELEASE_WF exists but no '- name:' image entries were found — the scan-coverage cross-check's published-image list derivation has broken, and this gate would silently compare an empty list against the trivy jobs." >&2
     fail=1
   fi
   missing=$(comm -23 <(printf '%s\n' "$published") <(printf '%s\n' "$scanned"))
   if [ -n "$missing" ]; then
-    echo "FAIL: image(s) published by $RELEASE_WF but never scanned in $CI_WF's trivy matrix:" >&2
+    echo "FAIL: image(s) published by $RELEASE_WF but never scanned by a trivy job in $CI_WF:" >&2
     printf '  %s\n' $missing >&2
+    fail=1
+  fi
+  # The check name is what branch protection requires and TRIVY_IMAGE is what
+  # the job scans: a job named for one image and scanning another would report
+  # a green `trivy (<image>)` for an image nothing scanned.
+  misnamed=$(awk '/^    name: trivy \(/ { want = $0; sub(/.*\(/, "", want); sub(/\)$/, "", want) }
+                  /^      TRIVY_IMAGE: / { if ($2 != want) print "trivy (" want ") scans " $2; want = "" }' "$CI_WF")
+  if [ -n "$misnamed" ]; then
+    echo "FAIL: a trivy job in $CI_WF is named for one image and scans another:" >&2
+    printf '  %s\n' "$misnamed" >&2
     fail=1
   fi
 fi

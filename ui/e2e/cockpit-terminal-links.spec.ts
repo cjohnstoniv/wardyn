@@ -14,6 +14,7 @@
  */
 import type { Page, WebSocketRoute } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
+import { settledGrid } from "./terminal-grid";
 import { attachModeFrame, findRunningFixture, stubAttachSocket, stubAttachTicket, stubInteractiveRun } from "./attach-stub";
 
 type Opened = [string, string, string];
@@ -46,16 +47,8 @@ async function open(page: Page, lines: string[], ready: string) {
   await expect.poll(async () => await screen.innerText()).toContain(ready);
   // The web font swaps in after first paint and refits the grid; xterm drops a hovered link on
   // every resize, so wait for the geometry to hold still before anyone hovers.
-  let last = "";
-  let steady = 0;
-  while (steady < 6) {
-    const now = `${await readGridText(page)} ${JSON.stringify(await screen.boundingBox())}`;
-    steady = now === last ? steady + 1 : 0;
-    last = now;
-    await page.waitForTimeout(100);
-  }
+  await settledGrid(page, screen);
 }
-const readGridText = (page: Page) => page.getByTestId("run-terminal-pane").getByText(/^\d+×\d+$/).first().innerText();
 const opened = (page: Page) => page.evaluate(() => (window as unknown as { __opened: Opened[] }).__opened);
 
 /** Hover, then click, `chars` characters into the first terminal row whose text contains `needle`.

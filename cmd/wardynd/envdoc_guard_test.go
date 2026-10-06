@@ -37,6 +37,8 @@ var envDocAllow = map[string]bool{
 	"WARDYN_TEST_VAULT": true, "WARDYN_TEST_VAULT_TOKEN_FILE": true, "WARDYN_TEST_VAULT_K8S_JWT_FILE": true,
 	"WARDYN_TEST_AZURE_KV":   true,
 	"WARDYN_TEST_FIPS_CHILD": true, "WARDYN_TEST_TOOLS_DIR": true, "WARDYN_ENVBUILD_TEST_FLOAT": true,
+	// internal/db's nested-acquire guard, read by db.Connect only inside a test binary.
+	"WARDYN_TEST_POOL_GUARD":   true,
 	"WARDYN_ENVBUILD_TEST_INT": true, "WARDYN_FAKE_MARKER": true, "WARDYN_NEGCTL": true,
 	// internal/testfloor.Marker: the skip-floor probe sentinel scripts/test-report.sh
 	// greps from `go test -json` log output — never read via os.Getenv, so it is
@@ -72,6 +74,9 @@ var envDocAllow = map[string]bool{
 	// run-ui-e2e.sh's default invocation runs — same shell-only situation as
 	// the pair above.
 	"WARDYN_E2E_INTERNAL_ADDR": true, "WARDYN_E2E_LANES": true,
+	// run-ui-e2e.sh's i/n split of the default invocation across runners
+	// (ci.yml's two ui-e2e shards) — shell-only like the lanes knob above.
+	"WARDYN_E2E_SHARD": true,
 	// the REST of the e2e backend's shell-only knobs (e2e-backend.sh,
 	// run-ui-e2e.sh, screenshots.sh, test/e2e/e2e.sh) — none read by Go, so
 	// TestEnvDoc_E2EShellVarsAreDocumented below is what actually enforces these

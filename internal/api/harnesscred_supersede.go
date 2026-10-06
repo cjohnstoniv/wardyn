@@ -102,9 +102,10 @@ var errSignInBusy = errors.New(signInBusyRefusal)
 // two live credential-bearing sandboxes come back. Two arms still proceed
 // unlocked, and neither is a wait: a store without the seam (test doubles —
 // PG implements it) and store.ErrLoginLockNoCapacity, the pool that cannot
-// spare a connection for the hold, which at the documented pool floor is every
-// call. That one is written to the trail as auth.signin_unserialized, so the
-// unserialized pass is evidence rather than one WARN line.
+// spare a connection for the hold: every call at pool_max_conns=1, transiently
+// on a busy larger pool. That one is written to the trail as
+// auth.signin_unserialized, so the unserialized pass is evidence rather than
+// one WARN line.
 //
 // AVAILABILITY, because this runs on a request path in a daemon that sets no
 // http.Server WriteTimeout and mounts no TimeoutHandler — a wedged request here

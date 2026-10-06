@@ -554,7 +554,8 @@ func terminalSandboxSweepTickLock(pool *pgxpool.Pool) func(context.Context) (fun
 // groundtruthRotatorLock is the ground-truth rotator's leader-election gate
 // (S2): a Postgres try-advisory-lock acquired ONCE (not per-tick, unlike
 // reapTickLock above) so at most one replica runs the mint/write loop in the
-// steady state while every other replica parks on a backoff. NOT a fencing
+// steady state while every other replica parks on a backoff. Held for the
+// process lifetime, so on a connection of its own rather than a pooled one. NOT a fencing
 // primitive — a lost session can transiently leave two leaders; see
 // runGroundtruthTokenRotatorLeader (gt_rotator.go). Unlike reapTickLock this
 // surfaces err separately from a plain not-acquired so the caller can log
@@ -562,7 +563,8 @@ func terminalSandboxSweepTickLock(pool *pgxpool.Pool) func(context.Context) (fun
 // unreachable database.
 func groundtruthRotatorLock(pool *pgxpool.Pool) func(context.Context) (func(), bool, error) {
 	return func(ctx context.Context) (func(), bool, error) {
-		return db.TryAdvisoryLock(ctx, pool, db.GroundTruthRotatorLockKey)
+		_, release, ok, err := db.TryAdvisoryLockDedicated(ctx, pool, db.GroundTruthRotatorLockKey)
+		return release, ok, err
 	}
 }
 

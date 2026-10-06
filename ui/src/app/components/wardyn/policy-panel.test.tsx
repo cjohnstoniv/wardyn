@@ -26,6 +26,7 @@ import {
   type PolicyPanelProps,
 } from "./policy-panel";
 import type { PolicyGrade, RunPolicySpec } from "../../lib/types";
+import { setField } from "../../../test/set-field";
 
 // A real-shaped medium grade (composer.Grade of a CC2 spec) — the default the
 // meter resolves unless a test overrides it.
@@ -304,7 +305,7 @@ describe("PolicyPanel — the tool_rules section", () => {
   it("adds a rule and persists it into the spec document", async () => {
     render(<Harness initial={VALID} />);
     await user.click(screen.getByRole("button", { name: "Add rule" }));
-    await user.type(screen.getByLabelText("Tool 1"), "Bash");
+    setField(screen.getByLabelText("Tool 1"), "Bash");
     await user.selectOptions(screen.getByLabelText("Effect 1"), "deny");
 
     expect(currentSpec().tool_rules).toEqual([{ tool: "Bash", effect: "deny" }]);
@@ -427,7 +428,7 @@ describe("PolicyPanel — the push_rules section", () => {
     render(<Harness initial={VALID} />);
     // Two "Add path" buttons exist (Deny, then Hold for review) — the first is Deny's.
     await user.click(screen.getAllByRole("button", { name: "Add path" })[0]);
-    await user.type(screen.getByLabelText("Deny path 1"), ".github/workflows/**");
+    setField(screen.getByLabelText("Deny path 1"), ".github/workflows/**");
     expect(currentSpec().push_rules).toEqual({ deny_paths: [".github/workflows/**"] });
   });
 

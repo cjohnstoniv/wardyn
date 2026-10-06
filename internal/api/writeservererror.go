@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/hostcapacity"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
@@ -63,6 +64,12 @@ func writeServerError(w http.ResponseWriter, r *http.Request, msg string, err er
 		return
 	}
 	if writeHostCapacityRefusal(w, r, err) {
+		return
+	}
+	// A lock, or the guarded credential write's connection (putOwned), that could not
+	// be taken in time is a retry, not a fault: 503 with a Retry-After.
+	if db.LockRefused(err) {
+		writeLockRefused(w, r, err)
 		return
 	}
 	if errors.Is(err, errUserTypeUnknown) {

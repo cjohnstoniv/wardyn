@@ -56,5 +56,5 @@ func (p *Proxy) emitLLMAllowWithFault(r *http.Request, host string, port int, ru
 	log := decisionLog(p.reqOf(r, host, port), egress.Allow, ruleSource)
 	log.Scan = scan
 	log.UpstreamFault = p.bedrockUpstreamFault(host, path, resp)
-	p.sink.emit(log)
+	p.emitDialledAllow(log, host)
 }

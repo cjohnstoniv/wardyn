@@ -64,6 +64,10 @@ func TestResolveFailure_AuditedAsResolveFailed_NotPrivateIP(t *testing.T) {
 				t.Errorf("rule_source = %q, want builtin:resolve-failed — auditing a DNS fault as the "+
 					"private-address guard tells the operator to widen an SSRF control over an outage", d.RuleSource)
 			}
+			// No upstream is configured, so there is no skipped hop to name.
+			if d.Via != "" || d.Cause != "" {
+				t.Errorf("via = %q cause = %q, want both empty without an upstream proxy", d.Via, d.Cause)
+			}
 			if got := rec.Header().Get(egressHeaderReason); got != "builtin:resolve-failed" {
 				t.Errorf("%s = %q, want builtin:resolve-failed", egressHeaderReason, got)
 			}

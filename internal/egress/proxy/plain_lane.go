@@ -143,7 +143,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	}
 	if log != nil {
 		log.UpstreamFault = p.bedrockUpstreamFault(host, r.URL.Path, resp)
-		p.sink.emit(*log)
+		p.emitDialledAllow(*log, host)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
