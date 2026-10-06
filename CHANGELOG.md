@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.8.7] — 2026-10-06
+
 ### Before you upgrade
 
 - **A new `egress.deny` row, `builtin:tunnel-failed`, appears in the audit stream.** A CONNECT tunnel that
