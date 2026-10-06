@@ -603,6 +603,19 @@ So:
   `scripts/green-by-tree.sh` accepts as release evidence: a run that narrowed anything did not
   test everything, even where every check it reported is green.
 
+**Start order under the 20-job cap.** The account runs 20 jobs at once and a change to Go
+asks for about 35, so some wait, and GitHub picks which among the jobs that became ready
+together. The long jobs (`go`, `ui`, `ui-e2e`, `helm-install-test`, both conformance jobs,
+`envbuild-integration`, `test-pg-shard`) need only `changes`. The short ones (`gates`,
+`notices`, the `trivy` scans) also need `diagrams`, a 45-second job that starts with the run,
+so they become ready about half a minute after the long jobs, which by then hold their
+runners, and share what is left. Nothing reads `diagrams`' result: each of them runs on
+`!cancelled()`, whether it passed or failed. The job they wait on has to start with the run:
+one that itself needs `changes` would send the short jobs through the queue a third time
+when the account is busy. Before this, a nine-minute job could sit behind eight two-minute
+scans: in run 37403763766 `conformance` queued 98 s and `go (unit)` 90 s while four `trivy`
+jobs started at once.
+
 **Before and after.** "Before" is main's last green run before this change, 35918188245
 (a push: every job ran). Wall time runs from the first job's start to the last job's end.
 The 7.3 minutes the run queued before any job started are not included. `build` itself queued
