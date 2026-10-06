@@ -69,6 +69,9 @@ func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	if !dsnSetsPoolMaxConns(dsn) {
 		cfg.MaxConns = max(cfg.MaxConns, DefaultPoolMaxConns)
 	}
+	if nestedAcquireGuardOn() {
+		cfg.ConnConfig.Tracer = newNestedAcquireGuard()
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("db: open pool: %w", err)
