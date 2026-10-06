@@ -9,12 +9,7 @@ name: Nightly (full-stack e2e)
 on:
   schedule:
     - cron: '0 7 * * *' # 07:00 UTC daily
-  workflow_dispatch:
-    # TEMPORARY (removed before merge): limits a dispatch to one job.
-    inputs:
-      only:
-        description: Run only this job (empty runs every job)
-        default: ''
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -24,7 +19,6 @@ permissions:
 # duration exists for them and theirs are wider still.
 jobs:
   e2e-live:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -66,7 +60,6 @@ jobs:
   # key not available in CI. On native docker the proxy->control-plane egress
   # callback routes, so the recording-replay synthesis allowlist is populated too.
   task-e2e-live:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -113,12 +106,6 @@ jobs:
   # into a red job instead of a green one that proved runc again. No KVM is
   # needed: runsc's default systrap platform runs in an ordinary VM.
   gvisor-cc2-live:
-    # TEMPORARY (removed before merge): ten attempts of this job per dispatch.
-    if: inputs.only == '' || inputs.only == 'gvisor-cc2-live'
-    strategy:
-      fail-fast: false
-      matrix:
-        attempt: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -167,22 +154,6 @@ jobs:
         run: |
           mkdir -p test/reports/e2e
           make test-conformance-docker 2>&1 | tee test/reports/e2e/cc2-conformance.log
-      # TEMPORARY (removed before merge): the two flaky cases twenty more times,
-      # with their diagnostics printed whether they pass or fail.
-      - name: Exec conformance cases, repeated
-        if: always()
-        env:
-          WARDYN_TEST_DOCKER: "1"
-          WARDYN_TEST_REQUIRE_CLASS: CC2
-        shell: bash
-        run: |
-          rc=0
-          go test -tags docker -count=20 -v -timeout 30m \
-            -run 'TestConformanceDocker$/^(WaitExitCode|ExecStreamLoopbackRelay)$' \
-            ./test/conformance/ > repeat.log 2>&1 || rc=$?
-          grep -E -- '--- FAIL|diagnostic:|listener_probe_rc|want|^(ok|FAIL)' repeat.log || true
-          if [ "$rc" -ne 0 ]; then echo "::group::full log"; cat repeat.log; echo "::endgroup::"; fi
-          exit "$rc"
       - name: Live task e2e with CC2 required (oracle lane)
         env:
           WARDYN_TEST_DOCKER: "1"
@@ -199,7 +170,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: gvisor-cc2-live-results-${{ matrix.attempt }}
+          name: gvisor-cc2-live-results
           path: test/reports/e2e/cc2-*.log
           if-no-files-found: error
 
@@ -211,7 +182,6 @@ jobs:
   # uniquely-namespaced compose stack and builds its own agent image, so it
   # must not share a runner with the e2e jobs above.
   ssh-e2e-live:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -248,7 +218,6 @@ jobs:
   # claude-code agent image (AGENT=claude-code in the script), which the compose
   # `up` does not build.
   test-drive:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -268,7 +237,6 @@ jobs:
   # waits, collects artifacts, tears down. Also asserts exit-code propagation:
   # a task that exits 3 must fail the script with exit 3.
   ci-mode-dogfood:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -316,7 +284,6 @@ jobs:
   # kept out of notify-new-lanes' needs and release.yml's watched= until it has
   # gone green on a real scheduled run, the same posture kind-survival-walk has.
   ci-mode-dogfood-model-fake:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -369,7 +336,6 @@ jobs:
   # those cases (internal/runner/docker network/integration tests,
   # internal/envbuild's integration_test.go) actually exercise a live daemon.
   docker-tagged-live:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -437,7 +403,6 @@ jobs:
   # 2026-09-28, run 36393687863), so it is now in notify-new-lanes.needs +
   # release.yml's watched= (guard 13) rather than NOTIFY_EXEMPT.
   provider-subscription-docker-pg:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -502,7 +467,6 @@ jobs:
   # #697's ask that was already sitting finished and unwired: the compose
   # control plane's own shared-host concurrency safety (scripts/test-concurrent.sh).
   test-e2e-concurrent:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -532,7 +496,6 @@ jobs:
   # one up, the same way ci.yml's helm-install-test does in its desktop-envelope
   # half.
   byoi-e2e-live:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -576,7 +539,6 @@ jobs:
   # to invoke it — but for that reason it must not share a runner with the jobs
   # above.
   ui-sandbox-e2e-live:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -630,7 +592,6 @@ jobs:
   # purpose: emulated apt/npm is slow, and a timeout kill here would read as a
   # build break.
   buildx-smoke:
-    if: inputs.only == ''
     name: multi-arch build (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -837,7 +798,6 @@ jobs:
   # actually reached its own PASS line and reported at least one executed
   # spec file — belt and suspenders, neither one a grep of the skip message.
   kind-sso-walk:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -987,7 +947,6 @@ jobs:
   # (the self-skip happens before the script dispatches to the ado profile, so
   # the message names only "the AWS SSO walk" — that's expected, not a bug).
   kind-sso-ado-walk:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -1062,7 +1021,6 @@ jobs:
   # kind-sso-walk builds, built fresh in this job (nightly jobs run on separate
   # runners, so there is nothing to reuse from the job above).
   compose-sso-roles:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1125,7 +1083,6 @@ jobs:
   # notify-new-lanes' needs and release.yml's watched= until it has gone green
   # here at least once, the same posture PR #1245 gave daemon-proxy-secret-kind.
   kind-survival-walk:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1189,7 +1146,6 @@ jobs:
   # nothing between jobs). NEVER RUN BEFORE — same NOTIFY_EXEMPT posture as
   # kind-survival-walk above.
   hybrid-walk:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -1260,7 +1216,6 @@ jobs:
   # ghcr.io packages (the chart + wardynd images), hence packages: read below.
   # NEVER RUN BEFORE — same NOTIFY_EXEMPT posture as the two jobs above.
   kind-upgrade-walk:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -1316,7 +1271,6 @@ jobs:
   # the same pins; the kind leg installs Vault from its Helm chart and logs in
   # with Kubernetes auth and a projected service-account token.
   kek-conformance:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1355,7 +1309,6 @@ jobs:
   # run 36377937351) — now in notify-new-lanes.needs AND release.yml's
   # watched= (guard 13), per PR #1245 review F2's own promotion rule.
   daemon-proxy-secret-kind:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -1376,7 +1329,6 @@ jobs:
   # does not verify must never decode into a session. Every PR runs the seed
   # corpus as an ordinary test; this lane searches past it.
   fuzz:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -1428,7 +1380,6 @@ jobs:
   # runs (a live dry run against 92 open PRs: 4 bad PRs, a binary search
   # each); re-measure and tighten once nightly runs exist (docs/CI.md).
   migration-merge-check:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
@@ -1470,7 +1421,6 @@ jobs:
   # 36786358051, so it is in notify-new-lanes.needs and release.yml's watched= like the
   # other lanes.
   managed-settings-drift:
-    if: inputs.only == ''
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -1499,7 +1449,6 @@ jobs:
   # are in scripts/test-repo-guards.sh's NOTIFY_EXEMPT for that reason.
   # Nothing here retags, rebuilds or otherwise touches a published image.
   published-image-scan:
-    if: inputs.only == ''
     name: published-image-scan (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
