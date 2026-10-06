@@ -211,3 +211,44 @@ tested against a peer built to behave the same way (HTTP/2 regardless of ALPN) a
 peer that negotiates normally. If the lane still fails, the new cause names the negotiated
 protocol, which is the next fact needed. `WARDYN_AWS_SSO_PROXY_INJECT=off` stays available as the
 stopgap they have chosen not to take.
+
+## Follow-up after 0.8.6: a tunnel that opened and then died
+
+On 0.8.6 a sign-in run behind a corporate proxy was told `200 Connection Established`, and its client
+then reported a TLS decode error. The run's trail held three `egress.allow` rows and no
+`builtin:dial-failed`, so it said the dial had worked and nothing about what came after.
+
+What the code did, and so could not show:
+
+- The proxy recorded the allow when the dial succeeded, wrote the `200`, and recorded nothing more
+  about the tunnel.
+- It relayed whatever bytes the dialled hop sent back. A hop that answered the client's TLS hello with
+  plaintext (an error page, a captive portal) reached the client as a TLS decode error, which is
+  indistinguishable in the client from a broken handshake.
+- Which of these happened on that estate was not recorded.
+
+What 0.8.7 changes on this path:
+
+- **A tunnel that dies after its `200` leaves one `egress.deny` row, `builtin:tunnel-failed`**, after
+  the allow, with a fixed `cause` naming what ended it and `via` naming the hop: the hop answered the
+  TLS hello with something that was not TLS (its HTTP status code, and the reason phrase when the hop
+  is your own upstream proxy), its whole answer was a TLS alert, it reset or closed without
+  answering, or the sandbox closed first. A lane the proxy terminates itself records a failed client
+  handshake the same way. The row is not counted on `wardyn_egress_denies_total`.
+- **Non-TLS bytes in answer to a TLS hello are no longer relayed.** The proxy refuses them and the
+  sandbox sees the connection close. Tunnels the sandbox opens with anything other than a TLS hello
+  are relayed untouched.
+- **Every allow that followed a forward dial carries `via`** (`upstream-proxy` or `direct`), so a
+  trail shows whether the upstream proxy was in the path, and a `builtin:resolve-failed` with an
+  upstream configured says the name is on the bypass list and did not resolve at the proxy.
+- **`run.upstream_proxy.resolve` is written on every dispatch**, with `in_effect`, so a run with no
+  upstream configured has a row saying so.
+- **The sidecar's warning about an AWS SSO host the bypass list does not cover** now says a bypass
+  entry helps only when `wardyn-proxy` itself can resolve and reach the host.
+
+[Phase B in OPERATIONS.md](../OPERATIONS.md#phase-b-the-ssobedrock-mitm-lane-and-the-upstream-proxy)
+reads each row.
+
+What it cannot prove from here: nothing outside that estate reproduces its hop, so the cause of that
+report is still unrecorded. The next run that meets it names what the hop answered and which side
+closed first, and that sentence is the next fact needed.
