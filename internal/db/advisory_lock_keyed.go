@@ -84,9 +84,10 @@ const KeyDomainAssignmentLockClass int32 = 0x574B4441 // ASCII "WKDA"
 var LoginSupersedeLockWait = 5 * time.Second
 
 // ErrAdvisoryLockNoCapacity is AdvisoryLockKeyed's one STRUCTURAL refusal: the
-// pool can't spare advisoryLockFreeConnsNeeded connections (every call, on a
-// pool at the documented floor of 2). The caller proceeds unlocked and audits
-// it; every other error is a wait or a database fault, and refuses.
+// pool can't spare advisoryLockFreeConnsNeeded connections (every call at
+// pool_max_conns=1; transiently on a busy larger pool). The caller proceeds
+// unlocked and audits it; every other error is a wait or a database fault, and
+// refuses.
 var ErrAdvisoryLockNoCapacity = errors.New("db: pool cannot spare a connection for an advisory lock")
 
 // advisoryLockAcquireWait bounds the POOL ACQUIRE specifically: Acquire on an
