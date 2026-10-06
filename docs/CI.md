@@ -414,13 +414,15 @@ below the old 537+395=932 s combined, not above it.
 the `go (lint)` leg also sets up pnpm and node; that install and lint pass are not in the
 120 s above.
 
-**Why `ui-e2e` is one job.** In the same run its Playwright step took 492 s:
-Playwright itself 418 s, the backend and UI build plus the first seed 32 s, and
-the 30 per-spec reseeds 40 s (1.3 s each). About 60 s of setup precedes that
-step. Three shards would add two checks and repeat that setup and build, roughly
-90 s, in each, while `build` stays the critical path; seeding once per shard
-would save the 40 s and give up the per-spec isolation `scripts/run-ui-e2e.sh`
-exists to provide.
+**Why `ui-e2e` runs as two shards.** It used to be one job, because `build` was the
+critical path and a shard repeats about 90 s of setup. Once `go` ran its tag sets in
+parallel and `test-pg` was split, `ui-e2e` became the longest job of a pull request:
+518 to 531 s of Playwright in a job of about 10.5 minutes (runs 37392974500 and
+37391169188). It now runs as `ui-e2e (1/2)` and `ui-e2e (2/2)`. Each shard takes every
+other spec of the sorted list (`WARDYN_E2E_SHARD`, `scripts/run-ui-e2e.sh`), with the
+same three lanes and the same fresh seed per spec, so the per-spec isolation is
+unchanged. The four-eyes run and the `e2etmux` harness pins run once, in shard 1. It
+is not a required check, so it needs no aggregator.
 
 **Per-job budget.** A job's budget is its `timeout-minutes`, at least twice its
 measured maximum with a ten-minute floor. Minutes, successful runs only. The old
@@ -433,7 +435,7 @@ split below; timings for the current aggregator and the new jobs remain pending:
 | `go` (lint, unit, docker, k8s matrix) | – | pending | pending | 40 |
 | `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
-| `ui-e2e` | 42 | 9.2 | 10.1 | 25 |
+| `ui-e2e` (1/2, 2/2 matrix) | – | pending | pending | 25 |
 | `test-pg-shard` (api, store, race matrix) | – | pending | pending | 20 |
 | `test-pg` (aggregator) | – | pending | pending | 10 |
 | `ui` | 60 | 4.5 | 4.8 | 20 |
@@ -495,36 +497,56 @@ race + coverage pass per tag set (#467):
    `make cover-check` enforces locally.
 2. **Skip what a change cannot affect.** The `changes` job classifies the pull request's
    changed paths (`git diff --name-only --no-renames HEAD^1 HEAD` on GitHub's merge commit,
-   so a moved file counts at both its old and its new path):
+   so a moved file counts at both its old and its new path) into five outputs, each `true`
+   when at least one changed path sets it:
 
-   | Class | Paths | Skipped |
+   | Output | Set by | Read by |
    |---|---|---|
-   | docs | `docs/**`, `threatmodel/**`, any `*.md` | `ui-e2e`, `helm-install-test`, plus everything the ui class skips. `go (unit)`, `go (docker)` and `go (k8s)` run only the guard packages, and `build` skips the union (see below) |
-   | ui | `ui/**` | `conformance`, `conformance-k8s`, `test-pg`, `envbuild-integration`, `helm`, and `helm-install-test`'s kind half |
-   | backend | everything else, including Go, `deploy/**`, `scripts/**` and `.github/**` | nothing |
+   | `code` | any path outside `docs/**`, `threatmodel/**` and `*.md` | `ui-e2e`, `helm-install-test` |
+   | `backend` | any path outside those and `ui/**` (Go, `deploy/**`, `scripts/**`, `.github/**`, …) | `go` (full suites or guard packages), `build` (union), `test-pg-shard`, `test-pg`, `conformance`, `conformance-k8s`, `envbuild-integration`, `helm`, `helm-install-test`'s kind half |
+   | `ui` | `ui/**`, the `Makefile`, `.github/workflows/ci.yml` | `ui` (whole vitest suite, or only the files that read outside `ui/`) |
+   | `images` | a `backend` path other than a Go `*_test.go` file | `trivy (…)` |
+   | `notices` | `images`, `ui/package.json`, `ui/pnpm-lock.yaml`, `THIRD-PARTY-NOTICES.md` | `notices` |
 
-   A job is skipped only when every changed path falls in a class that skips it, so a
-   docs-plus-ui change skips only the ui column. A path that matches no pattern counts as
-   backend, so a new directory runs everything until someone classifies it. A push, a merge
-   queue run and a pull request from a `train/*` branch always run everything.
+   A path that matches no pattern counts as backend, so a new directory runs everything until
+   someone classifies it. A push, a merge queue run, a pull request from a `train/*` branch
+   and a pull request into `release/*` always run everything. So, for example, a docs-only
+   change skips `ui-e2e`, `helm-install-test`, both conformance jobs, `envbuild-integration`,
+   `helm`, `test-pg`, `notices` and every `trivy` scan; a console-only change skips the same
+   except `ui-e2e` and `helm-install-test`'s desktop-envelope half; a change to Go test files
+   only skips `trivy` and `notices`.
    The Go jobs (`go`, `build`) never skip, whatever changed. Dozens of Go test files read
    the docs, the CHANGELOG, `ui/src` or the workflows (the citation, CHANGELOG-freeze,
    RELEASING job-list and copy-parity guards among them), so skipping Go on a docs-only
    change would let a docs change break the guards that check docs.
 
-   **Docs-only: guard packages only.** A docs-only change cannot change compiled code, race
-   behaviour or coverage. So when `code` is `false`, the three test legs do not run the race
-   and coverage suites. They run plain `go test -count=1`, with no race detector and no
-   coverage, over the guard packages only. Those are the directories of every `*_test.go`
-   file that names `docs/`, `threatmodel/`, `ui/`, `.github/`, `CHANGELOG.md`, `RELEASING.md`,
-   `AGENTS.md` or any `.md` file. The step finds them from the test sources at run time, so a
-   new guard is picked up without a list to maintain. `go (unit)` runs them with no tags.
+   **Docs or console only: guard packages only.** A change confined to the docs and `ui/`
+   cannot change compiled Go, race behaviour or coverage. So when `backend` is `false`, the
+   three test legs do not run the race and coverage suites. They run plain `go test -count=1`,
+   with no race detector and no coverage, over the guard packages only. Those are the
+   directories of every `*_test.go` file that names `docs/`, `threatmodel/`, `ui/`,
+   `.github/`, `CHANGELOG.md`, `RELEASING.md`, `AGENTS.md` or any `.md` file. The step finds
+   them from the test sources at run time, so a new guard is picked up without a list to
+   maintain. (Every Go test that walks the tree from its root filters to `.go` or `.sql`
+   files, so none reads `ui/` without naming it.) `go (unit)` runs them with no tags.
    `go (docker)` and `go (k8s)` run, with their tag, only the packages whose guard files carry
    that build tag. Today that is `./internal/runner/docker` for docker (`hardening_test.go`
    reads `threatmodel/THREAT-MODEL.md`) and none for k8s, so the k8s leg says so and passes.
    If the tagless leg finds no guard file at all, it fails: that would mean the search
    pattern broke. `build` then needs every leg green and skips the coverage union, since no
-   profiles were written. `go (lint)` runs in full on every change.
+   profiles were written. `go (lint)` runs in full on every change: it carries the console's
+   ESLint.
+
+   **No console change: the vitest files that read outside `ui/` only.** When `ui` is
+   `false`, the `ui` job still installs, audits, typechecks and builds, but a vitest verdict
+   can move only in a test that reads a file outside `ui/`: the Go wire-parity tests and the
+   `docs/design` canon pins. A test reads a file through `node:fs` (or `child_process`, a
+   cwd- or module-relative path, a `?raw` or glob import), so the step runs the test files
+   that do, plus the callers of the two helpers that read a path their caller passes
+   (`copy-doc-parity.ts`, and `test-fixtures.ts`'s `expectNoOwnCopy`): 76 of 341 files,
+   about 11% of the suite's test time, without coverage. It fails closed: if any other
+   module under `ui/src` reads files or names a path outside `ui/`, a test could read through
+   it unseen, so the whole suite runs instead; and finding no test at all fails.
 3. **Docker layer cache.** `helm-install-test` (wardynd, wardyn-proxy), `conformance-k8s` (wardyn-proxy) and
    `conformance` (wardyn-proxy, agent-claude-code) build through `docker/build-push-action`
    with `cache-from: type=gha,scope=<image>`. `cache-to` (`mode=max`) is written only from a
@@ -535,25 +557,39 @@ race + coverage pass per tag set (#467):
    buildx builder cannot see.
 
 **Required checks and skipped jobs.** GitHub reports a job skipped by a job-level `if:` as
-"skipped". Branch protection can count that as passing, which is the risk: a required check
-that is skipped because `changes` *failed* would pass without running anything. So no
-required job is skipped at the job level:
+"skipped", and branch protection accepts that as passing. Two rules keep that safe:
 
-- `test-pg` (through its `test-pg-shard` matrix, whose aggregator fails unless every shard passed), `conformance`, `conformance-k8s` and `helm` always run (`if: !cancelled()`) and
-  put `if: needs.changes.outputs.backend != 'false'` on every step. When a change cannot affect
-  them the job still reports success after a few seconds with its steps skipped. The
-  comparison is `!= 'false'`, so a failed or missing classification runs the work.
+- A required job reads the classification only as `!cancelled() && … != 'false'`. If
+  `changes` *failed*, every output is empty, so the job runs instead of skipping.
+- A required job with a **matrix** never skips at the job level. GitHub does not expand a
+  skipped matrix: it reports one check with the name unexpanded (`trivy (${{ matrix.name }})`,
+  the same row `scripts/green-by-tree.sh` documents for the nightly), so `trivy (wardynd)`
+  would never report and the pull request would wait on it forever. `trivy (…)` and
+  `gates (…)` therefore always run; `trivy` puts `if: needs.changes.outputs.images != 'false'`
+  on every step, so a cell that has nothing to scan reports success in seconds.
+
+So:
+
+- `test-pg` (the aggregator over its `test-pg-shard` matrix, which fails unless every shard
+  passed), `conformance`, `conformance-k8s`, `helm` and `envbuild-integration` skip at the job
+  level on `backend == 'false'`, `notices` on `notices == 'false'`. A skipped job needs no
+  runner, where a job that only skipped its steps still waited for one: in run 37392974500, a
+  console-only pull request, `conformance` queued 1426 s to run for 6 s, `helm` 1779 s, and
+  `test-pg` 1785 s.
 - `build` needs every `go` leg and runs with `if: !cancelled()`. Its first step fails unless
   every leg passed, so the `build` context is green only when all four legs and the union floor
-  are. The union steps carry `if: needs.changes.outputs.code != 'false'`, so only an explicit
-  docs-only classification skips them. A failed or missing classification runs the full
-  suites in the legs and requires the union.
-- Non-required jobs (`ui-e2e`, `helm-install-test`, `envbuild-integration`)
-  skip at the job level and free their runner. They too use `!cancelled()` and `!= 'false'`.
-  `helm-install-test` skips on `code` and puts `backend != 'false'` on its kind half's steps,
-  so a ui-only change runs just its desktop-envelope half.
-- Every other required context (`ui`, `compose`, `dco`, `notices`, `gates (…)`, `trivy (…)`)
-  does not read the classification and runs on every change.
+  are. The union steps carry `if: needs.changes.outputs.backend != 'false'`, so only an
+  explicit docs- or console-only classification skips them. A failed or missing classification
+  runs the full suites in the legs and requires the union.
+- `ui` always runs and narrows only vitest (above).
+- Non-required jobs (`ui-e2e`, `helm-install-test`) skip at the job level on `code`.
+  `helm-install-test` puts `backend != 'false'` on its kind half's steps, so a console-only
+  change runs just its desktop-envelope half.
+- `compose`, `dco`, `diagrams` and `gates (…)` do not read the classification and run on
+  every change.
+- Only a run whose five outputs are all `true` uploads the `ci-full-tree-<tree>` marker that
+  `scripts/green-by-tree.sh` accepts as release evidence: a run that narrowed anything did not
+  test everything, even where every check it reported is green.
 
 **Before and after.** "Before" is main's last green run before this change, 35918188245
 (a push: every job ran). Wall time runs from the first job's start to the last job's end.

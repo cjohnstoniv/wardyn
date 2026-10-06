@@ -15,7 +15,8 @@ minor, follows the manual steps. This document is that process, written down.
   `origin`, so only someone with push rights cuts them.
 - The full CI gate is green on the commit you intend to tag. The gate is the
   `.github/workflows/ci.yml` job list: `changes`, `go`
-  (a matrix job: `lint`, `unit`, `docker`, `k8s`), `build`, `diagrams`, `ui`, `ui-e2e`,
+  (a matrix job: `lint`, `unit`, `docker`, `k8s`), `build`, `diagrams`, `ui`, `ui-e2e`
+  (a matrix job: `1/2`, `2/2`),
   `helm`, `helm-install-test`, `compose`, `conformance`, `conformance-k8s`,
   `envbuild-integration`, `test-pg-shard` (a matrix job: `api`, `store`, `race`),
   `test-pg`, `gates`

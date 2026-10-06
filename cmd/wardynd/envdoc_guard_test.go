@@ -72,6 +72,9 @@ var envDocAllow = map[string]bool{
 	// run-ui-e2e.sh's default invocation runs — same shell-only situation as
 	// the pair above.
 	"WARDYN_E2E_INTERNAL_ADDR": true, "WARDYN_E2E_LANES": true,
+	// run-ui-e2e.sh's i/n split of the default invocation across runners
+	// (ci.yml's two ui-e2e shards) — shell-only like the lanes knob above.
+	"WARDYN_E2E_SHARD": true,
 	// the REST of the e2e backend's shell-only knobs (e2e-backend.sh,
 	// run-ui-e2e.sh, screenshots.sh, test/e2e/e2e.sh) — none read by Go, so
 	// TestEnvDoc_E2EShellVarsAreDocumented below is what actually enforces these

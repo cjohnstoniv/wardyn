@@ -40,6 +40,7 @@
 # Usage:  scripts/run-ui-e2e.sh                 # all specs, 1 lane locally / 3 in CI
 #         scripts/run-ui-e2e.sh runs secrets    # only runs.spec.ts + secrets.spec.ts (single lane)
 #         WARDYN_E2E_LANES=3 scripts/run-ui-e2e.sh   # all specs, 3 lanes (local override)
+#         WARDYN_E2E_SHARD=1/2 scripts/run-ui-e2e.sh # every other spec, starting with the first
 #
 # WARDYN_E2E_ALLOW_ALL_SKIPPED: space-separated spec basenames (no extension,
 # e.g. "drives ssh") allowed to report zero executed tests without failing the
@@ -187,6 +188,25 @@ if [[ $# -gt 0 ]]; then
   for a in "$@"; do specs+=("${spec_dir}/${a}.spec.ts"); done
 else
   for f in "${spec_dir}"/*.spec.ts; do specs+=("$f"); done
+fi
+
+# WARDYN_E2E_SHARD=i/n splits the DEFAULT invocation across n runners (ci.yml's
+# ui-e2e runs two): this one keeps every n-th spec of the byte-sorted list,
+# starting at the i-th, so every spec lands in exactly one shard whatever the
+# runner's locale. Nothing else changes: the same lanes, the same fresh seed per
+# spec. A shard left with no spec fails rather than pass having run nothing.
+if [[ -n "${WARDYN_E2E_SHARD:-}" && $# -eq 0 && -z "${LIVE_BASE_URL}" ]]; then
+  [[ ${WARDYN_E2E_SHARD} =~ ^([0-9]+)/([0-9]+)$ ]] || { echo "run-ui-e2e.sh: WARDYN_E2E_SHARD must be i/n, got '${WARDYN_E2E_SHARD}'" >&2; exit 1; }
+  shard_i=${BASH_REMATCH[1]} shard_n=${BASH_REMATCH[2]}
+  (( shard_i >= 1 && shard_i <= shard_n )) || { echo "run-ui-e2e.sh: WARDYN_E2E_SHARD needs 1 <= i <= n, got '${WARDYN_E2E_SHARD}'" >&2; exit 1; }
+  mapfile -t specs < <(printf '%s\n' "${specs[@]}" | LC_ALL=C sort)
+  kept=()
+  for k in "${!specs[@]}"; do
+    (( k % shard_n == shard_i - 1 )) && kept+=("${specs[k]}")
+  done
+  [[ ${#kept[@]} -gt 0 ]] || { echo "run-ui-e2e.sh: shard ${WARDYN_E2E_SHARD} holds no spec" >&2; exit 1; }
+  log "shard ${WARDYN_E2E_SHARD}: ${#kept[@]} of ${#specs[@]} specs"
+  specs=("${kept[@]}")
 fi
 
 allow_all_skipped=" ${WARDYN_E2E_ALLOW_ALL_SKIPPED:-} "
