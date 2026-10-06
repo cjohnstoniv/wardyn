@@ -14,11 +14,11 @@ import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { findRunningFixture, stubInteractiveRun } from "./attach-stub";
 import { RUN_COCKPIT } from "../src/app/components/wardyn/copy/run-cockpit";
-import { readGrid } from "./terminal-grid";
+import { readGrid, settledGrid } from "./terminal-grid";
 
 const settle = async (page: Page) => {
   await page.addStyleTag({ content: "*{transition:none!important;animation:none!important}" });
-  await page.waitForTimeout(800);
+  await settledGrid(page, page.locator(".xterm-screen").first());
 };
 
 test("a read-only tab renders the writer's grid and follows the writer's resize", async ({ page, context }) => {
