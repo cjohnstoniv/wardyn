@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -747,6 +748,23 @@ func TestPutSecret_RowFailureIsAudited(t *testing.T) {
 	ev := lastAuditEvent(t, h.audit.events, "secret.write")
 	if ev.Outcome != "failure" || ev.Target != "npm-token" || string(ev.Data) != `{"reason":"row"}` {
 		t.Fatalf("secret.write = (%s, %s, %s); want a failure on npm-token with reason row", ev.Outcome, ev.Target, ev.Data)
+	}
+}
+
+// A guarded write that finds every guarded-write connection in use is a retry,
+// not a fault: 503 lock_unavailable with a Retry-After, and nothing stored.
+func TestPutSecret_GuardedWriteAtCapacityIsARetry(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{}}
+	_, srv := secretsRBACServer(t, sec)
+	srv.cfg.Store = &gapCovSharer{Store: newAuthzStore(), refuse: fmt.Errorf("store: guarded write: %w (8 in use)", db.ErrLockNoCapacity)}
+	srv.router = srv.routes()
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser) // a member: the operator namespace has no owner to guard
+	w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/npm-token", alice, `{"value":"npm-at-capacity-value-000000"}`)
+	if w.Code != http.StatusServiceUnavailable || errorReason(w) != reasonLockUnavailable || w.Header().Get("Retry-After") != "5" {
+		t.Fatalf("PUT = %d %s retry-after %q (%s), want 503 %s with Retry-After 5", w.Code, errorReason(w), w.Header().Get("Retry-After"), w.Body, reasonLockUnavailable)
+	}
+	if len(sec.m) != 0 {
+		t.Fatalf("a refused guarded write stored %d secret(s)", len(sec.m))
 	}
 }
 
