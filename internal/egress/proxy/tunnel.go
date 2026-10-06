@@ -116,7 +116,7 @@ var errTunnelRefused = errors.New("proxy: the upstream's first bytes were refuse
 type tunnelRefusal struct {
 	armed  bool   // refused as the answer to a TLS hello, not as an unprompted HTTP response
 	status string // "" when the bytes were not an HTTP/1.x status line
-	reason string
+	reason string // never set when armed: see refuse
 }
 
 // tunnelWatch wraps the dialled side of a CONNECT tunnel. It notes what went
@@ -236,12 +236,18 @@ func isTLSRecordHeader(head []byte) bool {
 var statusLineRe = regexp.MustCompile(`^HTTP/1\.[0-9] ([0-9]{3})(?: ([ -~]{0,64}))?\r?\n`)
 
 // refuse records what the upstream sent instead of TLS, from the flight
-// already buffered, and returns the error that ends the relay.
+// already buffered, and returns the error that ends the relay. An armed
+// refusal keeps the status code and drops the reason phrase: bytes that
+// answer the client's hello came through the tunnel, so the destination
+// behind the hop may have written them.
 func (w *tunnelWatch) refuse(armed bool) error {
 	r := &tunnelRefusal{armed: armed}
 	flight, _ := w.br.Peek(w.br.Buffered())
 	if m := statusLineRe.FindSubmatch(flight); m != nil {
-		r.status, r.reason = string(m[1]), string(bytes.TrimSpace(m[2]))
+		r.status = string(m[1])
+		if !armed {
+			r.reason = string(bytes.TrimSpace(m[2]))
+		}
 	}
 	w.refused.Store(r)
 	return errTunnelRefused
@@ -252,7 +258,8 @@ func (w *tunnelWatch) refuse(armed bool) error {
 // that carried an answer. upstreamFirst says which direction ended first and
 // err what ended it. No client byte reaches it, and from the upstream only refuse's strict status
 // parse and the alert's description byte do; the reason phrase is kept only
-// when the hop is the operator's own proxy (via), whose wording is theirs.
+// when the hop is the operator's own proxy (via), whose wording is theirs,
+// and it spoke before any client byte reached it (refuse drops it otherwise).
 func (w *tunnelWatch) failure(via string, upstreamFirst bool, err error) string {
 	if r := w.refused.Load(); r != nil {
 		got := "bytes that are not a TLS record"

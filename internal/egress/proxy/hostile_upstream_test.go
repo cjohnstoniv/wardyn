@@ -220,7 +220,9 @@ func TestHostileUpstream(t *testing.T) {
 		wantCause  string
 		notInCause string
 	}{
-		{"a_http_after_hello", hostileHTTPAfterHello, nil, viaUpstreamProxy, "HTTP 503 (Service Unavailable)", ""},
+		// An answer to the hello came through the tunnel, so its reason phrase
+		// may be the destination's: only the status code is recorded.
+		{"a_http_after_hello", hostileHTTPAfterHello, nil, viaUpstreamProxy, "a TLS hello with HTTP 503, not TLS", "Service Unavailable"},
 		{"b_close_after_hello", hostileCloseAfterHello, nil, viaUpstreamProxy, "the upstream closed without answering", ""},
 		// The destination's own reason phrase is not the operator's text.
 		{"d_direct_http_after_hello", hostileDirectHTTPAfterHello, nil, viaDirect, "HTTP 503", "Service Unavailable"},
@@ -302,6 +304,39 @@ func TestHostileUpstreamPipelinedHTTPIsRefused(t *testing.T) {
 	}
 	if d := rows[0]; d.Via != viaUpstreamProxy || !strings.Contains(d.Cause, "HTTP 503 (Service Unavailable) before the client sent anything") {
 		t.Errorf("row = via %q cause %q, want the upstream proxy's unprompted 503", d.Via, d.Cause)
+	}
+}
+
+// TestTunnelWatchArmedReasonPhraseNeverReachesCause: whatever follows the
+// status code in an answer to the client's hello stays out of the row, on the
+// operator's own hop as on a direct dial. The same line sent before the client
+// spoke keeps its phrase on that hop only.
+func TestTunnelWatchArmedReasonPhraseNeverReachesCause(t *testing.T) {
+	const phrase = "words the destination chose"
+	refused := func(armed bool) *tunnelWatch {
+		t.Helper()
+		w, clientPeer, upstreamPeer := pipedTunnel(t)
+		if armed {
+			relayThrough(t, clientPeer, upstreamPeer, string(fakeClientHello))
+		}
+		go func() { _, _ = upstreamPeer.Write([]byte("HTTP/1.1 503 " + phrase + "\r\n\r\n")) }()
+		_ = clientPeer.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if got, err := io.ReadAll(clientPeer); len(got) != 0 || isTimeout(err) {
+			t.Fatalf("client read %q (err %v), want nothing and a closed tunnel", got, err)
+		}
+		return w
+	}
+	for _, via := range []string{viaUpstreamProxy, viaDirect} {
+		got := refused(true).failure(via, true, errTunnelRefused)
+		if !strings.Contains(got, "a TLS hello with HTTP 503, not TLS") || strings.Contains(got, phrase) {
+			t.Errorf("armed, via %s: failure = %q, want the status code and none of %q", via, got, phrase)
+		}
+	}
+	if got := refused(false).failure(viaUpstreamProxy, true, errTunnelRefused); !strings.Contains(got, "HTTP 503 ("+phrase+") before the client sent anything") {
+		t.Errorf("unarmed, via %s: failure = %q, want the hop's own phrase kept", viaUpstreamProxy, got)
+	}
+	if got := refused(false).failure(viaDirect, true, errTunnelRefused); !strings.Contains(got, "HTTP 503 before the client sent anything") || strings.Contains(got, phrase) {
+		t.Errorf("unarmed, via %s: failure = %q, want the status code and none of %q", viaDirect, got, phrase)
 	}
 }
 
