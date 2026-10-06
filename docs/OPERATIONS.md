@@ -5171,7 +5171,7 @@ Consequences worth knowing:
   launch sees the first and ends the caller's older sign-in. A lock not taken within about 5 seconds
   answers 503 and starts nothing; the person signs in again. A pass is unserialized
   whenever the pool cannot spare two connections at that moment (see the `WARDYN_PG_DSN` row in
-  [ENV.md](ENV.md)): on every call at `pool_max_conns=2`, and transiently on a busy larger pool.
+  [ENV.md](ENV.md)): on every call at `pool_max_conns=1`, and transiently on a busy larger pool.
   Each such pass proceeds and writes an `auth.signin_unserialized` audit
   row ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#auth)). Unserialized, two launches racing across replicas
   with clock skew can leave both sandboxes alive, and the next sign-in clears it.
@@ -5181,7 +5181,7 @@ Consequences worth knowing:
   overwriting the newer session. A capture that cannot get the lock within about 5 seconds is refused
   with `reason = signin_busy` and stores nothing. Whoever is watching the old sandbox sees "this
   sign-in sandbox was closed — a newer sign-in for you replaced it…" and finishes in the new one. At
-  an unserialized pass (every call at `pool_max_conns=2`) there is no lock, so a supersede landing between the re-read and the write can
+  an unserialized pass (every call at `pool_max_conns=1`) there is no lock, so a supersede landing between the re-read and the write can
   still lose to the old capture; the next sign-in replaces it.
 
 ### What the sign-in pane's waiting messages mean
@@ -7250,10 +7250,10 @@ What the switch needs, and refuses to render or boot without:
 - **An audit spool on the per-pod `tmp` emptyDir.** The chart renders
   `WARDYN_AUDIT_SPOOL=/tmp/audit-spool.jsonl` and refuses a `WARDYN_AUDIT_SPOOL`
   set in `env` or `extraEnv` anywhere outside `/tmp`.
-- **A database pool of at least 3 connections.** The sweeper leader election holds
-  one connection for the process lifetime; below that every replica would sweep
-  with no election and no fencing. `WARDYN_HA=true` with `pool_max_conns` under 3
-  in `WARDYN_PG_DSN` exits non-zero at boot, naming the value and the minimum.
+- **One more database connection per replica for the sweeper leader election.** It
+  holds its lock on a connection of its own, outside `pool_max_conns`, so every
+  replica elects and is fenced on a pool of any size ([ENV.md](ENV.md),
+  `WARDYN_PG_DSN`).
 - **A PodDisruptionBudget** (`minAvailable: 1`) and a preferred **pod anti-affinity**
   across nodes (soft, so a one-node cluster still schedules every replica; an
   `affinity.podAntiAffinity` of your own replaces it).

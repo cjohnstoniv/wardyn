@@ -5,8 +5,8 @@ package db
 
 // SweeperLeader: the one replica that runs the sweepers which must run once.
 //
-// Election is SweeperLeaderLockKey, held for the process lifetime on one pool
-// connection. An advisory lock is not a fence: a Postgres failover releases it
+// Election is SweeperLeaderLockKey, held for the process lifetime on a
+// connection of its own, outside the pool. An advisory lock is not a fence: a Postgres failover releases it
 // under a still-running leader while a follower takes over. So each term has a
 // durable epoch (sweeper_leader.epoch, bumped on every acquisition), the leader
 // watches its own lock connection and the epoch, and on loss it cancels and
@@ -34,12 +34,6 @@ const (
 	sweeperLeaderMonitor = 5 * time.Second
 	// sweeperLeaderPoll is how often a gated sweeper looks for a new term.
 	sweeperLeaderPoll = time.Second
-	// SweeperLeaderMinConns is the smallest pool that can spare the connection
-	// the leader holds for the process lifetime (the single-instance lock holds
-	// one more, and requests need at least one). A smaller pool runs solo, which
-	// is unfenced, so WARDYN_HA refuses to boot on one (claimSingleInstance).
-	SweeperLeaderMinConns = 3
-	sweeperLeaderMinConns = SweeperLeaderMinConns
 )
 
 // SweeperLeader elects and monitors the sweeper leader. Build one with
@@ -52,7 +46,6 @@ type SweeperLeader struct {
 
 	mu   sync.Mutex
 	term *sweeperTerm
-	solo bool
 }
 
 // sweeperTerm is one acquisition: its context ends when the lock is lost, and
@@ -82,16 +75,8 @@ func NewSweeperLeader(pool *pgxpool.Pool, holder string) *SweeperLeader {
 }
 
 // Run elects until ctx ends: take the lock, bump the epoch, lead, and on loss
-// stop the sweeps and try again. A pool too small to spare the lock's
-// connection leads without an election (solo), which is what a one-replica
-// install on a tiny pool did before the election existed.
+// stop the sweeps and try again.
 func (l *SweeperLeader) Run(ctx context.Context) {
-	if l.pool.Config().MaxConns < sweeperLeaderMinConns {
-		slog.WarnContext(ctx, "wardynd: pool_max_conns below 3 — the sweeper leader cannot spare a connection for its lock, so this process sweeps without an election; run one replica or raise the pool",
-			slog.Int("pool_max_conns", int(l.pool.Config().MaxConns)))
-		l.runSolo(ctx)
-		return
-	}
 	logged := ""
 	for {
 		switch outcome := l.lead(ctx); {
@@ -109,19 +94,10 @@ func (l *SweeperLeader) Run(ctx context.Context) {
 	}
 }
 
-func (l *SweeperLeader) runSolo(ctx context.Context) {
-	l.mu.Lock()
-	l.solo = true
-	l.mu.Unlock()
-	t := l.open(ctx, 0)
-	<-ctx.Done()
-	l.close(t)
-}
-
 // lead makes one attempt. It returns "led" after a term that ended, or why the
 // attempt did not lead.
 func (l *SweeperLeader) lead(ctx context.Context) string {
-	conn, release, ok, err := TryAdvisoryLockConn(ctx, l.pool, SweeperLeaderLockKey)
+	conn, release, ok, err := TryAdvisoryLockDedicated(ctx, l.pool, SweeperLeaderLockKey)
 	if err != nil {
 		return "lock unavailable: " + err.Error()
 	}
@@ -148,7 +124,7 @@ func (l *SweeperLeader) lead(ctx context.Context) string {
 // watch blocks until the lock connection fails, another term has bumped the
 // epoch, or ctx ends. A hung connection counts as lost: each probe has a
 // deadline of two monitor periods.
-func (l *SweeperLeader) watch(ctx context.Context, conn *pgxpool.Conn, epoch int64) {
+func (l *SweeperLeader) watch(ctx context.Context, conn *pgx.Conn, epoch int64) {
 	tick := time.NewTicker(l.monitor)
 	defer tick.Stop()
 	for {
@@ -235,12 +211,6 @@ func (l *SweeperLeader) Go(ctx context.Context, fn func(context.Context)) {
 // Current reports whether epoch is still the durable one: false once another
 // term has acquired the lease, which is when a stale leader must stop writing.
 func (l *SweeperLeader) Current(ctx context.Context, epoch int64) (bool, error) {
-	l.mu.Lock()
-	solo := l.solo
-	l.mu.Unlock()
-	if solo {
-		return epoch == 0, nil
-	}
 	var cur int64
 	err := l.pool.QueryRow(ctx, `SELECT epoch FROM sweeper_leader WHERE id`).Scan(&cur)
 	if err != nil {

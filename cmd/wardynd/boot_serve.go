@@ -152,6 +152,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// The audit retention policy and the daily partition sweep (a nil pool is a unit test).
 	if pool != nil {
 		startAuditRetention(rootCtx, f, pool, leader)
+		warnSmallPool(pool.Config().MaxConns)
 	}
 
 	if run != nil && *f.autoStopInterval > 0 {
@@ -175,19 +176,6 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	}
 
 	if gtFile := strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")); gtFile != "" {
-		// FOUR connections are spoken for here: the single-instance boot lock,
-		// the sweeper leader's lock and the rotator's leader lock each hold one
-		// for the whole process lifetime, and the reaper borrows another for the
-		// length of each tick — so a pool sized below 5 can leave request-serving
-		// queries with none,
-		// and pgxpool.Acquire BLOCKS until its context is done rather than
-		// erroring. That failure looks like a hang, not a misconfiguration, so
-		// say so at boot (docs/ENV.md, WARDYN_PG_DSN's pool_max_conns note).
-		// claimSingleInstance warns separately at the unconditional floor of 2.
-		if mc := pool.Config().MaxConns; mc < 5 {
-			slog.Warn("wardynd: pool_max_conns below 5 while the groundtruth rotator is enabled — the single-instance lock, the sweeper leader and the rotator each hold one connection for the process lifetime and the lifecycle reaper borrows one per tick; requests can block waiting for a connection",
-				slog.Int("pool_max_conns", int(mc)))
-		}
 		go goSafe("groundtruth.rotator", func() { runGroundtruthTokenRotatorLeader(rootCtx, groundtruthRotatorLock(pool), idp, gtFile) })
 		slog.Info("wardynd: groundtruth token rotator started", slog.String("file", gtFile))
 	}
@@ -250,6 +238,22 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 			slog.InfoContext(ctx, "wardynd: reconciled always-egress decisions onto workspaces", slog.Int("decisions", n))
 		}
 	})
+}
+
+// smallPoolWarnBelow is the pool the two tick locks need: the lifecycle reaper's
+// tick and the terminal-sandbox sweep's can overlap, and each holds one
+// connection for its lock while its queries take another.
+const smallPoolWarnBelow = 4
+
+// warnSmallPool says at boot that pool_max_conns is too small for the ticks.
+// pgxpool.Acquire BLOCKS on an empty pool rather than erroring, so the failure
+// looks like a hang, not a misconfiguration (docs/ENV.md, WARDYN_PG_DSN).
+func warnSmallPool(maxConns int32) {
+	if maxConns >= smallPoolWarnBelow {
+		return
+	}
+	slog.Warn("wardynd: pool_max_conns below 4 — the lifecycle reaper's tick and the terminal-sandbox sweep's tick can overlap, each holding one connection for its lock while its queries take another; requests can block waiting for a connection. Below 6, a sign-in during a tick is not serialized (auth.signin_unserialized)",
+		slog.Int("pool_max_conns", int(maxConns)))
 }
 
 // startSSHGateway launches the SSH gateway's accept loop in its own goroutine
