@@ -16,6 +16,8 @@ import { settledGrid } from "./terminal-grid";
 const HEIGHTS = Array.from({ length: 33 }, (_, i) => 300 + i * 7); // 300..524
 
 test("the terminal grid stays inside its padded wrapper at every panel height", async ({ page }) => {
+  // 33 heights, each held until the grid has been still for 600 ms.
+  test.setTimeout(90_000);
   const { id: runId } = await findRunningFixture(page);
   await stubInteractiveRun(page, runId);
   await stubAttachTicket(page, runId);
