@@ -46,6 +46,7 @@ Comment the *why*, never the *what*. The test for keeping one:
 - **Gates:** `make ci` is the merge gate; `scripts/run-ui-e2e.sh` (Playwright) is NOT in it and must run
   before a console change is called done. Guards in `cmd/wardynd/*_guard_test.go` run on every full
   `go test ./...` — run the full tree, not `./internal/...`.
+- **Before a push:** `scripts/lane-preflight.sh` runs the cheap gates on what you changed; it does not replace hosted CI.
 - **Invariants:** `ARCHITECTURE.md` (the numbered invariants) and `threatmodel/THREAT-MODEL.md` (residuals) are
   authoritative. `CONTRIBUTING.md`: "do not restate a count here, it is what drifts" — the same law applies
   to this file.
