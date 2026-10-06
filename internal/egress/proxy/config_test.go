@@ -145,6 +145,33 @@ func TestProxyConfig_WarnsOnUncoveredAWSSSOInjectionHost(t *testing.T) {
 	}
 }
 
+// TestProxyConfig_UncoveredAWSSSOWarningNamesResolvabilityPrecondition: the
+// warning must not read as "add the host to the bypass list and the run
+// works". Under a bypass entry the proxy resolves the name itself, so the
+// warning names that precondition and keeps the host attribute.
+func TestProxyConfig_UncoveredAWSSSOWarningNamesResolvabilityPrecondition(t *testing.T) {
+	logged, _, err := captureConfigLoadLogs(t, baseConfigJSON(t, map[string]any{
+		"upstream_proxy_url":      "http://corp-proxy.internal:8080",
+		"upstream_proxy_no_proxy": []string{},
+		"injection": []map[string]any{
+			{"host": testSSOPortalHost, "header": "x-amz-sso_bearer_token", "grant_id": uuid.New().String()},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("LoadConfigBytes: %v", err)
+	}
+	for _, want := range []string{
+		"not covered",
+		"a bypass entry helps only if wardyn-proxy itself (not the sandbox) can resolve and reach the host",
+		"the estate needs a route, not a configuration change",
+		"host=" + testSSOPortalHost,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("warning missing %q:\n%s", want, logged)
+		}
+	}
+}
+
 // TestProxyConfig_NoWarnWhenBypassCoversSSOHost: the negative control — a
 // upstream_proxy_no_proxy entry covering the portal's suffix means the SSO
 // host will NOT be chained through the upstream, so no warning is due.
