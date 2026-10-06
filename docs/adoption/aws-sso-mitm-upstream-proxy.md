@@ -238,7 +238,7 @@ What 0.8.7 changes on this path:
   sandbox sees the connection close. Tunnels the sandbox opens with anything other than a TLS hello
   are relayed untouched.
 - **The allow recorded for each forward dial carries `via`** (`upstream-proxy` or `direct`; the extra
-  marker allows some lanes write beside it, such as an Azure DevOps refusal class, carry none), so a
+  marker allows that some lanes write beside it, such as an Azure DevOps refusal class, carry none), so a
   trail shows whether the upstream proxy was in the path, and a `builtin:resolve-failed` with an
   upstream configured says the name is on the bypass list and did not resolve at the proxy.
 - **`run.upstream_proxy.resolve` is written on every dispatch that reaches the proxy config**, with `in_effect`, so a run with no

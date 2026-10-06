@@ -18,7 +18,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   rule over the `egress.deny` action will see it; match on `rule_source` to tell it from a policy denial.
 - **`egress.allow` rows gain `via`.** The allow recorded for each forward dial (the CONNECT tunnel, a plain
   forward, a relayed model call, and the git, token and forge-API broker lanes) now carries `via`:
-  `upstream-proxy` or `direct`, never an address; the extra marker allows some lanes write beside it, such as
+  `upstream-proxy` or `direct`, never an address; the extra marker allows that some lanes write beside it, such as
   an Azure DevOps refusal class, carry none. The allow of a CONNECT tunnel the proxy terminates itself carries
   none. A `builtin:resolve-failed` row written with an upstream proxy configured now also carries `via` and a
   `cause`. So does the deny for a request inside a tunnel the proxy terminates whose upstream could not be
@@ -38,7 +38,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `pool_max_conns=1` (it was 2), and below 6 not while both ticks run; each unserialized pass writes an
   `auth.signin_unserialized` row. `WARDYN_HA` no longer refuses to boot on a pool below 3, and the sweeper
   leader is elected on a pool of any size instead of sweeping without an election on a small one. See the
-  `WARDYN_PG_DSN` row of `docs/ENV.md`.
+  `WARDYN_PG_DSN` row of `docs/ENV.md`. Raise Postgres `max_connections`, or your pooler's per-database limit, by 3
+  per replica before rolling if the budget is tight.
 - **No schema change.** Rolling back is a redeploy of 0.8.6.
 
 ### Added
