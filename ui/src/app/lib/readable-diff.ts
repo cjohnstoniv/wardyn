@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// #217 — "Copy my changes" hands back the CHANGED FIELDS as text, never the
+// #217: "Copy my changes" hands back the CHANGED FIELDS as text, never the
 // whole draft as JSON (issue #217's binding default): the person is about to
 // paste this somewhere human, so the one field they edited should not be
 // buried under every field they didn't touch.
