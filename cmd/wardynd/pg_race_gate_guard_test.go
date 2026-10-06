@@ -134,41 +134,42 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 			t.Errorf("ci.yml's go job has no leg running `make %s`, so that race pass gates no PR:\n%s", target, goJob)
 		}
 	}
-	// Only an explicit docs-only classification ('false') swaps the suites for
-	// the guard packages, so a missing or failed classification runs them. The
+	// Only an explicit docs- or console-only classification (backend 'false')
+	// swaps the suites for the guard packages, so a missing or failed
+	// classification runs them. The
 	// executing line swallows no failure (an exact line, so no `|| true`), and
 	// no step may continue on error: a leg whose profile did not upload has not
 	// done its job, since build unions those profiles.
-	const fullSuites = "        if: matrix.suite == 'lint' || needs.changes.outputs.code != 'false'\n" +
+	const fullSuites = "        if: matrix.suite == 'lint' || needs.changes.outputs.backend != 'false'\n" +
 		"        run: make ${{ matrix.target }}\n"
 	if !strings.Contains(goJob, fullSuites) {
-		t.Errorf("ci.yml's go job no longer runs `make ${{ matrix.target }}` unless the change is explicitly docs-only:\n%s", goJob)
+		t.Errorf("ci.yml's go job no longer runs `make ${{ matrix.target }}` unless the change is explicitly docs- or console-only:\n%s", goJob)
 	}
 	if strings.Contains(goJob, "continue-on-error:") {
 		t.Errorf("a step in ci.yml's go job continues on error, so a failed suite or a missing profile can pass:\n%s", goJob)
 	}
-	// The docs-only replacement is a gate too: it runs only on an explicit
+	// The guard-package replacement is a gate too: it runs only on an explicit
 	// 'false', its `go test` line is pinned whole (so nothing can be appended
 	// to swallow a failure), and a tagless leg that finds no guard package
 	// fails instead of passing empty.
 	for _, want := range []string{
-		"\n        if: matrix.suite != 'lint' && needs.changes.outputs.code == 'false'\n",
+		"\n        if: matrix.suite != 'lint' && needs.changes.outputs.backend == 'false'\n",
 		"\n" + `          WARDYN_TEST_PG='' go test -count=1 ${TAGS:+-tags "$TAGS"} $pkgs` + "\n",
 		"\n" + `            [ -n "$TAGS" ] || { echo "::error::no doc-reading guard test found; the discovery pattern regressed"; exit 1; }` + "\n",
 	} {
 		if !strings.Contains(goJob, want) {
-			t.Errorf("ci.yml's go job no longer carries the docs-only guard step's line %q:\n%s", want, goJob)
+			t.Errorf("ci.yml's go job no longer carries the guard-package step's line %q:\n%s", want, goJob)
 		}
 	}
 	build := ciJobBlock(t, string(wf), "build")
 	for _, want := range []string{
 		"needs: [changes, go]",
 		"LEGS: ${{ needs.go.result }}",
-		"        if: needs.changes.outputs.code != 'false'\n        run: make cover-union\n",
+		"        if: needs.changes.outputs.backend != 'false'\n        run: make cover-union\n",
 	} {
 		if !strings.Contains(build, want) {
 			t.Errorf("ci.yml's build job must need every go leg and run `make cover-union` over their "+
-				"profiles unless the change is explicitly docs-only; missing %q:\n%s", want, build)
+				"profiles unless the change is explicitly docs- or console-only; missing %q:\n%s", want, build)
 		}
 	}
 
@@ -303,4 +304,73 @@ func ciJobBlock(t *testing.T, wf, job string) string {
 		return rest
 	}
 	return rest[:next[0]]
+}
+
+// TestCIClassifierPutsWhereAFileLivesBeforeItsExtension pins the order of the
+// path rules in ci.yml's `changes` job. Its docs rule once read
+// `docs/*|threatmodel/*|*.md` and came first, so ANY .md was documentation, and
+// a docs-only change skips helm, helm-install-test, both conformance jobs,
+// test-pg, the image scans and notices. Two things made that a hole:
+//
+//   - Helm renders every file under deploy/helm/wardyn/templates whatever its
+//     extension, so a NetworkPolicy written in templates/x.md would have merged
+//     with none of those jobs run;
+//   - every Dockerfile COPYs LICENSING.md and deploy/images/README.md, so
+//     deleting or renaming one broke each image build, with no image built on
+//     the pull request to say so.
+//
+// So the directory rules lead and only a .md at the repository root is
+// documentation by its extension: `deploy/*|LICENSING.md` is the first arm,
+// and `*/*` (every other directory) precedes `*.md`. The template half is also
+// held without the classifier, by scripts/check-helm-templates.sh, which this
+// guard keeps wired into both `make lint` (every change) and `make helm-lint`.
+func TestCIClassifierPutsWhereAFileLivesBeforeItsExtension(t *testing.T) {
+	root := repoRoot(t)
+	wf, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatalf("read ci.yml: %v", err)
+	}
+	changes := ciJobBlock(t, string(wf), "changes")
+
+	const firstArm = "            case \"$f\" in\n" +
+		"              deploy/*|LICENSING.md) class=backend; code=true; backend=true ;;\n"
+	if !strings.Contains(changes, firstArm) {
+		t.Errorf("the changes job's path rules no longer open with `deploy/*|LICENSING.md) class=backend`: "+
+			"a file Helm renders or a Dockerfile copies could be classed by its extension first:\n%s", changes)
+	}
+	arms := []string{
+		"\n              deploy/*|LICENSING.md) class=backend; code=true; backend=true ;;\n",
+		"\n              docs/*|threatmodel/*) class=docs ;;\n",
+		"\n              */*) class=backend; code=true; backend=true ;;\n",
+		"\n              *.md) class=docs ;;\n",
+	}
+	last := -1
+	for _, arm := range arms {
+		if n := strings.Count(changes, arm); n != 1 {
+			t.Fatalf("the changes job must carry the path rule %q exactly once, found %d:\n%s", arm, n, changes)
+		}
+		at := strings.Index(changes, arm)
+		if at < last {
+			t.Errorf("the path rule %q comes too early: the order must be deploy/ and LICENSING.md, the docs "+
+				"directories, every other directory, then root-level *.md:\n%s", arm, changes)
+		}
+		last = at
+	}
+	// Two rules name the docs class, and both are pinned above. A third could
+	// only be a way to call some other path documentation.
+	if n := strings.Count(changes, "class=docs"); n != 2 {
+		t.Errorf("the changes job classes a path as docs in %d places, want the 2 pinned above (docs/ and "+
+			"threatmodel/, and root-level *.md):\n%s", n, changes)
+	}
+
+	mk, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatalf("read Makefile: %v", err)
+	}
+	for _, target := range []string{"lint", "helm-lint"} {
+		if recipe := makeRecipeLines(t, string(mk), target); !strings.Contains(recipe, "./scripts/check-helm-templates.sh\n") {
+			t.Errorf("`make %s` no longer runs scripts/check-helm-templates.sh, so a manifest in a "+
+				"non-template file under the chart's templates/ is not refused there:\n%s", target, recipe)
+		}
+	}
 }

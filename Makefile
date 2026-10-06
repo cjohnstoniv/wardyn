@@ -572,6 +572,8 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	./scripts/check-image-pins.sh
 	@echo "Running workflow-artifact gate (scripts/check-workflow-artifacts.sh)..."
 	./scripts/check-workflow-artifacts.sh
+	@echo "Running Helm template-file gate (scripts/check-helm-templates.sh)..."
+	./scripts/check-helm-templates.sh
 	@echo "Running migration-numbering gate (scripts/check-migration-numbers.sh)..."
 	./scripts/check-migration-numbers.sh
 	@echo "Running actionlint $(ACTIONLINT_VERSION) (workflow YAML)..."
@@ -702,6 +704,7 @@ licenses: ## Every Go dependency licence must be on licenses/ALLOWED-LICENSES.tx
 # discipline scripts/check-image-pins.sh exists to enforce.
 helm-lint: ## Lint + template-render the Helm chart (default + all-on values + the refusals)
 	@echo "Linting + rendering the Helm chart..."
+	./scripts/check-helm-templates.sh
 	helm lint ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
 	echo "$$out" | grep -q "kind: Deployment" || { echo "chart rendered no Deployment"; exit 1; }; \
