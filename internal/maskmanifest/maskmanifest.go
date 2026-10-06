@@ -287,38 +287,11 @@ func (m *Manifests) Covered(ctx context.Context, runID uuid.UUID) bool {
 
 // load reads runID's manifest and values in one snapshot, opens them, registers
 // them and records the revision. False when any step fails or the row is not a
-// complete, unfenced manifest.
+// complete, unfenced manifest. The snapshot's transaction is closed before any
+// key is fetched: the key manager takes pool connections of its own.
 func (m *Manifests) load(ctx context.Context, runID uuid.UUID, owner string) bool {
-	tx, err := m.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return false
-	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	var complete, fenced bool
-	var rev int
-	if err := tx.QueryRow(ctx, `SELECT complete, fenced_at IS NOT NULL, revision FROM run_mask_manifest WHERE run_id=$1`, runID).Scan(&complete, &fenced, &rev); err != nil {
-		return false
-	}
-	if fenced {
-		m.Forget(runID)
-		return false
-	}
-	if !complete {
-		return false
-	}
-	rows, err := tx.Query(ctx, `SELECT ordinal, key_version, sealed FROM run_mask_values WHERE run_id=$1 ORDER BY ordinal`, runID)
-	if err != nil {
-		return false
-	}
-	type sealedRow struct {
-		ordinal, version int
-		sealed           []byte
-	}
-	stored, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (sealedRow, error) {
-		var s sealedRow
-		return s, r.Scan(&s.ordinal, &s.version, &s.sealed)
-	})
-	if err != nil {
+	rev, stored, ok := m.snapshot(ctx, runID)
+	if !ok {
 		return false
 	}
 	keys := map[int][]byte{}
@@ -331,6 +304,7 @@ func (m *Manifests) load(ctx context.Context, runID uuid.UUID, owner string) boo
 	for _, s := range stored {
 		k, ok := keys[s.version]
 		if !ok {
+			var err error
 			k, err = m.keys.Key(ctx, owner, subjectkey.PurposeCred, s.version)
 			if err != nil {
 				if errors.Is(err, subjectkey.ErrDataLoss) {
@@ -358,6 +332,46 @@ func (m *Manifests) load(ctx context.Context, runID uuid.UUID, owner string) boo
 	}
 	m.mu.Unlock()
 	return true
+}
+
+type sealedRow struct {
+	ordinal, version int
+	sealed           []byte
+}
+
+// snapshot reads runID's manifest row and its sealed values in one read-only
+// snapshot and returns them with the row's revision. False when a read fails or
+// the row is not a complete, unfenced manifest.
+func (m *Manifests) snapshot(ctx context.Context, runID uuid.UUID) (int, []sealedRow, bool) {
+	tx, err := m.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return 0, nil, false
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	var complete, fenced bool
+	var rev int
+	if err := tx.QueryRow(ctx, `SELECT complete, fenced_at IS NOT NULL, revision FROM run_mask_manifest WHERE run_id=$1`, runID).Scan(&complete, &fenced, &rev); err != nil {
+		return 0, nil, false
+	}
+	if fenced {
+		m.Forget(runID)
+		return 0, nil, false
+	}
+	if !complete {
+		return 0, nil, false
+	}
+	rows, err := tx.Query(ctx, `SELECT ordinal, key_version, sealed FROM run_mask_values WHERE run_id=$1 ORDER BY ordinal`, runID)
+	if err != nil {
+		return 0, nil, false
+	}
+	stored, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (sealedRow, error) {
+		var s sealedRow
+		return s, r.Scan(&s.ordinal, &s.version, &s.sealed)
+	})
+	if err != nil {
+		return 0, nil, false
+	}
+	return rev, stored, true
 }
 
 // Held reports whether this process holds runID's complete manifest, without
