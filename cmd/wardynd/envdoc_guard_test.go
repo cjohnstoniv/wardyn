@@ -37,6 +37,8 @@ var envDocAllow = map[string]bool{
 	"WARDYN_TEST_VAULT": true, "WARDYN_TEST_VAULT_TOKEN_FILE": true, "WARDYN_TEST_VAULT_K8S_JWT_FILE": true,
 	"WARDYN_TEST_AZURE_KV":   true,
 	"WARDYN_TEST_FIPS_CHILD": true, "WARDYN_TEST_TOOLS_DIR": true, "WARDYN_ENVBUILD_TEST_FLOAT": true,
+	// internal/db's nested-acquire guard, read by db.Connect only inside a test binary.
+	"WARDYN_TEST_POOL_GUARD":   true,
 	"WARDYN_ENVBUILD_TEST_INT": true, "WARDYN_FAKE_MARKER": true, "WARDYN_NEGCTL": true,
 	// internal/testfloor.Marker: the skip-floor probe sentinel scripts/test-report.sh
 	// greps from `go test -json` log output — never read via os.Getenv, so it is
