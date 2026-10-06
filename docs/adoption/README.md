@@ -21,6 +21,7 @@ survives redaction intact. Write "a corporate allowlist mirror", not the vendor.
 | [host-proxy detection is blind on the containerized control plane](host-proxy-detection-blind-on-compose.md) | Fixed in 0.4.1 |
 | [`make setup` requires a hand-set `WARDYN_UI_STAGE` behind a pnpm-less mirror](make-setup-requires-ui-stage-on-pnpm-less-mirror.md) | Fixed in 0.4.1 |
 | [corporate-network adoption: findings, local fixes, and open gaps](corp-network-onboarding-findings.md) | A1–A4, B4, B5 fixed in 0.4.2; B1–B3 and C1–C2 open |
+| [per-user AWS SSO behind a corporate proxy](aws-sso-mitm-upstream-proxy.md) | Follow-up after 0.8.6: a tunnel that died after its `200` now leaves an audit row (0.8.7) |
 
 Reference notes that came out of these reports:
 
