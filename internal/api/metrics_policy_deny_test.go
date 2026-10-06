@@ -36,6 +36,7 @@ func TestEgressDeniesTotalCountsPolicyDeniesOnly(t *testing.T) {
 		"policy",                      // a real policy deny — counts
 		"builtin:private-ip",          // a builtin GUARD deny — still a denial, counts
 		"builtin:dial-failed",         // the upstream dial lost it — must NOT count
+		"builtin:tunnel-failed",       // the tunnel died after its 200 — must NOT count
 		"egress:dropped-decisions-42", // audit-fidelity summary — must NOT count
 		"builtin:gateway-vet-failed",  // a guard refusal of the model gateway — counts
 	} {
@@ -57,7 +58,7 @@ func TestEgressDeniesTotalCountsPolicyDeniesOnly(t *testing.T) {
 				got = l
 			}
 		}
-		t.Errorf("policy-deny series = %q, want %q (dial-failed and decisions-dropped are not policy denials)", got, want)
+		t.Errorf("policy-deny series = %q, want %q (dial-failed, tunnel-failed and decisions-dropped are not policy denials)", got, want)
 	}
 
 	var denies int
@@ -66,7 +67,7 @@ func TestEgressDeniesTotalCountsPolicyDeniesOnly(t *testing.T) {
 			denies++
 		}
 	}
-	if denies != 5 {
-		t.Errorf("egress.deny audit rows = %d, want 5 — scoping the counter must not drop audit rows", denies)
+	if denies != 6 {
+		t.Errorf("egress.deny audit rows = %d, want 6 — scoping the counter must not drop audit rows", denies)
 	}
 }
