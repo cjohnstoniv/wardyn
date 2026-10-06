@@ -1135,6 +1135,40 @@ func TestWait_TolerantOfTransientProbeErrors(t *testing.T) {
 	}
 }
 
+// TestWait_UnstartedExecIsNotAnExit: the daemon answers the attach before it
+// starts the exec, so the first inspects after Exec can see an exec that is not
+// running and has no exit code and no pid. Wait must poll past that state: it
+// used to return exit 0 for a process that had not run yet, which the control
+// plane records as COMPLETED.
+func TestWait_UnstartedExecIsNotAnExit(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	ctx := context.Background()
+
+	sb, err := d.CreateSandbox(ctx, testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if _, err := d.Exec(ctx, sb.Ref, []string{"agent-run"}); err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+
+	f.mu.Lock()
+	f.execUnstarted = 2 // two inspects land before the daemon starts the exec
+	f.execExited = true
+	f.execExitCode = 42
+	f.mu.Unlock()
+
+	code, err := d.Wait(ctx, sb.Ref)
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if code != 42 {
+		t.Errorf("Wait code = %d, want 42 (0 is the unstarted exec read as an exit)", code)
+	}
+}
+
 // TestWait_NotFoundFailsFast: the retry budget must not blunt teardown. A
 // not-found exec is authoritative (the container is gone), so Wait returns at
 // once rather than polling out its transient-error budget.
