@@ -154,6 +154,9 @@ type fakeDocker struct {
 	// execUnstarted makes the next N ExecInspect probes report an exec the
 	// daemon has created but not started: not running, no exit code, no pid.
 	execUnstarted int
+	// execStartRefused reports a start the daemon refused (binary missing, not
+	// executable): finished with execExitCode and no pid.
+	execStartRefused bool
 	// execGone is an exec id ExecInspect reports as not-found (the authoritative
 	// "it is really gone", as opposed to the transient execInspectErrs blip).
 	execGone string
@@ -856,6 +859,9 @@ func (f *fakeDocker) ExecInspect(ctx context.Context, execID string, _ client.Ex
 	if f.execUnstarted > 0 {
 		f.execUnstarted--
 		return client.ExecInspectResult{ID: execID}, nil
+	}
+	if f.execStartRefused {
+		return client.ExecInspectResult{ID: execID, ExitCode: f.execExitCode}, nil
 	}
 	// A started exec has a pid, and keeps it after it exits.
 	return client.ExecInspectResult{ID: execID, Running: !f.execExited, ExitCode: f.execExitCode, PID: 4242}, nil

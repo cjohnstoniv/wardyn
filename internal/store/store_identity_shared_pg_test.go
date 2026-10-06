@@ -64,6 +64,14 @@ func TestPG_WithIdentitySharedCapsItsDials(t *testing.T) {
 			t.Fatalf("an excess call = %v, want db.ErrLockNoCapacity", err)
 		}
 	}
+	// Both holders are inside fn before either is let go: a refusal says the
+	// slots were taken, not that their holders have reached fn yet.
+	for deadline := time.Now().Add(10 * time.Second); inFn.Load() != 2; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			close(release)
+			t.Fatalf("calls inside fn = %d after 10s, want the 2 that hold a slot", inFn.Load())
+		}
+	}
 	close(release)
 	wg.Wait()
 	for range 2 {
