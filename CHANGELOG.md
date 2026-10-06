@@ -118,6 +118,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   would finalize as completed), and the setup wait no longer returns before the setup exec has run. A start
   the daemon refused still reads as an exit.
 
+### Security
+
+- **code-server in `agent-vscode` is 4.139.1 (it was 4.138.0).** 4.138.0 bundled `proxy-addr` 2.0.7
+  (CVE-2026-90711, CRITICAL; fixed in 2.0.8). Both architectures' sha256 pins moved with it.
+- **The console pins `seroval` and `seroval-plugins` to 1.6.8.** `asciinema-player`, which plays session
+  recordings, brought in `seroval` 1.5.4 through `solid-js`: GHSA-p6vx-979v-rg4c (critical) and
+  GHSA-jp82-f5mq-hwhp (high), fixed in 1.6.2 and 1.6.3 (`ui/package.json` overrides).
+
 ## [0.8.6] — 2026-10-04
 
 ### Before you upgrade
