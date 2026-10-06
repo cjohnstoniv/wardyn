@@ -1210,11 +1210,11 @@ jobs:
         include:
           - shard: api
             suite: pg-api
-            run: make test-report-pg PG_SUITE=pg-api PG_PKGS='./internal/api/... ./test/apie2e/...'
+            run: make test-report-pg PG_REPORT=pg-api PG_PKGS='./internal/api/... ./test/apie2e/...'
             superuser: "1"
           - shard: store
             suite: pg-store
-            run: make test-report-pg PG_SUITE=pg-store PG_PKGS='./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... ./internal/recording/... ./cmd/wardynd/...'
+            run: make test-report-pg PG_REPORT=pg-store PG_PKGS='./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... ./internal/recording/... ./cmd/wardynd/...'
             superuser: "1"
           # The `race` job above strips the DSN (Makefile: `WARDYN_TEST_PG= go test
           # -race ./...`), so the WARDYN_TEST_PG-gated tests are SKIPPED there — and

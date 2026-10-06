@@ -218,9 +218,9 @@ test-report: ## Go unit suite with per-suite JSON + coverage artifacts, under th
 	@echo "Running Go unit suite with detailed reports (-race)..."
 	WARDYN_TEST_PG= ./scripts/test-report.sh unit -race ./...
 
-# PG_SUITE names the report directory and PG_PKGS the packages; ci.yml's
+# PG_REPORT names the report directory and PG_PKGS the packages; ci.yml's
 # test-pg-shard matrix runs this target once per shard with a package subset.
-PG_SUITE ?= pg
+PG_REPORT ?= pg
 PG_PKGS ?= ./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... \
 	./internal/api/... ./test/apie2e/... ./internal/recording/... ./cmd/wardynd/...
 test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
@@ -231,7 +231,7 @@ test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # PUT). Serializing packages costs ~1 min; per-package throwaway databases are
 # the real fix if that minute ever matters.
 	@echo "Running Postgres-gated suite with reports (requires WARDYN_TEST_PG)..."
-	./scripts/test-report.sh $(PG_SUITE) -p 1 $(PG_PKGS)
+	WARDYN_TEST_REPORT_NAME=$(PG_REPORT) ./scripts/test-report.sh pg -p 1 $(PG_PKGS)
 
 # The whole tree under -tags docker, so the container-hardening driver
 # (internal/runner/docker), internal/envbuild and the wardynd wiring that calls
