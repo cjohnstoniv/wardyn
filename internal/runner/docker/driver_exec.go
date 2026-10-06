@@ -336,15 +336,27 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 // is unbounded (bound only by ctx). Factored out of Wait so ExecStream's
 // returned ExecSession.Wait closure can observe a DIFFERENT exec's
 // completion via the same, already-proven polling contract.
+//
+// "Not running" has two meanings and only one is an exit. The daemon answers
+// an attach before it starts the exec, so an inspect that follows the attach
+// closely can see an exec that has not started: not running, no exit code, no
+// pid. Returning then reported exit 0 for a process that had yet to run. That
+// state is polled past, for the same budget as a daemon blip; an exec that
+// still has not started by then is an error, never a silent 0.
 func (d *Driver) pollExecExit(ctx context.Context, execID string) (int, error) {
-	errs := 0
+	errs, unstarted := 0, 0
 	for {
 		insp, err := d.cli.ExecInspect(ctx, execID, client.ExecInspectOptions{})
 		switch {
 		case err == nil:
 			errs = 0
 			if !insp.Running {
-				return insp.ExitCode, nil
+				if !execNotStarted(insp) {
+					return insp.ExitCode, nil
+				}
+				if unstarted++; unstarted >= waitMaxProbeErrors {
+					return 0, fmt.Errorf("docker: exec wait: exec %s was never started (%d polls)", execID, unstarted)
+				}
 			}
 		case isNotFound(err):
 			return 0, fmt.Errorf("docker: exec wait: exec inspect: %w", err)
@@ -359,6 +371,15 @@ func (d *Driver) pollExecExit(ctx context.Context, execID string) (int, error) {
 		case <-time.After(pollInterval):
 		}
 	}
+}
+
+// execNotStarted reports whether insp is an exec the daemon has created but not
+// yet started. The client flattens the API's absent exit code to 0, so the pid
+// is what tells this from a clean exit: the daemon reports a pid from the
+// moment the process exists and keeps reporting it after the exit, and an exec
+// that failed to start carries a non-zero code (126/127).
+func execNotStarted(insp client.ExecInspectResult) bool {
+	return !insp.Running && insp.ExitCode == 0 && insp.PID == 0
 }
 
 // waitMainProcess blocks on the exec-less agent container's exit and returns its
