@@ -318,7 +318,9 @@ extraObjects:
   which is where the recipe also puts the Gateway.
 - **The Gateway's namespace.** `istio-ingress` here is the estate's own
   gateway namespace: the Gateway sits beside the gateway pods, and the
-  VirtualService names it as `<namespace>/<name>`.
+  VirtualService names it as `<namespace>/<name>`. Your Helm identity needs
+  rights to create Istio Gateways in that namespace, and the namespace must
+  already exist.
 - **The NetworkPolicy.** Setting `networkPolicy.ingress.from` replaces the
   same-namespace default, so list it again; the ssh rule passes the other
   named peers through. The same peer list also applies to the console `http`
