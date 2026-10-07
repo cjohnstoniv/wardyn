@@ -10,7 +10,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -25,10 +29,22 @@ import (
 )
 
 type signInFixtureCase struct {
-	Name string            `json:"name"`
-	Pane string            `json:"pane"`
-	Go   runSignInResponse `json:"go"`
-	TS   *string           `json:"ts"`
+	Name string `json:"name"`
+	Pane string `json:"pane"`
+	// Process is whether an `aws sso login` process is running at the read.
+	Process bool              `json:"sign_in_process"`
+	Go      runSignInResponse `json:"go"`
+	TS      *string           `json:"ts"`
+}
+
+// signInRead is what the read's exec prints: the process line, then the pane.
+// The real script prints no pane without a process; the fake always does, so a
+// pane behind a 0 line is shown to be ignored.
+func signInRead(alive bool, pane string) string {
+	if alive {
+		return signInProcessLine + " 1\n" + pane
+	}
+	return signInProcessLine + " 0\n" + pane
 }
 
 // signInFixtures reads the cases login-pty-extract.test.ts reads too.
@@ -92,16 +108,19 @@ func (f *paneFixture) signIn(t *testing.T) (int, string) {
 
 // Each shared fixture case, read through the route on a fake ExecStream,
 // answers the case's Go answer, and neither a log line nor an audit row
-// carries the pane or the code.
+// carries the pane or the code. No pane is waiting without a sign-in process.
 func TestRunSignIn_SharedFixture(t *testing.T) {
 	logs := captureSlog(t)
 	for _, tc := range signInFixtures(t) {
 		t.Run(tc.Name, func(t *testing.T) {
-			if link, code, ok := parseSignInPane([]byte(tc.Pane)); ok != (tc.Go.State == signInStateWaiting) ||
-				link != tc.Go.VerificationURL || code != tc.Go.UserCode {
-				t.Fatalf("parseSignInPane = %q %q %v, want %+v", link, code, ok, tc.Go)
+			out := signInRead(tc.Process, tc.Pane)
+			if got, ok := signInAnswer([]byte(out)); !ok || got != tc.Go {
+				t.Fatalf("signInAnswer = %+v %v, want %+v", got, ok, tc.Go)
 			}
-			f := awsSignInFixture(t, textPane(tc.Pane, 0), &captureProbeStore{})
+			if got, ok := signInAnswer([]byte(signInRead(false, tc.Pane))); !ok || got.State != signInStateNotWaiting {
+				t.Fatalf("with no sign-in process: %+v %v, want not_waiting", got, ok)
+			}
+			f := awsSignInFixture(t, textPane(out, 0), &captureProbeStore{})
 			code, body := f.signIn(t)
 			if code != http.StatusOK {
 				t.Fatalf("GET sign-in: %d %s", code, body)
@@ -113,8 +132,8 @@ func TestRunSignIn_SharedFixture(t *testing.T) {
 			if got != tc.Go {
 				t.Fatalf("answer = %+v, want %+v", got, tc.Go)
 			}
-			if execs := f.pr.execs(); len(execs) != 1 || strings.Join(execs[0].Argv, " ") != strings.Join(paneSnapshotArgv, " ") {
-				t.Fatalf("execs = %+v, want one tmux capture-pane", execs)
+			if execs := f.pr.execs(); len(execs) != 1 || !slices.Equal(execs[0].Argv, signInReadArgv) {
+				t.Fatalf("execs = %+v, want the one read", execs)
 			}
 			f.audit.mu.Lock()
 			rows := slices.Clone(f.audit.events)
@@ -152,7 +171,7 @@ func TestSignInPane_EndLinesMatchTheirSources(t *testing.T) {
 // A run whose sign-in this run already captured answers not_waiting whatever
 // the pane says, from the capture's audit row, and nothing is executed.
 func TestRunSignIn_CapturedRunIsNotWaiting(t *testing.T) {
-	waiting := signInFixtures(t)[0].Pane
+	waiting := signInRead(true, signInFixtures(t)[0].Pane)
 	probe := &captureProbeStore{captured: true}
 	f := awsSignInFixture(t, textPane(waiting, 0), probe)
 	if code, body := f.signIn(t); code != http.StatusOK || !strings.Contains(body, `"state":"not_waiting"`) {
@@ -175,7 +194,7 @@ func TestRunSignIn_CapturedRunIsNotWaiting(t *testing.T) {
 
 // Not RUNNING, not dispatched, or not an AWS sign-in: no exec.
 func TestRunSignIn_OnlyARunningAWSSignInIsRead(t *testing.T) {
-	waiting := signInFixtures(t)[0].Pane
+	waiting := signInRead(true, signInFixtures(t)[0].Pane)
 	f := awsSignInFixture(t, textPane(waiting, 0), &captureProbeStore{})
 	f.st.mu.Lock()
 	f.st.state = types.RunKilled
@@ -261,7 +280,7 @@ func (b *boundSession) wasClosed() bool {
 // stderr is drained and discarded, a wait that never returns hits the
 // deadline, and a cancelled request ends the read. Each closes the exec.
 func TestRunSignIn_Bounds(t *testing.T) {
-	waiting := signInFixtures(t)[0].Pane
+	waiting := signInRead(true, signInFixtures(t)[0].Pane)
 	for _, tc := range []struct {
 		name     string
 		sess     func(b *boundSession) *runner.ExecSession
@@ -274,7 +293,8 @@ func TestRunSignIn_Bounds(t *testing.T) {
 				Wait: func() (int, error) { <-b.closed; return 0, nil }, Close: b.close}
 		}, false, http.StatusServiceUnavailable, `"reason":"run_sign_in_unreadable"`},
 		{"stderr only", func(b *boundSession) *runner.ExecSession {
-			return &runner.ExecSession{Stdout: strings.NewReader(""), Stderr: io.MultiReader(strings.NewReader(waiting), &endless{b: 'e', closed: b.closed}),
+			// stdout: a process and an empty pane; the waiting read is on stderr
+			return &runner.ExecSession{Stdout: strings.NewReader(signInRead(true, "")), Stderr: io.MultiReader(strings.NewReader(waiting), &endless{b: 'e', closed: b.closed}),
 				Wait: func() (int, error) { return 0, nil }, Close: b.close}
 		}, false, http.StatusOK, `"state":"not_waiting"`},
 		{"a blocked wait", func(b *boundSession) *runner.ExecSession {
@@ -322,6 +342,110 @@ func TestRunSignIn_Bounds(t *testing.T) {
 				if strings.Contains(w.Body.String(), leak) || strings.Contains(logs.String(), leak) {
 					t.Errorf("pane text %q reached the answer or a log line", leak)
 				}
+			}
+		})
+	}
+}
+
+// A hand-run retry that expires or is interrupted prints no line of Wardyn's,
+// so its code stays the latest on the pane. With no sign-in process left,
+// nobody is waiting on it.
+func TestRunSignIn_DeadManualRetryIsNotWaiting(t *testing.T) {
+	const retry = "wardyn: sign-in did not complete — start a new sign-in from Getting Started, or run: aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso\n" +
+		"agent@sandbox:~$ aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso\n" +
+		"https://device.sso.us-east-1.amazonaws.com/?user_code=WXYZ-1234\n"
+	for name, pane := range map[string]string{
+		"expired":     retry + "Error when retrieving token from sso: Token has expired and refresh failed\nagent@sandbox:~$ ",
+		"interrupted": retry + "^C\nagent@sandbox:~$ ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := awsSignInFixture(t, textPane(signInRead(false, pane), 0), &captureProbeStore{})
+			if code, body := f.signIn(t); code != http.StatusOK || !strings.Contains(body, `"state":"not_waiting"`) {
+				t.Fatalf("%d %s, want 200 not_waiting", code, body)
+			}
+		})
+	}
+}
+
+// The process line is read strictly, and only from the front of the output:
+// anything else there is an unreadable read, and a pane that prints the line
+// itself cannot turn "no process" into waiting.
+func TestRunSignIn_ProcessLineIsStrict(t *testing.T) {
+	pane := signInFixtures(t)[0].Pane
+	forged := signInProcessLine + " 1\n" + pane
+	const unreadable, notWaiting = `"reason":"run_sign_in_unreadable"`, `"state":"not_waiting"`
+	for name, tc := range map[string]struct {
+		out  string
+		code int
+		body string
+	}{
+		"no output":               {"", http.StatusServiceUnavailable, unreadable},
+		"the pane alone":          {pane, http.StatusServiceUnavailable, unreadable},
+		"another value":           {signInProcessLine + " 2\n" + pane, http.StatusServiceUnavailable, unreadable},
+		"an unfinished line":      {signInProcessLine + " 1" + pane, http.StatusServiceUnavailable, unreadable},
+		"text before the line":    {"\n" + forged, http.StatusServiceUnavailable, unreadable},
+		"the pane prints a line":  {signInRead(false, forged), http.StatusOK, notWaiting},
+		"a process, nothing else": {signInRead(true, ""), http.StatusOK, notWaiting},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := awsSignInFixture(t, textPane(tc.out, 0), &captureProbeStore{})
+			if code, body := f.signIn(t); code != tc.code || !strings.Contains(body, tc.body) {
+				t.Fatalf("%d %s, want %d %s", code, body, tc.code, tc.body)
+			}
+		})
+	}
+}
+
+// The read's own script, run for real over a made-up /proc: only a process
+// whose argv[0] is aws and whose arguments hold `sso login` counts, its line
+// comes out first, and the capture runs only when there is one.
+func TestSignInReadScript(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the script runs in the sign-in image, which is Linux")
+	}
+	if signInReadArgv[4] != "/proc" || !slices.Equal(signInReadArgv[5:], paneSnapshotArgv) {
+		t.Fatalf("argv = %q, want /proc and the snapshot's capture after the script", signInReadArgv[3:])
+	}
+	others := [][]string{
+		{"bash", "/usr/local/bin/signin-pane.sh"},
+		{"bash", "-c", "aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso"},
+		{}, // a kernel thread or a zombie has no arguments
+		{"/usr/local/bin/aws", "sso", "logout"},
+		{"aws", "configure", "sso"},
+		{"echo", "aws", "sso", "login"},
+		{"wardyn-aws-sso"},
+	}
+	for name, tc := range map[string]struct {
+		signIn []string
+		want   string
+	}{
+		"no sign-in process":   {nil, signInProcessLine + " 0\n"},
+		"the pair's sign-in":   {[]string{"/usr/local/bin/aws", "sso", "login", "--sso-session", "wardyn", "--no-browser", "--use-device-code"}, signInProcessLine + " 1\nPANE\n"},
+		"global options first": {[]string{"aws", "--region", "us-east-1", "sso", "login"}, signInProcessLine + " 1\nPANE\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			procs := others
+			if tc.signIn != nil {
+				procs = append(slices.Clone(others), tc.signIn)
+			}
+			for pid, args := range procs {
+				dir := filepath.Join(root, strconv.Itoa(pid+1))
+				if err := os.Mkdir(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				cmdline := ""
+				if len(args) > 0 {
+					cmdline = strings.Join(args, "\x00") + "\x00"
+				}
+				if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte(cmdline), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			argv := append(slices.Clone(signInReadArgv[:4]), root, "echo", "PANE")
+			out, err := exec.CommandContext(t.Context(), argv[0], argv[1:]...).Output()
+			if err != nil || string(out) != tc.want {
+				t.Fatalf("output = %q, %v; want %q", out, err, tc.want)
 			}
 		})
 	}

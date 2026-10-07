@@ -172,12 +172,19 @@ browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
 - **A waiting sign-in.** `GET /api/v1/runs/{id}/sign-in` (and
   `wardyn run sign-in <run-id>`, which reads it once) answers whether a running
   AWS sign-in is waiting for its device-code approval, with the verification
-  link and code of its latest attempt. Only the run's owner may read it. It
-  reads the sign-in pane once with the snapshot's command, bounded to the same
-  3 seconds and to 64 KiB, and keeps nothing: no pane text or code is logged,
-  stored or audited. An attempt followed by its completion or failure line, or
-  a run whose capture is already audited (`harness.credential.capture` on this
-  run), answers `not_waiting`. A read that times out, overflows or fails answers
+  link and code of its latest attempt. Only the run's owner may read it. One
+  command in the sandbox, bounded to the snapshot's 3 seconds and to 64 KiB,
+  first checks that an `aws sso login` process is running there and only then
+  reads the sign-in pane with the snapshot's capture. It keeps nothing: no pane
+  text or code is logged, stored or audited. `waiting` takes both: a running
+  sign-in process and a current code on the pane. So a retry run by hand in the
+  pane's shell that expired, failed or was interrupted answers `not_waiting`,
+  although nothing on the pane says it ended. So does an attempt followed by its
+  completion or failure line, and a run whose capture is already audited
+  (`harness.credential.capture` on this run). The code is still read from the
+  pane: for the few seconds between a new retry starting and printing its own
+  code, a read can show the code of a hand-run retry that died before it, and
+  the next read corrects it. A read that times out, overflows or fails answers
   `503 run_sign_in_unreadable`. Closing the sign-in dialog on purpose still
   kills the run; only a lost tab leaves it waiting.
 - **A restart.** A run that was live across a wardynd restart, or that another

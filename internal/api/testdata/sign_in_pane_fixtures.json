@@ -1,9 +1,10 @@
 {
-  "_comment": "Shared by the Go pane parser (run_sign_in_test.go) and the console's device-URL extractor (login-pty-extract.test.ts). go is GET /runs/{id}/sign-in's answer for the pane; ts is extractDeviceVerificationUrl's result.",
+  "_comment": "Shared by the Go pane parser (run_sign_in_test.go) and the console's device-URL extractor (login-pty-extract.test.ts). sign_in_process is whether an `aws sso login` process is running in the sandbox when the pane is read; go is GET /runs/{id}/sign-in's answer for the two; ts is extractDeviceVerificationUrl's result for the pane, which is the latest link whether or not it is still waiting.",
   "cases": [
     {
       "name": "a waiting attempt",
       "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://device.sso.us-east-1.amazonaws.com/\n\nThen enter the code:\n\nABCD-EFGH\n\nAlternatively, you may visit the following URL which will autofill the code upon verification:\nhttps://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH\n",
+      "sign_in_process": true,
       "go": {
         "state": "waiting",
         "verification_url": "https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH",
@@ -14,6 +15,7 @@
     {
       "name": "a completed attempt",
       "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://device.sso.us-east-1.amazonaws.com/\n\nThen enter the code:\n\nABCD-EFGH\n\nAlternatively, you may visit the following URL which will autofill the code upon verification:\nhttps://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH\nSuccessfully logged into Start URL: https://d-1234567890.awsapps.com/start\nwardyn: aws sso credential captured\nwardyn: sign-in command finished — this pane is now a plain shell.\nagent@sandbox:~$ \n",
+      "sign_in_process": false,
       "go": {
         "state": "not_waiting"
       },
@@ -22,6 +24,7 @@
     {
       "name": "a failed or expired attempt",
       "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://device.sso.us-east-1.amazonaws.com/\n\nThen enter the code:\n\nABCD-EFGH\n\nAlternatively, you may visit the following URL which will autofill the code upon verification:\nhttps://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH\n\nError when retrieving token from sso: Token has expired and refresh failed\nwardyn: sign-in did not complete — start a new sign-in from Getting Started, or run: aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso\nagent@sandbox:~$ \n",
+      "sign_in_process": false,
       "go": {
         "state": "not_waiting"
       },
@@ -30,6 +33,7 @@
     {
       "name": "two consecutive attempts with equal-length codes: the latest is waiting",
       "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://device.sso.us-east-1.amazonaws.com/\n\nThen enter the code:\n\nABCD-EFGH\n\nAlternatively, you may visit the following URL which will autofill the code upon verification:\nhttps://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH\n\nError when retrieving token from sso: Token has expired and refresh failed\nwardyn: sign-in did not complete — start a new sign-in from Getting Started, or run: aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso\nagent@sandbox:~$ \nagent@sandbox:~$ aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://device.sso.us-east-1.amazonaws.com/\n\nThen enter the code:\n\nWXYZ-1234\n\nAlternatively, you may visit the following URL which will autofill the code upon verification:\nhttps://device.sso.us-east-1.amazonaws.com/?user_code=WXYZ-1234\n",
+      "sign_in_process": true,
       "go": {
         "state": "waiting",
         "verification_url": "https://device.sso.us-east-1.amazonaws.com/?user_code=WXYZ-1234",
@@ -40,6 +44,7 @@
     {
       "name": "a truncated repaint of the latest attempt loses to the whole one",
       "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://device.sso.us-east-1.amazonaws.com/\n\nThen enter the code:\n\nWXYZ-1234\n\nAlternatively, you may visit the following URL which will autofill the code upon verification:\nhttps://device.sso.us-east-1.amazonaws.com/?user_code=WXYZ-1234\nhttps://device.sso.us-east-1.amazonaws.com/?user_code=WXYZ\u001b[0m-1234\n",
+      "sign_in_process": true,
       "go": {
         "state": "waiting",
         "verification_url": "https://device.sso.us-east-1.amazonaws.com/?user_code=WXYZ-1234",
@@ -50,10 +55,49 @@
     {
       "name": "no attempt yet",
       "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\n",
+      "sign_in_process": false,
       "go": {
         "state": "not_waiting"
       },
       "ts": null
+    },
+    {
+      "name": "an expired manual retry: no sign-in process is left",
+      "pane": "wardyn: sign-in did not complete — start a new sign-in from Getting Started, or run: aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso\nagent@sandbox:~$ aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso\nhttps://device.sso.us-east-1.amazonaws.com/?user_code=WXYZ-1234\nError when retrieving token from sso: Token has expired and refresh failed\nagent@sandbox:~$ ",
+      "sign_in_process": false,
+      "go": {
+        "state": "not_waiting"
+      },
+      "ts": "https://device.sso.us-east-1.amazonaws.com/?user_code=WXYZ-1234"
+    },
+    {
+      "name": "an interrupted manual retry: no sign-in process is left",
+      "pane": "wardyn: sign-in did not complete — start a new sign-in from Getting Started, or run: aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso\nagent@sandbox:~$ aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso\nhttps://device.sso.us-east-1.amazonaws.com/?user_code=WXYZ-1234\n^C\nagent@sandbox:~$ ",
+      "sign_in_process": false,
+      "go": {
+        "state": "not_waiting"
+      },
+      "ts": "https://device.sso.us-east-1.amazonaws.com/?user_code=WXYZ-1234"
+    },
+    {
+      "name": "a retry after an expired manual retry is waiting with its own code",
+      "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://device.sso.us-east-1.amazonaws.com/\n\nThen enter the code:\n\nABCD-EFGH\n\nAlternatively, you may visit the following URL which will autofill the code upon verification:\nhttps://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH\n\nError when retrieving token from sso: Token has expired and refresh failed\nwardyn: sign-in did not complete — start a new sign-in from Getting Started, or run: aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso\nagent@sandbox:~$ aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso\nhttps://device.sso.us-east-1.amazonaws.com/?user_code=WXYZ-1234\nError when retrieving token from sso: Token has expired and refresh failed\nagent@sandbox:~$ aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso\nhttps://device.sso.us-east-1.amazonaws.com/?user_code=QRST-5678\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "waiting",
+        "verification_url": "https://device.sso.us-east-1.amazonaws.com/?user_code=QRST-5678",
+        "user_code": "QRST-5678"
+      },
+      "ts": "https://device.sso.us-east-1.amazonaws.com/?user_code=QRST-5678"
+    },
+    {
+      "name": "a finished attempt whose process has not exited yet",
+      "pane": "wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\nhttps://device.sso.us-east-1.amazonaws.com/\n\nThen enter the code:\n\nABCD-EFGH\n\nAlternatively, you may visit the following URL which will autofill the code upon verification:\nhttps://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH\nSuccessfully logged into Start URL: https://d-1234567890.awsapps.com/start\n",
+      "sign_in_process": true,
+      "go": {
+        "state": "not_waiting"
+      },
+      "ts": "https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH"
     }
   ]
 }

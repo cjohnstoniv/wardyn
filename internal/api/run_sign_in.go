@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -24,6 +25,13 @@ import (
 // started it was lost. Nothing server-side stores the device code (the console
 // scrapes it off the attach stream), so this reads the sign-in pane once,
 // bounded, and answers only what a strict parse of the latest attempt finds.
+//
+// A code on the pane does not prove anyone can still approve it. The first
+// attempt runs under signin-pane.sh, which prints a line on every exit; the
+// pane then becomes a plain shell and names the command to retry by hand, and a
+// retry that expires, fails or is interrupted there prints no line of Wardyn's.
+// So the same exec first proves that an `aws sso login` process is running in
+// the sandbox, and "waiting" takes both that process and a current code.
 //
 // The pane is sandbox-controlled text: none of it reaches an error, a log line
 // or an audit row, and nothing is stored. Only the run's owner may read the
@@ -80,7 +88,7 @@ func (s *Server) handleRunSignIn(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, notWaiting)
 		return
 	}
-	pane, reason := s.readSignInPane(r.Context(), run)
+	out, reason := s.readSignInPane(r.Context(), run)
 	switch reason {
 	case "":
 	case "sandbox_gone":
@@ -90,11 +98,56 @@ func (s *Server) handleRunSignIn(w http.ResponseWriter, r *http.Request) {
 		s.refuseSignInUnreadable(w, r, run.ID, reason)
 		return
 	}
-	if link, code, ok := parseSignInPane(pane); ok {
-		writeJSON(w, http.StatusOK, runSignInResponse{State: signInStateWaiting, VerificationURL: link, UserCode: code})
+	answer, ok := signInAnswer(out)
+	if !ok {
+		s.refuseSignInUnreadable(w, r, run.ID, "process_line_unreadable")
 		return
 	}
-	writeJSON(w, http.StatusOK, notWaiting)
+	writeJSON(w, http.StatusOK, answer)
+}
+
+// signInProcessLine opens a read's output: this word, a space, then 1 when an
+// `aws sso login` process is running in the sandbox and 0 when none is.
+const signInProcessLine = "wardyn-sign-in-process"
+
+// signInReadScript is the one exec of a read, run as
+// `bash -c <script> <name> <proc root> <the pane capture's argv...>`.
+//
+// It looks for a process whose argv[0] is `aws` and whose arguments hold
+// `sso login`, from /proc with bash builtins alone: the sign-in image carries
+// no `ps` or `pgrep`. The `bash -c "aws sso login … && wardyn-aws-sso"` that
+// signin-pane.sh starts is not one (its argv[0] is bash), and neither is this
+// script. The answer goes out first, on a line of its own, before the capture
+// is started, so nothing the pane holds can come before it or stand in for it.
+// With no such process the pane is not read at all.
+const signInReadScript = `root=$1; shift
+alive=0
+for f in "$root"/[0-9]*/cmdline; do
+  mapfile -d '' -t argv <"$f" || continue
+  if [[ ${argv[0]##*/} == aws && " ${argv[*]:1} " == *" sso login "* ]]; then alive=1; break; fi
+done 2>/dev/null
+printf '` + signInProcessLine + ` %s\n' "$alive"
+[[ $alive == 1 ]] || exit 0
+exec "$@"`
+
+// signInReadArgv is the read's exec: the process check, then the snapshot's
+// own pane capture.
+var signInReadArgv = append([]string{"bash", "-c", signInReadScript, "wardyn-sign-in-read", "/proc"}, paneSnapshotArgv...)
+
+// signInAnswer turns one read's output into the answer. The first line must be
+// the process line, exactly; ok is false when it is not, and the caller refuses
+// the read rather than guess. Waiting takes a running sign-in process and a
+// current code on the pane; with no process the rest is not looked at.
+func signInAnswer(out []byte) (answer runSignInResponse, ok bool) {
+	answer = runSignInResponse{State: signInStateNotWaiting}
+	pane, alive := bytes.CutPrefix(out, []byte(signInProcessLine+" 1\n"))
+	if !alive {
+		return answer, bytes.HasPrefix(out, []byte(signInProcessLine+" 0\n"))
+	}
+	if link, code, waiting := parseSignInPane(pane); waiting {
+		answer = runSignInResponse{State: signInStateWaiting, VerificationURL: link, UserCode: code}
+	}
+	return answer, true
 }
 
 // refuseSignInUnreadable logs why (a fixed word, never pane text) and answers 503.
@@ -115,17 +168,18 @@ func (s *Server) signInCaptured(ctx context.Context, runID uuid.UUID) (bool, err
 	return m.HasRunAuditEvent(ctx, runID, store.AuditFilter{Action: signInCaptureAction, Outcome: "success"})
 }
 
-// readSignInPane captures the pane once, on capturePane's exec, drain and
-// close pattern and its time bound, and never its writer: a sign-in run is
-// unrecordable, so the bytes are parsed in memory and dropped. reason is a
-// fixed word, never pane content.
-func (s *Server) readSignInPane(ctx context.Context, run types.AgentRun) (pane []byte, reason string) {
+// readSignInPane runs the read once, on capturePane's exec, drain and close
+// pattern and its time bound, and never its writer: a sign-in run is
+// unrecordable, so the bytes are parsed in memory and dropped. out is the
+// process line and then the pane (signInReadScript). reason is a fixed word,
+// never pane content.
+func (s *Server) readSignInPane(ctx context.Context, run types.AgentRun) (out []byte, reason string) {
 	if s.cfg.Runner == nil {
 		return nil, "no_runner"
 	}
 	readCtx, cancel := context.WithTimeout(ctx, s.paneSnapshotBound())
 	defer cancel()
-	sess, err := s.cfg.Runner.ExecStream(readCtx, run.SandboxRef, runner.ExecSpec{Argv: paneSnapshotArgv})
+	sess, err := s.cfg.Runner.ExecStream(readCtx, run.SandboxRef, runner.ExecSpec{Argv: signInReadArgv})
 	if sess != nil && sess.Close != nil {
 		defer func() { _ = sess.Close() }() // tears down only this exec, never the sandbox
 	}
@@ -184,7 +238,10 @@ var (
 )
 
 // signInEndLines end an attempt: a line after the attempt's code that names its
-// completion or failure means nobody is waiting on that code. The AWS CLI's own
+// completion or failure means nobody is waiting on that code, even while a
+// sign-in process is running (one that printed its last line and has not
+// exited, or a later attempt's). A hand-run retry prints none of them when it
+// fails: the process check is what ends that one. The AWS CLI's own
 // success line, wardyn-aws-sso's success and failure markers, and
 // signin-pane.sh's DONE and FAILED lines (login-hint.sh); each prefix is pinned
 // against its source by TestSignInPane_EndLinesMatchTheirSources.
