@@ -545,6 +545,8 @@ awsSSOProxyInject: ""
 # memory requests to that fraction of its limits, in (0, 1]; "" keeps requests equal to limits
 # (Guaranteed). Below 1 the pod is Burstable: more runs fit a node, but a pod over its memory
 # request is evicted or OOM-killed first under node pressure. The proxy pod stays Guaranteed.
+# This block sizes a run; where a sandbox pod is placed (nodeSelector, tolerations, affinity,
+# priorityClassName, podAnnotations, podLabels) is k8s.sandbox.*, not runner.sandbox.*.
 runner:
   sandbox:
     requestRatio: ""

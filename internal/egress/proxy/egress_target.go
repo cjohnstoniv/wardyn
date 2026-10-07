@@ -342,8 +342,9 @@ const (
 // per-request resolve+pin — it is CONTROL-PLANE-authored (the operator typed
 // it at boot), so no InternalHosts declaration is needed for it.
 // The upstream bypass applies here too, for the same reason it applies to an
-// ordinary host: an internal model gateway a corp proxy cannot CONNECT to is
-// exactly the destination the operator declared on the bypass list.
+// ordinary host: an internal model gateway that the corp proxy has no route to,
+// and this proxy can itself resolve and reach, is the destination the operator
+// declares on the bypass list.
 func (p *Proxy) gatewayTarget(host string, port int) (string, error) {
 	if p.upstream != nil && !p.bypassUpstream(host) {
 		return net.JoinHostPort(host, strconv.Itoa(port)), nil
