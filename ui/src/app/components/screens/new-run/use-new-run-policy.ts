@@ -13,7 +13,7 @@
 // active floor) — that is why this is a hook rather than a pure function like
 // policy-lane.ts's. React state (specText, parsedFloor, policyMode, …) stays
 // owned by NewRunScreen: the hook derives from it and writes back only through
-// its two effects (setParsedFloor, patch, pristineCc).
+// its two effects (setParsedFloor, patch, setPristineCc).
 import * as React from "react";
 import {
   CC_ORDER as ORDERED_CLASSES,
@@ -48,7 +48,7 @@ export interface UseNewRunPolicyParams {
    *  to pristineSpec) — the up-clamp effect below moves it with its own write,
    *  as the /setup/status effect does when it re-seeds the class, so a
    *  machine-made clamp never reads as an operator edit. */
-  pristineCc: React.MutableRefObject<ConfinementClass | undefined>;
+  setPristineCc: (cc: ConfinementClass) => void;
 }
 
 export function useNewRunPolicy({
@@ -66,7 +66,7 @@ export function useNewRunPolicy({
   operator,
   workspaces,
   modelProviders,
-  pristineCc,
+  setPristineCc,
 }: UseNewRunPolicyParams) {
   const cc = state.confinementClass;
   const parsed = React.useMemo(() => parseSpec(specText), [specText]);
@@ -153,10 +153,10 @@ export function useNewRunPolicy({
   React.useEffect(() => {
     if (!effectiveFloor || !ORDERED_CLASSES.includes(effectiveFloor)) return;
     if (rank(effectiveFloor) > rank(cc)) {
-      pristineCc.current = effectiveFloor;
+      setPristineCc(effectiveFloor);
       patch({ confinementClass: effectiveFloor });
     }
-  }, [effectiveFloor, cc, patch, pristineCc]);
+  }, [effectiveFloor, cc, patch, setPristineCc]);
 
   // The post-parse union, computed ONCE: the same value renders the "Added for
   // this run's selections" line and goes on the wire, so the screen cannot show

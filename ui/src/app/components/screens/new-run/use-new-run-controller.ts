@@ -90,9 +90,11 @@ export function useNewRunController() {
   // What `dirty` below compares against. The barrier is the one field the
   // machine writes on its own (probe/floor up-clamp), so its baseline moves
   // with those writes — a constant baseline would call an untouched form
-  // dirty and break Esc entirely.
+  // dirty and break Esc entirely. The class baseline is state, set beside the
+  // class itself: a ref written ahead of that render made the form read dirty
+  // for every render in between.
   const pristineSpec = React.useRef(specText);
-  const pristineCc = React.useRef(state.confinementClass);
+  const [pristineCc, setPristineCc] = React.useState(state.confinementClass);
   // Whether the Barrier control carries an EXPLICIT pick (a clone's
   // carried-over class counts, B4b). Untouched, the server's own default
   // decides and its audit trail reads `defaulted`, not `requested`.
@@ -180,7 +182,7 @@ export function useNewRunController() {
     const cloned = clonedCc.current;
     const cloneStillAvailable = !!cloned && classes.includes(cloned);
     const resolved = cloneStillAvailable ? cloned : strongestAvailable(classes) ?? "CC1";
-    pristineCc.current = resolved;
+    setPristineCc(resolved);
     setState((old) => ({ ...old, confinementClass: resolved }));
     if (!cloneStillAvailable) setCcTouched(false);
     clonedCc.current = undefined;
@@ -197,7 +199,7 @@ export function useNewRunController() {
     const text = defaultSpecText();
     setSpecText(text);
     pristineSpec.current = text;
-    pristineCc.current = "CC1";
+    setPristineCc("CC1");
     setParsedFloor("CC1");
     setState(initialWizardState("CC1"));
     setCcTouched(false);
@@ -247,7 +249,7 @@ export function useNewRunController() {
     operator: operator && operatorResolved,
     workspaces,
     modelProviders,
-    pristineCc,
+    setPristineCc,
   });
 
   // The up-clamp only ever RAISES the pick. While /me is unresolved the
@@ -257,7 +259,7 @@ export function useNewRunController() {
   React.useEffect(() => {
     if (ccTouched || !policy.qualifying?.length || policy.qualifying.includes(cc)) return;
     const next = policy.qualifying[policy.qualifying.length - 1];
-    pristineCc.current = next;
+    setPristineCc(next);
     patch({ confinementClass: next });
   }, [ccTouched, policy.qualifying, cc, patch]);
 
@@ -409,7 +411,7 @@ export function useNewRunController() {
   const dirty = submittedDraft !== draftSnapshot && (
     policyMode !== "custom" ||
     specText !== pristineSpec.current ||
-    JSON.stringify(state) !== JSON.stringify(initialWizardState(pristineCc.current, undefined, modelProviders)));
+    JSON.stringify(state) !== JSON.stringify(initialWizardState(pristineCc, undefined, modelProviders)));
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // defaultPrevented is load-bearing: Radix's DismissableLayer preventDefaults
