@@ -46,6 +46,20 @@ USER root
 # the build closed, never silently).
 ARG CODE_SERVER_VERSION=4.139.1
 ARG TARGETARCH
+# shell-quote inside code-server, replaced with the fixed release. code-server
+# 4.139.1 and the newest release (4.140.0) both bundle shell-quote 1.10.0 in
+# lib/vscode/node_modules (CVE-2026-102422, CRITICAL; fixed in 1.11.0), so a
+# code-server bump cannot clear it. The module is plain JavaScript with no
+# dependencies and no install script, so the registry tarball unpacked in
+# place of the bundled copy is the whole install: no npm at build time. Its
+# sha256 is computed from the registry tarball at build-pin time, like the
+# sums above (that tarball's sha512 matched the integrity the registry
+# publishes). It happens in the same RUN as the code-server install, so no
+# image layer carries 1.10.0. The lines refuse any bundled version other than
+# 1.10.0: when a code-server bump brings the fixed module, the build fails
+# here, and these two ARGs and the shell-quote lines below are deleted.
+ARG SHELL_QUOTE_VERSION=1.11.0
+ARG SHELL_QUOTE_SHA256=028be526afacb2bf5c6c008a95d5435b5d205135f68bb48afd0bb947610393f1
 RUN set -eu; \
 	case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
 		amd64) plat=amd64; sum=53029be6c5781b7bca49b815fcc9a2a3fc111813ad8c9965b2c0f0d2985a0674;; \
@@ -58,7 +72,18 @@ RUN set -eu; \
 	mkdir -p /usr/local/lib/code-server; \
 	tar -xzf /tmp/code-server.tar.gz -C /usr/local/lib/code-server --strip-components=1; \
 	rm -f /tmp/code-server.tar.gz; \
-	echo "installed code-server ${CODE_SERVER_VERSION} (${plat}), checksum-verified"
+	echo "installed code-server ${CODE_SERVER_VERSION} (${plat}), checksum-verified"; \
+	sq=/usr/local/lib/code-server/lib/vscode/node_modules/shell-quote; \
+	grep -q '"version": "1.10.0"' "$sq/package.json" || { \
+		echo "code-server ${CODE_SERVER_VERSION} does not bundle shell-quote 1.10.0 at $sq: delete the shell-quote replacement" >&2; exit 1; }; \
+	curl -fsSL "https://registry.npmjs.org/shell-quote/-/shell-quote-${SHELL_QUOTE_VERSION}.tgz" -o /tmp/shell-quote.tgz; \
+	echo "${SHELL_QUOTE_SHA256}  /tmp/shell-quote.tgz" | sha256sum -c -; \
+	rm -rf "$sq"; \
+	mkdir -m 0755 "$sq"; \
+	tar -xzf /tmp/shell-quote.tgz -C "$sq" --strip-components=1 --no-same-owner; \
+	rm -f /tmp/shell-quote.tgz; \
+	grep -q "\"version\": \"${SHELL_QUOTE_VERSION}\"" "$sq/package.json"; \
+	echo "replaced shell-quote 1.10.0 with ${SHELL_QUOTE_VERSION} in code-server, checksum-verified"
 
 # The launcher convention (deploy/images/README.md, docs/POLICIES.md
 # `ui_apps[].name`): an app declared `"name": "vscode"` is started by exec'ing
