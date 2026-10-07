@@ -56,8 +56,10 @@ ARG TARGETARCH
 # sums above (that tarball's sha512 matched the integrity the registry
 # publishes). It happens in the same RUN as the code-server install, so no
 # image layer carries 1.10.0. The lines refuse any bundled version other than
-# 1.10.0: when a code-server bump brings the fixed module, the build fails
-# here, and these two ARGs and the shell-quote lines below are deleted.
+# 1.10.0: a changed bundle requires re-inspecting both the module and the
+# embedded-code tracking below before removing the replacement.
+# The bundled @devcontainers/cli also inlines its own copy; #1904 and the
+# parent README track it separately. Replacing this module does not fix it.
 ARG SHELL_QUOTE_VERSION=1.11.0
 ARG SHELL_QUOTE_SHA256=028be526afacb2bf5c6c008a95d5435b5d205135f68bb48afd0bb947610393f1
 RUN set -eu; \
@@ -75,7 +77,7 @@ RUN set -eu; \
 	echo "installed code-server ${CODE_SERVER_VERSION} (${plat}), checksum-verified"; \
 	sq=/usr/local/lib/code-server/lib/vscode/node_modules/shell-quote; \
 	grep -q '"version": "1.10.0"' "$sq/package.json" || { \
-		echo "code-server ${CODE_SERVER_VERSION} does not bundle shell-quote 1.10.0 at $sq: delete the shell-quote replacement" >&2; exit 1; }; \
+		echo "code-server ${CODE_SERVER_VERSION} does not bundle shell-quote 1.10.0 at $sq: review the shell-quote replacement and #1904" >&2; exit 1; }; \
 	curl -fsSL "https://registry.npmjs.org/shell-quote/-/shell-quote-${SHELL_QUOTE_VERSION}.tgz" -o /tmp/shell-quote.tgz; \
 	echo "${SHELL_QUOTE_SHA256}  /tmp/shell-quote.tgz" | sha256sum -c -; \
 	rm -rf "$sq"; \

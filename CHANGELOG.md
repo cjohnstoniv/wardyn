@@ -8,6 +8,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Image download verification (#1905).** The image-pin gate checks every Dockerfile curl download for a same-file checksum before use and refuses ignored failures or unsupported shell forms. Claude native downloads now pin their manifest; alternate versions require an explicit manifest checksum and native channel downloads fail clearly. AWS installer and signature downloads gain per-architecture checksums while retaining GPG verification. Staged installs and npm remain supported. The embedded code-server shell-quote issue remains tracked in #1904.
+
 ## [0.8.8] — 2026-10-07
 
 ### Before you upgrade

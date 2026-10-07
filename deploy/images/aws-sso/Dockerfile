@@ -206,6 +206,8 @@ RUN printf '%s\n' \
 # then build with: make agent-images AWS_CLI_INSTALL=staged
 ARG AWS_CLI_INSTALL=download
 ARG AWS_CLI_VERSION=2.37.1
+ARG AWS_CLI_SHA256=
+ARG AWS_CLI_SIG_SHA256=
 ARG TARGETARCH
 # Host-staged installer zip (opt-in, gitignored). The README.md decoy makes
 # the COPY succeed when the awscliv2-bin* glob matches nothing (the download
@@ -213,8 +215,8 @@ ARG TARGETARCH
 COPY deploy/images/README.md deploy/images/aws-sso/awscliv2-bin* /awscli-stage/
 RUN set -eu; \
     case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
-        amd64) plat=x86_64;; \
-        arm64) plat=aarch64;; \
+        amd64) plat=x86_64; zip_sum=61a79950dfb436985611a258d3a8f85a47e13498fcc72c7d8d0597f5c9fde133; sig_sum=6b37863f95a59bfd9ad73e91e618ed73ca48e4f1b7b8046337e23d3561fc786f;; \
+        arm64) plat=aarch64; zip_sum=30642dc4840012614229feb68314637d024500f565d92f513a422bdd55844a90; sig_sum=82e029c0b74763507a0f95dbddb2a57b28251902e571fe7622f15a8dbf6ce4ab;; \
         *) echo "unsupported arch '${TARGETARCH:-unknown}' for AWS CLI" >&2; exit 1;; \
     esac; \
     if [ "$AWS_CLI_INSTALL" = "staged" ]; then \
@@ -222,13 +224,20 @@ RUN set -eu; \
         cp /awscli-stage/awscliv2-bin /tmp/awscliv2.zip; \
         echo "using host-staged AWS CLI installer zip (unverified — trust the staging host)"; \
     else \
+        if [ "$AWS_CLI_VERSION" != "2.37.1" ]; then \
+            [ -n "$AWS_CLI_SHA256" ] && [ -n "$AWS_CLI_SIG_SHA256" ] || { echo "AWS_CLI_VERSION=$AWS_CLI_VERSION requires AWS_CLI_SHA256 and AWS_CLI_SIG_SHA256 for $plat" >&2; exit 1; }; \
+        fi; \
+        zip_sum="${AWS_CLI_SHA256:-$zip_sum}"; \
+        sig_sum="${AWS_CLI_SIG_SHA256:-$sig_sum}"; \
         base="https://awscli.amazonaws.com"; \
         url="${base}/awscli-exe-linux-${plat}-${AWS_CLI_VERSION}.zip"; \
         curl -fsSL "$url" -o /tmp/awscliv2.zip; \
         curl -fsSL "${url}.sig" -o /tmp/awscliv2.sig; \
+        echo "$zip_sum  /tmp/awscliv2.zip" | sha256sum -c -; \
+        echo "$sig_sum  /tmp/awscliv2.sig" | sha256sum -c -; \
         gpg --batch --no-tty --import /aws-cli-pubkey.asc; \
         gpg --batch --no-tty --verify /tmp/awscliv2.sig /tmp/awscliv2.zip; \
-        echo "downloaded + GPG-verified AWS CLI ${AWS_CLI_VERSION} (${plat})"; \
+        echo "downloaded + checksum/GPG-verified AWS CLI ${AWS_CLI_VERSION} (${plat})"; \
     fi; \
     mkdir -p /tmp/awscli-install; \
     unzip -q /tmp/awscliv2.zip -d /tmp/awscli-install; \
