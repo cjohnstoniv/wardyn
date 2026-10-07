@@ -6,7 +6,7 @@ The three written packets are reviewable. **Their Claude Design prototypes are n
 |---|---|---|
 | [M-F](M-F.md) | #1901 saved/default extra-workspace refusal; #1906 terminal link token; #1908 sign-in reconciliation | Written; prototype blocked; unapproved |
 | [M-R](M-R.md) | Four New Run panels, full rail, shared PolicyDocument, YAML-default editing, existing Access controls | Written; prototype blocked; unapproved |
-| [M-O](M-O.md) | #1831 honest recording-recovered output | Written; prototype blocked; unapproved |
+| [M-O](M-O.md) | #1831 honest recording-recovered output, explicit HTTP-200 gaps and genuine refusal precedence | Written; prototype blocked; unapproved |
 
 Each packet has the established five parts: what it unblocks, surfaces, exact strings and homes, states with keyboard/screen-reader behavior, and decisions. Approve them independently only after the real prototype URL/revision and design-system verification are recorded. Implementation-plan authorization is already established; a new broad implementation request is unnecessary. Nonvisual work proceeds under the execution contract.
 
@@ -21,3 +21,5 @@ The source baseline is `7b08fd722ca4dcfd9d2d59e6f1cb8ecab54d8dcf`. The packet mi
 The remote handoff must use Claude Design with the console design system through DesignSync as required by `docs/design/SYNC.md`. It must verify the account's accessible project, sync/grade current components, create driveable state/focus prototypes, and then record the owner's decision. A Markdown packet or a local cached anchor is not remote verification. Another design provider does not clear this gate.
 
 Validation and commit/push evidence are recorded in the lane-M worker report in the 089 handoff. Source-string/inventory checks apply to these written artifacts. Browser, visual, assistive-technology and prototype walkthroughs have not run because no prototype exists; they remain part of the visual gate, not skipped passing checks.
+
+M-O's correction for independent finding M-1 specifies the empty `stdout` capture-gap frame, partial recording frame, exact Copy/focus behavior and a proposed cause-neutral `captureGap` sentence. Its fixture table is checked by the local packet validator. This is a correction to the review proposal, not a product-source fix or acceptance by the independent reviewer; the corrected SHA requires rereview.
