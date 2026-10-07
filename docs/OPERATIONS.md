@@ -1082,7 +1082,7 @@ erases one person's retained records by explicit scope, in one audited act
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
 | `run_tasks` | the task text of the runs the person created |
 | `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
-| `recordings` | their session recordings. Opt-in: nothing deletes a recording unless this scope is asked for |
+| `recordings` | their session recordings, with a durable per-run fence against later writes. Opt-in: nothing deletes a recording unless this scope is asked for |
 | `mask_copies` | the masking manifests of those runs, after their live attaches, SSH shells and relays are fenced |
 
 The scopes run in the order above whatever order the body lists them: the person's live
@@ -1091,6 +1091,25 @@ idempotent. A scope that fails stops the run: the answer is `500` `erasure_incom
 `remaining`, the `person.erasure` row records a `failure` naming each scope's outcome, and a retry with the
 same scopes finishes the rest. Erasure is reported complete (`200`, `outcome` success) only when every scope
 asked for finished.
+
+The `recordings` scope fences each run present in the person's run list, including its bare cast,
+attach sessions and upload parts. An upload still streaming when erasure completes cannot recreate
+one: its final save answers `410` `recording_erased`, audited as a failed `recording.upload`.
+Authentication, masking availability, part limits and upload size limits keep their existing refusal
+priority. Reads after erasure return no recording; a reader already opened before erasure may retain
+bytes, and bytes already handed out cannot be revoked. Streaming uploads may finish into temporary
+files or buffers, which are discarded instead of committed. A new run ID records normally.
+
+The Postgres fence (migration `0133_recording_erasures`) survives retention and replica/process restarts. The filesystem
+store syncs its `.erased/<key>.cast` marker before deleting casts and the shared-volume `.log` fallback;
+`<run>.lock` files retain their identities so waiting writers use the same lock. Keep these
+metadata files with the recording root: retention never deletes them. `wardyn-rec`'s `-out-dir`
+delivery uses the same fence for both original filenames. Filesystem storage requires local Unix
+advisory-lock and directory-sync support; a lock or sync error refuses the operation. Empty lock
+files are read-only across UIDs, and new marker directories retain the root's write permissions
+and inherited group semantics. Existing root and file permissions are not widened. This does not
+remove the fallback's masking or shared-volume trust limitations. Restoring a backup from before erasure restores that backup's
+recordings and fence state; erasure does not remove independent exports or sandbox-local capture files.
 
 Refusals, all before anything is erased: the operator namespace (`erasure_operator_namespace`), an unknown or
 empty `scopes` (`erasure_scope_unknown`), a principal that does not resolve (`owner_unresolved`,

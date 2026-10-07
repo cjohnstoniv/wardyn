@@ -23,10 +23,16 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
+	"golang.org/x/sys/unix"
 )
 
 // ErrNotFound is returned by OpenCast when no recording exists for the run.
 var ErrNotFound = errors.New("recording: not found")
+
+// ErrErased refuses access to a run whose recordings were durably erased.
+var ErrErased = errors.New("recording: erased")
 
 // Store is the recording persistence contract.
 //
@@ -44,6 +50,10 @@ var ErrNotFound = errors.New("recording: not found")
 // StatAndTail reports a key's size and its last tailBytes without returning
 // the whole payload; tailBytes clamps to size when the cast is smaller.
 // ErrNotFound on the same terms as OpenCast.
+//
+// Save, open and stat return ErrErased after a run is erased. A key belongs to
+// the run before its first "~", including keys passed directly to SaveCast.
+// Already-open readers may retain bytes; erasure does not revoke them.
 type Store interface {
 	SaveCast(ctx context.Context, runID string, r io.Reader) error
 	SaveCastNamed(ctx context.Context, runID, suffix string, r io.Reader) error
@@ -104,33 +114,51 @@ func (s *FSStore) SaveCastNamed(ctx context.Context, runID, suffix string, r io.
 
 // SaveCast writes the asciicast stream to <root>/<runID>.cast atomically (write
 // to a temp file then rename). Fails closed on any path-traversal attempt.
-func (s *FSStore) SaveCast(_ context.Context, runID string, r io.Reader) error {
-	dst, err := safeRunPath(s.root, runID)
+func (s *FSStore) SaveCast(ctx context.Context, key string, r io.Reader) error {
+	return s.saveFile(ctx, key, ".cast", r, 0o600)
+}
+
+// SaveRecordingFile preserves wardyn-rec's shared-volume .cast/.log filename
+// while applying the same run fence as SaveCast.
+func (s *FSStore) SaveRecordingFile(ctx context.Context, name string, r io.Reader) error {
+	ext := filepath.Ext(name)
+	if ext != ".cast" && ext != ".log" {
+		return errors.New("recording: expected a .cast or .log filename")
+	}
+	return s.saveFile(ctx, strings.TrimSuffix(name, ext), ext, r, 0o666)
+}
+
+func (s *FSStore) saveFile(ctx context.Context, key, ext string, r io.Reader, mode os.FileMode) error {
+	if _, err := safeRunPath(s.root, key); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(s.root)
 	if err != nil {
 		return err
 	}
-
-	tmp, err := os.CreateTemp(s.root, ".tmp-cast-*")
+	defer root.Close()
+	tmpName := ".tmp-cast-" + uuid.NewString()
+	tmp, err := root.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
 		return err
 	}
-	tmpName := tmp.Name()
-
-	if _, err := io.Copy(tmp, r); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
+	defer root.Remove(tmpName)
+	_, copyErr := io.Copy(tmp, contextReader{ctx, r})
+	if err := errors.Join(copyErr, tmp.Close()); err != nil {
 		return err
 	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
+	lock, err := lockFSRun(ctx, root, key)
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmpName, dst); err != nil {
-		// Without this unlink the store leaks its own .tmp-cast-* file.
-		_ = os.Remove(tmpName)
+	defer lock.Close()
+	if err := checkFSErased(root, key); err != nil {
 		return err
 	}
-	return nil
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return root.Rename(tmpName, key+ext)
 }
 
 // Sweep unlinks every cast (and orphaned atomic-write temp file) directly
@@ -152,7 +180,7 @@ func (s *FSStore) Sweep(olderThan time.Duration) (int, error) {
 	var errs []error
 	for _, e := range ents {
 		name := e.Name()
-		if e.IsDir() || (!strings.HasSuffix(name, ".cast") && !strings.HasPrefix(name, ".tmp-cast-")) {
+		if e.IsDir() || strings.HasSuffix(name, ".lock") || (!strings.HasSuffix(name, ".cast") && !strings.HasPrefix(name, ".tmp-cast-")) {
 			continue
 		}
 		// A stat error means the entry vanished under us.
@@ -169,71 +197,119 @@ func (s *FSStore) Sweep(olderThan time.Duration) (int, error) {
 	return removed, errors.Join(errs...)
 }
 
-// RunDeleter is the optional capability to delete every cast of one run: its
-// bare cast and every "<runID>~<suffix>" composite (attach sessions, upload
-// parts). It is how a person's erasure reaches recordings; a Store without it
-// cannot be erased from, and the caller says so rather than report it erased.
+// RunDeleter durably fences a run before deleting all of its recordings.
+// A successful erase prevents later saves, opens and stat calls across restart.
+// A composite runID erases that exact key and its "~" descendants only.
 type RunDeleter interface {
 	DeleteRun(ctx context.Context, runID string) (int, error)
 }
 
 var _ RunDeleter = (*FSStore)(nil)
 
-// DeleteRun removes <runID>.cast and every <runID>~*.cast under root, returning
-// how many it removed. Absent casts are not an error: the call is idempotent.
-func (s *FSStore) DeleteRun(_ context.Context, runID string) (int, error) {
-	if _, err := safeRunPath(s.root, runID); err != nil {
+// DeleteRun installs a durable fence and removes the run's bare and suffixed
+// casts, plus wardyn-rec's shared-volume .log fallback. Repeating it is safe.
+func (s *FSStore) DeleteRun(ctx context.Context, key string) (int, error) {
+	if _, err := safeRunPath(s.root, key); err != nil {
 		return 0, err
 	}
-	ents, err := os.ReadDir(s.root)
+	root, err := os.OpenRoot(s.root)
+	if err != nil {
+		return 0, err
+	}
+	defer root.Close()
+	lock, err := lockFSRun(ctx, root, key)
+	if err != nil {
+		return 0, err
+	}
+	defer lock.Close()
+	if err := markFSErased(ctx, root, key); err != nil {
+		return 0, err
+	}
+	dir, err := root.Open(".")
+	if err != nil {
+		return 0, err
+	}
+	defer dir.Close()
+	ents, err := dir.ReadDir(-1)
 	if err != nil {
 		return 0, err
 	}
 	removed := 0
 	var errs []error
 	for _, e := range ents {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".cast") {
+		ext := filepath.Ext(e.Name())
+		if e.IsDir() || (ext != ".cast" && ext != ".log") || !withinRun(strings.TrimSuffix(e.Name(), ext), key) {
 			continue
 		}
-		key := strings.TrimSuffix(name, ".cast")
-		if key != runID && !strings.HasPrefix(key, runID+castSep) {
-			continue
+		if err := ctx.Err(); err != nil {
+			return removed, err
 		}
-		if rerr := os.Remove(filepath.Join(s.root, name)); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
-			errs = append(errs, rerr)
+		if err := root.Remove(e.Name()); err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				errs = append(errs, err)
+			}
 			continue
 		}
 		removed++
 	}
-	return removed, errors.Join(errs...)
+	return removed, errors.Join(append(errs, dir.Sync())...)
 }
 
 // OpenCast opens <root>/<runID>.cast for reading. Returns ErrNotFound when the
 // file does not exist.
-func (s *FSStore) OpenCast(_ context.Context, runID string) (io.ReadCloser, error) {
-	path, err := safeRunPath(s.root, runID)
+func (s *FSStore) OpenCast(ctx context.Context, key string) (io.ReadCloser, error) {
+	f, lock, err := s.openCast(ctx, key)
+	if lock != nil {
+		_ = lock.Close()
+	}
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.OpenInRoot(s.root, filepath.Base(path))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, ErrNotFound
+	return f, nil
+}
+
+func (s *FSStore) openCast(ctx context.Context, key string) (*os.File, *os.File, error) {
+	if _, err := safeRunPath(s.root, key); err != nil {
+		return nil, nil, err
 	}
-	return f, err
+	root, err := os.OpenRoot(s.root)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer root.Close()
+	lock, err := lockFSRun(ctx, root, key)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := checkFSErased(root, key); err != nil {
+		return nil, lock, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, lock, err
+	}
+	// A shared-mount FIFO must not pin the run lock while erasure waits.
+	f, err := root.OpenFile(key+".cast", os.O_RDONLY|unix.O_NONBLOCK, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, lock, ErrNotFound
+	}
+	if err != nil {
+		return nil, lock, err
+	}
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, lock, errors.Join(err, errors.New("recording: not a regular file"))
+	}
+	return f, lock, nil
 }
 
 // StatAndTail reports the cast's size and reads its last tailBytes without
 // copying the rest of the file. tailBytes clamps down to size when the cast
 // is smaller.
-func (s *FSStore) StatAndTail(_ context.Context, key string, tailBytes int64) (int64, []byte, error) {
-	path, err := safeRunPath(s.root, key)
-	if err != nil {
-		return 0, nil, err
-	}
-	f, err := os.OpenInRoot(s.root, filepath.Base(path))
-	if errors.Is(err, os.ErrNotExist) {
-		return 0, nil, ErrNotFound
+func (s *FSStore) StatAndTail(ctx context.Context, key string, tailBytes int64) (int64, []byte, error) {
+	f, lock, err := s.openCast(ctx, key)
+	if lock != nil {
+		defer lock.Close()
 	}
 	if err != nil {
 		return 0, nil, err
@@ -292,4 +368,35 @@ func safeRunPath(root, runID string) (string, error) {
 		return "", errors.New("recording: path traversal rejected")
 	}
 	return joined, nil
+}
+
+func castRun(key string) string {
+	run, _, _ := strings.Cut(key, castSep)
+	return run
+}
+
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.r.Read(p)
+}
+
+func withinRun(key, run string) bool { return key == run || strings.HasPrefix(key, run+castSep) }
+
+// Composite erasures retain their original narrow scope. A descendant checks
+// each ancestor while sharing the first-prefix lock with every erase of it.
+func fenceKeys(key string) []string {
+	keys := []string{key}
+	for i, c := range key {
+		if c == '~' {
+			keys = append(keys, key[:i])
+		}
+	}
+	return keys
 }

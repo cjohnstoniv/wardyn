@@ -8,6 +8,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- Migration `0133_recording_erasures` adds durable per-run recording fences. Take a database dump before
+  upgrading; rollback requires restoring that dump. Filesystem deployments must retain the recording
+  root's `.erased` directory and `*.lock` files alongside the recordings.
+
+### Fixed
+
+- A `recordings`-scope person erasure now refuses late writers, including an upload that was already
+  streaming and the shared-volume recorder fallback. The upload answers `410` `recording_erased`;
+  later replay opens return no recording. Bare casts, attach sessions and upload parts stay erased
+  across restarts and retention sweeps. A new run ID records normally; already-open readers and
+  independent copies are outside the fence.
+
 ## [0.8.8] — 2026-10-07
 
 ### Before you upgrade

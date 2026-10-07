@@ -49,7 +49,7 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 			open = func(ctx context.Context, key string) (io.ReadCloser, error) { return OpenJoined(ctx, store, key) }
 		}
 		rc, err := open(req.Context(), key)
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrErased) {
 			http.Error(w, "recording not found", http.StatusNotFound)
 			return
 		}

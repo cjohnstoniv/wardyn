@@ -344,7 +344,22 @@ forms, which no verbatim matcher catches.
 - The optional `WARDYN_RECORDING_MOUNT`/`-out-dir` single-host recording
   fallback bypasses the control plane and delivers UNMASKED casts (masking is
   structurally control-plane-side — `wardyn-rec` holds no secret values). Do not
-  use it where recordings are viewer-exposed.
+  use it where recordings are viewer-exposed. Its `.cast` and `.log` delivery now
+  goes through `FSStore.SaveRecordingFile`, sharing the durable erasure fence
+  with API and attach writers. A `recordings`-scope erase serializes the fence and
+  deletion against each writer's final fence check and commit (`PGStore.runTx`,
+  `FSStore.saveFile`); streaming stays outside that lock. All suffix parts share
+  the run lock. New opens and stat calls check the fence even if a raw file or row
+  was recreated; a reader already opened before the erase may retain bytes.
+  Filesystem markers are synced before success and never retention-swept, nor are
+  the persistent per-run `.lock` files. Local Unix advisory-lock and directory-sync
+  support are required; a failure refuses the operation. This covers cooperative
+  Store/recorder writers on metadata whose integrity is protected. Postgres tombstones
+  likewise survive retention. A shared-volume actor able to remove metadata can
+  defeat that filesystem fence: this fallback is not a boundary against a writer
+  controlling the recording root. Erasure does not reach sandbox-local capture
+  files, independent exports or a restored pre-erasure backup. A later new run ID
+  remains usable.
 - **The registry is shared through Postgres and fails closed; four things stay
   outside it.** `secretmask.Registry` holds every value a run was given, and each
   replica's in-memory copy is a cache of what is committed. Dispatch commits a
