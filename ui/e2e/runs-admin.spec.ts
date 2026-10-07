@@ -13,7 +13,7 @@
 // script), so this file needs its own copy of that helper rather than
 // importing runs-landing.spec.ts's private one.
 import { test, expect, ADMIN_TOKEN, gotoConsole, sql } from "./fixtures";
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
 import { runsViewSaved } from "../src/app/components/wardyn/copy/runs-landing";
 
 const RUNS_LIST_RE = /\/api\/v1\/runs(\?.*)?$/;
@@ -256,6 +256,21 @@ test.describe("Entry to another person's run (#1476)", () => {
     const ticket = await page.request.post(`/api/v1/runs/${id}/attach/ticket`, { headers: auth });
     expect(ticket.status()).toBe(403);
     expect((await ticket.json()).reason).toBe("run_owner_only");
+  });
+
+  // #1888: with recording known to be off the link leads to a recording that
+  // cannot exist, so the sentence stands alone.
+  test("with recording off, the owner line on a person's run has no Watch link", async ({ page }) => {
+    await page.route("**/healthz", async (route: Route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.components = { ...json.components, recording: { selected: "none", source: "disabled" } };
+      await route.fulfill({ response, json });
+    });
+    const id = await seedRun(page, `entry no recording ${Date.now()}`, { owner: "priya@e2e.wardyn.invalid", operatorOwned: false });
+    await page.goto(`runs/${id}`);
+    await expect(page.getByText("Only priya@e2e.wardyn.invalid can open this run's terminal, apps and SSH.")).toBeVisible();
+    await expect(page.getByText(/Watch the captured session/)).toHaveCount(0);
   });
 
   test("a super admin keeps entry to a run no person owns: no owner line, the Attach card shows", async ({ page }) => {

@@ -649,6 +649,22 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(failed).not.toHaveClass("text-danger");
     expect(screen.getByText("deny")).toHaveClass("text-danger");
   });
+
+  // #1878: jsdom has no layout, so the guard is the class that gives the
+  // sentence its floor; e2e/audit.spec.ts measures the box.
+  it("keeps a minimum width on the sentence beside a long cause, so the chip and cause shrink first", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({
+        id: "fault",
+        action: "egress.deny",
+        outcome: "denied",
+        target: "flaky.example.com:443",
+        data: { rule_source: "builtin:tunnel-failed", cause: "connection reset ".repeat(40) },
+      }),
+    ]);
+    renderScreen();
+    expect(await screen.findByText("Failed egress to flaky.example.com:443")).toHaveClass("min-w-[10rem]");
+  });
 });
 
 // R4-F132: the live-tail deliberately swallows a failed tick to keep the last

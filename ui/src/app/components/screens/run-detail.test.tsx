@@ -82,6 +82,7 @@ vi.mock("../../lib/api/health", () => ({
 }));
 
 import { RunDetailScreen } from "./run-detail";
+import { health } from "../../lib/api/health";
 import { RUN_COCKPIT } from "../wardyn/copy";
 import { RUN_STARTUP } from "./run-status-detail";
 import { OperatorProvider } from "../wardyn/operator-context";
@@ -274,6 +275,52 @@ describe("RunDetailScreen — a not-yet-running interactive run tells its owner 
     expect(screen.queryByText("Attach from your terminal")).not.toBeInTheDocument();
     // Kill stays.
     expect(screen.getByRole("button", { name: /^Kill/ })).toBeEnabled();
+  });
+
+  // #1888: the link leads to a recording, so it is offered unless /healthz says
+  // recording is off. Unknown (the default {} above) keeps it, as the case
+  // above pins; known-off hides it on both panes that carry it.
+  describe("with recording known to be off", () => {
+    beforeEach(() => {
+      vi.mocked(health.health).mockResolvedValue({ components: { recording: { selected: "none" } } } as never);
+    });
+    afterEach(() => {
+      vi.mocked(health.health).mockResolvedValue({} as never);
+    });
+
+    function renderForeign(run: Record<string, unknown>) {
+      getRunMock.mockResolvedValue({ ...run, interactive: true, created_by: "priya@acme.io" });
+      return render(
+        <MemoryRouter initialEntries={["/runs/run-1"]}>
+          <OperatorProvider operator={true} principal="sam@acme.io">
+            <Routes>
+              <Route path="/runs/:id" element={<RunDetailScreen />} />
+            </Routes>
+          </OperatorProvider>
+        </MemoryRouter>,
+      );
+    }
+
+    it("a live run the person cannot drive shows the owner line and no Watch link", async () => {
+      renderForeign({ ...RUN, state: "RUNNING" });
+      expect(await screen.findByText("Only priya@acme.io can open this run's terminal, apps and SSH.")).toBeInTheDocument();
+      await waitFor(() => expect(health.health).toHaveBeenCalled());
+      await waitFor(() => expect(screen.queryByText(/Watch the captured session/)).not.toBeInTheDocument());
+    });
+
+    it("a STARTING run the person cannot enter shows the refusal line and no Watch link", async () => {
+      renderForeign({ ...RUN, state: "STARTING" });
+      expect(await screen.findByText("Only priya@acme.io can open this run's terminal, apps and SSH.")).toBeInTheDocument();
+      await waitFor(() => expect(health.health).toHaveBeenCalled());
+      await waitFor(() => expect(screen.queryByText(/Watch the captured session/)).not.toBeInTheDocument());
+    });
+
+    it("the STARTING run keeps the link while recording is unknown", async () => {
+      vi.mocked(health.health).mockResolvedValue({} as never);
+      renderForeign({ ...RUN, state: "STARTING" });
+      expect(await screen.findByText("Only priya@acme.io can open this run's terminal, apps and SSH.")).toBeInTheDocument();
+      expect(screen.getByText(/Watch the captured session/)).toBeInTheDocument();
+    });
   });
 
   it("a super admin on an operator-owned run keeps entry: no owner line, no refusal", async () => {
