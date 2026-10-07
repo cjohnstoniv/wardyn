@@ -59,6 +59,7 @@ function renderPanel(over: Partial<NewRunLaunchPanelProps>) {
     pin: undefined,
     workspaces: [],
     selectedWorkspaceId: undefined,
+    attachedWorkspaces: 0,
     caps: null,
     modelProviders: [],
     preflightIsCurrent: true,

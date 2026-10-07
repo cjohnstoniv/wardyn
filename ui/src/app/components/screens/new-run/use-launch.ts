@@ -20,6 +20,8 @@ import { getErrorMessage } from "../../../lib/format";
 import type { PolicyMode } from "../../wardyn/policy-panel";
 import { primaryWorkspaceId, type WizardState } from "./wizard-types";
 import { buildSpec, mergeRunSelections } from "./wizard-spec";
+import { defaultLaneDropsWorkspace } from "./new-run-launch-gates";
+import { POLICY_TEMPLATE_COPY } from "../../wardyn/copy/policy-templates";
 import type { SetupModelProvider, Workspace } from "../../../lib/types";
 
 export interface UseLaunchParams {
@@ -189,6 +191,12 @@ export function useLaunch({
     // and Check again send. The picked workspace still travels by reference,
     // as on the saved lane: without it a local_dir pick is never mounted.
     if (policyMode === "default") {
+      // Unreachable, as below: launchGates holds both actions while a second
+      // workspace is attached. This body carries one workspace, so sending it
+      // would launch without the other.
+      if (defaultLaneDropsWorkspace(policyMode, state.workspaces.length)) {
+        throw new Error(POLICY_TEMPLATE_COPY.DEFAULT_ONE_WORKSPACE);
+      }
       return { ...run, workspace_id: primaryWorkspaceId(state.workspaces, workspaces) ?? run.workspace_id };
     }
     // Unreachable: `problem` disables both actions while the document is
@@ -261,6 +269,9 @@ export function useLaunch({
     // never launch, breaking buildRunInput's same-body invariant. (The panel
     // disables the button in this state too; this guards the race.)
     if (policyMode === "saved" && !state.selectedPolicyId) return;
+    // Likewise the default lane with a second workspace attached: it has no
+    // body that carries both.
+    if (defaultLaneDropsWorkspace(policyMode, state.workspaces.length)) return;
     // One check at a time: a newer one supersedes the older, whose answer is
     // then never applied. The previous verdict stays on screen until the new
     // one lands, so a re-check of the same body never un-blocks Launch.

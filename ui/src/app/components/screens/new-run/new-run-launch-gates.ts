@@ -12,6 +12,7 @@
 // `preflightBlock` and never gate firing a check.
 import type { MeCapabilities, RunPolicySpec, SetupModelProvider, Workspace } from "../../../lib/types";
 import { RAIL_PROVIDER, RUN } from "../../wardyn/copy";
+import { POLICY_TEMPLATE_COPY } from "../../wardyn/copy/policy-templates";
 import type { PolicyMode } from "../../wardyn/policy-panel";
 import { savedPolicyGone } from "./policy-lane";
 import { workspaceUnavailableToCaller, type WizardState } from "./wizard-types";
@@ -29,6 +30,8 @@ export interface LaunchGateInputs {
   pin: string | undefined;
   workspaces: Workspace[];
   selectedWorkspaceId: string | undefined;
+  /** How many workspaces the Workspace card shows as attached (the primary and its chips). */
+  attachedWorkspaces: number;
   caps: MeCapabilities | null;
   modelProviders: SetupModelProvider[] | undefined;
   providerGateState: ProviderGate | undefined;
@@ -43,6 +46,18 @@ export interface LaunchGates {
   /** The picked workspace refuses this caller (#922) — disables Launch through
    *  the rail's own prop, never as a `problem` sentence (review F5). */
   workspaceUnavailable: boolean;
+  /** The default lane's own refusal, for the default-policy panel to show
+   *  beside Check again: set whenever it applies, even while `problem` is
+   *  carrying an earlier arm's sentence. */
+  defaultWorkspaceProblem: string | null;
+}
+
+// The default lane sends the primary workspace by reference and nothing else
+// (use-launch.ts), and the API has no second attachment on that path. A second
+// attached workspace is therefore refused here, never left out of the request.
+// The saved lane sends the same one-reference body and is not held here.
+export function defaultLaneDropsWorkspace(policyMode: PolicyMode, attachedWorkspaces: number): boolean {
+  return policyMode === "default" && attachedWorkspaces > 1;
 }
 
 export function launchGates(i: LaunchGateInputs): LaunchGates {
@@ -54,6 +69,9 @@ export function launchGates(i: LaunchGateInputs): LaunchGates {
   const workspaceUnavailable =
     !!pickedWorkspace && workspaceUnavailableToCaller(pickedWorkspace, i.caps, i.modelProviders, i.isAgent);
   const gate = i.providerGateState;
+  const defaultWorkspaceProblem = defaultLaneDropsWorkspace(i.policyMode, i.attachedWorkspaces)
+    ? POLICY_TEMPLATE_COPY.DEFAULT_ONE_WORKSPACE
+    : null;
   const problem =
     needsTask && !i.task.trim()
       ? i.isAgent
@@ -83,6 +101,7 @@ export function launchGates(i: LaunchGateInputs): LaunchGates {
                   // answers that its own way, so this stays silent then.
                   i.providerCandidates.length > 1 && !i.selectedModelProviderId && !i.pin
                   ? RAIL_PROVIDER.LAUNCH_HINT
-                  : null;
-  return { problem, workspaceUnavailable };
+                  : // The default lane with a second workspace attached.
+                    defaultWorkspaceProblem;
+  return { problem, workspaceUnavailable, defaultWorkspaceProblem };
 }

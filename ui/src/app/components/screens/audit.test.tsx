@@ -318,6 +318,29 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.getByText("credential.expired.delete — s4")).toBeInTheDocument();
   });
 
+  // A failure row is a deletion that did not happen: the store refused it, or
+  // the sweep's own scan failed (that row names no sign-in). It never says
+  // "Removed".
+  it("reads a failed credential.expired.delete as not removed, by its reason", async () => {
+    const error = "store: 403 permission denied";
+    listAuditMock.mockResolvedValue([
+      ev({ id: "f1", action: "credential.expired.delete", outcome: "failure", target: "s1", data: { reason: "expired", error } }),
+      ev({ id: "f2", action: "credential.expired.delete", outcome: "failure", target: "s2", data: { reason: "invalid_grant", error } }),
+      ev({ id: "f3", action: "credential.expired.delete", outcome: "failure", target: "s3", data: { reason: "invalid_grant", after_lost_reply: true, error } }),
+      ev({ id: "f4", action: "credential.expired.delete", outcome: "failure", target: "", data: { reason: "expired", error: "scan: connection reset" } }),
+      ev({ id: "f5", action: "credential.expired.delete", outcome: "failure", target: "s5", data: { reason: "something_else" } }),
+    ]);
+    renderScreen();
+
+    expect(await screen.findAllByText("Could not remove a stored sign-in that had expired")).toHaveLength(2);
+    expect(screen.getByText("Could not remove a stored sign-in the provider refused")).toBeInTheDocument();
+    expect(
+      screen.getByText("Could not remove a stored sign-in after a renewal whose reply may have been lost"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("credential.expired.delete — s5")).toBeInTheDocument();
+    expect(screen.queryAllByText(/^Removed a stored sign-in/)).toHaveLength(0);
+  });
+
   // #1020: no Go code emits these four, so they carry no verb row and render
   // as the raw action, like any action the table does not know.
   it("has no verb rows for actions the server never emits", async () => {

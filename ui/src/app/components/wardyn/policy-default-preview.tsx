@@ -21,6 +21,8 @@ export interface DefaultPolicyView {
   spec?: RunPolicySpec;
   /** GET /policies/default's governance_profile_name; names the mode's card. */
   profileName?: string;
+  /** Why Launch and Check again are held in this mode, when they are. */
+  problem?: string | null;
   onRetry: () => void;
 }
 
@@ -48,6 +50,11 @@ export function DefaultPolicyPreview({ view }: { view: DefaultPolicyView }) {
           <YamlBlock value={view.spec} />
           <p className="text-meta text-muted-foreground">{C.DEFAULT_NOTE}</p>
         </>
+      )}
+      {view.problem && (
+        <p role="status" className="text-meta text-warning">
+          {view.problem}
+        </p>
       )}
     </div>
   );
