@@ -33,7 +33,7 @@ export function useNewRunSources(identity: DraftIdentity) {
   const [loaded, setLoaded] = React.useState<{ revision: string; sources: Sources; pending: boolean }>();
   const workspaceList = useWorkspaceList(revision);
   const defaultRead = useDefaultPolicy(revision, allowed);
-  const { reload } = workspaceList;
+  const { load } = workspaceList;
   React.useEffect(() => {
     if (!allowed) return;
     let alive = true;
@@ -47,10 +47,10 @@ export function useNewRunSources(identity: DraftIdentity) {
       policies.listPolicies().then((saved) => update({ savedPolicies: saved.map(({ id, name, spec }) => ({ id, name, spec })), policiesLoaded: true })),
       health.whoami().then((me) => update({ governanceContact: me?.governance_contact ?? undefined })),
       runs.listRuns().then((titles) => update({ knownTitles: [...new Set(titles.map((run) => (run.title ?? "").trim()).filter(Boolean))].sort() })),
-      reload(true),
+      load(true),
     ]).then(() => update({}, false));
     return () => { alive = false; };
-  }, [revision, allowed, reload]);
+  }, [revision, allowed, load]);
   const refresh = React.useCallback(() => setAttempt((n) => n + 1), []);
   const sources = allowed && loaded?.revision === revision ? loaded.sources : EMPTY;
   return {

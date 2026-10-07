@@ -35,7 +35,7 @@ export function useWorkspaceList(scope = "") {
 
   // `clear` empties the list first — a dialog re-opening must not show the
   // previous session's workspaces while the new fetch is in flight.
-  const reload = React.useCallback((clear = false) => {
+  const load = React.useCallback((clear = false) => {
     if (clear) setWorkspaces([]);
     setLoading(true);
     setError(false);
@@ -52,6 +52,8 @@ export function useWorkspaceList(scope = "") {
       })
       .finally(() => { if (current()) { setLoadedScope(owner); setLoading(false); } });
   }, []);
+  // Fire-and-forget for every existing caller; `load` is for one that waits for the read to settle.
+  const reload = React.useCallback((clear = false) => void load(clear), [load]);
 
   // Refresh, kick a best-effort (re-)scan, then refresh again once it settles: a
   // local dir reaches "ready" inline, a repo launches its governed scan run — so
@@ -70,5 +72,5 @@ export function useWorkspaceList(scope = "") {
     [reload],
   );
 
-  return { workspaces: loadedScope === scope ? workspaces : [], loading: loadedScope !== scope || loading, error, reload, scanAndReload };
+  return { workspaces: loadedScope === scope ? workspaces : [], loading: loadedScope !== scope || loading, error, load, reload, scanAndReload };
 }
