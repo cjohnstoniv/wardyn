@@ -1,6 +1,6 @@
 # M-R — New Run panels and shared policy document
 
-Status: **packet ready for review; Claude Design prototype and owner approval pending**. Tracker #1916 under #1914. This independently approvable packet gates rendering in V/P and the visual portions of D. Nonvisual parser, preview, request-controller and mechanical split work can proceed under the execution contract. No product rendering code was changed to prepare this packet.
+Status: **parser-diagnostic amendment awaiting written review; Claude Design prototype and owner approval pending**. Tracker #1916 under #1914. The earlier written packet was independently accepted at `036dd8081c137268036404110a0c5e235a0a33f8`; that acceptance does not cover this amendment. This independently approvable packet gates rendering in V/P and the visual portions of D. Nonvisual parser, preview, request-controller and mechanical split work can proceed under the execution contract. No product rendering code was changed to prepare this packet.
 
 Baseline: `7b08fd722ca4dcfd9d2d59e6f1cb8ecab54d8dcf`. Read together with `regression-inventory.md`, `canon-inventory.md`, and `design-access.md`. All three 089 review reports and the accepted execution contracts inform this packet; superseded plan wording is not canon. Claude Design must use the console design-system project verified through DesignSync. The project/transport check is blocked, so these frames are authoring instructions, not screenshots or proof of a remote prototype.
 
@@ -102,6 +102,7 @@ Source policy                                         [Done editing — outline]
 Spec (YAML) *
 [authored source textarea, comments and invalid text retained]
 (Valid YAML) or (Invalid YAML — {message})
+Line {line}, column {column}                         invalid diagnostic position
 Comments are kept while you edit; they are not stored when the policy is saved or the run launches.
 [Copy source]                                         exact source, even invalid
 
@@ -185,6 +186,7 @@ New copy is imported directly from lazy files `ui/src/app/components/wardyn/copy
 | `POLICY_DOCUMENT.INVALID_YAML(message)` | Invalid YAML — {message} | Added error chip; parser supplies message/position |
 | Existing validity text / `POLICY_DOCUMENT.VALID_JSON` | Valid JSON | **Retained** in explicit JSON mode |
 | Existing validity text / `POLICY_DOCUMENT.INVALID_JSON(message)` | Invalid JSON — {message} | **Retained** in explicit JSON mode |
+| `POLICY_DOCUMENT.SOURCE_POSITION(line,column)` | Line {line}, column {column} | **New copy proposal:** separate visible and described diagnostic position; positive one-based integers |
 | `POLICY_DOCUMENT.INVALID_GATE` | The policy spec isn't valid YAML or JSON. | **Copy change:** replaces “The policy spec isn't valid JSON.” in the shared gate and its anchors |
 | `POLICY_DOCUMENT.REQUESTED_CLASS` | This run requests | New Run Barrier fact; run detail keeps “This run used” |
 | `POLICY_DOCUMENT.COMMENTS` | Comments are kept while you edit; they are not stored when the policy is saved or the run launches. | Editor helper |
@@ -204,6 +206,36 @@ New copy is imported directly from lazy files `ui/src/app/components/wardyn/copy
 | `POLICY_DOCUMENT.REPLACE_CUSTOM` | Replace custom policy | Confirm replacement |
 
 The `Spec (JSON)`/validity literals currently live in `policy-panel.tsx`; centralizing those unchanged literals for the shared lazy editor is an address change, not a wording change. Run-detail `Summary`, `YAML`, `Copy YAML`, redaction, provenance, change marks and `SUMMARY.used` remain their existing canon entries. Add the JSON-view amendment to the run-policy-view canon and extend its pin test in V. The YAML default explicitly requires updating the existing three-editor tests and demo 05/06 narration; no silent anchor deletion.
+
+### Strict-parser diagnostics — new written-review and owner-approval proposal
+
+This inventory reads the actual Y source at `3b4af5aee746aff0c496bb370001295d50973e25`, with exact `yaml@2.9.1`. It incorporates the earlier handoff supplement prepared at `9656bfdc2f42007925f1704d0f779d1dddca297c`; those parser bytes are unchanged. These diagnostics are internal and unrendered at that candidate. Listing them here proposes their presentation; it neither accepts Y's implementation nor approves new product copy. See `canon-inventory.md` for the separate candidate hash, distinct from the original source baseline.
+
+All fixed messages below live in `ui/src/app/lib/policy-document/index.ts`, in the named symbol. Consumers use the returned diagnostic verbatim rather than duplicating these strings in `POLICY_DOCUMENT` or the eager `copy.ts` barrel. Parse failures use the existing outer `INVALID_YAML(message)` / `INVALID_JSON(message)` templates and the proposed `SOURCE_POSITION(line,column)`. A refused structured operation on valid source shows its message and position beside the originating control without an invalid-source label. A successful strict parse proves a JSON-compatible mapping, not server policy validation, authorization or launch readiness.
+
+<!-- parser-fixed-diagnostics -->
+| Source symbol | Byte-exact fixed diagnostic |
+|---|---|
+| `caught` | `Policy source could not be read.` |
+| `documentValue` | `Policy source must be a mapping.` |
+| `documentValue` | `Mapping keys must be strings.` |
+| `documentValue` | `Merge keys (<<) are not allowed.` |
+| `documentValue` | `Aliases are not allowed.` |
+| `documentValue` | `Explicit tags are not allowed.` |
+| `documentValue` | `Numbers must be finite and within the safe integer range.` |
+| `documentValue` | `Only JSON-compatible values are allowed.` |
+| `readSource` | `Directives are not allowed.` |
+| `readSource` | `MULTIPLE_DOCS: Policy source must contain one document.` |
+| `editPolicySource` | `The edit must name a mapping field or a sequence item without gaps.` |
+| `editPolicySource` | `The edit must contain only JSON-compatible values and safe numbers.` |
+<!-- /parser-fixed-diagnostics -->
+
+Variable diagnostics are data, not additional fixed canon:
+
+- `readSource` returns `${issue.code}: ${issue.message}` from the first library error, otherwise the first warning. Warnings are fatal. Library wording and quoted source/key/tag text belong to the pinned library; retain the complete returned message, without interpreting markup, inventing a friendlier rewrite or turning it into a translation key.
+- `caught` returns the thrown `Error.message` from parsing, composition, AST traversal, conversion, path mutation or serialization. It uses the fixed fallback above only for a non-Error throw. Both paths return line 1, column 1; that fallback position does not prove where an unexpected failure originated.
+- `failure` returns one-based line/column from `LineCounter` at the offending token/node offset. Preserve the returned integers separately from the message. Directive refusal precedes composition; multiple-document refusal precedes library errors/warnings; the first AST refusal follows those. Do not promise an exhaustive list or infer an AST message when an earlier library diagnostic wins.
+- Treat every returned message as potentially sensitive authored-source data. Render only as escaped text, never HTML/Markdown or executable links; retain literal text and line breaks in a wrapping, selectable error region. Do not send messages, source snippets or unknown thrown errors to telemetry, analytics, crash reports, URLs or unrelated logs. Prototype fixtures use synthetic policies without real secret values, private paths or names. Only the authorized current editor may show its diagnostic; clear it with its source on principal change and never reconstruct hidden source from a redacted preview.
 
 ### Gate sentences, unchanged except the declared parser sentence
 
@@ -275,12 +307,35 @@ The leave dialog reuses `UNSAVED`/`UNSAVED_GUARD` from the existing guard: “Le
 | Explicit YAML→JSON | Valid source required; conversion confirmation carries the exact comment-loss copy. Keep YAML preserves bytes; Switch to JSON changes authored source and dirty state. |
 | Save/Launch | Submit object through existing server contract; comments disappear because they are session source content, as the visible helper states. |
 
+### Invalid-source diagnostic frames and interaction
+
+These written fixtures extend R4 and the planned `/m-r/policy/invalid` scenario; they are not implemented screens or browser evidence. Each invalid-parse fixture must be driveable in the real Claude Design prototype in both editor formats where applicable. Its displayed diagnostic comes from the parser result, with the format-specific outer label and separate position above; operation refusals retain valid-source status as specified below. `parsePolicySource` failures expose only `ok`, `line`, `column`, `message`, never `value` or a Document.
+
+| Fixture / transition | Diagnostic and state to demonstrate |
+|---|---|
+| Duplicate YAML or pasted JSON key | Library `DUPLICATE_KEY` diagnostic; demonstrate nested and escaped JSON-key duplicates. `# heading\na:\n  b: 1\n  b: 2` locates line 4, column 3. |
+| Second document, including empty second document | Exact fixed `MULTIPLE_DOCS` diagnostic; `a: 1\n---\nb: 2` locates line 2, column 1. |
+| Unknown tag / warning-only result | Library `TAG_RESOLVE_FAILED` diagnostic is invalid even without a library error. Known explicit tags use the fixed tags refusal when AST validation is reached. |
+| Directives / aliases / merge keys | `%YAML` and `%TAG` tokens refuse; aliases including unresolved/cyclic references refuse; quoted or JSON `<<` keys refuse. `a:\n  <<: {}` locates line 2, column 3; `a: 1\r\nb: *missing` locates line 2, column 4. Quoted/block-string lookalikes remain literal text. |
+| Nonstring key / nonmapping root / empty source | Fixed mapping-key or root-mapping refusal, including scalar, sequence, null and comment-only roots. Empty source is invalid, not an empty policy; `{}` is the valid empty mapping control. |
+| Nonfinite / unsafe number | Fixed numbers refusal, including unsafe JSON integers and overflow; `a:\n  n: .nan` locates line 2, column 6. Quoted numeric-looking strings and safe bounds remain valid controls. |
+| Malformed syntax / source-bearing message | Actual first library error, including an HTML-looking synthetic tag/key. Text remains literal and selectable; no link, image or markup executes and no diagnostic enters telemetry. |
+| Unexpected exception / defensive non-JSON value | Show the actual caught Error message or non-Error fallback; preserve line 1, column 1 without claiming that it is the fault site. The fixed JSON-compatible-values refusal is defensive AST coverage, not a promise that normal core-schema input produces objects. |
+| Structured edit path/value/serialization failure | Preserve the exact original source; no replacement `source` is returned. Show the returned operation diagnostic at its originating control, with the position. A refused operation on a still-valid document does not relabel that document invalid or change its body; invalid starting source instead follows the shared invalid-parse state. |
+| Invalid → Run → Workspace → Policy → corrected | Preserve exact bytes, comments, format and dirty state through navigation; show the same diagnostic on return. Correction reparses current text and removes only the resolved error; it does not resurrect an older accepted body or automatically Save/Launch. |
+
+For an invalid parse, the source textarea stays enabled and receives `aria-invalid="true"`; `aria-describedby` includes its visible diagnostic, position and existing helper. Use one polite, atomic `role="status"` region for changing local validity, not an assertive launch-failure alert. Stable repeated results do not reannounce. Typing, parser completion and preview responses never move focus or reset the caret. Tab/Shift+Tab still reach Copy source, Done editing, the remedy and navigation; Enter in the source inserts a newline and never submits. Escape follows the existing dirty-leave/dialog rules. An activated invalid-source issue reveals Policy and editing, then focuses the textarea; its description supplies the diagnostic/position without forcing a caret jump, including for fallback line 1, column 1.
+
+Summary is the existing view name (called “Pretty” in superseded planning); do not rename it. While authored source is invalid, its Summary and converted raw view show the invalid-source remedy without a synthesized spec, a success chip or last-valid source facts. The matching raw view may show the exact invalid authored bytes as invalid text. Copy source alone remains enabled and copies those bytes, excluding diagnostic/position text; generated, converted, Summary Copy YAML and Run draft Copy controls are disabled while invalid. View switching never formats, repairs or overwrites the source. Structured fields, insertion/template mutations and format conversions that need a parsed mapping remain disabled, with the focusable Edit policy remedy available outside the disabled group; unrelated run/workspace choices remain navigable.
+
+The rail retains all nine sections and applicable non-source facts, including the sticky confinement floor, but does not display last-valid source facts or an old green check as current. One invalid-source gate issue sits in the decision block directly before Launch and focuses the source; the detailed parser message appears only beside its owning editor, never duplicated in the rail. A previously authorized Run draft preview may stay visible only with `INVALID_PREVIEW` and disabled current-preview Copy; without a previous preview, show the remedy without invented content. Invalid source schedules no preview/preflight request and cannot launch/save a last-valid object. Superseded responses cannot restore freshness. Correcting the source uses the existing settled scheduler and gates; the old preview remains stale until a current authorized response arrives. These same source/Copy/focus rules apply in Policies and Governance editors, with their own explicit Save action and no New Run rail.
+
 ### Copy and freshness contract
 
 | Action/state | Exact source of copied or displayed content |
 |---|---|
 | Copy source | Authored source string byte for byte, including comments and invalid input. Available even when invalid or preview-stale. |
-| Matching authored YAML/JSON view | Copy preserves authored text when valid; it does not normalize matching-format source. Summary Copy YAML uses authored YAML when available. |
+| Matching authored YAML/JSON view | Copy preserves authored text when valid; it does not normalize matching-format source. Summary Copy YAML uses authored YAML when available and valid. |
 | Converted/generated copy | Current valid spec serialized to requested format; generated YAML uses `YamlBlock`/its existing emitter. Never claim comments persist in normalized output. |
 | Run draft copy | Current authorized server preview, not source draft or previous-body preview. Disable while stale/invalid/unavailable. |
 | Representable blocked draft | Preview remains inspectable when task/credentials/runner readiness blocks Launch; launch-only facts use PENDING. |
@@ -350,5 +405,6 @@ Binary acceptance evidence: default/saved/custom launches and refusal paths; inv
 - **R-D12:** Default/saved extra workspaces are refused everywhere using M-F's exact copy. Custom retains every attachment. No automatic dropping or mode switch.
 - **R-D13:** Hoist Segmented and remove the Policy-tab duplicate only after its recorded provenance check; preserve all original consumers and dirty-name semantics. `regression-inventory.md` records that provenance for the eventual implementation commit body.
 - **R-D14:** Approval identifies this concrete Claude Design prototype URL/revision and these decisions, including narrow layout/focus and copy amendments. M-F and M-O remain independent. This textual packet alone does not satisfy the blocked remote-prototype gate.
+- **R-D15 — new proposal:** Approve the strict-parser diagnostic inventory and variable-data treatment, `SOURCE_POSITION` copy, invalid-source frames and local announcement/focus/Copy/Summary/rail/preview rules above. This amendment needs independent written review and then the real Claude Design/DesignSync state walkthrough and owner decision before any diagnostic rendering is wired.
 
 Owner approval record: **pending**. Claude Design prototype URL/revision: **not created or verified yet**.

@@ -4,9 +4,9 @@ The three written packets are reviewable. **Their Claude Design prototypes are n
 
 | Packet | Independent scope | Status |
 |---|---|---|
-| [M-F](M-F.md) | #1901 saved/default extra-workspace refusal; #1906 terminal link token; #1908 sign-in reconciliation | Written; prototype blocked; unapproved |
-| [M-R](M-R.md) | Four New Run panels, full rail, shared PolicyDocument, YAML-default editing, existing Access controls | Written; prototype blocked; unapproved |
-| [M-O](M-O.md) | #1831 honest recording-recovered output, explicit HTTP-200 gaps and genuine refusal precedence | Written; prototype blocked; unapproved |
+| [M-F](M-F.md) | #1901 saved/default extra-workspace refusal; #1906 terminal link token; #1908 sign-in reconciliation | Written portion accepted at prior SHA below; prototype blocked; owner-unapproved |
+| [M-R](M-R.md) | Four New Run panels, full rail, shared PolicyDocument, YAML-default editing, existing Access controls and strict-parser diagnostic states | Earlier written portion accepted; new diagnostic amendment awaits written review; prototype blocked; owner-unapproved |
+| [M-O](M-O.md) | #1831 honest recording-recovered output, explicit HTTP-200 gaps and genuine refusal precedence | Written correction accepted at prior SHA below; prototype blocked; owner-unapproved |
 
 Each packet has the established five parts: what it unblocks, surfaces, exact strings and homes, states with keyboard/screen-reader behavior, and decisions. Approve them independently only after the real prototype URL/revision and design-system verification are recorded. Implementation-plan authorization is already established; a new broad implementation request is unnecessary. Nonvisual work proceeds under the execution contract.
 
@@ -22,4 +22,6 @@ The remote handoff must use Claude Design with the console design system through
 
 Validation and commit/push evidence are recorded in the lane-M worker report in the 089 handoff. Source-string/inventory checks apply to these written artifacts. Browser, visual, assistive-technology and prototype walkthroughs have not run because no prototype exists; they remain part of the visual gate, not skipped passing checks.
 
-M-O's correction for independent finding M-1 specifies the empty `stdout` capture-gap frame, partial recording frame, exact Copy/focus behavior and a proposed cause-neutral `captureGap` sentence. Its fixture table is checked by the local packet validator. This is a correction to the review proposal, not a product-source fix or acceptance by the independent reviewer; the corrected SHA requires rereview.
+The independent `lane-reports/M-review.md` accepted the written packets at `036dd8081c137268036404110a0c5e235a0a33f8` on 2026-10-07. M-O's correction closed M-1 with the empty `stdout` capture-gap frame, partial recording frame, exact Copy/focus behavior and proposed cause-neutral `captureGap` sentence. Its fixture table remains checked by the packet validator; M-F/M-R were byte-identical to the earlier reviewed packet. This acceptance covers written proposals only and does not approve the proposed copy or clear the real prototype/owner gate.
+
+The current M-R amendment incorporates the actual diagnostic inventory from Y candidate `3b4af5aee746aff0c496bb370001295d50973e25`, adds a proposed position label and specifies invalid-source interaction. It requires fresh independent written review; the prior acceptance is not carried over to these new bytes. The original handoff supplement and acceptance evidence remain preserved. No parser or product-rendering source changed. Validation and the exact new worker SHA are recorded in `lane-reports/M-diagnostics-worker.md` in the handoff archive.
