@@ -106,7 +106,12 @@ describe("RunRow — a waiting sign-in (M2)", () => {
 
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
-  const flush = () => act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+  // The read loop is a lazy chunk: let its import land, then its first read.
+  const flush = () =>
+    act(async () => {
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(0);
+    });
 
   it("answers waiting: the amber word and the Sign in action, in the Running section", async () => {
     signInMock.mockResolvedValue({
@@ -125,6 +130,7 @@ describe("RunRow — a waiting sign-in (M2)", () => {
     signInMock.mockResolvedValue({ state: "not_waiting" });
     renderMine(signInRun({ created_at: new Date(Date.now() - 3_600_000).toISOString() }));
     await flush();
+    expect(signInMock).toHaveBeenCalledTimes(1);
     expect(screen.getByText(RUNS_ROW_WORD.RUNNING)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: RUNS_ROW_ACTION.SIGN_IN })).not.toBeInTheDocument();
   });
@@ -133,6 +139,7 @@ describe("RunRow — a waiting sign-in (M2)", () => {
     signInMock.mockRejectedValue(new Error("503"));
     renderMine(signInRun());
     await flush();
+    expect(signInMock).toHaveBeenCalledTimes(1);
     expect(screen.getByText(RUNS_ROW_WORD.RUNNING)).toBeInTheDocument();
   });
 
