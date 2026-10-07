@@ -263,6 +263,11 @@ func TestEvictedSandbox_CancelsAHeldCredentialReauthAndShutsTheInternalDoor(t *t
 	}
 
 	// 3 — the REAL approval.cancel row, once, carrying this run and count 1.
+	// CancelForRun moves the approval FIRST and records the summary row after its
+	// loop, so the CANCELLED state read above can precede the row: wait for it,
+	// then hold a beat so a second row would still be counted and fail the check.
+	waitFor(t, "the approval.cancel audit row", func() bool { return len(cancelledRows(audit, runID)) >= 1 })
+	time.Sleep(100 * time.Millisecond)
 	rows := cancelledRows(audit, runID)
 	if len(rows) != 1 {
 		t.Fatalf("approval.cancel rows = %d, want exactly 1 — one run transition is one fact in the "+
@@ -279,7 +284,11 @@ func TestEvictedSandbox_CancelsAHeldCredentialReauthAndShutsTheInternalDoor(t *t
 		t.Errorf("approval.cancel count = %v, want 1", data["count"])
 	}
 
-	// 4 — the metric moved by exactly one.
+	// 4 — the metric moved by exactly one. It is bumped after CancelForRun
+	// returns, i.e. after the audit row, so it is awaited the same way.
+	waitFor(t, "the cancelled counter to move", func() bool {
+		return metricValue(t, srv, `wardyn_credential_reauth_total{outcome="cancelled"}`) != before
+	})
 	if after := metricValue(t, srv, `wardyn_credential_reauth_total{outcome="cancelled"}`); after == before {
 		t.Errorf("wardyn_credential_reauth_total{outcome=\"cancelled\"} stayed at %s across an eviction "+
 			"that cancelled a held request", before)
