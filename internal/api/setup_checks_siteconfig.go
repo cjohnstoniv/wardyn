@@ -12,13 +12,17 @@ import (
 // siteConfigStatusChecks bundles the /setup/status rows derived from one
 // site-config read — siteConfigCheck, artifactRepoCheck and the conditional
 // rows — into a single call, which keeps handleSetupStatus (setup.go) under
-// the funlen gate as this list grows.
-func siteConfigStatusChecks(checks []SetupCheck, sc types.SiteConfig, present map[string]bool) []SetupCheck {
+// the funlen gate as this list grows. seed is the boot-time seed file, nil when
+// none is set (siteConfigSeedCheck).
+func siteConfigStatusChecks(checks []SetupCheck, sc types.SiteConfig, present map[string]bool, seed *SiteConfigSeed) []SetupCheck {
 	checks = append(checks, siteConfigCheck(sc, present), artifactRepoCheck(sc))
 	for _, conditional := range []func(types.SiteConfig) (SetupCheck, bool){internalHostsCheck, signInHelpHTTPCheck, adoEntraRowsCheck, adoRowsOffCheck} {
 		if chk, ok := conditional(sc); ok {
 			checks = append(checks, chk)
 		}
+	}
+	if chk, ok := siteConfigSeedCheck(seed, sc); ok {
+		checks = append(checks, chk)
 	}
 	return checks
 }

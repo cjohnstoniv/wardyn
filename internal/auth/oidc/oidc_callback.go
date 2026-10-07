@@ -305,7 +305,9 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	sess.AuthorityEpoch = epoch
 	sess.Expiry = idToken.Expiry
 	sess.IssuedAt = time.Now().UTC() // The cutoff SessionRevocations compares against.
-	if sess.Expiry.IsZero() {
+	if a.cfg.SessionTTL > 0 {
+		sess.Expiry = sess.IssuedAt.Add(a.cfg.SessionTTL) // WARDYN_OIDC_SESSION_TTL replaces the ID token's expiry.
+	} else if sess.Expiry.IsZero() {
 		sess.Expiry = time.Now().UTC().Add(time.Hour)
 	}
 	cookie, err := a.encodeSession(sess)

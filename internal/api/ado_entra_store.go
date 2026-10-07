@@ -566,7 +566,7 @@ func (s *Server) redeemEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig
 func (s *Server) noteEntraSignInEnded(ctx context.Context, owner string, ec entraCapture, blob adoEntraBlob, class ADOEntraFailure) {
 	switch class {
 	case ADOEntraFailureDeadCredential:
-		s.deleteDeadCredential(ctx, s.cfg.Secrets.For(owner), owner, ec.secretName, ec.auditProvider())
+		s.deleteDeadCredential(ctx, s.cfg.Secrets.For(owner), owner, ec.secretName, ec.auditProvider(), false)
 		return
 	case ADOEntraFailureInteractionRequired:
 	default:

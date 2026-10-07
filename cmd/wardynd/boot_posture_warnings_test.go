@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 var tlsServed = tlsPosture{tlsEnabled: true, secureCookies: true}
@@ -96,6 +97,7 @@ func TestValidateBootPostureLogsTheWarnings(t *testing.T) {
 		redirect, control, internal, org, tok := "https://wardyn.example.com/auth/callback", "https://wardynd:8443", "", "", ""
 		allow, member, tail, rate, retention, seal := false, false, 65536, 20, 30, "off"
 		off, runner, store := false, "none", "pg"
+		var sessionTTL time.Duration
 		f := &bootFlags{
 			ha: &off, allowMultiInstance: &off, runnerSel: &runner, recordingSel: &store,
 			auditSeal:           &seal,
@@ -103,8 +105,10 @@ func TestValidateBootPostureLogsTheWarnings(t *testing.T) {
 			runOutputRetention:  &retention,
 			preflightRatePerMin: &rate,
 			basePath:            &base, oidcIssuer: &issuer, oidcInternalIss: &internal, oidcRedirectURL: &redirect, controlURL: &control,
-			listen: &listen, uiListen: &ui, uiAdvertise: &advertise, sshListen: &ssh, uiOriginTemplate: &tmpl, uiStripCookies: &strip,
+			listen: &listen, uiListen: &ui, uiAdvertise: &advertise, sshListen: &ssh, sshProxyCommand: &tmpl, uiOriginTemplate: &tmpl, uiStripCookies: &strip,
 			allowPlaintextListen: &allow, orgURL: &org, orgEnrolToken: &tok, memberMode: &member,
+			internalListen: &ssh, metricsListen: &ssh,
+			oidcSessionTTL: &sessionTTL,
 		}
 		if err := validateBootPosture(f, tlsServed); err != nil {
 			t.Fatal(err)

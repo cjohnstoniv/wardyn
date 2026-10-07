@@ -367,7 +367,8 @@ func (b awsSSOBlob) lastUsable() time.Time {
 
 // deleteSpentAWSSSOBlob deletes the stored AWS SSO sign-in in scope's
 // namespace once AWS has refused its refresh token (deleteDeadCredential).
-func (s *Server) deleteSpentAWSSSOBlob(ctx context.Context, scope awsSSOScope) {
+// afterLostReply: that refusal followed a lost renewal reply.
+func (s *Server) deleteSpentAWSSSOBlob(ctx context.Context, scope awsSSOScope, afterLostReply bool) {
 	st, owner := s.cfg.Secrets, ""
 	if st == nil {
 		return
@@ -378,7 +379,7 @@ func (s *Server) deleteSpentAWSSSOBlob(ctx context.Context, scope awsSSOScope) {
 		}
 		st, owner = st.For(scope.owner), scope.owner
 	}
-	s.deleteDeadCredential(ctx, st, owner, scope.ssoSecret(), awsSSOProvider)
+	s.deleteDeadCredential(ctx, st, owner, scope.ssoSecret(), awsSSOProvider, afterLostReply)
 }
 
 // Login run launch

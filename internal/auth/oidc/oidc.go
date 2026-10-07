@@ -99,9 +99,15 @@ type Config struct {
 	// RoleStampTTL is WARDYN_ROLE_STAMP_TTL: the oldest a session's role stamp may be, measured from
 	// the session's IssuedAt (the cookie's role is fixed then; only a sign-in changes it). An older
 	// session is rejected as "role_stamp_stale" and its owner signs in again. A cookie without an
-	// IssuedAt is older than any TTL. Zero is off. A session also ends at Expiry, so this only
-	// matters when it is shorter than that.
+	// IssuedAt is older than any TTL. Zero is off. A session also ends at Expiry (the ID token's
+	// expiry, or SessionTTL from sign-in when that is set), so this only matters when it is shorter.
 	RoleStampTTL time.Duration
+
+	// SessionTTL is WARDYN_OIDC_SESSION_TTL: when set, a console session lasts this long from
+	// sign-in instead of ending at the ID token's expiry. Zero (the default) keeps the ID token's
+	// expiry. Boot refuses more than 24 hours. Nothing re-checks the identity provider during a
+	// session, so a longer session should be paired with RoleStampTTL.
+	SessionTTL time.Duration
 
 	// OnLogin, when set, is called synchronously after an APPROVED login with what that login
 	// established (LoginFacts). A failure inside it must never fail the login; nil is a no-op.

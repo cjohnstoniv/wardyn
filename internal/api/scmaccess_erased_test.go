@@ -21,7 +21,7 @@ func TestSCMAccess_DeletedSignInDoesNotClaimRowIsNewer(t *testing.T) {
 			return err
 		},
 		"refused for good": func(s *Server) error {
-			s.deleteDeadCredential(context.Background(), s.cfg.Secrets.For("alice"), "alice", adoEntraSecretName(scmTestRowID), "ado")
+			s.deleteDeadCredential(context.Background(), s.cfg.Secrets.For("alice"), "alice", adoEntraSecretName(scmTestRowID), "ado", false)
 			return nil
 		},
 	} {

@@ -156,8 +156,9 @@ type Config struct {
 	// NO_PROXY the sandbox already honours internally. This sidecar vets the
 	// name on the upstream branch too (egressTarget): an endpoint that resolves
 	// into blocked space is denied HERE (builtin:private-ip), and one that does
-	// not is handed to a corporate forward proxy that will not CONNECT to an
-	// internal address; either way the bypass is what moves the dial local.
+	// not is handed to the corporate forward proxy, whose own routing decides
+	// whether it can be reached. An entry is for a host this sidecar can itself
+	// resolve and reach; either way the bypass is what moves the dial local.
 	//
 	// It is a ROUTING list only: a bypassed dial falls through to the same
 	// unconditional private/reserved-IP guard an unproxied dial does, so it

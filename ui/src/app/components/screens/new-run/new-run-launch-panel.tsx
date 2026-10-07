@@ -26,6 +26,7 @@ import type {
 import { RAIL_SETUP } from "../../wardyn/copy";
 import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
 import { launchGates } from "./new-run-launch-gates";
+import type { PolicyMode } from "../../wardyn/policy-panel";
 import type { WizardState } from "./wizard-types";
 import { RunRail } from "./new-run-rail";
 import type { ProviderGate } from "./model-provider-lane";
@@ -84,13 +85,14 @@ export interface NewRunLaunchPanelProps {
    *  anywhere else on the screen. */
   mode: WizardState["mode"];
   task: string;
-  useSaved: boolean;
+  policyMode: PolicyMode;
   specParsedOk: boolean;
   selectedPolicyId: string | undefined;
   policiesLoaded: boolean;
   pin: string | undefined;
   workspaces: Workspace[];
   selectedWorkspaceId: string | undefined;
+  attachedWorkspaces: number;
   caps: MeCapabilities | null;
   modelProviders: SetupModelProvider[] | undefined;
 
@@ -152,13 +154,14 @@ export function NewRunLaunchPanel({
   runnerUnknown,
   mode,
   task,
-  useSaved,
+  policyMode,
   specParsedOk,
   selectedPolicyId,
   policiesLoaded,
   pin,
   workspaces,
   selectedWorkspaceId,
+  attachedWorkspaces,
   caps,
   modelProviders,
   preflightIsCurrent,
@@ -204,7 +207,7 @@ export function NewRunLaunchPanel({
     isAgent,
     mode,
     task,
-    useSaved,
+    policyMode,
     specParsedOk,
     selectedPolicyId,
     savedPolicy,
@@ -212,6 +215,7 @@ export function NewRunLaunchPanel({
     pin,
     workspaces,
     selectedWorkspaceId,
+    attachedWorkspaces,
     caps,
     modelProviders,
     providerGateState,

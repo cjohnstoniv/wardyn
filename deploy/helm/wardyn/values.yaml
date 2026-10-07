@@ -471,6 +471,14 @@ secretFiles:
 extraVolumes: []
 extraVolumeMounts: []
 
+# Extra Kubernetes objects rendered with this release, each passed through tpl
+# (so "{{ .Release.Namespace }}" and "{{ include "wardyn.fullname" . }}" work)
+# — e.g. the Istio Gateway and VirtualService an estate needs in front of the
+# SSH gateway, kept beside these values instead of in a fork of the chart. The
+# chart itself ships no Istio template. See the README's "SSH on a 443-only
+# estate".
+extraObjects: []
+
 # Optional default policy, baked into a ConfigMap and mounted read-only
 # instead of relying on the wardynd image's own baked-in default
 # (examples/policies/default.json — see README "Installation"). JSON TEXT,
@@ -493,6 +501,18 @@ defaultPolicy: ""
 # escape hatch for a CA delivered your own way (e.g. extraEnv + secretKeyRef
 # pointing at a path your own volume mounts). See README "Corporate CA trust".
 trustedCA: ""
+
+# Optional site-config seed (WARDYN_SITE_CONFIG_SEED_FILE): the network
+# settings wardynd writes at boot into a site config that does not have them,
+# so a wiped or rebuilt database comes back with its upstream proxy and
+# internal hosts. Keys: upstream_proxy_url or upstream_proxy_secret_ref,
+# upstream_proxy_no_proxy, internal_hosts; any other key refuses boot. A
+# setting the database already has is never overwritten. Rendered as JSON into
+# a ConfigMap and mounted read-only. Use upstream_proxy_secret_ref, never a
+# credentialed URL. Empty (default) => no ConfigMap, no env. Wires
+# WARDYN_SITE_CONFIG_SEED_FILE unless env.WARDYN_SITE_CONFIG_SEED_FILE is
+# already set. See README "Site-config seed".
+siteConfigSeed: {}
 
 # WARDYN_DAEMON_PROXY_SECRET from a Secret you manage yourself (never one this
 # chart creates — the value is a credentialed forward-proxy URL, e.g.
@@ -545,6 +565,8 @@ awsSSOProxyInject: ""
 # memory requests to that fraction of its limits, in (0, 1]; "" keeps requests equal to limits
 # (Guaranteed). Below 1 the pod is Burstable: more runs fit a node, but a pod over its memory
 # request is evicted or OOM-killed first under node pressure. The proxy pod stays Guaranteed.
+# This block sizes a run; where a sandbox pod is placed (nodeSelector, tolerations, affinity,
+# priorityClassName, podAnnotations, podLabels) is k8s.sandbox.*, not runner.sandbox.*.
 runner:
   sandbox:
     requestRatio: ""
@@ -676,11 +698,22 @@ k8s:
 # not even a generated host key.
 ssh:
   enabled: false
+  # Keep this above 1023: wardynd runs non-root with every capability dropped,
+  # and on a runtime that does not allow unprivileged low ports (the default
+  # before containerd 2.0) a lower port rolls out Ready with no SSH listener
+  # behind it.
   port: 2222
   # Externally-reachable host agents/operators are told to connect back to
   # (WARDYN_SSH_ADVERTISE, combined with `port` above). Required when
   # enabled — the chart never guesses a public address.
   advertiseHost: ""
+  # An ssh ProxyCommand people's own ssh runs to reach the gateway, for an
+  # estate whose only way in is a TLS-terminating listener on 443
+  # (WARDYN_SSH_PROXY_COMMAND, rendered verbatim, never through tpl). wardynd
+  # publishes it on /healthz and never runs it; it refuses to boot on a control
+  # character, a newline, a single quote, or more than 512 bytes. Empty
+  # (default) publishes none. See docs/SSH.md "SSH on a 443-only estate".
+  proxyCommand: ""
 
 # UI-sandbox gateway (see docs/UI-SANDBOXES.md — a governed, ticket-gated
 # relay from a browser to ONE policy-declared loopback port inside a run's
@@ -762,6 +795,32 @@ metrics:
     labels: {}
     # Scrape interval (e.g. "30s"). Unset: the Prometheus default applies.
     interval: ""
+  # Opt-in dedicated listener (WARDYN_METRICS_LISTEN) that serves ONLY
+  # GET /metrics, in plain HTTP, with NO credential, for a stock Prometheus that
+  # scrapes without a bearer token. Off by default. /metrics on the console port
+  # keeps its operator gate, and the ServiceMonitor above keeps using that.
+  # The port is a named container port (`metrics`) and is deliberately NOT on
+  # the Service: scrape the pod (the chart adds the prometheus.io/scrape, /port
+  # and /path pod annotations; your own podAnnotations win). Read the chart
+  # README's "Scraping /metrics without a credential" first: anyone who reaches
+  # this port reads fleet and capacity counts, approval decisions and your
+  # notification channel ids, and with networkPolicy.enabled=false that is the
+  # whole pod network.
+  listener:
+    enabled: false
+    # 9464: clear of wardynd's other ports (8080, 8443, 2222, 8081) and of
+    # Prometheus's own 9090.
+    port: 9464
+    # NetworkPolicy ingress peers for this port ONLY. Empty (default): pods in
+    # this namespace that are not run pods (wardyn.managed absent). Setting it
+    # REPLACES that default; name your Prometheus, e.g.
+    #   - namespaceSelector:
+    #       matchLabels: {kubernetes.io/metadata.name: monitoring}
+    #     podSelector:
+    #       matchLabels: {app.kubernetes.io/name: prometheus}
+    # A peer that selects every namespace (an empty namespaceSelector with no
+    # podSelector narrowing it) is refused at render.
+    from: []
 
 podAnnotations: {}
 

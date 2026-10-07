@@ -53,6 +53,16 @@ func (e *modelProviderReadError) Error() string {
 
 func (e *modelProviderReadError) Unwrap() error { return e.err }
 
+// sentence is the 503's: a renewal's own sentence when it brought one
+// (providerUnavailable), as the create door answers, else the read failure's.
+func (e *modelProviderReadError) sentence() string {
+	var pu providerUnavailable
+	if errors.As(e.err, &pu) {
+		return pu.msg
+	}
+	return providerReadFailed(e.provider)
+}
+
 // recordProviderChoice is a record session's model-provider choice — the same
 // resolution order a run makes at create (chooseModelProvider), with the
 // workspace's pin and no request, and the same liveness check on the
@@ -77,7 +87,15 @@ func (s *Server) recordProviderChoice(ctx context.Context, actor string, ws type
 	case choice.refusal != "":
 		return runProviderChoice{}, &modelProviderRefusal{choice: choice}
 	case choice.chosen:
-		_, d, cerr := s.providerLiveness(ctx, choice.provider, stepRunAgent, runIdentitySubject(ctx, actor), false)
+		// Renewed here, as at run create (enforceRunModelProvider): the
+		// session's row is inserted before dispatch, so an AWS sign-in that
+		// cannot be renewed must be refused now, not by dispatch after it.
+		refresh := choice.provider.Kind.IsBedrock()
+		lctx := ctx
+		if refresh {
+			lctx = withCreateRenewal(ctx)
+		}
+		_, d, cerr := s.providerLiveness(lctx, choice.provider, stepRunAgent, runIdentitySubject(ctx, actor), refresh)
 		if cerr != nil {
 			return runProviderChoice{}, &modelProviderReadError{provider: choice.provider, err: cerr}
 		}

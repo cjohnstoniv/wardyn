@@ -122,9 +122,11 @@ export function TerminalPane({
           {lastStep === null && (
             <div className="flex flex-col items-center gap-2 pt-2 text-center">
               <p className="text-sm text-muted-foreground">{runEntryRefusalLine(run)}</p>
-              <button onClick={onGoRecording} className="text-xs font-medium text-primary hover:underline">
-                Watch the captured session →
-              </button>
+              {!recordingDisabled && (
+                <button onClick={onGoRecording} className="text-xs font-medium text-info hover:underline">
+                  Watch the captured session →
+                </button>
+              )}
             </div>
           )}
         </StartupProgress>
@@ -154,9 +156,11 @@ export function TerminalPane({
         <PaneNotice
           text={run.interactive ? runEntryRefusalLine(run) : RUN_MODE.autonomous.blurb}
           action={
-            <button onClick={onGoRecording} className="text-xs font-medium text-primary hover:underline">
-              Watch the captured session →
-            </button>
+            recordingDisabled ? undefined : (
+              <button onClick={onGoRecording} className="text-xs font-medium text-info hover:underline">
+                Watch the captured session →
+              </button>
+            )
           }
         />
       )}

@@ -170,9 +170,9 @@ there's no "same address, new container" to replace, and a stopped pod is
 gone, not kept.
 
 - A k8s run's end and limits still fire on schedule — that half is NOT a
-  gap. But ending, losing its sandbox, or (once it ships) being idle all
-  degrade to an immediate, non-resumable teardown rather than a grace
-  window.
+  gap. But ending, losing its sandbox, or being idle all degrade to an
+  immediate, non-resumable teardown rather than a grace window; the pause
+  half of [the clocks](#the-clocks-that-end-or-freeze-a-run) never applies.
 - Its proxy config reaches the sidecar through a per-run Secret staged into
   an in-memory volume (#688), not stdin. Since the run is never kept, that
   Secret lives exactly as long as the run and is never re-created from the
@@ -188,22 +188,63 @@ gone, not kept.
 
 See [Kubernetes: known gaps](kubernetes-known-gaps.md).
 
-## What's not here: pause
+## The clocks that end or freeze a run
 
-- The run-limits schema already carries a `pause_idle_after_sec` field,
-  validated at write like every other limit.
-- The runner layer already has a Freeze/Thaw primitive: the docker driver
-  pauses the AGENT container only (`ContainerPause`/`ContainerUnpause`).
-  Its proxy sidecar keeps running while the agent is frozen, so it keeps
-  renewing its token and answering egress decisions.
+Four clocks can end a run or freeze its agent. They are independent; the first
+one that fires wins. A person attached to a run holds only the first one off.
 
-Neither is wired to anything on main today: no reaper reads
-`pause_idle_after_sec`, and nothing calls Freeze or Thaw outside a test. The
-run-facing behaviour is unchanged from before this release: an idle run is
-STOPPED — a terminal, full-teardown action, never a pause — by the same
-idle reaper `docs/POLICIES.md`'s `auto_stop_after_sec` already describes.
+| Clock | What it does | Attached | On Kubernetes | Audit |
+| --- | --- | --- | --- | --- |
+| **Idle stop**, `auto_stop_after_sec` | Stops the run once it has been idle that long, plus a 30 second slack | Not stopped, as long as the attach's keepalive writes succeed | Applies | `run.autostop` |
+| **Idle pause**, `pause_idle_after_sec` | Freezes the agent in place, and thaws it on presence | A person's input thaws it | Never applies: the substrate cannot freeze | `run.pause`, `run.resume` |
+| **The lease**, `ends_at` | Ends the run: stopped and kept for `WARDYN_ENDED_RUN_GRACE` | Ends it all the same | Applies, but tears the run down at once instead of keeping it | `run.ended` |
+| **`WARDYN_RUN_MAX_AGE`** | Stops any run older than the cap, busy or not | Stops it all the same | Applies, and also sets the pods' deadlines | `run.max_age.expire` |
 
-Pause-and-resume is tracked as a follow-up and is not part of this release.
-When it ships, "paused" will mean the agent's processes are frozen, not
-that the run is any more contained than a running one — see the threat
-model.
+**Idle stop.**
+
+- Idleness is the age of the run's last activity: an egress call, CPU use, or
+  an attach.
+- Every attached surface resets the clock when it opens and every 30 seconds
+  while it is held. The surfaces are the browser terminal, an SSH shell, an
+  SSH exec, sftp or `-L` channel, and a relayed connection to an in-sandbox UI.
+- So a run someone is attached to is not idle-stopped, as long as those writes
+  succeed. They are best effort and a failed one is dropped, so a database
+  that refuses them for long enough lets an attached run look idle.
+- A run nobody is attached to is idle like any other, which is why a run can
+  end an hour after its owner last looked at it.
+- The value is `auto_stop_after_sec` in the run's policy. The shipped
+  `default.json` sets `3600`; `0` and a negative value both mean never
+  idle-stop.
+- A member's value is clamped to the ceiling's positive maximum. The `-1` that
+  interactive and SSH sessions use becomes that maximum too, so under the
+  shipped default a member's session has an hour of idleness. Admins are not
+  clamped.
+- To give members a longer window, raise `auto_stop_after_sec` in the ceiling
+  (the default policy, `defaultPolicy` in the chart). Do not set it to `0`: a
+  ceiling of `0` removes the cap, and it also turns idle stop off for every
+  run that does not set its own value.
+
+**Idle pause.**
+
+- A run is frozen only when its profile sets `pause_idle_after_sec` (at least
+  630 seconds is used), nothing has happened for that long, its CPU reads
+  quiet, and its substrate can freeze its confinement class (Docker `runc`
+  today).
+- A run waiting on a decision is frozen after 15 minutes whatever the profile
+  says.
+- The proxy keeps running and the run stays `RUNNING`. Typing into the run,
+  attaching, opening an SSH channel or an in-sandbox UI connection thaws it,
+  as does `POST /runs/{id}/resume`.
+- On Kubernetes the runner cannot freeze a pod in place, so the setting is
+  inert there and an idle run is stopped by idle stop.
+- The limit is set in a governance profile's run limits; see the
+  [profile table](../OPERATIONS.md#multi-user-who-can-change-what) for how
+  profiles combine.
+
+**The lease.** A run has no `ends_at` on the defaults. A governance profile's
+run limits set one at create, from `default_end_sec` or `max_end_ahead_sec`;
+the owner moves it later within the captured maximum (see [Extend](#extend)).
+
+**`WARDYN_RUN_MAX_AGE`.** Off by default (unset, `0` or negative). It is an
+absolute cap on a run's age since creation and is not the lease: a person
+cannot extend it. See [ENV.md](../ENV.md).

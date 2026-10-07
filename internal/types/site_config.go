@@ -36,8 +36,11 @@ type SiteConfig struct {
 	UpstreamProxyURL string `json:"upstream_proxy_url,omitempty"`
 	// UpstreamProxyNoProxy is the upstream proxy's BYPASS list (like
 	// NO_PROXY): destinations wardyn-proxy dials DIRECTLY, matched by
-	// host/domain-suffix or CIDR. Exists because a corporate forward proxy
-	// won't CONNECT to an internal address (breaks PrivateLink estates).
+	// host/domain-suffix or CIDR. Exists for a private-endpoint estate whose
+	// corporate forward proxy has no route to the endpoint but this sidecar
+	// does: an entry is for a host the sidecar can itself resolve and reach.
+	// Where the corporate proxy is the only route, leave the host off this
+	// list and declare it in InternalHosts alone.
 	//
 	// SECURITY: a bypassed dial still hits the unconditional private/
 	// reserved-IP SSRF guard (InternalHosts is the only lift) and grants no

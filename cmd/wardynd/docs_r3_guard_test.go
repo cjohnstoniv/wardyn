@@ -672,8 +672,11 @@ func TestOperationsDocNamesTheUnscopedNetworkRedirectDeny(t *testing.T) {
 func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
 	src := readSrc(t, "internal", "broker", "revoke.go")
 	fn := funcBody(t, src, "(b *Broker) RevokeRun")
-	if !strings.Contains(fn, `"jti":  mc.JTI`) || !strings.Contains(fn, `"note": revokeNote(mc.Kind)`) {
+	if !strings.Contains(fn, `"jti":   mc.JTI`) || !strings.Contains(fn, `"note":  revokeNote(mc.Kind)`) {
 		t.Fatal("Broker.RevokeRun no longer writes jti+revokeNote(kind) — re-derive the doc row before trusting this guard")
+	}
+	if !strings.Contains(fn, `"scope": "run_credentials"`) {
+		t.Fatal("Broker.RevokeRun no longer stamps scope run_credentials — the doc row and the Audit view's sentence depend on it")
 	}
 	if !strings.Contains(fn, "b.db.MintedCredentials(ctx, runID)") {
 		t.Fatal("Broker.RevokeRun no longer enumerates via MintedCredentials — re-derive the doc row before trusting this guard")

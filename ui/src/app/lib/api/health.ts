@@ -375,7 +375,11 @@ export const health = {
     // unset) or an older daemon — both must read as "no pane", never a
     // false-enabled guess. advertise_addr / host_key_fingerprint are both
     // non-secret (see docs/SSH.md) — the fingerprint is public by design.
-    ssh?: { enabled?: boolean; advertise_addr?: string; host_key_fingerprint?: string };
+    // proxy_command is the operator's advisory ssh ProxyCommand
+    // (WARDYN_SSH_PROXY_COMMAND, for an estate that only lets 443 in); absent
+    // when unset. The daemon never runs it, and the console shows it only
+    // after applying the daemon's own boot rules (lib/ssh-proxy-command.ts).
+    ssh?: { enabled?: boolean; advertise_addr?: string; host_key_fingerprint?: string; proxy_command?: string };
     // UI-sandbox gateway discovery (run-detail's "UI apps" lane): absent when
     // the gateway is off (WARDYN_UI_SANDBOX_LISTEN unset) or an older daemon —
     // both read as "no lane", never a false-enabled guess. enter_url_template

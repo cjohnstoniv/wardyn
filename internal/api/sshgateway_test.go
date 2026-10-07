@@ -16,7 +16,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -1508,4 +1511,44 @@ func TestSSHGateway_MixedChannelTypesShareOneCap(t *testing.T) {
 			t.Errorf("audit must distinguish the refused channel type (session=%v direct-tcpip=%v) — that distinction IS the shared-counter evidence", sawSession, sawForward)
 		}
 	})
+}
+
+// sshHealthzField serves one /healthz through the real router for a Server
+// with the gateway on and the given proxy command, and returns its "ssh" object.
+func sshHealthzField(t *testing.T, proxyCommand string) map[string]json.RawMessage {
+	t.Helper()
+	_, hostPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate host key: %v", err)
+	}
+	srv := New(Config{
+		SSHListenAddr: ":2222", SSHAdvertiseAddr: "ssh.example.com:2222",
+		SSHHostKey: hostPriv, SSHProxyCommand: proxyCommand,
+	})
+	r := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	r.RemoteAddr = "127.0.0.1:54321"
+	w := httptest.NewRecorder()
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
+	var body struct {
+		SSH map[string]json.RawMessage `json:"ssh"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode /healthz (%d): %v", w.Code, err)
+	}
+	return body.SSH
+}
+
+func TestSSHGatewayHealthz_ProxyCommandOnlyWhenSet(t *testing.T) {
+	const pc = "openssl s_client -quiet -verify_return_error -verify_hostname %h -connect %h:443 -servername %h"
+	set := sshHealthzField(t, pc)
+	var got string
+	if err := json.Unmarshal(set["proxy_command"], &got); err != nil || got != pc {
+		t.Fatalf("proxy_command = %s (%v), want %q", set["proxy_command"], err, pc)
+	}
+
+	unset := sshHealthzField(t, "")
+	keys := slices.Sorted(maps.Keys(unset))
+	if want := []string{"advertise_addr", "enabled", "host_key_fingerprint"}; !slices.Equal(keys, want) {
+		t.Fatalf("ssh keys with the proxy command unset = %v, want exactly %v", keys, want)
+	}
 }

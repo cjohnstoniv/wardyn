@@ -54,8 +54,9 @@ func (b *Broker) RevokeRun(ctx context.Context, runID uuid.UUID) error {
 	actor := spiffeForRun(runID)
 	for _, mc := range minted {
 		d := map[string]any{
-			"jti":  mc.JTI,
-			"note": revokeNote(mc.Kind),
+			"jti":   mc.JTI,
+			"note":  revokeNote(mc.Kind),
+			"scope": "run_credentials",
 		}
 		if mc.Kind != "" {
 			d["kind"] = mc.Kind

@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { toYaml, JsonBlock, YamlBlock } from "./code-block";
+import { toYaml, CodeBlock, JsonBlock, YamlBlock } from "./code-block";
 
 describe("toYaml", () => {
   it("renders a policy spec as pretty, indented YAML (arrays of scalars + maps)", () => {
@@ -82,5 +82,18 @@ describe("JsonBlock — copy feedback is honest about clipboard availability", (
 
     const live = await screen.findByText("Copied");
     expect(live).toHaveAttribute("aria-live", "polite");
+  });
+});
+
+describe("CodeBlock copyLabel", () => {
+  it("names the Copy button, and defaults to Copy without it", () => {
+    render(
+      <>
+        <CodeBlock text="a" copyLabel="Copy ssh config" />
+        <CodeBlock text="b" />
+      </>,
+    );
+    expect(screen.getByRole("button", { name: "Copy ssh config", hidden: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy", hidden: true })).toBeInTheDocument();
   });
 });

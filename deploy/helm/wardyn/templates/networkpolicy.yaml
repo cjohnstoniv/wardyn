@@ -24,6 +24,9 @@ re-open only what wardynd needs:
     for the console never reaches the port proxies resolve credentials on.
     The runs namespace gets that port and nothing else: no http, so no bearer
     reaches wardynd in plaintext from a run
+  - a SEPARATE ingress rule for the unauthenticated metrics listener
+    (metrics.listener.enabled): same-namespace non-run pods by default, or
+    metrics.listener.from; never networkPolicy.ingress.from
 */}}
 {{- /*
 `default dict` on the 0.6-only blocks: `helm upgrade --reuse-values` replaces
@@ -34,6 +37,7 @@ out; guarded, the 0.5 defaults simply carry forward.
 */ -}}
 {{- $ssh := .Values.ssh | default dict -}}
 {{- $ui := .Values.uiSandbox | default dict -}}
+{{- $ml := (.Values.metrics | default dict).listener | default dict -}}
 {{- if .Values.networkPolicy.enabled -}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -147,6 +151,34 @@ spec:
         - protocol: TCP
           port: ui
         {{- end }}
+    {{- end }}
+    {{- if $ml.enabled }}
+    # The dedicated metrics listener (metrics.listener), on its OWN rule with
+    # its OWN peers. It answers GET /metrics with no credential, so it never
+    # rides networkPolicy.ingress.from (an ingress controller added for the
+    # console gets nothing here) and never takes a cluster-wide peer. Default:
+    # this namespace minus run pods, the same wardyn.managed exclusion as the
+    # ssh/ui rule above. metrics.listener.from replaces that default.
+    - from:
+        {{- with $ml.from }}
+        {{- range . }}
+        {{- /* A selector with no matchLabels and no matchExpressions is empty however it is spelled ({}, null, {matchLabels: {}}, {matchExpressions: []}), and Kubernetes reads an empty selector as "everything". Both selectors are judged that way: every namespace AND every pod is the refused pair. */}}
+        {{- $ns := .namespaceSelector | default dict }}
+        {{- $pod := .podSelector | default dict }}
+        {{- if and (hasKey . "namespaceSelector") (empty $ns.matchLabels) (empty $ns.matchExpressions) (empty $pod.matchLabels) (empty $pod.matchExpressions) }}
+        {{- fail "wardyn: metrics.listener.from has a peer with an empty namespaceSelector (no matchLabels and no matchExpressions) and a podSelector that is absent or just as empty, which admits every pod in every namespace to the unauthenticated metrics listener. Name the namespace (matchLabels: {kubernetes.io/metadata.name: monitoring}) or give the podSelector labels." }}
+        {{- end }}
+        {{- end }}
+        {{- toYaml . | nindent 8 }}
+        {{- else }}
+        - podSelector:
+            matchExpressions:
+              - key: wardyn.managed
+                operator: DoesNotExist
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: metrics
     {{- end }}
   egress:
     # DNS resolution (kube-dns / CoreDNS). The ONLY rule in this chart that may

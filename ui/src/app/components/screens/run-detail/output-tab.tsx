@@ -7,9 +7,10 @@
 // sandbox-controlled, so they render as ONE React text node in a <pre>: never
 // HTML, never a markdown component, no escape-sequence interpretation.
 import * as React from "react";
-import { AlertTriangle, Logs } from "lucide-react";
+import { AlertTriangle, Loader2, Logs } from "lucide-react";
 import { HttpError } from "../../../lib/api/core";
 import { runOutput } from "../../../lib/api/run-output";
+import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import type { RunOutput } from "../../../lib/types";
 import { RUN_COCKPIT, RUN_OUTPUT } from "../../wardyn/copy";
 import { CopyButton } from "../../wardyn/copy-button";
@@ -18,10 +19,17 @@ import { EmptyState, ErrorState } from "../../wardyn/states";
 
 const POLL_MS = 4000;
 // A not-kept answer this soon after the run ended is the final row still
-// being written (design §3, read order 5), not a verdict.
+// being written (design §3, read order 5), not a verdict. So is an interactive
+// answer this soon after a Wardyn stop: the pane snapshot row is written a
+// moment after the run reaches STOPPED.
 const SAVING_WINDOW_MS = 60_000;
+// The empty busy body stays empty this long before a loading line shows.
+const LOADING_LINE_MS = 1000;
 
 type Refusal = "off" | "not_kept" | "expired" | "erased" | "interactive" | "not_captured" | "mask" | "error";
+
+// Ended states that never went through a Wardyn stop (internal/api/run_output.go).
+const NOT_STOPPED = new Set(["KILLED", "FAILED", "COMPLETED"]);
 
 const REFUSALS: Record<string, Refusal> = {
   run_output_off: "off",
@@ -45,12 +53,15 @@ function Notice({ children }: { children: React.ReactNode }) {
 export function OutputTab({
   runId,
   live,
+  state,
   endedAt,
   onGoRecording,
 }: {
   runId: string;
   /** The run has not reached a terminal state. */
   live: boolean;
+  /** The run's state: the nothing-kept sentence is only true for runs that did not end through a Wardyn stop. */
+  state: string;
   endedAt?: string;
   onGoRecording: () => void;
 }) {
@@ -60,6 +71,18 @@ export function OutputTab({
   const [attempt, setAttempt] = React.useState(0);
 
   const [saving, setSaving] = React.useState(false);
+  const [showLoading, setShowLoading] = React.useState(false);
+  const recordingOff = useRecordingDisabled() === true;
+  const stopped = state === "STOPPED";
+
+  React.useEffect(() => {
+    if (loaded) {
+      setShowLoading(false);
+      return;
+    }
+    const t = setTimeout(() => setShowLoading(true), LOADING_LINE_MS);
+    return () => clearTimeout(t);
+  }, [loaded]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -79,9 +102,10 @@ export function OutputTab({
         const r = e instanceof HttpError ? (REFUSALS[e.reason] ?? "error") : "error";
         setRefusal(r);
         setLoaded(true);
-        // Only a not-kept answer around the end of a run is worth another look.
-        const again =
-          r === "not_kept" && (live || (!!endedAt && Date.now() - Date.parse(endedAt) < SAVING_WINDOW_MS));
+        // Only an answer around the end of a run is worth another look: not-kept
+        // while the final row is written, interactive while the snapshot is.
+        const justEnded = !!endedAt && Date.now() - Date.parse(endedAt) < SAVING_WINDOW_MS;
+        const again = (r === "not_kept" && (live || justEnded)) || (r === "interactive" && stopped && justEnded);
         setSaving(again);
         if (again) timer = setTimeout(tick, POLL_MS);
       }
@@ -91,15 +115,26 @@ export function OutputTab({
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-    // endedAt/live only steer whether to poll again; a change re-reads once.
-  }, [runId, live, endedAt, attempt]);
+    // endedAt/live/stopped only steer whether to poll again; a change re-reads once.
+  }, [runId, live, stopped, endedAt, attempt]);
 
-  if (!loaded) return <div className="max-w-4xl text-sm text-muted-foreground" aria-busy="true" />;
+  if (!loaded) {
+    return (
+      <div className="max-w-4xl text-sm text-muted-foreground" aria-busy="true">
+        {showLoading && (
+          <div role="status" className="flex items-center gap-2">
+            <Loader2 className="size-4 animate-spin" />
+            <span>{RUN_OUTPUT.loading}</span>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   if (refusal !== null) {
     return (
       <div className="max-w-4xl rounded-xl border border-border bg-card" data-testid="run-output-refusal">
-        {refusalBody(refusal, saving, onGoRecording, () => {
+        {refusalBody(refusal, saving, recordingOff, live, state, onGoRecording, () => {
           setLoaded(false);
           setAttempt((n) => n + 1);
         })}
@@ -109,11 +144,12 @@ export function OutputTab({
 
   const o = out!;
   const pane = o.source === "pane_snapshot";
+  const sourceLabel = pane ? RUN_OUTPUT.sourcePane : RUN_OUTPUT.sourceStdout;
   return (
     <div className="max-w-4xl space-y-3 rounded-xl border border-border bg-card p-4">
       <div className="flex flex-wrap items-center gap-2">
         <span className="label-eyebrow">{RUN_OUTPUT.eyebrow}</span>
-        <Chip>{pane ? RUN_OUTPUT.sourcePane : RUN_OUTPUT.sourceStdout}</Chip>
+        <Chip>{sourceLabel}</Chip>
         <Chip tone={o.complete ? "neutral" : "info"}>{o.complete ? RUN_OUTPUT.final : RUN_OUTPUT.live}</Chip>
         <span className="ml-auto flex items-center gap-2">
           {o.complete && o.captured_at && (
@@ -137,6 +173,9 @@ export function OutputTab({
       </div>
       <pre
         data-testid="run-output-text"
+        tabIndex={0}
+        role="region"
+        aria-label={sourceLabel}
         className="scroll-thin max-h-[60vh] overflow-auto whitespace-pre-wrap break-all rounded-lg bg-[#0d1117] p-3 font-mono text-xs text-[#e6edf3]"
       >
         {o.output === "" ? (
@@ -152,7 +191,15 @@ export function OutputTab({
   );
 }
 
-function refusalBody(r: Refusal, saving: boolean, onGoRecording: () => void, retry: () => void) {
+function refusalBody(
+  r: Refusal,
+  saving: boolean,
+  recordingOff: boolean,
+  live: boolean,
+  state: string,
+  onGoRecording: () => void,
+  retry: () => void,
+) {
   switch (r) {
     case "off":
       return (
@@ -179,13 +226,29 @@ function refusalBody(r: Refusal, saving: boolean, onGoRecording: () => void, ret
     case "erased":
       return <EmptyState icon={Logs} title={RUN_OUTPUT.erasedTitle} description={RUN_OUTPUT.erasedDesc} />;
     case "interactive":
+      if (saving) return <EmptyState icon={Logs} title={RUN_OUTPUT.savingTitle} description={RUN_OUTPUT.savingDesc} />;
+      // Recording off is a known true only; unknown keeps the pointer (D).
+      if (recordingOff) {
+        if (live) {
+          return (
+            <EmptyState icon={Logs} title={RUN_OUTPUT.interactiveLiveTitle} description={RUN_OUTPUT.interactiveLiveDesc} />
+          );
+        }
+        // Mirrors the server's interactiveNothingKept: a run Wardyn stopped is
+        // told only that nothing is kept, never that it did not end through a stop.
+        return NOT_STOPPED.has(state) ? (
+          <EmptyState icon={Logs} title={RUN_OUTPUT.interactiveTitle} description={RUN_OUTPUT.interactiveNoneDesc} />
+        ) : (
+          <EmptyState icon={Logs} title={RUN_OUTPUT.interactiveTitle} description={RUN_OUTPUT.interactiveStoppedDesc} />
+        );
+      }
       return (
         <EmptyState
           icon={Logs}
           title={RUN_OUTPUT.interactiveTitle}
           description={RUN_OUTPUT.interactiveDesc}
           action={
-            <button type="button" onClick={onGoRecording} className="text-sm text-primary hover:underline">
+            <button type="button" onClick={onGoRecording} className="text-sm text-info hover:underline">
               {RUN_OUTPUT.interactiveLink}
             </button>
           }
@@ -198,7 +261,7 @@ function refusalBody(r: Refusal, saving: boolean, onGoRecording: () => void, ret
           title={RUN_OUTPUT.notCapturedTitle}
           description={RUN_OUTPUT.notCapturedDesc}
           action={
-            <button type="button" onClick={onGoRecording} className="text-sm text-primary hover:underline">
+            <button type="button" onClick={onGoRecording} className="text-sm text-info hover:underline">
               {RUN_OUTPUT.interactiveLink}
             </button>
           }

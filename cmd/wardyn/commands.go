@@ -226,7 +226,7 @@ func runCmd(client clientFn) *cobra.Command {
 
 	cmd.AddCommand(runListCmd(client), runGetCmd(client), runKillCmd(client),
 		runGrantsCmd(client), runRecordingCmd(client), runWaitReadyCmd(client), runPolicyCmd(client),
-		runLogsCmd(client), runOutputCmd(client), attachCmd(client), sshCmd(client))
+		runLogsCmd(client), runOutputCmd(client), runSignInCmd(client), attachCmd(client), sshCmd(client))
 	return cmd
 }
 

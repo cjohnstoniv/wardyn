@@ -53,6 +53,9 @@ type runProviderChoice struct {
 	// these, never choice.provider, which is the zero value on every refusal.
 	providerID string
 	kind       types.ModelProviderKind
+	// renewAtLaunch: Review's dry check found the chosen AWS session expired
+	// but renewable, so launch will renew it (mpBRRenewAtLaunch).
+	renewAtLaunch bool
 }
 
 // chooseModelProvider is the design's resolution order (multi-provider §2.4):
@@ -314,7 +317,7 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		if refresh {
 			lctx = withCreateRenewal(ctx)
 		}
-		_, d, err := s.providerLiveness(lctx, choice.provider, req.Agent, runIdentitySubject(ctx, principalFromRequest(r)), refresh)
+		blob, d, err := s.providerLiveness(lctx, choice.provider, req.Agent, runIdentitySubject(ctx, principalFromRequest(r)), refresh)
 		if err != nil {
 			// Deliberately bare (#656 slice 3): the sentence alone — a
 			// transient store failure is no door (multi-provider §5.8), and
@@ -333,6 +336,8 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 			s.writeProviderChoiceRefusal(w, r, choice, d)
 			return runProviderChoice{}, false
 		}
+		// A dry check passes an expired AWS session only when it is renewable.
+		choice.renewAtLaunch = !refresh && choice.provider.Kind == types.ModelProviderBedrockSSO && blob.expired(s.cfg.Now())
 	}
 	if name, secretName, found := modelEnvSecretGrant(spec); found {
 		s.writeProviderRefusal(w, r, choice.provider.ID, choice.provider.Kind, fmt.Sprintf(mpRunModelEnvSecret, secretName, name), false)

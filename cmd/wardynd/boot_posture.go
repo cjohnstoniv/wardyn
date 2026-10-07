@@ -12,6 +12,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/directory"
@@ -416,6 +417,12 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, *f.uiStripCookies, posture, *f.allowPlaintextListen); err != nil {
 		return err
 	}
+	if err := validateMetricsListenConfig(*f.metricsListen, *f.listen, *f.internalListen, *f.sshListen, *f.uiListen); err != nil {
+		return err
+	}
+	if err := validateSSHProxyCommand(*f.sshProxyCommand); err != nil {
+		return err
+	}
 	if err := validateBasePath(*f.basePath, *f.oidcIssuer, *f.oidcRedirectURL, *f.controlURL); err != nil {
 		return err
 	}
@@ -426,6 +433,9 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 		return err
 	}
 	if err := validateRunOutputRetentionDays(*f.runOutputRetention); err != nil {
+		return err
+	}
+	if err := validateOIDCSessionTTL(*f.oidcSessionTTL); err != nil {
 		return err
 	}
 	if _, err := scimConfig(f, posture); err != nil {
@@ -481,6 +491,18 @@ func validateRunOutputTailBytes(n int) error {
 func validateRunOutputRetentionDays(n int) error {
 	if n < 0 {
 		return fmt.Errorf("WARDYN_RUN_OUTPUT_RETENTION_DAYS is %d; it must be 0 (keep forever) or a positive number of days", n)
+	}
+	return nil
+}
+
+// maxOIDCSessionTTL caps WARDYN_OIDC_SESSION_TTL: nothing re-checks the identity provider during a
+// console session, so a person disabled there keeps the console until the session ends.
+const maxOIDCSessionTTL = 24 * time.Hour
+
+// validateOIDCSessionTTL refuses a negative WARDYN_OIDC_SESSION_TTL or one above maxOIDCSessionTTL.
+func validateOIDCSessionTTL(ttl time.Duration) error {
+	if ttl < 0 || ttl > maxOIDCSessionTTL {
+		return fmt.Errorf("refusing to start: WARDYN_OIDC_SESSION_TTL is %s; it must be 0 (the ID token's expiry) or at most 24h", ttl)
 	}
 	return nil
 }

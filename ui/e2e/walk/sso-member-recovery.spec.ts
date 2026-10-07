@@ -25,7 +25,7 @@
  * ── EXECUTION ORDER IS LOAD-BEARING ─────────────────────────────────────────
  * The letters below are the REPORT's topics, not the order. The order is:
  *
- *   B → A → A(rail) → C → D → E → G → H → I → E2 → L0 → F → L
+ *   B → A → A(rail) → C → D → E → G → H → I → E2 → L0 → F → L → M
  *
  * B runs FIRST because it reads the member's SIGNED-IN card while the member is
  * still `live` from the previous file — case A's pin flip is what takes that
@@ -53,6 +53,11 @@
  * in from whatever L0 left them at. L makes its own lapse (makeMemberActionable)
  * and ends by HEALING the member through a completed sign-in, so it goes where
  * nothing after it needs the member lapsed.
+ *
+ * 0.8.8 adds M LAST: it makes its own lapse, HOLDS the fake's next device code
+ * (so its pane waits, as against real AWS), and ends by healing the member
+ * through that same sign-in. Its afterEach approves the hold, so a red M never
+ * stalls sso-reauth-hold.spec.ts's sign-ins after it.
  *
  * ── NOTHING IS SKIPPED HERE ─────────────────────────────────────────────────
  * Every case runs live (D and E were flipped when lane `login-pane` merged).
@@ -89,6 +94,7 @@ import {
   LOGIN_DONE,
   MEMBER_EMAIL,
   SANDBOX_UP,
+  SEEN_URL,
   WALK_PROVIDER,
   WALK_PROVIDER_NAME,
   awaitCapture,
@@ -1245,4 +1251,78 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
     (r) => r.id === runID || (r.title === "L launch door" && (r.created_at ?? "") >= clickedAt),
   );
   expect(created.map((r) => r.id), "exactly one run for this click").toEqual([runID]);
+});
+
+// ── M — a sign-in whose browser page was lost is found from the run page ────
+
+/** The fake's device hold (test/awsssofake/device_hold.go), reached the way
+ *  sso-reauth-hold.spec.ts reaches its reauth control: through the walk's
+ *  read-only forward to the fake, which takes no bearer. hold=1 keeps the NEXT
+ *  sign-in authorization_pending; approve=1 approves it and drops an unused hold. */
+const DEVICE_CONTROL_URL = SEEN_URL.replace("/_seen", "/_control/device");
+let deviceHeld = false;
+
+async function deviceControl(query: "hold=1" | "approve=1"): Promise<void> {
+  const res = await fetch(`${DEVICE_CONTROL_URL}?${query}`, { method: "POST" });
+  if (!res.ok) throw new Error(`POST ${DEVICE_CONTROL_URL}?${query}: ${res.status}`);
+}
+
+// A hold left behind by a red case would stall every later sign-in in the walk.
+test.afterEach(async () => {
+  if (!deviceHeld) return;
+  deviceHeld = false;
+  await deviceControl("approve=1");
+});
+
+/** The run page's waiting strip: RUN_SIGN_IN's TITLE and NO_LONGER
+ *  (copy/run-sign-in.ts), the approved 088 mock's exact strings. */
+const SIGN_IN_WAITING = "This sign-in is waiting for you";
+const SIGN_IN_NO_LONGER = "This sign-in is no longer waiting.";
+
+test("M (run sign-in): a sign-in whose browser page was closed is found and finished from the run page", async ({
+  page,
+  request,
+}) => {
+  await dexSignIn(page, MEMBER_EMAIL);
+  await ensureActionable(page, request);
+  const prior = new Set((await myLoginRuns(page)).map((r) => r.id));
+
+  // The fake holds THIS sign-in's device code, so the sandbox's CLI prints the
+  // verification page and waits on it, as it does against real AWS.
+  deviceHeld = true;
+  await deviceControl("hold=1");
+  await openLoginPane(page);
+  const loginRun = await newLoginRun(page, prior);
+
+  // The PAGE goes, not the dialog: dismissing the dialog still kills the run
+  // (harness-login-pane-launch.test.tsx pins that), and a lost tab must not.
+  const context = page.context();
+  await page.close();
+  const again = await context.newPage();
+
+  // The server answers the owner with the latest attempt's code…
+  await again.goto(`/runs/${loginRun.id}`);
+  const signIn = async () =>
+    again.evaluate(async (id: string) => {
+      const r = await fetch(`/api/v1/runs/${id}/sign-in`, { credentials: "include" });
+      return (await r.json()) as { state?: string; verification_url?: string; user_code?: string };
+    }, loginRun.id);
+  await expect.poll(async () => (await signIn()).state, { timeout: SANDBOX_UP }).toBe("waiting");
+  const waiting = await signIn();
+  expect(waiting.verification_url ?? "").toMatch(/^https:\/\/device\.sso\.[a-z0-9-]+\.amazonaws\.com\//);
+  expect(waiting.verification_url ?? "").toContain(`user_code=${waiting.user_code}`);
+
+  // …and the run page shows it, with no dialog and nothing typed.
+  const strip = again.getByRole("status").filter({ hasText: SIGN_IN_WAITING });
+  await expect(strip).toBeVisible({ timeout: 60_000 });
+  await expect(strip).toContainText(waiting.user_code ?? "");
+
+  // Approving the page completes the same sign-in; the run page then says it
+  // is no longer waiting, and the capture is this run's.
+  await deviceControl("approve=1");
+  deviceHeld = false;
+  await expect(again.getByText(SIGN_IN_NO_LONGER)).toBeVisible({ timeout: 60_000 });
+  expect((await signIn()).state).not.toBe("waiting");
+  await expect.poll(async () => (await modelAccess(again)).state, { timeout: 120_000 }).toBe("live");
+  await expect.poll(async () => (await ownAWSRow(again)).source_run_id, { timeout: 120_000 }).toBe(loginRun.id);
 });

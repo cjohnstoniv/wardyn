@@ -122,6 +122,9 @@ type bootFlags struct {
 	// runs whenever controlURL is https.
 	internalListen *string
 	policyPath     *string
+	// siteConfigSeedFile is WARDYN_SITE_CONFIG_SEED_FILE: a PATH to the network
+	// settings restored into an empty site config at boot (api.LoadSiteConfigSeed).
+	siteConfigSeedFile *string
 	// trustedCAFile is WARDYN_TRUSTED_CA_FILE (see trusted_ca.go): a PATH to a
 	// PEM bundle of additional roots a corporate TLS-inspecting middlebox signs
 	// with. Same shape as policyPath above (a path read once at boot, not a
@@ -330,18 +333,23 @@ type bootFlags struct {
 
 	// SSH gateway (C2/C3): sshListen empty = off = no listener, no new surface
 	// (see resolveSSHGateway). sshAdvertise is purely advisory copy for the
-	// run-detail pane's `ssh` command — never read by the gateway itself.
+	// run-detail pane's `ssh` command — never read by the gateway itself;
+	// sshProxyCommand is advisory copy too: the daemon never runs it.
 	// sshRoleTTL (migration 0046) bounds how stale a key's admin-override
 	// stamp may be — see api.Config.SSHRoleTTL.
-	sshListen    *string
-	sshAdvertise *string
-	sshRoleTTL   *time.Duration
+	sshListen       *string
+	sshAdvertise    *string
+	sshProxyCommand *string
+	sshRoleTTL      *time.Duration
 	// apiTokenMaxTTL caps a newly minted API token's lifetime — see
 	// api.Config.APITokenMaxTTL.
 	apiTokenMaxTTL *time.Duration
 	// roleStampTTL bounds how old an API token's or console session's role
 	// stamp may be — see api.Config.RoleStampTTL. Zero is off.
 	roleStampTTL *time.Duration
+	// oidcSessionTTL replaces the ID token's expiry as a console session's lifetime — see
+	// oidc.Config.SessionTTL. Zero keeps the ID token's expiry.
+	oidcSessionTTL *time.Duration
 	// governanceChangeTTL is how long a governance change held for a second human waits — see
 	// api.Config.GovernanceChangeTTL.
 	governanceChangeTTL *time.Duration
@@ -358,6 +366,10 @@ type bootFlags struct {
 	// uiStripCookies is the relay's inbound cookie policy — see
 	// api.Config.UICookiePolicy.
 	uiStripCookies *string
+
+	// metricsListen is the dedicated, unauthenticated GET /metrics listener
+	// (boot_metrics.go). Empty = off = no listener, like sshListen.
+	metricsListen *string
 
 	// allowUnknownMigrations is the break-glass past db.Migrate's downgrade
 	// refusal (a database a newer wardynd migrated) — see connectAndMigrate.
@@ -458,6 +470,7 @@ func parseBootFlags() *bootFlags {
 		controlURL:             flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "https://wardynd:8443", "the URL every run's proxy dials to reach this daemon's internal TLS listener (-internal-listen); its host is the name wardynd's internal CA certifies. http:// is refused at boot unless the host is loopback (localhost, 127.0.0.0/8, ::1)"),
 		internalListen:         flagEnv("internal-listen", "WARDYN_INTERNAL_LISTEN", ":8443", "listen address of the proxy-facing TLS listener (the /api/v1/internal/ routes and /healthz only), served with a certificate from wardynd's own internal CA. Runs whenever -control-plane-url is https"),
 		policyPath:             flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
+		siteConfigSeedFile:     flagEnv("site-config-seed-file", "WARDYN_SITE_CONFIG_SEED_FILE", "", "path to a JSON file of network settings (upstream_proxy_url or upstream_proxy_secret_ref, upstream_proxy_no_proxy, internal_hosts) written at boot into a site config that does not have them; a setting the database has is never overwritten. Any other key, or a malformed file, refuses boot. Empty (default) seeds nothing"),
 		trustedCAFile:          flagEnv("trusted-ca-file", "WARDYN_TRUSTED_CA_FILE", "", "path to a PEM bundle of additional trusted roots, e.g. a corporate TLS-inspecting proxy's CA; added to the system roots for wardynd's own outbound TLS, the proxy sidecar and every sandbox. Empty (default) trusts only the system roots"),
 		daemonProxyURL:         flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) for wardynd's own outbound HTTP calls: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO token renewal and Entra directory sync. Empty (default) leaves the default transport untouched"),
 		daemonNoProxy:          flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-style bypass list for -daemon-proxy-url (host, .suffix, CIDR or *); ignored when the proxy URL is unset"),
@@ -616,8 +629,11 @@ func parseBootFlags() *bootFlags {
 		uiSessionTTL:     flagDuration("ui-sandbox-session-ttl", "WARDYN_UI_SANDBOX_SESSION_TTL", 8*time.Hour, "how long a UI-sandbox relay session cookie stays usable (duration)"),
 		uiStripCookies:   flagEnv("ui-sandbox-strip-cookies", "WARDYN_UI_SANDBOX_STRIP_COOKIES", "", `inbound cookie policy for the UI-sandbox gateway: "allow:<names>" forwards only those cookies to a sandbox app, "deny:<names>" strips them (comma-separated names, "prefix*" for a prefix). Empty (default) forwards every cookie but wardyn_*`),
 		uiOriginTemplate: flagEnv("ui-sandbox-origin-template", "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE", "", `optional per-run origin for the UI-sandbox gateway, e.g. "https://run-{run}.ui.example.com" (needs wildcard DNS and certificate); must contain {run}. Empty (default) shares one origin across every run`),
+		metricsListen:    flagEnv("metrics-listen", "WARDYN_METRICS_LISTEN", "", `plain-HTTP listen address that serves only GET /metrics with no credential, for a scraper that sends none, e.g. ":9464". Empty (default) disables it; must differ from -listen, -internal-listen, -ssh-listen and -ui-sandbox-listen`),
 
 		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn run ssh" refuses`),
+		oidcSessionTTL:         flagDuration("oidc-session-ttl", "WARDYN_OIDC_SESSION_TTL", 0, "how long a console session lasts from sign-in, instead of ending at the ID token's expiry (duration; 0 = the ID token's expiry; at most 24h)"),
+		sshProxyCommand:        flagEnv("ssh-proxy-command", "WARDYN_SSH_PROXY_COMMAND", "", `ssh ProxyCommand published on /healthz for people to reach the SSH gateway through a TLS-terminating listener on 443; the console and "wardyn run ssh" show it, the daemon never runs it. No control characters, newlines or single quotes; at most 512 bytes. Empty (default) publishes none`),
 		roleStampTTL:           flagDuration("role-stamp-ttl", "WARDYN_ROLE_STAMP_TTL", 0, "how old an API token's or console session's role stamp may be before its owner must sign in again (duration; 0 = off)"),
 		governanceChangeTTL:    flagDuration("governance-change-ttl", "WARDYN_GOVERNANCE_CHANGE_TTL", 72*time.Hour, "how long a governance change held for a second human (WARDYN_GOVERNANCE_SECOND_HUMAN) waits for approval before it expires (duration; must be positive)"),
 		sshRoleTTL:             flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration)"),

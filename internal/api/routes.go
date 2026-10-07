@@ -205,6 +205,8 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}", s.handleGetRun)
 			r.Get("/runs/{id}/events", s.handleRunEvents) // same gate as GET /runs/{id}
 			r.Get("/runs/{id}/output", s.handleRunOutput) // same gate as GET /runs/{id}
+			// A waiting sign-in's device code: the owner only (getRunForEntry, run_sign_in.go).
+			r.Get("/runs/{id}/sign-in", s.handleRunSignIn)
 			s.mountRunLeaseRoutes(r)
 			r.Get("/runs/{id}/grants", s.handleListGrants)
 			r.Get("/runs/{id}/policy", s.handleGetRunPolicy) // owner or admin; not on the delegation list

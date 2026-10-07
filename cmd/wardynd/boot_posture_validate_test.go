@@ -6,29 +6,34 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestValidateBootPosture pins the wiring, not the rules: each validator has
 // its own table test, so this only proves validateBootPosture still calls the
-// UI-sandbox, base-path and hybrid refusals that run() relies on before migration.
+// UI-sandbox, metrics-listener, base-path and hybrid refusals that run() relies on before migration.
 func TestValidateBootPosture(t *testing.T) {
 	for _, tc := range []struct {
-		name, listen, uiListen, orgURL, basePath, stripCookies string
-		memberMode                                             bool
-		wantErr                                                string // substring; empty = must succeed
+		name, listen, uiListen, metricsListen, orgURL, basePath, stripCookies, sshProxy string
+		memberMode                                                                      bool
+		wantErr                                                                         string // substring; empty = must succeed
 	}{
 		{name: "nothing set boots", listen: ":8080"},
 		{name: "hybrid without member mode refused", listen: ":8080", orgURL: "https://org.example.com", wantErr: "WARDYN_ORG_URL is set but WARDYN_USER_DESKTOP is not"},
 		{name: "UI-sandbox on the console address refused", listen: ":8080", uiListen: ":8080", wantErr: "same address as -listen"},
+		{name: "metrics listener on the internal listener's address refused", listen: ":8080", metricsListen: ":8443", wantErr: "same address as -internal-listen"},
 		{name: "a base path with a trailing slash refused", listen: ":8080", basePath: "/wardyn/", wantErr: "WARDYN_BASE_PATH"},
 		{name: "a malformed UI-sandbox cookie policy refused", listen: ":8080", uiListen: ":8081", stripCookies: "allow", wantErr: "WARDYN_UI_SANDBOX_STRIP_COOKIES"},
+		{name: "an SSH proxy command with a single quote refused", listen: ":8080", sshProxy: "nc '%h' 443", wantErr: "WARDYN_SSH_PROXY_COMMAND"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sshListen, originTemplate, enrolToken, allowPlaintext := "", "", "", false
 			oidcIssuer, oidcInternal, oidcRedirect, controlURL, uiAdvertise := "", "", "", "https://wardynd:8443", ""
+			internalListen := ":8443"
 			tail, retention := 65536, 30
 			rate, seal := 20, "off"
 			off, runner, store := false, "none", "pg"
+			var sessionTTL time.Duration
 			f := &bootFlags{
 				ha: &off, allowMultiInstance: &off, runnerSel: &runner, recordingSel: &store,
 				auditSeal:            &seal,
@@ -44,12 +49,16 @@ func TestValidateBootPosture(t *testing.T) {
 				listen:               &tc.listen,
 				uiListen:             &tc.uiListen,
 				sshListen:            &sshListen,
+				sshProxyCommand:      &tc.sshProxy,
 				uiOriginTemplate:     &originTemplate,
 				uiStripCookies:       &tc.stripCookies,
 				allowPlaintextListen: &allowPlaintext,
 				orgURL:               &tc.orgURL,
 				orgEnrolToken:        &enrolToken,
 				memberMode:           &tc.memberMode,
+				internalListen:       &internalListen,
+				metricsListen:        &tc.metricsListen,
+				oidcSessionTTL:       &sessionTTL,
 			}
 			err := validateBootPosture(f, tlsPosture{})
 			if tc.wantErr == "" {
@@ -90,5 +99,20 @@ func TestValidateRunOutputRetentionDays(t *testing.T) {
 	}
 	if err := validateRunOutputRetentionDays(-1); err == nil || !strings.Contains(err.Error(), "WARDYN_RUN_OUTPUT_RETENTION_DAYS") {
 		t.Fatalf("-1: error %v does not name the variable", err)
+	}
+}
+
+// TestValidateOIDCSessionTTL: unset and anything up to 24h boot; a negative TTL or one above 24h is
+// refused, naming the variable.
+func TestValidateOIDCSessionTTL(t *testing.T) {
+	for _, d := range []time.Duration{0, time.Minute, 8 * time.Hour, 24 * time.Hour} {
+		if err := validateOIDCSessionTTL(d); err != nil {
+			t.Fatalf("%s refused: %v", d, err)
+		}
+	}
+	for _, d := range []time.Duration{-time.Second, 24*time.Hour + time.Second, 48 * time.Hour} {
+		if err := validateOIDCSessionTTL(d); err == nil || !strings.Contains(err.Error(), "WARDYN_OIDC_SESSION_TTL") {
+			t.Fatalf("%s: error %v does not name the variable", d, err)
+		}
 	}
 }

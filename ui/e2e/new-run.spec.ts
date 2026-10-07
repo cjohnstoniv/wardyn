@@ -292,6 +292,33 @@ test.describe("New run — Preflight sends the body Launch sends", () => {
   });
 });
 
+// C2 — "Use the default policy": the launch carries no policy of its own, and the
+// run's recorded policy origin is the default the server resolved.
+test.describe("New run — Use the default policy", () => {
+  test("POST /runs carries neither policy_id nor inline_policy and the run's source is the default", async ({ page }) => {
+    const bodies: Record<string, string> = {};
+    page.on("request", (req) => {
+      if (req.method() === "POST" && new URL(req.url()).pathname === "/api/v1/runs") {
+        bodies.create = req.postData() ?? "";
+      }
+    });
+    await openNewRun(page);
+    await page.getByRole("button", { name: /^Use the default policy/ }).click();
+    await expect(page.getByLabel("Spec (JSON)")).toHaveCount(0);
+    await page.getByLabel("Title").fill("e2e default policy");
+    await launchRun(page);
+
+    const sent = JSON.parse(bodies.create);
+    expect(sent).not.toHaveProperty("policy_id");
+    expect(sent).not.toHaveProperty("inline_policy");
+
+    const id = new URL(page.url()).pathname.split("/").pop();
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const view = await (await page.request.get(`/api/v1/runs/${id}/policy`, { headers: auth })).json();
+    expect(view.source.kind).toBe("default");
+  });
+});
+
 // B4b — "Start a run like this one". 0.7.3 F7 moved this off the failure
 // block (which only rendered for a run that ended badly) onto the run
 // HEADER, which offers it for every terminal state — the header's onClone

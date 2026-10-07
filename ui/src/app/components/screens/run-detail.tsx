@@ -626,6 +626,7 @@ function RunDetailPage({ id }: { id: string }) {
             <OutputTab
               runId={run.id}
               live={!terminal}
+              state={run.state}
               endedAt={run.ended_at}
               onGoRecording={() => setTab("recording")}
             />
