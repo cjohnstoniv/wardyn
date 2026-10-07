@@ -200,38 +200,46 @@ one that fires wins. A person attached to a run holds only the first one off.
 | **The lease**, `ends_at` | Ends the run: stopped and kept for `WARDYN_ENDED_RUN_GRACE` | Ends it all the same | Applies, but tears the run down at once instead of keeping it | `run.ended` |
 | **`WARDYN_RUN_MAX_AGE`** | Stops any run older than the cap, busy or not | Stops it all the same | Applies, and also sets the pods' deadlines | `run.max_age.expire` |
 
-**Idle stop.** Idleness is the age of the run's last activity: an egress call,
-CPU use, or an attach. Every attached surface resets the clock when it opens
-and every 30 seconds while it is held: the browser terminal, an SSH shell, an
-SSH exec, sftp or `-L` channel, and a relayed connection to an in-sandbox UI.
-So a run someone is attached to is not idle-stopped, as long as those writes
-succeed. They are best effort, and a failed one is dropped, so a database that
-refuses them for long enough lets an attached run look idle. A run nobody is
-attached to is idle like any other, which is why a run can end an hour after
-its owner last looked at it.
+**Idle stop.**
 
+- Idleness is the age of the run's last activity: an egress call, CPU use, or
+  an attach.
+- Every attached surface resets the clock when it opens and every 30 seconds
+  while it is held. The surfaces are the browser terminal, an SSH shell, an
+  SSH exec, sftp or `-L` channel, and a relayed connection to an in-sandbox UI.
+- So a run someone is attached to is not idle-stopped, as long as those writes
+  succeed. They are best effort and a failed one is dropped, so a database
+  that refuses them for long enough lets an attached run look idle.
+- A run nobody is attached to is idle like any other, which is why a run can
+  end an hour after its owner last looked at it.
 - The value is `auto_stop_after_sec` in the run's policy. The shipped
-  `default.json` sets `3600`; `0` and a negative value both mean never idle-stop.
+  `default.json` sets `3600`; `0` and a negative value both mean never
+  idle-stop.
 - A member's value is clamped to the ceiling's positive maximum. The `-1` that
   interactive and SSH sessions use becomes that maximum too, so under the
   shipped default a member's session has an hour of idleness. Admins are not
   clamped.
 - To give members a longer window, raise `auto_stop_after_sec` in the ceiling
   (the default policy, `defaultPolicy` in the chart). Do not set it to `0`: a
-  ceiling of `0` removes the cap, and it also turns idle stop off for every run
-  that does not set its own value.
+  ceiling of `0` removes the cap, and it also turns idle stop off for every
+  run that does not set its own value.
 
-**Idle pause.** A run is frozen only when its profile sets `pause_idle_after_sec`
-(at least 630 seconds is used), nothing has happened for that long, its CPU
-reads quiet, and its substrate can freeze its confinement class (Docker `runc`
-today). A run waiting on a decision is frozen after 15 minutes whatever the
-profile says. The proxy keeps running and the run stays `RUNNING`; typing into
-it, attaching, opening an SSH channel or an in-sandbox UI connection thaws it,
-as does `POST /runs/{id}/resume`. On Kubernetes the runner cannot freeze a pod in
-place, so the setting is inert there and an idle run is stopped
-by idle stop. The limit is set in a governance profile's run limits; see the
-[profile table](../OPERATIONS.md#multi-user-who-can-change-what) for how
-profiles combine.
+**Idle pause.**
+
+- A run is frozen only when its profile sets `pause_idle_after_sec` (at least
+  630 seconds is used), nothing has happened for that long, its CPU reads
+  quiet, and its substrate can freeze its confinement class (Docker `runc`
+  today).
+- A run waiting on a decision is frozen after 15 minutes whatever the profile
+  says.
+- The proxy keeps running and the run stays `RUNNING`. Typing into the run,
+  attaching, opening an SSH channel or an in-sandbox UI connection thaws it,
+  as does `POST /runs/{id}/resume`.
+- On Kubernetes the runner cannot freeze a pod in place, so the setting is
+  inert there and an idle run is stopped by idle stop.
+- The limit is set in a governance profile's run limits; see the
+  [profile table](../OPERATIONS.md#multi-user-who-can-change-what) for how
+  profiles combine.
 
 **The lease.** A run has no `ends_at` on the defaults. A governance profile's
 run limits set one at create, from `default_end_sec` or `max_end_ahead_sec`;

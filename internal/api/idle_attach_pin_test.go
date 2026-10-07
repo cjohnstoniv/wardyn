@@ -50,7 +50,7 @@ type idleFixture struct {
 }
 
 func newIdleFixture(run uuid.UUID) *idleFixture {
-	t0 := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	t0 := time.Now().UTC()
 	return &idleFixture{now: t0, run: run, updated: t0}
 }
 
