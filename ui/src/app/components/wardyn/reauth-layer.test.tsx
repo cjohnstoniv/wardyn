@@ -499,4 +499,21 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     await poll();
     expect(reloadAs).toHaveBeenCalledWith("/admin/settings");
   });
+
+  it.each(["open", "closed", "fallback"])("a visible %s renewal keeps reconciling beyond the quiet-watch bound", async (kind) => {
+    answer = { body: alice(), status: 200 };
+    const { popup, onResumed } = startRenewal(kind === "fallback" ? { popup: null } : {});
+    if (kind === "closed") popup.closed = true;
+    if (kind === "fallback") fireEvent.click(screen.getByRole("link", { name: REAUTH_DIALOG.POPUP_FALLBACK }));
+    await act(() => vi.advanceTimersByTimeAsync(WATCH_MS + 6 * 60 * 1000));
+    const before = reads();
+    const cancelButton = screen.getByRole("button", { name: REAUTH_RENEW.CANCEL });
+    expect(cancelButton).toHaveFocus();
+    answer = { body: alice({ session_expires_at: LATER }), status: 200 };
+    await poll();
+    expect(reads()).toBeGreaterThan(before);
+    expect(onResumed).toHaveBeenCalledExactlyOnceWith(alice({ session_expires_at: LATER }));
+    expect(phase()).toBe("none");
+    expect(document.getElementById("main-content")).toHaveFocus();
+  });
 });
