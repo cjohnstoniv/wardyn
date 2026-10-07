@@ -24,23 +24,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   - Chart `extraObjects`: `[]` by default, so nothing extra is rendered.
 - **A launch can wait on a renewal.** On the default Postgres secret store, a launch that arrives while a
   renewal of the same person's AWS sign-in is in flight waits for that renewal's answer, up to about 20
-  seconds. On a secret store without revisions (Vault KV, Azure Key Vault) a launch does not wait and behaves
-  as in 0.8.7. A record session now renews an expired but renewable AWS sign-in when it starts, and is refused
+  seconds. If that renewal ended spent, the launch is refused `422` before a run row exists. On a secret store
+  without revisions (Vault KV, Azure Key Vault) a launch does not wait and behaves as in 0.8.7. A record session now renews an expired but renewable AWS sign-in when it starts, and is refused
   with `422` when it cannot (0.8.7 answered `202` and failed the run later).
 - **The audit trail gains one action and two fields.** A SIEM parser will see them:
-  - `site_config.seed`: written once per boot that restored network settings from the seed file. It names the
-    settings written, never their values, and is written by the system actor.
+  - `site_config.seed`: written once per boot that restored network settings from the seed file, by the system
+    actor. Its `settings` field names the settings written, never their values.
   - `scope` on `credential.revoke`: every row written from this release carries `scope` `run_credentials`
     (the row ends the run's own credentials, never a person's stored sign-in). Rows written earlier carry none
     and mean the same.
   - `after_lost_reply` on the `harness.credential.refresh` failure row and on the `credential.expired.delete`
     row for the same AWS sign-in. It is `true` only on those rows, when the retry ended `invalid_grant` after
-    a lost reply, and absent otherwise.
+    a first attempt that was sent in full and got no reply at all, and absent otherwise. It is consistent with
+    a lost reply, not proof of one.
 - **Pool note: a request can stop answering until a deadline fires.** Before this release, many simultaneous
   reads that check a run's masking on a cold manifest (a masked attach, a recording read or an output read)
   could each hold a database connection and then wait for a second one, so none could finish: requests stopped
-  answering until their deadline fired. On the default pool of 10 connections (the larger of 10 and the CPU
-  count) that took 10 such reads at once; on a pool of one it took a single read. That path is fixed (see
+  answering until their deadline fired. It took as many such reads at once as the pool has
+  connections: 10 on the default pool of a host with 10 or fewer CPUs (the default is the larger of 10 and the
+  CPU count), one on a pool of one. That path is fixed (see
   "Fixed"). It is the one path this release fixes: the other places that take a second connection while
   holding one, tracked in #1875, are unchanged and remain for 0.8.9. Sizing `pool_max_conns` above the
   expected concurrency, and never below 4 (the `WARDYN_PG_DSN` row of `docs/ENV.md`), remains the mitigation
@@ -79,7 +81,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   under the site-config lock, a setting the stored site config does not have is written from the file and
   audited as `site_config.seed`; one it has is never overwritten, and a differing value logs one warning. Any
   other key, malformed JSON, or a value `PUT /site-config` would refuse refuses boot, and two replicas booting
-  together write once. A `site_config_seed` row appears in the setup checks. See `docs/ENV.md` and
+  together write once. While a stored setting differs from the file, the setup checks carry a `site_config_seed` info row naming it. See `docs/ENV.md` and
   "Site-config seed" in the chart README.
 - **A metrics listener that needs no credential.** `WARDYN_METRICS_LISTEN` (flag `-metrics-listen`; chart
   `metrics.listener`) serves only `GET /metrics`, in plain HTTP with no credential, for a Prometheus that
@@ -124,9 +126,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   person's AWS sign-in running, it watches the store for that renewal's result, up to about 20 seconds, instead
   of serving the token in hand. This holds on the default Postgres secret store only; Vault KV and Azure Key
   Vault have no revisions to watch, and a launch there does not wait. If the renewal ended spent, the launch is
-  refused at the sign-in door and no run row is made (before, a run row could be made just before dispatch
-  refused it); if it stored a new pair, that
-  pair is served; if nothing changed inside the wait, the launch goes on with the token in hand. It narrows
+  refused `422` (reason `model_credential`) at the sign-in door and no run row is made (before, a run row
+  could be made just before dispatch refused it); if it stored a new pair, that pair is served; if nothing changed inside the wait, the launch goes on with the token in hand. It narrows
   that window and does not close it: a renewal still persisting after the wait can mark the pair spent after
   the run exists.
 - **Record Mode renews an AWS sign-in at its door.** A record session on a Bedrock provider now renews the
