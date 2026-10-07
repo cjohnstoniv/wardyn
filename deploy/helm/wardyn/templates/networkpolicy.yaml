@@ -162,10 +162,11 @@ spec:
     - from:
         {{- with $ml.from }}
         {{- range . }}
-        {{- /* A selector with no matchLabels and no matchExpressions is empty however it is spelled ({} or {matchLabels: {}}). */}}
+        {{- /* A selector with no matchLabels and no matchExpressions is empty however it is spelled ({}, null, {matchLabels: {}}, {matchExpressions: []}), and Kubernetes reads an empty selector as "everything". Both selectors are judged that way: every namespace AND every pod is the refused pair. */}}
         {{- $ns := .namespaceSelector | default dict }}
-        {{- if and (hasKey . "namespaceSelector") (empty $ns.matchLabels) (empty $ns.matchExpressions) (empty .podSelector) }}
-        {{- fail "wardyn: metrics.listener.from has a peer with an empty namespaceSelector (no matchLabels and no matchExpressions) and no podSelector, which admits every pod in every namespace to the unauthenticated metrics listener. Name the namespace (matchLabels: {kubernetes.io/metadata.name: monitoring}) or add a podSelector." }}
+        {{- $pod := .podSelector | default dict }}
+        {{- if and (hasKey . "namespaceSelector") (empty $ns.matchLabels) (empty $ns.matchExpressions) (empty $pod.matchLabels) (empty $pod.matchExpressions) }}
+        {{- fail "wardyn: metrics.listener.from has a peer with an empty namespaceSelector (no matchLabels and no matchExpressions) and a podSelector that is absent or just as empty, which admits every pod in every namespace to the unauthenticated metrics listener. Name the namespace (matchLabels: {kubernetes.io/metadata.name: monitoring}) or give the podSelector labels." }}
         {{- end }}
         {{- end }}
         {{- toYaml . | nindent 8 }}

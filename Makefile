@@ -836,6 +836,30 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.listener.enabled=true --set metrics.listener.port=8080 >/dev/null 2>&1 && { echo "metrics.listener.port equal to service.port rendered — wardynd would refuse to boot"; exit 1; } || true
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.listener.enabled=true --set-json 'metrics.listener.from=[{"namespaceSelector":{}}]' >/dev/null 2>&1 && { echo "metrics.listener.from with a bare namespaceSelector: {} rendered — every namespace would reach the unauthenticated listener"; exit 1; } || true
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.listener.enabled=true --set-json 'metrics.listener.from=[{"namespaceSelector":{"matchLabels":{}}}]' 2>&1 | grep -q "metrics.listener.from has a peer with an empty namespaceSelector" || { echo "metrics.listener.from with namespaceSelector: {matchLabels: {}} rendered — a selector with no matchLabels and no matchExpressions is every namespace, however it is spelled"; exit 1; }
+	@# Both selectors are judged by what Kubernetes reads, not by how they are spelled: an empty selector
+	@# ({}, null, {matchLabels: {}}, {matchExpressions: []}) selects everything, so every namespace AND every
+	@# pod is refused, by the refusal sentence. A named namespace, every namespace narrowed to labelled pods,
+	@# and an ipBlock still render.
+	@for peer in \
+	  '{"namespaceSelector":{"matchLabels":{}},"podSelector":{"matchLabels":{}}}' \
+	  '{"namespaceSelector":{},"podSelector":{"matchLabels":{}}}' \
+	  '{"namespaceSelector":{"matchLabels":{}},"podSelector":{"matchExpressions":[]}}' \
+	  '{"namespaceSelector":{"matchExpressions":[]},"podSelector":{}}' \
+	  '{"namespaceSelector":{"matchExpressions":[]},"podSelector":{"matchExpressions":[]}}' \
+	  '{"namespaceSelector":{"matchLabels":null,"matchExpressions":null},"podSelector":{"matchLabels":null,"matchExpressions":null}}' \
+	  '{"namespaceSelector":{},"podSelector":null}' \
+	  '{"namespaceSelector":null,"podSelector":null}'; do \
+	  out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.listener.enabled=true --set-json "metrics.listener.from=[$$peer]" 2>&1); \
+	  echo "$$out" | grep -q "metrics.listener.from has a peer with an empty namespaceSelector" || { echo "metrics.listener.from peer $$peer was not refused — it admits every pod in every namespace to the unauthenticated listener"; exit 1; }; \
+	done
+	@for pair in \
+	  '{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"monitoring"}}}=kubernetes.io/metadata.name: monitoring' \
+	  '{"namespaceSelector":{},"podSelector":{"matchLabels":{"app.kubernetes.io/name":"prometheus"}}}=app.kubernetes.io/name: prometheus' \
+	  '{"ipBlock":{"cidr":"10.0.0.0/8"}}=cidr: 10.0.0.0/8'; do \
+	  peer=$${pair%%=*}; want=$${pair#*=}; \
+	  out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.listener.enabled=true --set-json "metrics.listener.from=[$$peer]") || { echo "metrics.listener.from peer $$peer no longer renders — the every-namespace-and-every-pod refusal is too wide"; exit 1; }; \
+	  echo "$$out" | grep -B6 'port: metrics$$' | grep -q "$$want" || { echo "metrics.listener.from peer $$peer rendered without '$$want' on the metrics rule"; exit 1; }; \
+	done
 	@d=$$(mktemp -d); trap 'rm -rf "$$d"' EXIT; cp -r deploy/helm/wardyn "$$d/wardyn" && cp deploy/helm/wardyn/ci/reuse-values/v0.8.5.yaml "$$d/wardyn/values.yaml"; \
 	out=$$(helm template wardyn "$$d/wardyn" --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.listener.enabled=true) || { echo "metrics.listener does not render against v0.8.5's values (a --reuse-values upgrade): read it through default dict"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_METRICS_LISTEN" | grep -q 'value: ":9464"' || { echo "metrics.listener against v0.8.5's values did not fall back to port 9464"; exit 1; }
