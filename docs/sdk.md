@@ -237,8 +237,9 @@ From a shell, `wardyn run output <run-id>` prints the same bytes (below).
 device-code approval after the browser tab that started it was lost. It reads
 the sign-in sandbox's terminal once and answers `{"state":"waiting",
 "verification_url":"https://…","user_code":"ABCD-EFGH"}` for the latest
-attempt, or `{"state":"not_waiting"}` when that attempt has finished or failed,
-the run captured its sign-in, or the run is not running. Only the run's owner may
+attempt while an `aws sso login` process is still running in the sandbox, or
+`{"state":"not_waiting"}` when no such process is left, that attempt has
+finished or failed, the run captured its sign-in, or the run is not running. Only the run's owner may
 read it: a super admin on a person's run gets `403 run_owner_only`, because
 approving the page binds the approver's cloud identity to the owner's session.
 `RunSignIn` reads it:
