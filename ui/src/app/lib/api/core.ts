@@ -312,7 +312,7 @@ export async function wfetch(
     }
     throw e;
   } finally {
-    if (method === "POST" && (path === "/auth/logout" || path === "/me/view")) notifyAuthChange();
+    if (method === "POST" && (endsSession || path === "/me/view")) notifyAuthChange();
   }
 
   if (res.status === 401) {

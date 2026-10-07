@@ -64,6 +64,9 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	unionPreviewWorkspaceEgress(&spec, wsRefs)
 	present := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
 	_ = s.applyWorkspaceRequirementsFor(ctx, present, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
+	if _, refusal = s.unionDirectGitHubEgress(r, req, &spec, ceiling); refusal.write(s, w, r) {
+		return
+	}
 	if _, err := enforcedConfinement(spec, reqCC, nil); err != nil {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return

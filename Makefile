@@ -37,12 +37,16 @@ GOPROXY      ?=
 # Native-binary agent installs (opt-in; npm stays the default). Behind a proxy
 # where public npm is blocked, install the native CLI instead:
 #   make agent-images-core CLAUDE_INSTALL=native            # checksum-verified download
-#   make agent-images-core CLAUDE_INSTALL=native CLAUDE_CODE_VERSION=2.1.215
+#   make agent-images-core CLAUDE_INSTALL=native CLAUDE_CODE_VERSION=<version> CLAUDE_MANIFEST_SHA256=<sha256>
 #   scripts/stage-agent-binary.sh codex-cli && make agent-images-core CODEX_INSTALL=native
 CLAUDE_INSTALL      ?=
 CODEX_INSTALL       ?=
 CLAUDE_CODE_VERSION ?=
+CLAUDE_MANIFEST_SHA256 ?=
 AWS_CLI_INSTALL     ?=
+AWS_CLI_VERSION     ?=
+AWS_CLI_SHA256      ?=
+AWS_CLI_SIG_SHA256  ?=
 # vscode/novnc default FROM agent-base (deploy/images/{vscode,novnc}/Dockerfile);
 # a developer checkout that wants `claude` in the vscode terminal overrides this
 # to the vendor base, e.g.
@@ -65,7 +69,11 @@ DOCKER_BUILD_ARGS = \
 	$(call _build_arg,CLAUDE_INSTALL,$(CLAUDE_INSTALL)) \
 	$(call _build_arg,CODEX_INSTALL,$(CODEX_INSTALL)) \
 	$(call _build_arg,CLAUDE_CODE_VERSION,$(CLAUDE_CODE_VERSION)) \
+	$(call _build_arg,CLAUDE_MANIFEST_SHA256,$(CLAUDE_MANIFEST_SHA256)) \
 	$(call _build_arg,AWS_CLI_INSTALL,$(AWS_CLI_INSTALL)) \
+	$(call _build_arg,AWS_CLI_VERSION,$(AWS_CLI_VERSION)) \
+	$(call _build_arg,AWS_CLI_SHA256,$(AWS_CLI_SHA256)) \
+	$(call _build_arg,AWS_CLI_SIG_SHA256,$(AWS_CLI_SIG_SHA256)) \
 	$(call _build_arg,BASE_IMAGE,$(BASE_IMAGE))
 
 # Self-describing help: the description lives on the target line as a `##`
@@ -187,8 +195,8 @@ test-race: cover-check ## Alias: race coverage now rides along inside the test-r
 # convert_pg_test.go's TestPG_ConvertV0_IsSingleWriter converts in a goroutine.
 test-race-pg: ## Race-detector pass over the Postgres-gated concurrency proofs (needs WARDYN_TEST_PG)
 	@echo "Running the Postgres-gated concurrency proofs under the race detector (requires WARDYN_TEST_PG)..."
-	go test -race -p 1 -count=1 -run 'TestPG_' ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
-	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)|TestPG_CreateWait_' ./internal/api/...
+	go test -race -p 1 -count=1 -run 'TestPG_' ./internal/maskstore/... ./internal/secretmask/... ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
+	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)|TestPG_CreateWait_|TestPG_MaskErasure' ./internal/api/...
 	go test -race -p 1 -count=1 -run 'TestPG_AuditPartition_.*Contiguous' ./internal/db/...
 
 test-docker: ## Run all Go tests with -tags docker

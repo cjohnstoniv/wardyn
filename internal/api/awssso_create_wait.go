@@ -155,6 +155,7 @@ func (w *awsSSORenewalWatch) poll(ctx context.Context) (awsSSOBlob, string, bool
 	case !found:
 		return w.blob, awsSSORefreshSpentSentence, true, nil
 	case cur.servableFor(w.s.cfg.Now(), awsSSORefreshServeFloor):
+		cur.maskGeneration = w.blob.maskGeneration
 		return cur, "", true, nil
 	}
 	return w.blob, "", true, nil

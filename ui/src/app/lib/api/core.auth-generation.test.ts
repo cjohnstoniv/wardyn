@@ -40,12 +40,14 @@ it("publishes token changes after storage settles, including clearing", () => {
 });
 
 it.each(["/auth/logout", "/me/view"])("publishes %s settlement for success, failure and an uncertain network outcome", async (path) => {
+  // The logout is the one write that carries endsSession (health.ts), which is what core.ts keys on.
+  const init = path === "/auth/logout" ? { method: "POST", endsSession: true as const } : { method: "POST" };
   for (const status of [200, 500]) {
     fetchMock.mockResolvedValueOnce(new Response("", { status }));
-    await wfetch(path, { method: "POST" });
+    await wfetch(path, init);
   }
   fetchMock.mockRejectedValueOnce(new TypeError("offline"));
-  await expect(wfetch(path, { method: "POST" })).rejects.toThrow("offline");
+  await expect(wfetch(path, init)).rejects.toThrow("offline");
   expect(changed).toHaveBeenCalledTimes(3);
   expect(fetchMock).toHaveBeenCalledTimes(3);
 });

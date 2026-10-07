@@ -453,6 +453,10 @@ func (s *Server) redeemADOEntraAccessLocked(ctx context.Context, cfg ADOEntraCon
 // sent as `scope`, and what is stored back; the rotation, masking and
 // persistence discipline is one implementation.
 func (s *Server) redeemEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig, ec entraCapture, owner string, scopes []string) (ADOEntraAccess, error) {
+	generation, gerr := s.cfg.MaskRegistry.GlobalGeneration(ctx)
+	if gerr != nil {
+		return ADOEntraAccess{}, fmt.Errorf("%w: snapshot masking generation: %v", ErrADOEntraUnavailable, gerr)
+	}
 	// The row's revision comes BEFORE the read, so a write landing between the
 	// two can only make the rotation's Put refuse, never overwrite.
 	rev, guarded, rerr := s.entraRevision(ctx, owner, ec)
@@ -507,7 +511,7 @@ func (s *Server) redeemEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig
 	}
 	now := s.cfg.Now()
 	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
-	if err := s.cfg.MaskRegistry.AddGlobalUntil(owner, ec.secretName, now, accessExpiry, []byte(resp.AccessToken), []byte(keep)); err != nil {
+	if err := s.cfg.MaskRegistry.AddGlobalUntil(generation, owner, ec.secretName, now, accessExpiry, []byte(resp.AccessToken), []byte(keep)); err != nil {
 		return ADOEntraAccess{}, fmt.Errorf("%w: the new tokens could not be recorded for masking: %v", ErrADOEntraUnavailable, err)
 	}
 

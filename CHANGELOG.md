@@ -13,6 +13,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Migration `0133_recording_erasures` adds durable per-run recording fences. Take a database dump before
   upgrading; rollback requires restoring that dump. Filesystem deployments must retain the recording
   root's `.erased` directory and `*.lock` files alongside the recordings.
+- Migration `0134_mask_owner_erasures` retains owner erasure fences independently of masking rows;
+  retain this table with database backups and grant the app role `SELECT, INSERT, UPDATE`.
 
 ### Added
 
@@ -34,6 +36,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   renewal checking until it ends. Only a cancelled background watch has the existing quiet deadline.
   Run sign-in codes refresh on focus and visible return, serialize pending reads, and reset when the
   run or principal changes (#1908).
+- Mask-copy erasure now durably fences in-flight credential reads and renewals,
+  including an owner with no existing masking rows. Delayed AWS and Entra replies
+  cannot restore erased globals; new sign-ins use a fresh generation. Registration
+  also refuses credentials whose masking values cannot be read back after key
+  destruction (#1811).
+- Custom runs derive direct GitHub clone egress on the server after authorization and grant
+  narrowing, with matching policy preview, preflight and launch behavior. Only `github.com`
+  HTTPS/slug sources without a surviving GitHub grant receive the two bounded GitHub hosts;
+  other repository types, saved/default policies and manual domain rules keep their semantics (#1919).
 - The Playwright harness binds its API, UI-sandbox, internal and base-path proxy listeners to loopback
   by default and refuses non-loopback listeners in real-tmux mode. Each backend startup mints a fresh
   admin token and derived person credentials, shared with its own Playwright process; explicit test
@@ -54,6 +65,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   YAML or JSON mapping keys, stop before discovery or validation. (#1909)
 - Patch preparation refuses duplicate CHANGELOG heading keys after merging and after the
   release-commit step, including resumed candidates, before checks or publication work. (#1913)
+- **Image download verification (#1905).** The image-pin gate checks every Dockerfile curl download for a same-file checksum before use and refuses ignored failures or unsupported shell forms. Claude native downloads now pin their manifest; alternate versions require an explicit manifest checksum and native channel downloads fail clearly. AWS installer and signature downloads gain per-architecture checksums while retaining GPG verification. Staged installs and npm remain supported. The embedded code-server shell-quote issue remains tracked in #1904.
 
 ## [0.8.8] — 2026-10-07
 

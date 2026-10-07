@@ -33,6 +33,16 @@ Baseline source inventory for the 089 mock round. These hashes identify the exis
 | `.design-sync/NOTES.md` | Build/grade/upload ordering gotchas | `11fea2e85ce8bafbcbea8c8eee18fe6795ed2c146c4db8dd0740a922e786d0b6` |
 | `.design-sync/conventions.md` | Design-system library conventions | `5a9bd255158dfa6287a9cf05b4b20235792b4e3d6968b19c56dc7e0dd54e5731` |
 
+## Parser candidate for the M-R diagnostic amendment
+
+This is a separate inventory at Y candidate `3b4af5aee746aff0c496bb370001295d50973e25`, not a replacement for the original baseline hashes above. `ui/src/app/lib/policy-document/index.ts` has SHA-256 `dfa5aa6ecbbe52f87f8d8a3f8671dd1943458b3589b9a4f3106ea268553003b2`; `ui/package.json` pins `yaml` exactly to `2.9.1`. The parser file is byte-identical to the earlier supplement's candidate `9656bfdc2f42007925f1704d0f779d1dddca297c`.
+
+M-R's strict-parser table is the single proposed surfaced inventory for `caught`, `documentValue`, `readSource` and `editPolicySource`. Fixed diagnostics retain that lazy parser home; library/thrown messages remain potentially sensitive variable data rendered only as text. M-R explicitly adds `POLICY_DOCUMENT.SOURCE_POSITION(line,column)` in the proposed lazy `copy/policy-document.ts` home and keeps the existing outer validity/gate proposals. Nothing is added to the eager copy barrel. The new inventory and states await independent written review, the real Claude Design/DesignSync prototype and owner approval; the earlier written acceptance at `036dd8081c137268036404110a0c5e235a0a33f8` does not approve this amendment.
+
+## Existing server contract for the M-R Access correction
+
+M-R's field-semantics correction follows `RunPolicySpec.AzureDevOpsCapabilities`, `ADOEntraConfig.Profile`/`CapabilityCeiling`, `CeilingOverlay.AzureDevOpsCapabilities` and `GitPATScope.Repos`. Accepted A candidate `33511573b367e62cbf998440475fd19626d9e0e3` pins the preview equivalence in `TestPolicyPreviewADOPolicyEmptyUsesRowDefaults`; the same contract is present in accepted batch `74b3eaa10e59a2472f9cf5f6f6cc61748a79acbf`. The corrected meanings live in M-R's Access matrix and acceptance criteria. This is an amendment to the written proposal, requiring fresh review; it adds no visible copy or server behavior and does not replace the baseline inventory above.
+
 ## Exact existing mode copy carried into M-R
 
 | Home/key | Exact text |
@@ -76,4 +86,4 @@ Drive summary remains with the existing workspace/files facts; retaining the nin
 
 ## Reuse provenance and validation limit
 
-`regression-inventory.md` records Segmented/Policy-tab introducing commits and the local-note search before the proposed future duplicate removal. This lane changes documentation only and deletes no product code. Source and literal checks can verify the packet against this baseline; remote project type/access, actual uploaded assets and keyboard walkthroughs require the unavailable DesignSync transport.
+`regression-inventory.md` records Segmented/Policy-tab introducing commits and the local-note search before the proposed future duplicate removal. This lane changes documentation only and deletes no product code. Source and literal checks can verify the packet against this baseline; README records the separately verified DesignSync connection/project. Component synchronization, actual prototype assets and keyboard walkthroughs remain outstanding.
