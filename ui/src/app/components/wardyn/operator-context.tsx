@@ -89,6 +89,10 @@ export interface MeIdentity {
   // three-case rationale as `operator` above (unresolved /me, a failed
   // fetch, an unwrapped test).
   principal: string;
+  /** Advances for every confirmed identity read, even when the principal is unchanged. */
+  identityRevision: number;
+  /** Auth generation captured by that read; old identities cannot send a draft. */
+  authGeneration: number;
 
   // M3 — presentational label of the WARDYN_MEMBER_WORKSPACE_ROOTS/_MAP
   // constraint that applies to this signed-in member (GET /me's
@@ -209,6 +213,8 @@ const DEFAULT_ME_IDENTITY: MeIdentity = {
   securityOperator: true,
   userViewSuperAdmin: false,
   principal: "",
+  identityRevision: 0,
+  authGeneration: 0,
   memberLocalDirRoot: null,
   userDrive: NO_USER_DRIVE,
   userType: null,
@@ -224,6 +230,8 @@ export function OperatorProvider({
   securityOperator = true,
   userViewSuperAdmin = false,
   principal = "",
+  identityRevision = 0,
+  authGeneration = 0,
   memberLocalDirRoot = null,
   userDrive = null,
   userDriveDeniedByProfile = "",
@@ -246,6 +254,8 @@ export function OperatorProvider({
    *  Optional, defaulting false (fail closed). */
   userViewSuperAdmin?: boolean;
   principal?: string;
+  identityRevision?: number;
+  authGeneration?: number;
   memberLocalDirRoot?: string | null;
   userDrive?: MeUserDrive | null;
   userDriveDeniedByProfile?: string;
@@ -286,13 +296,15 @@ export function OperatorProvider({
       securityOperator,
       userViewSuperAdmin,
       principal,
+      identityRevision,
+      authGeneration,
       memberLocalDirRoot,
       userDrive: drive,
       userType,
       confinementPosture,
       demoVideoBaseUrl,
     }),
-    [operator, operatorResolved, securityOperator, userViewSuperAdmin, principal, memberLocalDirRoot, drive, userType, confinementPosture, demoVideoBaseUrl],
+    [operator, operatorResolved, securityOperator, userViewSuperAdmin, principal, identityRevision, authGeneration, memberLocalDirRoot, drive, userType, confinementPosture, demoVideoBaseUrl],
   );
   return <MeIdentityContext.Provider value={identity}>{children}</MeIdentityContext.Provider>;
 }
@@ -450,4 +462,10 @@ export function useConfinementPosture(): ConfinementPosture {
 // The operator-run demo mirror — see MeIdentity.demoVideoBaseUrl above.
 export function useDemoVideoBaseUrl(): string | undefined {
   return React.useContext(MeIdentityContext).demoVideoBaseUrl;
+}
+
+/** The confirmed identity boundary for a draft that can issue requests. */
+export function useRequestIdentity() {
+  const { principal, operatorResolved: resolved, identityRevision: revision, authGeneration } = React.useContext(MeIdentityContext);
+  return { principal, resolved, revision, authGeneration };
 }

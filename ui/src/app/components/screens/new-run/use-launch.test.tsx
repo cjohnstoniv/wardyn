@@ -12,12 +12,14 @@ import { act, renderHook } from "@testing-library/react";
 import type { PreflightResult } from "../../../lib/types";
 import { MemoryRouter } from "react-router-dom";
 
+vi.mock("../../../lib/api/policy-preview", () => ({ previewRunPolicy: vi.fn().mockResolvedValue({ spec: {}, pending: [], warnings: [], repository_access: [] }) }));
 const createRun = vi.fn();
 vi.mock("../../../lib/api/runs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api/runs")>();
   return { ...actual, runs: { ...actual.runs, createRun: (...a: unknown[]) => createRun(...a) } };
 });
 
+import { getAuthGeneration } from "../../../lib/api/core";
 import { useLaunch } from "./use-launch";
 import { initialWizardState } from "./wizard-types";
 import { HttpError } from "../../../lib/api/core";
@@ -35,6 +37,7 @@ function mountLaunch() {
         merged: null,
         autoCheck: { local: false, backendArm: true, modelArm: true },
         doorOpen: false,
+        adoDoorOpen: false, identity: { principal: "owner", resolved: true, revision: 1, authGeneration: getAuthGeneration() }, externalRevision: "1", sourceRefreshPending: false, onCreated: () => {},
       }),
     { wrapper: ({ children }: { children: React.ReactNode }) => <MemoryRouter>{children}</MemoryRouter> },
   );
@@ -90,6 +93,7 @@ describe("useLaunch — automatic preflight", () => {
           merged: null,
           autoCheck: p.auto,
           doorOpen: p.doorOpen,
+          adoDoorOpen: false, identity: { principal: "owner", resolved: true, revision: 1, authGeneration: getAuthGeneration() }, externalRevision: "1", sourceRefreshPending: false, onCreated: () => {},
         }),
       {
         initialProps: { task: init.task, auto: init.auto ?? ON, doorOpen: !!init.doorOpen },
@@ -205,22 +209,15 @@ describe("useLaunch — automatic preflight", () => {
     expect(result.current.preflightBlock).toBe(false);
   });
 
-  it("a focus re-check of a blocked body keeps Launch held while in flight, and re-checks a folded block", async () => {
-    preflightRun.mockResolvedValueOnce(setup("backend", "missing"));
-    const { result } = mountAuto({ task: "a" });
+  it("fresh focus preserves the verdict without another check", async () => {
+    preflightRun.mockResolvedValue({ enforced_confinement_class: "CC1", setup_items: [{ kind: "backend", status: "missing" }] });
+    const { result } = mountAuto();
     await tick(MS);
     expect(result.current.preflightBlock).toBe(true);
-    let resolve2: (r: PreflightResult) => void = () => {};
-    preflightRun.mockImplementationOnce(() => new Promise((r) => (resolve2 = r)));
-    act(() => {
-      window.dispatchEvent(new Event("focus"));
-    });
+    act(() => window.dispatchEvent(new Event("focus")));
     await tick(MS);
-    expect(preflightRun).toHaveBeenCalledTimes(2);
-    expect(result.current.preflighting).toBe(true);
+    expect(preflightRun).toHaveBeenCalledTimes(1);
     expect(result.current.preflightBlock).toBe(true);
-    await act(async () => resolve2(setup("backend", "ready")));
-    expect(result.current.preflightBlock).toBe(false);
   });
 
   it("a focus during an in-flight check does not double-send", async () => {

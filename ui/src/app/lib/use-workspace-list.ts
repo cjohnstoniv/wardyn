@@ -16,7 +16,12 @@ import type { Workspace } from "./types";
 // have none" lead to the same next action. The Workspaces SCREEN deliberately
 // does NOT use this — it tracks loading/error/ready separately so a failed fetch
 // never renders as a confident "no workspaces".
-export function useWorkspaceList() {
+export function useWorkspaceList(scope = "") {
+  const currentScope = React.useRef(scope);
+  currentScope.current = scope;
+  const sequence = React.useRef(0);
+  const [loadedScope, setLoadedScope] = React.useState(scope);
+  React.useEffect(() => () => { sequence.current++; }, []);
   const [workspaces, setWorkspaces] = React.useState<Workspace[]>([]);
   // Starts true: nothing has been fetched yet, so the empty initial list must not
   // be rendered as a confirmed "none".
@@ -34,14 +39,18 @@ export function useWorkspaceList() {
     if (clear) setWorkspaces([]);
     setLoading(true);
     setError(false);
-    workspacesApi
+    const started = ++sequence.current;
+    const owner = currentScope.current;
+    const current = () => started === sequence.current && owner === currentScope.current;
+    return workspacesApi
       .listWorkspaces()
-      .then(setWorkspaces)
+      .then((rows) => { if (current()) setWorkspaces(rows); })
       .catch(() => {
+        if (!current()) return;
         setWorkspaces([]);
         setError(true);
       })
-      .finally(() => setLoading(false));
+      .finally(() => { if (current()) { setLoadedScope(owner); setLoading(false); } });
   }, []);
 
   // Refresh, kick a best-effort (re-)scan, then refresh again once it settles: a
@@ -61,5 +70,5 @@ export function useWorkspaceList() {
     [reload],
   );
 
-  return { workspaces, loading, error, reload, scanAndReload };
+  return { workspaces: loadedScope === scope ? workspaces : [], loading: loadedScope !== scope || loading, error, reload, scanAndReload };
 }

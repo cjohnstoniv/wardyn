@@ -75,11 +75,11 @@ export function useSessionPoll(accept: (me: Me) => boolean) {
       tickRef.current();
     };
     const visible = () => { if (document.visibilityState === "visible") refresh(); };
-    onAuthChange(refresh);
+    const unsubscribe = onAuthChange(refresh);
     window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", visible);
     return () => {
-      onAuthChange(null);
+      unsubscribe();
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", visible);
       stopPoll();

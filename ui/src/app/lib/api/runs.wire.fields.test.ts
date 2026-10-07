@@ -32,6 +32,7 @@
 //      parity test uses; the repo root is found by walking up to go.mod so the
 //      file works from ui/ (vitest's cwd) or anywhere under it.
 
+import { previewRunPolicy } from "./policy-preview";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -146,13 +147,16 @@ describe("runWireBody — every console-settable DTO field reaches the wire", ()
     });
   }
 
-  it("createRun and preflightRun send byte-identical bodies for the same input", async () => {
+  it("create, preflight and preview send byte-identical bodies for the same input", async () => {
     await runs.createRun(fullInput);
     const a = String(fetchMock.mock.calls[0][1]?.body);
     fetchMock.mockClear();
     await runs.preflightRun(fullInput);
     const b = String(fetchMock.mock.calls[0][1]?.body);
+    await previewRunPolicy(fullInput);
     expect(a).toBe(b);
+    expect(String(fetchMock.mock.calls[1][1]?.body)).toBe(a);
+    expect(String(fetchMock.mock.calls[1][0])).toMatch(/\/policies\/preview$/);
   });
 
   // Per-field omission: an ABSENT choice must be an absent key, never

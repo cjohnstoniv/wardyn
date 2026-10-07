@@ -26,7 +26,7 @@ import { ADO } from "../../../lib/ado-entra-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
 import { NO_BARRIER, RAIL, RAIL_CHECK, RAIL_PROVIDER, RAIL_SETUP } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
-import { useOperator, useUserViewSuperAdmin } from "../../wardyn/operator-context";
+import { useOperator, useRequestIdentity, useUserViewSuperAdmin } from "../../wardyn/operator-context";
 import { useViewAccess } from "../../wardyn/console-view";
 import { PolicyRemedy } from "../../wardyn/policy-remedy";
 import { useModelAccessDoor } from "../../wardyn/model-access-context";
@@ -39,6 +39,7 @@ import {
   DialogTitle,
 } from "../../ui/dialog";
 import type { RunRailProps } from "./new-run-rail-types";
+import { getAuthGeneration } from "../../../lib/api/core";
 import { RunRailSummary } from "./new-run-rail-summary";
 
 /** The exact sentence R5b/R5c's gate names — NOT_GRANTED for R5b;
@@ -80,6 +81,11 @@ export function RunRail({
   // #1328 review round 2, R2-1 — who can reach the Environment step from
   // here, see the noBarrier reason line below.
   const operator = useOperator();
+  const identity = useRequestIdentity();
+  const live = React.useRef({ identity, draftRevision: launch.draftRevision });
+  live.current = { identity, draftRevision: launch.draftRevision };
+  const mounted = React.useRef(true);
+  React.useEffect(() => () => { mounted.current = false; }, []);
   const userViewSuperAdmin = useUserViewSuperAdmin();
   const access = useViewAccess();
   const canSetUpBarrier = operator || (access === "session-user" && userViewSuperAdmin);
@@ -134,7 +140,7 @@ export function RunRail({
   bodyRef.current = launch.body;
   // Only the Launch button's click arms a launch-after-sign-in; it records the
   // body the click was for, and the effect below hands it to the door once.
-  const clickArm = React.useRef<{ body: string | null | undefined } | null>(null);
+  const clickArm = React.useRef<{ body: string | null | undefined; principal: string; auth: number; draftRevision?: number } | null>(null);
   const autoOpened = React.useRef(false);
   const refusedProvider = launch.refusedProvider ?? "";
   React.useEffect(() => {
@@ -157,7 +163,9 @@ export function RunRail({
         // re-check of what is on screen now. Not disarmed by onClosed, which
         // also runs on a successful sign-in.
         onSignedIn: () => {
-          if (armed && !fired && armed.body === bodyRef.current) {
+          const owner = live.current.identity;
+          const authCurrent = mounted.current ? owner.resolved && owner.authGeneration === getAuthGeneration() : armed?.auth === getAuthGeneration();
+          if (armed && !fired && armed.body != null && armed.body === bodyRef.current && armed.principal === owner.principal && armed.draftRevision === live.current.draftRevision && authCurrent) {
             fired = true;
             return onLaunchRef.current();
           }
@@ -248,7 +256,7 @@ export function RunRail({
           disabled={launch.disabled || !!launch.problem || !!launch.workspaceUnavailable || !!launch.noBarrier || !!launch.preflightBlock}
           onClick={() => {
             autoOpened.current = false;
-            clickArm.current = { body: bodyRef.current };
+            clickArm.current = { body: bodyRef.current, principal: identity.principal, auth: getAuthGeneration(), draftRevision: launch.draftRevision };
             void launch.onLaunch();
           }}
         >

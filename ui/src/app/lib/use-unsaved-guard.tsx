@@ -226,8 +226,9 @@ export function releaseUnloadGuard(released: boolean): void {
  *  `getText` in unsaved-registry.ts while `dirty`, and arms `beforeunload`
  *  over that same window — the console's first use of either. `id` must be
  *  stable and unique per mounted editor. */
-export function useUnsavedGuard(id: string, dirty: boolean, getText: () => string): void {
-  useRegisterUnsaved(id, dirty, getText);
+export function useUnsavedGuard(id: string, dirty: boolean, getText: () => string): () => void {
+  const releaseRegistration = useRegisterUnsaved(id, dirty, getText);
+  const unload = React.useMemo(() => ({ id, release: () => {} }), [id]);
 
   React.useEffect(() => {
     if (!dirty) return undefined;
@@ -237,8 +238,11 @@ export function useUnsavedGuard(id: string, dirty: boolean, getText: () => strin
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", onBeforeUnload);
-    return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [dirty]);
+    const release = () => window.removeEventListener("beforeunload", onBeforeUnload);
+    unload.release = release;
+    return release;
+  }, [dirty, unload]);
+  return React.useCallback(() => { releaseRegistration(); unload.release(); }, [releaseRegistration, unload]);
 }
 
 /** Called from a control that can navigate the console away from a dirty form

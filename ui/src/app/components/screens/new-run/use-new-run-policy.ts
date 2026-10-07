@@ -69,7 +69,7 @@ export function useNewRunPolicy({
   pristineCc,
 }: UseNewRunPolicyParams) {
   const cc = state.confinementClass;
-  const parsed = parseSpec(specText);
+  const parsed = React.useMemo(() => parseSpec(specText), [specText]);
 
   // C5's one real trap (policy-panel.tsx's own doc) — the field is present and
   // this build can't spell it.
@@ -83,11 +83,10 @@ export function useNewRunPolicy({
   // Every successful parse re-reads the floor the document authors; a FAILED
   // parse changes nothing (parsedFloor stays whatever last parsed).
   React.useEffect(() => {
-    const p = parseSpec(specText);
-    if (!p.ok) return;
-    const f = p.spec.min_confinement_class as ConfinementClass;
+    if (!parsed.ok) return;
+    const f = parsed.spec.min_confinement_class as ConfinementClass;
     setParsedFloor(ORDERED_CLASSES.includes(f) ? f : undefined);
-  }, [specText, setParsedFloor]);
+  }, [parsed, setParsedFloor]);
 
   // The ACTIVE floor: a picked saved policy's stored floor, else the last
   // successful parse's. Both paths refuse to launch below it server-side.
@@ -164,8 +163,7 @@ export function useNewRunPolicy({
   // one policy and launch another.
   const merged = React.useMemo(
     () => (parsed.ok ? mergeRunSelections(parsed.spec, state, workspaces, modelProviders) : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- parsed is rebuilt every render; specText is what actually changes
-    [specText, state, workspaces, modelProviders],
+    [parsed, state, workspaces, modelProviders],
   );
   const added = merged?.added;
 

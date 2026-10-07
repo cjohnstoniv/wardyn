@@ -74,7 +74,7 @@ function grantsFromRecords(payload: unknown): CredentialGrant[] {
   });
 }
 
-type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
+export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   interactive?: boolean;
   inline_policy?: RunPolicySpec;
   // Per-run half of the requirements contract: which optional requirements
@@ -98,10 +98,10 @@ type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
 };
 
 // The ONE projection from wizard input to the POST /runs wire body. createRun
-// and preflightRun both send exactly this — a field added here reaches both, a
-// field missed here reaches neither, and the two verdicts can never drift.
+// preflightRun and policy preview all send this projection.
 // (They used to be two hand-built whitelists; preflight's lagged by five fields.)
-function runWireBody(input: RunWireInput): Record<string, unknown> {
+/** The shared request projection for create, preflight and policy preview. */
+export function runWireBody(input: RunWireInput): Record<string, unknown> {
   const body: Record<string, unknown> = {
     agent: input.agent,
     repo: input.repo,

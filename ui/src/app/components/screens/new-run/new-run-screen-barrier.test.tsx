@@ -32,9 +32,11 @@ vi.mock("../../../lib/api/policies", () => ({
   },
 }));
 const createRunMock = vi.fn();
+vi.mock("../../../lib/api/policy-preview", () => ({ previewRunPolicy: vi.fn().mockResolvedValue({ spec: {}, pending: [], warnings: [], repository_access: [] }) }));
 vi.mock("../../../lib/api/runs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api/runs")>();
   return {
+    ...actual,
     isCredentialRefusal: actual.isCredentialRefusal,
     isGitCredentialRefusal: actual.isGitCredentialRefusal,
     runs: {
@@ -69,7 +71,7 @@ const user = userEvent.setup({ pointerEventsCheck: 0 });
 function renderScreen() {
   return render(
     <MemoryRouter>
-      <OperatorProvider operator>
+      <OperatorProvider principal="test-owner" operator>
         <NewRunScreen />
       </OperatorProvider>
     </MemoryRouter>,
@@ -202,7 +204,7 @@ describe("NewRunScreen — no runner configured reads as unknown, not confirmed-
 function renderAsMember() {
   return render(
     <MemoryRouter>
-      <OperatorProvider operator={false}>
+      <OperatorProvider principal="test-owner" operator={false}>
         <NewRunScreen />
       </OperatorProvider>
     </MemoryRouter>,
@@ -358,7 +360,7 @@ describe("NewRunScreen — a cloned run reaches the wire as the run it cloned", 
   function renderClone(state: unknown = { prefill }) {
     return render(
       <MemoryRouter initialEntries={[{ pathname: "/runs/new", state }]}>
-        <OperatorProvider operator>
+        <OperatorProvider principal="test-owner" operator>
           <NewRunScreen />
         </OperatorProvider>
       </MemoryRouter>,
@@ -437,7 +439,7 @@ describe("NewRunScreen — a cloned run reaches the wire as the run it cloned", 
         ]}
       >
         <CaptureNavigate />
-        <OperatorProvider operator>
+        <OperatorProvider principal="test-owner" operator>
           <NewRunScreen />
         </OperatorProvider>
       </MemoryRouter>,
@@ -516,7 +518,7 @@ describe("NewRunScreen — #214: no barrier at all on this host disables Launch"
     mockConfinementClasses = [];
     render(
       <MemoryRouter>
-        <OperatorProvider operator={false}>
+        <OperatorProvider principal="test-owner" operator={false}>
           <NewRunScreen />
         </OperatorProvider>
       </MemoryRouter>,
@@ -534,7 +536,7 @@ describe("NewRunScreen — #214: no barrier at all on this host disables Launch"
     render(
       <MemoryRouter>
         <ViewAccessProvider value="session-user">
-          <OperatorProvider operator={false} userViewSuperAdmin={false}>
+          <OperatorProvider principal="test-owner" operator={false} userViewSuperAdmin={false}>
             <NewRunScreen />
           </OperatorProvider>
         </ViewAccessProvider>
@@ -550,7 +552,7 @@ describe("NewRunScreen — #214: no barrier at all on this host disables Launch"
     render(
       <MemoryRouter>
         <ViewAccessProvider value="session-user">
-          <OperatorProvider operator={false} userViewSuperAdmin>
+          <OperatorProvider principal="test-owner" operator={false} userViewSuperAdmin>
             <NewRunScreen />
           </OperatorProvider>
         </ViewAccessProvider>
@@ -680,7 +682,7 @@ describe("NewRunScreen — #1238 tier picker states", () => {
     getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC2", governance_profile_name: "wall-required" });
     const ui = (resolved: boolean) => (
       <MemoryRouter>
-        <OperatorProvider operator operatorResolved={resolved}>
+        <OperatorProvider principal="test-owner" operator operatorResolved={resolved}>
           <NewRunScreen />
         </OperatorProvider>
       </MemoryRouter>
@@ -700,7 +702,7 @@ describe("NewRunScreen — #1238 tier picker states", () => {
     getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC3", governance_profile_name: "vault-required" });
     const ui = (resolved: boolean) => (
       <MemoryRouter>
-        <OperatorProvider operator operatorResolved={resolved}>
+        <OperatorProvider principal="test-owner" operator operatorResolved={resolved}>
           <NewRunScreen />
         </OperatorProvider>
       </MemoryRouter>

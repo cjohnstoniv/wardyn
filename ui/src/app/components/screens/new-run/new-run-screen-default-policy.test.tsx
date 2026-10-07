@@ -28,7 +28,9 @@ vi.mock("../../../lib/api/policies", () => ({
 }));
 const createRunMock = vi.fn();
 const preflightRunMock = vi.fn();
-vi.mock("../../../lib/api/runs", () => ({
+vi.mock("../../../lib/api/policy-preview", () => ({ previewRunPolicy: vi.fn().mockResolvedValue({ spec: {}, pending: [], warnings: [], repository_access: [] }) }));
+vi.mock("../../../lib/api/runs", async () => ({
+  ...await vi.importActual<typeof import("../../../lib/api/runs")>("../../../lib/api/runs"),
   runs: {
     createRun: (...a: unknown[]) => createRunMock(...a),
     listRuns: () => Promise.resolve([]),
@@ -64,7 +66,7 @@ const DEFAULT_SPEC = {
 function renderScreen() {
   return render(
     <MemoryRouter>
-      <OperatorProvider operator>
+      <OperatorProvider principal="test-owner" operator>
         <NewRunScreen />
       </OperatorProvider>
     </MemoryRouter>,
@@ -128,7 +130,7 @@ describe("NewRunScreen — Use the default policy", () => {
           { pathname: "/runs/new", state: { prefill: { inlinePolicy: false, state: { workspaces: [{ workspaceId: "ws1" }] } } } },
         ]}
       >
-        <OperatorProvider operator>
+        <OperatorProvider principal="test-owner" operator>
           <NewRunScreen />
         </OperatorProvider>
       </MemoryRouter>,
@@ -256,7 +258,7 @@ describe("NewRunScreen — the default policy with two workspaces attached", () 
           },
         ]}
       >
-        <OperatorProvider operator>
+        <OperatorProvider principal="test-owner" operator>
           <NewRunScreen />
         </OperatorProvider>
       </MemoryRouter>,
