@@ -348,7 +348,10 @@ forms, which no verbatim matcher catches.
   goes through `FSStore.SaveRecordingFile`, sharing the durable erasure fence
   with API and attach writers. A `recordings`-scope erase serializes the fence and
   deletion against each writer's final fence check and commit (`PGStore.runTx`,
-  `FSStore.saveFile`); streaming stays outside that lock. All suffix parts share
+  `FSStore.saveFile`); incoming streams are staged privately outside that lock.
+  The fallback copies the prepared file under the lock, retaining its existing
+  in-place overwrite, file-write authorization, ownership and permissions. Normal
+  `SaveCast` commits still use an atomic rename. All suffix parts share
   the run lock. New opens and stat calls check the fence even if a raw file or row
   was recreated; a reader already opened before the erase may retain bytes.
   Filesystem markers are synced before success and never retention-swept, nor are

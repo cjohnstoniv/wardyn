@@ -115,20 +115,21 @@ func (s *FSStore) SaveCastNamed(ctx context.Context, runID, suffix string, r io.
 // SaveCast writes the asciicast stream to <root>/<runID>.cast atomically (write
 // to a temp file then rename). Fails closed on any path-traversal attempt.
 func (s *FSStore) SaveCast(ctx context.Context, key string, r io.Reader) error {
-	return s.saveFile(ctx, key, ".cast", r, 0o600)
+	return s.saveFile(ctx, key, ".cast", r, false)
 }
 
 // SaveRecordingFile preserves wardyn-rec's shared-volume .cast/.log filename
-// while applying the same run fence as SaveCast.
+// and existing-file permissions/ownership while applying the same run fence as
+// SaveCast. Its final local copy retains the fallback's in-place overwrite.
 func (s *FSStore) SaveRecordingFile(ctx context.Context, name string, r io.Reader) error {
 	ext := filepath.Ext(name)
 	if ext != ".cast" && ext != ".log" {
 		return errors.New("recording: expected a .cast or .log filename")
 	}
-	return s.saveFile(ctx, strings.TrimSuffix(name, ext), ext, r, 0o666)
+	return s.saveFile(ctx, strings.TrimSuffix(name, ext), ext, r, true)
 }
 
-func (s *FSStore) saveFile(ctx context.Context, key, ext string, r io.Reader, mode os.FileMode) error {
+func (s *FSStore) saveFile(ctx context.Context, key, ext string, r io.Reader, inPlace bool) error {
 	if _, err := safeRunPath(s.root, key); err != nil {
 		return err
 	}
@@ -138,13 +139,13 @@ func (s *FSStore) saveFile(ctx context.Context, key, ext string, r io.Reader, mo
 	}
 	defer root.Close()
 	tmpName := ".tmp-cast-" + uuid.NewString()
-	tmp, err := root.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	tmp, err := root.OpenFile(tmpName, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
 	defer root.Remove(tmpName)
-	_, copyErr := io.Copy(tmp, contextReader{ctx, r})
-	if err := errors.Join(copyErr, tmp.Close()); err != nil {
+	defer tmp.Close()
+	if _, err := io.Copy(tmp, contextReader{ctx, r}); err != nil {
 		return err
 	}
 	lock, err := lockFSRun(ctx, root, key)
@@ -158,7 +159,38 @@ func (s *FSStore) saveFile(ctx context.Context, key, ext string, r io.Reader, mo
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if inPlace {
+		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		return copyRecordingFile(ctx, root, key+ext, tmp)
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
 	return root.Rename(tmpName, key+ext)
+}
+
+func copyRecordingFile(ctx context.Context, root *os.Root, name string, src *os.File) error {
+	// Replacing the inode would bypass write access and change owner/mode/ACL.
+	// Only the prepared private file is copied while holding the erasure lock.
+	dst, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0o666)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+	info, err := dst.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return errors.Join(err, errors.New("recording: not a regular file"))
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := dst.Truncate(0); err != nil {
+		return err
+	}
+	_, err = io.Copy(dst, contextReader{ctx, src})
+	return errors.Join(err, dst.Close())
 }
 
 // Sweep unlinks every cast (and orphaned atomic-write temp file) directly

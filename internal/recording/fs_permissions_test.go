@@ -44,8 +44,13 @@ func TestFSStore_DifferentUIDs(t *testing.T) {
 					runRecordingUID(t, root, who, action, key, umask)
 				}
 				act(first, "save", "run", "022")
-				act("daemon", "save", "run", "022")
-				act("agent", "save", "run", "022")
+				for _, who := range []string{"daemon", "agent"} {
+					action := "denied"
+					if who == first {
+						action = "save"
+					}
+					act(who, action, "run", "022")
+				}
 				act("agent", "save", ".tmp-cast-collision", "077")
 				act(first, "erase", "run", "077")
 				act("agent", "erased", "run", "077")
@@ -126,6 +131,10 @@ func recordingUIDAction(t *testing.T, action string) {
 	if action == "erased" {
 		if !errors.Is(err, recording.ErrErased) {
 			t.Fatalf("late cross-UID save = %v", err)
+		}
+	} else if action == "denied" {
+		if !errors.Is(err, os.ErrPermission) {
+			t.Fatalf("cross-UID overwrite = %v", err)
 		}
 	} else if err != nil {
 		t.Fatal(err)

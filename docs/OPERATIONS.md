@@ -1104,7 +1104,10 @@ The Postgres fence (migration `0133_recording_erasures`) survives retention and 
 store syncs its `.erased/<key>.cast` marker before deleting casts and the shared-volume `.log` fallback;
 `<run>.lock` files retain their identities so waiting writers use the same lock. Keep these
 metadata files with the recording root: retention never deletes them. `wardyn-rec`'s `-out-dir`
-delivery uses the same fence for both original filenames. Filesystem storage requires local Unix
+delivery uses the same fence for both original filenames. Its source stream is staged privately;
+the prepared local copy then overwrites in place under the run lock, retaining the destination's
+write authorization, ownership and permissions. New fallback files retain 0666 subject to umask.
+Ordinary `SaveCast` remains an atomic 0600 replacement. Filesystem storage requires local Unix
 advisory-lock and directory-sync support; a lock or sync error refuses the operation. Empty lock
 files are read-only across UIDs, and new marker directories retain the root's write permissions
 and inherited group semantics. Existing root and file permissions are not widened. This does not
@@ -7711,4 +7714,3 @@ therefore the per-replica cap times the replica count (cap × N):
 ## Kubernetes: known gaps
 
 Moved to [kubernetes-known-gaps.md](operations/kubernetes-known-gaps.md).
-
