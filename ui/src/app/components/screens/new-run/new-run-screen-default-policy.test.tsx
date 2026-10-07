@@ -153,7 +153,12 @@ describe("NewRunScreen — Use the default policy", () => {
     await chooseDefault();
     expect(await screen.findByText(C.DEFAULT_PREVIEW)).toBeInTheDocument();
     expect(await screen.findByText(/api\.default\.example/)).toBeInTheDocument();
-    expect(screen.getByText(C.DEFAULT_NOTE)).toBeInTheDocument();
+    // The words, not the constant: the workspace still mounts, and the note must not say otherwise.
+    expect(
+      screen.getByText(
+        "This run launches under this policy as it stands. Your attached workspace mounts into it; nothing else on this page is merged.",
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByLabelText("Spec (JSON)")).toBeNull();
     expect(screen.queryByTestId("run-spec-additions")).toBeNull();
     expect(screen.queryByTestId("safety-meter")).toBeNull();

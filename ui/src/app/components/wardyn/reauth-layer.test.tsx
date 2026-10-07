@@ -184,7 +184,6 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
       operator: true,
       securityOperator: true,
       expiresAt: UNTIL,
-      expired: false,
       popup: popup as unknown as Window,
       ...over,
     };
@@ -273,11 +272,23 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     expect(reloadAs).not.toHaveBeenCalled();
   });
 
-  it("a banner that already read expired counts any live /me from the same person as renewed", async () => {
+  // A browser clock ahead of the server's reads "expired" on the banner while
+  // the session is still live: the old session answering is not a renewal.
+  it("a banner that already read expired keeps waiting while /me answers the old expiry", async () => {
+    vi.setSystemTime(UNTIL + 60_000);
     answer = { body: alice(), status: 200 };
-    const { onResumed } = startRenewal({ expired: true });
+    const { onResumed, reloadAs } = startRenewal();
+    await poll(3);
+    expect(screen.getByText(REAUTH_DIALOG.WAITING)).toBeInTheDocument();
+    expect(phase()).toBe("renew");
+    expect(onResumed).not.toHaveBeenCalled();
+    expect(reloadAs).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+
+    const renewed = alice({ session_expires_at: LATER });
+    answer = { body: renewed, status: 200 };
     await poll();
-    expect(onResumed).toHaveBeenCalledWith(alice());
+    expect(onResumed).toHaveBeenCalledWith(renewed);
     expect(phase()).toBe("none");
   });
 
