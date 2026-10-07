@@ -170,8 +170,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - **The `agent-vscode` image replaces the `shell-quote` module bundled in code-server at build time.** The
   latest code-server release (4.140.0) still bundles `shell-quote` 1.10.0, which carries CVE-2026-102422
-  (CRITICAL; `quote()` emits a `{ comment }` token as `# ...`; fixed in 1.11.0). The build now swaps that one
-  module for a pinned release that has the fix, and the rest of code-server is untouched.
+  (CRITICAL; `quote()` emits a `{ comment }` token as `# ...`; fixed in 1.11.0). The build now replaces that
+  one module with 1.11.0, checksum-pinned, and fails if a later code-server bundles a different version. The
+  rest of code-server is untouched.
 
 ## [0.8.7] — 2026-10-06
 
