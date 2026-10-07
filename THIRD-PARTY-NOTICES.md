@@ -207,6 +207,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `tw-animate-css` | 1.4.0 | MIT |
 | `use-callback-ref` | 1.3.3 | MIT |
 | `use-sidecar` | 1.1.3 | MIT |
+| `yaml` | 2.9.1 | ISC |
 
 ## Fonts
 

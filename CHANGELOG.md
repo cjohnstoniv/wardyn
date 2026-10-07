@@ -14,6 +14,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   upgrading; rollback requires restoring that dump. Filesystem deployments must retain the recording
   root's `.erased` directory and `*.lock` files alongside the recordings.
 
+### Added
+
+- A strict YAML/JSON policy-source parser and comment-preserving edit helpers for the upcoming
+  policy editors. Ambiguous keys, aliases, tags, directives and unsafe numbers are refused before
+  JSON conversion. Editor integration follows separately (#1917).
+
 ### Fixed
 
 - The Playwright harness binds its API, UI-sandbox, internal and base-path proxy listeners to loopback

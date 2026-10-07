@@ -79,6 +79,20 @@ describe("UI bundle is route-code-split", () => {
     const heavyInEntry = entryModules.filter((m) => /@xterm\/|asciinema-player/.test(m));
     expect(heavyInEntry, `heavy terminal deps leaked into the entry chunk: ${heavyInEntry.join(", ")}`).toEqual([]);
 
+    // The parser has no product consumer until the approved editors land; those
+    // consumers must also prove its presence in lazy output when they are wired.
+    // Static chunk imports load eagerly too; extracting a shared chunk must not
+    // let a parser dependency bypass this guard.
+    const eagerChunks = new Set([entry!.fileName]);
+    for (const fileName of eagerChunks) {
+      for (const imported of chunks.find((chunk) => chunk.fileName === fileName)?.imports ?? []) eagerChunks.add(imported);
+    }
+    const yamlInEntry = chunks
+      .filter((chunk) => eagerChunks.has(chunk.fileName))
+      .flatMap((chunk) => Object.keys(chunk.modules))
+      .filter((module) => /node_modules\/yaml\//.test(module));
+    expect(yamlInEntry, `YAML parser leaked into the entry chunk: ${yamlInEntry.join(", ")}`).toEqual([]);
+
     // 3. ...and they are present SOMEWHERE, so a build that simply dropped them
     //    (or a regex that stopped matching) can't make this test vacuously pass.
     const heavyAnywhere = chunks
