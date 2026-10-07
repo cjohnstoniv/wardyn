@@ -416,6 +416,13 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	s.refuseNoRunOutput(w, r, run, row, found, reader)
+}
+
+// refuseNoRunOutput is handleRunOutput's last answer: nothing was served, and
+// the cases say why, in the order its doc comment lists. reader is
+// recordingReader's verdict, the only caller told of a recording erasure.
+func (s *Server) refuseNoRunOutput(w http.ResponseWriter, r *http.Request, run types.AgentRun, row store.RunOutput, found, reader bool) {
 	uncaptured, captureKnown := s.execOutputCapture(r.Context())
 	switch {
 	case found:
