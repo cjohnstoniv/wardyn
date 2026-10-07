@@ -61,15 +61,10 @@ command -v jq >/dev/null 2>&1 || { echo "run-ui-e2e.sh: jq is required (used to 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-# One daemon everywhere (same rule as setup/up/e2e-backend): export the picked
-# DOCKER_HOST here so the Playwright child processes (approvals.spec.ts shells
-# out to `docker exec wardyn-test-pg`) hit the daemon e2e-backend.sh provisions
-# on — not the default one.
 WARDYN_LOG_TAG="[e2e-ui]"
 . "${REPO_ROOT}/scripts/lib/common.sh"
 . "${REPO_ROOT}/scripts/lib/e2e-quarantine.sh"
 . "${REPO_ROOT}/scripts/lib/e2e-network.sh"
-wardyn_pick_docker_host
 
 # An expired or malformed quarantine entry fails the run before anything boots.
 quarantine_validate ui/e2e/quarantine.txt "$(date -u +%F)" >&2 || exit 1
@@ -164,26 +159,6 @@ if [[ -n "${LIVE_BASE_URL}" ]]; then
   log "LIVE mode: specs run against ${LIVE_BASE_URL} (no hermetic backend, no re-seed)"
 fi
 
-# Build the backend + UI once; subsequent per-spec `up` calls (in every lane)
-# reuse them (each `up` also creates its own ${DB} if it does not exist — see
-# e2e-backend.sh cmd_up).
-# Specs named cockpit-terminal-tmux-* drive a REAL tmux through the production
-# attach endpoint: their backend is the e2etmux build, served with
-# WARDYN_E2E_TMUX=1 (see e2e-backend.sh). Every other spec keeps the none runner.
-needs_tmux_build=0
-if [[ $# -gt 0 ]]; then
-  for a in "$@"; do [[ "${a}" == cockpit-terminal-tmux-* ]] && needs_tmux_build=1; done
-elif compgen -G "ui/e2e/cockpit-terminal-tmux-*.spec.ts" >/dev/null; then
-  needs_tmux_build=1
-fi
-[[ ${needs_tmux_build} -eq 1 ]] && export WARDYN_E2E_TMUX_BUILD=1
-
-if [[ -z "${LIVE_BASE_URL}" ]]; then
-  log "Building backend + UI bundle once"
-  ./scripts/e2e-backend.sh build || { echo "build failed"; exit 1; }
-  export WARDYN_E2E_SKIP_BUILD=1
-fi
-
 # Spec selection: args map to e2e/<arg>.spec.ts; default = all *.spec.ts.
 spec_dir="ui/e2e"
 [[ -n "${LIVE_BASE_URL}" ]] && spec_dir="ui/e2e/walk"
@@ -254,6 +229,38 @@ for ((i = 1; i < NUM_LANES; i++)); do
   [[ -z "${WARDYN_E2E_BASE_PATH:-}" ]] || LANE_PROXY_ADDR+=("127.0.0.1:$(pick_free_port)")
   LANE_DB+=("${DB}_lane${i}")
 done
+
+# A selected tmux spec may be claimed by any lane. Refuse before builds,
+# backend retries or cleanup traps can reset a database for an unsafe request.
+# Inspect the final shard, so a non-tmux-only selection keeps explicit hosts.
+if [[ -z "${LIVE_BASE_URL}" ]]; then
+  needs_tmux_build=0
+  for spec in "${specs[@]}"; do
+    [[ "${spec##*/}" == cockpit-terminal-tmux-*.spec.ts ]] && needs_tmux_build=1
+  done
+  if [[ ${needs_tmux_build} -eq 1 ]]; then
+    export WARDYN_E2E_TMUX_BUILD=1
+    for ((i = 0; i < NUM_LANES; i++)); do
+      e2e_require_loopback "${LANE_ADDR[i]}" "${LANE_UI_ADDR[i]}" "${LANE_INTERNAL_ADDR[i]}" || exit 1
+      if [[ -n "${WARDYN_E2E_BASE_PATH:-}" ]]; then
+        e2e_require_loopback "${LANE_PROXY_ADDR[i]}" || exit 1
+      fi
+    done
+  fi
+fi
+
+# One daemon everywhere (same rule as setup/up/e2e-backend): export the picked
+# DOCKER_HOST here so the Playwright child processes (approvals.spec.ts shells
+# out to `docker exec wardyn-test-pg`) hit the daemon e2e-backend.sh provisions
+# on — not the default one.
+wardyn_pick_docker_host
+
+# Each lane's per-spec up reuses this build and creates its own database.
+if [[ -z "${LIVE_BASE_URL}" ]]; then
+  log "Building backend + UI bundle once"
+  ./scripts/e2e-backend.sh build || { echo "build failed"; exit 1; }
+  export WARDYN_E2E_SKIP_BUILD=1
+fi
 
 # Scratch for this run: one directory per spec, created by the lane that
 # claims it (mkdir is atomic, so two lanes never run the same spec) and
