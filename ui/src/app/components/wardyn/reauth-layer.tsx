@@ -134,7 +134,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   const location = useLocation();
   const navigate = useNavigate();
   // Same person, narrower role: this page is no longer theirs.
-  const [narrowed, setNarrowed] = React.useState<Me | null>(null);
+  const [narrowed, setNarrowed] = React.useState<{ me: Me; generation: number } | null>(null);
   const [token, setTokenValue] = React.useState("");
   // Same defaults and rule as sign-in.tsx: the token form until the daemon
   // says otherwise, SSO only once it says so.
@@ -217,7 +217,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
       return;
     }
     if (!roleCanReach(location.pathname, me.role)) {
-      setNarrowed(me);
+      setNarrowed({ me, generation: getAuthGeneration() });
       // A renewal or a watch has no dialog up yet, and the dialog is what says so.
       if (reauth.phase !== "dialog") reauth.setPhase("dialog");
       return;
@@ -344,7 +344,12 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   };
 
   const goToRuns = () => {
-    if (narrowed) carryOn(narrowed);
+    if (narrowed && narrowed.generation !== getAuthGeneration()) {
+      // A delayed acknowledgement cannot confirm a replacement session.
+      reauth.reloadAs("/runs");
+      return;
+    }
+    if (narrowed) carryOn(narrowed.me);
     reauth.clearWriteDropped();
     reauth.setPhase("none");
     void navigate("/runs", { replace: true });
