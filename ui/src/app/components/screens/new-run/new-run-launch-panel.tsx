@@ -70,6 +70,7 @@ export interface NewRunLaunchPanelProps {
   refusedProvider: string | undefined;
   /** The request Launch would send right now — see RunRailProps.launch.body. */
   launchBody: string | null;
+  draftRevision?: number;
   /** Re-runs preflight on the current body: what a preflight-origin sign-in does. */
   onPreflight: () => Promise<void>;
   preflightRefusal: { body: string; provider: string } | null;
@@ -148,6 +149,7 @@ export function NewRunLaunchPanel({
   credentialRefused,
   refusedProvider,
   launchBody,
+  draftRevision,
   onPreflight,
   preflightRefusal,
   noBarrier,
@@ -284,6 +286,7 @@ export function NewRunLaunchPanel({
         credentialRefused,
         refusedProvider,
         body: launchBody,
+        draftRevision,
       }}
       preflight={
         preflightIsCurrent

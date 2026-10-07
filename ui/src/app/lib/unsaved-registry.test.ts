@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { registerUnsaved, unsavedSnapshot, useRegisterUnsaved } from "./unsaved-registry";
 
 describe("unsaved-registry", () => {
@@ -100,4 +100,18 @@ describe("unsaved-registry", () => {
       unmount();
     });
   });
+});
+
+
+it("releases only its own mounted registration synchronously", () => {
+  const other = registerUnsaved("other-owner", () => "other");
+  const { result, rerender, unmount } = renderHook(({ id }) => useRegisterUnsaved(id, true, () => id), { initialProps: { id: "old-owner" } });
+  const oldRelease = result.current;
+  rerender({ id: "new-owner" });
+  act(() => oldRelease());
+  expect(unsavedSnapshot()).toBe("other\n\nnew-owner");
+  act(() => result.current());
+  expect(unsavedSnapshot()).toBe("other");
+  unmount();
+  other();
 });

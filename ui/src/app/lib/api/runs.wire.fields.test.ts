@@ -32,6 +32,7 @@
 //      parity test uses; the repo root is found by walking up to go.mod so the
 //      file works from ui/ (vitest's cwd) or anywhere under it.
 
+import { previewRunPolicy } from "./policy-preview";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -146,13 +147,35 @@ describe("runWireBody — every console-settable DTO field reaches the wire", ()
     });
   }
 
-  it("createRun and preflightRun send byte-identical bodies for the same input", async () => {
+  it("create, preflight and preview send byte-identical bodies for the same input", async () => {
     await runs.createRun(fullInput);
     const a = String(fetchMock.mock.calls[0][1]?.body);
     fetchMock.mockClear();
     await runs.preflightRun(fullInput);
     const b = String(fetchMock.mock.calls[0][1]?.body);
+    await previewRunPolicy(fullInput);
     expect(a).toBe(b);
+    expect(String(fetchMock.mock.calls[1][1]?.body)).toBe(a);
+    expect(String(fetchMock.mock.calls[1][0])).toMatch(/\/runs\/policy-preview$/);
+  });
+
+  it("calls the registered policy-preview route", async () => {
+    const routes = readFileSync(join(repoRoot(), "internal/api/routes.go"), "utf8");
+    const route = /r\.Post\("([^"]+)", s\.handlePolicyPreview\)/.exec(routes)?.[1];
+    expect(route).toBe("/runs/policy-preview");
+    fetchMock.mockImplementation(async (url: RequestInfo | URL) => new Response(JSON.stringify({ spec: fullInput.inline_policy }), {
+      status: String(url) === `/api/v1${route}` ? 200 : 404,
+      headers: { "content-type": "application/json" },
+    }));
+    await expect(previewRunPolicy(fullInput)).resolves.toMatchObject({ spec: fullInput.inline_policy });
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
+  });
+
+  it("preserves Retry-After on a preview refusal for the bounded preview scheduler", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "limited" }), { status: 429, headers: { "Retry-After": "3" } }));
+    await expect(previewRunPolicy(fullInput)).rejects.toMatchObject({ status: 429, message: "limited", retryAfter: "3" });
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "limited" }), { status: 429 }));
+    await expect(previewRunPolicy(fullInput)).rejects.toMatchObject({ status: 429, retryAfter: undefined });
   });
 
   // Per-field omission: an ABSENT choice must be an absent key, never

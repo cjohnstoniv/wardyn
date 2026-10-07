@@ -28,17 +28,23 @@ export interface Refused {
 }
 let _unauthorized: ((refused: Refused) => void) | null = null;
 let authGeneration = 0;
-let authChanged: (() => void) | null = null;
+const authListeners = new Set<() => void>();
 
 /** Invalidate session reads after an auth event this tab can observe. */
 export function notifyAuthChange(): void {
   authGeneration++;
-  authChanged?.();
+  for (const listener of authListeners) listener();
 }
 
-/** The mounted reauth layer's refresh listener. Remote cookie changes remain unobservable. */
-export function onAuthChange(fn: (() => void) | null): void {
-  authChanged = fn;
+/** Subscribe to observable auth changes without replacing another consumer. */
+export function onAuthChange(fn: () => void): () => void {
+  authListeners.add(fn);
+  return () => { authListeners.delete(fn); };
+}
+
+/** The generation an identity or request was read under. */
+export function getAuthGeneration(): number {
+  return authGeneration;
 }
 
 // #483: while the console is signed out mid-page — the dialog or the
@@ -148,6 +154,8 @@ export class HttpError extends Error {
    *  (the envelope's `policy`, internal/policyref.Ref). Absent when the body
    *  carries none, which is every refusal that is not a policy decision. */
   policy?: PolicyRef;
+  /** A refusal's Retry-After, set by the one caller that retries on it (previewRunPolicy). */
+  declare retryAfter?: string;
   constructor(
     status: number,
     message: string,

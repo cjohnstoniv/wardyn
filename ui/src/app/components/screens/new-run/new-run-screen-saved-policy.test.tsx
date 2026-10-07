@@ -30,7 +30,9 @@ vi.mock("../../../lib/api/policies", () => ({
 }));
 const createRunMock = vi.fn();
 const preflightRunMock = vi.fn();
-vi.mock("../../../lib/api/runs", () => ({
+vi.mock("../../../lib/api/policy-preview", () => ({ previewRunPolicy: vi.fn().mockResolvedValue({ spec: {}, pending: [], warnings: [], repository_access: [] }) }));
+vi.mock("../../../lib/api/runs", async () => ({
+  ...await vi.importActual<typeof import("../../../lib/api/runs")>("../../../lib/api/runs"),
   runs: {
     createRun: (...a: unknown[]) => createRunMock(...a),
     listRuns: () => Promise.resolve([]),
@@ -61,7 +63,7 @@ const user = userEvent.setup({ pointerEventsCheck: 0 });
 function renderScreen() {
   return render(
     <MemoryRouter>
-      <OperatorProvider operator>
+      <OperatorProvider principal="test-owner" operator>
         <NewRunScreen />
       </OperatorProvider>
     </MemoryRouter>,
@@ -71,7 +73,7 @@ function renderScreen() {
 function renderAsMember() {
   return render(
     <MemoryRouter>
-      <OperatorProvider operator={false} securityOperator={false}>
+      <OperatorProvider principal="test-owner" operator={false} securityOperator={false}>
         <NewRunScreen />
       </OperatorProvider>
     </MemoryRouter>,
@@ -146,7 +148,7 @@ describe("NewRunScreen — the saved-policy lane", { timeout: 20_000 }, () => {
           workspaces: [{ workspaceId: "ws-a" }, { workspaceId: "ws-b" }],
         } } },
       }]}>
-        <OperatorProvider operator><NewRunScreen /></OperatorProvider>
+        <OperatorProvider principal="test-owner" operator><NewRunScreen /></OperatorProvider>
       </MemoryRouter>,
     );
     await waitFor(() => expect(screen.getByTestId("nr-workspace-extras")).toHaveTextContent("Workspace B"));
@@ -178,42 +180,23 @@ describe("NewRunScreen — the saved-policy lane", { timeout: 20_000 }, () => {
     expect(JSON.stringify(createRunMock.mock.calls[0][0])).not.toContain("<redacted>");
   });
 
-  // R1 — the clear must key on isSecurityOperator (admin or
-  // security_admin, matching the server's redactPoliciesForRead gate), never
-  // the bare `operator`/`securityOperator` context booleans: both default
-  // fail-open (true) while /me is unresolved or the fetch failed
-  // (operator-context.tsx), which is the wrong direction for a clear that must
-  // still fire for a member in that state.
-  it("a member whose /me hasn't resolved yet still gets a redacted body cleared", async () => {
-    // ticket: R1
+  it("an unresolved identity never launches a redacted saved body", async () => {
     listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
-    render(
-      <MemoryRouter>
-        {/* operator/securityOperator both at their fail-open true default —
-            exactly what an unresolved /me looks like — operatorResolved is the
-            only signal this is not a real admin/security_admin answer. */}
-        <OperatorProvider operator operatorResolved={false}>
-          <NewRunScreen />
-        </OperatorProvider>
-      </MemoryRouter>,
-    );
+    render(<MemoryRouter><OperatorProvider principal="test-owner" operator operatorResolved={false}><NewRunScreen /></OperatorProvider></MemoryRouter>);
     await pickSavedPolicy(REDACTED_POLICY.name);
     await user.click(screen.getByRole("button", { name: /Custom policy/ }));
     setField(screen.getByLabelText("Title"), "unresolved me");
     await user.click(screen.getByRole("button", { name: "Launch run" }));
-    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
-    expect(JSON.stringify(createRunMock.mock.calls[0][0])).not.toContain("<redacted>");
+    expect(listPoliciesMock).toHaveBeenCalledOnce();
+    expect(createRunMock).not.toHaveBeenCalled();
   });
 
-  // R1 neg — a security_admin's saved-policy body is the real one (the server
-  // redacts on isSecurityOperator, which a security_admin passes); the clear
-  // must not fire and throw it away.
-  it("negative control: a resolved security_admin keeps the real body — no clear", async () => {
+  it("a security admin also retains the authored custom draft", async () => {
     // ticket: R1
     listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
     render(
       <MemoryRouter>
-        <OperatorProvider operator={false} securityOperator operatorResolved>
+        <OperatorProvider principal="test-owner" operator={false} securityOperator operatorResolved>
           <NewRunScreen />
         </OperatorProvider>
       </MemoryRouter>,
@@ -223,9 +206,7 @@ describe("NewRunScreen — the saved-policy lane", { timeout: 20_000 }, () => {
     setField(screen.getByLabelText("Title"), "security admin");
     await user.click(screen.getByRole("button", { name: "Launch run" }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
-    // Not cleared: whatever the fixture carried (here, the literal string a
-    // member would have seen redacted) reaches the wire byte-for-byte.
-    expect(JSON.stringify(createRunMock.mock.calls[0][0])).toContain("<redacted>");
+    expect(JSON.stringify(createRunMock.mock.calls[0][0])).not.toContain("<redacted>");
   });
 
   // F2-F2 — the reworded rail sentence: the saved lane does not merge nothing,
@@ -251,7 +232,7 @@ describe("NewRunScreen — the saved-policy lane", { timeout: 20_000 }, () => {
           { pathname: "/runs/new", state: { prefill: { inlinePolicy: false, state: { selectedPolicyId: "pol_ghost" } } } },
         ]}
       >
-        <OperatorProvider operator>
+        <OperatorProvider principal="test-owner" operator>
           <NewRunScreen />
         </OperatorProvider>
       </MemoryRouter>,

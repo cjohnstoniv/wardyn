@@ -45,7 +45,7 @@ only as a duplicate of the now-visible text, never as the sole explanation.
 |---|---|---|
 | `RAIL.LAUNCH_ERROR_LABEL` (`wardyn/copy/new-run-rail.ts`) | New — announced only, never visible | "Launch failed" |
 | `RAIL.PREFLIGHT_ERROR_LABEL` (`wardyn/copy/new-run-rail.ts`) | New — announced only, never visible | "Preflight failed" |
-| Preflight error fallback (inline literal, `use-launch.ts`) | Changed (#497) — was "Preflight failed.", spoken twice after the prefix | "No reason was given." |
+| Preflight error fallback (inline literal, `use-run-checks.ts`) | Changed (#497) — was "Preflight failed.", spoken twice after the prefix | "No reason was given." |
 | `OPERATOR_ONLY_REASON` (`wardyn/copy.ts`) | Reused | "Requires the admin role." |
 | `RECORDINGS.SEARCH_DISABLED_HINT` (`recording-copy.ts`) | New | "Session recording is disabled on this deployment — there is nothing to search." |
 | `RECORDINGS.EMPTY_TITLE` (`recording-copy.ts`) | Reused (mock naming) | "No recordings yet" |

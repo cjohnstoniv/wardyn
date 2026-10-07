@@ -39,12 +39,12 @@ const stripQuotes = (s: string): string => s.replace(/^"(.*)"$/, "$1");
 const rawDoc = parseFrozenTables(DOC, /^## Frozen strings/);
 const doc = new Map([...rawDoc].map(([key, value]) => [stripKeyNote(key), stripQuotes(value)]));
 
-// #497's preflight fallback is an inline literal in use-launch.ts with no
+// #497's preflight fallback is an inline literal in use-run-checks.ts with no
 // exported constant, so it is read out of the source text, anchored on the
-// setPreflightError call it feeds.
+// preflightError it feeds.
 const PREFLIGHT_FALLBACK =
-  /setPreflightError\(getErrorMessage\(e\) \|\| "([^"]*)"\)/.exec(
-    readFileSync(resolve(process.cwd(), "src/app/components/screens/new-run/use-launch.ts"), "utf8"),
+  /preflightError: [^\n]*getErrorMessage\(error\) \|\| "([^"]*)"/.exec(
+    readFileSync(resolve(process.cwd(), "src/app/components/screens/new-run/use-run-checks.ts"), "utf8"),
   )?.[1] ?? "";
 
 const rendered: Record<string, string> = {

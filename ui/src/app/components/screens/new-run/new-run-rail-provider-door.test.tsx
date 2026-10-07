@@ -73,6 +73,8 @@ function railTree(opts: RailOpts) {
           errorSeq: 1,
           credentialRefused: opts.credentialRefused ?? true,
           refusedProvider: opts.refusedProvider,
+          // The screen always names the request a click is for; a relaunch needs one to match.
+          body: "{}",
         }}
         preflight={{ error: null, errorSeq: 0, result: null }}
         adoDialog={{

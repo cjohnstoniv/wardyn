@@ -4,7 +4,7 @@
  */
 
 import * as React from "react";
-import { HttpError, onAuthChange, setToken, wfetch } from "../../lib/api/core";
+import { HttpError, isSignedOutHold, onAuthChange, setToken, wfetch } from "../../lib/api/core";
 import type { Me } from "../../lib/api/health";
 
 type Session = Me | "unauthed" | "unreachable";
@@ -75,11 +75,11 @@ export function useSessionPoll(accept: (me: Me) => boolean) {
       tickRef.current();
     };
     const visible = () => { if (document.visibilityState === "visible") refresh(); };
-    onAuthChange(refresh);
+    const unsubscribe = onAuthChange(refresh);
     window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", visible);
     return () => {
-      onAuthChange(null);
+      unsubscribe();
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", visible);
       stopPoll();
@@ -127,21 +127,35 @@ export function useSessionPoll(accept: (me: Me) => boolean) {
     if (!wait) tick();
   }, [invalidate, read, stopPoll]);
 
+  // A quiet auth invalidation gets one read, then focus/visibility/auth events can retry an outage.
+  const checkOnce = React.useCallback(() => {
+    stopPoll();
+    tickRef.current = () => {
+      if (isSignedOutHold()) { stopPoll(); return; }
+      read((session) => {
+        if (isSignedOutHold() || session === "unauthed" || (typeof session === "object" && acceptRef.current(session))) stopPoll();
+      });
+    };
+    pending.current = inFlight.current !== null;
+    tickRef.current();
+  }, [read, stopPoll]);
+
   const submitToken = (token: string) => {
     stopPoll();
     setBusy(true);
     setStatus("idle");
     setToken(token);
     tickRef.current = () => read((session) => {
-      stopPoll();
       setBusy(false);
+      // A live answer can wait on another auth mutation; its settlement must be able to retry.
+      if (typeof session === "object" && !acceptRef.current(session)) return;
+      stopPoll();
       if (session === "unauthed") setStatus("rejected");
       else if (session === "unreachable") setStatus("unreachable");
-      else acceptRef.current(session);
     });
     pending.current = true;
     tickRef.current();
   };
 
-  return { status, setStatus, busy, startPoll, stopPoll, submitToken };
+  return { status, setStatus, busy, startPoll, stopPoll, checkOnce, submitToken };
 }

@@ -8,23 +8,14 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   CC_ORDER as ORDERED_CLASSES,
   type ConfinementClass,
-  type RunPolicySpec,
-  type SetupHarnessTool,
-  type SetupModelProvider,
-  type SetupProviderAccess,
 } from "../../../lib/types";
-import { policies as policiesApi } from "../../../lib/api/policies";
-import { health as healthApi, type PolicyRef } from "../../../lib/api/health";
-import { runs as runsApi } from "../../../lib/api/runs";
-import { setup as setupApi } from "../../../lib/api/setup";
 import type { SCMAccessPAT } from "../../../lib/types/ado-pat";
+import { getAuthGeneration } from "../../../lib/api/core";
 import { hasLlmPath } from "../../../lib/readiness";
-import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { useMyCapabilities } from "../../../lib/capabilities";
 import {
   useOperator,
   useOperatorResolved,
-  useSecurityOperator,
   useUserDrive,
 } from "../../wardyn/operator-context";
 import { strongestAvailable } from "../../wardyn/default-confinement";
@@ -48,17 +39,21 @@ import { launchGates } from "./new-run-launch-gates";
 import { providerCandidates as candidatesForAgent, providerGate } from "./model-provider-lane";
 import { useModelProviderPick } from "./use-model-provider-pick";
 import { useNewRunPolicy } from "./use-new-run-policy";
-import { useDefaultPolicy } from "./use-default-policy";
+import { useNewRunSources } from "./use-new-run-sources";
+import { useDraftIdentity } from "./use-run-checks";
 
 export function useNewRunController() {
   const navigate = useNavigate();
-  const { workspaces, reload: reloadWorkspaces } = useWorkspaceList();
+  const identity = useDraftIdentity();
+  const sources = useNewRunSources(identity);
+  const { workspaces, savedPolicies, policiesLoaded, knownTitles, governanceContact, defaultRead } = sources;
+  const refreshSources = sources.refresh, retryDefault = refreshSources, reloadWorkspaces = refreshSources;
   // Visibility is not capability: the workspace list is NOT narrowed by the
   // `workspace` grant (a hidden workspace makes the launch gate's refusal
   // unexplainable and the grant undiscoverable). Ungranted rows are annotated
   // instead.
   const operator = useOperator();
-  const securityOperator = useSecurityOperator(), operatorResolved = useOperatorResolved(), caps = useMyCapabilities(!operator);
+  const operatorResolved = useOperatorResolved(), caps = useMyCapabilities(!operator && identity.resolved && identity.authGeneration === getAuthGeneration(), sources.revision);
   // B4b — "Start a run like this one". The run cockpit hands the prefill over
   // in navigation state (navigate("/runs/new", { state: { prefill } })) rather
   // than through a query string or a second GET: it is already holding the run
@@ -66,7 +61,8 @@ export function useNewRunController() {
   // the part that matters for a member — opens no new read path. Who may see a
   // run stays the server's getRunAuthorized question, answered before the
   // cockpit rendered at all.
-  const prefill = (useLocation().state as { prefill?: RunPrefill } | null)?.prefill;
+  const prefillRef = React.useRef((useLocation().state as { prefill?: RunPrefill } | null)?.prefill);
+  const prefill = prefillRef.current;
   // Seed with CC1 — a harmless placeholder the /setup/status effect below
   // replaces with the server's own strongest-installed-class default. There is
   // no per-browser default left to seed this from (see default-confinement.ts).
@@ -94,9 +90,11 @@ export function useNewRunController() {
   // What `dirty` below compares against. The barrier is the one field the
   // machine writes on its own (probe/floor up-clamp), so its baseline moves
   // with those writes — a constant baseline would call an untouched form
-  // dirty and break Esc entirely.
+  // dirty and break Esc entirely. The class baseline is state, set beside the
+  // class itself: a ref written ahead of that render made the form read dirty
+  // for every render in between.
   const pristineSpec = React.useRef(specText);
-  const pristineCc = React.useRef(state.confinementClass);
+  const [pristineCc, setPristineCc] = React.useState(state.confinementClass);
   // Whether the Barrier control carries an EXPLICIT pick (a clone's
   // carried-over class counts, B4b). Untouched, the server's own default
   // decides and its audit trail reads `defaulted`, not `requested`.
@@ -108,33 +106,14 @@ export function useNewRunController() {
   const clonedCc = React.useRef(prefill?.state.confinementClass);
   const [addWsOpen, setAddWsOpen] = React.useState(false);
   const [availableClasses, setAvailableClasses] = React.useState<ConfinementClass[] | null>(null);
-  const [savedPolicies, setSavedPolicies] = React.useState<{ id: string; name: string; spec: RunPolicySpec }[]>([]);
-  const [policiesLoaded, setPoliciesLoaded] = React.useState(false); // F2-F5: has listPolicies() answered?
-  // Whether the barrier probe has SETTLED (null availableClasses after settle
-  // means the check failed — unknown, never "confirmed absent").
-  const [probeSettled, setProbeSettled] = React.useState(false);
-  // null = not answered yet. An agent run with no model path launches and then
-  // fails its first model call, so the rail must say so BEFORE launch rather
-  // than promising credentials that cannot be minted.
-  const [llmReady, setLlmReady] = React.useState<boolean | null>(null);
-  // SetupStatus.harnesses — absent while unfetched or failed, same "unknown
-  // stays unknown" rule as llmReady above (AgentPicker's own fallback).
-  const [harnesses, setHarnesses] = React.useState<SetupHarnessTool[] | undefined>(undefined);
-  // #542/#922 — this person's own model providers (already filtered to what
-  // they may use, #832/#1015) and connection state. Same "unknown stays
-  // unknown" rule as harnesses: undefined until the read lands, which also
-  // keeps the rail's provider picker from rendering (and forcing a
-  // preselection) before there is anything to pick from, and is the one
-  // member-safe signal for #922's pinned-provider-availability check. Read off
-  // the SAME /setup/status fetch below, never a second one.
-  const [modelProviders, setModelProviders] = React.useState<SetupModelProvider[] | undefined>(undefined);
-  const [providerAccess, setProviderAccess] = React.useState<SetupProviderAccess[] | undefined>(undefined);
-  const [adoCeiling, setAdoCeiling] = React.useState<string[] | undefined>(undefined);
-  // The caller's own Azure DevOps answer, for a row that creates a token per run.
-  const [adoAccess, setAdoAccess] = React.useState<SCMAccessPAT | undefined>(undefined);
-  // Existing run titles, offered as a native <datalist> — grouping is by
-  // EXACT string, so a family needs a character-perfect retype without it.
-  const [knownTitles, setKnownTitles] = React.useState<string[]>([]);
+  const probeSettled = !sources.pending;
+  const setup = sources.setup;
+  const llmReady = setup && !setup.unreachable ? hasLlmPath(setup) : null;
+  const harnesses = setup?.harnesses;
+  const modelProviders = setup ? resolvedModelProviders(setup) : undefined;
+  const providerAccess = setup?.unreachable ? undefined : setup?.provider_access;
+  const adoCeiling = setup?.unreachable ? undefined : setup?.scm_access?.capability_ceiling;
+  const adoAccess = setup?.unreachable ? undefined : setup?.scm_access as SCMAccessPAT | undefined;
   // #1197 L2: Title tracks the task's first line (titleFromTask) until the
   // operator edits it themselves — a clone's carried-over title, or clearing
   // the field by hand, both count as an edit and must not be fought.
@@ -143,12 +122,10 @@ export function useNewRunController() {
   // THIS caller and its floor come off it, undefined for no assignment or a
   // failed read — either way the rail's ceiling section simply does not render,
   // never claiming a ceiling it could not confirm.
-  const { read: defaultRead, retry: retryDefault } = useDefaultPolicy();
   const defaultPolicy = defaultRead.status === "ready" ? defaultRead.policy : undefined;
   const governanceProfile = defaultPolicy?.governance_profile_name;
   // GET /me's governance_contact: who to ask about the policy bounding this
   // caller. Undefined until /me answers, and when it answers null or fails.
-  const [governanceContact, setGovernanceContact] = React.useState<PolicyRef | undefined>(undefined);
   // #1200 — the SAME read's min_confinement_class, the governance ceiling's
   // own floor (composer.Clamp raises the run to it, internal/composer/clamp.go).
   // Undefined for the same two reasons governanceProfile is; the Barrier
@@ -167,19 +144,6 @@ export function useNewRunController() {
   // failed read it is null/"" — which renders as today's card, the same
   // answer the server's own resolver gives.
   const { drive: userDrive, deniedByProfile: driveDeniedBy, unavailable: driveUnavailable } = useUserDrive();
-
-  React.useEffect(() => {
-    runsApi
-      .listRuns()
-      .then((rs) =>
-        setKnownTitles(
-          [...new Set(rs.map((r) => (r.title ?? "").trim()).filter(Boolean))].sort(),
-        ),
-      )
-      .catch(() => {
-        /* the datalist simply offers nothing — never blocks a launch */
-      });
-  }, []);
 
   // #1197 L2: the title default tracks the task's first line until the
   // operator writes their own. Keyed on state.task (and the edited flag) alone,
@@ -204,98 +168,46 @@ export function useNewRunController() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelProviders]);
 
-  // ONE /setup/status read for everything this screen needs: model-access
-  // readiness, the harness catalog, and which barriers this host can build —
-  // runner.confinement_classes, the same field every other surface reads, never
-  // a separately-polled mirror. `unreachable` distinguishes "couldn't check"
-  // from a real empty list, so there is no retry-on-empty heuristic to
-  // reimplement.
+  const touchedRef = React.useRef(ccTouched);
+  touchedRef.current = ccTouched;
   React.useEffect(() => {
-    let alive = true;
-    setupApi
-      .getSetupStatus()
-      .then((st) => {
-        if (!alive) return;
-        setLlmReady(st.unreachable ? null : hasLlmPath(st));
-        setHarnesses(st.harnesses);
-        // An absent model_providers key means no provider block (nothing to
-        // enforce); a present `[]` means a block that grants this caller
-        // nothing. resolvedModelProviders keeps that distinction and folds an
-        // unreachable read to undefined, off the same bit this effect reads.
-        setModelProviders(resolvedModelProviders(st));
-        setProviderAccess(st.unreachable ? undefined : st.provider_access);
-        setAdoCeiling(st.unreachable ? undefined : st.scm_access?.capability_ceiling);
-        setAdoAccess(st.unreachable ? undefined : (st.scm_access as SCMAccessPAT | undefined));
-        // Every path that leaves the class list unread still SETTLES the probe:
-        // that is what draws the unknown-barrier line (probeSettled with no
-        // availableClasses). Setting it only beside a real list made that
-        // state unreachable.
-        if (st.unreachable) {
-          setProbeSettled(true);
-          return;
-        }
-        setVaultReason(vaultRequirementReason(st.runner.driver, st.platform, st.runner.kubernetes));
-        const classes = (st.runner.confinement_classes ?? []).filter(Boolean);
-        // No runner AT ALL (environment-step.tsx's own noDriver fold — a
-        // member's redacted Driver:"" WITH classes is a withheld NAME, not
-        // no-driver) is UNKNOWN here, not "nothing installed": the capability
-        // gate (runs_create.go) is skipped entirely with no runner configured.
-        const noDriver = st.runner.driver === "none" || (st.runner.driver === "" && classes.length === 0);
-        if (noDriver) {
-          setProbeSettled(true);
-          return;
-        }
-        setAvailableClasses(classes);
-        setProbeSettled(true);
-        // B4b: a CLONE's barrier is the SOURCE RUN's — kept explicit
-        // (ccTouched) as long as this host can build it. A vanished tier
-        // falls back like any fresh run and stops counting as explicit.
-        const cloned = clonedCc.current;
-        const cloneStillAvailable = !!cloned && classes.includes(cloned);
-        const resolved = cloneStillAvailable ? cloned : strongestAvailable(classes) ?? "CC1";
-        pristineCc.current = resolved;
-        setState((s) => ({ ...s, confinementClass: resolved }));
-        if (!cloneStillAvailable) setCcTouched(false);
-      })
-      .catch(() => {
-        /* unknown stays unknown — never claim a missing model path, or a
-           confirmed-absent barrier, on a blip */
-        if (alive) setProbeSettled(true);
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
+    setAvailableClasses(null);
+    setVaultReason(undefined);
+    if (!setup?.runner || setup.unreachable) return;
+    setVaultReason(vaultRequirementReason(setup.runner.driver, setup.platform, setup.runner.kubernetes));
+    const classes = (setup.runner.confinement_classes ?? []).filter(Boolean);
+    if (setup.runner.driver === "none" || (setup.runner.driver === "" && classes.length === 0)) return;
+    setAvailableClasses(classes);
+    if (touchedRef.current && !clonedCc.current) return;
+    const cloned = clonedCc.current;
+    const cloneStillAvailable = !!cloned && classes.includes(cloned);
+    const resolved = cloneStillAvailable ? cloned : strongestAvailable(classes) ?? "CC1";
+    setPristineCc(resolved);
+    setState((old) => ({ ...old, confinementClass: resolved }));
+    if (!cloneStillAvailable) setCcTouched(false);
+    clonedCc.current = undefined;
+  }, [setup]);
 
+  const [draftOwner, setDraftOwner] = React.useState(identity.principal);
+  const [submittedDraft, setSubmittedDraft] = React.useState<string | null>(null);
+  const draftSnapshot = JSON.stringify([policyMode, specText, state]);
+  const ownerCurrent = draftOwner === identity.principal;
   React.useEffect(() => {
-    policiesApi
-      .listPolicies()
-      .then((ps) => {
-        setSavedPolicies(ps.map((p) => ({ id: p.id, name: p.name, spec: p.spec })));
-        setPoliciesLoaded(true);
-      })
-      .catch(() => {
-        /* the Saved-policy lane simply offers nothing — never blocks a launch */
-      });
-  }, []);
-
-  React.useEffect(() => {
-    let alive = true;
-    void healthApi.whoami().then((me) => {
-      if (alive) setGovernanceContact(me?.governance_contact ?? undefined);
-    });
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  // useWorkspaceList does NOT fetch on mount — every caller loads it itself.
-  // Without this, a workspace onboarded elsewhere (Getting started, the
-  // Workspaces screen) could never be attached to a run from this page.
-  React.useEffect(() => {
-    reloadWorkspaces();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount; reload is stable (useCallback([]))
-  }, []);
+    if (!identity.resolved || !identity.principal || ownerCurrent) return;
+    prefillRef.current = undefined;
+    clonedCc.current = undefined;
+    const text = defaultSpecText();
+    setSpecText(text);
+    pristineSpec.current = text;
+    setPristineCc("CC1");
+    setParsedFloor("CC1");
+    setState(initialWizardState("CC1"));
+    setCcTouched(false);
+    setPolicyMode("custom");
+    setTitleUserEdited(false);
+    setSubmittedDraft(null);
+    setDraftOwner(identity.principal);
+  }, [identity.principal, identity.resolved, ownerCurrent]);
 
   // The envelope-field detach funnel retired with the controls it guarded;
   // confinementClass is now guarded by the floor-DISABLE below instead, which
@@ -337,7 +249,7 @@ export function useNewRunController() {
     operator: operator && operatorResolved,
     workspaces,
     modelProviders,
-    pristineCc,
+    setPristineCc,
   });
 
   // The up-clamp only ever RAISES the pick. While /me is unresolved the
@@ -347,7 +259,7 @@ export function useNewRunController() {
   React.useEffect(() => {
     if (ccTouched || !policy.qualifying?.length || policy.qualifying.includes(cc)) return;
     const next = policy.qualifying[policy.qualifying.length - 1];
-    pristineCc.current = next;
+    setPristineCc(next);
     patch({ confinementClass: next });
   }, [ccTouched, policy.qualifying, cc, patch]);
 
@@ -431,7 +343,10 @@ export function useNewRunController() {
     preflightNotChecked,
     preflight,
     currentBody,
+    draftRevision,
     preflightRefusal,
+    invalidateChecks,
+    preview,
   } = useLaunch({
     state,
     workspaces,
@@ -447,7 +362,18 @@ export function useNewRunController() {
       modelArm: isAgent && !isInteractive,
     },
     doorOpen: modelAccessDoor.open,
+    adoDoorOpen: policy.adoDoor.dialog.open,
+    identity: { ...identity, resolved: identity.resolved && ownerCurrent },
+    externalRevision: sources.revision,
+    sourceRefreshPending: sources.pending,
+    onCreated: () => setSubmittedDraft(draftSnapshot),
   });
+
+  const doors = React.useRef({ model: modelAccessDoor.open, ado: policy.adoDoor.dialog.open });
+  React.useEffect(() => {
+    if ((doors.current.model && !modelAccessDoor.open) || (doors.current.ado && !policy.adoDoor.dialog.open)) refreshSources();
+    doors.current = { model: modelAccessDoor.open, ado: policy.adoDoor.dialog.open };
+  }, [modelAccessDoor.open, policy.adoDoor.dialog.open, refreshSources]);
 
   const added = policy.added;
   const hasAdditions = !!added && (added.hosts.length > 0 || added.grants.length > 0 || added.mounts.length > 0 || added.repos.length > 0);
@@ -467,13 +393,9 @@ export function useNewRunController() {
     if (state.selectedPolicyId) patch({ selectedPolicyId: undefined });
   };
 
-  // Picking a policy REPLACES the body, so the textarea always shows what will
-  // actually govern the run even while the reference path is what ships.
-  const onPickPolicy = (id: string) => {
-    const p = savedPolicies.find((x) => x.id === id);
-    if (p) setSpecText(JSON.stringify(p.spec, null, 2));
-    patch({ selectedPolicyId: id });
-  };
+  // A reference never becomes authored source, including a redacted stored policy.
+  const onPickPolicy = (id: string) => patch({ selectedPolicyId: id });
+  const onPolicyModeChange = (mode: PolicyMode) => setPolicyMode(mode);
 
   // Rulebook §8: Esc backs out quietly, with no prompt for an untouched form.
   //
@@ -486,10 +408,10 @@ export function useNewRunController() {
   // explicit discard prompt the rulebook asks for needs copy M4 does not draw,
   // and the ghost "Runs" button is still one click away. Wire the prompt when
   // the mock carries its words.
-  const dirty =
+  const dirty = submittedDraft !== draftSnapshot && (
     policyMode !== "custom" ||
     specText !== pristineSpec.current ||
-    JSON.stringify(state) !== JSON.stringify(initialWizardState(pristineCc.current, undefined, modelProviders));
+    JSON.stringify(state) !== JSON.stringify(initialWizardState(pristineCc, undefined, modelProviders)));
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // defaultPrevented is load-bearing: Radix's DismissableLayer preventDefaults
@@ -512,14 +434,14 @@ export function useNewRunController() {
     probeSettled, availableClasses, vaultReason, specText,
     onSpecChange, preflight, preflighting, policyMode,
     gates, adoCeiling, defaultRead, defaultPolicy,
-    governanceProfile, retryDefault, securityOperator, operatorResolved,
-    setSpecText, setPolicyMode, onPickPolicy, savedPolicies,
+    governanceProfile, retryDefault, operatorResolved,
+    onPolicyModeChange, onPickPolicy, savedPolicies,
     adoAccess, operator, hasAdditions, added,
     governanceContact, llmReady, pushRules, unattended,
     launch, launchDisabled, launchSpinning, launching,
     policiesLoaded, pin, error, errorSeq,
-    errorPolicy, credentialRefused, refusedProvider, currentBody,
-    preflightRefusal, preflightIsCurrent, preflightFresh, preflightBlock,
+    errorPolicy, credentialRefused, refusedProvider, currentBody, draftRevision,
+    preflightRefusal, invalidateChecks, preview, dirty, preflightIsCurrent, preflightFresh, preflightBlock,
     preflightNotChecked, preflightError, preflightErrorSeq, preflightResult,
     providerCandidates, providerAccess, onModelProviderChange, providerChangeNote,
     providerGateState, addWsOpen, reloadWorkspaces,
