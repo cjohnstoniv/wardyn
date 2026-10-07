@@ -209,7 +209,7 @@ it("accepts bounded seconds and HTTP dates without guessing at other strings", (
   const now = Date.parse("Wed, 07 Oct 2026 12:00:00 GMT");
   expect(retryAfterDelay("0", now)).toBe(0);
   expect(retryAfterDelay("Wed, 07 Oct 2026 12:00:02 GMT", now)).toBe(2000);
-  expect(retryAfterDelay("2026-10-07", now)).toBeNull();
+  expect(retryAfterDelay("2020-10-07", now)).toBeNull();
 });
 
 it.each(["preview", "preflight"] as const)("expires both results when %s completes first, without polling", async (first) => {
