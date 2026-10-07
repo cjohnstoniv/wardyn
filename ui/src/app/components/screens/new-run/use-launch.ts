@@ -3,12 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// New Run's launch + preflight lane — split out because new-run-screen.tsx sits
-// at the file-size gate's ceiling (scripts/check-file-size.sh, 1000 lines):
-// buildRunInput, launch and preflight move here verbatim, as a hook the screen
-// calls, rather than as pure functions (policy-lane.ts's pattern) — this lane
-// owns React state (in-flight flags, the last result, the last graded body),
-// not just a derivation over state the screen already holds.
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import type { CreateRunResult, PreflightResult } from "../../../lib/types";
@@ -17,23 +11,9 @@ import { HttpError, isSignedOutHold } from "../../../lib/api/core";
 import type { PolicyRef } from "../../../lib/api/health";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { getErrorMessage } from "../../../lib/format";
-import type { PolicyMode } from "../../wardyn/policy-panel";
-import { primaryWorkspaceId, type WizardState } from "./wizard-types";
-import { buildSpec, mergeRunSelections } from "./wizard-spec";
-import { defaultLaneDropsWorkspace } from "./new-run-launch-gates";
-import { POLICY_TEMPLATE_COPY } from "../../wardyn/copy/policy-templates";
-import type { SetupModelProvider, Workspace } from "../../../lib/types";
+import { buildRunInput, type RunInputParams } from "./build-run-input";
 
-export interface UseLaunchParams {
-  state: WizardState;
-  workspaces: Workspace[];
-  modelProviders?: SetupModelProvider[];
-  /** The mode row: the deployment default (no policy sent), a saved policy by reference, or an authored document. */
-  policyMode: PolicyMode;
-  /** Whether the Barrier control carries an EXPLICIT pick — see new-run-screen.tsx's ccTouched. */
-  ccTouched: boolean;
-  /** The post-parse union of the authored spec with this run's own selections, or null while the spec doesn't parse. */
-  merged: ReturnType<typeof mergeRunSelections> | null;
+export interface UseLaunchParams extends RunInputParams {
   /** Called from Launch's catch block with the caught error (#386's Azure DevOps launch door). */
   onLaunchError?: (e: unknown) => void;
   /** What the screen already knows about whether an automatic preflight may
@@ -92,8 +72,8 @@ export interface UseLaunchResult {
   /** The current body's last check was answered 429: nothing was graded. */
   preflightNotChecked: boolean;
   preflight: () => Promise<void>;
-  /** The request Launch would send right now (null while the policy document
-   *  is unparseable) — the identity a click-armed relaunch is held to. */
+  /** The request Launch would send right now (null when the mode cannot
+   *  represent the selections) — the identity a click-armed relaunch is held to. */
   currentBody: string | null;
   /** Preflight's own model-credential refusal, apart from launch's: the body
    *  it graded and the provider it names ("" when none). Its sign-in re-checks;
@@ -106,11 +86,8 @@ export interface PreflightRefusal {
   provider: string;
 }
 
-// New Run's launch + preflight state and actions — split out of
-// new-run-screen.tsx (see that file's header). `state`/`workspaces`/`policyMode`/
-// `ccTouched`/`merged` are the screen's own form state, read here rather than
-// duplicated: buildRunInput composes the wire body from exactly what the form
-// shows, so the screen and this hook can never author two different requests.
+// Preflight must grade the same body Launch would send, without owning a
+// second copy of the form's state.
 export function useLaunch({
   state,
   workspaces,
@@ -140,8 +117,8 @@ export function useLaunch({
   const [errorPolicy, setErrorPolicy] = React.useState<PolicyRef | undefined>(undefined);
   const [credentialRefused, setCredentialRefused] = React.useState(false);
   const [refusedProvider, setRefusedProvider] = React.useState("");
-  // Preflight is a dry-run of the SAME request Launch sends — see buildRunInput
-  // below. Independent loading/result/error state from Launch's: the two
+  // Preflight is a dry-run of the SAME request Launch sends. Independent
+  // loading/result/error state from Launch's: the two
   // actions can be in flight or have failed independently of one another.
   const [preflighting, setPreflighting] = React.useState(false);
   const [preflightResult, setPreflightResult] = React.useState<PreflightResult | null>(null);
@@ -157,7 +134,7 @@ export function useLaunch({
   // WHILE a preflight is in flight also invalidates the answer when it lands.
   // `at` and `status` are what the freshness and block rules read: a verdict is
   // a 4xx only when `status` says so (2xx = 200, no answer = 0).
-  const [graded, setGraded] = React.useState<{ body: string; at: number; status: number; reason: string } | null>(null);
+  const [graded, setGraded] = React.useState<{ body: string; requestKey: string; at: number; status: number; reason: string } | null>(null);
   const preflightedBody = graded?.body ?? null;
   // Forces the render that lets a verdict age out; the clock itself is read in render.
   const [, setAgeTick] = React.useState(0);
@@ -166,53 +143,21 @@ export function useLaunch({
   const inFlightRef = React.useRef(false);
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // The ONE request-payload builder — Launch and Preflight must send EXACTLY
-  // the same body, since preflight's verdict is only true if it is a dry-run
-  // of what Launch actually does. A second builder here is how the two drift.
-  const buildRunInput = () => {
-    const { run: built } = buildSpec(state, workspaces, modelProviders);
-    // Untouched Barrier control (ccTouched): OMIT confinement_class so the
-    // server's own default decides and its audit trail reads `defaulted`.
-    const run = ccTouched ? built : { ...built, confinement_class: undefined };
-    // The MODE ROW is the discriminator: a policy id that somehow survives a
-    // switch back to Custom still must not launch by reference. And the
-    // workspace_id override must never OVERWRITE buildSpec's deliberate
-    // ephemeral-workspace fallback with undefined — that silently launched a
-    // workspace-less run.
-    if (policyMode === "saved" && state.selectedPolicyId) {
-      return {
-        ...run,
-        policy_id: state.selectedPolicyId,
-        workspace_id: primaryWorkspaceId(state.workspaces, workspaces) ?? run.workspace_id,
-      };
-    }
-    // The default lane sends neither policy_id nor inline_policy: the server
-    // resolves the caller's ceiling itself, so this body is what both Launch
-    // and Check again send. The picked workspace still travels by reference,
-    // as on the saved lane: without it a local_dir pick is never mounted.
-    if (policyMode === "default") {
-      // Unreachable, as below: launchGates holds both actions while a second
-      // workspace is attached. This body carries one workspace, so sending it
-      // would launch without the other.
-      if (defaultLaneDropsWorkspace(policyMode, state.workspaces.length)) {
-        throw new Error(POLICY_TEMPLATE_COPY.DEFAULT_ONE_WORKSPACE);
-      }
-      return { ...run, workspace_id: primaryWorkspaceId(state.workspaces, workspaces) ?? run.workspace_id };
-    }
-    // Unreachable: `problem` disables both actions while the document is
-    // broken. Throwing beats substituting a composed fallback nobody wrote.
-    if (!merged) throw new Error("The policy spec isn't valid JSON.");
-    return { ...run, inline_policy: merged.spec };
-  };
+  const input = buildRunInput({ state, workspaces, modelProviders, policyMode, ccTouched, merged });
+  const currentBody = input ? JSON.stringify(input) : null;
+  // Reference bodies may omit attachment details. Changing those selections
+  // still invalidates the check, even if the serialized body stays identical.
+  const requestKey = JSON.stringify([policyMode, state.workspaces, currentBody]);
 
   const launch = async () => {
+    if (!input) return;
     setError(null);
     setErrorPolicy(undefined);
     setCredentialRefused(false);
     setRefusedProvider("");
     setLaunching(true);
     try {
-      const created: CreateRunResult = await runsApi.createRun(buildRunInput());
+      const created: CreateRunResult = await runsApi.createRun(input);
       // #125: a launch that answers 2xx always navigates, in the same tick —
       // no held screen, no timer (a timer both raced every other way off this
       // screen — Esc and the ghost "Runs" button each land on /runs — and gave
@@ -238,23 +183,9 @@ export function useLaunch({
     }
   };
 
-  // A dry-run of launch's own resolution: same body, same 4xx surface, but
-  // mints/dispatches nothing. Renders the member-clamp warnings, the risk
-  // grade, and the confinement class the run will actually be enforced at.
-  // The identity of the request Launch would send right now. buildRunInput
-  // throws while the policy document is unparseable (`problem` disables both
-  // actions in that state), which is itself a body change — hence the catch.
-  const currentBody = (() => {
-    try {
-      return JSON.stringify(buildRunInput());
-    } catch {
-      return null;
-    }
-  })();
-  // Stale BY CONSTRUCTION rather than by operator discipline: nothing has to
-  // remember to clear the verdict, because a verdict graded from a different
-  // body is never rendered in the first place.
-  const preflightIsCurrent = preflightedBody !== null && preflightedBody === currentBody;
+  // A changed body or attachment must hide the verdict on the first render,
+  // before the invalidation effect clears the previous check.
+  const preflightIsCurrent = preflightedBody !== null && preflightedBody === currentBody && graded?.requestKey === requestKey;
   const preflightFresh = preflightIsCurrent && !!graded && Date.now() - graded.at < PREFLIGHT_FRESH_MS;
   const preflightNotChecked = preflightIsCurrent && graded?.status === 429;
   React.useEffect(() => {
@@ -264,14 +195,7 @@ export function useLaunch({
   }, [graded]);
 
   const preflight = async () => {
-    // The saved lane with nothing picked has NO body to dry-run — falling
-    // through would preflight the leftover Custom document this lane will
-    // never launch, breaking buildRunInput's same-body invariant. (The panel
-    // disables the button in this state too; this guards the race.)
-    if (policyMode === "saved" && !state.selectedPolicyId) return;
-    // Likewise the default lane with a second workspace attached: it has no
-    // body that carries both.
-    if (defaultLaneDropsWorkspace(policyMode, state.workspaces.length)) return;
+    if (!input || currentBody === null) return;
     // One check at a time: a newer one supersedes the older, whose answer is
     // then never applied. The previous verdict stays on screen until the new
     // one lands, so a re-check of the same body never un-blocks Launch.
@@ -282,17 +206,16 @@ export function useLaunch({
     inFlightRef.current = true;
     setPreflighting(true);
     // Grade the body we actually send, and remember exactly that one.
-    const body = buildRunInput();
-    const key = JSON.stringify(body);
+    const key = currentBody;
     try {
-      const res = await runsApi.preflightRun(body, ctl.signal);
-      if (ctl.signal.aborted) return;
+      const res = await runsApi.preflightRun(input, ctl.signal);
+      if (ctl.signal.aborted || seqRef.current !== seq) return;
       setPreflightResult(res);
       setPreflightError(null);
       setPreflightRefusal(null);
-      setGraded({ body: key, at: Date.now(), status: 200, reason: "" });
+      setGraded({ body: key, requestKey, at: Date.now(), status: 200, reason: "" });
     } catch (e) {
-      if (ctl.signal.aborted) return;
+      if (ctl.signal.aborted || seqRef.current !== seq) return;
       const status = e instanceof HttpError ? e.status : 0;
       setPreflightResult(null);
       setPreflightRefusal(null);
@@ -306,7 +229,7 @@ export function useLaunch({
         setPreflightErrorSeq((n) => n + 1);
         if (isCredentialRefusal(e)) setPreflightRefusal({ body: key, provider: e instanceof HttpError ? e.provider : "" });
       }
-      setGraded({ body: key, at: Date.now(), status, reason: e instanceof HttpError ? e.reason : "" });
+      setGraded({ body: key, requestKey, at: Date.now(), status, reason: e instanceof HttpError ? e.reason : "" });
     } finally {
       if (seqRef.current === seq) {
         inFlightRef.current = false;
@@ -341,16 +264,23 @@ export function useLaunch({
       void preflightRef.current();
     }, PREFLIGHT_DEBOUNCE_MS);
   }, []);
-  // A body change restarts the debounce and aborts whatever was grading the old one.
+  // Never resurrect a completed verdict after switching away and back. An
+  // aborted transport may settle late, so release its busy state immediately.
   React.useEffect(() => {
-    if (currentBody === null) return;
-    scheduleCheck();
+    setGraded(null);
+    setPreflightResult(null);
+    setPreflightError(null);
+    setPreflightRefusal(null);
+    setPreflighting(false);
+    if (currentBody !== null) scheduleCheck();
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = null;
       abortRef.current?.abort();
+      seqRef.current = seqRef.current + 1;
+      inFlightRef.current = false;
     };
-  }, [currentBody, scheduleCheck]);
+  }, [currentBody, requestKey, scheduleCheck]);
   // The form becoming checkable without the body changing (a late provider list).
   React.useEffect(() => {
     if (autoCheck.local) scheduleCheck();

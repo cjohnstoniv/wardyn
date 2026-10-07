@@ -411,8 +411,6 @@ export function useNewRunController() {
   });
   const modelAccessDoor = useModelAccessDoor();
 
-  // Launch + preflight state and actions — see use-launch.ts's header for why
-  // this lane is a hook rather than a pure function like policy-lane.ts's.
   const {
     launching,
     launchDisabled,
@@ -443,7 +441,7 @@ export function useNewRunController() {
     merged: policy.merged,
     onLaunchError: policy.adoDoor.notifyLaunchError,
     autoCheck: {
-      local: !gates.problem && !gates.workspaceUnavailable && !policy.noBarrierOnHost,
+      local: !gates.problem && !gates.referenceWorkspaceBlocked && !gates.workspaceUnavailable && !policy.noBarrierOnHost,
       // No runner configured: Launch is not refused, so the backend row never holds it.
       backendArm: !policy.noBarrierOnHost && !!availableClasses,
       modelArm: isAgent && !isInteractive,

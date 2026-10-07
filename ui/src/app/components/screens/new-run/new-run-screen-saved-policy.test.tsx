@@ -9,7 +9,7 @@
 // policies/setup/health/runs/workspaces/capabilities regardless of which
 // suite mounts it.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -29,16 +29,18 @@ vi.mock("../../../lib/api/policies", () => ({
   },
 }));
 const createRunMock = vi.fn();
+const preflightRunMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({
   runs: {
     createRun: (...a: unknown[]) => createRunMock(...a),
     listRuns: () => Promise.resolve([]),
-    preflightRun: vi.fn(),
+    preflightRun: (...a: unknown[]) => preflightRunMock(...a),
     gradePolicy: () => Promise.resolve({ risk_assessment: [], overall_risk: "low" }),
   },
 }));
+const listWorkspacesMock = vi.fn();
 vi.mock("../../../lib/api/workspaces", () => ({
-  workspaces: { listWorkspaces: () => Promise.resolve([]) },
+  workspaces: { listWorkspaces: () => listWorkspacesMock() },
 }));
 const myCapabilitiesMock = vi.fn();
 vi.mock("../../../lib/capabilities", async () => {
@@ -78,6 +80,8 @@ function renderAsMember() {
 
 beforeEach(() => {
   createRunMock.mockReset().mockResolvedValue({ id: "run_1" });
+  preflightRunMock.mockReset().mockResolvedValue({ enforced_confinement_class: "CC1", setup_items: [] });
+  listWorkspacesMock.mockReset().mockResolvedValue([]);
   getDefaultPolicyMock.mockReset().mockResolvedValue({ min_confinement_class: "CC1" });
   listPoliciesMock.mockReset().mockResolvedValue([]);
   myCapabilitiesMock.mockReset().mockReturnValue(null);
@@ -127,6 +131,39 @@ describe("NewRunScreen — the saved-policy lane", { timeout: 20_000 }, () => {
     await user.click(screen.getByRole("combobox", { name: "Saved policy" }));
     await user.click(await screen.findByRole("option", { name }));
   }
+
+  it("refuses a saved reference with two attachments and retains both when switching to Custom", async () => {
+    listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
+    listWorkspacesMock.mockResolvedValue([
+      { id: "ws-a", name: "Workspace A", kind: "local_dir", source: "/data/a", status: "scanned" },
+      { id: "ws-b", name: "Workspace B", kind: "local_dir", source: "/data/b", status: "scanned" },
+    ]);
+    render(
+      <MemoryRouter initialEntries={[{
+        pathname: "/runs/new",
+        state: { prefill: { inlinePolicy: false, state: {
+          selectedPolicyId: REDACTED_POLICY.id,
+          workspaces: [{ workspaceId: "ws-a" }, { workspaceId: "ws-b" }],
+        } } },
+      }]}>
+        <OperatorProvider operator><NewRunScreen /></OperatorProvider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByTestId("nr-workspace-extras")).toHaveTextContent("Workspace B"));
+    await user.click(screen.getByRole("button", { name: "Launch run" }));
+    await user.click(screen.getByRole("button", { name: /^Check again$/ }));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1000)); });
+    expect(createRunMock).not.toHaveBeenCalled();
+    expect(preflightRunMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Remove Workspace B" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Custom policy/ }));
+    await user.click(screen.getByRole("button", { name: "Launch run" }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalledOnce());
+    const body = createRunMock.mock.calls[0][0] as { policy_id?: string; inline_policy: { workspace_mounts: { source: string }[] } };
+    expect(body.policy_id).toBeUndefined();
+    expect(body.inline_policy.workspace_mounts.map((mount) => mount.source)).toEqual(["/data/a", "/data/b"]);
+  });
 
   // F2-F1 — a member's redacted body must never reach the wire just because
   // they looked at Custom after picking it.
