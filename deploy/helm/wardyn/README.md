@@ -1201,9 +1201,11 @@ extraObjects:
 ```
 
 `istio-ingress` here is the estate's own gateway namespace, where the Gateway
-sits beside the gateway pods. The `networkPolicy.ingress.from` peer list also
-applies to the console `http` rule, so the gateway namespace can reach the
-console port too; a `podSelector` for the gateway pods on that peer narrows it.
+sits beside the gateway pods. Your Helm identity needs rights to create Istio
+Gateways in that namespace, and the namespace must already exist. The
+`networkPolicy.ingress.from` peer list also applies to the console `http`
+rule, so the gateway namespace can reach the console port too; a `podSelector`
+for the gateway pods on that peer narrows it.
 
 `-verify_hostname %h` is what checks the certificate names the host
 (`-servername` only sends SNI); add `-CAfile <path>` when the listener's

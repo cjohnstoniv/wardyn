@@ -27,9 +27,12 @@ import { repoLabel, rowHeadline } from "./board-groups";
 import { glyphKindFor, RowGlyph } from "./row-glyph";
 import { rowPresentation, waitingSignInPresentation } from "./runs-model";
 import { mayReadSignIn } from "../run-detail/sign-in-run";
-import { useRunSignIn } from "../run-detail/use-run-sign-in";
 import { RUNS_ROW_ACTION } from "../../wardyn/copy/runs-landing";
 import { REVIVE, REVIVING, revivePolicy } from "../../wardyn/copy/run-lifetime";
+
+// Lazy: the read loop is for the rare sign-in row, so it stays out of the entry
+// chunk. The gate (sign-in-run) is eager, and decides whether this loads at all.
+const RowSignInProbe = React.lazy(() => import("../run-detail/row-sign-in-probe"));
 
 function formatDuration(startIso: string, endIso: string): string {
   const mins = Math.max(0, Math.round((Date.parse(endIso) - Date.parse(startIso)) / 60000));
@@ -65,12 +68,9 @@ export function RunRow({ run }: { run: AgentRun }) {
   // attention row or a lease-ended run already says what it needs to. A failed
   // read draws nothing.
   const operator = useOperator();
-  const signIn = useRunSignIn(
-    run.id,
-    run.created_at,
-    mayReadSignIn(run, principal, operator) && !run.attention && run.lost_reason !== "ended",
-  );
-  const p = signIn.waiting && !signIn.failed ? waitingSignInPresentation() : rowPresentation(run, adminView);
+  const eligible = mayReadSignIn(run, principal, operator) && !run.attention && run.lost_reason !== "ended";
+  const [waitingSignIn, setWaitingSignIn] = React.useState(false);
+  const p = eligible && waitingSignIn ? waitingSignInPresentation() : rowPresentation(run, adminView);
   const glyph = glyphKindFor(p.hue, p.word, run.state);
   const title = rowHeadline(run);
   const href = runPath(view, run.id);
@@ -170,6 +170,11 @@ export function RunRow({ run }: { run: AgentRun }) {
           </Button>
         )}
       </div>
+      {eligible && (
+        <React.Suspense fallback={null}>
+          <RowSignInProbe runId={run.id} createdAt={run.created_at} onChange={setWaitingSignIn} />
+        </React.Suspense>
+      )}
     </div>
   );
 }

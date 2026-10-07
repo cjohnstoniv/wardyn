@@ -108,7 +108,7 @@ function renewVerdict(from: Renewal, me: Me, principalResolved: boolean): "other
   }
   const until = Date.parse(me.session_expires_at ?? "");
   if (Number.isNaN(until)) return "waiting";
-  return from.expired || until > from.expiresAt ? "renewed" : "waiting";
+  return until > from.expiresAt ? "renewed" : "waiting";
 }
 
 export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {

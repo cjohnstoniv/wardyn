@@ -851,7 +851,7 @@ export function AppShell({
               >
                 <AlertTriangle className="size-4 shrink-0" />
                 <span>{SESSION_EXPIRY_COPY[sessionExpiry][0]}</span>
-                <SessionRenewButton meta={meta} expired={sessionExpiry === "expired"} />
+                <SessionRenewButton meta={meta} />
                 <span>{SESSION_EXPIRY_COPY[sessionExpiry][1]}</span>
               </div>
             )}
