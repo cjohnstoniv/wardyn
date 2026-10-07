@@ -20,7 +20,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - Mask-copy erasure now durably fences in-flight credential reads and renewals,
   including an owner with no existing masking rows. Delayed AWS and Entra replies
-  cannot restore erased globals; new sign-ins use a fresh generation (#1811).
+  cannot restore erased globals; new sign-ins use a fresh generation. Registration
+  also refuses credentials whose masking values cannot be read back after key
+  destruction (#1811).
 
 - The Playwright harness binds its API, UI-sandbox, internal and base-path proxy listeners to loopback
   by default and refuses non-loopback listeners in real-tmux mode. Each backend startup mints a fresh

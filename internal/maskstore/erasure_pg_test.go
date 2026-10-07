@@ -21,8 +21,8 @@ import (
 
 type erasureKeys struct {
 	Keys
-	current, key     bool
-	entered, release chan struct{}
+	current, prepared, key bool
+	entered, release       chan struct{}
 }
 
 func (k *erasureKeys) wait(ctx context.Context) error {
@@ -41,7 +41,14 @@ func (k *erasureKeys) Current(ctx context.Context, owner, purpose string) (int, 
 			return 0, nil, err
 		}
 	}
-	return k.Keys.Current(ctx, owner, purpose)
+	version, value, err := k.Keys.Current(ctx, owner, purpose)
+	if err == nil && k.prepared {
+		if err := k.wait(ctx); err != nil {
+			clear(value)
+			return 0, nil, err
+		}
+	}
+	return version, value, err
 }
 
 func (k *erasureKeys) Key(ctx context.Context, owner, purpose string, version int) ([]byte, error) {

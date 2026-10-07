@@ -235,6 +235,7 @@ func (s *Store) PutGlobal(generation int64, owner, name string, values []secretm
 		rows = append(rows, r)
 		keep = append(keep, r.digest)
 	}
+	ids := make([]uuid.UUID, 0, len(rows))
 	_, err = s.commit(ctx, func(tx pgx.Tx, gen int64) error {
 		var erased int64
 		if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT gen FROM mask_owner_erasures WHERE owner=$1), 0)`, owner).Scan(&erased); err != nil {
@@ -244,10 +245,11 @@ func (s *Store) PutGlobal(generation int64, owner, name string, values []secretm
 			return secretmask.ErrErased
 		}
 		for _, r := range rows {
-			_, err := putGlobalRow(ctx, tx, owner, name, version, gen, merge, r)
+			id, err := putGlobalRow(ctx, tx, owner, name, version, gen, merge, r)
 			if err != nil {
 				return err
 			}
+			ids = append(ids, id)
 		}
 		if merge {
 			return nil
@@ -270,6 +272,9 @@ func (s *Store) PutGlobal(generation int64, owner, name string, values []secretm
 	if err := s.Fresh(ctx, time.Now()); err != nil {
 		return err
 	}
+	// A healthy read may discard an unreadable row, so it is not by itself a
+	// receipt for the values this caller is about to return or store.
+	applied := s.globalsApplied(ids) && s.reg.HasGlobalValues(owner, name, values)
 	var erased bool
 	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM mask_owner_erasures WHERE owner=$1 AND gen>$2)`, owner, generation).Scan(&erased); err != nil {
 		return fmt.Errorf("maskstore: recheck the owner's erasure generation: %w", err)
@@ -277,7 +282,21 @@ func (s *Store) PutGlobal(generation int64, owner, name string, values []secretm
 	if erased {
 		return secretmask.ErrErased
 	}
+	if !applied {
+		return errors.New("maskstore: registered values are not available for masking")
+	}
 	return nil
+}
+
+func (s *Store) globalsApplied(ids []uuid.UUID) bool {
+	s.sync.mu.Lock()
+	defer s.sync.mu.Unlock()
+	for _, id := range ids {
+		if s.sync.rows[id] == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // putGlobalRow writes one current value: a new row, or the existing row of the

@@ -7558,7 +7558,10 @@ state.
   refuses if that owner was erased after the snapshot. A deliberate new sign-in
   takes a new snapshot. Fences survive retention and restarts. Cached globals
   are applied only by ordered reads: an erased value is dropped on each replica's
-  next fresh read, without a delayed registration restoring it locally. Bytes
+  next fresh read, without a delayed registration restoring it locally. A global
+  registration succeeds only after its rows have been applied and its values are
+  available to mask; key destruction that makes a new row unreadable refuses the
+  credential. Previously cached retired values retain their existing grace. Bytes
   already handed out, including previously built maskers, cannot be revoked. **SSH exec, SFTP and direct-tcpip were never masked**
   (`sshgateway_channels.go`), so none of them is covered by any of this.
 
