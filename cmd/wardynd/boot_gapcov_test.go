@@ -14,13 +14,14 @@ import (
 func gapCovPostureFlags() *bootFlags {
 	off, tail, retention, rate := false, 65536, 30, 20
 	seal, runner, rec, listen := "off", "none", "pg", ":8080"
-	empty, controlURL := "", "https://wardynd:8443"
+	empty, controlURL, internal := "", "https://wardynd:8443", ":8443"
 	return &bootFlags{
 		ha: &off, allowMultiInstance: &off, runnerSel: &runner, recordingSel: &rec,
 		auditSeal: &seal, runOutputTailBytes: &tail, runOutputRetention: &retention, preflightRatePerMin: &rate,
 		basePath: &empty, oidcIssuer: &empty, oidcInternalIss: &empty, uiAdvertise: &empty, oidcRedirectURL: &empty,
 		controlURL: &controlURL, listen: &listen, uiListen: &empty, sshListen: &empty, uiOriginTemplate: &empty,
 		uiStripCookies: &empty, allowPlaintextListen: &off, orgURL: &empty, orgEnrolToken: &empty, memberMode: &off,
+		internalListen: &internal, metricsListen: &empty,
 	}
 }
 

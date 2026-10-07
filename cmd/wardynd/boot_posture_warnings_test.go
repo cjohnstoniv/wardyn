@@ -105,6 +105,7 @@ func TestValidateBootPostureLogsTheWarnings(t *testing.T) {
 			basePath:            &base, oidcIssuer: &issuer, oidcInternalIss: &internal, oidcRedirectURL: &redirect, controlURL: &control,
 			listen: &listen, uiListen: &ui, uiAdvertise: &advertise, sshListen: &ssh, uiOriginTemplate: &tmpl, uiStripCookies: &strip,
 			allowPlaintextListen: &allow, orgURL: &org, orgEnrolToken: &tok, memberMode: &member,
+			internalListen: &ssh, metricsListen: &ssh,
 		}
 		if err := validateBootPosture(f, tlsServed); err != nil {
 			t.Fatal(err)
