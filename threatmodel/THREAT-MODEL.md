@@ -3575,6 +3575,28 @@ cases widen that. With `networkPolicy.enabled=false` the chart renders no rule,
 and the port is open to the whole pod network. Outside the chart (compose, a
 host install) the bind address and the host firewall are the only control.
 
+### The advertised SSH ProxyCommand (opt-in)
+
+`WARDYN_SSH_PROXY_COMMAND` (Helm `ssh.proxyCommand`, unset by default) is
+advisory copy. wardynd publishes it on `/healthz` as `ssh.proxy_command`, and
+each person's own `ssh` executes it on their computer when they connect
+(`docs/SSH.md`, "SSH on a 443-only estate").
+
+**The controls.** The daemon never runs the value. `wardyn run ssh` runs it
+only with `--advertised-proxy`; without the flag it shows the command and runs
+nothing. The console card and the CLI apply the daemon's own rule again
+(`cliutil.CheckSSHProxyCommand`, `ui/src/app/lib/ssh-proxy-command.ts`) and
+refuse a value that fails it. Boot refuses a value with a control character, a
+newline or a single quote, or one over 512 bytes, so the value cannot break out
+of the single-quoted `-o ProxyCommand='<value>'` that the card and the CLI
+print.
+
+**The residual.** Those checks bound the value's shape, not what it does.
+Whoever can set the value runs a command on the computer of every person who
+connects, the same class as whoever sets the chart's image. The card's
+copy-paste command and the `--print` and `--config` output are run by the
+person, so a person must read what they paste.
+
 ### Known latent vulnerabilities
 
 We publish known-uncalled findings here rather than let them sit in a scanner's

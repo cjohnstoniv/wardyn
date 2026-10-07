@@ -173,12 +173,14 @@ ssh:
   proxyCommand: openssl s_client -quiet -verify_return_error -verify_hostname %h -connect %h:443 -servername %h
 
 # The same recipe's Istio objects, through extraObjects: neither is a ConfigMap,
-# and the destination host proves tpl expanded the release's own names.
+# and the destination host proves tpl expanded the release's own names. The
+# Gateway sits in the gateway pods' namespace, as the recipe has it.
 extraObjects:
   - apiVersion: networking.istio.io/v1
     kind: Gateway
     metadata:
       name: wardyn-ssh
+      namespace: istio-ingress
     spec:
       selector:
         istio: ingressgateway
@@ -200,7 +202,7 @@ extraObjects:
       hosts:
         - ssh.example.com
       gateways:
-        - wardyn-ssh
+        - istio-ingress/wardyn-ssh
       tcp:
         - match:
             - port: 443
