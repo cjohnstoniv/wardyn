@@ -658,15 +658,18 @@ is the strongest this daemon advertises, and `TestLive_TierMatrix` fails when th
 stack does not advertise it at all, where it used to accept the fail-closed 422
 instead. Unset, both behave as before; see nightly's
 `gvisor-cc2-live` job), `WARDYN_E2E_UI_ADDR` (the UI-sandbox
-gateway's second listener on the Playwright e2e backend, default `:8089`;
+gateway's second listener on the Playwright e2e backend, default `127.0.0.1:8089`;
 `scripts/e2e-backend.sh` — it must differ from `WARDYN_E2E_ADDR`, which the
 daemon itself enforces). `WARDYN_E2E_ADDR` is the backend's console listener,
-default `:8088`. `WARDYN_E2E_INTERNAL_ADDR` (default `:8443`) is wardynd's
+default `127.0.0.1:8088`. `WARDYN_E2E_INTERNAL_ADDR` (default `127.0.0.1:8443`) is wardynd's
 proxy-facing internal TLS listener (`-internal-listen`), which binds
 unconditionally whenever `-control-plane-url` is https (the daemon's own
 default) regardless of the two listeners above. `scripts/run-ui-e2e.sh` picks
 a free port for each of the three that is unset, so two runs — or, since #469,
-two concurrent lanes in one run — on one host never share one.
+two concurrent lanes in one run — on one host never share one. Port-only
+overrides (`:port`) and `localhost:port` bind to `127.0.0.1`; other explicit
+hosts are preserved. Real-tmux mode refuses non-loopback API, UI-sandbox,
+internal and active base-path proxy listeners before starting or resetting a backend.
 
 The rest of the Playwright e2e backend's knobs (`scripts/e2e-backend.sh`,
 `scripts/run-ui-e2e.sh`, `scripts/screenshots.sh`, `test/e2e/e2e.sh`) are
@@ -682,12 +685,12 @@ until it landed, ten of these thirteen were undocumented and unenforced in
 | `WARDYN_E2E_PG_HOSTPORT` | string (`host:port`) | `localhost:55432` | Where `run-ui-e2e.sh`/`screenshots.sh` point `WARDYN_E2E_DSN` at. **The one var to set on a shared box** where `:55432` is held by another job's Postgres — pair it with a `WARDYN_E2E_PG_CONTAINER` that actually publishes that port, or `e2e-backend.sh` refuses the mismatch loudly (F062) |
 | `WARDYN_E2E_PG_CONTAINER` | string | `wardyn-test-pg` | The container `e2e-backend.sh` runs `pg_isready`/`psql`/seed SQL against via `docker exec` — independent of the DSN's host:port, which is why the two must agree |
 | `WARDYN_E2E_PG_DBNAME` | string | `wardyn_e2e` (`run-ui-e2e.sh`: `wardyn_e2e_<pid>`) | The e2e database name. Unset, `run-ui-e2e.sh` names one after its own PID and drops it on exit, so concurrent runs never share a database; a name you set is kept. `screenshots.sh` overrides it to `wardyn_shots` so its own run never collides with a concurrent `run-ui-e2e.sh` |
-| `WARDYN_E2E_TOKEN` | string | `wardyn-e2e-token` | The fixed admin bearer token the seeded backend accepts, so specs never need a real sign-in flow |
+| `WARDYN_E2E_TOKEN` | string | (unset = mint a fresh token per `up`) | Explicit admin bearer override for a test backend. Otherwise every `e2e-backend.sh up` mints 32 random bytes, keeps the token in a mode-0600 `.e2e-bin/token-<port>` file until `down`, and derives the seeded person tokens from it. `run-ui-e2e.sh` and `screenshots.sh` read `e2e-backend.sh token` and export it to Playwright; direct callers must do the same with matching `WARDYN_E2E_ADDR`. A later `up` rotates the token unless an override was supplied |
 | `WARDYN_E2E_AGE_KEY` | string | (unset = mint a fresh one) | Pins the backend's secret-store age identity instead of minting one per `up` via `wardynd -gen-age-key`. Leave unset — a committed value would be a publicly-known key, and `wardynd` fail-closed refuses those |
 | `WARDYN_E2E_SKIP_BUILD` | bool | (unset = build) | `1` reuses the already-built `.e2e-bin/wardynd` instead of rebuilding it. `run-ui-e2e.sh`/`screenshots.sh` set this themselves after their own one-time build, so later `e2e-backend.sh up` calls in the same run don't rebuild per spec |
 | `WARDYN_E2E_NO_UI_BUILD` | bool | (unset = build) | `1` reuses an existing `ui/dist` and **refuses** (exit 1) if anything under `ui/` is newer. For a backend-only iteration; a UI change needs the knob unset or `cd ui && pnpm build` |
 | `WARDYN_E2E_TMUX_BUILD` | bool | (unset) | `1` also builds `.e2e-bin/wardynd-tmux` with `-tags e2etmux`, the test-only local-tmux runner. `run-ui-e2e.sh` sets it when a `cockpit-terminal-tmux-*` spec is selected |
-| `WARDYN_E2E_TMUX` | bool | (unset) | `1` serves `wardynd-tmux`, so the production attach endpoint drives a real tmux (throwaway socket, `deploy/images/common/tmux.conf`) and the seeded RUNNING fixture is attachable. A missing tmux or binary fails `e2e-backend.sh up`; it never skips |
+| `WARDYN_E2E_TMUX` | bool | (unset) | `1` serves `wardynd-tmux`, so the production attach endpoint drives a real tmux (throwaway socket, `deploy/images/common/tmux.conf`) and the seeded RUNNING fixture is attachable. A missing tmux or binary, or any non-loopback listener, fails `e2e-backend.sh up`; it never skips |
 | `WARDYN_E2E_TMUX_SOCKET` | string | (set by `e2e-backend.sh`) | Name of the throwaway tmux socket (`tmux -L`) the e2etmux build attaches to; killed by `e2e-backend.sh down`. The e2etmux build refuses to start without it |
 | `WARDYN_E2E_TMUX_CONF` | path | `deploy/images/common/tmux.conf` | tmux config the e2etmux build starts its server with; override to prove a spec red against an older config |
 | `WARDYN_E2E_KEEP` | bool | (unset = tear down) | `test/e2e/e2e.sh` only: `1` leaves the compose stack up on exit (success or failure) instead of tearing it down, for post-mortem inspection |
@@ -695,7 +698,7 @@ until it landed, ten of these thirteen were undocumented and unenforced in
 | `WARDYN_E2E_CC_IMAGE` | string (image ref) | `wardyn/agent-claude-code:local` | `test/e2e/e2e.sh` only: the tag the claude-code agent image is built to and pinned under (in `WARDYN_AGENT_IMAGES`). With `COMPOSE_PROJECT_NAME`/`WARDYN_NS`, the `*_PORT` variables and `WARDYN_WARDYND_IMAGE`/`WARDYN_PROXY_IMAGE`, it lets the suite run beside another stack on a shared host |
 | `WARDYN_E2E_ANTHROPIC_KEY` | string (credential) | (unset = skip) | `test/e2e/e2e.sh` only: when set, the real-LLM path records against a live Anthropic key at boot instead of skipping that leg. Credential-shaped — never commit a value, and it never appears in captured output |
 | `WARDYN_E2E_BASE_PATH` | string (path) | (unset = the host root) | `run-ui-e2e.sh`/`e2e-backend.sh`: boot the hermetic backend with `WARDYN_BASE_PATH` set to this value behind a stdlib reverse proxy (`test/basepathproxy`, forwarding paths unchanged), and point Playwright's base URL at the proxy under the prefix. The `base-path` spec runs in this mode; every other spec is written for the root. Unset (every other caller) is byte-identical to before |
-| `WARDYN_E2E_PROXY_ADDR` | string (`:port`) | `:8090` (`run-ui-e2e.sh`: a free port) | listen address of that reverse proxy in `WARDYN_E2E_BASE_PATH` mode; ignored without it |
+| `WARDYN_E2E_PROXY_ADDR` | string (`host:port`) | `127.0.0.1:8090` (`run-ui-e2e.sh`: a free loopback port per lane) | listen address of that reverse proxy in `WARDYN_E2E_BASE_PATH` mode; ignored without it |
 | `WARDYN_E2E_WALK_BASE_URL` | string (URL) | (unset = hermetic) | `run-ui-e2e.sh` LIVE mode: run specs from `ui/e2e/walk/` against an ALREADY-RUNNING external Wardyn at this URL — today the kind SSO cluster (`scripts/kind-sso-walk.sh`, which exports it) — instead of booting and re-seeding the hermetic `-runner none` backend. It also becomes `WARDYN_E2E_BASE_URL`, which is the `live` Playwright project's base URL. Unset (every other caller) leaves the default path byte-identical: the hermetic backend is built, brought up per spec and torn down as before. Every live spec ALSO self-skips without `WARDYN_TEST_K8S=1` |
 | `WARDYN_E2E_ALLOW_ALL_SKIPPED` | string (space-separated spec basenames) | (unset = none allowlisted) | `run-ui-e2e.sh` only (F061): names spec files allowed to report zero executed tests (every test in the file skipped) without failing the gate. Empty by default — a spec that skips its whole file is a red flag until named here on purpose |
 | `WARDYN_E2E_LANES` | int | `1` unset locally, `3` unset with `$CI` set | #469: `run-ui-e2e.sh`'s DEFAULT (no spec args, not LIVE mode) invocation only — how many isolated backends run specs concurrently, each claiming the next unclaimed spec from one shared list. Unset, the default is 1 on a plain dev box and 3 when `CI` is set — three concurrent backends triple one run's memory, which a shared box may not have headroom for; `ci.yml` also pins `WARDYN_E2E_LANES: 3` explicitly for its dedicated runner rather than rely on that default. Lane 0 reuses `WARDYN_E2E_ADDR`/`WARDYN_E2E_UI_ADDR`/`WARDYN_E2E_INTERNAL_ADDR`/`WARDYN_E2E_PG_DBNAME` as resolved above; lane i>0 asks the OS for its own free ADDR/UI_ADDR/INTERNAL_ADDR (never a fixed offset from another lane's — that is a guess, not a reservation) with database `<WARDYN_E2E_PG_DBNAME>_lane<i>`. Clamped to 1-3; an explicit spec list or LIVE mode always runs one lane, regardless of this setting |

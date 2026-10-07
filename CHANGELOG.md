@@ -8,6 +8,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- The Playwright harness binds its API, UI-sandbox, internal and base-path proxy listeners to loopback
+  by default and refuses non-loopback listeners in real-tmux mode. Each backend startup mints a fresh
+  admin token and derived person credentials, shared with its own Playwright process; explicit test
+  token overrides remain supported. The canonical runner preserves explicit hosts and base-path URLs (#1813).
+
 ## [0.8.8] — 2026-10-07
 
 ### Before you upgrade

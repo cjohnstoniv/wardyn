@@ -154,7 +154,7 @@ test.describe("Killing an active run", () => {
 
   test("killing an active run from its detail page surfaces a toast and reconciles", async ({ page }) => {
     const resp = await page.request.get("/api/v1/runs", {
-      headers: { Authorization: "Bearer wardyn-e2e-token" },
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
     });
     expect(resp.ok()).toBeTruthy();
     const payload = (await resp.json()) as unknown;
