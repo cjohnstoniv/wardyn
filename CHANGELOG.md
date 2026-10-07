@@ -16,6 +16,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- New Run's shared request builder refuses multiple workspace attachments with saved or default
+  policies, preventing a referenced policy request from omitting extra attachments. Changing policy
+  modes or attachments invalidates prior preflight results (#1901).
 - The Playwright harness binds its API, UI-sandbox, internal and base-path proxy listeners to loopback
   by default and refuses non-loopback listeners in real-tmux mode. Each backend startup mints a fresh
   admin token and derived person credentials, shared with its own Playwright process; explicit test
