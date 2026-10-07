@@ -24,6 +24,7 @@ import type { Me } from "../../lib/api/health";
 import { TOKEN_LABEL } from "../screens/sign-in";
 import { setField } from "../../../test/set-field";
 import { aheadByHours } from "../../lib/test-clock";
+import { wfetch } from "../../lib/api/core";
 
 vi.mock("../../lib/api/health", () => ({
   health: { health: () => Promise.resolve({}) },
@@ -53,8 +54,10 @@ function renderDialog(reauthOverrides: Partial<Reauth> = {}) {
     phase: "dialog",
     signedOut: true,
     renewal: null,
+    watch: null,
     writeDropped: null,
     setPhase,
+    setWatch: vi.fn(),
     startRenew: vi.fn(),
     endRenew: vi.fn(),
     reloadAs,
@@ -102,8 +105,10 @@ describe("ReauthLayer — succeed() and an unresolved identity (SF-29)", () => {
       phase: "dialog",
       signedOut: true,
       renewal: null,
+      watch: null,
       writeDropped: null,
       setPhase,
+      setWatch: vi.fn(),
       startRenew: vi.fn(),
       endRenew: vi.fn(),
       reloadAs,
@@ -167,7 +172,8 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
         </button>
         <output data-testid="phase">{reauth.phase}</output>
         <output data-testid="signed-out">{String(reauth.signedOut)}</output>
-        {reauth.phase !== "none" && <ReauthLayer onResumed={onResumed} />}
+        {/* The shell's own rule (app-shell.tsx): a watched sign-in keeps the layer. */}
+        {(reauth.phase !== "none" || reauth.watch) && <ReauthLayer onResumed={onResumed} />}
         <main id="main-content" tabIndex={-1} />
       </ReauthContext.Provider>
     );
@@ -199,14 +205,24 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
   }
   const poll = (times = 1) => act(() => vi.advanceTimersByTimeAsync(POLL_MS * times));
   const phase = () => screen.getByTestId("phase").textContent;
+  const reads = () => vi.mocked(wfetch).mock.calls.length;
+  const cancel = () => fireEvent.click(screen.getByRole("button", { name: REAUTH_RENEW.CANCEL }));
+  const bob = (over: Partial<Me> = {}) => alice({ principal: "bob", ...over });
+  // What the browser answers the fallback link's own window.open: refused
+  // again, unless a test hands it a tab.
+  const open = vi.fn((): unknown => null);
 
   beforeEach(() => {
     vi.useFakeTimers();
     vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.warning).mockClear();
+    open.mockReset().mockReturnValue(null);
+    vi.stubGlobal("open", open);
   });
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+    vi.unstubAllGlobals();
     answer = { body: meResponse, status: 200 };
   });
 
@@ -344,5 +360,143 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     await poll();
     expect(screen.getByText(REAUTH_DIALOG.WAITING)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: REAUTH_RENEW.CANCEL })).toBeInTheDocument();
+  });
+
+  // A sign-in this flow started can still complete after the page stops
+  // waiting for it: the server honours a started login for ten minutes, twice
+  // over when it restarts one (internal/auth/oidc), plus the callback's own work.
+  const WATCH_MS = 21 * 60 * 1000;
+
+  it("Cancel after the new-tab fallback: someone else finishing that sign-in reloads the page as them", async () => {
+    answer = { body: alice(), status: 200 };
+    const { onResumed, reloadAs } = startRenewal({ popup: null });
+    // The browser refuses this window too, so the link opens a tab of its own:
+    // one this page holds no handle on, and Cancel cannot close.
+    fireEvent.click(screen.getByRole("link", { name: REAUTH_DIALOG.POPUP_FALLBACK }));
+    await poll();
+    cancel();
+    expect(phase()).toBe("none");
+    expect(screen.queryByText(REAUTH_DIALOG.WAITING)).toBeNull();
+
+    answer = { body: bob({ session_expires_at: LATER }), status: 200 };
+    await poll();
+    expect(reloadAs).toHaveBeenCalledWith("/admin/settings");
+    expect(onResumed).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("the fallback's tab is opened from the click, so Cancel closes it, and who signs in is still watched", async () => {
+    answer = { body: alice(), status: 200 };
+    const tab = { closed: false, close: vi.fn(() => void (tab.closed = true)), opener: window as unknown, location: { href: "" } };
+    open.mockReturnValue(tab);
+    const { reloadAs } = startRenewal({ popup: null });
+    // Prevented: the click opened the tab, so the link must not open a second.
+    expect(fireEvent.click(screen.getByRole("link", { name: REAUTH_DIALOG.POPUP_FALLBACK }))).toBe(false);
+    expect(open).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(tab.opener).toBeNull();
+    expect(tab.location.href).toBe("/auth/login");
+    expect(screen.getByText(REAUTH_DIALOG.WAITING)).toBeInTheDocument();
+
+    cancel();
+    expect(tab.close).toHaveBeenCalled();
+    answer = { body: bob(), status: 200 };
+    await poll();
+    expect(reloadAs).toHaveBeenCalledWith("/admin/settings");
+  });
+
+  it("Cancel with the window open: a sign-in already on its way that lands as someone else reloads the page as them", async () => {
+    answer = { body: alice(), status: 200 };
+    const { popup, onResumed, reloadAs } = startRenewal();
+    await poll();
+    cancel();
+    // Closing the window does not recall a callback the server already has.
+    expect(popup.close).toHaveBeenCalled();
+    expect(phase()).toBe("none");
+    expect(reloadAs).not.toHaveBeenCalled();
+
+    answer = { body: bob(), status: 200 };
+    await poll();
+    expect(reloadAs).toHaveBeenCalledWith("/admin/settings");
+    expect(onResumed).not.toHaveBeenCalled();
+  });
+
+  it("Cancel, then the same person with a narrowed role: the role is applied", async () => {
+    answer = { body: alice(), status: 200 };
+    const { onResumed, reloadAs } = startRenewal();
+    cancel();
+    const narrowed = alice({ role: "user", operator: false, security_operator: false });
+    answer = { body: narrowed, status: 200 };
+    await poll();
+    expect(phase()).toBe("dialog");
+    expect(screen.getByTestId("signed-out")).toHaveTextContent("true");
+    expect(screen.getByText(REAUTH_DIALOG.ROLE_CHANGED_BODY)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: REAUTH_EXTRA.GO_TO_RUNS }));
+    expect(onResumed).toHaveBeenCalledWith(narrowed);
+    expect(reloadAs).not.toHaveBeenCalled();
+  });
+
+  it("Cancel, then the same person: nothing changes, and the watch stops at its bound", async () => {
+    // Even renewed: they backed out of this renewal, so it says nothing.
+    answer = { body: alice({ session_expires_at: LATER }), status: 200 };
+    const { onResumed, reloadAs } = startRenewal();
+    cancel();
+    const atCancel = reads();
+
+    // Still asking right up to the bound…
+    await act(() => vi.advanceTimersByTimeAsync(WATCH_MS - POLL_MS));
+    const nearBound = reads();
+    expect(nearBound).toBeGreaterThan(atCancel + 800);
+    await poll();
+    expect(reads()).toBeGreaterThan(nearBound);
+    // …and not after it.
+    await poll(2);
+    const atBound = reads();
+    await poll(20);
+    expect(reads()).toBe(atBound);
+
+    expect(phase()).toBe("none");
+    expect(screen.getByTestId("signed-out")).toHaveTextContent("false");
+    expect(screen.queryByRole("button", { name: REAUTH_RENEW.CANCEL })).toBeNull();
+    expect(screen.queryByText(REAUTH_DIALOG.WAITING)).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(onResumed).not.toHaveBeenCalled();
+    expect(reloadAs).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it("Cancel with the window refused and the fallback never used: no sign-in began, so nothing is watched", async () => {
+    answer = { body: bob(), status: 200 };
+    const { reloadAs } = startRenewal({ popup: null });
+    const before = reads();
+    cancel();
+    await poll(4);
+    expect(reads()).toBe(before);
+    expect(reloadAs).not.toHaveBeenCalled();
+  });
+
+  it("a window that closed is not proof: someone else's sign-in landing afterwards still reloads the page", async () => {
+    answer = { body: alice(), status: 200 };
+    const { popup, reloadAs } = startRenewal();
+    popup.closed = true;
+    await poll();
+    expect(screen.getByText(REAUTH_DIALOG.CLOSED_WITHOUT)).toBeInTheDocument();
+
+    answer = { body: bob(), status: 200 };
+    await poll();
+    expect(reloadAs).toHaveBeenCalledWith("/admin/settings");
+  });
+
+  it("a second window the browser refuses does not end it: the first one's sign-in can still land", async () => {
+    answer = { body: alice(), status: 200 };
+    const { popup, reloadAs } = startRenewal();
+    popup.closed = true;
+    await poll();
+    fireEvent.click(screen.getByRole("button", { name: REAUTH_RENEW.CTA }));
+    expect(screen.getByText(REAUTH_DIALOG.POPUP_BLOCKED)).toBeInTheDocument();
+
+    answer = { body: bob(), status: 200 };
+    await poll();
+    expect(reloadAs).toHaveBeenCalledWith("/admin/settings");
   });
 });

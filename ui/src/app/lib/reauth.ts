@@ -13,7 +13,8 @@
 //
 // It also holds a renewal: the expiry banner's "Sign in again", started while
 // the session is still live (lib/use-session-renew.ts), which the same layer
-// draws as a strip in the banner's place.
+// draws as a strip in the banner's place — and a watch: a renewal the person
+// backed out of, whose sign-in can still complete.
 import * as React from "react";
 import type { Refused } from "./api/core";
 
@@ -34,6 +35,13 @@ export interface Renewal {
   popup: Window | null;
 }
 
+/** A cancelled renewal whose sign-in can still complete: who it started from,
+ *  and until when (epoch milliseconds) the server would still honour it. */
+export interface Watch {
+  from: Renewal;
+  until: number;
+}
+
 export interface Reauth {
   phase: ReauthPhase;
   /** Signed out mid-page: the dialog, the bar, or a renewal under which a
@@ -41,12 +49,16 @@ export interface Reauth {
   signedOut: boolean;
   /** The renewal in progress, or null. */
   renewal: Renewal | null;
+  /** Set while a cancelled renewal's sign-in can still land in this browser:
+   *  the layer stays mounted and keeps measuring whoever answers /me. */
+  watch: Watch | null;
   /** The owner id (WfetchInit.save) of a Save refused in this lapse — never
    *  re-sent — or null. Only that owner's screen ever shows it. */
   writeDropped: string | null;
   /** "dialog": ask (again). "bar": Not now. "none": the same person is back
    *  and the page carries on. */
   setPhase: (phase: Exclude<ReauthPhase, "renew">) => void;
+  setWatch: (watch: Watch | null) => void;
   /** The banner's "Sign in again": the click has already opened the window. */
   startRenew: (renewal: Renewal) => void;
   /** Cancel: back to the banner, or to the dialog when the session ended
@@ -65,8 +77,10 @@ export const ReauthContext = React.createContext<Reauth>({
   phase: "none",
   signedOut: false,
   renewal: null,
+  watch: null,
   writeDropped: null,
   setPhase: noop,
+  setWatch: noop,
   startRenew: noop,
   endRenew: noop,
   reloadAs: noop,
@@ -83,10 +97,11 @@ interface State {
   phase: ReauthPhase;
   writeDropped: string | null;
   renewal: Renewal | null;
+  watch: Watch | null;
   /** A request was refused (401) since the person was last known signed in. */
   refused: boolean;
 }
-const SIGNED_IN: State = { phase: "none", writeDropped: null, renewal: null, refused: false };
+const SIGNED_IN: State = { phase: "none", writeDropped: null, renewal: null, watch: null, refused: false };
 
 export function useReauthController(reloadAs: (path: string) => void): {
   reauth: Reauth;
@@ -109,6 +124,8 @@ export function useReauthController(reloadAs: (path: string) => void): {
     });
   }, []);
   const reset = React.useCallback(() => setState(SIGNED_IN), []);
+  // Stable identity: the layer's watch effect depends on it.
+  const setWatch = React.useCallback((watch: Watch | null) => setState((s) => ({ ...s, watch })), []);
   // Stable identity: useWriteDropped's effect depends on it. The owner going
   // away takes its dropped save with it — the draft it named is gone too.
   const claimWriteDropped = React.useCallback((owner: string) => {
@@ -124,9 +141,11 @@ export function useReauthController(reloadAs: (path: string) => void): {
       phase: state.phase,
       writeDropped: state.writeDropped,
       renewal: state.renewal,
+      watch: state.watch,
       signedOut: state.phase !== "none" && (state.phase !== "renew" || state.refused),
       setPhase: (phase) =>
         setState((s) => ({ ...s, phase, renewal: null, refused: phase === "none" ? false : s.refused })),
+      setWatch,
       startRenew: (renewal) => setState((s) => ({ ...s, phase: "renew", renewal })),
       endRenew: () =>
         setState((s) => (s.phase === "renew" ? { ...s, phase: s.refused ? "dialog" : "none", renewal: null } : s)),
@@ -135,7 +154,7 @@ export function useReauthController(reloadAs: (path: string) => void): {
       writeDroppedClaimed: () => claims.current.has(state.writeDropped ?? ""),
       claimWriteDropped,
     }),
-    [state, reloadAs, claimWriteDropped],
+    [state, reloadAs, setWatch, claimWriteDropped],
   );
   return { reauth, lapse, reset };
 }
