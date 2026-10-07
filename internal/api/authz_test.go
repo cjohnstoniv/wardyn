@@ -647,6 +647,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/policy":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/ado-tokens":        {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// A waiting sign-in's device code: approving it binds the approver's
+	// cloud identity to the owner's stored session, so the owner only.
+	"GET /api/v1/runs/{id}/sign-in": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// Moving a run's end keeps a sandbox and its credentials alive: a write,
 	// so not the security tier's inspect-or-stop.
 	"PATCH /api/v1/runs/{id}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},

@@ -211,10 +211,16 @@ const (
 	reasonRunOutputTailInvalid = "run_output_tail_invalid" // ?tail= is not a positive number of bytes
 	reasonRunOutputInteractive = "run_output_interactive"  // the run is interactive; an interactive run keeps no output here
 	reasonRunOutputOff         = "run_output_off"          // WARDYN_EXEC_OUTPUT_TAIL=off
-	reasonRunOutputNotKept     = "run_output_not_kept"     // no output is kept for the run (a sign-in run, one never captured, or one still being captured)
+	reasonRunOutputNotKept     = "run_output_not_kept"     // no output is kept for the run (one never captured, or one still being captured)
 	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL, or the run ended past WARDYN_RUN_OUTPUT_RETENTION_DAYS
 	reasonRunOutputErased      = "run_output_erased"       // the run's output was erased (404)
 	reasonRunOutputNotCaptured = "run_output_not_captured" // the runner cannot capture a run's output (Kubernetes under the recorder); the recording has it
+)
+
+// GET /runs/{id}/sign-in (run_sign_in.go).
+const (
+	reasonRunSignInNotAWS     = "run_sign_in_not_aws"    // the run is not an AWS sign-in run
+	reasonRunSignInUnreadable = "run_sign_in_unreadable" // the pane, or the capture's audit row, could not be read in time
 )
 
 // POST /runs/{id}/resume (run_pause.go).

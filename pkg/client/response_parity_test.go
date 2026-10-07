@@ -107,6 +107,7 @@ func TestResponseDTOs_MatchTheServersWireTags(t *testing.T) {
 		{"RunFiles", "internal/api/run_files.go", "runFilesResponse", client.RunFiles{}},
 		{"RunFileStat", "internal/api/run_files.go", "runFileStat", client.RunFileStat{}},
 		{"RunOutput", "internal/api/run_output.go", "runOutputResponse", client.RunOutput{}},
+		{"RunSignIn", "internal/api/run_sign_in.go", "runSignInResponse", client.RunSignIn{}},
 		{"DrivesDocument", "internal/api/user_drives.go", "userDrivesResponse", client.DrivesDocument{}},
 		{"RunPolicyView", "internal/api/run_policy_view.go", "runPolicyResponse", client.RunPolicyView{}},
 		{"RunPolicySource", "internal/api/run_policy_view.go", "runPolicySource", client.RunPolicySource{}},

@@ -85,6 +85,9 @@ type session struct {
 	// roleCredPairs counts the account/role pairs its GetRoleCredentials asked
 	// for, so a walk can see which identity each session was spent as.
 	roleCredPairs map[string]int
+	// held: a device authorization CreateToken answers pending until it is
+	// approved through /_control/device (device_hold.go), whatever approved says.
+	held bool
 }
 
 func (s *Server) newSessionLocked() *session {
@@ -135,6 +138,8 @@ type Server struct {
 	devices  map[string]*session
 	userCode string
 	approved bool
+	// holdNext holds the NEXT device authorization pending (device_hold.go).
+	holdNext bool
 
 	// sessions is every session in issue order; sessions[0] is the one New()
 	// seeds, so a caller that never signs in still holds a working token.
@@ -256,6 +261,7 @@ func NewHandler() (*Server, http.Handler) {
 	// nothing else ever SPENDS the role credentials this portal mints.
 	mux.HandleFunc("/_seen", s.handleSeen)
 	mux.HandleFunc("/_control/reauth", s.handleReauthControl)
+	mux.HandleFunc("/_control/device", s.handleDeviceControl)
 	mux.HandleFunc("/model/", s.handleBedrockRuntime)
 	return s, mux
 }
@@ -493,15 +499,17 @@ func (s *Server) handleStartDeviceAuthorization(w http.ResponseWriter, r *http.R
 	deviceCode := randHex(16)
 	s.mu.Lock()
 	s.startURLSeen = req.StartURL
-	s.devices[deviceCode] = s.newSessionLocked()
+	ss := s.newSessionLocked()
+	s.devices[deviceCode] = ss
 	userCode := s.userCode
+	verify := s.verificationURILocked(ss)
 	s.mu.Unlock()
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"deviceCode":              deviceCode,
 		"userCode":                userCode,
-		"verificationUri":         s.URL() + "/verify",
-		"verificationUriComplete": s.URL() + "/verify?user_code=" + userCode,
+		"verificationUri":         verify,
+		"verificationUriComplete": verify + "?user_code=" + userCode,
 		"expiresIn":               900,
 		// interval=1: the real device-code flow's polling backoff (default
 		// 5s) would make a test wait many seconds for Approve() to land
@@ -550,7 +558,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 			writeOIDCError(w, "InvalidGrantException", "invalid_grant", "unknown device code")
 			return
 		}
-		if !s.approved {
+		if !s.approved || ss.held {
 			s.mu.Unlock()
 			writeOIDCError(w, "AuthorizationPendingException", "authorization_pending", "device authorization is still pending user approval")
 			return
