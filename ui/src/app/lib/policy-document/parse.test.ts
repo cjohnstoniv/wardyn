@@ -121,7 +121,7 @@ describe("parsePolicySource JSON-compatible mappings", () => {
     ["empty mapping", "{}", {}],
     ["JSON scalars and nested collections", "a: [true, false, null, 1.25, -2, {b: x}]", { a: [true, false, null, 1.25, -2, { b: "x" }] }],
     ["YAML 1.2 core words and leading-zero decimal", "a: yes\nb: off\nc: 017", { a: "yes", b: "off", c: 17 }],
-    ["plain timestamp and binary-looking strings", "date: 2026-10-07\nbinary: aGk=", { date: "2026-10-07", binary: "aGk=" }],
+    ["plain timestamp and binary-looking strings", "date: 2000-10-07\nbinary: aGk=", { date: "2000-10-07", binary: "aGk=" }],
     ["quoted unsafe-looking scalars", 'a: ".nan"\nb: ".inf"\nc: "9223372036854775807"\nd: "!!timestamp 2026-10-07"', { a: ".nan", b: ".inf", c: "9223372036854775807", d: "!!timestamp 2026-10-07" }],
     ["quoted string keys", '"1": a\n"true": b\n"null": c\n"": d', { "1": "a", true: "b", null: "c", "": "d" }],
     ["quoted directives and aliases", 'a: "%YAML 1.1"\nb: "%TAG !e! tag:example.com,2026:"\nc: "*missing"\nd: "<<"', { a: "%YAML 1.1", b: "%TAG !e! tag:example.com,2026:", c: "*missing", d: "<<" }],
