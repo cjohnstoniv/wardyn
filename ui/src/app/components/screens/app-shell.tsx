@@ -747,7 +747,7 @@ export function AppShell({
             </a>
             {/* #483: first, above everything — while it shows, nothing below
                 it can save. */}
-            {reauth.phase !== "none" && (
+            {(reauth.phase !== "none" || reauth.watch) && (
               <React.Suspense fallback={null}>
                 <ReauthLayer onResumed={adoptIdentity} />
               </React.Suspense>

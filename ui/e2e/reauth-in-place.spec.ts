@@ -171,4 +171,30 @@ test.describe("the expiry banner: sign in again in place", () => {
     await expect(page.getByTestId("provider-row-github")).toHaveCount(0);
     await expect(page.getByText(REAUTH_DIALOG.WAITING)).toHaveCount(0);
   });
+
+  test("after Cancel, someone else finishing that sign-in still reloads the page as them", async ({ page }) => {
+    const { answer } = await draftUnderAnExpiringSession(page);
+    const opened = page.waitForEvent("popup");
+    await page.getByRole("button", { name: REAUTH_RENEW.CTA }).click();
+    const popup = await opened;
+    await expect(page.getByText(REAUTH_DIALOG.WAITING)).toBeVisible({ timeout: 15_000 });
+
+    // Cancel: the window closes and the banner is back, on the same page.
+    await page.getByRole("button", { name: REAUTH_RENEW.CANCEL }).click();
+    await expect(page.getByText(EXPIRING_SOON)).toBeVisible();
+    await expect(page.getByText(REAUTH_DIALOG.WAITING)).toHaveCount(0);
+    await expect.poll(() => popup.isClosed()).toBe(true);
+    // /me is still read, and the same person answering it changes nothing.
+    await page.waitForResponse((r) => isMe(r.url()));
+    await page.waitForResponse((r) => isMe(r.url()));
+    expect(await sameDocument(page)).toBe(true);
+    await expect(page.getByTestId("provider-row-github").locator("textarea")).toHaveValue(BASE_URL);
+
+    // The sign-in that window began lands after all, as someone else.
+    answer({ principal: "someone-else" });
+    await expect.poll(() => sameDocument(page)).toBe(false);
+    await expect(page).toHaveURL(/\/providers$/);
+    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
+    await expect(page.getByTestId("provider-row-github")).toHaveCount(0);
+  });
 });
