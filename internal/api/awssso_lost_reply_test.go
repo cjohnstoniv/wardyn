@@ -72,20 +72,49 @@ func rotatingOIDC(t *testing.T, first func(w http.ResponseWriter)) {
 // deleted), and both rows carry the marker.
 func TestLostReply_DroppedReplyMarksBothRows(t *testing.T) {
 	srv := createRenewalFixture(t)
-	rotatingOIDC(t, func(w http.ResponseWriter) {
-		conn, _, err := w.(http.Hijacker).Hijack()
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		_ = conn.Close()
-	})
+	rotatingOIDC(t, func(w http.ResponseWriter) { dropReply(t, w) })
 	failure, refresh, deleted := lostReplyRun(t, srv, createRenewalBlob())
 	if failure != awsSSORefreshSpentSentence || refresh["spent"] != true || refresh["attempts"] != float64(2) {
 		t.Errorf("failure = %q, refresh row = %v, want the spent sentence after two attempts", failure, refresh)
 	}
 	if refresh["after_lost_reply"] != true || deleted["after_lost_reply"] != true || deleted["reason"] != "invalid_grant" {
 		t.Errorf("refresh row = %v, delete row = %v, want after_lost_reply on both", refresh, deleted)
+	}
+}
+
+// dropReply closes the connection of a request that was read in full, so no
+// reply goes back.
+func dropReply(t *testing.T, w http.ResponseWriter) {
+	conn, _, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	_ = conn.Close()
+}
+
+// The marker is for a retry that ended invalid_grant, the answer a replaced
+// refresh token gets. A retry that ends invalid_client after a dropped reply
+// still removes the sign-in, and a lost reply does not explain it: no marker.
+func TestLostReply_RetryEndingInvalidClientSetsNoMarker(t *testing.T) {
+	srv := createRenewalFixture(t)
+	fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, call int) {
+		if call == 1 {
+			dropReply(t, w)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "invalid_client"})
+	})
+	failure, refresh, deleted := lostReplyRun(t, srv, createRenewalBlob())
+	if failure != awsSSORefreshSpentSentence || refresh["spent"] != true || refresh["attempts"] != float64(2) {
+		t.Errorf("failure = %q, refresh row = %v, want the spent sentence after two attempts", failure, refresh)
+	}
+	if _, ok := refresh["after_lost_reply"]; ok {
+		t.Errorf("refresh row = %v, want no marker when the retry ended invalid_client", refresh)
+	}
+	if _, ok := deleted["after_lost_reply"]; ok {
+		t.Errorf("delete row = %v, want no marker when the retry ended invalid_client", deleted)
 	}
 }
 

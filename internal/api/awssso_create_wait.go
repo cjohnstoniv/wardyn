@@ -13,6 +13,12 @@ package api
 // STORE, never the lock (every lock try opens its own connection through the
 // small lock pool), for what that flight leaves behind.
 //
+// The wait applies only to a secret store that keeps row revisions
+// (secretstore.Revisioned): the revision is what tells a new pair from the old
+// one without reading it. A store without them has nothing to watch but the pair
+// itself, and every read of it decrypts it and writes a secret.read row, so
+// there create serves the token in hand at once, as it did before this wait.
+//
 // What this closes, stated narrowly: the window where the other flight's token
 // exchange ends inside the budget. It is a best-effort wait chosen for
 // availability. A holder still persisting after the budget (the persist has its
@@ -35,10 +41,6 @@ var awsSSOCreateWaitBudget = 2*awsSSORefreshTimeout + awsSSORefreshRetryDelay + 
 // awsSSOCreateWaitTick is the pause between two polls, and each poll's deadline.
 var awsSSOCreateWaitTick = 250 * time.Millisecond
 
-// awsSSOUnguardedReadEvery is how often a store without row revisions has the
-// pair itself read, since every read decrypts it and writes a secret.read row.
-const awsSSOUnguardedReadEvery = time.Second
-
 // renewalInFlight is refreshAWSSSOBlob's answer when another flight holds the
 // owner lock and the token in hand can still carry a run. Create has no later
 // chance to refuse, so it waits for that flight's result rather than make a run
@@ -59,18 +61,18 @@ func (s *Server) renewalInFlight(ctx context.Context, scope awsSSOScope, blob aw
 // The revision changed: the pair is read once and, when it can carry a run,
 // served. A read that fails or does not answer inside its tick, a client that
 // went away, or a budget spent with nothing changed: the token in hand, as
-// before this wait, never the unavailable sentence.
+// before this wait, never the unavailable sentence. A store that keeps no row
+// revision ends the wait at its first poll, on the token in hand.
 func (s *Server) awaitAWSSSORenewalInFlight(ctx context.Context, scope awsSSOScope, blob awsSSOBlob) (awsSSOBlob, string) {
 	slog.InfoContext(ctx, "wardynd: a renewal of this AWS SSO credential is already in flight; waiting for its result",
 		slog.String("credential_source", awsSSOCredentialSourceLabel(scope)))
 	w := awsSSORenewalWatch{s: s, scope: scope, blob: blob, fingerprint: awsSSOTokenFingerprint(blob.RefreshToken)}
-	readEvery := max(1, int(awsSSOUnguardedReadEvery/awsSSOCreateWaitTick))
 	stop := time.Now().Add(awsSSOCreateWaitBudget)
 	tick := time.NewTicker(awsSSOCreateWaitTick)
 	defer tick.Stop()
 	for n := 0; ; n++ {
 		pctx, cancel := context.WithTimeout(ctx, awsSSOCreateWaitTick)
-		next, failure, done, err := w.poll(pctx, n == 0, n%readEvery == 0)
+		next, failure, done, err := w.poll(pctx, n == 0)
 		cancel()
 		if err != nil {
 			slog.WarnContext(ctx, "wardynd: stopped waiting for the AWS SSO renewal in flight; serving the still-valid token", slog.Any("err", err))
@@ -97,12 +99,10 @@ type awsSSORenewalWatch struct {
 	blob        awsSSOBlob
 	fingerprint string
 	baseRev     string
-	guarded     bool
 }
 
-// poll is one look at the store. first takes the baseline revision; readPair
-// says a store without revisions may have its pair read on this tick.
-func (w *awsSSORenewalWatch) poll(ctx context.Context, first, readPair bool) (awsSSOBlob, string, bool, error) {
+// poll is one look at the store. first takes the baseline revision.
+func (w *awsSSORenewalWatch) poll(ctx context.Context, first bool) (awsSSOBlob, string, bool, error) {
 	spent, err := w.s.awsSSOTokenSpentNow(ctx, w.fingerprint)
 	if err != nil {
 		return w.blob, "", false, err
@@ -115,14 +115,17 @@ func (w *awsSSORenewalWatch) poll(ctx context.Context, first, readPair bool) (aw
 		return w.blob, "", false, err
 	}
 	if first {
-		w.baseRev, w.guarded = rev, guarded
+		w.baseRev = rev
 	}
 	switch {
-	case guarded && rev == "":
+	case !guarded:
+		// Nothing to watch but the pair itself, and every read of it decrypts it
+		// and writes a secret.read row: the token in hand, as before this wait.
+		slog.InfoContext(ctx, "wardynd: this secret store keeps no row revision to watch; serving the still-valid token")
+		return w.blob, "", true, nil
+	case rev == "":
 		return w.blob, awsSSORefreshSpentSentence, true, nil
-	case guarded && rev == w.baseRev:
-		return w.blob, "", false, nil
-	case !guarded && !readPair:
+	case rev == w.baseRev:
 		return w.blob, "", false, nil
 	}
 	cur, found, err := w.s.readAWSSSOBlob(ctx, w.scope)
@@ -131,8 +134,6 @@ func (w *awsSSORenewalWatch) poll(ctx context.Context, first, readPair bool) (aw
 		return w.blob, "", false, err
 	case !found:
 		return w.blob, awsSSORefreshSpentSentence, true, nil
-	case !guarded && cur.ExpiresAt.Equal(w.blob.ExpiresAt):
-		return w.blob, "", false, nil
 	case cur.servableFor(w.s.cfg.Now(), awsSSORefreshServeFloor):
 		return cur, "", true, nil
 	}
