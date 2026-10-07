@@ -504,6 +504,7 @@ func run() error {
 		// way this Config is constructed.
 		SSHListenAddr:    *f.sshListen,
 		SSHAdvertiseAddr: *f.sshAdvertise,
+		SSHProxyCommand:  *f.sshProxyCommand,
 		SSHHostKey:       feats.sshHostKey,
 		SSHRoleTTL:       *f.sshRoleTTL,
 		APITokenMaxTTL:   *f.apiTokenMaxTTL,

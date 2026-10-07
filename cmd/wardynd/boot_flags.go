@@ -330,12 +330,14 @@ type bootFlags struct {
 
 	// SSH gateway (C2/C3): sshListen empty = off = no listener, no new surface
 	// (see resolveSSHGateway). sshAdvertise is purely advisory copy for the
-	// run-detail pane's `ssh` command — never read by the gateway itself.
+	// run-detail pane's `ssh` command — never read by the gateway itself;
+	// sshProxyCommand is advisory copy too: the daemon never runs it.
 	// sshRoleTTL (migration 0046) bounds how stale a key's admin-override
 	// stamp may be — see api.Config.SSHRoleTTL.
-	sshListen    *string
-	sshAdvertise *string
-	sshRoleTTL   *time.Duration
+	sshListen       *string
+	sshAdvertise    *string
+	sshProxyCommand *string
+	sshRoleTTL      *time.Duration
 	// apiTokenMaxTTL caps a newly minted API token's lifetime — see
 	// api.Config.APITokenMaxTTL.
 	apiTokenMaxTTL *time.Duration
@@ -618,6 +620,7 @@ func parseBootFlags() *bootFlags {
 		uiOriginTemplate: flagEnv("ui-sandbox-origin-template", "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE", "", `optional per-run origin for the UI-sandbox gateway, e.g. "https://run-{run}.ui.example.com" (needs wildcard DNS and certificate); must contain {run}. Empty (default) shares one origin across every run`),
 
 		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn run ssh" refuses`),
+		sshProxyCommand:        flagEnv("ssh-proxy-command", "WARDYN_SSH_PROXY_COMMAND", "", `ssh ProxyCommand published on /healthz for people to reach the SSH gateway through a TLS-terminating listener on 443; the console and "wardyn run ssh" show it, the daemon never runs it. No control characters, newlines or single quotes; at most 512 bytes. Empty (default) publishes none`),
 		roleStampTTL:           flagDuration("role-stamp-ttl", "WARDYN_ROLE_STAMP_TTL", 0, "how old an API token's or console session's role stamp may be before its owner must sign in again (duration; 0 = off)"),
 		governanceChangeTTL:    flagDuration("governance-change-ttl", "WARDYN_GOVERNANCE_CHANGE_TTL", 72*time.Hour, "how long a governance change held for a second human (WARDYN_GOVERNANCE_SECOND_HUMAN) waits for approval before it expires (duration; must be positive)"),
 		sshRoleTTL:             flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration)"),

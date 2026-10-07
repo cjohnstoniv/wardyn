@@ -1081,6 +1081,75 @@ spec:
 it on. See [docs/SSH.md](../../../docs/SSH.md) for the SSH gateway itself
 (what it does once traffic reaches it, session semantics, client setup).
 
+## SSH on a 443-only estate
+
+When the only way in is port 443, terminated by a TLS-terminating listener
+such as an Istio ingress gateway, each person's `ssh` wraps SSH in TLS through
+`ssh.proxyCommand` (`WARDYN_SSH_PROXY_COMMAND`, rendered verbatim and shown by
+the run-detail card and `wardyn run ssh`), and the listener unwraps it onto
+the Service's `ssh` port, which the chart marks `appProtocol: tcp`. The chart
+ships no Istio template: `extraObjects` renders your Gateway and
+VirtualService with the release, each through `tpl`.
+
+```yaml
+ssh:
+  enabled: true
+  advertiseHost: ssh.example.com   # the listener's own hostname for SSH
+  proxyCommand: openssl s_client -quiet -verify_return_error -verify_hostname %h -connect %h:443 -servername %h
+
+networkPolicy:
+  ingress:
+    from:
+      - podSelector: {}            # keep the same-namespace default peer
+      - namespaceSelector:         # and admit the ingress gateway's namespace
+          matchLabels:
+            kubernetes.io/metadata.name: istio-ingress
+
+extraObjects:
+  - apiVersion: networking.istio.io/v1
+    kind: Gateway
+    metadata:
+      name: wardyn-ssh
+    spec:
+      selector:
+        istio: ingressgateway      # your ingress gateway pods' labels
+      servers:
+        - port:
+            number: 443
+            name: tls-wardyn-ssh
+            protocol: TLS          # never HTTPS: it attaches an HTTP filter and breaks SSH
+          tls:
+            mode: SIMPLE
+            credentialName: wardyn-ssh-tls   # a kubernetes.io/tls Secret in the gateway pods' namespace
+          hosts:
+            - ssh.example.com
+  - apiVersion: networking.istio.io/v1
+    kind: VirtualService
+    metadata:
+      name: wardyn-ssh
+    spec:
+      hosts:
+        - ssh.example.com
+      gateways:
+        - wardyn-ssh
+      tcp:
+        - match:
+            - port: 443
+          route:
+            - destination:
+                host: '{{ include "wardyn.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local'
+                port:
+                  number: 2222     # ssh.port
+```
+
+`-verify_hostname %h` is what checks the certificate names the host
+(`-servername` only sends SNI); add `-CAfile <path>` when the listener's
+certificate is not publicly trusted. Port 443 is written out because `%p` is
+the advertised SSH port. Host keys are unaffected, audit source IPs become the
+gateway's, and the browser terminal and `wardyn run attach` need none of
+this. The full recipe, with the reasons, is in
+[docs/SSH.md, "SSH on a 443-only estate"](../../../docs/SSH.md#ssh-on-a-443-only-estate).
+
 ## Scraping `/metrics` through the NetworkPolicy
 
 `GET /metrics` needs the admin bearer token ([docs/operations/monitoring.md](../../../docs/operations/monitoring.md)) — and on Kubernetes it also
@@ -1366,6 +1435,9 @@ See `values.yaml` for all options. Key settings:
 - `extraVolumes` / `extraVolumeMounts`: pod volumes and wardynd mounts, rendered
   verbatim. Use them for a Secrets Store CSI volume or your own Secret volume
   behind a `WARDYN_*_FILE` path.
+- `extraObjects`: extra Kubernetes objects rendered with the release, each through
+  `tpl` (the only value that is). Empty by default; see
+  [SSH on a 443-only estate](#ssh-on-a-443-only-estate) for an Istio example.
 - `persistence.enabled`: decides the recording store — `WARDYN_RECORDING_STORE=fs`
   with `WARDYN_RECORDING_DIR=<mountPath>/recordings` when on, `WARDYN_RECORDING_STORE=off`
   (no recording, no replay) when off. wardynd's own default directory writes to the
@@ -1393,7 +1465,9 @@ See `values.yaml` for all options. Key settings:
   the whole block: a drive's storage class is a per-drive field in the console,
   not a chart value.
 - `ssh.*`: SSH access into a running sandbox, off by default — see
-  [Split SSH exposure](#split-ssh-exposure) above.
+  [Split SSH exposure](#split-ssh-exposure) above. `ssh.proxyCommand` publishes
+  a ProxyCommand for a 443-only estate — see
+  [SSH on a 443-only estate](#ssh-on-a-443-only-estate).
 - `replicas`: **leave at 1 unless `ha.enabled=true`.** A render with `replicas > 1`
   and no `ha.enabled` fails with an explicit message. wardynd also takes a Postgres
   advisory lock at boot (`cmd/wardynd/single_instance.go`) and refuses to serve if it

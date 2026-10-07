@@ -557,6 +557,10 @@ type Config struct {
 	// address routinely differ. Purely advisory copy; the gateway itself never
 	// reads it.
 	SSHAdvertiseAddr string
+	// SSHProxyCommand is WARDYN_SSH_PROXY_COMMAND: an ssh ProxyCommand published
+	// on /healthz beside SSHAdvertiseAddr, for an estate that reaches the gateway
+	// only through a TLS-terminating listener. Advisory copy; never run here.
+	SSHProxyCommand string
 	// SSHHostKey is the gateway's persisted ed25519 host key (loadOrCreateSecret
 	// pattern, cmd/wardynd), used to derive the ssh.Signer AddHostKey wants and
 	// the fingerprint /healthz discloses ("verify on first connect" — public by
