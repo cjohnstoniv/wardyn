@@ -9,7 +9,7 @@ import type { PolicyPreviewResult } from "../types/policy-preview";
 
 /** Read the effective policy using exactly the input create and preflight send. */
 export async function previewRunPolicy(input: RunWireInput, signal?: AbortSignal): Promise<PolicyPreviewResult> {
-  return asJson<PolicyPreviewResult>(await wfetch("/policies/preview", {
+  return asJson<PolicyPreviewResult>(await wfetch("/runs/policy-preview", {
     method: "POST", body: JSON.stringify(runWireBody(input)), signal,
   }));
 }

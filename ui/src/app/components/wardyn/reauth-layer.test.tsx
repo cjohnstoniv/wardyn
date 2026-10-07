@@ -265,7 +265,7 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     await poll();
     expect(screen.getByText(REAUTH_DIALOG.CLOSED_WITHOUT)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: REAUTH_RENEW.CTA })).toBeInTheDocument();
-    expect(onResumed).not.toHaveBeenCalled();
+    expect(onResumed).toHaveBeenCalledExactlyOnceWith(alice());
     expect(reloadAs).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
   });
@@ -275,7 +275,7 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     answer = { body: alice(), status: 200 };
     const { popup, onResumed, reloadAs } = startRenewal();
     await poll();
-    expect(onResumed).not.toHaveBeenCalled();
+    expect(onResumed).toHaveBeenCalledExactlyOnceWith(alice());
 
     answer = { body: renewed, status: 200 };
     await poll();
@@ -297,7 +297,7 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     await poll(3);
     expect(screen.getByText(REAUTH_DIALOG.WAITING)).toBeInTheDocument();
     expect(phase()).toBe("renew");
-    expect(onResumed).not.toHaveBeenCalled();
+    expect(onResumed).toHaveBeenCalledExactlyOnceWith(alice());
     expect(reloadAs).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
 
@@ -342,7 +342,8 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
 
     answer = { body: alice({ session_expires_at: LATER }), status: 200 };
     await poll(2);
-    expect(onResumed).not.toHaveBeenCalled();
+    expect(onResumed).toHaveBeenCalledExactlyOnceWith(alice({ session_expires_at: LATER }));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it("a refused window offers the sign-in in a new tab; an outage reads as one and waiting resumes after it", async () => {
@@ -381,7 +382,7 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     answer = { body: bob({ session_expires_at: LATER }), status: 200 };
     await poll();
     expect(reloadAs).toHaveBeenCalledWith("/admin/settings");
-    expect(onResumed).not.toHaveBeenCalled();
+    expect(onResumed).toHaveBeenCalledExactlyOnceWith(alice());
     expect(toast.success).not.toHaveBeenCalled();
   });
 
@@ -417,7 +418,7 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     answer = { body: bob(), status: 200 };
     await poll();
     expect(reloadAs).toHaveBeenCalledWith("/admin/settings");
-    expect(onResumed).not.toHaveBeenCalled();
+    expect(onResumed).toHaveBeenCalledExactlyOnceWith(alice());
   });
 
   it("Cancel, then the same person with a narrowed role: the role is applied", async () => {
@@ -459,20 +460,22 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     expect(screen.queryByRole("button", { name: REAUTH_RENEW.CANCEL })).toBeNull();
     expect(screen.queryByText(REAUTH_DIALOG.WAITING)).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(onResumed).not.toHaveBeenCalled();
+    expect(onResumed).toHaveBeenCalledExactlyOnceWith(alice({ session_expires_at: LATER }));
     expect(reloadAs).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
     expect(toast.warning).not.toHaveBeenCalled();
   });
 
-  it("Cancel with the window refused and the fallback never used: no sign-in began, so nothing is watched", async () => {
-    answer = { body: bob(), status: 200 };
-    const { reloadAs } = startRenewal({ popup: null });
+  it("Cancel with the window refused and fallback unused confirms once, then stops watching", async () => {
+    answer = { body: alice(), status: 200 };
+    const { onResumed, reloadAs } = startRenewal({ popup: null });
     const before = reads();
     cancel();
     await poll(4);
-    expect(reads()).toBe(before);
+    expect(reads()).toBe(before + 1);
+    expect(onResumed).toHaveBeenCalledExactlyOnceWith(alice());
     expect(reloadAs).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it("a window that closed is not proof: someone else's sign-in landing afterwards still reloads the page", async () => {
@@ -512,7 +515,8 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     answer = { body: alice({ session_expires_at: LATER }), status: 200 };
     await poll();
     expect(reads()).toBeGreaterThan(before);
-    expect(onResumed).toHaveBeenCalledExactlyOnceWith(alice({ session_expires_at: LATER }));
+    expect(onResumed).toHaveBeenCalledTimes(2);
+    expect(onResumed).toHaveBeenLastCalledWith(alice({ session_expires_at: LATER }));
     expect(phase()).toBe("none");
     expect(document.getElementById("main-content")).toHaveFocus();
   });

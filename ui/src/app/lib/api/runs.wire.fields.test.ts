@@ -156,7 +156,19 @@ describe("runWireBody — every console-settable DTO field reaches the wire", ()
     await previewRunPolicy(fullInput);
     expect(a).toBe(b);
     expect(String(fetchMock.mock.calls[1][1]?.body)).toBe(a);
-    expect(String(fetchMock.mock.calls[1][0])).toMatch(/\/policies\/preview$/);
+    expect(String(fetchMock.mock.calls[1][0])).toMatch(/\/runs\/policy-preview$/);
+  });
+
+  it("calls the registered policy-preview route", async () => {
+    const routes = readFileSync(join(repoRoot(), "internal/api/routes.go"), "utf8");
+    const route = /r\.Post\("([^"]+)", s\.handlePolicyPreview\)/.exec(routes)?.[1];
+    expect(route).toBe("/runs/policy-preview");
+    fetchMock.mockImplementation(async (url: RequestInfo | URL) => new Response(JSON.stringify({ spec: fullInput.inline_policy }), {
+      status: String(url) === `/api/v1${route}` ? 200 : 404,
+      headers: { "content-type": "application/json" },
+    }));
+    await expect(previewRunPolicy(fullInput)).resolves.toMatchObject({ spec: fullInput.inline_policy });
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
   });
 
   // Per-field omission: an ABSENT choice must be an absent key, never

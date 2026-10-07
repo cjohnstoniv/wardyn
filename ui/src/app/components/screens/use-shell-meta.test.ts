@@ -61,3 +61,20 @@ it("an auth change prevents an in-flight /me from confirming the new generation"
   await waitFor(() => expect(result.current[0].identityResolved).toBe(true));
   expect(result.current[0].authGeneration).toBe(getAuthGeneration());
 });
+
+it("an adopted answer keeps the generation it confirmed across a batched auth change", async () => {
+  const { result } = renderHook(useMeta);
+  await waitFor(() => expect(result.current[0].identityResolved).toBe(true));
+  const confirmed = getAuthGeneration();
+  const next = deferred();
+  vi.mocked(health.whoami).mockReturnValueOnce(next.promise);
+  act(() => {
+    result.current[1]();
+    result.current[2](me);
+    notifyAuthChange();
+  });
+  expect(result.current[0].authGeneration).toBe(confirmed);
+  expect(result.current[0].authGeneration).not.toBe(getAuthGeneration());
+  await act(async () => next.resolve(me));
+  expect(result.current[0].authGeneration).toBe(getAuthGeneration());
+});

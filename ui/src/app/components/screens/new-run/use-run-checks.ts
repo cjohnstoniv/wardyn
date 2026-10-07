@@ -41,6 +41,8 @@ interface Check {
   result: PreflightResult | PolicyPreviewResult | null;
   error: unknown;
   at: number;
+  resultAt: number | null;
+  stale: boolean;
   status: number;
   busy: boolean;
   errorSeq: number;
@@ -53,7 +55,7 @@ interface Flight {
   retries: number;
   stopped: boolean;
 }
-const emptyCheck = (): Check => ({ generation: -1, result: null, error: null, at: 0, status: 0, busy: false, errorSeq: 0 });
+const emptyCheck = (): Check => ({ generation: -1, result: null, error: null, at: 0, resultAt: null, stale: true, status: 0, busy: false, errorSeq: 0 });
 const emptyFlight = (): Flight => ({ sequence: 0, pending: true, due: 0, retries: 0, stopped: false });
 
 /** Retry-After is either delay seconds or an HTTP date; overflowing timers are manual-only. */
@@ -70,7 +72,7 @@ export function useRunChecks(params: Params) {
   const [authGeneration, setAuthGeneration] = React.useState(getAuthGeneration);
   const [refresh, setRefresh] = React.useState(0);
   const [checks, setChecks] = React.useState({ preflight: emptyCheck(), preview: emptyCheck() });
-  const [, tick] = React.useState(0);
+  const [ageTick, tick] = React.useState(0);
   const latest = React.useRef(params);
   latest.current = params;
   const reads = React.useRef(checks);
@@ -125,15 +127,22 @@ export function useRunChecks(params: Params) {
     flight.pending = false;
     const current = () => mounted.current && !controller.signal.aborted && sequence === flight.sequence &&
       started === scope.current.generation && auth === getAuthGeneration() && !isSignedOutHold();
-    setChecks((old) => ({ ...old, [kind]: { ...old[kind], busy: true } }));
+    setChecks((old) => ({ ...old, [kind]: { ...old[kind], busy: true, stale: kind === "preview" || old[kind].stale } }));
     try {
       const result = kind === "preflight" ? await runs.preflightRun(p.input, controller.signal) : await previewRunPolicy(p.input, controller.signal);
       if (!current()) return;
-      setChecks((old) => ({ ...old, [kind]: { generation: started, result, error: null, status: 200, at: Date.now(), busy: false, errorSeq: old[kind].errorSeq } }));
+      setChecks((old) => ({ ...old, [kind]: { generation: started, result, error: null, status: 200, at: Date.now(), resultAt: Date.now(), stale: false, busy: false, errorSeq: old[kind].errorSeq } }));
     } catch (error) {
       if (!current()) return;
       const status = error instanceof HttpError ? error.status : 0;
-      setChecks((old) => ({ ...old, [kind]: { generation: started, result: null, error, status, at: Date.now(), busy: false, errorSeq: old[kind].errorSeq + 1 } }));
+      setChecks((old) => {
+        const previous = old[kind];
+        const keep = kind === "preview" && status === 429 && previous.generation === started;
+        return { ...old, [kind]: {
+          generation: started, result: keep ? previous.result : null, resultAt: keep ? previous.resultAt : null,
+          error, status, at: Date.now(), stale: true, busy: false, errorSeq: previous.errorSeq + 1,
+        } };
+      });
       if (status === 429) {
         const delay = error instanceof HttpError ? retryAfterDelay(error.retryAfter, Date.now()) : null;
         if (kind === "preview" && flight.retries === 0 && delay !== null) {
@@ -220,7 +229,7 @@ export function useRunChecks(params: Params) {
       for (const kind of ENDPOINTS) {
         const flight = flights.current[kind];
         const checked = reads.current[kind];
-        if (flight.controller || flight.stopped || (checked.at > 0 && Date.now() - checked.at < PREFLIGHT_FRESH_MS)) continue;
+        if (flight.controller || flight.stopped || (checked.generation >= 0 && Date.now() - checked.at < PREFLIGHT_FRESH_MS)) continue;
         flight.pending = true;
         pending = true;
       }
@@ -230,11 +239,15 @@ export function useRunChecks(params: Params) {
     return () => window.removeEventListener("focus", focus);
   }, [schedule]);
   React.useEffect(() => {
-    const times = ENDPOINTS.map((kind) => checks[kind].at + PREFLIGHT_FRESH_MS - Date.now()).filter((n) => n >= 0);
+    const times = ENDPOINTS.flatMap((kind) => {
+      const checked = checks[kind];
+      const at = kind === "preview" ? checked.stale ? null : checked.resultAt : checked.generation >= 0 ? checked.at : null;
+      return at === null ? [] : [at + PREFLIGHT_FRESH_MS - Date.now()];
+    }).filter((n) => n >= 0);
     if (!times.length) return;
     const timeout = setTimeout(() => tick((n) => n + 1), Math.min(...times) + 1);
     return () => clearTimeout(timeout);
-  }, [checks]);
+  }, [checks, ageTick]);
 
   const preflight = React.useCallback(async () => {
     clearTimer();
@@ -246,6 +259,7 @@ export function useRunChecks(params: Params) {
     await dispatcher.current(true);
   }, [cancel, clearTimer]);
   const previewAgain = React.useCallback(async () => {
+    setChecks((old) => ({ ...old, preview: { ...old.preview, stale: true } }));
     clearTimer();
     cancel("preview");
     Object.assign(flights.current.preview, { pending: true, stopped: false, due: 0, retries: 0 });
@@ -260,7 +274,8 @@ export function useRunChecks(params: Params) {
   const reason = error instanceof HttpError ? error.reason : "";
   const refused = checked.status >= 400 && checked.status < 500 && checked.status !== 401 && checked.status !== 429 && !NEVER_BLOCKS.has(reason);
   const missing = (kind: string) => !!result?.setup_items?.some((row) => row.kind === kind && row.status === "missing");
-  const previewIsCurrent = currentRead("preview");
+  const previewInScope = currentRead("preview");
+  const previewIsCurrent = previewInScope && checks.preview.result !== null && !checks.preview.stale;
 
   return {
     preflight,
@@ -275,11 +290,11 @@ export function useRunChecks(params: Params) {
     preflightNotChecked: preflightIsCurrent && checked.status === 429,
     preflightRefusal: preflightIsCurrent && isCredentialRefusal(error) && body !== null ? { body, provider: error instanceof HttpError ? error.provider : "" } : null,
     preview: {
-      result: previewIsCurrent ? checks.preview.result as PolicyPreviewResult | null : null,
-      error: previewIsCurrent ? checks.preview.error : null,
+      result: previewInScope ? checks.preview.result as PolicyPreviewResult | null : null,
+      error: previewInScope ? checks.preview.error : null,
       busy: checks.preview.busy,
       current: previewIsCurrent,
-      fresh: previewIsCurrent && Date.now() - checks.preview.at < PREFLIGHT_FRESH_MS,
+      fresh: previewIsCurrent && checks.preview.resultAt !== null && Date.now() - checks.preview.resultAt < PREFLIGHT_FRESH_MS,
       retry: previewAgain,
     },
   };

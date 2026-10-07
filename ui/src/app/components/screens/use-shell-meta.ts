@@ -237,7 +237,9 @@ export function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
   // would settle as an unknown identity and blank the page it just kept.
   const adopt = React.useCallback((me: Me) => {
     readGeneration.current++;
-    setMeta((m) => ({ ...m, ...identityFromMe(me), resolved: true, identityRevision: m.identityRevision + 1, authGeneration: getAuthGeneration() }));
+    // A batched render cannot stamp this answer as confirming a later auth change.
+    const authGeneration = getAuthGeneration();
+    setMeta((m) => ({ ...m, ...identityFromMe(me), resolved: true, identityRevision: m.identityRevision + 1, authGeneration }));
   }, []);
   return [meta, React.useCallback(() => setAttempt((n) => n + 1), []), adopt];
 }
@@ -247,4 +249,3 @@ function validExpiry(iso: string | null | undefined): Date | null {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? null : d;
 }
-

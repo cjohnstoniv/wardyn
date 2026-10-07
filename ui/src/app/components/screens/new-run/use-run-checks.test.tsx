@@ -118,6 +118,7 @@ it("retries preview once after Retry-After without repeating preflight, then req
   preview.mockRejectedValue(new HttpError(429, "limited", "", "", "", "", undefined, "2"));
   const { result } = renderHook(useRunChecks, { initialProps: params() });
   await tick();
+  expect(result.current.preview).toMatchObject({ result: null, current: false, fresh: false });
   await tick(1999);
   expect(preview).toHaveBeenCalledTimes(1);
   await tick(1);
@@ -207,4 +208,78 @@ it("accepts bounded seconds and HTTP dates without guessing at other strings", (
   expect(retryAfterDelay("0", now)).toBe(0);
   expect(retryAfterDelay("Wed, 07 Oct 2026 12:00:02 GMT", now)).toBe(2000);
   expect(retryAfterDelay("2026-10-07", now)).toBeNull();
+});
+
+it.each(["preview", "preflight"] as const)("expires both results when %s completes first, without polling", async (first) => {
+  const previewReply = deferred<PolicyPreviewResult>(), preflightReply = deferred<typeof ready>();
+  preview.mockReturnValueOnce(previewReply.promise);
+  preflight.mockReturnValueOnce(preflightReply.promise);
+  const { result } = renderHook(useRunChecks, { initialProps: params() });
+  const finish = (kind: typeof first) => act(async () => {
+    if (kind === "preview") previewReply.resolve(effective);
+    else preflightReply.reject(new HttpError(403, "policy refuses this run"));
+  });
+  await tick(1000);
+  await finish(first);
+  await tick(1000);
+  await finish(first === "preview" ? "preflight" : "preview");
+  expect(result.current.preflightBlock).toBe(true);
+  expect(result.current.preview.fresh).toBe(true);
+
+  await tick(59_001);
+  expect(result.current.preview.fresh).toBe(first !== "preview");
+  expect(result.current.preflightFresh).toBe(first !== "preflight");
+  expect(result.current.preflightBlock).toBe(first !== "preflight");
+  await tick(1000);
+  expect(result.current.preview.fresh).toBe(false);
+  expect(result.current.preflightFresh).toBe(false);
+  expect(result.current.preflightBlock).toBe(false);
+  expect(preview).toHaveBeenCalledTimes(1);
+  expect(preflight).toHaveBeenCalledTimes(1);
+});
+
+it("keeps the last good preview stale through an explicit retry and both rate limits", async () => {
+  const { result } = renderHook(useRunChecks, { initialProps: params() });
+  await tick();
+  expect(result.current.preview).toMatchObject({ result: effective, current: true, fresh: true });
+  await tick(5000);
+  const retryReply = deferred<PolicyPreviewResult>();
+  const limited = new HttpError(429, "limited", "", "", "", "", undefined, "2");
+  preview.mockReturnValueOnce(retryReply.promise).mockRejectedValue(limited);
+  let retry!: Promise<void>;
+  act(() => { retry = result.current.preview.retry(); });
+  expect(result.current.preview).toMatchObject({ result: effective, busy: true, current: false, fresh: false });
+  await act(async () => { retryReply.reject(limited); await retry; });
+  expect(result.current.preview).toMatchObject({ result: effective, error: limited, busy: false, current: false, fresh: false });
+  await tick(1999);
+  expect(preview).toHaveBeenCalledTimes(2);
+  await tick(1);
+  expect(preview).toHaveBeenCalledTimes(3);
+  expect(result.current.preview).toMatchObject({ result: effective, error: limited, busy: false, current: false, fresh: false });
+  await tick(60_000);
+  act(() => window.dispatchEvent(new Event("focus")));
+  await tick();
+  expect(preview).toHaveBeenCalledTimes(3);
+  expect(result.current.preview).toMatchObject({ result: effective, current: false, fresh: false });
+
+  preview.mockResolvedValueOnce({ ...effective, warnings: ["new answer"] });
+  await act(() => result.current.preview.retry());
+  expect(result.current.preview).toMatchObject({ current: true, fresh: true, error: null });
+  expect(result.current.preview.result?.warnings).toEqual(["new answer"]);
+});
+
+it.each(["body", "auth", "forbidden"])("discards a rate-limited prior preview after %s changes its eligibility", async (change) => {
+  const p = params();
+  const { result, rerender } = renderHook(useRunChecks, { initialProps: p });
+  await tick();
+  preview.mockRejectedValueOnce(new HttpError(429, "limited"));
+  await act(() => result.current.preview.retry());
+  expect(result.current.preview.result).toEqual(effective);
+  if (change === "body") rerender({ ...p, body: "changed" });
+  else if (change === "auth") act(() => notifyAuthChange());
+  else {
+    preview.mockRejectedValueOnce(new HttpError(403, "forbidden"));
+    await act(() => result.current.preview.retry());
+  }
+  expect(result.current.preview).toMatchObject({ result: null, current: false, fresh: false });
 });
