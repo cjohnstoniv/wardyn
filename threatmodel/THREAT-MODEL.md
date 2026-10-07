@@ -836,6 +836,7 @@ it. On a MANAGED backend the bind check short-circuits either way, so nothing
 here asks the CLUSTER whether a claim can bind: the stock chart's missing PVC
 rule, or a storage class with no provisioner, is still discovered at dispatch,
 after the row is written.
+The draft-only policy preview shares drive authorization but deliberately skips `driveMountFor`: runner/share readiness remains pending, while read-only widening still refuses through `driveReadOnlyRefusal`.
 
 ### 4.7 Boot-time state seeded into the sandbox (v0.7.5)
 
@@ -2788,12 +2789,9 @@ sandbox, every other kind is a header the proxy sets on the wire. A table test
 pins every model-credential row of this table against that grading, so the
 threat model and the console can no longer disagree.
 
-**What the console can state WITHOUT a dry run, and what it cannot.** `GET
-/setup/status` grades nothing: the run has not been described yet, and the
-deployment default policy is not what New Run sends. The rail reads "Resolved at
-launch." until Preflight is pressed, and Preflight's answer is for the exact body
-about to launch. Preflight's verdict is resolved when it answers; a credential
-changed between Preflight and launch is not re-graded in the rail.
+**Draft and launch facts have different readiness boundaries.** `GET /setup/status` does not grade a run. `POST /runs/policy-preview` returns only authorized, clamped, folded and redacted policy facts. It authorizes workspace ownership and provider/drive selection before facts, reads no credential values, and leaves credential-dependent autonomy, tool approvals and dispatch readiness pending. It performs no quota/capacity/runner/share probe, mint, renewal or dispatch. Identical preview and preflight denials share the existing dry-run audit coalescer; preview has an independent bounded per-person limiter.
+
+Preflight still grades launch readiness; create independently resolves all gates. Both dry responses describe the state when answered, not a reservation: a credential, saved policy, capability, connection or ceiling changed after either response may change launch's answer. Clients must key responses to request and principal, invalidate on relevant state changes, and mark stale after 60 seconds; launch never trusts a preview. `resolveRunPolicyFacts`, `seedAuthorizedWorkspace`, `authorizeRunModelProvider` and `authorizeRequestDrive` are the shared authorization seams.
 
 **`ssh_key` and `git_pat` — the brokered/unbrokered split** is stated once, in
 full, under asset #4 (§2). Two citations that live only here: on an unbrokered

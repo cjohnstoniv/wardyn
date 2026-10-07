@@ -622,6 +622,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/me/view":                     {class: classMember},
 	"POST /api/v1/policies/grade":              {class: classMember},
 	"POST /api/v1/runs":                        {class: classMember},
+	"POST /api/v1/runs/policy-preview":         {class: classMember},
 	"POST /api/v1/runs/preflight":              {class: classMember},
 	"DELETE /api/v1/me/ssh-keys/{fingerprint}": {class: classMember},
 

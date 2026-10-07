@@ -277,6 +277,11 @@
   {
     "reason": "model_provider_unavailable",
     "target": "\"runs.model_provider\"",
+    "sentence": "choice.refusal"
+  },
+  {
+    "reason": "model_provider_unavailable",
+    "target": "\"runs.model_provider\"",
     "sentence": "msg"
   },
   {
@@ -291,8 +296,8 @@
   },
   {
     "reason": "model_provider_unavailable (credential: false)",
-    "target": "choice.providerID",
-    "sentence": "choice.refusal"
+    "target": "choice.provider.ID",
+    "sentence": "fmt.Sprintf(mpRunModelEnvSecret, secretName, name)"
   },
   {
     "reason": "not_owner",
@@ -313,6 +318,11 @@
     "reason": "not_owner",
     "target": "run.ID.String()",
     "sentence": "\"run not found\""
+  },
+  {
+    "reason": "not_owner",
+    "target": "ws.ID.String()",
+    "sentence": "\"workspace not found\""
   },
   {
     "reason": "not_owner",

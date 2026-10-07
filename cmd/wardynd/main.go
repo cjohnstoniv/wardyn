@@ -468,6 +468,7 @@ func run() error {
 		RunOutputPersistOff:      !*f.runOutputPersist,
 		RunOutputRetention:       time.Duration(*f.runOutputRetention) * 24 * time.Hour,
 		PreflightRatePerMin:      *f.preflightRatePerMin,
+		PolicyPreviewRatePerMin:  *f.policyPreviewRatePerMin,
 		ADOEntra:                 adoEntraSourceFromFlags(st, f), // ado_entra_source.go
 		ADOEntraByRow:            adoEntraByRow(st, adoEntraLoginFromFlags(f)),
 		AzureFoundryEntra:        azureFoundryEntraByRow(st, adoEntraLoginFromFlags(f)), // ado_entra_source.go

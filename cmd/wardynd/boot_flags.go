@@ -318,7 +318,8 @@ type bootFlags struct {
 
 	hostCapacity hostCapacityFlags
 
-	preflightRatePerMin *int
+	preflightRatePerMin     *int
+	policyPreviewRatePerMin *int
 
 	// ha is WARDYN_HA, the runtime half of the chart's ha.enabled: it skips the
 	// single-instance boot lock (claimSingleInstance) and is refused unless the
@@ -618,10 +619,11 @@ func parseBootFlags() *bootFlags {
 		rewrapPrincipalKeys: flag.Bool("rewrap-principal-keys", false, "maintenance mode, safe while a daemon serves: move every person's stored credential from the credential key into an envelope under that person's own principal key (enc_version 3), "+
 			"one row at a time, then exit; idempotent and resumable, and values are never decrypted. Boot keys, the operator namespace and external-store pointers are untouched. "+
 			"Separate from -rewrap, which rotates the root key. See docs/operations/secrets-and-keys.md (default false)"),
-		vault:               registerVaultFlags(),
-		hostCapacity:        registerHostCapacityFlags(),
-		preflightRatePerMin: flagIntEnv("preflight-rate-per-min", "WARDYN_PREFLIGHT_RATE_PER_MIN", 20, "POST /runs/preflight calls one person may make per minute (burst 5); 0 turns the limit off. The admin token is exempt"),
-		azure:               registerAzureFlags(),
+		vault:                   registerVaultFlags(),
+		hostCapacity:            registerHostCapacityFlags(),
+		preflightRatePerMin:     flagIntEnv("preflight-rate-per-min", "WARDYN_PREFLIGHT_RATE_PER_MIN", 20, "POST /runs/preflight calls one person may make per minute (burst 5); 0 turns the limit off. The admin token is exempt"),
+		policyPreviewRatePerMin: flagIntEnv("policy-preview-rate-per-min", "WARDYN_POLICY_PREVIEW_RATE_PER_MIN", 60, "POST /runs/policy-preview calls one person may make per minute (burst 15); 0 turns the limit off. The admin token is exempt"),
+		azure:                   registerAzureFlags(),
 
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address, e.g. ":2222". Empty (default) disables the gateway entirely`),
 		uiListen:         flagEnv("ui-sandbox-listen", "WARDYN_UI_SANDBOX_LISTEN", "", `UI-sandbox gateway listen address, e.g. ":8081". Empty (default) disables the gateway entirely; must differ from -listen`),

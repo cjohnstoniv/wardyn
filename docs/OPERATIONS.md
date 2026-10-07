@@ -1563,7 +1563,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the user-drive **door** — `DenyUserDrive` on a governance profile (`internal/types/governance.go`) | 🟡 security admin too, through `/governance` — a limit on a profile, not a drive; it refuses the mount, it does not deallocate anything |
 | mounting YOUR OWN drive on a run (`drive.enabled`) | 🟢 the person, per run — read-only unless their allocation says otherwise, and the run flag may only narrow that, never widen it |
 | signing in to a model provider yourself (0.8) — `POST /model-providers/{id}/sign-in` launches the sign-in sandbox for a `bedrock_sso` or `anthropic_subscription` provider, and `PUT /model-providers/{id}/sign-in` stores the Claude setup-token that sandbox printed. Answers only while a model-provider block exists (409 otherwise). The capture lands in the caller's OWN namespace under that provider's name, never anyone else's | 🟡 any signed-in human, admins included, who may launch one of the agents the provider serves (the `agent` capability; otherwise 404, as if it did not exist) AND is granted the provider (the `model_provider` capability; otherwise 403). The admin token under SSO is a mechanism, not a person: 422. The portal, region and pin are the ADMIN'S, from the provider record — a sign-in can never choose another |
-| `POST /runs`, `POST /runs/{id}/kill` | 🟢 any signed-in human — using the product is a member act |
+| `POST /runs`, `POST /runs/preflight`, `POST /runs/policy-preview`, `POST /runs/{id}/kill` | 🟢 any signed-in human — using the product is a member act |
 
 **Documented gaps — routes gated but not yet named above.** None today. The
 ten pre-0.7 omissions the F316 completeness check surfaced (the `/sources` and
@@ -7693,3 +7693,5 @@ therefore the per-replica cap times the replica count (cap × N):
 
 Moved to [kubernetes-known-gaps.md](operations/kubernetes-known-gaps.md).
 
+
+The member draft endpoint `POST /runs/policy-preview` shares the authorization decisions described above, but leaves credential liveness, autonomy/tool approvals and execution readiness pending. It uses its own `WARDYN_POLICY_PREVIEW_RATE_PER_MIN` bucket. Its dry-run denials share preflight's coalescing key and window; no credential value read or renewal occurs. See [the SDK contract](sdk.md#policy-preview).

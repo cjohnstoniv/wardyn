@@ -18,6 +18,7 @@ package api
 // distinct revive-refusal cause; a few call sites answer the SAME cause two
 // ways (the runner substrate cannot revive at all) and share one on purpose.
 const (
+	reasonPolicyPreviewRateLimited    = "policy_preview_rate_limited"
 	reasonReviveLocalModeNotOwner     = "local_mode_not_owner"          // local mode mints for the run's own owner; nobody else may revive it — the SAME literal this refusal's own audit row already carried
 	reasonReviveUnsupportedDeployment = "revive_unsupported_deployment" // this deployment's store has no RunReviver, or configures no runner at all
 	// reasonReviveUnsupportedRunner covers three arms that all answer the
