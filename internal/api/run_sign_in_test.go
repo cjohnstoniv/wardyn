@@ -308,7 +308,7 @@ func TestRunSignIn_Bounds(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 			start := time.Now()
-			f.srv.Handler().ServeHTTP(w, r)
+			panicFails(t, f.srv.Handler()).ServeHTTP(w, r)
 			if took := time.Since(start); took > 5*time.Second {
 				t.Fatalf("the read took %v", took)
 			}
