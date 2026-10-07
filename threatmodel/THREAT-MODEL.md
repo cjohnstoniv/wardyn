@@ -376,6 +376,15 @@ forms, which no verbatim matcher catches.
   output read) answer `503` `mask_state_unavailable` for a run whose manifest they
   cannot prove complete, and a consumer that cannot prove its copy current replaces
   a live chunk with the placeholder, answers an upload `503` and refuses an attach.
+  A `mask_copies` erase also records a durable owner fence, including when no
+  values exist. Global registration compares that fence with a cursor snapshot
+  taken before credential reads or network exchange: a delayed AWS or Entra
+  response cannot register behind the erase. A new sign-in can use a later
+  snapshot. Fences survive row retention and process restarts. Erasure reaches
+  another replica's cached globals at its next fresh read; ordered cache reads
+  do not reapply old work after that read. Already-held bytes and previously
+  returned maskers are not revoked, and restoring a pre-erasure backup restores
+  that backup's fence state too.
   This is what makes several replicas (`ha.enabled`) a supported topology; the
   Helm chart and the daemon each refuse a second replica without it. Residuals:
   - **Runs that predate 0.8.6 have no manifest**, so after any restart they are

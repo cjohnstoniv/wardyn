@@ -11,8 +11,8 @@ import (
 // eraseMaskCopies is the mask_copies scope: the person's live consumers are
 // fenced first and their masking manifests deleted (FenceSubject), then every
 // committed value under the person, per-run and global, is tombstoned. It is
-// done only when no row still holds ciphertext for the person: a registration
-// that raced the erase leaves one, and the retry finishes it.
+// done only when no row still holds ciphertext for the person. A durable owner
+// generation refuses old global registrations; fresh work may require a retry.
 func (s *Server) eraseMaskCopies(ctx context.Context, person string) (any, error) {
 	runs, err := s.cfg.MaskManifests.FenceSubject(ctx, person)
 	detail := map[string]any{"runs_fenced": len(runs)}

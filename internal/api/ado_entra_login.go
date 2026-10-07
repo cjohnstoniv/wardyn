@@ -87,6 +87,12 @@ func (s *Server) LoginScopes(ctx context.Context) []string {
 	return append(slices.Clone(cfg.Scopes), entraOfflineAccessScope)
 }
 
+// LoginGrantGeneration snapshots masking erasure before the login token exchange,
+// when no verified subject exists yet. Failure skips capture, never login.
+func (s *Server) LoginGrantGeneration(ctx context.Context) (int64, error) {
+	return s.cfg.MaskRegistry.GlobalGeneration(ctx)
+}
+
 // CaptureLoginGrant implements the capture half of oidc.LoginGrantSink: it
 // stores the Azure DevOps refresh token the console login just earned.
 //
@@ -129,7 +135,7 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 
 	// Mask BEFORE anything can log or persist it, merged until the store write
 	// succeeds: a failed write leaves the credential already stored live.
-	if err := s.cfg.MaskRegistry.MergeGlobal(subject, adoEntraSecretName(cfg.RowID), []byte(grant.RefreshToken)); err != nil {
+	if err := s.cfg.MaskRegistry.MergeGlobal(grant.Generation, subject, adoEntraSecretName(cfg.RowID), []byte(grant.RefreshToken)); err != nil {
 		slog.ErrorContext(ctx, "wardynd: the Azure DevOps sign-in token could not be recorded for masking; not stored",
 			slog.String("row", cfg.RowID), slog.Any("err", err))
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
@@ -178,7 +184,7 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 		return
 	}
 	// The Merge above put the token on record; this retires what it replaced.
-	if err := s.cfg.MaskRegistry.AddGlobal(subject, adoEntraSecretName(cfg.RowID), s.cfg.Now(), []byte(grant.RefreshToken)); err != nil {
+	if err := s.cfg.MaskRegistry.AddGlobal(grant.Generation, subject, adoEntraSecretName(cfg.RowID), s.cfg.Now(), []byte(grant.RefreshToken)); err != nil {
 		slog.WarnContext(ctx, "wardynd: the replaced Azure DevOps sign-in token could not be retired", slog.String("row", cfg.RowID), slog.Any("err", err))
 	}
 	s.auditADOCapture(ctx, subject, cfg.RowID, "success", map[string]any{

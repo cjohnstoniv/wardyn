@@ -27,7 +27,7 @@ type gapCovMaskBackend struct {
 }
 
 func (b *gapCovMaskBackend) PutRun(uuid.UUID, []byte) error { return b.putRunErr }
-func (b *gapCovMaskBackend) PutGlobal(_, _ string, _ []secretmask.GlobalPut, merge bool, _ time.Time) error {
+func (b *gapCovMaskBackend) PutGlobal(_ int64, _, _ string, _ []secretmask.GlobalPut, merge bool, _ time.Time) error {
 	if merge {
 		return b.mergeErr
 	}
@@ -118,3 +118,5 @@ func TestGapCovLiveMaskWriterReplacesAChunkItCannotVouchFor(t *testing.T) {
 		t.Fatalf("tail %q dropped %v uncovered %v, want the tail cleared and the capture marked", w.tail, w.capture.dropped, w.capture.uncovered)
 	}
 }
+
+func (b *gapCovMaskBackend) GlobalGeneration(context.Context) (int64, error) { return 0, nil }

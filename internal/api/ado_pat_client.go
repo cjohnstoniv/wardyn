@@ -192,6 +192,10 @@ func (s *Server) mintADOPAT(ctx context.Context, cfg ADOEntraConfig, owner, org 
 // alone on a policy refusal — the organisation check's canaries are a probe of
 // the organisation, not the admin's own tokens.
 func (s *Server) createADOPAT(ctx context.Context, cfg ADOEntraConfig, owner, org string, req adoPATRequest, noteBlocked bool) (adoPAT, error) {
+	generation, gerr := s.cfg.MaskRegistry.GlobalGeneration(ctx)
+	if gerr != nil {
+		return adoPAT{}, fmt.Errorf("%w: snapshot masking generation: %v", ErrADOEntraUnavailable, gerr)
+	}
 	access, err := s.mintAccess(ctx, cfg, owner)
 	if err != nil {
 		return adoPAT{}, err
@@ -210,7 +214,7 @@ func (s *Server) createADOPAT(ctx context.Context, cfg ADOEntraConfig, owner, or
 	case err == nil:
 		// Masked process-wide under its own name until it expires: one name per
 		// token, so registering it never retires the sign-in's own values.
-		if merr := s.cfg.MaskRegistry.AddGlobalUntil(owner, "ado-pat-"+pat.AuthorizationID, s.cfg.Now(), pat.ValidTo, []byte(pat.Token)); merr != nil {
+		if merr := s.cfg.MaskRegistry.AddGlobalUntil(generation, owner, "ado-pat-"+pat.AuthorizationID, s.cfg.Now(), pat.ValidTo, []byte(pat.Token)); merr != nil {
 			// The token exists at Azure DevOps but is not on record for masking, so
 			// it is not handed out; it lapses at its own expiry.
 			slog.ErrorContext(ctx, "wardynd: a minted Azure DevOps token could not be recorded for masking; discarding it", slog.Any("err", merr))

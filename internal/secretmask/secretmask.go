@@ -161,41 +161,42 @@ func (r *Registry) AddLocal(runID uuid.UUID, value []byte) {
 // AddGlobal registers values as the CURRENT values of one credential (owner,
 // name), masked process-wide on every run; a value left out of this call is
 // retired (not dropped — SweepGlobals drops it later, keyed off now).
-// Repeats and values shorter than MinLen are ignored.
-func (r *Registry) AddGlobal(owner, name string, now time.Time, values ...[]byte) error {
-	return r.setGlobal(owner, name, now, false, time.Time{}, nil, values)
+// Repeats and values shorter than MinLen are ignored. generation must be the
+// GlobalGeneration snapshot from before obtaining the credential.
+func (r *Registry) AddGlobal(generation int64, owner, name string, now time.Time, values ...[]byte) error {
+	return r.setGlobal(generation, owner, name, now, false, time.Time{}, nil, values)
 }
 
 // AddGlobalUntil is AddGlobal for a credential with one expiring value (a
 // short-lived access token): it is let go once SweepGlobals sees until past
 // its grace, even if nothing replaces it. Lasting values carry no expiry.
-func (r *Registry) AddGlobalUntil(owner, name string, now, until time.Time, expiring []byte, lasting ...[]byte) error {
-	return r.setGlobal(owner, name, now, false, until, expiring, lasting)
+func (r *Registry) AddGlobalUntil(generation int64, owner, name string, now, until time.Time, expiring []byte, lasting ...[]byte) error {
+	return r.setGlobal(generation, owner, name, now, false, until, expiring, lasting)
 }
 
 // MergeGlobal is AddGlobal that retires nothing — for a caller holding a
 // possibly-stale read of the credential, which must not retire values a
 // concurrent refresh just made current.
-func (r *Registry) MergeGlobal(owner, name string, values ...[]byte) error {
-	return r.setGlobal(owner, name, time.Time{}, true, time.Time{}, nil, values)
+func (r *Registry) MergeGlobal(generation int64, owner, name string, values ...[]byte) error {
+	return r.setGlobal(generation, owner, name, time.Time{}, true, time.Time{}, nil, values)
 }
 
 // MergeGlobalUntil is MergeGlobal with AddGlobalUntil's expiring value. An
 // expiring value already current keeps the later of its two expiries.
-func (r *Registry) MergeGlobalUntil(owner, name string, until time.Time, expiring []byte, lasting ...[]byte) error {
-	return r.setGlobal(owner, name, time.Time{}, true, until, expiring, lasting)
+func (r *Registry) MergeGlobalUntil(generation int64, owner, name string, until time.Time, expiring []byte, lasting ...[]byte) error {
+	return r.setGlobal(generation, owner, name, time.Time{}, true, until, expiring, lasting)
 }
 
 // setGlobal's now is unused on a merge, which retires nothing. With a Backend
-// the change is committed to it first, and an error means it is not on record.
-func (r *Registry) setGlobal(owner, name string, now time.Time, merge bool, until time.Time, expiring []byte, lasting [][]byte) error {
+// the change is committed and read back first; an error refuses credential use.
+func (r *Registry) setGlobal(generation int64, owner, name string, now time.Time, merge bool, until time.Time, expiring []byte, lasting [][]byte) error {
 	if r == nil {
 		return nil
 	}
 	r.mu.RLock()
 	b := r.backend
 	r.mu.RUnlock()
-	if b != nil {
+	if b != nil && owner != "" {
 		var puts []GlobalPut
 		if len(expiring) >= MinLen {
 			puts = append(puts, GlobalPut{Value: expiring, Until: until})
@@ -205,11 +206,12 @@ func (r *Registry) setGlobal(owner, name string, now time.Time, merge bool, unti
 				puts = append(puts, GlobalPut{Value: v})
 			}
 		}
-		if len(puts) > 0 {
-			if err := b.PutGlobal(owner, name, puts, merge, now); err != nil {
-				return err
-			}
+		if len(puts) == 0 {
+			return nil
 		}
+		// The backend applies its committed read; a second, unversioned cache
+		// write here could restore a value erased while PutGlobal returned.
+		return b.PutGlobal(generation, owner, name, puts, merge, now)
 	}
 	r.setGlobalLocal(owner, name, now, merge, until, expiring, lasting)
 	return nil

@@ -13,6 +13,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Migration `0133_recording_erasures` adds durable per-run recording fences. Take a database dump before
   upgrading; rollback requires restoring that dump. Filesystem deployments must retain the recording
   root's `.erased` directory and `*.lock` files alongside the recordings.
+- Migration `0134_mask_owner_erasures` retains owner erasure fences independently of masking rows;
+  retain this table with database backups and grant the app role `SELECT, INSERT, UPDATE`.
 
 ### Added
 
@@ -34,6 +36,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   renewal checking until it ends. Only a cancelled background watch has the existing quiet deadline.
   Run sign-in codes refresh on focus and visible return, serialize pending reads, and reset when the
   run or principal changes (#1908).
+- Mask-copy erasure now durably fences in-flight credential reads and renewals,
+  including an owner with no existing masking rows. Delayed AWS and Entra replies
+  cannot restore erased globals; new sign-ins use a fresh generation (#1811).
 - The Playwright harness binds its API, UI-sandbox, internal and base-path proxy listeners to loopback
   by default and refuses non-loopback listeners in real-tmux mode. Each backend startup mints a fresh
   admin token and derived person credentials, shared with its own Playwright process; explicit test

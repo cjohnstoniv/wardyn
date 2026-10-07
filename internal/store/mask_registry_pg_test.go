@@ -108,7 +108,7 @@ func TestPG_MaskRegistry_ARegistrationOnAIsMaskedOnBAndAfterARestart(t *testing.
 	if err := a.reg.Add(run, []byte("injected-after-dispatch-value")); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if err := a.reg.AddGlobalUntil(regAlice, "aws-sso", time.Now(), time.Now().Add(time.Hour), []byte("sso-access-token-value"), []byte("sso-refresh-token-value")); err != nil {
+	if err := a.reg.AddGlobalUntil(0, regAlice, "aws-sso", time.Now(), time.Now().Add(time.Hour), []byte("sso-access-token-value"), []byte("sso-refresh-token-value")); err != nil {
 		t.Fatalf("AddGlobalUntil: %v", err)
 	}
 	if regMasks(b, run, "injected-after-dispatch-value") || regMasks(b, run, "sso-refresh-token-value") {
@@ -323,10 +323,10 @@ func TestPG_MaskRegistry_EvictionsAreTombstonesWithNoCiphertext(t *testing.T) {
 		}
 	}
 	mustNil("per-run", a.reg.Add(run, []byte("per-run-value-to-purge")))
-	mustNil("evicted credential", a.reg.AddGlobal(regAlice, "deleted-credential", now, []byte("deleted-credential-value")))
-	mustNil("replaced credential", a.reg.AddGlobal(regAlice, "rotating-credential", now, []byte("rotating-old-value-1")))
-	mustNil("replacement", a.reg.AddGlobal(regAlice, "rotating-credential", now, []byte("rotating-new-value-2")))
-	mustNil("erased person", a.reg.AddGlobal("bob@example.com", "bobs-credential", now, []byte("bobs-credential-value")))
+	mustNil("evicted credential", a.reg.AddGlobal(0, regAlice, "deleted-credential", now, []byte("deleted-credential-value")))
+	mustNil("replaced credential", a.reg.AddGlobal(0, regAlice, "rotating-credential", now, []byte("rotating-old-value-1")))
+	mustNil("replacement", a.reg.AddGlobal(0, regAlice, "rotating-credential", now, []byte("rotating-new-value-2")))
+	mustNil("erased person", a.reg.AddGlobal(0, "bob@example.com", "bobs-credential", now, []byte("bobs-credential-value")))
 	for _, r := range []regReplica{b, c} {
 		r.read(t)
 	}
@@ -430,7 +430,7 @@ func TestPG_MaskRegistry_ConvergesWithNoNotification(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	k := localKEK(t)
 	a, b := newRegReplica(t, pool, k), newRegReplica(t, pool, k)
-	if err := a.reg.AddGlobal(regAlice, "unannounced", time.Now(), []byte("unannounced-value-one")); err != nil {
+	if err := a.reg.AddGlobal(0, regAlice, "unannounced", time.Now(), []byte("unannounced-value-one")); err != nil {
 		t.Fatal(err)
 	}
 	// A notification would not have arrived: B has no listener at all.
@@ -444,7 +444,7 @@ func TestPG_MaskRegistry_ConvergesWithNoNotification(t *testing.T) {
 	// it, and visible to the next: Fresh waits for a read that STARTED after the
 	// arrival it is asked about.
 	early := time.Now()
-	if err := a.reg.AddGlobal(regAlice, "unannounced", time.Now(), []byte("unannounced-value-two")); err != nil {
+	if err := a.reg.AddGlobal(0, regAlice, "unannounced", time.Now(), []byte("unannounced-value-two")); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.st.Fresh(t.Context(), early); err != nil {
@@ -467,7 +467,7 @@ func TestPG_MaskRegistry_AListenerReadsOnANotification(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	b.st.Start(ctx)
-	if err := a.reg.AddGlobal(regAlice, "announced", time.Now(), []byte("announced-value-one")); err != nil {
+	if err := a.reg.AddGlobal(0, regAlice, "announced", time.Now(), []byte("announced-value-one")); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "B's listener to read the commit", func() bool { return regMasks(b, uuid.New(), "announced-value-one") })
@@ -494,7 +494,7 @@ func TestPG_MaskRegistry_AFailedRegistrationFailsTheAddAndIsRetryable(t *testing
 	if err := reg.Add(run, []byte("value-with-the-kek-down")); !errors.Is(err, errKEKDown) {
 		t.Fatalf("Add with the key service down = %v, want it to fail", err)
 	}
-	if err := reg.AddGlobal(regAlice, "cred", time.Now(), []byte("global-with-the-kek-down")); !errors.Is(err, errKEKDown) {
+	if err := reg.AddGlobal(0, regAlice, "cred", time.Now(), []byte("global-with-the-kek-down")); !errors.Is(err, errKEKDown) {
 		t.Fatalf("AddGlobal with the key service down = %v, want it to fail", err)
 	}
 	if bytes.Contains(reg.Masker(run).Mask([]byte("value-with-the-kek-down")), []byte("<secret-hidden>")) {
@@ -516,7 +516,7 @@ func TestPG_MaskRegistry_AFailedRegistrationFailsTheAddAndIsRetryable(t *testing
 	cr := secretmask.NewRegistry()
 	maskstore.New(closed, subjectkeytest.Manager(closed, k), cr)
 	closed.Close()
-	if err := cr.AddGlobal(regAlice, "cred", time.Now(), []byte("global-with-postgres-down")); err == nil {
+	if err := cr.AddGlobal(0, regAlice, "cred", time.Now(), []byte("global-with-postgres-down")); err == nil {
 		t.Error("AddGlobal with Postgres down succeeded")
 	}
 	if err := cr.Add(run, []byte("per-run-with-postgres-down")); err == nil {
@@ -556,7 +556,7 @@ func TestPG_MaskRegistry_FencedLegacyAndOperatorRegistrations(t *testing.T) {
 	if !regMasks(a, legacy, "legacy-run-injected-value") {
 		t.Error("a legacy run's value is not masked in this process")
 	}
-	if err := a.reg.AddGlobal("", "operator-cred", time.Now(), []byte("operator-namespace-value")); err != nil {
+	if err := a.reg.AddGlobal(0, "", "operator-cred", time.Now(), []byte("operator-namespace-value")); err != nil {
 		t.Errorf("AddGlobal in the operator namespace = %v, want it kept locally", err)
 	}
 	if n := liveRows(t, pool, `TRUE`); n != 0 {
@@ -573,13 +573,13 @@ func TestPG_MaskRegistry_SealingBindsOwnerAndRow(t *testing.T) {
 	ctx := t.Context()
 	a := newRegReplica(t, pool, k)
 	aliceRun, bobRun := dispatchedRun(t, pool, a, regAlice), dispatchedRun(t, pool, a, "bob@example.com")
-	if err := a.reg.AddGlobal(regAlice, "cred-one", time.Now(), []byte("sealed-credential-one")); err != nil {
+	if err := a.reg.AddGlobal(0, regAlice, "cred-one", time.Now(), []byte("sealed-credential-one")); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.reg.AddGlobal(regAlice, "cred-two", time.Now(), []byte("sealed-credential-two")); err != nil {
+	if err := a.reg.AddGlobal(0, regAlice, "cred-two", time.Now(), []byte("sealed-credential-two")); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.reg.AddGlobal("bob@example.com", "cred-bob", time.Now(), []byte("bobs-sealed-credential")); err != nil {
+	if err := a.reg.AddGlobal(0, "bob@example.com", "cred-bob", time.Now(), []byte("bobs-sealed-credential")); err != nil {
 		t.Fatal(err)
 	}
 	// Move cred-one's ciphertext onto cred-two's row: it must not open there.
@@ -627,7 +627,7 @@ func TestPG_MaskStore_UnopenableLiveRowFencesRun(t *testing.T) {
 	if err := a.reg.Add(aliceRun, []byte("alice-runtime-value")); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.reg.AddGlobal(bob, "bob-cred", time.Now(), []byte("bobs-credential-value")); err != nil {
+	if err := a.reg.AddGlobal(0, bob, "bob-cred", time.Now(), []byte("bobs-credential-value")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -670,7 +670,7 @@ func TestPG_MaskStore_UnopenableLiveRowFencesRun(t *testing.T) {
 	// replica that never cached one skips it, so the run the person starts under the next key
 	// generation is not fenced for a value it cannot hold.
 	const carol = "carol@example.com"
-	if err := a.reg.AddGlobal(carol, "carol-cred", time.Now(), []byte("carols-credential-value")); err != nil {
+	if err := a.reg.AddGlobal(0, carol, "carol-cred", time.Now(), []byte("carols-credential-value")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.m.FenceSubject(ctx, carol); err != nil {
@@ -719,7 +719,7 @@ func TestPG_MaskStore_AStaleReadDoesNotFenceARunStartedAfterTheErase(t *testing.
 	ctx := t.Context()
 	a := newRegReplica(t, pool, k)
 	old := dispatchedRun(t, pool, a, regAlice)
-	if err := a.reg.AddGlobal(regAlice, "credential", time.Now(), []byte("old-global-credential-secret")); err != nil {
+	if err := a.reg.AddGlobal(0, regAlice, "credential", time.Now(), []byte("old-global-credential-secret")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -791,10 +791,10 @@ func TestPG_MaskStore_AnOwnerKeyThatDoesNotUnwrapFencesOnlyThatOwner(t *testing.
 	const bob = "bob@example.com"
 	a := newRegReplica(t, pool, k)
 	aliceRun, bobRun := dispatchedRun(t, pool, a, regAlice), dispatchedRun(t, pool, a, bob)
-	if err := a.reg.AddGlobal(regAlice, "alice-cred", time.Now(), []byte("alices-credential-value")); err != nil {
+	if err := a.reg.AddGlobal(0, regAlice, "alice-cred", time.Now(), []byte("alices-credential-value")); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.reg.AddGlobal(bob, "bob-cred", time.Now(), []byte("bobs-credential-value")); err != nil {
+	if err := a.reg.AddGlobal(0, bob, "bob-cred", time.Now(), []byte("bobs-credential-value")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx,
@@ -847,7 +847,7 @@ func TestPG_MaskStore_ACorruptWrapFencesALiveRowAndNothingElseDoes(t *testing.T)
 			ctx := t.Context()
 			a := newRegReplica(t, pool, k)
 			run := dispatchedRun(t, pool, a, regAlice)
-			if err := a.reg.AddGlobal(regAlice, "alice-cred", time.Now(), []byte("alices-credential-value")); err != nil {
+			if err := a.reg.AddGlobal(0, regAlice, "alice-cred", time.Now(), []byte("alices-credential-value")); err != nil {
 				t.Fatal(err)
 			}
 
