@@ -151,6 +151,9 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	} else {
 		saveErr = s.cfg.RecordingStore.SaveCastNamed(r.Context(), claims.RunID.String(), recording.PartSuffix(part), body)
 	}
+	if saveErr == nil {
+		saveErr = s.uploadedRecordingOutput(r.Context(), claims.RunID)
+	}
 
 	// Audit BOTH outcomes, like every sibling recording lane: a full store or
 	// an over-cap upload is exactly how a long session's provenance gets lost,

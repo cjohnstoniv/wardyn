@@ -29,15 +29,16 @@ import (
 // pinned in run_output_final_pg_test.go.
 type memRunOutputs struct {
 	store.Store
-	mu       sync.Mutex
-	rows     map[uuid.UUID]store.RunOutput
-	erased   map[uuid.UUID]bool
-	saves    map[uuid.UUID]int
-	failSave int // the next N SaveFinalRunOutput calls fail
+	mu        sync.Mutex
+	rows      map[uuid.UUID]store.RunOutput
+	erased    map[uuid.UUID]bool
+	saves     map[uuid.UUID]int
+	failSave  int // the next N SaveFinalRunOutput calls fail
+	recording map[uuid.UUID]memRecordingOutput
 }
 
 func newMemRunOutputs(inner store.Store) *memRunOutputs {
-	return &memRunOutputs{Store: inner, rows: map[uuid.UUID]store.RunOutput{}, erased: map[uuid.UUID]bool{}, saves: map[uuid.UUID]int{}}
+	return &memRunOutputs{Store: inner, rows: map[uuid.UUID]store.RunOutput{}, erased: map[uuid.UUID]bool{}, saves: map[uuid.UUID]int{}, recording: map[uuid.UUID]memRecordingOutput{}}
 }
 
 func (m *memRunOutputs) InsertPendingRunOutput(_ context.Context, id uuid.UUID) error {
@@ -74,6 +75,9 @@ func (m *memRunOutputs) SaveFinalRunOutput(_ context.Context, o store.RunOutput)
 	if m.failSave > 0 {
 		m.failSave--
 		return errors.New("postgres is down")
+	}
+	if r, ok := m.rows[o.RunID]; ok && r.CapturedAt != nil && !(r.Source == "stdout" && r.CaptureGap) {
+		return nil
 	}
 	now := time.Now()
 	o.CapturedAt, o.ClaimedAt = &now, now
@@ -119,6 +123,10 @@ func (m *memRunOutputs) GetRunOutput(_ context.Context, id uuid.UUID) (store.Run
 		return store.RunOutput{}, false, store.ErrRunOutputErased
 	}
 	r, ok := m.rows[id]
+	r.RecordingErased = m.recording[id].erased
+	if r.RecordingErased && r.Source == recordingOutputSource {
+		return store.RunOutput{RecordingErased: true}, false, nil
+	}
 	return r, ok, nil
 }
 
@@ -128,6 +136,9 @@ func (m *memRunOutputs) EraseRunOutputs(_ context.Context, ids []uuid.UUID) erro
 	for _, id := range ids {
 		m.erased[id] = true
 		delete(m.rows, id)
+		p := m.recording[id]
+		p.completed, p.token = p.requested, uuid.Nil
+		m.recording[id] = p
 	}
 	return nil
 }

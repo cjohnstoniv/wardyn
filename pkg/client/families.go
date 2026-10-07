@@ -472,17 +472,17 @@ type RunOutput struct {
 	Output string `json:"output"`
 	// Truncated: Output does not start at the run's first byte.
 	Truncated bool `json:"truncated"`
-	// Complete: the capture is final (a stored row, or a memory tail sealed after
-	// the run's last bytes), so a read never gains bytes after it. A run that
-	// has just finished is not Complete until then: read again.
+	// Complete: this capture attempt is final. A later recording upload can
+	// improve a finalized recording result; Incomplete remains true for that source.
 	Complete bool `json:"complete"`
-	// Source is where the bytes came from; "stdout" for a run's own output.
+	// Source is "stdout", "pane_snapshot", or "recording". The latter two
+	// retain the recording's owner-or-operator privacy gate.
 	Source string `json:"source"`
 	// Incomplete: bytes may be missing (a copy did not end in time or failed, or
 	// a byte arrived after the capture was sealed).
 	Incomplete bool `json:"incomplete"`
-	// CaptureGap: the output could not be captured (no process held it), so
-	// Output is empty.
+	// CaptureGap: a capture was lost or could not be recovered. Output may
+	// retain partial stdout chunks that were already masked and persisted.
 	CaptureGap bool `json:"capture_gap"`
 	// MaskScope is "run" when the capture was masked against the run's complete
 	// manifest throughout, "globals_only" when it was not; empty when this

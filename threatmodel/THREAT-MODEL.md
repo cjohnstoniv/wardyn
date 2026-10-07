@@ -339,7 +339,7 @@ underivable from what the proxy holds: a `Format` that glues the secret to a
 suffix rather than a space-separated prefix, and hex-encoded or model-narrated
 forms, which no verbatim matcher catches.
 
-**Two named unmasked paths.**
+**Recording and masking boundaries.**
 
 - The optional `WARDYN_RECORDING_MOUNT`/`-out-dir` single-host recording
   fallback bypasses the control plane and delivers UNMASKED casts (masking is
@@ -363,6 +363,23 @@ forms, which no verbatim matcher catches.
   controlling the recording root. Erasure does not reach sandbox-local capture
   files, independent exports or a restored pre-erasure backup. A later new run ID
   remains usable.
+- **Recording-derived task output is another retained copy.** The available
+  numbered asciicast parts are decoded, output payloads concatenated before
+  streaming masking, and only a bounded masked tail is committed. It retains
+  `recordingReader`'s owner-or-operator gate, including recovery gaps and stored
+  rows after a backend change. Recorder delivery lacks a verified end marker,
+  so every result remains incomplete. Missing masking coverage refuses source
+  reads; lost coverage drops the result, and the final commit locks and rechecks
+  the manifest. The recordings-erasure adapter installs a separate durable
+  output fence before `DeleteRun`, including when no recording backend is
+  currently configured. The conditional output commit checks that fence under
+  the output lock, preventing already-open recording bytes from being retained
+  again. It preserves independently captured stdout and pane snapshots.
+  Erasure and retention never remove source tombstones. The recording commit
+  and output-work commit are not atomic across stores: an interrupted,
+  unacknowledged upload may require an authorized, cooldown-limited missing/gap
+  read to repair its output. Bounded leader retries recover acknowledged work;
+  loss of masking coverage or expiry of output retention prevents recovery.
 - **The registry is shared through Postgres and fails closed; four things stay
   outside it.** `secretmask.Registry` holds every value a run was given, and each
   replica's in-memory copy is a cache of what is committed. Dispatch commits a

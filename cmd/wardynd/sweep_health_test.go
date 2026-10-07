@@ -118,7 +118,7 @@ func TestSweepHealth_DefaultInstallRegistersItsSweepsAtDefaultIntervals(t *testi
 		sweephealth.CredentialExpiry: 24 * time.Hour,
 		sweephealth.RunWatcher:       time.Minute,
 		sweephealth.OrphanedBuild:    30 * time.Minute,
-		sweephealth.RunOutput:        time.Hour,
+		sweephealth.RunOutput:        time.Minute,
 	}
 	got := map[string]time.Duration{}
 	for _, s := range tr.Registered() {
