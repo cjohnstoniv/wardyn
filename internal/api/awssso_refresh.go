@@ -792,9 +792,10 @@ func (s *Server) auditAWSSSORefresh(ctx context.Context, scope awsSSOScope, outc
 // story, an EOF then invalid_grant already says spent, now with attempts:2
 // beside it.
 //
-// afterLostReply is the retry ending spent after a first attempt whose reply
-// was lost (awsSSOReplyLost): consistent with AWS having accepted that first
-// request and replaced the refresh token, never proof of it.
+// afterLostReply is the retry ending invalid_grant (awsSSOEndedInvalidGrant, not
+// the rest of the spent class) after a first attempt whose reply was lost
+// (awsSSOReplyLost): consistent with AWS having accepted that first request and
+// replaced the refresh token, never proof of it.
 func (s *Server) createAWSSSOTokenWithRetry(ctx context.Context, blob awsSSOBlob) (resp awsSSOTokenResponse, attempts int, afterLostReply bool, err error) {
 	resp, err = s.createAWSSSOToken(ctx, blob)
 	if err == nil || errors.Is(err, errAWSSSOCredentialSpent) {
@@ -809,7 +810,7 @@ func (s *Server) createAWSSSOTokenWithRetry(ctx context.Context, blob awsSSOBlob
 	}
 	resp2, err2 := s.createAWSSSOToken(ctx, blob)
 	if err2 != nil {
-		return resp2, 2, firstLost && errors.Is(err2, errAWSSSOCredentialSpent), errors.Join(err, err2)
+		return resp2, 2, firstLost && awsSSOEndedInvalidGrant(err2), errors.Join(err, err2)
 	}
 	return resp2, 2, false, nil
 }
@@ -884,7 +885,7 @@ func (s *Server) createAWSSSOToken(ctx context.Context, blob awsSSOBlob) (awsSSO
 	}
 	if out.Error != "" {
 		if awsSSOErrorIsSpent(out.Error) {
-			return out, fmt.Errorf("%w: %s", errAWSSSOCredentialSpent, out.Error)
+			return out, awsSSOSpentError{out.Error}
 		}
 		return out, fmt.Errorf("aws sso create-token refused: %s", out.Error)
 	}

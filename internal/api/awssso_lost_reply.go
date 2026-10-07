@@ -32,6 +32,23 @@ func awsSSOReplyLost(err error) bool {
 	return errors.As(err, &lost)
 }
 
+// awsSSOSpentError is a CreateToken refusal of the spent class
+// (errAWSSSOCredentialSpent, awsSSOErrorIsSpent) with the code the provider
+// answered.
+type awsSSOSpentError struct{ code string }
+
+func (e awsSSOSpentError) Error() string { return errAWSSSOCredentialSpent.Error() + ": " + e.code }
+func (e awsSSOSpentError) Unwrap() error { return errAWSSSOCredentialSpent }
+
+// awsSSOEndedInvalidGrant reports whether one attempt ended invalid_grant: the
+// answer a replaced refresh token gets, and so the only one after_lost_reply may
+// follow. The other spent codes (an expired token, a client registration that
+// is gone) are not what a lost reply leaves behind.
+func awsSSOEndedInvalidGrant(err error) bool {
+	var spent awsSSOSpentError
+	return errors.As(err, &spent) && spent.code == "invalid_grant"
+}
+
 // awsSSORefreshFailureData is a failed redemption's harness.credential.refresh
 // row data; after_lost_reply rides it only when true.
 func awsSSORefreshFailureData(spent bool, err error, attempts int, afterLostReply bool) map[string]any {
