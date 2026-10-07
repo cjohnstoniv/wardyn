@@ -44,6 +44,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/testfloor"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -215,11 +216,8 @@ func TestPG_AuditChain_SplicedOutRowReportsSuccessorSeq(t *testing.T) {
 	vSeq := auditSeq(t, pool, victim.ID)
 	aSeq := auditSeq(t, pool, after.ID)
 
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire: %v", err)
-	}
-	t.Cleanup(conn.Release) // registered FIRST so it runs LAST (cleanups are LIFO)
+	conn := testutil.PGConn(t, pool)
+	t.Cleanup(func() { _ = conn.Close(ctx) }) // registered FIRST so it runs LAST (cleanups are LIFO)
 	// No bind parameter: CREATE TABLE AS is a utility statement, and seq is an
 	// int64 we just read back, so formatting it in is safe.
 	if _, err := conn.Exec(ctx, fmt.Sprintf(`CREATE TEMP TABLE f11_victim AS SELECT * FROM audit_events WHERE seq = %d`, vSeq)); err != nil {
@@ -254,7 +252,7 @@ func TestPG_AuditChain_SplicedOutRowReportsSuccessorSeq(t *testing.T) {
 		}
 	})
 
-	err = onConn(func(tx pgx.Tx) error {
+	err := onConn(func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `DELETE FROM audit_events WHERE seq = $1`, vSeq)
 		return err
 	})
@@ -367,7 +365,7 @@ func TestPG_AuditChain_UnlockedWriterDoesNotForkChain(t *testing.T) {
 	// Writer R: audit_append with no caller-side pg_advisory_xact_lock (the function takes the
 	// chain lock itself, which is what serializes it), in a transaction held open while the
 	// locked writer starts.
-	rawTx, err := pool.Begin(ctx)
+	rawTx, err := testutil.PGConn(t, pool).Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin raw tx: %v", err)
 	}

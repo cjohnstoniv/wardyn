@@ -171,7 +171,7 @@ func applyGrantChange(s *Server, r *http.Request, q store.Querier, ch types.Gove
 	if err := validateCapabilityGrant(&g); err != nil {
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonCapabilityGrantInvalid, "invalid grant: %v", err)
 	}
-	if err := s.checkUserTypeSubject(ctx, g.SubjectType, g.Subject); err != nil {
+	if err := s.checkUserTypeSubject(ctx, q, g.SubjectType, g.Subject); err != nil {
 		return govApplied{}, err
 	}
 	g.ID = uuid.New()

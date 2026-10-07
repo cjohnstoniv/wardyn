@@ -16,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 )
 
 // A Put under WithExpiry records expires_at; a Put without it clears it, so a
@@ -111,7 +112,7 @@ func TestPG_DeleteExpiredDeletesOnlyLapsedRows(t *testing.T) {
 func holdRowLock(t *testing.T, pool *pgxpool.Pool, owner, name string) func() {
 	t.Helper()
 	ctx := context.Background()
-	tx, err := pool.Begin(ctx)
+	tx, err := testutil.PGConn(t, pool).Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +253,7 @@ func TestPG_DeleteExpiredScanIsBounded(t *testing.T) {
 	})
 
 	t.Run("a table it cannot read", func(t *testing.T) {
-		tx, err := pool.Begin(ctx)
+		tx, err := testutil.PGConn(t, pool).Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}

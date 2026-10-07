@@ -29,11 +29,21 @@ func TestDefaultPool_ReaperTickBesideLifetimeLocks(t *testing.T) {
 	}
 	defer pool.Close()
 	for range 3 {
-		c, err := pool.Acquire(ctx)
-		if err != nil {
-			t.Fatalf("hold a lifetime connection: %v", err)
+		acquired := make(chan error, 1)
+		stop, done := make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(done)
+			c, err := pool.Acquire(ctx)
+			acquired <- err
+			if err == nil {
+				<-stop
+				c.Release()
+			}
+		}()
+		defer func() { close(stop); <-done }()
+		if err := <-acquired; err != nil {
+			t.Fatal(err)
 		}
-		defer c.Release()
 	}
 
 	var release func()

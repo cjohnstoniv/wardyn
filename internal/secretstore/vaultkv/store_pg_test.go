@@ -22,6 +22,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/multitracer"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
@@ -998,21 +999,23 @@ func TestMigrate_ToLocalSkipsARemovalTheRowWasRepointedAt(t *testing.T) {
 
 	putDone := make(chan error, 1)
 	migDone := make(chan error, 1)
+	cfg := pool.Config()
+	tracer := &migrationCommitBarrier{after: func() {
+		go func() { putDone <- view.Put(ctx, "k", []byte("second")) }()
+		waitOnRowLock(t, pool)
+	}}
+	cfg.ConnConfig.Tracer = multitracer.New(cfg.ConnConfig.Tracer, tracer)
+	migratingPool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(migratingPool.Close)
+	migrating := storeMode(t, migratingPool, b, id)
 	go func() {
-		// onRead runs inside the migrator's first transaction: queue the Put
-		// on the row's lock behind it, so it lands right after the flip commits.
-		_, err := st.Migrate(ctx, secretstorepg.MigrateLocal, func(string, string) {
-			go func() { putDone <- view.Put(ctx, "k", []byte("second")) }()
-			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-				var n int
-				_ = pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND wait_event='advisory'`).Scan(&n)
-				if n > 0 {
-					return
-				}
-			}
-		})
+		_, err := migrating.Migrate(ctx, secretstorepg.MigrateLocal, func(string, string) {})
 		migDone <- err
 	}()
+
 	select {
 	case <-b.entered:
 	case <-time.After(10 * time.Second):

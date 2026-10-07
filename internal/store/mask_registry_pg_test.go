@@ -27,6 +27,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey/subjectkeytest"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 )
 
 const regAlice = "alice@example.com"
@@ -193,7 +194,7 @@ func TestPG_MaskRegistry_ALateCommittingValueIsNeverSkipped(t *testing.T) {
 
 	// An outside transaction holds r1's manifest row, which T1's own transaction
 	// needs right after it takes its generation: T1 is held open mid-flight.
-	hold, err := pool.Begin(ctx)
+	hold, err := testutil.PGConn(t, pool).Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +264,7 @@ func TestPG_MaskRegistry_ARacedRunValueIsStillMaskedAfterAFullReload(t *testing.
 
 	// T1 is held open mid-flight, after its dedup check and its generation, so
 	// T2's dedup check also finds no committed row.
-	hold, err := pool.Begin(ctx)
+	hold, err := testutil.PGConn(t, pool).Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

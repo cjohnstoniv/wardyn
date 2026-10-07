@@ -33,17 +33,27 @@ func narrowPool(t *testing.T, wide *pgxpool.Pool, conns int32) *pgxpool.Pool {
 		t.Fatalf("open a pool of %d: %v", conns, err)
 	}
 	t.Cleanup(p.Close)
-	held := make([]*pgxpool.Conn, 0, conns)
+	release := make(chan struct{})
+	ready := make(chan error, conns)
+	var workers sync.WaitGroup
 	for range conns {
-		c, err := p.Acquire(context.Background())
-		if err != nil {
+		workers.Go(func() {
+			c, err := p.Acquire(t.Context())
+			ready <- err
+			if err == nil {
+				<-release
+				c.Release()
+			}
+		})
+	}
+	defer workers.Wait()
+	defer close(release)
+	for range conns {
+		if err := <-ready; err != nil {
 			t.Fatalf("warm the pool: %v", err)
 		}
-		held = append(held, c)
 	}
-	for _, c := range held {
-		c.Release()
-	}
+
 	return p
 }
 

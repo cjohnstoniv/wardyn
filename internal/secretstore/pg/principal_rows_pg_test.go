@@ -40,7 +40,7 @@ func (m *memExt) Describe() string              { return m.name + " at test" }
 func (m *memExt) Put(_ context.Context, owner, name, _ string, v []byte, _ bool) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.vals[m.key(owner, name)] = v
+	m.vals[m.key(owner, name)] = append([]byte(nil), v...)
 	return m.key(owner, name), nil
 }
 func (m *memExt) Get(_ context.Context, owner, name, ref string) ([]byte, error) {
@@ -50,7 +50,7 @@ func (m *memExt) Get(_ context.Context, owner, name, ref string) ([]byte, error)
 	if ref != m.key(owner, name) || !ok {
 		return nil, fmt.Errorf("refused: nothing at %s", ref)
 	}
-	return v, nil
+	return append([]byte(nil), v...), nil
 }
 func (m *memExt) Ref(owner, name, _ string) (string, error) { return m.key(owner, name), nil }
 func (m *memExt) Check(ctx context.Context, owner, name, ref string) error {

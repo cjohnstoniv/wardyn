@@ -50,8 +50,10 @@ var nestedAcquireAllowlist = []allowedHold{
 		"the terminal-sandbox sweep's tick lock, the reaper's shape: its connection is kept while the tick pages runs and tears sandboxes down on the pool"},
 	{[]string{"internal/db.AdvisoryLockKeyed"},
 		"the keyed lock keeps its connection while the caller's guarded work uses the pool; it is taken only with two connections free (advisoryLockFreeConnsNeeded) and one hold per process (advisoryLockGate)"},
-	{[]string{"internal/store_test.TestPG_Devices_RefusedBatchReplayDoesNotStarveOrgAuditWriters"},
-		"a hybrid device push: the test holds the audit chain lock, standing in for an organisation audit writer, while it pushes a refused batch, to prove the push never waits on that lock"},
+	{[]string{"internal/db.AdvisoryLock", "cmd/wardynd.newBootKeyStore"},
+		"HA boot holds the boot-key create lock across the secret store's read/create to prevent replicas minting different signing keys; this bounded boot-only hold requires pool_max_conns >= 2"},
+	{[]string{"internal/db.TryAdvisoryLockConn", "internal/db.TryAdvisoryLock", "cmd/wardynd.rotateAgeKeyMode"},
+		"the offline age-key rotation command holds SecretRekeyLockKey for its lifetime to exclude other rotations while the store rewrites through the pool; the command requires pool_max_conns >= 2"},
 }
 
 // onNestedAcquire reports a finding. Exiting, not panicking: chi's Recoverer and the launch and
