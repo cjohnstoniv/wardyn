@@ -5235,6 +5235,13 @@ the role credentials it mints, not the organisation's. The
 answerable from the trail, and `harness.credential.refuse` says which captures were turned away and
 why.
 
+**What ends a stored sign-in, and the audit row for each.** The provider refusing its refresh
+token at a renewal removes it (`credential.expired.delete`, `reason` `invalid_grant`). Expiry removes
+it in the daily sweep (`credential.expired.delete`, `reason` `expired`; the access token's expiry,
+eight hours when the capture carried no refresh token). Erasing the person's credentials removes it
+(`credential.erase`). A `credential.revoke` row ends none of these: it records the end of a run's
+own credentials (`scope` `run_credentials`) and leaves the person's sign-in as it was.
+
 **Revoking a session.** A person removes their own with
 `DELETE /model-providers/{id}/credential`; a security admin erases a named
 person's credentials with `DELETE /people/{principal}/credentials`. Revoking the

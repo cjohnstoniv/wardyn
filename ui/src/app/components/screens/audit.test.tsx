@@ -286,6 +286,38 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.queryByText("source.scan")).not.toBeInTheDocument();
   });
 
+  // credential.revoke ends a run's own credentials and touches no stored
+  // sign-in; rows written before `scope` existed are the ones that misled, so
+  // the sentence applies to the action, with or without the field.
+  it("reads credential.revoke as the end of the run's own credentials, with or without scope", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "r1", action: "credential.revoke", target: "spiffe://wardyn/run/1", data: { jti: "a", scope: "run_credentials" } }),
+      ev({ id: "r2", action: "credential.revoke", target: "spiffe://wardyn/run/2", data: { jti: "b" } }),
+    ]);
+    renderScreen();
+
+    const sentence = "Recorded the end of this run's own credentials. The person's sign-in is not affected.";
+    expect(await screen.findAllByText(sentence)).toHaveLength(2);
+    expect(screen.queryByText(/revoked a credential/i)).not.toBeInTheDocument();
+  });
+
+  it("reads credential.expired.delete by its reason, and an unknown reason as the raw line", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "x1", action: "credential.expired.delete", target: "s1", data: { reason: "invalid_grant" } }),
+      ev({ id: "x2", action: "credential.expired.delete", target: "s2", data: { reason: "invalid_grant", after_lost_reply: true } }),
+      ev({ id: "x3", action: "credential.expired.delete", target: "s3", data: { reason: "expired" } }),
+      ev({ id: "x4", action: "credential.expired.delete", target: "s4", data: { reason: "something_else" } }),
+    ]);
+    renderScreen();
+
+    expect(await screen.findByText("Removed a stored sign-in the provider refused")).toBeInTheDocument();
+    expect(
+      screen.getByText("Removed a stored sign-in: the provider may have accepted a renewal whose reply was lost"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Removed a stored sign-in that had expired")).toBeInTheDocument();
+    expect(screen.getByText("credential.expired.delete — s4")).toBeInTheDocument();
+  });
+
   // #1020: no Go code emits these four, so they carry no verb row and render
   // as the raw action, like any action the table does not know.
   it("has no verb rows for actions the server never emits", async () => {

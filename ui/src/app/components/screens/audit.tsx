@@ -150,7 +150,6 @@ const ACTION_VERB: Record<string, string> = {
   "run.requirement.inject": "applied a workspace's required integration to the run",
   "run.record.synthesize": "synthesized a least-privilege profile from the recording",
   "credential.mint": "minted a credential",
-  "credential.revoke": "revoked a credential",
   "identity.mint": "minted a workload identity",
   "identity.revoke": "revoked a workload identity",
   "run.bedrock.configure": "configured Bedrock model access for the run",
@@ -217,6 +216,14 @@ function describeEvent(e: AuditEvent): string {
   }
   if (e.action.startsWith("llm.scan.")) {
     return `LLM content scan (${e.action.slice("llm.scan.".length)}) for ${e.target || "an unknown host"}`;
+  }
+  if (e.action === "credential.revoke") return AUDIT.REVOKE_RUN_CREDENTIALS;
+  if (e.action === "credential.expired.delete") {
+    const reason = e.data?.reason;
+    if (reason === "invalid_grant") {
+      return e.data?.after_lost_reply === true ? AUDIT.EXPIRED_DELETE_LOST_REPLY : AUDIT.EXPIRED_DELETE_REFUSED;
+    }
+    if (reason === "expired") return AUDIT.EXPIRED_DELETE_EXPIRED;
   }
   const verb = ACTION_VERB[e.action];
   if (verb) return e.target ? `${capitalize(verb)} — ${e.target}` : capitalize(verb);
