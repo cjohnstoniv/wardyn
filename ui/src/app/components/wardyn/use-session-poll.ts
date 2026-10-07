@@ -4,7 +4,7 @@
  */
 
 import * as React from "react";
-import { HttpError, onAuthChange, setToken, wfetch } from "../../lib/api/core";
+import { HttpError, isSignedOutHold, onAuthChange, setToken, wfetch } from "../../lib/api/core";
 import type { Me } from "../../lib/api/health";
 
 type Session = Me | "unauthed" | "unreachable";
@@ -127,6 +127,19 @@ export function useSessionPoll(accept: (me: Me) => boolean) {
     if (!wait) tick();
   }, [invalidate, read, stopPoll]);
 
+  // A quiet auth invalidation gets one read, then focus/visibility/auth events can retry an outage.
+  const checkOnce = React.useCallback(() => {
+    stopPoll();
+    tickRef.current = () => {
+      if (isSignedOutHold()) { stopPoll(); return; }
+      read((session) => {
+        if (isSignedOutHold() || session === "unauthed" || (typeof session === "object" && acceptRef.current(session))) stopPoll();
+      });
+    };
+    pending.current = inFlight.current !== null;
+    tickRef.current();
+  }, [read, stopPoll]);
+
   const submitToken = (token: string) => {
     stopPoll();
     setBusy(true);
@@ -143,5 +156,5 @@ export function useSessionPoll(accept: (me: Me) => boolean) {
     tickRef.current();
   };
 
-  return { status, setStatus, busy, startPoll, stopPoll, submitToken };
+  return { status, setStatus, busy, startPoll, stopPoll, checkOnce, submitToken };
 }

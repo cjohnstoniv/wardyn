@@ -4,11 +4,14 @@
  */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { toast } from "sonner";
 import App from "./App";
-import { isSignedOutHold, setSignedOutHold } from "./lib/api/core";
+import { SHELL } from "./components/wardyn/copy";
+import { CONSOLE_VIEW } from "./components/wardyn/copy/console-view";
+import { getAuthGeneration, getToken, isSignedOutHold, setSignedOutHold, setToken } from "./lib/api/core";
 import type { Me } from "./lib/api/health";
 import { REAUTH_DIALOG, REAUTH_RENEW } from "./lib/reauth-copy";
 import { SIGN_IN_AGAIN } from "./lib/session-renew-copy";
@@ -26,6 +29,8 @@ const calls: { path: string; method: string; body?: BodyInit | null }[] = [];
 const count = (path: string, method = "POST") => calls.filter((c) => c.path === path && c.method === method).length;
 let me: Me;
 let meStatus = 200;
+let viewFailsOffline = false;
+let logoutReply: Promise<Response> | undefined;
 function pendingMe() {
   let resolve!: (answer: Response) => void;
   const promise = new Promise<Response>((done) => { resolve = done; });
@@ -45,6 +50,8 @@ const fetchMock = vi.fn((url: RequestInfo | URL, init?: RequestInit): Promise<Re
     if (held) { held.signal = init?.signal ?? undefined; return held.promise; }
     return Promise.resolve(json(meStatus, meStatus === 200 ? me : { error: "unavailable" }));
   }
+  if (path === "/api/v1/me/view") return viewFailsOffline ? Promise.reject(new TypeError("Failed to fetch")) : Promise.resolve(json(503, { error: "view switch unavailable" }));
+  if (path === "/api/v1/auth/logout") return logoutReply ?? Promise.resolve(json(200, {}));
   if (path === "/api/v1/me/capabilities") return Promise.resolve(json(200, { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false }));
   if (path === "/api/v1/setup/status") return Promise.resolve(json(200, setup));
   if (path === "/api/v1/policies/default") return Promise.resolve(json(200, spec));
@@ -63,6 +70,8 @@ beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   me = { principal: "alice", method: "sso", role: "user", operator: false, security_operator: false, email: "", session_expires_at: new Date(Date.now() + 120_000).toISOString() };
   meStatus = 200;
+  viewFailsOffline = false;
+  logoutReply = undefined;
   heldMe = [];
   calls.length = 0;
   popup = { closed: false, close: vi.fn(() => { popup.closed = true; }), opener: {}, location: { href: "" } };
@@ -197,4 +206,200 @@ it("unmount retires a cancellation confirmation even when the response ignores a
   expect(assign).not.toHaveBeenCalled();
   expect(count("/api/v1/runs/policy-preview")).toBe(checked);
   expect(count("/api/v1/runs")).toBe(0);
+});
+
+it("reviewer: failed view switch retains a launchable same-owner draft", async () => {
+  me = { ...me, user_view: true, user_view_super_admin: true };
+  await draft();
+  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN, exact: true }));
+  await screen.findByText(CONSOLE_VIEW.SWITCH_FAILED);
+  await tick(1000);
+  act(() => window.dispatchEvent(new Event("focus")));
+  await tick(1000);
+  expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
+  expect(assign).not.toHaveBeenCalled();
+  expect(count("/api/v1/runs")).toBe(0);
+  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
+  await tick(0);
+  expect(count("/api/v1/runs")).toBe(1);
+});
+
+
+it.each([false, true])("a failed view switch (offline=%s) confirms automatically without focus or write replay", async (offline) => {
+  me = { ...me, user_view: true, user_view_super_admin: true };
+  viewFailsOffline = offline;
+  await draft();
+  const checked = count("/api/v1/runs/policy-preview");
+  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN, exact: true }));
+  await screen.findByText(CONSOLE_VIEW.SWITCH_FAILED);
+  await tick(0);
+  await tick(1000);
+  expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(checked);
+  expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
+  expect(count("/api/v1/me/view")).toBe(1);
+  expect(count("/api/v1/runs")).toBe(0);
+  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
+  await screen.findByText("Created run");
+  expect(count("/api/v1/runs")).toBe(1);
+});
+
+it("a normal confirmation outage remains fenced without polling and recovers on focus", async () => {
+  await draft();
+  meStatus = 503;
+  const checked = count("/api/v1/runs/policy-preview");
+  act(() => setToken("replacement-token"));
+  await tick(0);
+  const reads = count("/api/v1/me", "GET");
+  await tick(4500);
+  expect(count("/api/v1/me", "GET")).toBe(reads);
+  expect(count("/api/v1/runs/policy-preview")).toBe(checked);
+  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
+  expect(count("/api/v1/runs")).toBe(0);
+  meStatus = 200;
+  act(() => window.dispatchEvent(new Event("focus")));
+  await tick(0);
+  await tick(1000);
+  expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(checked);
+  expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
+  expect(count("/api/v1/runs")).toBe(0);
+});
+
+it("a rejected current token holds New Run without a /me loop until explicit sign-in", async () => {
+  await draft();
+  const before = count("/api/v1/me", "GET");
+  meStatus = 401;
+  act(() => setToken("rejected-token"));
+  await tick(0);
+  await screen.findByRole("dialog");
+  expect(getToken()).toBeNull();
+  expect(isSignedOutHold()).toBe(true);
+  expect(count("/api/v1/me", "GET")).toBe(before + 1);
+  const reads = count("/api/v1/me", "GET");
+  meStatus = 200;
+  act(() => setToken("later-token"));
+  act(() => window.dispatchEvent(new Event("focus")));
+  await tick(4500);
+  expect(count("/api/v1/me", "GET")).toBe(reads);
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+  expect(count("/api/v1/runs")).toBe(0);
+
+  const dialog = screen.getByRole("dialog");
+  setField(within(dialog).getByLabelText("Admin token"), "confirmed-token");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Sign in", exact: true }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await tick(1000);
+  expect(isSignedOutHold()).toBe(false);
+  expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
+  expect(count("/api/v1/runs")).toBe(0);
+  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
+  await screen.findByText("Created run");
+  expect(count("/api/v1/runs")).toBe(1);
+});
+
+it.each(["same", "other", "authority", "unmount"])("local token changes retire old normal-phase reads before a %s outcome", async (outcome) => {
+  const view = await draft();
+  const old = pendingMe();
+  act(() => setToken("first-replacement"));
+  await tick(0);
+  expect(old.signal).toBeDefined();
+  const current = pendingMe();
+  act(() => setToken("second-replacement"));
+  expect(old.signal?.aborted).toBe(true);
+  const checked = count("/api/v1/runs/policy-preview");
+  await act(async () => old.resolve(json(200, { ...me, principal: "obsolete-owner" })));
+  await tick(0);
+  expect(current.signal).toBeDefined();
+  expect(assign).not.toHaveBeenCalled();
+  expect(count("/api/v1/runs/policy-preview")).toBe(checked);
+  expect(count("/api/v1/runs")).toBe(0);
+  if (outcome === "unmount") {
+    view.unmount();
+    expect(current.signal?.aborted).toBe(true);
+  }
+  const answer = outcome === "other" || outcome === "unmount" ? { ...me, principal: "bob" }
+    : outcome === "authority" ? { ...me, role: "admin", operator: true, security_operator: true } : me;
+  await act(async () => current.resolve(json(200, answer)));
+  await tick(1000);
+  expect(count("/api/v1/runs")).toBe(0);
+  if (outcome === "same") {
+    expect(assign).not.toHaveBeenCalled();
+    expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(checked);
+    expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
+    const confirmedReads = count("/api/v1/me", "GET");
+    act(() => window.dispatchEvent(new Event("focus")));
+    await tick(1000);
+    expect(count("/api/v1/me", "GET")).toBe(confirmedReads);
+  } else {
+    expect(count("/api/v1/runs/policy-preview")).toBe(checked);
+    expect(screen.queryByLabelText("Title")).toBeNull();
+    if (outcome === "unmount") expect(assign).not.toHaveBeenCalled();
+    else expect(assign).toHaveBeenCalledWith("/runs/new");
+  }
+});
+
+it.each([["quiet", 200], ["quiet", 401], ["quiet", 503], ["renewal", 200]] as const)("deliberate logout from %s with status %s retires the pending confirmation", async (phase, status) => {
+  const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+  await draft();
+  const current = pendingMe();
+  if (phase === "quiet") act(() => setToken("replacement-before-logout"));
+  else await startRenew();
+  await tick(phase === "quiet" ? 0 : 1500);
+  expect(current.signal).toBeDefined();
+  let finishLogout!: (reply: Response) => void;
+  logoutReply = new Promise<Response>((done) => { finishLogout = done; });
+  const buttons = within(screen.getByRole("banner")).getAllByRole("button");
+  await user.click(buttons[buttons.length - 1]);
+  await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
+  expect(isSignedOutHold()).toBe(true);
+  expect(count("/api/v1/auth/logout")).toBe(1);
+  const checked = count("/api/v1/runs/policy-preview");
+  await act(async () => current.resolve(json(200, { ...me, principal: "bob" })));
+  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
+  expect(assign).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(count("/api/v1/runs")).toBe(0);
+  await act(async () => finishLogout(json(status, {})));
+  await screen.findByText("Admin token", { exact: true });
+  expect(isSignedOutHold()).toBe(false);
+  act(() => window.dispatchEvent(new Event("focus")));
+  await tick(3000);
+  expect(getToken()).toBeNull();
+  expect(screen.queryByLabelText("Title")).toBeNull();
+  expect(assign).not.toHaveBeenCalled();
+  expect(count("/api/v1/runs/policy-preview")).toBe(checked);
+  expect(count("/api/v1/runs")).toBe(0);
+});
+
+
+it("a normal auth change cannot adopt an identity the shell never resolved", async () => {
+  meStatus = 503;
+  render(<MemoryRouter initialEntries={["/runs/new"]}><App /></MemoryRouter>);
+  await screen.findByText(SHELL.UNKNOWN_BODY);
+  meStatus = 200;
+  act(() => setToken("new-token"));
+  await tick(0);
+  expect(assign).toHaveBeenCalledWith("/runs/new");
+  expect(screen.queryByLabelText("Title")).toBeNull();
+  expect(count("/api/v1/runs")).toBe(0);
+});
+
+
+it("a cookie-only 401 keeps the normal confirmation held without advancing auth or polling", async () => {
+  sessionStorage.clear();
+  me = { ...me, user_view: true, user_view_super_admin: true };
+  await draft();
+  meStatus = 401;
+  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN, exact: true }));
+  await screen.findByText(CONSOLE_VIEW.SWITCH_FAILED);
+  await tick(0);
+  await screen.findByRole("dialog");
+  expect(getToken()).toBeNull();
+  expect(isSignedOutHold()).toBe(true);
+  const generation = getAuthGeneration();
+  const reads = count("/api/v1/me", "GET");
+  await tick(4500);
+  expect(getAuthGeneration()).toBe(generation);
+  expect(count("/api/v1/me", "GET")).toBe(reads);
+  expect(count("/api/v1/runs")).toBe(0);
+  expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
 });

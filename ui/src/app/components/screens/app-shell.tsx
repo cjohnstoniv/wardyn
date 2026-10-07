@@ -518,13 +518,10 @@ export function AppShell({
             >
               Skip to main content
             </a>
-            {/* #483: first, above everything — while it shows, nothing below
-                it can save. */}
-            {(reauth.phase !== "none" || reauth.watch) && (
-              <React.Suspense fallback={null}>
-                <ReauthLayer onResumed={adoptIdentity} />
-              </React.Suspense>
-            )}
+            {/* The lazy coordinator also reconciles auth changes while no dialog or watch is active. */}
+            <React.Suspense fallback={null}>
+              <ReauthLayer onResumed={adoptIdentity} />
+            </React.Suspense>
             {/* Hidden — not merely covered — in focus mode: the cockpit's overlay is
           painted over the shell anyway, but leaving the header mounted would
           keep a dozen focusable controls ahead of the terminal in tab order
