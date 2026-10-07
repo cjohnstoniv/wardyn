@@ -92,6 +92,7 @@ export interface NewRunLaunchPanelProps {
   pin: string | undefined;
   workspaces: Workspace[];
   selectedWorkspaceId: string | undefined;
+  attachedWorkspaces: number;
   caps: MeCapabilities | null;
   modelProviders: SetupModelProvider[] | undefined;
 
@@ -160,6 +161,7 @@ export function NewRunLaunchPanel({
   pin,
   workspaces,
   selectedWorkspaceId,
+  attachedWorkspaces,
   caps,
   modelProviders,
   preflightIsCurrent,
@@ -213,6 +215,7 @@ export function NewRunLaunchPanel({
     pin,
     workspaces,
     selectedWorkspaceId,
+    attachedWorkspaces,
     caps,
     modelProviders,
     providerGateState,

@@ -439,6 +439,7 @@ export function NewRunScreen() {
     pin,
     workspaces,
     selectedWorkspaceId: state.workspaces[0]?.workspaceId,
+    attachedWorkspaces: state.workspaces.length,
     caps,
     modelProviders,
     providerGateState,
@@ -713,7 +714,7 @@ export function NewRunScreen() {
                 onChange={onSpecChange}
                 onPreflight={preflight}
                 preflightBusy={preflighting}
-                preflightDisabled={policyMode === "saved" && !state.selectedPolicyId}
+                preflightDisabled={(policyMode === "saved" && !state.selectedPolicyId) || !!gates.defaultWorkspaceProblem}
                 interactive={isInteractive}
                 adoCeiling={adoCeiling}
                 modelProviders={modelProviders}
@@ -723,6 +724,7 @@ export function NewRunScreen() {
                     status: defaultRead.status,
                     spec: defaultPolicy && previewSpec(defaultPolicy),
                     profileName: governanceProfile,
+                    problem: gates.defaultWorkspaceProblem,
                     onRetry: retryDefault,
                   },
                   onModeChange: (m: PolicyMode) => {
@@ -866,6 +868,7 @@ export function NewRunScreen() {
           pin={pin}
           workspaces={workspaces}
           selectedWorkspaceId={state.workspaces[0]?.workspaceId}
+          attachedWorkspaces={state.workspaces.length}
           caps={caps}
           modelProviders={modelProviders}
           noBarrier={policy.noBarrierOnHost}

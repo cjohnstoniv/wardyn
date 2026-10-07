@@ -7,7 +7,7 @@
 // card of the policy mode row. Its own copy of the screen's mock harness, as
 // new-run-screen-saved-policy.test.tsx keeps.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -232,6 +232,86 @@ describe("NewRunScreen — Use the default policy", () => {
     await user.click(screen.getByRole("button", { name: "Launch run" }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     expect(createRunMock.mock.calls[0][0]).toHaveProperty("inline_policy");
+  });
+});
+
+// The default lane carries one workspace by reference and the API has no
+// second attachment on that path, so a second attached workspace holds Launch
+// and Check again rather than being left out of the request.
+describe("NewRunScreen — the default policy with two workspaces attached", () => {
+  const SENTENCE =
+    "The default policy launches with one workspace. Remove the extra workspace, or choose Custom policy to keep them all.";
+
+  async function renderTwoAttachedOnDefault() {
+    listWorkspacesMock.mockResolvedValue([
+      { id: "ws1", name: "repo-a", kind: "local_dir", source: "/data/a", sources: [{ type: "local_dir", path: "/data/a", target: "/work/a" }], status: "scanned" },
+      { id: "ws2", name: "repo-b", kind: "local_dir", source: "/data/b", sources: [{ type: "local_dir", path: "/data/b", target: "/work/b" }], status: "scanned" },
+    ]);
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: "/runs/new",
+            state: { prefill: { inlinePolicy: true, state: { workspaces: [{ workspaceId: "ws1" }, { workspaceId: "ws2" }] } } },
+          },
+        ]}
+      >
+        <OperatorProvider operator>
+          <NewRunScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    await chooseDefault();
+    await waitFor(() => expect(screen.getByTestId("nr-workspace-extras")).toHaveTextContent("repo-b"));
+    setField(screen.getByLabelText("Title"), "default two workspaces");
+  }
+
+  it("holds Launch and Check again, says why, and sends no request", async () => {
+    await renderTwoAttachedOnDefault();
+
+    // Beside Launch, and in the default-policy panel beside Check again.
+    await waitFor(() => expect(screen.getAllByText(SENTENCE)).toHaveLength(2));
+    const panel = screen.getByText(C.DEFAULT_PREVIEW).parentElement!;
+    expect(within(panel).getByText(SENTENCE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Launch run" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Check again$/ })).toBeDisabled();
+    // Nothing is hidden or cleared: the chip and its Remove control stay.
+    expect(screen.getByRole("button", { name: "Remove repo-b" })).toBeInTheDocument();
+
+    // No launch, and no automatic check either, once the debounce has passed.
+    preflightRunMock.mockClear();
+    await user.click(screen.getByRole("button", { name: "Launch run" }));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 1000));
+    });
+    expect(createRunMock).not.toHaveBeenCalled();
+    expect(preflightRunMock).not.toHaveBeenCalled();
+  });
+
+  it("launches with the remaining workspace once the extra one is removed", async () => {
+    await renderTwoAttachedOnDefault();
+    await user.click(screen.getByRole("button", { name: "Remove repo-b" }));
+
+    await waitFor(() => expect(screen.queryByText(SENTENCE)).toBeNull());
+    await user.click(screen.getByRole("button", { name: "Launch run" }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+    const body = createRunMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(body.workspace_id).toBe("ws1");
+    expect(body).not.toHaveProperty("policy_id");
+    expect(body).not.toHaveProperty("inline_policy");
+    expect(JSON.stringify(body)).not.toContain("ws2");
+  });
+
+  it("keeps both workspaces when Custom policy is chosen instead", async () => {
+    await renderTwoAttachedOnDefault();
+    await user.click(screen.getByRole("button", { name: /^Custom policy/ }));
+
+    await waitFor(() => expect(screen.queryByText(SENTENCE)).toBeNull());
+    expect(screen.getByTestId("nr-workspace-extras")).toHaveTextContent("repo-b");
+    await user.click(screen.getByRole("button", { name: "Launch run" }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+    const body = createRunMock.mock.calls[0][0] as { inline_policy: { workspace_mounts: { source: string }[] } };
+    expect(body.inline_policy.workspace_mounts.map((m) => m.source)).toEqual(["/data/a", "/data/b"]);
   });
 });
 
