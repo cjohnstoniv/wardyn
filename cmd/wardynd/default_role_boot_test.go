@@ -63,7 +63,7 @@ func defaultRoleBootFlags(issuerURL, defaultRole string) *bootFlags {
 	envbuild, scanAIAdvisor := false, false
 	sshListen, uiListen := "", ""
 	adminToken := ""
-	var roleStampTTL time.Duration
+	var roleStampTTL, oidcSessionTTL time.Duration
 	controlURL := "http://127.0.0.1:8080" // loopback: no internal CA to mint
 	basePath := ""
 	return &bootFlags{
@@ -96,6 +96,7 @@ func defaultRoleBootFlags(issuerURL, defaultRole string) *bootFlags {
 		uiListen:                 &uiListen,
 		controlURL:               &controlURL,
 		roleStampTTL:             &roleStampTTL,
+		oidcSessionTTL:           &oidcSessionTTL,
 	}
 }
 

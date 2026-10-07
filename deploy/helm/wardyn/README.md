@@ -396,6 +396,13 @@ against an EXISTING OIDC-only install to turn on RBAC for the first time — it
 takes effect on each user's next login (a session signed before the role map
 existed carries no role and is never treated as authenticated).
 
+By default a console session ends at the identity provider's ID token expiry. To make it
+last longer (or shorter), set `env.WARDYN_OIDC_SESSION_TTL` (a duration, at
+most `24h`; boot refuses more). Pair a longer session with
+`env.WARDYN_ROLE_STAMP_TTL`: nothing else re-checks the identity provider
+during a session, so a person disabled only there keeps the console until the
+session TTL runs out. See docs/ENV.md.
+
 **`env.WARDYN_OIDC_ROLE_MAP` is the bootstrap layer, not the only editor.**
 Once the install is live, an admin adds, edits and removes further mappings
 without a redeploy from the console's Getting Started → People step (`GET`/

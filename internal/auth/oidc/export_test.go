@@ -84,6 +84,11 @@ func SetRoleStampTTLForTest(a *Authenticator, ttl time.Duration) {
 	a.cfg.RoleStampTTL = ttl
 }
 
+// SetSessionTTLForTest sets Config.SessionTTL on an already-built Authenticator.
+func SetSessionTTLForTest(a *Authenticator, ttl time.Duration) {
+	a.cfg.SessionTTL = ttl
+}
+
 // DeriveRoleForTest exposes deriveRole for direct table-testing of role
 // derivation precedence and Match provenance, without driving a signed ID
 // token through the whole callback for every case.
