@@ -12,7 +12,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - Release schema checks group rendered objects by discovered Kubernetes scope and namespace,
   so runner RBAC in a separate namespace passes the same strict server dry-run as the chart's
-  control-plane objects. Failed Helm renders stop before validation. (#1909)
+  control-plane objects. Failed Helm renders and malformed manifests, including duplicate
+  YAML or JSON mapping keys, stop before discovery or validation. (#1909)
 - Patch preparation refuses duplicate CHANGELOG heading keys after merging and after the
   release-commit step, including resumed candidates, before checks or publication work. (#1913)
 

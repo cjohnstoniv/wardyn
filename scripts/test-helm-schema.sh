@@ -155,6 +155,57 @@ run_check "$work/mixed.yaml" wardyn
 assert "omitted context succeeds" test "$rc" = 0
 assert "omitted context uses kubectl default throughout" jq -es 'all(.[]; index("--context") == null)' "$FIX/calls.jsonl"
 
+valid='{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"valid"},"data":{"route":"first"}}'
+printf '%s\n%s\n' "$valid" "$valid" >"$work/valid.json"
+run_check "$work/valid.json" wardyn
+assert "JSON document stream succeeds" test "$rc" = 0
+assert "JSON documents retain their complete content" jq -es --argjson expected "$valid" '
+  length == 1 and .[0].body.items == [$expected, $expected]
+' "$FIX/applies.jsonl"
+
+case_number=0
+for input in \
+  $'apiVersion: v1\nkind: Invalid\nkind: ConfigMap\nmetadata: {name: duplicate}' \
+  $'apiVersion: v1\nkind: ConfigMap\nmetadata: {name: duplicate, namespace: original, namespace: replacement}' \
+  $'apiVersion: v1\nkind: ConfigMap\nmetadata: {name: duplicate}\ndata: {route: first, "route": second}' \
+  $'apiVersion: v1\nkind: ConfigMap\nmetadata: {name: duplicate}\nspec: {list: [{nested: {route: first, route: second}}]}' \
+  '{"apiVersion":"v1","kind":"Invalid","kind":"ConfigMap","metadata":{"name":"duplicate"}}' \
+  '{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"duplicate","namespace":"original","namespace":"replacement"}}' \
+  '{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"duplicate"},"data":{"route":"first","\u0072oute":"second"}}' \
+  '{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"duplicate"},"spec":{"list":[{"nested":{"route":"first","route":"second"}}]}}'; do
+  case_number=$((case_number+1))
+  format=yaml
+  separator=$'---\n'
+  if [ "${input:0:1}" = '{' ]; then format=json; separator=''; fi
+  for position in standalone before-valid after-valid; do
+    case "$position" in
+      standalone) printf '%s\n' "$input" ;;
+      before-valid) printf '%s\n%s%s\n' "$input" "$separator" "$valid" ;;
+      after-valid) printf '%s\n%s%s\n' "$valid" "$separator" "$input" ;;
+    esac >"$work/duplicate.$format"
+    run_check "$work/duplicate.$format" wardyn
+    reject "$format duplicate mapping keys case $case_number ($position)" 'duplicate mapping keys'
+    assert "duplicate case $case_number ($position) makes no discovery calls" test ! -s "$FIX/calls.jsonl"
+  done
+done
+
+# Aliases and custom tags must not bypass the check before JSON erases them.
+for data in \
+  '!custom {route: first, route: second}' \
+  '{base: &base {route: first, route: second}, copy: *base}' \
+  '{&key route: first, *key: second}' \
+  '{1: first, "1": second}' \
+  '{? [one, two]: first, ? [three, four]: second}'; do
+  printf 'apiVersion: v1\nkind: ConfigMap\nmetadata: {name: duplicate}\ndata: %s\n' "$data" >"$work/duplicate.yaml"
+  run_check "$work/duplicate.yaml" wardyn
+  reject "ambiguous YAML mapping [$data]" 'mapping keys'
+  assert "ambiguous YAML mapping makes no discovery calls" test ! -s "$FIX/calls.jsonl"
+done
+printf 'apiVersion: v1\nkind: ConfigMap\nmetadata: {name: &key valid}\ndata: {*key: value}\n' >"$work/alias.yaml"
+run_check "$work/alias.yaml" wardyn
+assert "unique aliased mapping key succeeds" test "$rc" = 0
+assert "unique aliased mapping key retains its resolved value" jq -es '.[0].body.items[0].data == {"valid":"value"}' "$FIX/applies.jsonl"
+
 for input in '' '# comment only' $'---\n---\n' 'null' '~' '!!null' '!!null ""' '[]' 'false' 'plain text' 'apiVersion: v1' \
   $'apiVersion: v1\nkind: ConfigMap\nmetadata: {namespace: 42}' \
   $'apiVersion: ../../v1\nkind: ConfigMap\nmetadata: {}' 'metadata: ['; do

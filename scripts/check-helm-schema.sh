@@ -23,6 +23,13 @@ fi
 umask 077
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+# jq erases duplicate keys; inspect every original map before JSON conversion.
+# Complex YAML keys cannot be represented faithfully as JSON object keys.
+yq eval-all -e '
+  [.. | select(kind == "map") | keys | explode(.) |
+    select(any_c(kind != "scalar") or (length != (map(to_string) | unique | length)))] |
+  length == 0
+' -- "$manifest" >/dev/null || die "malformed YAML manifest or duplicate mapping keys: $manifest"
 yq -o=json -I=0 'select(tag != "!!null" or (. | to_string) != "" or style != "")' -- "$manifest" >"$work/documents.json" \
   || die "malformed YAML manifest: $manifest"
 jq -se '
