@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { asJson, getToken, onAuthChange, onUnauthorized, setSignedOutHold, setToken, wfetch } from "./core";
+import { getToken, onAuthChange, onUnauthorized, setSignedOutHold, setToken, wfetch } from "./core";
 
 const changed = vi.fn();
 let unsubscribe: () => void;
@@ -94,10 +94,4 @@ it("independent listeners dispose without disabling a replacement", () => {
   off();
   expect(changed).toHaveBeenCalledTimes(1);
   expect(second).toHaveBeenCalledTimes(2);
-});
-
-
-it("preserves Retry-After on an HTTP refusal for the bounded preview scheduler", async () => {
-  const response = new Response(JSON.stringify({ error: "limited" }), { status: 429, headers: { "Retry-After": "3" } });
-  await expect(asJson(response)).rejects.toMatchObject({ status: 429, retryAfter: "3" });
 });

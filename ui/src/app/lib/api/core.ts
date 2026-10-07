@@ -154,7 +154,8 @@ export class HttpError extends Error {
    *  (the envelope's `policy`, internal/policyref.Ref). Absent when the body
    *  carries none, which is every refusal that is not a policy decision. */
   policy?: PolicyRef;
-  retryAfter?: string;
+  /** A refusal's Retry-After, set by the one caller that retries on it (previewRunPolicy). */
+  declare retryAfter?: string;
   constructor(
     status: number,
     message: string,
@@ -163,7 +164,6 @@ export class HttpError extends Error {
     provider = "",
     kind = "",
     policy?: PolicyRef,
-    retryAfter?: string,
   ) {
     super(message);
     this.status = status;
@@ -172,7 +172,6 @@ export class HttpError extends Error {
     this.provider = provider;
     this.kind = kind;
     if (policy) this.policy = policy;
-    if (retryAfter) this.retryAfter = retryAfter;
     this.name = "HttpError";
   }
 }
@@ -361,7 +360,7 @@ export class PendingChangeError extends Error {
 export async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const { message, reason, org, provider, kind, policy } = await errEnvelope(res);
-    throw new HttpError(res.status, message, reason, org, provider, kind, policy, res.headers.get("Retry-After") ?? undefined);
+    throw new HttpError(res.status, message, reason, org, provider, kind, policy);
   }
   const body = await res.json();
   if (res.status === 202 && body && typeof body === "object" && (body as { pending_change?: unknown }).pending_change) {

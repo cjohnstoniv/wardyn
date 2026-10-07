@@ -13,6 +13,8 @@ import { retryAfterDelay, useRunChecks } from "./use-run-checks";
 
 const preflight = vi.fn(), preview = vi.fn();
 const ready = { enforced_confinement_class: "CC1", setup_items: [] };
+// The preview client sets retryAfter from the response header (runs.wire.fields.test.ts).
+const limitedFor = (retryAfter: string | undefined) => Object.assign(new HttpError(429, "limited"), { retryAfter });
 const effective: PolicyPreviewResult = { spec: { allowed_domains: [], first_use_approval: "deny_with_review", min_confinement_class: "CC1" }, source: { kind: "inline" }, provisional: true, redacted: false, warnings: [], pending: ["credential_liveness"], repository_access: [] };
 const tick = (ms = 800) => act(() => vi.advanceTimersByTimeAsync(ms));
 type Params = Parameters<typeof useRunChecks>[0];
@@ -115,7 +117,7 @@ it("does not poll on expiry or fresh focus; stale focus coalesces once", async (
 });
 
 it("retries preview once after Retry-After without repeating preflight, then requires an explicit retry", async () => {
-  preview.mockRejectedValue(new HttpError(429, "limited", "", "", "", "", undefined, "2"));
+  preview.mockRejectedValue(limitedFor("2"));
   const { result } = renderHook(useRunChecks, { initialProps: params() });
   await tick();
   expect(result.current.preview).toMatchObject({ result: null, current: false, fresh: false });
@@ -133,7 +135,7 @@ it("retries preview once after Retry-After without repeating preflight, then req
 });
 
 it.each([undefined, "nonsense", "-1", "2147483648"])("does not retry an unusable Retry-After %s", async (header) => {
-  preview.mockRejectedValue(new HttpError(429, "limited", "", "", "", "", undefined, header));
+  preview.mockRejectedValue(limitedFor(header));
   renderHook(useRunChecks, { initialProps: params() });
   await tick();
   await tick(60_000);
@@ -143,7 +145,7 @@ it.each([undefined, "nonsense", "-1", "2147483648"])("does not retry an unusable
 });
 
 it.each(["invalid", "auth", "unmount"])("cancels a scheduled retry after %s", async (change) => {
-  preview.mockRejectedValue(new HttpError(429, "limited", "", "", "", "", undefined, "2"));
+  preview.mockRejectedValue(limitedFor("2"));
   const p = params();
   const { rerender, unmount } = renderHook(useRunChecks, { initialProps: p });
   await tick();
@@ -244,7 +246,7 @@ it("keeps the last good preview stale through an explicit retry and both rate li
   expect(result.current.preview).toMatchObject({ result: effective, current: true, fresh: true });
   await tick(5000);
   const retryReply = deferred<PolicyPreviewResult>();
-  const limited = new HttpError(429, "limited", "", "", "", "", undefined, "2");
+  const limited = limitedFor("2");
   preview.mockReturnValueOnce(retryReply.promise).mockRejectedValue(limited);
   let retry!: Promise<void>;
   act(() => { retry = result.current.preview.retry(); });

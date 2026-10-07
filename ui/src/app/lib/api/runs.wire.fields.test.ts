@@ -171,6 +171,13 @@ describe("runWireBody — every console-settable DTO field reaches the wire", ()
     expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
   });
 
+  it("preserves Retry-After on a preview refusal for the bounded preview scheduler", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "limited" }), { status: 429, headers: { "Retry-After": "3" } }));
+    await expect(previewRunPolicy(fullInput)).rejects.toMatchObject({ status: 429, message: "limited", retryAfter: "3" });
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "limited" }), { status: 429 }));
+    await expect(previewRunPolicy(fullInput)).rejects.toMatchObject({ status: 429, retryAfter: undefined });
+  });
+
   // Per-field omission: an ABSENT choice must be an absent key, never
   // "", false, or null — pkg/client/dto_parity_test.go pins the same rule
   // from the Go side ("a minimal request must put only the always-sent keys
