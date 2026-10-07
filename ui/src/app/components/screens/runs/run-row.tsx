@@ -26,7 +26,7 @@ import { cn } from "../../ui/utils";
 import { repoLabel, rowHeadline } from "./board-groups";
 import { glyphKindFor, RowGlyph } from "./row-glyph";
 import { rowPresentation, waitingSignInPresentation } from "./runs-model";
-import { mayReadSignIn } from "../run-detail/login-sandbox-note";
+import { mayReadSignIn } from "../run-detail/sign-in-run";
 import { useRunSignIn } from "../run-detail/use-run-sign-in";
 import { RUNS_ROW_ACTION } from "../../wardyn/copy/runs-landing";
 import { REVIVE, REVIVING, revivePolicy } from "../../wardyn/copy/run-lifetime";

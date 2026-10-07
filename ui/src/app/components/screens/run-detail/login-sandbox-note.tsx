@@ -20,27 +20,12 @@
 import * as React from "react";
 import { KeyRound } from "lucide-react";
 import type { AgentRun } from "../../../lib/types";
-import { mayEnterRun } from "../../../lib/run-entry";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
-// Lazy: the Runs list imports mayReadSignIn from this file, and the strip (its
-// copy, signin-progress) has no business in the entry chunk (bundle-split.test.ts).
+import { AWS_SSO_LOGIN_AGENT, HARNESS_LOGIN_TASK, mayReadSignIn } from "./sign-in-run";
+// Lazy: the strip (its copy, signin-progress) loads only on a run that shows it.
 const RunSignInStrip = React.lazy(() => import("./run-sign-in-strip"));
 
-// The server-side task literal this note keys on. Mirrors harnessLoginTask
-// (internal/api/harnesscred.go) — a discriminator, never client input. Held to
-// the Go constant by TestHarnessLoginTask_UIParity (internal/api), which reads
-// this file: renaming one side alone silently stops the note rendering on the
-// one run it exists for.
-export const HARNESS_LOGIN_TASK = "harness login";
-
-// …and the agent, because the task alone is provider-agnostic. Every container
-// login sets `harness login` — the Anthropic lane is the route's own default
-// (`provider = "anthropic"`, harnesscred_launch.go) and runs `claude setup-token`
-// in the claude-code image. Keyed on the task alone, this note told a
-// Claude-subscription login run it was an AWS box that runs the AWS CLI and
-// nothing else, signed in from Getting Started — false on all three clauses.
-// Mirrors awsSSOAgent (internal/api/harnesscred.go), pinned by the same test.
-export const AWS_SSO_LOGIN_AGENT = "aws-sso";
+export { AWS_SSO_LOGIN_AGENT, HARNESS_LOGIN_TASK, mayReadSignIn };
 
 // Says the three things the page could not: what the
 // box is, what the terminal below is waiting for, and that nobody has to clean it
@@ -76,18 +61,6 @@ export const LOGIN_SANDBOX_NOTE =
 // device code, the idle cap — describes a RUNNING sandbox, and the Runs list is
 // exactly where a KILLED or COMPLETED login run is reopened. A run that is still
 // PENDING has no terminal to point at either.
-// Whether this viewer's console may read this run's sign-in: a RUNNING AWS
-// sign-in run they may enter. `mayEnterRun`, never the unknown-identity arm,
-// which would fire a read the server then refuses and draw a false failure.
-export function mayReadSignIn(run: AgentRun, principal: string, operator: boolean): boolean {
-  return (
-    run.task === HARNESS_LOGIN_TASK &&
-    run.agent === AWS_SSO_LOGIN_AGENT &&
-    run.state === "RUNNING" &&
-    mayEnterRun(run, principal, operator)
-  );
-}
-
 export function LoginSandboxNote({ run }: { run: AgentRun }) {
   const principal = usePrincipal();
   const operator = useOperator();
