@@ -234,11 +234,12 @@ function refusalBody(
             <EmptyState icon={Logs} title={RUN_OUTPUT.interactiveLiveTitle} description={RUN_OUTPUT.interactiveLiveDesc} />
           );
         }
-        // Mirrors the server's interactiveNothingKept: the sentence is false for a STOPPED run.
+        // Mirrors the server's interactiveNothingKept: a run Wardyn stopped is
+        // told only that nothing is kept, never that it did not end through a stop.
         return NOT_STOPPED.has(state) ? (
           <EmptyState icon={Logs} title={RUN_OUTPUT.interactiveTitle} description={RUN_OUTPUT.interactiveNoneDesc} />
         ) : (
-          <EmptyState icon={Logs} title={RUN_OUTPUT.interactiveTitle} description={RUN_OUTPUT.interactiveDesc} />
+          <EmptyState icon={Logs} title={RUN_OUTPUT.interactiveTitle} description={RUN_OUTPUT.interactiveStoppedDesc} />
         );
       }
       return (

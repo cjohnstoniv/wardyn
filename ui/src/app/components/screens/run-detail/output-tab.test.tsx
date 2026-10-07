@@ -269,15 +269,23 @@ describe("OutputTab — interactive run, nothing kept", () => {
     expect(screen.getByText(RUN_OUTPUT.interactiveNoneDesc)).toBeInTheDocument();
   });
 
-  it("recording off, run STOPPED: no nothing-kept sentence and no Recording link", async () => {
-    recording("none");
-    refuse("run_output_interactive", 409);
-    await mount({ live: false, state: "STOPPED" });
-    expect(screen.getByText(RUN_OUTPUT.interactiveTitle)).toBeInTheDocument();
-    expect(screen.getByText(RUN_OUTPUT.interactiveDesc)).toBeInTheDocument();
-    expect(screen.queryByText(RUN_OUTPUT.interactiveNoneDesc)).toBeNull();
-    expect(screen.queryByRole("button", { name: RUN_OUTPUT.interactiveLink })).toBeNull();
-  });
+  // Wardyn did stop these runs, so neither "it did not end through a Wardyn
+  // stop" nor "only when Wardyn stops it for you" is true of them.
+  it.each(["STOPPED", "ARCHIVED"])(
+    "recording off, run %s: the server's nothing-is-kept sentence, and no Recording link",
+    async (state) => {
+      recording("none");
+      refuse("run_output_interactive", 409);
+      await mount({ live: false, state });
+      expect(screen.getByText(RUN_OUTPUT.interactiveTitle)).toBeInTheDocument();
+      expect(
+        screen.getByText("Nothing is kept from this interactive session, and recording is off on this deployment."),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(RUN_OUTPUT.interactiveDesc)).toBeNull();
+      expect(screen.queryByText(RUN_OUTPUT.interactiveNoneDesc)).toBeNull();
+      expect(screen.queryByRole("button", { name: RUN_OUTPUT.interactiveLink })).toBeNull();
+    },
+  );
 
   // The pane snapshot row is written a moment after the run reaches STOPPED:
   // a read in between is refused as interactive, and must not be the verdict.
