@@ -96,7 +96,10 @@ the end of a headless run, during it and after a restart, with
 else gets the same `404` as `GET /runs/{id}`. An interactive run keeps no
 output of its own (its terminal is the recording's), only the pane snapshot
 below when Wardyn stops it gracefully; the managed-harness sign-in run keeps
-nothing at all, because its output is a live credential.
+nothing at all, because its output is a live credential, and a read of it
+answers `409 run_output_interactive` like any interactive run. A sign-in whose
+browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
+`wardyn run sign-in <run-id>` (below).
 
 - **Not captured on Kubernetes in this release.** The Kubernetes runner runs a
   task under the session recorder, which writes nothing to the container's log,
@@ -159,6 +162,17 @@ nothing at all, because its output is a live credential.
   is truncated, incomplete, a capture gap, a pane snapshot, or masked against
   global secrets only; a refusal exits non-zero and names its `run_output_*`
   reason.
+- **A waiting sign-in.** `GET /api/v1/runs/{id}/sign-in` (and
+  `wardyn run sign-in <run-id>`, which reads it once) answers whether a running
+  AWS sign-in is waiting for its device-code approval, with the verification
+  link and code of its latest attempt. Only the run's owner may read it. It
+  reads the sign-in pane once with the snapshot's command, bounded to the same
+  3 seconds and to 64 KiB, and keeps nothing: no pane text or code is logged,
+  stored or audited. An attempt followed by its completion or failure line, or
+  a run whose capture is already audited (`harness.credential.capture` on this
+  run), answers `not_waiting`. A read that times out, overflows or fails answers
+  `503 run_sign_in_unreadable`. Closing the sign-in dialog on purpose still
+  kills the run; only a lost tab leaves it waiting.
 - **A restart.** A run that was live across a wardynd restart, or that another
   replica adopted, has its output read back from the substrate when that is
   possible and safe, and ends with a `capture_gap` row when it is not. wardynd
