@@ -8,7 +8,13 @@
     "component": "ThemeProvider"
   },
   "componentSrcMap": {
-    "DemoDetail": null
+    "DemoDetail": null,
+    "RowSignInProbe": null,
+    "S": null
+  },
+  "extraEntries": ["../../../../.design-sync/exports.ts"],
+  "libOverrides": {
+    "source-kit.mjs": "Resolve Note and SectionCard star-export collisions in the synthesized entry."
   },
   "runtimeFontPrefixes": [
     "Cascadia Code",
