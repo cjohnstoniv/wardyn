@@ -402,15 +402,24 @@ it("a delayed view 401 ends reconciliation in the explicit sign-in hold", async 
   expect(getToken()).toBeNull();
   const reads = count("/api/v1/me", "GET");
   act(() => setToken("later-unconfirmed-token"));
-  act(() => window.dispatchEvent(new Event("focus")));
+  act(() => document.dispatchEvent(new Event("visibilitychange")));
   await tick(4500);
   expect(count("/api/v1/me", "GET")).toBe(reads);
+  // Focus also reaches the separate SSO view re-sync: its one read adopts nothing.
+  act(() => window.dispatchEvent(new Event("focus")));
+  await tick(4500);
+  expect(count("/api/v1/me", "GET")).toBe(reads + 1);
+  expect(isSignedOutHold()).toBe(true);
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
   expect(count("/api/v1/runs/policy-preview")).toBe(checked);
   expect(count("/api/v1/runs")).toBe(0);
   expect(assign).not.toHaveBeenCalled();
 });
 
-it("a normal confirmation outage remains fenced without polling and recovers on focus", async () => {
+it.each([
+  ["focus", () => window.dispatchEvent(new Event("focus"))],
+  ["visible return", () => document.dispatchEvent(new Event("visibilitychange"))],
+])("a normal confirmation outage remains fenced without polling and recovers on %s", async (_trigger, retry) => {
   await draft();
   meStatus = 503;
   const checked = count("/api/v1/runs/policy-preview");
@@ -423,7 +432,7 @@ it("a normal confirmation outage remains fenced without polling and recovers on 
   fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
   expect(count("/api/v1/runs")).toBe(0);
   meStatus = 200;
-  act(() => window.dispatchEvent(new Event("focus")));
+  act(() => void retry());
   await tick(0);
   await tick(1000);
   expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(checked);
