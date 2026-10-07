@@ -176,8 +176,6 @@ browser origin is the control — cmd/wardynd/main.go validateUISandboxConfig),
 and a Service carrying the same port number twice is rejected by the API server
 anyway. Both are failures that only show up after apply — as a crash-loop or a
 rejected object — so say it at render, like every other guard in this chart.
-An ssh.port below 1024 is refused too: wardynd cannot bind it, and the pod goes
-Ready with no SSH listener.
 */}}
 {{- define "wardyn.assertPorts" -}}
 {{- $http := int .Values.service.port -}}
@@ -189,9 +187,6 @@ Ready with no SSH listener.
 {{- end -}}
 {{- if and $ssh.enabled (eq (int ($ssh.port | default 2222)) $http) -}}
 {{- fail (printf "wardyn: ssh.port and service.port are both %d — the SSH gateway and the console cannot share one port. Give ssh.port its own number." $http) -}}
-{{- end -}}
-{{- if and $ssh.enabled (lt (int ($ssh.port | default 2222)) 1024) -}}
-{{- fail (printf "wardyn: ssh.port %d is below 1024. wardynd runs non-root with every capability dropped and cannot bind a privileged port, so the pod would go Ready with no SSH listener. Keep ssh.port above 1023. On a 443-only estate 443 is terminated on the gateway, which forwards to ssh.port (README, \"SSH on a 443-only estate\")." (int ($ssh.port | default 2222))) -}}
 {{- end -}}
 {{- if and $ui.enabled (eq (int ($ui.port | default 8081)) $http) -}}
 {{- fail (printf "wardyn: uiSandbox.port and service.port are both %d — wardynd refuses to boot when they are equal, because the sandbox's own pages must land on a DIFFERENT browser origin than the console. Give uiSandbox.port its own number." $http) -}}

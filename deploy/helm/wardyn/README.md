@@ -1193,8 +1193,10 @@ extraObjects:
                 host: '{{ include "wardyn.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local'
                 port:
                   # Keep ssh.port above 1023: the gateway listens on 443 and
-                  # wardynd cannot, and the chart refuses a lower port because it
-                  # would roll out green with no listener behind it.
+                  # forwards to it. wardynd runs non-root with every capability
+                  # dropped, and on a runtime that does not allow unprivileged
+                  # low ports (the default before containerd 2.0) a lower port
+                  # rolls out Ready with no SSH listener behind it.
                   number: 2222     # ssh.port
 ```
 

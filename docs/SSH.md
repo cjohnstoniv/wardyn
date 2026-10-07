@@ -303,17 +303,19 @@ extraObjects:
                 host: '{{ include "wardyn.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local'
                 port:
                   # Keep ssh.port above 1023: the gateway listens on 443 and
-                  # wardynd cannot, and the chart refuses a lower port because it
-                  # would roll out green with no listener behind it.
+                  # forwards to it. wardynd runs non-root with every capability
+                  # dropped, and on a runtime that does not allow unprivileged
+                  # low ports (the default before containerd 2.0) a lower port
+                  # rolls out Ready with no SSH listener behind it.
                   number: 2222     # ssh.port
 ```
 
 - **`protocol: TLS`, not `HTTPS`.** `HTTPS` attaches an HTTP filter to the
   server and breaks SSH; `TLS` with `tls.mode: SIMPLE` terminates TLS and
   hands the `tcp:` route the raw stream.
-- **The certificate.** `credentialName` names a `kubernetes.io/tls` Secret in
-  the ingress gateway pods' namespace (not the Gateway object's), for the SSH
-  hostname.
+- **The certificate.** `credentialName` names a `kubernetes.io/tls` Secret for
+  the SSH hostname. The Secret lives in the namespace of the gateway pods,
+  which is where the recipe also puts the Gateway.
 - **The Gateway's namespace.** `istio-ingress` here is the estate's own
   gateway namespace: the Gateway sits beside the gateway pods, and the
   VirtualService names it as `<namespace>/<name>`.
