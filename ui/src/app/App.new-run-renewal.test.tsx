@@ -232,7 +232,7 @@ it("reviewer: failed view switch retains a launchable same-owner draft", async (
   fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
   await screen.findByText(CONSOLE_VIEW.SWITCH_FAILED);
   await tick(1000);
-  act(() => window.dispatchEvent(new Event("focus")));
+  act(() => void window.dispatchEvent(new Event("focus")));
   await tick(1000);
   expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
   expect(assign).not.toHaveBeenCalled();
@@ -380,7 +380,7 @@ it("a delayed successful view switch keeps its reload guard and never adopts the
   await act(async () => finish());
   expect(assign).toHaveBeenCalledExactlyOnceWith("/admin");
   expect(isSwitching()).toBe(true);
-  act(() => window.dispatchEvent(new Event("focus")));
+  act(() => void window.dispatchEvent(new Event("focus")));
   await tick(1000);
   fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
   expect(count("/api/v1/runs/policy-preview")).toBe(checked);
@@ -402,11 +402,11 @@ it("a delayed view 401 ends reconciliation in the explicit sign-in hold", async 
   expect(getToken()).toBeNull();
   const reads = count("/api/v1/me", "GET");
   act(() => setToken("later-unconfirmed-token"));
-  act(() => document.dispatchEvent(new Event("visibilitychange")));
+  act(() => void document.dispatchEvent(new Event("visibilitychange")));
   await tick(4500);
   expect(count("/api/v1/me", "GET")).toBe(reads);
   // Focus also reaches the separate SSO view re-sync: its one read adopts nothing.
-  act(() => window.dispatchEvent(new Event("focus")));
+  act(() => void window.dispatchEvent(new Event("focus")));
   await tick(4500);
   expect(count("/api/v1/me", "GET")).toBe(reads + 1);
   expect(isSignedOutHold()).toBe(true);
@@ -453,7 +453,7 @@ it("a rejected current token holds New Run without a /me loop until explicit sig
   const reads = count("/api/v1/me", "GET");
   meStatus = 200;
   act(() => setToken("later-token"));
-  act(() => window.dispatchEvent(new Event("focus")));
+  act(() => void window.dispatchEvent(new Event("focus")));
   await tick(4500);
   expect(count("/api/v1/me", "GET")).toBe(reads);
   expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -502,7 +502,7 @@ it.each(["same", "other", "authority", "unmount"])("local token changes retire o
     expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(checked);
     expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
     const confirmedReads = count("/api/v1/me", "GET");
-    act(() => window.dispatchEvent(new Event("focus")));
+    act(() => void window.dispatchEvent(new Event("focus")));
     await tick(1000);
     expect(count("/api/v1/me", "GET")).toBe(confirmedReads);
   } else {
@@ -537,7 +537,7 @@ it.each([["quiet", 200], ["quiet", 401], ["quiet", 503], ["renewal", 200]] as co
   await act(async () => finishLogout(json(status, {})));
   await screen.findByText("Admin token", { exact: true });
   expect(isSignedOutHold()).toBe(false);
-  act(() => window.dispatchEvent(new Event("focus")));
+  act(() => void window.dispatchEvent(new Event("focus")));
   await tick(3000);
   expect(getToken()).toBeNull();
   expect(screen.queryByLabelText("Title")).toBeNull();

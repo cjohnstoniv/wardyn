@@ -214,7 +214,7 @@ describe("useLaunch — automatic preflight", () => {
     const { result } = mountAuto();
     await tick(MS);
     expect(result.current.preflightBlock).toBe(true);
-    act(() => window.dispatchEvent(new Event("focus")));
+    act(() => void window.dispatchEvent(new Event("focus")));
     await tick(MS);
     expect(preflightRun).toHaveBeenCalledTimes(1);
     expect(result.current.preflightBlock).toBe(true);

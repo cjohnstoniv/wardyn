@@ -102,7 +102,7 @@ it("ignores abort-resistant answers and finally handlers across a body round tri
 it("does not poll on expiry or fresh focus; stale focus coalesces once", async () => {
   const { result } = renderHook(useRunChecks, { initialProps: params() });
   await tick();
-  act(() => window.dispatchEvent(new Event("focus")));
+  act(() => void window.dispatchEvent(new Event("focus")));
   await tick();
   expect(preview).toHaveBeenCalledTimes(1);
   await tick(60_000);
@@ -125,7 +125,7 @@ it("retries preview once after Retry-After without repeating preflight, then req
   expect(preview).toHaveBeenCalledTimes(2);
   expect(preflight).toHaveBeenCalledTimes(1);
   await tick(60_000);
-  act(() => window.dispatchEvent(new Event("focus")));
+  act(() => void window.dispatchEvent(new Event("focus")));
   await tick();
   expect(preview).toHaveBeenCalledTimes(2);
   await act(() => result.current.preview.retry());
@@ -137,7 +137,7 @@ it.each([undefined, "nonsense", "-1", "2147483648"])("does not retry an unusable
   renderHook(useRunChecks, { initialProps: params() });
   await tick();
   await tick(60_000);
-  act(() => window.dispatchEvent(new Event("focus")));
+  act(() => void window.dispatchEvent(new Event("focus")));
   await tick();
   expect(preview).toHaveBeenCalledTimes(1);
 });
@@ -257,7 +257,7 @@ it("keeps the last good preview stale through an explicit retry and both rate li
   expect(preview).toHaveBeenCalledTimes(3);
   expect(result.current.preview).toMatchObject({ result: effective, error: limited, busy: false, current: false, fresh: false });
   await tick(60_000);
-  act(() => window.dispatchEvent(new Event("focus")));
+  act(() => void window.dispatchEvent(new Event("focus")));
   await tick();
   expect(preview).toHaveBeenCalledTimes(3);
   expect(result.current.preview).toMatchObject({ result: effective, current: false, fresh: false });
