@@ -166,10 +166,9 @@ type SealToPrincipalKeysResult struct {
 // already crypto-erased and is left. Boot keys, the operator namespace and
 // pointer rows are never touched.
 //
-// One row per transaction, under the row's write lock: a row that is no longer
-// v1 once locked (a concurrent Put under principal keys, a delete) is skipped,
-// a concurrent v1 Put waits for the row's commit and lands after it, and an
-// abort leaves every earlier row committed, so the run resumes. The data key is
+// Key operations finish before the transaction. The complete row is then
+// revalidated under its write lock, retrying a replacement and skipping a
+// deletion. An abort leaves every earlier row committed, so the run resumes. The data key is
 // unwrapped under its v1 KEK and sealed again under the principal key; the
 // sealed value is never decrypted, so nothing here is a secret.read. The
 // caller holds db.SecretRekeyLockKey.
@@ -205,53 +204,53 @@ func (s *Store) SealToPrincipalKeys(ctx context.Context) (SealToPrincipalKeysRes
 	return res, nil
 }
 
-// sealRowToPrincipal moves one row under its write lock into its owner's
-// current generation; moved is false for a row that is gone, already there, or
-// sealed under a key that was destroyed.
-func (s *Store) sealRowToPrincipal(ctx context.Context, owner, name string) (moved bool, err error) {
+// Prepare outside the transaction, then compare the entire row under its write
+// lock. A concurrent replacement is retried; a deletion is never resurrected.
+func (s *Store) sealRowToPrincipal(ctx context.Context, owner, name string) (bool, error) {
 	ctx, cancel := s.bounded(ctx)
 	defer cancel()
+	for {
+		e, err := readRowSnapshot(ctx, s.pool, owner, name, false)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		var version int
+		var wrapped []byte
+		switch e.version {
+		case encVersion:
+			version, wrapped, err = s.sealV1ToPrincipal(ctx, e.envelope)
+		case pkVersion:
+			version, wrapped, err = s.resealToCurrent(ctx, e.envelope)
+		default:
+			return false, nil
+		}
+		if err != nil || wrapped == nil {
+			return false, err
+		}
+		err = s.commitPrincipalRow(ctx, e, sealedRow{pkVersion, pkKekID(version), wrapped, e.ct})
+		if errors.Is(err, secretstore.ErrRevisionChanged) {
+			continue
+		}
+		return err == nil, err
+	}
+}
+
+func (s *Store) commitPrincipalRow(ctx context.Context, before rowSnapshot, after sealedRow) error {
 	tx, err := beginReadCommitted(ctx, s.pool)
 	if err != nil {
-		return false, fmt.Errorf("begin: %w", err)
+		return err
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	if err := lockRow(ctx, tx, owner, name); err != nil {
-		return false, err
+	if err := lockRow(ctx, tx, before.ownedBy, before.name); err != nil {
+		return err
 	}
-	e := envelope{ownedBy: owner, name: name}
-	err = tx.QueryRow(ctx,
-		`SELECT enc_version, kek_id, wrapped_dek FROM secrets WHERE owned_by=$1 AND name=$2 FOR UPDATE`, owner, name,
-	).Scan(&e.version, &e.kekID, &e.wrapped)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+	if err := replaceSnapshot(ctx, tx, before, after); err != nil {
+		return err
 	}
-	if err != nil {
-		return false, fmt.Errorf("lock: %w", err)
-	}
-	var version int
-	var wrapped []byte
-	switch e.version {
-	case encVersion:
-		version, wrapped, err = s.sealV1ToPrincipal(ctx, e)
-	case pkVersion:
-		version, wrapped, err = s.resealToCurrent(ctx, e)
-	default:
-		return false, nil
-	}
-	if err != nil || wrapped == nil {
-		return false, err
-	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE secrets SET enc_version=$3, kek_id=$4, wrapped_dek=$5, updated_at=now() WHERE owned_by=$1 AND name=$2 AND enc_version=$6 AND kek_id=$7`,
-		owner, name, pkVersion, pkKekID(version), wrapped, e.version, e.kekID,
-	); err != nil {
-		return false, fmt.Errorf("update: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("commit: %w", err)
-	}
-	return true, nil
+	return tx.Commit(ctx)
 }
 
 // sealV1ToPrincipal unwraps a v1 row's data key under its KEK and seals it

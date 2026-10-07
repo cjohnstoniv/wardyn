@@ -4,7 +4,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -262,7 +261,12 @@ func TestGovCovApplyAssignmentUpsertRefusals(t *testing.T) {
 		{name: "a user type lookup that fails", mutate: func(ch *types.GovernanceChange) {
 			ch.Payload = json.RawMessage(`{"subject_type":"user_type","subject":"ghost","profile_id":"` + govCovPID.String() + `"}`)
 			ch.TargetKey = "user_type:ghost"
-		}, st: &govCovStore{getTypeErr: boom}, check: func(t *testing.T, err error) {
+		}, rowErr: func(sql string) error {
+			if strings.Contains(sql, "FROM user_types") {
+				return boom
+			}
+			return pgx.ErrNoRows
+		}, check: func(t *testing.T, err error) {
 			if !errors.Is(err, boom) {
 				t.Errorf("error = %v, want the lookup failure", err)
 			}
@@ -346,9 +350,15 @@ func TestGovCovCheckUserTypeSubject(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			looked := 0
-			st := &govCovLookupStore{govCovStore: govCovStore{getTypeErr: c.err}, count: &looked}
-			s, _ := govCovServer(t, st)
-			err := s.checkUserTypeSubject(ctx, c.subjectType, c.subject)
+			q := &govCovQuerier{rowErr: func(string) error {
+				looked++
+				if errors.Is(c.err, store.ErrNotFound) {
+					return pgx.ErrNoRows
+				}
+				return c.err
+			}}
+			s, _ := govCovServer(t, &govCovStore{})
+			err := s.checkUserTypeSubject(ctx, q, c.subjectType, c.subject)
 			if !c.wantErr(err) {
 				t.Errorf("error = %v", err)
 			}
@@ -357,17 +367,6 @@ func TestGovCovCheckUserTypeSubject(t *testing.T) {
 			}
 		})
 	}
-}
-
-// govCovLookupStore counts GetUserType calls.
-type govCovLookupStore struct {
-	govCovStore
-	count *int
-}
-
-func (s *govCovLookupStore) GetUserType(ctx context.Context, id string) (types.UserType, error) {
-	*s.count++
-	return s.govCovStore.GetUserType(ctx, id)
 }
 
 func TestGovCovHoldAssignment(t *testing.T) {

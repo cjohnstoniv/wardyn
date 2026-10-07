@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 )
 
 // keyedLockTestClass keeps these tests' keys off LoginSupersedeLockClass, which
@@ -86,12 +88,9 @@ func TestAdvisoryLockKeyed_HeldElsewhereFailsOpenWithinBudgetAndLeaksNothing(t *
 	ctx := context.Background()
 	const obj = 101
 
-	holder, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire holder conn: %v", err)
-	}
+	holder := testutil.PGConn(t, pool)
 	if _, err := holder.Exec(ctx, `SELECT pg_advisory_lock($1, $2)`, keyedLockTestClass, obj); err != nil {
-		holder.Release()
+		_ = holder.Close(ctx)
 		t.Fatalf("holder lock: %v", err)
 	}
 	baseline := pool.Stat().AcquiredConns()
@@ -102,7 +101,7 @@ func TestAdvisoryLockKeyed_HeldElsewhereFailsOpenWithinBudgetAndLeaksNothing(t *
 	took := time.Since(start)
 	if err == nil {
 		release()
-		holder.Release()
+		_ = holder.Close(ctx)
 		t.Fatal("took a lock another session holds")
 	}
 	if !strings.Contains(err.Error(), "advisory lock (") {
@@ -119,7 +118,7 @@ func TestAdvisoryLockKeyed_HeldElsewhereFailsOpenWithinBudgetAndLeaksNothing(t *
 	}
 
 	holder.Exec(ctx, `SELECT pg_advisory_unlock($1, $2)`, keyedLockTestClass, obj) //nolint:errcheck // released with the conn either way
-	holder.Release()
+	_ = holder.Close(ctx)
 
 	// The slot was freed: the next call takes the lock at once instead of
 	// waiting out its budget behind a slot nobody holds.

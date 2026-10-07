@@ -89,7 +89,7 @@ func TestPG_ModelProviderConversion_OutputPassesTheWriteDoors(t *testing.T) {
 				t.Fatalf("run the conversion: %v", err)
 			}
 			var raw []byte
-			if err := pool.QueryRow(ctx, `SELECT config FROM site_config WHERE singleton`).Scan(&raw); err != nil {
+			if err := conn.QueryRow(ctx, `SELECT config FROM site_config WHERE singleton`).Scan(&raw); err != nil {
 				t.Fatal(err)
 			}
 			var sc types.SiteConfig
