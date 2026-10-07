@@ -146,11 +146,12 @@ export function useSessionPoll(accept: (me: Me) => boolean) {
     setStatus("idle");
     setToken(token);
     tickRef.current = () => read((session) => {
-      stopPoll();
       setBusy(false);
+      // A live answer can wait on another auth mutation; its settlement must be able to retry.
+      if (typeof session === "object" && !acceptRef.current(session)) return;
+      stopPoll();
       if (session === "unauthed") setStatus("rejected");
       else if (session === "unreachable") setStatus("unreachable");
-      else acceptRef.current(session);
     });
     pending.current = true;
     tickRef.current();

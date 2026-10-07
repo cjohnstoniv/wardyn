@@ -10,6 +10,7 @@ import { MemoryRouter } from "react-router-dom";
 import { toast } from "sonner";
 import App from "./App";
 import { SHELL } from "./components/wardyn/copy";
+import { isSwitching, switchView } from "./components/wardyn/console-view";
 import { CONSOLE_VIEW } from "./components/wardyn/copy/console-view";
 import { getAuthGeneration, getToken, isSignedOutHold, setSignedOutHold, setToken } from "./lib/api/core";
 import type { Me } from "./lib/api/health";
@@ -30,7 +31,18 @@ const count = (path: string, method = "POST") => calls.filter((c) => c.path === 
 let me: Me;
 let meStatus = 200;
 let viewFailsOffline = false;
+let viewReply: Response | undefined;
 let logoutReply: Promise<Response> | undefined;
+function pendingView(status = 503) {
+  let finish!: () => void;
+  viewReply = new Response(new ReadableStream<Uint8Array>({ start(controller) {
+    finish = () => {
+      controller.enqueue(new TextEncoder().encode(JSON.stringify(status === 200 ? { user_view: false } : { error: "view switch unavailable" })));
+      controller.close();
+    };
+  } }), { status, headers: { "Content-Type": "application/json" } });
+  return finish;
+}
 function pendingMe() {
   let resolve!: (answer: Response) => void;
   const promise = new Promise<Response>((done) => { resolve = done; });
@@ -50,7 +62,7 @@ const fetchMock = vi.fn((url: RequestInfo | URL, init?: RequestInit): Promise<Re
     if (held) { held.signal = init?.signal ?? undefined; return held.promise; }
     return Promise.resolve(json(meStatus, meStatus === 200 ? me : { error: "unavailable" }));
   }
-  if (path === "/api/v1/me/view") return viewFailsOffline ? Promise.reject(new TypeError("Failed to fetch")) : Promise.resolve(json(503, { error: "view switch unavailable" }));
+  if (path === "/api/v1/me/view") return viewFailsOffline ? Promise.reject(new TypeError("Failed to fetch")) : Promise.resolve(viewReply ?? json(503, { error: "view switch unavailable" }));
   if (path === "/api/v1/auth/logout") return logoutReply ?? Promise.resolve(json(200, {}));
   if (path === "/api/v1/me/capabilities") return Promise.resolve(json(200, { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false }));
   if (path === "/api/v1/setup/status") return Promise.resolve(json(200, setup));
@@ -71,6 +83,7 @@ beforeEach(() => {
   me = { principal: "alice", method: "sso", role: "user", operator: false, security_operator: false, email: "", session_expires_at: new Date(Date.now() + 120_000).toISOString() };
   meStatus = 200;
   viewFailsOffline = false;
+  viewReply = undefined;
   logoutReply = undefined;
   heldMe = [];
   calls.length = 0;
@@ -82,8 +95,13 @@ beforeEach(() => {
   sessionStorage.setItem("wardyn_admin_token", "good-token");
   setSignedOutHold(false);
 });
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  // A mocked successful document reload leaves the module alive in this test process.
+  if (isSwitching()) {
+    viewReply = undefined;
+    await switchView("user", "/runs").catch(() => {});
+  }
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -241,6 +259,155 @@ it.each([false, true])("a failed view switch (offline=%s) confirms automatically
   fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
   await screen.findByText("Created run");
   expect(count("/api/v1/runs")).toBe(1);
+});
+
+it.each(["quiet", "renewal", "watch"])("a delayed failed view body resumes %s confirmation only after settlement", async (phase) => {
+  me = { ...me, user_view: true, user_view_super_admin: true };
+  await draft();
+  if (phase !== "quiet") {
+    await startRenew();
+    await tick(1500);
+    if (phase === "watch") cancelRenew();
+    await tick(1000);
+  }
+  const finish = pendingView();
+  const checked = count("/api/v1/runs/policy-preview");
+  const before = count("/api/v1/me", "GET");
+  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN, exact: true }));
+  await tick(1000);
+  expect(count("/api/v1/me", "GET")).toBeGreaterThan(before);
+  expect(screen.queryByText(CONSOLE_VIEW.SWITCH_FAILED)).toBeNull();
+  expect(count("/api/v1/runs/policy-preview")).toBe(checked);
+  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
+  expect(count("/api/v1/runs")).toBe(0);
+  const reads = count("/api/v1/me", "GET");
+  if (phase === "quiet") {
+    await tick(4500);
+    expect(count("/api/v1/me", "GET")).toBe(reads);
+  }
+  await act(async () => finish());
+  await screen.findByText(CONSOLE_VIEW.SWITCH_FAILED);
+  await tick(1000);
+  expect(count("/api/v1/me", "GET")).toBeGreaterThan(reads);
+  expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(checked);
+  expect(assign).not.toHaveBeenCalled();
+  expect(count("/api/v1/runs")).toBe(0);
+  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
+  await screen.findByText("Created run");
+  expect(count("/api/v1/runs")).toBe(1);
+  expect(count("/api/v1/me/view")).toBe(1);
+});
+
+it("an explicit token check waits for the pending view body without losing its confirmation", async () => {
+  me = { ...me, user_view: true, user_view_super_admin: true };
+  await draft();
+  const finish = pendingView();
+  const checked = count("/api/v1/runs/policy-preview");
+  meStatus = 401;
+  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN, exact: true }));
+  const dialog = await screen.findByRole("dialog");
+  meStatus = 200;
+  setField(within(dialog).getByLabelText("Admin token"), "confirmed-token");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Sign in", exact: true }));
+  await tick(1000);
+  expect(isSignedOutHold()).toBe(true);
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+  expect(count("/api/v1/runs/policy-preview")).toBe(checked);
+  const reads = count("/api/v1/me", "GET");
+  await tick(4500);
+  expect(count("/api/v1/me", "GET")).toBe(reads);
+  await act(async () => finish());
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await tick(1000);
+  expect(isSignedOutHold()).toBe(false);
+  expect(count("/api/v1/me", "GET")).toBeGreaterThan(reads);
+  expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(checked);
+  expect(count("/api/v1/runs")).toBe(0);
+  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
+  await screen.findByText("Created run");
+  expect(count("/api/v1/runs")).toBe(1);
+});
+
+it.each(["same", "other", "401", "unmount"])("view settlement discards an older pending answer before a %s outcome", async (outcome) => {
+  me = { ...me, user_view: true, user_view_super_admin: true };
+  const view = await draft();
+  const finish = pendingView();
+  const old = pendingMe();
+  const checked = count("/api/v1/runs/policy-preview");
+  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN, exact: true }));
+  await tick(0);
+  expect(old.signal).toBeDefined();
+  const current = pendingMe();
+  act(() => setToken("replacement-during-view-switch"));
+  await act(async () => finish());
+  await screen.findByText(CONSOLE_VIEW.SWITCH_FAILED);
+  expect(old.signal?.aborted).toBe(true);
+  await act(async () => old.resolve(json(200, { ...me, principal: "obsolete-owner" })));
+  await tick(0);
+  expect(current.signal).toBeDefined();
+  expect(assign).not.toHaveBeenCalled();
+  expect(count("/api/v1/runs/policy-preview")).toBe(checked);
+  if (outcome === "unmount") view.unmount();
+  await act(async () => current.resolve(outcome === "401" ? json(401, {}) : json(200, outcome === "same" ? me : { ...me, principal: "bob" })));
+  await tick(1000);
+  expect(count("/api/v1/runs")).toBe(0);
+  if (outcome === "same") {
+    expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(checked);
+    expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
+    expect(assign).not.toHaveBeenCalled();
+  } else {
+    expect(count("/api/v1/runs/policy-preview")).toBe(checked);
+    if (outcome === "other") expect(assign).toHaveBeenCalledWith("/runs/new");
+    else expect(assign).not.toHaveBeenCalled();
+    if (outcome === "401") {
+      expect(isSignedOutHold()).toBe(true);
+      const reads = count("/api/v1/me", "GET");
+      await tick(4500);
+      expect(count("/api/v1/me", "GET")).toBe(reads);
+    } else expect(screen.queryByLabelText("Title")).toBeNull();
+  }
+});
+
+it("a delayed successful view switch keeps its reload guard and never adopts the pending draft", async () => {
+  me = { ...me, user_view: true, user_view_super_admin: true };
+  await draft();
+  const finish = pendingView(200);
+  const checked = count("/api/v1/runs/policy-preview");
+  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN, exact: true }));
+  await tick(1000);
+  expect(assign).not.toHaveBeenCalled();
+  expect(count("/api/v1/runs/policy-preview")).toBe(checked);
+  await act(async () => finish());
+  expect(assign).toHaveBeenCalledExactlyOnceWith("/admin");
+  expect(isSwitching()).toBe(true);
+  act(() => window.dispatchEvent(new Event("focus")));
+  await tick(1000);
+  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
+  expect(count("/api/v1/runs/policy-preview")).toBe(checked);
+  expect(count("/api/v1/runs")).toBe(0);
+  expect(assign).toHaveBeenCalledTimes(1);
+});
+
+it("a delayed view 401 ends reconciliation in the explicit sign-in hold", async () => {
+  me = { ...me, user_view: true, user_view_super_admin: true };
+  await draft();
+  const finish = pendingView(401);
+  const checked = count("/api/v1/runs/policy-preview");
+  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN, exact: true }));
+  await tick(1000);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  await act(async () => finish());
+  await screen.findByRole("dialog");
+  expect(isSignedOutHold()).toBe(true);
+  expect(getToken()).toBeNull();
+  const reads = count("/api/v1/me", "GET");
+  act(() => setToken("later-unconfirmed-token"));
+  act(() => window.dispatchEvent(new Event("focus")));
+  await tick(4500);
+  expect(count("/api/v1/me", "GET")).toBe(reads);
+  expect(count("/api/v1/runs/policy-preview")).toBe(checked);
+  expect(count("/api/v1/runs")).toBe(0);
+  expect(assign).not.toHaveBeenCalled();
 });
 
 it("a normal confirmation outage remains fenced without polling and recovers on focus", async () => {

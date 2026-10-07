@@ -186,7 +186,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   const quiet = !active;
   const { status, setStatus, busy, startPoll, stopPoll, checkOnce, submitToken: checkToken } = useSessionPoll((me) => {
     if (reauth.endingSession?.()) return true;
-    if (quiet && (isSignedOutHold() || isSwitching())) return false;
+    if (isSwitching() || (quiet && isSignedOutHold())) return false;
     if (verdict.current(me) === "waiting") {
       // A live same-owner read confirms request ownership without claiming that renewal finished.
       const generation = getAuthGeneration();
@@ -247,9 +247,8 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     if (!quiet) return;
     began.current = false;
     if (!needsConfirmation) return;
-    // Let the mutation's caller settle its switch/sign-out state before confirming.
-    const timer = setTimeout(checkOnce, 0);
-    return () => { clearTimeout(timer); stopPoll(); };
+    checkOnce();
+    return stopPoll;
   }, [quiet, needsConfirmation, checkOnce, stopPoll]);
 
   // A renewal begins with its window already open (or refused): only the wait
