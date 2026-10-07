@@ -282,13 +282,14 @@ What 0.8.8 changes on this path:
   symptom of the second.
 - **A renewal that ends spent after a lost reply is marked.** The `harness.credential.refresh` failure
   row, and the `credential.expired.delete` row for the same sign-in, carry `after_lost_reply: true` when
-  the retry ended spent after a first attempt that was sent in full and got no reply at all. It is an
+  the retry ended `invalid_grant` after a first attempt that was sent in full and got no reply at all. It is an
   audit marker consistent with a lost reply. It is not proof that the provider replaced the token, and it
   is absent when the first attempt failed part-way or got any response, an error page a proxy wrote
   included.
 - **A launch waits for a renewal already in flight, and Record Mode renews at its door.** A sign-in that
-  is found spent at either point is refused before a run row exists. The wait is bounded, so it narrows
-  the window and does not close it.
+  is found spent at either point is refused before a run row exists. The wait is bounded (about 20
+  seconds) and applies on the default Postgres secret store only, so it narrows the window and does not
+  close it.
 
 What it cannot prove from here: the hop's reason for closing is not recorded, and nothing outside that
 estate reproduces the hop. The marker records what Wardyn sent and what came back; it does not decide

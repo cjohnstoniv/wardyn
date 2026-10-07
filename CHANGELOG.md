@@ -22,9 +22,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   - `WARDYN_OIDC_SESSION_TTL`: unset by default, so a console session ends at the identity provider's ID token
     expiry, as before. It has no chart value; set it through the chart's `env:`.
   - Chart `extraObjects`: `[]` by default, so nothing extra is rendered.
-- **One chart manifest change has no switch.** With the SSH gateway enabled, the Service's `ssh` port now
-  declares `appProtocol: tcp`, so a service mesh treats it as opaque TCP. `helm upgrade` adds that one field to
-  the Service.
+- **A launch can wait on a renewal.** On the default Postgres secret store, a launch that arrives while a
+  renewal of the same person's AWS sign-in is in flight waits for that renewal's answer, up to about 20
+  seconds. On a secret store without revisions (Vault KV, Azure Key Vault) a launch does not wait and behaves
+  as in 0.8.7. A record session now renews an expired but renewable AWS sign-in when it starts, and is refused
+  with `422` when it cannot (0.8.7 answered `202` and failed the run later).
 - **The audit trail gains one action and two fields.** A SIEM parser will see them:
   - `site_config.seed`: written once per boot that restored network settings from the seed file. It names the
     settings written, never their values, and is written by the system actor.
@@ -32,7 +34,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
     (the row ends the run's own credentials, never a person's stored sign-in). Rows written earlier carry none
     and mean the same.
   - `after_lost_reply` on the `harness.credential.refresh` failure row and on the `credential.expired.delete`
-    row for the same AWS sign-in. It is `true` only on those rows, when it applies, and absent otherwise.
+    row for the same AWS sign-in. It is `true` only on those rows, when the retry ended `invalid_grant` after
+    a lost reply, and absent otherwise.
 - **Pool note: a request can stop answering until a deadline fires.** Before this release, many simultaneous
   reads that check a run's masking on a cold manifest (a masked attach, a recording read or an output read)
   could each hold a database connection and then wait for a second one, so none could finish: requests stopped
@@ -49,15 +52,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   an ssh `ProxyCommand` that wardynd publishes on `/healthz` as `ssh.proxy_command`, for an estate whose only
   way in is a TLS-terminating listener. It is advisory: the daemon never runs it, people's own `ssh` does.
   Boot refuses a value with a control character, a newline or a single quote, or over 512 bytes. The run page's
-  SSH card shows it with its own copy buttons, and `wardyn run ssh --print`, `--config` and `--json` carry it.
+  SSH card shows it with its own copy buttons (named "Copy ssh command", "Copy ssh config" and "Copy CLI
+  command"; nothing visible changes), and `wardyn run ssh --print`, `--config` and `--json` carry it.
   `wardyn run ssh` runs it only with `--advertised-proxy`, and the CLI refuses a published value that fails the
   daemon's rule. The Docker Compose file passes the variable through. See "SSH on a 443-only estate" in
   `docs/SSH.md`.
 - **The chart renders extra objects, and carries a recipe for SSH behind an Istio gateway.** `extraObjects` is a
   list of Kubernetes objects rendered with the release, each passed through `tpl`, so an estate keeps the
   Gateway and VirtualService it needs in front of the SSH gateway beside its values. The chart ships no Istio
-  template of its own. The recipe is in the chart README and `docs/SSH.md`, and says what the client must run
-  as its `ProxyCommand`.
+  template of its own. The recipe in the chart README and `docs/SSH.md` is the shape proven end to end: a
+  Gateway in the gateway pods' namespace with `protocol: TLS` and `tls.mode: SIMPLE`, a `VirtualService` TCP
+  route, and an `openssl s_client` `ProxyCommand` with `-verify_hostname`. Keep `ssh.port` above 1023, since
+  the gateway listens on 443.
 - **A waiting AWS sign-in can be found after its browser tab is lost.** `GET /api/v1/runs/{id}/sign-in` reads the
   sign-in sandbox's terminal once and answers `waiting` with the verification URL and code for the latest
   attempt, or `not_waiting`. Only the run's owner may read it (a super admin gets `403` `run_owner_only`). A run
@@ -97,14 +103,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   page as any ended session is held.
 - **New Run can launch under the default policy.** "Use the default policy" is the first of three policy cards.
   It shows the default policy read-only and sends neither `policy_id` nor an inline policy, so the run's policy
-  source reads `default`.
+  source reads `default`. An attached workspace still mounts into the run; nothing else on the page is merged
+  into the policy.
 - **The Output tab says why an interactive run has no output.** For an interactive run it shows the last screen
   when one was kept; with recording off and the run ended by a kill, a failure or completion it says nothing
   was kept; a session still open says it has no last screen yet; with recording on or unknown it links to the
-  Recording tab.
+  Recording tab. The tab keeps re-reading for up to a minute after an interactive run is stopped, so the last
+  screen appears without a reload.
 - **A renewal that ends spent after a lost reply is marked.** `after_lost_reply` rides the
   `harness.credential.refresh` failure row, and the `credential.expired.delete` row for the same sign-in, when
-  the renewal's retry ended spent after a first attempt that was sent in full and got no reply at all. A
+  the renewal's retry ended `invalid_grant` after a first attempt that was sent in full and got no reply at all. A
   write that failed part-way, or any response (an error page a proxy wrote included), does not count. The
   marker is consistent with a lost reply; it is not proof that the provider replaced the token.
 - **The launch Review says an expired AWS session will be renewed at launch.** When the session for a model
@@ -113,15 +121,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 ### Changed
 
 - **Create waits for a renewal that is already in flight.** When a launch finds another renewal of the same
-  person's AWS sign-in running, it watches the store for that renewal's result for a bounded time instead of
-  serving the token in hand. If the renewal ended spent, the launch is refused at the sign-in door and no run
-  row is made (before, a run row could be made just before dispatch refused it); if it stored a new pair, that
+  person's AWS sign-in running, it watches the store for that renewal's result, up to about 20 seconds, instead
+  of serving the token in hand. This holds on the default Postgres secret store only; Vault KV and Azure Key
+  Vault have no revisions to watch, and a launch there does not wait. If the renewal ended spent, the launch is
+  refused at the sign-in door and no run row is made (before, a run row could be made just before dispatch
+  refused it); if it stored a new pair, that
   pair is served; if nothing changed inside the wait, the launch goes on with the token in hand. It narrows
   that window and does not close it: a renewal still persisting after the wait can mark the pair spent after
   the run exists.
 - **Record Mode renews an AWS sign-in at its door.** A record session on a Bedrock provider now renews the
   person's sign-in when it starts, as a run's create does. A sign-in that cannot be renewed is refused with the
-  sign-in door's `422`, or `503` when the renewal could not be saved, before any session row is made.
+  sign-in door's `422` (0.8.7 answered `202` and failed the run later), or `503` when the renewal could not be
+  saved, before any session row is made.
 - **The `run_output_interactive` sentence says what the run kept.** The `409` for an interactive run says
   nothing was kept from the session when recording is off, and points at the recording when it is on. A reader
   who may not see a pane snapshot gets the recording sentence either way. A sign-in run is interactive and
