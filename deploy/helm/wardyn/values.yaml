@@ -494,6 +494,18 @@ defaultPolicy: ""
 # pointing at a path your own volume mounts). See README "Corporate CA trust".
 trustedCA: ""
 
+# Optional site-config seed (WARDYN_SITE_CONFIG_SEED_FILE): the network
+# settings wardynd writes at boot into a site config that does not have them,
+# so a wiped or rebuilt database comes back with its upstream proxy and
+# internal hosts. Keys: upstream_proxy_url or upstream_proxy_secret_ref,
+# upstream_proxy_no_proxy, internal_hosts; any other key refuses boot. A
+# setting the database already has is never overwritten. Rendered as JSON into
+# a ConfigMap and mounted read-only. Use upstream_proxy_secret_ref, never a
+# credentialed URL. Empty (default) => no ConfigMap, no env. Wires
+# WARDYN_SITE_CONFIG_SEED_FILE unless env.WARDYN_SITE_CONFIG_SEED_FILE is
+# already set. See README "Site-config seed".
+siteConfigSeed: {}
+
 # WARDYN_DAEMON_PROXY_SECRET from a Secret you manage yourself (never one this
 # chart creates — the value is a credentialed forward-proxy URL, e.g.
 # http://user:pass@proxy.corp.example:3128): existingSecret names it,

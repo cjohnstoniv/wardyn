@@ -729,7 +729,8 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	[ "$$(echo "$$out" | grep -c 'WARDYN_DEFAULT_POLICY')" = "0" ] || { echo "default render (no defaultPolicy set) still set WARDYN_DEFAULT_POLICY"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'kind: Ingress')" = "0" ] || { echo "default render (ingress.enabled=false) still created an Ingress"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'WARDYN_SCIM')" = "0" ] || { echo "default render (scim.enabled=false) rendered a WARDYN_SCIM variable — SCIM is off by default and must mount no route"; exit 1; }; \
-	[ "$$(echo "$$out" | grep -c 'trusted-ca\|WARDYN_TRUSTED_CA_FILE')" = "0" ] || { echo "default render (no trustedCA set) rendered part of the corporate-CA surface — the switch is off by default and must render NONE of its five objects"; exit 1; }
+	[ "$$(echo "$$out" | grep -c 'trusted-ca\|WARDYN_TRUSTED_CA_FILE')" = "0" ] || { echo "default render (no trustedCA set) rendered part of the corporate-CA surface — the switch is off by default and must render NONE of its five objects"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'site-config-seed\|WARDYN_SITE_CONFIG_SEED_FILE')" = "0" ] || { echo "default render (no siteConfigSeed set) rendered part of the site-config seed surface — empty by default, it must render no ConfigMap, volume or variable"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set basePath=/wardyn); \
 	echo "$$out" | grep -A1 "name: WARDYN_BASE_PATH" | grep -q 'value: "/wardyn"' || { echo "basePath did not reach wardynd as WARDYN_BASE_PATH"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'path: /wardyn/healthz')" = "2" ] || { echo "basePath: liveness + startup probes are not under it — wardynd 404s /healthz outside the base path"; exit 1; }; \
@@ -780,6 +781,11 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -A1 "name: WARDYN_TRUSTED_CA_FILE" | grep -q 'value: "/etc/wardyn/trusted-ca/ca.pem"' || { echo "trustedCA did not wire WARDYN_TRUSTED_CA_FILE at the mounted path — wardynd would boot trusting only the public roots while the operator believes the corporate CA is installed"; exit 1; }; \
 	echo "$$out" | grep -q "mountPath: /etc/wardyn/trusted-ca" || { echo "trustedCA rendered no volumeMount — WARDYN_TRUSTED_CA_FILE would name a path nothing mounts"; exit 1; }; \
 	echo "$$out" | grep -A2 '^        - name: trusted-ca$$' | grep -q "name: wardyn-trusted-ca" || { echo "the trusted-ca volume does not source the ConfigMap the chart rendered"; exit 1; }; \
+	echo "$$out" | grep "seed.json:" | grep -q "corp-proxy" || { echo "siteConfigSeed rendered no seed.json ConfigMap carrying its settings"; exit 1; }; \
+	echo "$$out" | grep -q "checksum/site-config-seed:" || { echo "siteConfigSeed did not stamp the checksum pod annotation — an edit to the seed alone would not roll the pod"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_SITE_CONFIG_SEED_FILE" | grep -q 'value: "/etc/wardyn/site-config-seed/seed.json"' || { echo "siteConfigSeed did not wire WARDYN_SITE_CONFIG_SEED_FILE at the mounted path"; exit 1; }; \
+	echo "$$out" | grep -q "mountPath: /etc/wardyn/site-config-seed" || { echo "siteConfigSeed rendered no volumeMount — WARDYN_SITE_CONFIG_SEED_FILE would name a path nothing mounts"; exit 1; }; \
+	echo "$$out" | grep -A2 '^        - name: site-config-seed$$' | grep -q "name: wardyn-site-config-seed" || { echo "the site-config-seed volume does not source the ConfigMap the chart rendered"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_VAULT_TOKEN_FILE" | grep -q '/vault/secrets/token' || { echo "secretStore.vault.auth=token-file did not render WARDYN_VAULT_TOKEN_FILE"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_VAULT_KV_PREFIX" | grep -q 'wardyn-ci' || { echo "secretStore.vault.kvPrefix did not render"; exit 1; }; \
 	echo "$$out" | grep -q "wardyn-vault-token" && { echo "token-file auth still projected the Kubernetes Vault token"; exit 1; } || true

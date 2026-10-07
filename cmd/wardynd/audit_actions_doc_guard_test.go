@@ -670,8 +670,11 @@ func TestAuditActionsDoc_Grammar(t *testing.T) {
 	if len(verbs) == 0 {
 		t.Fatal(`docs/AUDIT-ACTIONS.md's "Grammar" section lists no **Verbs:** — re-anchor this guard`)
 	}
+	// "seed" is an imperative that happens to end in "ed"; the suffix test is
+	// a past-tense heuristic, so the one real verb it misreads is named here.
+	imperativeEndingInEd := map[string]bool{"seed": true}
 	for v := range verbs {
-		if !actionSegment.MatchString(v) || strings.HasSuffix(v, "ed") {
+		if !actionSegment.MatchString(v) || (strings.HasSuffix(v, "ed") && !imperativeEndingInEd[v]) {
 			t.Errorf("docs/AUDIT-ACTIONS.md's verb list carries %q — a verb is one snake_case word in the imperative, never a past tense", v)
 		}
 	}

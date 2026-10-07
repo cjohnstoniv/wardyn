@@ -122,6 +122,9 @@ type bootFlags struct {
 	// runs whenever controlURL is https.
 	internalListen *string
 	policyPath     *string
+	// siteConfigSeedFile is WARDYN_SITE_CONFIG_SEED_FILE: a PATH to the network
+	// settings restored into an empty site config at boot (api.LoadSiteConfigSeed).
+	siteConfigSeedFile *string
 	// trustedCAFile is WARDYN_TRUSTED_CA_FILE (see trusted_ca.go): a PATH to a
 	// PEM bundle of additional roots a corporate TLS-inspecting middlebox signs
 	// with. Same shape as policyPath above (a path read once at boot, not a
@@ -458,6 +461,7 @@ func parseBootFlags() *bootFlags {
 		controlURL:             flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "https://wardynd:8443", "the URL every run's proxy dials to reach this daemon's internal TLS listener (-internal-listen); its host is the name wardynd's internal CA certifies. http:// is refused at boot unless the host is loopback (localhost, 127.0.0.0/8, ::1)"),
 		internalListen:         flagEnv("internal-listen", "WARDYN_INTERNAL_LISTEN", ":8443", "listen address of the proxy-facing TLS listener (the /api/v1/internal/ routes and /healthz only), served with a certificate from wardynd's own internal CA. Runs whenever -control-plane-url is https"),
 		policyPath:             flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
+		siteConfigSeedFile:     flagEnv("site-config-seed-file", "WARDYN_SITE_CONFIG_SEED_FILE", "", "path to a JSON file of network settings (upstream_proxy_url or upstream_proxy_secret_ref, upstream_proxy_no_proxy, internal_hosts) written at boot into a site config that does not have them; a setting the database has is never overwritten. Any other key, or a malformed file, refuses boot. Empty (default) seeds nothing"),
 		trustedCAFile:          flagEnv("trusted-ca-file", "WARDYN_TRUSTED_CA_FILE", "", "path to a PEM bundle of additional trusted roots, e.g. a corporate TLS-inspecting proxy's CA; added to the system roots for wardynd's own outbound TLS, the proxy sidecar and every sandbox. Empty (default) trusts only the system roots"),
 		daemonProxyURL:         flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) for wardynd's own outbound HTTP calls: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO token renewal and Entra directory sync. Empty (default) leaves the default transport untouched"),
 		daemonNoProxy:          flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-style bypass list for -daemon-proxy-url (host, .suffix, CIDR or *); ignored when the proxy URL is unset"),
