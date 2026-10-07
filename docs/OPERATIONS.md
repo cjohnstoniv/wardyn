@@ -153,6 +153,13 @@ browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
   run's owner or a super admin gets it; a security admin gets
   `409 run_output_interactive`, the answer for a run with no snapshot, and the
   refusal is audited.
+- **An interactive run with no snapshot.** It answers
+  `409 run_output_interactive`, and the sentence says what this run kept. With
+  recording on, it points at the run's recording. With recording off
+  (`components.recording` reads `none` on `/healthz`), it says nothing was kept
+  from this session, and for a kill, a failure or a reconcile, that the session
+  did not end through a Wardyn stop. A security admin always gets the
+  recording-on sentence, so it never tells them whether a snapshot exists.
 - **From the CLI.** `wardyn run output <run-id> [--tail N] [--json] [--raw]`
   reads the same endpoint, so a person without console access can read a run's
   kept output. Piped, it writes the bytes exactly as returned, with no added

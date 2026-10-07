@@ -26,8 +26,11 @@ import (
 // combined stdout/stderr. wardynd keeps it in memory while the run lives (and,
 // with persistence on, mirrors the masked bytes into run_output_chunks so any
 // replica serves it: run_output_chunks.go), apart from the recording store, so a deployment with WARDYN_RECORDING_STORE=off can
-// still read what its headless runs printed. An interactive run is refused: its
-// terminal is the recording's to keep, never this route's.
+// still read what its headless runs printed. An interactive run gets only the
+// pane snapshot Wardyn takes when it stops the run (run_output_snapshot.go);
+// with none it is refused, and the sentence says what this run kept: with
+// recording on, its terminal is the recording's to keep; with recording off,
+// nothing was kept (interactiveNothingKept).
 //
 // The tail is masked as it is written, the same way a live attach's recording
 // is (liveMaskWriter), so a value the masking registry holds when it is
@@ -407,8 +410,7 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept,
 			"this run's output is still being captured: read it again shortly")
 	case run.Interactive:
-		writeErrorReason(w, http.StatusConflict, reasonRunOutputInteractive,
-			"an interactive run keeps no output here: its terminal is the recording's to keep")
+		writeErrorReason(w, http.StatusConflict, reasonRunOutputInteractive, s.interactiveNothingKept(r, run))
 	case uncaptured:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotCaptured,
 			"Output isn't captured for Kubernetes runs yet. The run's recording has it.")
@@ -421,6 +423,27 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept, "no output is kept for this run")
 	}
+}
+
+// interactiveNothingKept is the 409 sentence for an interactive run with no
+// output to serve. Only a reader who may see a pane snapshot (the owner or an
+// operator) reaches it with no row, so only they are told nothing was kept.
+// Anyone else gets the recording sentence whether or not a snapshot exists, so
+// the row's existence is not revealed. With recording off (Config.RecordingStore
+// nil, which /healthz reports as components.recording) no sentence points at a
+// recording, and only a run that ended other than STOPPED (a kill, a failure or
+// a reconcile) is said not to have ended through a Wardyn stop: a STOPPED run
+// whose snapshot was not taken, or a run still open, is told only that nothing
+// is kept.
+func (s *Server) interactiveNothingKept(r *http.Request, run types.AgentRun) string {
+	if s.cfg.RecordingStore != nil || !s.recordingReader(r, run) {
+		return "an interactive run keeps no output here: its terminal is the recording's to keep"
+	}
+	switch run.State {
+	case types.RunKilled, types.RunFailed, types.RunCompleted:
+		return "Nothing was kept from this interactive session: it did not end through a Wardyn stop, and recording is off on this deployment"
+	}
+	return "Nothing is kept from this interactive session, and recording is off on this deployment"
 }
 
 // execOutputCapture asks the runner whether it can capture an exec's output

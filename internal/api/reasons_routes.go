@@ -209,7 +209,7 @@ const (
 // GET /runs/{id}/output (run_output.go).
 const (
 	reasonRunOutputTailInvalid = "run_output_tail_invalid" // ?tail= is not a positive number of bytes
-	reasonRunOutputInteractive = "run_output_interactive"  // the run is interactive; an interactive run keeps no output here
+	reasonRunOutputInteractive = "run_output_interactive"  // the run is interactive and has no pane snapshot to serve
 	reasonRunOutputOff         = "run_output_off"          // WARDYN_EXEC_OUTPUT_TAIL=off
 	reasonRunOutputNotKept     = "run_output_not_kept"     // no output is kept for the run (one never captured, or one still being captured)
 	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL, or the run ended past WARDYN_RUN_OUTPUT_RETENTION_DAYS
