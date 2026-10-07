@@ -17,6 +17,7 @@ import {
 import type { WizardState } from "./wizard-types";
 import type { Workspace, WorkspaceRequirementsMap } from "../../../lib/types";
 import { makeWorkspace } from "../../../../test/factories";
+import { mergeRunSelections } from "./wizard-spec";
 
 function localDirWorkspace(id: string, requirements: WorkspaceRequirementsMap = {}): Workspace {
   return makeWorkspace({
@@ -336,40 +337,43 @@ describe("impliedEgressHosts — the list buildSpec unions and step-egress.tsx r
     ]);
   });
 
-  // Claim 3's sharpest sub-case: selecting a repo workspace silently widens
-  // egress even with the GitHub switch untouched — the operator never visits
-  // a control that mentions GitHub. Same two hosts, a different "why".
-  it("names the SAME hosts 'repo workspace' when a repo is selected without the GitHub grant", () => {
+  it.each([
+    "acme/app",
+    "https://github.com/acme/app.git",
+    "https://gitlab.example/acme/app.git",
+    "https://github.corp.example/acme/app.git",
+    "git@github.com:acme/app.git",
+  ])("leaves clone egress for %s to the server without changing authored domains", (source) => {
     const repoWs = makeWorkspace({
       id: "ws-1",
       name: "app",
       kind: "repo",
-      source: "acme/app",
-      created_at: "",
-      updated_at: "",
+      source,
     });
-    const state = { ...initialWizardState(), workspaces: [{ workspaceId: "ws-1" }] };
-    expect(impliedEgressHosts(state, [repoWs])).toEqual([
-      { host: "github.com", why: "repo workspace" },
-      { host: "*.githubusercontent.com", why: "repo workspace" },
-    ]);
+    const state = { ...initialWizardState(), allowedDomains: [], workspaces: [{ workspaceId: "ws-1" }] };
+    expect(impliedEgressHosts(state)).toEqual([]);
+    const built = buildSpec(state, [repoWs]);
+    expect(built.inline_policy.allowed_domains).toEqual([]);
+    expect(built.inline_policy.workspace_repos?.map((repo) => repo.repo)).toEqual([source]);
+    const authored = {
+      allowed_domains: ["manual.example", "github.com"],
+      denied_domains: ["github.com"],
+      min_confinement_class: "CC2" as const,
+    };
+    const { spec, added } = mergeRunSelections(authored, state, [repoWs]);
+    expect(spec.allowed_domains).toEqual(authored.allowed_domains);
+    expect(spec.denied_domains).toEqual(authored.denied_domains);
+    expect(added.hosts).toEqual([]);
+    expect(added.repos.map((repo) => repo.repo)).toEqual([source]);
   });
 
-  it("prefers 'GitHub access' over 'repo workspace' when both are true", () => {
-    const repoWs = makeWorkspace({
-      id: "ws-1",
-      name: "app",
-      kind: "repo",
-      source: "acme/app",
-      created_at: "",
-      updated_at: "",
-    });
+  it("keeps grant-derived GitHub hosts when a workspace is also selected", () => {
     const state = {
       ...initialWizardState(),
       githubEnabled: true,
       workspaces: [{ workspaceId: "ws-1" }],
     };
-    expect(impliedEgressHosts(state, [repoWs])).toEqual([
+    expect(impliedEgressHosts(state)).toEqual([
       { host: "github.com", why: "GitHub access" },
       { host: "*.githubusercontent.com", why: "GitHub access" },
     ]);
@@ -411,4 +415,3 @@ describe("impliedEgressHosts — the list buildSpec unions and step-egress.tsx r
     for (const host of impliedHosts) expect(inline_policy.allowed_domains).toContain(host);
   });
 });
-

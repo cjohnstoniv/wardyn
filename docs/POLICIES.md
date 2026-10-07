@@ -357,6 +357,14 @@ credential, unchanged by any of the above.
 allowlist the hosts you need). A run with no git grants keeps whatever GitHub
 egress its policy grants — the confinement is no-op without one.
 
+For a custom (`inline_policy`) run with an authorized `github.com` HTTPS or
+`owner/repo` clone source and no surviving `github_token` grant, the server derives
+`github.com` and `*.githubusercontent.com`. Only these derived candidates pass
+through the caller's ceiling and personal egress capabilities before joining the
+resolved policy. Authored domains and deny priority keep their existing semantics.
+Preview, preflight and create share this rule; saved/default policies, SSH, GitHub
+Enterprise and other forges gain no automatic GitHub allowance from it.
+
 ### Bound the token itself: a GitHub ruleset
 
 Everything above bounds the **route**. None of it bounds the **token**. A GitHub

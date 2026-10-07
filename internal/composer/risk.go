@@ -66,9 +66,7 @@ var safeBaselineDomains = map[string]bool{
 	"api.anthropic.com":                 true,
 	"api.openai.com":                    true,
 	"generativelanguage.googleapis.com": true,
-	// VCS + package registries, synced with the workspace scanner's marker
-	// table. GitHub goes via the git-broker, never allowed_domains, so these
-	// entries are dead for scoring but kept as a defensive baseline.
+	// VCS + package registries, synced with the workspace scanner's marker table.
 	"github.com":                    true,
 	"api.github.com":                true,
 	"codeload.github.com":           true,

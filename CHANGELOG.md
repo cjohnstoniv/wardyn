@@ -27,6 +27,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- Custom runs derive direct GitHub clone egress on the server after authorization and grant
+  narrowing, with matching policy preview, preflight and launch behavior. Only `github.com`
+  HTTPS/slug sources without a surviving GitHub grant receive the two bounded GitHub hosts;
+  other repository types, saved/default policies and manual domain rules keep their semantics (#1919).
 - The Playwright harness binds its API, UI-sandbox, internal and base-path proxy listeners to loopback
   by default and refuses non-loopback listeners in real-tmux mode. Each backend startup mints a fresh
   admin token and derived person credentials, shared with its own Playwright process; explicit test

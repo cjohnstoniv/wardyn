@@ -275,6 +275,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// read where launch reads it (TestPreflightMirrorsLaunchGates pins the order).
 	presentSecrets := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
 	_ = s.applyWorkspaceRequirementsFor(ctx, presentSecrets, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
+	if _, refusal := s.unionDirectGitHubEgress(r, req, &spec, ceiling); refusal.write(s, w, r) {
+		return
+	}
 
 	// Enforced confinement class — the SAME math launch runs, now on the FOLDED
 	// spec (enforcedConfinement, called by resolveEnforcedConfinement in

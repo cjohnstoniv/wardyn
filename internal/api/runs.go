@@ -206,6 +206,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// requirement fold read the SAME one. Shared with the warning below.
 	present := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
 	reqEvents := s.applyWorkspaceRequirementsFor(ctx, present, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
+	directGitHubAdded, refusal := s.unionDirectGitHubEgress(r, req, &spec, ceiling)
+	if refusal.write(s, w, r) {
+		return
+	}
 
 	// The primary host workspace directory this run will operate in (if any), used
 	// below to DISCOURAGE — warn, never block — sharing a directory with another
@@ -425,7 +429,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
 	// ADO SCM lanes) — never the LLM; see unionRunEgress.
-	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo, scmSite)
+	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo, scmSite, directGitHubAdded)
 
 	// …and say so when one of those operator-approved workspace hosts is walled
 	// off by the caller's own governance profile. The union above still happened
