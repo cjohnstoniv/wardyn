@@ -614,6 +614,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-fixture-dates.sh
 	./scripts/test-gpl-source-offer.sh
 	./scripts/test-green-by-tree.sh
+	./scripts/test-helm-schema.sh
 	./scripts/test-image-pins.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
@@ -1373,6 +1374,8 @@ helm-install-test: ## kind: postgres + helm install the loaded image + prove /he
 	fi; \
 	echo "/healthz OK (200) via kubectl port-forward -> Service -> Pod"
 	@echo "==> server-side dry-run of the optional objects (Ingress + default-policy ConfigMap): helm-lint is grep-over-render, this is the one lane that hands them to a real API server's schema validation"
+	@manifest=$$(mktemp) || exit 1; \
+	trap 'rm -f "$$manifest"' EXIT; \
 	helm template $(HELM_TEST_RELEASE) ./deploy/helm/wardyn \
 		--namespace $(HELM_TEST_NAMESPACE) \
 		--set image.repository=$(HELM_TEST_IMAGE_REPO) \
@@ -1381,8 +1384,8 @@ helm-install-test: ## kind: postgres + helm install the loaded image + prove /he
 		--set auth.adminToken.value=dry-run-only \
 		--set ingress.enabled=true --set 'ingress.hosts[0].host=wardyn.example.test' \
 		--set-file defaultPolicy=examples/policies/demo.json \
-		$(HELM_TEST_SET) \
-		| kubectl -n $(HELM_TEST_NAMESPACE) apply --dry-run=server -f - >/dev/null
+		$(HELM_TEST_SET) >"$$manifest" || exit $$?; \
+	./scripts/check-helm-schema.sh "$$manifest" "$(HELM_TEST_NAMESPACE)"
 	@echo "==> teardown"
 	helm uninstall $(HELM_TEST_RELEASE) --namespace $(HELM_TEST_NAMESPACE)
 	kubectl delete namespace $(HELM_TEST_NAMESPACE) --wait=false

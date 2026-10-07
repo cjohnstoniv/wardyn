@@ -20,6 +20,7 @@
 #   J. the wait loop stops on a red run and PRINTS the rerun command, never runs it
 #   K-T. gh auth, release-commit refusal, numeric tag order, a missing draft,
 #      verify failure, an oversized BODY, bad ISSUES / PHASE, the script text
+#   X-Z. duplicate headings after merge/release commit or on resume; repair retains history
 # and, over every push any case made: no --force, no `+` refspec.
 # Daemon-free, network-free.
 set -u
@@ -125,6 +126,7 @@ case "$1" in
 esac
 to=""; while [ $# -gt 0 ]; do [ "$1" = --to ] && to="$2"; shift; done
 printf '\n## [%s] — 2030-01-02\n\n- notes for %s\n' "$to" "$to" >>CHANGELOG.md
+[ ! -f "$FIX/rc_extra.md" ] || cat "$FIX/rc_extra.md" >>CHANGELOG.md
 git add CHANGELOG.md
 git commit -q -s -m "release: $to"
 STUB
@@ -188,7 +190,7 @@ mkfix() {  # mkfix <name>: sets FIX WK OR; origin has main, release/0.8 (+tags v
 rp() {
   # GITHUB_REPOSITORY is pinned: on a hosted runner it names the real repository, and the
   # script (rightly) honours it, which would miss every canned acme/wardyn answer.
-  (cd "$WK" && env -u GH_TOKEN -u GITHUB_TOKEN GITHUB_REPOSITORY=acme/wardyn PATH="$WORK/bin:$PATH" WAIT_INTERVAL=0 RUN_POLL_INTERVAL=0 "$@" ./scripts/release-patch.sh) >"$FIX/out.txt" 2>&1
+  (cd "$WK" && env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN GITHUB_REPOSITORY=acme/wardyn PATH="$WORK/bin:$PATH" WAIT_INTERVAL=0 RUN_POLL_INTERVAL=0 "$@" ./scripts/release-patch.sh) >"$FIX/out.txt" 2>&1
   RC=$?
 }
 lines() { [ -f "$1" ] && wc -l <"$1" | tr -d ' ' || echo 0; }
@@ -498,6 +500,84 @@ check "W: GITHUB_REPOSITORY is honoured" log_has gh.log 'repos/other/repo/action
 rp V=0.8.4 PHASE=prepare GITHUB_REPOSITORY=
 check "W: without it, gh repo view names the repository" log_has gh.log '^repo view '
 keep_pushes
+
+# ── X-Z. duplicate heading guards also cover both prepare resume shortcuts ──
+no_prepare_checks() {
+  log_lacks dco.log '.' && log_lacks go.log '.' && log_lacks claims.log '.'
+}
+repair_headings() {
+  # Fixture repair removes duplicate headings, retaining every notes line and commit.
+  awk '/^## \[/ {
+    key = $0; sub(/^## \[/, "", key); sub(/\].*/, "", key)
+    if (seen[key]++) next
+  } { print }' "$WK/CHANGELOG.md" >"$FIX/repaired.md"
+  cp "$FIX/repaired.md" "$WK/CHANGELOG.md"
+  g -C "$WK" add CHANGELOG.md && g -C "$WK" commit -q -s -m "repair duplicate headings"
+}
+
+mkfix X
+cat >>"$WK/CHANGELOG.md" <<'NOTES'
+
+## [0.8.3] — 2030-02-03
+
+- merged notes to preserve
+
+## [Unreleased]
+NOTES
+g -C "$WK" add CHANGELOG.md && g -C "$WK" commit -q -s -m "main adds duplicate headings" && g -C "$WK" push -q origin main
+MAIN_TIP=$(g -C "$WK" rev-parse HEAD)
+rp V=0.8.4 PHASE=prepare MERGE=origin/main
+refused "X: merge-introduced duplicates refuse before release or external work" 'duplicate CHANGELOG.md heading keys'
+check "X: error lists the repeated version ignoring its different date" out_has '^0\.8\.3$'
+check "X: error lists duplicate Unreleased" out_has '^Unreleased$'
+check "X: repair guidance preserves history" out_has 'git commit -s.*re-run PHASE=prepare.*Keep the merge/release history'
+check "X: release-commit never invoked" log_lacks rc.log '.'
+check "X: no prepare checks" no_prepare_checks
+check "X: main was actually merged" g -C "$WK" merge-base --is-ancestor "$MAIN_TIP" HEAD
+MERGED_TIP=$(g -C "$WK" rev-parse HEAD)
+check "X: refusal leaves the merge commit" test "$(g -C "$WK" rev-list --parents -n 1 HEAD | wc -w)" = 3
+repair_headings || { bad "X: repair fixture failed"; exit 1; }
+REPAIR_TIP=$(g -C "$WK" rev-parse HEAD)
+rp V=0.8.4 PHASE=prepare MERGE=origin/main
+check "X: repaired prepare exits zero" test "$RC" = 0
+check "X: original merge is still an ancestor" g -C "$WK" merge-base --is-ancestor "$MERGED_TIP" HEAD
+check "X: repair commit is still an ancestor" g -C "$WK" merge-base --is-ancestor "$REPAIR_TIP" HEAD
+check "X: repair preserved release notes" grep -qx -- '- merged notes to preserve' "$WK/CHANGELOG.md"
+check "X: no second merge or release commit" test "$(g -C "$WK" rev-list --count --merges HEAD) $(lines "$FIX/rc.log")" = '1 1'
+check "X: repaired candidate pushed" test "$(g -C "$OR" rev-parse refs/heads/chore/release-0.8.4)" = "$(g -C "$WK" rev-parse HEAD)"
+keep_pushes
+
+mkfix Y
+printf '\n## [0.8.3] — 2030-03-04\n\n- generated notes to preserve\n' >"$FIX/rc_extra.md"
+rp V=0.8.4 PHASE=prepare
+refused "Y: generated duplicate refuses before external work" '^0\.8\.3$'
+check "Y: release commit actually ran once" test "$(lines "$FIX/rc.log")" = 1
+check "Y: release commit remains at HEAD after refusal" test "$(g -C "$WK" log -1 --format=%s)" = 'release: 0.8.4'
+check "Y: no prepare checks" no_prepare_checks
+RELEASE_TIP=$(g -C "$WK" rev-parse HEAD)
+repair_headings || { bad "Y: repair fixture failed"; exit 1; }
+rp V=0.8.4 PHASE=prepare
+check "Y: repaired prepare exits zero" test "$RC" = 0
+check "Y: release commit survives repair and rerun" g -C "$WK" merge-base --is-ancestor "$RELEASE_TIP" HEAD
+check "Y: rerun skips the already completed release commit" test "$(lines "$FIX/rc.log")" = 1
+check "Y: repair preserved generated notes" grep -qx -- '- generated notes to preserve' "$WK/CHANGELOG.md"
+check "Y: repaired candidate pushed" test "$(g -C "$OR" rev-parse refs/heads/chore/release-0.8.4)" = "$(g -C "$WK" rev-parse HEAD)"
+keep_pushes
+
+mkfix Z
+g -C "$WK" checkout -q --no-track -b chore/release-0.8.4 origin/release/0.8
+printf '\n## [0.8.4] — 2030-01-02\n\n## [0.8.4] — 2030-01-03\n\n## [0.8.3-rc.1]\n\n## [0.8.3-rc.1] — 2030-01-01\n' >>"$WK/CHANGELOG.md"
+g -C "$WK" add CHANGELOG.md && g -C "$WK" commit -q -s -m "already released duplicate" && g -C "$WK" push -q origin HEAD
+RESUME_TIP=$(g -C "$WK" rev-parse HEAD)
+for dry in 0 1; do
+  rp V=0.8.4 PHASE=prepare DRY_RUN=$dry
+  refused "Z: already released/pushed resume refuses duplicates (DRY_RUN=$dry)" '^0\.8\.4$'
+  check "Z: duplicate rc version keys are also reported" out_has '^0\.8\.3-rc\.1$'
+  check "Z: no release commit" log_lacks rc.log '.'
+  check "Z: no prepare checks" no_prepare_checks
+  check "Z: local candidate is unchanged" test "$(g -C "$WK" rev-parse HEAD)" = "$RESUME_TIP"
+  check "Z: pushed candidate is unchanged" test "$(g -C "$OR" rev-parse refs/heads/chore/release-0.8.4)" = "$RESUME_TIP"
+done
 
 # ── Q. the script text and every recorded push ───────────────────────────────
 check "Q: the script text never forces a push" bash -c "! grep -nE 'push[^#]*(--force|-f |--mirror| \\+)' '$SCRIPT'"

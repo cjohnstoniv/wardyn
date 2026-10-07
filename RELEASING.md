@@ -102,6 +102,28 @@ Their checks can run locally with the required services; follow
 variables. Run the Playwright lane with `scripts/run-ui-e2e.sh`. Without
 `WARDYN_TEST_PG` the Postgres suite prints a loud SKIPPED line.
 
+For a server-side schema check of a rendered chart, use Mike Farah yq v4, jq,
+and kubectl with the intended context. Render to a protected file first so a
+failed Helm command cannot be hidden by a pipeline:
+
+```bash
+(
+  manifest=$(mktemp) || exit 1
+  trap 'rm -f "$manifest"' EXIT
+  helm template wardyn ./deploy/helm/wardyn --namespace wardyn \
+    -f deploy/helm/wardyn/ci/all-on-values.yaml >"$manifest" || exit $?
+  ./scripts/check-helm-schema.sh "$manifest" wardyn kind-wardyn
+)
+```
+
+Replace `kind-wardyn` with the test cluster's context and use the candidate's
+values. The helper discovers each kind's scope, applies strict server dry-runs
+per namespace (including runner RBAC in `wardyn-runs`), and checks cluster-scoped
+objects separately. Omitted object namespaces use the release namespace;
+explicit namespaces and cluster-scoped objects are preserved. Required namespaces
+and custom-resource APIs must already exist. Omitting the helper's third argument
+uses kubectl's current context. `make helm-install-test` uses this same helper.
+
 Before tagging, run `scripts/stress-proxy-cgroup.sh` (needs docker). It sends
 the egress proxy's worst inspection load through it under the sidecar's 256
 MiB memory cap and fails on a refused request or an OOM kill.
@@ -216,6 +238,11 @@ crash or a usage limit resumes with the same command:
    push, a PR into `release/X.Y` titled `release: V`, and `nightly.yml`
    dispatched on the branch unless a dispatched nightly on the same tree is
    already queued, running or green.
+   After the merge and again after the release-commit step, duplicate CHANGELOG
+   heading keys (including `Unreleased`, regardless of dates) stop prepare before
+   checks, pushes, PRs or nightly dispatch. This also applies when resuming an
+   already released or pushed candidate. Commit a repair preserving the notes and
+   history, then rerun prepare; no reset, amend or force-push is needed.
 2. **wait.** Every 60 seconds, `scripts/green-by-tree.sh` on the head with
    `NEED_STAGING=1`. Exit 0 starts the clock, **T0**. Exit 2 stops. Exit 1 keeps
    waiting while a `ci.yml` or `nightly.yml` run on the head is queued or running;
