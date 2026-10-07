@@ -644,6 +644,11 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	generation, err := s.cfg.MaskRegistry.GlobalGeneration(ctx)
+	if err != nil {
+		http.Redirect(w, r, s.cfg.BasePath+adoSignInErrorPath+reasonStoreError, http.StatusFound)
+		return
+	}
 	resp, err := s.postADOEntraToken(ctx, cfg, url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
@@ -666,7 +671,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	// The access token is let go one grace after its expiry (#151).
 	now := s.cfg.Now()
 	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
-	if err := s.cfg.MaskRegistry.MergeGlobalUntil(subject, adoEntraSecretName(cfg.RowID), accessExpiry, []byte(resp.AccessToken), []byte(resp.RefreshToken)); err != nil {
+	if err := s.cfg.MaskRegistry.MergeGlobalUntil(generation, subject, adoEntraSecretName(cfg.RowID), accessExpiry, []byte(resp.AccessToken), []byte(resp.RefreshToken)); err != nil {
 		slog.ErrorContext(ctx, "wardynd: the Azure DevOps sign-in tokens could not be recorded for masking; not stored",
 			slog.String("row", cfg.RowID), slog.Any("err", err))
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
@@ -737,7 +742,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	// Stored: this sign-in is now the credential, and the one it replaced is not.
 	// The Merge above put both tokens on record; this retires what the sign-in
 	// replaced, and a failure leaves the old values masked longer.
-	if err := s.cfg.MaskRegistry.AddGlobalUntil(subject, adoEntraSecretName(cfg.RowID), s.cfg.Now(), blob.ExpiresAt, []byte(resp.AccessToken), []byte(resp.RefreshToken)); err != nil {
+	if err := s.cfg.MaskRegistry.AddGlobalUntil(generation, subject, adoEntraSecretName(cfg.RowID), s.cfg.Now(), blob.ExpiresAt, []byte(resp.AccessToken), []byte(resp.RefreshToken)); err != nil {
 		slog.WarnContext(ctx, "wardynd: the replaced Azure DevOps sign-in tokens could not be retired", slog.String("row", cfg.RowID), slog.Any("err", err))
 	}
 	s.auditADOCapture(ctx, subject, cfg.RowID, "success", map[string]any{

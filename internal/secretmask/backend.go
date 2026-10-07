@@ -6,11 +6,15 @@ package secretmask
 import (
 	"bytes"
 	"context"
+	"errors"
 	"slices"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrErased refuses credential work that began before its owner's mask erase.
+var ErrErased = errors.New("masking values were erased while the credential was being obtained")
 
 // GlobalPut is one value of a credential handed to Backend.PutGlobal. A zero
 // Until is a value that does not expire on its own.
@@ -32,9 +36,12 @@ type Backend interface {
 	// dispatched before masking manifests) is kept in this process only, and
 	// that is not an error.
 	PutRun(runID uuid.UUID, value []byte) error
+	// GlobalGeneration snapshots the committed cursor before credential work begins.
+	GlobalGeneration(ctx context.Context) (int64, error)
 	// PutGlobal commits values as credential (owner, name)'s. merge retires
 	// nothing; otherwise the credential's other current values are retired.
-	PutGlobal(owner, name string, values []GlobalPut, merge bool, now time.Time) error
+	// It refuses an owner erased after generation and synchronizes the cache.
+	PutGlobal(generation int64, owner, name string, values []GlobalPut, merge bool, now time.Time) error
 	// EvictGlobal tombstones the credential's current values.
 	EvictGlobal(owner, name string, now time.Time) error
 	// RetireOwnerGlobals retires every current credential value of owner.
@@ -48,12 +55,21 @@ type Backend interface {
 	// PurgeRuns tombstones the per-run values of runs, and deletes their masking
 	// manifests.
 	PurgeRuns(ctx context.Context, runs []uuid.UUID) error
-	// EraseOwner tombstones every value committed under owner, and reports how
+	// EraseOwner advances the durable owner fence, tombstones every value, and reports how
 	// many rows still hold ciphertext for it afterwards (zero when it is done).
 	EraseOwner(ctx context.Context, owner string) (remaining int, err error)
 	// Fresh returns nil only when this process's cache holds every value
 	// committed before a read of the corpus that began after arrived.
 	Fresh(ctx context.Context, arrived time.Time) error
+}
+
+// GlobalGeneration snapshots erasure ordering before any credential read or
+// network exchange. The owner's identity may be established by that exchange.
+func (r *Registry) GlobalGeneration(ctx context.Context) (int64, error) {
+	if b := r.backendOf(); b != nil {
+		return b.GlobalGeneration(ctx)
+	}
+	return 0, nil
 }
 
 // SetBackend attaches the shared corpus. It is set once, at boot, before the

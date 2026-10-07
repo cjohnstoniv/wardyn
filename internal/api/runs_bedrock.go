@@ -504,7 +504,7 @@ func bedrockBaseEnv(region, model, baseURL string) map[string]string {
 // would retire the refresh's live tokens. An error means it is not on record, and
 // the run must not be dispatched with it.
 func (s *Server) maskSSOBlob(blob awsSSOBlob, sso awsSSOScope) error {
-	return s.cfg.MaskRegistry.MergeGlobalUntil(sso.rowOwner(), sso.ssoSecret(), blob.ExpiresAt,
+	return s.cfg.MaskRegistry.MergeGlobalUntil(blob.maskGeneration, sso.rowOwner(), sso.ssoSecret(), blob.ExpiresAt,
 		[]byte(blob.AccessToken), []byte(blob.RefreshToken), []byte(blob.ClientSecret))
 }
 

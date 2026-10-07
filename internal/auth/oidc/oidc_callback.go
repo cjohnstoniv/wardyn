@@ -235,6 +235,7 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	if a.httpClient != nil {
 		exchangeCtx = gooidc.ClientContext(exchangeCtx, a.httpClient)
 	}
+	grantGeneration, captureGrant := a.loginGrantGeneration(r.Context())
 	// A transient IdP hiccup (5xx, timeout) gets tokenExchangeRetries
 	// short-backoff attempts. A permanent rejection (bad secret, expired/
 	// replayed code) is never retried — the code is single-use, so resending
@@ -299,7 +300,9 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	// earned (login_grant.go). The session itself carries no token. The sink
 	// learns the epoch the login was issued under, so a capture that a
 	// suspension overtook stores nothing.
-	a.captureLoginGrant(WithAuthorityEpoch(r.Context(), epoch), sess.Sub, token)
+	if captureGrant {
+		a.captureLoginGrant(WithAuthorityEpoch(r.Context(), epoch), sess.Sub, token, grantGeneration)
+	}
 
 	// (6) Create a Wardyn session.
 	sess.AuthorityEpoch = epoch

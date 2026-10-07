@@ -214,7 +214,7 @@ func (s *Store) PutRun(runID uuid.UUID, value []byte) error {
 // operator-namespace credential (owner "") has no subject key and is kept in
 // this process only: none exists today, and one would be sealed under a
 // platform key that this release does not add.
-func (s *Store) PutGlobal(owner, name string, values []secretmask.GlobalPut, merge bool, now time.Time) error {
+func (s *Store) PutGlobal(generation int64, owner, name string, values []secretmask.GlobalPut, merge bool, now time.Time) error {
 	if owner == "" {
 		return nil
 	}
@@ -235,15 +235,19 @@ func (s *Store) PutGlobal(owner, name string, values []secretmask.GlobalPut, mer
 		rows = append(rows, r)
 		keep = append(keep, r.digest)
 	}
-	var noted []*ref
-	gen, err := s.commit(ctx, func(tx pgx.Tx, gen int64) error {
+	_, err = s.commit(ctx, func(tx pgx.Tx, gen int64) error {
+		var erased int64
+		if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT gen FROM mask_owner_erasures WHERE owner=$1), 0)`, owner).Scan(&erased); err != nil {
+			return fmt.Errorf("maskstore: read the owner's erasure generation: %w", err)
+		}
+		if generation < erased || generation >= gen {
+			return secretmask.ErrErased
+		}
 		for _, r := range rows {
-			id, err := putGlobalRow(ctx, tx, owner, name, version, gen, merge, r)
+			_, err := putGlobalRow(ctx, tx, owner, name, version, gen, merge, r)
 			if err != nil {
 				return err
 			}
-			noted = append(noted, &ref{id: id, bucket: bucketGlobal, owner: owner, name: name,
-				value: append([]byte(nil), r.put.Value...), until: r.put.Until, current: true})
 		}
 		if merge {
 			return nil
@@ -263,9 +267,15 @@ func (s *Store) PutGlobal(owner, name string, values []secretmask.GlobalPut, mer
 	if err != nil {
 		return err
 	}
-	for _, r := range noted {
-		r.gen = gen
-		s.note(r)
+	if err := s.Fresh(ctx, time.Now()); err != nil {
+		return err
+	}
+	var erased bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM mask_owner_erasures WHERE owner=$1 AND gen>$2)`, owner, generation).Scan(&erased); err != nil {
+		return fmt.Errorf("maskstore: recheck the owner's erasure generation: %w", err)
+	}
+	if erased {
+		return secretmask.ErrErased
 	}
 	return nil
 }
@@ -485,30 +495,25 @@ func (s *Store) PurgeRuns(ctx context.Context, runs []uuid.UUID) error {
 	return err
 }
 
-// EraseOwner tombstones every value committed under owner, then reports how
-// many rows still hold ciphertext for it (a registration that raced the erase
-// can leave one: the caller retries until it is zero), and drops what this
-// process cached.
+// EraseOwner advances the owner's durable erasure fence even with no values,
+// tombstones its committed values, and drops this replica's cached copies.
 func (s *Store) EraseOwner(ctx context.Context, owner string) (int, error) {
 	if owner == "" {
 		return 0, errors.New("maskstore: erasing the operator namespace is not a person's erasure")
 	}
-	var any bool
-	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM mask_values WHERE owner=$1 AND NOT tombstone)`, owner).Scan(&any); err != nil {
-		return 0, fmt.Errorf("maskstore: look for the person's values: %w", err)
-	}
-	if any {
-		_, err := s.commit(ctx, func(tx pgx.Tx, gen int64) error {
-			if _, err := tx.Exec(ctx, `UPDATE mask_values SET `+tombstoneSet+`, retired_at = NULL WHERE owner = $2 AND NOT tombstone`, gen, owner); err != nil {
-				return fmt.Errorf("maskstore: erase the person's values: %w", err)
-			}
-			return nil
-		})
-		if err != nil {
-			return 0, err
+	_, err := s.commit(ctx, func(tx pgx.Tx, gen int64) error {
+		if _, err := tx.Exec(ctx, `INSERT INTO mask_owner_erasures (owner, gen) VALUES ($1, $2)
+			ON CONFLICT (owner) DO UPDATE SET gen=EXCLUDED.gen`, owner, gen); err != nil {
+			return fmt.Errorf("maskstore: advance the owner's erasure generation: %w", err)
 		}
+		if _, err := tx.Exec(ctx, `UPDATE mask_values SET `+tombstoneSet+`, retired_at = NULL WHERE owner = $2 AND NOT tombstone`, gen, owner); err != nil {
+			return fmt.Errorf("maskstore: erase the person's values: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
-	// This replica drops its copies now; the others at their next read.
 	if err := s.Fresh(ctx, time.Now()); err != nil {
 		return 0, err
 	}
@@ -517,4 +522,15 @@ func (s *Store) EraseOwner(ctx context.Context, owner string) (int, error) {
 		return 0, fmt.Errorf("maskstore: recount the person's values: %w", err)
 	}
 	return left, nil
+}
+
+// GlobalGeneration captures a committed prefix before reading or obtaining a
+// credential. The owner's latest erasure uses the same cursor, allowing a
+// sign-in to snapshot before the exchange establishes its verified owner.
+func (s *Store) GlobalGeneration(ctx context.Context) (int64, error) {
+	var gen int64
+	if err := s.pool.QueryRow(ctx, `SELECT gen FROM mask_gen`).Scan(&gen); err != nil {
+		return 0, fmt.Errorf("maskstore: snapshot erasure generation: %w", err)
+	}
+	return gen, nil
 }

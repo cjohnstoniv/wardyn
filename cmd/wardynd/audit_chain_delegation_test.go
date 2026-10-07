@@ -42,7 +42,7 @@ func TestAuditChainStampsAndCoalescesDryRunDenials(t *testing.T) {
 	}
 
 	reg := secretmask.NewRegistry()
-	reg.AddGlobal("test", "dry-run-reason", time.Now(), []byte("s3cr3t-value"))
+	reg.AddGlobal(0, "test", "dry-run-reason", time.Now(), []byte("s3cr3t-value"))
 	denials := &audit.DenialCoalescer{}
 	head, _, _, _, err := buildAuditChain(context.Background(), "", "", "", nil, reg, nil, serveChain{denials: denials})
 	if err != nil {

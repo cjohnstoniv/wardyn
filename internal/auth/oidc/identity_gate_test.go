@@ -324,3 +324,5 @@ func TestVerifySubjectTokenRefusesADeactivatedIdentity(t *testing.T) {
 		t.Errorf("an exchange issued an identity: %v", gate.issued)
 	}
 }
+
+func (s *epochSink) LoginGrantGeneration(context.Context) (int64, error) { return 0, nil }
