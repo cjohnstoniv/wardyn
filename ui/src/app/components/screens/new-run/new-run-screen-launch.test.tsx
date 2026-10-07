@@ -69,12 +69,15 @@ vi.mock("./new-run-rail", async (importOriginal) => {
 // The connect popup + poll (#386) — mocked so the launch-door tests below
 // drive the screen's own dialog wiring without a real window.
 const adoConnectMock = vi.fn();
+// One function for every render, as the real hook's cancel is: the door resets
+// itself whenever cancel's identity changes, so a fresh mock per render closed it.
+const adoCancelMock = vi.fn();
 vi.mock("../../../lib/hooks/use-ado-connect", () => ({
   useAdoConnect: () => ({
     connecting: false,
     connect: adoConnectMock,
     connectFallback: adoConnectMock,
-    cancel: vi.fn(),
+    cancel: adoCancelMock,
     blockedUrl: null,
   }),
 }));
