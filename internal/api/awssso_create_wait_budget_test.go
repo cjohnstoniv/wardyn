@@ -120,8 +120,9 @@ func createWaitServer(t *testing.T) *Server {
 // the door reads it, and how long it took.
 func createTimeRenewal(ctx context.Context, srv *Server) (awsSSOBlob, string, time.Duration) {
 	ctx = secretstore.WithPurpose(withCreateRenewal(ctx), secretstore.PurposeSSORefresh)
-	held, _, _ := srv.readAWSSSOBlob(ctx, createRenewalScope())
 	start := time.Now()
+	ctx = context.WithValue(ctx, awsSSORenewalBaselineKey{createRenewalScope()}, srv.readAWSSORenewalBaseline(ctx, createRenewalScope()))
+	held, _, _ := srv.readAWSSSOBlob(ctx, createRenewalScope())
 	got, failure := srv.refreshAWSSSOBlob(ctx, createRenewalScope(), held)
 	return got, failure, time.Since(start)
 }
@@ -217,6 +218,7 @@ func TestCreateWait_StoreWithoutRevisionsIsNotWatched(t *testing.T) {
 	storeSSOBlobFor(t, srv, createRenewalOwner, createWaitBlob())
 	heldElsewhere(t, srv)
 	ctx := secretstore.WithPurpose(withCreateRenewal(context.Background()), secretstore.PurposeSSORefresh)
+	ctx = context.WithValue(ctx, awsSSORenewalBaselineKey{createRenewalScope()}, srv.readAWSSORenewalBaseline(ctx, createRenewalScope()))
 	held, _, _ := srv.readAWSSSOBlob(ctx, createRenewalScope()) // the door's read
 	reads := new(atomic.Int32)
 	srv.cfg.Secrets = getCount{srv.cfg.Secrets, reads}
