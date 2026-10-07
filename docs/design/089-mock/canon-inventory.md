@@ -23,7 +23,7 @@ Baseline source inventory for the 089 mock round. These hashes identify the exis
 | `ui/src/app/components/wardyn/copy/runs-landing.ts` | Waiting row word/action | `e67745c3753c04e65bd6d4d164ef11799efca2addccd90a8434ffd321667ef99` |
 | `ui/src/app/lib/reauth-copy.ts` | REAUTH_DIALOG, REAUTH_RENEW, role change | `04f811de8d5d22716bce08f11e01ec026d2b39f06ff8c089552ca8f99d24e6f0` |
 | `ui/src/app/lib/session-renew-copy.ts` | Eager Sign in again constant only | `9956ed73f8b8efa6860affdb9cbfd6598bd68d9d2e5e302b58f0495fab1b048b` |
-| `ui/src/app/components/wardyn/copy/run-output.ts` | RUN_OUTPUT; M-O proposes two additions | `ab5a2b6fac61c2a603baed928b8fd5f4264a7e558c6a67af9352dcc1a6451dfe` |
+| `ui/src/app/components/wardyn/copy/run-output.ts` | RUN_OUTPUT; M-O proposes two additions and an explicit captureGap copy amendment | `ab5a2b6fac61c2a603baed928b8fd5f4264a7e558c6a67af9352dcc1a6451dfe` |
 | `ui/src/app/components/screens/new-run/new-run-launch-gates.ts` | Exact local gate ordering and literals | `871945986c32b93dcbe13a7a3d2707b2f0edaaece227cc6c8d73a3aa60e1889b` |
 | `ui/src/app/components/screens/new-run/new-run-launch-panel.tsx` | Existing backend/pin/model/launch gate composition | `4ebbc414ff2dd73bd4e6446ebdd5e32a49804885962a1c674645bf64bc302a96` |
 | `ui/src/styles/theme.css` | Token and reduced-motion authority | `57d13af9da0482085bba7cdab70c4453385bbfd9aeb562af640a0e5fba6c1954` |
