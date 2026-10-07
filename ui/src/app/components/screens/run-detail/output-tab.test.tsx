@@ -19,6 +19,12 @@ vi.mock("../../../lib/api/run-output", () => ({
   runOutput: { get: (...a: unknown[]) => getMock(...a) },
 }));
 
+// /healthz's recording answer: {} is unknown (the default), "none" is recording off.
+const healthMock = vi.fn();
+vi.mock("../../../lib/api/health", () => ({
+  health: { health: () => healthMock() },
+}));
+
 const out = (o: Partial<RunOutput> = {}): RunOutput => ({
   output: "$ go test ./...\nok",
   truncated: false,
@@ -41,6 +47,8 @@ async function mount(props: Partial<React.ComponentProps<typeof OutputTab>> = {}
 
 beforeEach(() => {
   getMock.mockReset();
+  healthMock.mockReset();
+  healthMock.mockResolvedValue({});
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -237,5 +245,96 @@ describe("OutputTab — refusals", () => {
     await mount();
     expect(screen.getByText(RUN_COCKPIT.loadError)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+  });
+});
+
+describe("OutputTab — interactive run, nothing kept", () => {
+  const recording = (selected: string) =>
+    healthMock.mockResolvedValue({ components: { recording: { selected } } });
+
+  it("recording off, run ended: says nothing was kept, no recording pointer", async () => {
+    recording("none");
+    refuse("run_output_interactive", 409);
+    await mount({ live: false });
+    expect(screen.getByText(RUN_OUTPUT.interactiveTitle)).toBeInTheDocument();
+    expect(screen.getByText(RUN_OUTPUT.interactiveNoneDesc)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_OUTPUT.interactiveDesc)).toBeNull();
+    expect(screen.queryByRole("button", { name: RUN_OUTPUT.interactiveLink })).toBeNull();
+  });
+
+  it("recording on: today's text and the Recording link", async () => {
+    recording("file");
+    refuse("run_output_interactive", 409);
+    await mount({ live: false });
+    expect(screen.getByText(RUN_OUTPUT.interactiveDesc)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_OUTPUT.interactiveNoneDesc)).toBeNull();
+    expect(screen.getByRole("button", { name: RUN_OUTPUT.interactiveLink })).toBeInTheDocument();
+  });
+
+  it("recording unknown: today's text and link, never the recording-off sentence", async () => {
+    refuse("run_output_interactive", 409);
+    await mount({ live: false });
+    expect(screen.getByText(RUN_OUTPUT.interactiveDesc)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_OUTPUT.interactiveNoneDesc)).toBeNull();
+    expect(screen.getByRole("button", { name: RUN_OUTPUT.interactiveLink })).toBeInTheDocument();
+  });
+
+  it("recording off, run still open: the still-open line, never the did-not-end sentence", async () => {
+    recording("none");
+    refuse("run_output_interactive", 409);
+    await mount({ live: true });
+    expect(screen.getByText(RUN_OUTPUT.interactiveLiveTitle)).toBeInTheDocument();
+    expect(screen.getByText(RUN_OUTPUT.interactiveLiveDesc)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_OUTPUT.interactiveNoneDesc)).toBeNull();
+    expect(screen.queryByRole("button", { name: RUN_OUTPUT.interactiveLink })).toBeNull();
+  });
+
+  it("recording unknown, run still open: D, not E", async () => {
+    refuse("run_output_interactive", 409);
+    await mount({ live: true });
+    expect(screen.getByText(RUN_OUTPUT.interactiveDesc)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_OUTPUT.interactiveLiveTitle)).toBeNull();
+  });
+
+  it("the Recording link is drawn in the info colour", async () => {
+    refuse("run_output_interactive", 409);
+    await mount();
+    const b = screen.getByRole("button", { name: RUN_OUTPUT.interactiveLink });
+    expect(b.className).toContain("text-info");
+    expect(b.className).not.toContain("text-primary");
+  });
+});
+
+describe("OutputTab — pane snapshot block", () => {
+  it("is a focusable region named by the source chip, not a live region", async () => {
+    getMock.mockResolvedValue(out({ source: "pane_snapshot" }));
+    await mount();
+    const pre = screen.getByRole("region", { name: RUN_OUTPUT.sourcePane });
+    expect(pre.getAttribute("tabindex")).toBe("0");
+    expect(pre.getAttribute("aria-live")).toBeNull();
+  });
+});
+
+describe("OutputTab — loading", () => {
+  it("stays empty for 1 s, then shows the loading line in a status region", async () => {
+    vi.useFakeTimers();
+    getMock.mockReturnValue(new Promise(() => {}));
+    const { container } = await mount();
+    expect(container.querySelector("[aria-busy='true']")).not.toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(999);
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2);
+    });
+    expect(screen.getByRole("status").textContent).toContain(RUN_OUTPUT.loading);
+  });
+
+  it("a fast answer never shows the loading line", async () => {
+    getMock.mockResolvedValue(out());
+    await mount();
+    expect(screen.queryByText(RUN_OUTPUT.loading)).toBeNull();
   });
 });
