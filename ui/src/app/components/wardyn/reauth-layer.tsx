@@ -13,7 +13,13 @@
 // about:blank first, the opener severed, then navigated; nothing the popup
 // says is trusted — the SERVER is polled until a session is live. Whatever
 // request got the 401 is never re-sent from here.
+//
+// It also draws the renewal strip: the expiry banner's "Sign in again" has
+// already opened the window (lib/use-session-renew.ts), and the strip waits
+// here, in the banner's place, on a session that is still live — so a live
+// /me proves nothing until renewVerdict below has measured it.
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import { AlertTriangle, Building2, Copy, KeyRound, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -30,8 +36,10 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { HttpError, setToken, wfetch } from "../../lib/api/core";
 import { health, type Me } from "../../lib/api/health";
-import { useReauth } from "../../lib/reauth";
-import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_EXTRA } from "../../lib/reauth-copy";
+import { shortTime } from "../../lib/format";
+import { useReauth, type Renewal } from "../../lib/reauth";
+import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_EXTRA, REAUTH_RENEW } from "../../lib/reauth-copy";
+import { openSignInWindow, RENEW_STRIP_SLOT } from "../../lib/use-session-renew";
 import { unsavedSnapshot } from "../../lib/unsaved-registry";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { PROVIDERS_EXTRA } from "../../lib/workspace-providers-copy";
@@ -82,6 +90,27 @@ async function readSession(): Promise<Session> {
 
 type Status = "idle" | "waiting" | "blocked" | "closed" | "unreachable" | "rejected";
 
+// A live /me while a renewal waits. Identity and authority come FIRST, on
+// every answer: someone else's sign-in, or this person's with other authority,
+// is live in this browser whatever its expiry says (a replacement session's
+// can be equal or earlier), so it is "other" and goes straight to succeed().
+// Only for the same person with the same authority does the expiry decide,
+// and one that is not later is the old session answering: keep waiting.
+function renewVerdict(from: Renewal, me: Me, principalResolved: boolean): "other" | "waiting" | "renewed" {
+  if (
+    !principalResolved ||
+    me.principal !== from.principal ||
+    me.role !== from.role ||
+    me.operator !== from.operator ||
+    me.security_operator !== from.securityOperator
+  ) {
+    return "other";
+  }
+  const until = Date.parse(me.session_expires_at ?? "");
+  if (Number.isNaN(until)) return "waiting";
+  return from.expired || until > from.expiresAt ? "renewed" : "waiting";
+}
+
 export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   const reauth = useReauth();
   const principal = usePrincipal();
@@ -103,6 +132,8 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   // says otherwise, SSO only once it says so.
   const [doors, setDoors] = React.useState({ sso: false, token: true });
   const pollRef = React.useRef<number | null>(null);
+  const cancelRef = React.useRef<HTMLButtonElement>(null);
+  const { renewal } = reauth;
   const { copied, copy } = useCopyToClipboard();
 
   React.useEffect(() => {
@@ -126,7 +157,10 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   }, []);
   React.useEffect(() => stopPoll, [stopPoll]);
 
-  // Read through a ref: the poll that calls it was started renders ago.
+  // Both read through a ref: the poll that calls them was started renders ago.
+  // Outside a renewal nobody was signed in, so any live /me is the answer.
+  const verdict = React.useRef((_me: Me): ReturnType<typeof renewVerdict> => "other");
+  verdict.current = (me: Me) => (renewal ? renewVerdict(renewal, me, principalResolved) : "other");
   const succeed = React.useRef((_me: Me) => {});
   succeed.current = (me: Me) => {
     stopPoll();
@@ -141,6 +175,8 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     }
     if (!roleCanReach(location.pathname, me.role)) {
       setNarrowed(me);
+      // A renewal has no dialog up yet, and the dialog is what says so.
+      if (renewal) reauth.setPhase("dialog");
       return;
     }
     // A save refused in the lapse is said beside that screen's own Save when
@@ -149,46 +185,80 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
       toast.warning(REAUTH_DIALOG.WRITE_DROPPED);
       reauth.clearWriteDropped();
     }
+    if (renewal) {
+      if (verdict.current(me) === "renewed") {
+        toast.success(REAUTH_RENEW.RENEWED(shortTime(me.session_expires_at ?? "")));
+      }
+      // The strip goes, and Cancel with it: focus lands on the page, not the document.
+      document.getElementById("main-content")?.focus();
+    }
     onResumed(me);
     reauth.setPhase("none");
   };
 
-  const startPoll = (giveUp: () => boolean, onGiveUp: () => void, onLive?: () => void) => {
-    stopPoll();
-    setStatus("waiting");
-    let inFlight = false;
-    const id = window.setInterval(() => {
-      if (inFlight) return;
-      inFlight = true;
-      // Asked BEFORE the read, so a window closed the instant sign-in
-      // finished still gets one last look at the server.
-      const gaveUp = giveUp();
-      void readSession().then((s) => {
-        inFlight = false;
-        if (pollRef.current !== id) return;
-        if (typeof s === "object") {
-          onLive?.();
-          succeed.current(s);
-        } else if (gaveUp) {
-          stopPoll();
-          onGiveUp();
-        } else {
-          setStatus(s === "unreachable" ? "unreachable" : "waiting");
-        }
-      });
-    }, POLL_MS);
-    pollRef.current = id;
+  const startPoll = React.useCallback(
+    (giveUp: () => boolean, onGiveUp: () => void, onLive?: () => void) => {
+      stopPoll();
+      setStatus("waiting");
+      let inFlight = false;
+      const id = window.setInterval(() => {
+        if (inFlight) return;
+        inFlight = true;
+        // Asked BEFORE the read, so a window closed the instant sign-in
+        // finished still gets one last look at the server.
+        const gaveUp = giveUp();
+        void readSession().then((s) => {
+          inFlight = false;
+          if (pollRef.current !== id) return;
+          if (typeof s === "object" && verdict.current(s) !== "waiting") {
+            onLive?.();
+            succeed.current(s);
+          } else if (gaveUp) {
+            stopPoll();
+            onGiveUp();
+          } else {
+            setStatus(s === "unreachable" ? "unreachable" : "waiting");
+          }
+        });
+      }, POLL_MS);
+      pollRef.current = id;
+    },
+    [stopPoll],
+  );
+
+  // A renewal begins with its window already open (or refused): only the wait
+  // starts here. However it ends — renewed, someone else, Cancel, a new
+  // attempt — the window and the wait end with it.
+  React.useEffect(() => {
+    if (!renewal) return;
+    const { popup } = renewal;
+    if (popup) {
+      startPoll(
+        () => popup.closed,
+        () => setStatus("closed"),
+      );
+    } else {
+      setStatus("blocked");
+    }
+    cancelRef.current?.focus();
+    return () => {
+      stopPoll();
+      popup?.close();
+    };
+  }, [renewal, startPoll, stopPoll]);
+
+  const cancelRenew = () => {
+    setStatus("idle");
+    reauth.endRenew();
   };
 
   const signInWithSso = () => {
-    const popup = window.open("about:blank", "wardyn-reauth", "width=520,height=680");
+    const popup = openSignInWindow();
     if (!popup) {
       stopPoll();
       setStatus("blocked");
       return;
     }
-    popup.opener = null;
-    popup.location.href = ssoLoginURL();
     startPoll(
       () => popup.closed,
       () => setStatus("closed"),
@@ -244,8 +314,69 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   };
   const line = note[status];
 
+  // role="status" for the states that follow; the first is heard through
+  // Cancel, which takes focus and is described by the status text.
+  const strip = renewal && (
+    <div
+      role="status"
+      className="relative z-50 flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-sm text-warning"
+      onKeyDown={(e) => {
+        if (e.key !== "Escape") return;
+        // Prevented, so a page's own Escape (New Run leaves on it) stays put.
+        e.preventDefault();
+        cancelRenew();
+      }}
+    >
+      <AlertTriangle className="size-4 shrink-0" />
+      {(status === "waiting" || status === "unreachable") && <Loader2 className="size-4 shrink-0 animate-spin" />}
+      <span id="reauth-renew-status">
+        {status === "blocked"
+          ? REAUTH_DIALOG.POPUP_BLOCKED
+          : status === "closed"
+            ? REAUTH_DIALOG.CLOSED_WITHOUT
+            : status === "unreachable"
+              ? REAUTH_DIALOG.UNREACHABLE
+              : REAUTH_DIALOG.WAITING}
+      </span>
+      {/* First in the tab order, last on the line. */}
+      <Button
+        ref={cancelRef}
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="order-last ml-auto"
+        aria-describedby="reauth-renew-status"
+        onClick={cancelRenew}
+      >
+        {REAUTH_RENEW.CANCEL}
+      </Button>
+      {status === "blocked" && (
+        <a
+          href={ssoLoginURL()}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium text-info hover:underline"
+          onClick={signInInTab}
+        >
+          {REAUTH_DIALOG.POPUP_FALLBACK}
+        </a>
+      )}
+      {status === "closed" && (
+        <button
+          type="button"
+          className="font-medium underline underline-offset-2"
+          onClick={() => reauth.startRenew({ ...renewal, popup: openSignInWindow() })}
+        >
+          {REAUTH_RENEW.CTA}
+        </button>
+      )}
+    </div>
+  );
+  const stripSlot = document.getElementById(RENEW_STRIP_SLOT);
+
   return (
     <>
+      {strip && (stripSlot ? createPortal(strip, stripSlot) : strip)}
       {reauth.phase === "bar" && (
         <div
           role="status"
