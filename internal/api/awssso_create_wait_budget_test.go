@@ -125,6 +125,47 @@ func createTimeRenewal(ctx context.Context, srv *Server) (awsSSOBlob, string, ti
 	return got, failure, time.Since(start)
 }
 
+// revisionedSecrets is a store that keeps row revisions, as the Postgres store
+// does: the kind of store the wait watches.
+type revisionedSecrets struct{ secretstore.Store }
+
+func (r revisionedSecrets) Revision(ctx context.Context, name string) (string, error) {
+	v, err := r.Get(ctx, name)
+	if errors.Is(err, secretstore.ErrNotFound) {
+		return "", nil
+	}
+	return string(v), err
+}
+
+func (r revisionedSecrets) For(owner string) secretstore.Store {
+	return revisionedSecrets{r.Store.For(owner)}
+}
+
+// A lock that could not be tried at all (the lock pool is full) is not a
+// renewal in flight: create launches on the token in hand at once, with no wait.
+func TestCreateWait_LockThatCouldNotBeTriedLaunchesAtOnce(t *testing.T) {
+	srv := createRenewalFixture(t)
+	srv.cfg.Secrets = revisionedSecrets{srv.cfg.Secrets}
+	storeSSOBlobFor(t, srv, createRenewalOwner, createWaitBlob())
+	calls := renewedOIDC(t)
+	bearer := providerAdminToken(srv, createRenewalOwner)
+	srv.locks.override = exhaustedPool()
+
+	start := time.Now()
+	w := do(t, srv, http.MethodPost, "/api/v1/runs", bearer, createRenewalBody)
+	took := time.Since(start)
+
+	if w.Code != http.StatusCreated || runRowCount(srv) != 1 {
+		t.Errorf("create = %d %s with %d rows, want the run created on the token in hand", w.Code, w.Body.String(), runRowCount(srv))
+	}
+	if took > 500*time.Millisecond {
+		t.Errorf("create took %v, want no wait: a lock that could not be tried says nothing about a renewal in flight", took)
+	}
+	if got, _ := createRenewalStored(t, srv); calls.Load() != 0 || got.AccessToken != createWaitBlob().AccessToken {
+		t.Errorf("CreateToken calls = %d, stored token %q, want nothing renewed without the lock", calls.Load(), got.AccessToken)
+	}
+}
+
 // A metadata read that does not answer ends the wait within one tick, on the
 // token in hand.
 func TestCreateWait_BlockedMetadataReadEndsWithinATick(t *testing.T) {

@@ -300,7 +300,7 @@ func TestCreateRenewal_EraseDuringPutRetryWinsAndBootstrapFailsClosed(t *testing
 	heldAtEveryPut.Store(true)
 	f.srv.cfg.Secrets = putScript{Store: f.secrets, only: providerSecretName(reauthProviderUID, providerSSOPart), n: new(atomic.Int32),
 		hook: func(n int) error {
-			if _, release, ok := f.srv.tryLockAWSSSOOwner(context.Background(), "alice@example.com"); ok {
+			if _, release, ok, _ := f.srv.tryLockAWSSSOOwner(context.Background(), "alice@example.com"); ok {
 				release()
 				heldAtEveryPut.Store(false)
 			}
