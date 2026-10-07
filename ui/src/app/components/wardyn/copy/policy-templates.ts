@@ -26,4 +26,12 @@ export const POLICY_TEMPLATE_COPY = {
   CI_HINT: "No egress, no grants, stopped after an idle hour — the unattended default.",
   ALLOW_ALL: "Allow-all — observe first",
   ALLOW_ALL_HINT: "Reaches almost any site (except a block-list); watch the audit log, then tighten.",
+  // Mock packet 088-mock C2: New Run's "Use the default policy" mode.
+  DEFAULT_TITLE: "Use the default policy",
+  DEFAULT_HINT: "Launch under the policy set for this deployment.",
+  DEFAULT_HINT_PROFILE: (name: string) => `Launch under the policy set by your profile, ${name}.`,
+  DEFAULT_PREVIEW: "Default policy, read-only",
+  DEFAULT_NOTE: "This run launches under this policy as it stands. Nothing is added to it.",
+  DEFAULT_LOADING: "Loading the default policy…",
+  DEFAULT_UNAVAILABLE: "Couldn't load the default policy to show here. The run still launches under it.",
 } as const;

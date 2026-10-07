@@ -26,6 +26,7 @@ import type {
 import { RAIL_SETUP } from "../../wardyn/copy";
 import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
 import { launchGates } from "./new-run-launch-gates";
+import type { PolicyMode } from "../../wardyn/policy-panel";
 import type { WizardState } from "./wizard-types";
 import { RunRail } from "./new-run-rail";
 import type { ProviderGate } from "./model-provider-lane";
@@ -84,7 +85,7 @@ export interface NewRunLaunchPanelProps {
    *  anywhere else on the screen. */
   mode: WizardState["mode"];
   task: string;
-  useSaved: boolean;
+  policyMode: PolicyMode;
   specParsedOk: boolean;
   selectedPolicyId: string | undefined;
   policiesLoaded: boolean;
@@ -152,7 +153,7 @@ export function NewRunLaunchPanel({
   runnerUnknown,
   mode,
   task,
-  useSaved,
+  policyMode,
   specParsedOk,
   selectedPolicyId,
   policiesLoaded,
@@ -204,7 +205,7 @@ export function NewRunLaunchPanel({
     isAgent,
     mode,
     task,
-    useSaved,
+    policyMode,
     specParsedOk,
     selectedPolicyId,
     savedPolicy,

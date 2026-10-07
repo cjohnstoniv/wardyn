@@ -30,7 +30,7 @@ function mountLaunch() {
       useLaunch({
         state: initialWizardState("CC1", { selectedPolicyId: "p1" }),
         workspaces: [],
-        useSaved: true,
+        policyMode: "saved",
         ccTouched: false,
         merged: null,
         autoCheck: { local: false, backendArm: true, modelArm: true },
@@ -85,7 +85,7 @@ describe("useLaunch — automatic preflight", () => {
         useLaunch({
           state: initialWizardState("CC1", { selectedPolicyId: "p1", task: p.task }),
           workspaces: [],
-          useSaved: true,
+          policyMode: "saved",
           ccTouched: false,
           merged: null,
           autoCheck: p.auto,
