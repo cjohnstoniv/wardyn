@@ -37,11 +37,11 @@ var isOperatorCensus = map[string]int{
 	"run_entry.go:getRunForEntry":         1,
 	"sshkeys.go:handleAddSSHKey":          1,
 	// Credential namespace.
-	"runs_policy.go:secretOwnerFromRequest":  1,
-	"inline_policy.go:boundEnvSecretPosture": 1,
-	"secrets.go:handlePutSecret":             1,
-	"secrets.go:secretOwnerParam":            1,
-	"secrets.go:handleListSecrets":           1,
+	"runs_policy.go:secretOwnerFromRequest":         1,
+	"inline_policy_bounds.go:boundEnvSecretPosture": 1,
+	"secrets.go:handlePutSecret":                    1,
+	"secrets.go:secretOwnerParam":                   1,
+	"secrets.go:handleListSecrets":                  1,
 	// Reading a recording is a privacy surface, not a launch.
 	"recording.go:recordingAuthorizer": 1,
 	"recording.go:recordingReader":     1,

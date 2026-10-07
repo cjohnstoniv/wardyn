@@ -12,7 +12,7 @@ import (
 
 // TestTRYITDoc_NoStaleReplayTab pins that docs/TRY-IT.md does not send the
 // first-run user to a "Replay tab" — the run detail screen's tab is named
-// "Recording" (run-detail.tsx's Tab type union). Live viewing is `wardyn run attach
+// "Recording" (run-detail/use-run-detail.ts's Tab type union). Live viewing is `wardyn run attach
 // <id>` / the run's attach terminal, not a replay surface (the recording only
 // shows the finished capture after the session ends). Anchor both halves so a
 // rename on either side breaks this loudly instead of the doc silently
@@ -25,22 +25,22 @@ func TestTRYITDoc_NoStaleReplayTab(t *testing.T) {
 		t.Fatalf("read docs/TRY-IT.md: %v", err)
 	}
 	if regexp.MustCompile(`(?i)replay tab|→ Replay\b`).Match(doc) {
-		t.Error(`docs/TRY-IT.md still points at a "Replay tab" — the real tab is "Recording" (see run-detail.tsx's Tab type)`)
+		t.Error(`docs/TRY-IT.md still points at a "Replay tab" — the real tab is "Recording" (see run-detail/use-run-detail.ts's Tab type)`)
 	}
 
-	tabsFile := filepath.Join(root, "ui", "src", "app", "components", "screens", "run-detail.tsx")
+	tabsFile := filepath.Join(root, "ui", "src", "app", "components", "screens", "run-detail", "use-run-detail.ts")
 	tabs, err := os.ReadFile(tabsFile)
 	if err != nil {
-		t.Fatalf("read run-detail.tsx: %v", err)
+		t.Fatalf("read run-detail/use-run-detail.ts: %v", err)
 	}
 	tabType := regexp.MustCompile(`type Tab = [^\n]+`).FindString(string(tabs))
 	if tabType == "" {
-		t.Fatal("run-detail.tsx: could not find the Tab type union — update this guard's anchor if it was renamed")
+		t.Fatal("run-detail/use-run-detail.ts: could not find the Tab type union — update this guard's anchor if it was renamed")
 	}
 	if !regexp.MustCompile(`"recording"`).MatchString(tabType) {
-		t.Errorf("run-detail.tsx's Tab type no longer has \"recording\": %s", tabType)
+		t.Errorf("run-detail/use-run-detail.ts's Tab type no longer has \"recording\": %s", tabType)
 	}
 	if regexp.MustCompile(`"replay"`).MatchString(tabType) {
-		t.Errorf("run-detail.tsx's Tab type now has \"replay\" — docs/TRY-IT.md's fix assumed it never would: %s", tabType)
+		t.Errorf("run-detail/use-run-detail.ts's Tab type now has \"replay\" — docs/TRY-IT.md's fix assumed it never would: %s", tabType)
 	}
 }
