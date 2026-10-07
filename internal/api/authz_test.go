@@ -647,6 +647,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/policy":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/ado-tokens":        {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// A waiting sign-in's device code: approving it binds the approver's
+	// cloud identity to the owner's stored session, so the owner only.
+	"GET /api/v1/runs/{id}/sign-in": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// Moving a run's end keeps a sandbox and its credentials alive: a write,
 	// so not the security tier's inspect-or-stop.
 	"PATCH /api/v1/runs/{id}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
@@ -1406,9 +1409,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// #1197 L2 added PATCH /runs/{id}/title; 25 since #572 added POST
 		// /runs/{id}/resume; 26 since #1144 added GET /runs/{id}/events; 27
 		// since #1232 added GET /runs/{id}/output; 28 since #1425 added GET
-		// /runs/{id}/policy; 29 since #1428 added GET /runs/{id}/ado-tokens.
-		if probed != 29 {
-			t.Errorf("probed %d classOwner routes, want 29 — a route that left classOwner takes its tier "+
+		// /runs/{id}/policy; 29 since #1428 added GET /runs/{id}/ado-tokens; 30
+		// since #1891 added GET /runs/{id}/sign-in.
+		if probed != 30 {
+			t.Errorf("probed %d classOwner routes, want 30 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

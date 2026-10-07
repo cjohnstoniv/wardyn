@@ -1027,6 +1027,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     |---|---|---|
     | Policy CRUD; workspace CRUD incl. the scoped `approved-egress` / `llm-cred` / `requirements` widening writes; `GET`/`PUT /site-config` + its two connectivity probes (each launches a sandbox on the operator's behalf); source-library and base-image catalog CRUD; integration writes (`PUT`/`DELETE /integrations/{id}`); the attach WebSocket's ticket-LESS fallback lane (`GET /runs/{id}/attach` falling back to session-cookie auth when no `?ticket=` is presented) | 403 for members | any signed-in human, via the one `humanOrAdminAuth` group (`internal/api/http.go`; the route registrations in `internal/api/routes.go` say so at each site) |
     | Minting an attach ticket (`POST /runs/{id}/attach/ticket`); deciding an `egress_domain` approval on a run one owns | owner-or-admin — **moved DOWN since v0.5, deliberately NOT in the 403 list.** The WebSocket re-checks the ticket's own stamped role/principal at consume time, since the ticket-bearing lane never runs this gate (`handleAttachWS`); `credential` and `tool_call` approvals stay ADMIN-TIER-only regardless of ownership (residual #17) — and "admin tier" now means `isSecurityOperator`, which `authorizeUserDecision` consults BEFORE it looks at `Kind` or owner, so a `security_admin` decides any kind on any run | same |
+    | Reading a waiting sign-in's device code (`GET /runs/{id}/sign-in`) | **the run's owner only** (`getRunForEntry`, the interactive-entry rule of #1476): approving the verification page binds the approver's cloud identity to the owner's stored session, so a super admin on a person's run is refused `403 run_owner_only` and the security tier gets the byte-identical 404. The answer is only what a strict parse of the latest attempt finds in the sandbox-controlled pane, read once and bounded (the snapshot's 3 s, 64 KiB, stderr discarded, the exec always closed), and it is `waiting` only while an `aws sso login` process is running in the sandbox: the same exec checks that first and prints it on a line of its own ahead of the pane, read exactly, so pane text cannot stand in for it (`signInReadScript`). The process list is the sandbox's own, as the pane is: a sandbox that forges both gets a `waiting` answer whose link is still held to the IAM Identity Center hosts. No pane text or code is logged, stored or audited, and a run whose capture is audited answers `not_waiting` from that row, never from the stored blob | same |
     | Secret write/delete/list (`PUT`/`DELETE /secrets/{name}`, `GET /secrets`) | **self-service since v0.7** (migration `0050_secret_owned_by.sql`), so it is NOT in the 403 cluster above: any signed-in human manages their OWN row, scoped by `secretOwnerFromRequest`. A member never reaches another principal's row (the store is namespaced per owner — `Secrets.For(owner)` cannot resolve it) nor the reserved model-credential names (refused for everyone, operator included); cross-principal reads/deletes go through `?owner=` and stay operator-only. The LIST returns names only, never values, and is capability-narrowed (`handleListSecrets`, kind `secret`) | same |
     | Capability-grant CRUD (`/permissions`) and the per-kind enforcement switches | **`securityOps`, not `operatorOnly`** (`mountPermissionRoutes`): admin OR `security_admin`. So the tier that WRITES the rows is not the tier they BOUND — grants bound members, and the resolver exempts `isOperator` only. `/access` role mappings, by contrast, stay `operatorOnly` (asset #8): the second tier governs posture and cannot mint a tier | same |
     | `POST /runs`, every read | open to any signed-in human, by design | same |
@@ -3522,6 +3523,79 @@ receives it but the row records it as unverified. The flag is on the hold lane o
 every tool (`--dangerously-skip-permissions`), and the interactive lanes have no
 Wardyn gate in the path. The approver there is the human in the pane. codex-cli has
 no hold lane, so there is no gate for a repository config to pre-empt.
+
+### The unauthenticated metrics listener (opt-in)
+
+`WARDYN_METRICS_LISTEN` (Helm `metrics.listener.enabled`, off by default) opens a
+second, plain-HTTP listener that answers `GET /metrics` with **no credential**
+and `404` to everything else (`api.Server.MetricsListenerHandler`,
+`cmd/wardynd/boot_metrics.go`). `/metrics` on the console port keeps its
+`requireOperator` gate. Boot refuses a metrics address equal to the console,
+internal, SSH or UI-sandbox listener, so the open route never sits on an
+address an authenticated route uses.
+
+**What a reader who reaches the port learns.** The same body the gated route
+serves: fleet and capacity counts (active runs by state, unschedulable runs,
+CPU and memory reservations per runner kind, the age of the oldest active run,
+runs finished by terminal state, launch and start-wait latency), approval
+decisions, credential-mint, credential re-auth and AWS SSO sign-in-renewal
+outcomes, egress-deny and auth-failure volumes, audit spool, sink and partition
+health, sweep tick times, the eBPF sensor's event counts, and the operator's
+approval-notification channel ids. The labelled series, every label, and where
+its values come from:
+
+| Series | Label | Values come from |
+| --- | --- | --- |
+| `wardyn_runs_total` | `state` | the terminal run states (`types.RunState`) |
+| `wardyn_runs_active` | `state` | the non-terminal run states (`types.RunState`) |
+| `wardyn_runs_cpu_millis_held`, `wardyn_runs_memory_mib_held` | `runner` | the runner kind recorded on the run (`runner_kind`, else `runner_target`): `docker` or `k8s` |
+| `wardyn_approval_decisions_total` | `decision` | `approved` or `denied` (`approvalDecided`) |
+| `wardyn_drive_refusals_total` | `reason` | the closed `driveRefusalReasons` list |
+| `wardyn_sso_refresh_total` | `outcome` | the closed list `success`, `spent`, `transport_error`, `unavailable` |
+| `wardyn_credential_reauth_total` | `outcome` | the closed list `requested`, `resolved`, `expired`, `cancelled`, `timeout` |
+| `wardyn_run_start_wait_seconds_sum`, `_count` | `reason` | the closed `startWaitReasons` list (Kubernetes wait reasons, else `other`) |
+| `wardyn_audit_sink_drops_total` | `sink` | the sink type's name: `webhook`, `syslog` or `file` |
+| `wardyn_approval_notify_failed_total`, `wardyn_approval_notify_suppressed_total` | `channel` | **the operator's** channel ids in `WARDYN_APPROVAL_NOTIFY` (`internal/notify`, grammar `[a-z0-9_-]{1,32}`) |
+| `wardyn_sweep_last_tick_seconds` | `sweep`, `result` | the `internal/sweephealth` sweep names; `attempt` or `success` |
+| `wardyn_groundtruth_observed_by_kind_total` | `kind` | the closed `groundtruthKinds` list (process exec, network connect) |
+
+Every other series is unlabelled. **No label carries a person or a run
+identifier**, and none carries a secret, a URL or a host name: every value but
+one comes from a closed list in the code. The exception is `channel`: Wardyn
+writes only the id the operator chose, never a person or run, but the grammar
+does not stop an operator naming a channel after a person or a team, and that
+name is then readable here. Choose neutral channel ids when the listener is on.
+
+**Who can reach it.** The chart keeps the port off the Service and gives it its
+own NetworkPolicy ingress rule: by default pods in the release namespace that
+are not run pods (`wardyn.managed` absent, the same exclusion the SSH and UI
+gateway rule uses), or the peers in `metrics.listener.from`, where a peer with
+an empty `namespaceSelector` and no `podSelector` is refused at render. Two
+cases widen that. With `networkPolicy.enabled=false` the chart renders no rule,
+and the port is open to the whole pod network. Outside the chart (compose, a
+host install) the bind address and the host firewall are the only control.
+
+### The advertised SSH ProxyCommand (opt-in)
+
+`WARDYN_SSH_PROXY_COMMAND` (Helm `ssh.proxyCommand`, unset by default) is
+advisory copy. wardynd publishes it on `/healthz` as `ssh.proxy_command`, and
+each person's own `ssh` executes it on their computer when they connect
+(`docs/SSH.md`, "SSH on a 443-only estate").
+
+**The controls.** The daemon never runs the value. `wardyn run ssh` runs it
+only with `--advertised-proxy`; without the flag it shows the command and runs
+nothing. The console card and the CLI apply the daemon's own rule again
+(`cliutil.CheckSSHProxyCommand`, `ui/src/app/lib/ssh-proxy-command.ts`) and
+refuse a value that fails it. Boot refuses a value with a control character, a
+newline or a single quote, or one over 512 bytes, so the value cannot break out
+of the single-quoted `-o ProxyCommand='<value>'` that the card and the CLI
+print.
+
+**The residual.** Those checks bound the value's shape, not what it does.
+Whoever can set the value runs a command on the computer of every person who
+connects, the same class as whoever sets the chart's image. The card's
+copy-paste command and the `--print` and `--config` output are run by the
+person, so a person must read what they paste.
 
 ### Known latent vulnerabilities
 

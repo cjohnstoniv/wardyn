@@ -11,5 +11,5 @@ import { ReauthContext } from "./reauth";
  *  wfetch (the terminal's WebSocket) closes and stays closed while this holds:
  *  whoever holds the session by then may not be the person at the keyboard. */
 export function useSignedOut(): boolean {
-  return React.useContext(ReauthContext).phase !== "none";
+  return React.useContext(ReauthContext).signedOut;
 }

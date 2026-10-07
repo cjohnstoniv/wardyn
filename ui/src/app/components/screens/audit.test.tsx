@@ -286,6 +286,61 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.queryByText("source.scan")).not.toBeInTheDocument();
   });
 
+  // credential.revoke ends a run's own credentials and touches no stored
+  // sign-in; rows written before `scope` existed are the ones that misled, so
+  // the sentence applies to the action, with or without the field.
+  it("reads credential.revoke as the end of the run's own credentials, with or without scope", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "r1", action: "credential.revoke", target: "spiffe://wardyn/run/1", data: { jti: "a", scope: "run_credentials" } }),
+      ev({ id: "r2", action: "credential.revoke", target: "spiffe://wardyn/run/2", data: { jti: "b" } }),
+    ]);
+    renderScreen();
+
+    const sentence = "Recorded the end of this run's own credentials. The person's sign-in is not affected.";
+    expect(await screen.findAllByText(sentence)).toHaveLength(2);
+    expect(screen.queryByText(/revoked a credential/i)).not.toBeInTheDocument();
+  });
+
+  it("reads credential.expired.delete by its reason, and an unknown reason as the raw line", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "x1", action: "credential.expired.delete", target: "s1", data: { reason: "invalid_grant" } }),
+      ev({ id: "x2", action: "credential.expired.delete", target: "s2", data: { reason: "invalid_grant", after_lost_reply: true } }),
+      ev({ id: "x3", action: "credential.expired.delete", target: "s3", data: { reason: "expired" } }),
+      ev({ id: "x4", action: "credential.expired.delete", target: "s4", data: { reason: "something_else" } }),
+    ]);
+    renderScreen();
+
+    expect(await screen.findByText("Removed a stored sign-in the provider refused")).toBeInTheDocument();
+    expect(
+      screen.getByText("Removed a stored sign-in: the provider may have accepted a renewal whose reply was lost"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Removed a stored sign-in that had expired")).toBeInTheDocument();
+    expect(screen.getByText("credential.expired.delete — s4")).toBeInTheDocument();
+  });
+
+  // A failure row is a deletion that did not happen: the store refused it, or
+  // the sweep's own scan failed (that row names no sign-in). It never says
+  // "Removed".
+  it("reads a failed credential.expired.delete as not removed, by its reason", async () => {
+    const error = "store: 403 permission denied";
+    listAuditMock.mockResolvedValue([
+      ev({ id: "f1", action: "credential.expired.delete", outcome: "failure", target: "s1", data: { reason: "expired", error } }),
+      ev({ id: "f2", action: "credential.expired.delete", outcome: "failure", target: "s2", data: { reason: "invalid_grant", error } }),
+      ev({ id: "f3", action: "credential.expired.delete", outcome: "failure", target: "s3", data: { reason: "invalid_grant", after_lost_reply: true, error } }),
+      ev({ id: "f4", action: "credential.expired.delete", outcome: "failure", target: "", data: { reason: "expired", error: "scan: connection reset" } }),
+      ev({ id: "f5", action: "credential.expired.delete", outcome: "failure", target: "s5", data: { reason: "something_else" } }),
+    ]);
+    renderScreen();
+
+    expect(await screen.findAllByText("Could not remove a stored sign-in that had expired")).toHaveLength(2);
+    expect(screen.getByText("Could not remove a stored sign-in the provider refused")).toBeInTheDocument();
+    expect(
+      screen.getByText("Could not remove a stored sign-in after a renewal whose reply may have been lost"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("credential.expired.delete — s5")).toBeInTheDocument();
+    expect(screen.queryAllByText(/^Removed a stored sign-in/)).toHaveLength(0);
+  });
+
   // #1020: no Go code emits these four, so they carry no verb row and render
   // as the raw action, like any action the table does not know.
   it("has no verb rows for actions the server never emits", async () => {
@@ -648,6 +703,22 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(failed).toHaveClass("text-warning");
     expect(failed).not.toHaveClass("text-danger");
     expect(screen.getByText("deny")).toHaveClass("text-danger");
+  });
+
+  // #1878: jsdom has no layout, so the guard is the class that gives the
+  // sentence its floor; e2e/audit.spec.ts measures the box.
+  it("keeps a minimum width on the sentence beside a long cause, so the chip and cause shrink first", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({
+        id: "fault",
+        action: "egress.deny",
+        outcome: "denied",
+        target: "flaky.example.com:443",
+        data: { rule_source: "builtin:tunnel-failed", cause: "connection reset ".repeat(40) },
+      }),
+    ]);
+    renderScreen();
+    expect(await screen.findByText("Failed egress to flaky.example.com:443")).toHaveClass("min-w-[10rem]");
   });
 });
 

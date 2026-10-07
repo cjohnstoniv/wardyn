@@ -45,8 +45,10 @@ export interface SiteConfig {
   upstream_proxy_url?: string;
   // The upstream proxy's BYPASS list — destinations wardyn-proxy dials
   // DIRECTLY instead of CONNECTing through the upstream (the operator-hop
-  // equivalent of NO_PROXY). Exists for a private-endpoint estate where a
-  // corporate forward proxy refuses to CONNECT to an internal address. Does
+  // equivalent of NO_PROXY). For a private-endpoint estate whose corporate
+  // forward proxy has no route to the endpoint: list only hosts wardyn-proxy can
+  // itself resolve and reach. Where the corporate proxy is the route, leave the
+  // host off this list and use internal_hosts alone. Does
   // NOT lift the SSRF guard or grant policy allow on its own — see
   // internal/types/site_config.go's SiteConfig.UpstreamProxyNoProxy.
   upstream_proxy_no_proxy?: string[];

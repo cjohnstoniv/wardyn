@@ -14,6 +14,9 @@ import { type Role } from "../wardyn/operator-context";
 import { ThemeProvider } from "../wardyn/theme-provider";
 import { UnsavedGuardProvider } from "../../lib/use-unsaved-guard";
 import { aheadByHours } from "../../lib/test-clock";
+import { ReauthContext, useReauthController } from "../../lib/reauth";
+import { REAUTH_DIALOG, REAUTH_RENEW } from "../../lib/reauth-copy";
+import { RENEW_STRIP_SLOT } from "../../lib/use-session-renew";
 
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
 // the ONLY navigation. These pins fail if the drawer stops opening, drops nav
@@ -138,24 +141,54 @@ describe("AppShell — session-expiry warning", () => {
     return render(
       <MemoryRouter>
         <ThemeProvider>
-          <AppShell
-            pendingApprovals={0}
-            attentionCount={0}
-            onSignOut={() => {}}
-          />
+          <WithReauth>
+            <AppShell
+              pendingApprovals={0}
+              attentionCount={0}
+              onSignOut={() => {}}
+            />
+          </WithReauth>
         </ThemeProvider>
       </MemoryRouter>,
     );
   }
+  // The real reauth state, as App.tsx provides it: the banner's button starts
+  // a renewal in it, and the shell's lazy layer draws the strip from it.
+  function WithReauth({ children }: { children: React.ReactNode }) {
+    const { reauth } = useReauthController(() => {});
+    return <ReauthContext.Provider value={reauth}>{children}</ReauthContext.Provider>;
+  }
 
-  it("warns and offers a re-auth link when the session is about to die", async () => {
+  it("warns when the session is about to die, and Sign in again renews in place instead of leaving the page", async () => {
+    const popup = { closed: false, close: vi.fn(), opener: window as unknown, location: { href: "" } };
+    const open = vi.fn(() => popup);
+    vi.stubGlobal("open", open);
+    const user = userEvent.setup();
     renderWithMe(aheadByHours(2 / 60)); // 2 minutes
     expect(
       await screen.findByText(/session is expiring soon/i),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: /sign in again/i }),
-    ).toHaveAttribute("href", "/auth/login");
+    // A button, not a link: nothing here navigates the tab away.
+    expect(screen.queryByRole("link", { name: /sign in again/i })).toBeNull();
+    const again = screen.getByRole("button", { name: REAUTH_RENEW.CTA });
+    expect(again).toHaveAttribute("type", "button");
+
+    // The click itself opens the sign-in window, severed from this page.
+    await user.click(again);
+    expect(open).toHaveBeenCalledWith("about:blank", "wardyn-reauth", expect.any(String));
+    expect(popup.opener).toBeNull();
+    expect(popup.location.href).toBe("/auth/login");
+
+    // The renewal strip stands in the banner's place while it waits…
+    const waiting = await screen.findByText(REAUTH_DIALOG.WAITING);
+    expect(document.getElementById(RENEW_STRIP_SLOT)).toContainElement(waiting);
+    expect(screen.queryByText(/session is expiring soon/i)).toBeNull();
+
+    // …and Cancel closes the window and brings the banner back.
+    await user.click(screen.getByRole("button", { name: REAUTH_RENEW.CANCEL }));
+    expect(await screen.findByText(/session is expiring soon/i)).toBeInTheDocument();
+    expect(screen.queryByText(REAUTH_DIALOG.WAITING)).toBeNull();
+    expect(popup.close).toHaveBeenCalled();
   });
 
   it("stays silent while the session has plenty of time left", async () => {

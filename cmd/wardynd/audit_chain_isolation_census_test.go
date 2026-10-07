@@ -96,7 +96,7 @@ var declaredNonAuditTx = map[string]string{
 		"so it writes no chain-linked row and its isolation level decides nothing. The LOCK it takes is " +
 		"session-level and deliberately outlives the commit; the caller's guarded work runs afterwards, on its " +
 		"own connection and its own transactions, which are classified on their own",
-	"internal/maskmanifest/maskmanifest.go:Manifests.load": "a READ ONLY REPEATABLE READ snapshot of one run's masking " +
+	"internal/maskmanifest/maskmanifest.go:Manifests.snapshot": "a READ ONLY REPEATABLE READ snapshot of one run's masking " +
 		"manifest row and its value rows, read together so the revision it records is the one its values belong to. " +
 		"It carries no INSERT, UPDATE or DELETE on any table, audit_events included, so it writes no chain-linked " +
 		"row and its isolation level decides nothing. The transactions of this package that write (Manifests.insert, " +

@@ -80,6 +80,15 @@ defaultPolicy: |
     "auto_stop_after_sec": 0
   }
 
+# The network settings a rebuilt database lost, restored at boot
+# (WARDYN_SITE_CONFIG_SEED_FILE). A secret reference, never a credentialed URL.
+siteConfigSeed:
+  upstream_proxy_secret_ref: corp-proxy
+  upstream_proxy_no_proxy: [".corp.internal"]
+  internal_hosts:
+    - host_suffix: git.corp.internal
+      cidrs: ["10.0.0.0/8"]
+
 networkPolicy:
   ingress:
     # Setting this REPLACES the same-namespace default, so every peer that must
@@ -159,6 +168,49 @@ ssh:
   enabled: true
   port: 2222
   advertiseHost: ssh.example.com
+  # The 443-only recipe (docs/SSH.md); helm-lint asserts it renders verbatim,
+  # so the %h placeholders must survive (no tpl on this value).
+  proxyCommand: openssl s_client -quiet -verify_return_error -verify_hostname %h -connect %h:443 -servername %h
+
+# The same recipe's Istio objects, through extraObjects: neither is a ConfigMap,
+# and the destination host proves tpl expanded the release's own names. The
+# Gateway sits in the gateway pods' namespace, as the recipe has it.
+extraObjects:
+  - apiVersion: networking.istio.io/v1
+    kind: Gateway
+    metadata:
+      name: wardyn-ssh
+      namespace: istio-ingress
+    spec:
+      selector:
+        istio: ingressgateway
+      servers:
+        - port:
+            number: 443
+            name: tls-wardyn-ssh
+            protocol: TLS
+          tls:
+            mode: SIMPLE
+            credentialName: wardyn-ssh-tls
+          hosts:
+            - ssh.example.com
+  - apiVersion: networking.istio.io/v1
+    kind: VirtualService
+    metadata:
+      name: wardyn-ssh
+    spec:
+      hosts:
+        - ssh.example.com
+      gateways:
+        - istio-ingress/wardyn-ssh
+      tcp:
+        - match:
+            - port: 443
+          route:
+            - destination:
+                host: '{{ include "wardyn.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local'
+                port:
+                  number: 2222
 
 # UI-sandbox gateway, the "other side" of ITS off-by-default switch: a third
 # port, on its OWN hostname (never the console's — that separation is the
@@ -208,6 +260,18 @@ metrics:
     labels:
       release: prometheus
     interval: 30s
+  # The dedicated unauthenticated listener, with metrics.listener.from
+  # replacing its same-namespace default peer.
+  listener:
+    enabled: true
+    port: 9464
+    from:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: monitoring
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: prometheus
 
 # Raised above the 70s default; the render must carry the operator's value.
 terminationGracePeriodSeconds: 90

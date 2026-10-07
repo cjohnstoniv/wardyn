@@ -557,6 +557,10 @@ type Config struct {
 	// address routinely differ. Purely advisory copy; the gateway itself never
 	// reads it.
 	SSHAdvertiseAddr string
+	// SSHProxyCommand is WARDYN_SSH_PROXY_COMMAND: an ssh ProxyCommand published
+	// on /healthz beside SSHAdvertiseAddr, for an estate that reaches the gateway
+	// only through a TLS-terminating listener. Advisory copy; never run here.
+	SSHProxyCommand string
 	// SSHHostKey is the gateway's persisted ed25519 host key (loadOrCreateSecret
 	// pattern, cmd/wardynd), used to derive the ssh.Signer AddHostKey wants and
 	// the fingerprint /healthz discloses ("verify on first connect" — public by
@@ -659,6 +663,9 @@ type Server struct {
 	// capability_batch_test.go's growth law reads it. One atomic add per row
 	// already being compared. Zero value is ready to use.
 	capRowsScanned atomic.Int64
+	// siteConfigSeed is the boot-time WARDYN_SITE_CONFIG_SEED_FILE (nil when
+	// unset), kept for the /setup/status row (site_config_seed.go).
+	siteConfigSeed *SiteConfigSeed
 	// locks is the in-process fallback for the cross-replica locks (locks.go).
 	// The audit chain verify sweep, the site-config and capability-enforcement
 	// writers, the per-run operation lock and the two refresh single-flights

@@ -188,7 +188,7 @@ test-race: cover-check ## Alias: race coverage now rides along inside the test-r
 test-race-pg: ## Race-detector pass over the Postgres-gated concurrency proofs (needs WARDYN_TEST_PG)
 	@echo "Running the Postgres-gated concurrency proofs under the race detector (requires WARDYN_TEST_PG)..."
 	go test -race -p 1 -count=1 -run 'TestPG_' ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
-	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)' ./internal/api/...
+	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)|TestPG_CreateWait_' ./internal/api/...
 	go test -race -p 1 -count=1 -run 'TestPG_AuditPartition_.*Contiguous' ./internal/db/...
 
 test-docker: ## Run all Go tests with -tags docker
@@ -729,7 +729,8 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	[ "$$(echo "$$out" | grep -c 'WARDYN_DEFAULT_POLICY')" = "0" ] || { echo "default render (no defaultPolicy set) still set WARDYN_DEFAULT_POLICY"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'kind: Ingress')" = "0" ] || { echo "default render (ingress.enabled=false) still created an Ingress"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'WARDYN_SCIM')" = "0" ] || { echo "default render (scim.enabled=false) rendered a WARDYN_SCIM variable — SCIM is off by default and must mount no route"; exit 1; }; \
-	[ "$$(echo "$$out" | grep -c 'trusted-ca\|WARDYN_TRUSTED_CA_FILE')" = "0" ] || { echo "default render (no trustedCA set) rendered part of the corporate-CA surface — the switch is off by default and must render NONE of its five objects"; exit 1; }
+	[ "$$(echo "$$out" | grep -c 'trusted-ca\|WARDYN_TRUSTED_CA_FILE')" = "0" ] || { echo "default render (no trustedCA set) rendered part of the corporate-CA surface — the switch is off by default and must render NONE of its five objects"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'site-config-seed\|WARDYN_SITE_CONFIG_SEED_FILE')" = "0" ] || { echo "default render (no siteConfigSeed set) rendered part of the site-config seed surface — empty by default, it must render no ConfigMap, volume or variable"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set basePath=/wardyn); \
 	echo "$$out" | grep -A1 "name: WARDYN_BASE_PATH" | grep -q 'value: "/wardyn"' || { echo "basePath did not reach wardynd as WARDYN_BASE_PATH"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'path: /wardyn/healthz')" = "2" ] || { echo "basePath: liveness + startup probes are not under it — wardynd 404s /healthz outside the base path"; exit 1; }; \
@@ -766,6 +767,10 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "name: WARDYN_SSH_LISTEN" || { echo "ssh.enabled rendered no WARDYN_SSH_LISTEN"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_SSH_ADVERTISE" || { echo "ssh.enabled rendered no WARDYN_SSH_ADVERTISE"; exit 1; }; \
 	echo "$$out" | grep -q "targetPort: ssh" || { echo "ssh.enabled rendered no ssh Service port"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_SSH_PROXY_COMMAND" | grep -qF 'value: "openssl s_client -quiet -verify_return_error -verify_hostname %h -connect %h:443 -servername %h"' || { echo "ssh.proxyCommand did not render verbatim as WARDYN_SSH_PROXY_COMMAND (it must never go through tpl)"; exit 1; }; \
+	echo "$$out" | grep -q '^kind: Gateway$$' || { echo "extraObjects did not render its Gateway (an entry that is not a ConfigMap)"; exit 1; }; \
+	echo "$$out" | grep -q '^kind: VirtualService$$' || { echo "extraObjects did not render its VirtualService"; exit 1; }; \
+	echo "$$out" | grep -q "host: 'wardyn.default.svc.cluster.local'" || { echo "extraObjects did not go through tpl (the release's Service name is unexpanded)"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_UI_SANDBOX_LISTEN" || { echo "uiSandbox.enabled rendered no WARDYN_UI_SANDBOX_LISTEN — the chart would publish a port with no gateway behind it"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE" || { echo "uiSandbox.originTemplate did not render — every run would share one browser origin (threatmodel/THREAT-MODEL.md §5 #18)"; exit 1; }; \
 	echo "$$out" | grep -q "targetPort: ui" || { echo "uiSandbox.enabled rendered no ui Service port"; exit 1; }; \
@@ -780,6 +785,11 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -A1 "name: WARDYN_TRUSTED_CA_FILE" | grep -q 'value: "/etc/wardyn/trusted-ca/ca.pem"' || { echo "trustedCA did not wire WARDYN_TRUSTED_CA_FILE at the mounted path — wardynd would boot trusting only the public roots while the operator believes the corporate CA is installed"; exit 1; }; \
 	echo "$$out" | grep -q "mountPath: /etc/wardyn/trusted-ca" || { echo "trustedCA rendered no volumeMount — WARDYN_TRUSTED_CA_FILE would name a path nothing mounts"; exit 1; }; \
 	echo "$$out" | grep -A2 '^        - name: trusted-ca$$' | grep -q "name: wardyn-trusted-ca" || { echo "the trusted-ca volume does not source the ConfigMap the chart rendered"; exit 1; }; \
+	echo "$$out" | grep "seed.json:" | grep -q "corp-proxy" || { echo "siteConfigSeed rendered no seed.json ConfigMap carrying its settings"; exit 1; }; \
+	echo "$$out" | grep -q "checksum/site-config-seed:" || { echo "siteConfigSeed did not stamp the checksum pod annotation — an edit to the seed alone would not roll the pod"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_SITE_CONFIG_SEED_FILE" | grep -q 'value: "/etc/wardyn/site-config-seed/seed.json"' || { echo "siteConfigSeed did not wire WARDYN_SITE_CONFIG_SEED_FILE at the mounted path"; exit 1; }; \
+	echo "$$out" | grep -q "mountPath: /etc/wardyn/site-config-seed" || { echo "siteConfigSeed rendered no volumeMount — WARDYN_SITE_CONFIG_SEED_FILE would name a path nothing mounts"; exit 1; }; \
+	echo "$$out" | grep -A2 '^        - name: site-config-seed$$' | grep -q "name: wardyn-site-config-seed" || { echo "the site-config-seed volume does not source the ConfigMap the chart rendered"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_VAULT_TOKEN_FILE" | grep -q '/vault/secrets/token' || { echo "secretStore.vault.auth=token-file did not render WARDYN_VAULT_TOKEN_FILE"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_VAULT_KV_PREFIX" | grep -q 'wardyn-ci' || { echo "secretStore.vault.kvPrefix did not render"; exit 1; }; \
 	echo "$$out" | grep -q "wardyn-vault-token" && { echo "token-file auth still projected the Kubernetes Vault token"; exit 1; } || true
@@ -801,6 +811,58 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q 'path: "/wardyn/metrics"' || { echo "ServiceMonitor path is not /metrics under basePath"; exit 1; }; \
 	echo "$$out" | grep -A6 '^      authorization:$$' | grep -q 'name: "wardyn-scrape"' || { echo "ServiceMonitor does not carry the bearer Secret reference"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.serviceMonitor.enabled=true >/dev/null 2>&1 && { echo "ServiceMonitor rendered with no bearer Secret named — Prometheus would scrape unauthenticated"; exit 1; } || true
+	@# metrics.listener (#1886): the dedicated listener answers GET /metrics with NO credential, so it is
+	@# off by default, its container port is pod-only (never a Service port), its NetworkPolicy rule admits
+	@# same-namespace non-run pods unless metrics.listener.from replaces that (never a cluster-wide peer), and
+	@# the chart's scrape annotations never override an operator's own podAnnotations key.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
+	echo "$$out" | grep -q "WARDYN_METRICS_LISTEN\|name: metrics$$\|port: metrics$$\|prometheus.io/port" && { echo "default render (metrics.listener.enabled=false) rendered part of the unauthenticated metrics listener"; exit 1; } || true
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.listener.enabled=true --set-string 'podAnnotations.prometheus\.io/port=1234'); \
+	echo "$$out" | grep -A1 "name: WARDYN_METRICS_LISTEN" | grep -q 'value: ":9464"' || { echo "metrics.listener.enabled did not render WARDYN_METRICS_LISTEN on the default port 9464"; exit 1; }; \
+	echo "$$out" | grep -A1 '^            - name: metrics$$' | grep -q "containerPort: 9464" || { echo "metrics.listener.enabled rendered no metrics container port"; exit 1; }; \
+	echo "$$out" | grep -q "targetPort: metrics" && { echo "the unauthenticated metrics port is on the Service — it must stay pod-only"; exit 1; }; \
+	echo "$$out" | grep -q 'prometheus.io/scrape: "true"' || { echo "metrics.listener.enabled did not render the prometheus.io/scrape annotation"; exit 1; }; \
+	echo "$$out" | grep -q 'prometheus.io/path: /metrics$$' || { echo "metrics.listener.enabled did not render the prometheus.io/path annotation"; exit 1; }; \
+	echo "$$out" | grep -q 'prometheus.io/port: "1234"' || { echo "the operator's own prometheus.io/port pod annotation did not win over the chart's"; exit 1; }; \
+	echo "$$out" | grep -q 'prometheus.io/port: "9464"' && { echo "the chart's prometheus.io/port overrode the operator's own"; exit 1; }; \
+	echo "$$out" | grep -B4 'port: metrics$$' | grep -q "key: wardyn.managed" || { echo "the metrics listener's NetworkPolicy rule does not default to same-namespace non-run pods"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'namespaceSelector: {}')" = "1" ] || { echo "metrics.listener added a namespaceSelector: {} peer (only the DNS egress rule may be cluster-wide)"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
+	echo "$$out" | grep -A1 '^            - name: metrics$$' | grep -q "containerPort: 9464" || { echo "all-on: metrics.listener rendered no metrics container port"; exit 1; }; \
+	echo "$$out" | grep -q "targetPort: metrics" && { echo "all-on: the unauthenticated metrics port is on the Service"; exit 1; }; \
+	echo "$$out" | grep -q 'prometheus.io/port: "9464"' || { echo "all-on: metrics.listener did not render prometheus.io/port beside the operator's prometheus.io/scrape"; exit 1; }; \
+	echo "$$out" | grep -B6 'port: metrics$$' | grep -q "app.kubernetes.io/name: prometheus" || { echo "all-on: metrics.listener.from did not render on the metrics rule"; exit 1; }; \
+	echo "$$out" | grep -B6 'port: metrics$$' | grep -q "wardyn.managed" && { echo "all-on: metrics.listener.from did not REPLACE the default peer"; exit 1; } || true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.listener.enabled=true --set metrics.listener.port=8080 >/dev/null 2>&1 && { echo "metrics.listener.port equal to service.port rendered — wardynd would refuse to boot"; exit 1; } || true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.listener.enabled=true --set-json 'metrics.listener.from=[{"namespaceSelector":{}}]' >/dev/null 2>&1 && { echo "metrics.listener.from with a bare namespaceSelector: {} rendered — every namespace would reach the unauthenticated listener"; exit 1; } || true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.listener.enabled=true --set-json 'metrics.listener.from=[{"namespaceSelector":{"matchLabels":{}}}]' 2>&1 | grep -q "metrics.listener.from has a peer with an empty namespaceSelector" || { echo "metrics.listener.from with namespaceSelector: {matchLabels: {}} rendered — a selector with no matchLabels and no matchExpressions is every namespace, however it is spelled"; exit 1; }
+	@# Both selectors are judged by what Kubernetes reads, not by how they are spelled: an empty selector
+	@# ({}, null, {matchLabels: {}}, {matchExpressions: []}) selects everything, so every namespace AND every
+	@# pod is refused, by the refusal sentence. A named namespace, every namespace narrowed to labelled pods,
+	@# and an ipBlock still render.
+	@for peer in \
+	  '{"namespaceSelector":{"matchLabels":{}},"podSelector":{"matchLabels":{}}}' \
+	  '{"namespaceSelector":{},"podSelector":{"matchLabels":{}}}' \
+	  '{"namespaceSelector":{"matchLabels":{}},"podSelector":{"matchExpressions":[]}}' \
+	  '{"namespaceSelector":{"matchExpressions":[]},"podSelector":{}}' \
+	  '{"namespaceSelector":{"matchExpressions":[]},"podSelector":{"matchExpressions":[]}}' \
+	  '{"namespaceSelector":{"matchLabels":null,"matchExpressions":null},"podSelector":{"matchLabels":null,"matchExpressions":null}}' \
+	  '{"namespaceSelector":{},"podSelector":null}' \
+	  '{"namespaceSelector":null,"podSelector":null}'; do \
+	  out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.listener.enabled=true --set-json "metrics.listener.from=[$$peer]" 2>&1); \
+	  echo "$$out" | grep -q "metrics.listener.from has a peer with an empty namespaceSelector" || { echo "metrics.listener.from peer $$peer was not refused — it admits every pod in every namespace to the unauthenticated listener"; exit 1; }; \
+	done
+	@for pair in \
+	  '{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"monitoring"}}}=kubernetes.io/metadata.name: monitoring' \
+	  '{"namespaceSelector":{},"podSelector":{"matchLabels":{"app.kubernetes.io/name":"prometheus"}}}=app.kubernetes.io/name: prometheus' \
+	  '{"ipBlock":{"cidr":"10.0.0.0/8"}}=cidr: 10.0.0.0/8'; do \
+	  peer=$${pair%%=*}; want=$${pair#*=}; \
+	  out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.listener.enabled=true --set-json "metrics.listener.from=[$$peer]") || { echo "metrics.listener.from peer $$peer no longer renders — the every-namespace-and-every-pod refusal is too wide"; exit 1; }; \
+	  echo "$$out" | grep -B6 'port: metrics$$' | grep -q "$$want" || { echo "metrics.listener.from peer $$peer rendered without '$$want' on the metrics rule"; exit 1; }; \
+	done
+	@d=$$(mktemp -d); trap 'rm -rf "$$d"' EXIT; cp -r deploy/helm/wardyn "$$d/wardyn" && cp deploy/helm/wardyn/ci/reuse-values/v0.8.5.yaml "$$d/wardyn/values.yaml"; \
+	out=$$(helm template wardyn "$$d/wardyn" --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.listener.enabled=true) || { echo "metrics.listener does not render against v0.8.5's values (a --reuse-values upgrade): read it through default dict"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_METRICS_LISTEN" | grep -q 'value: ":9464"' || { echo "metrics.listener against v0.8.5's values did not fall back to port 9464"; exit 1; }
 	@# WARDYN_DAEMON_PROXY_SECRET from an operator Secret (#719): daemonProxySecret.existingSecret
 	@# mounts it read-only and wires WARDYN_DAEMON_PROXY_SECRET at the mounted path; a default
 	@# render (no daemonProxySecret set) touches none of it, and an env.WARDYN_DAEMON_PROXY_SECRET

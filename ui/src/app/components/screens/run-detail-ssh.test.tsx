@@ -32,7 +32,7 @@ import { ConnectSSHCard } from "./run-detail-ssh";
 import { HttpError } from "../../lib/api/core";
 import { RUN_OWNER_ONLY } from "../../lib/run-entry";
 import { OperatorProvider } from "../wardyn/operator-context";
-import { UI_APPS_LANE } from "../wardyn/copy";
+import { RUN_SSH, UI_APPS_LANE } from "../wardyn/copy";
 import { aheadByHours } from "../../lib/test-clock";
 
 const OWNER = "alice@example.com";
@@ -695,5 +695,131 @@ describe("ConnectSSHCard — the CLI hint's WARDYN_URL keeps the base path", () 
     const cmd = screen.getByText((t) => t.includes(`wardyn run attach ${baseRun.id}`));
     expect(cmd.textContent).toContain(`WARDYN_URL=${window.location.origin}/wardyn wardyn run attach`);
     expect(cmd.textContent).not.toContain(`WARDYN_URL=${window.location.origin} `);
+  });
+});
+
+// 088-mock S1: an advertised ssh.proxy_command makes the ssh_config block the
+// primary and moves the one-liner into a closed <details>. The strings under
+// test are RUN_SSH's, and the one-liner and the config block must equal
+// `wardyn run ssh --print` / `--config` (cmd/wardyn/ssh_test.go's
+// TestRunSSH_ProxyCommandPrintConfigJSON pins the Go side with these literals).
+describe("ConnectSSHCard — an advertised ProxyCommand", () => {
+  const PROXY = "openssl s_client -quiet -verify_return_error -verify_hostname %h -connect %h:443 -servername %h";
+  const shortId = baseRun.id.replace(/^run_/, "").slice(0, 8);
+  const alias = `wardyn-${shortId}`;
+  const cliPrint = `ssh -o ProxyCommand='${PROXY}' ${baseRun.id}@ssh.example.com -p 2222`;
+  const cliConfig = [
+    `Host ${alias}`,
+    "  HostName ssh.example.com",
+    "  Port 2222",
+    `  User ${baseRun.id}`,
+    `  ProxyCommand ${PROXY}`,
+  ].join("\n");
+
+  function advertise(proxy?: string, keys = true) {
+    healthMock.mockResolvedValue({
+      status: "ok",
+      ssh: { enabled: true, advertise_addr: "ssh.example.com:2222", host_key_fingerprint: "SHA256:abc", proxy_command: proxy },
+    });
+    listKeysMock.mockResolvedValue(
+      keys ? [{ fingerprint: "SHA256:x", principal: OWNER, name: "k", public_key: "", created_at: "" }] : [],
+    );
+  }
+  const blockText = (el: HTMLElement) => el.closest("pre")?.textContent;
+
+  it("Case A: leads with the config block, closes the one-liner, and equals the CLI's output", async () => {
+    advertise(PROXY);
+    renderCard();
+    await screen.findByText(RUN_SSH.PROXY_NOTE);
+    const config = screen.getByText((_, el) => el?.tagName === "CODE" && el.textContent === cliConfig);
+    expect(config.closest("details")).toBeNull();
+    const oneLiner = screen.getByText(cliPrint);
+    const details = oneLiner.closest("details");
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute("open");
+    expect(details!.querySelector("summary")!.textContent).toBe(RUN_SSH.ONE_LINE);
+    expect(screen.getByText((_, el) => el?.tagName === "P" && el.textContent === RUN_SSH.CONFIG_USE(alias))).toBeInTheDocument();
+    expect(screen.getByText((_, el) => el?.tagName === "P" && el.textContent === RUN_SSH.CLI_PROXY(baseRun.id))).toBeInTheDocument();
+    expect(screen.getByText(RUN_SSH.CLI_PROXY_WHY)).toBeInTheDocument();
+    // The old hint would send the person to a command that exits non-zero.
+    expect(screen.queryByText(/Or skip retyping it/)).toBeNull();
+    expect(screen.queryByText(RUN_SSH.PROXY_REFUSED)).toBeNull();
+    // The card paints ssh_config in place of the one-liner as the primary: the
+    // config block comes before the one-line summary in document order.
+    expect(config.compareDocumentPosition(details!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("Case A: the three Copy buttons carry their own accessible names", async () => {
+    advertise(PROXY);
+    renderCard();
+    await screen.findByText(RUN_SSH.PROXY_NOTE);
+    for (const name of [RUN_SSH.COPY_CLI, RUN_SSH.COPY_CONFIG, RUN_SSH.COPY_COMMAND]) {
+      expect(screen.getAllByRole("button", { name, hidden: true })).toHaveLength(1);
+    }
+    // Only the VS Code settings line keeps the bare name; the mock names three.
+    expect(screen.getAllByRole("button", { name: "Copy", hidden: true })).toHaveLength(1);
+    expect(blockText(screen.getByText(cliPrint))).toBe(cliPrint);
+  });
+
+  it("Case B: absent proxy_command draws today's card, with the same Copy names", async () => {
+    advertise(undefined);
+    renderCard();
+    const plain = `ssh ${baseRun.id}@ssh.example.com -p 2222`;
+    expect(await screen.findByText(plain)).toBeInTheDocument();
+    expect(screen.getByText("ssh config").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText(/Or skip retyping it/)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_SSH.PROXY_NOTE)).toBeNull();
+    expect(screen.queryByText(RUN_SSH.PROXY_REFUSED)).toBeNull();
+    expect(screen.getAllByRole("button", { name: RUN_SSH.COPY_COMMAND, hidden: true })).toHaveLength(1);
+  });
+
+  it("a value the daemon would refuse draws Case B plus the one warning box, never the value", async () => {
+    for (const bad of ["ncat %h\nProxyCommand evil", "x\u0007y", "echo 'hi'", "a".repeat(513)]) {
+      healthMock.mockReset();
+      advertise(bad);
+      const { unmount } = renderCard();
+      const warn = await screen.findByText(RUN_SSH.PROXY_REFUSED);
+      expect(warn.parentElement).toHaveClass("rounded-lg", "border", "border-warning/30", "bg-warning-subtle", "px-3", "py-2.5");
+      expect(screen.getByText(`ssh ${baseRun.id}@ssh.example.com -p 2222`)).toBeInTheDocument();
+      expect(screen.queryByText(RUN_SSH.PROXY_NOTE)).toBeNull();
+      expect(document.body.textContent).not.toContain("ProxyCommand evil");
+      unmount();
+    }
+  });
+
+  it("accepts a 512-byte value", async () => {
+    const edge = "a".repeat(512);
+    advertise(edge);
+    renderCard();
+    await screen.findByText(RUN_SSH.PROXY_NOTE);
+    expect(screen.queryByText(RUN_SSH.PROXY_REFUSED)).toBeNull();
+  });
+
+  it("SSH off ignores proxy_command, and an unanswered /healthz draws the heading alone", async () => {
+    healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: false, proxy_command: PROXY } });
+    listKeysMock.mockResolvedValue([]);
+    const off = renderCard();
+    await screen.findByText(/Off on this deployment\. It gives you/);
+    expect(screen.queryByText(RUN_SSH.PROXY_NOTE)).toBeNull();
+    expect(screen.queryByText(RUN_SSH.PROXY_REFUSED)).toBeNull();
+    off.unmount();
+
+    healthMock.mockResolvedValue({});
+    renderCard();
+    await waitFor(() => expect(healthMock).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("SSH")).toBeInTheDocument();
+    expect(screen.queryByText(RUN_SSH.ONE_LINE)).toBeNull();
+    expect(screen.queryByText(/Off on this deployment\. It gives you/)).toBeNull();
+  });
+
+  it("no key: the warning box sits above the block and both Case A blocks dim together", async () => {
+    advertise(PROXY, false);
+    renderCard();
+    const warn = await screen.findByText("Add your SSH key first");
+    const config = screen.getByText((_, el) => el?.tagName === "CODE" && el.textContent === cliConfig);
+    expect(warn.compareDocumentPosition(config) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const dimmed = config.closest(".opacity-50");
+    expect(dimmed).not.toBeNull();
+    expect(dimmed).toContainElement(screen.getByText(cliPrint));
   });
 });

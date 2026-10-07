@@ -63,10 +63,11 @@ export function SignInSteps({ step, provider }: { step: SignInStep; provider: st
   return <ProgressSteps rows={rows} testId="signin-progress" />;
 }
 
-function DeviceCode({ code }: { code: string }) {
+export function DeviceCode({ code, label }: { code: string; label?: string }) {
   if (!code) return null;
   return (
     <code
+      aria-label={label}
       className="rounded-md border border-border bg-background/70 px-2 py-1 font-mono text-sm text-foreground"
       data-testid="signin-device-code"
     >

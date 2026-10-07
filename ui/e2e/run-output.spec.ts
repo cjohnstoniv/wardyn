@@ -69,7 +69,7 @@ test.describe("Run output tab", () => {
       route.fulfill({ json: body({ source: "pane_snapshot", output: "user@sandbox:~$ " }) }),
     );
     await openOutputTab(page);
-    await expect(page.getByText(RUN_OUTPUT.sourcePane)).toBeVisible();
+    await expect(page.getByText(RUN_OUTPUT.sourcePane, { exact: true })).toBeVisible();
     await expect(page.getByText(RUN_OUTPUT.paneCaption)).toBeVisible();
     await expect(page.getByTestId("run-output-text")).toContainText("user@sandbox:~$");
   });

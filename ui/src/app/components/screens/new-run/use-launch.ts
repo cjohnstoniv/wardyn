@@ -17,16 +17,19 @@ import { HttpError, isSignedOutHold } from "../../../lib/api/core";
 import type { PolicyRef } from "../../../lib/api/health";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { getErrorMessage } from "../../../lib/format";
+import type { PolicyMode } from "../../wardyn/policy-panel";
 import { primaryWorkspaceId, type WizardState } from "./wizard-types";
 import { buildSpec, mergeRunSelections } from "./wizard-spec";
+import { defaultLaneDropsWorkspace } from "./new-run-launch-gates";
+import { POLICY_TEMPLATE_COPY } from "../../wardyn/copy/policy-templates";
 import type { SetupModelProvider, Workspace } from "../../../lib/types";
 
 export interface UseLaunchParams {
   state: WizardState;
   workspaces: Workspace[];
   modelProviders?: SetupModelProvider[];
-  /** The mode row: launch by reference (a saved policy) vs. an authored document. */
-  useSaved: boolean;
+  /** The mode row: the deployment default (no policy sent), a saved policy by reference, or an authored document. */
+  policyMode: PolicyMode;
   /** Whether the Barrier control carries an EXPLICIT pick — see new-run-screen.tsx's ccTouched. */
   ccTouched: boolean;
   /** The post-parse union of the authored spec with this run's own selections, or null while the spec doesn't parse. */
@@ -104,7 +107,7 @@ export interface PreflightRefusal {
 }
 
 // New Run's launch + preflight state and actions — split out of
-// new-run-screen.tsx (see that file's header). `state`/`workspaces`/`useSaved`/
+// new-run-screen.tsx (see that file's header). `state`/`workspaces`/`policyMode`/
 // `ccTouched`/`merged` are the screen's own form state, read here rather than
 // duplicated: buildRunInput composes the wire body from exactly what the form
 // shows, so the screen and this hook can never author two different requests.
@@ -112,7 +115,7 @@ export function useLaunch({
   state,
   workspaces,
   modelProviders,
-  useSaved,
+  policyMode,
   ccTouched,
   merged,
   onLaunchError,
@@ -176,12 +179,25 @@ export function useLaunch({
     // workspace_id override must never OVERWRITE buildSpec's deliberate
     // ephemeral-workspace fallback with undefined — that silently launched a
     // workspace-less run.
-    if (useSaved && state.selectedPolicyId) {
+    if (policyMode === "saved" && state.selectedPolicyId) {
       return {
         ...run,
         policy_id: state.selectedPolicyId,
         workspace_id: primaryWorkspaceId(state.workspaces, workspaces) ?? run.workspace_id,
       };
+    }
+    // The default lane sends neither policy_id nor inline_policy: the server
+    // resolves the caller's ceiling itself, so this body is what both Launch
+    // and Check again send. The picked workspace still travels by reference,
+    // as on the saved lane: without it a local_dir pick is never mounted.
+    if (policyMode === "default") {
+      // Unreachable, as below: launchGates holds both actions while a second
+      // workspace is attached. This body carries one workspace, so sending it
+      // would launch without the other.
+      if (defaultLaneDropsWorkspace(policyMode, state.workspaces.length)) {
+        throw new Error(POLICY_TEMPLATE_COPY.DEFAULT_ONE_WORKSPACE);
+      }
+      return { ...run, workspace_id: primaryWorkspaceId(state.workspaces, workspaces) ?? run.workspace_id };
     }
     // Unreachable: `problem` disables both actions while the document is
     // broken. Throwing beats substituting a composed fallback nobody wrote.
@@ -252,7 +268,10 @@ export function useLaunch({
     // through would preflight the leftover Custom document this lane will
     // never launch, breaking buildRunInput's same-body invariant. (The panel
     // disables the button in this state too; this guards the race.)
-    if (useSaved && !state.selectedPolicyId) return;
+    if (policyMode === "saved" && !state.selectedPolicyId) return;
+    // Likewise the default lane with a second workspace attached: it has no
+    // body that carries both.
+    if (defaultLaneDropsWorkspace(policyMode, state.workspaces.length)) return;
     // One check at a time: a newer one supersedes the older, whose answer is
     // then never applied. The previous verdict stays on screen until the new
     // one lands, so a re-check of the same body never un-blocks Launch.

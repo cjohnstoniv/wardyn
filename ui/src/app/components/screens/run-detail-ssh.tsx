@@ -34,9 +34,10 @@ import { runs as runsApi } from "../../lib/api/runs";
 import { sshKeys as sshKeysApi } from "../../lib/api/ssh-keys";
 import { Button } from "../ui/button";
 import { basePath } from "../../lib/base-path";
+import { proxyCommandIsSafe } from "../../lib/ssh-proxy-command";
 import { entryErrorMessage, mayEnterRunOrUnknown } from "../../lib/run-entry";
 import { CodeBlock, Mono } from "../wardyn/code-block";
-import { UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
+import { RUN_SSH, UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
 import { WidgetCard } from "../wardyn/primitives";
 import { cn } from "../ui/utils";
@@ -58,6 +59,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
     enabled?: boolean;
     advertise_addr?: string;
     host_key_fingerprint?: string;
+    proxy_command?: string;
   } | null>(null);
   // null = not loaded yet (treated as "assume keys exist" below, so a human
   // who HAS keys never sees the no-keys lead-in flash before the real answer
@@ -128,12 +130,21 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   const [host, port] = splitHostPort(ssh?.advertise_addr ?? "");
   const shortId = run.id.replace(/^run_/, "").slice(0, 8);
   const portFlag = port ? ` -p ${port}` : "";
-  const command = `ssh ${run.id}@${host || "…"}${portFlag}`;
+  // A proxy command that fails the daemon's own rules is never drawn into a
+  // shell line or an ssh_config line: the card falls back to the plain form and
+  // says why (088-mock S1 D5).
+  const advertisedProxy = ssh?.proxy_command ?? "";
+  const proxyRefused = advertisedProxy !== "" && !proxyCommandIsSafe(advertisedProxy);
+  const proxy = proxyRefused ? "" : advertisedProxy;
+  const proxyFlag = proxy ? `-o ProxyCommand='${proxy}' ` : "";
+  // Byte-identical to `wardyn run ssh --print` (cmd/wardyn/ssh.go).
+  const command = `ssh ${proxyFlag}${run.id}@${host || "…"}${portFlag}`;
   const sshConfig = [
     `Host wardyn-${shortId}`,
     `  HostName ${host || "…"}`,
     `  Port ${port || "22"}`,
     `  User ${run.id}`,
+    ...(proxy ? [`  ProxyCommand ${proxy}`] : []),
   ].join("\n");
   const hasKeys = keys === null || keys.length > 0;
   const sshOn = !!ssh?.enabled;
@@ -232,7 +243,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
         <Mono className="text-foreground">WARDYN_ADMIN_TOKEN</Mono>, same as this page's own terminal. Ctrl-C or
         closing the session detaches.
       </p>
-      <CodeBlock text={cliCommand} />
+      <CodeBlock text={cliCommand} copyLabel={RUN_SSH.COPY_CLI} />
       <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
         Started with <Mono className="text-foreground">make setup</Mono>? The binary is at{" "}
         <Mono className="text-foreground">./bin/wardyn</Mono> in the repo.
@@ -264,19 +275,48 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
         </div>
       )}
 
+      {sshOn && proxyRefused && (
+        <div className="mb-3 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
+          <p className="text-meta leading-relaxed text-muted-foreground">{RUN_SSH.PROXY_REFUSED}</p>
+        </div>
+      )}
+
       {sshOn && (
       <div className={cn("mt-2", !hasKeys && "opacity-50")}>
-        <CodeBlock text={command} />
-        <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
-          Or skip retyping it: <Mono className="text-foreground">wardyn run ssh {run.id}</Mono>
-        </p>
+        {proxy ? (
+          <>
+            <p className="mb-1.5 text-meta leading-relaxed text-muted-foreground">{RUN_SSH.PROXY_NOTE}</p>
+            <CodeBlock text={sshConfig} copyLabel={RUN_SSH.COPY_CONFIG} />
+            <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
+              {monoTokens(RUN_SSH.CONFIG_USE(`wardyn-${shortId}`), "~/.ssh/config", `ssh wardyn-${shortId}`)}
+            </p>
+            <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
+              {monoTokens(RUN_SSH.CLI_PROXY(run.id), `wardyn run ssh --advertised-proxy ${run.id}`)}
+            </p>
+            <p className="text-meta leading-relaxed text-muted-foreground">{RUN_SSH.CLI_PROXY_WHY}</p>
 
-        <details className="mt-2.5">
-          <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
-            ssh config
-          </summary>
-          <CodeBlock text={sshConfig} className="mt-1.5" />
-        </details>
+            <details className="mt-2.5">
+              <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+                {RUN_SSH.ONE_LINE}
+              </summary>
+              <CodeBlock text={command} copyLabel={RUN_SSH.COPY_COMMAND} className="mt-1.5" />
+            </details>
+          </>
+        ) : (
+          <>
+            <CodeBlock text={command} copyLabel={RUN_SSH.COPY_COMMAND} />
+            <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
+              Or skip retyping it: <Mono className="text-foreground">wardyn run ssh {run.id}</Mono>
+            </p>
+
+            <details className="mt-2.5">
+              <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+                ssh config
+              </summary>
+              <CodeBlock text={sshConfig} copyLabel={RUN_SSH.COPY_CONFIG} className="mt-1.5" />
+            </details>
+          </>
+        )}
 
         {ssh.host_key_fingerprint && (
           <div className="mt-2.5 text-meta">

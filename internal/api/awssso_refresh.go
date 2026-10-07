@@ -353,8 +353,9 @@ func (s *Server) lockAWSSSOOwner(ctx context.Context, owner string) (context.Con
 }
 
 // tryLockAWSSSOOwner is lockAWSSSOOwner's NON-BLOCKING form: ok=false rather
-// than queueing behind a renewal that is already in flight, and ok=false too
-// when the lock cannot be taken at all.
+// than queueing behind a renewal that is already in flight. A lock that could
+// not be tried at all (no lock connection to spare, the database not answering)
+// is err, never ok=false: it says nothing about a renewal in flight.
 //
 // Why that is a different question from "who renews". Dispatch is
 // synchronous with POST /runs, and the renewal starts a whole skew window
@@ -372,23 +373,38 @@ func (s *Server) lockAWSSSOOwner(ctx context.Context, owner string) (context.Con
 // A caller whose token is EXPIRED still BLOCKS, because for that caller the
 // renewal is the difference between a working run and a dead one, and the
 // in-flight renewal is very likely about to produce exactly what it needs.
-func (s *Server) tryLockAWSSSOOwner(ctx context.Context, owner string) (context.Context, func(), bool) {
-	return s.tryLock(ctx, db.AWSSSOLockClass, owner)
+func (s *Server) tryLockAWSSSOOwner(ctx context.Context, owner string) (context.Context, func(), bool, error) {
+	return s.locker().TryLock(ctx, db.NewLockKey(db.AWSSSOLockClass, owner))
 }
 
 // lockAWSSSORenewal takes owner's renewal lock for refreshAWSSSOBlob. mayServe
 // says the token in hand can still carry a run, so the caller only tries
-// (tryLockAWSSSOOwner): got=false then means a renewal is already in flight, or
-// the lock cannot be had, and the caller serves the token it holds. Any other
-// caller waits (lockAWSSSOOwner); err means the lock could not be taken at all.
-// The returned context is the guarded work's.
+// (tryLockAWSSSOOwner): got=false with no error then means a renewal is already
+// in flight. Any other caller waits (lockAWSSSOOwner). err means the lock could
+// not be tried or taken at all (renewalLockUntaken). The returned context is the
+// guarded work's.
 func (s *Server) lockAWSSSORenewal(ctx context.Context, owner string, mayServe bool) (lctx context.Context, unlock func(), got bool, err error) {
 	if mayServe {
-		lctx, unlock, got = s.tryLockAWSSSOOwner(ctx, owner)
-		return lctx, unlock, got, nil
+		return s.tryLockAWSSSOOwner(ctx, owner)
 	}
 	lctx, unlock, err = s.lockAWSSSOOwner(ctx, owner)
 	return lctx, unlock, err == nil, err
+}
+
+// renewalLockUntaken is refreshAWSSSOBlob's answer when the owner lock could
+// not be tried or taken at all. No lock, no redemption: spending the refresh
+// token unlocked could spend it twice. A token that can still carry a run
+// (mayServe) is served at once: nothing says a renewal is in flight, so there is
+// nothing to wait for. Otherwise nothing was redeemed and the sign-in is still
+// good: retry.
+func (s *Server) renewalLockUntaken(ctx context.Context, blob awsSSOBlob, mayServe bool, err error) (awsSSOBlob, string) {
+	if mayServe {
+		slog.WarnContext(ctx, "wardynd: could not try the AWS SSO renewal lock; serving the still-valid token", slog.Any("err", err))
+		return blob, ""
+	}
+	slog.WarnContext(ctx, "wardynd: could not take the AWS SSO renewal lock; not renewing the credential", slog.Any("err", err))
+	s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeUnavailable)
+	return blob, awsSSORefreshUnavailableSentence
 }
 
 // AWSSSOSpentTokenRetention bounds how long a persisted spent-token row is
@@ -552,19 +568,13 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 	// dispatch that close to the edge has everything to gain by waiting for the
 	// renewal already in flight, and nothing to lose — it has no usable
 	// credential of its own either way.
-	ctx, unlock, got, lerr := s.lockAWSSSORenewal(parent, scope.owner, blob.servableFor(now, awsSSORefreshServeFloor))
+	mayServe := blob.servableFor(now, awsSSORefreshServeFloor)
+	ctx, unlock, got, lerr := s.lockAWSSSORenewal(parent, scope.owner, mayServe)
 	if lerr != nil {
-		// No lock, no redemption: the token in hand cannot carry a run, and
-		// spending the refresh token unlocked could spend it twice. Nothing was
-		// redeemed, so the sign-in is still good: retry.
-		slog.WarnContext(parent, "wardynd: could not take the AWS SSO renewal lock; not renewing the credential", slog.Any("err", lerr))
-		s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeUnavailable)
-		return blob, awsSSORefreshUnavailableSentence
+		return s.renewalLockUntaken(parent, blob, mayServe, lerr)
 	}
 	if !got {
-		slog.InfoContext(parent, "wardynd: a renewal of this AWS SSO credential is already in flight; serving the still-valid token",
-			slog.String("credential_source", awsSSOCredentialSourceLabel(scope)))
-		return blob, ""
+		return s.renewalInFlight(parent, scope, blob)
 	}
 	defer unlock()
 
@@ -619,7 +629,7 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 		}
 	}
 
-	resp, attempts, err := s.createAWSSSOTokenWithRetry(ctx, blob)
+	resp, attempts, afterLostReply, err := s.createAWSSSOTokenWithRetry(ctx, blob)
 	if err != nil {
 		spent := errors.Is(err, errAWSSSOCredentialSpent)
 		if spent {
@@ -635,13 +645,11 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 			if guarded {
 				dctx = secretstore.WithIfRevision(dctx, rev)
 			}
-			s.deleteSpentAWSSSOBlob(dctx, scope)
+			s.deleteSpentAWSSSOBlob(dctx, scope, afterLostReply)
 		}
 		slog.ErrorContext(ctx, "wardynd: renewing the captured AWS SSO credential failed",
-			slog.Bool("credential_spent", spent), slog.Any("err", err))
-		s.auditAWSSSORefresh(ctx, scope, "failure", map[string]any{
-			"provider": awsSSOProvider, "spent": spent, "error": err.Error(), "attempts": attempts,
-		})
+			slog.Bool("credential_spent", spent), slog.Bool("after_lost_reply", afterLostReply), slog.Any("err", err))
+		s.auditAWSSSORefresh(ctx, scope, "failure", awsSSORefreshFailureData(spent, err, attempts, afterLostReply))
 		if spent {
 			s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeSpent)
 			return blob, awsSSORefreshSpentSentence
@@ -783,21 +791,28 @@ func (s *Server) auditAWSSSORefresh(ctx context.Context, scope awsSSOScope, outc
 // errors are errors.Join'd so BOTH are in the row: two EOFs read as a network
 // story, an EOF then invalid_grant already says spent, now with attempts:2
 // beside it.
-func (s *Server) createAWSSSOTokenWithRetry(ctx context.Context, blob awsSSOBlob) (awsSSOTokenResponse, int, error) {
-	resp, err := s.createAWSSSOToken(ctx, blob)
+//
+// afterLostReply is the retry ending invalid_grant (awsSSOEndedInvalidGrant, not
+// the rest of the spent class) after a first attempt whose reply was lost
+// (awsSSOReplyLost): consistent with AWS having accepted that first request and
+// replaced the refresh token, never proof of it.
+func (s *Server) createAWSSSOTokenWithRetry(ctx context.Context, blob awsSSOBlob) (resp awsSSOTokenResponse, attempts int, afterLostReply bool, err error) {
+	resp, err = s.createAWSSSOToken(ctx, blob)
 	if err == nil || errors.Is(err, errAWSSSOCredentialSpent) {
-		return resp, 1, err
+		return resp, 1, false, err
 	}
+	// Classified on its own, before the join below makes the two errors one.
+	firstLost := awsSSOReplyLost(err)
 	select {
 	case <-ctx.Done():
-		return resp, 1, err
+		return resp, 1, false, err
 	case <-time.After(awsSSORefreshRetryDelay):
 	}
 	resp2, err2 := s.createAWSSSOToken(ctx, blob)
 	if err2 != nil {
-		return resp2, 2, errors.Join(err, err2)
+		return resp2, 2, firstLost && awsSSOEndedInvalidGrant(err2), errors.Join(err, err2)
 	}
-	return resp2, 2, nil
+	return resp2, 2, false, nil
 }
 
 // createAWSSSOToken performs the SSO-OIDC CreateToken refresh_token grant.
@@ -832,7 +847,8 @@ func (s *Server) createAWSSSOToken(ctx context.Context, blob awsSSOBlob) (awsSSO
 	if err != nil {
 		return out, fmt.Errorf("aws sso create-token: marshal request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.awsSSOTokenEndpoint(blob.Region), bytes.NewReader(body))
+	tctx, written := traceRequestWritten(ctx)
+	req, err := http.NewRequestWithContext(tctx, http.MethodPost, s.awsSSOTokenEndpoint(blob.Region), bytes.NewReader(body))
 	if err != nil {
 		return out, fmt.Errorf("aws sso create-token: build request: %w", err)
 	}
@@ -848,7 +864,12 @@ func (s *Server) createAWSSSOToken(ctx context.Context, blob awsSSOBlob) (awsSSO
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return out, fmt.Errorf("aws sso create-token: %w", err)
+		err = fmt.Errorf("aws sso create-token: %w", err)
+		if written() {
+			// Sent in full, and no response came back: AWS may have acted on it.
+			err = awsSSOReplyLostError{err}
+		}
+		return out, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	// Bounded read: the body is four fields, and an unbounded read from a host
@@ -864,7 +885,7 @@ func (s *Server) createAWSSSOToken(ctx context.Context, blob awsSSOBlob) (awsSSO
 	}
 	if out.Error != "" {
 		if awsSSOErrorIsSpent(out.Error) {
-			return out, fmt.Errorf("%w: %s", errAWSSSOCredentialSpent, out.Error)
+			return out, awsSSOSpentError{out.Error}
 		}
 		return out, fmt.Errorf("aws sso create-token refused: %s", out.Error)
 	}

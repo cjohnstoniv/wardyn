@@ -380,7 +380,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		var readErr *modelProviderReadError
 		if errors.As(lerr, &readErr) {
 			slog.ErrorContext(r.Context(), "api: read model provider credential", slog.String("provider", readErr.provider.ID), slog.Any("err", readErr.err))
-			writeError(w, http.StatusServiceUnavailable, providerReadFailed(readErr.provider))
+			writeError(w, http.StatusServiceUnavailable, readErr.sentence())
 			return
 		}
 		// An unreadable provider block: the bare 503 the create door answers.

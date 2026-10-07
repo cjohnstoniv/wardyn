@@ -786,7 +786,7 @@ func ssoOnlyBootFlags(issuerURL, adminToken string, ssoOnly bool) *bootFlags {
 	dirProvider, dirTenant, dirClientID, dirSecret := "", "", "", ""
 	envbuild, scanAIAdvisor := false, false
 	sshListen, uiListen := "", ""
-	var roleStampTTL time.Duration
+	var roleStampTTL, oidcSessionTTL time.Duration
 	controlURL := "http://127.0.0.1:8080" // loopback: no internal CA to mint
 	basePath := ""
 	return &bootFlags{
@@ -813,16 +813,17 @@ func ssoOnlyBootFlags(issuerURL, adminToken string, ssoOnly bool) *bootFlags {
 		// "boots clean" case takes all the way to the function's return —
 		// every one of them off/empty so that path is a no-op, not a panic
 		// on a nil pointer this test never meant to exercise.
-		dirProvider:   &dirProvider,
-		dirTenant:     &dirTenant,
-		dirClientID:   &dirClientID,
-		dirSecret:     &dirSecret,
-		envbuild:      &envbuild,
-		scanAIAdvisor: &scanAIAdvisor,
-		sshListen:     &sshListen,
-		uiListen:      &uiListen,
-		controlURL:    &controlURL,
-		roleStampTTL:  &roleStampTTL,
+		dirProvider:    &dirProvider,
+		dirTenant:      &dirTenant,
+		dirClientID:    &dirClientID,
+		dirSecret:      &dirSecret,
+		envbuild:       &envbuild,
+		scanAIAdvisor:  &scanAIAdvisor,
+		sshListen:      &sshListen,
+		uiListen:       &uiListen,
+		controlURL:     &controlURL,
+		roleStampTTL:   &roleStampTTL,
+		oidcSessionTTL: &oidcSessionTTL,
 	}
 }
 

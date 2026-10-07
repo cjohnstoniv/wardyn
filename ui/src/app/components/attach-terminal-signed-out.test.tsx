@@ -82,8 +82,14 @@ function reauthAt(phase: ReauthPhase): Reauth {
   const noop = () => {};
   return {
     phase,
+    signedOut: phase === "dialog" || phase === "bar",
+    renewal: null,
+    watch: null,
     writeDropped: null,
     setPhase: noop,
+    setWatch: noop,
+    startRenew: noop,
+    endRenew: noop,
     reloadAs: noop,
     clearWriteDropped: noop,
     writeDroppedClaimed: () => false,
@@ -133,5 +139,13 @@ describe("AttachTerminal — signed out mid-page (#483)", () => {
     rerender(at("none", <AttachTerminal runId="run_1" />));
     expect(FakeWebSocket.instances).toHaveLength(2);
     expect(FakeWebSocket.instances[1].closed).toBe(false);
+  });
+
+  it("keeps a live socket through a renewal from the expiry banner: nobody is signed out", () => {
+    const { rerender } = render(at("none", <AttachTerminal runId="run_1" />));
+    const live = FakeWebSocket.instances[0];
+    rerender(at("renew", <AttachTerminal runId="run_1" />));
+    expect(live.closed).toBe(false);
+    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 });

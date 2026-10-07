@@ -89,6 +89,8 @@ install.
   read-only; see [Default policy](#default-policy).
 - **ConfigMap** (`kek.domains` only) — the key domains file, mounted
   read-only; see [Key domains](#key-domains).
+- **ConfigMap** (`siteConfigSeed` only) — the network settings restored at
+  boot, mounted read-only; see [Site-config seed](#site-config-seed).
 
 ## Prerequisites
 
@@ -240,6 +242,14 @@ The shipped file is also the ceiling member runs are clamped to, so while it is 
 a negative value, or more than `3600` is capped to `3600` with a warning, including the `-1` that interactive and SSH sessions
 use (admins are not clamped). On Kubernetes without metrics-server the CPU signal is off (see `/setup/status`), so a busy run
 that makes no egress calls and has no attach is also stopped after an hour.
+
+A run someone is attached to (a browser terminal, an SSH shell, an exec, sftp or `-L` channel) is not idle-stopped, as long
+as the attach's keepalive writes, made every 30 seconds, succeed; they are best effort and a failed one is dropped. To lengthen
+the hour for members, raise `auto_stop_after_sec` in the default policy rather than setting it to `0`: a ceiling of `0` removes
+the cap and also turns idle stop off for every run that does not set its own. Three more clocks are separate: idle pause
+(`pause_idle_after_sec` in a governance profile; the Kubernetes runner cannot freeze, so it never applies there), the lease
+(`ends_at`, none by default, set only by a profile's run limits) and `WARDYN_RUN_MAX_AGE` (off by default). See
+[Run lifetime](../../../docs/operations/run-lifetime.md#the-clocks-that-end-or-freeze-a-run).
 
 **Upgrade note — `/readyz` is a 0.6-and-later endpoint.** The readiness probe
 targets `/readyz`. From 0.6.0 the chart's own default image serves it: an empty
@@ -395,6 +405,13 @@ out. Set `env.WARDYN_OIDC_ROLE_MAP` on its own (no `extraEnv`/Entra changes)
 against an EXISTING OIDC-only install to turn on RBAC for the first time — it
 takes effect on each user's next login (a session signed before the role map
 existed carries no role and is never treated as authenticated).
+
+By default a console session ends at the identity provider's ID token expiry. To make it
+last longer (or shorter), set `env.WARDYN_OIDC_SESSION_TTL` (a duration, at
+most `24h`; boot refuses more). Pair a longer session with
+`env.WARDYN_ROLE_STAMP_TTL`: nothing else re-checks the identity provider
+during a session, so a person disabled only there keeps the console until the
+session TTL runs out. See docs/ENV.md.
 
 **`env.WARDYN_OIDC_ROLE_MAP` is the bootstrap layer, not the only editor.**
 Once the install is live, an admin adds, edits and removes further mappings
@@ -590,6 +607,8 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 - `runner.sandbox.requestRatio` (`WARDYN_SANDBOX_REQUEST_RATIO`): agent pod requests as a fraction of limits, in
   (0, 1]; empty (default) keeps requests equal to limits. Below 1 the pod is Burstable and a pod over its memory
   request is an eviction and OOM-kill candidate under node pressure. The proxy pod stays Guaranteed.
+  Placement is not under `runner.sandbox.*`: where a sandbox pod goes (`nodeSelector`, `tolerations`, `affinity`,
+  `priorityClassName`, `podAnnotations`, `podLabels`) is `k8s.sandbox.*`, listed above.
 - `k8s.runtimeClasses.CC2` / `.CC3`: pins a Confinement Class to a RuntimeClass
   NAME already registered in the cluster (`WARDYN_CONFINEMENT_MAP`), e.g.
   `--set k8s.runtimeClasses.CC2=gvisor`. Unlike Docker's well-known runtime
@@ -1016,6 +1035,40 @@ hatch for a CA delivered your own way (e.g. `extraEnv` + `secretKeyRef`
 pointing `WARDYN_TRUSTED_CA_FILE` at a path a volume you wire yourself
 mounts, rather than this chart's own ConfigMap).
 
+## Site-config seed
+
+The upstream proxy, its bypass list and the internal hosts live only in the
+database's site-config row, so a wiped or rebuilt database comes back without
+them. `siteConfigSeed` keeps them in your values file (in Git), renders them as
+JSON into a ConfigMap, mounts it read-only and wires
+`WARDYN_SITE_CONFIG_SEED_FILE` at `/etc/wardyn/site-config-seed/seed.json`:
+
+```yaml
+siteConfigSeed:
+  upstream_proxy_secret_ref: corp-proxy
+  upstream_proxy_no_proxy: [".corp.internal"]
+  internal_hosts:
+    - host_suffix: git.corp.internal
+      cidrs: ["10.0.0.0/8"]
+```
+
+At boot `wardynd` writes each setting the database does not have and never
+overwrites one it does; a different value logs a warning and shows a
+`site_config_seed` info row on `/setup/status` saying the database value is in
+effect. To remove a seeded setting, remove it here: clearing it in the console
+lasts until the next restart. Any key other than `upstream_proxy_url`,
+`upstream_proxy_secret_ref`, `upstream_proxy_no_proxy` and `internal_hosts`
+refuses boot.
+
+**Use `upstream_proxy_secret_ref`, never a credentialed `upstream_proxy_url`**
+(one with `user:pass@` refuses boot). The seed restores the reference, not the
+secret: with the default Postgres secret store a wiped database loses the proxy
+credential too, so after a rebuild an admin re-creates that secret (or the
+estate keeps it in an external secret store). Until then the `site_config` row
+of `/setup/status` warns that a referenced secret is not set. An operator-set
+`env.WARDYN_SITE_CONFIG_SEED_FILE` wins over the ConfigMap-backed path. See
+[docs/OPERATIONS.md § Network](../../../docs/OPERATIONS.md#network-upstream-proxy-and-egress-redirects).
+
 ## Daemon egress proxy
 
 `WARDYN_DAEMON_PROXY_URL` (plain) and `WARDYN_DAEMON_PROXY_SECRET` (a file
@@ -1080,6 +1133,87 @@ spec:
 (`ssh.port`, default `2222`) regardless of what port your own Service exposes
 it on. See [docs/SSH.md](../../../docs/SSH.md) for the SSH gateway itself
 (what it does once traffic reaches it, session semantics, client setup).
+
+## SSH on a 443-only estate
+
+When the only way in is port 443, terminated by a TLS-terminating listener
+such as an Istio ingress gateway, each person's `ssh` wraps SSH in TLS through
+`ssh.proxyCommand` (`WARDYN_SSH_PROXY_COMMAND`, rendered verbatim and shown by
+the run-detail card and `wardyn run ssh`), and the listener unwraps it onto
+the Service's `ssh` port. The chart ships no Istio template: `extraObjects`
+renders your Gateway and VirtualService with the release, each through `tpl`.
+
+```yaml
+ssh:
+  enabled: true
+  advertiseHost: ssh.example.com   # the listener's own hostname for SSH
+  proxyCommand: openssl s_client -quiet -verify_return_error -verify_hostname %h -connect %h:443 -servername %h
+
+networkPolicy:
+  ingress:
+    from:
+      - podSelector: {}            # keep the same-namespace default peer
+      - namespaceSelector:         # and admit the ingress gateway's namespace
+          matchLabels:
+            kubernetes.io/metadata.name: istio-ingress
+
+extraObjects:
+  - apiVersion: networking.istio.io/v1
+    kind: Gateway
+    metadata:
+      name: wardyn-ssh
+      namespace: istio-ingress     # the gateway pods' namespace
+    spec:
+      selector:
+        istio: ingressgateway      # your ingress gateway pods' labels
+      servers:
+        - port:
+            number: 443
+            name: tls-wardyn-ssh
+            protocol: TLS          # never HTTPS: it attaches an HTTP filter and breaks SSH
+          tls:
+            mode: SIMPLE
+            credentialName: wardyn-ssh-tls   # a kubernetes.io/tls Secret in the gateway pods' namespace
+          hosts:
+            - ssh.example.com
+  - apiVersion: networking.istio.io/v1
+    kind: VirtualService
+    metadata:
+      name: wardyn-ssh
+    spec:
+      hosts:
+        - ssh.example.com
+      gateways:
+        - istio-ingress/wardyn-ssh
+      tcp:
+        - match:
+            - port: 443
+          route:
+            - destination:
+                host: '{{ include "wardyn.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local'
+                port:
+                  # Keep ssh.port above 1023: the gateway listens on 443 and
+                  # forwards to it. wardynd runs non-root with every capability
+                  # dropped, and on a runtime that does not allow unprivileged
+                  # low ports (the default before containerd 2.0) a lower port
+                  # rolls out Ready with no SSH listener behind it.
+                  number: 2222     # ssh.port
+```
+
+`istio-ingress` here is the estate's own gateway namespace, where the Gateway
+sits beside the gateway pods. Your Helm identity needs rights to create Istio
+Gateways in that namespace, and the namespace must already exist. The
+`networkPolicy.ingress.from` peer list also applies to the console `http`
+rule, so the gateway namespace can reach the console port too; a `podSelector`
+for the gateway pods on that peer narrows it.
+
+`-verify_hostname %h` is what checks the certificate names the host
+(`-servername` only sends SNI); add `-CAfile <path>` when the listener's
+certificate is not publicly trusted. Port 443 is written out because `%p` is
+the advertised SSH port. Host keys are unaffected, audit source IPs become the
+gateway's, and the browser terminal and `wardyn run attach` need none of
+this. The full recipe, with the reasons, is in
+[docs/SSH.md, "SSH on a 443-only estate"](../../../docs/SSH.md#ssh-on-a-443-only-estate).
 
 ## Scraping `/metrics` through the NetworkPolicy
 
@@ -1176,6 +1310,50 @@ fresh token, so put the rotation on a calendar shorter than both.
 previous section: it replaces the same-namespace default), and
 `metrics.serviceMonitor.labels` must match the Prometheus
 `serviceMonitorSelector`.
+
+## Scraping `/metrics` without a credential
+
+`metrics.listener.enabled=true` turns on wardynd's dedicated metrics listener
+(`WARDYN_METRICS_LISTEN`) for a Prometheus that scrapes pods by annotation and
+sends no bearer token. It is off by default. On that port wardynd serves
+`GET /metrics` in plain HTTP with **no credential**, and a `404` for everything
+else.
+
+```yaml
+metrics:
+  listener:
+    enabled: true
+    port: 9464          # default; must differ from every other wardynd port
+    from:               # replaces the default peer (see below)
+      - namespaceSelector:
+          matchLabels: {kubernetes.io/metadata.name: monitoring}
+        podSelector:
+          matchLabels: {app.kubernetes.io/name: prometheus}
+```
+
+What the chart renders:
+
+- a container port named `metrics` that is **not** on the Service, so nothing
+  reaches it through the Service or an Ingress; scrape the pod;
+- the `prometheus.io/scrape: "true"`, `prometheus.io/port` and
+  `prometheus.io/path: /metrics` pod annotations. A key you set in
+  `podAnnotations` wins over the chart's;
+- its own NetworkPolicy ingress rule for that port. The default peer is pods
+  in this namespace that are not run pods (`wardyn.managed` absent).
+  `metrics.listener.from` replaces it. `networkPolicy.ingress.from` never
+  applies to this port, and a peer with an empty `namespaceSelector` and no
+  `podSelector` is refused at render.
+
+`/metrics` on the `http` port keeps its operator gate, and the ServiceMonitor
+above keeps scraping that one with its bearer Secret. The two routes serve the
+same body.
+
+**Anyone who reaches the port reads the body:** fleet and capacity counts,
+approval decisions, credential-mint and sign-in-renewal outcomes, and your
+approval-notification channel ids. No label carries a person or run identifier
+(`threatmodel/THREAT-MODEL.md`, "The unauthenticated metrics listener", lists
+them all). With `networkPolicy.enabled=false` the port is open to the whole pod
+network.
 
 ## UI sandbox gateway
 
@@ -1366,6 +1544,9 @@ See `values.yaml` for all options. Key settings:
 - `extraVolumes` / `extraVolumeMounts`: pod volumes and wardynd mounts, rendered
   verbatim. Use them for a Secrets Store CSI volume or your own Secret volume
   behind a `WARDYN_*_FILE` path.
+- `extraObjects`: extra Kubernetes objects rendered with the release, each through
+  `tpl` (the only value that is). Empty by default; see
+  [SSH on a 443-only estate](#ssh-on-a-443-only-estate) for an Istio example.
 - `persistence.enabled`: decides the recording store — `WARDYN_RECORDING_STORE=fs`
   with `WARDYN_RECORDING_DIR=<mountPath>/recordings` when on, `WARDYN_RECORDING_STORE=off`
   (no recording, no replay) when off. wardynd's own default directory writes to the
@@ -1393,7 +1574,9 @@ See `values.yaml` for all options. Key settings:
   the whole block: a drive's storage class is a per-drive field in the console,
   not a chart value.
 - `ssh.*`: SSH access into a running sandbox, off by default — see
-  [Split SSH exposure](#split-ssh-exposure) above.
+  [Split SSH exposure](#split-ssh-exposure) above. `ssh.proxyCommand` publishes
+  a ProxyCommand for a 443-only estate — see
+  [SSH on a 443-only estate](#ssh-on-a-443-only-estate).
 - `replicas`: **leave at 1 unless `ha.enabled=true`.** A render with `replicas > 1`
   and no `ha.enabled` fails with an explicit message. wardynd also takes a Postgres
   advisory lock at boot (`cmd/wardynd/single_instance.go`) and refuses to serve if it

@@ -240,15 +240,16 @@ describe("PolicyPanel — run instance extras", () => {
 
   it("the saved-policy mode row swaps the editor for the screen's own picker", async () => {
     const user = userEvent.setup();
-    const onActiveChange = vi.fn();
+    const onModeChange = vi.fn();
     render(
       <Harness
         instance="run"
         initial={VALID}
-        savedPolicy={{
-          active: true,
-          onActiveChange,
+        policyMode={{
+          mode: "saved",
+          onModeChange,
           picker: <div>policy picker</div>,
+          defaultPolicy: { status: "loading", onRetry: vi.fn() },
         }}
       />,
     );
@@ -256,7 +257,9 @@ describe("PolicyPanel — run instance extras", () => {
     expect(screen.queryByLabelText("Spec (JSON)")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: /custom policy/i }));
-    expect(onActiveChange).toHaveBeenCalledWith(false);
+    expect(onModeChange).toHaveBeenCalledWith("custom");
+    await user.click(screen.getByRole("button", { name: /use the default policy/i }));
+    expect(onModeChange).toHaveBeenCalledWith("default");
   });
 });
 

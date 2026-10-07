@@ -147,6 +147,48 @@ networkPolicy:
 `deploy/helm/wardyn/ci/all-on-values.yaml` carries exactly that pair, beside
 the `prometheus.io/scrape` pod annotation it advertises.
 
+## Scraping without a credential: the dedicated listener
+
+For a scraper that sends no bearer token, such as a stock Prometheus reading
+`prometheus.io/*` pod annotations, set `WARDYN_METRICS_LISTEN` (flag
+`-metrics-listen`, e.g. `:9464`; [ENV.md](../ENV.md)). It is off by default.
+
+- **What it serves:** `GET /metrics` in plain HTTP with **no credential**, the
+  same body the gated route answers. Every other method and path is a `404`.
+- **Where it may bind:** boot refuses an address equal to `WARDYN_LISTEN`,
+  `WARDYN_INTERNAL_LISTEN`, `WARDYN_SSH_LISTEN` or `WARDYN_UI_SANDBOX_LISTEN`.
+- **The console route:** `/metrics` on the console port keeps its operator
+  gate either way, and the chart's ServiceMonitor keeps using it.
+- **What a reader learns:** fleet and capacity counts, approval decisions,
+  credential-mint and sign-in-renewal outcomes, and your approval-notification
+  channel ids as labels. No label carries a person, a run id or a secret.
+  `threatmodel/THREAT-MODEL.md` ("The unauthenticated metrics listener") lists
+  every label and its source.
+
+On Kubernetes, set `metrics.listener.enabled=true` in the Helm chart (default
+port `9464`). The chart then renders:
+
+- a container port named `metrics` that is **not** on the Service;
+- the `prometheus.io/scrape`, `prometheus.io/port` and `prometheus.io/path` pod
+  annotations, where an operator's own `podAnnotations` key wins;
+- its own NetworkPolicy ingress rule, admitting pods in the release namespace
+  that are not run pods. `metrics.listener.from` replaces that peer, which a
+  Prometheus in another namespace needs:
+
+```yaml
+metrics:
+  listener:
+    enabled: true
+    from:
+      - namespaceSelector:
+          matchLabels: {kubernetes.io/metadata.name: monitoring}
+        podSelector:
+          matchLabels: {app.kubernetes.io/name: prometheus}
+```
+
+With `networkPolicy.enabled=false` there is no rule at all, and the port is
+open to the whole pod network.
+
 ## No core dumps, no attaching
 
 wardynd and wardyn-proxy hold credentials in memory, so each sets

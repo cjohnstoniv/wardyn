@@ -150,7 +150,6 @@ const ACTION_VERB: Record<string, string> = {
   "run.requirement.inject": "applied a workspace's required integration to the run",
   "run.record.synthesize": "synthesized a least-privilege profile from the recording",
   "credential.mint": "minted a credential",
-  "credential.revoke": "revoked a credential",
   "identity.mint": "minted a workload identity",
   "identity.revoke": "revoked a workload identity",
   "run.bedrock.configure": "configured Bedrock model access for the run",
@@ -217,6 +216,20 @@ function describeEvent(e: AuditEvent): string {
   }
   if (e.action.startsWith("llm.scan.")) {
     return `LLM content scan (${e.action.slice("llm.scan.".length)}) for ${e.target || "an unknown host"}`;
+  }
+  if (e.action === "credential.revoke") return AUDIT.REVOKE_RUN_CREDENTIALS;
+  // "Removed" only on a row whose deletion happened; a failure row says what
+  // was not removed. Any other outcome reads as the raw line.
+  if (e.action === "credential.expired.delete" && (e.outcome === "success" || e.outcome === "failure")) {
+    const ok = e.outcome === "success";
+    const reason = e.data?.reason;
+    if (reason === "invalid_grant") {
+      if (e.data?.after_lost_reply === true) {
+        return ok ? AUDIT.EXPIRED_DELETE_LOST_REPLY : AUDIT.EXPIRED_DELETE_LOST_REPLY_FAILED;
+      }
+      return ok ? AUDIT.EXPIRED_DELETE_REFUSED : AUDIT.EXPIRED_DELETE_REFUSED_FAILED;
+    }
+    if (reason === "expired") return ok ? AUDIT.EXPIRED_DELETE_EXPIRED : AUDIT.EXPIRED_DELETE_EXPIRED_FAILED;
   }
   const verb = ACTION_VERB[e.action];
   if (verb) return e.target ? `${capitalize(verb)} — ${e.target}` : capitalize(verb);
@@ -766,7 +779,7 @@ function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: stri
         <AuditDecision event={event} className="flex min-w-0 flex-1 items-center gap-2 text-sm" />
       ) : (
         <span className="flex min-w-0 flex-1 items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={describeEvent(event)}>
+          <span className="min-w-[10rem] flex-1 truncate text-sm text-foreground" title={describeEvent(event)}>
             {describeEvent(event)}
           </span>
           <RuleSourceChip event={event} />

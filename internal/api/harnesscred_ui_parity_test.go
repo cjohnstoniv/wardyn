@@ -26,7 +26,7 @@ import (
 // a constant, so the test reads both sides.
 func TestHarnessLoginTask_UIParity(t *testing.T) {
 	uiPath := filepath.Join("..", "..", "ui", "src", "app", "components", "screens",
-		"run-detail", "login-sandbox-note.tsx")
+		"run-detail", "sign-in-run.ts")
 	b, err := os.ReadFile(uiPath) //nolint:gosec // fixed in-repo path
 	if err != nil {
 		t.Fatalf("read %s: %v", uiPath, err)

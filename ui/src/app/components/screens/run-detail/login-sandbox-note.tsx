@@ -17,24 +17,15 @@
 //
 // Its own file because run-detail.tsx is six lines under the 1000-line cap
 // (scripts/check-file-size.sh) and this is a whole surface, not a line.
+import * as React from "react";
 import { KeyRound } from "lucide-react";
 import type { AgentRun } from "../../../lib/types";
+import { useOperator, usePrincipal } from "../../wardyn/operator-context";
+import { AWS_SSO_LOGIN_AGENT, HARNESS_LOGIN_TASK, mayReadSignIn } from "./sign-in-run";
+// Lazy: the strip (its copy, signin-progress) loads only on a run that shows it.
+const RunSignInStrip = React.lazy(() => import("./run-sign-in-strip"));
 
-// The server-side task literal this note keys on. Mirrors harnessLoginTask
-// (internal/api/harnesscred.go) — a discriminator, never client input. Held to
-// the Go constant by TestHarnessLoginTask_UIParity (internal/api), which reads
-// this file: renaming one side alone silently stops the note rendering on the
-// one run it exists for.
-export const HARNESS_LOGIN_TASK = "harness login";
-
-// …and the agent, because the task alone is provider-agnostic. Every container
-// login sets `harness login` — the Anthropic lane is the route's own default
-// (`provider = "anthropic"`, harnesscred_launch.go) and runs `claude setup-token`
-// in the claude-code image. Keyed on the task alone, this note told a
-// Claude-subscription login run it was an AWS box that runs the AWS CLI and
-// nothing else, signed in from Getting Started — false on all three clauses.
-// Mirrors awsSSOAgent (internal/api/harnesscred.go), pinned by the same test.
-export const AWS_SSO_LOGIN_AGENT = "aws-sso";
+export { AWS_SSO_LOGIN_AGENT, HARNESS_LOGIN_TASK, mayReadSignIn };
 
 // Says the three things the page could not: what the
 // box is, what the terminal below is waiting for, and that nobody has to clean it
@@ -71,15 +62,24 @@ export const LOGIN_SANDBOX_NOTE =
 // exactly where a KILLED or COMPLETED login run is reopened. A run that is still
 // PENDING has no terminal to point at either.
 export function LoginSandboxNote({ run }: { run: AgentRun }) {
+  const principal = usePrincipal();
+  const operator = useOperator();
   if (run.task !== HARNESS_LOGIN_TASK || run.agent !== AWS_SSO_LOGIN_AGENT) return null;
   if (run.state !== "RUNNING") return null;
   return (
-    <div
-      className="flex shrink-0 items-start gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground"
-      data-testid="login-sandbox-note"
-    >
-      <KeyRound className="mt-0.5 size-3.5 shrink-0 text-primary" />
-      <p>{LOGIN_SANDBOX_NOTE}</p>
-    </div>
+    <>
+      {mayReadSignIn(run, principal, operator) && (
+        <React.Suspense fallback={null}>
+          <RunSignInStrip runId={run.id} createdAt={run.created_at} />
+        </React.Suspense>
+      )}
+      <div
+        className="flex shrink-0 items-start gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground"
+        data-testid="login-sandbox-note"
+      >
+        <KeyRound className="mt-0.5 size-3.5 shrink-0 text-primary" />
+        <p>{LOGIN_SANDBOX_NOTE}</p>
+      </div>
+    </>
   );
 }

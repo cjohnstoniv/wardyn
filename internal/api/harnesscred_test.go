@@ -522,7 +522,7 @@ func TestDeleteSpentAWSSSOBlob_ProviderScopeDeletesOnlyItsOwnRow(t *testing.T) {
 		t.Fatalf("seed provider row: %v", err)
 	}
 
-	s.deleteSpentAWSSSOBlob(ctx, providerScope)
+	s.deleteSpentAWSSSOBlob(ctx, providerScope, false)
 
 	if _, found, err := s.readAWSSSOBlob(ctx, providerScope); err != nil || found {
 		t.Errorf("provider row after its own refresh was refused: found=%v err=%v, want gone", found, err)

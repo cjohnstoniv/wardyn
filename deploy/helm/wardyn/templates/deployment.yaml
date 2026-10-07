@@ -43,6 +43,7 @@ out; guarded, the 0.5 defaults simply carry forward.
 */ -}}
 {{- $ssh := .Values.ssh | default dict -}}
 {{- $ui := .Values.uiSandbox | default dict -}}
+{{- $ml := (.Values.metrics | default dict).listener | default dict -}}
 {{- $dps := .Values.daemonProxySecret | default dict -}}
 {{- $ageRef := .Values.secrets.ageKeySecretRef | default dict -}}
 {{- $internalPort := int (.Values.service.internalPort | default 8443) -}}
@@ -196,6 +197,14 @@ spec:
       {{- end }}
       {{- if ($.Values.kek | default dict).domains }}
       {{- $podAnnotations = merge (dict "checksum/key-domains" (sha256sum (toJson $.Values.kek.domains))) $podAnnotations }}
+      {{- end }}
+      {{- if (.Values.siteConfigSeed | default dict) }}
+      {{- $podAnnotations = merge (dict "checksum/site-config-seed" (sha256sum (toJson .Values.siteConfigSeed))) $podAnnotations }}
+      {{- end }}
+      {{- if $ml.enabled }}
+      {{- /* Scrape hints for the dedicated metrics listener. mergeOverwrite into a
+      fresh dict, so an operator's own podAnnotations key wins over the chart's. */ -}}
+      {{- $podAnnotations = mergeOverwrite (dict "prometheus.io/scrape" "true" "prometheus.io/port" (toString (int ($ml.port | default 9464))) "prometheus.io/path" "/metrics") $podAnnotations }}
       {{- end }}
       {{- with $podAnnotations }}
       annotations:
@@ -518,6 +527,12 @@ spec:
             - name: WARDYN_DEFAULT_POLICY
               value: {{ "/etc/wardyn/default-policy/policy.json" | quote }}
             {{- end }}
+            {{- if and (.Values.siteConfigSeed | default dict) (not (hasKey .Values.env "WARDYN_SITE_CONFIG_SEED_FILE")) }}
+            # Points wardynd at the site-config seed baked into the ConfigMap
+            # below, mounted read-only. An .Values.env entry overrides.
+            - name: WARDYN_SITE_CONFIG_SEED_FILE
+              value: {{ "/etc/wardyn/site-config-seed/seed.json" | quote }}
+            {{- end }}
             {{- if and .Values.trustedCA (not (hasKey .Values.env "WARDYN_TRUSTED_CA_FILE")) }}
             # Points wardynd at the corp CA bundle baked into the ConfigMap
             # below, mounted read-only. An .Values.env entry overrides (e.g. a
@@ -644,6 +659,10 @@ spec:
               value: {{ printf ":%d" (int ($ssh.port | default 2222)) | quote }}
             - name: WARDYN_SSH_ADVERTISE
               value: {{ printf "%s:%d" (required "wardyn: ssh.advertiseHost is required when ssh.enabled=true (the externally-reachable host agents/operators connect back to)" $ssh.advertiseHost) (int ($ssh.port | default 2222)) | quote }}
+            {{- with $ssh.proxyCommand }}
+            - name: WARDYN_SSH_PROXY_COMMAND
+              value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             {{- if $ui.enabled }}
             - name: WARDYN_UI_SANDBOX_LISTEN
@@ -654,6 +673,10 @@ spec:
             - name: WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE
               value: {{ . | quote }}
             {{- end }}
+            {{- end }}
+            {{- if $ml.enabled }}
+            - name: WARDYN_METRICS_LISTEN
+              value: {{ printf ":%d" (int ($ml.port | default 9464)) | quote }}
             {{- end }}
           ports:
             - name: http
@@ -670,6 +693,13 @@ spec:
             {{- if $ui.enabled }}
             - name: ui
               containerPort: {{ $ui.port | default 8081 }}
+              protocol: TCP
+            {{- end }}
+            {{- if $ml.enabled }}
+            # Pod-only: no Service port targets it (helm-lint pins that), because
+            # this listener answers without a credential.
+            - name: metrics
+              containerPort: {{ $ml.port | default 9464 }}
               protocol: TCP
             {{- end }}
           livenessProbe:
@@ -739,6 +769,11 @@ spec:
               mountPath: /etc/wardyn/trusted-ca
               readOnly: true
             {{- end }}
+            {{- if (.Values.siteConfigSeed | default dict) }}
+            - name: site-config-seed
+              mountPath: /etc/wardyn/site-config-seed
+              readOnly: true
+            {{- end }}
             {{- if ($.Values.kek | default dict).domains }}
             - name: key-domains
               mountPath: /etc/wardyn/key-domains
@@ -779,6 +814,11 @@ spec:
         - name: trusted-ca
           configMap:
             name: {{ include "wardyn.fullname" . }}-trusted-ca
+        {{- end }}
+        {{- if (.Values.siteConfigSeed | default dict) }}
+        - name: site-config-seed
+          configMap:
+            name: {{ include "wardyn.fullname" . }}-site-config-seed
         {{- end }}
         {{- if ($.Values.kek | default dict).domains }}
         - name: key-domains

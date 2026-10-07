@@ -96,7 +96,10 @@ the end of a headless run, during it and after a restart, with
 else gets the same `404` as `GET /runs/{id}`. An interactive run keeps no
 output of its own (its terminal is the recording's), only the pane snapshot
 below when Wardyn stops it gracefully; the managed-harness sign-in run keeps
-nothing at all, because its output is a live credential.
+nothing at all, because its output is a live credential, and a read of it
+answers `409 run_output_interactive` like any interactive run. A sign-in whose
+browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
+`wardyn run sign-in <run-id>` (below).
 
 - **Not captured on Kubernetes in this release.** The Kubernetes runner runs a
   task under the session recorder, which writes nothing to the container's log,
@@ -150,6 +153,13 @@ nothing at all, because its output is a live credential.
   run's owner or a super admin gets it; a security admin gets
   `409 run_output_interactive`, the answer for a run with no snapshot, and the
   refusal is audited.
+- **An interactive run with no snapshot.** It answers
+  `409 run_output_interactive`, and the sentence says what this run kept. With
+  recording on, it points at the run's recording. With recording off
+  (`components.recording` reads `none` on `/healthz`), it says nothing was kept
+  from this session, and for a kill, a failure or a reconcile, that the session
+  did not end through a Wardyn stop. A security admin always gets the
+  recording-on sentence, so it never tells them whether a snapshot exists.
 - **From the CLI.** `wardyn run output <run-id> [--tail N] [--json] [--raw]`
   reads the same endpoint, so a person without console access can read a run's
   kept output. Piped, it writes the bytes exactly as returned, with no added
@@ -159,6 +169,24 @@ nothing at all, because its output is a live credential.
   is truncated, incomplete, a capture gap, a pane snapshot, or masked against
   global secrets only; a refusal exits non-zero and names its `run_output_*`
   reason.
+- **A waiting sign-in.** `GET /api/v1/runs/{id}/sign-in` (and
+  `wardyn run sign-in <run-id>`, which reads it once) answers whether a running
+  AWS sign-in is waiting for its device-code approval, with the verification
+  link and code of its latest attempt. Only the run's owner may read it. One
+  command in the sandbox, bounded to the snapshot's 3 seconds and to 64 KiB,
+  first checks that an `aws sso login` process is running there and only then
+  reads the sign-in pane with the snapshot's capture. It keeps nothing: no pane
+  text or code is logged, stored or audited. `waiting` takes both: a running
+  sign-in process and a current code on the pane. So a retry run by hand in the
+  pane's shell that expired, failed or was interrupted answers `not_waiting`,
+  although nothing on the pane says it ended. So does an attempt followed by its
+  completion or failure line, and a run whose capture is already audited
+  (`harness.credential.capture` on this run). The code is still read from the
+  pane: for the few seconds between a new retry starting and printing its own
+  code, a read can show the code of a hand-run retry that died before it, and
+  the next read corrects it. A read that times out, overflows or fails answers
+  `503 run_sign_in_unreadable`. Closing the sign-in dialog on purpose still
+  kills the run; only a lost tab leaves it waiting.
 - **A restart.** A run that was live across a wardynd restart, or that another
   replica adopted, has its output read back from the substrate when that is
   possible and safe, and ends with a `capture_gap` row when it is not. wardynd
@@ -3082,8 +3110,12 @@ and never signs in again keeps the role and groups their tokens were minted with
 refused with `401` and the reason `role_stamp_stale` (an `authz.denied` audit row) until its owner
 signs in again, which re-stamps it with their current role. A console session older than the TTL is
 sent back through sign-in, so a stamp you can tune is also the age of the longest role a session
-can carry (a session already ends at the ID token's own expiry, so the TTL only matters when it is
-shorter than that). Wardyn keeps no identity-provider token and cannot re-derive a role on a timer;
+can carry (with `WARDYN_OIDC_SESSION_TTL` unset a session already ends at the ID token's own
+expiry, and with it set at that TTL after sign-in, so the role-stamp TTL only matters when it is
+shorter than the session). The ID token's expiry is today the only identity-provider-driven bound on
+a console session, and `WARDYN_ROLE_STAMP_TTL` is off by default. So a session lengthened with
+`WARDYN_OIDC_SESSION_TTL` (at most `24h`) should be paired with a role-stamp TTL, or a person
+disabled only at the identity provider keeps the console until the session TTL runs out. Wardyn keeps no identity-provider token and cannot re-derive a role on a timer;
 re-login is the only refresh. Turning the TTL on asks every token holder to sign in once, because
 the backfill dated existing stamps at mint. A login never revives a revoked token, and a stamp is
 one statement, so a failed re-stamp leaves that person's tokens stale, never half-updated.
@@ -4227,6 +4259,37 @@ warning naming every such dangling ref, and the setup checklist's "Site config"
 row grades `warn` (never the plain `info` of a fully-live config) while one
 remains.
 
+**Restoring the network settings at boot (`WARDYN_SITE_CONFIG_SEED_FILE`).** The
+upstream proxy (`upstream_proxy_url` or `upstream_proxy_secret_ref`), its bypass
+list (`upstream_proxy_no_proxy`) and `internal_hosts` live only in the site-config
+row, so an estate that rebuilds its database loses them. Keep them in a file in
+Git and point `WARDYN_SITE_CONFIG_SEED_FILE` at it (chart: `siteConfigSeed`):
+
+```json
+{
+  "upstream_proxy_secret_ref": "corp-proxy",
+  "upstream_proxy_no_proxy": [".corp.internal", "100.64.0.0/10"],
+  "internal_hosts": [{"host_suffix": "git.corp.internal", "cidrs": ["10.0.0.0/8"]}]
+}
+```
+
+At every boot, before serving, `wardynd` writes each of those settings the stored
+site config does not have (no row, or the field empty), under the site-config
+lock, so two replicas booting together write once. Every other key of the
+document is kept as it was, and the write is audited as `site_config.seed`. A
+setting the database already has is **never overwritten**: if it differs from the
+file, one warning is logged and `/setup/status` shows a `site_config_seed` info
+row saying the database value is in effect. The upstream proxy is one setting:
+its URL and secret reference together. The consequence: to remove a seeded
+setting, remove it from the file; clearing it in the console lasts until the next
+restart. Any other key, malformed JSON, or a value `PUT /site-config` would
+refuse (an embedded `user:pass@` among them) refuses boot. Use
+`upstream_proxy_secret_ref`, never a credentialed URL. The file restores the
+**reference, not the secret**: with the default Postgres secret store a wiped
+database loses the proxy credential too, so after a rebuild re-create that secret
+(or keep it in an external secret store). Until then the `site_config` row of
+`/setup/status` warns that a referenced secret is not set.
+
 A captured document carries `onboarding_completed_at` whenever the install it
 came from had finished the Getting Started funnel, and `set` forwards it
 verbatim — deliberately: no client strips it, so the same file works through
@@ -4317,13 +4380,22 @@ With an upstream configured, **every** forward dial is `CONNECT`ed through it,
 and the sidecar resolves the name for its own private/reserved-IP guard before it does.
 So on an estate whose endpoints are private (a VPC endpoint / PrivateLink, an
 in-cluster service, a corp mirror on RFC 6598) a name that resolves here is refused
-`builtin:private-ip` before the corp proxy is asked, and one this proxy cannot
-resolve reaches a corporate forward proxy that will not `CONNECT` to an internal
-address and times out. Neither is reachable: `internal_hosts` lifts the guard,
-`upstream_proxy_no_proxy` is the bypass that moves the dial to this sidecar, and
-the estate needs both.
+`builtin:private-ip` before the corp proxy is asked; `internal_hosts` lifts that
+guard. What happens next depends on the estate's routing, and there are two kinds:
+
+- **The sidecar can resolve and reach the endpoint itself** (a private resolver
+  answers the name here, and the sidecar has a route to the range), while the
+  corporate proxy has no route to it. List the name in `upstream_proxy_no_proxy`
+  so the sidecar dials it directly, and in `internal_hosts` to lift the guard: the
+  estate needs both.
+- **The corporate proxy is the only route to the private range** (the sidecar
+  cannot resolve or reach the endpoint). Do not use the bypass: list the name in
+  `internal_hosts` only and let the corporate proxy dial it. The recipe is under
+  "Bedrock on a private endpoint" below.
+
 `upstream_proxy_no_proxy` is the bypass — the operator-hop equivalent of the
-`NO_PROXY` the sandbox already honours internally, spelled the same way:
+`NO_PROXY` the sandbox already honours internally, spelled the same way. An entry
+is for a host the sidecar can itself resolve and reach directly:
 
 ```jsonc
 "upstream_proxy_url": "http://proxy.corp.internal:8080",
@@ -4352,12 +4424,13 @@ the sidecar resolves the name for the guard before it hands the hostname over.
 Either way the destination still needs its `allowed_domains` entry, and
 `internal_hosts` is the only field that lifts the guard — the bypass never
 does. The bypass is the other half of the same configuration: it decides which
-hop takes the dial, and on a private-endpoint estate the corp proxy cannot make
-it, so the two fields are set together:
+hop takes the dial. Where the corp proxy has no route to the endpoint and the
+sidecar does, the two fields are set together; where the corp proxy is the route,
+only `internal_hosts` is set:
 
 | | Without `internal_hosts` | With `internal_hosts` |
 |---|---|---|
-| **No bypass** | the guard resolves the name and refuses `builtin:private-ip` before the corp proxy is asked (a name this proxy cannot resolve at all still goes to the corp proxy) | the guard lifts and the HOSTNAME is handed to the corp proxy (`rule_source: site-config:internal-host`); whether that proxy will `CONNECT` to a private address is the estate's own routing — on the private-endpoint estates this section is written for it will not, which is why the bypass exists |
+| **No bypass** | the guard resolves the name and refuses `builtin:private-ip` before the corp proxy is asked (a name this proxy cannot resolve at all still goes to the corp proxy) | the guard lifts and the HOSTNAME is handed to the corp proxy (`rule_source: site-config:internal-host`); whether that proxy will `CONNECT` to a private address is the estate's own routing — where it will, this cell is the working configuration; where it will not, the bypass moves the dial to this sidecar, which is what the bypass is for |
 | **Bypassed** | dialled directly, then refused `builtin:private-ip` | **reaches the endpoint** dialled directly (`rule_source: site-config:internal-host`) |
 
 The left column is the safety property, not a rough edge: neither bypassing a
@@ -4366,8 +4439,9 @@ there names its own cause in the `X-Wardyn-Egress-Detail` response header and
 points at `internal_hosts`. The right column is not a promise of reachability:
 lifting the guard is necessary, never sufficient, because the dial still has to
 leave whichever hop takes it. That is why the bottom-right cell — bypass AND
-lift — is the working private-endpoint configuration, and why the recipes below
-set both fields.
+lift — is the working configuration where the sidecar can reach the endpoint
+itself, and the top-right cell is the working one where the corp proxy is the
+route; the recipes below say which to use.
 
 **A bypass entry helps only if `wardyn-proxy` itself can resolve and reach the name.** A bypassed
 name is resolved and dialled by the proxy, not by your corporate proxy, so a name that only the
@@ -4378,7 +4452,9 @@ guard, and a failed lookup there denies nothing), so a `builtin:resolve-failed` 
 `via: direct` and a `cause` saying the name is on the upstream proxy's bypass list and did not resolve at the proxy is that case, and not your
 corporate proxy failing to find the name. Either fix the proxy's own resolution, or take the name off
 the bypass list so the corporate proxy resolves it. If neither hop can resolve and reach the name,
-the estate needs a route, not a configuration change. The proxy says the same at startup, once per
+the estate needs a route, not a configuration change. An estate whose corporate proxy is the
+only route to the private range is the second kind above: it has nothing to put on the bypass
+list, and a bypass entry there fails exactly as described. The proxy says the same at startup, once per
 AWS SSO injection host the bypass list does not cover (on Kubernetes,
 `kubectl -n "$WARDYN_NS" logs wardyn-proxy-<run-id>`, with `$WARDYN_NS` the namespace the run's pods are
 in): "a bypass entry helps only if wardyn-proxy itself (not the sandbox) can resolve and
@@ -4391,8 +4467,9 @@ lane off" below) terminates and re-originates `portal.sso.<region>.amazonaws.com
 `wardyn-proxy` sidecar to inject a captured AWS SSO session on the wire. That re-origination is a
 forward dial like any other in this section, not a separate lane with its own rules: it is governed
 by `upstream_proxy_url`, `upstream_proxy_no_proxy` and `internal_hosts` exactly as above, and on a
-private-endpoint estate it needs the same bypass-plus-lift configuration a VPC-endpoint Bedrock
-deployment already does (see "Bedrock on a private endpoint" below).
+private-endpoint estate it needs the same configuration a VPC-endpoint Bedrock
+deployment does: bypass plus lift where the sidecar can reach the endpoint itself, lift alone where
+the corporate proxy is the route (see "Bedrock on a private endpoint" below).
 
 **The invariant, stated once:** the sandbox's dials — and the sidecar's forward dials on the
 sandbox's behalf, MITM re-origination included — follow `SiteConfig.upstream_proxy_url`; wardynd's
@@ -4953,11 +5030,19 @@ bearer-injection run), and the dispatch-layer wiring cannot see a TLS failure.
   providers). The sandbox keeps dialling
   `bedrock-runtime.<region>.amazonaws.com`, so the SNI stays the public host the
   cert names; the estate's private resolver answers that name into 100.64.
-  Reach it by listing the public host in `upstream_proxy_no_proxy` (skip the
-  corp proxy) and in `internal_hosts` — leave `cidrs` empty (the default: the
-  CGNAT range is in the liftable set), or name `100.64.0.0/10` only if you have
-  confirmed the sandbox resolves into it (lift the guard). Nothing about the
-  private address enters the TLS layer.
+  Reach it by listing the public host in `internal_hosts` (lift the guard) —
+  leave `cidrs` empty (the default: the CGNAT range is in the liftable set), or
+  name `100.64.0.0/10` only if you have confirmed the sandbox resolves into it —
+  and, **only if the sidecar can itself resolve and reach it**, in
+  `upstream_proxy_no_proxy` too (skip the corp proxy). Nothing about the private
+  address enters the TLS layer. Which of the two estates you are on:
+  - **The sidecar reaches the endpoint, the corp proxy does not.** Both fields.
+  - **The corp proxy is the only route to the private range.** `internal_hosts`
+    only, nothing on the bypass list: the sidecar hands the hostname to the corp
+    proxy, which resolves and dials it. Putting the host on the bypass list there
+    sends the dial from the sidecar, which has no route, and inference fails with
+    `tcp dial: i/o timeout` while sign-in (a public host the corp proxy carries)
+    works.
 - **A cert for the endpoint's own name.** Only when the endpoint's cert
   actually covers its `…vpce.amazonaws.com` name (private DNS disabled, or a
   cert issued for it) set the provider's `bedrock.base_url` to that hostname — then
@@ -4990,14 +5075,29 @@ application-inference-profile models call `bedrock.<region>.amazonaws.com`
 (`ListInferenceProfiles`/`GetInferenceProfile`), which the provider's `bedrock.base_url`
 deliberately does **not** re-point (a PrivateLink endpoint is per-service). On a
 fully-private estate that host also resolves into 100.64 and needs its **own**
-endpoint plus the same bypass + lift — list `bedrock.<region>.amazonaws.com`
-(or a shared `amazonaws.com` suffix) in both fields too, or a profile-id model
-fails on a control-plane call the data-plane override never touches.
+endpoint plus the same treatment as the data plane — list
+`bedrock.<region>.amazonaws.com` (or a shared `amazonaws.com` suffix) in the same
+field or fields as the data-plane host, or a profile-id model fails on a
+control-plane call the data-plane override never touches.
 
-**A literal-IP data-plane host** needs a **CIDR** `upstream_proxy_no_proxy`
-entry — the suffix form matches hostnames only, and `internal_hosts` never
+**A literal-IP data-plane host** on an estate where the sidecar dials it directly needs a
+**CIDR** `upstream_proxy_no_proxy` entry — the suffix form matches hostnames only, and `internal_hosts` never
 admits a bare IP (an exact `allowed_domains` entry does, per the redirect
 literal-IP note above). Prefer the hostname shape.
+
+**The AWS IAM Identity Center hosts cannot be re-pointed in production, so the
+settings that cover them are the routing ones.** `oidc.<region>.amazonaws.com` and
+`portal.sso.<region>.amazonaws.com` are always the real AWS names: no AWS SSO
+operation Wardyn uses is signed, so Wardyn could not tell a substitute from the real
+service, and `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` is refused unless
+`WARDYN_ALLOW_TEST_ENDPOINTS` is set (`threatmodel/THREAT-MODEL.md`, residual 45).
+What covers them is how each side reaches the real name. On the **sandbox** side,
+`upstream_proxy_url`, `upstream_proxy_no_proxy` and `internal_hosts` govern the
+dial exactly as for any other host: a name that resolves into a private range
+needs `internal_hosts`, and a bypass entry only if the sidecar can itself resolve
+and reach it. On the **daemon** side, `WARDYN_DAEMON_PROXY_URL` and
+`WARDYN_DAEMON_NO_PROXY` govern `oidc.<region>`, the host wardynd calls to renew a
+captured session at dispatch; the sandbox settings never reach that call.
 
 **`wardynd`'s own egress is a separate channel.** `upstream_proxy_no_proxy`,
 `internal_hosts` and a provider's `bedrock.base_url` govern the **sandbox** proxy;
@@ -5005,13 +5105,15 @@ literal-IP note above). Prefer the hostname shape.
 connector, and `oidc.<region>.amazonaws.com` to renew
 a captured AWS SSO session at dispatch — go out over its process HTTP client,
 which carries no SSRF guard, so a private (100.64) issuer or Graph host is
-dialled directly and boots fine. What that client *does* honour is the
-process's own `HTTPS_PROXY`/`NO_PROXY` (the published images do not set them at
-runtime): if you run `wardynd` behind the corporate proxy, add the private
-issuer/Graph ranges to the process `NO_PROXY`, or the corp proxy — which
-cannot reach an internal address — fails discovery at boot, and none of the
-site-config fields above can fix it. For a split-horizon issuer (public URL,
-internal resolution) use `WARDYN_OIDC_INTERNAL_ISSUER`.
+dialled directly and boots fine when no daemon proxy is set. Behind a corporate proxy
+the knobs are `WARDYN_DAEMON_PROXY_URL` and `WARDYN_DAEMON_NO_PROXY`, not process
+`HTTPS_PROXY`/`NO_PROXY`, which are never set on wardynd (`docs/ENV.md`). List in
+`WARDYN_DAEMON_NO_PROXY` a private issuer or Graph host that wardynd can itself
+resolve and reach directly; leave it off the list when the corporate proxy is
+the only route to it. A host the corporate proxy cannot reach and that is not on
+the list fails discovery at boot, and none of the site-config fields above can fix
+it. For a split-horizon issuer (public URL, internal resolution) use
+`WARDYN_OIDC_INTERNAL_ISSUER`.
 
 ### AWS SSO per person
 
@@ -5195,6 +5297,13 @@ the role credentials it mints, not the organisation's. The
 `owner` (the capture also names `model_provider`), so "whose credential" is
 answerable from the trail, and `harness.credential.refuse` says which captures were turned away and
 why.
+
+**What ends a stored sign-in, and the audit row for each.** The provider refusing its refresh
+token at a renewal removes it (`credential.expired.delete`, `reason` `invalid_grant`). Expiry removes
+it in the daily sweep (`credential.expired.delete`, `reason` `expired`; the access token's expiry,
+eight hours when the capture carried no refresh token). Erasing the person's credentials removes it
+(`credential.erase`). A `credential.revoke` row ends none of these: it records the end of a run's
+own credentials (`scope` `run_credentials`) and leaves the person's sign-in as it was.
 
 **Revoking a session.** A person removes their own with
 `DELETE /model-providers/{id}/credential`; a security admin erases a named
@@ -5801,10 +5910,21 @@ entry, exactly as the public host does. **Behind a corporate
 upstream proxy, the gateway must be reachable FROM that upstream** — with
 `upstream_proxy_url`/`upstream_proxy_secret_ref` also configured, every forward
 dial (the gateway included) is CONNECTed through the corp proxy by the transport,
-never dialled directly. A gateway the corp proxy cannot reach — an internal one,
-typically — is what `upstream_proxy_no_proxy` is for: list its host there and the
-gateway is dialled directly instead, then admitted by `internal_hosts` like any
-other internal address.
+never dialled directly. A gateway the corp proxy cannot reach, but the sidecar
+can resolve and reach itself, is what `upstream_proxy_no_proxy` is for: list its
+host there and the gateway is dialled directly instead. If the corp proxy is the
+only route to the gateway, leave it off the bypass list. That routing choice is
+all the brokered route needs.
+
+**Do not add the gateway to `internal_hosts` for the brokered route.** The route
+works without it whichever hop dials, and the lift is by host, not by route: it
+removes the private-address guard for that host on the ordinary path too. A
+sandbox `CONNECT` to the gateway host on another port (its port 22, say) passes
+the `allowed_domains` entry above and is refused `builtin:private-ip` by the
+guard; with the lift it is allowed (`rule_source: site-config:internal-host`).
+`internal_hosts` is for a private endpoint that is not a provider's configured
+gateway: "Bedrock on a private endpoint" above is that case, its dials take the
+ordinary guard, and they do need the lift.
 
 Two invariants carry over unchanged: the `egress_redirects` lane above still
 points the AGENT'S OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`
