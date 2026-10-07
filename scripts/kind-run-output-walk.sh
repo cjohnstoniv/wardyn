@@ -2,11 +2,11 @@
 # Copyright 2025 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Run-output walk on kind: a headless exec run prints a registered secret and a
-# marker, completes, wardynd restarts, and `wardyn run output` returns the same
-# bytes it did before the restart. The registered secret is absent from
-# run_outputs.output read with psql, and the marker is present (so the row is
-# not simply empty).
+# Run-output walk on kind, with recording off (checked on /healthz): a headless
+# exec run prints a registered secret and a marker, completes, wardynd restarts,
+# and `wardyn run output` returns the same bytes it did before the restart. The
+# registered secret is absent from run_outputs.output read with psql, and the
+# marker is present (so the row is not simply empty).
 #
 # It creates its OWN cluster (default name wardyn-out-o4, ports 8291/2291) with
 # deploy/kind/quickstart.sh and deletes it on exit; it refuses a cluster that
@@ -65,6 +65,10 @@ deploy/kind/quickstart.sh >"${TMPDIR}/quickstart.log" 2>&1 || { tail -30 "${TMPD
 
 TOKEN="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get secret wardyn-auth -o jsonpath='{.data.admin-token}' | base64 -d)"
 [[ -n "${TOKEN}" ]] || die "could not read the admin token"
+
+step "checking recording is off (the printed line must reach the output without it)"
+rec="$(curl -sf -H "Authorization: Bearer ${TOKEN}" "${BASE_URL}/healthz" | jq -r '.components.recording.selected // empty')"
+[[ "${rec}" == "none" ]] || die "components.recording.selected is '${rec}', want none"
 
 step "building the wardyn CLI"
 go build -o "${TMPDIR}/wardyn" ./cmd/wardyn || die "go build failed"
