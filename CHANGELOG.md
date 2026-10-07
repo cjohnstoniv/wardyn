@@ -14,6 +14,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   by default and refuses non-loopback listeners in real-tmux mode. Each backend startup mints a fresh
   admin token and derived person credentials, shared with its own Playwright process; explicit test
   token overrides remain supported. The canonical runner preserves explicit hosts and base-path URLs (#1813).
+- A configured metrics listener now refuses daemon startup if its address cannot bind,
+  before background workers or optional gateways start (#1902). Unset remains off.
+- The terminal takeover regression test now waits for completed input writes separately
+  from WebSocket reads, with a deterministic proof that queued input is dropped after
+  eviction (#1907).
 
 ## [0.8.8] — 2026-10-07
 

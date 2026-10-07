@@ -157,6 +157,8 @@ For a scraper that sends no bearer token, such as a stock Prometheus reading
   same body the gated route answers. Every other method and path is a `404`.
 - **Where it may bind:** boot refuses an address equal to `WARDYN_LISTEN`,
   `WARDYN_INTERNAL_LISTEN`, `WARDYN_SSH_LISTEN` or `WARDYN_UI_SANDBOX_LISTEN`.
+  A bind failure, including an occupied port or malformed address, also refuses
+  boot before background workers and optional gateways start.
 - **The console route:** `/metrics` on the console port keeps its operator
   gate either way, and the chart's ServiceMonitor keeps using it.
 - **What a reader learns:** fleet and capacity counts, approval decisions,

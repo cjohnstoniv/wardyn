@@ -648,6 +648,12 @@ func warnGovernAdminRunsUnbound(governAdminRuns, oidcConfigured bool) {
 	}
 }
 
+func warnPublicAPIDisabled(adminToken string, localMode bool) {
+	if adminToken == "" && !localMode {
+		slog.Warn("wardynd: admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
+	}
+}
+
 // parseGovernAdminRunsExempt validates WARDYN_GOVERN_ADMIN_RUNS_EXEMPT: a CSV
 // whose only value is "recording". Any other value is refused with exit 2 (the
 // code the flag package uses for a bad flag), so a typo cannot silently leave a

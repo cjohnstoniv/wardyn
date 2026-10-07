@@ -7,13 +7,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/google/uuid"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 )
 
 // TestAttachWS_LargePasteSurvives pins attachReadLimit. coder/websocket's
@@ -160,6 +162,58 @@ func recvWithin(ch <-chan []byte, d time.Duration) ([]byte, bool) {
 	case <-time.After(d):
 		return nil, false
 	}
+}
+
+func TestAttachPump_DropsQueuedInputAfterEviction(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		sess := newGatedSession()
+		defer sess.Close()
+		holder := &attachHolder{}
+		holder.writable.Store(true)
+		holder.ready.setReadyIf(func() bool { return true })
+		p := &attachPumpState{
+			ctx: ctx, cancel: cancel, holder: holder, sess: sess,
+			queue: newAttachInputQueue(), reasonC: make(chan string, 1),
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			p.drain()
+		}()
+		release := sync.OnceFunc(func() { close(sess.release) })
+		defer func() {
+			release()
+			cancel()
+			<-done
+		}()
+
+		if !p.queue.push([]byte("F1-before")) {
+			t.Fatal("F1 was not queued")
+		}
+		if got := waitEntered(t, sess, "F1"); string(got) != "F1-before" {
+			t.Fatalf("entered = %q, want F1-before", got)
+		}
+		if !p.queue.push([]byte("F2-queued")) {
+			t.Fatal("F2 was not queued")
+		}
+		holder.evicted.Store(true)
+		release()
+		if got, ok := recvWithin(sess.completed, 3*time.Second); !ok || string(got) != "F1-before" {
+			t.Fatalf("completed = %q, %v; want F1-before", got, ok)
+		}
+
+		// Quiescence proves the drain handled F2 before cancellation can end it.
+		synctest.Wait()
+		if len(p.queue.items) != 0 || p.queue.bytes != 0 {
+			t.Fatal("the drain left input queued after eviction")
+		}
+		cancel()
+		<-done
+		if got := sess.deliveredStrings(); len(got) != 1 || got[0] != "F1-before" {
+			t.Fatalf("delivered = %q, want only F1-before", got)
+		}
+	})
 }
 
 // TestAttachPump_ControlWhileWriteBlocked: with Session.Write parked on a paste,
