@@ -11,7 +11,7 @@
 import { CC_ORDER, type ConfinementClass } from "../../../lib/types";
 import { ccRank } from "./new-run-primitives";
 import { CC_META } from "../../wardyn/cc-meta";
-import { minimalSpec } from "../../wardyn/policy-panel";
+import { minimalSpec, type PolicyMode } from "../../wardyn/policy-panel";
 import type { SetupModelProvider } from "../../../lib/types";
 import type { WizardAgent, WizardState } from "./wizard-types";
 
@@ -155,10 +155,10 @@ export function barrierRequirementReason(
 // match on the very first render, before listPolicies() has answered, and that
 // is "unknown", never "gone".
 export function savedPolicyGone(
-  useSaved: boolean,
+  policyMode: PolicyMode,
   selectedPolicyId: string | undefined,
   selectedPolicy: unknown,
   policiesLoaded: boolean,
 ): boolean {
-  return useSaved && !!selectedPolicyId && !selectedPolicy && policiesLoaded;
+  return policyMode === "saved" && !!selectedPolicyId && !selectedPolicy && policiesLoaded;
 }

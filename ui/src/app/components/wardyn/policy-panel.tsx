@@ -44,8 +44,12 @@ import { PushRulesSection } from "./policy-push-rules";
 import { ADOCapabilitiesSection } from "./policy-ado-capabilities";
 import { RAIL_CHECK } from "./copy";
 import { GitPATSection } from "./policy-git-pat";
+import { DefaultPolicyPreview, type DefaultPolicyView } from "./policy-default-preview";
 
 export type PolicyPanelInstance = "run" | "policies";
+
+/** The run instance's mode row: launch under the deployment default, reuse a stored policy, or author one. */
+export type PolicyMode = "default" | "saved" | "custom";
 
 /* ---------- templates ---------- */
 
@@ -316,17 +320,18 @@ export interface PolicyPanelProps {
   /** The editor's last save refusal; one naming an axis of a git_pat grant is
    *  shown on that field (policy-git-pat.tsx). */
   serverError?: string | null;
-  /**
-   * Run instance: the "Reuse a saved policy" half of the mode row. The screen
-   * owns the policy list and the selection; this is only where it renders and
-   * which half of the row is lit.
-   */
   /** /setup/status model_providers; the template chips follow them. Absent = the no-provider set. */
   modelProviders?: readonly SetupModelProvider[];
-  savedPolicy?: {
-    active: boolean;
-    onActiveChange: (active: boolean) => void;
+  /**
+   * Run instance: the mode row (default / saved / custom). The screen owns the
+   * policy list, the selection and the default-policy read; this is only where
+   * they render and which card is lit.
+   */
+  policyMode?: {
+    mode: PolicyMode;
+    onModeChange: (mode: PolicyMode) => void;
     picker: React.ReactNode;
+    defaultPolicy: DefaultPolicyView;
   };
   className?: string;
 }
@@ -342,14 +347,14 @@ export function PolicyPanel({
   adoCeiling,
   modelProviders,
   serverError,
-  savedPolicy,
+  policyMode,
   className,
 }: PolicyPanelProps) {
   const templates = React.useMemo(() => policyTemplates(modelProviders), [modelProviders]);
   const providerNames = templateProviders(modelProviders).names;
   const parsed = parseSpec(value);
   const egress = parsed.ok ? egressSummary(parsed.spec) : null;
-  const usingSaved = savedPolicy?.active ?? false;
+  const mode: PolicyMode = policyMode?.mode ?? "custom";
   const specId = `policy-spec-${instance}`;
   const fields = (Object.keys(FIELD_HELP) as (keyof RunPolicySpec)[]).filter(
     (k) => instance === "policies" || !HIDDEN_ON_RUN.includes(k),
@@ -357,25 +362,37 @@ export function PolicyPanel({
 
   return (
     <div className={cn("space-y-4", className)}>
-      {savedPolicy && (
-        <div className="grid gap-2 sm:grid-cols-2">
+      {policyMode && (
+        <div className="grid gap-2 sm:grid-cols-3">
           <OptionCard
-            selected={usingSaved}
-            onClick={() => savedPolicy.onActiveChange(true)}
+            selected={mode === "default"}
+            onClick={() => policyMode.onModeChange("default")}
+            title={C.DEFAULT_TITLE}
+            hint={
+              policyMode.defaultPolicy.profileName
+                ? C.DEFAULT_HINT_PROFILE(policyMode.defaultPolicy.profileName)
+                : C.DEFAULT_HINT
+            }
+          />
+          <OptionCard
+            selected={mode === "saved"}
+            onClick={() => policyMode.onModeChange("saved")}
             title="Reuse a saved policy"
             hint="One your operators already wrote and named."
           />
           <OptionCard
-            selected={!usingSaved}
-            onClick={() => savedPolicy.onActiveChange(false)}
+            selected={mode === "custom"}
+            onClick={() => policyMode.onModeChange("custom")}
             title="Custom policy"
             hint="Start from a template and edit the spec for this run."
           />
         </div>
       )}
 
-      {usingSaved ? (
-        savedPolicy?.picker
+      {mode === "default" ? (
+        policyMode && <DefaultPolicyPreview view={policyMode.defaultPolicy} />
+      ) : mode === "saved" ? (
+        policyMode?.picker
       ) : (
         <>
           <div>
@@ -559,7 +576,7 @@ export function PolicyPanel({
             variant="outline"
             size="sm"
             onClick={onPreflight}
-            disabled={preflightBusy || preflightDisabled || (!usingSaved && !parsed.ok)}
+            disabled={preflightBusy || preflightDisabled || (mode === "custom" && !parsed.ok)}
           >
             <ShieldCheck className="size-4" />
             {RAIL_CHECK.BUTTON}

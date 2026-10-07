@@ -56,7 +56,7 @@ import { CC_META } from "../../wardyn/cc-meta";
 import { RUN } from "../../wardyn/copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { strongestAvailable } from "../../wardyn/default-confinement";
-import { PolicyPanel } from "../../wardyn/policy-panel";
+import { PolicyPanel, type PolicyMode } from "../../wardyn/policy-panel";
 import { TierPicker, allowedFromFloor } from "../../wardyn/tier-picker";
 import { vaultRequirementReason } from "../setup/environment-step";
 import { TIER_PICKER } from "../../../lib/tier-picker-copy";
@@ -85,6 +85,7 @@ import { providerCandidates as candidatesForAgent, providerGate } from "./model-
 import { useModelProviderPick } from "./use-model-provider-pick";
 import { WhatToRunStep } from "./step-bodies";
 import { useNewRunPolicy } from "./use-new-run-policy";
+import { previewSpec, useDefaultPolicy } from "./use-default-policy";
 import { NewRunLaunchPanel } from "./new-run-launch-panel";
 
 export function NewRunScreen() {
@@ -110,11 +111,14 @@ export function NewRunScreen() {
   const [state, setState] = React.useState<WizardState>(() =>
     initialWizardState("CC1", prefill?.state),
   );
-  // `useSaved` is the mode row: reuse a stored policy by REFERENCE (policy_id)
-  // or author one here. A clone of a run that launched by reference opens in
-  // that mode — otherwise the picker would hold the id while the panel showed
-  // an authored document nobody wrote.
-  const [useSaved, setUseSaved] = React.useState(!!prefill?.state.selectedPolicyId);
+  // `policyMode` is the mode row: launch under the deployment's default policy
+  // (no policy sent), reuse a stored policy by REFERENCE (policy_id), or author
+  // one here. A clone of a run that launched by reference opens in that mode —
+  // otherwise the picker would hold the id while the panel showed an authored
+  // document nobody wrote. Custom stays the preselected mode otherwise.
+  const [policyMode, setPolicyMode] = React.useState<PolicyMode>(
+    prefill?.state.selectedPolicyId ? "saved" : "custom",
+  );
   // The DEFAULT body floors at CC1 — NOT Minimal's authored CC2. A hardcoded
   // CC2 default would open every fresh /runs/new on a Fence-only host
   // fail-closed, all tiers dead, before the operator authored anything.
@@ -173,11 +177,13 @@ export function NewRunScreen() {
   // operator edits it themselves — a clone's carried-over title, or clearing
   // the field by hand, both count as an edit and must not be fought.
   const [titleUserEdited, setTitleUserEdited] = React.useState(!!prefill?.state.title);
-  // The governance profile bounding THIS caller (GET /policies/default).
-  // Undefined for no assignment or a failed read — either way the rail's
-  // ceiling section simply does not render, never claiming a ceiling it
-  // could not confirm.
-  const [governanceProfile, setGovernanceProfile] = React.useState<string | undefined>(undefined);
+  // GET /policies/default: the caller's ceiling. The governance profile bounding
+  // THIS caller and its floor come off it, undefined for no assignment or a
+  // failed read — either way the rail's ceiling section simply does not render,
+  // never claiming a ceiling it could not confirm.
+  const { read: defaultRead, retry: retryDefault } = useDefaultPolicy();
+  const defaultPolicy = defaultRead.status === "ready" ? defaultRead.policy : undefined;
+  const governanceProfile = defaultPolicy?.governance_profile_name;
   // GET /me's governance_contact: who to ask about the policy bounding this
   // caller. Undefined until /me answers, and when it answers null or fails.
   const [governanceContact, setGovernanceContact] = React.useState<PolicyRef | undefined>(undefined);
@@ -185,7 +191,9 @@ export function NewRunScreen() {
   // own floor (composer.Clamp raises the run to it, internal/composer/clamp.go).
   // Undefined for the same two reasons governanceProfile is; the Barrier
   // control then falls back to the authored floor alone.
-  const [govFloor, setGovFloor] = React.useState<ConfinementClass | undefined>(undefined);
+  const govFloor = (ORDERED_CLASSES as string[]).includes(defaultPolicy?.min_confinement_class ?? "")
+    ? (defaultPolicy?.min_confinement_class as ConfinementClass)
+    : undefined;
   // #1200 review P2-6/R2-4 — Vault's driver-aware reason (the /dev/kvm probe
   // on docker, a Kata RuntimeClass on k8s), so T-9 names the SAME honest
   // reason environment-step.tsx computes instead of a generic "not installed".
@@ -310,19 +318,6 @@ export function NewRunScreen() {
   }, []);
 
   React.useEffect(() => {
-    policiesApi
-      .getDefaultPolicy()
-      .then((p) => {
-        setGovernanceProfile(p.governance_profile_name);
-        const f = p.min_confinement_class;
-        setGovFloor(f && (ORDERED_CLASSES as string[]).includes(f) ? (f as ConfinementClass) : undefined);
-      })
-      .catch(() => {
-        /* unknown stays unknown — the rail names no ceiling it could not read */
-      });
-  }, []);
-
-  React.useEffect(() => {
     let alive = true;
     void healthApi.whoami().then((me) => {
       if (alive) setGovernanceContact(me?.governance_contact ?? undefined);
@@ -365,7 +360,7 @@ export function NewRunScreen() {
   const policy = useNewRunPolicy({
     state,
     patch,
-    useSaved,
+    policyMode,
     specText,
     parsedFloor,
     setParsedFloor,
@@ -436,7 +431,7 @@ export function NewRunScreen() {
     isAgent,
     mode: state.mode,
     task: state.task,
-    useSaved,
+    policyMode,
     specParsedOk: policy.parsed.ok,
     selectedPolicyId: state.selectedPolicyId,
     savedPolicy: policy.selectedPolicy,
@@ -480,7 +475,7 @@ export function NewRunScreen() {
     state,
     workspaces,
     modelProviders,
-    useSaved,
+    policyMode,
     ccTouched,
     merged: policy.merged,
     onLaunchError: policy.adoDoor.notifyLaunchError,
@@ -531,7 +526,7 @@ export function NewRunScreen() {
   // and the ghost "Runs" button is still one click away. Wire the prompt when
   // the mock carries its words.
   const dirty =
-    useSaved ||
+    policyMode !== "custom" ||
     specText !== pristineSpec.current ||
     JSON.stringify(state) !== JSON.stringify(initialWizardState(pristineCc.current, undefined, modelProviders));
   React.useEffect(() => {
@@ -718,16 +713,26 @@ export function NewRunScreen() {
                 onChange={onSpecChange}
                 onPreflight={preflight}
                 preflightBusy={preflighting}
-                preflightDisabled={useSaved && !state.selectedPolicyId}
+                preflightDisabled={policyMode === "saved" && !state.selectedPolicyId}
                 interactive={isInteractive}
                 adoCeiling={adoCeiling}
                 modelProviders={modelProviders}
-                savedPolicy={{
-                  active: useSaved,
-                  onActiveChange: (v: boolean) => {
-                    const c = clearedSpecOnCustomSwitch(v, securityOperator && operatorResolved, !!state.selectedPolicyId, modelProviders);
-                    if (c) setSpecText(c);
-                    setUseSaved(v);
+                policyMode={{
+                  mode: policyMode,
+                  defaultPolicy: {
+                    status: defaultRead.status,
+                    spec: defaultPolicy && previewSpec(defaultPolicy),
+                    profileName: governanceProfile,
+                    onRetry: retryDefault,
+                  },
+                  onModeChange: (m: PolicyMode) => {
+                    // Only leaving Saved can leave a loaded (redacted) stored body
+                    // in the editor; Default and Custom never touch the document.
+                    if (policyMode === "saved" && m !== "saved") {
+                      const c = clearedSpecOnCustomSwitch(false, securityOperator && operatorResolved, !!state.selectedPolicyId, modelProviders);
+                      if (c) setSpecText(c);
+                    }
+                    setPolicyMode(m);
                   },
                   picker: (
                     <div className="space-y-2">
@@ -779,7 +784,7 @@ export function NewRunScreen() {
               <AdoLaunchNote access={adoAccess} refusal={policy.adoDoor.refusal} connecting={policy.adoDoor.dialog.connecting} onConnect={policy.adoDoor.dialog.onConfirm} />
 
               {/* C5: named, not left to the barrier above silently winning. */}
-              {!useSaved && policy.unparseableFloor && (
+              {policyMode === "custom" && policy.unparseableFloor && (
                 <p className="text-xs text-warning">{AGENTS.FLOOR_UNPARSEABLE(policy.unparseableFloor)}</p>
               )}
 
@@ -791,7 +796,7 @@ export function NewRunScreen() {
                   api_key grant whose host is not on the allowlist
                   authenticates nothing, allow_all_egress included). Saved-policy runs launch by REFERENCE, so nothing
                   is merged into a stored spec. */}
-              {!useSaved && hasAdditions && added && (
+              {policyMode === "custom" && hasAdditions && added && (
                 <div
                   className="rounded-lg border border-border bg-surface-2 p-3"
                   data-testid="run-spec-additions"
@@ -854,7 +859,7 @@ export function NewRunScreen() {
           launchSpinning={launchSpinning}
           launching={launching}
           task={state.task}
-          useSaved={useSaved}
+          policyMode={policyMode}
           specParsedOk={policy.parsed.ok}
           selectedPolicyId={state.selectedPolicyId}
           policiesLoaded={policiesLoaded}

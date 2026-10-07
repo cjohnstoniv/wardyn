@@ -11,7 +11,7 @@
 // computed twice and drift apart. It owns two effects (re-deriving the
 // authored floor on every parse, and up-clamping the Barrier Seg to the
 // active floor) — that is why this is a hook rather than a pure function like
-// policy-lane.ts's. React state (specText, parsedFloor, useSaved, …) stays
+// policy-lane.ts's. React state (specText, parsedFloor, policyMode, …) stays
 // owned by NewRunScreen: the hook derives from it and writes back only through
 // its two effects (setParsedFloor, patch, pristineCc).
 import * as React from "react";
@@ -24,7 +24,7 @@ import {
 } from "../../../lib/types";
 import { ccRank as rank } from "./new-run-primitives";
 import { useAdoLaunchDoor } from "./new-run-rail";
-import { parseSpec, toolRulesSummary, unparseableFloorClass } from "../../wardyn/policy-panel";
+import { parseSpec, toolRulesSummary, unparseableFloorClass, type PolicyMode } from "../../wardyn/policy-panel";
 import { barrierReasons, combineFloors, governanceRemovedTier } from "./policy-lane";
 import { mergeRunSelections } from "./wizard-spec";
 import type { WizardState } from "./wizard-types";
@@ -32,7 +32,7 @@ import type { WizardState } from "./wizard-types";
 export interface UseNewRunPolicyParams {
   state: WizardState;
   patch: (p: Partial<WizardState>) => void;
-  useSaved: boolean;
+  policyMode: PolicyMode;
   specText: string;
   parsedFloor: ConfinementClass | undefined;
   setParsedFloor: React.Dispatch<React.SetStateAction<ConfinementClass | undefined>>;
@@ -54,7 +54,7 @@ export interface UseNewRunPolicyParams {
 export function useNewRunPolicy({
   state,
   patch,
-  useSaved,
+  policyMode,
   specText,
   parsedFloor,
   setParsedFloor,
@@ -76,7 +76,7 @@ export function useNewRunPolicy({
   const unparseableFloor = unparseableFloorClass(parsed);
 
   const selectedPolicy =
-    useSaved && state.selectedPolicyId
+    policyMode === "saved" && state.selectedPolicyId
       ? savedPolicies.find((p) => p.id === state.selectedPolicyId)
       : undefined;
 
@@ -91,7 +91,14 @@ export function useNewRunPolicy({
 
   // The ACTIVE floor: a picked saved policy's stored floor, else the last
   // successful parse's. Both paths refuse to launch below it server-side.
-  const floor = useSaved ? (selectedPolicy?.spec.min_confinement_class as ConfinementClass | undefined) : parsedFloor;
+  // The default lane authors no floor of its own: the ceiling's (below) is the
+  // run's whole policy.
+  const floor =
+    policyMode === "saved"
+      ? (selectedPolicy?.spec.min_confinement_class as ConfinementClass | undefined)
+      : policyMode === "default"
+        ? undefined
+        : parsedFloor;
 
   // #1200 review P2-2 — govFloor binds ONLY where the server would actually
   // clamp to it, mirrored exactly from the two doors that decide that:
@@ -104,9 +111,12 @@ export function useNewRunPolicy({
   //     (governanceProfile present) — an unassigned member's saved policy is
   //     not raised to the deployment default at all (inline_policy.go:310's
   //     `ceiling.Profile != nil`).
+  //   - the DEFAULT lane launches under the caller's own ceiling as the run's
+  //     spec itself (resolvePolicy), operator included, so its floor binds for all.
   // Folding it unconditionally (the pre-review build) hid tiers the server
   // would have let an admin, or an unassigned member's saved policy, use.
-  const govFloorApplies = !operator && (!useSaved || !!governanceProfile);
+  const govFloorApplies =
+    policyMode === "default" || (!operator && (policyMode === "custom" || !!governanceProfile));
   const boundGovFloor = govFloorApplies ? govFloor : undefined;
 
   // #1200 — the floor that actually binds: whichever of the authored
@@ -166,7 +176,8 @@ export function useNewRunPolicy({
   // the merged document on the custom lane, the stored one on the saved lane.
   // Null when there are no rules, so a policy written before the field existed
   // grows no empty rail section.
-  const specForRules = useSaved ? selectedPolicy?.spec : merged?.spec;
+  const specForRules =
+    policyMode === "saved" ? selectedPolicy?.spec : policyMode === "default" ? undefined : merged?.spec;
   const toolRules = React.useMemo(() => (specForRules ? toolRulesSummary(specForRules) : null), [specForRules]);
 
   return {

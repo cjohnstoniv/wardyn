@@ -12,6 +12,7 @@
 // `preflightBlock` and never gate firing a check.
 import type { MeCapabilities, RunPolicySpec, SetupModelProvider, Workspace } from "../../../lib/types";
 import { RAIL_PROVIDER, RUN } from "../../wardyn/copy";
+import type { PolicyMode } from "../../wardyn/policy-panel";
 import { savedPolicyGone } from "./policy-lane";
 import { workspaceUnavailableToCaller, type WizardState } from "./wizard-types";
 import type { ProviderGate } from "./model-provider-lane";
@@ -20,7 +21,7 @@ export interface LaunchGateInputs {
   isAgent: boolean;
   mode: WizardState["mode"];
   task: string;
-  useSaved: boolean;
+  policyMode: PolicyMode;
   specParsedOk: boolean;
   selectedPolicyId: string | undefined;
   savedPolicy: { id: string; name: string; spec: RunPolicySpec } | undefined;
@@ -59,12 +60,13 @@ export function launchGates(i: LaunchGateInputs): LaunchGates {
         ? "An autonomous run needs a task to perform."
         : "Enter a command to run."
       : // A Custom policy that doesn't parse has nothing to send. The saved
-        // lane launches by reference, so its body is never on the wire.
-        !i.useSaved && !i.specParsedOk
+        // lane launches by reference and the default lane sends no policy at
+        // all, so neither puts a document on the wire.
+        i.policyMode === "custom" && !i.specParsedOk
         ? "The policy spec isn't valid JSON."
-        : savedPolicyGone(i.useSaved, i.selectedPolicyId, i.savedPolicy, i.policiesLoaded) // F2-F5
+        : savedPolicyGone(i.policyMode, i.selectedPolicyId, i.savedPolicy, i.policiesLoaded) // F2-F5
           ? RUN.POLICY_GONE
-          : i.useSaved && !i.selectedPolicyId
+          : i.policyMode === "saved" && !i.selectedPolicyId
             ? "Pick a saved policy, or write a custom one."
             : // R5b (#1052) — no provider serves this person for this agent at
               // all, though one serves it org-wide.
