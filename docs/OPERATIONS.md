@@ -4317,13 +4317,22 @@ With an upstream configured, **every** forward dial is `CONNECT`ed through it,
 and the sidecar resolves the name for its own private/reserved-IP guard before it does.
 So on an estate whose endpoints are private (a VPC endpoint / PrivateLink, an
 in-cluster service, a corp mirror on RFC 6598) a name that resolves here is refused
-`builtin:private-ip` before the corp proxy is asked, and one this proxy cannot
-resolve reaches a corporate forward proxy that will not `CONNECT` to an internal
-address and times out. Neither is reachable: `internal_hosts` lifts the guard,
-`upstream_proxy_no_proxy` is the bypass that moves the dial to this sidecar, and
-the estate needs both.
+`builtin:private-ip` before the corp proxy is asked; `internal_hosts` lifts that
+guard. What happens next depends on the estate's routing, and there are two kinds:
+
+- **The sidecar can resolve and reach the endpoint itself** (a private resolver
+  answers the name here, and the sidecar has a route to the range), while the
+  corporate proxy has no route to it. List the name in `upstream_proxy_no_proxy`
+  so the sidecar dials it directly, and in `internal_hosts` to lift the guard: the
+  estate needs both.
+- **The corporate proxy is the only route to the private range** (the sidecar
+  cannot resolve or reach the endpoint). Do not use the bypass: list the name in
+  `internal_hosts` only and let the corporate proxy dial it. The recipe is under
+  "Bedrock on a private endpoint" below.
+
 `upstream_proxy_no_proxy` is the bypass — the operator-hop equivalent of the
-`NO_PROXY` the sandbox already honours internally, spelled the same way:
+`NO_PROXY` the sandbox already honours internally, spelled the same way. An entry
+is for a host the sidecar can itself resolve and reach directly:
 
 ```jsonc
 "upstream_proxy_url": "http://proxy.corp.internal:8080",
@@ -4352,12 +4361,13 @@ the sidecar resolves the name for the guard before it hands the hostname over.
 Either way the destination still needs its `allowed_domains` entry, and
 `internal_hosts` is the only field that lifts the guard — the bypass never
 does. The bypass is the other half of the same configuration: it decides which
-hop takes the dial, and on a private-endpoint estate the corp proxy cannot make
-it, so the two fields are set together:
+hop takes the dial. Where the corp proxy has no route to the endpoint and the
+sidecar does, the two fields are set together; where the corp proxy is the route,
+only `internal_hosts` is set:
 
 | | Without `internal_hosts` | With `internal_hosts` |
 |---|---|---|
-| **No bypass** | the guard resolves the name and refuses `builtin:private-ip` before the corp proxy is asked (a name this proxy cannot resolve at all still goes to the corp proxy) | the guard lifts and the HOSTNAME is handed to the corp proxy (`rule_source: site-config:internal-host`); whether that proxy will `CONNECT` to a private address is the estate's own routing — on the private-endpoint estates this section is written for it will not, which is why the bypass exists |
+| **No bypass** | the guard resolves the name and refuses `builtin:private-ip` before the corp proxy is asked (a name this proxy cannot resolve at all still goes to the corp proxy) | the guard lifts and the HOSTNAME is handed to the corp proxy (`rule_source: site-config:internal-host`); whether that proxy will `CONNECT` to a private address is the estate's own routing — where it will, this cell is the working configuration; where it will not, the bypass moves the dial to this sidecar, which is what the bypass is for |
 | **Bypassed** | dialled directly, then refused `builtin:private-ip` | **reaches the endpoint** dialled directly (`rule_source: site-config:internal-host`) |
 
 The left column is the safety property, not a rough edge: neither bypassing a
@@ -4366,8 +4376,9 @@ there names its own cause in the `X-Wardyn-Egress-Detail` response header and
 points at `internal_hosts`. The right column is not a promise of reachability:
 lifting the guard is necessary, never sufficient, because the dial still has to
 leave whichever hop takes it. That is why the bottom-right cell — bypass AND
-lift — is the working private-endpoint configuration, and why the recipes below
-set both fields.
+lift — is the working configuration where the sidecar can reach the endpoint
+itself, and the top-right cell is the working one where the corp proxy is the
+route; the recipes below say which to use.
 
 **A bypass entry helps only if `wardyn-proxy` itself can resolve and reach the name.** A bypassed
 name is resolved and dialled by the proxy, not by your corporate proxy, so a name that only the
@@ -4378,7 +4389,9 @@ guard, and a failed lookup there denies nothing), so a `builtin:resolve-failed` 
 `via: direct` and a `cause` saying the name is on the upstream proxy's bypass list and did not resolve at the proxy is that case, and not your
 corporate proxy failing to find the name. Either fix the proxy's own resolution, or take the name off
 the bypass list so the corporate proxy resolves it. If neither hop can resolve and reach the name,
-the estate needs a route, not a configuration change. The proxy says the same at startup, once per
+the estate needs a route, not a configuration change. An estate whose corporate proxy is the
+only route to the private range is the second kind above: it has nothing to put on the bypass
+list, and a bypass entry there fails exactly as described. The proxy says the same at startup, once per
 AWS SSO injection host the bypass list does not cover (on Kubernetes,
 `kubectl -n "$WARDYN_NS" logs wardyn-proxy-<run-id>`, with `$WARDYN_NS` the namespace the run's pods are
 in): "a bypass entry helps only if wardyn-proxy itself (not the sandbox) can resolve and
@@ -4391,8 +4404,9 @@ lane off" below) terminates and re-originates `portal.sso.<region>.amazonaws.com
 `wardyn-proxy` sidecar to inject a captured AWS SSO session on the wire. That re-origination is a
 forward dial like any other in this section, not a separate lane with its own rules: it is governed
 by `upstream_proxy_url`, `upstream_proxy_no_proxy` and `internal_hosts` exactly as above, and on a
-private-endpoint estate it needs the same bypass-plus-lift configuration a VPC-endpoint Bedrock
-deployment already does (see "Bedrock on a private endpoint" below).
+private-endpoint estate it needs the same configuration a VPC-endpoint Bedrock
+deployment does: bypass plus lift where the sidecar can reach the endpoint itself, lift alone where
+the corporate proxy is the route (see "Bedrock on a private endpoint" below).
 
 **The invariant, stated once:** the sandbox's dials — and the sidecar's forward dials on the
 sandbox's behalf, MITM re-origination included — follow `SiteConfig.upstream_proxy_url`; wardynd's
@@ -4953,11 +4967,19 @@ bearer-injection run), and the dispatch-layer wiring cannot see a TLS failure.
   providers). The sandbox keeps dialling
   `bedrock-runtime.<region>.amazonaws.com`, so the SNI stays the public host the
   cert names; the estate's private resolver answers that name into 100.64.
-  Reach it by listing the public host in `upstream_proxy_no_proxy` (skip the
-  corp proxy) and in `internal_hosts` — leave `cidrs` empty (the default: the
-  CGNAT range is in the liftable set), or name `100.64.0.0/10` only if you have
-  confirmed the sandbox resolves into it (lift the guard). Nothing about the
-  private address enters the TLS layer.
+  Reach it by listing the public host in `internal_hosts` (lift the guard) —
+  leave `cidrs` empty (the default: the CGNAT range is in the liftable set), or
+  name `100.64.0.0/10` only if you have confirmed the sandbox resolves into it —
+  and, **only if the sidecar can itself resolve and reach it**, in
+  `upstream_proxy_no_proxy` too (skip the corp proxy). Nothing about the private
+  address enters the TLS layer. Which of the two estates you are on:
+  - **The sidecar reaches the endpoint, the corp proxy does not.** Both fields.
+  - **The corp proxy is the only route to the private range.** `internal_hosts`
+    only, nothing on the bypass list: the sidecar hands the hostname to the corp
+    proxy, which resolves and dials it. Putting the host on the bypass list there
+    sends the dial from the sidecar, which has no route, and inference fails with
+    `tcp dial: i/o timeout` while sign-in (a public host the corp proxy carries)
+    works.
 - **A cert for the endpoint's own name.** Only when the endpoint's cert
   actually covers its `…vpce.amazonaws.com` name (private DNS disabled, or a
   cert issued for it) set the provider's `bedrock.base_url` to that hostname — then
@@ -4990,14 +5012,29 @@ application-inference-profile models call `bedrock.<region>.amazonaws.com`
 (`ListInferenceProfiles`/`GetInferenceProfile`), which the provider's `bedrock.base_url`
 deliberately does **not** re-point (a PrivateLink endpoint is per-service). On a
 fully-private estate that host also resolves into 100.64 and needs its **own**
-endpoint plus the same bypass + lift — list `bedrock.<region>.amazonaws.com`
-(or a shared `amazonaws.com` suffix) in both fields too, or a profile-id model
-fails on a control-plane call the data-plane override never touches.
+endpoint plus the same treatment as the data plane — list
+`bedrock.<region>.amazonaws.com` (or a shared `amazonaws.com` suffix) in the same
+field or fields as the data-plane host, or a profile-id model fails on a
+control-plane call the data-plane override never touches.
 
-**A literal-IP data-plane host** needs a **CIDR** `upstream_proxy_no_proxy`
-entry — the suffix form matches hostnames only, and `internal_hosts` never
+**A literal-IP data-plane host** on an estate where the sidecar dials it directly needs a
+**CIDR** `upstream_proxy_no_proxy` entry — the suffix form matches hostnames only, and `internal_hosts` never
 admits a bare IP (an exact `allowed_domains` entry does, per the redirect
 literal-IP note above). Prefer the hostname shape.
+
+**The AWS IAM Identity Center hosts cannot be re-pointed in production, so the
+settings that cover them are the routing ones.** `oidc.<region>.amazonaws.com` and
+`portal.sso.<region>.amazonaws.com` are always the real AWS names: no AWS SSO
+operation Wardyn uses is signed, so Wardyn could not tell a substitute from the real
+service, and `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` is refused unless
+`WARDYN_ALLOW_TEST_ENDPOINTS` is set (`threatmodel/THREAT-MODEL.md`, residual 45).
+What covers them is how each side reaches the real name. On the **sandbox** side,
+`upstream_proxy_url`, `upstream_proxy_no_proxy` and `internal_hosts` govern the
+dial exactly as for any other host: a name that resolves into a private range
+needs `internal_hosts`, and a bypass entry only if the sidecar can itself resolve
+and reach it. On the **daemon** side, `WARDYN_DAEMON_PROXY_URL` and
+`WARDYN_DAEMON_NO_PROXY` govern `oidc.<region>`, the host wardynd calls to renew a
+captured session at dispatch; the sandbox settings never reach that call.
 
 **`wardynd`'s own egress is a separate channel.** `upstream_proxy_no_proxy`,
 `internal_hosts` and a provider's `bedrock.base_url` govern the **sandbox** proxy;
@@ -5005,13 +5042,15 @@ literal-IP note above). Prefer the hostname shape.
 connector, and `oidc.<region>.amazonaws.com` to renew
 a captured AWS SSO session at dispatch — go out over its process HTTP client,
 which carries no SSRF guard, so a private (100.64) issuer or Graph host is
-dialled directly and boots fine. What that client *does* honour is the
-process's own `HTTPS_PROXY`/`NO_PROXY` (the published images do not set them at
-runtime): if you run `wardynd` behind the corporate proxy, add the private
-issuer/Graph ranges to the process `NO_PROXY`, or the corp proxy — which
-cannot reach an internal address — fails discovery at boot, and none of the
-site-config fields above can fix it. For a split-horizon issuer (public URL,
-internal resolution) use `WARDYN_OIDC_INTERNAL_ISSUER`.
+dialled directly and boots fine when no daemon proxy is set. Behind a corporate proxy
+the knobs are `WARDYN_DAEMON_PROXY_URL` and `WARDYN_DAEMON_NO_PROXY`, not process
+`HTTPS_PROXY`/`NO_PROXY`, which are never set on wardynd (`docs/ENV.md`). List in
+`WARDYN_DAEMON_NO_PROXY` a private issuer or Graph host that wardynd can itself
+resolve and reach directly; leave it off the list when the corporate proxy is
+the only route to it. A host the corporate proxy cannot reach and that is not on
+the list fails discovery at boot, and none of the site-config fields above can fix
+it. For a split-horizon issuer (public URL, internal resolution) use
+`WARDYN_OIDC_INTERNAL_ISSUER`.
 
 ### AWS SSO per person
 
@@ -5801,10 +5840,12 @@ entry, exactly as the public host does. **Behind a corporate
 upstream proxy, the gateway must be reachable FROM that upstream** — with
 `upstream_proxy_url`/`upstream_proxy_secret_ref` also configured, every forward
 dial (the gateway included) is CONNECTed through the corp proxy by the transport,
-never dialled directly. A gateway the corp proxy cannot reach — an internal one,
-typically — is what `upstream_proxy_no_proxy` is for: list its host there and the
-gateway is dialled directly instead, then admitted by `internal_hosts` like any
-other internal address.
+never dialled directly. A gateway the corp proxy cannot reach, but the sidecar
+can resolve and reach itself, is what `upstream_proxy_no_proxy` is for: list its
+host there and the gateway is dialled directly instead, then admitted by
+`internal_hosts` like any other internal address. If the corp proxy is the only
+route to the gateway, leave it off the bypass list and declare it in
+`internal_hosts` alone.
 
 Two invariants carry over unchanged: the `egress_redirects` lane above still
 points the AGENT'S OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`

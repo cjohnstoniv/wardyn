@@ -590,6 +590,8 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 - `runner.sandbox.requestRatio` (`WARDYN_SANDBOX_REQUEST_RATIO`): agent pod requests as a fraction of limits, in
   (0, 1]; empty (default) keeps requests equal to limits. Below 1 the pod is Burstable and a pod over its memory
   request is an eviction and OOM-kill candidate under node pressure. The proxy pod stays Guaranteed.
+  Placement is not under `runner.sandbox.*`: where a sandbox pod goes (`nodeSelector`, `tolerations`, `affinity`,
+  `priorityClassName`, `podAnnotations`, `podLabels`) is `k8s.sandbox.*`, listed above.
 - `k8s.runtimeClasses.CC2` / `.CC3`: pins a Confinement Class to a RuntimeClass
   NAME already registered in the cluster (`WARDYN_CONFINEMENT_MAP`), e.g.
   `--set k8s.runtimeClasses.CC2=gvisor`. Unlike Docker's well-known runtime
