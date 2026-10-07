@@ -289,8 +289,9 @@ func (s PG) EraseRunOutputs(ctx context.Context, runIDs []uuid.UUID) error {
 
 // DeleteRunOutputsOlderThan — see RunOutputStore.
 func (s PG) DeleteRunOutputsOlderThan(ctx context.Context, age time.Duration) (int, error) {
+	// Seconds, not age.String(): Go prints sub-millisecond ages in units Postgres intervals do not parse.
 	tag, err := s.Pool.Exec(ctx,
-		`DELETE FROM run_outputs WHERE captured_at IS NOT NULL AND captured_at < now() - $1::interval`, age.String())
+		`DELETE FROM run_outputs WHERE captured_at IS NOT NULL AND captured_at < now() - make_interval(secs => $1)`, age.Seconds())
 	if err != nil {
 		return 0, fmt.Errorf("store: delete old run outputs: %w", err)
 	}
