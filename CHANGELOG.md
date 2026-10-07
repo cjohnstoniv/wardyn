@@ -8,6 +8,153 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- **No schema change.** Rolling back is a redeploy of 0.8.7.
+- **Every new setting is opt-in, and its default is today's behaviour.** An install that sets none of them runs
+  as 0.8.7 does:
+  - `WARDYN_SSH_PROXY_COMMAND` (chart `ssh.proxyCommand`): unset, empty by default. `/healthz` carries no
+    `ssh.proxy_command`.
+  - `WARDYN_SITE_CONFIG_SEED_FILE` (chart `siteConfigSeed`): unset, `{}` by default. No ConfigMap is rendered
+    and no environment variable is set.
+  - `WARDYN_METRICS_LISTEN` (chart `metrics.listener.enabled`, `port` `9464`, `from`): unset, `false` by default.
+    No second listener exists.
+  - `WARDYN_OIDC_SESSION_TTL`: unset by default, so a console session ends at the identity provider's ID token
+    expiry, as before. It has no chart value; set it through the chart's `env:`.
+  - Chart `extraObjects`: `[]` by default, so nothing extra is rendered.
+- **One chart manifest change has no switch.** With the SSH gateway enabled, the Service's `ssh` port now
+  declares `appProtocol: tcp`, so a service mesh treats it as opaque TCP. `helm upgrade` adds that one field to
+  the Service.
+- **The audit trail gains one action and two fields.** A SIEM parser will see them:
+  - `site_config.seed`: written once per boot that restored network settings from the seed file. It names the
+    settings written, never their values, and is written by the system actor.
+  - `scope` on `credential.revoke`: every row written from this release carries `scope` `run_credentials`
+    (the row ends the run's own credentials, never a person's stored sign-in). Rows written earlier carry none
+    and mean the same.
+  - `after_lost_reply` on the `harness.credential.refresh` failure row and on the `credential.expired.delete`
+    row for the same AWS sign-in. It is `true` only on those rows, when it applies, and absent otherwise.
+- **Pool note: a request can stop answering until a deadline fires.** Before this release, many simultaneous
+  reads that check a run's masking on a cold manifest (a masked attach, a recording read or an output read)
+  could each hold a database connection and then wait for a second one, so none could finish: requests stopped
+  answering until their deadline fired. On the default pool of 10 connections (the larger of 10 and the CPU
+  count) that took 10 such reads at once; on a pool of one it took a single read. That path is fixed (see
+  "Fixed"). It is the one path this release fixes: the other places that take a second connection while
+  holding one, tracked in #1875, are unchanged and remain for 0.8.9. Sizing `pool_max_conns` above the
+  expected concurrency, and never below 4 (the `WARDYN_PG_DSN` row of `docs/ENV.md`), remains the mitigation
+  for them.
+
+### Added
+
+- **SSH through a TLS-terminating listener on 443.** `WARDYN_SSH_PROXY_COMMAND` (flag `-ssh-proxy-command`) is
+  an ssh `ProxyCommand` that wardynd publishes on `/healthz` as `ssh.proxy_command`, for an estate whose only
+  way in is a TLS-terminating listener. It is advisory: the daemon never runs it, people's own `ssh` does.
+  Boot refuses a value with a control character, a newline or a single quote, or over 512 bytes. The run page's
+  SSH card shows it with its own copy buttons, and `wardyn run ssh --print`, `--config` and `--json` carry it.
+  `wardyn run ssh` runs it only with `--advertised-proxy`, and the CLI refuses a published value that fails the
+  daemon's rule. The Docker Compose file passes the variable through. See "SSH on a 443-only estate" in
+  `docs/SSH.md`.
+- **The chart renders extra objects, and carries a recipe for SSH behind an Istio gateway.** `extraObjects` is a
+  list of Kubernetes objects rendered with the release, each passed through `tpl`, so an estate keeps the
+  Gateway and VirtualService it needs in front of the SSH gateway beside its values. The chart ships no Istio
+  template of its own. The recipe is in the chart README and `docs/SSH.md`, and says what the client must run
+  as its `ProxyCommand`.
+- **A waiting AWS sign-in can be found after its browser tab is lost.** `GET /api/v1/runs/{id}/sign-in` reads the
+  sign-in sandbox's terminal once and answers `waiting` with the verification URL and code for the latest
+  attempt, or `not_waiting`. Only the run's owner may read it (a super admin gets `403` `run_owner_only`). A run
+  that is not an AWS sign-in run answers `409` `run_sign_in_not_aws`, and a read that could not finish answers
+  `503` `run_sign_in_unreadable`, never `not_waiting`. The Go client has `RunSignIn` and the CLI has
+  `wardyn run sign-in <run-id>`. See "Finding a waiting sign-in" in `docs/sdk.md`.
+- **The console shows a waiting sign-in.** The run page shows a strip with the code and the verification page
+  while the owner's sign-in run waits, and the Runs list reads "Waiting for sign-in" with a Sign in action for
+  the viewer's own sign-in runs.
+- **A restored database can get its network settings back from a file.** `WARDYN_SITE_CONFIG_SEED_FILE` (flag
+  `-site-config-seed-file`; chart `siteConfigSeed`, rendered into a read-only ConfigMap) names a JSON file of
+  `upstream_proxy_url` or `upstream_proxy_secret_ref`, `upstream_proxy_no_proxy` and `internal_hosts`. At boot,
+  under the site-config lock, a setting the stored site config does not have is written from the file and
+  audited as `site_config.seed`; one it has is never overwritten, and a differing value logs one warning. Any
+  other key, malformed JSON, or a value `PUT /site-config` would refuse refuses boot, and two replicas booting
+  together write once. A `site_config_seed` row appears in the setup checks. See `docs/ENV.md` and
+  "Site-config seed" in the chart README.
+- **A metrics listener that needs no credential.** `WARDYN_METRICS_LISTEN` (flag `-metrics-listen`; chart
+  `metrics.listener`) serves only `GET /metrics`, in plain HTTP with no credential, for a Prometheus that
+  sends no bearer token; every other method and path gets `404`. `/metrics` on the console port keeps its
+  operator gate. Boot refuses an address that another wardynd listener uses. The chart exposes it as a pod port
+  that is not on the Service, adds the `prometheus.io/*` scrape annotations (your own `podAnnotations` win),
+  adds its own NetworkPolicy rule (`metrics.listener.from`; an empty selector that matches every namespace is
+  refused at render) and refuses a port that another wardynd port uses. Anyone who reaches the port reads
+  fleet and capacity counts, approval decisions and notification channel ids: read "Scraping `/metrics`
+  without a credential" in the chart README, and `docs/operations/monitoring.md`, first.
+- **The console session lifetime can be set.** `WARDYN_OIDC_SESSION_TTL` (flag `-oidc-session-ttl`) sets how long
+  a console SSO session lasts from sign-in: the session cookie and `/me`'s `session_expires_at` end that long
+  after sign-in, whether the ID token expires sooner or later. Boot refuses a negative value or one above
+  `24h`. The ID token's expiry is otherwise the only identity-provider-driven bound on a session, so pair a
+  longer session with `WARDYN_ROLE_STAMP_TTL`, or a person disabled only at the identity provider keeps their
+  session until it ends.
+- **The session-expiry banner renews the session in place.** "Sign in again" opens the sign-in window without
+  leaving the page, and the page, polling and an open terminal carry on while it waits. When the next `/me`
+  shows the same person with the same authority, the window closes and says when the session now ends. A
+  different person or changed authority is treated as a new sign-in, and a `401` during the wait holds the
+  page as any ended session is held.
+- **New Run can launch under the default policy.** "Use the default policy" is the first of three policy cards.
+  It shows the default policy read-only and sends neither `policy_id` nor an inline policy, so the run's policy
+  source reads `default`.
+- **The Output tab says why an interactive run has no output.** For an interactive run it shows the last screen
+  when one was kept; with recording off and the run ended by a kill, a failure or completion it says nothing
+  was kept; a session still open says it has no last screen yet; with recording on or unknown it links to the
+  Recording tab.
+- **A renewal that ends spent after a lost reply is marked.** `after_lost_reply` rides the
+  `harness.credential.refresh` failure row, and the `credential.expired.delete` row for the same sign-in, when
+  the renewal's retry ended spent after a first attempt that was sent in full and got no reply at all. A
+  write that failed part-way, or any response (an error page a proxy wrote included), does not count. The
+  marker is consistent with a lost reply; it is not proof that the provider replaced the token.
+- **The launch Review says an expired AWS session will be renewed at launch.** When the session for a model
+  provider has expired but can be renewed, the Review carries a note saying so.
+
+### Changed
+
+- **Create waits for a renewal that is already in flight.** When a launch finds another renewal of the same
+  person's AWS sign-in running, it watches the store for that renewal's result for a bounded time instead of
+  serving the token in hand. If the renewal ended spent, the launch is refused at the sign-in door and no run
+  row is made (before, a run row could be made just before dispatch refused it); if it stored a new pair, that
+  pair is served; if nothing changed inside the wait, the launch goes on with the token in hand. It narrows
+  that window and does not close it: a renewal still persisting after the wait can mark the pair spent after
+  the run exists.
+- **Record Mode renews an AWS sign-in at its door.** A record session on a Bedrock provider now renews the
+  person's sign-in when it starts, as a run's create does. A sign-in that cannot be renewed is refused with the
+  sign-in door's `422`, or `503` when the renewal could not be saved, before any session row is made.
+- **The `run_output_interactive` sentence says what the run kept.** The `409` for an interactive run says
+  nothing was kept from the session when recording is off, and points at the recording when it is on. A reader
+  who may not see a pane snapshot gets the recording sentence either way. A sign-in run is interactive and
+  answers this reason.
+- **The Audit screen and the audit docs say what ended a stored sign-in.** `credential.revoke` reads as ending
+  the run's own credentials (every row now carries `scope` `run_credentials`) and `credential.expired.delete`
+  reads by its reason, `invalid_grant` or `expired`. `docs/AUDIT-ACTIONS.md` and `docs/OPERATIONS.md` say what
+  ends a stored sign-in and which row records each end.
+- **The bypass documentation says what a bypass entry is for.** A bypass entry is for a host the proxy sidecar
+  can itself resolve and reach directly. `docs/OPERATIONS.md` now carries a second recipe for an estate whose
+  corporate proxy is the only route to the private range (`internal_hosts` only; the symptom is `tcp dial:
+  i/o timeout` on inference while sign-in works), an SSO-host block, and a rewritten daemon-egress paragraph
+  (`WARDYN_DAEMON_PROXY_URL`, `WARDYN_DAEMON_NO_PROXY`).
+- **The four clocks that end or freeze a run are documented.** Idle stop, idle pause, the lease and
+  `WARDYN_RUN_MAX_AGE` are set out in `docs/operations/run-lifetime.md`, `docs/SSH.md` and the chart README,
+  replacing the page's "What's not here: pause" note (idle pause is wired). No behaviour changed: new tests pin
+  that a browser attach, an SSH shell, and SSH exec, sftp and `-L` channels hold idle stop off while their
+  keepalive writes succeed.
+
+### Fixed
+
+- **Masked reads no longer wedge a small pool.** Loading a run's mask manifest read its rows in a transaction
+  and fetched the subject key while that transaction still held a connection, so reads that arrived together on
+  a cold manifest could take every connection and wait on each other until their deadline fired. The key is now
+  fetched after the transaction ends. What the manifest answers is unchanged. See the pool note in "Before you
+  upgrade" for what this does and does not cover.
+- **The run page no longer links to a recording that is off.** With recording known to be off, both "Watch the
+  captured session" buttons are hidden; with it unknown they stay.
+- **A long cause no longer squeezes an Audit row's sentence to nothing.** The sentence has a floor width, and
+  the cause shortens first.
+- **A second sign-in attempt in the pane is read, not the first.** The console and the new route both take the
+  latest attempt's code, and a truncated repaint of an earlier one does not replace it.
+
 ## [0.8.7] — 2026-10-06
 
 ### Before you upgrade
