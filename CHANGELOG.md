@@ -8,6 +8,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- A configured metrics listener now refuses daemon startup if its address cannot bind,
+  before background workers or optional gateways start (#1902). Unset remains off.
+- The terminal takeover regression test now waits for completed input writes separately
+  from WebSocket reads, with a deterministic proof that queued input is dropped after
+  eviction (#1907).
+
 ## [0.8.8] — 2026-10-07
 
 ### Before you upgrade

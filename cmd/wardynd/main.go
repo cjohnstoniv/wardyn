@@ -354,9 +354,7 @@ func run() error {
 		return err
 	}
 
-	if *f.adminToken == "" && !lm.enabled {
-		slog.Warn("wardynd: admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
-	}
+	warnPublicAPIDisabled(*f.adminToken, lm.enabled)
 
 	// Optional subsystems (recording replay, OIDC SSO, devcontainer builds,
 	// advisory AI scan fallback) — each nil/off when unconfigured; see
@@ -540,6 +538,11 @@ func run() error {
 		return err
 	}
 
+	// Refuse a metrics bind failure before workers or optional gateways start.
+	if err := startMetricsListener(rootCtx, *f.metricsListen, srv.MetricsListenerHandler()); err != nil {
+		return err
+	}
+
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
 	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore, leader, ticks)
@@ -551,10 +554,6 @@ func run() error {
 	// UI-sandbox gateway: a SECOND HTTP listener on its own origin (see
 	// startUISandboxGateway; a no-op when -ui-sandbox-listen is empty).
 	startUISandboxGateway(rootCtx, f, posture, srv)
-
-	// Dedicated metrics listener: GET /metrics with no credential, on its own
-	// plain-HTTP address (see startMetricsListener; a no-op when unset).
-	startMetricsListener(rootCtx, *f.metricsListen, srv.MetricsListenerHandler())
 
 	// Serve until signal/error, then drain: HTTP first, audit sinks last, the
 	// org federation forwarder (if any) joined so it never outlives the

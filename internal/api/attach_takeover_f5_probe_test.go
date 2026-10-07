@@ -61,8 +61,9 @@ type gatedSession struct {
 	r *io.PipeReader
 	w *io.PipeWriter
 
-	entered chan []byte   // one send per Write that started
-	release chan struct{} // closed by the test to let parked Writes finish
+	entered   chan []byte
+	completed chan []byte
+	release   chan struct{} // closed by the test to let parked Writes finish
 
 	mu        sync.Mutex
 	delivered [][]byte
@@ -71,7 +72,9 @@ type gatedSession struct {
 
 func newGatedSession() *gatedSession {
 	r, w := io.Pipe()
-	return &gatedSession{r: r, w: w, entered: make(chan []byte, 64), release: make(chan struct{})}
+	return &gatedSession{
+		r: r, w: w, entered: make(chan []byte, 64), completed: make(chan []byte, 64), release: make(chan struct{}),
+	}
 }
 
 func (s *gatedSession) Read(p []byte) (int, error) { return s.r.Read(p) }
@@ -83,6 +86,7 @@ func (s *gatedSession) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	s.delivered = append(s.delivered, cp)
 	s.mu.Unlock()
+	s.completed <- cp
 	return len(p), nil
 }
 
@@ -230,15 +234,9 @@ func wsPing(t *testing.T, c *websocket.Conn) {
 
 // web lane
 
-// TestTakeover_WebPumpDropsFrameOnTheWireBeforeEviction: a keystroke frame the
-// displaced client DISPATCHED before the take-over was decided — already on the
-// wire, not yet consumed because the pump is parked inside Session.Write of the
-// previous frame — must be DROPPED once the eviction lands, not delivered when
-// the pump gets to it. The socket is deliberately left OPEN (evictAttachHolder
-// is called directly, exactly as TestAttachHolder_EvictionRevokesWriteAuthorityImmediately
-// does) to model the worst case where displace()'s close handshake is stuck
-// against an unresponsive peer: the ONLY thing standing between the frame and
-// the tmux session is attachPump's per-frame canWrite() gate.
+// The socket stays open after eviction to model a stuck displace handshake.
+// Ping orders socket reads, while completed orders the separate input drain;
+// TestAttachPump_DropsQueuedInputAfterEviction pins that drain's queue barrier.
 func TestTakeover_WebPumpDropsFrameOnTheWireBeforeEviction(t *testing.T) {
 	// ticket: F5
 	srv, gr, _, run := f5Server(t)
@@ -252,16 +250,18 @@ func TestTakeover_WebPumpDropsFrameOnTheWireBeforeEviction(t *testing.T) {
 	go drainClient(c)
 	waitFor(t, "the holder's session to open", func() bool { return gr.session(0) != nil })
 	sess := gr.session(0)
+	release := sync.OnceFunc(func() { close(sess.release) })
+	defer release()
 	holder := srv.attachHolderFor(run.ID)
 	if holder == nil {
 		t.Fatal("no holder registered for the run")
 	}
 
-	// F1 enters Session.Write and parks there; F2 is dispatched while the pump
-	// is parked, so it sits unread on the wire.
+	// The reader keeps queuing input while F1 blocks the drain.
 	wsWrite(t, c, websocket.MessageBinary, []byte("F1-before"))
 	waitEntered(t, sess, "F1")
 	wsWrite(t, c, websocket.MessageBinary, []byte("F2-on-the-wire"))
+	wsPing(t, c)
 
 	// The take-over is DECIDED here: registry entry gone, evicted=true, socket
 	// still open (worst-case displace).
@@ -272,13 +272,13 @@ func TestTakeover_WebPumpDropsFrameOnTheWireBeforeEviction(t *testing.T) {
 		t.Fatal("evicted holder still reports canWrite()")
 	}
 
-	// Unpark F1; the pump now reads F2 and must drop it. F3 is dispatched
-	// strictly after the eviction and must be dropped too. The Ping is the
-	// frame-order barrier: the pump answers it from the same read loop, so a
-	// completed Ping proves F2 and F3 were already consumed.
-	close(sess.release)
+	// Ping proves F2 and F3 were read; it cannot prove F1 finished writing.
+	release()
 	wsWrite(t, c, websocket.MessageBinary, []byte("F3-after"))
 	wsPing(t, c)
+	if p, ok := recvWithin(sess.completed, 3*time.Second); !ok || string(p) != "F1-before" {
+		t.Fatalf("completed = %q, %v; want F1-before", p, ok)
+	}
 
 	got := sess.deliveredStrings()
 	for _, d := range got {
@@ -289,8 +289,6 @@ func TestTakeover_WebPumpDropsFrameOnTheWireBeforeEviction(t *testing.T) {
 	if len(got) != 1 || got[0] != "F1-before" {
 		t.Errorf("delivered=%q, want exactly [F1-before] (F1 was already inside Session.Write when the eviction landed — see H1 for that residual)", got)
 	}
-	// A resize from the evicted holder must be dropped as well (attachPump's
-	// resize arm in attach.go).
 	before := sess.resizeCount()
 	wsWrite(t, c, websocket.MessageText, []byte(`{"type":"resize","cols":10,"rows":3}`))
 	wsPing(t, c)
