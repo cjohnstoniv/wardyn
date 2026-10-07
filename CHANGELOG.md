@@ -8,6 +8,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- `POST /api/v1/runs/policy-preview` returns authorized, clamped and redacted policy facts for incomplete
+  run drafts, with readiness checks marked pending. It reads no credential values, renews nothing and
+  performs no runner or share probe. Its independent per-person limit defaults to 60/minute with a burst of 15,
+  configured by `WARDYN_POLICY_PREVIEW_RATE_PER_MIN`; see `docs/sdk.md` (#1918).
+
 ### Fixed
 
 - The Playwright harness binds its API, UI-sandbox, internal and base-path proxy listeners to loopback
