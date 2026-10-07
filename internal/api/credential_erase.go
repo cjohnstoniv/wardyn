@@ -232,8 +232,13 @@ func (s *Server) auditSweepFailure(ctx context.Context, err error) {
 // only keeps a secret. st is the owner's own view. Best-effort for the caller,
 // whose answer is already a refusal; a failed delete is audited and the sign-in
 // is left for the next refusal or the person's next capture to replace.
-func (s *Server) deleteDeadCredential(ctx context.Context, st secretstore.Store, owner, name, provider string) {
+// afterLostReply puts after_lost_reply on the row: the refusal followed a
+// renewal whose reply was lost (createAWSSSOTokenWithRetry).
+func (s *Server) deleteDeadCredential(ctx context.Context, st secretstore.Store, owner, name, provider string, afterLostReply bool) {
 	data := map[string]any{"reason": "invalid_grant", "provider": provider}
+	if afterLostReply {
+		data["after_lost_reply"] = true
+	}
 	outcome := "success"
 	if err := st.Delete(ctx, name); errors.Is(err, secretstore.ErrRevisionChanged) {
 		// A newer row replaced the one the authority refused (the caller's

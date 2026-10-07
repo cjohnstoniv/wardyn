@@ -1,0 +1,157 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+// Create's wait for a renewal another flight already has in flight.
+//
+// Create only tries the owner lock (tryLockAWSSSOOwner): N launches must not each
+// wait out one stalled renewal, and a blocking wait would hold lock-pool slots.
+// But a create that served the token in hand while another flight was renewing
+// could insert its run row just before that flight ended invalid_grant, and
+// dispatch would then refuse a run that already exists. So create watches the
+// STORE, never the lock (every lock try opens its own connection through the
+// small lock pool), for what that flight leaves behind.
+//
+// What this closes, stated narrowly: the window where the other flight's token
+// exchange ends inside the budget. It is a best-effort wait chosen for
+// availability. A holder still persisting after the budget (the persist has its
+// own 30 s, awsSSOPersistBudget) can still mark the pair spent after the run
+// exists; that needs a failed persist, so it is rare.
+
+import (
+	"context"
+	"log/slog"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
+)
+
+// awsSSOCreateWaitBudget is how long create watches: the holder's whole token
+// exchange (two attempts and the delay between them) and a second, so it follows
+// awsSSORefreshTimeout if that is ever raised. A var for the tests.
+var awsSSOCreateWaitBudget = 2*awsSSORefreshTimeout + awsSSORefreshRetryDelay + time.Second
+
+// awsSSOCreateWaitTick is the pause between two polls, and each poll's deadline.
+var awsSSOCreateWaitTick = 250 * time.Millisecond
+
+// awsSSOUnguardedReadEvery is how often a store without row revisions has the
+// pair itself read, since every read decrypts it and writes a secret.read row.
+const awsSSOUnguardedReadEvery = time.Second
+
+// renewalInFlight is refreshAWSSSOBlob's answer when another flight holds the
+// owner lock and the token in hand can still carry a run. Create has no later
+// chance to refuse, so it waits for that flight's result rather than make a run
+// on a pair the flight may be about to spend; any other caller serves the token.
+func (s *Server) renewalInFlight(ctx context.Context, scope awsSSOScope, blob awsSSOBlob) (awsSSOBlob, string) {
+	if createRenewal(ctx) {
+		return s.awaitAWSSSORenewalInFlight(ctx, scope, blob)
+	}
+	slog.InfoContext(ctx, "wardynd: a renewal of this AWS SSO credential is already in flight; serving the still-valid token",
+		slog.String("credential_source", awsSSOCredentialSourceLabel(scope)))
+	return blob, ""
+}
+
+// awaitAWSSSORenewalInFlight is a create-time renewal's answer when another
+// flight holds the owner lock. Each poll reads metadata only, under a deadline
+// derived from the request's context: the spent mark, and the stored row's
+// revision. Spent, or the row gone: the spent sentence, so no run row is made.
+// The revision changed: the pair is read once and, when it can carry a run,
+// served. A read that fails or does not answer inside its tick, a client that
+// went away, or a budget spent with nothing changed: the token in hand, as
+// before this wait, never the unavailable sentence.
+func (s *Server) awaitAWSSSORenewalInFlight(ctx context.Context, scope awsSSOScope, blob awsSSOBlob) (awsSSOBlob, string) {
+	slog.InfoContext(ctx, "wardynd: a renewal of this AWS SSO credential is already in flight; waiting for its result",
+		slog.String("credential_source", awsSSOCredentialSourceLabel(scope)))
+	w := awsSSORenewalWatch{s: s, scope: scope, blob: blob, fingerprint: awsSSOTokenFingerprint(blob.RefreshToken)}
+	readEvery := max(1, int(awsSSOUnguardedReadEvery/awsSSOCreateWaitTick))
+	stop := time.Now().Add(awsSSOCreateWaitBudget)
+	tick := time.NewTicker(awsSSOCreateWaitTick)
+	defer tick.Stop()
+	for n := 0; ; n++ {
+		pctx, cancel := context.WithTimeout(ctx, awsSSOCreateWaitTick)
+		next, failure, done, err := w.poll(pctx, n == 0, n%readEvery == 0)
+		cancel()
+		if err != nil {
+			slog.WarnContext(ctx, "wardynd: stopped waiting for the AWS SSO renewal in flight; serving the still-valid token", slog.Any("err", err))
+			return blob, ""
+		}
+		if done {
+			return next, failure
+		}
+		select {
+		case <-ctx.Done():
+			return blob, ""
+		case <-tick.C:
+		}
+		if time.Now().After(stop) {
+			return blob, ""
+		}
+	}
+}
+
+// awsSSORenewalWatch is one create's view of the store while it waits.
+type awsSSORenewalWatch struct {
+	s           *Server
+	scope       awsSSOScope
+	blob        awsSSOBlob
+	fingerprint string
+	baseRev     string
+	guarded     bool
+}
+
+// poll is one look at the store. first takes the baseline revision; readPair
+// says a store without revisions may have its pair read on this tick.
+func (w *awsSSORenewalWatch) poll(ctx context.Context, first, readPair bool) (awsSSOBlob, string, bool, error) {
+	spent, err := w.s.awsSSOTokenSpentNow(ctx, w.fingerprint)
+	if err != nil {
+		return w.blob, "", false, err
+	}
+	if spent {
+		return w.blob, awsSSORefreshSpentSentence, true, nil
+	}
+	rev, guarded, err := w.s.awsSSORevision(ctx, w.scope)
+	if err != nil {
+		return w.blob, "", false, err
+	}
+	if first {
+		w.baseRev, w.guarded = rev, guarded
+	}
+	switch {
+	case guarded && rev == "":
+		return w.blob, awsSSORefreshSpentSentence, true, nil
+	case guarded && rev == w.baseRev:
+		return w.blob, "", false, nil
+	case !guarded && !readPair:
+		return w.blob, "", false, nil
+	}
+	cur, found, err := w.s.readAWSSSOBlob(ctx, w.scope)
+	switch {
+	case err != nil:
+		return w.blob, "", false, err
+	case !found:
+		return w.blob, awsSSORefreshSpentSentence, true, nil
+	case !guarded && cur.ExpiresAt.Equal(w.blob.ExpiresAt):
+		return w.blob, "", false, nil
+	case cur.servableFor(w.s.cfg.Now(), awsSSORefreshServeFloor):
+		return cur, "", true, nil
+	}
+	return w.blob, "", true, nil
+}
+
+// awsSSOTokenSpentNow is awsSSOTokenSpent for a caller that must see a mark
+// another replica writes later: it reads under ctx and caches nothing. A mark
+// this process holds is final, so it is answered from the map.
+func (s *Server) awsSSOTokenSpentNow(ctx context.Context, fingerprint string) (bool, error) {
+	s.ssoRefreshMu.Lock()
+	marked := s.ssoRefreshSpent[fingerprint]
+	s.ssoRefreshMu.Unlock()
+	if marked {
+		return true, nil
+	}
+	st, ok := s.cfg.Store.(store.AWSSSOSpentTokenStore)
+	if !ok {
+		return false, nil
+	}
+	return st.AWSSSOTokenSpent(ctx, fingerprint)
+}

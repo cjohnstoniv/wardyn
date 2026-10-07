@@ -36,6 +36,8 @@ const (
 	mpBRPersistFailed   = "your AWS sign-in was renewed but could not be saved, so it must be signed in again"
 	mpBRReadFailed      = "Wardyn couldn't read your AWS credential for model provider %s just now — nothing was started. Try again in a moment."
 	mpBRMaskFailed      = "Wardyn couldn't record your AWS credential for model provider %s for masking just now — nothing was started. Try again in a moment."
+	// Review's one note on an expired but renewable session (renewAtLaunch).
+	mpBRRenewAtLaunch = "Your AWS session for model provider %s has expired; your sign-in will be renewed at launch."
 )
 
 // providerUnavailable is a liveness error that is a 503 with its own sentence,
