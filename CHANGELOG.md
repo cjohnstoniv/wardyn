@@ -68,7 +68,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the gateway listens on 443.
 - **A waiting AWS sign-in can be found after its browser tab is lost.** `GET /api/v1/runs/{id}/sign-in` reads the
   sign-in sandbox's terminal once and answers `waiting` with the verification URL and code for the latest
-  attempt, or `not_waiting`. Only the run's owner may read it (a super admin gets `403` `run_owner_only`). A run
+  attempt, or `not_waiting`. It reports `waiting` only while that sign-in is still in progress, so a retry that
+  expired or was interrupted reads as `not_waiting`; the run page and `wardyn run sign-in` follow the same
+  rule. Only the run's owner may read it (a super admin gets `403` `run_owner_only`). A run
   that is not an AWS sign-in run answers `409` `run_sign_in_not_aws`, and a read that could not finish answers
   `503` `run_sign_in_unreadable`, never `not_waiting`. The Go client has `RunSignIn` and the CLI has
   `wardyn run sign-in <run-id>`. See "Finding a waiting sign-in" in `docs/sdk.md`.
@@ -88,8 +90,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   sends no bearer token; every other method and path gets `404`. `/metrics` on the console port keeps its
   operator gate. Boot refuses an address that another wardynd listener uses. The chart exposes it as a pod port
   that is not on the Service, adds the `prometheus.io/*` scrape annotations (your own `podAnnotations` win),
-  adds its own NetworkPolicy rule (`metrics.listener.from`; an empty selector that matches every namespace is
-  refused at render) and refuses a port that another wardynd port uses. Anyone who reaches the port reads
+  adds its own NetworkPolicy rule (`metrics.listener.from`; a peer whose namespace selector and pod selector together select
+  every pod in every namespace is refused at render, whatever the spelling) and refuses a port that another wardynd port uses. Anyone who reaches the port reads
   fleet and capacity counts, approval decisions and notification channel ids: read "Scraping `/metrics`
   without a credential" in the chart README, and `docs/operations/monitoring.md`, first.
 - **The console session lifetime can be set.** `WARDYN_OIDC_SESSION_TTL` (flag `-oidc-session-ttl`) sets how long
@@ -102,11 +104,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   leaving the page, and the page, polling and an open terminal carry on while it waits. When the next `/me`
   shows the same person with the same authority, the window closes and says when the session now ends. A
   different person or changed authority is treated as a new sign-in, and a `401` during the wait holds the
-  page as any ended session is held.
+  page as any ended session is held. Cancelling the renewal does not stop the page checking who is signed in: for
+  as long as a sign-in the renewal started could still complete, a sign-in as a different person reloads the
+  page as them, and a narrowed role is applied.
 - **New Run can launch under the default policy.** "Use the default policy" is the first of three policy cards.
   It shows the default policy read-only and sends neither `policy_id` nor an inline policy, so the run's policy
   source reads `default`. An attached workspace still mounts into the run; nothing else on the page is merged
-  into the policy.
+  into the policy. It launches with one workspace: with more than one attached, Launch is held and the form
+  says to remove the extra workspace or choose Custom policy, so nothing is dropped silently.
 - **The Output tab says why an interactive run has no output.** For an interactive run it shows the last screen
   when one was kept; with recording off and the run ended by a kill, a failure or completion it says nothing
   was kept; a session still open says it has no last screen yet; with recording on or unknown it links to the
@@ -140,13 +145,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   answers this reason.
 - **The Audit screen and the audit docs say what ended a stored sign-in.** `credential.revoke` reads as ending
   the run's own credentials (every row now carries `scope` `run_credentials`) and `credential.expired.delete`
-  reads by its reason, `invalid_grant` or `expired`. `docs/AUDIT-ACTIONS.md` and `docs/OPERATIONS.md` say what
+  reads by its reason, `invalid_grant` or `expired`, as removed only when the deletion succeeded (a failed
+  deletion says it could not be removed). `docs/AUDIT-ACTIONS.md` and `docs/OPERATIONS.md` say what
   ends a stored sign-in and which row records each end.
 - **The bypass documentation says what a bypass entry is for.** A bypass entry is for a host the proxy sidecar
   can itself resolve and reach directly. `docs/OPERATIONS.md` now carries a second recipe for an estate whose
   corporate proxy is the only route to the private range (`internal_hosts` only; the symptom is `tcp dial:
   i/o timeout` on inference while sign-in works), an SSO-host block, and a rewritten daemon-egress paragraph
-  (`WARDYN_DAEMON_PROXY_URL`, `WARDYN_DAEMON_NO_PROXY`).
+  (`WARDYN_DAEMON_PROXY_URL`, `WARDYN_DAEMON_NO_PROXY`). The internal model gateway recipe no longer asks for
+  `internal_hosts` on a brokered gateway route: it never needed one, and the entry would have let ordinary
+  sandbox traffic reach that private host. The private-endpoint recipes that need the lift are unchanged.
 - **The four clocks that end or freeze a run are documented.** Idle stop, idle pause, the lease and
   `WARDYN_RUN_MAX_AGE` are set out in `docs/operations/run-lifetime.md`, `docs/SSH.md` and the chart README,
   replacing the page's "What's not here: pause" note (idle pause is wired). No behaviour changed: new tests pin
