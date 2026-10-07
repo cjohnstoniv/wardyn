@@ -10,7 +10,7 @@ export const RUN_OUTPUT = {
   tab: "Output",
   eyebrow: "Output",
   sourceStdout: "Command output",
-  sourcePane: "Last screen",
+  sourcePane: "Last screen of this session",
   live: "live · refreshing",
   final: "final",
   capturedAt: (t: string) => `Captured ${clockTime(t)}`,
@@ -24,7 +24,8 @@ export const RUN_OUTPUT = {
   incomplete: "This capture may be missing its last lines.",
   truncated: "Showing the end only — earlier output wasn't kept.",
   paneCaption:
-    "The terminal as Wardyn last saw it, just before stopping the run. The sandbox draws this screen, so read it as the sandbox's account.",
+    "This is the last screen of this session, not a full record. Wardyn captured it just before stopping the run, and the sandbox draws it, so read it as the sandbox's account.",
+  loading: "Loading output…",
   cliHint: "Also from the CLI:",
   offTitle: "Run output is off on this deployment",
   // The env var renders mono at the call site: offDescPre + offEnvVar + offDescPost.
@@ -43,6 +44,10 @@ export const RUN_OUTPUT = {
   interactiveTitle: "No last screen to show",
   interactiveDesc:
     "An interactive run keeps its last screen only when Wardyn stops it for you, and only the run's owner or an operator sees it.",
+  interactiveNoneDesc:
+    "Nothing was kept from this interactive session: it did not end through a Wardyn stop, and recording is off on this deployment.",
+  interactiveLiveTitle: "No last screen yet",
+  interactiveLiveDesc: "This session is still open. Wardyn keeps its last screen if it stops the run.",
   interactiveLink: "Open the Recording tab →",
   notCapturedTitle: "Output isn't captured for Kubernetes runs yet",
   notCapturedDesc: "The run's recording has it.",
