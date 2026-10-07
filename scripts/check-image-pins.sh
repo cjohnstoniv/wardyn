@@ -25,6 +25,19 @@
 # Run via `make lint`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# shellcheck source=lib/common.sh
+source scripts/lib/common.sh
+
+# Git scopes discovery to this checkout, including new recipes. The non-git
+# path is for test-image-pins.sh's small fixture tree, never adjacent worktrees.
+if [ "$(git rev-parse --show-toplevel 2>/dev/null || true)" = "$PWD" ]; then
+  mapfile -d '' -t dockerfiles < <(git ls-files --cached --others --exclude-standard -z -- \
+    Dockerfile 'Dockerfile.*' '**/Dockerfile' '**/Dockerfile.*')
+else
+  mapfile -d '' -t dockerfiles < <(find . -type d \( -name .git -o -name node_modules -o -name .claude -o -name worktrees \) -prune \
+    -o -type f \( -name Dockerfile -o -name 'Dockerfile.*' \) -print0)
+fi
+[ "${#dockerfiles[@]}" -gt 0 ] || die "no Dockerfiles found in this checkout"
 
 # Matched on the REF, not the file: exempting a whole Dockerfile would silently
 # waive every OTHER FROM in it (full/ also pulls digest-pinned toolchain stages).
@@ -79,7 +92,10 @@ while IFS= read -r df; do
       fail=1
     fi
   done < <(grep -iE '^FROM ' "$df")
-done < <(find . \( -name 'Dockerfile' -o -name 'Dockerfile.*' \) ! -path './.git/*' ! -path './ui/node_modules/*' ! -path './.claude/*')
+done < <(printf '%s\n' "${dockerfiles[@]}")
+
+# ── every curl artifact is checked before use, in the same logical RUN ──────
+python3 scripts/lib/image_downloads.py "${dockerfiles[@]}" || fail=1
 
 # ── compose registry images (base AND every overlay: ci-run.sh starts the stack
 #    with -f docker-compose.yaml -f docker-compose.ci.yaml) ──────────────────

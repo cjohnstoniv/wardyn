@@ -170,16 +170,15 @@ ENV NODE_EXTRA_CA_CERTS=/corp-ca/corp-ca.pem
 # agent image must be reproducible, and a floating `stable`/`latest` means two
 # builds of the same git tag ship different agents (D3, supply chain). The SAME
 # value drives BOTH install paths: npm takes it as the version specifier, and
-# the native path passes a bare semver straight through as a release id (its
-# `stable|latest` arm below resolves a channel and is what a deliberate opt-out
-# would name). Bump it deliberately, exactly like AWS_CLI_VERSION in the
-# sibling aws-sso image.
+# the native download requires an exact release and a pinned manifest. Channel
+# overrides remain available through npm or a host-staged native binary.
 ARG NPM_REGISTRY=
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
 ARG NO_PROXY=
 ARG CLAUDE_INSTALL=npm
 ARG CLAUDE_CODE_VERSION=2.1.231
+ARG CLAUDE_MANIFEST_SHA256=
 ARG TARGETARCH
 # The node base's bundled npm has shipped a vendored node-tar carrying
 # CVE-2026-59873 (gzip-bomb DoS) — a CRITICAL the trivy gate fails on, and it
@@ -213,12 +212,20 @@ RUN set -eu; \
             esac; \
             base="https://downloads.claude.ai/claude-code-releases"; \
             ver="$CLAUDE_CODE_VERSION"; \
-            case "$ver" in stable|latest) ver="$(curl -fsSL "$base/$ver")";; esac; \
+            case "$ver" in stable|latest) echo "native download requires an exact CLAUDE_CODE_VERSION and CLAUDE_MANIFEST_SHA256; stage a binary or use npm for channels" >&2; exit 1;; esac; \
+            manifest_sum="$CLAUDE_MANIFEST_SHA256"; \
+            if [ -z "$manifest_sum" ] && [ "$ver" = "2.1.231" ]; then \
+                manifest_sum=670096acfde2def2e5b71178908e40983bf6e3cb6155300ee4a669a5768d3e43; \
+            fi; \
+            [ -n "$manifest_sum" ] || { echo "native download of $ver requires CLAUDE_MANIFEST_SHA256" >&2; exit 1; }; \
+            printf '%s' "$manifest_sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
             curl -fsSL "$base/$ver/manifest.json" -o /tmp/claude-manifest.json; \
+            echo "$manifest_sum  /tmp/claude-manifest.json" | sha256sum --strict -c -; \
             sum="$(grep -A3 "\"$plat\"" /tmp/claude-manifest.json | grep -oiE '[a-f0-9]{64}' | head -1)"; \
             [ -n "$sum" ] || { echo "no sha256 for $plat in $ver manifest" >&2; exit 1; }; \
+            printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
             curl -fsSL "$base/$ver/$plat/claude" -o /usr/local/bin/claude; \
-            echo "$sum  /usr/local/bin/claude" | sha256sum -c -; \
+            echo "$sum  /usr/local/bin/claude" | sha256sum --strict -c -; \
             chmod 0755 /usr/local/bin/claude; \
             rm -f /tmp/claude-manifest.json; \
             echo "installed native claude $ver ($plat), checksum-verified"; \

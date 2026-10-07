@@ -110,20 +110,24 @@ onboarding. Opt-in per agent; the npm default is unchanged for OSS builds.
 drives BOTH install paths (npm takes it as the version specifier; the native
 path passes a bare semver through as a release id). A released image has to be
 reproducible — a floating `stable`/`latest` means two builds of the same git tag
-ship different agents. Pass `CLAUDE_CODE_VERSION=stable` explicitly if you
-deliberately want the channel; the Dockerfile still resolves it on the native
-path, and npm has a `stable` dist-tag of its own.
+ship different agents. Channel overrides such as `CLAUDE_CODE_VERSION=stable`
+remain available with npm or a host-staged native binary. Native downloads
+refuse channels: select an exact version and pin its manifest instead.
 
 **claude-code** (`CLAUDE_INSTALL=native`): installs the native `claude` binary,
-checksum-verified against the release manifest, from the official
+checksum-verified against a SHA256-pinned release manifest, from the official
 `https://downloads.claude.ai/claude-code-releases` surface — the **only** host this
 path contacts (allowlist it in the proxy; the corp CA above covers its TLS):
 
 ```
-make agent-images-core CLAUDE_INSTALL=native                               # the pinned default
-make agent-images-core CLAUDE_INSTALL=native CLAUDE_CODE_VERSION=2.1.215   # a different pin
-make agent-images-core CLAUDE_INSTALL=native CLAUDE_CODE_VERSION=stable    # opt back into the channel
+make agent-images-core CLAUDE_INSTALL=native  # the pinned default
+make agent-images-core CLAUDE_INSTALL=native CLAUDE_CODE_VERSION=<version> CLAUDE_MANIFEST_SHA256=<sha256>
 ```
+
+For an alternate version, obtain `manifest.json` from the official release
+URL on a trusted host, review it and compute its SHA256. The build checks
+that pin before reading the binary checksum from the manifest. Omitting the
+pin for an alternate version, or supplying a mismatched pin, fails the build.
 
 For a fully **offline / strict-allowlist** mirror that can't reach
 `downloads.claude.ai` from the build either, stage the binary on a host that can,
