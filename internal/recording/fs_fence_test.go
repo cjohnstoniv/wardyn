@@ -107,7 +107,7 @@ func TestFSStore_FenceLockCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lock.Close()
-	for _, action := range []string{"save", "erase", "open", "stat"} {
+	for _, action := range []string{"save", "fallback", "erase", "open", "stat"} {
 		t.Run(action, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 			defer cancel()
@@ -115,6 +115,8 @@ func TestFSStore_FenceLockCancellation(t *testing.T) {
 			switch action {
 			case "save":
 				err = s.SaveCast(ctx, "run~part-2", strings.NewReader("late"))
+			case "fallback":
+				err = s.SaveRecordingFile(ctx, "run~part-2.log", strings.NewReader("late"))
 			case "erase":
 				_, err = s.DeleteRun(ctx, "run")
 			case "open":
