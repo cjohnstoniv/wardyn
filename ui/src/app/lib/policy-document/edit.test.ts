@@ -138,7 +138,7 @@ describe("editPolicySource", () => {
   it.each<[string, unknown]>([
     ["NaN", NaN], ["Infinity", Infinity], ["unsafe integer", Number.MAX_SAFE_INTEGER + 1],
     ["nested Infinity", { n: -Infinity }], ["merge key", { "<<": {} }],
-    ["Date", new Date("2026-10-07")], ["binary", new Uint8Array([1])], ["Map", new Map([["a", 1]])],
+    ["Date", new Date("2000-10-07")], ["binary", new Uint8Array([1])], ["Map", new Map([["a", 1]])],
     ["BigInt", 1n], ["undefined field", { missing: undefined }], ["sparse array", Array(1)],
   ])("refuses non-JSON or unsafe edit value %s before serialization", (_, value) => {
     const result = editPolicySource("{}", ["value"], value as PolicySourceValue, "json");
