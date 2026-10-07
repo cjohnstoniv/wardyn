@@ -309,8 +309,7 @@ extraObjects:
 
 - **`protocol: TLS`, not `HTTPS`.** `HTTPS` attaches an HTTP filter to the
   server and breaks SSH; `TLS` with `tls.mode: SIMPLE` terminates TLS and
-  hands the `tcp:` route the raw stream. The chart marks the Service's `ssh`
-  port `appProtocol: tcp` so the mesh never sniffs it as HTTP.
+  hands the `tcp:` route the raw stream.
 - **The certificate.** `credentialName` names a `kubernetes.io/tls` Secret in
   the ingress gateway pods' namespace (not the Gateway object's), for the SSH
   hostname.

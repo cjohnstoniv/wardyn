@@ -1140,9 +1140,8 @@ When the only way in is port 443, terminated by a TLS-terminating listener
 such as an Istio ingress gateway, each person's `ssh` wraps SSH in TLS through
 `ssh.proxyCommand` (`WARDYN_SSH_PROXY_COMMAND`, rendered verbatim and shown by
 the run-detail card and `wardyn run ssh`), and the listener unwraps it onto
-the Service's `ssh` port, which the chart marks `appProtocol: tcp`. The chart
-ships no Istio template: `extraObjects` renders your Gateway and
-VirtualService with the release, each through `tpl`.
+the Service's `ssh` port. The chart ships no Istio template: `extraObjects`
+renders your Gateway and VirtualService with the release, each through `tpl`.
 
 ```yaml
 ssh:
