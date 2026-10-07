@@ -229,12 +229,14 @@ RUN set -eu; \
         fi; \
         zip_sum="${AWS_CLI_SHA256:-$zip_sum}"; \
         sig_sum="${AWS_CLI_SIG_SHA256:-$sig_sum}"; \
+        printf '%s' "$zip_sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
+        printf '%s' "$sig_sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
         base="https://awscli.amazonaws.com"; \
         url="${base}/awscli-exe-linux-${plat}-${AWS_CLI_VERSION}.zip"; \
         curl -fsSL "$url" -o /tmp/awscliv2.zip; \
         curl -fsSL "${url}.sig" -o /tmp/awscliv2.sig; \
-        echo "$zip_sum  /tmp/awscliv2.zip" | sha256sum -c -; \
-        echo "$sig_sum  /tmp/awscliv2.sig" | sha256sum -c -; \
+        echo "$zip_sum  /tmp/awscliv2.zip" | sha256sum --strict -c -; \
+        echo "$sig_sum  /tmp/awscliv2.sig" | sha256sum --strict -c -; \
         gpg --batch --no-tty --import /aws-cli-pubkey.asc; \
         gpg --batch --no-tty --verify /tmp/awscliv2.sig /tmp/awscliv2.zip; \
         echo "downloaded + checksum/GPG-verified AWS CLI ${AWS_CLI_VERSION} (${plat})"; \

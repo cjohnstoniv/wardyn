@@ -187,6 +187,7 @@ class Parser:
 
 
 PARAMETER = re.compile(r"\$(?:([A-Za-z_]\w*)|\{([A-Za-z_]\w*)\})")
+SHA256_FIELD = "[0123456789abcdefABCDEF]{64}"
 PACKAGES = {"apt-get", "apt", "apk", "dnf", "yum", "microdnf", "npm", "pnpm", "pip", "pip3"}
 # Shell builtins/wrappers outside this subset can change the parent's options,
 # interpret generated code, or mutate variables without an assignment command.
@@ -312,7 +313,10 @@ def checksum_file(commands):
     producer, consumer = ([word.value for word in command.words] for command in commands)
     if not consumer or consumer[0] != "sha256sum":
         return None
-    if consumer not in (["sha256sum", "-c", "-"], ["sha256sum", "--check", "-"]):
+    options = consumer[1:]
+    if options and options[0] == "--strict":
+        options = options[1:]
+    if options not in (["-c", "-"], ["--check", "-"]):
         raise ValueError("unsupported checksum options; use sha256sum -c -")
     if len(producer) == 2 and producer[0] == "echo":
         data = producer[1]
@@ -320,16 +324,33 @@ def checksum_file(commands):
         data = producer[2]
     else:
         raise ValueError("unsupported checksum input; pipe echo 'HASH  FILE' or printf '%s\\n' into sha256sum -c -")
-    match = re.fullmatch(r"(?:[a-fA-F0-9]{64}|\$[A-Za-z_]\w*|\$\{[A-Za-z_]\w*\}) +\*?([^\s]+)", data)
+    match = re.fullmatch(r"([a-fA-F0-9]{64}|\$[A-Za-z_]\w*|\$\{[A-Za-z_]\w*\}) +\*?([^\s]+)", data)
     if not match:
         raise ValueError("checksum must name one hash and the downloaded file")
-    return literal_path(match[1])
+    if PARAMETER.fullmatch(match[1]) and commands[0].words[-1].raw != f'"{data}"':
+        raise ValueError("checksum variable must be double-quoted with the literal filename")
+    return literal_path(match[2]), match[1]
+
+
+def hash_validation(commands):
+    if len(commands) != 2 or any(command.kind != "simple" for command in commands):
+        return None
+    producer, consumer = ([word.value for word in command.words] for command in commands)
+    # NUL-delimited whole-record matching rejects embedded/trailing newlines too.
+    if consumer != ["grep", "-zExq", SHA256_FIELD] or len(producer) != 3 or producer[:2] != ["printf", "%s"]:
+        return None
+    match = PARAMETER.fullmatch(producer[2])
+    if not match or commands[0].words[2].raw != f'"{producer[2]}"':
+        raise ValueError("hash validation requires one double-quoted variable")
+    plain_word(commands[1].words[2])
+    return match[1] or match[2]
 
 
 class Checker:
     def __init__(self, tree):
         self.pending = set()
         self.urls = set()
+        self.hashes = set()
         self.errexit = False
         self.first = tree[0].children[0].children[0] if tree else None
         if self.first and self.first.kind == "simple" and len(tree[0].children[0].children) == 1:
@@ -349,7 +370,8 @@ class Checker:
             for pipeline in chain.children:
                 contains_curl = any(command.kind == "simple" and is_curl(command.words) for command in pipeline.children)
                 checked = checksum_file(pipeline.children)
-                if contains_curl or checked:
+                validated = hash_validation(pipeline.children)
+                if contains_curl or checked or validated:
                     if condition or (chain.ops and not protected) or (not chain.ops and not self.errexit):
                         raise ValueError("download/checksum must fail closed: initial set -e with unconditional commands, or a terminal && chain")
                 if contains_curl:
@@ -360,9 +382,16 @@ class Checker:
                         raise ValueError(f"{path} is overwritten before its checksum")
                     self.pending.add(path)
                 elif checked:
-                    if checked not in self.pending:
-                        raise ValueError(f"checksum for {checked} does not match a pending curl download")
-                    self.pending.remove(checked)
+                    path, expected = checked
+                    variable = PARAMETER.fullmatch(expected)
+                    if variable and (variable[1] or variable[2]) not in self.hashes:
+                        raise ValueError("checksum variable needs a literal 64-hex assignment or fail-closed hash validation before the download")
+                    if path not in self.pending:
+                        raise ValueError(f"checksum for {path} does not match a pending curl download")
+                    self.pending.remove(path)
+                elif validated:
+                    self.boundary()
+                    self.hashes.add(validated)
                 else:
                     self.boundary()
                     for command in pipeline.children:
@@ -380,6 +409,11 @@ class Checker:
                             self.urls.add(name)
                     else:
                         self.urls.discard(name)
+                    if re.fullmatch(SHA256_FIELD, value):
+                        if not condition:
+                            self.hashes.add(name)
+                    else:
+                        self.hashes.discard(name)
                 return
             if args[0] == "set" and node is self.first and self.errexit:
                 return
@@ -387,19 +421,27 @@ class Checker:
                 raise ValueError(f"unsupported {args[0]} in a curl RUN; keep download/check commands explicit")
         elif node.kind == "if":
             before, outcomes = self.urls.copy(), []
+            hashes_before, hash_outcomes = self.hashes.copy(), []
             for branch in node.children:
                 self.urls = before.copy()
+                self.hashes = hashes_before.copy()
                 self.sequence(branch.children[0], condition=True)
                 self.sequence(branch.children[1], condition=condition)
                 outcomes.append(self.urls)
+                hash_outcomes.append(self.hashes)
             self.urls = before.intersection(*outcomes)
+            self.hashes = hashes_before.intersection(*hash_outcomes)
         elif node.kind == "case":
             before, outcomes = self.urls.copy(), []
+            hashes_before, hash_outcomes = self.hashes.copy(), []
             for branch in node.children:
                 self.urls = before.copy()
+                self.hashes = hashes_before.copy()
                 self.sequence(branch, condition=condition)
                 outcomes.append(self.urls)
+                hash_outcomes.append(self.hashes)
             self.urls = before.intersection(*outcomes)
+            self.hashes = hashes_before.intersection(*hash_outcomes)
         else:
             self.sequence(node.children, condition=True)
 
@@ -446,7 +488,7 @@ def inspect_commands(node, piped=False):
                 return False
         raise ValueError("fail closed: unsupported curl wrapper or generated shell command")
     if node.kind == "pipeline":
-        if checksum_file(node.children):
+        if checksum_file(node.children) or hash_validation(node.children):
             return False
         piped |= len(node.children) > 1
     # Do not short-circuit: unsupported commands after a valid curl still matter.

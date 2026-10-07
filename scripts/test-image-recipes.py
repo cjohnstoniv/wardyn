@@ -199,6 +199,26 @@ class ImageRecipes(unittest.TestCase):
         self.assertIn("is not staged", result.stderr)
         self.assertEqual(self.events, [])
 
+    def test_hash_override_shape(self):
+        invalid = ["abc", "a" * 63, "a" * 65, "g" * 64, "a" * 32 + "\n" + "a" * 32,
+                   "a" * 64 + "\n", " " + "a" * 64, "a" * 64 + " "]
+        overrides = [("claude-code", "CLAUDE_MANIFEST_SHA256"),
+                     ("aws-sso", "AWS_CLI_SHA256"), ("aws-sso", "AWS_CLI_SIG_SHA256")]
+        for name, variable in overrides:
+            for value in invalid:
+                with self.subTest(recipe=name, variable=variable, value=repr(value)):
+                    (self.root / "events").write_text("")
+                    result = self.run_recipe(name, **{variable: value})
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(self.events, [])
+
+    def test_uppercase_hash_overrides(self):
+        for name, variables in [("claude-code", ["CLAUDE_MANIFEST_SHA256"]),
+                                ("aws-sso", ["AWS_CLI_SHA256", "AWS_CLI_SIG_SHA256"])]:
+            with self.subTest(recipe=name):
+                result = self.run_recipe(name, **{key: self.env[key].upper() for key in variables})
+                self.assertEqual(result.returncode, 0, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

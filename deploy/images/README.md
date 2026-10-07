@@ -20,9 +20,9 @@ The supported command names are defined in `scripts/lib/image_downloads.py`.
 The recognizer validates that subset before classifying package names or
 stdout diagnostics as inert curl references. Command-name expansion, shell
 wrappers, generated command text, and stdout redirection/pipelines from data
-emitters are unsupported (the checksum pipeline and stderr diagnostics are
-the exceptions). An initial `set -e` must run in the parent shell; setting it
-inside a pipeline does not protect later commands.
+emitters are unsupported (checksum/hash-validation pipelines and stderr
+diagnostics are the exceptions). An initial `set -e` must run in the parent
+shell; setting it inside a pipeline does not protect later commands.
 
 Curl arguments retain their quote context: variable expansions must be plain
 and double-quoted, and command substitutions, parameter operators and unquoted
@@ -35,6 +35,26 @@ config option. Dynamic filenames remain unsupported. The guard does not
 derive `--remote-name` filenames from variables; use a literal URL or `-o`.
 It does not interpret arbitrary shell, decode generated programs, or inspect commands
 hidden inside other files or installed tools.
+
+Checksum input must contain one 64-hex field and a literal filename. The guard
+accepts a literal hash, a variable assigned a literal 64-hex value in the same
+RUN, or a variable validated before downloading with this exact fail-closed
+pipeline:
+
+```sh
+printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'
+```
+
+GNU grep's `-z` makes newlines part of the record and `-x` matches the entire
+record, so leading/trailing whitespace and additional lines refuse. Shell
+variables cannot contain NUL. See the [GNU grep manual](https://www.gnu.org/software/grep/manual/grep.html).
+The guard discards this fact after reassignment and does not infer validation
+from a branch that may be skipped. Build-argument and manifest-derived hashes
+use the validator; unchanged literal noVNC/websockify pins are proved directly.
+The affected recipes also use `sha256sum --strict -c -`.
+[`--strict`](https://www.gnu.org/software/coreutils/manual/coreutils.html#cksum-common-options)
+rejects malformed checksum records; it does not replace the single-field proof
+or establish where the expected hash came from.
 
 Claude's native download pins the manifest before reading the binary's hash.
 The default version has a baked manifest pin; alternate exact versions require

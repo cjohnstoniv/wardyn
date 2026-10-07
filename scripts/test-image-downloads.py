@@ -15,6 +15,8 @@ HASH = "a" * 64
 DOWNLOAD = "curl -fsSL https://example.invalid/a.tgz -o /tmp/a.tgz"
 VERIFY = f'echo "{HASH}  /tmp/a.tgz" | sha256sum -c -'
 USE = "tar -xzf /tmp/a.tgz"
+VALIDATE = 'printf \'%s\' "$sum" | grep -zExq \'[0123456789abcdefABCDEF]{64}\''
+VARIABLE_VERIFY = 'echo "$sum  /tmp/a.tgz" | sha256sum --strict -c -'
 
 
 class ImageDownloads(unittest.TestCase):
@@ -54,6 +56,12 @@ class ImageDownloads(unittest.TestCase):
             "url_end_options": f'RUN curl -o /tmp/a.tgz -- "$URL" && {VERIFY}',
             "url_prefix_inherited": f'RUN set -e; base="https://example.invalid"; url="$base/$VERSION"; curl "$url" -o /tmp/a.tgz; {VERIFY}',
             "url_prefix_retained_in_case": f'RUN set -e; url="https://example.invalid/a"; case $arch in amd64) sum={HASH};; *) exit 1;; esac; curl "$url" -o /tmp/a.tgz; {VERIFY}',
+            "validated_hash": f"RUN set -e; {VALIDATE}; {DOWNLOAD}; {VARIABLE_VERIFY}",
+            "validated_hash_and": f"RUN {VALIDATE} && {DOWNLOAD} && {VARIABLE_VERIFY}",
+            "validated_hash_branch": f"RUN set -e; if true; then {VALIDATE}; {DOWNLOAD}; {VARIABLE_VERIFY}; fi",
+            "literal_uppercase_hash": f'RUN set -e; sum={HASH.upper()}; {DOWNLOAD}; {VARIABLE_VERIFY}',
+            "strict_literal_hash": f"RUN {DOWNLOAD} && " + VERIFY.replace("sha256sum -c", "sha256sum --strict -c"),
+            "strict_long_check": f"RUN {DOWNLOAD} && " + VERIFY.replace("sha256sum -c", "sha256sum --strict --check"),
         }
         for name, text in cases.items():
             with self.subTest(name=name):
@@ -137,6 +145,19 @@ class ImageDownloads(unittest.TestCase):
             "arithmetic_expansion": (f'RUN set -e; echo "$((x=1))"; {DOWNLOAD}; {VERIFY}', "mutating expansion"),
             "printf_variable_mutation": (f'RUN set -e; printf -v url "%s" -Kconfig; {DOWNLOAD}; {VERIFY}', "printf options"),
             "remote_variable_prefix": (f'RUN set -e; base="https://example.invalid"; curl -O "$base/a.tgz"; echo "{HASH}  a.tgz" | sha256sum -c -', "literal URL"),
+            "unknown_hash_variable": (f"RUN set -e; {DOWNLOAD}; {VARIABLE_VERIFY}", "64-hex"),
+            "short_hash_variable": (f"RUN set -e; sum=abc; {DOWNLOAD}; {VARIABLE_VERIFY}", "64-hex"),
+            "unvalidated_hash_source": (f'RUN set -e; sum="$EXPECTED"; {DOWNLOAD}; {VARIABLE_VERIFY}', "64-hex"),
+            "wrong_validated_hash": (f"RUN set -e; {VALIDATE.replace('$sum', '$other')}; {DOWNLOAD}; {VARIABLE_VERIFY}", "64-hex"),
+            "line_hash_validation": (f"RUN set -e; {VALIDATE.replace('-zExq', '-Exq')}; {DOWNLOAD}; {VARIABLE_VERIFY}", "pipeline"),
+            "conditional_hash_validation": (f"RUN set -e; if true; then {VALIDATE}; fi; {DOWNLOAD}; {VARIABLE_VERIFY}", "64-hex"),
+            "ignored_hash_validation": (f"RUN set -e; {VALIDATE} || true; {DOWNLOAD}; {VARIABLE_VERIFY}", "fail closed"),
+            "conditional_hash_assignment": (f"RUN set -e; false && sum={HASH}; {DOWNLOAD}; {VARIABLE_VERIFY}", "64-hex"),
+            "hash_reassignment": (f'RUN set -e; {VALIDATE}; sum="$OTHER"; {DOWNLOAD}; {VARIABLE_VERIFY}', "64-hex"),
+            "hash_branch_reassignment": (f'RUN set -e; {VALIDATE}; if true; then sum="$OTHER"; fi; {DOWNLOAD}; {VARIABLE_VERIFY}', "64-hex"),
+            "unquoted_hash_validation": ("RUN set -e; " + VALIDATE.replace('"', '') + f"; {DOWNLOAD}; {VARIABLE_VERIFY}", "double-quoted variable"),
+            "late_hash_validation": (f"RUN set -e; {DOWNLOAD}; {VALIDATE}; {VARIABLE_VERIFY}", "before another command"),
+            "unquoted_hash_record": (f"RUN set -e; sum={HASH}; {DOWNLOAD}; echo $sum\\ \\ /tmp/a.tgz | sha256sum -c -", "double-quoted"),
         }
         for name, (text, diagnostic) in cases.items():
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, diagnostic):

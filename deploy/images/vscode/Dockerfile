@@ -68,9 +68,10 @@ RUN set -eu; \
 		arm64) plat=arm64; sum=0edb4b60d9c4744b2dd14b0911e3c2e6dd8c6f3c13bd58bda23ae744e59e7df1;; \
 		*) echo "unsupported arch '${TARGETARCH:-unknown}' for code-server" >&2; exit 1;; \
 	esac; \
+	printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
 	url="https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server-${CODE_SERVER_VERSION}-linux-${plat}.tar.gz"; \
 	curl -fsSL "$url" -o /tmp/code-server.tar.gz; \
-	echo "$sum  /tmp/code-server.tar.gz" | sha256sum -c -; \
+	echo "$sum  /tmp/code-server.tar.gz" | sha256sum --strict -c -; \
 	mkdir -p /usr/local/lib/code-server; \
 	tar -xzf /tmp/code-server.tar.gz -C /usr/local/lib/code-server --strip-components=1; \
 	rm -f /tmp/code-server.tar.gz; \
@@ -78,8 +79,9 @@ RUN set -eu; \
 	sq=/usr/local/lib/code-server/lib/vscode/node_modules/shell-quote; \
 	grep -q '"version": "1.10.0"' "$sq/package.json" || { \
 		echo "code-server ${CODE_SERVER_VERSION} does not bundle shell-quote 1.10.0 at $sq: review the shell-quote replacement and #1904" >&2; exit 1; }; \
+	printf '%s' "$SHELL_QUOTE_SHA256" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
 	curl -fsSL "https://registry.npmjs.org/shell-quote/-/shell-quote-${SHELL_QUOTE_VERSION}.tgz" -o /tmp/shell-quote.tgz; \
-	echo "${SHELL_QUOTE_SHA256}  /tmp/shell-quote.tgz" | sha256sum -c -; \
+	echo "${SHELL_QUOTE_SHA256}  /tmp/shell-quote.tgz" | sha256sum --strict -c -; \
 	rm -rf "$sq"; \
 	mkdir -m 0755 "$sq"; \
 	tar -xzf /tmp/shell-quote.tgz -C "$sq" --strip-components=1 --no-same-owner; \

@@ -218,12 +218,14 @@ RUN set -eu; \
                 manifest_sum=670096acfde2def2e5b71178908e40983bf6e3cb6155300ee4a669a5768d3e43; \
             fi; \
             [ -n "$manifest_sum" ] || { echo "native download of $ver requires CLAUDE_MANIFEST_SHA256" >&2; exit 1; }; \
+            printf '%s' "$manifest_sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
             curl -fsSL "$base/$ver/manifest.json" -o /tmp/claude-manifest.json; \
-            echo "$manifest_sum  /tmp/claude-manifest.json" | sha256sum -c -; \
+            echo "$manifest_sum  /tmp/claude-manifest.json" | sha256sum --strict -c -; \
             sum="$(grep -A3 "\"$plat\"" /tmp/claude-manifest.json | grep -oiE '[a-f0-9]{64}' | head -1)"; \
             [ -n "$sum" ] || { echo "no sha256 for $plat in $ver manifest" >&2; exit 1; }; \
+            printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
             curl -fsSL "$base/$ver/$plat/claude" -o /usr/local/bin/claude; \
-            echo "$sum  /usr/local/bin/claude" | sha256sum -c -; \
+            echo "$sum  /usr/local/bin/claude" | sha256sum --strict -c -; \
             chmod 0755 /usr/local/bin/claude; \
             rm -f /tmp/claude-manifest.json; \
             echo "installed native claude $ver ($plat), checksum-verified"; \
