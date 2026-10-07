@@ -23,7 +23,7 @@ ODD_WHITESPACE = re.compile(r"[^\S \t]")
 def instructions(text):
     pending, start = "", 0
     for number, line in enumerate(text.split("\n"), 1):  # BuildKit splits on \n only
-        line = line[:-1] if line.endswith("\r") else line
+        line = line.rstrip("\r")  # BuildKit trims every trailing \r
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         if DOUBLE_BACKSLASH.search(line):

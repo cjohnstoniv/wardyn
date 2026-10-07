@@ -88,6 +88,7 @@ class ImageDownloads(unittest.TestCase):
             "continuation_crlf": (f"RUN set -e; \\\r\n  {DOWNLOAD}\r\n", "same-file checksum"),
             "indented_escape": (f" # escape=`\nRUN set -e; `\n  {DOWNLOAD}", "custom SHELL/escape"),
             "bom_escape": (f"\ufeff# escape=`\nRUN set -e; `\n  {DOWNLOAD}", "custom SHELL/escape"),
+            "continuation_crcrlf": (f"RUN set -e; \\\r\r\n  {DOWNLOAD}\r\r\n", "same-file checksum"),
             "double_backslash_end": (f"RUN echo a\\\\\nRUN {DOWNLOAD}", "two backslashes"),
             "double_backslash_end_space": (f"RUN echo a\\\\ \t\nRUN {DOWNLOAD}", "two backslashes"),
             "form_feed": (f"RUN set -e; echo ok\f{DOWNLOAD}", "form feed"),
