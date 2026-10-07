@@ -10,8 +10,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [0.8.8] — 2026-10-07
 
-## [0.8.7] — 2026-10-06
-
 ### Before you upgrade
 
 - **No schema change.** Rolling back is a redeploy of 0.8.7.
