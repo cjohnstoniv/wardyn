@@ -13,4 +13,13 @@ export const AUDIT = {
   // was destroyed.
   ERASED: "Erased",
   ERASED_HINT: "Erased on request. The event and its place in the log remain.",
+  // What a credential.* row says about a person's stored sign-in. A
+  // credential.revoke row records the end of a run's OWN credentials and
+  // touches no stored sign-in, with or without its `scope` field (rows written
+  // before it existed are the ones that misled).
+  REVOKE_RUN_CREDENTIALS: "Recorded the end of this run's own credentials. The person's sign-in is not affected.",
+  EXPIRED_DELETE_REFUSED: "Removed a stored sign-in the provider refused",
+  EXPIRED_DELETE_LOST_REPLY:
+    "Removed a stored sign-in: the provider may have accepted a renewal whose reply was lost",
+  EXPIRED_DELETE_EXPIRED: "Removed a stored sign-in that had expired",
 } as const;
