@@ -359,6 +359,7 @@ describe("impliedEgressHosts — the list buildSpec unions and step-egress.tsx r
       allowed_domains: ["manual.example", "github.com"],
       denied_domains: ["github.com"],
       min_confinement_class: "CC2" as const,
+      first_use_approval: false,
     };
     const { spec, added } = mergeRunSelections(authored, state, [repoWs]);
     expect(spec.allowed_domains).toEqual(authored.allowed_domains);
