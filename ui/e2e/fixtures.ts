@@ -4,6 +4,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import {
   test as base,
@@ -19,7 +20,7 @@ import {
 // The admin token the seeded backend is started with. The app stores it under
 // localStorage["wardyn_admin_token"] and probes /api/v1/runs on mount to decide
 // auth; injecting it before first navigation boots the app already signed in.
-export const ADMIN_TOKEN = process.env.WARDYN_E2E_TOKEN || "wardyn-e2e-token";
+export const ADMIN_TOKEN = process.env.WARDYN_E2E_TOKEN || "";
 // #510-F11 — exported so no OTHER e2e file has to re-type this literal (it
 // mirrors lib/api/core.ts's own private TOKEN_KEY; a rename there that this
 // file's own hand-typed copy missed used to make the two-tabs case in
@@ -27,10 +28,13 @@ export const ADMIN_TOKEN = process.env.WARDYN_E2E_TOKEN || "wardyn-e2e-token";
 // instead of a clear mismatch).
 export const TOKEN_KEY = "wardyn_admin_token";
 
-// Synthetic credentials: e2e-backend.sh stores only their SHA-256 hashes.
-export const MEMBER_TOKEN = `wdn_${"1".repeat(64)}`;
-const SECURITY_ADMIN_TOKEN = `wdn_${"2".repeat(64)}`;
-const SECURITY_ADMIN_2_TOKEN = `wdn_${"3".repeat(64)}`;
+// Rotate with each backend; e2e-backend.sh stores only their SHA-256 hashes.
+function personToken(principal: string): string {
+  return `wdn_${createHash("sha256").update(`${ADMIN_TOKEN}:${principal}`).digest("hex")}`;
+}
+export const MEMBER_TOKEN = personToken("e2e-member");
+const SECURITY_ADMIN_TOKEN = personToken("e2e-security-admin");
+const SECURITY_ADMIN_2_TOKEN = personToken("e2e-security-admin-2");
 export const MEMBER_PRINCIPAL = "e2e-member";
 
 // T-68 — page-health teardown gate. A spec whose page threw an uncaught JS
@@ -66,6 +70,7 @@ function pageHealthAllowed(testFile: string): boolean {
 // `test` from "@playwright/test" instead and manage storage themselves.
 export const test = base.extend({
   page: async ({ page }, use, testInfo) => {
+    if (!ADMIN_TOKEN) throw new Error("WARDYN_E2E_TOKEN is missing; use scripts/run-ui-e2e.sh or read e2e-backend.sh token for this backend");
     await page.addInitScript(
       ([key, tok]) => {
         try {

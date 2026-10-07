@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, navTo } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, navTo } from "./fixtures";
 import type { Page } from "@playwright/test";
 
 // E2E coverage for the Secrets screen
@@ -87,7 +87,7 @@ test.describe("Secrets screen", () => {
     // robust to any sibling secrets, then assert correct singular/plural copy.
     // Unfiltered, the footer reads "<n> of <n> secret(s)" (filtered of total).
     const list = await page.request.get(`/api/v1/secrets`, {
-      headers: { Authorization: "Bearer wardyn-e2e-token" },
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
     });
     const { names } = (await list.json()) as { names: string[] };
     const n = names.length;
@@ -180,7 +180,7 @@ test.describe("Secrets screen", () => {
 
     // Cleanup so the lane stays re-seed tolerant: delete the secret we added.
     await page.request.delete(`/api/v1/secrets/${encodeURIComponent(newName)}`, {
-      headers: { Authorization: "Bearer wardyn-e2e-token" },
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
     });
   });
 
@@ -243,7 +243,7 @@ test.describe("Secrets screen", () => {
     // shared seeded one (keeps the lane re-seed tolerant).
     const victim = `e2e-del-${Date.now()}`;
     const resp = await page.request.put(`/api/v1/secrets/${encodeURIComponent(victim)}`, {
-      headers: { Authorization: "Bearer wardyn-e2e-token", "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json" },
       data: { value: "to-be-deleted" },
     });
     expect(resp.ok()).toBeTruthy();
@@ -271,7 +271,7 @@ test.describe("Secrets screen", () => {
   test("a double-click on Delete secret sends one DELETE and disables the button while it runs", async ({ page }) => {
     const victim = `e2e-delonce-${Date.now()}`;
     const resp = await page.request.put(`/api/v1/secrets/${encodeURIComponent(victim)}`, {
-      headers: { Authorization: "Bearer wardyn-e2e-token", "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json" },
       data: { value: "to-be-deleted-once" },
     });
     expect(resp.ok()).toBeTruthy();
@@ -303,7 +303,7 @@ test.describe("Secrets screen", () => {
     // than silently pretending the secret is gone.
     const victim = `e2e-delfail-${Date.now()}`;
     const resp = await page.request.put(`/api/v1/secrets/${encodeURIComponent(victim)}`, {
-      headers: { Authorization: "Bearer wardyn-e2e-token", "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json" },
       data: { value: "stays-put" },
     });
     expect(resp.ok()).toBeTruthy();
@@ -347,14 +347,14 @@ test.describe("Secrets screen", () => {
     // intercept doesn't mask the truth).
     await page.unroute(`**/api/v1/secrets/${encodeURIComponent(victim)}`);
     const list = await page.request.get(`/api/v1/secrets`, {
-      headers: { Authorization: "Bearer wardyn-e2e-token" },
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
     });
     const body = (await list.json()) as { names: string[] };
     expect(body.names).toContain(victim);
 
     // Cleanup: now actually delete it (intercept removed).
     await page.request.delete(`/api/v1/secrets/${encodeURIComponent(victim)}`, {
-      headers: { Authorization: "Bearer wardyn-e2e-token" },
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
     });
   });
 });
