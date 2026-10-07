@@ -52,7 +52,7 @@ func recordingOutputEligible(ctx context.Context, tx pgx.Tx, runID uuid.UUID, re
 	var eligible bool
 	err := tx.QueryRow(ctx, `SELECT
 		EXISTS (SELECT 1 FROM agent_runs WHERE id=$1 AND NOT interactive
-			AND ($2::double precision <= 0 OR ended_at IS NULL OR ended_at >= now() - make_interval(secs => $2)))
+			AND ($2::double precision <= 0 OR ended_at IS NULL OR ended_at >= clock_timestamp() - make_interval(secs => $2)))
 		AND NOT EXISTS (SELECT 1 FROM run_outputs WHERE run_id=$1 AND captured_at IS NOT NULL
 			AND (source='pane_snapshot' OR (source='stdout' AND NOT capture_gap)))`,
 		runID, retention.Seconds()).Scan(&eligible)
@@ -132,7 +132,7 @@ func (s PG) SaveRecordingRunOutput(ctx context.Context, claim RecordingOutputCla
 				return err
 			}
 		}
-		wrote, err = saveRecordingOutputRow(ctx, tx, o)
+		wrote, err = saveRecordingOutputRow(ctx, tx, o, retention)
 		if err != nil {
 			return err
 		}
@@ -184,19 +184,25 @@ func recordingOutputCovered(ctx context.Context, tx pgx.Tx, o RunOutput) error {
 	return err
 }
 
-func saveRecordingOutputRow(ctx context.Context, tx pgx.Tx, o RunOutput) (bool, error) {
+func saveRecordingOutputRow(ctx context.Context, tx pgx.Tx, o RunOutput, retention time.Duration) (bool, error) {
 	if o.Output == nil {
 		o.Output = []byte{}
 	}
+	// Advisory, manifest and conflicting-row locks can outlast retention.
+	// Recheck wall time at both write branches, not the transaction's start.
 	tag, err := tx.Exec(ctx, `INSERT INTO run_outputs
 		(run_id, output, truncated, incomplete, capture_gap, source, mask_scope, captured_at, claimed_at)
-		VALUES ($1, $2, $3, true, $4, 'recording', NULLIF($5, ''), now(), now())
+		SELECT $1, $2, $3, true, $4, 'recording', NULLIF($5, ''), clock_timestamp(), clock_timestamp()
+		FROM agent_runs WHERE id=$1 AND NOT interactive
+			AND ($6::double precision <= 0 OR ended_at IS NULL OR ended_at >= clock_timestamp() - make_interval(secs => $6))
 		ON CONFLICT (run_id) DO UPDATE SET output=EXCLUDED.output, truncated=EXCLUDED.truncated,
 			incomplete=true, capture_gap=EXCLUDED.capture_gap, source='recording', mask_scope=EXCLUDED.mask_scope,
 			captured_at=EXCLUDED.captured_at, claimed_at=EXCLUDED.claimed_at
-		WHERE run_outputs.captured_at IS NULL OR (NOT EXCLUDED.capture_gap
-			AND (run_outputs.source='recording' OR (run_outputs.source='stdout' AND run_outputs.capture_gap)))`,
-		o.RunID, o.Output, o.Truncated, o.CaptureGap, o.MaskScope)
+		WHERE (run_outputs.captured_at IS NULL OR (NOT EXCLUDED.capture_gap
+			AND (run_outputs.source='recording' OR (run_outputs.source='stdout' AND run_outputs.capture_gap))))
+			AND EXISTS (SELECT 1 FROM agent_runs WHERE id=$1 AND NOT interactive
+				AND ($6::double precision <= 0 OR ended_at IS NULL OR ended_at >= clock_timestamp() - make_interval(secs => $6)))`,
+		o.RunID, o.Output, o.Truncated, o.CaptureGap, o.MaskScope, retention.Seconds())
 	if err != nil || tag.RowsAffected() == 0 {
 		return false, err
 	}

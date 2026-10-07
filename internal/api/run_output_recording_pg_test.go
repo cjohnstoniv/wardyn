@@ -287,7 +287,9 @@ func TestRecordingOutputPG_FreshnessLostBetweenPartsDropsWholeResult(t *testing.
 	a.dispatch(t, run, "part-boundary-secret-value")
 	run = l.recordingRunEnded(run)
 	source := a.srv.cfg.RecordingStore
-	saveOutputCast(t, source, run.ID, partsHeader+`[0,"o","part-boundary-"]`+"\n")
+	// The next event forces a full masked batch before part 2 loses freshness.
+	saveOutputCast(t, source, run.ID, partsHeader+`[0,"o","`+strings.Repeat("x", maskPipeMax)+`"]`+"\n"+
+		`[1,"o","part-boundary-"]`+"\n")
 	if err := source.SaveCastNamed(t.Context(), run.ID.String(), recording.PartSuffix(2), strings.NewReader(partsHeader+`[1,"o","secret-value"]`+"\n")); err != nil {
 		t.Fatal(err)
 	}

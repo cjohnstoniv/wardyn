@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"log/slog"
@@ -134,7 +135,19 @@ func (s *Server) readRecordingOutput(ctx context.Context, runID uuid.UUID) (stor
 	go func() {
 		rc, err := recording.OpenJoined(readCtx, s.cfg.RecordingStore, runID.String())
 		if err == nil {
-			err = recording.CopyOutput(readCtx, tail.mw, rc)
+			// Each batch still refreshes after its bytes arrive; per-event
+			// freshness would cap a healthy recovery at 20 events per second.
+			batch := bufio.NewWriterSize(tail.mw, maskPipeMax)
+			err = recording.CopyOutput(readCtx, batch, rc)
+			if err == nil {
+				err = readCtx.Err()
+			}
+			if err == nil {
+				err = batch.Flush()
+			}
+			if err == nil {
+				err = readCtx.Err()
+			}
 			_ = rc.Close()
 		}
 		done <- err
