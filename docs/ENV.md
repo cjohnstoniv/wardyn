@@ -670,6 +670,9 @@ two concurrent lanes in one run — on one host never share one. Port-only
 overrides (`:port`) and `localhost:port` bind to `127.0.0.1`; other explicit
 hosts are preserved. Real-tmux mode refuses non-loopback API, UI-sandbox,
 internal and active base-path proxy listeners before starting or resetting a backend.
+The canonical wrapper validates every lane against the selected specs after shard
+filtering, before building or registering cleanup; an unsafe tmux request leaves
+existing backends and databases untouched.
 
 The rest of the Playwright e2e backend's knobs (`scripts/e2e-backend.sh`,
 `scripts/run-ui-e2e.sh`, `scripts/screenshots.sh`, `test/e2e/e2e.sh`) are

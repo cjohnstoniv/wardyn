@@ -110,6 +110,11 @@ cat > "${tmp}/bin/tmux" <<'SH'
 #!/usr/bin/env bash
 exit 0
 SH
+cat > "${tmp}/bin/go" <<'SH'
+#!/usr/bin/env bash
+printf '%s %s\n' "${WARDYN_E2E_ADDR}" "$*" >> "${E2E_TEST_EVENTS}/go.log"
+exit 1
+SH
 cat > "${tmp}/bin/pnpm" <<'PY'
 #!/usr/bin/env python3
 import hashlib
@@ -185,6 +190,53 @@ assert len([b for b in binds if b["proxy"]]) == (len(clients) if prefix else 0)
 assert all(addr[0] == host for b in binds for addr in b["listeners"]), binds
 PY
 }
+
+touch ui/e2e/cockpit-terminal-tmux-probe.spec.ts
+for setting in WARDYN_E2E_ADDR=0.0.0.0:8088 WARDYN_E2E_ADDR=example.com:8088 \
+    WARDYN_E2E_UI_ADDR=192.0.2.1:8089 'WARDYN_E2E_INTERNAL_ADDR=[::]:8443' \
+    WARDYN_E2E_PROXY_ADDR=0.0.0.0:8090; do
+  for skip_build in 0 1; do
+    rm -f "${E2E_TEST_EVENTS}/"*
+    if env WARDYN_E2E_BASE_PATH=/wardyn WARDYN_E2E_SKIP_BUILD="${skip_build}" "${setting}" \
+        ./scripts/run-ui-e2e.sh cockpit-terminal-tmux-probe > "${tmp}/refused.log" 2>&1; then
+      die "wrapper accepted ${setting}"
+    fi
+    grep -q 'refuses non-loopback listener' "${tmp}/refused.log" || { cat "${tmp}/refused.log"; die "wrong wrapper refusal"; }
+    [[ -z "$(find "${E2E_TEST_EVENTS}" -type f -print -quit)" ]] || die "unsafe wrapper performed build, Docker, startup or cleanup work"
+  done
+done
+log "canonical wrapper refuses every unsafe tmux listener before build or cleanup, with and without skip-build"
+
+for selection in mixed default tmux-shard; do
+  spec_args=() shard_env=()
+  [[ "${selection}" != mixed ]] || spec_args=(one cockpit-terminal-tmux-probe)
+  [[ "${selection}" != tmux-shard ]] || shard_env=(WARDYN_E2E_SHARD=1/7)
+  rm -f "${E2E_TEST_EVENTS}/"*
+  if env WARDYN_E2E_ADDR=0.0.0.0:8088 WARDYN_E2E_LANES=3 "${shard_env[@]}" \
+      ./scripts/run-ui-e2e.sh "${spec_args[@]}" > "${tmp}/refused.log" 2>&1; then
+    die "wrapper accepted an unsafe ${selection} selection"
+  fi
+  grep -q 'refuses non-loopback listener' "${tmp}/refused.log" || { cat "${tmp}/refused.log"; die "wrong ${selection} refusal"; }
+  [[ -z "$(find "${E2E_TEST_EVENTS}" -type f -print -quit)" ]] || die "${selection} performed work before refusing"
+done
+log "mixed lists, default three-lane runs and selected tmux shards refuse before any work"
+
+# Stop at the build boundary: a non-tmux host must survive selection, but this
+# test must never actually open even an inert wildcard listener.
+for selection in explicit non-tmux-shard; do
+  spec_args=() shard_env=()
+  [[ "${selection}" != explicit ]] || spec_args=(one)
+  [[ "${selection}" != non-tmux-shard ]] || shard_env=(WARDYN_E2E_SHARD=2/7)
+  rm -f "${E2E_TEST_EVENTS}/"*
+  if env WARDYN_E2E_ADDR=0.0.0.0:8088 WARDYN_E2E_SKIP_BUILD=0 "${shard_env[@]}" \
+      ./scripts/run-ui-e2e.sh "${spec_args[@]}" > "${tmp}/build-stopped.log" 2>&1; then
+    die "build stub unexpectedly succeeded"
+  fi
+  grep -q '^0.0.0.0:8088 build ' "${E2E_TEST_EVENTS}/go.log" || die "${selection} lost its explicit non-tmux host"
+  [[ ! -e "${E2E_TEST_EVENTS}/docker.log" ]] || die "failed build triggered database cleanup"
+done
+rm ui/e2e/cockpit-terminal-tmux-probe.spec.ts
+log "explicit non-tmux selections and shards preserve host overrides"
 
 run_wrapper one two
 check_events 2 1 '' 127.0.0.1
