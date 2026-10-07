@@ -13,15 +13,19 @@ export function CodeBlock({
   text,
   className,
   children,
+  copyLabel,
 }: {
   text: string;
   className?: string;
   children?: React.ReactNode;
+  /** Accessible name of the Copy button; says WHAT is copied when a card holds several blocks. */
+  copyLabel?: string;
 }) {
   return (
     <div className={cn("group relative rounded-lg border border-border bg-surface-2/60", className)}>
       <CopyButton
         text={text}
+        label={copyLabel}
         className="absolute right-2 top-2 z-10 size-7 justify-center rounded-md border border-border bg-card text-muted-foreground opacity-0 transition focus-visible:opacity-100 group-hover:opacity-100 hover:text-foreground"
       />
       <pre className="scroll-thin overflow-x-auto p-3 text-xs leading-relaxed">
