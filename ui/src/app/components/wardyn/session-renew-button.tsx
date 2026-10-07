@@ -9,14 +9,13 @@ import { RENEW_STRIP_SLOT, useSessionRenew } from "../../lib/use-session-renew";
 import { SIGN_IN_AGAIN } from "../../lib/session-renew-copy";
 import type { ShellMeta } from "../screens/app-shell";
 
-export function SessionRenewButton({ meta, expired }: { meta: ShellMeta; expired: boolean }) {
+export function SessionRenewButton({ meta }: { meta: ShellMeta }) {
   const renew = useSessionRenew({
     principal: meta.principal,
     role: meta.role,
     operator: meta.operator,
     securityOperator: meta.securityOperator,
     expiresAt: meta.sessionExpiresAt?.getTime() ?? 0,
-    expired,
   });
   return (
     <button type="button" onClick={renew} className="font-medium underline underline-offset-2">

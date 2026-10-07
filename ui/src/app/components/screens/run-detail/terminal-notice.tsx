@@ -123,7 +123,7 @@ export function TerminalPane({
             <div className="flex flex-col items-center gap-2 pt-2 text-center">
               <p className="text-sm text-muted-foreground">{runEntryRefusalLine(run)}</p>
               {!recordingDisabled && (
-                <button onClick={onGoRecording} className="text-xs font-medium text-primary hover:underline">
+                <button onClick={onGoRecording} className="text-xs font-medium text-info hover:underline">
                   Watch the captured session →
                 </button>
               )}
@@ -157,7 +157,7 @@ export function TerminalPane({
           text={run.interactive ? runEntryRefusalLine(run) : RUN_MODE.autonomous.blurb}
           action={
             recordingDisabled ? undefined : (
-              <button onClick={onGoRecording} className="text-xs font-medium text-primary hover:underline">
+              <button onClick={onGoRecording} className="text-xs font-medium text-info hover:underline">
                 Watch the captured session →
               </button>
             )
