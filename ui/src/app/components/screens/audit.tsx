@@ -766,7 +766,7 @@ function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: stri
         <AuditDecision event={event} className="flex min-w-0 flex-1 items-center gap-2 text-sm" />
       ) : (
         <span className="flex min-w-0 flex-1 items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={describeEvent(event)}>
+          <span className="min-w-[10rem] flex-1 truncate text-sm text-foreground" title={describeEvent(event)}>
             {describeEvent(event)}
           </span>
           <RuleSourceChip event={event} />
