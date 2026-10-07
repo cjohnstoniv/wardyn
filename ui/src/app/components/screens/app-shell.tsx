@@ -61,7 +61,7 @@ import {
 import { health as api, type Me, type MeUserDrive } from "../../lib/api/health";
 import { useReauth } from "../../lib/reauth";
 import { TopBar } from "./top-bar";
-import { appURL } from "../../lib/base-path";
+import { SessionRenewButton, SessionRenewSlot } from "../wardyn/session-renew-button";
 import { ViewAccessProvider, type ConsoleView } from "../wardyn/console-view";
 import {
   useShellView,
@@ -844,22 +844,19 @@ export function AppShell({
           (while the current session still works) replaces it before it dies. */}
             {/* F3-F11: three-state, so an already-past-expiry session doesn't
                 read "expiring soon" forever. */}
-            {!unreachable && sessionExpiry !== "none" && (
+            {!unreachable && sessionExpiry !== "none" && reauth.phase !== "renew" && (
               <div
                 role="status"
                 className="relative z-50 flex shrink-0 items-center gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-sm text-warning"
               >
                 <AlertTriangle className="size-4 shrink-0" />
                 <span>{SESSION_EXPIRY_COPY[sessionExpiry][0]}</span>
-                <a
-                  href={appURL("/auth/login")}
-                  className="font-medium underline underline-offset-2"
-                >
-                  Sign in again
-                </a>
+                <SessionRenewButton meta={meta} expired={sessionExpiry === "expired"} />
                 <span>{SESSION_EXPIRY_COPY[sessionExpiry][1]}</span>
               </div>
             )}
+            {/* While a renewal waits, its strip (the reauth layer's) stands here instead. */}
+            <SessionRenewSlot />
             {/* LAST in the stack, and not hidden in focus mode: a dead control
           plane, an unknown identity and a dying session are each the better
           explanation of what you are looking at and are read first — but this

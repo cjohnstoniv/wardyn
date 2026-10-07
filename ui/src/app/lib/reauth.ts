@@ -10,20 +10,50 @@
 // through. Deliberately
 // free of copy and UI: it sits on the eager graph, and the layer that draws
 // it is a lazy chunk (bundle-split.test.ts).
+//
+// It also holds a renewal: the expiry banner's "Sign in again", started while
+// the session is still live (lib/use-session-renew.ts), which the same layer
+// draws as a strip in the banner's place.
 import * as React from "react";
 import type { Refused } from "./api/core";
 
 // none: signed in. dialog: signed out, asking. bar: signed out, "Not now".
-export type ReauthPhase = "none" | "dialog" | "bar";
+// renew: still signed in, signing in again from the expiry banner.
+export type ReauthPhase = "none" | "dialog" | "bar" | "renew";
+
+/** What a renewal started from: who was signed in, with what authority and
+ *  until when. Whoever answers /me while it waits is measured against this. */
+export interface Renewal {
+  principal: string;
+  role: string;
+  operator: boolean;
+  securityOperator: boolean;
+  /** session_expires_at at the click, in epoch milliseconds. */
+  expiresAt: number;
+  /** The banner already read "expired" at the click. */
+  expired: boolean;
+  /** The sign-in window the click opened; null when the browser refused it. */
+  popup: Window | null;
+}
 
 export interface Reauth {
   phase: ReauthPhase;
+  /** Signed out mid-page: the dialog, the bar, or a renewal under which a
+   *  request was refused. A renewal alone leaves the page working. */
+  signedOut: boolean;
+  /** The renewal in progress, or null. */
+  renewal: Renewal | null;
   /** The owner id (WfetchInit.save) of a Save refused in this lapse — never
    *  re-sent — or null. Only that owner's screen ever shows it. */
   writeDropped: string | null;
   /** "dialog": ask (again). "bar": Not now. "none": the same person is back
    *  and the page carries on. */
-  setPhase: (phase: ReauthPhase) => void;
+  setPhase: (phase: Exclude<ReauthPhase, "renew">) => void;
+  /** The banner's "Sign in again": the click has already opened the window. */
+  startRenew: (renewal: Renewal) => void;
+  /** Cancel: back to the banner, or to the dialog when the session ended
+   *  while the renewal waited. */
+  endRenew: () => void;
   /** Someone else signed in: drop the page and load `path` fresh. */
   reloadAs: (path: string) => void;
   clearWriteDropped: () => void;
@@ -35,8 +65,12 @@ export interface Reauth {
 const noop = () => {};
 export const ReauthContext = React.createContext<Reauth>({
   phase: "none",
+  signedOut: false,
+  renewal: null,
   writeDropped: null,
   setPhase: noop,
+  startRenew: noop,
+  endRenew: noop,
   reloadAs: noop,
   clearWriteDropped: noop,
   writeDroppedClaimed: () => false,
@@ -50,28 +84,33 @@ export function useReauth(): Reauth {
 interface State {
   phase: ReauthPhase;
   writeDropped: string | null;
+  renewal: Renewal | null;
+  /** A request was refused (401) since the person was last known signed in. */
+  refused: boolean;
 }
+const SIGNED_IN: State = { phase: "none", writeDropped: null, renewal: null, refused: false };
 
 export function useReauthController(reloadAs: (path: string) => void): {
   reauth: Reauth;
   lapse: (refused: Refused) => void;
   reset: () => void;
 } {
-  const [state, setState] = React.useState<State>({ phase: "none", writeDropped: null });
+  const [state, setState] = React.useState<State>(SIGNED_IN);
   // One mounted screen per Save owner (an owner is a screen's own resource).
   const claims = React.useRef(new Set<string>());
 
   // Functional updates throughout: several requests can 401 in one tick, and
   // each must see the phase the one before it set. A write refused under the
-  // bar asks again — the person just tried to change something.
+  // bar asks again — the person just tried to change something. Under a
+  // renewal the strip stays, and its sign-in window serves this refusal too.
   const lapse = React.useCallback(({ write, save }: Refused) => {
     setState((s) => {
-      if (s.phase === "none") return { phase: "dialog", writeDropped: save ?? null };
+      if (s.phase === "none") return { ...s, phase: "dialog", writeDropped: save ?? null, refused: true };
       const phase = write && s.phase === "bar" ? "dialog" : s.phase;
-      return { phase, writeDropped: save ?? s.writeDropped };
+      return { ...s, phase, writeDropped: save ?? s.writeDropped, refused: true };
     });
   }, []);
-  const reset = React.useCallback(() => setState({ phase: "none", writeDropped: null }), []);
+  const reset = React.useCallback(() => setState(SIGNED_IN), []);
   // Stable identity: useWriteDropped's effect depends on it. The owner going
   // away takes its dropped save with it — the draft it named is gone too.
   const claimWriteDropped = React.useCallback((owner: string) => {
@@ -84,8 +123,15 @@ export function useReauthController(reloadAs: (path: string) => void): {
 
   const reauth = React.useMemo<Reauth>(
     () => ({
-      ...state,
-      setPhase: (phase) => setState((s) => ({ ...s, phase })),
+      phase: state.phase,
+      writeDropped: state.writeDropped,
+      renewal: state.renewal,
+      signedOut: state.phase !== "none" && (state.phase !== "renew" || state.refused),
+      setPhase: (phase) =>
+        setState((s) => ({ ...s, phase, renewal: null, refused: phase === "none" ? false : s.refused })),
+      startRenew: (renewal) => setState((s) => ({ ...s, phase: "renew", renewal })),
+      endRenew: () =>
+        setState((s) => (s.phase === "renew" ? { ...s, phase: s.refused ? "dialog" : "none", renewal: null } : s)),
       reloadAs,
       clearWriteDropped: () => setState((s) => (s.writeDropped ? { ...s, writeDropped: null } : s)),
       writeDroppedClaimed: () => claims.current.has(state.writeDropped ?? ""),

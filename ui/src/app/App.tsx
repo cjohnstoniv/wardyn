@@ -375,7 +375,8 @@ export default function App() {
   // and the document then loads fresh as them.
   const [reloadTo, setReloadTo] = React.useState<string | null>(null);
   const { reauth, lapse, reset: resetReauth } = useReauthController(setReloadTo);
-  const lapsed = reauth.phase !== "none";
+  // Not the phase: a renewal from the expiry banner leaves the page working.
+  const lapsed = reauth.signedOut;
   // H1: onUnauthorized fires for EVERY 401, including the cold mount probe
   // (no session at all yet) — mirrored in a ref (not read from `auth` state
   // directly) because the handler below is registered once (its only

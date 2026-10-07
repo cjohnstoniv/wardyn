@@ -5,7 +5,7 @@
 
 import type { Page, Request } from "@playwright/test";
 import { ADMIN_TOKEN, expect, gotoConsole, navToRoute, test } from "./fixtures";
-import { REAUTH_BAR, REAUTH_DIALOG } from "../src/app/lib/reauth-copy";
+import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_RENEW } from "../src/app/lib/reauth-copy";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 
 // #483 — a session that ends mid-page keeps the page. A real screen with a
@@ -87,5 +87,88 @@ test.describe("signed out mid-page: sign in again in place (#483)", () => {
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(page.getByTestId("provider-row-github")).toHaveCount(0);
     await expect(page.getByText(REAUTH_DIALOG.WRITE_DROPPED)).toHaveCount(0);
+  });
+});
+
+// The expiry banner's "Sign in again", renewing in place. The harness signs in
+// with one admin token and has no SSO, so GET /me is spliced: it gains the
+// session_expires_at that draws the banner, and later whatever a sign-in in
+// the popup would have changed. Nothing the popup shows is read.
+
+// app-shell.tsx SESSION_EXPIRY_COPY.soon[0] (the shell is not importable here).
+const EXPIRING_SOON = "Your session is expiring soon.";
+const inMinutes = (m: number) => new Date(Date.now() + m * 60_000).toISOString();
+const isMe = (url: string) => new URL(url).pathname === "/api/v1/me";
+
+/** On /admin/providers with a git row typed but not saved, under a session
+ *  two minutes from its end. `answer` changes what /me says from then on. */
+async function draftUnderAnExpiringSession(page: Page): Promise<{ answer: (over: Record<string, unknown>) => void }> {
+  let spliced: Record<string, unknown> = { session_expires_at: inMinutes(2) };
+  await page.route("**/api/v1/me", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ response, json: { ...(await response.json()), ...spliced } });
+  });
+  await gotoConsole(page);
+  await navToRoute(page, "/admin/providers");
+  await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
+  await page.getByRole("button", { name: PROVIDERS.ADD_ROW_CTA }).click();
+  await page.getByTestId("provider-row-github").locator("textarea").fill(BASE_URL);
+  await expect(page.getByText(EXPIRING_SOON)).toBeVisible();
+  await page.evaluate(() => {
+    (window as unknown as { beforeRenew?: boolean }).beforeRenew = true;
+  });
+  return {
+    answer: (over) => {
+      spliced = { ...spliced, ...over };
+    },
+  };
+}
+const sameDocument = (page: Page) =>
+  page.evaluate(() => (window as unknown as { beforeRenew?: boolean }).beforeRenew ?? false);
+
+test.describe("the expiry banner: sign in again in place", () => {
+  test("the same person signing in keeps the tab and the draft, and the expiry moved", async ({ page }) => {
+    const { answer } = await draftUnderAnExpiringSession(page);
+    const opened = page.waitForEvent("popup");
+    await page.getByRole("button", { name: REAUTH_RENEW.CTA }).click();
+    const popup = await opened;
+
+    // The strip takes the banner's place — room for a cold lazy chunk.
+    await expect(page.getByText(REAUTH_DIALOG.WAITING)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(EXPIRING_SOON)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: REAUTH_RENEW.CANCEL })).toBeFocused();
+    // The old session answering /me is not a renewal: the strip keeps waiting.
+    await page.waitForResponse((r) => isMe(r.url()));
+    await expect(page.getByText(REAUTH_DIALOG.WAITING)).toBeVisible();
+
+    const later = inMinutes(60);
+    answer({ session_expires_at: later });
+    const until = await page.evaluate(
+      (iso) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }),
+      later,
+    );
+    await expect(page.getByText(REAUTH_RENEW.RENEWED(until))).toBeVisible();
+    await expect(page.getByText(REAUTH_DIALOG.WAITING)).toHaveCount(0);
+    await expect(page.getByText(EXPIRING_SOON)).toHaveCount(0);
+    // The page never left: same document, same route, the draft as typed.
+    expect(await sameDocument(page)).toBe(true);
+    await expect(page).toHaveURL(/\/providers$/);
+    await expect(page.getByTestId("provider-row-github").locator("textarea")).toHaveValue(BASE_URL);
+    await expect.poll(() => popup.isClosed()).toBe(true);
+  });
+
+  test("someone else signing in from the banner reloads the page as them — the draft is gone", async ({ page }) => {
+    const { answer } = await draftUnderAnExpiringSession(page);
+    await page.getByRole("button", { name: REAUTH_RENEW.CTA }).click();
+    await expect(page.getByText(REAUTH_DIALOG.WAITING)).toBeVisible({ timeout: 15_000 });
+
+    // Their session ends when the first person's did: who it is decides, not
+    // the expiry, which never moved.
+    answer({ principal: "someone-else" });
+    await expect.poll(() => sameDocument(page)).toBe(false);
+    await expect(page).toHaveURL(/\/providers$/);
+    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
+    await expect(page.getByTestId("provider-row-github")).toHaveCount(0);
+    await expect(page.getByText(REAUTH_DIALOG.WAITING)).toHaveCount(0);
   });
 });
