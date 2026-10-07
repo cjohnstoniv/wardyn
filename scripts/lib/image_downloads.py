@@ -11,16 +11,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-# BuildKit continues a line on a backslash followed only by spaces or tabs.
+# BuildKit continues a line on a backslash followed only by spaces or tabs, unless that
+# backslash is itself escaped; an escaped one is refused rather than modelled. Leading
+# whitespace before a parser directive is ignored by BuildKit.
 CONTINUATION = re.compile(r"\\[ \t]*$")
-ESCAPE_DIRECTIVE = re.compile(r"^#\s*escape\s*=\s*(?!\\)\S", re.M | re.I)
+DOUBLE_BACKSLASH = re.compile(r"\\\\[ \t]*$")
+ESCAPE_DIRECTIVE = re.compile(r"^\s*#\s*escape\s*=\s*(?!\\)\S", re.M | re.I)
+ODD_WHITESPACE = re.compile(r"[^\S \t]")
 
 
 def instructions(text):
     pending, start = "", 0
-    for number, line in enumerate(text.splitlines(), 1):
+    for number, line in enumerate(text.split("\n"), 1):  # BuildKit splits on \n only
+        line = line[:-1] if line.endswith("\r") else line
         if not line.strip() or line.lstrip().startswith("#"):
             continue
+        if DOUBLE_BACKSLASH.search(line):
+            raise ValueError(f"line {number}: a line ending in two backslashes is unsupported")
         if not pending:
             start = number
         continuation = CONTINUATION.search(line)
@@ -518,11 +525,16 @@ def check_run(body):
 
 
 def check_file(path):
-    text = Path(path).read_text()
+    with open(path, encoding="utf-8", newline="") as handle:
+        text = handle.read().removeprefix("\ufeff")
     custom_shell = False
     if ESCAPE_DIRECTIVE.search(text):
         raise ValueError(f"{path}: custom SHELL/escape parser directive is unsupported; use the default escape character")
-    for number, name, body in instructions(text):
+    try:
+        parsed = list(instructions(text))
+    except ValueError as error:
+        raise ValueError(f"{path}: {error}") from error
+    for number, name, body in parsed:
         if name == "ONBUILD":
             name, body = (body.split(None, 1) + ["", ""])[:2]
             name = name.upper()
@@ -539,6 +551,8 @@ def check_file(path):
                 continue
             if custom_shell:
                 raise ValueError("custom SHELL/escape with curl is unsupported")
+            if ODD_WHITESPACE.search(body):
+                raise ValueError("form feed, vertical tab or Unicode line/space characters in a curl RUN are unsupported")
             check_run(body)
         except (ValueError, IndexError) as error:
             raise ValueError(f"{path}:{number}: {error}") from error
