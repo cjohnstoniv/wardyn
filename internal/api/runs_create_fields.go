@@ -78,7 +78,7 @@ type runTextField struct {
 // "chars", and a CJK or emoji value well under the limit was refused with a byte
 // count the operator could not reconcile with what they typed.
 func (s *Server) validateRunTextFields(w http.ResponseWriter, req createRunRequest) bool {
-	return s.runTextFieldsRefusal(req).write(s, w, nil) == false
+	return !s.runTextFieldsRefusal(req).write(s, w, nil)
 }
 
 // runFieldCharsAllowed is controlCharFree (permissions.go — C0, DEL and the C1

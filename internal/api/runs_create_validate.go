@@ -458,30 +458,6 @@ func (s *Server) denyUserRunQuota(w http.ResponseWriter, r *http.Request, ceilin
 	return s.runQuotaRefusal(r, ceiling).write(s, w, r)
 }
 
-// denyUserSeededImage closes a gap: a MEMBER-OWNED
-// workspace's base_image is copied into req.Image by seedRequestWorkspace AFTER
-// denyUserRequest has already run, and the follow-up re-validation
-// (validateImageBuildRequest) only re-checks the XOR and the builder — never
-// capGranted(capImage, …). So a member onboards a workspace whose base_image is
-// any ref they like, launches against it, and reaches the one WIDENING
-// capability the product has without holding a grant for it.
-//
-// Ownership-scoped, and the scoping is not a nicety. seededOwner is non-empty
-// only when the seed actually set req.Image AND the seeding workspace was
-// member-owned; an operator-authored workspace's base_image stays exactly what
-// denyUserRequest's own doc says it is — operator config, not a member's
-// free-text choice — and this function no-ops on it, byte-for-byte today.
-//
-// The trap, named because the next refactor will reach for it: an UNCONDITIONAL
-// re-check here is a catastrophic regression, not a stricter version of this
-// one. capGranted answers the WIDENING question, so it REFUSES on !enforced
-// (capabilities.go) — which means an unconditional call would 403 every member
-// run against every base-image workspace on every deployment that has not
-// enforced capImage, i.e. all of them on upgrade day.
-func (s *Server) denyUserSeededImage(w http.ResponseWriter, r *http.Request, seededOwner, image string) bool {
-	return s.seededImageRefusal(r, seededOwner, image).write(s, w, r)
-}
-
 // validateImageBuildRequest enforces the image/devcontainer_repo XOR + the
 // image-builder-wired requirement. Shared by decodeAndValidateCreateRun (the
 // request's own --image) and seedRequestWorkspace's caller: a workspace's

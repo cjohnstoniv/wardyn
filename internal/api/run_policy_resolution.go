@@ -232,6 +232,8 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 	return spec, policyID, storedWarns, source, nil
 }
 
+// Stored policies may predate write-time validation; duplicate narrowed PATs
+// must still refuse before a run is created.
 func patDuplicatesRunRefusal(prefix string, spec types.RunPolicySpec) *runRefusal {
 	if err := validatePATNarrowedDuplicates(spec.EligibleGrants); err != nil {
 		return runError(http.StatusUnprocessableEntity, reasonInlinePolicyInvalid, prefix+err.Error())

@@ -127,6 +127,8 @@ func (s *Server) seedAuthorizedWorkspace(ctx context.Context, r *http.Request, s
 	return ephemeralDirs, nil
 }
 
+// Missing and foreign selections share a 404 before seeding; the seed helper
+// otherwise answers a missing row with 422, revealing whether it exists.
 func (s *Server) workspaceLaunchSelection(r *http.Request, id uuid.UUID) (types.Workspace, *runRefusal) {
 	if s.cfg.Store == nil {
 		return types.Workspace{}, runError(http.StatusInternalServerError, reasonWorkspaceStoreUnavailable, "get workspace: no store configured")

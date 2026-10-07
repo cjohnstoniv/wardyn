@@ -102,7 +102,7 @@ var driveRefusalReasons = []string{
 //
 // It exists because five of the six arms recorded nothing. A refused drive was
 // a 422 to the member and silence everywhere else: no audit row (the profile
-// DOOR has one, denyUserDrive's authz.denied, and it is the only arm that
+// DOOR has one, userDriveDoorRefusal's authz.denied, and it is the only arm that
 // did), no log line, no metric, and no request log either — routes.go wires
 // RequestID and Recoverer and no logger. So the failure mode the runbook itself
 // predicts — "Wardyn does not mkdir on a share, a missing home is a 422 at run
@@ -158,7 +158,7 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 
 // driveDoorProfile names the governance profile whose DenyUserDrive DOOR is
 // shut for this caller, or "" when the door is open. ONE predicate, read by
-// the enforcement path (denyUserDrive's 403) and the display path
+// the enforcement path (userDriveDoorRefusal's 403) and the display path
 // (userDriveDeniedByProfile, the /me field) alike: this is an authz rule, and
 // two spellings of one authz rule is one place a widening can hide.
 //
@@ -210,14 +210,6 @@ func driveDoorShut(ceiling governanceCeiling) (string, bool) {
 // bytes are the canon's bytes; the console renders `drive` as mono itself.
 func driveDeniedByProfileMsg(profile string) string {
 	return fmt.Sprintf("mounting a user drive is not allowed by your governance profile %q. Launch without drive.", profile)
-}
-
-// denyUserDrive is the DOOR at the enforcement site: 403 with an authz.denied
-// row, target `runs.drive`, reason `governance_profile` — the refuse
-// shape the two other profile refusals take, and no new value in the closed
-// reason enum.
-func (s *Server) denyUserDrive(w http.ResponseWriter, r *http.Request, ceiling governanceCeiling) bool {
-	return s.userDriveDoorRefusal(r, ceiling).write(s, w, r)
 }
 
 // driveIsMountableHere is the pair of refusals that are about the DEPLOYMENT
