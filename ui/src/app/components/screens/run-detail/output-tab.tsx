@@ -26,6 +26,9 @@ const LOADING_LINE_MS = 1000;
 
 type Refusal = "off" | "not_kept" | "expired" | "erased" | "interactive" | "not_captured" | "mask" | "error";
 
+// Ended states that never went through a Wardyn stop (internal/api/run_output.go).
+const NOT_STOPPED = new Set(["KILLED", "FAILED", "COMPLETED"]);
+
 const REFUSALS: Record<string, Refusal> = {
   run_output_off: "off",
   run_output_not_kept: "not_kept",
@@ -48,12 +51,15 @@ function Notice({ children }: { children: React.ReactNode }) {
 export function OutputTab({
   runId,
   live,
+  state,
   endedAt,
   onGoRecording,
 }: {
   runId: string;
   /** The run has not reached a terminal state. */
   live: boolean;
+  /** The run's state: the nothing-kept sentence is only true for runs that did not end through a Wardyn stop. */
+  state: string;
   endedAt?: string;
   onGoRecording: () => void;
 }) {
@@ -124,7 +130,7 @@ export function OutputTab({
   if (refusal !== null) {
     return (
       <div className="max-w-4xl rounded-xl border border-border bg-card" data-testid="run-output-refusal">
-        {refusalBody(refusal, saving, recordingOff, live, onGoRecording, () => {
+        {refusalBody(refusal, saving, recordingOff, live, state, onGoRecording, () => {
           setLoaded(false);
           setAttempt((n) => n + 1);
         })}
@@ -186,6 +192,7 @@ function refusalBody(
   saving: boolean,
   recordingOff: boolean,
   live: boolean,
+  state: string,
   onGoRecording: () => void,
   retry: () => void,
 ) {
@@ -217,10 +224,16 @@ function refusalBody(
     case "interactive":
       // Recording off is a known true only; unknown keeps the pointer (D).
       if (recordingOff) {
-        return live ? (
-          <EmptyState icon={Logs} title={RUN_OUTPUT.interactiveLiveTitle} description={RUN_OUTPUT.interactiveLiveDesc} />
-        ) : (
+        if (live) {
+          return (
+            <EmptyState icon={Logs} title={RUN_OUTPUT.interactiveLiveTitle} description={RUN_OUTPUT.interactiveLiveDesc} />
+          );
+        }
+        // Mirrors the server's interactiveNothingKept: the sentence is false for a STOPPED run.
+        return NOT_STOPPED.has(state) ? (
           <EmptyState icon={Logs} title={RUN_OUTPUT.interactiveTitle} description={RUN_OUTPUT.interactiveNoneDesc} />
+        ) : (
+          <EmptyState icon={Logs} title={RUN_OUTPUT.interactiveTitle} description={RUN_OUTPUT.interactiveDesc} />
         );
       }
       return (

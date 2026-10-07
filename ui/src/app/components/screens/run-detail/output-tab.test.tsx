@@ -40,7 +40,7 @@ const refuse = (reason: string, status = 404) =>
   getMock.mockRejectedValue(new HttpError(status, "refused", reason));
 
 async function mount(props: Partial<React.ComponentProps<typeof OutputTab>> = {}) {
-  const r = render(<OutputTab runId="run-1" live={false} onGoRecording={() => {}} {...props} />);
+  const r = render(<OutputTab runId="run-1" live={false} state="COMPLETED" onGoRecording={() => {}} {...props} />);
   await act(async () => {});
   return r;
 }
@@ -259,6 +259,23 @@ describe("OutputTab — interactive run, nothing kept", () => {
     expect(screen.getByText(RUN_OUTPUT.interactiveTitle)).toBeInTheDocument();
     expect(screen.getByText(RUN_OUTPUT.interactiveNoneDesc)).toBeInTheDocument();
     expect(screen.queryByText(RUN_OUTPUT.interactiveDesc)).toBeNull();
+    expect(screen.queryByRole("button", { name: RUN_OUTPUT.interactiveLink })).toBeNull();
+  });
+
+  it("recording off, run KILLED: the nothing-kept sentence", async () => {
+    recording("none");
+    refuse("run_output_interactive", 409);
+    await mount({ live: false, state: "KILLED" });
+    expect(screen.getByText(RUN_OUTPUT.interactiveNoneDesc)).toBeInTheDocument();
+  });
+
+  it("recording off, run STOPPED: no nothing-kept sentence and no Recording link", async () => {
+    recording("none");
+    refuse("run_output_interactive", 409);
+    await mount({ live: false, state: "STOPPED" });
+    expect(screen.getByText(RUN_OUTPUT.interactiveTitle)).toBeInTheDocument();
+    expect(screen.getByText(RUN_OUTPUT.interactiveDesc)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_OUTPUT.interactiveNoneDesc)).toBeNull();
     expect(screen.queryByRole("button", { name: RUN_OUTPUT.interactiveLink })).toBeNull();
   });
 
