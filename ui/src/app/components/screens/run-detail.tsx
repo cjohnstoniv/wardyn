@@ -22,81 +22,56 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import {
-  canDecideAdoCapability,
-  canDecideApproval,
   decisionArgs,
-  isAdoCapabilityRequest,
   isAdoConsentRequest,
   runHasWorkspace,
   type ApprovalRequest,
   type ApprovalScope,
   type AuditEvent,
-  type CredentialGrant,
   type DecisionOptions,
-  type EgressDecision,
-  type Recording,
   type RunDetail,
 } from "../../lib/types";
-import { ERASED_VALUE, isTerminalRunState } from "../../lib/types";
+import { ERASED_VALUE } from "../../lib/types";
 import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
-import {
-  audit as auditApi,
-  canonicalAuditAction,
-  createRequestFromAudit,
-  egressFromAudit,
-  exitCodeFromAudit,
-  runEndingFromAudit,
-} from "../../lib/api/audit";
-import { heldCredentials, type HeldCredentials } from "../../lib/held-credentials";
+import { canonicalAuditAction, exitCodeFromAudit } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { appURL } from "../../lib/base-path";
-import { recordings as recordingsApi } from "../../lib/api/recordings";
-import { useRecordingDisabled } from "../../lib/hooks/use-recording-disabled";
-import { usePoll } from "../../lib/use-poll";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { absoluteTime, clockTime, getErrorMessage } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { ActorTypeChip } from "../wardyn/primitives";
-import { AuditDecision, ErasedFields, isAttributedRefusal, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
+import {
+  AuditDecision,
+  ErasedFields,
+  isAttributedRefusal,
+  RuleSourceChip,
+  toolRuleDecision,
+} from "../wardyn/audit-decision";
 import { PolicyRemedy } from "../wardyn/policy-remedy";
 import { AUDIT } from "./audit-copy";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
-import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
+import { isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { APPROVALS } from "../../lib/approvals-copy";
-import { useOperator, useOperatorResolved, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
-import { useConsoleMode, type ConsoleView } from "../wardyn/console-view";
-import {
-  RUN_COCKPIT,
-  RUN_OUTPUT,
-  VIEWER_APPROVAL_BLOCKS_NOTE,
-} from "../wardyn/copy";
+import { useSecurityOperator } from "../wardyn/operator-context";
+import { useConsoleMode } from "../wardyn/console-view";
+import { RUN_COCKPIT, RUN_OUTPUT } from "../wardyn/copy";
 import { ProfileReview } from "./profile-review";
 import { SummaryHeader } from "./run-detail-summary-header";
 import { ApprovalsTab } from "./run-detail-approvals-tab";
 import { RunDetailCommandBar } from "./run-detail-command-bar";
-import { RunCanvas } from "./run-detail/canvas";
-import { RunFailureBlock } from "./run-detail/failure-block";
-import { LoginSandboxNote } from "./run-detail/login-sandbox-note";
 import { LaunchWarningsNote } from "./run-detail/launch-warnings-note";
 import { RunLifetimeBanner } from "./run-detail/run-lifetime-banner";
 import { RunEndsRow } from "./run-detail/run-ends-row";
-import { TerminalPane } from "./run-detail/terminal-notice";
 import { PolicyTab } from "./run-detail/policy-tab";
 import { POLICY_TAB } from "./run-detail/policy-tab-copy";
 import { RecordingTab } from "./run-detail/recording-tab";
 import { OutputTab } from "./run-detail/output-tab";
 import { cloneFromAudit, CLONE_UNREADABLE } from "./new-run/wizard-types";
-import type { WidgetContext } from "./run-detail/widget-registry";
-
-// Live refresh cadence for a non-terminal run's detail.
-const DETAIL_POLL_MS = 4000;
-// How long after a KILLED run ended its page keeps asking whether the kill row has landed.
-const KILL_SETTLE_MS = 120_000;
-
-type Tab = "overview" | "approvals" | "policy" | "audit" | "recording" | "output";
+import { useRunDetail, type Tab } from "./run-detail/use-run-detail";
+import { Cockpit } from "./run-detail/cockpit";
 
 // The route's component. KEYED by the route id on both run routes (/runs/:id
 // and /admin/runs/:id), so moving from run A to run B REMOUNTS the page: A's
@@ -113,28 +88,12 @@ function RunDetailPage({ id }: { id: string }) {
   const navigate = useNavigate();
   const view = useConsoleMode(); // M-7: no relaunch/SSH/credential door in admin view.
 
-  const [run, setRun] = React.useState<RunDetail | null | undefined>(undefined);
-  const [grants, setGrants] = React.useState<CredentialGrant[]>([]);
-  const [egress, setEgress] = React.useState<EgressDecision[]>([]);
-  const [approvals, setApprovals] = React.useState<ApprovalRequest[]>([]);
-  const [audit, setAudit] = React.useState<AuditEvent[]>([]);
-  // The run's session.recording(.write) events (RECORDING_ACTIONS), via a
-  // SEPARATE action_prefix fetch so the general trail's cap can't crowd them out.
-  const [recordingAudit, setRecordingAudit] = React.useState<AuditEvent[]>([]);
-  // F6-F2: run.complete/run.kill/run.autostop are the LATEST events on a run's
-  // trail — the first ones the 1000-row cap on `audit` above pushes off —
-  // scoped-fetched the same way session.recording.write is, so the exit code and
-  // ending derivation stay known past that cap.
-  const [endingAudit, setEndingAudit] = React.useState<AuditEvent[]>([]);
-  // #1487: this run's credential.mint rows, fetched with their OWN action filter
-  // (never read off the 1000-row trail above) so a kill outcome can name what
-  // the run held. undefined = not fetched yet; null = the fetch failed. Joined
-  // to `grants` for the kind and host by held-credentials.ts.
-  const [endingState, setEndingState] = React.useState<"loading" | "ready" | "failed">("loading");
-  const [mintAudit, setMintAudit] = React.useState<AuditEvent[] | null | undefined>(undefined);
-  const [grantsReadable, setGrantsReadable] = React.useState(false);
-  const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [tab, setTab] = React.useState<Tab>("overview");
+  const {
+    run, grants, egress, approvals, audit, recordingAudit, status, tab, setTab,
+    recording, recState, setRecState, recKey, setRecKey, recordingDisabled,
+    load, terminal, pending, endingEvents, held, killAgain, outcomeReady,
+  } = useRunDetail(id);
+
   // "Make a policy from this run" — the honest home of "write the policy from
   // what actually happened", now that /runs/new's Record radio (which only ever
   // set allow_all_egress) is gone. Same runId-driven ProfileReview sheet
@@ -143,189 +102,12 @@ function RunDetailPage({ id }: { id: string }) {
   // own "Save as policy" persists it via POST /policies. Local open-state only.
   const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
 
-  // Recording is fetched lazily the first time the Recording tab opens.
-  const [recording, setRecording] = React.useState<Recording | null>(null);
-  const [recState, setRecState] = React.useState<"idle" | "loading" | "error" | "ready">("idle");
-  // Which cast to replay: the run's own (stored under the bare run id) or one
-  // interactive attach session (the composite `<run-id>~<session-uuid>` key).
-  const [recKey, setRecKey] = React.useState(id);
-  // Now the shared hook: the same /healthz read the Recordings
-  // library and the New Run rail make. See use-recording-disabled.ts.
-  const recordingDisabled = useRecordingDisabled() === true;
-
   const { copied, copyAsync } = useCopyToClipboard(1400);
   const [decide, setDecide] = React.useState<{
     id: string;
     action: "approve" | "deny";
     kind: ApprovalRequest["kind"];
   } | null>(null);
-
-  // How a terminal run ended, read off its own scoped audit rows (#1487): the
-  // facts that decide a KILLED run's outcome. The run page renders without them;
-  // the KILLED outcome block and the Kill-again offer wait for them rather than
-  // guess ("no kill record" before the rows landed is a claim, not a loading
-  // state). A generation counter drops an older read that answers after a newer
-  // one. Best-effort: a failed read leaves the last-good rows, and a failed mint
-  // read is "couldn't read which credentials".
-  const settleSince = React.useRef<number | null>(null);
-  const endingGen = React.useRef(0);
-  const endingInFlight = React.useRef(false);
-  const loadEnding = React.useCallback(() => {
-    // One read at a time: a poll that keeps asking while a slow read is still out
-    // would stack four more calls every tick.
-    if (endingInFlight.current) return;
-    endingInFlight.current = true;
-    const gen = ++endingGen.current;
-    void Promise.allSettled([
-      auditApi.listAudit(id, { action: "run.complete" }),
-      auditApi.listAudit(id, { action: "run.kill" }),
-      auditApi.listAudit(id, { action: "run.autostop" }),
-      auditApi.listAudit(id, { action: "credential.mint" }),
-    ]).then(([done, kill, autostop, minted]) => {
-      endingInFlight.current = false;
-      if (endingGen.current !== gen) return;
-      if (done.status === "fulfilled" && kill.status === "fulfilled" && autostop.status === "fulfilled") {
-        setEndingAudit([done.value, kill.value, autostop.value].flat());
-        setEndingState("ready");
-      } else {
-        setEndingState((s) => (s === "ready" ? s : "failed"));
-      }
-      setMintAudit(minted.status === "fulfilled" ? minted.value : null);
-    });
-  }, [id]);
-
-  // Core fetch — run + its grants, egress, approvals, and audit trail.
-  const load = React.useCallback(
-    (foreground: boolean) => {
-      if (!id) return;
-      if (foreground) setStatus("loading");
-      // RETURNED, not fired and forgotten: usePoll's in-flight guard waits on
-      // this promise, so a control plane slower than DETAIL_POLL_MS costs one
-      // outstanding set of requests instead of a new set every 4s (R4-F074).
-      // Egress is derived from the same audit events we already fetch here — call
-      // egressFromAudit(a) instead of api.getEgress (which would re-fetch /audit).
-      // allSettled, NOT all. The PAGE is the run; the other four are panes on
-      // it — a single subsidiary rejection under Promise.all would replace the
-      // whole cockpit (run state, live terminal, approvals strip and the KILL
-      // button for a RUNNING run) with ErrorState's "we couldn't reach the
-      // Wardyn control plane", an outage claim that is false when GET
-      // /runs/{id} just returned 200. The rejection is routine, not
-      // hypothetical: handleListApprovals answers 500 "approval listing is not
-      // scoped for members on this backend" on a backend without
-      // ApprovalsByRunCreatorPager (internal/api/approvals.go), and a degraded
-      // audit store fails listAudit. Each pane keeps its last-good value and
-      // the page stays operable.
-      return Promise.allSettled([
-        runsApi.getRun(id),
-        runsApi.getGrants(id),
-        // Scoped SERVER-side (?run_id=). Filtering this list in the browser
-        // instead drops the run's own approvals once the fleet has more than
-        // LIST_LIMIT lifetime rows — see approvals.ts's listApprovals comment
-        // and internal/api/approvals.go:56-61.
-        approvalsApi.listApprovals("", id),
-        auditApi.listAudit(id),
-        // "session.recording" names the ACTION FAMILY, prefixing both the old
-        // and new action names — not itself a legacy action name (Conductor ruling, #1062).
-        auditApi.listAudit(id, { actionPrefix: "session.recording" }),
-      ])
-        .then(([r, g, runApprovals, a, recA]) => {
-          // A run answer for a different id than this page shows is dropped:
-          // the page never renders, or acts on, a run it was not asked for.
-          // Case-insensitive: a non-canonical UUID in the URL is still this run.
-          if (r.status === "fulfilled" && r.value && r.value.id.toLowerCase() !== id.toLowerCase()) return;
-          if (r.status === "rejected") {
-            // The run itself is the one fetch this page cannot render without.
-            // Foreground load shows the error state; a background poll blip
-            // keeps last-good data silently (matches the Runs board) rather
-            // than replacing a live cockpit every DETAIL_POLL_MS during a
-            // control-plane hiccup.
-            if (foreground) setStatus("error");
-            return;
-          }
-          setRun(r.value ?? null);
-          setGrantsReadable(g.status === "fulfilled");
-          if (g.status === "fulfilled") setGrants(g.value);
-          if (a.status === "fulfilled") {
-            setEgress(egressFromAudit(a.value));
-            setAudit(a.value);
-          }
-          // The ?run_id= above is what makes this list this run's; the filter
-          // is a belt-and-braces no-op kept so a backend that ignored the
-          // predicate cannot leak another run's rows onto this page.
-          if (runApprovals.status === "fulfilled")
-            setApprovals(runApprovals.value.filter((x) => x.run_id.toLowerCase() === id.toLowerCase()));
-          if (recA.status === "fulfilled") setRecordingAudit(recA.value);
-          setStatus("ready");
-          // R-5: run.complete/run.kill/run.autostop cannot exist for a run that
-          // ISN'T terminal — fetching them every DETAIL_POLL_MS tick on a live
-          // run would be wasted round-trips, forever. Gated on THIS tick's own
-          // fresh state, so the exact tick a run turns terminal is the one that
-          // catches it. DETACHED: the run has already rendered, and this poll's
-          // in-flight guard must not wait on four more calls (a hang costs 60s).
-          if (r.value && isTerminalRunState(r.value.state)) loadEnding();
-        })
-        .catch(() => {
-          // allSettled never rejects, so this is a bug in the block above, not
-          // a network answer. Same foreground rule.
-          if (foreground) setStatus("error");
-        });
-    },
-    [id, loadEnding],
-  );
-
-  React.useEffect(() => {
-    setRun(undefined);
-    setStatus("loading");
-    // Reset recording state on run-id change too: without it, the Recording
-    // tab would keep showing the PREVIOUS run's cast (labelled as this run)
-    // until something else touched recState — the lazy-load effect below
-    // only fetches when recState === "idle", so a stale "ready"/"error" from
-    // the last run id would block the refetch entirely.
-    setRecording(null);
-    setRecState("idle");
-    setRecKey(id);
-    void load(true);
-  }, [id, load]);
-
-  const terminal = run ? isTerminalRunState(run.state) : true;
-
-  // Lazy recording load on first Recording-tab open (and on each session pick,
-  // which resets recState to "idle").
-  //
-  // ALSO for a finished run sitting on Overview: its terminal pane replays the
-  // cast in place (design board 2d's fourth state), so the fetch can no longer
-  // be keyed on the Recording tab alone. Still lazy — a LIVE run on Overview
-  // fetches nothing, which is the common case.
-  const wantsRecording = tab === "recording" || (tab === "overview" && terminal && !!run);
-  // F1-F2: without an ordering guard, a slow fetch for an earlier-selected
-  // cast (recKey A) could resolve AFTER a later selection (recKey B) and
-  // overwrite it, or setState after unmount. NOT a plain `let alive` + cleanup (the
-  // sibling pattern in run-context-row.tsx/run-detail-ssh.tsx): this effect's
-  // own setRecState("loading") is itself a dependency-array member, so a
-  // cleanup tied to every re-run would invalidate the very request it just
-  // started. A generation counter only advances when a NEW fetch actually
-  // starts, so it survives the effect's own idle->loading->ready churn.
-  const recRequest = React.useRef(0);
-  React.useEffect(() => {
-    if (!wantsRecording || !id || recState !== "idle") return;
-    const thisRequest = ++recRequest.current;
-    setRecState("loading");
-    recordingsApi
-      .getRecording(id, recKey || id)
-      .then((rec) => {
-        if (recRequest.current !== thisRequest) return;
-        setRecording(rec ?? null);
-        setRecState("ready");
-      })
-      .catch(() => {
-        if (recRequest.current === thisRequest) setRecState("error");
-      });
-  }, [wantsRecording, id, recKey, recState]);
-  // F1-F2's other half: setState after unmount. The counter must also
-  // advance on teardown, not only when a new fetch starts — -1 never
-  // matches a real (>=1) generation, so any in-flight fetch's callback is
-  // permanently a no-op once this component is gone.
-  React.useEffect(() => () => { recRequest.current = -1; }, []);
 
   const copyLink = () => {
     if (!run) return;
@@ -423,42 +205,6 @@ function RunDetailPage({ id }: { id: string }) {
   // field — but unlike ADO, NO opts at all (decide's rule 4 refuses a
   // decision_scope on this kind).
   const decidePushDirect = (id: string, approve: boolean): Promise<void> => decideAdoDirect(id, approve, []);
-
-  // ----- top-level states -----
-  const pending = approvals.filter((a) => a.state === "PENDING");
-  // F6-F2: run.complete/run.kill/run.autostop rows land here even when the
-  // capped `audit` trail above dropped them — duplicates are harmless, both
-  // derivations below keep the last/first matching row regardless.
-  const endingEvents = [...audit, ...endingAudit];
-  // #1487: what a killed run held that Wardyn cannot take back. undefined until
-  // the terminal-run fetch has answered, so nothing says "couldn't read" for the
-  // beat before it lands.
-  const held =
-    mintAudit === undefined ? undefined : heldCredentials(grantsReadable ? grants : undefined, mintAudit ?? undefined);
-  // Kill again is offered on a KILLED run whose trail does not PROVE the
-  // teardown: the server re-kills a KILLED run (runs_lifecycle.go), and the
-  // cascade is safe to repeat — the one action that settles the doubt.
-  const killEvidence = run?.state === "KILLED" ? runEndingFromAudit(run.state, endingEvents)?.evidence : undefined;
-  // Kill again follows the evidence: offered once the ending facts have settled
-  // (or failed to read) and the trail does not PROVE the teardown. A failed read
-  // does not hide a row the main trail already holds, so a proven kill stays off.
-  const killAgain = run?.state === "KILLED" && endingState !== "loading" && killEvidence !== "confirmed";
-  // The outcome block of a KILLED run waits for its facts (see loadEnding). When
-  // the read failed it still shows what the main trail proves, and nothing when
-  // that holds no kill row either (no row would read as "no kill record", which a
-  // failed read cannot claim).
-  const outcomeReady = run?.state !== "KILLED" || endingState === "ready" || (endingState === "failed" && killEvidence !== "unknown");
-  // The server marks a run KILLED BEFORE it writes the run.kill row
-  // (runs_lifecycle.go), so a read can land in between. Keep polling a KILLED run
-  // whose trail does not yet PROVE the teardown for two minutes, counted on THIS
-  // page's clock from when it first saw such a run (a ref, so it resets on
-  // remount): the server's ended_at against our Date.now() would depend on skew.
-  // The row arrives, or the wait gives up and the person can kill again. A failed
-  // ending read is retried on the same polls (load re-calls loadEnding).
-  const unconfirmedKill = run?.state === "KILLED" && killEvidence !== "confirmed";
-  if (unconfirmedKill && settleSince.current === null) settleSince.current = Date.now();
-  const killSettling = unconfirmedKill && Date.now() - (settleSince.current ?? Date.now()) < KILL_SETTLE_MS;
-  usePoll(() => load(false), DETAIL_POLL_MS, terminal && !killSettling);
 
   // The page does not scroll. `h-full min-h-0 flex flex-col` fills
   // app-shell's <main> exactly — main is flex-1 inside a h-screen column, so
@@ -649,159 +395,6 @@ function RunDetailPage({ id }: { id: string }) {
       />
     </div>
   );
-}
-
-// Cockpit — the Overview tab. The terminal is the page: the Audit tab owns
-// the event trail, so this component gives the terminal the full pane
-// rather than sharing it with a timeline.
-//
-// Layout: a CONFIGURABLE canvas (design board 2b) — see run-detail/canvas.tsx.
-// This component's whole job is to assemble the WidgetContext every widget
-// reads from, including the terminal hero itself: the canvas PLACES the
-// terminal, it does not build it, because building it needs the attach /
-// recording / approvals graph that lives here.
-function Cockpit({
-  run, view, terminal,
-  grants,
-  egress,
-  audit,
-  held,
-  outcomeReady,
-  pending,
-  recording,
-  recState,
-  recordingDisabled,
-  onGoAudit,
-  onGoPolicy,
-  onGoRecording,
-}: {
-  run: RunDetail;
-  view: ConsoleView; // M-7: no relaunch/SSH/credential door in admin view.
-  terminal: boolean;
-  grants: CredentialGrant[];
-  egress: EgressDecision[];
-  audit: AuditEvent[];
-  /** What a killed run held that a kill cannot revoke; undefined while loading. */
-  held: HeldCredentials | undefined;
-  /** False while a KILLED run's ending facts are still being read: no outcome block yet. */
-  outcomeReady: boolean;
-  /** This run's PENDING approvals — the viewer note, and (B3) the ONE live
-   *  held count every widget reads; the decision surface itself is
-   *  LiveApprovals' own poll. */
-  pending: ApprovalRequest[];
-  recording: Recording | null;
-  recState: "idle" | "loading" | "error" | "ready";
-  recordingDisabled: boolean;
-  onGoAudit: () => void;
-  onGoPolicy: () => void;
-  onGoRecording: () => void;
-}) {
-  const principal = usePrincipal();
-  // The run's REQUEST-scoped facts, off its run.create audit row — the only
-  // durable record of task_mode, interactive_start, seed_auto_tools and
-  // tool_approvals, none of which lands on AgentRun. Read once here; the exec
-  // pane reads it below.
-  const createRequest = createRequestFromAudit(audit);
-  // useSecurityOperator, not useOperator (0.7 §B): this banner says "you can't
-  // decide any of these", and authorizeUserDecision (approvals.go:392)
-  // early-returns for the security tier — so a security admin can decide every
-  // one of them and must never be told otherwise. The SUPER-only surfaces on
-  // this page (attach, take-over) read useOperator in their own components.
-  const securityOperator = useSecurityOperator();
-  // The SUPER-admin question, for the widget context: ConnectSSHCard reads it
-  // itself, and RUN_WIDGETS.ssh.available has to ask the same one.
-  const operator = useOperator();
-  const operatorResolved = useOperatorResolved();
-  // "blocked until an admin decides" is FALSE for a re-auth row (UX round B2):
-  // no admin decides it, and the person who can fix it is the credential's own
-  // owner. The kind is excluded from the predicate rather than the sentence
-  // reworded — a run whose ONLY pending row is a re-auth is not blocked on
-  // anyone's decision at all, and the strip's own heading says what it needs.
-  //
-  // S10 round 2 (F2): an Azure DevOps escalation this viewer OWNS is ALSO
-  // excluded — canDecideApproval doesn't know the ADO ownership carve-out
-  // (canDecideAdoCapability does), so without this a run's own owner read
-  // this "you're blocked" note over a card that, two lines below, lets them
-  // decide it.
-  const isRunOwner = run.created_by === principal;
-  const viewerBlocked =
-    pending.length > 0 &&
-    !securityOperator &&
-    pending.some((p) => p.kind !== "credential_reauth") &&
-    !pending.some(
-      (p) =>
-        p.kind !== "credential_reauth" &&
-        (canDecideApproval(false, p.kind) || (isAdoCapabilityRequest(p) && canDecideAdoCapability(false, isRunOwner))),
-    );
-
-  // The terminal widget's contents. Unchanged from the fixed-rail cockpit: the
-  // session, and directly beneath it the approval that is HOLDING the session —
-  // not in a sidebar, not a toast, because the person who has to decide it is
-  // already looking here. Interactive OR autonomous, as long as the run is live.
-  // task_mode lives only in the run.create audit event (request-scoped, never
-  // on AgentRun) — this page already holds the full trail, so the pane can
-  // speak honestly about a no-harness run for free.
-  const execMode = createRequest.task_mode === "exec";
-  const terminalPane = (
-    <>
-      {/* M7(b): above the terminal, because on a run that ended badly the
-          replay is not the news — why it ended is. Inside the terminal widget
-          rather than beside it so the canvas keeps placing exactly one hero,
-          and nothing on this page moves for a run that ended fine (the block
-          renders null unless the audit trail says otherwise). The clone door
-          lives on the run header instead (0.7.3 F7), a strict superset of
-          the states this block explains, so this block takes no onClone. */}
-      <LoginSandboxNote run={run} />
-      {outcomeReady && <RunFailureBlock run={run} audit={audit} held={held} onGoAudit={onGoAudit} />}
-      <TerminalPane
-        run={run}
-        terminal={terminal}
-        recording={recording}
-        recState={recState}
-        recordingDisabled={recordingDisabled}
-        onGoRecording={onGoRecording}
-        execMode={execMode}
-      />
-      {run.state === "RUNNING" && (
-        <div className="shrink-0 space-y-2 pt-2.5">
-          {/* Said once, where a viewer actually feels the consequence: the
-              run is stopped and they personally cannot unstick it — the
-              command bar states the pending count and the strip below is the
-              decision surface, so this is the VIEWER-only half of that
-              story. Same canDecideApproval kind-question: the page is
-              already owner-scoped, so a member here owns every approval
-              shown; egress_domain is theirs to decide, credential and
-              tool_call stay admin-only regardless. */}
-          {viewerBlocked && (
-            <p className="rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
-              {VIEWER_APPROVAL_BLOCKS_NOTE}
-            </p>
-          )}
-          <LiveApprovals runId={run.id} hasWorkspace={runHasWorkspace(run)} run={run} adminView={view === "admin"} />
-        </div>
-      )}
-    </>
-  );
-
-  const ctx: WidgetContext = {
-    run,
-    finished: terminal,
-    principal,
-    operator, operatorResolved, view, // ssh widget: owner-or-admin AND the user view (M-7).
-    grants,
-    egress,
-    // B3 — the SAME derivation the command bar's "sandbox held" and the board's
-    // card state already use (isHeld, live-approvals.tsx), not a second copy
-    // and not a count of audit rows. `egress` above stays the history the rows
-    // render; this is the state the alarm chip states.
-    heldCount: pending.filter(isHeld).length,
-    audit,
-    onGoAudit,
-    onGoPolicy,
-    terminalPane,
-  };
-
-  return <RunCanvas ctx={ctx} />;
 }
 
 // Every human attach session is recorded under a COMPOSITE cast key the
