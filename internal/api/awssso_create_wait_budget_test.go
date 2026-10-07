@@ -105,11 +105,12 @@ func heldElsewhere(t *testing.T, srv *Server) {
 	t.Cleanup(unlock)
 }
 
-// createWaitServer is a create server holding a session create would serve,
-// with its renewal lock held by another flight.
+// createWaitServer is a create server holding a session create would serve, in
+// a store that keeps row revisions, with its renewal lock held by another flight.
 func createWaitServer(t *testing.T) *Server {
 	t.Helper()
 	srv := createRenewalFixture(t)
+	srv.cfg.Secrets = revisionedSecrets{srv.cfg.Secrets}
 	storeSSOBlobFor(t, srv, createRenewalOwner, createWaitBlob())
 	heldElsewhere(t, srv)
 	return srv
@@ -195,18 +196,43 @@ func TestCreateWait_CancelledClientEndsWithinATick(t *testing.T) {
 	}
 }
 
-// On a store without row revisions, a new pair is found by its expiry.
-func TestCreateWait_UnguardedStoreServesTheNewPair(t *testing.T) {
-	srv := createWaitServer(t)
-	newer := createWaitBlob()
-	newer.AccessToken, newer.RefreshToken, newer.ExpiresAt = "newer-access-token-1234567890", "newer-refresh-token-1234567890", time.Now().Add(time.Hour)
-	time.AfterFunc(300*time.Millisecond, func() { storeSSOBlobFor(t, srv, createRenewalOwner, newer) })
-	got, failure, took := createTimeRenewal(context.Background(), srv)
-	if failure != "" || got.AccessToken != newer.AccessToken {
-		t.Errorf("renewal = %q, %q, want the newer pair", got.AccessToken, failure)
+// getCount counts the reads of a store that keeps no row revisions.
+type getCount struct {
+	secretstore.Store
+	n *atomic.Int32
+}
+
+func (g getCount) Get(ctx context.Context, name string) ([]byte, error) {
+	g.n.Add(1)
+	return g.Store.Get(ctx, name)
+}
+
+func (g getCount) For(owner string) secretstore.Store { return getCount{g.Store.For(owner), g.n} }
+
+// A store without row revisions is not watched: every look at it would read the
+// pair itself. A contended create serves the token in hand at once, and the
+// pair is never read.
+func TestCreateWait_StoreWithoutRevisionsIsNotWatched(t *testing.T) {
+	srv := createRenewalFixture(t)
+	storeSSOBlobFor(t, srv, createRenewalOwner, createWaitBlob())
+	heldElsewhere(t, srv)
+	ctx := secretstore.WithPurpose(withCreateRenewal(context.Background()), secretstore.PurposeSSORefresh)
+	held, _, _ := srv.readAWSSSOBlob(ctx, createRenewalScope()) // the door's read
+	reads := new(atomic.Int32)
+	srv.cfg.Secrets = getCount{srv.cfg.Secrets, reads}
+
+	start := time.Now()
+	got, failure := srv.refreshAWSSSOBlob(ctx, createRenewalScope(), held)
+	took := time.Since(start)
+
+	if failure != "" || got.AccessToken != createWaitBlob().AccessToken {
+		t.Errorf("renewal = %q, %q, want the token in hand", got.AccessToken, failure)
 	}
-	if took > 3*time.Second {
-		t.Errorf("found the newer pair after %v, want within a second or two", took)
+	if n := reads.Load(); n != 0 {
+		t.Errorf("reads of the pair = %d, want none: each one decrypts it and writes a secret.read row", n)
+	}
+	if took >= awsSSOCreateWaitTick {
+		t.Errorf("the renewal took %v, want no wait at all", took)
 	}
 }
 
