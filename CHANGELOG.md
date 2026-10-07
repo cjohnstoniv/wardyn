@@ -8,6 +8,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- A strict YAML/JSON policy-source parser and comment-preserving edit helpers for the upcoming
+  policy editors. Ambiguous keys, aliases, tags, directives and unsafe numbers are refused before
+  JSON conversion. Editor integration follows separately (#1917).
+
 ### Fixed
 
 - The Playwright harness binds its API, UI-sandbox, internal and base-path proxy listeners to loopback
