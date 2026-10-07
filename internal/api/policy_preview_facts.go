@@ -4,6 +4,7 @@
 package api
 
 import (
+	"net/url"
 	"reflect"
 	"regexp"
 	"slices"
@@ -102,6 +103,13 @@ func previewRepositoryAccess(req createRunRequest, spec types.RunPolicySpec, sit
 		if !ok {
 			continue
 		}
+		if target.ssh {
+			target.host = canonicalProviderHost(strings.TrimSuffix(target.host, "."))
+		}
+		normalized := previewRepositoryURL(clone, target)
+		if normalized == "" {
+			continue
+		}
 		row := admitRepoURL(site, clone).Provider
 		kind, org := "other", ""
 		switch {
@@ -112,21 +120,45 @@ func previewRepositoryAccess(req createRunRequest, spec types.RunPolicySpec, sit
 		case adoServicesHost(target.host):
 			kind = "azure_devops"
 		}
-		group := slices.IndexFunc(out, func(group policyPreviewRepository) bool { return group.Kind == kind && group.Org == org })
+		access := policyPreviewRepository{Kind: kind, Org: org, Repos: []string{}, DefaultProfile: []adoscope.Capability{}, CapabilityCeiling: []adoscope.Capability{}}
+		if row.Entra != nil {
+			access.DefaultProfile = row.Entra.Profile()
+			slices.Sort(access.DefaultProfile)
+			access.DefaultProfile = slices.Compact(access.DefaultProfile)
+			access.CapabilityCeiling = append(access.CapabilityCeiling, row.Entra.CapabilityCeiling...)
+			slices.Sort(access.CapabilityCeiling)
+			access.CapabilityCeiling = slices.Compact(access.CapabilityCeiling)
+		}
+		group := slices.IndexFunc(out, func(group policyPreviewRepository) bool {
+			return group.Kind == access.Kind && group.Org == access.Org &&
+				slices.Equal(group.DefaultProfile, access.DefaultProfile) && slices.Equal(group.CapabilityCeiling, access.CapabilityCeiling)
+		})
 		if group < 0 {
-			access := policyPreviewRepository{Kind: kind, Org: org, Repos: []string{}, DefaultProfile: []adoscope.Capability{}, CapabilityCeiling: []adoscope.Capability{}}
-			if row.Entra != nil {
-				access.DefaultProfile = row.Entra.Profile()
-				access.CapabilityCeiling = append(access.CapabilityCeiling, row.Entra.CapabilityCeiling...)
-			}
 			out = append(out, access)
 			group = len(out) - 1
 		}
-		// The parsed target contains neither URL userinfo nor query credentials.
-		normalized := "https://" + target.host + "/" + strings.TrimPrefix(target.path, "/")
 		if !slices.Contains(out[group].Repos, normalized) {
 			out[group].Repos = append(out[group].Repos, normalized)
 		}
 	}
 	return out
+}
+
+// Admission deliberately ignores SSH paths; display keeps the full repository
+// identity without userinfo, query strings or fragments from the clone URL.
+func previewRepositoryURL(clone string, target cloneTarget) string {
+	if target.ssh && !strings.Contains(clone, "://") {
+		_, address, _ := strings.Cut(clone, "@")
+		_, path, _ := strings.Cut(address, ":")
+		clone = "ssh://" + target.host + "/" + strings.TrimPrefix(path, "/")
+	}
+	u, err := url.Parse(clone)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Host)
+	if target.ssh {
+		host = target.host
+	}
+	return strings.ToLower(u.Scheme) + "://" + host + strings.TrimSuffix(u.EscapedPath(), "/")
 }

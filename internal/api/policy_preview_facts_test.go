@@ -153,7 +153,9 @@ func TestPolicyPreviewADOPolicyEmptyUsesRowDefaults(t *testing.T) {
 		body := `{"agent":"claude-code","workspace_id":"` + ws.ID.String() + `","inline_policy":{"min_confinement_class":"CC2"` + axis + `}}`
 		w := doSSO(t, srv, http.MethodPost, policyPreviewPath, member, body)
 		result := previewResult(t, w)
-		if len(result.RepositoryAccess) != 1 || !slices.Equal(result.RepositoryAccess[0].DefaultProfile, adoscope.ProfileDefault()) || !slices.Equal(result.RepositoryAccess[0].CapabilityCeiling, sc.WorkspaceProviders.Git[0].Entra.CapabilityCeiling) {
+		wantProfile := []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapProjectRead}
+		wantCeiling := []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite, adoscope.CapPR, adoscope.CapProjectRead}
+		if len(result.RepositoryAccess) != 1 || !slices.Equal(result.RepositoryAccess[0].DefaultProfile, wantProfile) || !slices.Equal(result.RepositoryAccess[0].CapabilityCeiling, wantCeiling) {
 			t.Fatalf("resolved row defaults: %s", w.Body.String())
 		}
 		outputs = append(outputs, w.Body.String())
