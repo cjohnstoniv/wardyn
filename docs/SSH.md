@@ -535,12 +535,19 @@ surface, not a nuisance:
   unbounded parallel shells OR unbounded forwards.
 
 **Idle auto-stop.** A shell, a running `exec`, an open sftp subsystem, and a
-held `-L` forward ALL keep the run's idle clock reset (`TouchRun`) for as
-long as they're open — a long `scp`, a slow `ssh run 'make build'`, or a
+held `-L` forward ALL reset the run's idle clock when they open and every 30
+seconds while they are open — a long `scp`, a slow `ssh run 'make build'`, or a
 tunnel held open in another terminal is exactly as protected as the
-interactive shell is. `auto_stop_after_sec` governs an SSH session
-identically to any other activity, on every channel kind, not just the
-shell.
+interactive shell is. So an attached run is not stopped by
+`auto_stop_after_sec`, on every channel kind, as long as those writes succeed
+(they are best effort, and a failed one is dropped). A run nobody is attached
+to is idle like any other: with the shipped default policy a session's `-1`
+becomes the member ceiling of 3600, so a run left detached for an hour is
+stopped (`run.autostop`). That hour is the ceiling, not a lease. To lengthen it,
+raise `auto_stop_after_sec` in the ceiling; a ceiling of `0` removes the cap but
+also turns idle stop off for every run that does not set its own. Idle pause,
+the lease (`ends_at`) and `WARDYN_RUN_MAX_AGE` are separate clocks: see
+[Run lifetime](operations/run-lifetime.md#the-clocks-that-end-or-freeze-a-run).
 
 **Env allowlist.** A non-interactive `ssh <run-id>@host <cmd>` forwards only
 `TERM`/`LANG`/`LC_*` from the client's environment into the exec — nothing
