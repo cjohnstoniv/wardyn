@@ -347,6 +347,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	siteConfigSeed, err := api.LoadSiteConfigSeed(*f.siteConfigSeedFile)
+	if err != nil {
+		return err
+	}
 
 	// The gated AWS SSO endpoint test hatch — see resolveAWSSSOEndpointOverride.
 	awsSSOEndpointOverride, err := resolveAWSSSOEndpointOverride(f)
@@ -537,6 +541,12 @@ func run() error {
 	// answers "nothing to add", the authorization request is not widened and the
 	// callback stores nothing (internal/api/ado_entra_login.go).
 	attachLoginGrantSink(feats.authn, srv)
+
+	// The network settings a rebuilt database lost, from WARDYN_SITE_CONFIG_SEED_FILE,
+	// before anything is served. A no-op when the file is unset.
+	if err := srv.SeedSiteConfig(bootCtx, siteConfigSeed); err != nil {
+		return err
+	}
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).

@@ -659,6 +659,9 @@ type Server struct {
 	// capability_batch_test.go's growth law reads it. One atomic add per row
 	// already being compared. Zero value is ready to use.
 	capRowsScanned atomic.Int64
+	// siteConfigSeed is the boot-time WARDYN_SITE_CONFIG_SEED_FILE (nil when
+	// unset), kept for the /setup/status row (site_config_seed.go).
+	siteConfigSeed *SiteConfigSeed
 	// locks is the in-process fallback for the cross-replica locks (locks.go).
 	// The audit chain verify sweep, the site-config and capability-enforcement
 	// writers, the per-run operation lock and the two refresh single-flights

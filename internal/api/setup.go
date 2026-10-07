@@ -356,7 +356,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// two. It also feeds the agent roster below (setupHarnessTools); a failed
 	// read leaves the zero value, which reads as legacy open mode.
 	if siteCfgOK {
-		checks = siteConfigStatusChecks(checks, siteCfg, present)
+		checks = siteConfigStatusChecks(checks, siteCfg, present, s.siteConfigSeed)
 		onboardingComplete = siteCfg.OnboardingCompletedAt != nil
 	}
 	if s.cfg.Store != nil {

@@ -197,6 +197,9 @@ spec:
       {{- if ($.Values.kek | default dict).domains }}
       {{- $podAnnotations = merge (dict "checksum/key-domains" (sha256sum (toJson $.Values.kek.domains))) $podAnnotations }}
       {{- end }}
+      {{- if (.Values.siteConfigSeed | default dict) }}
+      {{- $podAnnotations = merge (dict "checksum/site-config-seed" (sha256sum (toJson .Values.siteConfigSeed))) $podAnnotations }}
+      {{- end }}
       {{- with $podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
@@ -518,6 +521,12 @@ spec:
             - name: WARDYN_DEFAULT_POLICY
               value: {{ "/etc/wardyn/default-policy/policy.json" | quote }}
             {{- end }}
+            {{- if and (.Values.siteConfigSeed | default dict) (not (hasKey .Values.env "WARDYN_SITE_CONFIG_SEED_FILE")) }}
+            # Points wardynd at the site-config seed baked into the ConfigMap
+            # below, mounted read-only. An .Values.env entry overrides.
+            - name: WARDYN_SITE_CONFIG_SEED_FILE
+              value: {{ "/etc/wardyn/site-config-seed/seed.json" | quote }}
+            {{- end }}
             {{- if and .Values.trustedCA (not (hasKey .Values.env "WARDYN_TRUSTED_CA_FILE")) }}
             # Points wardynd at the corp CA bundle baked into the ConfigMap
             # below, mounted read-only. An .Values.env entry overrides (e.g. a
@@ -739,6 +748,11 @@ spec:
               mountPath: /etc/wardyn/trusted-ca
               readOnly: true
             {{- end }}
+            {{- if (.Values.siteConfigSeed | default dict) }}
+            - name: site-config-seed
+              mountPath: /etc/wardyn/site-config-seed
+              readOnly: true
+            {{- end }}
             {{- if ($.Values.kek | default dict).domains }}
             - name: key-domains
               mountPath: /etc/wardyn/key-domains
@@ -779,6 +793,11 @@ spec:
         - name: trusted-ca
           configMap:
             name: {{ include "wardyn.fullname" . }}-trusted-ca
+        {{- end }}
+        {{- if (.Values.siteConfigSeed | default dict) }}
+        - name: site-config-seed
+          configMap:
+            name: {{ include "wardyn.fullname" . }}-site-config-seed
         {{- end }}
         {{- if ($.Values.kek | default dict).domains }}
         - name: key-domains

@@ -80,6 +80,15 @@ defaultPolicy: |
     "auto_stop_after_sec": 0
   }
 
+# The network settings a rebuilt database lost, restored at boot
+# (WARDYN_SITE_CONFIG_SEED_FILE). A secret reference, never a credentialed URL.
+siteConfigSeed:
+  upstream_proxy_secret_ref: corp-proxy
+  upstream_proxy_no_proxy: [".corp.internal"]
+  internal_hosts:
+    - host_suffix: git.corp.internal
+      cidrs: ["10.0.0.0/8"]
+
 networkPolicy:
   ingress:
     # Setting this REPLACES the same-namespace default, so every peer that must

@@ -4227,6 +4227,37 @@ warning naming every such dangling ref, and the setup checklist's "Site config"
 row grades `warn` (never the plain `info` of a fully-live config) while one
 remains.
 
+**Restoring the network settings at boot (`WARDYN_SITE_CONFIG_SEED_FILE`).** The
+upstream proxy (`upstream_proxy_url` or `upstream_proxy_secret_ref`), its bypass
+list (`upstream_proxy_no_proxy`) and `internal_hosts` live only in the site-config
+row, so an estate that rebuilds its database loses them. Keep them in a file in
+Git and point `WARDYN_SITE_CONFIG_SEED_FILE` at it (chart: `siteConfigSeed`):
+
+```json
+{
+  "upstream_proxy_secret_ref": "corp-proxy",
+  "upstream_proxy_no_proxy": [".corp.internal", "100.64.0.0/10"],
+  "internal_hosts": [{"host_suffix": "git.corp.internal", "cidrs": ["10.0.0.0/8"]}]
+}
+```
+
+At every boot, before serving, `wardynd` writes each of those settings the stored
+site config does not have (no row, or the field empty), under the site-config
+lock, so two replicas booting together write once. Every other key of the
+document is kept as it was, and the write is audited as `site_config.seed`. A
+setting the database already has is **never overwritten**: if it differs from the
+file, one warning is logged and `/setup/status` shows a `site_config_seed` info
+row saying the database value is in effect. The upstream proxy is one setting:
+its URL and secret reference together. The consequence: to remove a seeded
+setting, remove it from the file; clearing it in the console lasts until the next
+restart. Any other key, malformed JSON, or a value `PUT /site-config` would
+refuse (an embedded `user:pass@` among them) refuses boot. Use
+`upstream_proxy_secret_ref`, never a credentialed URL. The file restores the
+**reference, not the secret**: with the default Postgres secret store a wiped
+database loses the proxy credential too, so after a rebuild re-create that secret
+(or keep it in an external secret store). Until then the `site_config` row of
+`/setup/status` warns that a referenced secret is not set.
+
 A captured document carries `onboarding_completed_at` whenever the install it
 came from had finished the Getting Started funnel, and `set` forwards it
 verbatim — deliberately: no client strips it, so the same file works through

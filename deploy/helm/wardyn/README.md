@@ -89,6 +89,8 @@ install.
   read-only; see [Default policy](#default-policy).
 - **ConfigMap** (`kek.domains` only) — the key domains file, mounted
   read-only; see [Key domains](#key-domains).
+- **ConfigMap** (`siteConfigSeed` only) — the network settings restored at
+  boot, mounted read-only; see [Site-config seed](#site-config-seed).
 
 ## Prerequisites
 
@@ -1015,6 +1017,40 @@ ConfigMap-backed path, same as `env.WARDYN_DEFAULT_POLICY` above — the escape
 hatch for a CA delivered your own way (e.g. `extraEnv` + `secretKeyRef`
 pointing `WARDYN_TRUSTED_CA_FILE` at a path a volume you wire yourself
 mounts, rather than this chart's own ConfigMap).
+
+## Site-config seed
+
+The upstream proxy, its bypass list and the internal hosts live only in the
+database's site-config row, so a wiped or rebuilt database comes back without
+them. `siteConfigSeed` keeps them in your values file (in Git), renders them as
+JSON into a ConfigMap, mounts it read-only and wires
+`WARDYN_SITE_CONFIG_SEED_FILE` at `/etc/wardyn/site-config-seed/seed.json`:
+
+```yaml
+siteConfigSeed:
+  upstream_proxy_secret_ref: corp-proxy
+  upstream_proxy_no_proxy: [".corp.internal"]
+  internal_hosts:
+    - host_suffix: git.corp.internal
+      cidrs: ["10.0.0.0/8"]
+```
+
+At boot `wardynd` writes each setting the database does not have and never
+overwrites one it does; a different value logs a warning and shows a
+`site_config_seed` info row on `/setup/status` saying the database value is in
+effect. To remove a seeded setting, remove it here: clearing it in the console
+lasts until the next restart. Any key other than `upstream_proxy_url`,
+`upstream_proxy_secret_ref`, `upstream_proxy_no_proxy` and `internal_hosts`
+refuses boot.
+
+**Use `upstream_proxy_secret_ref`, never a credentialed `upstream_proxy_url`**
+(one with `user:pass@` refuses boot). The seed restores the reference, not the
+secret: with the default Postgres secret store a wiped database loses the proxy
+credential too, so after a rebuild an admin re-creates that secret (or the
+estate keeps it in an external secret store). Until then the `site_config` row
+of `/setup/status` warns that a referenced secret is not set. An operator-set
+`env.WARDYN_SITE_CONFIG_SEED_FILE` wins over the ConfigMap-backed path. See
+[docs/OPERATIONS.md § Network](../../../docs/OPERATIONS.md#network-upstream-proxy-and-egress-redirects).
 
 ## Daemon egress proxy
 

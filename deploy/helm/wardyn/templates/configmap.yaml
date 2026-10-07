@@ -78,3 +78,23 @@ metadata:
 data:
   domains.json: {{ toJson $domains | quote }}
 {{- end -}}
+{{/*
+Optional site-config seed (WARDYN_SITE_CONFIG_SEED_FILE): .Values.siteConfigSeed
+rendered as JSON. Network topology and secret NAMES only, so a ConfigMap is
+right; wardynd validates the keys and values at boot (LoadSiteConfigSeed).
+*/}}
+{{- $seed := .Values.siteConfigSeed | default dict -}}
+{{- if $seed -}}
+{{- if not (kindIs "map" $seed) -}}
+{{- fail "wardyn: siteConfigSeed must be a map of upstream_proxy_url or upstream_proxy_secret_ref, upstream_proxy_no_proxy and internal_hosts" -}}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wardyn.fullname" . }}-site-config-seed
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+data:
+  seed.json: {{ toJson $seed | quote }}
+{{- end -}}
