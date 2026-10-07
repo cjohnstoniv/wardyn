@@ -47,7 +47,7 @@ export function useNewRunController() {
   const identity = useRequestIdentity();
   const sources = useNewRunSources(identity);
   const { workspaces, savedPolicies, policiesLoaded, knownTitles, governanceContact, defaultRead } = sources;
-  const retryDefault = sources.refresh, reloadWorkspaces = sources.refresh;
+  const refreshSources = sources.refresh, retryDefault = refreshSources, reloadWorkspaces = refreshSources;
   // Visibility is not capability: the workspace list is NOT narrowed by the
   // `workspace` grant (a hidden workspace makes the launch gate's refusal
   // unexplainable and the grant undiscoverable). Ungranted rows are annotated
@@ -369,9 +369,9 @@ export function useNewRunController() {
 
   const doors = React.useRef({ model: modelAccessDoor.open, ado: policy.adoDoor.dialog.open });
   React.useEffect(() => {
-    if ((doors.current.model && !modelAccessDoor.open) || (doors.current.ado && !policy.adoDoor.dialog.open)) sources.refresh();
+    if ((doors.current.model && !modelAccessDoor.open) || (doors.current.ado && !policy.adoDoor.dialog.open)) refreshSources();
     doors.current = { model: modelAccessDoor.open, ado: policy.adoDoor.dialog.open };
-  }, [modelAccessDoor.open, policy.adoDoor.dialog.open, sources.refresh]);
+  }, [modelAccessDoor.open, policy.adoDoor.dialog.open, refreshSources]);
 
   const added = policy.added;
   const hasAdditions = !!added && (added.hosts.length > 0 || added.grants.length > 0 || added.mounts.length > 0 || added.repos.length > 0);
