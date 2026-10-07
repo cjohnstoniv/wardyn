@@ -19,7 +19,9 @@ import { EmptyState, ErrorState } from "../../wardyn/states";
 
 const POLL_MS = 4000;
 // A not-kept answer this soon after the run ended is the final row still
-// being written (design §3, read order 5), not a verdict.
+// being written (design §3, read order 5), not a verdict. So is an interactive
+// answer this soon after a Wardyn stop: the pane snapshot row is written a
+// moment after the run reaches STOPPED.
 const SAVING_WINDOW_MS = 60_000;
 // The empty busy body stays empty this long before a loading line shows.
 const LOADING_LINE_MS = 1000;
@@ -71,6 +73,7 @@ export function OutputTab({
   const [saving, setSaving] = React.useState(false);
   const [showLoading, setShowLoading] = React.useState(false);
   const recordingOff = useRecordingDisabled() === true;
+  const stopped = state === "STOPPED";
 
   React.useEffect(() => {
     if (loaded) {
@@ -99,9 +102,10 @@ export function OutputTab({
         const r = e instanceof HttpError ? (REFUSALS[e.reason] ?? "error") : "error";
         setRefusal(r);
         setLoaded(true);
-        // Only a not-kept answer around the end of a run is worth another look.
-        const again =
-          r === "not_kept" && (live || (!!endedAt && Date.now() - Date.parse(endedAt) < SAVING_WINDOW_MS));
+        // Only an answer around the end of a run is worth another look: not-kept
+        // while the final row is written, interactive while the snapshot is.
+        const justEnded = !!endedAt && Date.now() - Date.parse(endedAt) < SAVING_WINDOW_MS;
+        const again = (r === "not_kept" && (live || justEnded)) || (r === "interactive" && stopped && justEnded);
         setSaving(again);
         if (again) timer = setTimeout(tick, POLL_MS);
       }
@@ -111,8 +115,8 @@ export function OutputTab({
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-    // endedAt/live only steer whether to poll again; a change re-reads once.
-  }, [runId, live, endedAt, attempt]);
+    // endedAt/live/stopped only steer whether to poll again; a change re-reads once.
+  }, [runId, live, stopped, endedAt, attempt]);
 
   if (!loaded) {
     return (
@@ -222,6 +226,7 @@ function refusalBody(
     case "erased":
       return <EmptyState icon={Logs} title={RUN_OUTPUT.erasedTitle} description={RUN_OUTPUT.erasedDesc} />;
     case "interactive":
+      if (saving) return <EmptyState icon={Logs} title={RUN_OUTPUT.savingTitle} description={RUN_OUTPUT.savingDesc} />;
       // Recording off is a known true only; unknown keeps the pointer (D).
       if (recordingOff) {
         if (live) {

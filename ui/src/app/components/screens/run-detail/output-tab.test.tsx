@@ -279,6 +279,40 @@ describe("OutputTab — interactive run, nothing kept", () => {
     expect(screen.queryByRole("button", { name: RUN_OUTPUT.interactiveLink })).toBeNull();
   });
 
+  // The pane snapshot row is written a moment after the run reaches STOPPED:
+  // a read in between is refused as interactive, and must not be the verdict.
+  it("recording off, run STOPPED seconds ago: says it is saving, re-reads, and renders the snapshot", async () => {
+    vi.useFakeTimers();
+    recording("none");
+    getMock
+      .mockRejectedValueOnce(new HttpError(409, "refused", "run_output_interactive"))
+      .mockResolvedValue(out({ source: "pane_snapshot", output: "user@sandbox:~$ " }));
+    await mount({ live: false, state: "STOPPED", endedAt: new Date(Date.now() - 2000).toISOString() });
+    expect(getMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(RUN_OUTPUT.savingTitle)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_OUTPUT.interactiveTitle)).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(RUN_OUTPUT.sourcePane)).toBeInTheDocument();
+    expect(screen.getByTestId("run-output-text").textContent).toBe("user@sandbox:~$ ");
+    expect(screen.queryByText(RUN_OUTPUT.savingTitle)).toBeNull();
+  });
+
+  it("recording off, run STOPPED long ago: the answer stands and nothing re-reads", async () => {
+    vi.useFakeTimers();
+    recording("none");
+    refuse("run_output_interactive", 409);
+    await mount({ live: false, state: "STOPPED", endedAt: aheadByHours(-24) });
+    expect(screen.getByText(RUN_OUTPUT.interactiveTitle)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_OUTPUT.savingTitle)).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(1);
+  });
+
   it("recording on: today's text and the Recording link", async () => {
     recording("file");
     refuse("run_output_interactive", 409);
