@@ -149,34 +149,31 @@ the `prometheus.io/scrape` pod annotation it advertises.
 
 ## Scraping without a credential: the dedicated listener
 
-A scraper that sends no bearer token (a stock Prometheus with only the
-`prometheus.io/*` pod annotations) can use a second, opt-in listener instead
-of the console port. Set `WARDYN_METRICS_LISTEN` (flag `-metrics-listen`,
-e.g. `:9464`; [ENV.md](../ENV.md)) and wardynd serves `GET /metrics` there in
-plain HTTP with **no credential**: the same body the gated route answers. Every
-other method and path is a `404`, so nothing else the console serves is
-reachable on that port. It is off by default, and boot refuses an address equal
-to `WARDYN_LISTEN`, `WARDYN_INTERNAL_LISTEN`, `WARDYN_SSH_LISTEN` or
-`WARDYN_UI_SANDBOX_LISTEN`.
+For a scraper that sends no bearer token, such as a stock Prometheus reading
+`prometheus.io/*` pod annotations, set `WARDYN_METRICS_LISTEN` (flag
+`-metrics-listen`, e.g. `:9464`; [ENV.md](../ENV.md)). It is off by default.
 
-`/metrics` on the console port keeps its operator gate whether or not the
-listener is on, and the chart's ServiceMonitor keeps using it.
+- **What it serves:** `GET /metrics` in plain HTTP with **no credential**, the
+  same body the gated route answers. Every other method and path is a `404`.
+- **Where it may bind:** boot refuses an address equal to `WARDYN_LISTEN`,
+  `WARDYN_INTERNAL_LISTEN`, `WARDYN_SSH_LISTEN` or `WARDYN_UI_SANDBOX_LISTEN`.
+- **The console route:** `/metrics` on the console port keeps its operator
+  gate either way, and the chart's ServiceMonitor keeps using it.
+- **What a reader learns:** fleet and capacity counts, approval decisions,
+  credential-mint and sign-in-renewal outcomes, and your approval-notification
+  channel ids as labels. No label carries a person, a run id or a secret.
+  `threatmodel/THREAT-MODEL.md` ("The unauthenticated metrics listener") lists
+  every label and its source.
 
-**Who can reach the port reads the body.** That is fleet and capacity counts,
-approval decisions, credential-mint and sign-in-renewal outcomes, and your
-approval-notification channel ids as labels. No label carries a person, a run
-id or a secret; `threatmodel/THREAT-MODEL.md` ("The unauthenticated metrics
-listener") lists every label and its source. Restrict the port to your
-scraper.
+On Kubernetes, set `metrics.listener.enabled=true` in the Helm chart (default
+port `9464`). The chart then renders:
 
-On Kubernetes, `metrics.listener.enabled=true` in the Helm chart sets the
-variable (default port `9464`), adds a container port named `metrics` that is
-**not** on the Service, adds the `prometheus.io/scrape`, `prometheus.io/port`
-and `prometheus.io/path` pod annotations (an operator's own `podAnnotations`
-key wins), and gives the port its own NetworkPolicy ingress rule. That rule
-admits pods in the release namespace that are not run pods by default;
-`metrics.listener.from` replaces that with the peers you name, which a
-Prometheus in another namespace needs:
+- a container port named `metrics` that is **not** on the Service;
+- the `prometheus.io/scrape`, `prometheus.io/port` and `prometheus.io/path` pod
+  annotations, where an operator's own `podAnnotations` key wins;
+- its own NetworkPolicy ingress rule, admitting pods in the release namespace
+  that are not run pods. `metrics.listener.from` replaces that peer, which a
+  Prometheus in another namespace needs:
 
 ```yaml
 metrics:
