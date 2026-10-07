@@ -32,6 +32,10 @@ class ImageDownloads(unittest.TestCase):
             "and": f"RUN {DOWNLOAD} && {VERIFY} && {USE}",
             "and_errexit": f"RUN set -e && {DOWNLOAD} && {VERIFY} && {USE}",
             "continuations_comments": f"RUN set -eu; \\\n  {DOWNLOAD}; \\\n# a Dockerfile comment does not terminate the RUN\n  {VERIFY}; \\\n  {USE}",
+            "continuation_trailing_space": f"RUN set -eu; \\ \n  {DOWNLOAD}; \\ \n  {VERIFY}; \\\t\n  {USE}",
+            "onbuild": f"ONBUILD RUN set -eu; {DOWNLOAD}; {VERIFY}; {USE}",
+            "onbuild_lowercase": f"onbuild run {DOWNLOAD} && {VERIFY}",
+            "onbuild_non_run": "ONBUILD COPY . /app\nONBUILD ENV curl=1",
             "lowercase_tab": f"run\tset -e; {DOWNLOAD}; {VERIFY}",
             "long_output": f"RUN curl --fail --location https://example.invalid/a --output /tmp/a.tgz && {VERIFY}",
             "equals_output": f"RUN curl --output=/tmp/a.tgz https://example.invalid/a && {VERIFY}",
@@ -69,6 +73,13 @@ class ImageDownloads(unittest.TestCase):
 
     def test_rejected(self):
         cases = {
+            "continuation_trailing_space": (f"RUN set -e; \\ \n  {DOWNLOAD}", "same-file checksum"),
+            "continuation_trailing_tab": (f"RUN set -e; \\\t\n  {DOWNLOAD}", "same-file checksum"),
+            "onbuild_unchecked": (f"ONBUILD RUN set -e; {DOWNLOAD}", "same-file checksum"),
+            "onbuild_no_errexit": (f"ONBUILD RUN {DOWNLOAD}; {VERIFY}", "fail closed"),
+            "onbuild_exec_form": ('ONBUILD RUN ["curl", "https://example.invalid/a", "-o", "/tmp/a"]', "exec-form"),
+            "onbuild_checksum_after_use": (f"ONBUILD RUN set -e; {DOWNLOAD}; {USE}; {VERIFY}", "before another command"),
+            "custom_escape_continuation": (f"# escape=`\nRUN set -e; `\n  {DOWNLOAD}", "custom SHELL/escape"),
             "unchecked": (f"RUN set -e; {DOWNLOAD}", "same-file checksum"),
             "no_errexit": (f"RUN {DOWNLOAD}; {VERIFY}; {USE}", "fail closed"),
             "later_run": (f"RUN {DOWNLOAD}\nRUN {VERIFY}", "fail closed"),

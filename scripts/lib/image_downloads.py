@@ -11,6 +11,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+# BuildKit continues a line on a backslash followed only by spaces or tabs.
+CONTINUATION = re.compile(r"\\[ \t]*$")
+ESCAPE_DIRECTIVE = re.compile(r"^#\s*escape\s*=\s*(?!\\)\S", re.M | re.I)
+
+
 def instructions(text):
     pending, start = "", 0
     for number, line in enumerate(text.splitlines(), 1):
@@ -18,9 +23,9 @@ def instructions(text):
             continue
         if not pending:
             start = number
-        continued = line.endswith("\\")
-        pending += line[:-1] if continued else line
-        if not continued:
+        continuation = CONTINUATION.search(line)
+        pending += line[:continuation.start()] if continuation else line
+        if not continuation:
             parts = pending.strip().split(None, 1)
             name, body = parts[0], parts[1] if len(parts) == 2 else ""
             yield start, name.upper(), body.strip()
@@ -515,7 +520,12 @@ def check_run(body):
 def check_file(path):
     text = Path(path).read_text()
     custom_shell = False
+    if ESCAPE_DIRECTIVE.search(text):
+        raise ValueError(f"{path}: custom SHELL/escape parser directive is unsupported; use the default escape character")
     for number, name, body in instructions(text):
+        if name == "ONBUILD":
+            name, body = (body.split(None, 1) + ["", ""])[:2]
+            name = name.upper()
         if name == "SHELL":
             custom_shell = True
         if name != "RUN":
@@ -527,7 +537,7 @@ def check_file(path):
             candidate = candidate.replace("\\", "").replace("'", "").replace('"', "")
             if not re.search(r"\bcurl\b", candidate):
                 continue
-            if custom_shell or re.search(r"^#\s*escape\s*=\s*`", text, re.M | re.I):
+            if custom_shell:
                 raise ValueError("custom SHELL/escape with curl is unsupported")
             check_run(body)
         except (ValueError, IndexError) as error:
