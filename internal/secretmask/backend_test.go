@@ -70,6 +70,33 @@ func masksValue(r *Registry, run uuid.UUID, v string) bool {
 	return bytes.Contains(r.Masker(run).Mask([]byte("x "+v+" y")), placeholder)
 }
 
+func TestHasGlobalValuesIncludesRetirementGrace(t *testing.T) {
+	r := NewRegistry()
+	now := time.Now()
+	old, current := []byte("previously-applied-credential"), []byte("current-credential-value")
+	r.ApplyGlobal("alice", "sso", old, time.Time{}, time.Time{})
+	r.ApplyGlobal("alice", "sso", old, time.Time{}, now)
+	r.ApplyGlobal("alice", "sso", current, time.Time{}, time.Time{})
+	values := []GlobalPut{{Value: old}, {Value: current}, {Value: current}}
+	if !r.HasGlobalValues("alice", "sso", values) {
+		t.Fatal("retirement grace or a duplicate value lost its masking proof")
+	}
+	for _, p := range values {
+		if bytes.Contains(r.Masker(uuid.Nil).Mask(p.Value), p.Value) {
+			t.Fatal("value reported available is not masked")
+		}
+	}
+	if n := r.SweepGlobals(now.Add(time.Second)); n != 1 {
+		t.Fatalf("sweep dropped %d values", n)
+	}
+	if r.HasGlobalValues("alice", "sso", values) {
+		t.Fatal("a swept value still satisfies registration")
+	}
+	if !r.HasGlobalValues("alice", "sso", []GlobalPut{{Value: current}}) {
+		t.Fatal("sweeping a retired value lost a current credential's proof")
+	}
+}
+
 // A mutator commits before it returns and caches only what committed: a failed
 // commit leaves the value unknown, so the retry persists it instead of skipping
 // it as already known.

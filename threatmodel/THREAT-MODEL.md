@@ -382,7 +382,10 @@ forms, which no verbatim matcher catches.
   response cannot register behind the erase. A new sign-in can use a later
   snapshot. Fences survive row retention and process restarts. Erasure reaches
   another replica's cached globals at its next fresh read; ordered cache reads
-  do not reapply old work after that read. Already-held bytes and previously
+  do not reapply old work after that read. Global registration also requires its
+  rows to have been applied and its values to remain available for masking: a
+  healthy corpus read that skipped an unreadable row cannot authorize credential
+  use. Cached retired values still mask through their existing grace. Already-held bytes and previously
   returned maskers are not revoked, and restoring a pre-erasure backup restores
   that backup's fence state too.
   This is what makes several replicas (`ha.enabled`) a supported topology; the

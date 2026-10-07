@@ -40,7 +40,8 @@ type Backend interface {
 	GlobalGeneration(ctx context.Context) (int64, error)
 	// PutGlobal commits values as credential (owner, name)'s. merge retires
 	// nothing; otherwise the credential's other current values are retired.
-	// It refuses an owner erased after generation and synchronizes the cache.
+	// It refuses an owner erased after generation and succeeds only after the
+	// committed rows are applied and the requested values are available to mask.
 	PutGlobal(generation int64, owner, name string, values []GlobalPut, merge bool, now time.Time) error
 	// EvictGlobal tombstones the credential's current values.
 	EvictGlobal(owner, name string, now time.Time) error
@@ -126,6 +127,25 @@ func (r *Registry) Generation() uint64 {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.gen
+}
+
+// HasGlobalValues reports whether every value of a committed credential is
+// present, including copies retained through retirement grace.
+func (r *Registry) HasGlobalValues(owner, name string, values []GlobalPut) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	current := r.current[globalKey{owner, name}]
+	for _, put := range values {
+		if !containsValue(current, put.Value) && !slices.ContainsFunc(r.retired, func(v retiredValue) bool {
+			return bytes.Equal(v.value, put.Value)
+		}) {
+			return false
+		}
+	}
+	return true
 }
 
 // SweepPersisted is SweepGlobals for the committed rows: it tombstones the
