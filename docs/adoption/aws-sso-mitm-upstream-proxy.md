@@ -252,3 +252,45 @@ reads each row.
 What it cannot prove from here: nothing outside that estate reproduces its hop, so the cause of that
 report is still unrecorded. The next run that meets it names what the hop answered and which side
 closed first, and that sentence is the next fact needed.
+
+## Follow-up after 0.8.7: a tunnel closed without a byte
+
+On 0.8.7 a sign-in run behind a corporate proxy failed in the sandbox with
+`SSL: UNEXPECTED_EOF_WHILE_READING` and nothing else. The client's error names the end of a TLS
+stream, not which hop ended it.
+
+What 0.8.7 showed, and what it could not:
+
+- The sandbox's own error could not say whether the proxy, the hop behind it or the far end closed the
+  stream.
+- The 0.8.7 row could say which side was silent, and did: the run's new `egress.deny` row carried
+  `rule_source: builtin:tunnel-failed`, `cause: "tunnel first bytes: the upstream closed without
+  answering"` and `via`, which located the fault at the hop.
+- On that estate this answered the open question of the 0.8.6 follow-up above: the hop closed the
+  tunnel without sending a byte.
+- A row of that kind says that the hop closed and that nothing came back. It does not say why the hop
+  closed.
+
+What 0.8.8 changes on this path:
+
+- **The bypass guidance is corrected.** A bypass entry (`upstream_proxy_no_proxy`) is for a host the
+  proxy sidecar can itself resolve and reach directly. For an estate whose corporate proxy is the only
+  route to the private range, the entry is the wrong tool: the recipe lists the name in `internal_hosts`
+  only and lets the corporate proxy dial it. The rewritten bypass section of
+  [OPERATIONS.md](../OPERATIONS.md#upstream-proxy-the-bypass-list-upstream_proxy_no_proxy) carries both
+  recipes, and says that inference timing out with `tcp dial: i/o timeout` while sign-in works is the
+  symptom of the second.
+- **A renewal that ends spent after a lost reply is marked.** The `harness.credential.refresh` failure
+  row, and the `credential.expired.delete` row for the same sign-in, carry `after_lost_reply: true` when
+  the retry ended `invalid_grant` after a first attempt that was sent in full and got no reply at all. It is an
+  audit marker consistent with a lost reply. It is not proof that the provider replaced the token, and it
+  is absent when the first attempt failed part-way or got any response, an error page a proxy wrote
+  included.
+- **A launch waits for a renewal already in flight, and Record Mode renews at its door.** A sign-in that
+  is found spent at either point is refused before a run row exists. The wait is bounded (about 20
+  seconds) and applies on the default Postgres secret store only, so it narrows the window and does not
+  close it.
+
+What it cannot prove from here: the hop's reason for closing is not recorded, and nothing outside that
+estate reproduces the hop. The marker records what Wardyn sent and what came back; it does not decide
+what happened on the provider's side.
