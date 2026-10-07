@@ -10,22 +10,24 @@ import (
 
 // TestValidateBootPosture pins the wiring, not the rules: each validator has
 // its own table test, so this only proves validateBootPosture still calls the
-// UI-sandbox, base-path and hybrid refusals that run() relies on before migration.
+// UI-sandbox, metrics-listener, base-path and hybrid refusals that run() relies on before migration.
 func TestValidateBootPosture(t *testing.T) {
 	for _, tc := range []struct {
-		name, listen, uiListen, orgURL, basePath, stripCookies string
-		memberMode                                             bool
-		wantErr                                                string // substring; empty = must succeed
+		name, listen, uiListen, metricsListen, orgURL, basePath, stripCookies string
+		memberMode                                                            bool
+		wantErr                                                               string // substring; empty = must succeed
 	}{
 		{name: "nothing set boots", listen: ":8080"},
 		{name: "hybrid without member mode refused", listen: ":8080", orgURL: "https://org.example.com", wantErr: "WARDYN_ORG_URL is set but WARDYN_USER_DESKTOP is not"},
 		{name: "UI-sandbox on the console address refused", listen: ":8080", uiListen: ":8080", wantErr: "same address as -listen"},
+		{name: "metrics listener on the internal listener's address refused", listen: ":8080", metricsListen: ":8443", wantErr: "same address as -internal-listen"},
 		{name: "a base path with a trailing slash refused", listen: ":8080", basePath: "/wardyn/", wantErr: "WARDYN_BASE_PATH"},
 		{name: "a malformed UI-sandbox cookie policy refused", listen: ":8080", uiListen: ":8081", stripCookies: "allow", wantErr: "WARDYN_UI_SANDBOX_STRIP_COOKIES"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sshListen, originTemplate, enrolToken, allowPlaintext := "", "", "", false
 			oidcIssuer, oidcInternal, oidcRedirect, controlURL, uiAdvertise := "", "", "", "https://wardynd:8443", ""
+			internalListen := ":8443"
 			tail, retention := 65536, 30
 			rate, seal := 20, "off"
 			off, runner, store := false, "none", "pg"
@@ -50,6 +52,8 @@ func TestValidateBootPosture(t *testing.T) {
 				orgURL:               &tc.orgURL,
 				orgEnrolToken:        &enrolToken,
 				memberMode:           &tc.memberMode,
+				internalListen:       &internalListen,
+				metricsListen:        &tc.metricsListen,
 			}
 			err := validateBootPosture(f, tlsPosture{})
 			if tc.wantErr == "" {

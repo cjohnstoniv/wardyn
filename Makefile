@@ -807,6 +807,33 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q 'path: "/wardyn/metrics"' || { echo "ServiceMonitor path is not /metrics under basePath"; exit 1; }; \
 	echo "$$out" | grep -A6 '^      authorization:$$' | grep -q 'name: "wardyn-scrape"' || { echo "ServiceMonitor does not carry the bearer Secret reference"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.serviceMonitor.enabled=true >/dev/null 2>&1 && { echo "ServiceMonitor rendered with no bearer Secret named — Prometheus would scrape unauthenticated"; exit 1; } || true
+	@# metrics.listener (#1886): the dedicated listener answers GET /metrics with NO credential, so it is
+	@# off by default, its container port is pod-only (never a Service port), its NetworkPolicy rule admits
+	@# same-namespace non-run pods unless metrics.listener.from replaces that (never a cluster-wide peer), and
+	@# the chart's scrape annotations never override an operator's own podAnnotations key.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
+	echo "$$out" | grep -q "WARDYN_METRICS_LISTEN\|name: metrics$$\|port: metrics$$\|prometheus.io/port" && { echo "default render (metrics.listener.enabled=false) rendered part of the unauthenticated metrics listener"; exit 1; } || true
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.listener.enabled=true --set-string 'podAnnotations.prometheus\.io/port=1234'); \
+	echo "$$out" | grep -A1 "name: WARDYN_METRICS_LISTEN" | grep -q 'value: ":9464"' || { echo "metrics.listener.enabled did not render WARDYN_METRICS_LISTEN on the default port 9464"; exit 1; }; \
+	echo "$$out" | grep -A1 '^            - name: metrics$$' | grep -q "containerPort: 9464" || { echo "metrics.listener.enabled rendered no metrics container port"; exit 1; }; \
+	echo "$$out" | grep -q "targetPort: metrics" && { echo "the unauthenticated metrics port is on the Service — it must stay pod-only"; exit 1; }; \
+	echo "$$out" | grep -q 'prometheus.io/scrape: "true"' || { echo "metrics.listener.enabled did not render the prometheus.io/scrape annotation"; exit 1; }; \
+	echo "$$out" | grep -q 'prometheus.io/path: /metrics$$' || { echo "metrics.listener.enabled did not render the prometheus.io/path annotation"; exit 1; }; \
+	echo "$$out" | grep -q 'prometheus.io/port: "1234"' || { echo "the operator's own prometheus.io/port pod annotation did not win over the chart's"; exit 1; }; \
+	echo "$$out" | grep -q 'prometheus.io/port: "9464"' && { echo "the chart's prometheus.io/port overrode the operator's own"; exit 1; }; \
+	echo "$$out" | grep -B4 'port: metrics$$' | grep -q "key: wardyn.managed" || { echo "the metrics listener's NetworkPolicy rule does not default to same-namespace non-run pods"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'namespaceSelector: {}')" = "1" ] || { echo "metrics.listener added a namespaceSelector: {} peer (only the DNS egress rule may be cluster-wide)"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
+	echo "$$out" | grep -A1 '^            - name: metrics$$' | grep -q "containerPort: 9464" || { echo "all-on: metrics.listener rendered no metrics container port"; exit 1; }; \
+	echo "$$out" | grep -q "targetPort: metrics" && { echo "all-on: the unauthenticated metrics port is on the Service"; exit 1; }; \
+	echo "$$out" | grep -q 'prometheus.io/port: "9464"' || { echo "all-on: metrics.listener did not render prometheus.io/port beside the operator's prometheus.io/scrape"; exit 1; }; \
+	echo "$$out" | grep -B6 'port: metrics$$' | grep -q "app.kubernetes.io/name: prometheus" || { echo "all-on: metrics.listener.from did not render on the metrics rule"; exit 1; }; \
+	echo "$$out" | grep -B6 'port: metrics$$' | grep -q "wardyn.managed" && { echo "all-on: metrics.listener.from did not REPLACE the default peer"; exit 1; } || true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.listener.enabled=true --set metrics.listener.port=8080 >/dev/null 2>&1 && { echo "metrics.listener.port equal to service.port rendered — wardynd would refuse to boot"; exit 1; } || true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.listener.enabled=true --set-json 'metrics.listener.from=[{"namespaceSelector":{}}]' >/dev/null 2>&1 && { echo "metrics.listener.from with a bare namespaceSelector: {} rendered — every namespace would reach the unauthenticated listener"; exit 1; } || true
+	@d=$$(mktemp -d); trap 'rm -rf "$$d"' EXIT; cp -r deploy/helm/wardyn "$$d/wardyn" && cp deploy/helm/wardyn/ci/reuse-values/v0.8.5.yaml "$$d/wardyn/values.yaml"; \
+	out=$$(helm template wardyn "$$d/wardyn" --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set metrics.listener.enabled=true) || { echo "metrics.listener does not render against v0.8.5's values (a --reuse-values upgrade): read it through default dict"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_METRICS_LISTEN" | grep -q 'value: ":9464"' || { echo "metrics.listener against v0.8.5's values did not fall back to port 9464"; exit 1; }
 	@# WARDYN_DAEMON_PROXY_SECRET from an operator Secret (#719): daemonProxySecret.existingSecret
 	@# mounts it read-only and wires WARDYN_DAEMON_PROXY_SECRET at the mounted path; a default
 	@# render (no daemonProxySecret set) touches none of it, and an env.WARDYN_DAEMON_PROXY_SECRET

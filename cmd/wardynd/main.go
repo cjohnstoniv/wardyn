@@ -551,6 +551,10 @@ func run() error {
 	// startUISandboxGateway; a no-op when -ui-sandbox-listen is empty).
 	startUISandboxGateway(rootCtx, f, posture, srv)
 
+	// Dedicated metrics listener: GET /metrics with no credential, on its own
+	// plain-HTTP address (see startMetricsListener; a no-op when unset).
+	startMetricsListener(rootCtx, *f.metricsListen, srv.MetricsListenerHandler())
+
 	// Serve until signal/error, then drain: HTTP first, audit sinks last, the
 	// org federation forwarder (if any) joined so it never outlives the
 	// process (issue #1131).

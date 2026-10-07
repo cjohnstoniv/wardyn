@@ -191,6 +191,13 @@ rejected object — so say it at render, like every other guard in this chart.
 {{- if and $ui.enabled (eq (int ($ui.port | default 8081)) $http) -}}
 {{- fail (printf "wardyn: uiSandbox.port and service.port are both %d — wardynd refuses to boot when they are equal, because the sandbox's own pages must land on a DIFFERENT browser origin than the console. Give uiSandbox.port its own number." $http) -}}
 {{- end -}}
+{{- $ml := (.Values.metrics | default dict).listener | default dict -}}
+{{- if $ml.enabled -}}
+{{- $mp := int ($ml.port | default 9464) -}}
+{{- if or (eq $mp $http) (eq $mp $internal) (and $ssh.enabled (eq $mp (int ($ssh.port | default 2222)))) (and $ui.enabled (eq $mp (int ($ui.port | default 8081)))) -}}
+{{- fail (printf "wardyn: metrics.listener.port %d collides with another wardynd port (service.port, service.internalPort, ssh.port or uiSandbox.port). The metrics listener serves /metrics with no credential, and wardynd refuses to boot when it shares an address with an authenticated listener. Give metrics.listener.port its own number." $mp) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

@@ -362,6 +362,10 @@ type bootFlags struct {
 	// api.Config.UICookiePolicy.
 	uiStripCookies *string
 
+	// metricsListen is the dedicated, unauthenticated GET /metrics listener
+	// (boot_metrics.go). Empty = off = no listener, like sshListen.
+	metricsListen *string
+
 	// allowUnknownMigrations is the break-glass past db.Migrate's downgrade
 	// refusal (a database a newer wardynd migrated) — see connectAndMigrate.
 	allowUnknownMigrations *bool
@@ -620,6 +624,7 @@ func parseBootFlags() *bootFlags {
 		uiSessionTTL:     flagDuration("ui-sandbox-session-ttl", "WARDYN_UI_SANDBOX_SESSION_TTL", 8*time.Hour, "how long a UI-sandbox relay session cookie stays usable (duration)"),
 		uiStripCookies:   flagEnv("ui-sandbox-strip-cookies", "WARDYN_UI_SANDBOX_STRIP_COOKIES", "", `inbound cookie policy for the UI-sandbox gateway: "allow:<names>" forwards only those cookies to a sandbox app, "deny:<names>" strips them (comma-separated names, "prefix*" for a prefix). Empty (default) forwards every cookie but wardyn_*`),
 		uiOriginTemplate: flagEnv("ui-sandbox-origin-template", "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE", "", `optional per-run origin for the UI-sandbox gateway, e.g. "https://run-{run}.ui.example.com" (needs wildcard DNS and certificate); must contain {run}. Empty (default) shares one origin across every run`),
+		metricsListen:    flagEnv("metrics-listen", "WARDYN_METRICS_LISTEN", "", `plain-HTTP listen address that serves only GET /metrics with no credential, for a scraper that sends none, e.g. ":9464". Empty (default) disables it; must differ from -listen, -internal-listen, -ssh-listen and -ui-sandbox-listen`),
 
 		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn run ssh" refuses`),
 		roleStampTTL:           flagDuration("role-stamp-ttl", "WARDYN_ROLE_STAMP_TTL", 0, "how old an API token's or console session's role stamp may be before its owner must sign in again (duration; 0 = off)"),

@@ -43,6 +43,7 @@ out; guarded, the 0.5 defaults simply carry forward.
 */ -}}
 {{- $ssh := .Values.ssh | default dict -}}
 {{- $ui := .Values.uiSandbox | default dict -}}
+{{- $ml := (.Values.metrics | default dict).listener | default dict -}}
 {{- $dps := .Values.daemonProxySecret | default dict -}}
 {{- $ageRef := .Values.secrets.ageKeySecretRef | default dict -}}
 {{- $internalPort := int (.Values.service.internalPort | default 8443) -}}
@@ -199,6 +200,11 @@ spec:
       {{- end }}
       {{- if (.Values.siteConfigSeed | default dict) }}
       {{- $podAnnotations = merge (dict "checksum/site-config-seed" (sha256sum (toJson .Values.siteConfigSeed))) $podAnnotations }}
+      {{- end }}
+      {{- if $ml.enabled }}
+      {{- /* Scrape hints for the dedicated metrics listener. mergeOverwrite into a
+      fresh dict, so an operator's own podAnnotations key wins over the chart's. */ -}}
+      {{- $podAnnotations = mergeOverwrite (dict "prometheus.io/scrape" "true" "prometheus.io/port" (toString (int ($ml.port | default 9464))) "prometheus.io/path" "/metrics") $podAnnotations }}
       {{- end }}
       {{- with $podAnnotations }}
       annotations:
@@ -664,6 +670,10 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             {{- end }}
+            {{- if $ml.enabled }}
+            - name: WARDYN_METRICS_LISTEN
+              value: {{ printf ":%d" (int ($ml.port | default 9464)) | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
@@ -679,6 +689,13 @@ spec:
             {{- if $ui.enabled }}
             - name: ui
               containerPort: {{ $ui.port | default 8081 }}
+              protocol: TCP
+            {{- end }}
+            {{- if $ml.enabled }}
+            # Pod-only: no Service port targets it (helm-lint pins that), because
+            # this listener answers without a credential.
+            - name: metrics
+              containerPort: {{ $ml.port | default 9464 }}
               protocol: TCP
             {{- end }}
           livenessProbe:
