@@ -287,3 +287,5 @@ func TestAnUnretriedRefusalIsLogged(t *testing.T) {
 		t.Fatalf("the refusal's code and description are not in the log: %q", logged)
 	}
 }
+
+func (s *blockingSink) LoginGrantGeneration(context.Context) (int64, error) { return 0, nil }

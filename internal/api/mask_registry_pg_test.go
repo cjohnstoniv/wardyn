@@ -50,7 +50,7 @@ func TestMaskRegistry_ARegistrationOnAMasksAnUploadToB(t *testing.T) {
 	if err := a.srv.maskInjected(run.ID, []byte("injected-after-dispatch-2")); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.reg.AddGlobalUntil(maskOwner, "aws-sso", time.Now(), time.Now().Add(time.Hour), []byte("global-sso-token-3"), []byte("global-sso-refresh-4")); err != nil {
+	if err := a.reg.AddGlobalUntil(0, maskOwner, "aws-sso", time.Now(), time.Now().Add(time.Hour), []byte("global-sso-token-3"), []byte("global-sso-refresh-4")); err != nil {
 		t.Fatal(err)
 	}
 	if perRun() != 1 || manifest() != 1 {
@@ -170,7 +170,7 @@ func TestMaskRegistry_ErasureLeavesNothingToDecryptAndNothingRecreatesIt(t *test
 		{alice, adoName, "alice-ado-access-token", "alice-ado-refresh-token"},
 		{bob, awsName, "bobs-aws-access-token-0", "bobs-aws-refresh-token-0"},
 	} {
-		if err := a.reg.AddGlobalUntil(g.owner, g.name, time.Now(), time.Now().Add(time.Hour), []byte(g.access), []byte(g.refresh)); err != nil {
+		if err := a.reg.AddGlobalUntil(0, g.owner, g.name, time.Now(), time.Now().Add(time.Hour), []byte(g.access), []byte(g.refresh)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -259,7 +259,11 @@ func TestMaskRegistry_ErasureLeavesNothingToDecryptAndNothingRecreatesIt(t *test
 
 	// A person who signs in again is registered under a NEW key generation: a
 	// destroyed one is never revived to hold a value.
-	if err := a2.reg.AddGlobal(alice, awsName, time.Now(), []byte("alice-aws-token-after-signing-in-again")); err != nil {
+	generation, err := a2.reg.GlobalGeneration(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a2.reg.AddGlobal(generation, alice, awsName, time.Now(), []byte("alice-aws-token-after-signing-in-again")); err != nil {
 		t.Fatal(err)
 	}
 	var v int

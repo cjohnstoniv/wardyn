@@ -7580,8 +7580,19 @@ state.
   only its cache. A credential with no owner (the operator namespace) has no
   subject key and stays in the registering process; none exists today. A split
   migrator and app role install grants the app role `SELECT, INSERT, UPDATE,
-  DELETE` on `mask_values`, `SELECT, UPDATE` on `mask_gen` and `DELETE` on
-  `run_mask_manifest`. **SSH exec, SFTP and direct-tcpip were never masked**
+  DELETE` on `mask_values`, `SELECT, UPDATE` on `mask_gen`, `SELECT, INSERT, UPDATE`
+  on `mask_owner_erasures` (migration `0134_mask_owner_erasures`) and `DELETE` on
+  `run_mask_manifest`. A `mask_copies` erase advances the owner's durable fence
+  even when no values exist. Credential reads, renewals and sign-in exchanges
+  snapshot the committed cursor before obtaining material; global registration
+  refuses if that owner was erased after the snapshot. A deliberate new sign-in
+  takes a new snapshot. Fences survive retention and restarts. Cached globals
+  are applied only by ordered reads: an erased value is dropped on each replica's
+  next fresh read, without a delayed registration restoring it locally. A global
+  registration succeeds only after its rows have been applied and its values are
+  available to mask; key destruction that makes a new row unreadable refuses the
+  credential. Previously cached retired values retain their existing grace. Bytes
+  already handed out, including previously built maskers, cannot be revoked. **SSH exec, SFTP and direct-tcpip were never masked**
   (`sshgateway_channels.go`), so none of them is covered by any of this.
 
 Six OTHER pieces are now Postgres-backed, so they survive a crash and no longer

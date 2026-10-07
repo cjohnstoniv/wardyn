@@ -606,6 +606,7 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 	if !found {
 		return blob, awsSSORefreshSpentSentence
 	}
+	cur.maskGeneration = blob.maskGeneration
 	blob = cur
 	now = s.cfg.Now()
 	if !blob.renewable(now) || !blob.needsRefresh(now) {
@@ -682,7 +683,7 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 	// the same reason the capture path masks globally: one credential is reused
 	// across every run that selects this lane. The access token is let go one
 	// grace after its expiry even if no later refresh replaces it (#151).
-	if err := s.cfg.MaskRegistry.AddGlobalUntil(scope.rowOwner(), scope.ssoSecret(), s.cfg.Now(), next.ExpiresAt,
+	if err := s.cfg.MaskRegistry.AddGlobalUntil(blob.maskGeneration, scope.rowOwner(), scope.ssoSecret(), s.cfg.Now(), next.ExpiresAt,
 		[]byte(next.AccessToken), []byte(next.RefreshToken), []byte(next.ClientSecret)); err != nil {
 		slog.ErrorContext(ctx, "wardynd: the renewed AWS SSO tokens could not be recorded for masking; not stored", slog.Any("err", err))
 		s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeUnavailable)
@@ -761,6 +762,7 @@ func (s *Server) storedPairAfterSupersededCreate(ctx context.Context, scope awsS
 	if err != nil || !found || !stored.servableFor(s.cfg.Now(), awsSSORefreshServeFloor) {
 		return blob, awsSSORefreshSpentSentence
 	}
+	stored.maskGeneration = blob.maskGeneration
 	return stored, ""
 }
 
