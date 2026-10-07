@@ -301,6 +301,9 @@ extraObjects:
             - destination:
                 host: '{{ include "wardyn.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local'
                 port:
+                  # Keep ssh.port above 1023: the gateway listens on 443 and
+                  # wardynd cannot, and the chart refuses a lower port because it
+                  # would roll out green with no listener behind it.
                   number: 2222     # ssh.port
 ```
 
