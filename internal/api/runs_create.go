@@ -672,23 +672,25 @@ func (s *Server) applySSHLaneWarnings(ctx context.Context, req createRunRequest,
 // hosts dispatched here are the hosts that were graded. Extracted verbatim
 // from handleCreateRun.
 func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, gw grantWiring, wsRefs []types.Workspace, legacyRepo string,
-	scmSite types.SiteConfig,
+	scmSite types.SiteConfig, directGitHubAdded []string,
 ) {
-	// One action for every lane that widens the allowlist; `kind` names the lane.
+	// Direct GitHub candidates were bounded before grading; audit them only now
+	// that a run exists, alongside the dispatch-only additions.
 	auditAdded := func(kind string, added []string) {
 		if len(added) > 0 {
 			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.egress.add",
 				runID.String(), "success", mustJSON(map[string]any{"kind": kind, "added_domains": added})))
 		}
 	}
+	auditAdded("github_direct", directGitHubAdded)
 	auditAdded("workspace", unionWorkspaceEgress(spec, wsRefs))
 	// Repo clone host(s) each referenced workspace needs: a
 	// non-GitHub HTTPS clone (GitLab, self-hosted git) reaches its forge as an
 	// ordinary egress host, and nothing else in this union adds it — so a real run
 	// of a workspace whose only access is anonymous read got NO clone host and the
 	// clone was proxy-denied, even though the confined Verify (which unions
-	// workspaceCloneEgress via confinedEgressDomains) proved it. GitHub sources add
-	// nothing here by design (they route through the on-segment broker). This makes
+	// workspaceCloneEgress via confinedEgressDomains) proved it. Direct GitHub
+	// candidates were bounded before grading; brokered clones need no host. This makes
 	// promoteSkipHosts' "wired into every scan/verify for free" comment true for a
 	// real run too.
 	var cloneAdded []string
