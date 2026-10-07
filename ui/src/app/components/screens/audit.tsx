@@ -218,12 +218,18 @@ function describeEvent(e: AuditEvent): string {
     return `LLM content scan (${e.action.slice("llm.scan.".length)}) for ${e.target || "an unknown host"}`;
   }
   if (e.action === "credential.revoke") return AUDIT.REVOKE_RUN_CREDENTIALS;
-  if (e.action === "credential.expired.delete") {
+  // "Removed" only on a row whose deletion happened; a failure row says what
+  // was not removed. Any other outcome reads as the raw line.
+  if (e.action === "credential.expired.delete" && (e.outcome === "success" || e.outcome === "failure")) {
+    const ok = e.outcome === "success";
     const reason = e.data?.reason;
     if (reason === "invalid_grant") {
-      return e.data?.after_lost_reply === true ? AUDIT.EXPIRED_DELETE_LOST_REPLY : AUDIT.EXPIRED_DELETE_REFUSED;
+      if (e.data?.after_lost_reply === true) {
+        return ok ? AUDIT.EXPIRED_DELETE_LOST_REPLY : AUDIT.EXPIRED_DELETE_LOST_REPLY_FAILED;
+      }
+      return ok ? AUDIT.EXPIRED_DELETE_REFUSED : AUDIT.EXPIRED_DELETE_REFUSED_FAILED;
     }
-    if (reason === "expired") return AUDIT.EXPIRED_DELETE_EXPIRED;
+    if (reason === "expired") return ok ? AUDIT.EXPIRED_DELETE_EXPIRED : AUDIT.EXPIRED_DELETE_EXPIRED_FAILED;
   }
   const verb = ACTION_VERB[e.action];
   if (verb) return e.target ? `${capitalize(verb)} — ${e.target}` : capitalize(verb);
