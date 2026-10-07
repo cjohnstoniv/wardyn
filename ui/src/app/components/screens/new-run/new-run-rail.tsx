@@ -26,7 +26,7 @@ import { ADO } from "../../../lib/ado-entra-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
 import { NO_BARRIER, RAIL, RAIL_CHECK, RAIL_PROVIDER, RAIL_SETUP } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
-import { useOperator, useRequestIdentity, useUserViewSuperAdmin } from "../../wardyn/operator-context";
+import { useOperator, useUserViewSuperAdmin } from "../../wardyn/operator-context";
 import { useViewAccess } from "../../wardyn/console-view";
 import { PolicyRemedy } from "../../wardyn/policy-remedy";
 import { useModelAccessDoor } from "../../wardyn/model-access-context";
@@ -39,6 +39,7 @@ import {
   DialogTitle,
 } from "../../ui/dialog";
 import type { RunRailProps } from "./new-run-rail-types";
+import { useDraftIdentity } from "./use-run-checks";
 import { getAuthGeneration } from "../../../lib/api/core";
 import { RunRailSummary } from "./new-run-rail-summary";
 
@@ -81,7 +82,7 @@ export function RunRail({
   // #1328 review round 2, R2-1 — who can reach the Environment step from
   // here, see the noBarrier reason line below.
   const operator = useOperator();
-  const identity = useRequestIdentity();
+  const identity = useDraftIdentity();
   const live = React.useRef({ identity, draftRevision: launch.draftRevision });
   live.current = { identity, draftRevision: launch.draftRevision };
   const mounted = React.useRef(true);

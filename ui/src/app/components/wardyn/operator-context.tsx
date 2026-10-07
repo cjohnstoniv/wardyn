@@ -464,8 +464,8 @@ export function useDemoVideoBaseUrl(): string | undefined {
   return React.useContext(MeIdentityContext).demoVideoBaseUrl;
 }
 
-/** The confirmed identity boundary for a draft that can issue requests. */
-export function useRequestIdentity() {
-  const { principal, operatorResolved: resolved, identityRevision: revision, authGeneration } = React.useContext(MeIdentityContext);
-  return { principal, resolved, revision, authGeneration };
+/** The confirmed identity boundary for a draft that can issue requests. Handed over as read:
+ *  its consumers are lazy and shape it there (useDraftIdentity), off the entry chunk. */
+export function useRequestIdentity(): Pick<MeIdentity, "principal" | "operatorResolved" | "identityRevision" | "authGeneration"> {
+  return React.useContext(MeIdentityContext);
 }

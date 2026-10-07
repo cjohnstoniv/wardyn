@@ -120,7 +120,7 @@ function renewVerdict(from: Renewal, me: Me, principalResolved: boolean): "other
 
 export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   const reauth = useReauth();
-  const { principal, resolved: principalResolved, authGeneration } = useRequestIdentity();
+  const { principal, operatorResolved: principalResolved, authGeneration } = useRequestIdentity();
   const confirmedGeneration = React.useRef(authGeneration);
   const observedGeneration = React.useSyncExternalStore(onAuthChange, getAuthGeneration);
   const needsConfirmation = observedGeneration !== authGeneration;

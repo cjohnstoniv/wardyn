@@ -16,7 +16,6 @@ import { useMyCapabilities } from "../../../lib/capabilities";
 import {
   useOperator,
   useOperatorResolved,
-  useRequestIdentity,
   useUserDrive,
 } from "../../wardyn/operator-context";
 import { strongestAvailable } from "../../wardyn/default-confinement";
@@ -41,10 +40,11 @@ import { providerCandidates as candidatesForAgent, providerGate } from "./model-
 import { useModelProviderPick } from "./use-model-provider-pick";
 import { useNewRunPolicy } from "./use-new-run-policy";
 import { useNewRunSources } from "./use-new-run-sources";
+import { useDraftIdentity } from "./use-run-checks";
 
 export function useNewRunController() {
   const navigate = useNavigate();
-  const identity = useRequestIdentity();
+  const identity = useDraftIdentity();
   const sources = useNewRunSources(identity);
   const { workspaces, savedPolicies, policiesLoaded, knownTitles, governanceContact, defaultRead } = sources;
   const refreshSources = sources.refresh, retryDefault = refreshSources, reloadWorkspaces = refreshSources;

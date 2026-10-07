@@ -10,6 +10,7 @@ import { isCredentialRefusal, runs, type RunWireInput } from "../../../lib/api/r
 import type { PreflightResult } from "../../../lib/types";
 import type { PolicyPreviewResult } from "../../../lib/types/policy-preview";
 import { getErrorMessage } from "../../../lib/format";
+import { useRequestIdentity } from "../../wardyn/operator-context";
 
 export const PREFLIGHT_FRESH_MS = 60_000;
 export const PREFLIGHT_DEBOUNCE_MS = 800;
@@ -22,6 +23,12 @@ export interface DraftIdentity {
   resolved: boolean;
   revision: number;
   authGeneration: number;
+}
+
+/** The shell's identity in the shape a draft's requests are fenced by. */
+export function useDraftIdentity(): DraftIdentity {
+  const { principal, operatorResolved: resolved, identityRevision: revision, authGeneration } = useRequestIdentity();
+  return { principal, resolved, revision, authGeneration };
 }
 
 interface Params {
