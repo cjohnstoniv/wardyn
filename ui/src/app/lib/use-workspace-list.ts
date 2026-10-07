@@ -16,12 +16,7 @@ import type { Workspace } from "./types";
 // have none" lead to the same next action. The Workspaces SCREEN deliberately
 // does NOT use this — it tracks loading/error/ready separately so a failed fetch
 // never renders as a confident "no workspaces".
-export function useWorkspaceList(scope = "") {
-  const currentScope = React.useRef(scope);
-  currentScope.current = scope;
-  const sequence = React.useRef(0);
-  const [loadedScope, setLoadedScope] = React.useState(scope);
-  React.useEffect(() => () => { sequence.current++; }, []);
+export function useWorkspaceList() {
   const [workspaces, setWorkspaces] = React.useState<Workspace[]>([]);
   // Starts true: nothing has been fetched yet, so the empty initial list must not
   // be rendered as a confirmed "none".
@@ -35,25 +30,19 @@ export function useWorkspaceList(scope = "") {
 
   // `clear` empties the list first — a dialog re-opening must not show the
   // previous session's workspaces while the new fetch is in flight.
-  const load = React.useCallback((clear = false) => {
+  const reload = React.useCallback((clear = false) => {
     if (clear) setWorkspaces([]);
     setLoading(true);
     setError(false);
-    const started = ++sequence.current;
-    const owner = currentScope.current;
-    const current = () => started === sequence.current && owner === currentScope.current;
-    return workspacesApi
+    workspacesApi
       .listWorkspaces()
-      .then((rows) => { if (current()) setWorkspaces(rows); })
+      .then(setWorkspaces)
       .catch(() => {
-        if (!current()) return;
         setWorkspaces([]);
         setError(true);
       })
-      .finally(() => { if (current()) { setLoadedScope(owner); setLoading(false); } });
+      .finally(() => setLoading(false));
   }, []);
-  // Fire-and-forget for every existing caller; `load` is for one that waits for the read to settle.
-  const reload = React.useCallback((clear = false) => void load(clear), [load]);
 
   // Refresh, kick a best-effort (re-)scan, then refresh again once it settles: a
   // local dir reaches "ready" inline, a repo launches its governed scan run — so
@@ -72,5 +61,5 @@ export function useWorkspaceList(scope = "") {
     [reload],
   );
 
-  return { workspaces: loadedScope === scope ? workspaces : [], loading: loadedScope !== scope || loading, error, load, reload, scanAndReload };
+  return { workspaces, loading, error, reload, scanAndReload };
 }

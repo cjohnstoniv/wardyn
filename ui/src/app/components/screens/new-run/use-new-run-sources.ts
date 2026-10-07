@@ -9,8 +9,8 @@ import { setup } from "../../../lib/api/setup";
 import { policies } from "../../../lib/api/policies";
 import { health, type PolicyRef } from "../../../lib/api/health";
 import { runs } from "../../../lib/api/runs";
-import type { RunPolicySpec, SetupStatus } from "../../../lib/types";
-import { useWorkspaceList } from "../../../lib/use-workspace-list";
+import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
+import type { RunPolicySpec, SetupStatus, Workspace } from "../../../lib/types";
 import { useDefaultPolicy } from "./use-default-policy";
 import type { DraftIdentity } from "./use-run-checks";
 
@@ -19,9 +19,10 @@ interface Sources {
   savedPolicies: { id: string; name: string; spec: RunPolicySpec }[];
   policiesLoaded: boolean;
   knownTitles: string[];
+  workspaces: Workspace[];
   governanceContact?: PolicyRef;
 }
-const EMPTY: Sources = { savedPolicies: [], policiesLoaded: false, knownTitles: [] };
+const EMPTY: Sources = { savedPolicies: [], policiesLoaded: false, knownTitles: [], workspaces: [] };
 
 /** Reads are scoped to the observed auth generation; advisory POSTs additionally require confirmed identity. */
 export function useNewRunSources(identity: DraftIdentity) {
@@ -31,9 +32,7 @@ export function useNewRunSources(identity: DraftIdentity) {
   const revision = JSON.stringify([identity, authGeneration, attempt]);
   const allowed = identity.authGeneration === authGeneration;
   const [loaded, setLoaded] = React.useState<{ revision: string; sources: Sources; pending: boolean }>();
-  const workspaceList = useWorkspaceList(revision);
   const defaultRead = useDefaultPolicy(revision, allowed);
-  const { load } = workspaceList;
   React.useEffect(() => {
     if (!allowed) return;
     let alive = true;
@@ -47,18 +46,18 @@ export function useNewRunSources(identity: DraftIdentity) {
       policies.listPolicies().then((saved) => update({ savedPolicies: saved.map(({ id, name, spec }) => ({ id, name, spec })), policiesLoaded: true })),
       health.whoami().then((me) => update({ governanceContact: me?.governance_contact ?? undefined })),
       runs.listRuns().then((titles) => update({ knownTitles: [...new Set(titles.map((run) => (run.title ?? "").trim()).filter(Boolean))].sort() })),
-      load(true),
+      // Read here, not through the shared list hook: a list from an earlier owner or revision is dropped with the rest.
+      workspacesApi.listWorkspaces().then((workspaces) => update({ workspaces })),
     ]).then(() => update({}, false));
     return () => { alive = false; };
-  }, [revision, allowed, load]);
+  }, [revision, allowed]);
   const refresh = React.useCallback(() => setAttempt((n) => n + 1), []);
   const sources = allowed && loaded?.revision === revision ? loaded.sources : EMPTY;
   return {
     ...sources,
-    workspaces: workspaceList.workspaces,
     defaultRead,
     revision,
-    pending: !allowed || loaded?.revision !== revision || loaded.pending || defaultRead.status === "loading" || workspaceList.loading,
+    pending: !allowed || loaded?.revision !== revision || loaded.pending || defaultRead.status === "loading",
     refresh,
   };
 }
