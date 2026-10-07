@@ -1162,6 +1162,7 @@ extraObjects:
     kind: Gateway
     metadata:
       name: wardyn-ssh
+      namespace: istio-ingress     # the gateway pods' namespace
     spec:
       selector:
         istio: ingressgateway      # your ingress gateway pods' labels
@@ -1183,7 +1184,7 @@ extraObjects:
       hosts:
         - ssh.example.com
       gateways:
-        - wardyn-ssh
+        - istio-ingress/wardyn-ssh
       tcp:
         - match:
             - port: 443
@@ -1196,6 +1197,11 @@ extraObjects:
                   # would roll out green with no listener behind it.
                   number: 2222     # ssh.port
 ```
+
+`istio-ingress` here is the estate's own gateway namespace, where the Gateway
+sits beside the gateway pods. The `networkPolicy.ingress.from` peer list also
+applies to the console `http` rule, so the gateway namespace can reach the
+console port too; a `podSelector` for the gateway pods on that peer narrows it.
 
 `-verify_hostname %h` is what checks the certificate names the host
 (`-servername` only sends SNI); add `-CAfile <path>` when the listener's
