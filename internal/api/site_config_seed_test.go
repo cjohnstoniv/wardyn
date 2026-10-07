@@ -112,6 +112,39 @@ func TestSiteConfigSeedCheck(t *testing.T) {
 	assertSetupCheckBlocking(t, chk)
 }
 
+// The proxy matches any entry of these lists, so the same entries in another
+// order are not a disagreement, and comparing them leaves the stored order alone.
+func TestSiteConfigSeedCheck_ReorderedLists(t *testing.T) {
+	seed := &SiteConfigSeed{
+		UpstreamProxyNoProxy: []string{".corp.internal", "10.0.0.0/8"},
+		InternalHosts: []types.InternalHost{
+			{HostSuffix: "git.corp.internal", CIDRs: []string{"10.0.0.0/8", "172.16.0.0/12"}},
+			{HostSuffix: "pkg.corp.internal"},
+		},
+	}
+	sc := types.SiteConfig{
+		UpstreamProxyNoProxy: []string{"10.0.0.0/8", ".corp.internal"},
+		InternalHosts: []types.InternalHost{
+			{HostSuffix: "pkg.corp.internal"},
+			{HostSuffix: "git.corp.internal", CIDRs: []string{"172.16.0.0/12", "10.0.0.0/8"}},
+		},
+	}
+	if chk, ok := statusCheckSeeded(sc, seed); ok {
+		t.Errorf("reordered lists reported as a disagreement: %s", chk.Detail)
+	}
+	if sc.UpstreamProxyNoProxy[0] != "10.0.0.0/8" || sc.InternalHosts[0].HostSuffix != "pkg.corp.internal" ||
+		sc.InternalHosts[1].CIDRs[0] != "172.16.0.0/12" || seed.UpstreamProxyNoProxy[0] != ".corp.internal" {
+		t.Errorf("the compare reordered its inputs: database %+v, seed %+v", sc, seed)
+	}
+	// A different entry is still a disagreement, in either list.
+	sc.UpstreamProxyNoProxy[1] = ".other.internal"
+	sc.InternalHosts[1].CIDRs = []string{"10.0.0.0/8"}
+	chk, ok := statusCheckSeeded(sc, seed)
+	if !ok || !strings.Contains(chk.Detail, "upstream_proxy_no_proxy, internal_hosts") {
+		t.Errorf("row = %+v (present %v); want one naming upstream_proxy_no_proxy and internal_hosts", chk, ok)
+	}
+}
+
 func statusCheckSeeded(sc types.SiteConfig, seed *SiteConfigSeed) (SetupCheck, bool) {
 	for _, c := range siteConfigStatusChecks(nil, sc, nil, seed) {
 		if c.ID == "site_config_seed" {

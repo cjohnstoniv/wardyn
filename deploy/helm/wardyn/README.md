@@ -1140,9 +1140,8 @@ When the only way in is port 443, terminated by a TLS-terminating listener
 such as an Istio ingress gateway, each person's `ssh` wraps SSH in TLS through
 `ssh.proxyCommand` (`WARDYN_SSH_PROXY_COMMAND`, rendered verbatim and shown by
 the run-detail card and `wardyn run ssh`), and the listener unwraps it onto
-the Service's `ssh` port, which the chart marks `appProtocol: tcp`. The chart
-ships no Istio template: `extraObjects` renders your Gateway and
-VirtualService with the release, each through `tpl`.
+the Service's `ssh` port. The chart ships no Istio template: `extraObjects`
+renders your Gateway and VirtualService with the release, each through `tpl`.
 
 ```yaml
 ssh:
@@ -1163,6 +1162,7 @@ extraObjects:
     kind: Gateway
     metadata:
       name: wardyn-ssh
+      namespace: istio-ingress     # the gateway pods' namespace
     spec:
       selector:
         istio: ingressgateway      # your ingress gateway pods' labels
@@ -1184,7 +1184,7 @@ extraObjects:
       hosts:
         - ssh.example.com
       gateways:
-        - wardyn-ssh
+        - istio-ingress/wardyn-ssh
       tcp:
         - match:
             - port: 443
@@ -1192,8 +1192,18 @@ extraObjects:
             - destination:
                 host: '{{ include "wardyn.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local'
                 port:
+                  # Keep ssh.port above 1023: the gateway listens on 443 and
+                  # forwards to it. wardynd runs non-root with every capability
+                  # dropped, and on a runtime that does not allow unprivileged
+                  # low ports (the default before containerd 2.0) a lower port
+                  # rolls out Ready with no SSH listener behind it.
                   number: 2222     # ssh.port
 ```
+
+`istio-ingress` here is the estate's own gateway namespace, where the Gateway
+sits beside the gateway pods. The `networkPolicy.ingress.from` peer list also
+applies to the console `http` rule, so the gateway namespace can reach the
+console port too; a `podSelector` for the gateway pods on that peer narrows it.
 
 `-verify_hostname %h` is what checks the certificate names the host
 (`-servername` only sends SNI); add `-CAfile <path>` when the listener's
