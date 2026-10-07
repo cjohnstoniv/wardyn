@@ -318,6 +318,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	modelCred := mpChoice.modelCredential()
+	if mpChoice.renewAtLaunch {
+		clampWarnings = append(clampWarnings, fmt.Sprintf(mpBRRenewAtLaunch, mpChoice.provider.ID))
+	}
 
 	// The SAME autonomy gate launch runs, in the same place in the order
 	// (runs.go) and on the same folded spec + enforced class — called, not

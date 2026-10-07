@@ -562,9 +562,7 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 		return blob, awsSSORefreshUnavailableSentence
 	}
 	if !got {
-		slog.InfoContext(parent, "wardynd: a renewal of this AWS SSO credential is already in flight; serving the still-valid token",
-			slog.String("credential_source", awsSSOCredentialSourceLabel(scope)))
-		return blob, ""
+		return s.renewalInFlight(parent, scope, blob)
 	}
 	defer unlock()
 
@@ -619,7 +617,7 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 		}
 	}
 
-	resp, attempts, err := s.createAWSSSOTokenWithRetry(ctx, blob)
+	resp, attempts, afterLostReply, err := s.createAWSSSOTokenWithRetry(ctx, blob)
 	if err != nil {
 		spent := errors.Is(err, errAWSSSOCredentialSpent)
 		if spent {
@@ -635,13 +633,11 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 			if guarded {
 				dctx = secretstore.WithIfRevision(dctx, rev)
 			}
-			s.deleteSpentAWSSSOBlob(dctx, scope)
+			s.deleteSpentAWSSSOBlob(dctx, scope, afterLostReply)
 		}
 		slog.ErrorContext(ctx, "wardynd: renewing the captured AWS SSO credential failed",
-			slog.Bool("credential_spent", spent), slog.Any("err", err))
-		s.auditAWSSSORefresh(ctx, scope, "failure", map[string]any{
-			"provider": awsSSOProvider, "spent": spent, "error": err.Error(), "attempts": attempts,
-		})
+			slog.Bool("credential_spent", spent), slog.Bool("after_lost_reply", afterLostReply), slog.Any("err", err))
+		s.auditAWSSSORefresh(ctx, scope, "failure", awsSSORefreshFailureData(spent, err, attempts, afterLostReply))
 		if spent {
 			s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeSpent)
 			return blob, awsSSORefreshSpentSentence
@@ -783,21 +779,27 @@ func (s *Server) auditAWSSSORefresh(ctx context.Context, scope awsSSOScope, outc
 // errors are errors.Join'd so BOTH are in the row: two EOFs read as a network
 // story, an EOF then invalid_grant already says spent, now with attempts:2
 // beside it.
-func (s *Server) createAWSSSOTokenWithRetry(ctx context.Context, blob awsSSOBlob) (awsSSOTokenResponse, int, error) {
-	resp, err := s.createAWSSSOToken(ctx, blob)
+//
+// afterLostReply is the retry ending spent after a first attempt whose reply
+// was lost (awsSSOReplyLost): consistent with AWS having accepted that first
+// request and replaced the refresh token, never proof of it.
+func (s *Server) createAWSSSOTokenWithRetry(ctx context.Context, blob awsSSOBlob) (resp awsSSOTokenResponse, attempts int, afterLostReply bool, err error) {
+	resp, err = s.createAWSSSOToken(ctx, blob)
 	if err == nil || errors.Is(err, errAWSSSOCredentialSpent) {
-		return resp, 1, err
+		return resp, 1, false, err
 	}
+	// Classified on its own, before the join below makes the two errors one.
+	firstLost := awsSSOReplyLost(err)
 	select {
 	case <-ctx.Done():
-		return resp, 1, err
+		return resp, 1, false, err
 	case <-time.After(awsSSORefreshRetryDelay):
 	}
 	resp2, err2 := s.createAWSSSOToken(ctx, blob)
 	if err2 != nil {
-		return resp2, 2, errors.Join(err, err2)
+		return resp2, 2, firstLost && errors.Is(err2, errAWSSSOCredentialSpent), errors.Join(err, err2)
 	}
-	return resp2, 2, nil
+	return resp2, 2, false, nil
 }
 
 // createAWSSSOToken performs the SSO-OIDC CreateToken refresh_token grant.
@@ -832,7 +834,8 @@ func (s *Server) createAWSSSOToken(ctx context.Context, blob awsSSOBlob) (awsSSO
 	if err != nil {
 		return out, fmt.Errorf("aws sso create-token: marshal request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.awsSSOTokenEndpoint(blob.Region), bytes.NewReader(body))
+	tctx, written := traceRequestWritten(ctx)
+	req, err := http.NewRequestWithContext(tctx, http.MethodPost, s.awsSSOTokenEndpoint(blob.Region), bytes.NewReader(body))
 	if err != nil {
 		return out, fmt.Errorf("aws sso create-token: build request: %w", err)
 	}
@@ -848,7 +851,12 @@ func (s *Server) createAWSSSOToken(ctx context.Context, blob awsSSOBlob) (awsSSO
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return out, fmt.Errorf("aws sso create-token: %w", err)
+		err = fmt.Errorf("aws sso create-token: %w", err)
+		if written() {
+			// Sent in full, and no response came back: AWS may have acted on it.
+			err = awsSSOReplyLostError{err}
+		}
+		return out, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	// Bounded read: the body is four fields, and an unbounded read from a host
