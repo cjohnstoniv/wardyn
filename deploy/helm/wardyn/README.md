@@ -241,6 +241,14 @@ a negative value, or more than `3600` is capped to `3600` with a warning, includ
 use (admins are not clamped). On Kubernetes without metrics-server the CPU signal is off (see `/setup/status`), so a busy run
 that makes no egress calls and has no attach is also stopped after an hour.
 
+A run someone is attached to (a browser terminal, an SSH shell, an exec, sftp or `-L` channel) is not idle-stopped, as long
+as the attach's keepalive writes, made every 30 seconds, succeed; they are best effort and a failed one is dropped. To lengthen
+the hour for members, raise `auto_stop_after_sec` in the default policy rather than setting it to `0`: a ceiling of `0` removes
+the cap and also turns idle stop off for every run that does not set its own. Three more clocks are separate: idle pause
+(`pause_idle_after_sec` in a governance profile; the Kubernetes runner cannot freeze, so it never applies there), the lease
+(`ends_at`, none by default, set only by a profile's run limits) and `WARDYN_RUN_MAX_AGE` (off by default). See
+[Run lifetime](../../../docs/operations/run-lifetime.md#the-clocks-that-end-or-freeze-a-run).
+
 **Upgrade note — `/readyz` is a 0.6-and-later endpoint.** The readiness probe
 targets `/readyz`. From 0.6.0 the chart's own default image serves it: an empty
 `image.tag` resolves to `.Chart.AppVersion`, so a stock install
