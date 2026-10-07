@@ -53,7 +53,6 @@ var preflightInlinedWrappers = map[string]string{
 	"denyUserGovernance":          "runs_create_validate.go",
 	"denyUserRunQuota":            "runs_create_validate.go",
 	"denyUserCapability":          "runs_create_validate.go",
-	"denyUserSeededImage":         "runs_create_validate.go",
 	"resolveRunPolicy":            "inline_policy.go",
 	"boundUserSpec":               "inline_policy.go",
 	"validateRunTextFields":       "runs_create_fields.go",
@@ -61,9 +60,7 @@ var preflightInlinedWrappers = map[string]string{
 	"admitRepoSources":            "workspace_admission.go",
 	"denyUserWorkspaceProviders":  "workspace_providers.go",
 	"seedAndAdmitWorkspace":       "runs.go",
-	"getWorkspaceLaunchable":      "helpers.go",
 	"seedRequestDrive":            "user_drives_run.go",
-	"denyUserDrive":               "user_drives_run.go",
 	"enforceRunModelProvider":     "run_model_provider.go",
 	"authorizePreviewRequest":     "policy_preview.go",
 	"runRequestGovernance":        "run_request_governance.go",
@@ -151,9 +148,8 @@ func TestPreflightMirrorsLaunchGates(t *testing.T) {
 	}
 }
 
-// orderedServerCalls is serverCalls in source order, each name at its FIRST
-// call, with each preflightInlinedWrappers call replaced in place by the
-// wrapper's own calls (the order launch actually meets them in).
+// First calls determine the order launch meets each gate. Inline registered
+// wrappers so extracting a gate cannot hide it from either dry door.
 func orderedServerCalls(t *testing.T, fset *token.FileSet, fn *ast.FuncDecl, before token.Pos) []string {
 	t.Helper()
 	var out []string
@@ -196,28 +192,6 @@ func parseHandler(t *testing.T, fset *token.FileSet, file, name string) *ast.Fun
 	}
 	t.Fatalf("%s: no method %s", file, name)
 	return nil
-}
-
-// serverCalls collects the names of every `s.<Name>(…)` call in fn's body,
-// stopping at `before` when it is a real position (token.NoPos scans all of it).
-// `s.cfg.X.Y()` and package-level calls are deliberately not collected: this
-// guard is about the Server's own gate helpers.
-func serverCalls(fn *ast.FuncDecl, before token.Pos) map[string]bool {
-	out := map[string]bool{}
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		if before != token.NoPos && call.Pos() >= before {
-			return true
-		}
-		if name := serverMethodName(call); name != "" {
-			out[name] = true
-		}
-		return true
-	})
-	return out
 }
 
 // serverCallPos returns the position of the first call whose selector ends in

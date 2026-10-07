@@ -82,12 +82,12 @@ const composerWorkspaceTarget = "/home/agent/work"
 // run→workspace linkage the scan/verify/record uploads authorize on, so a user
 // run must never claim it.
 //
-// seededImageOwner is the ownership half of denyUserSeededImage's fix: the
+// seededImageOwner is the ownership half of seededImageRefusal's fix: the
 // OwnedBy of the workspace whose base_image just set req.Image, and "" in
 // every other case — including a member-owned workspace that set no image and an
 // operator-owned one that did. The callers' capability re-check keys on exactly
 // that emptiness, so returning the owner unconditionally would turn an
-// ownership-scoped guard into the unconditional variant denyUserSeededImage
+// ownership-scoped guard into the unconditional variant seededImageRefusal
 // exists to prevent — a catastrophic regression.
 // #656 M1: five distinct causes used to share one reason (reasonWorkspaceSeedFailed);
 // each return below now names its own, since a caller who gets one back cannot
@@ -181,7 +181,7 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 // gate: every onboarded workspace the spec's mount sources and repos resolve to must be one
 // the caller may launch against (mayLaunchWorkspace).
 //
-// The workspace_id door is authorized by getWorkspaceLaunchable before any
+// The workspace_id door is authorized by workspaceLaunchSelection before any
 // source is folded, but a source can also reach the spec WITHOUT naming an id —
 // a hand-authored inline or stored policy naming the host path directly. That
 // second door landed in the same room: validateWorkspaceSources admits the

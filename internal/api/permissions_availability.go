@@ -171,12 +171,3 @@ type errUngrantedWorkspaceRepo struct {
 func (e *errUngrantedWorkspaceRepo) Error() string {
 	return fmt.Sprintf("workspace %s (repo %q) is not granted to you", e.wsID, e.repo)
 }
-
-// refuseOrErrorCapabilityResolution answers boundUserSpec's (inline_policy.go)
-// narrowUserInlinePolicy error: an ungranted workspace_repos entry (#1259,
-// errUngrantedWorkspaceRepo) refuses with the same named 403 req.workspace_id
-// already gives; anything else is a genuine store failure and 500s exactly as
-// before. Always writes a response — the caller only needs to stop.
-func (s *Server) refuseOrErrorCapabilityResolution(w http.ResponseWriter, r *http.Request, cerr error) {
-	capabilityRunRefusal(cerr).write(s, w, r)
-}

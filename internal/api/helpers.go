@@ -376,28 +376,6 @@ func (s *Server) mayLaunchWorkspace(r *http.Request, ws types.Workspace) bool {
 	return ws.OwnedBy == "" || s.ownsWorkspaceOrAdmin(r, ws)
 }
 
-// getWorkspaceLaunchable loads the workspace a run REQUEST named and authorizes
-// the CALLER to launch against it (mayLaunchWorkspace). Callers must return
-// immediately when ok is false.
-//
-// It is getWorkspaceReadable's launch twin, and it exists because the create
-// path had no caller-scoped gate at all: seedRequestWorkspace resolved the id
-// through the store and folded its sources onto the spec, and the only
-// member-mount check downstream is evaluated against the workspace OWNER's
-// roots — so per-principal roots did not constrain the caller, and any member
-// (or a security admin) could bind another member's host directory into a
-// sandbox they own.
-//
-// A foreign member-owned row gets denyForeignWorkspace's byte-identical 404,
-// which on this route is the SAME answer getWorkspaceOr404 gives a truly-missing
-// id — so the status is not an existence oracle across members. That parity is
-// why the load happens HERE rather than being folded into seedRequestWorkspace's
-// own 422 arm, which answers a different code for a missing row.
-func (s *Server) getWorkspaceLaunchable(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.Workspace, bool) {
-	ws, refusal := s.workspaceLaunchSelection(r, id)
-	return ws, !refusal.write(s, w, r)
-}
-
 // getRunOr404 loads a run, writing a 404 (missing) or 500 (store error) and
 // returning ok=false on failure — the run-noun twin of getWorkspaceOr404.
 // Callers must return immediately when ok is false.

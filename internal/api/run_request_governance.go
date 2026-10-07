@@ -21,6 +21,8 @@ func (s *Server) runCapabilityRefusal(r *http.Request, kind, value, target, msg 
 	return runDenied(authz.Deny(capKinds[kind].reason, target, msg))
 }
 
+// Only member-authored workspace images need this re-check. Applying it to
+// operator-owned workspaces would refuse their images wherever capImage is off.
 func (s *Server) seededImageRefusal(r *http.Request, seededOwner, image string) *runRefusal {
 	if seededOwner == "" {
 		return nil

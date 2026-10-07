@@ -681,7 +681,7 @@ allocation, and `read_only: false` against a read-only one is a `422`, never a
 widening (`driveMountFor`, `internal/api/user_drives_run.go`). A governance
 profile can shut the door outright: `GovernanceLimits.DenyUserDrive`
 (`internal/types/governance.go`) refuses the mount for every member under that
-profile as an audited `403` (`denyUserDrive` — `authz.denied`, reason
+profile as an audited `403` (`userDriveDoorRefusal` — `authz.denied`, reason
 `governance_profile`, target `runs.drive`, no new `reason` enum value).
 
 **Read-only is TOP-LEVEL on a runtime that does not declare `rro`.** A bind's
