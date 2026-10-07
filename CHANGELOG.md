@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.8.8] — 2026-10-07
+
 ## [0.8.7] — 2026-10-06
 
 ### Before you upgrade
