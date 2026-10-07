@@ -477,6 +477,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			ExtraScopes:          splitCSV(*f.oidcExtraScopes),
 			SecureCookies:        secureCookies,
 			RoleStampTTL:         *f.roleStampTTL,
+			SessionTTL:           *f.oidcSessionTTL,
 			RoleMap:              roleMap,
 			DefaultRole:          defaultRole,
 			// Legacy source: a 0.4.5 deployment's WARDYN_OIDC_OPERATOR_EMAILS

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // gapCovPostureFlags is a flag set validateBootPosture accepts, for a test to perturb in one field.
@@ -15,6 +16,7 @@ func gapCovPostureFlags() *bootFlags {
 	off, tail, retention, rate := false, 65536, 30, 20
 	seal, runner, rec, listen := "off", "none", "pg", ":8080"
 	empty, controlURL, internal := "", "https://wardynd:8443", ":8443"
+	var sessionTTL time.Duration
 	return &bootFlags{
 		ha: &off, allowMultiInstance: &off, runnerSel: &runner, recordingSel: &rec,
 		auditSeal: &seal, runOutputTailBytes: &tail, runOutputRetention: &retention, preflightRatePerMin: &rate,
@@ -22,11 +24,13 @@ func gapCovPostureFlags() *bootFlags {
 		controlURL: &controlURL, listen: &listen, uiListen: &empty, sshListen: &empty, uiOriginTemplate: &empty,
 		uiStripCookies: &empty, allowPlaintextListen: &off, orgURL: &empty, orgEnrolToken: &empty, memberMode: &off,
 		internalListen: &internal, metricsListen: &empty,
+		oidcSessionTTL: &sessionTTL,
 	}
 }
 
 func TestGapCovValidateBootPostureRefusals(t *testing.T) {
 	bad, token, none, negative, on := "bogus", "scim-bearer", "", -1, true
+	day, overDay := 24*time.Hour, 24*time.Hour+time.Second
 	for _, tc := range []struct {
 		name    string
 		mutate  func(f *bootFlags)
@@ -36,6 +40,8 @@ func TestGapCovValidateBootPostureRefusals(t *testing.T) {
 		{"an unknown audit seal mode", func(f *bootFlags) { f.auditSeal = &bad }, "refusing to start"},
 		{"the removed multi-instance flag", func(f *bootFlags) { f.allowMultiInstance = &on }, "-allow-multi-instance was removed"},
 		{"a negative output retention", func(f *bootFlags) { f.runOutputRetention = &negative }, "WARDYN_RUN_OUTPUT_RETENTION_DAYS is -1"},
+		{"a session TTL of 24h", func(f *bootFlags) { f.oidcSessionTTL = &day }, ""},
+		{"a session TTL above 24h", func(f *bootFlags) { f.oidcSessionTTL = &overDay }, "WARDYN_OIDC_SESSION_TTL is 24h0m1s"},
 		{"SCIM without OIDC", func(f *bootFlags) { f.scimToken, f.scimTokenNext = &token, &none }, "WARDYN_SCIM_TOKEN is set but OIDC is not configured"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

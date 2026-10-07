@@ -6,6 +6,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestValidateBootPosture pins the wiring, not the rules: each validator has
@@ -31,6 +32,7 @@ func TestValidateBootPosture(t *testing.T) {
 			tail, retention := 65536, 30
 			rate, seal := 20, "off"
 			off, runner, store := false, "none", "pg"
+			var sessionTTL time.Duration
 			f := &bootFlags{
 				ha: &off, allowMultiInstance: &off, runnerSel: &runner, recordingSel: &store,
 				auditSeal:            &seal,
@@ -54,6 +56,7 @@ func TestValidateBootPosture(t *testing.T) {
 				memberMode:           &tc.memberMode,
 				internalListen:       &internalListen,
 				metricsListen:        &tc.metricsListen,
+				oidcSessionTTL:       &sessionTTL,
 			}
 			err := validateBootPosture(f, tlsPosture{})
 			if tc.wantErr == "" {
@@ -94,5 +97,20 @@ func TestValidateRunOutputRetentionDays(t *testing.T) {
 	}
 	if err := validateRunOutputRetentionDays(-1); err == nil || !strings.Contains(err.Error(), "WARDYN_RUN_OUTPUT_RETENTION_DAYS") {
 		t.Fatalf("-1: error %v does not name the variable", err)
+	}
+}
+
+// TestValidateOIDCSessionTTL: unset and anything up to 24h boot; a negative TTL or one above 24h is
+// refused, naming the variable.
+func TestValidateOIDCSessionTTL(t *testing.T) {
+	for _, d := range []time.Duration{0, time.Minute, 8 * time.Hour, 24 * time.Hour} {
+		if err := validateOIDCSessionTTL(d); err != nil {
+			t.Fatalf("%s refused: %v", d, err)
+		}
+	}
+	for _, d := range []time.Duration{-time.Second, 24*time.Hour + time.Second, 48 * time.Hour} {
+		if err := validateOIDCSessionTTL(d); err == nil || !strings.Contains(err.Error(), "WARDYN_OIDC_SESSION_TTL") {
+			t.Fatalf("%s: error %v does not name the variable", d, err)
+		}
 	}
 }

@@ -345,6 +345,9 @@ type bootFlags struct {
 	// roleStampTTL bounds how old an API token's or console session's role
 	// stamp may be — see api.Config.RoleStampTTL. Zero is off.
 	roleStampTTL *time.Duration
+	// oidcSessionTTL replaces the ID token's expiry as a console session's lifetime — see
+	// oidc.Config.SessionTTL. Zero keeps the ID token's expiry.
+	oidcSessionTTL *time.Duration
 	// governanceChangeTTL is how long a governance change held for a second human waits — see
 	// api.Config.GovernanceChangeTTL.
 	governanceChangeTTL *time.Duration
@@ -627,6 +630,7 @@ func parseBootFlags() *bootFlags {
 		metricsListen:    flagEnv("metrics-listen", "WARDYN_METRICS_LISTEN", "", `plain-HTTP listen address that serves only GET /metrics with no credential, for a scraper that sends none, e.g. ":9464". Empty (default) disables it; must differ from -listen, -internal-listen, -ssh-listen and -ui-sandbox-listen`),
 
 		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn run ssh" refuses`),
+		oidcSessionTTL:         flagDuration("oidc-session-ttl", "WARDYN_OIDC_SESSION_TTL", 0, "how long a console session lasts from sign-in, instead of ending at the ID token's expiry (duration; 0 = the ID token's expiry; at most 24h)"),
 		roleStampTTL:           flagDuration("role-stamp-ttl", "WARDYN_ROLE_STAMP_TTL", 0, "how old an API token's or console session's role stamp may be before its owner must sign in again (duration; 0 = off)"),
 		governanceChangeTTL:    flagDuration("governance-change-ttl", "WARDYN_GOVERNANCE_CHANGE_TTL", 72*time.Hour, "how long a governance change held for a second human (WARDYN_GOVERNANCE_SECOND_HUMAN) waits for approval before it expires (duration; must be positive)"),
 		sshRoleTTL:             flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration)"),

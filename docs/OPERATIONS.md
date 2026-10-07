@@ -3082,8 +3082,12 @@ and never signs in again keeps the role and groups their tokens were minted with
 refused with `401` and the reason `role_stamp_stale` (an `authz.denied` audit row) until its owner
 signs in again, which re-stamps it with their current role. A console session older than the TTL is
 sent back through sign-in, so a stamp you can tune is also the age of the longest role a session
-can carry (a session already ends at the ID token's own expiry, so the TTL only matters when it is
-shorter than that). Wardyn keeps no identity-provider token and cannot re-derive a role on a timer;
+can carry (with `WARDYN_OIDC_SESSION_TTL` unset a session already ends at the ID token's own
+expiry, and with it set at that TTL after sign-in, so the role-stamp TTL only matters when it is
+shorter than the session). The ID token's expiry is today the only identity-provider-driven bound on
+a console session, and `WARDYN_ROLE_STAMP_TTL` is off by default. So a session lengthened with
+`WARDYN_OIDC_SESSION_TTL` (at most `24h`) should be paired with a role-stamp TTL, or a person
+disabled only at the identity provider keeps the console until the session TTL runs out. Wardyn keeps no identity-provider token and cannot re-derive a role on a timer;
 re-login is the only refresh. Turning the TTL on asks every token holder to sign in once, because
 the backfill dated existing stamps at mint. A login never revives a revoked token, and a stamp is
 one statement, so a failed re-stamp leaves that person's tokens stale, never half-updated.
