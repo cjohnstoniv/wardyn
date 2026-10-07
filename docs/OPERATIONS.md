@@ -5905,10 +5905,19 @@ upstream proxy, the gateway must be reachable FROM that upstream** — with
 dial (the gateway included) is CONNECTed through the corp proxy by the transport,
 never dialled directly. A gateway the corp proxy cannot reach, but the sidecar
 can resolve and reach itself, is what `upstream_proxy_no_proxy` is for: list its
-host there and the gateway is dialled directly instead, then admitted by
-`internal_hosts` like any other internal address. If the corp proxy is the only
-route to the gateway, leave it off the bypass list and declare it in
-`internal_hosts` alone.
+host there and the gateway is dialled directly instead. If the corp proxy is the
+only route to the gateway, leave it off the bypass list. That routing choice is
+all the brokered route needs.
+
+**Do not add the gateway to `internal_hosts` for the brokered route.** The route
+works without it whichever hop dials, and the lift is by host, not by route: it
+removes the private-address guard for that host on the ordinary path too. A
+sandbox `CONNECT` to the gateway host on another port (its port 22, say) passes
+the `allowed_domains` entry above and is refused `builtin:private-ip` by the
+guard; with the lift it is allowed (`rule_source: site-config:internal-host`).
+`internal_hosts` is for a private endpoint that is not a provider's configured
+gateway: "Bedrock on a private endpoint" above is that case, its dials take the
+ordinary guard, and they do need the lift.
 
 Two invariants carry over unchanged: the `egress_redirects` lane above still
 points the AGENT'S OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`
