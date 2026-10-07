@@ -750,6 +750,7 @@ const reasonCredentialInventoryNoMeta = "credential_inventory_no_meta"
 const (
 	reasonRecordingStoreUnavailable = "recording_store_unavailable"
 	reasonRecordingTooLarge         = "recording_too_large"
+	reasonRecordingErased           = "recording_erased"
 	reasonRecordingInvalidPart      = "recording_invalid_part" // {part} is not canonical decimal >= 2 (handleUploadRecordingPart)
 	// reasonRecordingPartLimit is recording.upload's ONLY name for a part
 	// above types.RecordingMaxParts — the wire reason AND the nested

@@ -34,6 +34,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -47,6 +48,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 )
 
 // uploadDialTimeout/uploadClientTimeout bound how long a finished task can be
@@ -305,25 +308,17 @@ func deliver(srcPath, outDir string, upload func() error) error {
 	return nil
 }
 
-// copyToDir copies srcPath into dstDir, keeping only the base filename.
 func copyToDir(srcPath, dstDir string) error {
-	if err := os.MkdirAll(dstDir, 0o750); err != nil {
-		return fmt.Errorf("mkdir: %w", err)
+	store, err := recording.NewFSStore(dstDir)
+	if err != nil {
+		return err
 	}
-	dst := filepath.Join(dstDir, filepath.Base(srcPath))
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return fmt.Errorf("open src: %w", err)
 	}
 	defer src.Close()
-
-	f, err := os.Create(dst)
-	if err != nil {
-		return fmt.Errorf("create dst: %w", err)
-	}
-	defer f.Close()
-	_, err = io.Copy(f, src)
-	return err
+	return store.SaveRecordingFile(context.Background(), filepath.Base(srcPath), src)
 }
 
 // uploadCast PUTs the recording file to uploadURL with Bearer auth. The server
