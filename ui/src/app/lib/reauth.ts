@@ -30,8 +30,6 @@ export interface Renewal {
   securityOperator: boolean;
   /** session_expires_at at the click, in epoch milliseconds. */
   expiresAt: number;
-  /** The banner already read "expired" at the click. */
-  expired: boolean;
   /** The sign-in window the click opened; null when the browser refused it. */
   popup: Window | null;
 }

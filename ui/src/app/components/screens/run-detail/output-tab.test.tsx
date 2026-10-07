@@ -269,14 +269,56 @@ describe("OutputTab — interactive run, nothing kept", () => {
     expect(screen.getByText(RUN_OUTPUT.interactiveNoneDesc)).toBeInTheDocument();
   });
 
-  it("recording off, run STOPPED: no nothing-kept sentence and no Recording link", async () => {
+  // Wardyn did stop these runs, so neither "it did not end through a Wardyn
+  // stop" nor "only when Wardyn stops it for you" is true of them.
+  it.each(["STOPPED", "ARCHIVED"])(
+    "recording off, run %s: the server's nothing-is-kept sentence, and no Recording link",
+    async (state) => {
+      recording("none");
+      refuse("run_output_interactive", 409);
+      await mount({ live: false, state });
+      expect(screen.getByText(RUN_OUTPUT.interactiveTitle)).toBeInTheDocument();
+      expect(
+        screen.getByText("Nothing is kept from this interactive session, and recording is off on this deployment."),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(RUN_OUTPUT.interactiveDesc)).toBeNull();
+      expect(screen.queryByText(RUN_OUTPUT.interactiveNoneDesc)).toBeNull();
+      expect(screen.queryByRole("button", { name: RUN_OUTPUT.interactiveLink })).toBeNull();
+    },
+  );
+
+  // The pane snapshot row is written a moment after the run reaches STOPPED:
+  // a read in between is refused as interactive, and must not be the verdict.
+  it("recording off, run STOPPED seconds ago: says it is saving, re-reads, and renders the snapshot", async () => {
+    vi.useFakeTimers();
+    recording("none");
+    getMock
+      .mockRejectedValueOnce(new HttpError(409, "refused", "run_output_interactive"))
+      .mockResolvedValue(out({ source: "pane_snapshot", output: "user@sandbox:~$ " }));
+    await mount({ live: false, state: "STOPPED", endedAt: new Date(Date.now() - 2000).toISOString() });
+    expect(getMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(RUN_OUTPUT.savingTitle)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_OUTPUT.interactiveTitle)).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(RUN_OUTPUT.sourcePane)).toBeInTheDocument();
+    expect(screen.getByTestId("run-output-text").textContent).toBe("user@sandbox:~$ ");
+    expect(screen.queryByText(RUN_OUTPUT.savingTitle)).toBeNull();
+  });
+
+  it("recording off, run STOPPED long ago: the answer stands and nothing re-reads", async () => {
+    vi.useFakeTimers();
     recording("none");
     refuse("run_output_interactive", 409);
-    await mount({ live: false, state: "STOPPED" });
+    await mount({ live: false, state: "STOPPED", endedAt: aheadByHours(-24) });
     expect(screen.getByText(RUN_OUTPUT.interactiveTitle)).toBeInTheDocument();
-    expect(screen.getByText(RUN_OUTPUT.interactiveDesc)).toBeInTheDocument();
-    expect(screen.queryByText(RUN_OUTPUT.interactiveNoneDesc)).toBeNull();
-    expect(screen.queryByRole("button", { name: RUN_OUTPUT.interactiveLink })).toBeNull();
+    expect(screen.queryByText(RUN_OUTPUT.savingTitle)).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(1);
   });
 
   it("recording on: today's text and the Recording link", async () => {

@@ -46,6 +46,9 @@ export const RUN_OUTPUT = {
     "An interactive run keeps its last screen only when Wardyn stops it for you, and only the run's owner or an operator sees it.",
   interactiveNoneDesc:
     "Nothing was kept from this interactive session: it did not end through a Wardyn stop, and recording is off on this deployment.",
+  // The server's own sentence for a run Wardyn did stop, with no snapshot taken
+  // (interactiveNothingKept, internal/api/run_output.go).
+  interactiveStoppedDesc: "Nothing is kept from this interactive session, and recording is off on this deployment.",
   interactiveLiveTitle: "No last screen yet",
   interactiveLiveDesc: "This session is still open. Wardyn keeps its last screen if it stops the run.",
   interactiveLink: "Open the Recording tab →",
