@@ -208,6 +208,18 @@ metrics:
     labels:
       release: prometheus
     interval: 30s
+  # The dedicated unauthenticated listener, with metrics.listener.from
+  # replacing its same-namespace default peer.
+  listener:
+    enabled: true
+    port: 9464
+    from:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: monitoring
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: prometheus
 
 # Raised above the 70s default; the render must carry the operator's value.
 terminationGracePeriodSeconds: 90

@@ -762,6 +762,32 @@ metrics:
     labels: {}
     # Scrape interval (e.g. "30s"). Unset: the Prometheus default applies.
     interval: ""
+  # Opt-in dedicated listener (WARDYN_METRICS_LISTEN) that serves ONLY
+  # GET /metrics, in plain HTTP, with NO credential, for a stock Prometheus that
+  # scrapes without a bearer token. Off by default. /metrics on the console port
+  # keeps its operator gate, and the ServiceMonitor above keeps using that.
+  # The port is a named container port (`metrics`) and is deliberately NOT on
+  # the Service: scrape the pod (the chart adds the prometheus.io/scrape, /port
+  # and /path pod annotations; your own podAnnotations win). Read the chart
+  # README's "Scraping /metrics without a credential" first: anyone who reaches
+  # this port reads fleet and capacity counts, approval decisions and your
+  # notification channel ids, and with networkPolicy.enabled=false that is the
+  # whole pod network.
+  listener:
+    enabled: false
+    # 9464: clear of wardynd's other ports (8080, 8443, 2222, 8081) and of
+    # Prometheus's own 9090.
+    port: 9464
+    # NetworkPolicy ingress peers for this port ONLY. Empty (default): pods in
+    # this namespace that are not run pods (wardyn.managed absent). Setting it
+    # REPLACES that default; name your Prometheus, e.g.
+    #   - namespaceSelector:
+    #       matchLabels: {kubernetes.io/metadata.name: monitoring}
+    #     podSelector:
+    #       matchLabels: {app.kubernetes.io/name: prometheus}
+    # A peer that selects every namespace (an empty namespaceSelector with no
+    # podSelector narrowing it) is refused at render.
+    from: []
 
 podAnnotations: {}
 

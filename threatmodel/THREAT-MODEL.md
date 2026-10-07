@@ -3523,6 +3523,57 @@ every tool (`--dangerously-skip-permissions`), and the interactive lanes have no
 Wardyn gate in the path. The approver there is the human in the pane. codex-cli has
 no hold lane, so there is no gate for a repository config to pre-empt.
 
+### The unauthenticated metrics listener (opt-in)
+
+`WARDYN_METRICS_LISTEN` (Helm `metrics.listener.enabled`, off by default) opens a
+second, plain-HTTP listener that answers `GET /metrics` with **no credential**
+and `404` to everything else (`api.Server.MetricsListenerHandler`,
+`cmd/wardynd/boot_metrics.go`). `/metrics` on the console port keeps its
+`requireOperator` gate. Boot refuses a metrics address equal to the console,
+internal, SSH or UI-sandbox listener, so the open route never sits on an
+address an authenticated route uses.
+
+**What a reader who reaches the port learns.** The same body the gated route
+serves: fleet and capacity counts (active runs by state, unschedulable runs,
+CPU and memory reservations per runner kind, the age of the oldest active run,
+runs finished by terminal state, launch and start-wait latency), approval
+decisions, credential-mint, credential re-auth and AWS SSO sign-in-renewal
+outcomes, egress-deny and auth-failure volumes, audit spool, sink and partition
+health, sweep tick times, the eBPF sensor's event counts, and the operator's
+approval-notification channel ids. The labelled series, every label, and where
+its values come from:
+
+| Series | Label | Values come from |
+| --- | --- | --- |
+| `wardyn_runs_total` | `state` | the terminal run states (`types.RunState`) |
+| `wardyn_runs_active` | `state` | the non-terminal run states (`types.RunState`) |
+| `wardyn_runs_cpu_millis_held`, `wardyn_runs_memory_mib_held` | `runner` | the runner kind recorded on the run (`runner_kind`, else `runner_target`): `docker` or `k8s` |
+| `wardyn_approval_decisions_total` | `decision` | `approved` or `denied` (`approvalDecided`) |
+| `wardyn_drive_refusals_total` | `reason` | the closed `driveRefusalReasons` list |
+| `wardyn_sso_refresh_total` | `outcome` | the closed list `success`, `spent`, `transport_error`, `unavailable` |
+| `wardyn_credential_reauth_total` | `outcome` | the closed list `requested`, `resolved`, `expired`, `cancelled`, `timeout` |
+| `wardyn_run_start_wait_seconds_sum`, `_count` | `reason` | the closed `startWaitReasons` list (Kubernetes wait reasons, else `other`) |
+| `wardyn_audit_sink_drops_total` | `sink` | the sink type's name: `webhook`, `syslog` or `file` |
+| `wardyn_approval_notify_failed_total`, `wardyn_approval_notify_suppressed_total` | `channel` | **the operator's** channel ids in `WARDYN_APPROVAL_NOTIFY` (`internal/notify`, grammar `[a-z0-9_-]{1,32}`) |
+| `wardyn_sweep_last_tick_seconds` | `sweep`, `result` | the `internal/sweephealth` sweep names; `attempt` or `success` |
+| `wardyn_groundtruth_observed_by_kind_total` | `kind` | the closed `groundtruthKinds` list (process exec, network connect) |
+
+Every other series is unlabelled. **No label carries a person or a run
+identifier**, and none carries a secret, a URL or a host name: every value but
+one comes from a closed list in the code. The exception is `channel`: Wardyn
+writes only the id the operator chose, never a person or run, but the grammar
+does not stop an operator naming a channel after a person or a team, and that
+name is then readable here. Choose neutral channel ids when the listener is on.
+
+**Who can reach it.** The chart keeps the port off the Service and gives it its
+own NetworkPolicy ingress rule: by default pods in the release namespace that
+are not run pods (`wardyn.managed` absent, the same exclusion the SSH and UI
+gateway rule uses), or the peers in `metrics.listener.from`, where a peer with
+an empty `namespaceSelector` and no `podSelector` is refused at render. Two
+cases widen that. With `networkPolicy.enabled=false` the chart renders no rule,
+and the port is open to the whole pod network. Outside the chart (compose, a
+host install) the bind address and the host firewall are the only control.
+
 ### Known latent vulnerabilities
 
 We publish known-uncalled findings here rather than let them sit in a scanner's

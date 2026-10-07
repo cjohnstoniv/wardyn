@@ -147,6 +147,51 @@ networkPolicy:
 `deploy/helm/wardyn/ci/all-on-values.yaml` carries exactly that pair, beside
 the `prometheus.io/scrape` pod annotation it advertises.
 
+## Scraping without a credential: the dedicated listener
+
+A scraper that sends no bearer token (a stock Prometheus with only the
+`prometheus.io/*` pod annotations) can use a second, opt-in listener instead
+of the console port. Set `WARDYN_METRICS_LISTEN` (flag `-metrics-listen`,
+e.g. `:9464`; [ENV.md](../ENV.md)) and wardynd serves `GET /metrics` there in
+plain HTTP with **no credential**: the same body the gated route answers. Every
+other method and path is a `404`, so nothing else the console serves is
+reachable on that port. It is off by default, and boot refuses an address equal
+to `WARDYN_LISTEN`, `WARDYN_INTERNAL_LISTEN`, `WARDYN_SSH_LISTEN` or
+`WARDYN_UI_SANDBOX_LISTEN`.
+
+`/metrics` on the console port keeps its operator gate whether or not the
+listener is on, and the chart's ServiceMonitor keeps using it.
+
+**Who can reach the port reads the body.** That is fleet and capacity counts,
+approval decisions, credential-mint and sign-in-renewal outcomes, and your
+approval-notification channel ids as labels. No label carries a person, a run
+id or a secret; `threatmodel/THREAT-MODEL.md` ("The unauthenticated metrics
+listener") lists every label and its source. Restrict the port to your
+scraper.
+
+On Kubernetes, `metrics.listener.enabled=true` in the Helm chart sets the
+variable (default port `9464`), adds a container port named `metrics` that is
+**not** on the Service, adds the `prometheus.io/scrape`, `prometheus.io/port`
+and `prometheus.io/path` pod annotations (an operator's own `podAnnotations`
+key wins), and gives the port its own NetworkPolicy ingress rule. That rule
+admits pods in the release namespace that are not run pods by default;
+`metrics.listener.from` replaces that with the peers you name, which a
+Prometheus in another namespace needs:
+
+```yaml
+metrics:
+  listener:
+    enabled: true
+    from:
+      - namespaceSelector:
+          matchLabels: {kubernetes.io/metadata.name: monitoring}
+        podSelector:
+          matchLabels: {app.kubernetes.io/name: prometheus}
+```
+
+With `networkPolicy.enabled=false` there is no rule at all, and the port is
+open to the whole pod network.
+
 ## No core dumps, no attaching
 
 wardynd and wardyn-proxy hold credentials in memory, so each sets

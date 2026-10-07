@@ -1177,6 +1177,50 @@ previous section: it replaces the same-namespace default), and
 `metrics.serviceMonitor.labels` must match the Prometheus
 `serviceMonitorSelector`.
 
+## Scraping `/metrics` without a credential
+
+`metrics.listener.enabled=true` turns on wardynd's dedicated metrics listener
+(`WARDYN_METRICS_LISTEN`) for a Prometheus that scrapes pods by annotation and
+sends no bearer token. It is off by default. On that port wardynd serves
+`GET /metrics` in plain HTTP with **no credential**, and a `404` for everything
+else.
+
+```yaml
+metrics:
+  listener:
+    enabled: true
+    port: 9464          # default; must differ from every other wardynd port
+    from:               # replaces the default peer (see below)
+      - namespaceSelector:
+          matchLabels: {kubernetes.io/metadata.name: monitoring}
+        podSelector:
+          matchLabels: {app.kubernetes.io/name: prometheus}
+```
+
+What the chart renders:
+
+- a container port named `metrics` that is **not** on the Service, so nothing
+  reaches it through the Service or an Ingress; scrape the pod;
+- the `prometheus.io/scrape: "true"`, `prometheus.io/port` and
+  `prometheus.io/path: /metrics` pod annotations. A key you set in
+  `podAnnotations` wins over the chart's;
+- its own NetworkPolicy ingress rule for that port. The default peer is pods
+  in this namespace that are not run pods (`wardyn.managed` absent).
+  `metrics.listener.from` replaces it. `networkPolicy.ingress.from` never
+  applies to this port, and a peer with an empty `namespaceSelector` and no
+  `podSelector` is refused at render.
+
+`/metrics` on the `http` port keeps its operator gate, and the ServiceMonitor
+above keeps scraping that one with its bearer Secret. The two routes serve the
+same body.
+
+**Anyone who reaches the port reads the body:** fleet and capacity counts,
+approval decisions, credential-mint and sign-in-renewal outcomes, and your
+approval-notification channel ids. No label carries a person or run identifier
+(`threatmodel/THREAT-MODEL.md`, "The unauthenticated metrics listener", lists
+them all). With `networkPolicy.enabled=false` the port is open to the whole pod
+network.
+
 ## UI sandbox gateway
 
 `uiSandbox.enabled` relays one policy-declared loopback port inside a run's
