@@ -111,6 +111,24 @@ browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
   or an operator may read these rows, including gaps; a foreign security admin
   gets the same refusal as if no recording output existed. A stored row remains
   available under that gate if recording is later disabled.
+- **Recording recovery has a fixed budget.** A successful eligible upload queues
+  recovery durably before its receipt. Terminal finalization and authorized reads
+  can attempt it; the elected leader retries pending work immediately on startup
+  and every minute. Each source read has a ten-second budget, and a leader pass
+  shares ten seconds across a page of at most 200 runs. Decoded output is masked
+  in bounded 512 KiB batches before tail truncation; every batch still refreshes
+  the shared registry. A valid large joined recording can time out on every
+  attempt because each retry reads from the beginning. A timeout keeps the work
+  pending and preserves any earlier final row; it does not certify an empty or
+  complete capture. An unfinished claim permits takeover after five minutes, and
+  selection favors never-claimed work, then the oldest claim, so one slow cast
+  yields later passes to other runs. This bounds work, not delivery latency or
+  backlog capacity: sustained load can exceed what the leader recovers before
+  `api.RunSecretGrace` removes the run's masking manifest. Lost coverage refuses
+  further source reads and yields a gap unless a better row already exists;
+  expired output retention retires the obligation without recreating output.
+  Keep the original recording when it is needed under its own retention policy;
+  a durable recovery obligation does not guarantee a derived output row.
 - **Persistent output.** Direct stdout lives outside the recording store and
   works with `WARDYN_RECORDING_STORE=off`. With
   `WARDYN_RUN_OUTPUT_PERSIST` on (the default) the final tail of each run is
@@ -1128,7 +1146,10 @@ are independent copies. A failure after the derived fence leaves the recordings 
 incomplete, so retry it rather than treating every copy as erased.
 
 Split migrator/app-role installations grant the app role `SELECT, INSERT, UPDATE`
-on `run_output_recording_recovery` for the source fence and recovery claims.
+on `run_output_recording_recovery` (migration `0135_run_output_recording_recovery`)
+for the source fence and recovery claims. Retain its erased rows with database
+backups; the absence of a run foreign key deliberately preserves the fence after
+run deletion or identifier reuse.
 
 The Postgres fence (migration `0133_recording_erasures`) survives retention and replica/process restarts. The filesystem
 store syncs its `.erased/<key>.cast` marker before deleting casts and the shared-volume `.log` fallback;

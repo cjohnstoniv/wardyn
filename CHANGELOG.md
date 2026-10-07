@@ -15,6 +15,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   root's `.erased` directory and `*.lock` files alongside the recordings.
 - Migration `0134_mask_owner_erasures` retains owner erasure fences independently of masking rows;
   retain this table with database backups and grant the app role `SELECT, INSERT, UPDATE`.
+- Migration `0135_run_output_recording_recovery` adds durable recovery claims and recording-only
+  output erasure fences. Preserve its erased rows across retention and backups, and grant the app
+  role `SELECT, INSERT, UPDATE` on `run_output_recording_recovery`.
 
 ### Added
 
@@ -29,6 +32,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- Recording-on Kubernetes task output can recover the available recording into an incomplete,
+  masked tail after the run ends. Durable claims support bounded restart retries; large joined
+  recordings or a backlog that outlives masking coverage may remain unrecoverable. Recording
+  reader permissions and durable erasure fences cover the derived copy; final stdout and pane
+  snapshots remain intact (#1831).
 - New Run's shared request builder refuses multiple workspace attachments with saved or default
   policies, preventing a referenced policy request from omitting extra attachments. Changing policy
   modes or attachments invalidates prior preflight results (#1901).

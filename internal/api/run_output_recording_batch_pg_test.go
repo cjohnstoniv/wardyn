@@ -88,7 +88,11 @@ func TestRecordingOutputPG_BatchesRefreshNewGlobalBeforeMasking(t *testing.T) {
 	done := make(chan struct{})
 	go func() { defer close(done); b.srv.FinishRunOutput(ctx, run.ID) }()
 	awaitRecordingSignal(t, opened)
-	if err := a.reg.AddGlobalUntil(maskOwner, "recording-batch-refresh", time.Now(), time.Now().Add(time.Hour), []byte("fresh-global-secret")); err != nil {
+	generation, err := a.reg.GlobalGeneration(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.reg.AddGlobalUntil(generation, maskOwner, "recording-batch-refresh", time.Now(), time.Now().Add(time.Hour), []byte("fresh-global-secret")); err != nil {
 		t.Fatal(err)
 	}
 	close(release)

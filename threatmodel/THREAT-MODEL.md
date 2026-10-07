@@ -378,8 +378,18 @@ forms, which no verbatim matcher catches.
   Erasure and retention never remove source tombstones. The recording commit
   and output-work commit are not atomic across stores: an interrupted,
   unacknowledged upload may require an authorized, cooldown-limited missing/gap
-  read to repair its output. Bounded leader retries recover acknowledged work;
-  loss of masking coverage or expiry of output retention prevents recovery.
+  read to repair its output. Acknowledged eligible uploads durably queue recovery,
+  but do not guarantee it finishes. Decoded output is masked in bounded batches
+  with fresh registry reads before tail truncation. Each source read and each
+  leader pass has a ten-second budget: a sufficiently large valid joined cast
+  can time out on every retry, which restarts from the beginning. A timeout
+  leaves pending work and preserves an earlier final row. Claim cooldown and
+  oldest-claim ordering let other runs proceed, but sustained backlog can outlive
+  `api.RunSecretGrace` and lose the masking manifest required for recovery.
+  Missing coverage refuses further reads; output retention is checked against
+  the current database clock at the final conditional write after blocking locks,
+  and expired work is retired without recreating output. This is bounded
+  best-effort recovery, not a completeness or delivery-latency guarantee.
 - **The registry is shared through Postgres and fails closed; four things stay
   outside it.** `secretmask.Registry` holds every value a run was given, and each
   replica's in-memory copy is a cache of what is committed. Dispatch commits a
