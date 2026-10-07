@@ -343,22 +343,13 @@ func run() error {
 		return err
 	}
 
-	defaultPolicy, err := api.LoadPolicySpec(*f.policyPath)
-	if err != nil {
-		return err
-	}
-	siteConfigSeed, err := api.LoadSiteConfigSeed(*f.siteConfigSeedFile)
-	if err != nil {
-		return err
-	}
-
 	// The gated AWS SSO endpoint test hatch — see resolveAWSSSOEndpointOverride.
 	awsSSOEndpointOverride, err := resolveAWSSSOEndpointOverride(f)
 	if err != nil {
 		return err
 	}
 
-	demoVideoBaseURL, governAdminRunsExempt, err := parseServeKnobs(f)
+	knobs, err := parseServeKnobs(f)
 	if err != nil {
 		return err
 	}
@@ -425,9 +416,9 @@ func run() error {
 		GovernAdminRuns:     *f.governAdminRuns,
 		LocalOperator:       lm.operator,
 		TrustDomain:         *f.trustDomain,
-		DefaultPolicy:       defaultPolicy,
+		DefaultPolicy:       knobs.defaultPolicy,
 		TrustedCAPEM:        trustedCAPEM,
-		DemoVideoBaseURL:    demoVideoBaseURL,
+		DemoVideoBaseURL:    knobs.demoVideoBaseURL,
 		RunnerTarget:        runnerTarget,
 		UIDir:               *f.uiDir,
 		ControlPlaneURL:     *f.controlURL,
@@ -436,7 +427,7 @@ func run() error {
 		OIDC:                feats.authn,
 
 		// WARDYN_GOVERN_ADMIN_RUNS_EXEMPT, already validated by parseGovernAdminRunsExempt.
-		GovernAdminRunsExempt: governAdminRunsExempt,
+		GovernAdminRunsExempt: knobs.governAdminRunsExempt,
 
 		SCIM: scimConfigValidated(f, posture),
 		// §I: nil unless WARDYN_DIRECTORY_PROVIDER is set — the whole feature
@@ -544,7 +535,7 @@ func run() error {
 
 	// The network settings a rebuilt database lost, from WARDYN_SITE_CONFIG_SEED_FILE,
 	// before anything is served. A no-op when the file is unset.
-	if err := srv.SeedSiteConfig(bootCtx, siteConfigSeed); err != nil {
+	if err := srv.SeedSiteConfig(bootCtx, knobs.siteConfigSeed); err != nil {
 		return err
 	}
 
@@ -841,13 +832,28 @@ func printGroundtruthToken(ctx context.Context, idp identity.Provider) error {
 	return nil
 }
 
-// parseServeKnobs validates the two free-text knobs api.Config carries parsed, once at boot,
-// failing closed on a malformed value: WARDYN_DEMO_VIDEO_BASE_URL and
+// serveKnobs are the values parseServeKnobs reads and checks for the Server.
+type serveKnobs struct {
+	defaultPolicy         types.RunPolicySpec
+	siteConfigSeed        *api.SiteConfigSeed
+	demoVideoBaseURL      string
+	governAdminRunsExempt []string
+}
+
+// parseServeKnobs reads, once at boot and failing closed on a malformed value, the two
+// files the Server is given (WARDYN_DEFAULT_POLICY and WARDYN_SITE_CONFIG_SEED_FILE) and
+// the two free-text knobs api.Config carries parsed: WARDYN_DEMO_VIDEO_BASE_URL and
 // WARDYN_GOVERN_ADMIN_RUNS_EXEMPT.
-func parseServeKnobs(f *bootFlags) (demoVideoBaseURL string, governAdminRunsExempt []string, err error) {
-	if demoVideoBaseURL, err = api.ValidateDemoVideoBaseURL(*f.demoVideoBaseURL); err != nil {
-		return "", nil, err
+func parseServeKnobs(f *bootFlags) (k serveKnobs, err error) {
+	if k.defaultPolicy, err = api.LoadPolicySpec(*f.policyPath); err != nil {
+		return serveKnobs{}, err
 	}
-	governAdminRunsExempt, err = parseGovernAdminRunsExempt(*f.governAdminRunsExempt, *f.governAdminRuns)
-	return demoVideoBaseURL, governAdminRunsExempt, err
+	if k.siteConfigSeed, err = api.LoadSiteConfigSeed(*f.siteConfigSeedFile); err != nil {
+		return serveKnobs{}, err
+	}
+	if k.demoVideoBaseURL, err = api.ValidateDemoVideoBaseURL(*f.demoVideoBaseURL); err != nil {
+		return serveKnobs{}, err
+	}
+	k.governAdminRunsExempt, err = parseGovernAdminRunsExempt(*f.governAdminRunsExempt, *f.governAdminRuns)
+	return k, err
 }

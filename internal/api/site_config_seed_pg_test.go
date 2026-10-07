@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -108,14 +109,15 @@ func TestPG_SiteConfigSeed_NoRow(t *testing.T) {
 // and every other key is byte-for-byte what it was.
 func TestPG_SiteConfigSeed_KeepsOtherKeys(t *testing.T) {
 	p := newReplicaPair(t)
-	putRawSiteConfig(t, p.poolA, `{
+	stamp := time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
+	putRawSiteConfig(t, p.poolA, strings.ReplaceAll(`{
 		"integrations": [{"id": "jira", "name": "Jira", "kind": "jira", "egress": ["jira.corp.example"],
-			"created_at": "2026-01-02T03:04:05Z", "updated_at": "2026-01-03T03:04:05Z"}],
+			"created_at": "STAMP", "updated_at": "STAMP"}],
 		"model_providers": {"providers": [{"id": "corp-gateway", "uid": "mp-0001", "name": "Corp gateway", "kind": "anthropic"}]},
 		"scm_hosts": ["git.corp.example"],
 		"sign_in_help_text": "Ask the platform team.",
-		"onboarding_completed_at": "2026-01-02T03:04:05Z",
-		"future_key": {"kept": true}}`)
+		"onboarding_completed_at": "STAMP",
+		"future_key": {"kept": true}}`, "STAMP", stamp))
 	before, _ := storedSiteConfig(t, p.poolA, seedNetworkKeys...)
 	seed := testSeed()
 	if err := p.a.SeedSiteConfig(context.Background(), seed); err != nil {
