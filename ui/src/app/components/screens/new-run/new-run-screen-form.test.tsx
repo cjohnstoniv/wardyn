@@ -548,7 +548,8 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
   // `useMyCapabilities(true)` breaks.
   it("passes useMyCapabilities the operator's own exemption (enabled=false for an operator)", async () => {
     renderScreen();
-    await waitFor(() => expect(myCapabilitiesMock).toHaveBeenCalledWith(false));
+    // The second argument scopes the read to the draft's identity revision.
+    await waitFor(() => expect(myCapabilitiesMock).toHaveBeenCalledWith(false, expect.any(String)));
   });
 });
 
