@@ -230,6 +230,19 @@ func TestRecordingOutput_PreservesIndependentFinalRowsAndOptOuts(t *testing.T) {
 	}
 }
 
+// A recordings erasure fences the derived copy only: direct stdout this process
+// still holds, with no stored row beside it, stays readable.
+func TestRecordingOutput_ErasedSourceLeavesIndependentLiveTailReadable(t *testing.T) {
+	f := newOutputFixture(t, func(c *Config) { c.RunOutputPersistOff = true })
+	writeExecOutput(t, f.open(t), "direct stdout\n")
+	if _, err := f.mem.EraseRecordingRunOutputs(t.Context(), []uuid.UUID{f.run.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if code, got := f.get(t); code != http.StatusOK || got.Output != "direct stdout\n" || got.Source != "stdout" {
+		t.Fatalf("independent tail after a recordings erasure = %d %+v", code, got)
+	}
+}
+
 func TestRecordingOutput_PrivacyIncludesGapsErasureAndDisabledBackend(t *testing.T) {
 	var mem *memRunOutputs
 	rr := newRecoveringRunner()

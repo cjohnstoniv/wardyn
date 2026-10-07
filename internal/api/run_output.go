@@ -315,7 +315,8 @@ type runOutputResponse struct {
 // (409); a final row, served on any replica with no manifest and no lease
 // (200); a live read of an uncovered run (503, ha-l2.0's refusal); a live
 // tail in this process (200); the live chunks another replica wrote (200); a pending row
-// with nothing to read (409, read again shortly);
+// with nothing to read (409, read again shortly); for recordingReader's callers
+// only, a run whose recording-derived output was erased (410, recording_erased);
 // an interactive run (409, which is also what a pane snapshot's non-reader
 // gets: only recordingReader's callers are served one); a run on a runner that
 // cannot capture output (409, run_output_not_captured); a runner whose capabilities
@@ -366,10 +367,6 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			writeServerError(w, r, "read run output", err)
-			return
-		}
-		if row.RecordingErased && !found {
-			writeErrorReason(w, http.StatusGone, reasonRecordingErased, "recordings for this run have been erased")
 			return
 		}
 	}
@@ -424,6 +421,10 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	case found:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept,
 			"this run's output is still being captured: read it again shortly")
+	case reader && row.RecordingErased:
+		// Last, not first: the fence covers the derived copy only, and direct
+		// stdout this process or another replica still holds was served above.
+		writeErrorReason(w, http.StatusGone, reasonRecordingErased, "recordings for this run have been erased")
 	case run.Interactive:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputInteractive, s.interactiveNothingKept(r, run))
 	case uncaptured:
