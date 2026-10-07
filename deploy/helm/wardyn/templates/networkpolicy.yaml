@@ -162,8 +162,10 @@ spec:
     - from:
         {{- with $ml.from }}
         {{- range . }}
-        {{- if and (hasKey . "namespaceSelector") (empty .namespaceSelector) (empty .podSelector) }}
-        {{- fail "wardyn: metrics.listener.from has a peer with an empty namespaceSelector and no podSelector, which admits every pod in every namespace to the unauthenticated metrics listener. Name the namespace (matchLabels: {kubernetes.io/metadata.name: monitoring}) or add a podSelector." }}
+        {{- /* A selector with no matchLabels and no matchExpressions is empty however it is spelled ({} or {matchLabels: {}}). */}}
+        {{- $ns := .namespaceSelector | default dict }}
+        {{- if and (hasKey . "namespaceSelector") (empty $ns.matchLabels) (empty $ns.matchExpressions) (empty .podSelector) }}
+        {{- fail "wardyn: metrics.listener.from has a peer with an empty namespaceSelector (no matchLabels and no matchExpressions) and no podSelector, which admits every pod in every namespace to the unauthenticated metrics listener. Name the namespace (matchLabels: {kubernetes.io/metadata.name: monitoring}) or add a podSelector." }}
         {{- end }}
         {{- end }}
         {{- toYaml . | nindent 8 }}

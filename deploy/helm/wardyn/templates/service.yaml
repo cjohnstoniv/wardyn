@@ -50,8 +50,6 @@ spec:
       port: {{ $ssh.port | default 2222 }}
       targetPort: ssh
       protocol: TCP
-      # Tells a mesh (Istio) this port is opaque TCP, so it never sniffs it as HTTP.
-      appProtocol: tcp
     {{- end }}
     {{- if $ui.enabled }}
     - name: ui
