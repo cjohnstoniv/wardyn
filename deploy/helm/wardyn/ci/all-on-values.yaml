@@ -168,6 +168,47 @@ ssh:
   enabled: true
   port: 2222
   advertiseHost: ssh.example.com
+  # The 443-only recipe (docs/SSH.md); helm-lint asserts it renders verbatim,
+  # so the %h placeholders must survive (no tpl on this value).
+  proxyCommand: openssl s_client -quiet -verify_return_error -verify_hostname %h -connect %h:443 -servername %h
+
+# The same recipe's Istio objects, through extraObjects: neither is a ConfigMap,
+# and the destination host proves tpl expanded the release's own names.
+extraObjects:
+  - apiVersion: networking.istio.io/v1
+    kind: Gateway
+    metadata:
+      name: wardyn-ssh
+    spec:
+      selector:
+        istio: ingressgateway
+      servers:
+        - port:
+            number: 443
+            name: tls-wardyn-ssh
+            protocol: TLS
+          tls:
+            mode: SIMPLE
+            credentialName: wardyn-ssh-tls
+          hosts:
+            - ssh.example.com
+  - apiVersion: networking.istio.io/v1
+    kind: VirtualService
+    metadata:
+      name: wardyn-ssh
+    spec:
+      hosts:
+        - ssh.example.com
+      gateways:
+        - wardyn-ssh
+      tcp:
+        - match:
+            - port: 443
+          route:
+            - destination:
+                host: '{{ include "wardyn.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local'
+                port:
+                  number: 2222
 
 # UI-sandbox gateway, the "other side" of ITS off-by-default switch: a third
 # port, on its OWN hostname (never the console's — that separation is the

@@ -105,7 +105,7 @@ func TestValidateBootPostureLogsTheWarnings(t *testing.T) {
 			runOutputRetention:  &retention,
 			preflightRatePerMin: &rate,
 			basePath:            &base, oidcIssuer: &issuer, oidcInternalIss: &internal, oidcRedirectURL: &redirect, controlURL: &control,
-			listen: &listen, uiListen: &ui, uiAdvertise: &advertise, sshListen: &ssh, uiOriginTemplate: &tmpl, uiStripCookies: &strip,
+			listen: &listen, uiListen: &ui, uiAdvertise: &advertise, sshListen: &ssh, sshProxyCommand: &tmpl, uiOriginTemplate: &tmpl, uiStripCookies: &strip,
 			allowPlaintextListen: &allow, orgURL: &org, orgEnrolToken: &tok, memberMode: &member,
 			internalListen: &ssh, metricsListen: &ssh,
 			oidcSessionTTL: &sessionTTL,

@@ -659,6 +659,10 @@ spec:
               value: {{ printf ":%d" (int ($ssh.port | default 2222)) | quote }}
             - name: WARDYN_SSH_ADVERTISE
               value: {{ printf "%s:%d" (required "wardyn: ssh.advertiseHost is required when ssh.enabled=true (the externally-reachable host agents/operators connect back to)" $ssh.advertiseHost) (int ($ssh.port | default 2222)) | quote }}
+            {{- with $ssh.proxyCommand }}
+            - name: WARDYN_SSH_PROXY_COMMAND
+              value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             {{- if $ui.enabled }}
             - name: WARDYN_UI_SANDBOX_LISTEN

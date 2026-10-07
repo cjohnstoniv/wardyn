@@ -420,6 +420,9 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateMetricsListenConfig(*f.metricsListen, *f.listen, *f.internalListen, *f.sshListen, *f.uiListen); err != nil {
 		return err
 	}
+	if err := validateSSHProxyCommand(*f.sshProxyCommand); err != nil {
+		return err
+	}
 	if err := validateBasePath(*f.basePath, *f.oidcIssuer, *f.oidcRedirectURL, *f.controlURL); err != nil {
 		return err
 	}

@@ -471,6 +471,14 @@ secretFiles:
 extraVolumes: []
 extraVolumeMounts: []
 
+# Extra Kubernetes objects rendered with this release, each passed through tpl
+# (so "{{ .Release.Namespace }}" and "{{ include "wardyn.fullname" . }}" work)
+# — e.g. the Istio Gateway and VirtualService an estate needs in front of the
+# SSH gateway, kept beside these values instead of in a fork of the chart. The
+# chart itself ships no Istio template. See the README's "SSH on a 443-only
+# estate".
+extraObjects: []
+
 # Optional default policy, baked into a ConfigMap and mounted read-only
 # instead of relying on the wardynd image's own baked-in default
 # (examples/policies/default.json — see README "Installation"). JSON TEXT,
@@ -695,6 +703,13 @@ ssh:
   # (WARDYN_SSH_ADVERTISE, combined with `port` above). Required when
   # enabled — the chart never guesses a public address.
   advertiseHost: ""
+  # An ssh ProxyCommand people's own ssh runs to reach the gateway, for an
+  # estate whose only way in is a TLS-terminating listener on 443
+  # (WARDYN_SSH_PROXY_COMMAND, rendered verbatim, never through tpl). wardynd
+  # publishes it on /healthz and never runs it; it refuses to boot on a control
+  # character, a newline, a single quote, or more than 512 bytes. Empty
+  # (default) publishes none. See docs/SSH.md "SSH on a 443-only estate".
+  proxyCommand: ""
 
 # UI-sandbox gateway (see docs/UI-SANDBOXES.md — a governed, ticket-gated
 # relay from a browser to ONE policy-declared loopback port inside a run's

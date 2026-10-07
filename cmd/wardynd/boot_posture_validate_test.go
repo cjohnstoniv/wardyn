@@ -14,9 +14,9 @@ import (
 // UI-sandbox, metrics-listener, base-path and hybrid refusals that run() relies on before migration.
 func TestValidateBootPosture(t *testing.T) {
 	for _, tc := range []struct {
-		name, listen, uiListen, metricsListen, orgURL, basePath, stripCookies string
-		memberMode                                                            bool
-		wantErr                                                               string // substring; empty = must succeed
+		name, listen, uiListen, metricsListen, orgURL, basePath, stripCookies, sshProxy string
+		memberMode                                                                      bool
+		wantErr                                                                         string // substring; empty = must succeed
 	}{
 		{name: "nothing set boots", listen: ":8080"},
 		{name: "hybrid without member mode refused", listen: ":8080", orgURL: "https://org.example.com", wantErr: "WARDYN_ORG_URL is set but WARDYN_USER_DESKTOP is not"},
@@ -24,6 +24,7 @@ func TestValidateBootPosture(t *testing.T) {
 		{name: "metrics listener on the internal listener's address refused", listen: ":8080", metricsListen: ":8443", wantErr: "same address as -internal-listen"},
 		{name: "a base path with a trailing slash refused", listen: ":8080", basePath: "/wardyn/", wantErr: "WARDYN_BASE_PATH"},
 		{name: "a malformed UI-sandbox cookie policy refused", listen: ":8080", uiListen: ":8081", stripCookies: "allow", wantErr: "WARDYN_UI_SANDBOX_STRIP_COOKIES"},
+		{name: "an SSH proxy command with a single quote refused", listen: ":8080", sshProxy: "nc '%h' 443", wantErr: "WARDYN_SSH_PROXY_COMMAND"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sshListen, originTemplate, enrolToken, allowPlaintext := "", "", "", false
@@ -48,6 +49,7 @@ func TestValidateBootPosture(t *testing.T) {
 				listen:               &tc.listen,
 				uiListen:             &tc.uiListen,
 				sshListen:            &sshListen,
+				sshProxyCommand:      &tc.sshProxy,
 				uiOriginTemplate:     &originTemplate,
 				uiStripCookies:       &tc.stripCookies,
 				allowPlaintextListen: &allowPlaintext,

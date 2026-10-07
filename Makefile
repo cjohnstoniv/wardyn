@@ -767,6 +767,13 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "name: WARDYN_SSH_LISTEN" || { echo "ssh.enabled rendered no WARDYN_SSH_LISTEN"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_SSH_ADVERTISE" || { echo "ssh.enabled rendered no WARDYN_SSH_ADVERTISE"; exit 1; }; \
 	echo "$$out" | grep -q "targetPort: ssh" || { echo "ssh.enabled rendered no ssh Service port"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_SSH_PROXY_COMMAND" | grep -qF 'value: "openssl s_client -quiet -verify_return_error -verify_hostname %h -connect %h:443 -servername %h"' || { echo "ssh.proxyCommand did not render verbatim as WARDYN_SSH_PROXY_COMMAND (it must never go through tpl)"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'appProtocol: tcp')" = "1" ] || { echo "appProtocol: tcp must render exactly once, on the ssh Service port"; exit 1; }; \
+	echo "$$out" | grep -B4 "appProtocol: tcp" | grep -q "targetPort: ssh" || { echo "appProtocol: tcp is not on the ssh Service port"; exit 1; }; \
+	echo "$$out" | grep -A2 '^            - name: ssh$$' | grep -q "protocol: TCP" || { echo "the ssh container port lost protocol: TCP (a container port has no appProtocol)"; exit 1; }; \
+	echo "$$out" | grep -q '^kind: Gateway$$' || { echo "extraObjects did not render its Gateway (an entry that is not a ConfigMap)"; exit 1; }; \
+	echo "$$out" | grep -q '^kind: VirtualService$$' || { echo "extraObjects did not render its VirtualService"; exit 1; }; \
+	echo "$$out" | grep -q "host: 'wardyn.default.svc.cluster.local'" || { echo "extraObjects did not go through tpl (the release's Service name is unexpanded)"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_UI_SANDBOX_LISTEN" || { echo "uiSandbox.enabled rendered no WARDYN_UI_SANDBOX_LISTEN — the chart would publish a port with no gateway behind it"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE" || { echo "uiSandbox.originTemplate did not render — every run would share one browser origin (threatmodel/THREAT-MODEL.md §5 #18)"; exit 1; }; \
 	echo "$$out" | grep -q "targetPort: ui" || { echo "uiSandbox.enabled rendered no ui Service port"; exit 1; }; \

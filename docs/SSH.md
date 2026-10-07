@@ -180,7 +180,16 @@ Host wardyn-<short-id>
   HostName <advertise-host>
   Port <port>
   User <run-id>
+  ProxyCommand <proxy-command>
 ```
+
+The `ProxyCommand` line is there only when the operator set
+`WARDYN_SSH_PROXY_COMMAND` (shown on `/healthz` as `ssh.proxy_command`; see
+[SSH on a 443-only estate](#ssh-on-a-443-only-estate)). With it, `--print`
+emits `ssh -o ProxyCommand='<proxy-command>' <run-id>@<advertise-host> -p <port>`,
+`--json` carries it as `proxy_command`, and `wardyn run ssh` connects through
+it only with `--advertised-proxy`: it is a command from the deployment that
+runs on your computer, so without the flag the CLI shows it and stops.
 
 **Verify on first connect**: the card also shows the host key fingerprint
 (`ED25519 SHA256:…`). Check it against what your client prompts before
@@ -225,6 +234,104 @@ where they are implemented:
   the *sandbox*, not in wardynd's pod, so a BYOI run still needs
   `sftp-server`/`socat` — see [Image contract](#image-contract-byoi). A
   cluster install does not supply them on the image's behalf.
+
+### SSH on a 443-only estate
+
+Some estates let nothing in but port 443, terminated by a TLS-terminating
+listener in front of the cluster (an Istio ingress gateway, say). The SSH
+gateway's listener is plain TCP, so `ssh` cannot reach it there as it is. The
+recipe wraps SSH in TLS on each person's computer and lets the listener
+unwrap it:
+
+1. The listener terminates TLS on 443 under a hostname of its own and passes
+   the bytes, as plain TCP, to the Service's `ssh` port.
+2. `ssh.proxyCommand` (`WARDYN_SSH_PROXY_COMMAND`) tells each person's `ssh`
+   to open that TLS connection first. The run-detail card and
+   `wardyn run ssh` carry it, so the copy-paste command works.
+
+In your own values file (Istio installed from its own charts; the Wardyn
+chart ships no Istio template, and `extraObjects` keeps these objects beside
+your values instead of in a fork of the chart):
+
+```yaml
+ssh:
+  enabled: true
+  advertiseHost: ssh.example.com   # the listener's own hostname for SSH
+  proxyCommand: openssl s_client -quiet -verify_return_error -verify_hostname %h -connect %h:443 -servername %h
+
+networkPolicy:
+  ingress:
+    from:
+      - podSelector: {}            # keep the same-namespace default peer
+      - namespaceSelector:         # and admit the ingress gateway's namespace
+          matchLabels:
+            kubernetes.io/metadata.name: istio-ingress
+
+extraObjects:
+  - apiVersion: networking.istio.io/v1
+    kind: Gateway
+    metadata:
+      name: wardyn-ssh
+    spec:
+      selector:
+        istio: ingressgateway      # your ingress gateway pods' labels
+      servers:
+        - port:
+            number: 443
+            name: tls-wardyn-ssh
+            protocol: TLS          # never HTTPS
+          tls:
+            mode: SIMPLE
+            credentialName: wardyn-ssh-tls
+          hosts:
+            - ssh.example.com
+  - apiVersion: networking.istio.io/v1
+    kind: VirtualService
+    metadata:
+      name: wardyn-ssh
+    spec:
+      hosts:
+        - ssh.example.com
+      gateways:
+        - wardyn-ssh
+      tcp:
+        - match:
+            - port: 443
+          route:
+            - destination:
+                host: '{{ include "wardyn.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local'
+                port:
+                  number: 2222     # ssh.port
+```
+
+- **`protocol: TLS`, not `HTTPS`.** `HTTPS` attaches an HTTP filter to the
+  server and breaks SSH; `TLS` with `tls.mode: SIMPLE` terminates TLS and
+  hands the `tcp:` route the raw stream. The chart marks the Service's `ssh`
+  port `appProtocol: tcp` so the mesh never sniffs it as HTTP.
+- **The certificate.** `credentialName` names a `kubernetes.io/tls` Secret in
+  the ingress gateway pods' namespace (not the Gateway object's), for the SSH
+  hostname.
+- **The NetworkPolicy.** Setting `networkPolicy.ingress.from` replaces the
+  same-namespace default, so list it again; the ssh rule passes the other
+  named peers through.
+- **The proxy command.** `-servername %h` only sends SNI, which the listener
+  routes on; `-verify_hostname %h` is what checks that the certificate names
+  the host, and `-verify_return_error` makes a failed check end the
+  connection. Port 443 is written out because `%p` expands to the advertised
+  SSH port (the chart always renders `host:ssh.port`; the `-p <port>` on the
+  card is harmless, the proxy command ignores it). When the listener's
+  certificate is not from a publicly trusted CA, add `-CAfile <path>` naming
+  a file every person keeps the CA at, e.g. `-CAfile ~/.ssh/wardyn-ca.pem`
+  (ssh runs the command through the person's shell, so `~` expands). Each
+  person needs `openssl` on their computer. The daemon never runs this value
+  and refuses to boot on a control character, a newline, a single quote, or
+  more than 512 bytes ([ENV.md](ENV.md)).
+- **Host keys are unaffected.** The SSH handshake runs end to end inside the
+  tunnel, so the fingerprint on the card is still the one to verify.
+- **Audit source IPs become the listener's.** The gateway sees the ingress
+  gateway pod's address, so `ssh.*` audit rows record that, not the person's.
+- **Nothing else needs it.** The browser terminal and `wardyn run attach`
+  already ride the console's own 443.
 
 ## 3. sftp
 

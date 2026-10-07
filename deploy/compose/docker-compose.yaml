@@ -509,6 +509,9 @@ services:
       # latter.
       WARDYN_SSH_LISTEN: "${WARDYN_SSH_LISTEN:-}"
       WARDYN_SSH_ADVERTISE: "${WARDYN_SSH_ADVERTISE:-}"
+      # Optional ProxyCommand the card and `wardyn run ssh` show (docs/SSH.md,
+      # "SSH on a 443-only estate"); advisory copy, wardynd never runs it.
+      WARDYN_SSH_PROXY_COMMAND: "${WARDYN_SSH_PROXY_COMMAND:-}"
       # UI-sandbox gateway (docs/UI-SANDBOXES.md), same off-by-default shape:
       # empty WARDYN_UI_SANDBOX_LISTEN means no listener and no relay cookie
       # key, whatever the port mapping above publishes. Turn it on with
