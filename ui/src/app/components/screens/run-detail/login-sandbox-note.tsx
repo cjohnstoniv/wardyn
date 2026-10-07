@@ -17,8 +17,14 @@
 //
 // Its own file because run-detail.tsx is six lines under the 1000-line cap
 // (scripts/check-file-size.sh) and this is a whole surface, not a line.
+import * as React from "react";
 import { KeyRound } from "lucide-react";
 import type { AgentRun } from "../../../lib/types";
+import { mayEnterRun } from "../../../lib/run-entry";
+import { useOperator, usePrincipal } from "../../wardyn/operator-context";
+// Lazy: the Runs list imports mayReadSignIn from this file, and the strip (its
+// copy, signin-progress) has no business in the entry chunk (bundle-split.test.ts).
+const RunSignInStrip = React.lazy(() => import("./run-sign-in-strip"));
 
 // The server-side task literal this note keys on. Mirrors harnessLoginTask
 // (internal/api/harnesscred.go) — a discriminator, never client input. Held to
@@ -70,16 +76,37 @@ export const LOGIN_SANDBOX_NOTE =
 // device code, the idle cap — describes a RUNNING sandbox, and the Runs list is
 // exactly where a KILLED or COMPLETED login run is reopened. A run that is still
 // PENDING has no terminal to point at either.
+// Whether this viewer's console may read this run's sign-in: a RUNNING AWS
+// sign-in run they may enter. `mayEnterRun`, never the unknown-identity arm,
+// which would fire a read the server then refuses and draw a false failure.
+export function mayReadSignIn(run: AgentRun, principal: string, operator: boolean): boolean {
+  return (
+    run.task === HARNESS_LOGIN_TASK &&
+    run.agent === AWS_SSO_LOGIN_AGENT &&
+    run.state === "RUNNING" &&
+    mayEnterRun(run, principal, operator)
+  );
+}
+
 export function LoginSandboxNote({ run }: { run: AgentRun }) {
+  const principal = usePrincipal();
+  const operator = useOperator();
   if (run.task !== HARNESS_LOGIN_TASK || run.agent !== AWS_SSO_LOGIN_AGENT) return null;
   if (run.state !== "RUNNING") return null;
   return (
-    <div
-      className="flex shrink-0 items-start gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground"
-      data-testid="login-sandbox-note"
-    >
-      <KeyRound className="mt-0.5 size-3.5 shrink-0 text-primary" />
-      <p>{LOGIN_SANDBOX_NOTE}</p>
-    </div>
+    <>
+      {mayReadSignIn(run, principal, operator) && (
+        <React.Suspense fallback={null}>
+          <RunSignInStrip runId={run.id} createdAt={run.created_at} />
+        </React.Suspense>
+      )}
+      <div
+        className="flex shrink-0 items-start gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground"
+        data-testid="login-sandbox-note"
+      >
+        <KeyRound className="mt-0.5 size-3.5 shrink-0 text-primary" />
+        <p>{LOGIN_SANDBOX_NOTE}</p>
+      </div>
+    </>
   );
 }

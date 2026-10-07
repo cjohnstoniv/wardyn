@@ -322,6 +322,14 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInterfaceTopKeys(outTs, "RunOutput"))).toEqual(new Set(goTags));
   });
 
+  // GET /runs/{id}/sign-in: RunSignIn mirrors runSignInResponse.
+  it("runSignInResponse (GET /runs/{id}/sign-in): full parity with the TS RunSignIn mirror", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/api/run_sign_in.go"), "utf8"), "runSignInResponse");
+    expect(goTags.length).toBeGreaterThanOrEqual(3);
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/run-sign-in.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(ts, "RunSignIn"))).toEqual(new Set(goTags));
+  });
+
   // Key custody (key-l3.4): GET /key-domains and the key-domain fields of the credential inventory.
   it.each([
     ["internal/api/key_domains.go", "keyDomainRow", "key-domains.ts", "KeyDomainRow"],

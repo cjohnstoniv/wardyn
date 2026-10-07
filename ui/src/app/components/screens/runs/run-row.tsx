@@ -20,12 +20,14 @@ import { relativeTime, getErrorMessage } from "../../../lib/format";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { OpenInUserView, runPath, useConsoleMode } from "../../wardyn/console-view";
 import { ownerLabel } from "../../wardyn/copy/console-view";
-import { usePrincipal } from "../../wardyn/operator-context";
+import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
 import { cn } from "../../ui/utils";
 import { repoLabel, rowHeadline } from "./board-groups";
 import { glyphKindFor, RowGlyph } from "./row-glyph";
-import { rowPresentation } from "./runs-model";
+import { rowPresentation, waitingSignInPresentation } from "./runs-model";
+import { mayReadSignIn } from "../run-detail/login-sandbox-note";
+import { useRunSignIn } from "../run-detail/use-run-sign-in";
 import { RUNS_ROW_ACTION } from "../../wardyn/copy/runs-landing";
 import { REVIVE, REVIVING, revivePolicy } from "../../wardyn/copy/run-lifetime";
 
@@ -59,7 +61,16 @@ export function RunRow({ run }: { run: AgentRun }) {
   const adminView = view === "admin";
   const principal = usePrincipal();
   const own = !!principal && run.created_by === principal;
-  const p = rowPresentation(run, adminView);
+  // M2 D4: the one row read, for this viewer's own RUNNING sign-in runs only. An
+  // attention row or a lease-ended run already says what it needs to. A failed
+  // read draws nothing.
+  const operator = useOperator();
+  const signIn = useRunSignIn(
+    run.id,
+    run.created_at,
+    mayReadSignIn(run, principal, operator) && !run.attention && run.lost_reason !== "ended",
+  );
+  const p = signIn.waiting && !signIn.failed ? waitingSignInPresentation() : rowPresentation(run, adminView);
   const glyph = glyphKindFor(p.hue, p.word, run.state);
   const title = rowHeadline(run);
   const href = runPath(view, run.id);

@@ -116,6 +116,7 @@ export const RUNS_ROW_WORD = {
   NEEDS_APPROVAL: "Needs your approval",
   NEEDS_DECISION: "Needs a decision",
   WAITING_FOR_ADMIN: "Waiting for an admin",
+  WAITING_SIGN_IN: "Waiting for sign-in",
   SANDBOX_STOPPED: "Sandbox stopped",
   RUNNING: "Running",
   STARTING: "Starting",
