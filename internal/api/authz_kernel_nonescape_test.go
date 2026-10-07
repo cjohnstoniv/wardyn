@@ -44,11 +44,11 @@ var kernelDoors = map[string][]string{
 	// run.create (and its dry run): the request's own fields, then the inline
 	// policy's entries, then the image a workspace seeds and the git rows its
 	// repos resolve to, then the model provider it will use.
-	"denyUserRequest":            {"capAgent", "capImage", "capPolicy", "capWorkspace"},
-	"narrowUserInlinePolicy":     {"capEgressHost", "capSecret", "capWorkspace"},
-	"denyUserSeededImage":        {"capImage"},
-	"denyUserWorkspaceProviders": {"capWorkspaceProvider"},
-	"enforceRunModelProvider":    {"capModelProvider"},
+	"runRequestGovernance":      {"capAgent", "capImage", "capPolicy", "capWorkspace"},
+	"narrowUserInlinePolicy":    {"capEgressHost", "capSecret", "capWorkspace"},
+	"seededImageRefusal":        {"capImage"},
+	"workspaceProvidersRefusal": {"capWorkspaceProvider"},
+	"authorizeRunModelProvider": {"capModelProvider"},
 	// A record session's model provider, chosen as a run's would be.
 	"recordProviderChoice": {"capModelProvider"},
 	// A revive or an extension, re-checked as the run's owner.

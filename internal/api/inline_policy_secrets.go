@@ -31,7 +31,8 @@ const (
 // Despite the name (kept for the inline call site it was written for — the
 // stored/default branch now also calls it, same check either way) it takes
 // a plain types.RunPolicySpec, not anything inline-specific.
-// It NEVER reads a secret VALUE — it consults Secrets.List (names only). The
+// Names come from Secrets.List; create/preflight also grade the ADO own-token
+// credential, while policy preview deliberately defers that readiness. The
 // returned status code is 422 (Unprocessable Entity) for every failure so the
 // create call fails closed: an inline policy whose grant references a
 // missing/forbidden secret would otherwise brick the run (a proxy-injection
@@ -310,6 +311,10 @@ func (s *Server) secretRefsOf(spec types.RunPolicySpec) ([]neededSecret, error) 
 // grant is read from at mint. With no reference there is nothing to check and
 // no secret store is required.
 func (s *Server) validateInlineSecretRefs(ctx context.Context, owner, subject string, spec types.RunPolicySpec) (int, error) {
+	return s.validateRunSecretRefs(ctx, owner, subject, spec, true)
+}
+
+func (s *Server) validateRunSecretRefs(ctx context.Context, owner, subject string, spec types.RunPolicySpec, credentials bool) (int, error) {
 	needed, err := s.secretRefsOf(spec)
 	if err != nil {
 		return http.StatusUnprocessableEntity, err
@@ -339,7 +344,7 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner, subject st
 	// person with no token of their own is refused here, with the reason,
 	// rather than started into a clone that fails inside the sandbox (adoGitGrants
 	// drops the grant where the row takes each person's own token instead).
-	needed, code, err := s.adoGitGrants(ctx, subject, needed, spec)
+	needed, code, err := s.adoGitGrants(ctx, subject, needed, spec, credentials)
 	if err != nil {
 		return code, err
 	}

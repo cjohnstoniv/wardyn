@@ -48,6 +48,9 @@ func TestADOStandingAtTheDoors(t *testing.T) {
 		}}
 		body := `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2",` +
 			`"workspace_repos":[{"repo":` + quote(adoTestRepo) + `,"target":"/work/repo"}],"azure_devops_capabilities":` + caps + `}}`
+		if path == policyPreviewPath {
+			forbidPreviewSideEffects(t, srv)
+		}
 		if who == "operator" {
 			return do(t, srv, http.MethodPost, path, adminToken, body), st, audit
 		}
@@ -112,7 +115,7 @@ func TestADOStandingAtTheDoors(t *testing.T) {
 		})
 	}
 	t.Run("the pre-split read id is a 400 at both doors", func(t *testing.T) {
-		for _, path := range []string{"/api/v1/runs", "/api/v1/runs/preflight"} {
+		for _, path := range []string{"/api/v1/runs", "/api/v1/runs/preflight", policyPreviewPath} {
 			w, _, _ := post(t, path, `["read"]`)
 			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"reason":"`+reasonADOCapabilityUnknown+`"`) ||
 				!strings.Contains(w.Body.String(), `azure_devops_capabilities[0]: \"read\" is not a grantable`) {
@@ -126,12 +129,14 @@ func TestADOStandingAtTheDoors(t *testing.T) {
 			t.Fatalf("create = %d: %s", w.Code, w.Body.String())
 		}
 	})
-	t.Run("preflight carries the narrowing", func(t *testing.T) {
-		w, _, _ := post(t, "/api/v1/runs/preflight", `["code_read","pr"]`)
-		var resp preflightResponse
-		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK ||
-			countEqual(resp.Warnings, sentence) != 1 {
-			t.Fatalf("preflight = %d %s", w.Code, w.Body.String())
+	t.Run("dry doors carry the narrowing", func(t *testing.T) {
+		for _, path := range []string{"/api/v1/runs/preflight", policyPreviewPath} {
+			w, _, _ := post(t, path, `["code_read","pr"]`)
+			var resp preflightResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK ||
+				countEqual(resp.Warnings, sentence) != 1 {
+				t.Fatalf("%s = %d %s", path, w.Code, w.Body.String())
+			}
 		}
 	})
 	// adoStandingAtDoor is pure in-memory: a dry run asks it with every outbound
@@ -154,14 +159,16 @@ func TestADOStandingAtTheDoors(t *testing.T) {
 			t.Fatalf("preflight = %d %s", w.Code, w.Body.String())
 		}
 	})
-	t.Run("preflight refuses a list nothing of which may stand", func(t *testing.T) {
-		w, _, _ := post(t, "/api/v1/runs/preflight", `["pr"]`)
-		if w.Code != http.StatusUnprocessableEntity {
-			t.Fatalf("preflight = %d, want 422: %s", w.Code, w.Body.String())
-		}
-		for _, want := range []string{`"reason":"` + reasonADOCapabilitiesNonePermitted + `"`, adoNonePermitted([]adoscope.Capability{adoscope.CapPR})[:40]} {
-			if !strings.Contains(w.Body.String(), want) {
-				t.Errorf("body %s does not carry %q", w.Body.String(), want)
+	t.Run("dry doors refuse a list nothing of which may stand", func(t *testing.T) {
+		for _, path := range []string{"/api/v1/runs/preflight", policyPreviewPath} {
+			w, _, _ := post(t, path, `["pr"]`)
+			if w.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("%s = %d, want 422: %s", path, w.Code, w.Body.String())
+			}
+			for _, want := range []string{`"reason":"` + reasonADOCapabilitiesNonePermitted + `"`, adoNonePermitted([]adoscope.Capability{adoscope.CapPR})[:40]} {
+				if !strings.Contains(w.Body.String(), want) {
+					t.Errorf("body %s does not carry %q", w.Body.String(), want)
+				}
 			}
 		}
 	})

@@ -278,6 +278,9 @@ func TestRefusalSentencesGolden(t *testing.T) {
 			case strings.HasSuffix(fn, ".denyUserCapability") && len(call.Args) == 6:
 				got = append(got, refusalSentence{"capKinds[" + types.ExprString(call.Args[2]) + "].reason",
 					types.ExprString(call.Args[4]), types.ExprString(call.Args[5])})
+			case strings.HasSuffix(fn, ".runCapabilityRefusal") && len(call.Args) == 5 && types.ExprString(call.Args[1]) != "kind":
+				got = append(got, refusalSentence{"capKinds[" + types.ExprString(call.Args[1]) + "].reason",
+					types.ExprString(call.Args[3]), types.ExprString(call.Args[4])})
 			case fn == "s.writeProviderRefusal" && len(call.Args) == 6:
 				// The model-provider 422 (#532) keeps its own envelope; its row is
 				// model_provider_unavailable (#987), keyed here by the credential flag.

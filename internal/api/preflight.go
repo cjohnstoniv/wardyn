@@ -270,10 +270,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// exist yet at preflight time (no grants have been minted) — the
 	// workspace + clone-host union below is the lane that can silently
 	// diverge without any grant ever being involved.
-	unionWorkspaceEgress(&spec, wsRefs)
-	for _, ws := range wsRefs {
-		unionAllowedDomains(&spec, workspaceCloneEgress(ws))
-	}
+	unionPreviewWorkspaceEgress(&spec, wsRefs)
 	// Which secrets actually exist (names only) — the SAME map compose builds,
 	// read where launch reads it (TestPreflightMirrorsLaunchGates pins the order).
 	presentSecrets := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))

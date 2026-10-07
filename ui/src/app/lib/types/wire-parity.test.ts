@@ -342,4 +342,24 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     const ts = readFileSync(join(root, "ui/src/app/lib/api", tsFile), "utf8");
     expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
   });
+  it.each([
+    ["policyPreviewResponse", "PolicyPreviewResult"],
+    ["policyPreviewSource", "PolicyPreviewSource"],
+    ["policyPreviewRepository", "PolicyPreviewRepository"],
+  ])("%s mirrors %s", (goName, tsName) => {
+    const go = readFileSync(join(root, "internal/api/policy_preview_facts.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/policy-preview.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goJSONTags(go, goName)));
+  });
+
+  it("policy-preview pending reasons have the same closed enum in Go and TS", () => {
+    const go = readFileSync(join(root, "internal/api/policy_preview_facts.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/policy-preview.ts"), "utf8");
+    const goValues = [...go.matchAll(/policyPreviewPending\s*=\s*"([a-z_]+)"/g)].map((m) => m[1]);
+    const pending = /export type PolicyPreviewPending =([\s\S]*?);/.exec(ts)?.[1] ?? "";
+    const tsValues = [...pending.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
+    expect(goValues).toHaveLength(8);
+    expect(new Set(tsValues)).toEqual(new Set(goValues));
+  });
+
 });

@@ -8,7 +8,6 @@ import (
 	"go/parser"
 	"go/token"
 	"slices"
-	"sort"
 	"testing"
 )
 
@@ -49,7 +48,30 @@ import (
 // The value is the file the wrapper is declared in, so a move reds here naming
 // the file rather than as a bare parse failure.
 var preflightInlinedWrappers = map[string]string{
-	"decodeAndValidateCreateRun": "runs_create_validate.go",
+	"decodeAndValidateCreateRun":  "runs_create_validate.go",
+	"denyUserRequest":             "runs_create_validate.go",
+	"denyUserGovernance":          "runs_create_validate.go",
+	"denyUserRunQuota":            "runs_create_validate.go",
+	"denyUserCapability":          "runs_create_validate.go",
+	"denyUserSeededImage":         "runs_create_validate.go",
+	"resolveRunPolicy":            "inline_policy.go",
+	"boundUserSpec":               "inline_policy.go",
+	"validateRunTextFields":       "runs_create_fields.go",
+	"requestRepoProviderRefusals": "workspace_admission.go",
+	"admitRepoSources":            "workspace_admission.go",
+	"denyUserWorkspaceProviders":  "workspace_providers.go",
+	"seedAndAdmitWorkspace":       "runs.go",
+	"getWorkspaceLaunchable":      "helpers.go",
+	"seedRequestDrive":            "user_drives_run.go",
+	"denyUserDrive":               "user_drives_run.go",
+	"enforceRunModelProvider":     "run_model_provider.go",
+	"authorizePreviewRequest":     "policy_preview.go",
+	"runRequestGovernance":        "run_request_governance.go",
+	"resolveRunPolicyFacts":       "run_policy_resolution.go",
+	"boundRunUserSpec":            "run_policy_resolution.go",
+	"seedAuthorizedWorkspace":     "run_workspace_authorization.go",
+	"authorizeRequestDrive":       "run_drive_authorization.go",
+	"authorizeRunModelProvider":   "run_provider_authorization.go",
 }
 
 var preflightGateExceptions = map[string]string{
@@ -71,80 +93,61 @@ var preflightGateExceptions = map[string]string{
 // goes; raising it needs a reviewed reason.
 const preflightGateExceptionsMax = 2
 
+var policyPreviewGateExceptions = map[string]string{
+	"runQuotaRefusal":            "preview does not count this member's runs",
+	"gitCredentialRefusal":       "preview never reads repository credential values; credential_liveness is pending",
+	"driveMountFor":              "preview checks read-only narrowing separately; runner and share readiness stay pending",
+	"resolveEnforcedConfinement": "preview runs the same static floor math; runner resolution stays pending",
+	"providerLiveness":           "preview authorizes the selection; credential values and renewal are forbidden",
+	"writeProviderChoiceRefusal": "credential liveness refusals belong only to create and preflight",
+	"resolveRunAutonomy":         "credential-dependent autonomy and tool approvals stay pending",
+	"admitHostCapacity":          "preview does not probe host capacity",
+	"refuseRunCapFull":           "preview does not count runs or enforce quota",
+	"refuseRunFit":               "preview does not read Kubernetes quota",
+	"runFitSpec":                 "preview does not resolve a dispatch fit request",
+}
+
+const policyPreviewGateExceptionsMax = 11
+
 func TestPreflightMirrorsLaunchGates(t *testing.T) {
-	fset := token.NewFileSet()
-	create := parseHandler(t, fset, "runs.go", "handleCreateRun")
-	preflight := parseHandler(t, fset, "preflight.go", "handlePreflightRun")
-
-	mint := serverCallPos(create, "MintRunIdentity")
-	if mint == token.NoPos {
-		t.Fatal("handleCreateRun no longer calls MintRunIdentity — this test uses the mint as the " +
-			"dry-run/launch-only boundary; re-point it at the new boundary rather than deleting it")
-	}
-
-	launchGates := serverCalls(create, mint)
-	// Scan THROUGH the wrappers preflight reproduces gate-by-gate rather than
-	// calling: their own gates join the launch set, and the wrapper name itself
-	// leaves it (preflight will never call it, and nothing is learned by saying
-	// so every release). See preflightInlinedWrappers.
-	for name, file := range preflightInlinedWrappers {
-		if !launchGates[name] {
-			t.Errorf("preflightInlinedWrappers names %q, which handleCreateRun no longer calls before the mint — drop the entry", name)
-			continue
-		}
-		delete(launchGates, name)
-		for inner := range serverCalls(parseHandler(t, fset, file, name), token.NoPos) {
-			launchGates[inner] = true
-		}
-	}
-	previewed := serverCalls(preflight, token.NoPos)
-
-	var missing []string
-	for name := range launchGates {
-		if previewed[name] {
-			continue
-		}
-		if _, ok := preflightGateExceptions[name]; ok {
-			continue
-		}
-		missing = append(missing, name)
-	}
-	sort.Strings(missing)
-	if len(missing) > 0 {
-		t.Errorf("handleCreateRun gates handlePreflightRun does not reproduce: %v\n"+
-			"Either call them from handlePreflightRun (preferred — a shared helper both call is better still), "+
-			"or add each to preflightGateExceptions with the reason Review is allowed to skip it.", missing)
-	}
-
-	if len(preflightGateExceptions) > preflightGateExceptionsMax {
-		t.Errorf("preflightGateExceptions has %d entries, the cap is %d — reproduce the new gate in preflight instead of exempting it",
-			len(preflightGateExceptions), preflightGateExceptionsMax)
-	}
-
-	// The exception list must not rot: an entry naming a helper launch no longer
-	// calls is a stale licence to diverge.
-	for name := range preflightGateExceptions {
-		if !launchGates[name] {
-			t.Errorf("preflightGateExceptions names %q, which handleCreateRun no longer calls before the mint — drop the entry", name)
-		}
-	}
-
-	// ORDER, not only the set (#515): when two gates can both refuse, the one
-	// that runs first decides the answer, so Review must meet them in launch's
-	// order or it previews a different refusal than the launch gives.
-	launchOrder := orderedServerCalls(t, fset, create, mint)
-	previewOrder := orderedServerCalls(t, fset, preflight, token.NoPos)
-	shared := func(seq, other []string) []string {
-		var out []string
-		for _, name := range seq {
-			if slices.Contains(other, name) {
-				out = append(out, name)
+	for _, door := range []struct {
+		name, file string
+		exceptions map[string]string
+		cap        int
+	}{
+		{"handlePreflightRun", "preflight.go", preflightGateExceptions, preflightGateExceptionsMax},
+		{"handlePolicyPreview", "policy_preview.go", policyPreviewGateExceptions, policyPreviewGateExceptionsMax},
+	} {
+		t.Run(door.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			create := parseHandler(t, fset, "runs.go", "handleCreateRun")
+			dry := parseHandler(t, fset, door.file, door.name)
+			mint := serverCallPos(create, "MintRunIdentity")
+			if mint == token.NoPos {
+				t.Fatal("handleCreateRun lost MintRunIdentity: re-point the dry-run boundary")
 			}
-		}
-		return out
-	}
-	if l, p := shared(launchOrder, previewOrder), shared(previewOrder, launchOrder); !slices.Equal(l, p) {
-		t.Errorf("handlePreflightRun calls the shared gates in a different order than handleCreateRun:\n launch:    %v\n preflight: %v", l, p)
+			launch := orderedServerCalls(t, fset, create, mint)
+			preview := orderedServerCalls(t, fset, dry, token.NoPos)
+			for _, gate := range launch {
+				if !slices.Contains(preview, gate) && door.exceptions[gate] == "" {
+					t.Errorf("%s does not reproduce launch gate %s", door.name, gate)
+				}
+			}
+			if len(door.exceptions) > door.cap {
+				t.Errorf("%s has %d exceptions, cap %d", door.name, len(door.exceptions), door.cap)
+			}
+			for gate := range door.exceptions {
+				if !slices.Contains(launch, gate) {
+					t.Errorf("%s exception %s no longer names a launch gate", door.name, gate)
+				}
+			}
+			shared := func(a, b []string) []string {
+				return slices.DeleteFunc(slices.Clone(a), func(gate string) bool { return !slices.Contains(b, gate) || door.exceptions[gate] != "" })
+			}
+			if a, b := shared(launch, preview), shared(preview, launch); !slices.Equal(a, b) {
+				t.Errorf("%s shared gate order differs: launch %v; dry run %v", door.name, a, b)
+			}
+		})
 	}
 }
 

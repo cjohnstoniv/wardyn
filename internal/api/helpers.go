@@ -394,15 +394,8 @@ func (s *Server) mayLaunchWorkspace(r *http.Request, ws types.Workspace) bool {
 // why the load happens HERE rather than being folded into seedRequestWorkspace's
 // own 422 arm, which answers a different code for a missing row.
 func (s *Server) getWorkspaceLaunchable(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.Workspace, bool) {
-	ws, ok := s.getWorkspaceOr404(w, r, id)
-	if !ok {
-		return types.Workspace{}, false
-	}
-	if s.mayLaunchWorkspace(r, ws) {
-		return ws, true
-	}
-	s.denyForeignWorkspace(w, r, ws)
-	return types.Workspace{}, false
+	ws, refusal := s.workspaceLaunchSelection(r, id)
+	return ws, !refusal.write(s, w, r)
 }
 
 // getRunOr404 loads a run, writing a 404 (missing) or 500 (store error) and

@@ -960,30 +960,7 @@ const capProvider403 = "you are not granted this deployment's %s provider — as
 // derived clone URL is computed HERE, once, so no call site can compare a bare
 // <org>/<name> against a base URL and miss.
 func (s *Server) denyUserWorkspaceProviders(w http.ResponseWriter, r *http.Request, target string, repos ...string) bool {
-	if len(repos) == 0 || s.cfg.Store == nil || s.runUngoverned(r.Context()) {
-		return false
-	}
-	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
-	if err != nil {
-		writeServerError(w, r, "get site config", err)
-		return true
-	}
-	if !providersConfigured(sc) {
-		return false // legacy open mode — byte-identical to 0.7.1
-	}
-	seen := map[string]bool{}
-	for _, repo := range repos {
-		row := admitRepoURL(sc, repoCloneURL(repo)).Provider
-		if row.ID == "" || seen[row.ID] {
-			continue
-		}
-		seen[row.ID] = true
-		if s.denyUserCapability(w, r, capWorkspaceProvider, row.ID, target,
-			fmt.Sprintf(capProvider403, row.Kind)) {
-			return true
-		}
-	}
-	return false
+	return s.workspaceProvidersRefusal(r, target, repos...).write(s, w, r)
 }
 
 // repoSourceLocators is the raw repo source of every repo entry in sources —
