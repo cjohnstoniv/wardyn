@@ -36,8 +36,9 @@ vi.mock("../../../lib/api/runs", () => ({
     gradePolicy: () => Promise.resolve({ risk_assessment: [], overall_risk: "low" }),
   },
 }));
+const listWorkspacesMock = vi.fn();
 vi.mock("../../../lib/api/workspaces", () => ({
-  workspaces: { listWorkspaces: () => Promise.resolve([]) },
+  workspaces: { listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a) },
 }));
 const myCapabilitiesMock = vi.fn();
 vi.mock("../../../lib/capabilities", async () => {
@@ -83,6 +84,7 @@ beforeEach(() => {
   });
   getDefaultPolicyMock.mockReset().mockResolvedValue(DEFAULT_SPEC);
   listPoliciesMock.mockReset().mockResolvedValue([]);
+  listWorkspacesMock.mockReset().mockResolvedValue([]);
   myCapabilitiesMock.mockReset().mockReturnValue(null);
 });
 
@@ -114,6 +116,35 @@ describe("NewRunScreen — Use the default policy", () => {
     expect(checked).not.toHaveProperty("policy_id");
     expect(checked).not.toHaveProperty("inline_policy");
     expect(checked).toEqual(body);
+  });
+
+  it("a picked local_dir workspace still travels by reference in default mode", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      { id: "ws1", name: "repo-a", kind: "local_dir", source: "/home/agent/repo-a", status: "scanned" },
+    ]);
+    render(
+      <MemoryRouter
+        initialEntries={[
+          { pathname: "/runs/new", state: { prefill: { inlinePolicy: false, state: { workspaces: [{ workspaceId: "ws1" }] } } } },
+        ]}
+      >
+        <OperatorProvider operator>
+          <NewRunScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    await chooseDefault();
+    setField(screen.getByLabelText("Title"), "default run");
+    await user.click(screen.getByRole("button", { name: /^Check again$/ }));
+    await waitFor(() => expect(preflightRunMock).toHaveBeenCalled());
+    await user.click(screen.getByRole("button", { name: "Launch run" }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+
+    const body = createRunMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(body.workspace_id).toBe("ws1");
+    expect(body).not.toHaveProperty("policy_id");
+    expect(body).not.toHaveProperty("inline_policy");
+    expect(preflightRunMock.mock.lastCall![0]).toEqual(body);
   });
 
   it("shows the read-only preview and hides the editor and the additions box", async () => {

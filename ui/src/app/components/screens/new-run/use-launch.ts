@@ -186,8 +186,11 @@ export function useLaunch({
     }
     // The default lane sends neither policy_id nor inline_policy: the server
     // resolves the caller's ceiling itself, so this body is what both Launch
-    // and Check again send.
-    if (policyMode === "default") return run;
+    // and Check again send. The picked workspace still travels by reference,
+    // as on the saved lane: without it a local_dir pick is never mounted.
+    if (policyMode === "default") {
+      return { ...run, workspace_id: primaryWorkspaceId(state.workspaces, workspaces) ?? run.workspace_id };
+    }
     // Unreachable: `problem` disables both actions while the document is
     // broken. Throwing beats substituting a composed fallback nobody wrote.
     if (!merged) throw new Error("The policy spec isn't valid JSON.");
