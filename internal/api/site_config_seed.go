@@ -98,7 +98,7 @@ func (seed *SiteConfigSeed) apply(sc *types.SiteConfig) (applied, differs []stri
 		case len(sc.UpstreamProxyNoProxy) == 0:
 			sc.UpstreamProxyNoProxy = slices.Clone(seed.UpstreamProxyNoProxy)
 			applied = append(applied, seedSettingNoProxy)
-		case !slices.Equal(sc.UpstreamProxyNoProxy, seed.UpstreamProxyNoProxy):
+		case !slices.Equal(sortedCopy(sc.UpstreamProxyNoProxy), sortedCopy(seed.UpstreamProxyNoProxy)):
 			differs = append(differs, seedSettingNoProxy)
 		}
 	}
@@ -107,13 +107,32 @@ func (seed *SiteConfigSeed) apply(sc *types.SiteConfig) (applied, differs []stri
 		case len(sc.InternalHosts) == 0:
 			sc.InternalHosts = slices.Clone(seed.InternalHosts)
 			applied = append(applied, seedSettingInternalHosts)
-		case !slices.EqualFunc(sc.InternalHosts, seed.InternalHosts, func(a, b types.InternalHost) bool {
-			return a.HostSuffix == b.HostSuffix && slices.Equal(a.CIDRs, b.CIDRs)
-		}):
+		case !slices.Equal(sortedInternalHosts(sc.InternalHosts), sortedInternalHosts(seed.InternalHosts)):
 			differs = append(differs, seedSettingInternalHosts)
 		}
 	}
 	return applied, differs
+}
+
+// sortedCopy and sortedInternalHosts are what apply compares: the proxy matches
+// any entry of a bypass list, an internal-hosts list or a host's CIDRs, so the
+// same entries in another order are the same setting. Both sort copies and
+// leave the stored order alone.
+func sortedCopy(in []string) []string {
+	out := slices.Clone(in)
+	slices.Sort(out)
+	return out
+}
+
+// sortedInternalHosts renders each host as "suffix cidr,cidr" with its CIDRs
+// sorted, then sorts the hosts.
+func sortedInternalHosts(in []types.InternalHost) []string {
+	out := make([]string, len(in))
+	for i, h := range in {
+		out[i] = h.HostSuffix + " " + strings.Join(sortedCopy(h.CIDRs), ",")
+	}
+	slices.Sort(out)
+	return out
 }
 
 // SeedSiteConfig writes the seed's settings the stored site config does not
