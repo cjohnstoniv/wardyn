@@ -50,7 +50,7 @@ function pendingMe() {
   heldMe.push(read);
   return read;
 }
-let heldMe: ReturnType<typeof pendingMe>[] = [];
+let heldMe: { promise: Promise<Response>; resolve: (answer: Response) => void; signal: AbortSignal | undefined }[] = [];
 const fetchMock = vi.fn((url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const path = new URL(String(url), "http://localhost").pathname;
   const method = init?.method ?? "GET";
@@ -229,7 +229,7 @@ it("unmount retires a cancellation confirmation even when the response ignores a
 it("reviewer: failed view switch retains a launchable same-owner draft", async () => {
   me = { ...me, user_view: true, user_view_super_admin: true };
   await draft();
-  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN, exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
   await screen.findByText(CONSOLE_VIEW.SWITCH_FAILED);
   await tick(1000);
   act(() => window.dispatchEvent(new Event("focus")));
@@ -248,7 +248,7 @@ it.each([false, true])("a failed view switch (offline=%s) confirms automatically
   viewFailsOffline = offline;
   await draft();
   const checked = count("/api/v1/runs/policy-preview");
-  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN, exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
   await screen.findByText(CONSOLE_VIEW.SWITCH_FAILED);
   await tick(0);
   await tick(1000);
@@ -273,7 +273,7 @@ it.each(["quiet", "renewal", "watch"])("a delayed failed view body resumes %s co
   const finish = pendingView();
   const checked = count("/api/v1/runs/policy-preview");
   const before = count("/api/v1/me", "GET");
-  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN, exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
   await tick(1000);
   expect(count("/api/v1/me", "GET")).toBeGreaterThan(before);
   expect(screen.queryByText(CONSOLE_VIEW.SWITCH_FAILED)).toBeNull();
@@ -304,11 +304,11 @@ it("an explicit token check waits for the pending view body without losing its c
   const finish = pendingView();
   const checked = count("/api/v1/runs/policy-preview");
   meStatus = 401;
-  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN, exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
   const dialog = await screen.findByRole("dialog");
   meStatus = 200;
   setField(within(dialog).getByLabelText("Admin token"), "confirmed-token");
-  fireEvent.click(within(dialog).getByRole("button", { name: "Sign in", exact: true }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Sign in" }));
   await tick(1000);
   expect(isSignedOutHold()).toBe(true);
   expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -334,7 +334,7 @@ it.each(["same", "other", "401", "unmount"])("view settlement discards an older 
   const finish = pendingView();
   const old = pendingMe();
   const checked = count("/api/v1/runs/policy-preview");
-  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN, exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
   await tick(0);
   expect(old.signal).toBeDefined();
   const current = pendingMe();
@@ -373,7 +373,7 @@ it("a delayed successful view switch keeps its reload guard and never adopts the
   await draft();
   const finish = pendingView(200);
   const checked = count("/api/v1/runs/policy-preview");
-  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN, exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
   await tick(1000);
   expect(assign).not.toHaveBeenCalled();
   expect(count("/api/v1/runs/policy-preview")).toBe(checked);
@@ -393,7 +393,7 @@ it("a delayed view 401 ends reconciliation in the explicit sign-in hold", async 
   await draft();
   const finish = pendingView(401);
   const checked = count("/api/v1/runs/policy-preview");
-  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN, exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
   await tick(1000);
   expect(screen.queryByRole("dialog")).toBeNull();
   await act(async () => finish());
@@ -461,7 +461,7 @@ it("a rejected current token holds New Run without a /me loop until explicit sig
 
   const dialog = screen.getByRole("dialog");
   setField(within(dialog).getByLabelText("Admin token"), "confirmed-token");
-  fireEvent.click(within(dialog).getByRole("button", { name: "Sign in", exact: true }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Sign in" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   await tick(1000);
   expect(isSignedOutHold()).toBe(false);
@@ -565,7 +565,7 @@ it("a cookie-only 401 keeps the normal confirmation held without advancing auth 
   me = { ...me, user_view: true, user_view_super_admin: true };
   await draft();
   meStatus = 401;
-  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN, exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
   await screen.findByText(CONSOLE_VIEW.SWITCH_FAILED);
   await tick(0);
   await screen.findByRole("dialog");
