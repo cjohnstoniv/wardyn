@@ -16,6 +16,26 @@ leaving the branch. Unsupported syntax fails with a file/line diagnostic;
 the guard does not execute shell or establish the provenance of a hash.
 `scripts/test-image-pins.sh` exercises the accepted and rejected forms.
 
+The supported command names are defined in `scripts/lib/image_downloads.py`.
+The recognizer validates that subset before classifying package names or
+stdout diagnostics as inert curl references. Command-name expansion, shell
+wrappers, generated command text, and stdout redirection/pipelines from data
+emitters are unsupported (the checksum pipeline and stderr diagnostics are
+the exceptions). An initial `set -e` must run in the parent shell; setting it
+inside a pipeline does not protect later commands.
+
+Curl arguments retain their quote context: variable expansions must be plain
+and double-quoted, and command substitutions, parameter operators and unquoted
+globs refuse. URL variables must have a literal protocol prefix from an
+assignment that runs before the download. Assignments that can be skipped
+cannot establish that property. Alternatively, place `--` before the quoted
+URL, after all options.
+This prevents a URL value from injecting another output or becoming a curl
+config option. Dynamic filenames remain unsupported. The guard does not
+derive `--remote-name` filenames from variables; use a literal URL or `-o`.
+It does not interpret arbitrary shell, decode generated programs, or inspect commands
+hidden inside other files or installed tools.
+
 Claude's native download pins the manifest before reading the binary's hash.
 The default version has a baked manifest pin; alternate exact versions require
 `CLAUDE_MANIFEST_SHA256`. Native downloads refuse `stable`/`latest`; npm and

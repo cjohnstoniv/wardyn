@@ -218,6 +218,7 @@ case "$out" in
 esac
 echo "ok  unchecked curl fails through the image-pin gate"
 python3 "$ROOT/scripts/test-image-downloads.py"
+python3 "$ROOT/scripts/test-image-download-safety.py"
 python3 "$ROOT/scripts/test-image-recipes.py"
 
 echo "test-image-pins: PASS"
