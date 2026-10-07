@@ -163,6 +163,15 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
   }
 }
 
+/**
+ * A RUNNING sign-in run whose read answered `waiting`: the amber "needs you"
+ * word and glyph with the Sign in action, and nothing else. It stays in the
+ * Running section (placement reads run.attention only; M2 D3).
+ */
+export function waitingSignInPresentation(): RowPresentation {
+  return { hue: "amber", word: RUNS_ROW_WORD.WAITING_SIGN_IN, action: "sign-in", needsYou: false };
+}
+
 export interface RunSections {
   decide: AgentRun[];
   // Admin view only (H-3): an owner's own sign-in hold or lost run — nobody
