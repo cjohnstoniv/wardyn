@@ -163,12 +163,8 @@ kubectl --context kind-wardyn-entra -n wardyn logs \
 - Skip this flag and the People-step run in the walk below fails closed with a confinement-floor refusal, not an auth error — don't mistake it for one.
 
 - **`auth.adminToken` is deliberately NOT emptied.**
-
-> [!NOTE]
-> `values-entra.yaml` never sets `auth.*` at all, and `--reuse-values` carries the quickstart's inline admin token forward from Step 3 —
->
-> it is the recovery path if the role map ever locks every human out (same guidance as [the chart README's own Multi-user section](../helm/wardyn/README.md#multi-user-adminmember-rbac)).
-
+  - `values-entra.yaml` never sets `auth.*` at all, and `--reuse-values` carries the quickstart's inline admin token forward from Step 3 —
+  - it is the recovery path if the role map ever locks every human out (same guidance as [the chart README's own Multi-user section](../helm/wardyn/README.md#multi-user-adminmember-rbac)).
 - Never `--set auth.adminToken.secretRef.name=wardyn-auth` here: the inline-mode Secret carrying that token **does** exist on this install already (rendered from `auth.adminToken.value` by Step 3's install), but [`templates/secret.yaml`](../helm/wardyn/templates/secret.yaml) only renders it while `secretRef.name` is empty (`{{- if and (not .Values.auth.adminToken.secretRef.name) .Values.auth.adminToken.value }}`);
   - set `secretRef.name` and that condition goes false, the block stops rendering, and the next `helm upgrade` deletes the Secret the Deployment's own `secretKeyRef` still points at.
 - Not a clean switch to an external Secret that was never created — `CreateContainerConfigError`, and no way back to admin.
@@ -211,10 +207,8 @@ TENANT_ID=<tenant> CLIENT_ID=<app> deploy/azure-entra-sso/06-kind-follow-main.sh
    - Confirm the same way as step 2: open `http://localhost:8480/api/v1/me/capabilities` and check `session_groups` contains `<ENG_GROUP_OID>` (from `.env.local`).
    - Confirm you land in member's own (unforced, since People is admin-scoped) Getting Started, and **launch a run**.
    - The assertion here is that the run **launches** (`201`, pod scheduled), proving the member path works end to end, not just authenticates.
-   > [!NOTE]
-   > It won't necessarily *complete*: an actual agent turn needs a model credential this runbook doesn't provision (an admin adds a model provider under Settings → Model providers,
-   >
-   > and the member connects their own credential for it, if you want to watch a full run).
+   - It won't necessarily *complete*: an actual agent turn needs a model credential this runbook doesn't provision (an admin adds a model provider under Settings → Model providers),
+   - and the member connects their own credential for it, if you want to watch a full run.
 4. **`wardyn-outsider` — the two-gate demo.** `wardyn-outsider` has no group and no App Role assignment (`03-people.sh`).
    - Use a fresh browser profile / incognito window, or sign out of Entra first, for **both** sign-ins below.
    - A live `wardyn-admin` or `wardyn-member` (or even a prior `wardyn-outsider`) session in the same tab is silently reused instead of prompting for credentials, and the step then "passes" without testing anything.

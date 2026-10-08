@@ -7,11 +7,10 @@ This chart deploys `wardynd` (the control plane) to a Kubernetes cluster, connec
 > [!NOTE]
 > **Published automatically — but only for a released version.**
 > CI ([.github/workflows/publish-image.yml](../../../.github/workflows/publish-image.yml)) builds and pushes `ghcr.io/cjohnstoniv/wardynd` after CI passes on `main` (`:latest`, `:sha-<commit>`); every `vX.Y.Z` release tag is [release.yml](../../../.github/workflows/release.yml)'s job (the bare semver — matching this chart's default `image.tag`, i.e. `Chart.yaml`'s own `appVersion`; see [RELEASING.md](../../../RELEASING.md)).
->
-> The chart's defaults resolve to a real image once the version in `Chart.yaml`'s `appVersion` has actually been released; for an unreleased/main-tip build, override `image.tag` to `latest` or `sha-<commit>`.
->
-> Building your own (below) is still useful for a fork, a private registry, or a local change CI has not published yet.
-> A wrong or stale `image.*` still renders fine and then `ImagePullBackOff`s forever, so double-check it either way.
+
+- The chart's defaults resolve to a real image once the version in `Chart.yaml`'s `appVersion` has actually been released; for an unreleased/main-tip build, override `image.tag` to `latest` or `sha-<commit>`.
+- Building your own (below) is still useful for a fork, a private registry, or a local change CI has not published yet.
+- A wrong or stale `image.*` still renders fine and then `ImagePullBackOff`s forever, so double-check it either way.
 
 > [!NOTE]
 > **Kubernetes data plane (`k8s.enabled`, v0.5+).**
@@ -41,11 +40,8 @@ Wardyn is up.
 - **Deployment** (`wardynd`) — non-root (uid 65532), read-only root FS, all capabilities dropped, `RuntimeDefault` seccomp; liveness and startup probes on `/healthz`, readiness on `/readyz` (which additionally pings Postgres).
   - So a dead DB actually takes the pod out of the Service — `/readyz` is 0.6+, so an older image needs `readinessProbe.path` pinned back, see [Installation](#installation); `WARDYN_PG_DSN` and `WARDYN_ADMIN_TOKEN` sourced from Secrets.
 - **Service** (ClusterIP) fronting the HTTP port (API + UI + `/healthz`) and the `internal` port (`service.internalPort`, 8443: the proxy-facing TLS listener — see [Control-plane to proxy TLS](#control-plane-to-proxy-tls)),
-
-  | Detail |
-  |---|
-  | plus an SSH port when `ssh.enabled` (same Service, no second object — see [Split SSH exposure](#split-ssh-exposure) to expose it differently) |
-  | and a UI port when `uiSandbox.enabled` (which must reach a DIFFERENT hostname — see [UI sandbox gateway](#ui-sandbox-gateway)). |
+  - plus an SSH port when `ssh.enabled` (same Service, no second object — see [Split SSH exposure](#split-ssh-exposure) to expose it differently)
+  - and a UI port when `uiSandbox.enabled` (which must reach a DIFFERENT hostname — see [UI sandbox gateway](#ui-sandbox-gateway)).
 - **ServiceAccount** (dedicated identity; token auto-mount off on the pod by default, so it also holds when you bring your own ServiceAccount — `k8s.enabled` requires flipping this to `true`, see below).
 - **Secret** — only in the inline/demo modes (DSN and/or admin token, see below); skipped for whichever credential you supply as an external Secret.
 - **NetworkPolicy** — default-deny ingress/egress (Wardyn's L0 egress posture), re-opening DNS, Postgres egress, HTTP (+ SSH and + the UI-sandbox gateway, when enabled) ingress from this namespace,
@@ -63,11 +59,8 @@ Platform requirements, in one breath: **Kubernetes 1.20+, Helm 3, a NetworkPolic
 - **Kubernetes 1.20+** and **Helm 3**.
 - **A CNI that enforces NetworkPolicy** (Calico, Cilium, ...).
   - The chart renders portable `networking.k8s.io/v1` policies — no specific CNI required — but enforcement is load-bearing:
-
-    | Detail |
-    |---|
-    | with `k8s.enabled`, a boot-time egress canary verifies it and refuses to start the substrate on a non-enforcing CNI |
-    | (kind's default kindnet is the classic case — the conformance CI lane pins kind + Calico; `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` downgrades the refusal to a loud warning). |
+    - with `k8s.enabled`, a boot-time egress canary verifies it and refuses to start the substrate on a non-enforcing CNI
+    - (kind's default kindnet is the classic case — the conformance CI lane pins kind + Calico; `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` downgrades the refusal to a loud warning).
   - A DIFFERENT knob, `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1`, never downgrades this enforcement refusal — it only acknowledges the SEPARATE trap below (an ambient default-deny already present in `k8s.runsNamespace`),
     - and only when the canary pod actually ran and could not connect.
 - **Postgres 13+** (external or managed).
@@ -154,12 +147,10 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
   --set auth.adminToken.secretRef.name=wardyn-auth
 ```
 
-> [!IMPORTANT]
-> (`wardyn-pg` here needs an `age-key` entry alongside `dsn` — see [Database (DSN)](#database-dsn--two-modes) below.
-> **The chart refuses to render without this pairing**, because skipping it is not a trade-off:
->
-> the default age identity is ephemeral, regenerated every boot, so boot 2 cannot decrypt what boot 1 encrypted and the pod crash-loops on its SECOND restart with those rows unrecoverable.
-> `--set secrets.allowEphemeralAgeKey=true` renders it anyway for a throwaway install.)
+- (`wardyn-pg` here needs an `age-key` entry alongside `dsn` — see [Database (DSN)](#database-dsn--two-modes) below.
+- **The chart refuses to render without this pairing**, because skipping it is not a trade-off:
+  - the default age identity is ephemeral, regenerated every boot, so boot 2 cannot decrypt what boot 1 encrypted and the pod crash-loops on its SECOND restart with those rows unrecoverable.
+- `--set secrets.allowEphemeralAgeKey=true` renders it anyway for a throwaway install.)
 
 - The image defaults `WARDYN_DEFAULT_POLICY=/examples/policies/default.json` (baked into `Dockerfile.wardynd` — images older than that fix crash-loop on boot with `open examples/policies/default.json: no such file or directory`; on one of those, add `--set env.WARDYN_DEFAULT_POLICY=/examples/policies/default.json`).
 - To use a different bundled policy, set `env.WARDYN_DEFAULT_POLICY` to any file under `/examples/policies/` (`demo.json`, ...).
@@ -181,13 +172,12 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
 > **Upgrade note — `/readyz` is a 0.6-and-later endpoint.**
 > The readiness probe targets `/readyz`.
 > From 0.6.0 the chart's own default image serves it: an empty `image.tag` resolves to `.Chart.AppVersion`, so a stock install needs nothing here.
->
-> It still matters if you **pin an image at or below `0.5.0`**
->
-> — those predate `/readyz`, so the probe 404s forever, the pod never becomes Ready, and the `rollout status` below hangs with no other symptom (nothing crashes, nothing logs an error).
->
-> On any such image, pin the probe back: `--set readinessProbe.path=/healthz`, accepting that version's ceiling — a dead Postgres reads healthy again, which is exactly what `/readyz` exists to fix.
-> CI never sees this: `helm-install-test` and the kind quickstart both build `wardynd` from source, so their image always has `/readyz`.
+
+It still matters if you **pin an image at or below `0.5.0`**.
+Those predate `/readyz`, so the probe 404s forever, the pod never becomes Ready, and the `rollout status` below hangs with no other symptom (nothing crashes, nothing logs an error).
+
+On any such image, pin the probe back: `--set readinessProbe.path=/healthz`, accepting that version's ceiling — a dead Postgres reads healthy again, which is exactly what `/readyz` exists to fix.
+CI never sees this: `helm-install-test` and the kind quickstart both build `wardynd` from source, so their image always has `/readyz`.
 
 - The chart **refuses to render** without an admin token or an OIDC issuer: an install with neither brings up a pod that passes its `/healthz` probe and 401s every API route.
 - Verify the pod is actually running (not `ImagePullBackOff` — the failure mode when the image is wrong or absent):
@@ -233,11 +223,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 - Every secret-carrying wardynd setting therefore has a `<VAR>_FILE` twin holding a **path**; wardynd reads the file once at boot.
 - Setting a variable both ways refuses boot (and the render), and so does an empty, unreadable, group- or world-writable file, or one wardynd's own non-root uid owns that others can read.
 - **Same Secrets, as files.**
-  > [!NOTE]
-  > `secretFiles.enabled=true` projects the Secrets the chart already wires (either DSN mode above, `auth.adminToken`, the age key)
-  >
-  > into one read-only volume at `secretFiles.mountPath` (default `/etc/wardyn/secrets`, mode `0440`, readable through `podSecurityContext.fsGroup`) and sets `WARDYN_PG_DSN_FILE`, `WARDYN_ADMIN_TOKEN_FILE` and `WARDYN_AGE_KEY_FILE` instead.
-
+  - `secretFiles.enabled=true` projects the Secrets the chart already wires (either DSN mode above, `auth.adminToken`, the age key) into one read-only volume at `secretFiles.mountPath` (default `/etc/wardyn/secrets`, mode `0440`, readable through `podSecurityContext.fsGroup`) and sets `WARDYN_PG_DSN_FILE`, `WARDYN_ADMIN_TOKEN_FILE` and `WARDYN_AGE_KEY_FILE` instead.
   - No secretKeyRef env is rendered.
   - It is **off by default** because it needs a wardynd image that reads `*_FILE` (0.7.12 or later): an older pinned `image.tag`/`image.digest` would boot with no DSN.
   - Turning it on for an existing install changes only the delivery.
@@ -296,11 +282,8 @@ helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
 - See [docs/ENV.md](../../../docs/ENV.md).
 - **`env.WARDYN_OIDC_ROLE_MAP` is the bootstrap layer, not the only editor.**
   - Once the install is live, an admin adds, edits and removes further mappings without a redeploy from the console's Getting Started → People step (`GET`/ `POST /access/mappings`, `DELETE /access/mappings/{id}`);
-
-    | Detail |
-    |---|
-    | a console row can never override a chart key (the chart always wins a collision; a colliding console write is refused at write time, 400) |
-    | and takes effect at the mapped person's next sign-in, never retroactively. |
+    - a console row can never override a chart key (the chart always wins a collision; a colliding console write is refused at write time, 400)
+    - and takes effect at the mapped person's next sign-in, never retroactively.
   - An email-shaped console mapping is refused by default, the same posture an Entra deployment should already want; set `env.WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS=true` only when this deployment genuinely has no usable App Role or `groups` claim to key on instead.
   - A full walkthrough of that surface — the merged table, the posture-flip and lockout guards, the preview panel — is [docs/OPERATIONS.md's "Who decides who gets in"](../../../docs/OPERATIONS.md#who-decides-who-gets-in-chart-vs-console-vs-idp).
 - [`deploy/azure-entra-sso/`](../../azure-entra-sso/) is a scripted, worked validation of this entire path against a real (free-tier, throwaway) Entra tenant;
@@ -309,11 +292,8 @@ helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
 
 - **Flipping `auth.adminToken.secretRef.name` on an install that started inline can delete your own recovery token.**
   - [`templates/secret.yaml`](templates/secret.yaml) only renders the inline admin-token Secret while `secretRef.name` is empty and `auth.adminToken.value` is set;
-
-    | Detail |
-    |---|
-    | the moment an upgrade sets `secretRef.name` (e.g. `--set auth.adminToken.secretRef.name=wardyn-auth`), that condition goes false, the template stops rendering, |
-    | and Helm deletes the Secret the Deployment's `secretKeyRef` still points at — `CreateContainerConfigError`, with no admin token left to sign in with. |
+    - the moment an upgrade sets `secretRef.name` (e.g. `--set auth.adminToken.secretRef.name=wardyn-auth`), that condition goes false, the template stops rendering,
+    - and Helm deletes the Secret the Deployment's `secretKeyRef` still points at — `CreateContainerConfigError`, with no admin token left to sign in with.
   - Create and populate the target Secret yourself (as in [Installation](#installation) above) **before** the upgrade that sets `secretRef.name`, never after.
 
 ## Leaver deprovisioning (SCIM)
@@ -351,14 +331,11 @@ helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
 > [!WARNING]
 > **Boot-time canary trap: a pre-existing default-deny NetworkPolicy in `k8s.runsNamespace`.**
 > The canary's phase A applies no NetworkPolicy of its own — it exists only to prove the cluster is reachable at all before phase B proves Wardyn's own deny-all rule takes effect.
->
-> If the namespace already carries a default-deny NetworkPolicy from something else (a cluster-wide baseline, another operator's policy), phase A is blocked too,
->
-> and wardynd refuses to boot with an INDETERMINATE verdict — indistinguishable from a genuinely broken cluster, even though per-run confinement would work fine once Wardyn's own allow-rules are in place.
->
-> Use a namespace with no ambient default-deny for `k8s.runsNamespace`, or **exempt Wardyn's pods from the existing policy's own `podSelector`**
->
-> — e.g. a `matchExpressions` entry with `key: wardyn.managed`, `operator: NotIn`, `values: ["true"]`, so the ambient policy simply stops selecting them and Wardyn's per-run policies are the only ones that apply.
+
+- If the namespace already carries a default-deny NetworkPolicy from something else (a cluster-wide baseline, another operator's policy), phase A is blocked too,
+  - and wardynd refuses to boot with an INDETERMINATE verdict — indistinguishable from a genuinely broken cluster, even though per-run confinement would work fine once Wardyn's own allow-rules are in place.
+- Use a namespace with no ambient default-deny for `k8s.runsNamespace`, or **exempt Wardyn's pods from the existing policy's own `podSelector`**
+  - e.g. a `matchExpressions` entry with `key: wardyn.managed`, `operator: NotIn`, `values: ["true"]`, so the ambient policy simply stops selecting them and Wardyn's per-run policies are the only ones that apply.
 
 - Can't get an exemption in place right away?
 - `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1` boots anyway — but ONLY for the case phase A's pod actually ran and could not connect (exit 1).
@@ -367,9 +344,9 @@ helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
 
 > [!WARNING]
 > **Do NOT instead add a separate allow policy for `wardyn.managed=true`.**
-> NetworkPolicy allows are purely additive and every sandbox pod (agent *and* proxy) carries that label,
->
-> so such a policy would widen every run's egress past Wardyn's per-run deny+proxy-only rule — and it would flip the canary's phase B to "CNI does not enforce", inviting `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` and fully unconfined runs.
+
+- NetworkPolicy allows are purely additive and every sandbox pod (agent *and* proxy) carries that label,
+  - so such a policy would widen every run's egress past Wardyn's per-run deny+proxy-only rule — and it would flip the canary's phase B to "CNI does not enforce", inviting `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` and fully unconfined runs.
 
 - The ack above only lets wardynd boot past phase A — it says nothing about the proxy pod's OWN egress to `WARDYN_CONTROL_PLANE_URL` (where every run's session recording uploads to).
   - A cluster-wide baseline deny or a mesh authorization policy can still drop that hop even with the ack in place, and Wardyn's own per-run NetworkPolicy allows cannot override a platform-applied deny elsewhere (allows are additive-only).
@@ -404,11 +381,8 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   - **Required with `k8s.enabled=true`** — the chart refuses to render an empty value (it would put the k8s-runner Role, and every run's pods, in the CONTROL-PLANE namespace, where those verbs cover every other workload sharing it);
     - `k8s.allowRunsInReleaseNamespace=true` is the explicit opt-out for a laptop demo.
   - The namespace must **already exist** — the chart never creates or labels it — and gets its own Role/RoleBinding plus an extra NetworkPolicy ingress peer
-
-    | Detail |
-    |---|
-    | (matched on the namespace's built-in `kubernetes.io/metadata.name` label, since an operator-created namespace carries no chart labels) |
-    | so its proxy sidecars can still reach wardynd's `internal` TLS port for credential resolves and mints, approval checks, and recording uploads. |
+    - (matched on the namespace's built-in `kubernetes.io/metadata.name` label, since an operator-created namespace carries no chart labels)
+    - so its proxy sidecars can still reach wardynd's `internal` TLS port for credential resolves and mints, approval checks, and recording uploads.
   - That port has its own NetworkPolicy rule (this namespace plus the runs namespace) and never inherits `networkPolicy.ingress.from`.
   - The runs namespace is granted that port only, never `http`.
 - `k8s.proxyImage`: the wardyn-proxy sidecar image (`WARDYN_PROXY_IMAGE`) — also what the boot-time egress canary launches.
@@ -443,34 +417,19 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   - Override/extend for a different apiserver port or a CNI/dataplane that evaluates pre-DNAT.
 - **`k8s.apiServer.to`: empty (any destination) by default — this is a REAL WIDENING, not a narrow rule.**
   - Like the Postgres egress rule right above it in the rendered NetworkPolicy, an empty `to` allows the ports above to ANY destination,
-
-    | Detail |
-    |---|
-    | because the apiserver is frequently not a selectable pod (a managed control plane, or static pods no podSelector/namespaceSelector can match) |
-    | there is no generically-correct default peer. |
+    - because the apiserver is frequently not a selectable pod (a managed control plane, or static pods no podSelector/namespaceSelector can match)
+    - there is no generically-correct default peer.
   - **Scope this in any cluster where "wardynd can reach 443/6443 anywhere" is not an acceptable posture** — set it to a raw `NetworkPolicyPeer` list (same shape as `networkPolicy.egress.extra`), e.g. an `ipBlock` naming your cluster's actual apiserver/load-balancer CIDR.
 
-> [!NOTE]
-> RBAC ships least-privilege: the namespaced Role covers exactly the verbs the substrate issues (pods create/get/list/delete/deletecollection;
->
-> `pods/ephemeralcontainers` update; `pods/exec` get+create — the exec subresource's websocket transport issues GET, SPDY issues POST, and the driver tries websocket first;
->
-> `pods/log` get, which streams an exec run's output into its tail for `GET /runs/{id}/output`; secrets create/delete/deletecollection and networkpolicies create/list/delete/deletecollection —
->
-> deliberately **no** `get`, `list` or `watch` on `secrets`: every one of those returns the object's body, RBAC cannot scope a list by label, and wardynd never reads a Secret back.
->
-> `list` on `networkpolicies` alone is what the orphan sweep needs to reach a run whose pods are both gone, and it is asked for best-effort —
->
-> a Role without it degrades the sweep rather than killing it; `events` list only, so an image pull reads as "Downloading the image" rather than ContainerCreating —
->
-> a Role without it keeps the old wording and nothing else changes; `pods` list in the `metrics.k8s.io` group, one namespaced PodMetrics read per sweep tick,
->
-> so idle auto-stop counts CPU work inside a sandbox —
->
-> a Role without it, or a cluster without metrics-server, keeps idleness on attaches and egress and the setup checklist's Idle detection row says so);
->
-> the cluster-scoped ClusterRole covers `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver only ever resolves one by name).
-
+- RBAC ships least-privilege: the namespaced Role covers exactly the verbs the substrate issues (pods create/get/list/delete/deletecollection; `pods/ephemeralcontainers` update;
+- `pods/exec` get+create — the exec subresource's websocket transport issues GET, SPDY issues POST, and the driver tries websocket first; `pods/log` get, which streams an exec run's output into its tail for `GET /runs/{id}/output`;
+- secrets create/delete/deletecollection and networkpolicies create/list/delete/deletecollection — deliberately **no** `get`, `list` or `watch` on `secrets`:
+- every one of those returns the object's body, RBAC cannot scope a list by label, and wardynd never reads a Secret back.
+- `list` on `networkpolicies` alone is what the orphan sweep needs to reach a run whose pods are both gone, and it is asked for best-effort —
+- a Role without it degrades the sweep rather than killing it; `events` list only, so an image pull reads as "Downloading the image" rather than ContainerCreating —
+- a Role without it keeps the old wording and nothing else changes; `pods` list in the `metrics.k8s.io` group, one namespaced PodMetrics read per sweep tick, so idle auto-stop counts CPU work inside a sandbox —
+- a Role without it, or a cluster without metrics-server, keeps idleness on attaches and egress and the setup checklist's Idle detection row says so);
+- the cluster-scoped ClusterRole covers `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver only ever resolves one by name).
 - One rule is conditional, and it is the only one switched twice: `persistentvolumeclaims` get+create, rendered only with `drives.enabled`, plus `delete` only with `drives.reclaim.enabled` — see [User drives](#user-drives-drivesenabled) below.
 - A run's `disk_mib` cap needs **no new verb**: `ephemeral-storage` is a field on the pod spec the runner already creates, and eviction is read back through the `pods: get` the Role already has.
 
@@ -501,11 +460,8 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   - What `drives.reclaim.enabled=true` adds is `delete` on the same rule, for exactly one caller:
   - the operator's explicit `POST /api/v1/drives/{id}/reclaim` (`wardyn drive reclaim`), super-admin only, refused while a pod still mounts the claim, and audited as `drive.reclaim` on every attempt that reaches the cluster.
   - **It destroys a member's stored bytes and nothing undoes it**, so it is opt-in:
-
-    | Detail |
-    |---|
-    | leave the value unset and this Role is byte-for-byte the one it has always been, every reclaim attempt ends in the apiserver's own `403`, |
-    | and reclaiming a departed person's storage stays an operator command, run once, deliberately: |
+    - leave the value unset and this Role is byte-for-byte the one it has always been, every reclaim attempt ends in the apiserver's own `403`,
+    - and reclaiming a departed person's storage stays an operator command, run once, deliberately:
 
 ```sh
 kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
@@ -562,23 +518,15 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
 - A deployment that sets no `storage.ephemeral.default_disk_mib` still leaves node-level eviction as the only bound on a run that asked for nothing.
 - **Upgrading:** if you set `disk_mib` / `storage.ephemeral.default_disk_mib` on Kubernetes, size it for the clone plus installs first — until 0.7.5 it did not bind an autonomous run's agent; from 0.7.5 it evicts.
 - An interactive run's agent has been bound since 0.7.2; size for its caches too.
-> [!NOTE]
-> An eviction is a kill path nothing in Wardyn is on, so the run's SIBLINGS —
->
-> the proxy pod, still running with its resolved upstream credentials, and the per-run Secret holding the run token, the MITM CA key and any injected git token —
->
-> are reclaimed by the control plane's orphan sweep rather than by the run's own teardown.
-
+- An eviction is a kill path nothing in Wardyn is on, so the run's SIBLINGS — the proxy pod, still running with its resolved upstream credentials,
+  - and the per-run Secret holding the run token, the MITM CA key and any injected git token — are reclaimed by the control plane's orphan sweep rather than by the run's own teardown.
 - That sweep now covers this substrate too (it previously existed only on the Docker driver, and was a silent no-op here).
 - It fires on boot and on its cadence after, once the run is past its dispatch grace, and never touches a user drive's claim.
 - **0.7.4 adds exactly one verb to that Role: `list` on `networkpolicies`.**
   - Keying the sweep on pods alone left a run whose agent AND proxy pods are BOTH gone — a deleted node takes them together — unreachable, so its per-run Secret survived permanently.
   - The Secret is found WITHOUT being listed:
-
-    | Detail |
-    |---|
-    | a NetworkPolicy carries no credential, and the substrate orders the objects so both policies strictly outlive the Secret (created before it, deleted after it), |
-    | which makes the run-id label on a surviving policy a complete key for a surviving Secret. |
+    - a NetworkPolicy carries no credential, and the substrate orders the objects so both policies strictly outlive the Secret (created before it, deleted after it),
+    - which makes the run-id label on a surviving policy a complete key for a surviving Secret.
   - The reclaim itself is the label-scoped `deletecollection` the Role has always had.
   - **No Secret-body read verb is granted in any configuration** — `list` on `secrets` would be namespace-wide plaintext read of every Secret, the control plane's own included when `k8s.runsNamespace` is unset.
   - **If you write the Role yourself (`k8s.rbac.create=false`), add `networkpolicies: list` on upgrade.**
@@ -593,12 +541,7 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
   - See [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s "Who writes the provider policy: console vs CLI/MDM".
 - Full detail, including the exact code each claim above is checked against: [`docs/OPERATIONS.md`](../../../docs/OPERATIONS.md)'s "Kubernetes: known gaps" section.
 - What *is* proven, and what the gaps above are measured against: Wardyn ships exactly two deployment paths — `deploy/compose` and this chart — and both run sandboxes.
-- CI proves the chart renders (`helm-lint`), boots to a healthy control plane on a real cluster,
-
-  | Detail |
-  |---|
-  | AND (the k8s runner substrate, `internal/runner/k8s`) actually creates a confined sandbox there, |
-  | conformance-tested on a NetworkPolicy-enforcing cluster (kind + Calico). |
+- CI proves the chart renders (`helm-lint`), boots to a healthy control plane on a real cluster, AND (the k8s runner substrate, `internal/runner/k8s`) actually creates a confined sandbox there, conformance-tested on a NetworkPolicy-enforcing cluster (kind + Calico).
 
 ## Console Ingress
 
@@ -637,9 +580,9 @@ ingress:
 > **Watch the confinement floor.**
 > `min_confinement_class` in the policy JSON is a hard floor.
 > CC1 ships enforceable out of the box, but CC2/CC3 stay *unadvertised* until you also pin `k8s.runtimeClasses.CC2`/`.CC3` to an actual RuntimeClass (see [Kubernetes runner substrate](#kubernetes-runner-substrate-k8senabled) above).
->
-> Bake a policy that floors at CC2 without also pinning `k8s.runtimeClasses.CC2`, and every run on this default is refused before it launches — silently from the chart's point of view, since the render still succeeds.
-> [`examples/policies/demo.json`](../../../examples/policies/demo.json) (CC1) is the safe reference: it works unmodified on any cluster.
+
+- Bake a policy that floors at CC2 without also pinning `k8s.runtimeClasses.CC2`, and every run on this default is refused before it launches — silently from the chart's point of view, since the render still succeeds.
+- [`examples/policies/demo.json`](../../../examples/policies/demo.json) (CC1) is the safe reference: it works unmodified on any cluster.
 
 ```bash
 helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
@@ -667,11 +610,7 @@ helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
 ## Key domains
 
 - `kek.domains` declares key domains: tenants of the key service.
-- Each is a name (`a-z`, `0-9` and `-`, never `default`, which is the credential key) mapped to a Transit key and an optional Vault role,
-
-  | Detail |
-  |---|
-  | or to a Key Vault key pair and an optional client id. |
+- Each is a name (`a-z`, `0-9` and `-`, never `default`, which is the credential key) mapped to a Transit key and an optional Vault role, or to a Key Vault key pair and an optional client id.
 - The chart renders the map to a ConfigMap, mounts it read-only and sets `WARDYN_KEY_DOMAINS_FILE`;
   - a render refuses a bad name or a value that is not exactly one `transit` or `azurekv`, and `wardynd` proves every key at boot.
 
@@ -792,11 +731,8 @@ spec:
 ## SSH on a 443-only estate
 
 - When the only way in is port 443, terminated by a TLS-terminating listener such as an Istio ingress gateway,
-
-  | Detail |
-  |---|
-  | each person's `ssh` wraps SSH in TLS through `ssh.proxyCommand` (`WARDYN_SSH_PROXY_COMMAND`, rendered verbatim and shown by the run-detail card and `wardyn run ssh`), |
-  | and the listener unwraps it onto the Service's `ssh` port. |
+  - each person's `ssh` wraps SSH in TLS through `ssh.proxyCommand` (`WARDYN_SSH_PROXY_COMMAND`, rendered verbatim and shown by the run-detail card and `wardyn run ssh`),
+  - and the listener unwraps it onto the Service's `ssh` port.
 - The chart ships no Istio template: `extraObjects` renders your Gateway and VirtualService with the release, each through `tpl`.
 
 ```yaml
@@ -914,17 +850,14 @@ metrics:
 > **The scrape credential carries full admin authority.**
 > `GET /metrics` is gated by `requireOperator` ([`internal/api/routes.go`](../../../internal/api/routes.go)), the same gate as the rest of the operator API, and there is no narrower metrics-reader token class yet (a follow-up).
 > The Prometheus Operator copies the credential into the Prometheus configuration Secret and into the Prometheus pod, in the Prometheus namespace.
->
-> Everyone with Secret read or `exec` there, and the Operator's ServiceAccount, therefore holds admin authority over the Wardyn API.
-> Treat the Prometheus namespace as part of the admin trust boundary.
+
+- Everyone with Secret read or `exec` there, and the Operator's ServiceAccount, therefore holds admin authority over the Wardyn API.
+- Treat the Prometheus namespace as part of the admin trust boundary.
 
 - **Mint a dedicated credential, never the shared admin token.**
   - Use a dedicated admin identity that exists only for scraping, and mint a personal API token for it ([docs/OPERATIONS.md](../../../docs/OPERATIONS.md), "Per-user API tokens: stop sharing the admin token"):
-
-    | Detail |
-    |---|
-    | sign in as that identity in admin mode and mint the token from its own session (`POST /api/v1/me/tokens`); |
-    | a token cannot mint a token, and member mode refuses the mint, with a `ttl_seconds` no longer than `WARDYN_API_TOKEN_MAX_TTL` allows. |
+    - sign in as that identity in admin mode and mint the token from its own session (`POST /api/v1/me/tokens`; a token cannot mint a token, and member mode refuses the mint),
+    - with a `ttl_seconds` no longer than `WARDYN_API_TOKEN_MAX_TTL` allows.
   - Then create the Secret in the release namespace:
 
 ```bash
@@ -1024,20 +957,17 @@ spec:
 > [!NOTE]
 > **Published from the NEXT tagged release, not before.**
 > [`release.yml`](../../../.github/workflows/release.yml)'s publish matrix now includes `agent-vscode` and `agent-novnc` (`ghcr.io/cjohnstoniv/agent-vscode`, `ghcr.io/cjohnstoniv/agent-novnc`, #141) — both build `FROM` the `agent-base` image that same run just pushed, never from the unpublished `agent-claude-code`.
->
-> Until the next `vX.Y.Z` tag actually runs that workflow, though, no digest exists at either ref, so enabling `uiSandbox` on a cluster that pulls only published images still opens a gateway with nothing to serve.
-> Until then, build the UI image yourself and push it to a registry your nodes can pull, and pin it in `WARDYN_AGENT_IMAGES` or per-run.
+
+- Until the next `vX.Y.Z` tag actually runs that workflow, though, no digest exists at either ref, so enabling `uiSandbox` on a cluster that pulls only published images still opens a gateway with nothing to serve.
+- Until then, build the UI image yourself and push it to a registry your nodes can pull, and pin it in `WARDYN_AGENT_IMAGES` or per-run.
 
 ### What is actually proven on Kubernetes
 
 - The relay is not a new network path: it is `Runner.ExecStream` carrying bytes to a port the sandbox is already listening on inside its own netns,
   - so on this substrate it needs **no NetworkPolicy change and no new Pod ingress**.
-- That claim is gated, not asserted, and it runs on **both** substrates:
-
-  | Detail |
-  |---|
-  | `test/conformance`'s `ExecStreamLoopbackRelay` case dials an in-sandbox loopback listener over `ExecStream` and reads the response back with stdin still open (the full-duplex behavior an editor's WebSocket needs), |
-  | `make test-conformance-docker` and `make test-conformance-k8s` against a real kind + Calico cluster. |
+- That claim is gated, not asserted — `test/conformance`'s `ExecStreamLoopbackRelay` case dials an in-sandbox loopback listener over `ExecStream` and reads the response back with stdin still open
+  - (the full-duplex behavior an editor's WebSocket needs), and it runs on **both** substrates:
+  - `make test-conformance-docker` and `make test-conformance-k8s` against a real kind + Calico cluster.
 - What is **not** run on Kubernetes is the browser-level lane.
 - The live e2e (`make test-e2e-ui-sandbox`) drives a real ticket → cookie → code-server HTML round trip, the `ui.*` audit rows, the 403s and the header strips —
   - and it brings up a **compose** stack to do it.
@@ -1066,11 +996,8 @@ spec:
 - `secrets.ageKey` / `secrets.ageKeyFromSecret`: secret-store age identity (empty => wardynd self-generates an ephemeral key).
   - `ageKey` is inline-mode only; with an external DSN Secret, put `age-key` in it and set `ageKeyFromSecret=true`.
   - **One of these is REQUIRED against any real (non-inline) Postgres — the chart refuses to render otherwise**, even for a quick trial:
-
-    | Detail |
-    |---|
-    | an ephemeral key does not survive a pod restart, and wardynd's own first-boot secret-store entries (e.g. its internal signing key) are written under whatever key that first boot generated; |
-    | the NEXT boot generates a different one, can no longer decrypt them, and the pod crash-loops forever. |
+    - an ephemeral key does not survive a pod restart, and wardynd's own first-boot secret-store entries (e.g. its internal signing key) are written under whatever key that first boot generated —
+    - the NEXT boot generates a different one, can no longer decrypt them, and the pod crash-loops forever.
 - `secrets.ageKeySecretRef.name` / `.key`: age identity from a SEPARATE, chart-unmanaged Secret — for an operator-owned Secret (e.g. one a Postgres operator manages that would reject an extra `age-key` key added to it) that isn't `postgres.dsn`'s own.
   - Counts as wired for the refusal above.
   - Mutually exclusive with `ageKeyFromSecret`/`ageKey` — the chart refuses a render naming two sources.
