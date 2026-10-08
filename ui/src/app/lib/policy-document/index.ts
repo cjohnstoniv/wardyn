@@ -48,10 +48,10 @@ const MAX_SOURCE_LENGTH = 1 << 20;
 // once per level, and a stack overflow there left V8 unable to compile the next
 // regular expression, aborting the page on a later parse.
 const MAX_DEPTH = 64;
-const TOO_DEEP = "Policy source is nested too deeply.";
+const TOO_DEEP = `Policy source is nested more than ${MAX_DEPTH} levels deep: flatten it.`;
 
 function unreadable(source: string): PolicySourceError | undefined {
-  if (source.length > MAX_SOURCE_LENGTH) return { ok: false, line: 1, column: 1, message: "Policy source is too large." };
+  if (source.length > MAX_SOURCE_LENGTH) return { ok: false, line: 1, column: 1, message: "Policy source is larger than 1 MiB: shorten it." };
   // gopkg.in/yaml.v3 strips a byte order mark only at byte 0, yaml here only
   // before the first content line; anywhere else they read the text differently.
   const bom = source.indexOf("\ufeff", 1);

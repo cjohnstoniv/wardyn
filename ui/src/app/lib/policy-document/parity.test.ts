@@ -57,7 +57,7 @@ describe("line breaks the readers split differently", () => {
 
 describe("nesting and size are checked before anything recurses", () => {
   const nested = (levels: number) => '{"a":' + "[".repeat(levels - 1) + "]".repeat(levels - 1) + "}";
-  const TOO_DEEP = "Policy source is nested too deeply.";
+  const TOO_DEEP = "Policy source is nested more than 64 levels deep: flatten it.";
 
   // A stack overflow while composing used to leave V8 unable to compile the
   // next regular expression: the second parse aborted the whole process.
@@ -96,7 +96,7 @@ describe("nesting and size are checked before anything recurses", () => {
     const fits = format === "json" ? `{"a":"${"x".repeat((1 << 20) - 8)}"}` : `a: ${"x".repeat((1 << 20) - 3)}`;
     expect(fits.length).toBe(1 << 20);
     expect(parsePolicySource(fits, format)).toMatchObject({ ok: true });
-    expect(parsePolicySource(`${fits} `, format)).toEqual({ ok: false, line: 1, column: 1, message: "Policy source is too large." });
+    expect(parsePolicySource(`${fits} `, format)).toEqual({ ok: false, line: 1, column: 1, message: "Policy source is larger than 1 MiB: shorten it." });
   });
 });
 
