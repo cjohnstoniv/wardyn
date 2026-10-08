@@ -37,10 +37,10 @@ describe("parsePolicySource refusals", () => {
     ["explicit timestamp", "a: !!timestamp 2026-10-07", "tags"],
     ["explicit binary", "a: !!binary aGk=", "tags"],
     ["explicit set", "a: !!set {x: null}", "tags"],
-    ["alias", "a: &a x\nb: *a", "Aliases"],
+    ["alias (its anchor is refused first)", "a: &a x\nb: *a", "Anchors"],
     ["unresolved alias", "a: *missing", "Aliases"],
-    ["alias cycle", "a: &a [*a]", "Aliases"],
-    ["alias bomb", aliasBomb, "Aliases"],
+    ["alias cycle", "a: &a [*a]", "Anchors"],
+    ["alias bomb", aliasBomb, "Anchors"],
     ["%YAML 1.1 yes and 017", "%YAML 1.1\n---\na: yes\nb: 017", "Directives"],
     ["%YAML 1.2", "%YAML 1.2\n---\na: 1", "Directives"],
     ["unused %TAG", "%TAG !e! tag:example.com,2026:\n---\na: 1", "Directives"],
@@ -129,7 +129,6 @@ describe("parsePolicySource JSON-compatible mappings", () => {
     ["safe integer limits", "min: -9007199254740991\nmax: 9007199254740991", { min: Number.MIN_SAFE_INTEGER, max: Number.MAX_SAFE_INTEGER }],
     ["safe bases and exponents", "hex: 0x10\noctal: 0o17\nexp: 1e3\nsmall: 1e-3", { hex: 16, octal: 15, exp: 1000, small: 0.001 }],
     ["comments and document markers", "# policy\n---\na: 1 # trailing\n...\n# end\n", { a: 1 }],
-    ["anchor without aliases", "a: &label x", { a: "x" }],
     ["explicit null versus omitted", "a: null\nb:\n", { a: null, b: null }],
   ])("round-trips %s through the same JSON boundary", (_, source, expected) => {
     const parsed = parsePolicySource(source);

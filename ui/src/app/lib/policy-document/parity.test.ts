@@ -214,3 +214,26 @@ describe("a ':' directly before a flow indicator", () => {
     expect(parsePolicySource(edited.source)).toEqual({ ok: true, value: { a: ["x", { y: 1 }, { k: null }] } });
   });
 });
+
+// gopkg.in/yaml.v3 ends an anchor name at ':' or '?' and reads the rest as the
+// next scalar: `&x:y a: 1` is {"a": 1} here and {":y a": 1} there. Aliases are
+// already refused, so an anchor can never be used; it is refused outright.
+describe("anchors", () => {
+  const ANCHOR = "Anchors are not allowed.";
+
+  it.each([
+    ["an anchor name with ':' on a key", "&x:y a: 1", 1, 1],
+    ["an anchor name with ':' on a value", "a: &x:y 1", 1, 4],
+    ["an anchor name with '?'", "&x?y a: 1", 1, 1],
+    ["an anchored root mapping", "&x:y {}", 1, 1],
+    ["a plain anchor", "a: &label x", 1, 4],
+    ["an anchor in a flow sequence", "a: [&x b]", 1, 5],
+    ["an anchored block mapping", "a: &m\n  b: 1", 1, 4],
+  ])("refuses %s at the '&'", (_, source, line, column) => {
+    expect(parsePolicySource(source)).toEqual({ ok: false, line, column, message: ANCHOR });
+  });
+
+  it("accepts '&' inside scalars", () => {
+    expect(parsePolicySource('a: x&y\nb: "&z"\nc: \'&w\'')).toEqual({ ok: true, value: { a: "x&y", b: "&z", c: "&w" } });
+  });
+});

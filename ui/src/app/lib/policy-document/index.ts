@@ -100,7 +100,7 @@ function ambiguousString(text: string): boolean {
   return (/^[-+.\d]/.test(text) && NUMBER_LIKE.test(text.replace(/_/g, ""))) || DATE_LIKE.test(text);
 }
 
-function documentValue(document: Document, lines: LineCounter): PolicySourceResult {
+function documentValue(document: Document, lines: LineCounter, source: string): PolicySourceResult {
   if (!isMap(document.contents)) {
     return failure(lines, document.contents?.range?.[0] ?? 0, "Policy source must be a mapping.");
   }
@@ -113,7 +113,12 @@ function documentValue(document: Document, lines: LineCounter): PolicySourceResu
       if (!isScalar(node.key) || typeof node.key.value !== "string") message = "Mapping keys must be strings.";
       else if (node.key.value === "<<") message = "Merge keys (<<) are not allowed.";
     } else if (isAlias(node)) message = "Aliases are not allowed.";
-    else if (isNode(node) && node.tag) message = "Explicit tags are not allowed.";
+    else if (isNode(node) && node.anchor) {
+      // Aliases are refused, so an anchor is never needed; and gopkg.in/yaml.v3
+      // ends a name at ':' or '?', reading the rest as the next scalar.
+      message = "Anchors are not allowed.";
+      offset = source.lastIndexOf(`&${node.anchor}`, offset);
+    } else if (isNode(node) && node.tag) message = "Explicit tags are not allowed.";
     else if (isScalar(node)) {
       const value = node.value;
       const plain = node.type === "PLAIN" ? node.source ?? "" : undefined;
@@ -169,7 +174,7 @@ function readSource(source: string):
     const document = documents[0];
     const issue = document.errors[0] ?? document.warnings[0];
     if (issue) return failure(lines, issue.pos[0], `${issue.code}: ${issue.message}`);
-    const parsed = documentValue(document, lines);
+    const parsed = documentValue(document, lines, source);
     return parsed.ok ? { ...parsed, document } : parsed;
   } catch (error) {
     return caught(error);

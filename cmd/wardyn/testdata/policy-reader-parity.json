@@ -279,5 +279,25 @@
   "cli": {
    "pattern": 1
   }
+ },
+ {
+  "name": "an anchor name holding ':' on a key",
+  "source": "&x:y a: 1\n",
+  "console": {
+   "error": "Anchors are not allowed."
+  },
+  "cli": {
+   ":y a": 1
+  }
+ },
+ {
+  "name": "an anchor name holding ':' on a value",
+  "source": "a: &x:y 1\n",
+  "console": {
+   "error": "Anchors are not allowed."
+  },
+  "cli": {
+   "a": ":y 1"
+  }
  }
 ]
