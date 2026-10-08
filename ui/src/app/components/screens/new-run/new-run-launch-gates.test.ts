@@ -120,7 +120,7 @@ describe("New Run launch issues", () => {
 
     const notAdmitted = gates({
       ...custom,
-      workspaces: [ws({ available_to_you: true, sources: [{ kind: "repo", source: "https://git.example/a", admitted: false }] } as Partial<Workspace>)],
+      workspaces: [ws({ available_to_you: true, sources: [{ type: "repo", source: "https://git.example/a", admitted: false }] })],
       selectedWorkspaceId: "ws1",
     });
     expect(notAdmitted.issues.map((i) => [i.panel, i.text])).toEqual([["workspace", PROVIDERS.CARD_NOT_ADMITTED]]);

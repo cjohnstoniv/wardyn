@@ -62,7 +62,7 @@ vi.mock("../../../lib/capabilities", async () => {
 // launch.credentialRefused/refusedProvider.
 const railProps: Array<{
   modelProvider?: { selectedId?: string; changeNote: string | null };
-  launch: { problem: string | null; workspaceUnavailable?: boolean };
+  launch: { problem: string | null; issue?: { panel: string } | null; workspaceUnavailable?: boolean };
 }> = [];
 vi.mock("./new-run-rail", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./new-run-rail")>();
