@@ -614,6 +614,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-compose-ns-registry-port.sh
 	./scripts/test-dco.sh
 	./scripts/test-desktop-profile.sh
+	./scripts/test-doc-form.sh
 	./scripts/test-e2e-harness.sh
 	./scripts/test-e2e-lane-kill-tree.sh
 	./scripts/test-e2e-live-base-url.sh
