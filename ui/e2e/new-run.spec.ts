@@ -149,7 +149,9 @@ test.describe("New run — one page", () => {
     await expect(page.getByText("The policy spec isn't valid YAML or JSON.")).toBeVisible();
     await expect(doc.getByText("This preview is out of date. Fix the policy source to refresh it.")).toBeVisible();
     await expect(doc.getByText("pypi.org")).toBeVisible();
-    await expect(page.getByTestId("policy-structured")).toBeDisabled();
+    // Held as a group: every control that writes the source through a parse.
+    await expect(page.getByRole("button", { name: "Package registries" })).toBeDisabled();
+    await expect(page.getByTestId("policy-structured")).toHaveAttribute("disabled", "");
 
     // "Done editing" goes back to reading; it neither repairs nor discards.
     await page.getByRole("button", { name: "Done editing" }).click();
@@ -1089,10 +1091,12 @@ test.describe("New run rail — the Autonomy section (#93/#96)", () => {
     await page.getByRole("button", { name: "Check again" }).click();
     await expect(page.getByTestId("preflight-result")).toBeVisible();
 
-    await expect(page.getByText(AUTONOMY_RAIL.HEADING, { exact: true })).toBeVisible();
-    await expect(page.getByText(AUTONOMY_META.L1.label, { exact: true })).toBeVisible();
+    // The rail's own section: the policy document lists Autonomy among its launch-only checks too.
+    const rail = page.getByRole("complementary");
+    await expect(rail.getByText(AUTONOMY_RAIL.HEADING, { exact: true })).toBeVisible();
+    await expect(rail.getByText(AUTONOMY_META.L1.label, { exact: true })).toBeVisible();
     const sentence = autonomyBoundSentence(["secrets_powerful", "confinement_cc1"]);
-    await expect(page.getByText(sentence, { exact: true })).toBeVisible();
+    await expect(rail.getByText(sentence, { exact: true })).toBeVisible();
   });
 
   test("with no autonomy on the wire (the default): no cap on this deployment's operator bearer", async ({
@@ -1102,8 +1106,9 @@ test.describe("New run rail — the Autonomy section (#93/#96)", () => {
     await goToNewRunPanel(page, "policy");
     await page.getByRole("button", { name: "Check again" }).click();
     await expect(page.getByTestId("preflight-result")).toBeVisible();
-    await expect(page.getByText(AUTONOMY_RAIL.HEADING, { exact: true })).toBeVisible();
-    await expect(page.getByText(AUTONOMY_RAIL.NO_PROFILE, { exact: true })).toBeVisible();
+    const rail = page.getByRole("complementary");
+    await expect(rail.getByText(AUTONOMY_RAIL.HEADING, { exact: true })).toBeVisible();
+    await expect(rail.getByText(AUTONOMY_RAIL.NO_PROFILE, { exact: true })).toBeVisible();
   });
 });
 
