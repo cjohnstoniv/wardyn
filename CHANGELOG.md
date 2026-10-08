@@ -81,6 +81,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   opens with is YAML. New Run's editor no longer shows the safety meter, the Fields list and its
   Insert buttons, or the host-count chips; Policies keeps them. Under a saved or default policy the
   Hold option's tool rules link lands on that read-only policy (#1922).
+- `docs/USERS.md`, `docs/SSH.md` and `docs/UI-SANDBOXES.md` are restructured into short bullets,
+  tables and callouts, with every file reference a link and no sentence over 35 words. The console's
+  quoted strings, defaults, limits, refusals and upgrade steps are unchanged.
 
 ### Fixed
 
