@@ -56,9 +56,11 @@ function unreadable(source: string): PolicySourceError | undefined {
 }
 
 // The tokenizer does not recurse, so its output is checked before anything
-// that does sees it: nesting depth, and a ':' straight before ',', ']' or '}'
-// after an unquoted flow key. YAML 1.2 ends the key there ([x:] is [{x: null}]);
-// gopkg.in/yaml.v3 keeps the ':' in the scalar (["x:"]).
+// that does sees it: nesting depth, and two flow shapes gopkg.in/yaml.v3 reads
+// differently from YAML 1.2. A ':' straight before ',', ']' or '}' ends an
+// unquoted key here ([x:] is [{x: null}]) but stays in the scalar there
+// (["x:"]); a '?' starting an item is a plain scalar here ([?x] is ["?x"]) but
+// an explicit-key indicator there ([{x: null}]).
 function structureProblem(tokens: readonly CST.Token[], source: string): [number, string] | undefined {
   const pending: [CST.Token | null | undefined, number][] = tokens.map((token) => [token, 0]);
   for (let next = pending.pop(); next; next = pending.pop()) {
@@ -69,9 +71,13 @@ function structureProblem(tokens: readonly CST.Token[], source: string): [number
     if ("value" in token) pending.push([token.value, level]);
     if (!("items" in token)) continue;
     for (const item of token.items) {
-      const colon = item.sep?.find((sep) => sep.type === "map-value-ind");
-      if (token.type === "flow-collection" && colon && item.key?.type === "scalar" && /[,\]}]/.test(source[colon.offset + 1] ?? "")) {
-        return [colon.offset, "Ambiguous ':' after an unquoted key: add a space after it, or quote the key."];
+      if (token.type === "flow-collection") {
+        const colon = item.sep?.find((sep) => sep.type === "map-value-ind");
+        if (colon && item.key?.type === "scalar" && /[,\]}]/.test(source[colon.offset + 1] ?? "")) {
+          return [colon.offset, "Ambiguous ':' after an unquoted key: add a space after it, or quote the key."];
+        }
+        const question = [item.key, item.value].find((part) => part?.type === "scalar" && part.source.startsWith("?"));
+        if (question) return [question.offset, "Ambiguous '?' starting a flow item: quote the item."];
       }
       pending.push([item.key, level], [item.value, level]);
     }

@@ -299,5 +299,31 @@
   "cli": {
    "a": ":y 1"
   }
+ },
+ {
+  "name": "a '?' starting a flow sequence item",
+  "source": "allowed_domains: [?x]\n",
+  "console": {
+   "error": "Ambiguous '?' starting a flow item: quote the item."
+  },
+  "cli": {
+   "allowed_domains": [
+    {
+     "x": null
+    }
+   ]
+  }
+ },
+ {
+  "name": "a '?' starting a flow mapping key",
+  "source": "scope: {?host: 1}\n",
+  "console": {
+   "error": "Ambiguous '?' starting a flow item: quote the item."
+  },
+  "cli": {
+   "scope": {
+    "host": 1
+   }
+  }
  }
 ]

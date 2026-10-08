@@ -237,3 +237,30 @@ describe("anchors", () => {
     expect(parsePolicySource('a: x&y\nb: "&z"\nc: \'&w\'')).toEqual({ ok: true, value: { a: "x&y", b: "&z", c: "&w" } });
   });
 });
+
+// Inside a flow collection gopkg.in/yaml.v3 takes '?' as the explicit-key
+// indicator whatever follows it; YAML 1.2 reads ?x as a plain scalar. So
+// [?x] is ["?x"] here and [{"x": null}] there.
+describe("a '?' starting a flow item", () => {
+  const QUESTION = "Ambiguous '?' starting a flow item: quote the item.";
+
+  it.each([
+    ["a flow sequence item", "allowed_domains: [?x]", 1, 19],
+    ["a flow mapping key", "scope: {?host: 1}", 1, 9],
+    ["a flow pair key", "a: [?x: 1]", 1, 5],
+    ["a '?' before a quoted JSON key", '{"a": [?"b"]}', 1, 8],
+    ["a later flow item", "a: [y, ?z]", 1, 8],
+  ])("refuses %s at the '?'", (_, source, line, column) => {
+    expect(parsePolicySource(source)).toEqual({ ok: false, line, column, message: QUESTION });
+  });
+
+  it.each<[string, string, unknown]>([
+    ["an explicit key with a space", "a: [? x]", { a: [{ x: null }] }],
+    ["a block value", "a: ?x", { a: "?x" }],
+    ["a block key", "?x: 1", { "?x": 1 }],
+    ["a quoted flow item", 'a: ["?x"]', { a: ["?x"] }],
+    ["a '?' later in a flow item", "a: [x?]", { a: ["x?"] }],
+  ])("accepts %s", (_, source, value) => {
+    expect(parsePolicySource(source)).toEqual({ ok: true, value });
+  });
+});
