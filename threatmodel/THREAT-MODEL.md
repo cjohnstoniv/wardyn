@@ -232,7 +232,7 @@ coverage verdict pointing back into this document.
 |---|---|---|
 | **B1 — Sandbox vs. everything else** | 🟢 shipped | The hard boundary; the agent runs on the untrusted side. Enforced by isolation tier (runc-hardened / gVisor / Kata) and L0 structural network confinement. Every higher-layer control assumes the agent is hostile here. |
 | **B2 — Sandbox vs. egress proxy** | 🟢 shipped | Sole network path out is the wardyn-proxy sidecar, default-deny. `HTTP_PROXY`/`HTTPS_PROXY` are set for compatibility; the env-var-bypass class is defended structurally at L0 (gatewayless network → no route to bypass to), not by omitting the var. |
-| **B3 — Sandbox vs. MCP/tool gateway** | 🟡 **partial (L3)** | The per-tool-call decision plane ships; tool-call egress interception is planned: [detail](#b3--sandbox-vs-mcptool-gateway). |
+| **B3 — Sandbox vs. MCP/tool gateway** | 🟡 **partial (L3)** | The per-tool-call decision plane ships and is in-sandbox and cooperative; tool-call egress interception is planned: [detail](#b3--sandbox-vs-mcptool-gateway). |
 | **B4 — Agent-run identity vs. token broker** | 🟢 shipped | SVID-authenticated; the broker is the only thing that can turn an identity and an approval into a credential. |
 | **B5 — Approval gate vs. credential issuance** | 🟢 shipped | Novel coupling: a high-risk action's approval is what mints the scoped token. No prior art; threat-modeled fresh in §4. |
 | **B6 — Runner data plane vs. control plane** | 🟡 partial | TLS with a pinned CA and a per-run bearer, not mTLS: [detail](#b6--runner-data-plane-vs-control-plane). |
@@ -828,10 +828,12 @@ forms, which no verbatim matcher catches.
   - When `SiteConfig.UpstreamProxy` is configured the corp proxy performs the outbound DNS and
     dial, so the target is sent to it BY NAME rather than as a proxy-resolved literal (an upstream
     handed a literal refuses it).
-  - The guard still runs: `Proxy.egressTarget` resolves the name locally for the check alone and
-    denies a host that answers into a blocked range, so the guard binds the HOSTNAME spelling and
-    not only the literal one `evaluate` step 0 catches — a run under `allow_all_egress` cannot reach
-    `169.254.169.254` by naming a host that resolves to it here.
+  - The guard still runs.
+  - `Proxy.egressTarget` resolves the name locally for the check alone and denies a host that
+    answers into a blocked range, so the guard binds the HOSTNAME spelling and not only the literal
+    one `evaluate` step 0 catches.
+  - A run under `allow_all_egress` cannot reach `169.254.169.254` by naming a host that resolves
+    to it here.
   - **Two residuals, stated:** a name this proxy cannot resolve at all (`resolve failed` / no
     addresses) is forwarded unvetted,
     - because on a private-endpoint estate the sandbox host frequently cannot resolve external names
@@ -1056,11 +1058,12 @@ ADMIN pre-authorized** —
     row's `prev_hash`/`row_hash` **for every event whose Postgres write succeeded**.
     - So a SIEM holds head hashes, and a chain no longer containing a recorded head has been
       rewritten or truncated.
-  - That qualifier is a residual of its own: the hashes are filled by the write itself, so an event
-    written while Postgres is unavailable fans out to the sinks with no hashes on it, and the spool
-    drain replays it into Postgres through the raw store recorder rather than back onto a sink — the
-    off-box head series therefore has a gap across an outage
-    ([`docs/OPERATIONS.md`](../docs/OPERATIONS.md), "What the drain does not restore").
+  - That qualifier is a residual of its own.
+  - The hashes are filled by the write itself, so an event written while Postgres is unavailable
+    fans out to the sinks with no hashes on it.
+  - And the spool drain replays it into Postgres through the raw store recorder rather than back
+    onto a sink — the off-box head series therefore has a gap across an outage.
+    - ([`docs/OPERATIONS.md`](../docs/OPERATIONS.md), "What the drain does not restore").
   - Pre-migration rows keep NULL hashes and sit outside the chain (no backfill — hashes computed
     after the fact by the process that could have altered the rows prove nothing).
   - Signed receipts under a key no database role can reach are the next rung and are

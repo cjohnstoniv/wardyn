@@ -82,7 +82,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Insert buttons, or the host-count chips; Policies keeps them. Under a saved or default policy the
   Hold option's tool rules link lands on that read-only policy (#1922).
 - **Threat model: sections 0 to 3, 4 (except 4.1) and 6 to 8 are bullets and split table rows.** Every
-  sentence is kept; long table cells continue in rows under their own, and file references are links.
+  sentence is kept; the longest table cells move into subsections under their table, and file references
+  are links.
 
 ### Fixed
 
