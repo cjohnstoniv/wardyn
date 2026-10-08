@@ -167,7 +167,7 @@ Three more the tier inherits rather than introduces:
 | OIDC | absent | **required** — the org IdP authenticates the developer and `deriveRole` maps them to `user`. `WARDYN_OIDC_ROLE_MAP` / `WARDYN_OIDC_OPERATOR_EMAILS` are MDM-set, and the developer is on neither |
 | `WARDYN_ADMIN_TOKEN` | not used | a **process credential** MDM injects and the developer does not read. It is never surfaced to the browser UI |
 | `WARDYN_USER_DESKTOP` | unset | **`true`** — asserts the above rather than enforcing anything new |
-| `WARDYN_ORG_URL` | not used | **optional.** Set it to enrol this laptop into a remote org control plane — see [Enrolling into an org control plane](#enrolling-into-an-org-control-plane) below. Unset (the default) is m′ with no hybrid posture at all: the laptop still keeps its own runs and its own audit table, forwarding nothing upward |
+| `WARDYN_ORG_URL` | not used | **optional.** Enrols this laptop; see [below](#wardyn_org_url). |
 
 - The invariant the whole profile turns on is: **`isOperator(ctx)` is false for the developer's every request.**
 - `WARDYN_USER_DESKTOP` adds no middleware — the admin/member split in `internal/api` already does the enforcement.
@@ -212,6 +212,12 @@ Three more the tier inherits rather than introduces:
 
 - A departed member's owned workspaces point at an identity nobody can sign in as.
 - `POST /workspaces/{id}/reassign` (admin-only, idempotent) returns each to the operator and audits `workspace.reassign` naming the `from_owner`.
+
+### `WARDYN_ORG_URL`
+
+- **optional.**
+- Set it to enrol this laptop into a remote org control plane — see [Enrolling into an org control plane](#enrolling-into-an-org-control-plane) below.
+- Unset (the default) is m′ with no hybrid posture at all: the laptop still keeps its own runs and its own audit table, forwarding nothing upward.
 
 ### Enrolling into an org control plane
 
@@ -266,7 +272,7 @@ Three more the tier inherits rather than introduces:
 | `/etc/wardyn/wardyn.env` | **MDM** | `0644` | the non-secret envelope — `WARDYN_LOCAL_MODE`, `WARDYN_LOCAL_OPERATOR`, `WARDYN_DEFAULT_POLICY`, `WARDYN_AGENT_IMAGES`, `WARDYN_LISTEN`, `WARDYN_RUNNER`, `WARDYN_WORKSPACES_ROOT`, `WARDYN_TRUSTED_CA_FILE` | fleet-uniform, non-sensitive; readable is fine and makes support tractable — a CA cert is public, unlike the age key below |
 | `/etc/wardyn/secret.env` | **MDM** | `0600` | secret-bearing variables — `WARDYN_AUDIT_SINKS` (its JSON carries the SIEM `bearer_token`), and `WARDYN_OIDC_CLIENT_SECRET` on the SSO variant | these are org credentials, uniform across the fleet, so MDM is the right delivery path — but they are not per-device secrets and `0600` does not make them ones |
 | `/etc/wardyn/policy.json` | **MDM** | `0644` | the default `RunPolicySpec` — confinement class, allowed egress, eligible grant kinds ([POLICIES.md](POLICIES.md)) | this file *is* the managed ceiling; it is the reason the tier is called managed |
-| `/etc/wardyn/site-config.json` | **MDM** | `0644` | corporate network facts — upstream proxy, artifact mirrors, SCM hosts — and, since 0.7.2, the org's **provider policy**: `workspace_providers` and `agent_providers` (`wardyn site-config set`; see the note below this table) — and, since 0.8.4, `branding.logo_path`, a logo file under `/etc/wardyn` ([Console branding](operations/console-branding.md)) | environment-shaped, identical across the fleet, and re-applied after a reset |
+| `/etc/wardyn/site-config.json` | **MDM** | `0644` | corporate network facts and provider policy; see [below](#etcwardynsite-configjson). | environment-shaped, identical across the fleet, and re-applied after a reset |
 | `/etc/wardyn/age.key` | **the installer, on the device** | `0600` | the age X25519 identity backing this laptop's secret store (`WARDYN_AGE_KEY`) | **never via MDM** — see below |
 
 **The two provider blocks, and why an old MDM file cannot delete them.**
@@ -278,6 +284,12 @@ Three more the tier inherits rather than introduces:
 - `set` prints which post-0.6.6 keys it left as the server already had them.
 - That carry-forward is what stops the 5-minute converge on a laptop whose MDM file predates 0.7.2 from silently deleting the org's provider policy on every tick.
 - To CLEAR a block deliberately, write it as `{}` — the only clear form that behaves the same on this door and on the API.
+
+### `/etc/wardyn/site-config.json`
+
+- corporate network facts — upstream proxy, artifact mirrors, SCM hosts —
+- and, since 0.7.2, the org's **provider policy**: `workspace_providers` and `agent_providers` (`wardyn site-config set`; see the note below this table) —
+- and, since 0.8.4, `branding.logo_path`, a logo file under `/etc/wardyn` ([Console branding](operations/console-branding.md)).
 
 ### An org `default_disk_mib` runs UNCAPPED here, with a warning
 
@@ -339,10 +351,44 @@ Five files, all under [`deploy/desktop/`](../deploy/desktop/):
 
 | File | Role |
 |---|---|
-| [`install.sh`](../deploy/desktop/install.sh) | Run once per device, as root (an MDM package's postinstall step, or by hand for a pilot). Creates `/etc/wardyn`, mints `age.key` if one doesn't already exist (`wardynd -gen-age-key`, `0600`, never overwritten — see [What the enrolment mint pulls](#what-the-enrolment-mint-pulls), because that one command runs a container image as root), and registers the platform's converge job — [`com.wardyn.daemon.plist`](../deploy/desktop/com.wardyn.daemon.plist) with launchd on macOS, `wardyn.service` + `wardyn.timer` with systemd on Linux — pointed at `wardyn-desktop.sh` wherever the installer bundle sits on disk. `--uninstall` reverses it (keeping `age.key` and the database); `--uninstall --purge` destroys both. |
-| `com.wardyn.daemon.plist` | The launchd `LaunchDaemon`. Runs `wardyn-desktop.sh up` at load and every 5 minutes after (`StartInterval`) — the same "re-assert, don't assume" posture MDM uses for the files it owns, not a foreground process launchd has to keep alive (`wardynd`'s own container carries `restart: unless-stopped`; this job's only work is making sure the *stack* is up). |
-| [`wardyn.service`](../deploy/desktop/wardyn.service) + [`wardyn.timer`](../deploy/desktop/wardyn.timer) | The systemd analogue. `Type=oneshot` driven by the timer — `wardyn-desktop.sh up` converges and exits, exactly as the launchd job does, so a `Restart=` would fight the timer. `OnBootSec` mirrors `RunAtLoad` and `OnUnitActiveSec=300s` mirrors `StartInterval`; the two platforms must not drift, and [`scripts/test-desktop-profile.sh`](../scripts/test-desktop-profile.sh) asserts they do not. Logs to journald rather than a file, which is where a Linux operator looks and which rotates on its own. |
-| [`wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh) | What the plist actually runs. Reads the envelope out of `/etc/wardyn`, brings up [`deploy/desktop/docker-compose.yaml`](../deploy/desktop/docker-compose.yaml) (which `include:`s the same [compose stack](../deploy/compose/README.md) every other single-host deployment uses, and exports `WARDYN_MANAGED_DIR=/etc/wardyn` so that stack's own read-only mount gives `WARDYN_DEFAULT_POLICY` sight of the managed policy file), waits for `/healthz` on the published port (`WARDYN_UP_PORT`: process environment including `secret.env`, then `wardyn.env`, then 8080; a value that is not a whole number from 1 to 65535 stops the launcher with a message naming the key), and idempotently applies `site-config.json` if MDM has delivered one. |
+| [`install.sh`](../deploy/desktop/install.sh) | Run once, as root; see [below](#installsh). |
+| `com.wardyn.daemon.plist` | The launchd `LaunchDaemon`; see [below](#comwardyndaemonplist). |
+| [`wardyn.service`](../deploy/desktop/wardyn.service) + [`wardyn.timer`](../deploy/desktop/wardyn.timer) | The systemd analogue; see [below](#wardynservice--wardyntimer). |
+| [`wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh) | What the plist actually runs; see [below](#wardyn-desktopsh). |
+
+### `install.sh`
+
+- Run once per device, as root (an MDM package's postinstall step, or by hand for a pilot).
+- Creates `/etc/wardyn`,
+- mints `age.key` if one doesn't already exist (`wardynd -gen-age-key`, `0600`, never overwritten — see [What the enrolment mint pulls](#what-the-enrolment-mint-pulls), because that one command runs a container image as root),
+- and registers the platform's converge job —
+- [`com.wardyn.daemon.plist`](../deploy/desktop/com.wardyn.daemon.plist) with launchd on macOS, `wardyn.service` + `wardyn.timer` with systemd on Linux —
+- pointed at `wardyn-desktop.sh` wherever the installer bundle sits on disk.
+- `--uninstall` reverses it (keeping `age.key` and the database); `--uninstall --purge` destroys both.
+
+### `com.wardyn.daemon.plist`
+
+- The launchd `LaunchDaemon`.
+- Runs `wardyn-desktop.sh up` at load and every 5 minutes after (`StartInterval`) —
+- the same "re-assert, don't assume" posture MDM uses for the files it owns, not a foreground process launchd has to keep alive
+- (`wardynd`'s own container carries `restart: unless-stopped`; this job's only work is making sure the *stack* is up).
+
+### `wardyn.service` + `wardyn.timer`
+
+- The systemd analogue.
+- `Type=oneshot` driven by the timer — `wardyn-desktop.sh up` converges and exits, exactly as the launchd job does, so a `Restart=` would fight the timer.
+- `OnBootSec` mirrors `RunAtLoad` and `OnUnitActiveSec=300s` mirrors `StartInterval`; the two platforms must not drift, and [`scripts/test-desktop-profile.sh`](../scripts/test-desktop-profile.sh) asserts they do not.
+- Logs to journald rather than a file, which is where a Linux operator looks and which rotates on its own.
+
+### `wardyn-desktop.sh`
+
+- What the plist actually runs.
+- Reads the envelope out of `/etc/wardyn`,
+- brings up [`deploy/desktop/docker-compose.yaml`](../deploy/desktop/docker-compose.yaml) (which `include:`s the same [compose stack](../deploy/compose/README.md) every other single-host deployment uses,
+- and exports `WARDYN_MANAGED_DIR=/etc/wardyn` so that stack's own read-only mount gives `WARDYN_DEFAULT_POLICY` sight of the managed policy file),
+- waits for `/healthz` on the published port (`WARDYN_UP_PORT`: process environment including `secret.env`, then `wardyn.env`, then 8080;
+- a value that is not a whole number from 1 to 65535 stops the launcher with a message naming the key),
+- and idempotently applies `site-config.json` if MDM has delivered one.
 
 ### What the enrolment mint pulls
 
@@ -352,7 +398,7 @@ Five files, all under [`deploy/desktop/`](../deploy/desktop/):
 | | |
 |---|---|
 | Default | `ghcr.io/cjohnstoniv/wardynd:latest` |
-| What that tag is | the **continuous, main-tip** half of image publishing — [`publish-image.yml`](../.github/workflows/publish-image.yml) pushes it after CI passes on a push to `main`, so it lags `main` by one CI run, and signs it by digest (keyless) after pushing it. The signature identity is in [VERIFY.md](VERIFY.md#the-continuous-lane). `:latest` can move, this lane has no SBOM or provenance, and it is not a release. |
+| What that tag is | the **continuous, main-tip** half; see [below](#what-that-tag-is). |
 | Verification | none. Nothing in this lane verifies that signature or a digest, and no repo gate covers it: [`scripts/check-image-pins.sh`](../scripts/check-image-pins.sh) reads Dockerfile `FROM`s and `deploy/compose/*.yaml`, so a `docker run` in a shell script is outside it by construction. |
 | Override | `WARDYN_INSTALL_IMAGE` (also in [ENV.md](ENV.md)) — `sudo WARDYN_INSTALL_IMAGE=ghcr.io/cjohnstoniv/wardynd@sha256:<digest> ./install.sh` |
 
@@ -360,7 +406,9 @@ Five files, all under [`deploy/desktop/`](../deploy/desktop/):
 - The stack the device then *runs* is pinned by digest either way.
 - `wardyn.env.example` says so in its own comment, and `wardyn-desktop.sh` reads the pin out of the envelope.
 - So the mutable tag is confined to this one enrolment call.
-- That is still a container running as root on the device, with the master key for its secret store as the output, which is why `install.sh` prints a warning when the ref it is about to run carries no `@sha256:`.
+- That is still a container running as root on the device,
+  - with the master key for its secret store as the output,
+  - which is why `install.sh` prints a warning when the ref it is about to run carries no `@sha256:`.
 - Both platforms ship.
 - `install.sh` branches on `uname -s`: the macOS path is unchanged, and the Linux path installs the systemd unit + timer.
 - They are genuinely different files rather than one portable script because the divergence is not cosmetic — `chown root:wheel` is a **hard failure** on Debian and Ubuntu, which have no `wheel` group, under `set -euo pipefail`.
@@ -391,6 +439,13 @@ sudo WARDYN_INSTALL_IMAGE=ghcr.io/cjohnstoniv/wardynd@sha256:<digest> ./install.
   - `/policies/default` really does serve the managed file,
   - a run naming no policy really does resolve to that ceiling,
   - and a synthesized profile really is clamped to it (see "Tamper posture" above for what "clamped" does and does not mean once the caller is an admin).
+
+#### What that tag is
+
+- the **continuous, main-tip** half of image publishing —
+- [`publish-image.yml`](../.github/workflows/publish-image.yml) pushes it after CI passes on a push to `main`, so it lags `main` by one CI run, and signs it by digest (keyless) after pushing it.
+- The signature identity is in [VERIFY.md](VERIFY.md#the-continuous-lane).
+- `:latest` can move, this lane has no SBOM or provenance, and it is not a release.
 
 ## Model access on m′
 
@@ -460,9 +515,9 @@ curl -fsS -X POST -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" \
 | OIDC discovery at boot (m′ only) | **Fails boot, loudly, inside a 30s budget — and that is correct.** See below. |
 | First-device enrolment (`install.sh`) | **Needs the network, once.** It mints `age.key` by running `wardynd -gen-age-key`, so it needs that image — `ghcr.io/cjohnstoniv/wardynd:latest` unless `WARDYN_INSTALL_IMAGE` names another (see "The install lane"). This is inherent: enrolment cannot complete offline. Pre-seed that exact ref, or enrol on-network. |
 | Audit fanout to the SIEM | **Drops past the buffer.** At-most-once beyond 4096 events; see the ceiling above. This is the one that loses evidence rather than recovering. |
-| Hybrid enrolment to the org control plane (m′ only, `WARDYN_ORG_URL` set) | **Needs the network, once** — a separate step from the `install.sh` row above: `wardynd` does it at boot, reaching the organisation rather than an image registry. A boot with no stored device credential and no reachable organisation refuses, naming the missing token or the failure; the service manager retries, which helps only while the token is unspent and inside its 72 hours — a spent or expired token needs an admin to mint a new one. Enrol on-network. |
+| Hybrid enrolment to the org control plane (m′ only, `WARDYN_ORG_URL` set) | **Needs the network, once.** See [below](#hybrid-enrolment-to-the-org-control-plane). |
 | Audit forwarding to the org control plane, once enrolled | **Buffered, not dropped.** Rows accrue past the durable local cursor and `/healthz`'s `org_federation.lag` (and `wardyn_org_federation_lag`) grows; nothing is lost, because the org path is at-least-once, unlike the SIEM row above. The backlog drains once the organisation is reachable again. |
-| Runs, once the organisation has revoked this device | **Fails closed, deliberately.** Every run-creating path answers `503` naming re-enrolment, the organisation reachable or not — a run substituting local execution for an org-refused device would be the placement-substitution mistake this tier does not make. See [Enrolling into an org control plane](#enrolling-into-an-org-control-plane). |
+| Runs, once the organisation has revoked this device | **Fails closed, deliberately.** See [below](#runs-once-the-organisation-has-revoked-this-device). |
 
 **Why the IdP case is not a bug.**
 
@@ -480,6 +535,21 @@ curl -fsS -X POST -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" \
 - A **captive portal** is the slow one: DNS resolves and the connection hangs, so each attempt spends the whole 30s budget.
 - A laptop with no link at all still has loopback and the Docker bridge, so the stack itself comes up — only the outward-facing dependencies fail.
 - When testing this, use the mode that matches the site: reachable-but-hanging is the one that exercises the boot budget.
+
+### Hybrid enrolment to the org control plane
+
+- **Needs the network, once** — a separate step from the `install.sh` row above: `wardynd` does it at boot, reaching the organisation rather than an image registry.
+- A boot with no stored device credential and no reachable organisation refuses, naming the missing token or the failure;
+- the service manager retries, which helps only while the token is unspent and inside its 72 hours —
+- a spent or expired token needs an admin to mint a new one.
+- Enrol on-network.
+
+### Runs, once the organisation has revoked this device
+
+- **Fails closed, deliberately.**
+- Every run-creating path answers `503` naming re-enrolment, the organisation reachable or not —
+- a run substituting local execution for an org-refused device would be the placement-substitution mistake this tier does not make.
+- See [Enrolling into an org control plane](#enrolling-into-an-org-control-plane).
 
 ## Which Docker socket
 
