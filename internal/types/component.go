@@ -49,8 +49,9 @@ const (
 
 // ComponentFileDelivery says whether this build can deliver a secret as a
 // file. While false, Validate refuses the mode, so no definition can promise a
-// delivery nothing performs. The change that adds the file lane sets it true.
-const ComponentFileDelivery = false
+// delivery nothing performs. True since the file lane exists (the file_secret
+// grant and its dispatch).
+const ComponentFileDelivery = true
 
 // Bounds on one definition and on one run's attachments.
 const (
