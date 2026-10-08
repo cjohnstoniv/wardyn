@@ -370,3 +370,33 @@ func TestPG_Components_OwnerIsTheSubjectSecretsAreKeyedBy(t *testing.T) {
 		t.Fatalf("erasing by that subject removed %d rows (%v), want 1", n, err)
 	}
 }
+
+// TestPG_Components_ASavedRowIsFoundByTheRunGate: the owner a row is saved under
+// is the owner the gate looks it up by, so a person's own saved component attaches
+// by id at the policy-preview door and its hosts reach the run; another person's
+// row is refused as absent, and an unknown id answers with the same bytes.
+func TestPG_Components_ASavedRowIsFoundByTheRunGate(t *testing.T) {
+	e := newComponentsPG(t)
+	mine := decodeSaved(t, e.do(t, http.MethodPost, "/api/v1/me/components", e.member,
+		saveComponentBody("Mine", `{"hosts":["saved-host.example.com"]}`)))
+	other := ssoSession(t, "sub-other", "other@corp.example", oidc.RoleUser)
+	theirs := decodeSaved(t, e.do(t, http.MethodPost, "/api/v1/me/components", other,
+		saveComponentBody("Theirs", `{"hosts":["their-host.example.com"]}`)))
+
+	ask := func(id uuid.UUID) *httptest.ResponseRecorder {
+		return e.do(t, http.MethodPost, "/api/v1/runs/policy-preview", e.member,
+			`{"agent":"claude-code","task":"t","components":[{"id":"`+id.String()+`"}]}`)
+	}
+	w := ask(mine.ID)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "saved-host.example.com") {
+		t.Fatalf("attaching the saved row = %d %s, want 200 with its host in the preview", w.Code, w.Body.String())
+	}
+	foreign, absent := ask(theirs.ID), ask(uuid.New())
+	if foreign.Code != http.StatusForbidden || errorReason(foreign) != "capability_component" || foreign.Body.String() != absent.Body.String() {
+		t.Fatalf("another person's row = %d %s, an absent id = %d %s; want the same 403 capability_component bytes (A18)",
+			foreign.Code, foreign.Body.String(), absent.Code, absent.Body.String())
+	}
+	if strings.Contains(foreign.Body.String(), "their-host") {
+		t.Fatal("the refusal leaks the other person's host")
+	}
+}
