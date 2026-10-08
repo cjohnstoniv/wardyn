@@ -3940,9 +3940,9 @@ scheduled.**
   ([`cmd/wardyn/setup.go`](../cmd/wardyn/setup.go)) detects rootlessness from `docker info`'s
   `SecurityOptions` and a `/run/user` `DOCKER_HOST`, and prints an unsupported plan for both tiers.
 - **The scheduler does not.**
-- `classToRuntime` consults only the daemon's registered runtimes — it has no rootless awareness
-  at all — so a rootless daemon that REGISTERS `runsc` still advertises and schedules CC2, and the
-  run is gated and audited as Wall.
+- `classToRuntime` consults only the daemon's registered runtimes —
+  it has no rootless awareness at all — so a rootless daemon that REGISTERS `runsc` still advertises
+  and schedules CC2, and the run is gated and audited as Wall.
 - Registration is not delivery: what fails closed there is an ABSENT runtime, never a
   present-but-unusable one.
 - A version-and-rootless probe in the runtime-selection path is the closing fix — tracked, not
