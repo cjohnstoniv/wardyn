@@ -99,7 +99,7 @@ beforeEach(() => {
 describe("NewRunScreen — the barrier floor leaves nothing this run can use (T-9)", () => {
   it("shows the requirement card naming the floor, with no radiogroup at all", async () => {
     renderScreen();
-    const box = await screen.findByLabelText(/Spec \(JSON\)/);
+    const box = await screen.findByLabelText(/Spec \(YAML\)/);
     fireEvent.change(box, {
       target: {
         value: JSON.stringify({
@@ -178,7 +178,7 @@ describe("NewRunScreen — no runner configured reads as unknown, not confirmed-
       baseStatus({ runner: { driver: "none", confinement_classes: [] } }),
     );
     renderScreen();
-    const box = await screen.findByLabelText(/Spec \(JSON\)/);
+    const box = await screen.findByLabelText(/Spec \(YAML\)/);
     fireEvent.change(box, {
       target: {
         value: JSON.stringify({
@@ -608,7 +608,7 @@ describe("NewRunScreen — #1238 tier picker states", () => {
       baseStatus({ runner: { driver: "k8s", kubernetes: true, confinement_classes: ["CC1", "CC2"] } }),
     );
     renderScreen();
-    fireEvent.change(await screen.findByLabelText(/Spec \(JSON\)/), {
+    fireEvent.change(await screen.findByLabelText(/Spec \(YAML\)/), {
       target: {
         value: JSON.stringify({ allowed_domains: [], first_use_approval: "always_deny", min_confinement_class: "CC3" }),
       },

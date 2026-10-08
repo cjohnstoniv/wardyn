@@ -8,7 +8,8 @@
 //
 // It authors ONE saved object: a name, a ceiling, and the Limits section (three
 // launch-mode doors plus, since 0.7.2, three integer ceilings). The ceiling is
-// the SHIPPED spec editor (PolicyPanel instance="policies", carrying its own
+// the SHIPPED policy document and source editor (profile-ceiling-policy.tsx:
+// the shared read view, and PolicyPanel instance="policies" with its own
 // templates, field help and SafetyMeter) — this file does not redraw any of it
 // (prompt §3, "no second spec editor"), and the limits are a SECTION of the
 // same form rather than a second card, because a second card implies a second
@@ -25,22 +26,18 @@ import { policies as policiesApi } from "../../../lib/api/policies";
 import { getErrorMessage } from "../../../lib/format";
 import { GOVERNANCE as GOV, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
-import type { ConfinementClass, PolicyContact, RunPolicySpec, SetupModelProvider } from "../../../lib/types";
-import { CC_ORDER } from "../../../lib/types";
+import type { PolicyContact, RunPolicySpec, SetupModelProvider } from "../../../lib/types";
 import type { StorageEnforcement } from "../../../lib/api/drives";
 import { isUncappedEnforcement } from "../drives/display";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
-import { TIER_PICKER } from "../../../lib/tier-picker-copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { makeMono, Mono } from "../../wardyn/code-block";
 import { safeRequestHref } from "../../wardyn/policy-remedy";
-import { CC_META } from "../../wardyn/cc-meta";
-import { FIELD_HELP } from "../../wardyn/policy-field-help";
 import { Field, fieldHintId, Switch } from "../../wardyn/form-primitives";
-import { PolicyPanel, minimalSpec, parseSpec } from "../../wardyn/policy-panel";
-import { Segmented } from "../../wardyn/segmented";
+import { specToSource, type PolicySourceFormat } from "../../wardyn/policy-document/policy-source";
+import { minimalSpec, parseSpec } from "../../wardyn/policy-panel";
 import { Note, withMono } from "./display";
 import {
   asOverlay,
@@ -55,6 +52,7 @@ import {
   OverlayRows,
   seedOverlayLimits,
 } from "./profile-overlay";
+import { ProfileCeilingPolicy } from "./profile-ceiling-policy";
 import { ProfileRubric } from "./profile-rubric";
 
 // A number field renders blank at 0/undefined — 0 IS "unlimited" for all three
@@ -77,7 +75,8 @@ const STARTER_SPEC: RunPolicySpec = minimalSpec();
 // `https:` and `mailto:` are literals in the contact strings, so they render mono.
 const withContactMono = makeMono(["https:", "mailto:"]);
 
-const specText = (spec: RunPolicySpec): string => JSON.stringify(spec, null, 2);
+// A ceiling opens as generated YAML; from there it is whatever the admin types.
+const specText = (spec: RunPolicySpec): string => specToSource(spec);
 
 export function ProfileEditor({
   profile,
@@ -102,6 +101,7 @@ export function ProfileEditor({
   const [name, setName] = React.useState(profile?.name ?? "");
   // A composed profile stores `{}` as its ceiling; going standalone starts from the starter.
   const [spec, setSpec] = React.useState(() => specText(profile && !profile.overlay ? profile.ceiling : STARTER_SPEC));
+  const [format, setFormat] = React.useState<PolicySourceFormat>("yaml");
   // Composition: the base picker's value, and the two overlays as key-present-or-absent bags.
   const [base, setBase] = React.useState<string>(
     profile?.overlay ? (profile.base_profile_id ?? BASE_DEPLOYMENT) : BASE_NONE,
@@ -111,6 +111,8 @@ export function ProfileEditor({
     ...(profile?.overlay_limits ?? {}),
   }));
   const composed = base !== BASE_NONE;
+  // A standalone profile saves what its source parses to NOW; one that does not parse cannot be saved.
+  const ceiling = React.useMemo(() => (composed ? null : parseSpec(spec, format)), [composed, spec, format]);
   const baseProfile = profiles.find((p) => p.id === base);
   // The deployment ceiling, read once and only when a deployment-based overlay needs its values.
   const [deployment, setDeployment] = React.useState<RunPolicySpec | null>(null);
@@ -171,7 +173,7 @@ export function ProfileEditor({
   const dockerUncapped = isUncappedEnforcement(enforcement);
 
   const save = async () => {
-    const parsed = composed ? null : parseSpec(spec);
+    const parsed = ceiling;
     if (parsed && !parsed.ok) {
       setError({ message: parsed.message });
       return;
@@ -305,14 +307,17 @@ export function ProfileEditor({
           </>
         ) : (
           <>
-        {/* #1200 §3a — the "Allowed barriers" control: the same
-            min_confinement_class floor the JSON spec below already carries,
-            authored as one radio instead of a hand-typed field (T-7 ships
-            against the existing floor; no allow-set, no ceiling field). */}
-        <AllowedBarriersField spec={spec} onChange={setSpec} disabled={disabled} />
-        <div className="mt-3">
-          <PolicyPanel instance="policies" value={spec} onChange={setSpec} modelProviders={modelProviders} />
-        </div>
+        {/* #1200 §3a's "Allowed barriers" control (the same min_confinement_class
+            floor the source carries), then the ceiling itself: read first,
+            edited on "Edit policy". */}
+        <ProfileCeilingPolicy
+          source={spec}
+          format={format}
+          onSourceChange={setSpec}
+          onFormatChange={setFormat}
+          disabled={disabled}
+          modelProviders={modelProviders}
+        />
         <p className="mt-2 text-xs text-muted-foreground">{GOV.GRADE_NOTE}</p>
           </>
         )}
@@ -556,55 +561,11 @@ export function ProfileEditor({
         </Button>
         {/* The surface's ONE `default` button while the editor is open — the
             add-assignment form below collapses and takes its teal with it. */}
-        <Button onClick={save} disabled={disabled || saving || !name.trim()}>
+        <Button onClick={save} disabled={disabled || saving || !name.trim() || ceiling?.ok === false}>
           {saving ? <Loader2 className="size-4 animate-spin" /> : null}
           {GOV.SAVE}
         </Button>
       </div>
-    </div>
-  );
-}
-
-// #1200 §3a — "Allowed barriers": a labelled radio over the SAME
-// min_confinement_class field the JSON spec below authors, rather than a
-// second, competing floor. Reads the CURRENT floor out of the parsed spec
-// (CC1 — the weakest tier — when the field is absent or unparseable, which
-// reads identically to "no floor"), and on change rewrites just that one key
-// into the spec text PolicyPanel renders, so the two controls can never
-// disagree about what was last saved.
-function AllowedBarriersField({
-  spec,
-  onChange,
-  disabled,
-}: {
-  spec: string;
-  onChange: (next: string) => void;
-  disabled: boolean;
-}) {
-  const parsed = parseSpec(spec);
-  const raw = parsed.ok ? (parsed.spec as { min_confinement_class?: unknown }).min_confinement_class : undefined;
-  const floor: ConfinementClass = typeof raw === "string" && (CC_ORDER as string[]).includes(raw) ? (raw as ConfinementClass) : "CC1";
-
-  const setFloor = (cc: ConfinementClass) => {
-    if (!parsed.ok) return;
-    onChange(JSON.stringify({ ...parsed.spec, min_confinement_class: cc }, null, 2));
-  };
-
-  return (
-    <div className="mt-3 rounded-lg border border-border bg-surface-2 p-3">
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-medium text-foreground">{TIER_PICKER.ALLOWED_BARRIERS_LABEL}</span>
-      </div>
-      <p className="mt-0.5 text-xs text-muted-foreground">{FIELD_HELP.min_confinement_class.what}</p>
-      <div className="mt-2">
-        <Segmented
-          value={floor}
-          disabled={disabled || !parsed.ok}
-          onChange={setFloor}
-          options={CC_ORDER.map((cc) => ({ value: cc, label: CC_META[cc].label }))}
-        />
-      </div>
-      <p className="mt-2 text-xs text-muted-foreground">{TIER_PICKER.ALLOWED_BARRIERS_SUMMARY(floor)}</p>
     </div>
   );
 }
