@@ -23,6 +23,30 @@ function caught(error: unknown): PolicySourceError {
   return { ok: false, line: 1, column: 1, message: error instanceof Error ? error.message : "Policy source could not be read." };
 }
 
+function located(source: string, offset: number, message: string): PolicySourceError {
+  const before = source.slice(0, offset).split("\n");
+  return { ok: false, line: before.length, column: before[before.length - 1].length + 1, message };
+}
+
+// yaml here breaks lines only at LF and CRLF. The CLI's --policy-file reader
+// (gopkg.in/yaml.v3) also breaks at a bare CR, U+0085, U+2028 and U+2029, so
+// the same text would read as a different policy there. Escapes are fine.
+const STRAY_BREAK = /\r(?!\n)|[\x85\u2028\u2029]/;
+
+function strayBreak(source: string): PolicySourceError | undefined {
+  const at = source.search(STRAY_BREAK);
+  if (at < 0) return undefined;
+  const code = source.charCodeAt(at).toString(16).padStart(4, "0");
+  return located(source, at, source[at] === "\r"
+    ? "Bare carriage return: use LF or CRLF line endings."
+    : `Unescaped U+${code.toUpperCase()}: write it as \\u${code} in a quoted string.`);
+}
+
+// Written text must never hold those characters raw; only quoted strings can.
+function escapeBreaks(text: string): string {
+  return text.replace(/[\x85\u2028\u2029]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
 function safeNumber(value: number): boolean {
   return Number.isFinite(value) && (!Number.isInteger(value) || Number.isSafeInteger(value));
 }
@@ -66,6 +90,8 @@ function documentValue(document: Document, lines: LineCounter): PolicySourceResu
 function readSource(source: string):
   | { ok: true; document: Document; value: PolicySourceMapping }
   | PolicySourceError {
+  const refused = strayBreak(source);
+  if (refused) return refused;
   const lines = new LineCounter();
   try {
     const tokens = [...new Parser(lines.addNewLine).parse(source)];
@@ -146,22 +172,20 @@ function jsonSyntaxError(source: string): PolicySourceError {
   } catch {
     at = 0; // Nesting too deep to walk: refused without a place to point at.
   }
-  const before = source.slice(0, at).split("\n");
-  return { ok: false, line: before.length, column: before[before.length - 1].length + 1, message };
+  return located(source, at, message);
 }
 
 // The AST walk supplies the value in both formats: JSON.parse would silently
 // keep the last duplicate key and round an unsafe integer. Explicit JSON must
-// also be JSON by JSON.parse's grammar and read the same both ways (JSON allows
-// a bare carriage return as whitespace; the YAML reading keeps it as content).
-// No failed parse exposes a previously valid value or Document.
+// also be JSON by JSON.parse's grammar and read the same both ways. No failed
+// parse exposes a previously valid value or Document.
 export function parsePolicySource(source: string, format: PolicySourceFormat = "yaml"): PolicySourceResult {
   let json: unknown;
   if (format === "json") {
     try {
       json = JSON.parse(source);
     } catch {
-      return jsonSyntaxError(source);
+      return strayBreak(source) ?? jsonSyntaxError(source);
     }
   }
   const parsed = readSource(source);
@@ -224,11 +248,19 @@ export function editPolicySource(
         : value;
       parsed.document.setIn(path, next);
     }
-    const edited = parsed.document.toString();
+    // Authored text already passed readSource, so only new strings can hold a
+    // CR or a character that must be escaped; only double quotes keep them
+    // exact (a block scalar would turn CRLF into LF).
+    visit(parsed.document, {
+      Scalar(_, node) {
+        if (typeof node.value === "string" && /[\r\x85\u2028\u2029]/.test(node.value)) node.type = "QUOTE_DOUBLE";
+      },
+    });
+    const edited = escapeBreaks(parsed.document.toString());
     const checked = parsePolicySource(edited);
     if (!checked.ok) return checked;
     // JSON is the wire/storage representation, so its conversion drops comments.
-    return { ok: true, source: format === "json" ? JSON.stringify(checked.value, null, 2) : edited };
+    return { ok: true, source: format === "json" ? escapeBreaks(JSON.stringify(checked.value, null, 2)) : edited };
   } catch (error) {
     return caught(error);
   }

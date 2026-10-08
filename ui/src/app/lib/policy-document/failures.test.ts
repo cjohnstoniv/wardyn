@@ -31,6 +31,15 @@ it("contains serialization failures without replacing the authored source", () =
   });
 });
 
+// No known valid JSON reads differently once bare CRs are refused; the
+// comparison stays as a backstop, so simulate a YAML reading that differs.
+it("refuses explicit JSON whose YAML reading differs from JSON.parse", () => {
+  vi.spyOn(yaml.Document.prototype, "toJS").mockImplementationOnce(() => ({ a: 2 }));
+  expect(parsePolicySource('{"a": 1}', "json")).toEqual({
+    ok: false, line: 1, column: 1, message: "Policy source reads differently as JSON and as YAML.",
+  });
+});
+
 it("contains a non-Error thrown by the parser", () => {
   vi.spyOn(yaml.Parser.prototype, "parse").mockImplementationOnce(() => { throw "failed"; });
   expect(parsePolicySource("a: 1")).toEqual({
