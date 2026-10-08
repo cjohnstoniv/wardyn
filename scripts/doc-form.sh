@@ -298,8 +298,14 @@ def line_prose_words(raw):
 EMPHASIS = re.compile(r'\*{1,2}|_{1,2}')
 
 
+SPAN_GAP = '\u2003'
+
+
 def sentences_from_block(text):
-    text = CODESPAN.sub(' ', text)
+    # An em space, not a plain one: it splits and counts exactly like a space
+    # (\s, str.split), but the joiner check can tell a removed code span from
+    # the real spaces around it (", `0-9` and `-`" is not ", and ").
+    text = CODESPAN.sub(SPAN_GAP, text)
     text = LINKORURL.sub(' ', text)
     text = ABBREV.sub(lambda m: m.group(0).replace('.', '\u0000'), text)
     text = VERSIONDOT.sub('\u0000', text)
@@ -323,6 +329,9 @@ WAIVE_MIN, WAIVE_MAX = 36, 40
 
 
 def joiner_in(text):
+    """text keeps SPAN_GAP where a code span was; only runs of plain spaces
+    collapse, so a joiner counts only when written out in the prose."""
+    text = re.sub(r'[ \t]+', ' ', text)
     return next((j for j in JOINERS if j in text), None)
 
 
@@ -389,8 +398,8 @@ def apply_waivers(path, long_sentences, long_blocks, tables):
                 errors.append((w['where'], 'matches no over-cap sentence in ' + path))
             elif hit['n'] != w['words']:
                 errors.append((w['where'], f"declares {w['words']} words but the sentence has {hit['n']}"))
-            elif joiner_in(hit['text']):
-                errors.append((w['where'], f"the {hit['n']}-word sentence contains the clause joiner \"{joiner_in(hit['text']).strip()}\"; split it instead"))
+            elif hit['joiner']:
+                errors.append((w['where'], f"the {hit['n']}-word sentence contains the clause joiner \"{hit['joiner'].strip()}\"; split it instead"))
             else:
                 hit['waived'] = True
         else:
@@ -444,7 +453,8 @@ def analyze(path):
         for s in sentences_from_block(text):
             n = nwords(s)
             if n > max_words:
-                long_sentences.append({'n': n, 'snippet': s[:100], 'text': fold(s),
+                long_sentences.append({'n': n, 'snippet': s.replace(SPAN_GAP, ' ')[:100],
+                                       'text': fold(s), 'joiner': joiner_in(s),
                                        'sha': sentence_sha1(s), 'waived': False})
 
     def flush_block():
@@ -656,7 +666,7 @@ for path in asserted_paths:
         ok = False
     for s in [s for s in r['long_sentences'] if not s['waived']][:5]:
         print(f"  FAIL {path}: {s['n']}-word sentence (max {max_words}): \"{s['snippet']}...\"")
-        if WAIVE_MIN <= s['n'] <= WAIVE_MAX and not joiner_in(s['text']):
+        if WAIVE_MIN <= s['n'] <= WAIVE_MAX and not s['joiner']:
             print(f"       waivable as: sentence\t{path}\t{s['sha']}\t{s['n']}\t<reason>")
         ok = False
     for b in [b for b in r['long_blocks'] if not b['waived']][:5] if strict else []:
