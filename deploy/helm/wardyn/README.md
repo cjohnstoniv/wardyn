@@ -425,9 +425,9 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 - `pods/exec` get+create — the exec subresource's websocket transport issues GET, SPDY issues POST, and the driver tries websocket first; `pods/log` get, which streams an exec run's output into its tail for `GET /runs/{id}/output`;
 - secrets create/delete/deletecollection and networkpolicies create/list/delete/deletecollection — deliberately **no** `get`, `list` or `watch` on `secrets`:
 - every one of those returns the object's body, RBAC cannot scope a list by label, and wardynd never reads a Secret back.
-- `list` on `networkpolicies` alone is what the orphan sweep needs to reach a run whose pods are both gone, and it is asked for best-effort —
-- a Role without it degrades the sweep rather than killing it; `events` list only, so an image pull reads as "Downloading the image" rather than ContainerCreating —
-- a Role without it keeps the old wording and nothing else changes; `pods` list in the `metrics.k8s.io` group, one namespaced PodMetrics read per sweep tick, so idle auto-stop counts CPU work inside a sandbox —
+- `list` on `networkpolicies` alone is what the orphan sweep needs to reach a run whose pods are both gone, and it is asked for best-effort — a Role without it degrades the sweep rather than killing it;
+- `events` list only, so an image pull reads as "Downloading the image" rather than ContainerCreating — a Role without it keeps the old wording and nothing else changes;
+- `pods` list in the `metrics.k8s.io` group, one namespaced PodMetrics read per sweep tick, so idle auto-stop counts CPU work inside a sandbox —
 - a Role without it, or a cluster without metrics-server, keeps idleness on attaches and egress and the setup checklist's Idle detection row says so);
 - the cluster-scoped ClusterRole covers `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver only ever resolves one by name).
 - One rule is conditional, and it is the only one switched twice: `persistentvolumeclaims` get+create, rendered only with `drives.enabled`, plus `delete` only with `drives.reclaim.enabled` — see [User drives](#user-drives-drivesenabled) below.
@@ -494,8 +494,9 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
   - and **`replicas` stays 1 unless `ha.enabled` is set** (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s "High availability").
 
 - **Narrowed in 0.7.5, further in 0.8 (#164): `DiskMiB` now bounds an AUTONOMOUS (task-mode) run's writes to `/tmp`, its workdir `/home/agent/work`, and its toolchain cache root `/home/agent/.cache`.**
-  - A run's `disk_mib` becomes the agent container's `resources.limits[ephemeral-storage]` (with a small fixed 256Mi request),
-    - scheduling is unchanged except that a node short on allocatable ephemeral storage can newly leave the pod Pending, **and** the `sizeLimit` of three `emptyDir` volumes mounted on that container — `wardyn-tmp` at `/tmp`, `wardyn-work` at `/home/agent/work`, and `wardyn-cache` at `/home/agent/.cache`.
+  - A run's `disk_mib` becomes the agent container's `resources.limits[ephemeral-storage]`
+    - (with a small fixed 256Mi request, so scheduling is unchanged except that a node short on allocatable ephemeral storage can newly leave the pod Pending)
+    - **and** the `sizeLimit` of three `emptyDir` volumes mounted on that container — `wardyn-tmp` at `/tmp`, `wardyn-work` at `/home/agent/work`, and `wardyn-cache` at `/home/agent/.cache`.
   - An autonomous run's commands run in an ephemeral container `Exec` attaches to the pod,
     - and the kubelet meters no part of an ephemeral container's writable layer: that is why 0.7.2's limit alone bound an idle container nothing writes in on such a run (0.7.4 disclosed it).
   - An `emptyDir` is metered as the pod's local ephemeral storage whichever container writes to it, and the ephemeral container inherits the main container's mounts verbatim.
@@ -641,8 +642,9 @@ secretStore:
 
 ## Corporate CA trust
 
-- `trustedCA` bakes a PEM bundle of additional trusted roots into a ConfigMap (a certificate is public, so — unlike `defaultPolicy`'s sibling knobs that touch real secrets)
-  - no Secret is involved, and mounts it read-only, wiring `WARDYN_TRUSTED_CA_FILE` at `/etc/wardyn/trusted-ca/ca.pem`.
+- `trustedCA` bakes a PEM bundle of additional trusted roots into a ConfigMap
+  - (a certificate is public, so — unlike `defaultPolicy`'s sibling knobs that touch real secrets — no Secret is involved)
+  - and mounts it read-only, wiring `WARDYN_TRUSTED_CA_FILE` at `/etc/wardyn/trusted-ca/ca.pem`.
 - Set it when this cluster's egress passes through a TLS-inspecting corporate middlebox: without it, `wardynd`'s own outbound TLS (OIDC discovery, the GitHub App transport, the audit webhook sink), the `wardyn-proxy` sidecar's forwarding transport,
   - and every sandbox's own TLS clients on a passthrough CONNECT tunnel all fail certificate verification against that middlebox.
 - It never widens what a proxy trusts for its calls to wardynd (see above).

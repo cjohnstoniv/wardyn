@@ -1,2 +1,3 @@
-deploy/helm/wardyn/README.md	9bac06d29fd0cf684c1e583b53aa0865c36f3180	37	one sentence of 37 words with no usable clause joiner (a comma list of what CI proves); text kept byte-identical (ledger row R0317)
-deploy/helm/wardyn/README.md	f58ab42078aa04df0cf6bddfdfb964e71b42bf01	37	one sentence of 37 words with no usable clause joiner (a name rule followed by one mapping); text kept byte-identical (ledger row R0348)
+# kind	path	key	words	reason
+sentence	deploy/helm/wardyn/README.md	6a6745d3e1f067e8d67ea1b82273b4c5dac5216c	37	one sentence of 37 words with no clause joiner (a comma list of what CI proves); text kept byte-identical (ledger row R0317)
+sentence	deploy/helm/wardyn/README.md	67a25d0adaa048bd1e7aadceb8cff31b331cd954	37	one sentence of 37 words with no clause joiner (a name rule followed by one mapping; the gate reads the span list `0-9` and `-` as a joiner, a gate defect); text kept byte-identical (ledger row R0348)
