@@ -336,5 +336,15 @@
    "a": " x\n \n",
    "b": 1
   }
+ },
+ {
+  "name": "an escaped line break before an empty line",
+  "source": "a: \"x\\\n\n  y\"\n",
+  "console": {
+   "error": "Escaped line break in a quoted string: write the string on one line."
+  },
+  "cli": {
+   "a": "x\ny"
+  }
  }
 ]

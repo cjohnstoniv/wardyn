@@ -289,3 +289,28 @@ describe("block scalar indentation indicators", () => {
     expect(parsePolicySource(source)).toEqual({ ok: true, value });
   });
 });
+
+// An escaped line break followed by an empty line keeps that line as "\n" in
+// gopkg.in/yaml.v3 (as YAML 1.2 says) and folds it to a space here.
+describe("escaped line breaks in double-quoted strings", () => {
+  const ESCAPED = "Escaped line break in a quoted string: write the string on one line.";
+
+  it.each([
+    ["one before an empty line", 'a: "x\\\n\n  y"', 1, 6],
+    ["one before a continuation", 'a: "x\\\n  y"', 1, 6],
+    ["one before CRLF", 'a: "x\\\r\n  y"', 1, 6],
+    ["one in a key", '"k\\\n  z": 1', 1, 3],
+    ["one after an escaped backslash", 'a: "x\\\\\\\n  y"', 1, 8],
+  ])("refuses %s at the backslash", (_, source, line, column) => {
+    expect(parsePolicySource(source)).toEqual({ ok: false, line, column, message: ESCAPED });
+  });
+
+  it.each<[string, string, unknown]>([
+    ["an escaped backslash before a line break", 'a: "x\\\\\n  y"', { a: "x\\ y" }],
+    ["a folded line break", 'a: "x\n  y"', { a: "x y" }],
+    ["a \\n escape", 'a: "x\\ny"', { a: "x\ny" }],
+    ["a single-quoted backslash before a line break", "a: 'x\\\n  y'", { a: "x\\ y" }],
+  ])("accepts %s", (_, source, value) => {
+    expect(parsePolicySource(source)).toEqual({ ok: true, value });
+  });
+});

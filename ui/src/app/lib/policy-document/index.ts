@@ -74,6 +74,12 @@ function structureProblem(tokens: readonly CST.Token[], source: string): [number
     if (header && "source" in header && /\d/.test(header.source)) {
       return [header.offset, "Indentation indicators are not allowed: remove the digit after | or >."];
     }
+    // An escaped line break before an empty line keeps it as "\n" in yaml.v3
+    // (as YAML 1.2 says); yaml here folds it to a space.
+    const escaped = token.type === "double-quoted-scalar" ? /(?:^|[^\\])(?:\\\\)*\\\r?\n/.exec(token.source) : null;
+    if (escaped) {
+      return [token.offset + escaped.index + escaped[0].lastIndexOf("\\"), "Escaped line break in a quoted string: write the string on one line."];
+    }
     if ("value" in token) pending.push([token.value, level]);
     if (!("items" in token)) continue;
     for (const item of token.items) {
