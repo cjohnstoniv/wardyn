@@ -152,13 +152,15 @@ function summarize(
   if (blocked.length > 0) network.push(row(SUMMARY.blockedHosts, blocked));
   // The wire still accepts the legacy boolean here.
   const firstUse = take("first_use_approval", (v) => (typeof v === "string" || typeof v === "boolean" ? v : undefined));
-  if (firstUse !== undefined) {
-    const hold = take("first_use_hold_seconds", asNumber);
-    const waits = asFirstUseMode(firstUse) === "wait_for_review";
+  // The hold is read whether or not the policy names a mode: it shows under the
+  // same title either way, never as a raw key.
+  const holdSeconds = take("first_use_hold_seconds", asNumber);
+  if (firstUse !== undefined || holdSeconds) {
+    const waits = firstUse !== undefined && asFirstUseMode(firstUse) === "wait_for_review";
     network.push(
       row(SUMMARY.otherHost, [
-        text(firstUseText(firstUse, hold)),
-        ...(hold && !waits ? [text(SUMMARY.held(hold))] : []),
+        ...(firstUse !== undefined ? [text(firstUseText(firstUse, holdSeconds))] : []),
+        ...(holdSeconds && !waits ? [text(SUMMARY.held(holdSeconds))] : []),
       ]),
     );
   }

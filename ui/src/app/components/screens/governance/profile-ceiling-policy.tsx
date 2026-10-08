@@ -15,8 +15,13 @@ import { Button } from "../../ui/button";
 import { CC_META } from "../../wardyn/cc-meta";
 import { POLICY_DOCUMENT as D } from "../../wardyn/copy/policy-document";
 import { PolicyDocument, type PolicyView } from "../../wardyn/policy-document/policy-document";
-import { useEditModeFocus } from "../../wardyn/policy-document/policy-editor";
-import { setSpecKey, type ParsedSpec, type PolicySourceFormat } from "../../wardyn/policy-document/policy-source";
+import { OperationError, useEditModeFocus } from "../../wardyn/policy-document/policy-editor";
+import {
+  setSpecKey,
+  type ParsedSpec,
+  type PolicySourceError,
+  type PolicySourceFormat,
+} from "../../wardyn/policy-document/policy-source";
 import { FIELD_HELP } from "../../wardyn/policy-field-help";
 import { PolicyPanel, parseSpec } from "../../wardyn/policy-panel";
 import { Segmented } from "../../wardyn/segmented";
@@ -102,10 +107,14 @@ function AllowedBarriersField({
 }) {
   const raw = parsed.ok ? (parsed.spec as { min_confinement_class?: unknown }).min_confinement_class : undefined;
   const floor: ConfinementClass = typeof raw === "string" && (CC_ORDER as string[]).includes(raw) ? (raw as ConfinementClass) : "CC1";
+  // A refused write is said here, beside the control that asked, for as long as
+  // the source it was refused on is the one on screen.
+  const [refused, setRefused] = React.useState<{ source: string; error: PolicySourceError } | null>(null);
 
   const setFloor = (cc: ConfinementClass) => {
     const edited = setSpecKey(source, format, "min_confinement_class", cc);
     if (edited.ok) onChange(edited.source);
+    else setRefused({ source, error: edited });
   };
 
   return (
@@ -123,6 +132,7 @@ function AllowedBarriersField({
         />
       </div>
       <p className="mt-2 text-xs text-muted-foreground">{TIER_PICKER.ALLOWED_BARRIERS_SUMMARY(floor)}</p>
+      {refused?.source === source && <OperationError error={refused.error} className="mt-2" />}
     </div>
   );
 }

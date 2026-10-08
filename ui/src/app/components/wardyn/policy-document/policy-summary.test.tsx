@@ -168,6 +168,16 @@ describe("PolicySummary — each repeated key is one title with a list", () => {
     expect(screen.queryByRole("heading", { name: "Other settings" })).toBeNull();
   });
 
+  // The hold has a display name of its own; without a mode it must not fall to its raw key.
+  it("shows a hold with no first-use mode under Any other host, not under its raw key", () => {
+    const { container } = render(<PolicySummary spec={{ first_use_hold_seconds: 45 } as unknown as RunPolicySpec} />);
+    expect(within(row("Network", "Any other host")).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
+      "Held for up to 45 seconds while someone decides",
+    ]);
+    expect(container).not.toHaveTextContent("first_use_hold_seconds");
+    expect(screen.queryByRole("heading", { name: "Other settings" })).toBeNull();
+  });
+
   it("a held connection states its own wait once", () => {
     render(
       <PolicySummary

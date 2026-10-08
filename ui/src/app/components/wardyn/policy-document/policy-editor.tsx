@@ -161,14 +161,7 @@ export function PolicyEditor({
         </CopyButton>
       </div>
 
-      {operationError && (
-        <p role="status" className="select-text whitespace-pre-wrap break-words text-xs text-warning">
-          {operationError.message}{" "}
-          <span className="font-mono text-muted-foreground">
-            {D.SOURCE_POSITION(operationError.line, operationError.column)}
-          </span>
-        </p>
-      )}
+      {operationError && <OperationError error={operationError} />}
 
       {structured && (
         <fieldset disabled={invalid} className="m-0 flex min-w-0 flex-col gap-4 border-0 p-0" data-testid="policy-structured">
@@ -204,6 +197,17 @@ export function PolicyEditor({
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+/** A structured edit the parser refused on a still-valid source: its own
+ *  sentence and position, shown beside the control that asked for it. */
+export function OperationError({ error, className }: { error: PolicySourceError; className?: string }) {
+  return (
+    <p role="status" className={cn("select-text whitespace-pre-wrap break-words text-xs text-warning", className)}>
+      {error.message}{" "}
+      <span className="font-mono text-muted-foreground">{D.SOURCE_POSITION(error.line, error.column)}</span>
+    </p>
   );
 }
 
