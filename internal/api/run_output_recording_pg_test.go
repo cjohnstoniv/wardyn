@@ -323,3 +323,29 @@ func TestRecordingOutputPG_FreshnessLostBetweenPartsDropsWholeResult(t *testing.
 		t.Fatalf("lost freshness kept %q gap=%v incomplete=%v scope=%v", out, gap, incomplete, scope)
 	}
 }
+
+// The receipt says the cast is kept. Whether its output is owed is the runner's
+// to say, and a runner that cannot be asked fails no upload and queues nothing:
+// the run's end asks again.
+func TestRecordingOutputPG_UploadReceiptDoesNotNeedRunnerCapabilities(t *testing.T) {
+	l := newMaskLab(t)
+	a := l.recordingReplica()
+	run := l.run()
+	a.dispatch(t, run, "caps-secret-value")
+	a.srv.cfg.Runner = &outputRunner{fakeRunner: &fakeRunner{capsErr: errors.New("substrate unreachable")}}
+	if w := l.upload(a, run, partsHeader+`[0,"o","kept caps-secret-value\n"]`+"\n"); w.Code != http.StatusNoContent {
+		t.Fatalf("a stored cast was refused its receipt: %d %s", w.Code, w.Body)
+	}
+	if evs := l.recEvents("recording.upload"); len(evs) != 1 || evs[0].Outcome != "success" {
+		t.Fatalf("upload audit = %+v, want one success", evs)
+	}
+	if l.count(`SELECT count(*) FROM run_output_recording_recovery WHERE run_id=$1`, run.ID) != 0 {
+		t.Fatal("an unreadable capability queued recovery that may not be owed")
+	}
+	run = l.recordingRunEnded(run)
+	b := l.recordingReplica()
+	b.srv.FinishRunOutput(t.Context(), run.ID)
+	if raw, final := l.storedOutput(run.ID); string(raw) != "kept <secret-hidden>\n" || !final {
+		t.Fatalf("the run's end did not recover the kept cast: %q final=%v", raw, final)
+	}
+}

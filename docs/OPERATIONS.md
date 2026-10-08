@@ -251,7 +251,13 @@ browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
   - The recording commit and recovery-obligation commit use separate stores.
     A crash between them leaves a committed recording without a successful
     receipt or queued recovery. An authorized terminal missing/gap output read
-    repairs that window, with a five-minute cooldown. Transient source failures
+    repairs that window, with a five-minute cooldown. A failed obligation commit
+    is the same window: the upload answers `500` although the recording is
+    stored, and the recorder does not retry its final upload. The receipt never
+    waits on the runner. When the runner's capabilities cannot be read at upload
+    time, the stored recording is acknowledged and that upload queues nothing;
+    terminal finalization asks the runner again, and the same read repairs an
+    upload that arrived after the run ended. Transient source failures
     leave durable pending work; no recovery is possible once masking coverage
     or output retention has expired.
 

@@ -39,11 +39,10 @@ func (s *Server) uploadedRecordingOutput(ctx context.Context, runID uuid.UUID) e
 	if err != nil || run.Interactive || runIsUnrecordable(run) || s.runOutputExpiredByRetention(run) {
 		return err
 	}
-	uncaptured, known := s.execOutputCapture(ctx)
-	if !known {
-		return errors.New("run output capture capability is unavailable")
-	}
-	if !uncaptured {
+	// The runner never withholds a receipt: one that cannot be asked owes
+	// nothing here, like one that captures. The cast is kept, and the run's end
+	// or an authorized read asks the runner again.
+	if uncaptured, _ := s.execOutputCapture(ctx); !uncaptured {
 		return nil
 	}
 	st := s.runOutputStore()

@@ -379,7 +379,9 @@ forms, which no verbatim matcher catches.
   and output-work commit are not atomic across stores: an interrupted,
   unacknowledged upload may require an authorized, cooldown-limited missing/gap
   read to repair its output. Acknowledged eligible uploads durably queue recovery,
-  but do not guarantee it finishes. Decoded output is masked in bounded batches
+  but do not guarantee it finishes. An upload acknowledged while the runner's
+  capabilities could not be read queues none: terminal finalization, or the same
+  authorized read, recovers it. Decoded output is masked in bounded batches
   with fresh registry reads before tail truncation. Each source read and each
   leader pass has a ten-second budget: a sufficiently large valid joined cast
   can time out on every retry, which restarts from the beginning. A timeout
