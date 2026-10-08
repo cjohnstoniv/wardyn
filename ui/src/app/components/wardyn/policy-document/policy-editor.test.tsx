@@ -98,6 +98,16 @@ describe("PolicyEditor — invalid source", () => {
     expect(screen.queryByText("Valid YAML")).toBeNull();
   });
 
+  // The parser's own sentences are shown as they are, inside the approved frame.
+  it.each([
+    ["a: 017", "Leading zeros are ambiguous: remove them, or quote the value."],
+    ["a: [x:]", "Ambiguous ':' after an unquoted key: add a space after it, or quote the key."],
+  ])("shows the parser's message for %j verbatim", (source, message) => {
+    render(<Editor initial={source} />);
+    expect(screen.getByRole("status")).toHaveTextContent(`Invalid YAML — ${message}`);
+    expect(box().value).toBe(source);
+  });
+
   it("keeps the text exactly as typed and holds the structured controls, with a way back to the text", async () => {
     render(<Editor initial="a: [" structured={<button type="button">Minimal</button>} />);
     expect(box().value).toBe("a: [");
