@@ -31,7 +31,7 @@ func componentsServer(t *testing.T) (*Server, *authzStore, *recRecorder) {
 	return matrixServer(cfg), ast, h.audit
 }
 
-func componentBody(name, def string) string {
+func saveComponentBody(name, def string) string {
 	return `{"name":` + jsonString(name) + `,"definition":` + def + `}`
 }
 
@@ -57,7 +57,7 @@ func TestComponents_MemberSavesUpdatesDeletesOwnRow(t *testing.T) {
 	srv, _, rec := componentsServer(t)
 	member := ssoSession(t, "sub-member", "m@corp.example", oidc.RoleUser)
 
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/components", member, componentBody("Stripe", stripeDef))
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/components", member, saveComponentBody("Stripe", stripeDef))
 	if w.Code != http.StatusCreated {
 		t.Fatalf("save = %d: %s", w.Code, w.Body.String())
 	}
@@ -69,7 +69,7 @@ func TestComponents_MemberSavesUpdatesDeletesOwnRow(t *testing.T) {
 		t.Errorf("body = %s, want requirements as [] not null", w.Body.String())
 	}
 
-	w = doSSO(t, srv, http.MethodPut, "/api/v1/me/components/"+saved.ID.String(), member, componentBody("Stripe live", stripeDef))
+	w = doSSO(t, srv, http.MethodPut, "/api/v1/me/components/"+saved.ID.String(), member, saveComponentBody("Stripe live", stripeDef))
 	if w.Code != http.StatusOK {
 		t.Fatalf("update = %d: %s", w.Code, w.Body.String())
 	}
@@ -127,14 +127,14 @@ func TestComponents_SaveRefusals(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			w := doSSO(t, srv, http.MethodPost, "/api/v1/me/components", member, componentBody("x", c.def))
+			w := doSSO(t, srv, http.MethodPost, "/api/v1/me/components", member, saveComponentBody("x", c.def))
 			if w.Code != http.StatusUnprocessableEntity || errorReason(w) != "component_definition_invalid" || !strings.Contains(w.Body.String(), c.wantIn) {
 				t.Fatalf("= %d %s, want 422 component_definition_invalid naming %q", w.Code, w.Body.String(), c.wantIn)
 			}
 		})
 	}
 	// A bad name, and an unknown field, are refused before the definition is read.
-	for _, body := range []string{componentBody("", `{}`), componentBody(" padded ", `{}`), `{"name":"x","definition":{},"owner":""}`} {
+	for _, body := range []string{saveComponentBody("", `{}`), saveComponentBody(" padded ", `{}`), `{"name":"x","definition":{},"owner":""}`} {
 		if w := doSSO(t, srv, http.MethodPost, "/api/v1/me/components", member, body); w.Code != http.StatusUnprocessableEntity && w.Code != http.StatusBadRequest {
 			t.Errorf("%s = %d, want a refusal", body, w.Code)
 		}
@@ -148,25 +148,25 @@ func TestComponents_NamesAreUniquePerOwnerWithoutCase(t *testing.T) {
 	alice := ssoSession(t, "sub-alice", "a@corp.example", oidc.RoleUser)
 	bob := ssoSession(t, "sub-bob", "b@corp.example", oidc.RoleUser)
 
-	first := doSSO(t, srv, http.MethodPost, "/api/v1/me/components", alice, componentBody("Stripe", stripeDef))
+	first := doSSO(t, srv, http.MethodPost, "/api/v1/me/components", alice, saveComponentBody("Stripe", stripeDef))
 	if first.Code != http.StatusCreated {
 		t.Fatalf("first = %d: %s", first.Code, first.Body.String())
 	}
 	for _, name := range []string{"Stripe", "stripe", "STRIPE"} {
-		w := doSSO(t, srv, http.MethodPost, "/api/v1/me/components", alice, componentBody(name, stripeDef))
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/me/components", alice, saveComponentBody(name, stripeDef))
 		if w.Code != http.StatusConflict || errorReason(w) != "component_name_conflict" {
 			t.Errorf("%q = %d %s, want 409 component_name_conflict", name, w.Code, w.Body.String())
 		}
 	}
-	if w := doSSO(t, srv, http.MethodPost, "/api/v1/me/components", bob, componentBody("stripe", stripeDef)); w.Code != http.StatusCreated {
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/me/components", bob, saveComponentBody("stripe", stripeDef)); w.Code != http.StatusCreated {
 		t.Errorf("another person's same name = %d, want 201", w.Code)
 	}
 	// Renaming a row onto a name its owner already uses is refused; keeping its own name is not.
-	other := decodeSaved(t, doSSO(t, srv, http.MethodPost, "/api/v1/me/components", alice, componentBody("Other", stripeDef)))
-	if w := doSSO(t, srv, http.MethodPut, "/api/v1/me/components/"+other.ID.String(), alice, componentBody("sTRIPE", stripeDef)); w.Code != http.StatusConflict {
+	other := decodeSaved(t, doSSO(t, srv, http.MethodPost, "/api/v1/me/components", alice, saveComponentBody("Other", stripeDef)))
+	if w := doSSO(t, srv, http.MethodPut, "/api/v1/me/components/"+other.ID.String(), alice, saveComponentBody("sTRIPE", stripeDef)); w.Code != http.StatusConflict {
 		t.Errorf("rename onto a taken name = %d, want 409", w.Code)
 	}
-	if w := doSSO(t, srv, http.MethodPut, "/api/v1/me/components/"+other.ID.String(), alice, componentBody("OTHER", stripeDef)); w.Code != http.StatusOK {
+	if w := doSSO(t, srv, http.MethodPut, "/api/v1/me/components/"+other.ID.String(), alice, saveComponentBody("OTHER", stripeDef)); w.Code != http.StatusOK {
 		t.Errorf("recasing its own name = %d, want 200: %s", w.Code, w.Body.String())
 	}
 }
@@ -183,8 +183,8 @@ func TestComponents_AnotherPersonsRowIsAbsent(t *testing.T) {
 
 	for _, method := range []string{http.MethodPut, http.MethodDelete} {
 		for who, sess := range map[string]*http.Cookie{"another member": alice, "an admin": admin} {
-			foreign := doSSO(t, srv, method, "/api/v1/me/components/"+row.String(), sess, componentBody("x", stripeDef))
-			missing := doSSO(t, srv, method, "/api/v1/me/components/"+absent.String(), sess, componentBody("x", stripeDef))
+			foreign := doSSO(t, srv, method, "/api/v1/me/components/"+row.String(), sess, saveComponentBody("x", stripeDef))
+			missing := doSSO(t, srv, method, "/api/v1/me/components/"+absent.String(), sess, saveComponentBody("x", stripeDef))
 			if foreign.Code != http.StatusNotFound || foreign.Body.String() != missing.Body.String() {
 				t.Errorf("%s %s on someone else's row = %d %s, want the bytes an absent id gets (%d %s)",
 					who, method, foreign.Code, foreign.Body.String(), missing.Code, missing.Body.String())
@@ -214,7 +214,7 @@ func TestComponents_MemberCannotTouchOrgRoutes(t *testing.T) {
 	id := uuid.NewString()
 	for _, c := range []struct{ method, path, body string }{
 		{http.MethodGet, "/api/v1/components", ""},
-		{http.MethodPut, "/api/v1/components/" + id, componentBody("Org", stripeDef)},
+		{http.MethodPut, "/api/v1/components/" + id, saveComponentBody("Org", stripeDef)},
 		{http.MethodDelete, "/api/v1/components/" + id, ""},
 	} {
 		for who, sess := range map[string]*http.Cookie{"member": member, "security admin": secadmin} {
@@ -235,17 +235,17 @@ func TestComponents_OrgCreateIsRestrictedAndNamesAreAudited(t *testing.T) {
 	id := uuid.New()
 
 	org := `{"hosts":["api.example.com"],"secrets":[{"secret_name":"shared-key","shared":true,"delivery":{"mode":"header","host":"api.example.com","plain_http":true}}]}`
-	w := doSSO(t, srv, http.MethodPut, "/api/v1/components/"+id.String(), admin, componentBody("Org Stripe", org))
+	w := doSSO(t, srv, http.MethodPut, "/api/v1/components/"+id.String(), admin, saveComponentBody("Org Stripe", org))
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create = %d: %s", w.Code, w.Body.String())
 	}
 	if !ast.restricted["component/"+id.String()] {
 		t.Fatal("a new org component was created without its restriction")
 	}
-	if up := doSSO(t, srv, http.MethodPut, "/api/v1/components/"+id.String(), admin, componentBody("Org Stripe", org)); up.Code != http.StatusOK || decodeSaved(t, up).Version != 2 {
+	if up := doSSO(t, srv, http.MethodPut, "/api/v1/components/"+id.String(), admin, saveComponentBody("Org Stripe", org)); up.Code != http.StatusOK || decodeSaved(t, up).Version != 2 {
 		t.Fatalf("second PUT = %d %s, want 200 at version 2", up.Code, up.Body.String())
 	}
-	doSSO(t, srv, http.MethodPost, "/api/v1/me/components", member, componentBody("My Secret Host", `{"hosts":["internal-billing.example.com"],"secrets":[{"secret_name":"my-token-name","delivery":{"mode":"env","var":"MY_TOKEN"}}],"config":{"MY_CONFIG_KEY":"v"}}`))
+	doSSO(t, srv, http.MethodPost, "/api/v1/me/components", member, saveComponentBody("My Secret Host", `{"hosts":["internal-billing.example.com"],"secrets":[{"secret_name":"my-token-name","delivery":{"mode":"env","var":"MY_TOKEN"}}],"config":{"MY_CONFIG_KEY":"v"}}`))
 
 	var orgRow, personRow map[string]any
 	for _, ev := range rec.snapshot() {
@@ -284,18 +284,18 @@ func TestComponents_OrgSharedSecretMustBeInTheOperatorNamespace(t *testing.T) {
 	def := func(secret string) string {
 		return `{"hosts":["api.example.com"],"secrets":[{"secret_name":"` + secret + `","shared":true,"delivery":{"mode":"header","host":"api.example.com"}}]}`
 	}
-	w := doSSO(t, srv, http.MethodPut, "/api/v1/components/"+uuid.NewString(), admin, componentBody("Org", def("not-stored")))
+	w := doSSO(t, srv, http.MethodPut, "/api/v1/components/"+uuid.NewString(), admin, saveComponentBody("Org", def("not-stored")))
 	if w.Code != http.StatusUnprocessableEntity || errorReason(w) != "component_secret_missing" {
 		t.Fatalf("an unstored shared secret = %d %s, want 422 component_secret_missing", w.Code, w.Body.String())
 	}
-	if w := doSSO(t, srv, http.MethodPut, "/api/v1/components/"+uuid.NewString(), admin, componentBody("Org", def("shared-key"))); w.Code != http.StatusCreated {
+	if w := doSSO(t, srv, http.MethodPut, "/api/v1/components/"+uuid.NewString(), admin, saveComponentBody("Org", def("shared-key"))); w.Code != http.StatusCreated {
 		t.Fatalf("a stored shared secret = %d %s, want 201", w.Code, w.Body.String())
 	}
 	// An org row may name an address; a person's may not.
-	if w := doSSO(t, srv, http.MethodPut, "/api/v1/components/"+uuid.NewString(), admin, componentBody("Lab", `{"hosts":["10.0.0.5"]}`)); w.Code != http.StatusCreated {
+	if w := doSSO(t, srv, http.MethodPut, "/api/v1/components/"+uuid.NewString(), admin, saveComponentBody("Lab", `{"hosts":["10.0.0.5"]}`)); w.Code != http.StatusCreated {
 		t.Errorf("an org row naming an address = %d %s, want 201", w.Code, w.Body.String())
 	}
-	if w := doSSO(t, srv, http.MethodPut, "/api/v1/components/"+uuid.Nil.String(), admin, componentBody("Nil", `{}`)); w.Code != http.StatusBadRequest {
+	if w := doSSO(t, srv, http.MethodPut, "/api/v1/components/"+uuid.Nil.String(), admin, saveComponentBody("Nil", `{}`)); w.Code != http.StatusBadRequest {
 		t.Errorf("the nil id = %d, want 400", w.Code)
 	}
 }

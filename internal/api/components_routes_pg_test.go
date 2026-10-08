@@ -66,7 +66,7 @@ func (e componentsPG) do(t *testing.T, method, path string, who *http.Cookie, bo
 func (e componentsPG) putOrg(t *testing.T, name string) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
-	w := e.do(t, http.MethodPut, "/api/v1/components/"+id.String(), e.admin, componentBody(name, stripeDef))
+	w := e.do(t, http.MethodPut, "/api/v1/components/"+id.String(), e.admin, saveComponentBody(name, stripeDef))
 	if w.Code != http.StatusCreated {
 		t.Fatalf("admin creates org component %q = %d: %s", name, w.Code, w.Body.String())
 	}
@@ -148,7 +148,7 @@ func TestPG_Components_A19NewOrgComponentIsAttachableByNobody(t *testing.T) {
 
 	// A refused create (same name, new id) leaves no restriction.
 	loser := uuid.New()
-	w := e.do(t, http.MethodPut, "/api/v1/components/"+loser.String(), e.admin, componentBody("org stripe", stripeDef))
+	w := e.do(t, http.MethodPut, "/api/v1/components/"+loser.String(), e.admin, saveComponentBody("org stripe", stripeDef))
 	if w.Code != http.StatusConflict || errorReason(w) != "component_name_conflict" {
 		t.Fatalf("duplicate name = %d %s, want 409 component_name_conflict", w.Code, w.Body.String())
 	}
@@ -156,8 +156,8 @@ func TestPG_Components_A19NewOrgComponentIsAttachableByNobody(t *testing.T) {
 		t.Fatal("a create that was refused left its restriction behind")
 	}
 	// An id that is already someone's personal row is refused too, whole.
-	mine := decodeSaved(t, e.do(t, http.MethodPost, "/api/v1/me/components", e.member, componentBody("Mine", stripeDef)))
-	if w := e.do(t, http.MethodPut, "/api/v1/components/"+mine.ID.String(), e.admin, componentBody("Hijack", stripeDef)); w.Code != http.StatusConflict {
+	mine := decodeSaved(t, e.do(t, http.MethodPost, "/api/v1/me/components", e.member, saveComponentBody("Mine", stripeDef)))
+	if w := e.do(t, http.MethodPut, "/api/v1/components/"+mine.ID.String(), e.admin, saveComponentBody("Hijack", stripeDef)); w.Code != http.StatusConflict {
 		t.Fatalf("an org PUT on a personal row's id = %d, want 409", w.Code)
 	}
 	if e.restricted(t, mine.ID) {
@@ -225,23 +225,23 @@ func TestPG_Components_RowCaps(t *testing.T) {
 			t.Fatalf("seed person row %d: %v", i, err)
 		}
 	}
-	w := e.do(t, http.MethodPost, "/api/v1/me/components", e.member, componentBody("one too many", stripeDef))
+	w := e.do(t, http.MethodPost, "/api/v1/me/components", e.member, saveComponentBody("one too many", stripeDef))
 	if w.Code != http.StatusUnprocessableEntity || errorReason(w) != "component_cap_reached" {
 		t.Fatalf("33rd personal row = %d %s, want 422 component_cap_reached", w.Code, w.Body.String())
 	}
 	rows, _ := e.st.ListComponents(ctx, "sub-member")
-	if w := e.do(t, http.MethodPut, "/api/v1/me/components/"+rows[0].ID.String(), e.member, componentBody("p00 renamed", stripeDef)); w.Code != http.StatusOK {
+	if w := e.do(t, http.MethodPut, "/api/v1/me/components/"+rows[0].ID.String(), e.member, saveComponentBody("p00 renamed", stripeDef)); w.Code != http.StatusOK {
 		t.Fatalf("update at the cap = %d: %s", w.Code, w.Body.String())
 	}
 	if w := e.do(t, http.MethodDelete, "/api/v1/me/components/"+rows[1].ID.String(), e.member, ""); w.Code != http.StatusNoContent {
 		t.Fatalf("delete at the cap = %d", w.Code)
 	}
-	if w := e.do(t, http.MethodPost, "/api/v1/me/components", e.member, componentBody("fits now", stripeDef)); w.Code != http.StatusCreated {
+	if w := e.do(t, http.MethodPost, "/api/v1/me/components", e.member, saveComponentBody("fits now", stripeDef)); w.Code != http.StatusCreated {
 		t.Fatalf("create after a delete = %d: %s", w.Code, w.Body.String())
 	}
 	// Another person's rows do not count against this one.
 	other := ssoSession(t, "sub-other", "other@corp.example", oidc.RoleUser)
-	if w := e.do(t, http.MethodPost, "/api/v1/me/components", other, componentBody("first", stripeDef)); w.Code != http.StatusCreated {
+	if w := e.do(t, http.MethodPost, "/api/v1/me/components", other, saveComponentBody("first", stripeDef)); w.Code != http.StatusCreated {
 		t.Fatalf("another person's first row = %d", w.Code)
 	}
 
@@ -255,11 +255,11 @@ func TestPG_Components_RowCaps(t *testing.T) {
 			firstOrg = c.ID
 		}
 	}
-	w = e.do(t, http.MethodPut, "/api/v1/components/"+uuid.NewString(), e.admin, componentBody("org one too many", stripeDef))
+	w = e.do(t, http.MethodPut, "/api/v1/components/"+uuid.NewString(), e.admin, saveComponentBody("org one too many", stripeDef))
 	if w.Code != http.StatusUnprocessableEntity || errorReason(w) != "component_cap_reached" {
 		t.Fatalf("257th org row = %d %s, want 422 component_cap_reached", w.Code, w.Body.String())
 	}
-	if w := e.do(t, http.MethodPut, "/api/v1/components/"+firstOrg.String(), e.admin, componentBody("o000 renamed", stripeDef)); w.Code != http.StatusOK {
+	if w := e.do(t, http.MethodPut, "/api/v1/components/"+firstOrg.String(), e.admin, saveComponentBody("o000 renamed", stripeDef)); w.Code != http.StatusOK {
 		t.Fatalf("org update at the cap = %d: %s", w.Code, w.Body.String())
 	}
 }
@@ -270,20 +270,20 @@ func TestPG_Components_RowCaps(t *testing.T) {
 func TestPG_Components_MembersAreIsolatedAndCannotWriteOrgRows(t *testing.T) {
 	e := newComponentsPG(t)
 	other := ssoSession(t, "sub-other", "other@corp.example", oidc.RoleUser)
-	theirs := decodeSaved(t, e.do(t, http.MethodPost, "/api/v1/me/components", other, componentBody("Theirs", stripeDef)))
+	theirs := decodeSaved(t, e.do(t, http.MethodPost, "/api/v1/me/components", other, saveComponentBody("Theirs", stripeDef)))
 	org := e.putOrg(t, "Org")
 
 	for _, method := range []string{http.MethodPut, http.MethodDelete} {
-		w := e.do(t, method, "/api/v1/me/components/"+theirs.ID.String(), e.member, componentBody("Taken", stripeDef))
-		a := e.do(t, method, "/api/v1/me/components/"+uuid.NewString(), e.member, componentBody("Taken", stripeDef))
+		w := e.do(t, method, "/api/v1/me/components/"+theirs.ID.String(), e.member, saveComponentBody("Taken", stripeDef))
+		a := e.do(t, method, "/api/v1/me/components/"+uuid.NewString(), e.member, saveComponentBody("Taken", stripeDef))
 		if w.Code != http.StatusNotFound || w.Body.String() != a.Body.String() {
 			t.Errorf("%s on another person's row = %d %s, want an absent id's bytes %s", method, w.Code, w.Body.String(), a.Body.String())
 		}
 		// An org row's id is not a personal row of anyone's: also absent here.
-		if w := e.do(t, method, "/api/v1/me/components/"+org.String(), e.member, componentBody("Taken", stripeDef)); w.Code != http.StatusNotFound {
+		if w := e.do(t, method, "/api/v1/me/components/"+org.String(), e.member, saveComponentBody("Taken", stripeDef)); w.Code != http.StatusNotFound {
 			t.Errorf("%s on an org row through /me = %d, want 404", method, w.Code)
 		}
-		if w := e.do(t, method, "/api/v1/me/components/"+org.String(), e.admin, componentBody("Taken", stripeDef)); w.Code != http.StatusNotFound {
+		if w := e.do(t, method, "/api/v1/me/components/"+org.String(), e.admin, saveComponentBody("Taken", stripeDef)); w.Code != http.StatusNotFound {
 			t.Errorf("admin %s on an org row through /me = %d, want 404", method, w.Code)
 		}
 	}
@@ -293,7 +293,7 @@ func TestPG_Components_MembersAreIsolatedAndCannotWriteOrgRows(t *testing.T) {
 		{http.MethodPut, "/api/v1/components/" + org.String()},
 		{http.MethodDelete, "/api/v1/components/" + org.String()},
 	} {
-		if w := e.do(t, c.method, c.path, e.member, componentBody("x", stripeDef)); w.Code != http.StatusForbidden {
+		if w := e.do(t, c.method, c.path, e.member, saveComponentBody("x", stripeDef)); w.Code != http.StatusForbidden {
 			t.Errorf("member %s %s = %d, want 403", c.method, c.path, w.Code)
 		}
 	}
@@ -319,7 +319,7 @@ func TestPG_Components_MembersAreIsolatedAndCannotWriteOrgRows(t *testing.T) {
 // saved; an admin is exempt.
 func TestPG_Components_RefusedWhenCustomComponentIsDenied(t *testing.T) {
 	e := newComponentsPG(t)
-	mine := decodeSaved(t, e.do(t, http.MethodPost, "/api/v1/me/components", e.member, componentBody("Before", stripeDef)))
+	mine := decodeSaved(t, e.do(t, http.MethodPost, "/api/v1/me/components", e.member, saveComponentBody("Before", stripeDef)))
 
 	e.grant(t, "all", "", capFeature, featureCustomComponent, "deny")
 
@@ -327,7 +327,7 @@ func TestPG_Components_RefusedWhenCustomComponentIsDenied(t *testing.T) {
 		{http.MethodPost, "/api/v1/me/components"},
 		{http.MethodPut, "/api/v1/me/components/" + mine.ID.String()},
 	} {
-		w := e.do(t, c.method, c.path, e.member, componentBody("After", stripeDef))
+		w := e.do(t, c.method, c.path, e.member, saveComponentBody("After", stripeDef))
 		if w.Code != http.StatusForbidden || errorReason(w) != "capability_feature" ||
 			!strings.Contains(w.Body.String(), "Custom components aren't turned on for you. Ask your admin.") {
 			t.Errorf("%s %s with the value denied = %d %s, want 403 capability_feature", c.method, c.path, w.Code, w.Body.String())
@@ -343,7 +343,7 @@ func TestPG_Components_RefusedWhenCustomComponentIsDenied(t *testing.T) {
 	if w := e.do(t, http.MethodDelete, "/api/v1/me/components/"+mine.ID.String(), e.member, ""); w.Code != http.StatusNoContent {
 		t.Errorf("deleting one's own row with the value denied = %d, want 204", w.Code)
 	}
-	if w := e.do(t, http.MethodPost, "/api/v1/me/components", e.admin, componentBody("Admin's own", stripeDef)); w.Code != http.StatusCreated {
+	if w := e.do(t, http.MethodPost, "/api/v1/me/components", e.admin, saveComponentBody("Admin's own", stripeDef)); w.Code != http.StatusCreated {
 		t.Errorf("an admin with the value denied = %d %s, want 201 (exempt)", w.Code, w.Body.String())
 	}
 }
@@ -362,7 +362,7 @@ func TestPG_Components_OwnerIsTheSubjectSecretsAreKeyedBy(t *testing.T) {
 	if err != nil || len(names) != 1 || names[0] != "my-token" {
 		t.Fatalf("secrets under the subject = %v, %v; want the member's own", names, err)
 	}
-	saved := decodeSaved(t, e.do(t, http.MethodPost, "/api/v1/me/components", e.member, componentBody("Mine", stripeDef)))
+	saved := decodeSaved(t, e.do(t, http.MethodPost, "/api/v1/me/components", e.member, saveComponentBody("Mine", stripeDef)))
 	if saved.Owner != "sub-member" {
 		t.Fatalf("owner = %q, want the subject the secrets are keyed by", saved.Owner)
 	}
