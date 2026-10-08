@@ -78,8 +78,9 @@ func modelServingDestinations(sc types.SiteConfig) []types.Destination {
 // credential on this run from a source other than a component: a grant already
 // on the spec (a policy's, a workspace requirement's), the per-person Azure
 // DevOps lane when it resolves for this caller, and every corporate redirect's
-// target. The proxy keeps one credential per bare host and the last one
-// written wins, so a component may never add a second.
+// target and the public hosts it stands in for. The proxy keeps one credential
+// per bare host and the last one written wins, so a component may never add a
+// second.
 //
 // A model credential's hosts are not listed: no component host may overlap one
 // at all (servesModel). A credential dispatch authors from a person's captured
@@ -97,8 +98,12 @@ func (s *Server) credentialedDestinations(r *http.Request, sc types.SiteConfig, 
 	if ado, on := resolveADOEntraRun(sc, repoLocatorsOf(spec.WorkspaceRepos), subject); on {
 		hosts = append(hosts, ado.laneHosts()...)
 	}
+	// Both ends of a redirect: dispatch swaps the public hosts a redirect
+	// fronts for its target, so a credential bound to one of them would be
+	// bound to a host the run no longer reaches.
 	for _, red := range sc.EgressRedirects {
-		hosts = append(hosts, hostrules.HostOf(red.To))
+		hosts = append(hosts, hostrules.HostOf(red.To), hostrules.HostOf(red.From))
+		hosts = append(hosts, redirectPublicHosts(red)...)
 	}
 	return parseDestinations(hosts)
 }

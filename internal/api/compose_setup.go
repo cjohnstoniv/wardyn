@@ -186,11 +186,17 @@ func setupSecretItems(spec types.RunPolicySpec, presentSecrets map[string]bool) 
 	for _, g := range spec.EligibleGrants {
 		switch g.Kind {
 		case types.GrantAPIKey:
-			if rule, err := injectionRuleFromScope(g.Scope); err == nil {
-				// api_key: the value is resolved proxy-side (injection.go) and never
-				// reaches the sandbox.
-				add(rule.SecretName, "an api_key grant ("+rule.Host+")", "proxy_injected")
+			rule, err := injectionRuleFromScope(g.Scope)
+			if err != nil {
+				continue
 			}
+			if apiKeyScopeShared(g.Scope) {
+				items = append(items, setupSharedSecretItem(rule.Host, presentSecrets[rule.SecretName]))
+				continue
+			}
+			// api_key: the value is resolved proxy-side (injection.go) and never
+			// reaches the sandbox.
+			add(rule.SecretName, "an api_key grant ("+rule.Host+")", "proxy_injected")
 		case types.GrantGitPAT:
 			if sc, err := types.DecodeGitPATScope(g.Scope); err == nil {
 				// git_pat's residency belongs to the repo_credential row (the grant
@@ -209,6 +215,27 @@ func setupSecretItems(spec types.RunPolicySpec, presentSecrets map[string]bool) 
 		}
 	}
 	return items
+}
+
+// setupSharedSecretItem is the row for a `shared` api_key grant: a credential
+// the organisation provides through one of its components. The secret's NAME
+// is the operator's and no member-facing row carries it — not in the id, the
+// label or a fix — so the row is keyed by the host it is presented to, which a
+// person granted the component may see. There is nothing for them to add:
+// only an admin can store it.
+//
+// A shared grant is only ever authored by the component gate, which refuses a
+// run whose operator has not stored the secret before any row is derived, so
+// the status read from the caller's presence map is the operator's answer.
+func setupSharedSecretItem(host string, present bool) SetupItem {
+	status := "missing"
+	if present {
+		status = "satisfied"
+	}
+	return SetupItem{
+		Kind: "secret", ID: "secret:provided:" + host, Label: "Provided by your admin",
+		RequiredBy: "an api_key grant (" + host + ")", Status: status, Residency: "proxy_injected",
+	}
 }
 
 // setupWorkspaceItems maps each referenced workspace (referencedWorkspaces —

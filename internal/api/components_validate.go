@@ -135,9 +135,20 @@ func claimResidentTargets(def types.ComponentDefinition, taken map[string]bool) 
 // holds under it, and the gate cannot be used to probe the operator's secret
 // names. The secret's name is said even for an organisation's component: it
 // is the name the person has to store.
-func (s *Server) componentSecretsOwned(r *http.Request, adm *componentAdmission, c attachedComponent, i int) *componentRefusal {
+//
+// Launch and Review refuse a secret the caller does not hold. The policy
+// preview records it on the component instead (needsOwnSecrets) and carries
+// on, so a draft that still needs a secret keeps its preview; it reads the
+// same namespace and no other.
+func (s *Server) componentSecretsOwned(r *http.Request, adm *componentAdmission, c *attachedComponent, i int) *componentRefusal {
 	for si, sec := range c.snapshot.Definition.Secrets {
 		if sec.Shared || s.callerOwnsSecret(r, adm, sec.SecretName) {
+			continue
+		}
+		if !adm.credentials {
+			if !slices.Contains(c.needsOwnSecrets, sec.SecretName) {
+				c.needsOwnSecrets = append(c.needsOwnSecrets, sec.SecretName)
+			}
 			continue
 		}
 		msg := fmt.Sprintf("components[%d]: %ssecrets[%d].secret_name: you have no secret named %q of your own. Store it under Your account first.",
