@@ -147,3 +147,52 @@ func TestSiteConfigComponentSettings_AbsentBlockIsByteIdentical(t *testing.T) {
 		t.Errorf("round trip stored components = %+v, want none", fake.putSeen.Components)
 	}
 }
+
+// Setting the block and clearing it must leave different site_config.write rows;
+// a write that never names a block (none stored) keeps the row it always wrote.
+func TestSiteConfigComponentSettings_AuditRecordsSetAndClear(t *testing.T) {
+	datumOf := func(t *testing.T, start types.SiteConfig, body string) map[string]any {
+		t.Helper()
+		fake := &fakeSiteConfigStore{cfg: start}
+		srv, audit := newSiteConfigHarness(t, fake)
+		if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body); w.Code != http.StatusOK {
+			t.Fatalf("PUT %s = %d %s", body, w.Code, w.Body.String())
+		}
+		for _, ev := range audit.snapshot() {
+			if ev.Action == "site_config.write" {
+				var d map[string]any
+				if err := json.Unmarshal(ev.Data, &d); err != nil {
+					t.Fatal(err)
+				}
+				return d
+			}
+		}
+		t.Fatal("no site_config.write event")
+		return nil
+	}
+	keys := []string{"components_autonomy_cap", "components_deny_resident_delivery", "components_require_vault"}
+	set := datumOf(t, types.SiteConfig{},
+		`{"components":{"autonomy_cap":"L1","deny_resident_delivery":true,"require_vault_for_credentials":true}}`)
+	stored := types.SiteConfig{Components: &types.ComponentSettings{AutonomyCap: types.AutonomyL1, DenyResidentDelivery: true, RequireVaultForCredentials: true}}
+	cleared := datumOf(t, stored, `{"components":{}}`)
+	want := map[string][2]any{
+		"components_autonomy_cap":           {"L1", ""},
+		"components_deny_resident_delivery": {true, false},
+		"components_require_vault":          {true, false},
+	}
+	for _, k := range keys {
+		if set[k] != want[k][0] || cleared[k] != want[k][1] {
+			t.Errorf("%s: set=%v cleared=%v, want %v then %v", k, set[k], cleared[k], want[k][0], want[k][1])
+		}
+	}
+	carried := datumOf(t, stored, `{"scm_hosts":["github.com"]}`)
+	if carried["components_autonomy_cap"] != "L1" {
+		t.Errorf("carried-forward block not recorded: %v", carried)
+	}
+	none := datumOf(t, types.SiteConfig{}, `{"scm_hosts":["github.com"]}`)
+	for _, k := range keys {
+		if _, ok := none[k]; ok {
+			t.Errorf("%s present on a write with no block stored or named — the row must stay what it always was", k)
+		}
+	}
+}

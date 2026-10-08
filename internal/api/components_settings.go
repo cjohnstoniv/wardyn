@@ -32,6 +32,20 @@ func validateComponentSettings(cs *types.ComponentSettings) error {
 	return fmt.Errorf(`components.autonomy_cap: %q is not accepted — use "" (no cap), "L1" (hold tool calls) or "L0" (refuse unattended runs); the cap can only tighten`, cs.AutonomyCap)
 }
 
+// auditComponentSettings adds the components block to a site_config.write datum,
+// so lifting a cap or the Vault floor is reviewable from the log alone. Only once
+// a block is stored or the body named one, so a deployment with none writes the
+// row it always wrote; a cleared block records the defaults it now reads as.
+func auditComponentSettings(datum map[string]any, cs *types.ComponentSettings, named bool) {
+	if cs == nil && !named {
+		return
+	}
+	eff := componentSettings(types.SiteConfig{Components: cs})
+	datum["components_autonomy_cap"] = string(eff.AutonomyCap)
+	datum["components_deny_resident_delivery"] = eff.DenyResidentDelivery
+	datum["components_require_vault"] = eff.RequireVaultForCredentials
+}
+
 // carryForwardComponentSettings keeps the stored components block when the body
 // did not mention it, for the MDM re-apply reason the provider blocks state, and
 // stores an all-default block as none so a GET stays byte-identical to an install
