@@ -185,16 +185,19 @@ test("create form requires a name (client-side validation)", async ({ page }) =>
   await expect(editorDialog(page)).toBeHidden();
 });
 
-test("create form rejects malformed JSON spec client-side", async ({ page }) => {
+test("create form rejects a malformed spec client-side", async ({ page }) => {
   const name = uniqueName("badjson");
   await openCreate(page);
-  await fillEditor(page, name, "{ this is not json }");
+  // Not a policy in YAML or JSON (#1921: the editor opens in YAML, and JSON text is YAML too).
+  await fillEditor(page, name, "allowed_domains: [");
   const dialog = editorDialog(page);
-  await dialog.getByRole("button", { name: "Create policy" }).click();
-  // Client-side JSON.parse failure is surfaced in the inline error region; the
-  // dialog stays open and nothing is created.
-  await expect(dialog.getByText(/Spec is not valid JSON/i)).toBeVisible();
-  await expect(dialog).toBeVisible();
+  // The parser's failure and where it is sit beside the field; the source is
+  // kept as typed and Create stays held, so nothing is sent.
+  await expect(dialog.getByText(/^Invalid YAML — /)).toBeVisible();
+  await expect(dialog.getByText(/^Line \d+, column \d+$/)).toBeVisible();
+  await expect(dialog.getByLabel(SPEC_LABEL)).toHaveAttribute("aria-invalid", "true");
+  await expect(dialog.getByLabel(SPEC_LABEL)).toHaveValue("allowed_domains: [");
+  await expect(dialog.getByRole("button", { name: "Create policy" })).toBeDisabled();
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(policyRow(page, name)).toHaveCount(0);
 });
