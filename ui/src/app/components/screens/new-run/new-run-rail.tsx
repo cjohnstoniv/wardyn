@@ -237,24 +237,24 @@ export function RunRail({
         aria-label={NEW_RUN_FLOW.RAIL_TITLE}
         className={cn("scroll-thin my-2 max-h-48 overflow-y-auto lg:my-0 lg:block lg:max-h-none lg:min-h-24", !sectionsOpen && "hidden")}
       >
-      <RunRailSummary
-        governanceProfile={governanceProfile}
-        governanceContact={governanceContact}
-        savedPolicy={savedPolicy}
-        cc={cc}
-        showModelWarning={showModelWarning}
-        modelBlocked={modelBlocked}
-        startup={startup}
-        showHoldNote={showHoldNote}
-        toolRules={toolRules}
-        pushRules={pushRules}
-        unattended={unattended}
-        preflight={preflight}
-        agentRow={agentRow}
-        modelProvider={modelProvider}
-        recordingDisabled={recordingDisabled}
-        guardLink={guardLink}
-      />
+        <RunRailSummary
+          governanceProfile={governanceProfile}
+          governanceContact={governanceContact}
+          savedPolicy={savedPolicy}
+          cc={cc}
+          showModelWarning={showModelWarning}
+          modelBlocked={modelBlocked}
+          startup={startup}
+          showHoldNote={showHoldNote}
+          toolRules={toolRules}
+          pushRules={pushRules}
+          unattended={unattended}
+          preflight={preflight}
+          agentRow={agentRow}
+          modelProvider={modelProvider}
+          recordingDisabled={recordingDisabled}
+          guardLink={guardLink}
+        />
       </div>
 
       <RailVerdict preflight={preflight} />

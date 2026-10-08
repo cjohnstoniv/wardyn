@@ -859,7 +859,11 @@ test.describe("New run rail — credentials and recording are read, not asserted
       await expect(toggle).toHaveAttribute("aria-expanded", "true");
       await expect(toggle).toBeFocused();
       await expect(rail(page).getByText("Barrier", { exact: true })).toBeVisible();
+      // Reachable, as on the desktop pins: an open summary may leave the
+      // footer taller than its bound, and then the footer itself scrolls.
+      await page.getByRole("button", { name: "Launch run" }).scrollIntoViewIfNeeded();
       const open = (await page.getByRole("button", { name: "Launch run" }).boundingBox())!;
+      expect(open.y, "Launch top edge, summary open").toBeGreaterThanOrEqual(0);
       expect(open.y + open.height, "Launch bottom edge, summary open").toBeLessThanOrEqual(size.height);
     });
   }
