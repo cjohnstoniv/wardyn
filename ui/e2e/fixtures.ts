@@ -216,6 +216,19 @@ export async function goToNewRunPanel(page: Page, panel: NewRunPanel): Promise<v
   await expect(step).toHaveAttribute("aria-current", "step");
 }
 
+/**
+ * Opens New Run's custom policy source for editing, as a person does: the
+ * Policy panel, then "Edit policy". The panel opens on its read view, so the
+ * source field is not on screen until then. Returns the field.
+ */
+export async function editNewRunPolicy(page: Page): Promise<Locator> {
+  await goToNewRunPanel(page, "policy");
+  const source = page.getByLabel(/^Spec \((YAML|JSON)\)/);
+  if ((await source.count()) === 0) await page.getByRole("button", { name: "Edit policy" }).click();
+  await expect(source).toBeVisible();
+  return source;
+}
+
 export async function launchRun(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Launch run" }).click();
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/, { timeout: 15_000 });

@@ -29,7 +29,7 @@ import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
 import { AUTONOMY_RAIL, autonomyBoundSentence } from "../src/app/lib/governance-copy";
 import { AGENTS, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import type { Page } from "@playwright/test";
-import { goToNewRunPanel } from "./fixtures";
+import { editNewRunPolicy, goToNewRunPanel } from "./fixtures";
 import type { ConfinementClass } from "../src/app/lib/types";
 import { SPEC_LABEL } from "./policy-source";
 
@@ -107,26 +107,37 @@ test.describe("New run — one page", () => {
   });
 
   // The Policy panel replaced the Confinement + Network cards: the run's policy
-  // IS the spec JSON, authored through the same component /policies uses. Its
-  // live derivations are what the rail's Network section used to be — the
-  // consequences of the envelope, while you build it rather than after.
-  test("the panel's derivations track the spec as it changes", async ({ page }) => {
+  // is the source the person writes, and what they READ is the policy this run
+  // will get, as the server previews it (#1922). Reading comes first; "Edit
+  // policy" opens the source, and the read view follows it.
+  test("the read view tracks the source as it changes", async ({ page }) => {
     await openNewRun(page);
-    const spec = page.getByLabel(SPEC_LABEL);
-
-    // Opens on the Minimal template: one host, a review rule, a CC2 floor.
     await goToNewRunPanel(page, "policy");
-    await expect(spec).toHaveValue(/api\.anthropic\.com/);
-    // The editor opens in YAML (#1921); JSON is a choice made in the format switch.
+    const doc = page.getByTestId("policy-document");
+
+    // Opens read-only on the Minimal starter, in plain names: no source field,
+    // no YAML keys.
+    await expect(page.getByRole("heading", { name: "This run's policy" })).toBeVisible();
+    await expect(page.getByLabel(SPEC_LABEL)).toHaveCount(0);
+    await expect(doc.getByText("Allowed hosts")).toBeVisible();
+    await expect(doc.getByText("api.anthropic.com", { exact: true }).first()).toBeVisible();
+    await expect(doc.getByText(/allowed_domains/)).toHaveCount(0);
+
+    // "Edit policy" opens the source in YAML (#1921) with focus in it; JSON is
+    // a choice made in the format switch.
+    await page.getByRole("button", { name: "Edit policy" }).click();
+    const spec = page.getByLabel(SPEC_LABEL);
+    await expect(spec).toBeFocused();
+    await expect(spec).toHaveValue(/^allowed_domains:\n\s*- api\.anthropic\.com$/m);
     await expect(page.getByText("Valid YAML")).toBeVisible();
-    await expect(page.getByText("1 domain allowed")).toBeVisible();
 
     await page.getByRole("button", { name: "Package registries" }).click();
     await expect(spec).toHaveValue(/pypi\.org/);
-    await expect(page.getByText(/1[0-9] domains allowed/)).toBeVisible();
+    await expect(doc.getByText("pypi.org")).toBeVisible();
 
     // A broken document says so instead of deriving from nothing, and Launch
-    // stops rather than posting a body nobody can read.
+    // stops rather than posting a body nobody can read. The last preview stays
+    // readable, marked out of date, and the structured controls are held.
     await goToNewRunPanel(page, "run");
     await page.getByLabel("Title").fill("e2e smoke");
     await expect(page.getByRole("button", { name: "Launch run" })).toBeEnabled();
@@ -135,7 +146,16 @@ test.describe("New run — one page", () => {
     await expect(page.getByText(/^Invalid YAML — /)).toBeVisible();
     await expect(page.getByText(/^Line \d+, column \d+$/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Launch run" })).toBeDisabled();
-    await expect(page.getByText("The policy spec isn't valid JSON.")).toBeVisible();
+    await expect(page.getByText("The policy spec isn't valid YAML or JSON.")).toBeVisible();
+    await expect(doc.getByText("This preview is out of date. Fix the policy source to refresh it.")).toBeVisible();
+    await expect(doc.getByText("pypi.org")).toBeVisible();
+    await expect(page.getByTestId("policy-structured")).toBeDisabled();
+
+    // "Done editing" goes back to reading; it neither repairs nor discards.
+    await page.getByRole("button", { name: "Done editing" }).click();
+    await expect(page.getByLabel(SPEC_LABEL)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Edit policy" })).toBeFocused();
+    await expect(page.getByRole("button", { name: "Launch run" })).toBeDisabled();
   });
 
   // The Record radio only ever set allow_all_egress — a promise this screen
@@ -143,28 +163,32 @@ test.describe("New run — one page", () => {
   // now, named for what it actually does.
   test("the allow-all template says block-list only, never 'unrestricted'", async ({ page }) => {
     await openNewRun(page);
-    await goToNewRunPanel(page, "policy");
+    const spec = await editNewRunPolicy(page);
     await page.getByRole("button", { name: "Allow-all — observe first" }).click();
 
-    await expect(page.getByLabel(SPEC_LABEL)).toHaveValue(/allow_all_egress: true/);
-    await expect(page.getByText("Allow-all egress (block-list only)")).toBeVisible();
+    await expect(spec).toHaveValue(/allow_all_egress: true/);
+    await expect(page.getByTestId("policy-document").getByText("Allow-all egress (block-list only)")).toBeVisible();
   });
 
   // The Edit-hosts dialog's job — pick hosts, set the unlisted rule, block hosts
-  // outright — is the JSON itself now, with the Fields rail documenting each key
-  // and writing a starting value for it.
-  test("the Fields rail inserts a key into the spec, and the derivations follow", async ({ page }) => {
+  // outright — is the source itself now. New Run's editor carries no Fields
+  // rail (#1922; Policies keeps it): a key is typed, and the read view names
+  // what it does in plain words.
+  test("a key typed into the source shows in the read view under its plain name", async ({ page }) => {
     await openNewRun(page);
-    const spec = page.getByLabel(SPEC_LABEL);
+    const spec = await editNewRunPolicy(page);
+    const doc = page.getByTestId("policy-document");
+    await expect(page.getByRole("button", { name: /^Insert / })).toHaveCount(0);
 
-    await goToNewRunPanel(page, "policy");
-    await page.getByRole("button", { name: "Insert denied_domains" }).click();
-    await expect(spec).toHaveValue(/denied_domains/);
-    // A deny beats an allow in both egress modes, so it is counted separately.
-    await expect(page.getByText("1 domain allowed, 1 denied")).toBeVisible();
-
-    // The unlisted-host rule is a documented key, not a buried dropdown.
-    await expect(page.getByTitle("docs/POLICIES.md#first_use_approval-modes")).toBeVisible();
+    await spec.fill(
+      "min_confinement_class: CC1\nallowed_domains:\n  - api.anthropic.com\ndenied_domains:\n  - tracker.example.com\nfirst_use_approval: deny_with_review\n",
+    );
+    // A deny beats an allow in both egress modes, so it is listed separately.
+    await expect(doc.getByText("Blocked hosts")).toBeVisible();
+    await expect(doc.getByText("tracker.example.com")).toBeVisible();
+    // The unlisted-host rule is named, not shown as a key.
+    await expect(doc.getByText("Any other host")).toBeVisible();
+    await expect(doc.getByText(/denied_domains|first_use_approval/)).toHaveCount(0);
   });
 
   // Two lanes, one panel: reuse a stored policy by reference, or author one for
@@ -174,11 +198,13 @@ test.describe("New run — one page", () => {
     await openNewRun(page);
     // The required title first: the line above Launch names one issue at a time.
     await page.getByLabel("Title").fill("e2e saved mode");
-    await goToNewRunPanel(page, "policy");
-    await expect(page.getByLabel(SPEC_LABEL)).toBeVisible();
+    await editNewRunPolicy(page);
 
+    // A saved policy is read-only here: no editor, and no way into one.
     await page.getByRole("button", { name: /Reuse a saved policy/ }).click();
     await expect(page.getByLabel(SPEC_LABEL)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Edit policy" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Customize for this run" })).toBeVisible();
     await expect(page.getByRole("combobox", { name: "Saved policy" })).toBeVisible();
     // Nothing is picked yet, so Launch says what it is waiting for.
     await expect(page.getByText("Pick a saved policy, or write a custom one.")).toBeVisible();
@@ -405,6 +431,8 @@ test.describe("New run — Use the default policy", () => {
     await goToNewRunPanel(page, "policy");
     await page.getByRole("button", { name: /^Use the default policy/ }).click();
     await expect(page.getByLabel(SPEC_LABEL)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Edit policy" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Customize for this run" })).toBeVisible();
     await goToNewRunPanel(page, "run");
     await page.getByLabel("Title").fill("e2e default policy");
     await launchRun(page);

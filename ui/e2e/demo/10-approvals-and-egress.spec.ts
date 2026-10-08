@@ -92,7 +92,7 @@ import {
 // (one browser, one context, one recorded page), and every beat reads the page
 // out of stage() inside a test body rather than closing over a module binding.
 import { stage } from "./stage";
-import { APPROVAL_APPEARS, decide, newRunPanel } from "./funnel";
+import { APPROVAL_APPEARS, decide, newRunEditPolicy, newRunPanel } from "./funnel";
 import { sweepStaleState } from "./sweep";
 import { termText } from "../terminal-text";
 import { SPEC_LABEL } from "../policy-source";
@@ -793,7 +793,7 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   // Asserted straight off the JSON textarea rather than a radio's
   // aria-checked, because a changed default would make the approval below
   // never fire while the take still went green.
-  await newRunPanel(page, "policy");
+  await newRunEditPolicy(page);
   await expect(
     page.getByLabel(SPEC_LABEL),
     "the default first_use_approval is no longer deny_with_review",
