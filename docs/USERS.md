@@ -226,7 +226,10 @@ resolves your drive the same way, in a dry run too:
 
 ## Who approves a governance change
 
-- If your deployment sets `WARDYN_GOVERNANCE_SECOND_HUMAN`, an administrator's change to who may do what (a governance profile or assignment, a capability grant, the enforcement map, a value's availability, a user type's priority, a role mapping or a key-domain assignment) is held as a pending change until a second administrator approves it.
+- If your deployment sets `WARDYN_GOVERNANCE_SECOND_HUMAN`, an administrator's change to who may do what:
+  - a governance profile or assignment, a capability grant, the enforcement map,
+  - a value's availability, a user type's priority, a role mapping or a key-domain assignment,
+- It is held as a pending change until a second administrator approves it.
 - Members propose and approve nothing here; these tiers do:
 
 | Role | May approve |
@@ -278,7 +281,10 @@ resolves your drive the same way, in a dry run too:
 - If your admin set a base URL on a Claude-subscription provider, your sign-in token is sent to that gateway rather
   than to Anthropic.
 
-- **Where you see it.** In the User view only (not on Getting started), a banner names a provider that is the default for one of your harnesses and still needs you — no key or token is available for it (it may never have been added, or been removed or unreadable since), or (Bedrock SSO only) your sign-in is expiring or no longer works; a provider nobody defaults to is not an alarm even if you never connected it.
+- **Where you see it.** In the User view only (not on Getting started), a banner names a provider that is the default for one of your harnesses and still needs you:
+  - no key or token is available for it (it may never have been added, or been removed or unreadable since),
+  - or (Bedrock SSO only) your sign-in is expiring or no longer works;
+  - a provider nobody defaults to is not an alarm even if you never connected it.
   - Two or more needing you collapse to one "N of your model connections need you" line with a Review link, rather than naming each.
   - `GET /setup/status`'s `model_providers` and `provider_access`
     are the same answer, if you are scripting.
@@ -355,7 +361,10 @@ resolves your drive the same way, in a dry run too:
     are not served an admin's if you have none.
   - Renewal is Wardyn's while the session lasts; once the refresh token is spent or
     your identity provider revokes it, you sign in again.
-  - **If your SSO session reaches several AWS accounts, the admin pins which account and role that provider may use** — so you are never asked to guess which of your entitlements the model lives in, and a sign-in that cannot reach the pinned pair is refused on the login terminal (`wardyn: aws sso credential rejected: …`) rather than quietly capturing the wrong one; if nothing is pinned and your session reaches more than one, the sign-in asks you to choose.
+  - **If your SSO session reaches several AWS accounts, the admin pins which account and role that provider may use**:
+    - so you are never asked to guess which of your entitlements the model lives in,
+    - and a sign-in that cannot reach the pinned pair is refused on the login terminal (`wardyn: aws sso credential rejected: …`) rather than quietly capturing the wrong one;
+  - If nothing is pinned and your session reaches more than one, the sign-in asks you to choose.
   - This sign-in is yours alone — your admin's own API calls, made with the shared admin
     token, cannot sign in on your behalf or read your model access for you.
 

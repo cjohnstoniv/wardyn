@@ -71,7 +71,10 @@ curl -sf -X POST "$WARDYN_URL/api/v1/me/ssh-keys" \
 
 - The fingerprint primary key is **global** — correct for auth, since a key
   must map to exactly one principal, never two.
-- That means it is also, by construction, possible for someone else to register a public key you also hold before you do (e.g. a key whose public half you've posted somewhere, like a GitHub profile), after which your own `POST` 409s indefinitely — the API never confirms who holds it, so there is no self-service resolution.
+- That means it is also, by construction, possible for someone else to register a public key you also hold before you do
+  - (e.g. a key whose public half you've posted somewhere, like a GitHub profile),
+  - after which your own `POST` 409s indefinitely
+- The API never confirms who holds it, so there is no self-service resolution.
 - An operator can free the slot at the database directly, once the rightful
   owner is verified out-of-band:
 
@@ -390,7 +393,9 @@ ssh -L 8080:127.0.0.1:3000 <run-id>@<advertise-host> -p <port>
 - reaches port 3000 **inside the sandbox's own network namespace** via
   `socat`, run the same way sftp is — the sandbox's own binary, no protocol
   reimplementation.
-- The destination is **restricted to the sandbox's own loopback** (`127.0.0.1` / `::1` / `localhost`); anything else is refused before any command runs, with a reason, because the sandbox has no other egress to forward to regardless (L0 structural confinement — invariant 3 is unaffected by this feature: no new network path is opened, forwarding rides inside the existing sandbox network namespace).
+- The destination is **restricted to the sandbox's own loopback** (`127.0.0.1` / `::1` / `localhost`).
+- Anything else is refused before any command runs, with a reason, because the sandbox has no other egress to forward to regardless (L0 structural confinement).
+- Invariant 3 is unaffected by this feature: no new network path is opened, forwarding rides inside the existing sandbox network namespace.
 - `-R` (remote/reverse
   forwarding) and agent/X11 forwarding are refused outright — see
   [Bounds](#bounds).
@@ -411,7 +416,10 @@ ssh -L 8080:127.0.0.1:3000 <run-id>@<advertise-host> -p <port>
 "remote.SSH.localServerDownload": "always"
 ```
 
-- **Why**: the sandbox has no internet — its only egress is the wardyn-proxy sidecar under the run's own allowlist, which does not include `vscode-cdn`/`update.code.visualstudio.com`/etc. Remote-SSH's default behavior tries to have the **remote host** download its own server binary; inside a Wardyn sandbox that download has nothing to reach and stalls or fails.
+- **Why**: the sandbox has no internet.
+- Its only egress is the wardyn-proxy sidecar under the run's own allowlist, which does not include `vscode-cdn`/`update.code.visualstudio.com`/etc.
+- Remote-SSH's default behavior tries to have the **remote host** download its own server binary.
+- Inside a Wardyn sandbox that download has nothing to reach and stalls or fails.
 - `"always"` makes your **local** VS Code fetch the server and push it
   over the SSH connection instead.
 - That is a normal file transfer over the
@@ -423,7 +431,9 @@ ssh -L 8080:127.0.0.1:3000 <run-id>@<advertise-host> -p <port>
 
 - Everything above assumes a human typing `ssh` or pasting a `Host` block by
   hand.
-- An external tool — an IDE or an agent workbench that wants to drive the sandbox itself — needs the same three facts (host, port, username) without a human copying them out of the console, plus one thing the console card never had to solve: knowing when the sandbox is actually ready to open, not merely RUNNING.
+- An external tool — an IDE or an agent workbench that wants to drive the sandbox itself — needs the same three facts (host, port, username) without a human copying them out of the console.
+- Plus one thing the console card never had to solve:
+  - knowing when the sandbox is actually ready to open, not merely RUNNING.
 - Four commands, each doing one part:
 
 ```sh
@@ -494,7 +504,9 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   like this, not a policy that simply forgot the field (see
   [`examples/policies/remote-workspace.yaml`](../examples/policies/remote-workspace.yaml)).
 
-- If the tool's own agent commits and pushes under a branch name it picked itself — not the `wardyn/<run-id>/*` namespace `agent-run` sets up — the git-broker's default confinement refuses that push with no way to tell the external tool why; `git_push_any_branch: true` is the per-run opt-out (see [docs/POLICIES.md](POLICIES.md)'s `git_push_any_branch` row).
+- If the tool's own agent commits and pushes under a branch name it picked itself — not the `wardyn/<run-id>/*` namespace `agent-run` sets up —
+  - the git-broker's default confinement refuses that push with no way to tell the external tool why.
+- `git_push_any_branch: true` is the per-run opt-out (see [docs/POLICIES.md](POLICIES.md)'s `git_push_any_branch` row).
 - **Channel budget.** `session` (shell/exec/sftp) and `direct-tcpip` (`-L`
   forwards) draw from the **same** per-run cap —
   [`maxSSHSessionsPerRun`](../internal/api/sshgateway.go) (`4`, today) — so an
@@ -601,14 +613,18 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
     owner check does, same as before.
   - Existing admin-stamped keys are not revoked:
     they keep working on the runs they own and on operator-owned ones.
-  - The `role` column is stamped at `POST /me/ssh-keys` time, from the role the registering session actually held **then** — but it is now also RE-stamped, along with `role_checked_at`, on every OIDC login for that principal (`oidc.Config.OnLogin`, wired to `RefreshSSHKeyRoles` in [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)): a live read of the human's current role, applied to every key they hold, no re-registration required.
+  - The `role` column is stamped at `POST /me/ssh-keys` time, from the role the registering session actually held **then**.
+  - But it is now also RE-stamped, along with `role_checked_at`, on every OIDC login for that principal (`oidc.Config.OnLogin`, wired to `RefreshSSHKeyRoles` in [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)):
+    - a live read of the human's current role, applied to every key they hold, no re-registration required.
   - The gateway still never
     consults the human's role live at connect time — SSH carries no session for
     `requireOperator` to read.
   - So this stays **bounded-stale, not live**, unlike
     the browser terminal's `requireOperator` gate, which reads the session's role
     fresh on every attach.
-  - What bounds the staleness now: **a demoted admin's already-registered key keeps its override only until whichever comes first — their own next login (re-stamping `role=user`), `role_checked_at` aging past `WARDYN_SSH_ROLE_TTL` (the TTL bites even if they never log in again), or the key being deleted/re-registered.**
+  - What bounds the staleness now: **a demoted admin's already-registered key keeps its override only until whichever comes first:**
+    - **their own next login (re-stamping `role=user`), `role_checked_at` aging past `WARDYN_SSH_ROLE_TTL` (the TTL bites even if they never log in again),**
+    - **or the key being deleted/re-registered.**
   - An operator who wants the override gone
     immediately can use `DELETE /people/{principal}/ssh-keys` as an admin or
     `security_admin`, or revoke the person's sessions to remove their tokens and
@@ -658,7 +674,10 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
     nothing in the schema knows what role a pre-0.6 registrant actually held, and
     guessing `admin` would hand every key already in the deployment a cross-user
     reach it was never granted.
-  - Migration `0046` adds a second fail-closed backfill on top: `role_checked_at` defaults `NULL` for every pre-existing row, and `sshAuth` treats `NULL` as infinitely stale — so **an `admin`-stamped key that predates `0046` has no override until its owner does ONE of two things: log in again** (the ordinary path now — `oidc.Config.OnLogin` re-stamps both `role` and `role_checked_at` for every key that principal owns, no re-registration needed) **or `DELETE`/`POST` the key again** (still supported, still immediate, useful when you want the refresh before your next login rather than after).
+  - Migration `0046` adds a second fail-closed backfill on top: `role_checked_at` defaults `NULL` for every pre-existing row, and `sshAuth` treats `NULL` as infinitely stale.
+  - So **an `admin`-stamped key that predates `0046` has no override until its owner does ONE of two things:**
+    - **log in again** (the ordinary path now — `oidc.Config.OnLogin` re-stamps both `role` and `role_checked_at` for every key that principal owns, no re-registration needed)
+    - **or `DELETE`/`POST` the key again** (still supported, still immediate, useful when you want the refresh before your next login rather than after).
   - Which of your own keys carries the `admin` stamp is
     visible without reading the database: Your account (`/account`) badges the
     row **Admin override**.

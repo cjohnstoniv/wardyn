@@ -186,7 +186,11 @@ export WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}'
 
 ## 3. Open an app
 
-- Three calls: mint a single-use attach ticket (the **same** ticket the browser terminal uses — there is no second ticket type), **bind** it to the browser that will use it, then hand it to the enter endpoint on the UI origin — as a `POST` form field (preferred: the ticket never lands in a URL, browser history, or a reverse-proxy access log) or, for compatibility, as a `GET` query string.
+- Three calls:
+  1. Mint a single-use attach ticket (the **same** ticket the browser terminal uses — there is no second ticket type),
+  2. **bind** it to the browser that will use it,
+  3. then hand it to the enter endpoint on the UI origin —
+     - as a `POST` form field (preferred: the ticket never lands in a URL, browser history, or a reverse-proxy access log) or, for compatibility, as a `GET` query string.
 
 ```sh
 TICKET=$(curl -sf -X POST "$WARDYN_URL/api/v1/runs/$RUN_ID/attach/ticket" \
@@ -215,7 +219,11 @@ curl -sf -b jar "$UI_ORIGIN/__wardyn/enter?run=$RUN_ID&app=vscode&ticket=$TICKET
 - A ticket in the query
   string on a `POST` is refused outright (no mixed mode): exactly one of the two
   forms is honored per request.
-- Both forms run the **same** consume-then-re-check path: the ticket is consumed, then everything it cannot prove on its own is re-checked against freshly-loaded state — the run's owner (or a super admin, on a run with no personal owner), the governance profile the run was created under not carrying `deny_ui_apps` (a super admin is exempt; a limit set later stops new sessions but does not end one already open), the run still `RUNNING` with a sandbox, and the app actually declared in the run's **effective** policy.
+- Both forms run the **same** consume-then-re-check path: the ticket is consumed, then everything it cannot prove on its own is re-checked against freshly-loaded state —
+  - the run's owner (or a super admin, on a run with no personal owner),
+  - the governance profile the run was created under not carrying `deny_ui_apps` (a super admin is exempt; a limit set later stops new sessions but does not end one already open),
+  - the run still `RUNNING` with a sandbox,
+  - and the app actually declared in the run's **effective** policy.
 - Only then does it set the relay cookie — `wardyn_ui_sess`, `HttpOnly`,
   `SameSite=Lax`, `Path=/r/<run-id>/<app>/`, `WARDYN_UI_SANDBOX_SESSION_TTL`
   (default 8h) — and redirects to `/r/<run-id>/<app><path>` (`303` for `POST`,
@@ -432,7 +440,10 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 - **Bounded staleness, not a frozen bearer.** The cookie carries its own
   issued-at, so `WARDYN_UI_SANDBOX_SESSION_TTL` applies to sessions already in
   browsers — shortening it takes effect at once.
-  - On top of that, the relay re-asserts the owner rule against the freshly-loaded run and consults the revoke cutoff `POST /sessions/revoke` stamps, against the time the ticket was **admitted** (not redeemed), by `sub` or by email, **on every new connection, and at least every 30 seconds on a reused one** — relay connections are pooled, so a busy tab can ride one warm connection for a long time and the request-path check is what bounds it.
+  - On top of that, the relay re-asserts the owner rule against the freshly-loaded run and consults the revoke cutoff `POST /sessions/revoke` stamps,
+    - against the time the ticket was **admitted** (not redeemed), by `sub` or by email,
+    - **on every new connection, and at least every 30 seconds on a reused one**
+  - Relay connections are pooled, so a busy tab can ride one warm connection for a long time and the request-path check is what bounds it.
   - An off-boarded or revoked human therefore stops being
     able to use the app within 30 seconds.
   - `WARDYN_UI_SANDBOX_SESSION_TTL` is the
@@ -501,7 +512,9 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
     domain is the console's too.
   - Keep nothing else whose non-HttpOnly cookies matter
     on it.
-  - The console's own cookies (`wardyn_session`, `wardyn_oidc_state`, `wardyn_oidc_nonce`, `wardyn_oidc_pkce`) carry no `__Host-` prefix, so a relayed page can plant a `Domain=` cookie of the same name, which the console reads whenever the browser holds no live one of its own (signed out, expired, or mid-login): login CSRF onto the console, open as #1258.
+  - The console's own cookies (`wardyn_session`, `wardyn_oidc_state`, `wardyn_oidc_nonce`, `wardyn_oidc_pkce`) carry no `__Host-` prefix, so a relayed page can plant a `Domain=` cookie of the same name,
+    - which the console reads whenever the browser holds no live one of its own (signed out, expired, or mid-login):
+    - login CSRF onto the console, open as #1258.
   - Host mode keeps each run on a host
     of its own under that site.
   - `X-Forwarded-*` is removed and deliberately not
