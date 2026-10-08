@@ -222,15 +222,16 @@ its rows consult the server, and both are silent rather than wrong when
 the server hasn't answered.
 
 **Credentials** names the model provider THIS run would use and where its
-credential lands, with no click:
+credential lands, with no click. The picker itself is on the Run panel,
+beside the agent; the rail only states the choice:
 
 | Answer | Meaning |
 | --- | --- |
 | `proxy` | A key or token, injected by the proxy at launch and never written into the sandbox |
-| `sandbox` | A Bedrock AWS sign-in, which signs inside the run for its lifetime, chipped **Per-person AWS sign-in** — ownership, not sign-in status |
+| `sandbox` | A Bedrock AWS sign-in, which signs inside the run for its lifetime |
 
 - Where several providers serve the agent and none is the default, the
-  rail asks which.
+  Run panel asks which, and Launch waits for the answer.
 - Where no provider serves the agent it reads "Resolved at launch." and an
   invitation to press **Check again**. Preflight runs on its own as the run
   is edited; the button dry-runs the exact body Launch would send, and Launch
