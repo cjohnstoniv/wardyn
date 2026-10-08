@@ -91,10 +91,14 @@ export function RunRail({
   // Below lg: whether the sections are showing. A view preference, not part
   // of the draft.
   const [sectionsOpen, setSectionsOpen] = React.useState(false);
-  // Below lg the rail is a sticky footer over the page's own scroller, so that
-  // scroller reserves the footer's MEASURED height (it grows with an open
-  // summary or a wrapped refusal): a control brought into view by focus never
-  // lands underneath it. 1024px is the theme's lg breakpoint.
+  // Both bounds are MEASURED against the page's own scroller (app-shell.tsx's
+  // <main>), which already excludes the header and any shell banner above it.
+  // Below lg the rail is a sticky footer over that scroller, so the scroller
+  // reserves the footer's height (it grows with an open summary or a wrapped
+  // refusal): a control brought into view by focus never lands underneath it.
+  // From lg up the rail sticks `top-6` below the scroller's top and may be no
+  // taller than what is left of it, banner or not — the class's 100vh - 5rem
+  // is only the first paint. 1024px is the theme's lg breakpoint.
   const asideRef = React.useRef<HTMLElement>(null);
   React.useEffect(() => {
     const aside = asideRef.current;
@@ -103,15 +107,18 @@ export function RunRail({
     const wide = window.matchMedia("(min-width: 1024px)");
     const sync = () => {
       scroller.style.scrollPaddingBottom = wide.matches ? "" : `${aside.offsetHeight}px`;
+      aside.style.maxHeight = wide.matches ? `${scroller.clientHeight - parseFloat(getComputedStyle(aside).top)}px` : "";
     };
     const observer = new ResizeObserver(sync);
     observer.observe(aside);
+    observer.observe(scroller);
     wide.addEventListener("change", sync);
     sync();
     return () => {
       observer.disconnect();
       wide.removeEventListener("change", sync);
       scroller.style.scrollPaddingBottom = "";
+      aside.style.maxHeight = "";
     };
   }, []);
 
