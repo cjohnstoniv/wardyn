@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"filippo.io/age"
@@ -398,5 +399,63 @@ func TestPG_Components_ASavedRowIsFoundByTheRunGate(t *testing.T) {
 	}
 	if strings.Contains(foreign.Body.String(), "their-host") {
 		t.Fatal("the refusal leaks the other person's host")
+	}
+}
+
+// TestPG_Components_ConcurrentCaseVariantsOfANameSaveOnce: eight writers save
+// case variants of one name at once, for a person and for the organisation.
+// The handler's name check reads before it writes, so it cannot hold this; the
+// unique index on (owner, lower(name)) does, and its violation answers 409
+// component_name_conflict. A losing org create leaves no restriction behind.
+func TestPG_Components_ConcurrentCaseVariantsOfANameSaveOnce(t *testing.T) {
+	e := newComponentsPG(t)
+	variants := []string{"Stripe", "stripe", "STRIPE", "sTripe", "StRiPe", "strIPE", "stripE", "STRipe"}
+	orgIDs := make([]uuid.UUID, len(variants))
+	for i := range orgIDs {
+		orgIDs[i] = uuid.New()
+	}
+	for owner, save := range map[string]func(i int) *httptest.ResponseRecorder{
+		"sub-member": func(i int) *httptest.ResponseRecorder {
+			return e.do(t, http.MethodPost, "/api/v1/me/components", e.member, saveComponentBody(variants[i], stripeDef))
+		},
+		"": func(i int) *httptest.ResponseRecorder {
+			return e.do(t, http.MethodPut, "/api/v1/components/"+orgIDs[i].String(), e.admin, saveComponentBody(variants[i], stripeDef))
+		},
+	} {
+		got := make([]*httptest.ResponseRecorder, len(variants))
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := range variants {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				got[i] = save(i)
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		rows, err := e.st.ListComponents(context.Background(), owner)
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("owner %q: %d rows (%v) from eight concurrent case variants of one name, want exactly 1: %+v", owner, len(rows), err, rows)
+		}
+		created := 0
+		for i, w := range got {
+			switch {
+			case w.Code == http.StatusCreated:
+				created++
+			case w.Code != http.StatusConflict || errorReason(w) != "component_name_conflict":
+				t.Errorf("owner %q: %q = %d %s, want 201 or 409 component_name_conflict", owner, variants[i], w.Code, w.Body.String())
+			}
+		}
+		if created != 1 {
+			t.Errorf("owner %q: %d creates answered 201, want exactly 1", owner, created)
+		}
+	}
+	for _, id := range orgIDs {
+		if _, err := e.st.GetComponent(context.Background(), id, ""); err != nil && e.restricted(t, id) {
+			t.Errorf("the refused org create of %s left its restriction behind", id)
+		}
 	}
 }

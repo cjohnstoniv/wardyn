@@ -29,6 +29,9 @@ type componentRequest = client.ComponentRequest
 const (
 	// componentsMaxPerPerson and componentsMaxOrg bound saved rows, the shape of
 	// secretsMaxPerOwner: a runaway-add guard answered with a 422, no audit row.
+	// A soft bound: the count is read before the row is written and nothing in
+	// the database holds it, so creates in flight together can each pass and
+	// land a few rows over. It stops a loop, not a race.
 	componentsMaxPerPerson = 32
 	componentsMaxOrg       = 256
 )
@@ -123,9 +126,12 @@ func (s *Server) componentSaveRefusal(ctx context.Context, c types.Component) (r
 	return "", ""
 }
 
-// componentNameTaken reports whether another row of rows already has name. The
-// database's UNIQUE (owner, name) is byte-exact, so "Stripe" and "stripe" would
-// both save; two components a person cannot tell apart in a list are one name.
+// componentNameTaken reports whether another row of rows already has name:
+// two components a person cannot tell apart in a list are one name, so "Stripe"
+// and "stripe" do not both save. It reads before the write, so it answers the
+// usual case with its own sentence and holds nothing against two writers at
+// once; the unique index on (owner, lower(name)) does, and its violation comes
+// back as store.ErrConflict, answered with the same reason.
 func componentNameTaken(rows []types.Component, name string, self uuid.UUID) bool {
 	for _, c := range rows {
 		if c.ID != self && strings.EqualFold(c.Name, name) {
