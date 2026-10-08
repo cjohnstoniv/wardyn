@@ -42,6 +42,35 @@ describe("toYaml", () => {
   it("handles empties + null", () => {
     expect(toYaml({ a: [], b: {}, c: null, d: "" })).toBe(['a: []', "b: {}", "c: null", 'd: ""'].join("\n"));
   });
+
+  // A raw line break ended the scalar, so the rest read back as another key; an
+  // unquoted `true`, numeric or padded key read back as a different key. Either
+  // way the emitted text no longer described the mapping it was made from.
+  it("quotes strings holding a line break or control character, and ambiguous mapping keys", () => {
+    expect(toYaml({ pattern: "echo one\necho two" })).toBe('pattern: "echo one\\necho two"');
+    expect(toYaml({ a: ["x\r\ny", "bell\u0007", "nul\u0000"] })).toBe(
+      ["a:", '  - "x\\r\\ny"', '  - "bell\\u0007"', '  - "nul\\u0000"'].join("\n"),
+    );
+    expect(toYaml({ true: "value" })).toBe('"true": value');
+    expect(toYaml({ " padded ": 1, "a: b": 2, "": 3, "#x": 4, "1": 5, "line\nbreak": [{ "~": null }] })).toBe(
+      ['"1": 5', '" padded ": 1', '"a: b": 2', '"": 3', '"#x": 4', '"line\\nbreak":', '  - "~": null'].join("\n"),
+    );
+  });
+
+  it("keeps a tab inside a value and ordinary keys unquoted", () => {
+    expect(toYaml({ pattern: "echo\tone", "x-api-key": "a b", "acme/one": 1 })).toBe(
+      "pattern: echo\tone\nx-api-key: a b\nacme/one: 1",
+    );
+  });
+
+  // YAML allows an implicit key at most 1024 characters before its colon.
+  it("writes a key longer than 1024 characters in the explicit form", () => {
+    const key = "k".repeat(1025);
+    expect(toYaml({ [key]: 1, list: [{ [key]: { a: 1 } }] })).toBe(
+      [`? ${key}`, ": 1", "list:", `  - ? ${key}`, "    :", "      a: 1"].join("\n"),
+    );
+    expect(toYaml({ ["k".repeat(1024)]: 1 })).toBe(`${"k".repeat(1024)}: 1`);
+  });
 });
 
 // the copy button was opacity-0 + group-hover:opacity-100 only, so a

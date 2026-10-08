@@ -58,7 +58,8 @@ export function YamlBlock({ value: v, className }: { value: unknown; className?:
 
 // toYaml renders a JSON-like value (the shapes a RunPolicySpec uses: objects, arrays,
 // strings, numbers, booleans, null) as pretty, indented YAML. Kept minimal on purpose
-// — no external yaml dep — and scalar-quotes only where YAML requires it.
+// — no external yaml dep — and scalar-quotes only where YAML requires it. The strict
+// policy parser (lib/policy-document) must read its output back as the same value.
 export function toYaml(value: unknown, indent = 0): string {
   const pad = "  ".repeat(indent);
   if (value === null || value === undefined) return "null";
@@ -67,21 +68,21 @@ export function toYaml(value: unknown, indent = 0): string {
   if (Array.isArray(value)) {
     if (value.length === 0) return "[]";
     return value
-      .map((item) => {
-        if (isYamlContainer(item)) {
-          const lines = toYaml(item, indent + 1).split("\n");
-          const first = lines[0].slice((indent + 1) * 2); // hoist first line after "- "
-          const rest = lines.slice(1);
-          return `${pad}- ${first}${rest.length ? "\n" + rest.join("\n") : ""}`;
-        }
-        return `${pad}- ${toYaml(item, 0)}`;
-      })
+      .map((item) =>
+        // A nested block opens on the dash's own line: drop its first indent.
+        isYamlContainer(item) ? `${pad}- ${toYaml(item, indent + 1).slice(pad.length + 2)}` : `${pad}- ${toYaml(item, 0)}`,
+      )
       .join("\n");
   }
   const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined);
   if (entries.length === 0) return "{}";
   return entries
-    .map(([k, v]) => (isYamlContainer(v) ? `${pad}${k}:\n${toYaml(v, indent + 1)}` : `${pad}${k}: ${toYaml(v, 0)}`))
+    .map(([k, v]) => {
+      const key = yamlScalar(k);
+      // YAML allows an implicit key at most 1024 characters before its colon.
+      const head = `${pad}${key.length > 1024 ? `? ${key}\n${pad}` : key}:`;
+      return isYamlContainer(v) ? `${head}\n${toYaml(v, indent + 1)}` : `${head} ${toYaml(v, 0)}`;
+    })
     .join("\n");
 }
 
@@ -90,18 +91,15 @@ function isYamlContainer(v: unknown): boolean {
   return v !== null && typeof v === "object" && Object.keys(v as object).length > 0;
 }
 
-// yamlScalar quotes a string only when a plain YAML scalar would be ambiguous
-// (special indicators, leading/trailing space, or a value that would parse as a
-// number/bool/null). Uses JSON string quoting for the quoted form.
+// yamlScalar quotes a string — a value or a mapping key — only when a plain YAML
+// scalar would be ambiguous: empty, a control character other than tab (a raw line
+// break ends the scalar), special indicators, leading/trailing space, or text that
+// would parse as a number/bool/null. Uses JSON string quoting for the quoted form.
+// One expression on purpose: this module ships in the size-budgeted entry chunk.
 function yamlScalar(s: string): string {
-  if (s === "") return '""';
-  const needsQuote =
-    /[:#[\]{}",&*!|>'%@`]/.test(s) ||
-    /^[\s?-]/.test(s) ||
-    /\s$/.test(s) ||
-    /^(true|false|null|yes|no|on|off|~)$/i.test(s) ||
-    /^[+-]?[\d.]/.test(s);
-  return needsQuote ? JSON.stringify(s) : s;
+  return /^$|[\0-\b\n-\x1f:#[\]{}",&*!|>'%@`]|^[\s?-]|\s$|^(true|false|null|yes|no|on|off|~)$|^[+-]?[\d.]/i.test(s)
+    ? JSON.stringify(s)
+    : s;
 }
 
 // tintLines renders each source line as its own div, tinting a `key: value` pair
