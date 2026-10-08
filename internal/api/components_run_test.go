@@ -947,28 +947,128 @@ func TestRunComponents_RefusalIsAuditedAtLaunchOnly(t *testing.T) {
 	}
 }
 
-// The organisation's autonomy cap reaches both gating doors through the gate's
-// own count: a self-defined component is capped, an organisation's is not.
-func TestRunComponents_AutonomyCapSeesSelfDefinedOnly(t *testing.T) {
-	f := newComponentFixture(t)
-	f.st.siteConfig.Components = &types.ComponentSettings{AutonomyCap: types.AutonomyL0}
-	own := componentBody(inlineComponent([]string{"svc.example"}))
-	var first string
-	for i, door := range componentDoors[:2] {
-		w := f.ask(t, door, own)
-		if got := decodeErrorBody(t, w); w.Code != http.StatusForbidden || got.Reason != "component_autonomy" {
-			t.Fatalf("%s = %d %s, want 403 component_autonomy", door, w.Code, w.Body.String())
+// The organisation's autonomy cap reaches BOTH gating doors through the gate's
+// own count — launch and Review are handed the same components, so they decide
+// the same and refuse with the same bytes — and it counts a self-defined
+// component only, never an organisation's.
+func TestRunComponents_AutonomyCapDecidesTheSameAtBothDoors(t *testing.T) {
+	capped := func(level types.AutonomyLevel) *componentFixture {
+		f := newComponentFixture(t)
+		f.st.siteConfig.Components = &types.ComponentSettings{AutonomyCap: level}
+		return f
+	}
+	own := func() map[string]any { return componentBody(inlineComponent([]string{"svc.example"})) }
+	refusedAtBoth := func(t *testing.T, f *componentFixture, body map[string]any) {
+		t.Helper()
+		var first string
+		var rows []string
+		for i, door := range componentDoors[:2] {
+			before := len(f.rec.snapshot())
+			w := f.ask(t, door, body)
+			if got := decodeErrorBody(t, w); w.Code != http.StatusForbidden || got.Reason != "component_autonomy" ||
+				!strings.Contains(got.Error, componentAutonomySource) {
+				t.Fatalf("%s = %d %s, want 403 component_autonomy naming the organisation's rule", door, w.Code, w.Body.String())
+			}
+			denied := f.componentAudit(before, "authz.denied")
+			if i == 0 {
+				first, rows = w.Body.String(), denied
+			} else if w.Body.String() != first || !slices.Equal(denied, rows) || len(denied) != 1 {
+				t.Errorf("Review answered %s %v, launch %s %v", w.Body.String(), denied, first, rows)
+			}
 		}
-		if i == 0 {
-			first = w.Body.String()
-		} else if w.Body.String() != first {
-			t.Errorf("Review answered %s, launch %s", w.Body.String(), first)
+		if len(f.st.runs) != 0 {
+			t.Error("a refused launch left a run")
 		}
 	}
-	org := componentBody(f.org(compOrgID, types.ComponentDefinition{Hosts: []string{"org-api.example"}}))
-	for _, door := range componentDoors {
-		if w := f.ask(t, door, org); w.Code >= 300 {
-			t.Errorf("org component under the cap at %s = %d %s, want success", door, w.Code, w.Body.String())
+
+	t.Run("L0 refuses an unattended run", func(t *testing.T) { refusedAtBoth(t, capped(types.AutonomyL0), own()) })
+	t.Run("L1 refuses a run nothing can hold", func(t *testing.T) {
+		body := own()
+		body["task_mode"] = "exec"
+		refusedAtBoth(t, capped(types.AutonomyL1), body)
+	})
+	t.Run("L1 holds an unattended run's tool calls", func(t *testing.T) {
+		f := capped(types.AutonomyL1)
+		w := f.ask(t, componentDoors[1], own())
+		var pre struct {
+			Autonomy json.RawMessage `json:"autonomy"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &pre); err != nil || w.Code != http.StatusOK {
+			t.Fatalf("preflight = %d %s (%v)", w.Code, w.Body.String(), err)
+		}
+		w = f.ask(t, componentDoors[0], own())
+		var run struct {
+			Level types.AutonomyLevel `json:"autonomy_level"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &run); err != nil || w.Code != http.StatusCreated || run.Level != types.AutonomyL1 {
+			t.Fatalf("create = %d %s (%v), want 201 at L1", w.Code, w.Body.String(), err)
+		}
+		var row struct {
+			Autonomy      json.RawMessage `json:"autonomy"`
+			ToolApprovals string          `json:"tool_approvals"`
+		}
+		for _, e := range f.rec.snapshot() {
+			if e.Action == "run.create" && e.Outcome == "success" {
+				if err := json.Unmarshal(e.Data, &row); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if row.ToolApprovals != "hold" {
+			t.Errorf("run.create tool_approvals = %q, want the derived hold", row.ToolApprovals)
+		}
+		var res types.AutonomyResolution
+		if err := json.Unmarshal(row.Autonomy, &res); err != nil || res.Level != types.AutonomyL1 || !slices.Equal(res.BoundBy, []string{componentAutonomyCause}) {
+			t.Errorf("run.create autonomy = %s (%v), want L1 bound by custom_component", row.Autonomy, err)
+		}
+		// Review published the resolution launch recorded, field for field.
+		if string(pre.Autonomy) != string(row.Autonomy) {
+			t.Errorf("Review autonomy = %s, launch recorded %s", pre.Autonomy, row.Autonomy)
+		}
+	})
+	t.Run("an organisation's component is not capped", func(t *testing.T) {
+		f := capped(types.AutonomyL0)
+		org := componentBody(f.org(compOrgID, types.ComponentDefinition{Hosts: []string{"org-api.example"}}))
+		for _, door := range componentDoors {
+			if w := f.ask(t, door, org); w.Code >= 300 {
+				t.Errorf("%s = %d %s, want success", door, w.Code, w.Body.String())
+			}
+		}
+	})
+	t.Run("no cap, no hold", func(t *testing.T) {
+		f := capped("")
+		for _, door := range componentDoors {
+			// The preview lists "autonomy" among what it leaves pending; a
+			// resolution would be the object, a capped run the level.
+			if w := f.ask(t, door, own()); w.Code >= 300 || strings.Contains(w.Body.String(), `"autonomy":`) || strings.Contains(w.Body.String(), `"autonomy_level"`) {
+				t.Errorf("%s = %d %s, want an uncapped success", door, w.Code, w.Body.String())
+			}
+		}
+	})
+}
+
+// A stored cap outside the accepted set is read as the strictest one: it can
+// only tighten, and never names a level the ladder has no rung for.
+func TestComponentAutonomyCap_AnUnknownStoredValueIsTheStrictest(t *testing.T) {
+	for stored, want := range map[types.AutonomyLevel]types.AutonomyLevel{
+		"": "", types.AutonomyL1: types.AutonomyL1, types.AutonomyL0: types.AutonomyL0,
+		"L2": types.AutonomyL0, "L3": types.AutonomyL0, "L9": types.AutonomyL0, "l1": types.AutonomyL0, " L1": types.AutonomyL0, "none": types.AutonomyL0,
+	} {
+		settings := types.ComponentSettings{AutonomyCap: stored}
+		if got := componentAutonomyCap(runComponents{selfDefined: 1, settings: settings}); got != want {
+			t.Errorf("stored %q with a self-defined component: cap = %q, want %q", stored, got, want)
+		}
+		if got := componentAutonomyCap(runComponents{settings: settings}); got != "" {
+			t.Errorf("stored %q with no self-defined component: cap = %q, want none", stored, got)
+		}
+	}
+	// Through the door: a stored "L9" refuses an unattended run as L0 does.
+	f := newComponentFixture(t)
+	f.st.siteConfig.Components = &types.ComponentSettings{AutonomyCap: "L9"}
+	for _, door := range componentDoors[:2] {
+		w := f.ask(t, door, componentBody(inlineComponent([]string{"svc.example"})))
+		if got := decodeErrorBody(t, w); w.Code != http.StatusForbidden || got.Reason != "component_autonomy" || strings.Contains(got.Error, "L9") {
+			t.Errorf("%s = %d %s, want the L0 refusal", door, w.Code, w.Body.String())
 		}
 	}
 }

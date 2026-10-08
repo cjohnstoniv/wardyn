@@ -28,11 +28,20 @@ const componentAutonomySource = "your organisation's rule for runs that use your
 // "" (no cap) otherwise. "" is also the default setting, so with nothing set no
 // run is capped — the owner's "warn only" default; the run is still marked as
 // carrying reach its launcher added, by the gate and not here.
+//
+// PUT /site-config stores only "", L1 or L0 (validateComponentSettings). A
+// stored value outside that set reached the document some other way, and is
+// read as the strictest cap rather than as a level the ladder has no rung for:
+// a cap can only tighten.
 func componentAutonomyCap(comps runComponents) types.AutonomyLevel {
 	if comps.selfDefined == 0 {
 		return ""
 	}
-	return comps.settings.AutonomyCap
+	switch level := comps.settings.AutonomyCap; level {
+	case "", types.AutonomyL1, types.AutonomyL0:
+		return level
+	}
+	return types.AutonomyL0
 }
 
 // autonomySource is who decided the level the ladder enforces: the phrase its
