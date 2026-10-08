@@ -78,15 +78,25 @@ func TestCitationFloorStillTrips(t *testing.T) {
 }
 
 // TestLineCitationStillBanned: link-wrapping does not hide a line number from
-// the threat-model and USERS.md line guards.
+// the threat-model and USERS.md line guards, in the link text or its target.
 func TestLineCitationStillBanned(t *testing.T) {
 	for _, line := range []string{
 		"see `internal/x/f.go:123`",
 		"see [`internal/x/f.go:123`](../internal/x/f.go)",
 		"`RealSym` in [`f.go:123`](../internal/x/f.go)",
+		"`RealSym` in [`internal/x/f.go`](../internal/x/f.go#L120)",
 	} {
 		if lineCitation.FindString(line) == "" {
 			t.Errorf("%q: line citation not caught", line)
+		}
+	}
+	for _, line := range []string{
+		"`RealSym` in [`internal/x/f.go`](../internal/x/f.go)",
+		"[`internal/x/f.go#Load`](../internal/x/f.go)",
+		"[`docs/x.md#L1-scope`](../docs/x.md#L1-scope)",
+	} {
+		if m := lineCitation.FindString(line); m != "" {
+			t.Errorf("%q: symbol citation flagged as a line citation (%q)", line, m)
 		}
 	}
 }

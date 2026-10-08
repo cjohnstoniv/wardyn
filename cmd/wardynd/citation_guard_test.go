@@ -30,8 +30,9 @@ var citationRoots = []string{"cmd", "internal", "pkg"}
 // runs_create.go, for instance, leaves every comment citing a runs.go line
 // number pointing at unrelated code. A symbol name survives that refactor; a
 // line number never does. Cite the symbol (and the file, if it is not obvious)
-// instead.
-var lineCitation = regexp.MustCompile(`[a-zA-Z0-9_]+\.go:[0-9]+`)
+// instead. A GitHub line anchor in a link target (the file name, "#L", digits)
+// is the same claim in link form and rots the same way.
+var lineCitation = regexp.MustCompile(`[a-zA-Z0-9_]+\.go(?::|#L)[0-9]+`)
 
 // TestCommentsCiteSymbolsNotLineNumbers fails on any Go comment under
 // citationRoots that references another file by line number.
