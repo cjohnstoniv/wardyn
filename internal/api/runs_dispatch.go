@@ -455,11 +455,6 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// an already-set variable covers every platform-authored key, not just the
 	// ones written above it. See resolveEnvSecretGrants.
 	secretEnvKeys := s.resolveEnvSecretGrants(ctx, run, policy, sandboxEnv)
-	// file_secret grants: stored secret -> a FILE the agent reads, mask-registered. See resolveFileSecretGrants.
-	secretFiles, ok := s.resolveFileSecretGrants(ctx, run, policy)
-	if !ok {
-		return
-	}
 
 	// Split the composed environment into its non-secret and credential-bearing
 	// halves — after EVERY writer above, so the "already set" guards each of them
@@ -486,10 +481,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		SecretEnv: secretEnv,
 		Mounts:    mounts,
 		Drive:     p.Drive,
-		// The managed settings this run's autonomy level generates (nil for a
-		// run with none, or on a runner that cannot deliver them root-owned),
-		// then the run's file_secret files.
-		ManagedFiles: append(agentPolicy.files, secretFiles...),
+		// The managed settings this run's autonomy level generates; nil for a
+		// run with none, or on a runner that cannot deliver them root-owned.
+		ManagedFiles: agentPolicy.files,
 		// nil for an operator run (the driver then behaves exactly as it does
 		// today); non-nil marks a member-owned-workspace run whose MEMBER-AUTHORED
 		// binds (stamped above by buildRunMounts) the driver re-checks against
@@ -640,7 +634,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	}
 	onWaiting, endStartWait := s.runStatusDetailWriter(ctx, run.ID)
 	spec.OnWaiting = s.runEvents.onWaiting(run.ID, onWaiting)
-	if !s.completeMaskManifest(ctx, run) {
+	// The file_secret files join the spec last, so the manifest completes over their values.
+	if !s.completeMaskManifestWithFileSecrets(ctx, run, policy, &spec) {
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)

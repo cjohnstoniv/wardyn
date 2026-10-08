@@ -538,8 +538,8 @@ func TestResolveFileSecretGrants_RunnerUnsupported(t *testing.T) {
 				t.Errorf("the store was read (%v) for a run that was always going to fail", sec.asked())
 			}
 			ev := findAudit(audit.events, run.ID, "run.create", "failure")
-			if ev == nil || !strings.Contains(string(ev.Data), reasonManagedFilesUnsupported) {
-				t.Fatalf("no run.create failure with reason %s; events: %s", reasonManagedFilesUnsupported, auditDump(audit.events, run.ID))
+			if ev == nil || !strings.Contains(string(ev.Data), `"reason":"managed_files_unsupported"`) {
+				t.Fatalf("no run.create failure with reason managed_files_unsupported; events: %s", auditDump(audit.events, run.ID))
 			}
 			if hint := st.FailureHint(); hint == "" || strings.Contains(hint, "docker.sock") {
 				t.Errorf("failure hint = %q, want a sentence and no driver text", hint)

@@ -19,10 +19,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// reasonManagedFilesUnsupported is the run.create failure reason of a run
-// carrying a file_secret grant on a runner that cannot deliver a file.
-const reasonManagedFilesUnsupported = "managed_files_unsupported"
-
 // resolveFileSecretGrants resolves this run's file_secret grants
 // store->sandbox at dispatch: each grant's scope names a stored secret and the
 // FILE its value is delivered as, always in runner.ComponentSecretDir — the
@@ -47,6 +43,8 @@ const reasonManagedFilesUnsupported = "managed_files_unsupported"
 // file_secret grant on a runner that cannot deliver a managed file at all is
 // failed instead (ok=false), because every grant would silently go missing.
 // A run with no file_secret grant reads nothing and returns (nil, true).
+//
+// dispatchRun reaches it through completeMaskManifestWithFileSecrets.
 func (s *Server) resolveFileSecretGrants(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec) (files []runner.ManagedFile, ok bool) {
 	if !slices.ContainsFunc(policy.EligibleGrants, func(g types.GrantSpec) bool { return g.Kind == types.GrantFileSecret }) {
 		return nil, true
@@ -107,6 +105,19 @@ func (s *Server) resolveFileSecretGrants(ctx context.Context, run types.AgentRun
 	return files, true
 }
 
+// completeMaskManifestWithFileSecrets is the file lane's place in dispatchRun:
+// the last values the run receives, resolved onto spec immediately before the
+// run's masking manifest completes over them, so the manifest is whole when
+// the sandbox is created. false means the run has been failed.
+func (s *Server) completeMaskManifestWithFileSecrets(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, spec *runner.SandboxSpec) bool {
+	files, ok := s.resolveFileSecretGrants(ctx, run, policy)
+	if !ok {
+		return false
+	}
+	spec.ManagedFiles = append(spec.ManagedFiles, files...)
+	return s.completeMaskManifest(ctx, run)
+}
+
 // fileSecretRenderings is what a delivered file's value is masked as: the
 // bytes as stored, plus those bytes without a trailing line break when that
 // differs — the form a shell's command substitution reads the file into.
@@ -118,13 +129,15 @@ func fileSecretRenderings(val []byte) [][]byte {
 }
 
 // fileSecretRunnerDelivers fails the run closed, with its run.create row,
-// when the runner cannot deliver a file or cannot say whether it can.
+// when the runner cannot deliver a file or cannot say whether it can: decided
+// here, before any value is read, as the orchestrator decides managed files
+// before routing (a driver's own refusal is the backstop, not the gate).
 func (s *Server) fileSecretRunnerDelivers(ctx context.Context, run types.AgentRun) bool {
 	caps, err := s.cfg.Runner.Capabilities(ctx)
 	if err == nil && caps.ManagedFiles {
 		return true
 	}
-	data := map[string]any{"reason": reasonManagedFilesUnsupported}
+	data := map[string]any{"reason": "managed_files_unsupported"}
 	hint := "This run was not launched: it delivers a secret as a file, and its runner cannot place one in the sandbox"
 	if err != nil {
 		hint = "This run was not launched: it delivers a secret as a file, and whether its runner can place one in the sandbox is unknown"
