@@ -159,6 +159,15 @@ describe("PolicySummary — each repeated key is one title with a list", () => {
     ]);
   });
 
+  it("reads the legacy boolean first_use_approval the way the wire does", () => {
+    const { unmount } = render(<PolicySummary spec={{ first_use_approval: true } as unknown as RunPolicySpec} />);
+    expect(row("Network", "Any other host")).toHaveTextContent("Refused, then sent for approval");
+    unmount();
+    render(<PolicySummary spec={{ first_use_approval: false } as unknown as RunPolicySpec} />);
+    expect(row("Network", "Any other host")).toHaveTextContent("Refused");
+    expect(screen.queryByRole("heading", { name: "Other settings" })).toBeNull();
+  });
+
   it("a held connection states its own wait once", () => {
     render(
       <PolicySummary

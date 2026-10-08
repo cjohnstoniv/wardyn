@@ -150,8 +150,9 @@ function summarize(
   }
   const blocked = entries(take("denied_domains", asStrings) ?? [], "denied_domains");
   if (blocked.length > 0) network.push(row(SUMMARY.blockedHosts, blocked));
-  const firstUse = take("first_use_approval", asString);
-  if (firstUse) {
+  // The wire still accepts the legacy boolean here.
+  const firstUse = take("first_use_approval", (v) => (typeof v === "string" || typeof v === "boolean" ? v : undefined));
+  if (firstUse !== undefined) {
     const hold = take("first_use_hold_seconds", asNumber);
     const waits = asFirstUseMode(firstUse) === "wait_for_review";
     network.push(
