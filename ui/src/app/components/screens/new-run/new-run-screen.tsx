@@ -98,7 +98,10 @@ export function NewRunScreen() {
         <PanelNav active={panel} counts={issueCounts(issues)} onSelect={go} />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      {/* A flex column below lg, not a one-column grid: a grid item sticks
+          only inside its own row, and the rail has to stick to the bottom of
+          the whole page as its footer. */}
+      <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0">
           <Panel id="run" active={panel} onSelect={go}>
             <RunPanel
