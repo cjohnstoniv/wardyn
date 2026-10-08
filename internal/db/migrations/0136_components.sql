@@ -21,3 +21,8 @@ CREATE TABLE IF NOT EXISTS components (
     UNIQUE (owner, name)
 );
 CREATE INDEX IF NOT EXISTS components_owner_idx ON components (owner);
+-- Two names that differ only by case read as one in a list, so they are one name. The API
+-- checks that before it writes, which two writers at once both pass; this index is what holds
+-- then, and its violation is the same conflict the API reports. UNIQUE (owner, name) above stays
+-- as the byte-exact rule that does not depend on how the database folds case.
+CREATE UNIQUE INDEX IF NOT EXISTS components_owner_lower_name_key ON components (owner, lower(name));

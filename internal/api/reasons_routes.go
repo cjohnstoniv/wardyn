@@ -892,3 +892,13 @@ const (
 // (settleCredentialHosts). component_host_collision is the same rule for a
 // component's own header.
 const reasonCredentialHostCollision = "credential_host_collision"
+
+// The component routes' own reasons (components_routes.go): a person's saved
+// components under /me/components and the organisation's under /components. The
+// definition, shared-secret and store-unavailable refusals they also answer are
+// the gate's, declared above.
+const (
+	reasonComponentCapReached   = "component_cap_reached"   // the person, or the organisation, is at the saved-component limit
+	reasonComponentNameConflict = "component_name_conflict" // another component of this owner already has the name (or, for an org id, the id)
+	reasonComponentNotFound     = "component_not_found"     // no such component of this owner's; another person's and an absent id answer alike
+)
