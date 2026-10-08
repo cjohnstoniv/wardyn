@@ -439,12 +439,12 @@ func (s *Server) resolvePolicy(ctx context.Context, policyID *uuid.UUID, ceiling
 	// subsequent run. Cloning at this single seam fixes every caller at once.
 	if policyID == nil {
 		spec := ceiling.Spec.Clone()
-		// A ceiling's azure_devops_capabilities is a bound, not a grant: handed
-		// to a member as their spec it would replace the row's default_profile
-		// with the widest list they may choose. Only a choice the member (or a
-		// selected row) made is honoured.
+		// A ceiling's azure_devops_capabilities and github_capabilities are
+		// bounds, not grants: handed to a member as their spec either would
+		// replace the row's default_profile with the widest list they may
+		// choose. Only a choice the member (or a selected row) made is honoured.
 		if !s.runUngoverned(ctx) {
-			spec.AzureDevOpsCapabilities = nil
+			spec.AzureDevOpsCapabilities, spec.GitHubCapabilities = nil, nil
 		}
 		origin := policyOrigin{kind: policyKindDefault}
 		if ceiling.Profile != nil {

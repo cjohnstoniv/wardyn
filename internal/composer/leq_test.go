@@ -14,6 +14,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -300,6 +301,14 @@ func TestLeqIsFalseForEveryWidening(t *testing.T) {
 		}},
 		{name: "a capability list under an empty base", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.AzureDevOpsCapabilities = []adoscope.Capability{adoscope.CapCodeRead}
+		}},
+		{name: "a GitHub capability added", base: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
+			c.GitHubCapabilities = []ghscope.Capability{ghscope.CapCodeRead}
+		}, wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
+			c.GitHubCapabilities = []ghscope.Capability{ghscope.CapCodeRead, ghscope.CapPR}
+		}},
+		{name: "a GitHub capability list under an empty base", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
+			c.GitHubCapabilities = []ghscope.Capability{ghscope.CapCodeRead}
 		}},
 
 		// Grants.

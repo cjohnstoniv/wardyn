@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/runner/sizing"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -61,7 +62,14 @@ func (m *meeter) meetPosture(o types.CeilingOverlay) {
 		c.GitPushAnyBranch = c.GitPushAnyBranch && *o.GitPushAnyBranch
 	}
 	if o.AzureDevOpsCapabilities != nil {
-		m.meetCapabilities(*o.AzureDevOpsCapabilities)
+		if both, ok := m.meetCapabilities("azure_devops_capabilities", capStrings(c.AzureDevOpsCapabilities), capStrings(*o.AzureDevOpsCapabilities)); ok {
+			c.AzureDevOpsCapabilities = toCaps[adoscope.Capability](both)
+		}
+	}
+	if o.GitHubCapabilities != nil {
+		if both, ok := m.meetCapabilities("github_capabilities", capStrings(c.GitHubCapabilities), capStrings(*o.GitHubCapabilities)); ok {
+			c.GitHubCapabilities = toCaps[ghscope.Capability](both)
+		}
 	}
 }
 
@@ -272,21 +280,17 @@ func (m *meeter) meetToolRules(base, ov []types.ToolRule) []types.ToolRule {
 	return out
 }
 
-// meetCapabilities intersects two capability lists where empty means "the
-// provider row's default profile", which a list cannot be proven within: an
-// overlay list under an empty base is a widening and leaves the base empty. A
-// disjoint pair has no representable result.
-func (m *meeter) meetCapabilities(ov []adoscope.Capability) {
-	c := &m.out.Ceiling
-	want := capStrings(ov)
-	base := capStrings(c.AzureDevOpsCapabilities)
+// meetCapabilities intersects two capability lists (field names which) where
+// empty means "the provider row's default profile", which a list cannot be
+// proven within: an overlay list under an empty base is a widening and leaves
+// the base as it is (ok=false). A disjoint pair has no representable result.
+func (m *meeter) meetCapabilities(field string, base, want []string) (both []string, ok bool) {
 	if len(base) == 0 {
 		// An empty base is the provider row's default profile, which a list
 		// cannot be proven within, so the base's reading is kept.
-		m.widen("azure_devops_capabilities", "the base carries the provider row's default profile, which a list cannot be proven within")
-		return
+		m.widen(field, "the base carries the provider row's default profile, which a list cannot be proven within")
+		return nil, false
 	}
-	var both []string
 	for _, s := range want {
 		if slices.Contains(base, s) {
 			both = append(both, s)
@@ -294,14 +298,14 @@ func (m *meeter) meetCapabilities(ov []adoscope.Capability) {
 	}
 	switch {
 	case len(both) == 0:
-		m.fail(ReasonOverlayUnsatisfiable, "azure_devops_capabilities", "no capability is in both the base (%s) and the overlay (%s)", trimJoin(base), trimJoin(want))
+		m.fail(ReasonOverlayUnsatisfiable, field, "no capability is in both the base (%s) and the overlay (%s)", trimJoin(base), trimJoin(want))
 	case len(both) < len(want):
-		m.widen("azure_devops_capabilities", "the base does not carry %s", trimJoin(slicesDiff(want, both)))
+		m.widen(field, "the base does not carry %s", trimJoin(slicesDiff(want, both)))
 	}
-	c.AzureDevOpsCapabilities = toCaps(both)
+	return both, true
 }
 
-func capStrings(in []adoscope.Capability) []string {
+func capStrings[C ~string](in []C) []string {
 	out := make([]string, 0, len(in))
 	for _, c := range in {
 		out = append(out, string(c))
@@ -310,10 +314,10 @@ func capStrings(in []adoscope.Capability) []string {
 	return slices.Compact(out)
 }
 
-func toCaps(in []string) []adoscope.Capability {
-	out := make([]adoscope.Capability, 0, len(in))
+func toCaps[C ~string](in []string) []C {
+	out := make([]C, 0, len(in))
 	for _, s := range in {
-		out = append(out, adoscope.Capability(s))
+		out = append(out, C(s))
 	}
 	return out
 }
