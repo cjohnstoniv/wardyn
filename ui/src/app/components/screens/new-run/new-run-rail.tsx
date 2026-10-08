@@ -29,6 +29,7 @@ import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled"
 import { useOperator, useUserViewSuperAdmin } from "../../wardyn/operator-context";
 import { useViewAccess } from "../../wardyn/console-view";
 import { PolicyRemedy } from "../../wardyn/policy-remedy";
+import { POLICY_HOLD_ID } from "../../wardyn/policy-panel";
 import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import {
   Dialog,
@@ -254,7 +255,8 @@ export function RunRail({
           ref={launchRef}
           type="button"
           className="flex-1"
-          disabled={launch.disabled || !!launch.problem || !!launch.workspaceUnavailable || !!launch.noBarrier || !!launch.preflightBlock}
+          disabled={launch.disabled || !!launch.problem || !!launch.workspaceUnavailable || !!launch.referenceHold || !!launch.noBarrier || !!launch.preflightBlock}
+          aria-describedby={launch.referenceHold ? POLICY_HOLD_ID : undefined}
           onClick={() => {
             autoOpened.current = false;
             clickArm.current = { body: bodyRef.current, principal: identity.principal, auth: getAuthGeneration(), draftRevision: launch.draftRevision };

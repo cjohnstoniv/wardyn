@@ -7,7 +7,7 @@
 // card of the policy mode row. Its own copy of the screen's mock harness, as
 // new-run-screen-saved-policy.test.tsx keeps.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -268,17 +268,22 @@ describe("NewRunScreen — the default policy with two workspaces attached", () 
     setField(screen.getByLabelText("Title"), "default two workspaces");
   }
 
-  it("holds Launch and Check again, says why, and sends no request", async () => {
+  it("holds Launch and Check again, says why once, and sends no request", async () => {
     await renderTwoAttachedOnDefault();
 
-    // Beside Launch, and in the default-policy panel beside Check again.
-    await waitFor(() => expect(screen.getAllByText(SENTENCE)).toHaveLength(2));
-    const panel = screen.getByText(C.DEFAULT_PREVIEW).parentElement!;
-    expect(within(panel).getByText(SENTENCE)).toBeInTheDocument();
+    // Once, in the default-policy panel beside Check again; the rail does not
+    // repeat it. Both held buttons name it as their description.
+    await waitFor(() => expect(screen.getAllByText(SENTENCE)).toHaveLength(1));
+    const hold = screen.getByText(SENTENCE);
+    expect(hold).toHaveAttribute("role", "status");
+    expect(hold.closest("aside")).toBeNull();
     expect(screen.getByRole("button", { name: "Launch run" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^Check again$/ })).toBeDisabled();
-    // Nothing is hidden or cleared: the chip and its Remove control stay.
+    expect(screen.getByRole("button", { name: "Launch run" })).toHaveAccessibleDescription(SENTENCE);
+    expect(screen.getByRole("button", { name: /^Check again$/ })).toHaveAccessibleDescription(SENTENCE);
+    // Nothing is hidden or cleared, and the mode never switches by itself.
     expect(screen.getByRole("button", { name: "Remove repo-b" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: new RegExp(C.DEFAULT_TITLE) })).toHaveAttribute("aria-pressed", "true");
 
     // No launch, and no automatic check either, once the debounce has passed.
     preflightRunMock.mockClear();
@@ -288,6 +293,15 @@ describe("NewRunScreen — the default policy with two workspaces attached", () 
     });
     expect(createRunMock).not.toHaveBeenCalled();
     expect(preflightRunMock).not.toHaveBeenCalled();
+  });
+
+  it("coexists with the default-policy read failing: Retry stays and the hold stays", async () => {
+    getDefaultPolicyMock.mockRejectedValue(new Error("boom"));
+    await renderTwoAttachedOnDefault();
+    expect(await screen.findByText(C.DEFAULT_UNAVAILABLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(screen.getAllByText(SENTENCE)).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Launch run" })).toBeDisabled();
   });
 
   it("launches with the remaining workspace once the extra one is removed", async () => {

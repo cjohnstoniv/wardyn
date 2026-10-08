@@ -33,20 +33,34 @@ function gates(over: Partial<LaunchGateInputs> = {}) {
 }
 
 describe("New Run local reference workspace gate", () => {
-  it.each(["default", "saved", "custom"] as const)("%s exposes the attachment gate independently of its visible sentence", (policyMode) => {
+  it.each(["default", "saved", "custom"] as const)("%s exposes the attachment gate and its mode sentence", (policyMode) => {
+    const sentence = {
+      default: "The default policy launches with one workspace. Remove the extra workspace, or choose Custom policy to keep them all.",
+      saved: "A saved policy launches with one workspace. Remove the extra workspace, or choose Custom policy to keep them all.",
+      custom: null,
+    }[policyMode];
     for (const attachedWorkspaces of [0, 1, 2, 4]) {
       const result = gates({ policyMode, attachedWorkspaces });
       expect(result.referenceWorkspaceBlocked).toBe(policyMode !== "custom" && attachedWorkspaces > 1);
-      expect(result.defaultWorkspaceProblem).toBe(policyMode === "default" && attachedWorkspaces > 1
-        ? POLICY_TEMPLATE_COPY.DEFAULT_ONE_WORKSPACE
-        : null);
+      expect(result.referenceWorkspaceProblem).toBe(attachedWorkspaces > 1 ? sentence : null);
     }
+    expect(POLICY_TEMPLATE_COPY.SAVED_ONE_WORKSPACE).toBe(
+      "A saved policy launches with one workspace. Remove the extra workspace, or choose Custom policy to keep them all.",
+    );
+  });
+
+  it.each(["default", "saved"] as const)("%s alone is not the rail's problem sentence: the panel says it once", (policyMode) => {
+    const result = gates({ policyMode, mode: "batch", task: "do it" });
+    expect(result.problem).toBeNull();
+    expect(result.referenceWorkspaceBlocked).toBe(true);
+    expect(result.referenceWorkspaceProblem).not.toBeNull();
   });
 
   it.each(["default", "saved"] as const)("%s retains earlier task validation while recording the attachment refusal", (policyMode) => {
     const result = gates({ policyMode, mode: "batch" });
     expect(result.problem).toBe("An autonomous run needs a task to perform.");
     expect(result.referenceWorkspaceBlocked).toBe(true);
+    expect(result.referenceWorkspaceProblem).not.toBeNull();
   });
 
   it("a saved policy known to be gone retains its earlier problem", () => {
