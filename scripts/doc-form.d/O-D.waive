@@ -1,0 +1,8 @@
+# Sentences of 36 to 40 words with no clause joiner, left whole under the docs-overhaul ruling.
+# One per line: <doc> | <opening words of the sentence> | <words> | <reason>
+docs/OPERATIONS.md | appends every network-only row's | 37 | no clause joiner; "unlike …, both of which …" hangs off the main clause
+docs/OPERATIONS.md | A host that resolves to a loopback address, to link-local space | 36 | no clause joiner; one subject list before one verb
+docs/OPERATIONS.md | A blob that disagrees — or, on an unpinned launch | 38 | the only joiners bound a parenthesis inside the subject
+docs/OPERATIONS.md | A holding row that recorded no reservation | 36 | no clause joiner; one subject with a parenthesis before one verb
+docs/OPERATIONS.md | 400s outright on a body carrying a non-empty | 39 | no clause joiner ("and always carries" shares the subject); 38 words before the gate counts the linked path
+docs/OPERATIONS.md | Every exec-mode run's task is wrapped by | 38 | no clause joiner; two "which" clauses hang off the main clause

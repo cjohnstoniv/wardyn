@@ -4396,7 +4396,9 @@ Moved to [integrations.md](operations/integrations.md).
 - The server owns that mark, so it is ignored on the write and the STORED one (none on a fresh install; this install's own once its operator has finished the funnel) is carried forward.
 - Applying a captured baseline restores corporate network config, never the funnel's completion state.
 - `PUT` never refuses a body over this field — it cannot be set, cleared or moved through that endpoint whatever it says, so a refusal would only have broken the recovery flows ([`internal/api/site_config.go`](../internal/api/site_config.go), `handlePutSiteConfig`).
-- When the file's copy is dropped — a captured baseline applied after re-onboarding, or the MDM file re-applied to a laptop that has since finished its own funnel — the response says so (`onboarding_completed_at_ignored`) and `set` prints it as a warning.
+- When the file's copy is dropped — a captured baseline applied after re-onboarding, or the MDM file re-applied to a laptop that has since finished its own funnel — two things happen.
+  - The response says so (`onboarding_completed_at_ignored`).
+  - `set` prints it as a warning.
 
 > [!IMPORTANT]
 > **A SiteConfig write reaches only runs dispatched after it lands.**
@@ -4487,7 +4489,7 @@ It is dropped there with an audited reason (`unloadable-upstream-url`, a
 
 | | Without `internal_hosts` | With `internal_hosts` |
 |---|---|---|
-| **No bypass** | the guard resolves the name and refuses `builtin:private-ip` before the corp proxy is asked (a name this proxy cannot resolve at all still goes to the corp proxy) | the guard lifts and the HOSTNAME is handed to the corp proxy (`rule_source: site-config:internal-host`); whether that proxy will `CONNECT` to a private address is the estate's own routing — where it will, this cell is the working configuration; where it will not, the bypass moves the dial to this sidecar, which is what the bypass is for |
+| **No bypass** | the guard resolves the name and refuses `builtin:private-ip` before the corp proxy is asked (a name this proxy cannot resolve at all still goes to the corp proxy) | the guard lifts and the HOSTNAME is handed to the corp proxy; see [below](#no-bypass-with-internal_hosts) |
 | **Bypassed** | dialled directly, then refused `builtin:private-ip` | **reaches the endpoint** dialled directly (`rule_source: site-config:internal-host`) |
 
 - The left column is the safety property, not a rough edge: neither bypassing a host nor proxying it lifts the guard — only `internal_hosts` does.
@@ -4501,19 +4503,31 @@ It is dropped there with an audited reason (`unloadable-upstream-url`, a
 
 - A bypassed name is resolved and dialled by the proxy, not by your corporate proxy, so a name that only the corporate proxy can resolve fails there.
 - A lookup from inside the sandbox proves nothing about this: on Kubernetes the sandbox has no DNS by design.
-- With an upstream configured, the only names the proxy resolves in order to dial are the bypassed ones (it still looks up every other name for its address guard, and a failed lookup there denies nothing).
-- So a `builtin:resolve-failed` row that carries `via: direct` and a `cause` saying the name is on the upstream proxy's bypass list and did not resolve at the proxy is that case, and not your corporate proxy failing to find the name.
+- With an upstream configured, the only names the proxy resolves in order to dial are the bypassed ones.
+- It still looks up every other name for its address guard, and a failed lookup there denies nothing.
+- So a `builtin:resolve-failed` row that carries `via: direct` and a `cause` saying the name is on the upstream proxy's bypass list and did not resolve at the proxy is that case.
+- It is not your corporate proxy failing to find the name.
 - Either fix the proxy's own resolution, or take the name off the bypass list so the corporate proxy resolves it.
 - If neither hop can resolve and reach the name, the estate needs a route, not a configuration change.
 - An estate whose corporate proxy is the only route to the private range is the second kind above.
 - It has nothing to put on the bypass list, and a bypass entry there fails exactly as described.
-- The proxy says the same at startup, once per AWS SSO injection host the bypass list does not cover (on Kubernetes, `kubectl -n "$WARDYN_NS" logs wardyn-proxy-<run-id>`, with `$WARDYN_NS` the namespace the run's pods are in): "a bypass entry helps only if wardyn-proxy itself (not the sandbox) can resolve and reach the host; if neither hop can, the estate needs a route, not a configuration change".
+- The proxy says the same at startup, once per AWS SSO injection host the bypass list does not cover.
+  - On Kubernetes: `kubectl -n "$WARDYN_NS" logs wardyn-proxy-<run-id>`, with `$WARDYN_NS` the namespace the run's pods are in.
+  - It says: "a bypass entry helps only if wardyn-proxy itself (not the sandbox) can resolve and reach the host; if neither hop can, the estate needs a route, not a configuration change".
+
+#### No bypass, with `internal_hosts`
+
+- the guard lifts and the HOSTNAME is handed to the corp proxy (`rule_source: site-config:internal-host`); whether that proxy will `CONNECT` to a private address is the estate's own routing.
+- Where it will, this cell is the working configuration.
+- Where it will not, the bypass moves the dial to this sidecar, which is what the bypass is for.
 
 ### Phase B: the SSO/Bedrock MITM lane and the upstream proxy
 
 - Phase B (`WARDYN_AWS_SSO_PROXY_INJECT=on`, the default — see [ENV.md](ENV.md) and "[Turning the lane off](#turning-the-lane-off)" below) terminates and re-originates `portal.sso.<region>.amazonaws.com` inside the `wardyn-proxy` sidecar to inject a captured AWS SSO session on the wire.
 - That re-origination is a forward dial like any other in this section, not a separate lane with its own rules: it is governed by `upstream_proxy_url`, `upstream_proxy_no_proxy` and `internal_hosts` exactly as above.
-- On a private-endpoint estate it needs the same configuration a VPC-endpoint Bedrock deployment does: bypass plus lift where the sidecar can reach the endpoint itself, lift alone where the corporate proxy is the route (see "[Bedrock on a private endpoint](#bedrock-on-a-private-endpoint)" below).
+- On a private-endpoint estate it needs the same configuration a VPC-endpoint Bedrock deployment does:
+  - bypass plus lift where the sidecar can reach the endpoint itself;
+  - lift alone where the corporate proxy is the route (see "[Bedrock on a private endpoint](#bedrock-on-a-private-endpoint)" below).
 
 > [!IMPORTANT]
 > **The invariant, stated once:** the sandbox's dials — and the sidecar's forward dials on the sandbox's behalf, MITM re-origination included — follow `SiteConfig.upstream_proxy_url`; wardynd's own dials follow `WARDYN_DAEMON_PROXY_URL` ("[wardynd behind a corporate proxy](#wardynd-behind-a-corporate-proxy)", next).
@@ -4545,7 +4559,11 @@ Three things in a run's audit trail say which hop its connections took and why o
   - The failure rows carry it too.
 - **`builtin:tunnel-failed` is a connection Wardyn allowed, that opened, and then died.**
   - The `egress.allow` row stands (the dial succeeded and the sandbox was told `200 Connection Established`) and one `egress.deny` follows it, never `builtin:dial-failed`, which says the tunnel never opened.
-  - Its `cause` is a fixed sentence beginning `tunnel first bytes:` (the dialled hop answered a TLS hello with something that was not TLS, for example `HTTP 503`, or wrote an HTTP response before the sandbox sent a byte, or reset or closed without answering, or the sandbox closed before any reply), `tunnel tls handshake:` (the hop's whole answer to the TLS hello was a TLS alert, with its description number when that byte arrived) or `client tls handshake (sandbox to wardyn-proxy):` followed by the error (the sandbox's TLS handshake with the terminating proxy failed after it sent at least one byte; for example a client that does not trust the CA the proxy signs with).
+  - Its `cause` is a fixed sentence beginning `tunnel first bytes:` when the dialled hop answered a TLS hello with something that was not TLS, for example `HTTP 503`.
+    - Or it wrote an HTTP response before the sandbox sent a byte, or reset or closed without answering, or the sandbox closed before any reply.
+    - `tunnel tls handshake:` means the hop's whole answer to the TLS hello was a TLS alert, with its description number when that byte arrived.
+    - `client tls handshake (sandbox to wardyn-proxy):` followed by the error means the sandbox's TLS handshake with the terminating proxy failed after it sent at least one byte.
+    - For example, a client that does not trust the CA the proxy signs with.
   - From the hop the cause carries only a strictly parsed three-digit status code or an alert's description number, never the status line's reason phrase, whichever hop it is.
   - A tunnel the sandbox opened with a TLS hello is no longer handed a first answer from the hop that is not a TLS record.
   - It is refused, nothing is relayed, and the sandbox sees the connection close.
@@ -4564,12 +4582,17 @@ Three things in a run's audit trail say which hop its connections took and why o
 - Those five calls all ride the process's shared `http.DefaultTransport`.
 - Go's `net/http` honors the standard `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` variables **process-wide** — including inside the Kubernetes client, so a mistyped `NO_PROXY` on a k8s deployment can take the control plane's own API access down with it.
 - That is why those three variables are documented as unsupported for wardynd's runtime environment (see [`docs/ENV.md`](ENV.md)'s `HTTP_PROXY` row) rather than a supported knob.
-- `WARDYN_DAEMON_PROXY_URL` (+ `WARDYN_DAEMON_NO_PROXY`) is the supported, scoped replacement: it sets `http.DefaultTransport.Proxy` directly at boot (`installDaemonProxy`, beside the same-shaped `WARDYN_TRUSTED_CA_FILE` trust-tier knob), so it reaches exactly wardynd's five outbound consumers above and nothing else — the Kubernetes client builds its own transport (unaffected) and the Docker client speaks a unix socket (unaffected).
+- `WARDYN_DAEMON_PROXY_URL` (+ `WARDYN_DAEMON_NO_PROXY`) is the supported, scoped replacement.
+- It sets `http.DefaultTransport.Proxy` directly at boot (`installDaemonProxy`, beside the same-shaped `WARDYN_TRUSTED_CA_FILE` trust-tier knob), so it reaches exactly wardynd's five outbound consumers above and nothing else.
+- The Kubernetes client builds its own transport (unaffected) and the Docker client speaks a unix socket (unaffected).
 - Unset leaves the transport untouched, byte-identical to today (`ProxyFromEnvironment` still applies if you set the standard variables yourself — unsupported, not rejected).
 
 **The bypass list defends itself.**
 
-- Wardynd auto-appends three hosts to `WARDYN_DAEMON_NO_PROXY` before applying it, because getting this wrong is exactly the outage this knob exists to prevent: `KUBERNETES_SERVICE_HOST` (the in-cluster API server address), the `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` host when one is configured (a kind Service in a test walk must never be dialed through a corporate proxy), and the `WARDYN_OIDC_INTERNAL_ISSUER` host when one is configured (a cluster-internal issuer wardynd itself dials at boot, before SiteConfig or any other runtime read exists).
+- Wardynd auto-appends three hosts to `WARDYN_DAEMON_NO_PROXY` before applying it, because getting this wrong is exactly the outage this knob exists to prevent:
+  - `KUBERNETES_SERVICE_HOST` (the in-cluster API server address);
+  - the `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` host when one is configured (a kind Service in a test walk must never be dialed through a corporate proxy);
+  - the `WARDYN_OIDC_INTERNAL_ISSUER` host when one is configured (a cluster-internal issuer wardynd itself dials at boot, before SiteConfig or any other runtime read exists).
 - Every boot that sets a proxy logs one line naming the proxy host (never any embedded credential — `WARDYN_DAEMON_PROXY_URL` refuses to start if the URL carries `user:pass@`) and the effective bypass list:
 
 ```
@@ -4589,7 +4612,9 @@ grep 'daemon egress proxy configured' <logs>
   - A bind failure ends the daemon.
   - The console listener (`WARDYN_LISTEN`) is unchanged.
 - **The proxy's end.**
-  - Dispatch puts the CA's public certificate in each run's sealed proxy config (`control_plane_ca_pem`: written to the proxy's stdin by the docker driver, the k8s driver's per-run Secret, staged by a nonroot init container into an owner-only file the sidecar reads via `-config` — where the per-run MITM CA already travels).
+  - Dispatch puts the CA's public certificate in each run's sealed proxy config (`control_plane_ca_pem`).
+  - It is written to the proxy's stdin by the docker driver, the k8s driver's per-run Secret, staged by a nonroot init container into an owner-only file the sidecar reads via `-config`.
+  - That is where the per-run MITM CA already travels.
   - The proxy trusts that certificate and nothing else for every control-plane call: the resolve, mints, token renewal, decisions, approvals and uploads.
   - Not the system roots, and not `WARDYN_TRUSTED_CA_FILE`: that bundle is for egress, because a TLS-inspecting box sits between the proxy and the internet, never between the proxy and `wardynd`.
   - A wrong CA, a wrong name, or an https URL with no CA fails the call closed — at startup, the proxy does not start.
@@ -4686,7 +4711,8 @@ grep 'daemon egress proxy configured' <logs>
 ### Corporate TLS-inspection root
 
 - A TLS-inspecting upstream proxy — one that terminates and re-signs TLS with its own internal CA rather than relaying CONNECT bytes — is unusable with the published images out of the box.
-- `wardynd`'s own outbound TLS (OIDC discovery, the GitHub App transport, the audit webhook sink), the `wardyn-proxy` sidecar's forwarding transport, and every sandbox's own TLS clients on a passthrough CONNECT tunnel all fail certificate verification against a root none of them trust.
+- `wardynd`'s own outbound TLS (OIDC discovery, the GitHub App transport, the audit webhook sink), the `wardyn-proxy` sidecar's forwarding transport, and every sandbox's own TLS clients on a passthrough CONNECT tunnel all fail certificate verification.
+- Each is checked against a root none of them trust.
 - `WARDYN_TRUSTED_CA_FILE` closes that gap: a PATH to a PEM bundle of additional trusted roots, additive to the system roots, read once at `wardynd` boot ([ENV.md](ENV.md)).
 - The file must hold certificates only — a private key or CSR exported alongside the root is refused at boot (`loadTrustedCA`).
 - The bundle handed to the sidecar and the sandboxes is rebuilt from the parsed certificates, never copied from the raw file.
@@ -4734,20 +4760,27 @@ What you get depends on whether `ecosystem` is set:
 | empty (**network only**) | 🟢 yes | 🟢 yes | ⛔ no |
 
 - An ecosystem row gets the per-tool config file `EmitArtifactConfig` ([`internal/workspacescan/gen.go`](../internal/workspacescan/gen.go)) writes at workspace-import time — `.npmrc`, `.config/pip/pip.conf`, `.cargo/config.toml`, `.m2/settings.xml`, `GOPROXY`/`GOSUMDB`, or `.nuget/NuGet/NuGet.Config` — on top of the egress substitution and token injection every redirect gets.
-- A network-only row (empty `ecosystem`: a container registry, an internal appliance, a bare host or IP) gets the network half only: host substituted into the run's egress allowlist, token injected proxy-side, but **no config file is written** — there is no `.npmrc` equivalent for an arbitrary host.
-- That is a real cost: the workspace still needs telling to pull from the mirror itself (`docker login` against the internal registry, an appliance client's own config), or a run reaches an allowed, credentialed host that nothing in the sandbox asks for.
+- A network-only row (empty `ecosystem`: a container registry, an internal appliance, a bare host or IP) gets the network half only: host substituted into the run's egress allowlist, token injected proxy-side.
+- But **no config file is written**.
+- There is no `.npmrc` equivalent for an arbitrary host.
+- That is a real cost: the workspace still needs telling to pull from the mirror itself.
+- Examples: `docker login` against the internal registry, an appliance client's own config.
+- Otherwise a run reaches an allowed, credentialed host that nothing in the sandbox asks for.
 
 > [!WARNING]
 > **A network-only row also has a third effect the two columns above don't show: it denies its own `from` host outright, in EVERY run, not only a run this redirect otherwise covers.**
 
 - `appendNetworkRedirectDenials` ([`internal/api/workspace_egress.go`](../internal/api/workspace_egress.go)) appends every network-only row's `from` to `policy.DeniedDomains` unconditionally on every dispatch ([`internal/api/runs_dispatch.go`](../internal/api/runs_dispatch.go)), unlike the substitution and the token plan, both of which are scoped to a run that actually reaches one of the redirect's public hosts.
-- Deny beats `allow_all_egress`, so this closes the public route even for a run the redirect's substitution never touches — the intended GAP-EGRESS-4 protection against an allow-all Record session reaching the public host the redirect was configured to steer away from.
+- Deny beats `allow_all_egress`, so this closes the public route even for a run the redirect's substitution never touches.
+- That is the intended GAP-EGRESS-4 protection against an allow-all Record session reaching the public host the redirect was configured to steer away from.
 - But it also means a redirect an operator scoped narrowly still costs every OTHER run that public host, with neither the `to` host nor the token to show for it.
 - The UI labels these rows `network only` so the gap stays visible.
-- **A `to` that is a literal IP** — the normal shape of a private endpoint — is trusted as an egress target for the runs the redirect covers, on every path the proxy vets (the opaque tunnel, the TLS-terminated token-injection path, and the git/PAT brokers alike).
+- **A `to` that is a literal IP** — the normal shape of a private endpoint — is trusted as an egress target for the runs the redirect covers.
+- That holds on every path the proxy vets: the opaque tunnel, the TLS-terminated token-injection path, and the git/PAT brokers alike.
 - It shows in the audit trail as `rule_source: site-config:egress-redirect` rather than a generic policy allow.
 - The trust comes from the exact allowlist entry the substitution writes, so it is scoped to those runs, to that address, and to **one port**.
-- `substituteArtifactEgress` writes `net.JoinHostPort(hostrules.HostOf(r.To), redirectPort(r.To))`, a PORT-QUALIFIED entry, and `Policy.AllowsLiteralIP` matches it on that port only — the one `to` spells, else the default of the scheme `to` spells (`80` for an explicit `http://`, `443` otherwise), which is the SAME port the redirect's TLS-MITM/token-injection half is scoped to.
+- `substituteArtifactEgress` writes `net.JoinHostPort(hostrules.HostOf(r.To), redirectPort(r.To))`, a PORT-QUALIFIED entry, and `Policy.AllowsLiteralIP` matches it on that port only.
+- That port is the one `to` spells, else the default of the scheme `to` spells (`80` for an explicit `http://`, `443` otherwise), which is the SAME port the redirect's TLS-MITM/token-injection half is scoped to.
 - A bare address would have matched EVERY port instead, so a `to` of `https://10.40.2.11:8443/` used to trust `10.40.2.11:22` and `:5432` as well.
 - A mirror reached on some other port needs that port in the `to`, exactly as the token injection has always required.
 - A run the redirect does not cover is refused, and a `denied_domains` entry still wins.
@@ -4781,8 +4814,11 @@ The residuals an operator should plan for:
 - **A first push to a new branch enumerates the whole new tree.**
   - Under branch-namespace confinement the pushed commit's parent stays on the forge, so the pack holds nothing to diff against.
   - Every root file is named whether changed or not, and every untouched directory, symlink or submodule arrives as an opaque entry.
-  - When the forge is GitHub, a matched entry the pack does not carry is compared with the parent commit's trees through GitHub's REST API (the run's own credential for the lane, trees only), and a legitimate rename, restore or directory move passes — only an add, change, move or restore under a denied path is refused.
-  - That comparison cannot run on a `git_pat` grant to a non-GitHub forge, when no parent counts, or when a read fails, times out or needs more than 64 reads — there, any matched entry the pack does not carry refuses the push, including every root file.
+  - When the forge is GitHub, a matched entry the pack does not carry is compared with the parent commit's trees through GitHub's REST API (the run's own credential for the lane, trees only).
+  - A legitimate rename, restore or directory move passes.
+  - Only an add, change, move or restore under a denied path is refused.
+  - That comparison cannot run on a `git_pat` grant to a non-GitHub forge, when no parent counts, or when a read fails, times out or needs more than 64 reads.
+  - There, any matched entry the pack does not carry refuses the push, including every root file.
   - So `deny_paths: ["Makefile"]` on a GitLab PAT refuses every push to a repo that has a Makefile.
   - See "What the rules see, and what they do not" in [docs/POLICIES.md](POLICIES.md#push_rules--pushrulesspec).
 
@@ -4791,7 +4827,8 @@ The residuals an operator should plan for:
 - The proxy's unconditional private/loopback/link-local/metadata/CGNAT/NAT64 [IP guard](../threatmodel/THREAT-MODEL.md#42-the-unconditional-ip-guard-and-its-two-admin-authored-exceptions) (`isBlockedIP`/`VetHost`, [`internal/egress/proxy/policy.go`](../internal/egress/proxy/policy.go)) denies a literal or resolved private-range address *regardless of policy* — the SSRF/ DNS-rebinding defense L2 exists for.
 - That also made an in-cluster service name, `registry.corp.internal`, or any genuinely internal hostname on RFC1918/CGNAT space unreachable even when the policy allowlist named it.
 - `internal_hosts` is a list of `{host_suffix, cidrs}` entries on the same `SiteConfig` document.
-- Each declares a hostname (matched by label suffix — `host_suffix` itself, or any host ending in `.`+`host_suffix`) whose resolved/literal address is *lifted* out of the private-IP guard, scoped to `cidrs` — or, when `cidrs` is empty, to the full RFC1918 + `fc00::/7` + 100.64.0.0/10 liftable range, still bounded by `host_suffix` alone.
+- Each declares a hostname (matched by label suffix — `host_suffix` itself, or any host ending in `.`+`host_suffix`) whose resolved/literal address is *lifted* out of the private-IP guard, scoped to `cidrs`.
+- When `cidrs` is empty, the scope is the full RFC1918 + `fc00::/7` + 100.64.0.0/10 liftable range, still bounded by `host_suffix` alone.
 
 > [!IMPORTANT]
 > **Leave `cidrs` empty — that is the default, and it is the right one.**
@@ -4813,7 +4850,9 @@ The residuals an operator should plan for:
 - The run's own policy allowlist (`allowed_domains`) still has to name the host separately.
 - Two more exclusions apply automatically: an address on the proxy's own network interfaces, and the resolved control-plane (`wardynd`) host — the sidecar shares its Docker network with Postgres/Dex/the registry container.
 - On Kubernetes the sidecar's interface carries only the pod's own address and the control plane's neighbours are ClusterIP Services off that interface, so only the resolved `wardynd` address is excluded there.
-- This IS the case where you, the cluster operator, have real sandbox-side evidence: use a WORKLOAD-SPECIFIC suffix (one Service's own name, never the bare `svc.cluster.local`, which would reach every Service in the cluster) and narrow `cidrs` to that workload's own Pod range — ClusterIPs come from ONE cluster-wide range, so a Service-range CIDR lifts the whole cluster, control plane included.
+- This IS the case where you, the cluster operator, have real sandbox-side evidence.
+- Use a WORKLOAD-SPECIFIC suffix (one Service's own name, never the bare `svc.cluster.local`, which would reach every Service in the cluster) and narrow `cidrs` to that workload's own Pod range.
+- ClusterIPs come from ONE cluster-wide range, so a Service-range CIDR lifts the whole cluster, control plane included.
 - The lift applies wherever the proxy resolves a hostname for a direct dial — the sandbox's CONNECT/plain-HTTP path, the MITM path, and the `git_pat` PAT-broker lane (its forge host is grant-derived).
 - So a declared suffix covering a self-hosted forge lets the brokered PAT reach it.
 - A lifted decision's audit `rule_source` reads `site-config:internal-host` instead of the default `policy:allowed`.
@@ -4824,7 +4863,8 @@ The residuals an operator should plan for:
 - `internal_hosts` lifts exactly one class — RFC1918/ULA/CGNAT private space.
 - A host that resolves to a loopback address, to link-local space (including the `169.254.169.254` metadata address), to multicast or unspecified space, to a NAT64- or IPv4-compatible-embedded blocked address, or to any other reserved range is refused **unconditionally**.
 - No `internal_hosts` entry, no `allowed_domains` entry and no `egress_redirects` target reaches it, and a new run behaves identically.
-- The refusal's body names the class and prescribes nothing, because there is nothing in site config to change — an agent resolving a name into that space is either misconfigured or probing the host's own metadata service.
+- The refusal's body names the class and prescribes nothing, because there is nothing in site config to change.
+- An agent resolving a name into that space is either misconfigured or probing the host's own metadata service.
 - **The guard's memory of a refusal lasts one run.**
   - Once a hostname and port have been refused `builtin:private-ip` for a run, that run keeps refusing it for the rest of its life even if the name later resolves to a public address.
   - The remedy is the same one above (declare it under `internal_hosts`), and a fresh run re-resolves the name from scratch.
@@ -4853,11 +4893,13 @@ The residuals an operator should plan for:
 
 - Two topologies, told apart by which hostname the endpoint's TLS certificate names.
 - Get it wrong and the handshake fails on an SNI/cert mismatch.
-- The SNI presented to the endpoint is the hostname the sandbox dialled (its own end-to-end TLS on a `bedrock_sso` run, or the proxy's re-dial on a bearer-injection run), and the dispatch-layer wiring cannot see a TLS failure.
+- The SNI presented to the endpoint is the hostname the sandbox dialled (its own end-to-end TLS on a `bedrock_sso` run, or the proxy's re-dial on a bearer-injection run).
+- The dispatch-layer wiring cannot see a TLS failure.
 - **Private DNS enabled — a cert for the *public* host (the common shape).**
   - Leave the Bedrock provider's `bedrock.base_url` **unset** (Settings → Model providers).
   - The sandbox keeps dialling `bedrock-runtime.<region>.amazonaws.com`, so the SNI stays the public host the cert names; the estate's private resolver answers that name into 100.64.
-  - Reach it by listing the public host in `internal_hosts` (lift the guard) — leave `cidrs` empty (the default: the CGNAT range is in the liftable set), or name `100.64.0.0/10` only if you have confirmed the sandbox resolves into it — and, **only if the sidecar can itself resolve and reach it**, in `upstream_proxy_no_proxy` too (skip the corp proxy).
+  - Reach it by listing the public host in `internal_hosts` (lift the guard); leave `cidrs` empty (the default: the CGNAT range is in the liftable set), or name `100.64.0.0/10` only if you have confirmed the sandbox resolves into it.
+  - List it, **only if the sidecar can itself resolve and reach it**, in `upstream_proxy_no_proxy` too (skip the corp proxy).
   - Nothing about the private address enters the TLS layer.
   - Which of the two estates you are on:
     - **The sidecar reaches the endpoint, the corp proxy does not.** Both fields.
@@ -4874,15 +4916,23 @@ The residuals an operator should plan for:
 > [!WARNING]
 > **The endpoint must not land on a wardyn-proxy sidecar's own subnet.**
 
-- Every run's proxy refuses to dial any address on the subnet(s) it is itself attached to (`onOwnSubnetOrControlPlane`, [`internal/egress/proxy/egress_target.go`](../internal/egress/proxy/egress_target.go) — a deliberate SSRF invariant that `internal_hosts` cannot lift, on purpose), and that covers EVERY subnet the sidecar's own interfaces sit on — both the fixed control-plane network below and the per-run network it shares with that run's agent.
-- A PrivateLink endpoint that happens to resolve onto either would have every model call on the affected run(s) denied there instead, with the SDK misreading the proxy's denial page as a malformed Bedrock response — one dispatch at a time, never a clean failure.
+- Every run's proxy refuses to dial any address on the subnet(s) it is itself attached to (`onOwnSubnetOrControlPlane`, [`internal/egress/proxy/egress_target.go`](../internal/egress/proxy/egress_target.go) — a deliberate SSRF invariant that `internal_hosts` cannot lift, on purpose).
+- That covers EVERY subnet the sidecar's own interfaces sit on.
+- That means both the fixed control-plane network below and the per-run network it shares with that run's agent.
+- A PrivateLink endpoint that happens to resolve onto either would have every model call on the affected run(s) denied there instead.
+- The SDK misreads the proxy's denial page as a malformed Bedrock response.
+- That happens one dispatch at a time, never a clean failure.
 - Nothing checks this at boot.
-- Verify by hand that a PrivateLink endpoint's address falls inside neither the control-plane network's subnet (`WARDYN_INTERNAL_NETWORK`, `wardyn-internal` by default), nor Docker's default address pools (`172.17.0.0/16` through `172.31.0.0/16`, and `192.168.0.0/16` — set `default-address-pools` in that daemon's `daemon.json` away from the endpoint's range, or use an endpoint outside them), nor a Kubernetes cluster's pod CIDR.
+- Verify by hand that a PrivateLink endpoint's address falls inside neither the control-plane network's subnet (`WARDYN_INTERNAL_NETWORK`, `wardyn-internal` by default), nor Docker's default address pools (`172.17.0.0/16` through `172.31.0.0/16`, and `192.168.0.0/16`).
+- For the pools, set `default-address-pools` in that daemon's `daemon.json` away from the endpoint's range, or use an endpoint outside them.
+- Nor should it fall inside a Kubernetes cluster's pod CIDR.
 - **The control plane is a second service.**
   - Profile-id and application-inference-profile models call `bedrock.<region>.amazonaws.com` (`ListInferenceProfiles`/`GetInferenceProfile`), which the provider's `bedrock.base_url` deliberately does **not** re-point (a PrivateLink endpoint is per-service).
   - On a fully-private estate that host also resolves into 100.64 and needs its **own** endpoint plus the same treatment as the data plane.
   - List `bedrock.<region>.amazonaws.com` (or a shared `amazonaws.com` suffix) in the same field or fields as the data-plane host, or a profile-id model fails on a control-plane call the data-plane override never touches.
-- **A literal-IP data-plane host** on an estate where the sidecar dials it directly needs a **CIDR** `upstream_proxy_no_proxy` entry — the suffix form matches hostnames only, and `internal_hosts` never admits a bare IP (an exact `allowed_domains` entry does, per the redirect literal-IP note above).
+- **A literal-IP data-plane host** on an estate where the sidecar dials it directly needs a **CIDR** `upstream_proxy_no_proxy` entry.
+  - The suffix form matches hostnames only.
+  - `internal_hosts` never admits a bare IP (an exact `allowed_domains` entry does, per the redirect literal-IP note above).
   - Prefer the hostname shape.
 - **The AWS IAM Identity Center hosts cannot be re-pointed in production, so the settings that cover them are the routing ones.**
   - `oidc.<region>.amazonaws.com` and `portal.sso.<region>.amazonaws.com` are always the real AWS names.
@@ -4893,7 +4943,8 @@ The residuals an operator should plan for:
   - On the **daemon** side, `WARDYN_DAEMON_PROXY_URL` and `WARDYN_DAEMON_NO_PROXY` govern `oidc.<region>`, the host wardynd calls to renew a captured session at dispatch; the sandbox settings never reach that call.
 - **`wardynd`'s own egress is a separate channel.**
   - `upstream_proxy_no_proxy`, `internal_hosts` and a provider's `bedrock.base_url` govern the **sandbox** proxy.
-  - `wardynd`'s own control-plane calls — OIDC discovery, JWKS, the Entra directory connector, and `oidc.<region>.amazonaws.com` to renew a captured AWS SSO session at dispatch — go out over its process HTTP client, which carries no SSRF guard, so a private (100.64) issuer or Graph host is dialled directly and boots fine when no daemon proxy is set.
+  - `wardynd`'s own control-plane calls — OIDC discovery, JWKS, the Entra directory connector, and `oidc.<region>.amazonaws.com` to renew a captured AWS SSO session at dispatch — go out over its process HTTP client, which carries no SSRF guard.
+  - So a private (100.64) issuer or Graph host is dialled directly and boots fine when no daemon proxy is set.
   - Behind a corporate proxy the knobs are `WARDYN_DAEMON_PROXY_URL` and `WARDYN_DAEMON_NO_PROXY`, not process `HTTPS_PROXY`/`NO_PROXY`, which are never set on wardynd ([`docs/ENV.md`](ENV.md)).
   - List in `WARDYN_DAEMON_NO_PROXY` a private issuer or Graph host that wardynd can itself resolve and reach directly; leave it off the list when the corporate proxy is the only route to it.
   - A host the corporate proxy cannot reach and that is not on the list fails discovery at boot, and none of the site-config fields above can fix it.
@@ -4938,11 +4989,15 @@ The residuals an operator should plan for:
   - When it does, it says *"wardyn: sign-in command finished — this pane is now a plain shell."* and hands the pane over as a shell, with the scrollback intact for somebody attaching late.
 - **An unpinned multi-account sign-in asks a question in the pane.**
   - If the provider pins `sso_account_id` and `sso_role_name`, the sign-in is fully unattended once the browser step is done.
-  - If it does NOT, and the person's SSO session reaches more than one account (or more than one role in the chosen account), the helper asks WHICH ONE in the sign-in terminal and allows three tries.
+  - If it does NOT, and the person's SSO session reaches more than one account (or more than one role in the chosen account), the helper asks WHICH ONE.
+  - It asks in the sign-in terminal.
+  - It allows three tries.
   - Anyone with a WRITABLE attach can answer — the console's sign-in pane, `wardyn run attach`, an SSH attach, or the Runs list when they hold the terminal.
   - A read-only viewer cannot; the prompt itself has no deadline, so it waits until a writable attach answers or the sandbox's own 30-minute idle cap ends the run.
   - Pin the account and the role on the provider and the question never comes up.
-  - While the sandbox waits on the answer, the sign-in panel's own copy already narrates the sign-in as done (`CAPTURE_HANDOFF`) — the browser step finished — so the person reads "click or tab into the terminal, type the number, press Enter" rather than a claim that Wardyn is still waiting on them externally.
+  - While the sandbox waits on the answer, the sign-in panel's own copy already narrates the sign-in as done (`CAPTURE_HANDOFF`).
+  - The browser step finished.
+  - So the person reads "click or tab into the terminal, type the number, press Enter" rather than a claim that Wardyn is still waiting on them externally.
 - **Signing in from Getting Started is still the path to prefer** — it watches for the helper's success marker, corroborates the capture with the server, and shuts the sandbox down when it lands.
   - The Runs-list path shows the same sign-in; it just has no console around it — with one difference worth stating.
   - Nothing server-side stops a login run when the capture lands (the shutdown is the console pane's own kill), so a sandbox opened from `/runs` stays up until the reaper's 30-minute idle cap.
@@ -4956,8 +5011,10 @@ The residuals an operator should plan for:
 - **The launch answers before the sandbox is up.**
   - Since 0.7.4 `POST /model-providers/{id}/sign-in` returns `{run_id, state: "PENDING"}` as soon as the run row exists and the launch is stamped; the pane then polls the run and attaches once it is RUNNING.
   - The reason is that a **first start may need to pull the image**: that pull, plus (on Kubernetes) the network-policy canary, can exceed the console's own request deadline.
-  - It is not specific to an upgrade — a first install pulls too, and a host that already has the image pulls nothing — which is why the console's own waiting copy hedges the same way.
-  - The synchronous version answered so late that the console reported the control plane unreachable over a launch that was working — and dropped the run id, leaving a sandbox alive to its 30-minute idle cap with nothing able to name it.
+  - It is not specific to an upgrade.
+  - A first install pulls too, and a host that already has the image pulls nothing — which is why the console's own waiting copy hedges the same way.
+  - The synchronous version answered so late that the console reported the control plane unreachable over a launch that was working.
+  - The console also dropped the run id, leaving a sandbox alive to its 30-minute idle cap with nothing able to name it.
   - Cancel now kills it from the first second.
   - A launch that fails AFTER that answer fails the RUN (a `FAILED` state and a `failure_hint` the pane renders), never a silent PENDING.
 - **The access portal is the admin's, not theirs.**
@@ -4983,7 +5040,8 @@ The residuals an operator should plan for:
 > The pin is the fix; both halves of it.
 
 - **What the control plane holds.**
-  - One age-encrypted blob per person per provider, in that person's own secret namespace under the provider's name — the SSO access token, its refresh token, the client registration, and the account/role the session mints role credentials for.
+  - One age-encrypted blob per person per provider, in that person's own secret namespace under the provider's name.
+  - It holds the SSO access token, its refresh token, the client registration, and the account/role the session mints role credentials for.
   - Reads never fall back: a person with no capture of their own resolves as *not signed in*, never as anyone else's session.
   - Wardyn renews the access token control-plane side at dispatch while the client registration lives (see "wardynd's own egress" above), so a one-hour token does not mean an hourly sign-in.
 - **What it never holds.**
@@ -5025,8 +5083,10 @@ Consequences worth knowing:
   - A killed sign-in run's credential upload is refused with `harness.credential.refuse` / `reason = run_killed`, even inside the five-minute grace a terminal run otherwise has for its own tail uploads.
   - Credential revocation alone is best-effort; this is the belt.
 - **The old sandbox's teardown is detached from the launch request.**
-  - The state change is still synchronous — the launch POST claims the KILLED transition (and frees the concurrency slot it held) before it answers, so the superseded run already reads `KILLED` by the time the caller sees a response.
-  - But the sandbox teardown, the run identity's revocation and the `run.kill` audit row now run on a goroutine detached from the request, up to about 30 seconds per superseded run, and on Kubernetes it waits for the pod to actually go away.
+  - The state change is still synchronous.
+  - The launch POST claims the KILLED transition (and frees the concurrency slot it held) before it answers, so the superseded run already reads `KILLED` by the time the caller sees a response.
+  - But the sandbox teardown, the run identity's revocation and the `run.kill` audit row now run on a goroutine detached from the request, up to about 30 seconds per superseded run.
+  - On Kubernetes it waits for the pod to actually go away.
   - None of that holds the sign-in POST open: a client that gives up (a closed tab, a proxy timeout) has already gotten its answer either way.
   - Nothing is lost and nothing is stuck — start the sign-in again.
 - **Two sign-ins started at once leave one.**
@@ -5052,13 +5112,15 @@ The pane polls the run while the sandbox comes up and says which of four states 
 | "Starting the sign-in sandbox…" | Reads are healthy, OR have been failing for under 10 seconds (a blip); the sandbox is not up yet; less than a minute has passed since launch. |
 | "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet…" | Reads are healthy, past a minute since launch, and the run carries no `status_detail` (a pre-0.7.6 daemon, or a Docker warm image with nothing to report). |
 | | Nothing on this path can *prove* a pull is what it is waiting on, which is why the sentence is hedged. |
-| the substrate's own reason (e.g. "Waiting for a machine with room for this sandbox.", "Downloading the image…") | Reads are healthy and the run's `status_detail` names a non-terminal reason ("[What a starting run is waiting on](#what-a-starting-run-is-waiting-on)", above) — since 0.7.6 this REPLACES the generic "Still starting" hedge; the clock budget is unchanged, only the sentence is more honest. |
+| the substrate's own reason (e.g. "Waiting for a machine with room for this sandbox.", "Downloading the image…") | Reads are healthy and the run's `status_detail` names a non-terminal reason ("[What a starting run is waiting on](#what-a-starting-run-is-waiting-on)", above). Since 0.7.6 this REPLACES the generic "Still starting" hedge; the clock budget is unchanged, only the sentence is more honest. |
 | the substrate's own reason, Cancel only, no clock | `status_detail`'s reason is TERMINAL (`ImagePullBackOff`, `CrashLoopBackOff`, …) — the wait ends in seconds, not after five minutes, because trying again gets the same answer until the cluster or the image changes. |
 | "Wardyn can't read the sign-in sandbox right now — still trying…" | The console's reads of the run have been failing for at least 10 seconds (a daemon restart, an ingress 5xx, a roster edit that made the read a 403). The sandbox itself may be perfectly fine. |
 | "Wardyn stopped being able to read the sign-in sandbox…" | Reads have been failing for at least five minutes AND at least 15 consecutive polls. The wait ends; the run id is kept, so Cancel still tears the sandbox down. |
 
 - The wait is graded on BOTH the clock and a poll-count floor, not on poll ticks alone.
-- The clock (five minutes of failing reads) says the outage is real, and the 15-failure floor — kept from the old tick budget — says it is not one hidden-tab poll pretending to be one (a backgrounded tab skips ticks entirely, so a single failed read after ten minutes away must not immediately read as unreadable).
+- The clock (five minutes of failing reads) says the outage is real.
+- The 15-failure floor — kept from the old tick budget — says it is not one hidden-tab poll pretending to be one.
+- A backgrounded tab skips ticks entirely, so a single failed read after ten minutes away must not immediately read as unreadable.
 - A healthy wait with no reason to report is never ended by the pane, however long the pull takes.
 - A healthy wait carrying a TERMINAL reason ends on the reason instead — what otherwise bounds it is the server, below.
 
@@ -5098,7 +5160,8 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 - Until then a run whose build or start died with the daemon can still read `image: Building` (or the last substrate wait) as if it were current.
 - It is not: kill the run and launch it again.
 - `status_detail` is display-only, never interpreted, and never cleared by a write.
-- The API blanks it at READ for any run that is not `STARTING` (for `image: Building`, any run that is not `PENDING`) — except a run that FAILED on one of the terminal reasons, where the reason IS the failure.
+- The API blanks it at READ for any run that is not `STARTING` (for `image: Building`, any run that is not `PENDING`).
+- The exception is a run that FAILED on one of the terminal reasons, where the reason IS the failure.
 - The last reason therefore survives on the row for a `SELECT` postmortem without the console ever narrating a finished run's old wait.
 - A run read from a pre-0.7.6 daemon, or a run that started before this upgrade, simply carries no reason.
 
@@ -5129,7 +5192,8 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 
 The pane will wait; the **runner** will not wait forever, and these are the bounds an operator sizes:
 
-- `WARDYN_SANDBOX_START_TIMEOUT` (default **3 minutes**) is one absolute deadline for the whole sandbox start, counted from the moment the proxy pod is created and spent across BOTH pods: the proxy's scheduling, image pull, config-staging init container and Ready, then the agent's pull and Running.
+- `WARDYN_SANDBOX_START_TIMEOUT` (default **3 minutes**) is one absolute deadline for the whole sandbox start, counted from the moment the proxy pod is created and spent across BOTH pods.
+  - That is the proxy's scheduling, image pull, config-staging init container and Ready, then the agent's pull and Running.
   - It is not restarted when the agent pod is created, and a change in the reason a pod is stuck never resets it.
   - A first pull of the `aws-sso` image was measured at **131 seconds** on a reporting estate, which is most of the default; raise it for a slower registry.
   - Before 0.8.6 this was a fixed 3 minutes for the agent plus a separate fixed 90 seconds for the proxy's IP.
@@ -5140,7 +5204,8 @@ The pane will wait; the **runner** will not wait forever, and these are the boun
   - `0` turns the wait off: an unplaceable run fails at the start timeout, which is what 0.8.5 did (at 90 seconds for the proxy).
 - Terminal states never wait: `ImagePullBackOff`, `CrashLoopBackOff`, a failed init and the like fail the run at once, inside a capacity wait as anywhere else.
 - The **boot egress canary** keeps its own fixed budget (`canaryWaitTimeout`, 3 minutes a phase, [`internal/runner/k8s/canary.go`](../internal/runner/k8s/canary.go)) and neither setting moves it: both phases must fit inside the chart's 450 second startup probe.
-- While a run waits, wardynd holds the run's watcher lease with a heartbeat for as long as the sandbox create blocks, so another replica's sweep does not adopt a run that is still being set up.
+- While a run waits, wardynd holds the run's watcher lease with a heartbeat for as long as the sandbox create blocks.
+- So another replica's sweep does not adopt a run that is still being set up.
 - `GET /api/v1/setup/status` reports both values (`runner.sandbox_start`, Kubernetes only) and the checklist shows them as the `sandbox_start` row.
   - The console's "taking longer than expected" bound for a starting run is the two added together plus 90 seconds, read from there.
 
@@ -5171,7 +5236,9 @@ The pane will wait; the **runner** will not wait forever, and these are the boun
 
 ### Telling an estate-side failure from a Wardyn one
 
-- If people report *"Wardyn stopped being able to read the sign-in sandbox"*, the reads were failing, and the cause is almost always in front of Wardyn (an ingress/WAF 5xx or 429 against a 2-second poll, or a `wardynd` pod rolling during the upgrade that triggered the pull).
+- If people report *"Wardyn stopped being able to read the sign-in sandbox"*, the reads were failing.
+- The cause is almost always in front of Wardyn.
+- Examples: an ingress/WAF 5xx or 429 against a 2-second poll, or a `wardynd` pod rolling during the upgrade that triggered the pull.
 - Run both of these while it is happening — one shows what the console's poll sees, the other what the sandbox is actually doing:
 
 ```sh
@@ -5197,10 +5264,14 @@ kubectl -n "$WARDYN_NS" describe pod -l wardyn.run-id="$RUN_ID" | sed -n '/Event
 - It is testable now, on a throwaway kind cluster, with no AWS account and no real credential anywhere in the loop.
 - **The cluster.**
   - `make agent-images` (the overlay loads this tree's `wardyn/agent-aws-sso:local` login image and refuses to start without it), then `WARDYN_QUICKSTART_HTTP_PORT=8280 WARDYN_QUICKSTART_SSH_PORT=2322 make kind-quickstart`, then `make kind-sso` (see [`deploy/kind/sso/README.md`](../deploy/kind/sso/README.md)).
-  - The overlay adds Dex with one static principal per role path — `admin@wardyn.local`, `member@wardyn.local` and four more, password `password` — plus `wardyn-awsssofake`: an unsigned fake of both AWS IAM Identity Center services (`sso-oidc` and the `sso` portal) on one in-cluster Service, and a bedrock-runtime stub on a second (`wardyn-awsssofake-bedrock`, port 8091), so a model call takes the SigV4 passthrough real Bedrock gets rather than the portal's terminated tunnel.
+  - The overlay adds Dex with one static principal per role path: `admin@wardyn.local`, `member@wardyn.local` and four more, password `password`.
+  - It also adds `wardyn-awsssofake`: an unsigned fake of both AWS IAM Identity Center services (`sso-oidc` and the `sso` portal) on one in-cluster Service.
+  - A bedrock-runtime stub runs on a second (`wardyn-awsssofake-bedrock`, port 8091).
+  - So a model call takes the SigV4 passthrough real Bedrock gets rather than the portal's terminated tunnel.
   - `make kind-sso-down` removes the overlay; the cluster itself belongs to `make kind-down`.
 - **The knobs.**
-  - `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE=<url>` re-points both SSO services at that Service, moving five things together: the containerized login sandbox's `AWS_ENDPOINT_URL_SSO`/`_SSO_OIDC`, the captured-credential sandbox's same pair, the SSO egress allow-list entries, the login flow's own `device.sso.<region>` entry, and the dispatch-time `CreateToken` URL.
+  - `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE=<url>` re-points both SSO services at that Service, moving five things together.
+  - They are the containerized login sandbox's `AWS_ENDPOINT_URL_SSO`/`_SSO_OIDC`, the captured-credential sandbox's same pair, the SSO egress allow-list entries, the login flow's own `device.sso.<region>` entry, and the dispatch-time `CreateToken` URL.
   - It is **refused unless `WARDYN_ALLOW_TEST_ENDPOINTS=true`** is also set, and every boot carrying it logs a warning opening `TEST HATCH ACTIVE`.
   - Unset — every real deployment — nothing changes.
   - It is not a Bedrock provider's `bedrock.base_url` (a different service, and a supported production posture), and it is not the global `AWS_ENDPOINT_URL`.
@@ -5210,7 +5281,9 @@ kubectl -n "$WARDYN_NS" describe pod -l wardyn.run-id="$RUN_ID" | sed -n '/Event
 > An operator who sets both has pointed a real sign-in at a server that can hand back credentials of its choosing, and Wardyn cannot tell that server from AWS.
 
 - The same acknowledgement unlocks one more thing: a plain `http://` `bedrock.base_url` on a model provider.
-- This is the SigV4 passthrough lane of a `bedrock_sso` provider — no per-run TLS-MITM terminates for it — so without the acknowledgement the provider save is refused on rule 1 (`must be https://`) before the SSO hatch is even reached.
+- This is the SigV4 passthrough lane of a `bedrock_sso` provider.
+- No per-run TLS-MITM terminates for it.
+- So without the acknowledgement the provider save is refused on rule 1 (`must be https://`) before the SSO hatch is even reached.
 - That relaxation is rule 1 and nothing else.
 - An embedded credential, an empty host, a metadata literal, the public host itself, a query or a fragment all still refuse the save exactly as they do in production.
 - The walk itself no longer needs it: it serves the fake over HTTPS under a throwaway CA it mints each run and installs as the chart's `trustedCA`.
@@ -5219,7 +5292,10 @@ kubectl -n "$WARDYN_NS" describe pod -l wardyn.run-id="$RUN_ID" | sed -n '/Event
   - The fake is addressed by its **Service** name, never a pod IP, and site-config `internal_hosts` must lift it **before the first sign-in**.
   - The sandbox's egress goes through the proxy sidecar, which denies any host resolving to a private address unless an `internal_hosts` rule lifts it — and the lift refuses the proxy's own interface subnets.
   - A pod IP is on the pod CIDR, which IS that subnet, so a pod IP can never be lifted however it is declared; a ClusterIP is on the Service CIDR, which can.
-  - Scope the rule to the Service CIDR your cluster actually uses (read it off the apiserver's `--service-cluster-ip-range`, do not assume `10.96.0.0/16`; [`scripts/kind-sso-walk.sh`](../scripts/kind-sso-walk.sh) reads it off the apiserver itself; a set `WARDYN_KIND_SSO_SERVICE_CIDR` wins over that read, which is also how you rescue a failed one).
+  - Scope the rule to the Service CIDR your cluster actually uses.
+  - Read it off the apiserver's `--service-cluster-ip-range`, do not assume `10.96.0.0/16`.
+  - [`scripts/kind-sso-walk.sh`](../scripts/kind-sso-walk.sh) reads it off the apiserver itself.
+  - A set `WARDYN_KIND_SSO_SERVICE_CIDR` wins over that read, which is also how you rescue a failed one.
   - The same entry covers the Bedrock stub, because it is the same Service.
 - **The walk.**
   - `WARDYN_TEST_K8S=1 scripts/kind-sso-walk.sh` does all of the above and then drives [`ui/e2e/walk/sso-member.spec.ts`](../ui/e2e/walk/sso-member.spec.ts).
@@ -5232,10 +5308,12 @@ kubectl -n "$WARDYN_NS" describe pod -l wardyn.run-id="$RUN_ID" | sed -n '/Event
 - `/setup/status` reads `model_access.state: "live"` for the member and `not_configured` for the admin at the same moment.
 - The closing assertion is the one that is not Wardyn asserting about itself: the fake's own `/_seen` reports which account and role real botocore asked it to mint, and that the Bedrock stub was hit.
 - **What the second spec adds (0.7.5).**
-  - The walk now runs TWO spec files in one invocation and against one cluster — `./scripts/run-ui-e2e.sh sso-member sso-member-recovery` — in that order, because the second inherits the state the first leaves: a member who is already signed in, and a roster pin that already contradicts nothing.
+  - The walk now runs TWO spec files in one invocation and against one cluster — `./scripts/run-ui-e2e.sh sso-member sso-member-recovery` — in that order, because the second inherits the state the first leaves.
+    - It is a member who is already signed in, and a roster pin that already contradicts nothing.
   - It covers the paths a member who is already `live` cannot reach from their own seat, and three things 0.7.4's walk did not touch at all:
     - **the org standard set in the CONSOLE, not by an API PUT.**
-      - An admin drives the Agents tab once — mechanism, per-person credential source, and the three org settings the row carries (SSO start URL, pinned account, pinned role) — and the walk then proves a MEMBER is bound by all of it.
+      - An admin drives the Agents tab once: mechanism, per-person credential source, and the three org settings the row carries (SSO start URL, pinned account, pinned role).
+      - The walk then proves a MEMBER is bound by all of it.
       - New Run offers only the enabled agent, and the member's own sign-in pane has no start-URL field at all, because the organization's portal wins.
       - That last one is the proof an org setting is ENFORCED on a member rather than merely saved.
     - **the sign-in sandbox signing itself in, reached from the RUNS LIST.**
@@ -5243,11 +5321,13 @@ kubectl -n "$WARDYN_NS" describe pod -l wardyn.run-id="$RUN_ID" | sed -n '/Event
       - Opening the run from `/runs` joins the same tmux session the image already started, shows the sandbox's own banner and the device-code URL, and the capture completes with the test typing nothing at all.
       - The absence of a keystroke is the assertion: before 0.7.5 the console typed the command and a Runs-list attach got a bare prompt.
     - **cancel, retry and supersede.**
-
-      A sign-in cancelled while it is still starting leaves no stored credential, the retry replaces the blob (proven by the stored capture's `source_run_id` MOVING to the second run — "it reaches live" proves nothing about a member who was already live), and starting a third sign-in over an abandoned one kills the orphan — the ordinary case leaves exactly one live sandbox per person.
-
+      - A sign-in cancelled while it is still starting leaves no stored credential.
+      - The retry replaces the blob (proven by the stored capture's `source_run_id` MOVING to the second run — "it reaches live" proves nothing about a member who was already live).
+      - Starting a third sign-in over an abandoned one kills the orphan.
+      - The ordinary case leaves exactly one live sandbox per person.
       - A rare timestamp race across replicas can leave two (see "[One live sign-in sandbox per person](#one-live-sign-in-sandbox-per-person)" below).
-- It also holds a sign-in in `STARTING` for 65 seconds on purpose — by tainting the kind node so nothing the run needs can schedule — and asserts that the console says the start is SLOW, and never that Wardyn cannot read the sandbox, with the pane's own 2-second poll answering 200 throughout.
+- It also holds a sign-in in `STARTING` for 65 seconds on purpose — by tainting the kind node so nothing the run needs can schedule.
+- It then asserts that the console says the start is SLOW, and never that Wardyn cannot read the sandbox, with the pane's own 2-second poll answering 200 throughout.
 - That is the live twin of the Go characterization test, and it is the datum that tells an operator whether an "unreadable" they saw was estate-side.
 - The 65 seconds are not arbitrary and neither is what they hold up.
 - A sandbox creates its PROXY pod first and waits for that pod's IP for **90 seconds** before the agent pod exists at all.
@@ -5255,10 +5335,12 @@ kubectl -n "$WARDYN_NS" describe pod -l wardyn.run-id="$RUN_ID" | sed -n '/Event
 - The hold is therefore five seconds past the 60 at which the slow-start sentence appears, and the taint comes off the moment the assertion is made — about 25 seconds of margin.
 - A walk that is killed mid-case would leave the node unschedulable, so the walk script clears that taint before its own restarts and again on exit.
 - **Run it on images built from the tip you are judging.**
-  - The console is baked into the daemon image, so a cluster loaded before a console change judges the OLD screens with the NEW assertions — which is exactly how one 0.7.4 walk went red with a correct tree.
+  - The console is baked into the daemon image.
+  - So a cluster loaded before a console change judges the OLD screens with the NEW assertions — which is exactly how one 0.7.4 walk went red with a correct tree.
   - `WARDYN_KIND_SSO_REBUILD=1 WARDYN_TEST_K8S=1 scripts/kind-sso-walk.sh` rebuilds all five images the walk judges (`wardynd`, `wardyn-proxy`, `agent-aws-sso`, `agent-claude-code`, the SSO fake) from the working tree and reloads them first.
   - It retags the two `:local` agent images on that Docker daemon — a compose stack sharing that daemon adopts them for new runs, which the walk warns about once.
-  - Either way the walk writes an `images.txt` into its evidence directory naming the tree's HEAD and each image's content digest and build time (and, since 0.7.6, a `MANIFEST.json` with the host and node digests compared per image, the dirty paths, the fake's TTL knobs and the kill-switch posture read back off the Deployment).
+  - Either way the walk writes an `images.txt` into its evidence directory naming the tree's HEAD and each image's content digest and build time.
+  - Since 0.7.6 it also writes a `MANIFEST.json` with the host and node digests compared per image, the dirty paths, the fake's TTL knobs and the kill-switch posture read back off the Deployment.
   - So "which tip did this prove?" is answerable afterwards rather than remembered.
 
 > [!NOTE]
@@ -5300,16 +5382,22 @@ Naming these is the point of the walk, not a caveat on it:
 - A lapse — `expired_signin` or `expiring` — cannot be dismissed.
 - Under a `shared` row the one credential is the admin's.
 - A member whose runs depend on it is told when it dies ("Your admin's model credential expired — ask them to reconnect it") with no button, because nobody but an admin can repair it.
-- The ADMIN reading the same state sees the blast radius named — "The shared AWS sign-in no longer works — every Claude Code run needs it" — and gets the sign-in, which is the path `authorizeHarnessLogin` has always admitted for an operator.
+- The ADMIN reading the same state sees the blast radius named: "The shared AWS sign-in no longer works — every Claude Code run needs it".
+- The ADMIN also gets the sign-in, which is the path `authorizeHarnessLogin` has always admitted for an operator.
 - Wardyn has no way for that member to notify the admin; that gap is listed in the [CHANGELOG](../CHANGELOG.md).
 
 ### A run refused for a model credential
 
-- When an `AgentProviders` row says HOW an agent reaches its model and the credential that lane needs is dead at dispatch, the run is failed with the server's own sentence — and from 0.7.6 that refusal is also machine-readable.
+- When an `AgentProviders` row says HOW an agent reaches its model and the credential that lane needs is dead at dispatch, the run is failed with the server's own sentence.
+- From 0.7.6 that refusal is also machine-readable.
 - The `run.create` failure row it already wrote carries `reason: model_credential` and the run's DECLARED `mechanism`.
 - The console grades that ending `credential` and renders the sentence with the AWS sign-in beside it, in a dialog, on the run page.
 
-The button is offered only where a sign-in the reader can complete would repair the state: the refused run's declared lane must still be the deployment's Claude Code lane, the reader's own `model_access` must be actionable, and the reader must be the person who created the run — an admin reading somebody else's failed run is shown the sentence alone, because their sign-in repairs nothing for that run.
+- The button is offered only where a sign-in the reader can complete would repair the state:
+  - the refused run's declared lane must still be the deployment's Claude Code lane;
+  - the reader's own `model_access` must be actionable;
+  - the reader must be the person who created the run.
+- An admin reading somebody else's failed run is shown the sentence alone, because their sign-in repairs nothing for that run.
 
 - A refusal whose renewal merely did not complete ("launch again in a moment") grades `live` and gets no button either, correctly: nothing is wrong with that credential.
 - In the Admin view (`/admin/runs/:id`) the button never renders, even on the admin's own run.
@@ -5330,16 +5418,24 @@ The button is offered only where a sign-in the reader can complete would repair 
 **What the operator sees.**
 
 - The run stays RUNNING.
-  - Its header chip reads *Waiting for your AWS sign-in* (plus a count when something else is pending too), and the cockpit's approvals strip carries one row, *AWS sign-in needed*, whose single button opens the sign-in dialog.
+  - Its header chip reads *Waiting for your AWS sign-in* (plus a count when something else is pending too).
+  - The cockpit's approvals strip carries one row, *AWS sign-in needed*, whose single button opens the sign-in dialog.
   - There is no Approve and no Deny.
   - The request is answered by signing in, and the API refuses a decision on it with `409` — to the security tier and to the run's own owner or an admin.
   - A caller who does not own the run gets the same `404 approval not found` every other kind gives them, byte for byte, so the refusal cannot be used to ask whether a UUID is somebody else's sign-in request.
-- The audit trail carries `credential.reauth.request` at the raise — with `owner`, `credential_source` and a `reason` from a closed set (`spent` the refresh token is gone at AWS, `unavailable` renewal failed transiently with nothing left to serve, `not_found` there is no stored session for that namespace).
+- The audit trail carries `credential.reauth.request` at the raise, with `owner`, `credential_source` and a `reason` from a closed set:
+    - `spent`: the refresh token is gone at AWS;
+    - `unavailable`: renewal failed transiently with nothing left to serve;
+    - `not_found`: there is no stored session for that namespace.
   - It carries `credential.reauth.resolve` when a sign-in answers it, naming `resolved_by` and the `capture_run_id` it landed from.
 - `/metrics` carries `wardyn_credential_reauth_total{outcome=requested|resolved|expired|cancelled|timeout}` and `wardyn_credential_reauth_wait_seconds` (sum/count — the average time a request stayed open).
-  - **Each label is counted at its own transition**: `requested` at the raise, `resolved` at the sign-in that answered it, `expired` where the 24 h sweeper ages a row out, `cancelled` where a terminal run cancels one, `timeout` where the daemon ingests the sidecar's `credential:reauth-timeout` decision.
+  - **Each label is counted at its own transition**.
+  - `requested` counts at the raise, `resolved` at the sign-in that answered it, `expired` where the 24 h sweeper ages a row out.
+  - `cancelled` counts where a terminal run cancels one, `timeout` where the daemon ingests the sidecar's `credential:reauth-timeout` decision.
   - That decision row is written for a spent BUDGET and nothing else.
-  - A hold ended by a proxy shutdown, by a killed run (which leaves its own `approval.cancel` row) or by a request answered with anything but an approval refuses the sandbox with the same modelled 401 but is neither counted nor logged as a timeout, so `timeout` always means "the owner had the whole window".
+  - Some holds are ended by a proxy shutdown, by a killed run (which leaves its own `approval.cancel` row) or by a request answered with anything but an approval.
+  - They refuse the sandbox with the same modelled 401 but are neither counted nor logged as a timeout.
+  - So `timeout` always means "the owner had the whole window".
 - **`timeout` is the label to alert on**, and the one to tune `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` against: it means a sandbox's model call was FAILED because nobody signed in inside the budget.
   - A rising `timeout` beside a `wait_seconds` average near the budget says people are only just making it — lengthen the budget, or make the request more visible.
   - A rising `timeout` with a LOW `wait_seconds` says the opposite.
@@ -5354,7 +5450,8 @@ The button is offered only where a sign-in the reader can complete would repair 
 - `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` (proxy sidecar, default `600s`, clamped `[10s, 1800s]`) is how long ONE hold waits.
 - Lower it if your agent's SDK gives up before the hold does — on expiry the call fails with the AWS `UnauthorizedException` it would have got anyway.
 - Both container runners forward it from wardynd's environment into every proxy sidecar, and the compose stack forwards it from the operator's shell into wardynd.
-- A docker-gated measurement against the reference agent's own SDK (`wardyn/agent-claude-code`) found it still waiting on a parked credential exchange at eleven minutes — the test's own ceiling, not the SDK's — having made 28 `GetRoleCredentials` calls in that window, roughly every 30 s.
+- A docker-gated measurement against the reference agent's own SDK (`wardyn/agent-claude-code`) found it still waiting on a parked credential exchange at eleven minutes — the test's own ceiling, not the SDK's.
+- It was waiting, having made 28 `GetRoleCredentials` calls in that window, roughly every 30 s.
 - So the 600 s default is the binding constraint, not that SDK; a less patient SDK is what the "lower it" advice above is for.
 
 **The PENDING row outlives the hold, deliberately.**
@@ -5366,16 +5463,27 @@ The button is offered only where a sign-in the reader can complete would repair 
 
 **Bounds.**
 
-- One hold per REQUEST, however many of the sandbox's concurrent calls discover the lapse — the hold belongs to the request rather than to whichever call opened it, so a client that gives up does not end it and a client that arrives later joins it instead of starting a second one.
+- One hold per REQUEST, however many of the sandbox's concurrent calls discover the lapse.
+- The hold belongs to the request rather than to whichever call opened it.
+- So a client that gives up does not end it and a client that arrives later joins it instead of starting a second one.
 - At most eight such workflows per run, after which the run is refused rather than asked again.
-- A hold ends within one poll of a 401/403/410 on the approval read (which is what a killed run answers before its CANCELLED row is readable), after three consecutive 404s, and at its budget — never later.
+- A hold ends within one poll of a 401/403/410 on the approval read (which is what a killed run answers before its CANCELLED row is readable).
+- It also ends after three consecutive 404s, and at its budget.
+- It never ends later.
 
 ### Turning the lane off
 
-- `WARDYN_AWS_SSO_PROXY_INJECT=off` restores the pre-0.7.6 behaviour: the SSO access token is written into the sandbox's token cache, `portal.sso` is not TLS-MITM'd, no injection grant is authored, and a lapsed session fails the run's model call as it used to.
-- It is also the sanctioned stopgap for the corporate-proxy interaction described in ["Phase B: the SSO/Bedrock MITM lane and the upstream proxy"](#phase-b-the-ssobedrock-mitm-lane-and-the-upstream-proxy) above — reachable now as a named Helm value and a Compose env line, not only through the raw env passthrough.
+- `WARDYN_AWS_SSO_PROXY_INJECT=off` restores the pre-0.7.6 behaviour:
+  - the SSO access token is written into the sandbox's token cache;
+  - `portal.sso` is not TLS-MITM'd;
+  - no injection grant is authored;
+  - a lapsed session fails the run's model call as it used to.
+- It is also the sanctioned stopgap for the corporate-proxy interaction described in ["Phase B: the SSO/Bedrock MITM lane and the upstream proxy"](#phase-b-the-ssobedrock-mitm-lane-and-the-upstream-proxy) above.
+- It is reachable now as a named Helm value and a Compose env line, not only through the raw env passthrough.
 - It applies to **new dispatches only**.
-- The placeholder cache, the injection grant and the MITM entry are all authored at dispatch, so a run that is already running keeps the lane it was authored with until it ends — including a run that is currently HELD, which keeps holding to its budget and can still be resolved by a sign-in.
+- The placeholder cache, the injection grant and the MITM entry are all authored at dispatch.
+- So a run that is already running keeps the lane it was authored with until it ends.
+- That includes a run that is currently HELD, which keeps holding to its budget and can still be resolved by a sign-in.
 - After flipping the switch, relaunch the runs that matter or wait them out; do not expect a running sandbox to change lane under you.
 - The default is `on` — set the environment variable to `off` to roll back; a run already dispatched under `on` is unaffected by a later flip either direction.
 
@@ -5409,7 +5517,9 @@ The button is offered only where a sign-in the reader can complete would repair 
 - No `SiteConfig.InternalHosts` declaration is needed for the gateway itself **on that brokered route**.
 - Only the proxy's own `/wardyn/llm/*` handler resolves and dials it, per request, with its own refusal for the same disallowed address kinds (`Proxy.vetTrustedHost`, reached only via `Proxy.gatewayTarget`).
 - That relaxed vet is scoped to the brokered route alone.
-- A sandbox naming the gateway host on an ordinary CONNECT/plain-HTTP request is treated like any other host: policy (`allowed_domains`) plus the unconditional private-IP guard apply unchanged, so a private-address gateway named by hostname stays unreachable that way without its own `SiteConfig.InternalHosts` declaration.
+- A sandbox naming the gateway host on an ordinary CONNECT/plain-HTTP request is treated like any other host.
+- Policy (`allowed_domains`) plus the unconditional private-IP guard apply unchanged.
+- So a private-address gateway named by hostname stays unreachable that way without its own `SiteConfig.InternalHosts` declaration.
 - Prefer a hostname gateway: one configured by IP literal must be listed by that literal in `allowed_domains`, and an exact literal-IP allowlist entry is honoured before the private-IP guard (`Policy.AllowsLiteralIP`).
 - The gateway box then becomes reachable from the sandbox on every port over a plain CONNECT (no credential rides that path; injection happens only on the brokered route).
 
@@ -5429,7 +5539,8 @@ The button is offered only where a sign-in the reader can complete would repair 
 - A sandbox `CONNECT` to the gateway host on another port (its port 22, say) passes the `allowed_domains` entry above and is refused `builtin:private-ip` by the guard; with the lift it is allowed (`rule_source: site-config:internal-host`).
 - `internal_hosts` is for a private endpoint that is not a provider's configured gateway: "[Bedrock on a private endpoint](#bedrock-on-a-private-endpoint)" above is that case, its dials take the ordinary guard, and they do need the lift.
 - Two invariants carry over unchanged: the `egress_redirects` lane above still points the AGENT'S OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` env, or an equivalent harness setting) at a gateway independently of Wardyn's injection lane.
-- An `egress_redirects` row can never be pointed *at* the gateway or the public provider host to swap an artifact-registry token onto model traffic — `planArtifactRedirect` refuses that redirect outright (audited `run.artifact.redirect`, `warn`) rather than letting `buildInjector`'s last-write-wins host map silently collide the two.
+- An `egress_redirects` row can never be pointed *at* the gateway or the public provider host to swap an artifact-registry token onto model traffic.
+- `planArtifactRedirect` refuses that redirect outright (audited `run.artifact.redirect`, `warn`) rather than letting `buildInjector`'s last-write-wins host map silently collide the two.
 
 ### Upgrading from `artifact_overrides`
 
@@ -5445,10 +5556,13 @@ The button is offered only where a sign-in the reader can complete would repair 
 
 ### Integrations are not part of this round-trip
 
-- `integrations` — the rows behind **Settings**' Model provider card and behind the git credential lanes on the Workspace Providers screen (which is where the retired Git host card's lanes moved in 0.7.2), plus generic rows stored under an earlier release — lives on the SAME `SiteConfig` document `GET`/`PUT /site-config` reads and writes, but does not travel through this door.
+- `integrations` are the rows behind **Settings**' Model provider card and behind the git credential lanes on the Workspace Providers screen (which is where the retired Git host card's lanes moved in 0.7.2).
+- It also holds generic rows stored under an earlier release.
+- The field lives on the SAME `SiteConfig` document `GET`/`PUT /site-config` reads and writes, but does not travel through this door.
 - `PUT /site-config` 400s outright on a body carrying a non-empty `integrations` ("integrations are managed through their own endpoints, not PUT /site-config") and always carries the STORED integrations forward onto whatever it persists, regardless of what the body sent (`handlePutSiteConfig`, [`internal/api/site_config.go`](../internal/api/site_config.go)).
 - Same whole-document-replace reason as above: an older client that `get`s a config saved before `integrations` existed, then `set`s it back unmodified, would otherwise silently delete every stored integration.
-- The practical edge: once any integrations are stored, a fresh `wardyn site-config get > corp-baseline.json` captures them too, and the client strips them back out on the way in (`PutSiteConfig`, [`pkg/client/families.go`](../pkg/client/families.go)) so the `set` half does not 400 on its own capture.
+- The practical edge: once any integrations are stored, a fresh `wardyn site-config get > corp-baseline.json` captures them too.
+- The client strips them back out on the way in (`PutSiteConfig`, [`pkg/client/families.go`](../pkg/client/families.go)) so the `set` half does not 400 on its own capture.
 
 > [!IMPORTANT]
 > That strip also means **`set` never restores an integration** — the ones in the file are dropped, the stored ones carried forward untouched.
@@ -5483,8 +5597,9 @@ curl -s -X POST http://localhost:8080/api/v1/site-config/test-redirect \
 - `test-proxy` needs no body and runs whether or not an upstream proxy is configured — with one it proves the chain works, without one it proves direct egress works, and it says which path it took.
 - It goes out through the sandbox's normal egress, which dispatch already chains to the configured upstream.
 
-It dispatches the published `agent-base` image (a plain curl task) at the STRONGEST confinement class this host's runner actually advertises — never the operator's configured floor, because the question is whether egress works, not whether the floor is enforceable (an admin floor above what this host's runner advertises — CC2 with no RuntimeClass registered, say — otherwise fails the probe before it reaches the network, reading as a proxy problem it is not).
-
+- It dispatches the published `agent-base` image (a plain curl task) at the STRONGEST confinement class this host's runner actually advertises.
+- It never uses the operator's configured floor, because the question is whether egress works, not whether the floor is enforceable.
+- An admin floor above what this host's runner advertises — CC2 with no RuntimeClass registered, say — otherwise fails the probe before it reaches the network, reading as a proxy problem it is not.
 - See `not_run` below and the setup checklist's confinement-floor warning row.
 - It also accepts an optional `{"url": "https://…"}`:
 
@@ -5512,19 +5627,20 @@ curl -s -X POST http://localhost:8080/api/v1/site-config/test-proxy \
 > [!IMPORTANT]
 > **It never dials a caller-supplied target**: the probe target always comes from the stored row, never the request body, or the endpoint would be an SSRF gadget with a friendly label.
 
-- It runs two fetches in one sandbox — the mirror (`to`) through the normal path, then the public endpoint (`from`) again with the proxy deliberately bypassed — to catch a redirect that's configured but not enforced.
+- It runs two fetches in one sandbox.
+- The mirror (`to`) goes through the normal path, then the public endpoint (`from`) again with the proxy deliberately bypassed — to catch a redirect that's configured but not enforced.
 - Both return `200` with `{"state", "detail", "elapsed_ms"}`.
-- `test-proxy` adds three qualifiers so a client never has to string-match `detail`: `via` (`proxy`/`direct`), `intercepted` (`blocked`'s captive-portal flavor — something answered, just not with the published payload), and `custom` (a caller-named URL with no known payload, so `reached` is the weaker "request completed" claim).
+- `test-proxy` adds three qualifiers so a client never has to string-match `detail`:
+  - `via` (`proxy`/`direct`);
+  - `intercepted` (`blocked`'s captive-portal flavor — something answered, just not with the published payload);
+  - `custom` (a caller-named URL with no known payload, so `reached` is the weaker "request completed" claim).
 - Both endpoints may also carry `warning` (below).
 
 | `state` | Means |
 |---|---|
 | 🟢 `reached` | The path works — proxy or mirror reachable, and for a redirect, the public host is correctly *blocked* when dialed directly. |
-| ⛔ `blocked` | Could not reach the proxy or the mirror. `detail` names the real cause — DNS failure, connection refused, TLS failure, timeout, or curl's own exit code — never a generic "failed". |
-| | It also carries the one case where the mirror answered but the direct dial of the public host produced no connection fact at all to read (a `from` curl cannot dial — a space, a path, an unsupported scheme): `detail` then says the redirect was NOT tested, and the setup gate stays held, because an untested redirect must never render as `reached`. |
-| ⛔ `bypass` | **The one that looks fine but isn't.** The mirror answers, but the public host it's supposed to replace is *also* still reachable, directly, from a sandbox. |
-| | The redirect is configured but not enforced: a run can silently pull from the internet instead of the mirror, and every other signal — the row is filled in, the mirror answers — looks exactly like a working redirect. |
-| | "Reachable" means the public host **answered** — any HTTP status, a 403 included, or a TLS-level reply — not that the fetch succeeded: a host that answers `403` is one the confinement class did not block, and so is one that merely **accepted** the TCP connection and then stalled (the probe reads curl's own `num_connects`, because a timeout alone cannot tell an accepted-then-tarpitted dial from one that never left the sandbox). `test-redirect` only. |
+| ⛔ `blocked` | Could not reach the proxy or the mirror; see [below](#blocked). |
+| ⛔ `bypass` | **The one that looks fine but isn't** (`test-redirect` only); see [below](#bypass). |
 | 🟡 `no_runner` | No runner is configured; there's nothing to launch a probe with. Not an error, and not a guess. |
 | 🟡 `not_run` | A runner IS configured, but the throwaway sandbox never got to running the probe — an image pull failure, or a confinement class this host can't enforce. |
 | | Distinct from `blocked`: `blocked` means the probe DID run — usually observing a real network fact, and otherwise saying in `detail` that nothing was learned; `not_run` means nothing was learned either way. |
@@ -5533,7 +5649,9 @@ curl -s -X POST http://localhost:8080/api/v1/site-config/test-proxy \
 | | `detail` names the sandbox agent's own observed status at the deadline and `WARDYN_CONTROL_PLANE_URL` to check. Usual cause: the run's recording upload hanging against an unreachable control plane — see "Recording upload path on Kubernetes" below. |
 
 - The recorder's upload bound ships inside the agent images.
-- An image pinned through `WARDYN_AGENT_IMAGES` must be rebuilt from 0.6.6 or later (or use the published `agent-base:0.6.6` or a newer tag — prefer the current release's, since a pre-0.7 image also lacks `/home/agent/drive` and silently breaks writable drives), or its recorder keeps the pre-0.6.6 60s upload tail.
+- An image pinned through `WARDYN_AGENT_IMAGES` must be rebuilt from 0.6.6 or later (or use the published `agent-base:0.6.6` or a newer tag).
+- Prefer the current release's, since a pre-0.7 image also lacks `/home/agent/drive` and silently breaks writable drives.
+- Otherwise its recorder keeps the pre-0.6.6 60s upload tail.
 - A probe is bounded well under two minutes and reclaims (kills) its sandbox if the run doesn't finish in time, so a wedged probe can never hold one open.
 - **`warning` (both endpoints, `omitempty`).**
   - Set alongside a `reached` verdict when the probe's OWN session recording never reached the control plane even though egress worked — the "probe passes, recordings silently vanish" case.
@@ -5545,6 +5663,25 @@ curl -s -X POST http://localhost:8080/api/v1/site-config/test-proxy \
   - A cluster-wide baseline default-deny NetworkPolicy or a mesh authorization policy can drop the proxy-pod → control-plane hop even with the ambient-deny ack in place (`WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY`, "[Kubernetes: known gaps](#kubernetes-known-gaps)" below).
   - Wardyn's own per-run NetworkPolicy allows are additive only within the namespaced policy model and cannot override a platform-applied deny elsewhere.
   - The probe's `warning` field and `timed_out` state are how you find out.
+
+#### `blocked`
+
+- Could not reach the proxy or the mirror.
+- `detail` names the real cause — DNS failure, connection refused, TLS failure, timeout, or curl's own exit code — never a generic "failed".
+- It also carries the one case where the mirror answered but the direct dial of the public host produced no connection fact at all to read.
+- That means a `from` curl cannot dial — a space, a path, an unsupported scheme.
+- `detail` then says the redirect was NOT tested, and the setup gate stays held, because an untested redirect must never render as `reached`.
+
+#### `bypass`
+
+- **The one that looks fine but isn't.**
+- The mirror answers, but the public host it's supposed to replace is *also* still reachable, directly, from a sandbox.
+- The redirect is configured but not enforced.
+- A run can silently pull from the internet instead of the mirror, and every other signal — the row is filled in, the mirror answers — looks exactly like a working redirect.
+- "Reachable" means the public host **answered** — any HTTP status, a 403 included, or a TLS-level reply — not that the fetch succeeded.
+- A host that answers `403` is one the confinement class did not block, and so is one that merely **accepted** the TCP connection and then stalled.
+- The probe reads curl's own `num_connects`, because a timeout alone cannot tell an accepted-then-tarpitted dial from one that never left the sandbox.
+- `test-redirect` only.
 
 ### Directory autocomplete: the one path where the daemon dials out
 
@@ -5576,7 +5713,9 @@ That is a real expansion of Wardyn's minimal-reach posture, so:
   - Unset `WARDYN_DIRECTORY_PROVIDER` and restart: the connector is gone, the endpoint answers `503 {"code":"directory_unconfigured"}`, and the console degrades every picker back to a plain text input with no error.
   - Revoking the admin consent in Entra retracts it from the other side.
 - Credentials default to the OIDC app registration with the tenant derived from the issuer, so the common case is the one variable above.
-- A **public** OIDC client (PKCE, no secret) and a deployment with no OIDC at all can both do neither, and either one is a **boot refusal** naming what to set rather than a 503 an admin discovers by typing — see `WARDYN_DIRECTORY_CLIENT_SECRET` in [ENV.md](ENV.md).
+- A **public** OIDC client (PKCE, no secret) and a deployment with no OIDC at all can both do neither.
+- Either one is a **boot refusal** naming what to set rather than a 503 an admin discovers by typing.
+- See `WARDYN_DIRECTORY_CLIENT_SECRET` in [ENV.md](ENV.md).
 
 ## Toolchain-fidelity environment
 
