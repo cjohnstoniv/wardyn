@@ -743,7 +743,8 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
     await page.getByRole("button", { name: /^Reuse a saved policy/ }).click();
     await page.getByRole("combobox", { name: "Saved policy" }).click();
     await page.getByRole("option", { name: "e2e rail-height policy" }).click();
-    await expect(page.getByText("Tool rules", { exact: true })).toBeVisible();
+    // The rail's own section: the policy document names tool rules too.
+    await expect(page.getByRole("complementary").getByText("Tool rules", { exact: true })).toBeVisible();
     await goToNewRunPanel(page, "run");
     await page.getByLabel("Title").fill("e2e rail-height");
     // Re-derived for the four-panel layout (#1922): Launch is reachable from
