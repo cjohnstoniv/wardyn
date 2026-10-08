@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// OutputTab — run-detail's Output tab (mock packet M8). The kept bytes are
+// OutputTab — run-detail's Output tab (mock packets M8 and M-O). The kept bytes are
 // sandbox-controlled, so they render as ONE React text node in a <pre>: never
 // HTML, never a markdown component, no escape-sequence interpretation.
 import * as React from "react";
@@ -36,14 +36,16 @@ const REFUSALS: Record<string, Refusal> = {
   run_output_not_kept: "not_kept",
   run_output_expired: "expired",
   run_output_erased: "erased",
+  // Told only to the run's owner or an operator; anyone else gets not_captured or not_kept.
+  recording_erased: "erased",
   run_output_interactive: "interactive",
   run_output_not_captured: "not_captured",
   mask_state_unavailable: "mask",
 };
 
-function Notice({ children }: { children: React.ReactNode }) {
+function Notice({ id, children }: { id?: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
+    <div id={id} className="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
       <AlertTriangle className="size-3.5 shrink-0" />
       <span>{children}</span>
     </div>
@@ -71,6 +73,8 @@ export function OutputTab({
   const [attempt, setAttempt] = React.useState(0);
 
   const [saving, setSaving] = React.useState(false);
+  const [retrying, setRetrying] = React.useState(false);
+  const noticeId = React.useId();
   const [showLoading, setShowLoading] = React.useState(false);
   const recordingOff = useRecordingDisabled() === true;
   const stopped = state === "STOPPED";
@@ -94,6 +98,7 @@ export function OutputTab({
         setOut(o);
         setRefusal(null);
         setSaving(false);
+        setRetrying(false);
         setLoaded(true);
         if (!o.complete) timer = setTimeout(tick, POLL_MS);
       } catch (e) {
@@ -101,6 +106,7 @@ export function OutputTab({
         setOut(null);
         const r = e instanceof HttpError ? (REFUSALS[e.reason] ?? "error") : "error";
         setRefusal(r);
+        setRetrying(false);
         setLoaded(true);
         // Only an answer around the end of a run is worth another look: not-kept
         // while the final row is written, interactive while the snapshot is.
@@ -133,9 +139,16 @@ export function OutputTab({
 
   if (refusal !== null) {
     return (
-      <div className="max-w-4xl rounded-xl border border-border bg-card" data-testid="run-output-refusal">
+      <div
+        className="max-w-4xl rounded-xl border border-border bg-card"
+        data-testid="run-output-refusal"
+        aria-busy={retrying}
+      >
         {refusalBody(refusal, saving, recordingOff, live, state, onGoRecording, () => {
-          setLoaded(false);
+          // The surface stays mounted while the retry read is in flight, so
+          // keyboard focus stays on Retry; a press during it sends nothing.
+          if (retrying) return;
+          setRetrying(true);
           setAttempt((n) => n + 1);
         })}
       </div>
@@ -144,7 +157,14 @@ export function OutputTab({
 
   const o = out!;
   const pane = o.source === "pane_snapshot";
-  const sourceLabel = pane ? RUN_OUTPUT.sourcePane : RUN_OUTPUT.sourceStdout;
+  const recording = o.source === "recording";
+  const sourceLabel = recording ? RUN_OUTPUT.sourceRecording : pane ? RUN_OUTPUT.sourcePane : RUN_OUTPUT.sourceStdout;
+  // The warnings that limit what the bytes mean describe the region, with or without a body.
+  const recoveredId = `${noticeId}-recovered`;
+  const gapId = `${noticeId}-gap`;
+  const describedBy = [recording && recoveredId, o.capture_gap && gapId].filter(Boolean).join(" ") || undefined;
+  // Neither a recovery nor a gap establishes that the run printed nothing.
+  const cleanEmpty = o.output === "" && !recording && !o.capture_gap;
   return (
     <div className="max-w-4xl space-y-3 rounded-xl border border-border bg-card p-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -165,9 +185,10 @@ export function OutputTab({
         </span>
       </div>
       <div className="space-y-2">
+        {recording && <Notice id={recoveredId}>{RUN_OUTPUT.recordingRecovered}</Notice>}
         {o.mask_scope === "globals_only" && <Notice>{RUN_OUTPUT.globalsOnly}</Notice>}
-        {o.capture_gap && <Notice>{RUN_OUTPUT.captureGap}</Notice>}
-        {o.incomplete && <Notice>{RUN_OUTPUT.incomplete}</Notice>}
+        {o.capture_gap && <Notice id={gapId}>{RUN_OUTPUT.captureGap}</Notice>}
+        {o.incomplete && !recording && <Notice>{RUN_OUTPUT.incomplete}</Notice>}
         {o.truncated && <Notice>{RUN_OUTPUT.truncated}</Notice>}
         {pane && <p className="text-xs text-muted-foreground">{RUN_OUTPUT.paneCaption}</p>}
       </div>
@@ -176,9 +197,10 @@ export function OutputTab({
         tabIndex={0}
         role="region"
         aria-label={sourceLabel}
+        aria-describedby={describedBy}
         className="scroll-thin max-h-[60vh] overflow-auto whitespace-pre-wrap break-all rounded-lg bg-[#0d1117] p-3 font-mono text-xs text-[#e6edf3]"
       >
-        {o.output === "" ? (
+        {cleanEmpty ? (
           <span className="text-muted-foreground">{o.complete ? RUN_OUTPUT.emptyFinal : RUN_OUTPUT.emptyLive}</span>
         ) : (
           o.output
