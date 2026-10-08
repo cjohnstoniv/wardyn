@@ -241,7 +241,7 @@ export function NewRunScreen() {
                 onChange={onSpecChange}
                 onPreflight={preflight}
                 preflightBusy={preflighting}
-                preflightDisabled={(policyMode === "saved" && !state.selectedPolicyId) || !!gates.defaultWorkspaceProblem}
+                preflightDisabled={(policyMode === "saved" && !state.selectedPolicyId) || gates.referenceWorkspaceBlocked}
                 interactive={isInteractive}
                 adoCeiling={adoCeiling}
                 modelProviders={modelProviders}
@@ -251,9 +251,9 @@ export function NewRunScreen() {
                     status: defaultRead.status,
                     spec: defaultPolicy && previewSpec(defaultPolicy),
                     profileName: governanceProfile,
-                    problem: gates.defaultWorkspaceProblem,
                     onRetry: retryDefault,
                   },
+                  hold: gates.referenceWorkspaceProblem,
                   onModeChange: onPolicyModeChange,
                   picker: (
                     <div className="space-y-2">

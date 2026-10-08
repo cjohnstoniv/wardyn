@@ -21,6 +21,7 @@
 // are configured for the roster-pin e2e), so the model-provider warning
 // below is unconditionally absent, not merely an environment fact.
 import { test, expect, gotoConsole, ADMIN_TOKEN, launchRun } from "./fixtures";
+import { POLICY_TEMPLATE_COPY } from "../src/app/components/wardyn/copy/policy-templates";
 import { NO_BARRIER, RAIL, RAIL_CREDENTIAL, RAIL_PROVIDER, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
 import { MODEL_ACCESS_BANNER } from "../src/app/components/wardyn/model-access-copy";
 import { CC_META } from "../src/app/components/wardyn/cc-meta";
@@ -317,6 +318,69 @@ test.describe("New run — Use the default policy", () => {
     const view = await (await page.request.get(`/api/v1/runs/${id}/policy`, { headers: auth })).json();
     expect(view.source.kind).toBe("default");
   });
+});
+
+// M-F #1901: the default and saved policies launch by reference and carry one
+// workspace, so a second attached workspace holds Launch and Check again and
+// says why, once. Nothing is removed and the mode never changes by itself.
+// The seeded backend has one workspace; a second is spliced into the list
+// (in memory, like the admitted:false case below) and both are attached
+// through the same router state a clone hands the page.
+test.describe("New run — saved and default policies with two workspaces attached (#1901)", () => {
+  async function openWithTwoAttached(page: Page) {
+    await page.route("**/api/v1/workspaces*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      const list = Array.isArray(json) ? json : (json.workspaces ?? []);
+      list.push({ ...list[0], id: "ws-e2e-extra", name: "e2e-extra" });
+      await route.fulfill({ response, json });
+    });
+    await gotoConsole(page);
+    const listed = await (await page.request.get("/api/v1/workspaces", { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` } })).json();
+    const primary = (Array.isArray(listed) ? listed : listed.workspaces)[0].id as string;
+    // Away and back, so the screen mounts with the prefill.
+    await page.evaluate((ids) => {
+      const go = (path: string, usr: unknown) => {
+        window.history.pushState({ usr, key: Math.random().toString(36).slice(2), idx: window.history.length }, "", path);
+        window.dispatchEvent(new PopStateEvent("popstate", { state: window.history.state }));
+      };
+      go("/runs", null);
+      go("/runs/new", { prefill: { inlinePolicy: false, state: { workspaces: ids.map((workspaceId) => ({ workspaceId })) } } });
+    }, [primary, "ws-e2e-extra"]);
+    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await expect(page.getByTestId("nr-workspace-extras")).toContainText("e2e-extra");
+  }
+
+  for (const [mode, name, sentence] of [
+    ["saved", /Reuse a saved policy/, POLICY_TEMPLATE_COPY.SAVED_ONE_WORKSPACE],
+    ["default", /^Use the default policy/, POLICY_TEMPLATE_COPY.DEFAULT_ONE_WORKSPACE],
+  ] as const) {
+    test(`${mode}: the refusal shows once, holds Launch and Check again, and Remove clears it`, async ({ page }) => {
+      await openWithTwoAttached(page);
+      await page.getByRole("button", { name }).click();
+      await expect(page.getByText(sentence)).toHaveCount(1);
+      await expect(page.getByRole("button", { name: "Launch run" })).toBeDisabled();
+      await expect(page.getByRole("button", { name: "Check again" })).toBeDisabled();
+      await expect(page.getByRole("button", { name })).toHaveAttribute("aria-pressed", "true");
+
+      // Custom keeps both workspaces and drops only the hold.
+      await page.getByRole("button", { name: /Custom policy/ }).click();
+      await expect(page.getByText(sentence)).toHaveCount(0);
+      await expect(page.getByTestId("nr-workspace-extras")).toContainText("e2e-extra");
+
+      // Back, then remove the extra: the hold clears, the mode stays, and focus
+      // lands on the Workspace select, since no other chip is left.
+      await page.getByRole("button", { name }).click();
+      await expect(page.getByText(sentence)).toHaveCount(1);
+      await page.getByRole("button", { name: "Remove e2e-extra" }).click();
+      await expect(page.getByText(sentence)).toHaveCount(0);
+      await expect(page.getByRole("button", { name })).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByRole("combobox", { name: "Workspace" })).toBeFocused();
+      // Saved still waits for a pick; the default has nothing left to wait for.
+      if (mode === "default") await expect(page.getByRole("button", { name: "Check again" })).toBeEnabled();
+    });
+  }
 });
 
 // B4b — "Start a run like this one". 0.7.3 F7 moved this off the failure

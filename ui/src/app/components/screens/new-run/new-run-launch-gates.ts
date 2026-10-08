@@ -46,10 +46,11 @@ export interface LaunchGates {
   /** The picked workspace refuses this caller (#922) — disables Launch through
    *  the rail's own prop, never as a `problem` sentence (review F5). */
   workspaceUnavailable: boolean;
-  /** The default lane's own refusal, for the default-policy panel to show
-   *  beside Check again: set whenever it applies, even while `problem` is
-   *  carrying an earlier arm's sentence. */
-  defaultWorkspaceProblem: string | null;
+  /** The reference lane's own refusal (default or saved, one sentence each),
+   *  shown once beside Check again: set whenever it applies, even while
+   *  `problem` is carrying an earlier arm's sentence. It is never `problem`
+   *  itself, so the rail does not repeat it. */
+  referenceWorkspaceProblem: string | null;
   /** Neither reference policy mode can carry extra workspace attachments. */
   referenceWorkspaceBlocked: boolean;
 }
@@ -70,9 +71,11 @@ export function launchGates(i: LaunchGateInputs): LaunchGates {
     !!pickedWorkspace && workspaceUnavailableToCaller(pickedWorkspace, i.caps, i.modelProviders, i.isAgent);
   const gate = i.providerGateState;
   const referenceWorkspaceBlocked = referenceLaneDropsWorkspace(i.policyMode, i.attachedWorkspaces);
-  const defaultWorkspaceProblem = i.policyMode === "default" && referenceWorkspaceBlocked
-    ? POLICY_TEMPLATE_COPY.DEFAULT_ONE_WORKSPACE
-    : null;
+  const referenceWorkspaceProblem = !referenceWorkspaceBlocked
+    ? null
+    : i.policyMode === "saved"
+      ? POLICY_TEMPLATE_COPY.SAVED_ONE_WORKSPACE
+      : POLICY_TEMPLATE_COPY.DEFAULT_ONE_WORKSPACE;
   const problem =
     needsTask && !i.task.trim()
       ? i.isAgent
@@ -102,7 +105,6 @@ export function launchGates(i: LaunchGateInputs): LaunchGates {
                   // answers that its own way, so this stays silent then.
                   i.providerCandidates.length > 1 && !i.selectedModelProviderId && !i.pin
                   ? RAIL_PROVIDER.LAUNCH_HINT
-                  : // The default lane with a second workspace attached.
-                    defaultWorkspaceProblem;
-  return { problem, workspaceUnavailable, defaultWorkspaceProblem, referenceWorkspaceBlocked };
+                  : null;
+  return { problem, workspaceUnavailable, referenceWorkspaceProblem, referenceWorkspaceBlocked };
 }

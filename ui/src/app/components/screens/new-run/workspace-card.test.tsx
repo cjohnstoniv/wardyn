@@ -12,6 +12,7 @@
 // property of the WIRE, not of the machine running the suite: whether a member
 // has a paused allocation or a shut door cannot be arranged against a live
 // daemon without an admin fixture per case.
+import * as React from "react";
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -565,5 +566,52 @@ describe("WorkspaceCard — reads the server's available_to_you (#1267)", () => 
       caps: { grants: [], enforcement: { workspace: true }, session_groups: [], groups_snapshot_stale: false },
     });
     expect(screen.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeInTheDocument();
+  });
+});
+
+// M-F: removing a chip takes its Remove button with it, so focus moves beside it
+// — the next chip's button, else the previous one's, else the Workspace select.
+describe("WorkspaceCard — focus after removing an extra workspace", () => {
+  const ws = (id: string, name: string): Workspace => ({
+    id, name, kind: "repo", source: `acme/${name}`, status: "scanned", created_at: "", updated_at: "",
+  });
+  const all = [ws("w0", "primary"), ws("w1", "one"), ws("w2", "two"), ws("w3", "three")];
+
+  function Harness({ ids }: { ids: string[] }) {
+    const [state, setState] = React.useState<WizardState>({
+      ...initialWizardState(),
+      workspaces: ids.map((workspaceId) => ({ workspaceId, enabledOptional: [] })),
+    });
+    return (
+      <WorkspaceCard
+        state={state}
+        patch={(p) => setState((s) => ({ ...s, ...p }))}
+        workspaces={all}
+        caps={null}
+        modelProviders={undefined}
+        onAddWorkspace={() => {}}
+        drive={null}
+        driveDeniedBy=""
+      />
+    );
+  }
+
+  it("a middle chip hands focus to the next chip's Remove button", async () => {
+    render(<Harness ids={["w0", "w1", "w2", "w3"]} />);
+    await user.click(screen.getByRole("button", { name: "Remove one" }));
+    expect(screen.getByRole("button", { name: "Remove two" })).toHaveFocus();
+  });
+
+  it("the last chip hands focus to the previous chip's Remove button", async () => {
+    render(<Harness ids={["w0", "w1", "w2"]} />);
+    await user.click(screen.getByRole("button", { name: "Remove two" }));
+    expect(screen.getByRole("button", { name: "Remove one" })).toHaveFocus();
+  });
+
+  it("the only chip hands focus to the Workspace select", async () => {
+    render(<Harness ids={["w0", "w1"]} />);
+    await user.click(screen.getByRole("button", { name: "Remove one" }));
+    expect(screen.queryByTestId("nr-workspace-extras")).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Workspace" })).toHaveFocus();
   });
 });

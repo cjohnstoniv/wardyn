@@ -167,6 +167,92 @@ describe("NewRunScreen — the saved-policy lane", { timeout: 20_000 }, () => {
     expect(body.inline_policy.workspace_mounts.map((mount) => mount.source)).toEqual(["/data/a", "/data/b"]);
   });
 
+  // M-F F1 — the approved refusal: one sentence beside Check again, Launch and
+  // Check again held and described by it, nothing removed, no mode switch.
+  const SAVED_TWO =
+    "A saved policy launches with one workspace. Remove the extra workspace, or choose Custom policy to keep them all.";
+  const WORKSPACES = [
+    { id: "ws-a", name: "Workspace A", kind: "local_dir", source: "/data/a", status: "scanned" },
+    { id: "ws-b", name: "Workspace B", kind: "local_dir", source: "/data/b", status: "scanned" },
+    { id: "ws-c", name: "Workspace C", kind: "local_dir", source: "/data/c", status: "scanned" },
+  ];
+
+  function renderSavedWith(ids: string[], pick: string | null = REDACTED_POLICY.id) {
+    listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
+    listWorkspacesMock.mockResolvedValue(WORKSPACES);
+    return render(
+      <MemoryRouter initialEntries={[{
+        pathname: "/runs/new",
+        state: { prefill: { inlinePolicy: false, state: { selectedPolicyId: pick ?? undefined, workspaces: ids.map((workspaceId) => ({ workspaceId })) } } },
+      }]}>
+        <OperatorProvider principal="test-owner" operator><NewRunScreen /></OperatorProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("shows the saved sentence once beside Check again, holds both buttons, and removes nothing", async () => {
+    renderSavedWith(["ws-a", "ws-b"]);
+    const hold = await screen.findByText(SAVED_TWO);
+    expect(screen.getAllByText(SAVED_TWO)).toHaveLength(1);
+    expect(hold).toHaveAttribute("role", "status");
+    expect(screen.getByRole("button", { name: "Launch run" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Check again$/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Launch run" })).toHaveAccessibleDescription(SAVED_TWO);
+    expect(screen.getByRole("button", { name: /^Check again$/ })).toHaveAccessibleDescription(SAVED_TWO);
+    expect(hold.closest("aside")).toBeNull();
+    expect(screen.getByRole("button", { name: "Remove Workspace B" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Reuse a saved policy/ })).toHaveAttribute("aria-pressed", "true");
+    expect(createRunMock).not.toHaveBeenCalled();
+    expect(preflightRunMock).not.toHaveBeenCalled();
+  });
+
+  it("clears the hold once at most one workspace remains, keeping Saved and the pick", async () => {
+    renderSavedWith(["ws-a", "ws-b", "ws-c"]);
+    await screen.findByText(SAVED_TWO);
+    await user.click(screen.getByRole("button", { name: "Remove Workspace B" }));
+    // Two still attached: the hold stays.
+    expect(screen.getByText(SAVED_TWO)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove Workspace C" }));
+    await waitFor(() => expect(screen.queryByText(SAVED_TWO)).toBeNull());
+    expect(screen.getByRole("button", { name: /Reuse a saved policy/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("combobox", { name: "Saved policy" })).toHaveTextContent(REDACTED_POLICY.name);
+    setField(screen.getByLabelText("Title"), "one left");
+    await user.click(screen.getByRole("button", { name: "Launch run" }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalledOnce());
+    expect(createRunMock.mock.calls[0][0]).toMatchObject({ policy_id: REDACTED_POLICY.id, workspace_id: "ws-a" });
+  });
+
+  it("Custom clears only the hold: no sentence, both chips stay", async () => {
+    renderSavedWith(["ws-a", "ws-b"]);
+    await screen.findByText(SAVED_TWO);
+    await user.click(screen.getByRole("button", { name: /Custom policy/ }));
+    expect(screen.queryByText(SAVED_TWO)).toBeNull();
+    expect(screen.getByTestId("nr-workspace-extras")).toHaveTextContent("Workspace B");
+    expect(screen.getByRole("button", { name: /Custom policy/ })).toHaveFocus();
+  });
+
+  it("an earlier problem keeps the rail's sentence while the hold stays beside Check again", async () => {
+    renderSavedWith(["ws-a", "ws-b"], null);
+    await user.click(await screen.findByRole("button", { name: /Reuse a saved policy/ }));
+    expect(await screen.findByText(SAVED_TWO)).toBeInTheDocument();
+    expect(screen.getByText("Pick a saved policy, or write a custom one.")).toBeInTheDocument();
+    expect(screen.getAllByText(SAVED_TWO)).toHaveLength(1);
+  });
+
+  it("a saved policy that is gone keeps its own sentence and the hold", async () => {
+    renderSavedWith(["ws-a", "ws-b"], "pol_ghost");
+    expect(await screen.findByText(RUN.POLICY_GONE)).toBeInTheDocument();
+    expect(screen.getByText(SAVED_TWO)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove Workspace B" })).toBeInTheDocument();
+  });
+
+  it("with one or no workspace there is no hold", async () => {
+    renderSavedWith(["ws-a"]);
+    await screen.findByRole("combobox", { name: "Saved policy" });
+    expect(screen.queryByText(SAVED_TWO)).toBeNull();
+    expect(screen.getByRole("button", { name: /^Check again$/ })).not.toBeDisabled();
+  });
+
   // F2-F1 — a member's redacted body must never reach the wire just because
   // they looked at Custom after picking it.
   it("a member switching a redacted saved policy to Custom never ships the redacted body", async () => {

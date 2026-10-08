@@ -1,6 +1,6 @@
 # M-F — 0.8.9 independent console fixes
 
-Status: **packet ready for review; design prototype and owner approval pending**. This packet independently covers #1901, #1906 and #1908. It does not depend on M-R. Implementation-plan authorization is not visual approval. No product rendering was changed to prepare this packet.
+Status: **approved by the owner 2026-10-08** against the design prototype Version 3 (`1791421176-82e4`, `Main.dc.html` sha256 `831800dc…f91e0`). This packet independently covers #1901, #1906 and #1908. It does not depend on M-R. Implementation-plan authorization is not visual approval. No product rendering was changed to prepare this packet.
 
 Baseline: `7b08fd722ca4dcfd9d2d59e6f1cb8ecab54d8dcf`. Design authority: `docs/design/CONSOLE-RULES.md`, `docs/design/SYNC.md`, `.design-sync/NOTES.md`, and the approved 0.8.8 mock decisions C2/M2/C3. The prototype must be built on the console design-system project (see `docs/design/SYNC.md`); a local project ID is not verification.
 
@@ -145,4 +145,4 @@ Regression evidence required: shared-builder refusal tests for saved and default
 - **F-D5:** Duplicate poll answers are silent and do not move focus. Existing owner-only, startup-watch, failure and successful-renewal transitions remain.
 - **F-D6:** Approving M-F must identify its concrete design prototype URL/revision and the decisions above. It does not approve M-R or M-O. Packet text alone does not satisfy the remote prototype gate.
 
-Owner approval record: **pending**. Design prototype URL/revision: **not created or verified yet**.
+Owner approval record: **approved 2026-10-08** ("yes"). Design prototype: Version 3, version id `1791421176-82e4`.

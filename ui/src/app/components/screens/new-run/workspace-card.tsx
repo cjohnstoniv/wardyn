@@ -257,6 +257,19 @@ export function WorkspaceCard({
   const selectedWorkspaceUnavailable =
     !!pickedWorkspace && workspaceUnavailableToCaller(pickedWorkspace, caps, modelProviders, isAgent);
 
+  // The removed chip takes its Remove button with it: keep keyboard focus
+  // beside it — the next chip's button, else the previous one's, else the
+  // Workspace select — rather than dropping it to the document.
+  const extras = React.useRef<HTMLDivElement>(null);
+  const removedAt = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    const at = removedAt.current;
+    if (at === null) return;
+    removedAt.current = null;
+    const buttons = extras.current?.querySelectorAll("button") ?? [];
+    (buttons[at] ?? buttons[at - 1] ?? document.getElementById("nr-workspace"))?.focus();
+  }, [state.workspaces]);
+
   return (
     <SectionCard title="Workspace">
       <Select
@@ -303,8 +316,8 @@ export function WorkspaceCard({
           demoted when it changed) — attached, but not the primary, so they get
           no reason line of their own; just a way off. */}
       {state.workspaces.length > 1 && (
-        <div className="mt-2 flex flex-wrap gap-1.5" data-testid="nr-workspace-extras">
-          {state.workspaces.slice(1).map((sel) => {
+        <div ref={extras} className="mt-2 flex flex-wrap gap-1.5" data-testid="nr-workspace-extras">
+          {state.workspaces.slice(1).map((sel, at) => {
             const name = workspaces.find((w) => w.id === sel.workspaceId)?.name ?? sel.workspaceId;
             return (
               <Chip key={sel.workspaceId} tone="neutral">
@@ -312,9 +325,10 @@ export function WorkspaceCard({
                 <button
                   type="button"
                   aria-label={`Remove ${name}`}
-                  onClick={() =>
-                    patch({ workspaces: state.workspaces.filter((s) => s.workspaceId !== sel.workspaceId) })
-                  }
+                  onClick={() => {
+                    removedAt.current = at;
+                    patch({ workspaces: state.workspaces.filter((s) => s.workspaceId !== sel.workspaceId) });
+                  }}
                   className="text-muted-foreground hover:text-foreground"
                 >
                   <X className="size-3" />
