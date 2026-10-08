@@ -341,24 +341,28 @@ export function editPolicySource(
       if (!parsed.document.hasIn(path)) return { ok: true, source };
       parsed.document.deleteIn(path);
     } else {
-      const next = value !== null && typeof value === "object"
-        ? parsed.document.createNode(value, { aliasDuplicateObjects: false })
-        : value;
-      parsed.document.setIn(path, next);
+      // A new value goes in as a Scalar node, never a raw string, so the pass
+      // below sees and quotes it; an existing scalar keeps its node, and with
+      // it its comment, when only its value changes.
+      const replacesScalar = isScalar(parsed.document.getIn(path, true)) && (value === null || typeof value !== "object");
+      parsed.document.setIn(path, replacesScalar ? value : parsed.document.createNode(value, { aliasDuplicateObjects: false }));
     }
     // Authored text already passed readSource, so only new strings can hold a
-    // CR, a byte order mark or a character that must be escaped, or be
-    // ambiguous when plain; only
-    // double quotes keep them exact (a block scalar would turn CRLF into LF).
+    // CR, a byte order mark or a character that must be escaped, or be refused
+    // when plain; double quotes keep them exact (a block scalar would turn CRLF
+    // into LF).
     visit(parsed.document, {
       Scalar(_, node) {
         if (typeof node.value !== "string") return;
-        if (/[\r\x85\u2028\u2029\ufeff]/.test(node.value) || ((node.type ?? "PLAIN") === "PLAIN" && ambiguousString(node.value))) {
+        const plain = (node.type ?? "PLAIN") === "PLAIN";
+        if (/[\r\x85\u2028\u2029\ufeff]/.test(node.value) || (plain && (ambiguousString(node.value) || node.value.startsWith("?")))) {
           node.type = "QUOTE_DOUBLE";
         }
       },
     });
-    const edited = escapeBreaks(parsed.document.toString());
+    // No folding: yaml folds a long double-quoted string with escaped line
+    // breaks, which the parse below refuses.
+    const edited = escapeBreaks(parsed.document.toString({ lineWidth: 0 }));
     const checked = parsePolicySource(edited);
     if (!checked.ok) return checked;
     // JSON is the wire/storage representation, so its conversion drops comments.

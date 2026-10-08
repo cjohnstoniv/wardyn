@@ -381,3 +381,34 @@ describe("unpaired surrogates", () => {
     expect(parsePolicySource('a: "\\ud83d\\ude00"')).toEqual({ ok: true, value: { a: "😀" } });
   });
 });
+
+// Every way an edit can place a value: the written source must read back as
+// exactly that value, never as other text and never as a refusal.
+describe("structured edits write exactly the requested value", () => {
+  const PATHS: [string, string, (string | number)[]][] = [
+    ["a new key", "a: 1\n", ["b"]],
+    ["an existing scalar", "a: 1 # kept\n", ["a"]],
+    ["a replaced list", "l: [1]\n", ["l"]],
+    ["a new nested key", "m: {k: 1}\n", ["m", "z"]],
+    ["a sequence append", "l: [1]\n", ["l", 1]],
+    ["a replaced sequence item", "l: [1]\n", ["l", 0]],
+  ];
+  const VALUES = ["x\u2028y", "x\u2029y", "x\ufeffy", "+_1", "2000-10-07", "x\u0085y", "x\ry", "x\r\ny", "017", "1_000", "x: y", "x:", "", " x", "?x", "?", "x\u007fy",
+    "a".repeat(200) + ": b", "word ".repeat(40).trim()];
+  const CASES = PATHS.flatMap(([where, source, path]) =>
+    (["yaml", "json"] as const).flatMap((format) =>
+      VALUES.map((value) => [`${JSON.stringify(value.length > 30 ? `${value.slice(0, 12)}… (${value.length})` : value)} as ${where} (${format})`, source, path, value, format] as const)));
+
+  it.each(CASES)("writes %s", (_, source, path, value, format) => {
+    const edited = editPolicySource(source, path, value, format);
+    if (!edited.ok) throw new Error(`${edited.line}:${edited.column} ${edited.message}`);
+    const read = parsePolicySource(edited.source, format);
+    if (!read.ok) throw new Error(read.message);
+    expect(path.reduce<unknown>((node, key) => (node as Record<string | number, unknown>)[key], read.value)).toBe(value);
+  });
+
+  it("keeps the comment on an edited existing scalar", () => {
+    const edited = editPolicySource("a: 1 # kept\n", ["a"], "x\u2028y", "yaml");
+    expect(edited).toEqual({ ok: true, source: 'a: "x\\u2028y" # kept\n' });
+  });
+});
