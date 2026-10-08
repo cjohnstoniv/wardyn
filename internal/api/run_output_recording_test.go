@@ -299,3 +299,27 @@ func TestRecordingOutput_PrivacyIncludesGapsErasureAndDisabledBackend(t *testing
 		t.Fatalf("owner erase = %d %+v", code, refusal)
 	}
 }
+
+// A recovered row is audited as a success that says it is incomplete; only a
+// gap is the failed capture.
+func TestRecordingOutput_AuditsRecoveryAsSuccessAndGapAsFailure(t *testing.T) {
+	f, rs := newRecordingOutputFixture(t)
+	f.srv.FinishRunOutput(t.Context(), f.run.ID)
+	saveOutputCast(t, rs, f.run.ID, partsHeader+`[0,"o","marker\n"]`+"\n")
+	if err := f.srv.uploadedRecordingOutput(t.Context(), f.run.ID); err != nil {
+		t.Fatal(err)
+	}
+	want := [][2]string{
+		{"failure", `{"capture_gap":true,"incomplete":true,"reason":"recording_missing","source":"recording"}`},
+		{"success", `{"capture_gap":false,"incomplete":true,"reason":"","source":"recording"}`},
+	}
+	evs := f.audit.eventsFor(f.run.ID, "run.output.finalize")
+	if len(evs) != len(want) {
+		t.Fatalf("finalize rows = %+v, want a gap then a recovery", evs)
+	}
+	for i, ev := range evs {
+		if got := [2]string{ev.Outcome, string(ev.Data)}; got != want[i] {
+			t.Errorf("finalize row %d = %v, want %v", i, got, want[i])
+		}
+	}
+}
