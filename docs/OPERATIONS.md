@@ -143,6 +143,19 @@ browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
   the window, and a run whose output was erased (below) answers
   `404 run_output_erased`. A deployment that turned recordings off so terminals
   are not kept should decide on these two settings too.
+- **The window is counted from when a row was written.** The sweep deletes a
+  row `WARDYN_RUN_OUTPUT_RETENTION_DAYS` after its `captured_at`. Direct stdout
+  is written as the run is finalized, so for it that is the run's end. A
+  recording-derived row is written when its recovery commits. No recovery
+  commits for a run that ended longer ago than the window, but one that
+  commits inside it is then kept for a full window of its own, so such a row
+  can outlive the run's end by more than the window. For a row that holds
+  output the excess is small in normal operation: recovering bytes needs the
+  run's masking manifest, which the run-secret sweep removes about an hour
+  after the run's last change (`api.RunSecretGrace`, checked every 15
+  minutes). A `capture_gap` row holds no output. It can be written later, by
+  an authorized read anywhere in the window when the run has no row yet, and
+  is then kept for a full window from that read.
 - **Another replica's live tail.** With persistence on, a replica that holds no
   tail for a live run answers the read from `run_output_chunks`, where the
   dispatching replica keeps what its masker has passed (`complete` is false).
