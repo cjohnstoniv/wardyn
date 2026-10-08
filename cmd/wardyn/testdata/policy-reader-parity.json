@@ -385,5 +385,14 @@
   "cli": {
    "a": 1
   }
+ },
+ {
+  "name": "a lone surrogate escape in JSON",
+  "format": "json",
+  "source": "{\"a\": \"\\ud83d\"}\n",
+  "console": {
+   "error": "Unpaired UTF-16 surrogate: remove it."
+  },
+  "cliError": true
  }
 ]

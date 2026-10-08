@@ -162,6 +162,9 @@ type ParityCase = {
   format?: PolicySourceFormat;
   emitted?: boolean;
   console: { value: PolicySourceMapping } | { error: string };
+  // For a refused snippet: what the CLI reads instead, or that it refuses too.
+  cli?: unknown;
+  cliError?: boolean;
 };
 const parityCases = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, "../../../../../cmd/wardyn/testdata/policy-reader-parity.json"), "utf8"),
@@ -343,5 +346,25 @@ describe("byte order marks", () => {
     if (!edited.ok) throw new Error(edited.message);
     expect(edited.source.slice(1)).not.toMatch(/\ufeff/);
     expect(parsePolicySource(edited.source, format)).toEqual({ ok: true, value: { a: 1, b: ["x\ufeffy", "\ufefflead"] } });
+  });
+});
+
+// JSON.stringify sends an unpaired surrogate as a \u escape, which the
+// server's encoding/json stores as U+FFFD, and the CLI's YAML reader refuses.
+describe("unpaired surrogates", () => {
+  const SURROGATE = "Unpaired UTF-16 surrogate: remove it.";
+
+  it.each<[string, PolicySourceFormat, string, number, number]>([
+    ["a lone high surrogate in JSON", "json", '{"a": "\\ud83d"}', 1, 7],
+    ["a lone low surrogate in a JSON key", "json", '{"\\udc00": 1}', 1, 2],
+    ["a reversed pair in JSON", "json", '{"a": "\\ude00\\ud83d"}', 1, 7],
+    ["a lone surrogate escape in YAML", "yaml", 'a: "x\\ud800"', 1, 4],
+  ])("refuses %s at the string", (_, format, source, line, column) => {
+    expect(parsePolicySource(source, format)).toEqual({ ok: false, line, column, message: SURROGATE });
+  });
+
+  it("accepts a surrogate pair, escaped or raw", () => {
+    expect(parsePolicySource('{"a": "\\ud83d\\ude00", "b": "😀"}', "json")).toEqual({ ok: true, value: { a: "😀", b: "😀" } });
+    expect(parsePolicySource('a: "\\ud83d\\ude00"')).toEqual({ ok: true, value: { a: "😀" } });
   });
 });

@@ -31,7 +31,7 @@ function expectRoundTrip(value: PolicySourceMapping) {
 const STRINGS = [
   "", " ", "  leading", "trailing  ", "\tx", "x\t", "in\tner", "echo one\necho two", "\n", "x\n", "\nx", "a\r\nb", "a\rb",
   "\u0000", "bell\u0007", "esc\u001b[0m", "del\u007f", "nel\u0085x", "c1\u009fx", "ls\u2028x", "ps\u2029x", "\ufeffbom",
-  "x\ufeffy", "nb\u00a0sp", "\u00a0", "é😀", "\ud800", "a: b", "a:b", "a:", ":a", "a #b", "a#b", "#a", "- a", "-a", "-",
+  "x\ufeffy", "nb\u00a0sp", "\u00a0", "é😀", "a: b", "a:b", "a:", ":a", "a #b", "a#b", "#a", "- a", "-a", "-",
   "? a", "?a", "'single'", '"double"', "it's", 'say "hi"', "back\\slash", "\\n", "[a]", "{a}", "a,b", "&a", "*a", "!a",
   "|", ">", "%a", "@a", "`a`", "<<", "=", "a=b", "true", "True", "TRUE", "false", "null", "Null", "NULL", "~", "yes",
   "No", "on", "OFF", "y", "n", "0", "-1", "+1", "017", "0o17", "0x1f", "1e3", "1.5", ".5", "1_000", "1:30",

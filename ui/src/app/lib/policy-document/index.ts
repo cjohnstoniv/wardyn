@@ -145,7 +145,11 @@ function documentValue(document: Document, lines: LineCounter, source: string): 
     else if (isScalar(node)) {
       const value = node.value;
       const plain = node.type === "PLAIN" ? node.source ?? "" : undefined;
-      if (plain !== undefined && typeof value === "string" && ambiguousString(plain)) {
+      // JSON.stringify sends an unpaired surrogate as a \u escape that the
+      // server's encoding/json stores as U+FFFD.
+      if (typeof value === "string" && /[\ud800-\udbff](?![\udc00-\udfff])|(?:^|[^\ud800-\udbff])[\udc00-\udfff]/.test(value)) {
+        message = "Unpaired UTF-16 surrogate: remove it.";
+      } else if (plain !== undefined && typeof value === "string" && ambiguousString(plain)) {
         message = "Ambiguous unquoted value: quote it.";
       } else if (plain !== undefined && typeof value !== "string" && /^[-+]?0\d/.test(plain)) {
         message = "Leading zeros are ambiguous: remove them, or quote the value.";
