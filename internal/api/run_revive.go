@@ -672,6 +672,35 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling)
 	return re, nil
 }
 
+// pruneUnpairedInterception drops every interception entry of a revived
+// config whose host no longer has an injection rule. Dispatch authors an
+// entry only beside the rule it exists for, and the strip and the ceiling
+// re-assertion above can take the rule away: left in place, the entry would
+// have the proxy terminate that host's TLS and set nothing. A vendor's own
+// model host is kept — the proxy decides those by the run's inspection
+// intent, not by this list.
+func (s *Server) pruneUnpairedInterception(cfg *proxy.Config) {
+	cfg.MITMHosts = slices.DeleteFunc(cfg.MITMHosts, func(entry string) bool {
+		host := interceptionEntryHost(entry)
+		return !s.isModelProviderHost(host) && !slices.ContainsFunc(cfg.Injection, func(in proxy.InjectionConfig) bool {
+			return hostEqual(in.Host, host)
+		})
+	})
+}
+
+// interceptionEntryHost is the bare host of one interception entry, read as
+// the proxy reads it: an optional scheme, then host and optional port.
+func interceptionEntryHost(entry string) string {
+	entry = strings.TrimSpace(entry)
+	for _, scheme := range []string{"http://", "https://"} {
+		if len(entry) >= len(scheme) && strings.EqualFold(entry[:len(scheme)], scheme) {
+			entry = entry[len(scheme):]
+			break
+		}
+	}
+	return componentMITMHost(entry)
+}
+
 // loadRenderedProxyConfig loads a run's rendered proxy config with its
 // control-plane hop (URL and CA) set to this deployment's current pair BEFORE
 // the strict loader validates it. A config rendered before the TLS hop names

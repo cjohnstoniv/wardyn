@@ -366,3 +366,84 @@ func TestRevive_ASharedCredentialIsRecheckedInTheOperatorNamespaceAndNeverNamed(
 		f.assertReviveRefused(t, reasonOwnerModelCredentialErased)
 	})
 }
+
+// A revive drops an interception entry whose injection rule it has just
+// stripped. Here an admin has since made a component's header host a model
+// provider's endpoint: the rule is stripped as a model credential no provider
+// authored, and the proxy must not go on terminating that host's TLS to set
+// nothing. An entry that still has its rule stays, and so does a vendor's own
+// model host, which the proxy decides by the run's inspection intent.
+func TestRevive_DropsAnInterceptionEntryWhoseRuleWasStripped(t *testing.T) {
+	f, _ := newOwnerFixture(t)
+	f.st.site.ModelProviders = providerBlock(endpointProvider()) // gateway.corp.example now serves a model
+	f.editConfig(t, func(c *proxy.Config) {
+		c.Policy.AllowedDomains = append(c.Policy.AllowedDomains, "gateway.corp.example", "person-api.example")
+		for _, host := range []string{"gateway.corp.example", "person-api.example"} {
+			c.Injection = append(c.Injection, proxy.InjectionConfig{GrantID: uuid.New(),
+				InjectionRule: egress.InjectionRule{Host: host, Header: "Authorization", Format: "Bearer %s", RequireTLS: true}})
+		}
+		c.MITMHosts = []string{"gateway.corp.example:443", "person-api.example:443", "api.anthropic.com:443"}
+	})
+	if code, body := f.reviveAs(t, true); code != http.StatusOK {
+		t.Fatalf("revive = %d %s, want 200", code, body)
+	}
+	cfg := f.newConfig(t)
+	var rules []string
+	for _, in := range cfg.Injection {
+		rules = append(rules, in.Host)
+	}
+	if slices.Contains(rules, "gateway.corp.example") || !slices.Contains(rules, "person-api.example") {
+		t.Fatalf("revived injection hosts = %v, want the model host's rule stripped and the component's kept", rules)
+	}
+	if !slices.Equal(cfg.MITMHosts, []string{"person-api.example:443", "api.anthropic.com:443"}) {
+		t.Errorf("revived MITMHosts = %v, want the stripped rule's entry gone, the paired entry and the vendor host kept", cfg.MITMHosts)
+	}
+}
+
+// The credential re-check looks where the sink reads the grant. An owner_only
+// grant is the owner's own secret: an operator's secret of the same name does
+// not stand in for it, so the revive is refused up front and not by a proxy
+// that fails to boot. The name is the owner's, so the refusal says it.
+func TestRevive_AnOwnerOnlyCredentialIsRecheckedInTheOwnersNamespace(t *testing.T) {
+	ownerOnly := func(f *reviveFixture) {
+		f.st.credGrants[0].Spec.OwnerOnly = true
+		f.st.site.Integrations = nil
+	}
+	t.Run("only the operator holds one of that name", func(t *testing.T) {
+		f, _ := newModelCredFixture(t) // the operator holds artifactory-token
+		ownerOnly(f)
+		code, body := f.reviveAs(t, true)
+		if code != http.StatusConflict || !strings.Contains(body, "(secret artifactory-token)") {
+			t.Fatalf("revive = %d %s; want 409 naming the owner's own secret", code, body)
+		}
+		f.assertReviveRefused(t, reasonOwnerModelCredentialErased)
+	})
+	t.Run("the owner holds it", func(t *testing.T) {
+		f, sec := newModelCredFixture(t)
+		ownerOnly(f)
+		if err := sec.For(f.run.CreatedBy).Put(context.Background(), "artifactory-token", []byte("art-own")); err != nil {
+			t.Fatal(err)
+		}
+		delete(sec.m, "artifactory-token")
+		if code, body := f.reviveAs(t, true); code != http.StatusOK {
+			t.Fatalf("revive = %d %s, want 200", code, body)
+		}
+	})
+}
+
+// A grant that is neither shared nor owner_only may be answered by the
+// operator's row, so on a person's run the refusal names the host and never
+// the secret.
+func TestRevive_AnErasedCredentialOnAPersonsRunIsNotNamed(t *testing.T) {
+	f, sec := newModelCredFixture(t)
+	f.st.site.Integrations = nil
+	delete(sec.m, "artifactory-token")
+	code, body := f.reviveAs(t, true)
+	if code != http.StatusConflict || !strings.Contains(body, "artifactory.corp.example") {
+		t.Fatalf("revive = %d %s; want 409 naming the host", code, body)
+	}
+	if strings.Contains(body, "artifactory-token") {
+		t.Errorf("the refusal names a secret the operator's row may hold: %s", body)
+	}
+	f.assertReviveRefused(t, reasonOwnerModelCredentialErased)
+}

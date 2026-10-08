@@ -365,14 +365,25 @@ func (s *Server) modelCredentialRefusal(ctx context.Context, run types.AgentRun,
 		if err := json.Unmarshal(g.Spec.Scope, &scope); err != nil || scope.SecretName == "" {
 			continue
 		}
-		// A shared grant is read from the operator's namespace alone, as the
-		// sink reads it, and its refusal never names the secret: that name is
-		// the operator's, and the run's owner did not choose it.
-		namespaces := []string{runIdentitySubject(ctx, run.CreatedBy), ""}
-		gone := fmt.Sprintf("the credential this run injects for %s (secret %s) no longer exists; start a new run", in.Host, scope.SecretName)
-		if scope.Shared {
+		// The check looks where the sink reads the grant, and names the
+		// secret only where the name is the owner's own to know. A shared
+		// grant is read from the operator's namespace alone, and what the
+		// organisation's secret is called is the operator's. An owner_only
+		// grant is read from the owner's namespace alone, and is theirs. Any
+		// other grant on a person's run may be answered by the operator's
+		// row, so its refusal names the host and not the secret.
+		subject := runIdentitySubject(ctx, run.CreatedBy)
+		namespaces := []string{subject, ""}
+		gone := fmt.Sprintf("the credential this run injects for %s no longer exists; start a new run", in.Host)
+		switch {
+		case scope.Shared:
 			namespaces = []string{""}
 			gone = fmt.Sprintf("the credential your organisation provides for %s on this run no longer exists; ask your admin, then start a new run", in.Host)
+		case g.Spec.OwnerOnly:
+			namespaces = []string{grantReadOwner(subject, true, run.OperatorOwned)}
+			fallthrough
+		case run.OperatorOwned:
+			gone = fmt.Sprintf("the credential this run injects for %s (secret %s) no longer exists; start a new run", in.Host, scope.SecretName)
 		}
 		present, err := s.secretPresentIn(ctx, namespaces, scope.SecretName)
 		if err != nil {
@@ -521,6 +532,7 @@ func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg
 		if rerr := s.stripRevivedModelInjections(ctx, run, cfg); rerr != nil {
 			return rerr
 		}
+		s.pruneUnpairedInterception(cfg)
 		ref, err = s.modelCredentialRefusal(ctx, run, cfg)
 	}
 	if err == nil && ref == nil {
