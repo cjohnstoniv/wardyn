@@ -70,6 +70,23 @@
 # (the Helm README) was this parser dropping a quote line that starts with
 # "#141)" as a heading; inside a quote only "#" plus a space is a heading now.
 #
+# WAIVERS: scripts/doc-form.d/*.waive (tab-separated, '#' comments) name the
+# few over-cap items a lane keeps on purpose, so the gate counts them and says
+# so instead of failing on them or never seeing them. Two kinds of line:
+#   sentence<TAB>path<TAB>sha1<TAB>words<TAB>reason
+#       one sentence of 36-40 words with no clause joiner (';', ' — ', ', so ',
+#       ', and ', ': '). sha1 is of the sentence as sentences_from_block()
+#       returns it (code spans, URLs and emphasis marks removed), with its
+#       whitespace folded to single spaces. A failing, waivable sentence prints
+#       the line to paste.
+#   table<TAB>path<TAB>header line<TAB>reason
+#       every over-cap cell of the one table whose first row equals the header
+#       line; the reason must cite a "PLAN §" section. Sentences inside those
+#       cells still need their own sentence waiver.
+# A malformed waiver, a refused one, and one that matches nothing all fail the
+# gate. The report prints "long_sentences: N (M waived)" and "long_blocks: N
+# (M waived)"; only the unwaived items fail.
+#
 # BUDGET (grow-fails): "--budget '<doc>=<N>[ share=<S>]'" (repeatable) and
 # lines "path=N share=S" in scripts/doc-form.d/*.budget ("share=S" optional)
 # fail when a doc's PROSE words exceed N, or when its STRICT paragraph share
@@ -177,6 +194,8 @@ python3 - "${MAX_SENTENCE_WORDS}" "${MAX_PARAGRAPH_SHARE}" "${MAX_PARAGRAPH_WORD
   "${MAX_ITEM_WORDS}" "${MAX_CELL_WORDS}" "${#STRICT_DOCS[@]}" "${#LEGACY_DOCS[@]}" \
   "${#BUDGETS[@]}" "${STRICT_DOCS[@]+"${STRICT_DOCS[@]}"}" "${LEGACY_DOCS[@]}" \
   "${BUDGETS[@]+"${BUDGETS[@]}"}" "${MEASURED_ONLY[@]}" <<'PYEOF'
+import glob
+import hashlib
 import re
 import sys
 
@@ -299,6 +318,96 @@ def sentences_from_block(text):
     return [p.replace('\u0000', '.').strip() for p in parts if p.strip()]
 
 
+JOINERS = (';', ' \u2014 ', ', so ', ', and ', ': ')
+WAIVE_MIN, WAIVE_MAX = 36, 40
+
+
+def joiner_in(text):
+    return next((j for j in JOINERS if j in text), None)
+
+
+def fold(sentence):
+    return ' '.join(sentence.split())
+
+
+def sentence_sha1(sentence):
+    return hashlib.sha1(fold(sentence).encode('utf-8')).hexdigest()
+
+
+def load_waivers():
+    """scripts/doc-form.d/*.waive -> ({path: [waiver]}, [(where, message)]).
+    Fields split on tabs only; the last field (the reason) keeps any text."""
+    by_path, errors = {}, []
+    for f in sorted(glob.glob('scripts/doc-form.d/*.waive')):
+        with open(f, encoding='utf-8') as fh:
+            for no, raw in enumerate(fh.read().splitlines(), 1):
+                if not raw.strip() or raw.lstrip().startswith('#'):
+                    continue
+                where = f"{f}:{no}"
+                kind = raw.split('\t', 1)[0]
+                if kind == 'sentence':
+                    parts = raw.split('\t', 4)
+                    if len(parts) != 5 or not parts[4].strip():
+                        errors.append((where, 'want sentence<TAB>path<TAB>sha1<TAB>words<TAB>reason'))
+                        continue
+                    _, path, sha, words, reason = parts
+                    if not re.fullmatch(r'[0-9a-f]{40}', sha):
+                        errors.append((where, f'sha1 "{sha}" is not 40 lowercase hex digits'))
+                        continue
+                    if not words.isdigit() or not WAIVE_MIN <= int(words) <= WAIVE_MAX:
+                        errors.append((where, f'words "{words}": only {WAIVE_MIN}-{WAIVE_MAX}-word sentences can be waived; longer ones split or become a table'))
+                        continue
+                    w = {'kind': kind, 'where': where, 'sha': sha, 'words': int(words)}
+                elif kind == 'table':
+                    parts = raw.split('\t', 3)
+                    if len(parts) != 4 or not parts[2].strip() or not parts[3].strip():
+                        errors.append((where, 'want table<TAB>path<TAB>header line<TAB>reason'))
+                        continue
+                    _, path, header, reason = parts
+                    if 'PLAN \u00a7' not in reason:
+                        errors.append((where, 'a table waiver must cite a plan section ("PLAN \u00a7") in its reason'))
+                        continue
+                    w = {'kind': kind, 'where': where, 'header': header.strip()}
+                else:
+                    errors.append((where, 'first field must be "sentence" or "table"'))
+                    continue
+                by_path.setdefault(path, []).append(w)
+    return by_path, errors
+
+
+WAIVERS, WAIVER_PARSE_ERRORS = load_waivers()
+
+
+def apply_waivers(path, long_sentences, long_blocks, tables):
+    """Mark the items this doc's waivers cover; return [(where, message)] for
+    every waiver that is refused or matches nothing."""
+    errors = []
+    for w in WAIVERS.get(path, []):
+        if w['kind'] == 'sentence':
+            hit = next((s for s in long_sentences if s['sha'] == w['sha'] and not s['waived']), None)
+            if hit is None:
+                errors.append((w['where'], 'matches no over-cap sentence in ' + path))
+            elif hit['n'] != w['words']:
+                errors.append((w['where'], f"declares {w['words']} words but the sentence has {hit['n']}"))
+            elif joiner_in(hit['text']):
+                errors.append((w['where'], f"the {hit['n']}-word sentence contains the clause joiner \"{joiner_in(hit['text']).strip()}\"; split it instead"))
+            else:
+                hit['waived'] = True
+        else:
+            n_tables = tables.count(w['header'])
+            cells = [b for b in long_blocks if b['what'] == 'table cell' and b['table'] == w['header'] and not b['waived']]
+            if n_tables == 0:
+                errors.append((w['where'], 'no table in ' + path + ' has this header line'))
+            elif n_tables > 1:
+                errors.append((w['where'], f'{n_tables} tables in {path} share this header line'))
+            elif not cells:
+                errors.append((w['where'], 'no cell of this table is over the cap'))
+            else:
+                for b in cells:
+                    b['waived'] = True
+    return errors
+
+
 def analyze(path):
     with open(path, encoding='utf-8') as f:
         lines = f.read().splitlines()
@@ -313,6 +422,9 @@ def analyze(path):
     in_fence = False
     long_sentences = []
     long_blocks = []
+    tables = []
+    table_head = None
+    saw_table_row = False
     seen_h1 = False
     seen_h2_after_h1 = False
     lead_lines = 0
@@ -324,11 +436,16 @@ def analyze(path):
     # of kind, and then checked against the per-block caps.
     cur = None
 
+    def block(n, what, cap, text, table=None):
+        return {'n': n, 'what': what, 'cap': cap, 'snippet': text[:100],
+                'table': table, 'waived': False}
+
     def check_sentences(text):
         for s in sentences_from_block(text):
             n = nwords(s)
             if n > max_words:
-                long_sentences.append((n, s[:100]))
+                long_sentences.append({'n': n, 'snippet': s[:100], 'text': fold(s),
+                                       'sha': sentence_sha1(s), 'waived': False})
 
     def flush_block():
         nonlocal cur, paragraph_lines
@@ -338,9 +455,9 @@ def analyze(path):
         check_sentences(text)
         where = ' (in a quote)' if cur['quote'] else ''
         if cur['kind'] == 'paragraph' and cur['words'] > max_para:
-            long_blocks.append((cur['words'], 'paragraph' + where, max_para, text[:100]))
+            long_blocks.append(block(cur['words'], 'paragraph' + where, max_para, text))
         if cur['kind'] == 'item' and cur['words'] > max_item:
-            long_blocks.append((cur['words'], 'list item' + where, max_item, text[:100]))
+            long_blocks.append(block(cur['words'], 'list item' + where, max_item, text))
             # An item over the cap is prose in a list's clothing: its lines
             # join the paragraph share (quote lines are already counted, and
             # so are lazy continuation lines, which are paragraph lines).
@@ -365,17 +482,27 @@ def analyze(path):
         return cur is not None and cur['kind'] == 'item' and cur['quote'] == quote
 
     def do_table(text):
+        nonlocal table_head, saw_table_row
         flush_block()
+        saw_table_row = True
+        if table_head is None:
+            table_head = text.strip()
+            tables.append(table_head)
         for cell in table_cells(text):
             n = nwords(cell)
             if n > max_cell:
-                long_blocks.append((n, 'table cell', max_cell, cell[:100]))
+                long_blocks.append(block(n, 'table cell', max_cell, cell, table_head))
             # Each cell is checked on its own: a table row is data, not a
             # flowing paragraph, so joining cells together (or joining rows)
             # would manufacture sentences that were never written as one.
             check_sentences(cell)
 
     for raw in lines:
+        # A table is the run of table rows; any other line (blank, fence, text)
+        # ends it, and its first row is the header line a table waiver names.
+        if not saw_table_row:
+            table_head = None
+        saw_table_row = False
         if FENCE.match(raw):
             in_fence = not in_fence
             if in_fence and raw.strip().strip('`').strip().lower() == 'mermaid':
@@ -476,7 +603,9 @@ def analyze(path):
     share = (100.0 * paragraph_lines / total_nonblank) if total_nonblank else 0.0
     legacy_share = (100.0 * legacy_par / legacy_total) if legacy_total else 0.0
     has_summary = seen_h1 and seen_h2_after_h1 and 0 < lead_lines <= 5
+    waiver_errors = apply_waivers(path, long_sentences, long_blocks, tables)
     return {
+        'waiver_errors': waiver_errors,
         'lines': len(lines), 'share': share, 'legacy_share': legacy_share,
         'table_rows': table_rows,
         'mermaid': mermaid_blocks, 'long_sentences': long_sentences,
@@ -499,8 +628,9 @@ for path in asserted_paths + measured_paths:
     print(f"{path}: {r['lines']} lines, paragraph share {shown:.0f}%, "
           f"{r['table_rows']} table rows, {r['mermaid']} mermaid, "
           f"summary={'yes' if r['has_summary'] else 'no'}, "
-          f"long_sentences={len(r['long_sentences'])}, "
-          f"strict: share {r['share']:.0f}% long_blocks={len(r['long_blocks'])}, "
+          f"long_sentences: {len(r['long_sentences'])} ({sum(s['waived'] for s in r['long_sentences'])} waived), "
+          f"strict: share {r['share']:.0f}% long_blocks: {len(r['long_blocks'])} "
+          f"({sum(b['waived'] for b in r['long_blocks'])} waived), "
           f"prose_words={r['prose_words']}")
 
 print()
@@ -524,16 +654,39 @@ for path in asserted_paths:
     if not r['has_summary']:
         print(f"  FAIL {path}: no <=5-line summary between the H1 title and the first H2 heading")
         ok = False
-    for words, snippet in r['long_sentences'][:5]:
-        print(f"  FAIL {path}: {words}-word sentence (max {max_words}): \"{snippet}...\"")
+    for s in [s for s in r['long_sentences'] if not s['waived']][:5]:
+        print(f"  FAIL {path}: {s['n']}-word sentence (max {max_words}): \"{s['snippet']}...\"")
+        if WAIVE_MIN <= s['n'] <= WAIVE_MAX and not joiner_in(s['text']):
+            print(f"       waivable as: sentence\t{path}\t{s['sha']}\t{s['n']}\t<reason>")
         ok = False
-    for words, what, cap, snippet in (r['long_blocks'][:5] if strict else []):
-        print(f"  FAIL {path}: {words}-word {what} (max {cap}): \"{snippet}...\"")
+    for b in [b for b in r['long_blocks'] if not b['waived']][:5] if strict else []:
+        print(f"  FAIL {path}: {b['n']}-word {b['what']} (max {b['cap']}): \"{b['snippet']}...\"")
         ok = False
     if ok:
         print(f"  ok   {path} (paragraph share {share:.0f}%)")
     else:
         fail = 1
+
+if WAIVERS or WAIVER_PARSE_ERRORS:
+    print()
+    print(f"=== doc-form waivers ({sum(map(len, WAIVERS.values())) + len(WAIVER_PARSE_ERRORS)} lines; a refused or stale waiver fails) ===")
+    for where, msg in WAIVER_PARSE_ERRORS:
+        print(f"  FAIL {where}: {msg}")
+        fail = 1
+    for path, ws in WAIVERS.items():
+        try:
+            errs = dict(analyze(path)['waiver_errors'])
+        except FileNotFoundError:
+            for w in ws:
+                print(f"  FAIL {w['where']}: {path} not found")
+            fail = 1
+            continue
+        for w in ws:
+            if w['where'] in errs:
+                print(f"  FAIL {w['where']}: {errs[w['where']]}")
+                fail = 1
+            else:
+                print(f"  ok   {w['where']} ({w['kind']} waiver, {path})")
 
 print()
 print(f"=== doc-form prose-word budgets ({len(budget_specs)} docs; a doc whose prose or share grew fails) ===")
