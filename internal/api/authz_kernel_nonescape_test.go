@@ -59,6 +59,8 @@ var kernelDoors = map[string][]string{
 	// egress-host gate — asked from the attention rule (row 8) and from
 	// TestMayDecideAgreesWithDecide, never from decide() itself.
 	"decidableKindAndOwner": {"capEgressHost"},
+	// Attaching a component: an org row by id, a person-defined one by feature.
+	"componentAttachRefusal": {"capComponent", "capFeature"},
 	// Minting a personal credential.
 	"handleAddSSHKey":      {"capFeature"},
 	"handleCreateAPIToken": {"capFeature"},
