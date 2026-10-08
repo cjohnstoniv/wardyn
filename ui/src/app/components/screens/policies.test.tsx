@@ -44,7 +44,7 @@ vi.mock("../../lib/api/setup", () => ({
 }));
 
 import { PoliciesScreen } from "./policies";
-import { toYaml } from "../wardyn/code-block";
+import { toYaml } from "../wardyn/yaml-block";
 
 function policy(over: Partial<RunPolicy> = {}): RunPolicy {
   return {

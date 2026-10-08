@@ -20,7 +20,7 @@ vi.mock("../../../lib/api/runs", () => ({
 }));
 
 import { aheadByHours } from "../../../lib/test-clock";
-import { toYaml } from "../../wardyn/code-block";
+import { toYaml } from "../../wardyn/yaml-block";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { PolicyTab } from "./policy-tab";
 import { CHANGE_HEADING, POLICY_TAB } from "./policy-tab-copy";

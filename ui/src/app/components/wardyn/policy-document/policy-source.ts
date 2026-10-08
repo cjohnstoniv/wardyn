@@ -16,7 +16,7 @@ import {
   type PolicySourceValue,
 } from "../../../lib/policy-document";
 import type { RunPolicySpec } from "../../../lib/types";
-import { toYaml } from "../code-block";
+import { toYaml } from "../yaml-block";
 
 export type { PolicySourceError, PolicySourceFormat };
 

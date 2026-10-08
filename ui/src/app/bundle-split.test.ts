@@ -99,11 +99,11 @@ describe("UI bundle is route-code-split", () => {
       .flatMap((chunk) => Object.keys(chunk.modules))
       .filter((module) => /node_modules\/yaml\//.test(module));
     expect(yamlLazy.length, "the YAML parser is in no lazy chunk").toBeGreaterThan(0);
-    // The policy document's own modules and copy ride lazy chunks too.
+    // The policy document's own modules, its copy and the YAML display emitter ride lazy chunks too.
     const policyDocumentEager = chunks
       .filter((chunk) => eagerChunks.has(chunk.fileName))
       .flatMap((chunk) => Object.keys(chunk.modules))
-      .filter((module) => /wardyn\/(policy-document\/|copy\/policy-document|segmented|policy-panel)/.test(module));
+      .filter((module) => /wardyn\/(policy-document\/|copy\/policy-document|segmented|policy-panel|yaml-block)/.test(module));
     expect(policyDocumentEager, `policy document modules leaked into the entry chunk: ${policyDocumentEager.join(", ")}`).toEqual([]);
 
     // 3. ...and they are present SOMEWHERE, so a build that simply dropped them

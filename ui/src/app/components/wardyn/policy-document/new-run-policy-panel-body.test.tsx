@@ -15,7 +15,7 @@ vi.mock("../../../lib/api/runs", () => ({ runs: { gradePolicy: vi.fn().mockResol
 import { setField } from "../../../../test/set-field";
 import type { RunPolicySpec } from "../../../lib/types";
 import type { PolicyPreviewResult } from "../../../lib/types/policy-preview";
-import { toYaml } from "../code-block";
+import { toYaml } from "../yaml-block";
 import type { PolicyMode } from "../policy-panel";
 import {
   NewRunPolicyPanelBody,

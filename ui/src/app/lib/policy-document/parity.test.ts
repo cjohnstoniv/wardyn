@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { toYaml } from "../../components/wardyn/code-block";
+import { toYaml } from "../../components/wardyn/yaml-block";
 import { editPolicySource, parsePolicySource, type PolicySourceFormat, type PolicySourceMapping } from ".";
 
 const STRAY_BREAK = /\r(?!\n)|[\x85\u2028\u2029]/;

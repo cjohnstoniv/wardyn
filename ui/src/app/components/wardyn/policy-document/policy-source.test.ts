@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { RunPolicySpec } from "../../../lib/types";
-import { toYaml } from "../code-block";
+import { toYaml } from "../yaml-block";
 import { applySpecChange, parseSpec, setSpecKey, specToSource } from "./policy-source";
 
 const SOURCE = `# who may reach what

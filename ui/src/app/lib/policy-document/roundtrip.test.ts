@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { toYaml } from "../../components/wardyn/code-block";
+import { toYaml } from "../../components/wardyn/yaml-block";
 import { policyTemplates } from "../../components/wardyn/policy-panel";
 import { DEMOS } from "../../components/screens/demos/demo-catalog";
 import { SECRETS_DEMOS } from "../../components/screens/demos/demo-catalog-secrets";

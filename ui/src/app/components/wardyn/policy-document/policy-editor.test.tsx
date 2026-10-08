@@ -7,7 +7,7 @@ import * as React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { toYaml } from "../code-block";
+import { toYaml } from "../yaml-block";
 import { PolicyEditor, type PolicyEditorProps } from "./policy-editor";
 import { parseSpec, type PolicySourceFormat } from "./policy-source";
 

@@ -28,7 +28,7 @@ import {
 import { Button, buttonVariants } from "../../ui/button";
 import { Textarea } from "../../ui/textarea";
 import { cn } from "../../ui/utils";
-import { toYaml } from "../code-block";
+import { toYaml } from "../yaml-block";
 import { POLICY_DOCUMENT as D } from "../copy/policy-document";
 import { CopyButton } from "../copy-button";
 import { Field } from "../form-primitives";
