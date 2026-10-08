@@ -222,6 +222,20 @@ func TestPreflightDecisionsEqualLaunch_Components(t *testing.T) {
 			f.st.siteConfig.Components = &types.ComponentSettings{AutonomyCap: types.AutonomyL0}
 			return []any{own}
 		}},
+		// One credential per host is asked of every run at the same point:
+		// with no component on the request, and with one.
+		"two credentials for one host, no components": {refused: http.StatusUnprocessableEntity, setup: func(f *componentFixture) []any {
+			twoCredentialsOnOneHost(f)
+			return nil
+		}},
+		"two credentials for one host, with a component": {refused: http.StatusUnprocessableEntity, setup: func(f *componentFixture) []any {
+			twoCredentialsOnOneHost(f)
+			return []any{own}
+		}},
+		"a policy credential on a token redirect's host, no components": {refused: http.StatusUnprocessableEntity, setup: func(f *componentFixture) []any {
+			tokenRedirectOnAPolicyCredential(f)
+			return nil
+		}},
 	}
 	refusals := 0
 	for _, name := range sortedKeys(requests) {

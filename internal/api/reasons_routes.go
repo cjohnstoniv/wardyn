@@ -885,8 +885,10 @@ const (
 	reasonComponentResidentDeliveryDenied = "component_resident_delivery_denied" // the organisation turned off env and file delivery (components.deny_resident_delivery)
 )
 
-// reasonCredentialHostCollision is dispatch's own finding (settleCredentialHosts),
-// on the failed run's run.create row: two of the credentials dispatch authored
-// are bound to one host, and the proxy carries one per host. The gate's
-// component_host_collision is the same rule asked before the run exists.
+// reasonCredentialHostCollision: two of a run's credentials are bound to one
+// host, and the proxy carries one per host. The three run doors answer it as a
+// 422 for any run (credentialHostRefusal), and dispatch records it on a failed
+// run's run.create row when the collision only appears there
+// (settleCredentialHosts). component_host_collision is the same rule for a
+// component's own header.
 const reasonCredentialHostCollision = "credential_host_collision"

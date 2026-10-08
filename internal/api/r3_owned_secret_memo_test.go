@@ -155,18 +155,30 @@ func TestOwnedSecretReadsAreFlatInCallerInput(t *testing.T) {
 		srv := New(cfg)
 		member := ssoSession(t, "sub-gov-bob", "bob@corp.example", oidc.RoleUser)
 		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", member, r3MemberPreflightBody(t, n))
-		if w.Code != http.StatusOK {
-			t.Fatalf("n=%d: preflight = %d, want 200; body=%s", n, w.Code, w.Body.String())
+		// One grant is a run; the same grant n times is n credentials for one
+		// host, which the doors refuse (credentialHostRefusal) — AFTER the
+		// member pipeline this test counts the reads of, so the count is the
+		// same measurement either way.
+		refused := n > 1 && w.Code == http.StatusUnprocessableEntity && errorReason(w) == reasonCredentialHostCollision
+		if w.Code != http.StatusOK && !refused {
+			t.Fatalf("n=%d: preflight = %d, want 200 (422 %s for a repeated grant); body=%s", n, w.Code, reasonCredentialHostCollision, w.Body.String())
 		}
 		return sec.ownerList.Load(), w.Code
 	}
 
+	// n=1 is admitted and runs the whole door; a repeated grant is refused
+	// after the member pipeline, so it can only read less. The law is that
+	// the count does not grow with n.
 	base, _ := run(t, 1)
+	repeated, _ := run(t, 2)
+	if repeated > base {
+		t.Errorf("n=2: owner-scoped secret List calls = %d, more than the %d of n=1", repeated, base)
+	}
 	for _, n := range []int{10, 200, 2000} {
 		got, _ := run(t, n)
-		if got != base {
-			t.Errorf("n=%d: owner-scoped secret List calls = %d, want %d (the n=1 count) — a member's "+
-				"request body must not choose how many store round trips one request makes", n, got, base)
+		if got != repeated {
+			t.Errorf("n=%d: owner-scoped secret List calls = %d, want %d (the n=2 count) — a member's "+
+				"request body must not choose how many store round trips one request makes", n, got, repeated)
 		}
 	}
 	if base > 2 {

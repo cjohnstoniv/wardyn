@@ -7,12 +7,14 @@ import (
 	"context"
 	"maps"
 	"net"
+	"net/http"
 	"slices"
 	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -182,12 +184,101 @@ func credentialHostCollision(injections []runner.InjectionGrant, patGrants map[s
 			hosts = append(hosts, credentialedHost{grant: g.GrantID, host: host})
 		}
 	}
-	for i, h := range hosts {
-		if j := slices.IndexFunc(hosts[:i], h.overlaps); j >= 0 {
-			return []uuid.UUID{hosts[j].grant, h.grant}, true
-		}
+	if i, j, found := firstCredentialCollision(hosts); found {
+		return []uuid.UUID{hosts[i].grant, hosts[j].grant}, true
 	}
 	return nil, false
+}
+
+// firstCredentialCollision is the one pairwise comparison, for the doors and
+// for dispatch: the first two entries that land on one host.
+func firstCredentialCollision(hosts []credentialedHost) (first, second int, found bool) {
+	for i, h := range hosts {
+		if j := slices.IndexFunc(hosts[:i], h.overlaps); j >= 0 {
+			return j, i, true
+		}
+	}
+	return 0, 0, false
+}
+
+// admissionCredentialHosts is the credentials a run's policy and the site
+// config already bind to a host before any component is admitted — what
+// dispatch would hand the proxy, read at the door:
+//
+//   - the policy's api_key grants (an approval-gated one is never injected);
+//   - the policy's git_pat grants whose forge API the proxy credentials;
+//   - the per-person Azure DevOps lane's hosts, when it resolves for subject;
+//   - the target of each redirect that carries a token, once per host: one
+//     mirror behind several ecosystems is one credential. A redirect with no
+//     token authors no credential, so its target is not listed here (a
+//     component's header there is the component gate's own refusal).
+//
+// A grant whose scope names no host binds nothing and is not listed.
+func admissionCredentialHosts(spec types.RunPolicySpec, sc types.SiteConfig, subject string) []credentialedHost {
+	var hosts []credentialedHost
+	add := func(host string) {
+		if strings.TrimSpace(host) != "" {
+			hosts = append(hosts, credentialedHost{host: host})
+		}
+	}
+	for _, g := range spec.EligibleGrants {
+		switch g.Kind {
+		case types.GrantAPIKey:
+			if !g.RequiresApproval {
+				add(apiKeyGrantScopeHost(g.Scope))
+			}
+		case types.GrantGitPAT:
+			if pat, err := types.DecodeGitPATScope(g.Scope); err == nil && pat.API {
+				add(pat.Host)
+			}
+		}
+	}
+	if ado, on := resolveADOEntraRun(sc, repoLocatorsOf(spec.WorkspaceRepos), subject); on {
+		for _, h := range ado.laneHosts() {
+			add(h)
+		}
+	}
+	var mirrors []string
+	for _, red := range sc.EgressRedirects {
+		host := hostrules.HostOf(red.To)
+		if (red.TokenSecretRef == "" && red.TokenIntegrationRef == "") || slices.ContainsFunc(mirrors, func(m string) bool { return hostEqual(m, host) }) {
+			continue
+		}
+		mirrors = append(mirrors, host)
+		add(host)
+	}
+	return hosts
+}
+
+// DRAFT (M2 canon pending) — the three doors' refusal of a run whose policy
+// and deployment bind two credentials to one host. It names no host: either
+// credential may be one an admin configured.
+const credentialHostCollisionRefusal = "Two of this run's credentials are bound to the same host, and a host carries only one. " +
+	"Remove one of them from the run's policy; if neither is yours, ask your admin — the second may come from a redirect or a Git provider your organisation set up."
+
+// credentialHostRefusal is the one-credential-per-host rule at the three run
+// doors, for every run: with or without components. Dispatch asks it again
+// over what it authored (settleCredentialHosts), and the proxy refuses a
+// config that breaks it; a run that would die there is refused here, where
+// the person can still change it.
+//
+// It reads the site config for every run, a policy with no credential
+// included: the Azure DevOps lane and a redirect's token are credentials no
+// policy names, and they can land on one host between themselves (a package
+// feed on an Azure DevOps host that is also a redirect's target).
+func (s *Server) credentialHostRefusal(r *http.Request, spec types.RunPolicySpec) *runRefusal {
+	var sc types.SiteConfig
+	if s.cfg.Store != nil {
+		var err error
+		if sc, err = s.cfg.Store.GetSiteConfig(r.Context()); err != nil {
+			return runServerError("get site config", err)
+		}
+	}
+	hosts := admissionCredentialHosts(spec, sc, runIdentitySubject(r.Context(), principalFromRequest(r)))
+	if _, _, found := firstCredentialCollision(hosts); !found {
+		return nil
+	}
+	return runError(http.StatusUnprocessableEntity, reasonCredentialHostCollision, credentialHostCollisionRefusal)
 }
 
 // componentHostCollision is the gate's own collision question, asked again at

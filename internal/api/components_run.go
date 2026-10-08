@@ -111,6 +111,11 @@ type componentRefusal struct {
 func (s *Server) applyRunComponents(r *http.Request, req createRunRequest, spec *types.RunPolicySpec,
 	ceiling governanceCeiling, wsRefs []types.Workspace, credentials bool,
 ) (runComponents, *runRefusal) {
+	// One credential per host, for every run, before any component is looked
+	// at: the policy's own credentials and the deployment's (credentialHostRefusal).
+	if refusal := s.credentialHostRefusal(r, *spec); refusal != nil {
+		return runComponents{}, refusal
+	}
 	if len(req.Components) == 0 {
 		return runComponents{}, nil
 	}
