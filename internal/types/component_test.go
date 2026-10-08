@@ -561,3 +561,47 @@ func TestComponentDefinitionValidate_BoundsPersonAuthoredLengths(t *testing.T) {
 		}
 	}
 }
+
+// The proxy keys a header credential by bare host and sends it on the host's
+// standard TLS port, so a delivery names the host without a port and needs an
+// egress entry for it listed bare or with :443 (A9, A14).
+func TestComponentDefinitionValidate_HeaderHostIsBare(t *testing.T) {
+	def := func(hosts []string, deliveryHost string) types.ComponentDefinition {
+		return types.ComponentDefinition{Hosts: hosts, Secrets: []types.ComponentSecret{header("k", deliveryHost)}}
+	}
+	for _, tc := range []struct {
+		hosts []string
+		host  string
+		want  string // "" = accepted
+	}{
+		{[]string{"svc.example.com"}, "svc.example.com", ""},
+		{[]string{"svc.example.com:443"}, "svc.example.com", ""},
+		{[]string{"svc.example.com:8443", "svc.example.com:443"}, "svc.example.com", ""},
+		{[]string{"svc.example.com:8443"}, "svc.example.com", "listed bare or with :443"},
+		{[]string{"*.example.com", "svc.example.com:8443"}, "svc.example.com", "listed bare or with :443"},
+		{[]string{"svc.example.com:8443"}, "svc.example.com:8443", "must not carry a port"},
+		{[]string{"svc.example.com"}, "svc.example.com:443", "must not carry a port"},
+		{[]string{"svc.example.com"}, "svc.example.com.", "write"},
+		{[]string{"svc.example.com"}, "SVC.example.com", "write"},
+		{[]string{"*.example.com"}, "*.example.com", "not a wildcard"},
+		{[]string{"*.example.com"}, "svc.example.com", "must be one of this component's hosts"},
+		{[]string{"svc.example.com"}, "other.example.com", "must be one of this component's hosts"},
+		{[]string{"svc.example.com"}, "", "not a wildcard"},
+	} {
+		err := def(tc.hosts, tc.host).Validate(proxy.ValidDomainEntry, true)
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("hosts %v, header host %q: Validate = %v, want nil", tc.hosts, tc.host, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), "secrets[0].delivery.host: ") || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("hosts %v, header host %q: Validate = %v, want a delivery.host refusal containing %q", tc.hosts, tc.host, err, tc.want)
+		}
+	}
+	// An org row may bind a header to an address it names; a person cannot name one at all.
+	org := def([]string{"10.0.0.1:443"}, "10.0.0.1")
+	if err := org.Validate(proxy.ValidDomainEntry, false); err != nil {
+		t.Errorf("org row, header to an address: Validate = %v, want nil", err)
+	}
+	if err := org.Validate(proxy.ValidDomainEntry, true); err == nil || !strings.Contains(err.Error(), "hosts[0]: ") {
+		t.Errorf("person row, header to an address: Validate = %v, want the host refused", err)
+	}
+}
