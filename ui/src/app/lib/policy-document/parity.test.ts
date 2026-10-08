@@ -51,3 +51,48 @@ describe("line breaks the readers split differently", () => {
     expect(editPolicySource("a: 1\rb: 2", ["a"], 2, "yaml")).toMatchObject({ ok: false, line: 1, column: 5 });
   });
 });
+
+describe("nesting and size are checked before anything recurses", () => {
+  const nested = (levels: number) => '{"a":' + "[".repeat(levels - 1) + "]".repeat(levels - 1) + "}";
+  const TOO_DEEP = "Policy source is nested too deeply.";
+
+  // A stack overflow while composing used to leave V8 unable to compile the
+  // next regular expression: the second parse aborted the whole process.
+  it.each<PolicySourceFormat>(["yaml", "json"])("refuses 1000-deep nesting on consecutive %s parses", (format) => {
+    // Every parse runs before any assertion, as an editor reparsing per keystroke would.
+    const results = [nested(1000), nested(1000), "[".repeat(100_000), nested(1000)].map((source) => parsePolicySource(source, format));
+    for (const parsed of results) {
+      expect(parsed).toMatchObject({ ok: false, message: TOO_DEEP });
+      expect(parsed).not.toHaveProperty("value");
+    }
+  });
+
+  it.each<PolicySourceFormat>(["yaml", "json"])("accepts 64 levels and refuses the 65th at its bracket in %s mode", (format) => {
+    expect(parsePolicySource(nested(64), format)).toMatchObject({ ok: true });
+    expect(parsePolicySource(nested(65), format)).toEqual({ ok: false, line: 1, column: 69, message: TOO_DEEP });
+  });
+
+  it.each([
+    ["nested block sequences on one line", "a:\n  " + "- ".repeat(100) + "x\n", 2, 129],
+    ["indented block mappings", Array.from({ length: 100 }, (_, i) => " ".repeat(i) + "k:").join("\n") + " x\n", 65, 65],
+    ["an unclosed JSON array", "[".repeat(200_000), 1, 65],
+  ])("refuses %s", (_, source, line, column) => {
+    expect(parsePolicySource(source)).toEqual({ ok: false, line, column, message: TOO_DEEP });
+  });
+
+  it("refuses invalid JSON nested past the limit at its bracket", () => {
+    expect(parsePolicySource("[".repeat(200_000), "json")).toEqual({ ok: false, line: 1, column: 65, message: TOO_DEEP });
+  });
+
+  it("refuses an edit of source nested past the limit", () => {
+    expect(editPolicySource(nested(65), ["b"], 1, "yaml")).toMatchObject({ ok: false, message: TOO_DEEP });
+  });
+
+  // The server refuses a request body over 1 MiB, so no larger policy can launch.
+  it.each<PolicySourceFormat>(["yaml", "json"])("refuses %s source over 1 MiB before reading it", (format) => {
+    const fits = format === "json" ? `{"a":"${"x".repeat((1 << 20) - 8)}"}` : `a: ${"x".repeat((1 << 20) - 3)}`;
+    expect(fits.length).toBe(1 << 20);
+    expect(parsePolicySource(fits, format)).toMatchObject({ ok: true });
+    expect(parsePolicySource(`${fits} `, format)).toEqual({ ok: false, line: 1, column: 1, message: "Policy source is too large." });
+  });
+});

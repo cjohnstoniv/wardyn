@@ -5,7 +5,7 @@
 
 // Only lazy policy consumers may import this module; code-block's display
 // emitter is reachable from the eager Runs screen and must stay dependency-free.
-import { Composer, isAlias, isMap, isNode, isPair, isScalar, LineCounter, Parser, visit, type Document } from "yaml";
+import { Composer, isAlias, isMap, isNode, isPair, isScalar, LineCounter, Parser, visit, type CST, type Document } from "yaml";
 
 export type PolicySourceValue = null | boolean | number | string | PolicySourceValue[] | PolicySourceMapping;
 export type PolicySourceMapping = { [key: string]: PolicySourceValue };
@@ -40,6 +40,34 @@ function strayBreak(source: string): PolicySourceError | undefined {
   return located(source, at, source[at] === "\r"
     ? "Bare carriage return: use LF or CRLF line endings."
     : `Unescaped U+${code.toUpperCase()}: write it as \\u${code} in a quoted string.`);
+}
+
+// The server refuses a request body over 1 MiB, so no larger policy can launch.
+const MAX_SOURCE_LENGTH = 1 << 20;
+// Far above any real policy; composing, converting and the JSON locator recurse
+// once per level, and a stack overflow there left V8 unable to compile the next
+// regular expression, aborting the page on a later parse.
+const MAX_DEPTH = 64;
+const TOO_DEEP = "Policy source is nested too deeply.";
+
+function unreadable(source: string): PolicySourceError | undefined {
+  if (source.length > MAX_SOURCE_LENGTH) return { ok: false, line: 1, column: 1, message: "Policy source is too large." };
+  return strayBreak(source);
+}
+
+// The tokenizer does not recurse, so nesting is measured on its output before
+// anything that does sees it.
+function nestingOffset(tokens: readonly CST.Token[]): number | undefined {
+  const pending: [CST.Token | null | undefined, number][] = tokens.map((token) => [token, 0]);
+  for (let next = pending.pop(); next; next = pending.pop()) {
+    const [token, depth] = next;
+    if (!token) continue;
+    const level = "items" in token ? depth + 1 : depth;
+    if (level > MAX_DEPTH) return token.offset;
+    if ("value" in token) pending.push([token.value, level]);
+    if ("items" in token) for (const item of token.items) pending.push([item.key, level], [item.value, level]);
+  }
+  return undefined;
 }
 
 // Written text must never hold those characters raw; only quoted strings can.
@@ -90,14 +118,14 @@ function documentValue(document: Document, lines: LineCounter): PolicySourceResu
 function readSource(source: string):
   | { ok: true; document: Document; value: PolicySourceMapping }
   | PolicySourceError {
-  const refused = strayBreak(source);
-  if (refused) return refused;
   const lines = new LineCounter();
   try {
     const tokens = [...new Parser(lines.addNewLine).parse(source)];
     // Inspect tokens, not lines: %YAML and %TAG inside strings are ordinary text.
     const directive = tokens.find((token) => token.type === "directive");
     if (directive) return failure(lines, directive.offset, "Directives are not allowed.");
+    const deep = nestingOffset(tokens);
+    if (deep !== undefined) return failure(lines, deep, TOO_DEEP);
     const documents = [...new Composer({
       version: "1.2",
       schema: "core",
@@ -144,18 +172,24 @@ function jsonSyntaxError(source: string): PolicySourceError {
   };
   const eat = (char: string): boolean => skip(JSON_SPACE) && take(char);
   const string = (): boolean => skip(JSON_SPACE) && skip(JSON_STRING) && take('"');
-  const value = (): boolean => {
-    if (eat("{")) {
+  const open = (char: string, depth: number): boolean => {
+    if (!eat(char)) return false;
+    if (depth < MAX_DEPTH) return true;
+    at--;
+    throw new RangeError(TOO_DEEP);
+  };
+  const value = (depth: number): boolean => {
+    if (open("{", depth)) {
       if (eat("}")) return true;
       do {
-        if (!(string() && eat(":") && value())) return false;
+        if (!(string() && eat(":") && value(depth + 1))) return false;
       } while (eat(","));
       return eat("}");
     }
-    if (eat("[")) {
+    if (open("[", depth)) {
       if (eat("]")) return true;
       do {
-        if (!value()) return false;
+        if (!value(depth + 1)) return false;
       } while (eat(","));
       return eat("]");
     }
@@ -163,14 +197,14 @@ function jsonSyntaxError(source: string): PolicySourceError {
   };
   let message = "Policy source is not valid JSON.";
   try {
-    if (value() && skip(JSON_SPACE) && at === source.length) at = 0;
+    if (value(0) && skip(JSON_SPACE) && at === source.length) at = 0;
     else {
       message = at < source.length
         ? `Unexpected ${JSON.stringify(String.fromCodePoint(source.codePointAt(at) ?? 0))} in JSON.`
         : "Unexpected end of JSON.";
     }
   } catch {
-    at = 0; // Nesting too deep to walk: refused without a place to point at.
+    message = TOO_DEEP; // the only throw: `at` is the bracket past the limit
   }
   return located(source, at, message);
 }
@@ -180,12 +214,14 @@ function jsonSyntaxError(source: string): PolicySourceError {
 // also be JSON by JSON.parse's grammar and read the same both ways. No failed
 // parse exposes a previously valid value or Document.
 export function parsePolicySource(source: string, format: PolicySourceFormat = "yaml"): PolicySourceResult {
+  const refused = unreadable(source);
+  if (refused) return refused;
   let json: unknown;
   if (format === "json") {
     try {
       json = JSON.parse(source);
     } catch {
-      return strayBreak(source) ?? jsonSyntaxError(source);
+      return jsonSyntaxError(source);
     }
   }
   const parsed = readSource(source);
@@ -234,7 +270,7 @@ export function editPolicySource(
   value: PolicySourceValue | undefined,
   format: PolicySourceFormat,
 ): PolicySourceEditResult {
-  const parsed = readSource(source);
+  const parsed = unreadable(source) ?? readSource(source);
   if (!parsed.ok) return parsed;
   try {
     if (!validPath(parsed.value, path)) return caught(new Error("The edit must name a mapping field or a sequence item without gaps."));

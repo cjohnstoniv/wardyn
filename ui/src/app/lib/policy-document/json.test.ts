@@ -98,12 +98,6 @@ describe("parsePolicySource in explicit JSON mode", () => {
     });
   });
 
-  it("refuses invalid JSON nested too deeply to locate", () => {
-    expect(parsePolicySource("[".repeat(200_000), "json")).toEqual({
-      ok: false, line: 1, column: 1, message: "Policy source is not valid JSON.",
-    });
-  });
-
   it("leaves the default YAML reading of JSON-compatible YAML unchanged", () => {
     for (const source of ['{"a": 1,}', "{a: 1} # note", "{'a': 1}", "a: 1", '{"a": 0x1}']) {
       expect(parsePolicySource(source)).toEqual({ ok: true, value: { a: 1 } });
