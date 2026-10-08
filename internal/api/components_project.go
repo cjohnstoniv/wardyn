@@ -32,6 +32,12 @@ func orgComponentView(c types.Component) client.OrgComponentView {
 // saved, and the org rows they are granted. An org row the caller is not granted
 // is absent, asked through the same door a run's attach asks, so the list and the
 // refusal can never disagree about who may use a row.
+//
+// The rows are read BEFORE the first capability question. The answers are
+// memoised for the request, and a new org row commits together with its
+// restriction: a memo loaded after the rows were listed already holds the
+// restriction of every row in the list, where one loaded before would judge a
+// row created in between as unrestricted and show it to everyone.
 func (s *Server) handleMyComponents(w http.ResponseWriter, r *http.Request) {
 	cs, ok := s.componentStoreOr501(w)
 	if !ok {
@@ -50,11 +56,6 @@ func (s *Server) handleMyComponents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	settings := componentSettings(sc)
-	define := s.componentAttachRefusal(r, "")
-	if define != nil && define.err != nil {
-		define.write(s, w, r)
-		return
-	}
 	mine, err := cs.ListComponents(ctx, owner)
 	if err != nil {
 		writeServerError(w, r, "list components", err)
@@ -66,6 +67,11 @@ func (s *Server) handleMyComponents(w http.ResponseWriter, r *http.Request) {
 	orgRows, err := cs.ListComponents(ctx, "")
 	if err != nil {
 		writeServerError(w, r, "list components", err)
+		return
+	}
+	define := s.componentAttachRefusal(r, "")
+	if define != nil && define.err != nil {
+		define.write(s, w, r)
 		return
 	}
 	org := []client.OrgComponentView{}
