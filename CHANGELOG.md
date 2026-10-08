@@ -93,7 +93,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   bullets, tables and alerts, with every repository file they cite linked. No rule, default or limit
   changed.
 - The Desktop tier page is now bullets, tables and alerts, with every repository file it cites linked.
-  No rule, default, limit or heading changed.
+  No rule, default or limit changed; long table cells moved to
+  sections of their own.
+- The compose demo README, the agent images README, the build images operations page and the
+  devcontainer build page (ENVBUILD) are now bullets, tables and alerts, with every repository file
+  they cite linked. No rule, default or limit changed.
 
 ### Fixed
 
