@@ -1,0 +1,5 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words of the rewrite, so growth fails.
+docs/operations/secrets-and-keys.md=9496 share=25
+docs/operations/monitoring.md=1842 share=13
+docs/operations/run-lifetime.md=2008 share=21
+docs/operations/kubernetes-known-gaps.md=2058 share=15
