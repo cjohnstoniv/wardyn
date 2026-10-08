@@ -138,15 +138,28 @@ func pullsCapability(read bool, method string, sub []string) Capability {
 	return unclassified(read)
 }
 
-// actionsRunWrites are the writes on one workflow run, by the segment after
-// its id.
-var actionsRunWrites = map[string]Capability{
-	"approve":           CapActionsAdmin,
-	"cancel":            CapActionsExecute,
-	"force-cancel":      CapActionsExecute,
-	"rerun":             CapActionsExecute,
-	"rerun-failed-jobs": CapActionsExecute,
+// actionsWrites are the actions area's classified writes, keyed by method and
+// shape: the resource, then "{id}" for the one segment that names an object,
+// then the action on it.
+var actionsWrites = map[string]Capability{
+	"POST runs/{id}/approve":           CapActionsAdmin,
+	"POST runs/{id}/cancel":            CapActionsExecute,
+	"POST runs/{id}/force-cancel":      CapActionsExecute,
+	"POST runs/{id}/rerun":             CapActionsExecute,
+	"POST runs/{id}/rerun-failed-jobs": CapActionsExecute,
+	"DELETE runs/{id}":                 CapActionsAdmin,
+	"DELETE runs/{id}/logs":            CapActionsAdmin,
+	"POST jobs/{id}/rerun":             CapActionsExecute,
+	"POST workflows/{id}/dispatches":   CapActionsExecute,
+	"PUT workflows/{id}/enable":        CapActionsAdmin,
+	"PUT workflows/{id}/disable":       CapActionsAdmin,
+	"DELETE artifacts/{id}":            CapActionsAdmin,
+	"DELETE caches":                    CapActionsAdmin,
+	"DELETE caches/{id}":               CapActionsAdmin,
 }
+
+// actionsReadResources are the actions resources a read is classified in.
+var actionsReadResources = []string{"artifacts", "cache", "caches", "jobs", "runs", "workflows"}
 
 // actionsCapability is the actions area, limited to runs, jobs, workflows,
 // artifacts and caches. Its secrets and runners are refused by
@@ -154,32 +167,26 @@ var actionsRunWrites = map[string]Capability{
 // it under administration), and its variables and OIDC settings, each under
 // a permission of its own, are unclassified.
 func actionsCapability(read bool, method string, sub []string) Capability {
-	res, part := at(sub, 1), at(sub, 3)
-	if res == "permissions" && !read {
-		return CapRepoAdmin
-	}
-	if !slices.Contains([]string{"artifacts", "cache", "caches", "jobs", "runs", "workflows"}, res) {
-		return unclassified(read)
-	}
-	if read {
-		return CapActionsRead
-	}
-	del, post := method == http.MethodDelete, method == http.MethodPost
+	res := at(sub, 1)
 	switch {
-	case res == "runs" && len(sub) == 4 && post:
-		if c, ok := actionsRunWrites[part]; ok {
-			return c
-		}
-	case res == "runs" && del && (len(sub) == 3 || len(sub) == 4 && part == "logs"):
-		return CapActionsAdmin
-	case res == "jobs" && len(sub) == 4 && post && part == "rerun":
-		return CapActionsExecute
-	case res == "workflows" && len(sub) == 4 && post && part == "dispatches":
-		return CapActionsExecute
-	case res == "workflows" && len(sub) == 4 && method == http.MethodPut && (part == "enable" || part == "disable"):
-		return CapActionsAdmin
-	case (res == "artifacts" || res == "caches") && del && len(sub) <= 3:
-		return CapActionsAdmin
+	case res == "permissions" && !read:
+		return CapRepoAdmin
+	case !slices.Contains(actionsReadResources, res):
+		return unclassified(read)
+	case read:
+		return CapActionsRead
+	case len(sub) > 4:
+		return CapUnclassifiedWrite
+	}
+	key := method + " " + res
+	if len(sub) > 2 {
+		key += "/{id}"
+	}
+	if len(sub) > 3 {
+		key += "/" + sub[3]
+	}
+	if c, ok := actionsWrites[key]; ok {
+		return c
 	}
 	return CapUnclassifiedWrite
 }
