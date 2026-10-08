@@ -26,6 +26,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   performs no runner or share probe. Its independent per-person limit defaults to 60/minute with a burst of 15,
   configured by `WARDYN_POLICY_PREVIEW_RATE_PER_MIN`. Repository facts preserve full SSH paths and keep
   differing Azure DevOps profiles and ceilings in separate groups; see `docs/sdk.md` (#1918).
+- The console shows a policy as one read-only document with Summary, YAML and JSON views: on
+  Policies (the default and each saved policy), in the governance profile editor, on a run's Policy
+  tab and for New Run's default policy. Summary names every setting in plain words under headings
+  and lists repeated values once under one title; a key it does not know still appears, under its
+  raw name. Copy YAML and Copy JSON copy the policy in that format. Viewing never changes a
+  policy (#1921).
+
+### Changed
+
+- Policy editors open in YAML (`Spec (YAML)`) in Policies, Governance and New Run. JSON remains an
+  explicit choice (`Spec (JSON)`), and JSON text pasted into the YAML editor is still read. A source
+  that does not parse names its line and column, holds the structured controls, and cannot be
+  saved. Templates, Insert and the rule sections rewrite only the keys they change, so comments
+  elsewhere in the text survive an edit; comments are not stored when a policy is saved or a run
+  launches. Switching YAML to JSON asks first, because it drops them (#1921).
+- A governance profile's ceiling reads first and is edited through "Edit policy". A run's Policy
+  tab Summary draws a row only for what the policy sets, so the "None" and "Standard limit" rows
+  are gone; tool rules are listed one per line and an idle stop reads "Stops after N minutes"
+  (#1921).
 
 ### Fixed
 
@@ -72,7 +91,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the explicit form. Ordinary policies render unchanged. The policy-source parser's explicit JSON
   mode now refuses text that is not JSON — trailing commas, comments, single quotes, unquoted keys
   and other YAML-only syntax — with a line and column, while still refusing duplicate keys and
-  unsafe numbers. Editor integration follows separately (#1921).
+  unsafe numbers (#1921).
 
 ## [0.8.8] — 2026-10-07
 
