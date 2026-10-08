@@ -29,6 +29,7 @@ import { AUTONOMY_RAIL, autonomyBoundSentence } from "../src/app/lib/governance-
 import { AGENTS, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import type { Page } from "@playwright/test";
 import type { ConfinementClass } from "../src/app/lib/types";
+import { SPEC_LABEL } from "./policy-source";
 
 // U-15: the rail's "recording is on" sentence is a shared constant now
 // (RAIL_RECORDING_ON, imported above) instead of a literal re-typed here — its
@@ -84,15 +85,16 @@ test.describe("New run — one page", () => {
   // consequences of the envelope, while you build it rather than after.
   test("the panel's derivations track the spec as it changes", async ({ page }) => {
     await openNewRun(page);
-    const spec = page.getByLabel("Spec (JSON)");
+    const spec = page.getByLabel(SPEC_LABEL);
 
     // Opens on the Minimal template: one host, a review rule, a CC2 floor.
-    await expect(spec).toHaveValue(/"api\.anthropic\.com"/);
-    await expect(page.getByText("Valid JSON")).toBeVisible();
+    await expect(spec).toHaveValue(/api\.anthropic\.com/);
+    // The editor opens in YAML (#1921); JSON is a choice made in the format switch.
+    await expect(page.getByText("Valid YAML")).toBeVisible();
     await expect(page.getByText("1 domain allowed")).toBeVisible();
 
     await page.getByRole("button", { name: "Package registries" }).click();
-    await expect(spec).toHaveValue(/"pypi\.org"/);
+    await expect(spec).toHaveValue(/pypi\.org/);
     await expect(page.getByText(/1[0-9] domains allowed/)).toBeVisible();
 
     // A broken document says so instead of deriving from nothing, and Launch
@@ -100,7 +102,8 @@ test.describe("New run — one page", () => {
     await page.getByLabel("Title").fill("e2e smoke");
     await expect(page.getByRole("button", { name: "Launch run" })).toBeEnabled();
     await spec.fill("{ not json");
-    await expect(page.getByText(/Invalid JSON/)).toBeVisible();
+    await expect(page.getByText(/^Invalid YAML — /)).toBeVisible();
+    await expect(page.getByText(/^Line \d+, column \d+$/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Launch run" })).toBeDisabled();
     await expect(page.getByText("The policy spec isn't valid JSON.")).toBeVisible();
   });
@@ -112,7 +115,7 @@ test.describe("New run — one page", () => {
     await openNewRun(page);
     await page.getByRole("button", { name: "Allow-all — observe first" }).click();
 
-    await expect(page.getByLabel("Spec (JSON)")).toHaveValue(/"allow_all_egress": true/);
+    await expect(page.getByLabel(SPEC_LABEL)).toHaveValue(/allow_all_egress: true/);
     await expect(page.getByText("Allow-all egress (block-list only)")).toBeVisible();
   });
 
@@ -121,10 +124,10 @@ test.describe("New run — one page", () => {
   // and writing a starting value for it.
   test("the Fields rail inserts a key into the spec, and the derivations follow", async ({ page }) => {
     await openNewRun(page);
-    const spec = page.getByLabel("Spec (JSON)");
+    const spec = page.getByLabel(SPEC_LABEL);
 
     await page.getByRole("button", { name: "Insert denied_domains" }).click();
-    await expect(spec).toHaveValue(/"denied_domains"/);
+    await expect(spec).toHaveValue(/denied_domains/);
     // A deny beats an allow in both egress modes, so it is counted separately.
     await expect(page.getByText("1 domain allowed, 1 denied")).toBeVisible();
 
@@ -137,16 +140,16 @@ test.describe("New run — one page", () => {
   // the page is merged into a stored spec.
   test("the mode row swaps the editor for the saved-policy picker", async ({ page }) => {
     await openNewRun(page);
-    await expect(page.getByLabel("Spec (JSON)")).toBeVisible();
+    await expect(page.getByLabel(SPEC_LABEL)).toBeVisible();
 
     await page.getByRole("button", { name: /Reuse a saved policy/ }).click();
-    await expect(page.getByLabel("Spec (JSON)")).toHaveCount(0);
+    await expect(page.getByLabel(SPEC_LABEL)).toHaveCount(0);
     await expect(page.getByRole("combobox", { name: "Saved policy" })).toBeVisible();
     // Nothing is picked yet, so Launch says what it is waiting for.
     await expect(page.getByText("Pick a saved policy, or write a custom one.")).toBeVisible();
 
     await page.getByRole("button", { name: /Custom policy/ }).click();
-    await expect(page.getByLabel("Spec (JSON)")).toBeVisible();
+    await expect(page.getByLabel(SPEC_LABEL)).toBeVisible();
   });
 
   // The "no model provider is connected" rail warning is NOT asserted here on
@@ -304,7 +307,7 @@ test.describe("New run — Use the default policy", () => {
     });
     await openNewRun(page);
     await page.getByRole("button", { name: /^Use the default policy/ }).click();
-    await expect(page.getByLabel("Spec (JSON)")).toHaveCount(0);
+    await expect(page.getByLabel(SPEC_LABEL)).toHaveCount(0);
     await page.getByLabel("Title").fill("e2e default policy");
     await launchRun(page);
 

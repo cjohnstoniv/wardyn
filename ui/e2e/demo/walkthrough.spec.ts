@@ -50,6 +50,7 @@ import { act, beat, caption, chapter, PACE, spotlight, typeInTerminal } from "./
 import { stage } from "./stage";
 import { advance, APPROVAL_APPEARS, clearWorkspace, decide } from "./funnel";
 import { termText } from "../terminal-text";
+import { readSpec, SPEC_LABEL } from "../policy-source";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -473,11 +474,11 @@ test("act 5 — a real run", async () => {
   // literal so the floor (min_confinement_class) stays whatever is actually
   // on screen — same pattern policies.spec.ts's fillEditor uses for this
   // textarea.
-  const specBox = page.getByLabel("Spec (JSON)");
+  const specBox = page.getByLabel(SPEC_LABEL);
   await caption(page, "This is the part that matters.");
   await spotlight(page, specBox);
   const heldSpec = JSON.stringify(
-    { ...JSON.parse(await specBox.inputValue()), first_use_approval: "wait_for_review" },
+    { ...(await readSpec(specBox)), first_use_approval: "wait_for_review" },
     null,
     2,
   );

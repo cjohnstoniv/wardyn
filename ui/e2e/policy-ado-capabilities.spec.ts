@@ -8,6 +8,7 @@ import { ADO_ACCESS } from "../src/app/lib/ado-access-copy";
 import { ADO_ENTRA_EDITOR } from "../src/app/lib/workspace-providers-copy";
 import type { RunPolicySpec } from "../src/app/lib/types";
 import type { Locator, Page } from "@playwright/test";
+import { SPEC_LABEL } from "./policy-source";
 
 // azure_devops_capabilities (#1363): a saved policy as a saved Azure DevOps
 // access profile — the approved mock's "Azure DevOps access" section (Member ·
@@ -76,7 +77,7 @@ test("the Azure DevOps access section locks what the ceiling does not grant, and
   await dialog.getByLabel("Name", { exact: true }).fill(name);
   await capBox(dialog, "Read code").click();
   await capBox(dialog, "Edit branch policies").click();
-  await expect(dialog.getByLabel("Spec (JSON)")).toHaveValue(/"azure_devops_capabilities"/);
+  await expect(dialog.getByLabel(SPEC_LABEL)).toHaveValue(/azure_devops_capabilities:/);
 
   const created = page.waitForResponse((r) => r.url().includes("/api/v1/policies") && r.request().method() === "POST");
   await dialog.getByRole("button", { name: "Create policy" }).click();

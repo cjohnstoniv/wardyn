@@ -38,6 +38,7 @@
 import { test, expect } from "@playwright/test";
 import { act, beat, caption, chapter, PACE, spotlight } from "./overlay";
 import { stage } from "./stage";
+import { SPEC_LABEL } from "../policy-source";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -117,7 +118,7 @@ test("V12b act 2 — a member's run asks for the outside world", async () => {
   // Minimal ships a CC2 floor; this demo cluster's one barrier is the Fence.
   // The one-line edit is itself the lesson: the floor is the member's to
   // RAISE, never to sneak under the admin's ceiling.
-  const spec = page.getByRole("textbox", { name: "Spec (JSON)" });
+  const spec = page.getByLabel(SPEC_LABEL);
   await spec.fill(JSON.stringify({
     allowed_domains: ["api.anthropic.com"],
     first_use_approval: "deny_with_review",

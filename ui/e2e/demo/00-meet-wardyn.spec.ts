@@ -84,6 +84,7 @@ import { sweepStaleState } from "./sweep";
 // (one browser, one context, one recorded page), and every beat reads the page
 // out of stage() inside a test body rather than closing over a module binding.
 import { stage } from "./stage";
+import { SPEC_LABEL } from "../policy-source";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -495,9 +496,9 @@ test("V00 act 2 — a run, and a knock at the door", async () => {
   // Asserted straight off the JSON textarea rather than a radio's aria-checked,
   // because a changed default would make the approval below never fire while
   // the take still went green.
-  const spec = page.getByLabel("Spec (JSON)");
+  const spec = page.getByLabel(SPEC_LABEL);
   await expect(spec, "the default first_use_approval is no longer deny_with_review").toHaveValue(
-    /"first_use_approval": "deny_with_review"/,
+    /"?first_use_approval"?: "?deny_with_review"?/,
   );
   await centerInFrame(spec);
   await spotlight(page, spec);

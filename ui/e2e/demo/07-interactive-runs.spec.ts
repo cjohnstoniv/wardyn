@@ -89,6 +89,7 @@ import { sweepStaleState } from "./sweep";
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll.
 import { stage } from "./stage";
 import { termText } from "../terminal-text";
+import { SPEC_LABEL } from "../policy-source";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -277,9 +278,9 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   // deleted "Just the model provider" Network preset radio. The Minimal chip
   // clicked above already scopes allowed_domains to exactly
   // api.anthropic.com, so there is no second click left to attach this line
-  // to — re-spotlighting the panel's Spec (JSON) textarea is the closest
+  // to — re-spotlighting the panel's policy source textarea is the closest
   // honest on-screen event.
-  await spotlight(page, page.getByLabel("Spec (JSON)"));
+  await spotlight(page, page.getByLabel(SPEC_LABEL));
   await caption(page, "Add api.anthropic.com.");
   await beat(page, BEAT_SHORT);
   await caption(page, "That's the entire network contract for this run.");

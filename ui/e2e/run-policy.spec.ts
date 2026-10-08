@@ -247,17 +247,19 @@ test.describe("Run detail — the Policy tab (#1425)", () => {
     await page.getByRole("tab", { name: POLICY_TAB.tab }).click();
     const tab = page.getByTestId("run-policy-tab");
 
-    const narrowed = tab.locator("dd").filter({ hasText: "gitlab.example.com" });
+    // One "Git access token" title; each grant is its host line, then what it is narrowed to.
+    await expect(tab.getByText(SUMMARY.grantKinds.git_pat, { exact: true })).toHaveCount(1);
+    const narrowed = tab.locator("li").filter({ hasText: "gitlab.example.com" });
     await expect(narrowed.getByText(SUMMARY.readOnly, { exact: true })).toBeVisible();
     await expect(narrowed.getByText(GIT_PAT_SCOPE.RUN_API, { exact: true })).toBeVisible();
-    await expect(narrowed).toContainText("group/app, group/libs/*");
+    await expect(tab.getByText("group/app, group/libs/*", { exact: true })).toBeVisible();
     await expect(narrowed.getByText(SUMMARY.readOnly, { exact: true }).locator("xpath=ancestor::span[@title][1]")).toHaveAttribute(
       "title",
       GIT_PAT_SCOPE.HONESTY_TOKEN,
     );
 
-    const open = tab.locator("dd").filter({ hasText: "git.example.com" });
-    await expect(open).toContainText(GIT_PAT_SCOPE.RUN_REPOS_ALL);
+    const open = tab.locator("li").filter({ hasText: "git.example.com" });
+    await expect(tab.getByText(GIT_PAT_SCOPE.RUN_REPOS_ALL, { exact: true })).toBeVisible();
     await expect(open.getByText(SUMMARY.readOnly, { exact: true })).toHaveCount(0);
   });
 
@@ -291,7 +293,10 @@ test.describe("Run detail — the Policy tab (#1425)", () => {
     await page.getByRole("tab", { name: POLICY_TAB.tab }).click();
     const tab = page.getByTestId("run-policy-tab");
 
-    await expect(tab.getByText(POLICY_TAB.hidden, { exact: true })).toHaveAttribute("title", POLICY_TAB.hiddenTip);
+    await expect(tab.getByRole("note", { name: `${POLICY_TAB.hidden}. ${POLICY_TAB.hiddenTip}` })).toHaveAttribute(
+      "title",
+      POLICY_TAB.hiddenTip,
+    );
     await expect(tab.getByText("/home/agent/work/shared")).toBeVisible();
     await expect(tab).not.toContainText("<redacted>");
     await expect(tab.getByText(POLICY_TAB.redacted)).toHaveCount(0);
