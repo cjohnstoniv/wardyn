@@ -318,6 +318,25 @@ waive_fails "a sentence waiver with a malformed sha1" "is not 40 lowercase hex d
 printf 'sentence\tdocs/scratch/waived.md\t%s\t38\n' "$(sha "$S38")" > "$WAIVE"
 waive_fails "a sentence waiver with no reason" "want sentence<TAB>path<TAB>sha1<TAB>words<TAB>reason"
 
+# A joiner written out in the prose is refused; one that only appears once code
+# spans are removed (", `0-9` and `-`") is not. Both sentences are 38 words.
+SA="$(sentence 37 | sed 's/w19 /w19, and /')"
+page > "$TMP/docs/scratch/waived.md" <<DOC
+$SA
+DOC
+printf 'sentence\tdocs/scratch/waived.md\t%s\t38\treason\n' "$(sha "$SA")" > "$WAIVE"
+waive_fails "a 38-word sentence with a written-out ', and '" 'contains the clause joiner ", and"'
+SC="$(sentence 37 | sed 's/w19 /w19, `0-9` and `-` /')"
+page > "$TMP/docs/scratch/waived.md" <<DOC
+$SC
+DOC
+rm -f "$WAIVE"
+out="$(gate_says)"
+grep -qF "waivable as: sentence" <<<"$out" || fail "code spans around 'and' are not a joiner; the paste line must print: $out"
+printf 'sentence\tdocs/scratch/waived.md\t%s\t38\treason\n' "$(sha "$(sentence 37 | sed 's/w19 /w19, and /')")" > "$WAIVE"
+run_gate || fail "a sentence whose ', and' is only code spans around 'and' must be waivable: $(gate_says)"
+echo "ok  code spans around 'and' after a comma are not a clause joiner"
+
 scratch tbl
 page > "$TMP/docs/scratch/tbl.md" <<DOC
 | Option | Meaning |
