@@ -1,78 +1,45 @@
 # Azure Entra ID SSO validation runbook
 
-Live-verifies Wardyn's Entra ID App Role / groups-claim RBAC (`internal/auth/oidc`'s
-`deriveRole`, `WARDYN_OIDC_ROLE_MAP`, the console's Getting Started → People
-step) against a **real, throwaway** Entra tenant — not Dex
-(`deploy/kind/sso/`), which proves the console/chart wiring but is not Entra
-and cannot exercise its two traps (security defaults blocking device-code
-sign-in, and the missing `email_verified` claim). This directory is scripts +
-docs only: nothing here runs `az`/`kubectl`/`helm`/`kind`/`docker` on your
-behalf. You run each step yourself, in order, under your own supervision.
-
-Read `.claude/skills/wardyn-k8s-setup/SKILL.md` §3 first if you haven't — it's
-the general Entra App Role recipe this runbook automates end to end, plus a
-troubleshooting table (redirect loops, `no Wardyn role assigned`,
-`ImagePullBackOff`) worth keeping open during the walk.
+- Live-verifies Wardyn's Entra ID App Role / groups-claim RBAC (`internal/auth/oidc`'s `deriveRole`, `WARDYN_OIDC_ROLE_MAP`, the console's Getting Started → People step) against a **real, throwaway** Entra tenant.
+- Not Dex ([`deploy/kind/sso/`](../kind/sso/)), which proves the console/chart wiring but is not Entra and cannot exercise its two traps (security defaults blocking device-code sign-in, and the missing `email_verified` claim).
+- This directory is scripts + docs only: nothing here runs `az`/`kubectl`/`helm`/`kind`/`docker` on your behalf. You run each step yourself, in order, under your own supervision.
+- Read [`.claude/skills/wardyn-k8s-setup/SKILL.md`](../../.claude/skills/wardyn-k8s-setup/SKILL.md) §3 first if you haven't;
+  - it's the general Entra App Role recipe this runbook automates end to end, plus a troubleshooting table (redirect loops, `no Wardyn role assigned`, `ImagePullBackOff`) worth keeping open during the walk.
 
 ## Prelude — the tenant (manual, ~5 minutes)
 
 1. Create an **Azure Free Account** if you don't have one:
-   <https://azure.microsoft.com/free/>. A credit card is required for
-   identity verification only — this runbook creates no billable resource,
-   nothing here is charged.
-2. During or after signup, note the **new tenant's ID** (Entra ID → Overview
-   → Tenant ID — a GUID). `01-tenant-prep.sh` below takes it as its one
-   argument.
-3. **This tenant is throwaway, on purpose.** Before Step 1, disable Entra's
-   security defaults yourself in the portal (MFA enforcement + a
-   device-code-flow block, tenant-wide): **Azure Portal → Microsoft Entra ID →
-   Properties → Manage Security defaults** (link at the bottom of the page) →
-   **Security defaults: Disabled** → give any justification → **Save**.
-   Microsoft Graph refuses an API `PATCH` of this policy on current tenants
-   (`AADSTS65002`) — it is portal-only now, so `01-tenant-prep.sh` only
-   verifies the change took, it does not make it. This trade-off is fine on a
-   tenant with three demo users and nothing else in it, and never fine on a
-   tenant with real ones. `teardown.sh` at the end deletes every object this
-   runbook creates (after listing them and asking you to confirm — see
-   Teardown below); the very last line is the portal action that deletes the
-   **directory itself** — do that when you're done. Don't point any of this
-   at a tenant you or your org depends on.
+   - <https://azure.microsoft.com/free/>. A credit card is required for identity verification only — this runbook creates no billable resource, nothing here is charged.
+2. During or after signup, note the **new tenant's ID** (Entra ID → Overview → Tenant ID — a GUID).
+   - `01-tenant-prep.sh` below takes it as its one argument.
+3. **This tenant is throwaway, on purpose.**
+   - Before Step 1, disable Entra's security defaults yourself in the portal (MFA enforcement + a device-code-flow block, tenant-wide):
+   - **Azure Portal → Microsoft Entra ID → Properties → Manage Security defaults** (link at the bottom of the page) → **Security defaults: Disabled** → give any justification → **Save**.
+   - Microsoft Graph refuses an API `PATCH` of this policy on current tenants (`AADSTS65002`) — it is portal-only now, so `01-tenant-prep.sh` only verifies the change took, it does not make it.
+   - This trade-off is fine on a tenant with three demo users and nothing else in it, and never fine on a tenant with real ones.
+   - `teardown.sh` at the end deletes every object this runbook creates (after listing them and asking you to confirm — see Teardown below);
+   - the very last line is the portal action that deletes the **directory itself** — do that when you're done.
+   - Don't point any of this at a tenant you or your org depends on.
 
 ## Context — facts this runbook leans on
 
-- **Entra ID Free** covers everything here: per-**user** App Role assignment
-  is free. Per-**group** App Role assignment needs Entra ID **P1** — not
-  scripted anywhere in this runbook; the group path used here (`wardyn-eng` →
-  the `groups` claim → the console's People-step mapping) is the free
-  alternative and is in fact what the walk is built to demonstrate.
-- The `groups` claim itself is free — `groupMembershipClaims: SecurityGroup`
-  on the app registration, no P1 required.
-- Tenants created **2026-07 or later** ship with **security defaults ON**:
-  they force MFA and block the device-code flow. You disable them yourself in
-  the portal — see the Prelude's trade-off above; `01-tenant-prep.sh` only
-  verifies it took. Until you've disabled them, use a normal interactive
-  browser `az login`, never `--use-device-code`.
-- **Entra never emits `email_verified`.** `WARDYN_OIDC_EMAIL_DOMAINS` fails
-  *every* login closed against an Entra tenant if set (`docs/ENV.md`'s own
-  row says so) — `04-values.sh` never sets it, and neither should you. The same
-  goes for `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED`: an absent claim counts as
-  unverified, so turning it on with Entra refuses every sign-in.
-- A **cloud-only** user has no `email` claim unless (a) the app registration
-  requests the **optional** `email` ID-token claim (`02-app.sh` does this)
-  **and** (b) the user object's `mail` attribute is actually populated —
-  `mail` is **best-effort writable** on a cloud-only user, not guaranteed.
-  The walk asserts this claim explicitly and names the fallback (an
-  admin-token sign-in to read the raw ID token) if it's absent.
-- Web-platform **redirect URIs match exactly**, including the port — Entra
-  does byte comparison, not prefix matching — and Entra only accepts `http://`
-  on `localhost` (any other host must be `https://`).
-- `az login --tenant <id> --allow-no-subscriptions` works on a
-  subscription-less Free tenant; every script here checks it's the active
-  session before doing anything.
-- Issuer, always: `https://login.microsoftonline.com/<tenantId>/v2.0`
-  (`WARDYN_OIDC_ISSUER`). Get the v1/v2 or tenant-segment wrong and you get
-  `id_token verification failed` — the SKILL.md troubleshooting table's exact
-  entry for this.
+- **Entra ID Free** covers everything here: per-**user** App Role assignment is free.
+  - Per-**group** App Role assignment needs Entra ID **P1** — not scripted anywhere in this runbook;
+  - the group path used here (`wardyn-eng` → the `groups` claim → the console's People-step mapping) is the free alternative and is in fact what the walk is built to demonstrate.
+- The `groups` claim itself is free — `groupMembershipClaims: SecurityGroup` on the app registration, no P1 required.
+- Tenants created **2026-07 or later** ship with **security defaults ON**: they force MFA and block the device-code flow.
+  - You disable them yourself in the portal — see the Prelude's trade-off above; `01-tenant-prep.sh` only verifies it took.
+  - Until you've disabled them, use a normal interactive browser `az login`, never `--use-device-code`.
+- **Entra never emits `email_verified`.**
+  - `WARDYN_OIDC_EMAIL_DOMAINS` fails *every* login closed against an Entra tenant if set ([`docs/ENV.md`](../../docs/ENV.md)'s own row says so) — `04-values.sh` never sets it, and neither should you.
+  - The same goes for `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED`: an absent claim counts as unverified, so turning it on with Entra refuses every sign-in.
+- A **cloud-only** user has no `email` claim unless (a) the app registration requests the **optional** `email` ID-token claim (`02-app.sh` does this) **and** (b) the user object's `mail` attribute is actually populated;
+  - `mail` is **best-effort writable** on a cloud-only user, not guaranteed.
+  - The walk asserts this claim explicitly and names the fallback (an admin-token sign-in to read the raw ID token) if it's absent.
+- Web-platform **redirect URIs match exactly**, including the port — Entra does byte comparison, not prefix matching — and Entra only accepts `http://` on `localhost` (any other host must be `https://`).
+- `az login --tenant <id> --allow-no-subscriptions` works on a subscription-less Free tenant; every script here checks it's the active session before doing anything.
+- Issuer, always: `https://login.microsoftonline.com/<tenantId>/v2.0` (`WARDYN_OIDC_ISSUER`).
+  - Get the v1/v2 or tenant-segment wrong and you get `id_token verification failed` — the SKILL.md troubleshooting table's exact entry for this.
 
 ## Step 1 — tenant prep
 
@@ -80,12 +47,9 @@ troubleshooting table (redirect loops, `no Wardyn role assigned`,
 deploy/azure-entra-sso/01-tenant-prep.sh <tenant-id>
 ```
 
-Interactive browser `az login --tenant <tenant-id> --allow-no-subscriptions`,
-then a Graph GET on `policies/identitySecurityDefaultsEnforcementPolicy` to
-confirm the portal step in the Prelude actually took — the script exits 1
-with the portal instructions again if it didn't, rather than silently
-continuing on a tenant device-code sign-in will still fail against. Writes
-`TENANT_ID` to `.env.local` (created `chmod 600`, gitignored — see below).
+- Interactive browser `az login --tenant <tenant-id> --allow-no-subscriptions`, then a Graph GET on `policies/identitySecurityDefaultsEnforcementPolicy` to confirm the portal step in the Prelude actually took;
+  - the script exits 1 with the portal instructions again if it didn't, rather than silently continuing on a tenant device-code sign-in will still fail against.
+- Writes `TENANT_ID` to `.env.local` (created `chmod 600`, gitignored — see below).
 
 ## Step 2 — app, people, values
 
@@ -95,76 +59,49 @@ deploy/azure-entra-sso/03-people.sh  # 3 users, 2 groups, role assignments
 deploy/azure-entra-sso/04-values.sh  # renders values-entra.yaml from .env.local
 ```
 
-Each script sources `deploy/azure-entra-sso/.env.local` on entry and appends
-to it on exit — TENANT_ID, CLIENT_ID/CLIENT_SECRET, the two App Role GUIDs,
-the three users' UPN/object-id/password, and the two groups' object ids all
-accumulate there across the three scripts. Nothing in this directory's
-generated output is ever committed:
-`deploy/azure-entra-sso/.gitignore` (this directory's **own** file — the repo
-root `.gitignore` is untouched) excludes `.env.local`, `values-entra.yaml`,
-and `*.secret`. No script ever echoes a secret to stdout.
+- Each script sources `deploy/azure-entra-sso/.env.local` on entry and appends to it on exit;
+  - TENANT_ID, CLIENT_ID/CLIENT_SECRET, the two App Role GUIDs, the three users' UPN/object-id/password, and the two groups' object ids all accumulate there across the three scripts.
+- Nothing in this directory's generated output is ever committed: [`deploy/azure-entra-sso/.gitignore`](.gitignore) (this directory's **own** file — the repo root `.gitignore` is untouched) excludes `.env.local`, `values-entra.yaml`, and `*.secret`.
+- No script ever echoes a secret to stdout.
 
 ### Azure DevOps permissions on the app (`ADO_TOKEN_MODE`)
 
-`02-app.sh` puts the Azure DevOps permissions on this same app registration,
-and which ones depends on how the Azure DevOps provider row connects people
-(`docs/AZURE-DEVOPS.md`, "Choosing how people connect"):
+- `02-app.sh` puts the Azure DevOps permissions on this same app registration, and which ones depends on how the Azure DevOps provider row connects people ([`docs/AZURE-DEVOPS.md`](../../docs/AZURE-DEVOPS.md), "[Choosing how people connect](../../docs/AZURE-DEVOPS.md#choosing-how-people-connect)"):
 
 | `ADO_TOKEN_MODE` | Adds (delegated, Azure DevOps) | For a row with |
 |---|---|---|
 | `minted_pat` (the default) | `vso.pats`, `vso.pats_manage` | `token_mode: minted_pat`: Wardyn creates a short-lived token for each run |
 | `bearer` | the per-area capability scopes, never the two above | `token_mode: bearer`: the person's Entra token is sent as it is |
 
-Run `ADO_TOKEN_MODE=bearer deploy/azure-entra-sso/02-app.sh` for the second.
-The choice is recorded in `.env.local`, so a re-run keeps it, and a re-run adds
-only the permissions the app does not already hold. A fresh run defaults to
-`minted_pat`. A re-run on an existing app whose `.env.local` predates this setting
-stops and asks you to set `ADO_TOKEN_MODE`, because adding the token permissions to
-an app that serves a `bearer` row stops that row's runs. The script warns when a
-`bearer` app holds the two token permissions, because a `bearer` row refuses
-to inject a token that can create tokens.
+- Run `ADO_TOKEN_MODE=bearer deploy/azure-entra-sso/02-app.sh` for the second.
+- The choice is recorded in `.env.local`, so a re-run keeps it, and a re-run adds only the permissions the app does not already hold.
+- A fresh run defaults to `minted_pat`.
+- A re-run on an existing app whose `.env.local` predates this setting stops and asks you to set `ADO_TOKEN_MODE`, because adding the token permissions to an app that serves a `bearer` row stops that row's runs.
+- The script warns when a `bearer` app holds the two token permissions, because a `bearer` row refuses to inject a token that can create tokens.
 
 For `minted_pat` the app must also be, and the script already makes it:
 
-- **a confidential client**: it creates a client secret, and `04-values.sh`
-  renders it as `WARDYN_OIDC_CLIENT_SECRET`. A row that creates tokens is
-  refused when saved, and left unusable at boot, if the console has no secret;
-- **on the Web platform**: the redirect URIs are registered with
-  `--web-redirect-uris`, not as a single-page or mobile app. A secret sent for
-  a public-client redirect fails with `AADSTS700025`;
-- **the app the row names**: the row's `tenant_id` and `client_id` must be this
-  tenant and `CLIENT_ID` (the console's own sign-in app), or the row is
-  refused.
+- **a confidential client**: it creates a client secret, and `04-values.sh` renders it as `WARDYN_OIDC_CLIENT_SECRET`. A row that creates tokens is refused when saved, and left unusable at boot, if the console has no secret;
+- **on the Web platform**: the redirect URIs are registered with `--web-redirect-uris`, not as a single-page or mobile app. A secret sent for a public-client redirect fails with `AADSTS700025`;
+- **the app the row names**: the row's `tenant_id` and `client_id` must be this tenant and `CLIENT_ID` (the console's own sign-in app), or the row is refused.
 
-**Admin consent is required for `minted_pat`.** The script prints the command
-(`az ad app permission admin-consent --id <CLIENT_ID>`); run it as a Cloud
-Application Administrator, Application Administrator, AI Administrator,
-Privileged Role Administrator, or a role that can grant permissions to
-applications. Then enable the row, sign in to Wardyn, and run **Check
-organisation settings** on it, in that order: the check uses your own
-connection, which is captured at sign-in and only for a row that is on. The
-Azure DevOps side (an allow list if "Restrict personal access token (PAT)
-creation" is on, and the maximum token lifespan policy) is in
-`docs/AZURE-DEVOPS.md`. If the tenant has no Azure DevOps organisation
-connected yet, the script skips this step and says so.
+> [!IMPORTANT]
+> **Admin consent is required for `minted_pat`.**
+> The script prints the command (`az ad app permission admin-consent --id <CLIENT_ID>`); run it as a Cloud Application Administrator, Application Administrator, AI Administrator, Privileged Role Administrator, or a role that can grant permissions to applications.
 
-`02-app.sh` also writes `.env.local`'s `HTTP_PORT` (default `8480`) — the
-port baked into the app registration's redirect URI. It must equal the
-`WARDYN_QUICKSTART_HTTP_PORT` used to bring the cluster up in Step 3, or the
-redirect URI won't byte-match what the browser is actually on (see Context
-above).
+- Then enable the row, sign in to Wardyn, and run **Check organisation settings** on it, in that order:
+  - the check uses your own connection, which is captured at sign-in and only for a row that is on.
+- The Azure DevOps side (an allow list if "Restrict personal access token (PAT) creation" is on, and the maximum token lifespan policy) is in [`docs/AZURE-DEVOPS.md`](../../docs/AZURE-DEVOPS.md).
+- If the tenant has no Azure DevOps organisation connected yet, the script skips this step and says so.
+
+`02-app.sh` also writes `.env.local`'s `HTTP_PORT` (default `8480`) — the port baked into the app registration's redirect URI. It must equal the `WARDYN_QUICKSTART_HTTP_PORT` used to bring the cluster up in Step 3, or the redirect URI won't byte-match what the browser is actually on (see Context above).
 
 ## Step 3 — the cluster
 
-State first: this quickstart targets the **default Docker daemon** (no
-`DOCKER_HOST` override), not the `wardyn-docker.sock` daemon other Wardyn dev
-flows use — check **both** daemons before you start, so a stray SSO
-validation cluster never lands where a live demo/e2e run expects the other
-one. Point `DOCKER_HOST` at the default daemon explicitly — **unsetting it is
-not enough**: with `DOCKER_HOST` unset, `quickstart.sh` picks the
-`wardyn-docker.sock` daemon when that socket exists
-(`wardyn_pick_docker_host`, `scripts/lib/common.sh`), and then tries to create
-a second `wardyn-entra` on the same host ports:
+- State first: this quickstart targets the **default Docker daemon** (no `DOCKER_HOST` override), not the `wardyn-docker.sock` daemon other Wardyn dev flows use;
+  - check **both** daemons before you start, so a stray SSO validation cluster never lands where a live demo/e2e run expects the other one.
+- Point `DOCKER_HOST` at the default daemon explicitly — **unsetting it is not enough**:
+  - with `DOCKER_HOST` unset, `quickstart.sh` picks the `wardyn-docker.sock` daemon when that socket exists (`wardyn_pick_docker_host`, [`scripts/lib/common.sh`](../../scripts/lib/common.sh)), and then tries to create a second `wardyn-entra` on the same host ports:
 
 ```sh
 docker ps                                                  # default daemon
@@ -180,26 +117,16 @@ WARDYN_QUICKSTART_SSH_PORT=2422 \
 deploy/kind/quickstart.sh
 ```
 
-`WARDYN_QUICKSTART_CLUSTER` overrides one line of `quickstart.sh` itself
-(`CLUSTER="${WARDYN_QUICKSTART_CLUSTER:-wardyn-quickstart}"`) — a **named**
-cluster (`wardyn-entra`) so it never collides with, and is never mistaken
-for, the plain `wardyn-quickstart` cluster you may already have up.
-
-**Ports 8480/2422 are deliberately not any port already spoken for
-elsewhere in this repo** — avoid re-using any of: `8080`, `8280`, `2322`,
-`5557`, `8390`, `8888`, `8890`, `8891`, `9999`, `8088`, `55432` (compose,
-Dex-overlay, e2e Postgres, screening-room, and other demo-take ports already
-in use across `scripts/`).
-
-Teardown for this step uses the **same** variable:
+- `WARDYN_QUICKSTART_CLUSTER` overrides one line of `quickstart.sh` itself (`CLUSTER="${WARDYN_QUICKSTART_CLUSTER:-wardyn-quickstart}"`) — a **named** cluster (`wardyn-entra`) so it never collides with, and is never mistaken for, the plain `wardyn-quickstart` cluster you may already have up.
+- **Ports 8480/2422 are deliberately not any port already spoken for elsewhere in this repo**;
+  - avoid re-using any of: `8080`, `8280`, `2322`, `5557`, `8390`, `8888`, `8890`, `8891`, `9999`, `8088`, `55432` (compose, Dex-overlay, e2e Postgres, screening-room, and other demo-take ports already in use across `scripts/`).
+- Teardown for this step uses the **same** variable:
 
 ```sh
 WARDYN_QUICKSTART_CLUSTER=wardyn-entra deploy/kind/quickstart.sh --down
 ```
 
-A bare `make kind-down` targets the chart's *default* cluster name
-(`wardyn-quickstart`) — without the override it deletes the wrong cluster (or
-reports "not found" and leaves `wardyn-entra` running).
+- A bare `make kind-down` targets the chart's *default* cluster name (`wardyn-quickstart`) — without the override it deletes the wrong cluster (or reports "not found" and leaves `wardyn-entra` running).
 
 ## Step 4 — the overlay
 
@@ -216,64 +143,44 @@ helm --kube-context kind-wardyn-entra upgrade wardyn deploy/helm/wardyn \
 kubectl --context kind-wardyn-entra -n wardyn rollout status deployment/wardyn --timeout=300s
 ```
 
-If that doesn't go `Ready`, check what's actually wrong before assuming it's
-auth:
+- If that doesn't go `Ready`, check what's actually wrong before assuming it's auth:
 
 ```sh
 kubectl --context kind-wardyn-entra -n wardyn logs \
   -l app.kubernetes.io/name=wardyn --tail=100 --all-containers
 ```
 
-`CLIENT_SECRET` comes from `.env.local` (`source deploy/azure-entra-sso/.env.local`
-first, or substitute it by hand — never paste it on the command line where
-shell history keeps it either way if you can avoid it).
+- `CLIENT_SECRET` comes from `.env.local` (`source deploy/azure-entra-sso/.env.local` first, or substitute it by hand — never paste it on the command line where shell history keeps it either way if you can avoid it).
 
-**Every `kubectl`/`helm` line above, and every one in the walk below, carries
-`--context`/`--kube-context kind-wardyn-entra` explicitly.** A context-less
-command falls back to `kubectl`'s current-context, which may be a *different*
-cluster in `~/.kube/config` (a live demo cluster, a real cluster from another
-project) — this is the same shared-host discipline `docker ps` above is for,
-just at the k8s-context layer instead of the daemon layer.
+> [!IMPORTANT]
+> **Every `kubectl`/`helm` line above, and every one in the walk below, carries `--context`/`--kube-context kind-wardyn-entra` explicitly.**
+> A context-less command falls back to `kubectl`'s current-context, which may be a *different* cluster in `~/.kube/config` (a live demo cluster, a real cluster from another project).
+> This is the same shared-host discipline `docker ps` above is for, just at the k8s-context layer instead of the daemon layer.
 
-**The confinement-floor trap:** the chart's baked-in default policy
-floors confinement at `CC2`, but this kind cluster registers no gVisor/Kata
-`RuntimeClass` (Fence/`CC1` only, same as the plain quickstart and the Dex
-overlay) — every **member** run would be refused at launch, clamped to a
-floor the cluster can't actually satisfy. `--set-file
-defaultPolicy=deploy/kind/sso/default-policy.json` rides along for exactly
-this reason: it sets `min_confinement_class: CC1`, matching what this cluster
-can really enforce, without touching `k8s.runtimeClasses`. Skip this flag and
-the People-step run in the walk below fails closed with a confinement-floor
-refusal, not an auth error — don't mistake it for one.
+- **The confinement-floor trap:** the chart's baked-in default policy floors confinement at `CC2`, but this kind cluster registers no gVisor/Kata `RuntimeClass` (Fence/`CC1` only, same as the plain quickstart and the Dex overlay);
+  - every **member** run would be refused at launch, clamped to a floor the cluster can't actually satisfy.
+- `--set-file defaultPolicy=deploy/kind/sso/default-policy.json` rides along for exactly this reason: it sets `min_confinement_class: CC1`, matching what this cluster can really enforce, without touching `k8s.runtimeClasses`.
+- Skip this flag and the People-step run in the walk below fails closed with a confinement-floor refusal, not an auth error — don't mistake it for one.
 
-**`auth.adminToken` is deliberately NOT emptied.** `values-entra.yaml` never
-sets `auth.*` at all, and `--reuse-values` carries the quickstart's inline
-admin token forward from Step 3 — it is the recovery path if the role map
-ever locks every human out (same guidance as the chart README's own
-Multi-user section). Never `--set auth.adminToken.secretRef.name=wardyn-auth`
-here: the inline-mode Secret carrying that token **does** exist on this
-install already (rendered from `auth.adminToken.value` by Step 3's install),
-but `templates/secret.yaml` only renders it while
-`secretRef.name` is empty (`{{- if and (not .Values.auth.adminToken.secretRef.name) .Values.auth.adminToken.value }}`)
-— set `secretRef.name` and that condition goes false, the block stops
-rendering, and the next `helm upgrade` deletes the Secret the Deployment's
-own `secretKeyRef` still points at. Not a clean switch to an external
-Secret that was never created — `CreateContainerConfigError`, and no way
-back to admin.
+- **`auth.adminToken` is deliberately NOT emptied.**
+
+> [!NOTE]
+> `values-entra.yaml` never sets `auth.*` at all, and `--reuse-values` carries the quickstart's inline admin token forward from Step 3 —
+>
+> it is the recovery path if the role map ever locks every human out (same guidance as [the chart README's own Multi-user section](../helm/wardyn/README.md#multi-user-adminmember-rbac)).
+
+- Never `--set auth.adminToken.secretRef.name=wardyn-auth` here: the inline-mode Secret carrying that token **does** exist on this install already (rendered from `auth.adminToken.value` by Step 3's install), but [`templates/secret.yaml`](../helm/wardyn/templates/secret.yaml) only renders it while `secretRef.name` is empty (`{{- if and (not .Values.auth.adminToken.secretRef.name) .Values.auth.adminToken.value }}`);
+  - set `secretRef.name` and that condition goes false, the block stops rendering, and the next `helm upgrade` deletes the Secret the Deployment's own `secretKeyRef` still points at.
+- Not a clean switch to an external Secret that was never created — `CreateContainerConfigError`, and no way back to admin.
 
 ## Keeping the cluster on main
 
-After Steps 3 and 4 have run once, `05-kind-deploy.sh <ref>` redeploys one
-commit: it builds every image from `git archive` of that ref under a
-per-commit tag, loads them, and makes one `helm upgrade --reuse-values` with
-the Entra overlay plus the Bedrock region and model. It does not re-run
-`quickstart.sh`, whose own upgrade carries no overlay. `06-kind-follow-main.sh`
-runs it for the newest `main` commit whose CI passed and that descends from
-the commit the cluster is running (read off its `c-<sha>` image tag), one run
-at a time, and does nothing when that commit is already deployed — run it on a
-schedule. Both need `TENANT_ID`
-and `CLIENT_ID` in the environment; the client secret stays in the cluster's
-`wardyn-entra-oidc` Secret.
+- After Steps 3 and 4 have run once, `05-kind-deploy.sh <ref>` redeploys one commit:
+  - it builds every image from `git archive` of that ref under a per-commit tag, loads them, and makes one `helm upgrade --reuse-values` with the Entra overlay plus the Bedrock region and model.
+- It does not re-run `quickstart.sh`, whose own upgrade carries no overlay.
+- `06-kind-follow-main.sh` runs it for the newest `main` commit whose CI passed and that descends from the commit the cluster is running (read off its `c-<sha>` image tag), one run at a time;
+  - and does nothing when that commit is already deployed — run it on a schedule.
+- Both need `TENANT_ID` and `CLIENT_ID` in the environment; the client secret stays in the cluster's `wardyn-entra-oidc` Secret.
 
 ```sh
 TENANT_ID=<tenant> CLIENT_ID=<app> deploy/azure-entra-sso/06-kind-follow-main.sh
@@ -281,69 +188,39 @@ TENANT_ID=<tenant> CLIENT_ID=<app> deploy/azure-entra-sso/06-kind-follow-main.sh
 
 ## The walk
 
-Evidence checklist — log each numbered row (pass/fail, timestamp, one-line
-observation) as you go.
+- Evidence checklist — log each numbered row (pass/fail, timestamp, one-line observation) as you go.
 
-1. **Browse `http://localhost:8480` — never the `127.0.0.1` URL
-   `quickstart.sh` prints.** OIDC state/PKCE cookies are host-scoped, and
-   Entra only accepts `http://` on `localhost` specifically (Context above) —
-   opening `127.0.0.1` starts the flow from one origin and completes it on
-   another, and the ONLY symptom is a bare `400 invalid state parameter` with
-   no further explanation. If you see that error, this is the first thing to
-   check, not an app-registration bug. A related failure mode: `kind`'s
-   `extraPortMappings` publish on the **IPv4** loopback only, so if this
-   host's resolver returns `::1` first for `localhost` (common on a fresh
-   Linux/WSL install), the browser will try IPv6 and get a connection
-   refused before it ever reaches Entra. If that happens, don't switch the
-   URL to `127.0.0.1` (that reintroduces the state-parameter mismatch
-   above) — instead pin `localhost` to `127.0.0.1` in `/etc/hosts`.
-2. **Sign in as `wardyn-admin`** (its UPN/password are in `.env.local`) — the
-   **App Role path**: their token's `roles` claim carries `Wardyn.Admin`,
-   which the chart's `WARDYN_OIDC_ROLE_MAP: "Wardyn.Admin=admin"` resolves to
-   admin. Confirm you land in the forced **Getting Started** flow:
+1. **Browse `http://localhost:8480` — never the `127.0.0.1` URL `quickstart.sh` prints.**
+   - OIDC state/PKCE cookies are host-scoped, and Entra only accepts `http://` on `localhost` specifically (Context above).
+   - Opening `127.0.0.1` starts the flow from one origin and completes it on another, and the ONLY symptom is a bare `400 invalid state parameter` with no further explanation.
+   - If you see that error, this is the first thing to check, not an app-registration bug.
+   - A related failure mode: `kind`'s `extraPortMappings` publish on the **IPv4** loopback only.
+   - If this host's resolver returns `::1` first for `localhost` (common on a fresh Linux/WSL install), the browser will try IPv6 and get a connection refused before it ever reaches Entra.
+   - If that happens, don't switch the URL to `127.0.0.1` (that reintroduces the state-parameter mismatch above) — instead pin `localhost` to `127.0.0.1` in `/etc/hosts`.
+2. **Sign in as `wardyn-admin`** (its UPN/password are in `.env.local`) — the **App Role path**: their token's `roles` claim carries `Wardyn.Admin`, which the chart's `WARDYN_OIDC_ROLE_MAP: "Wardyn.Admin=admin"` resolves to admin.
+   - Confirm you land in the forced **Getting Started** flow:
    - **Environment** step — confirm it renders.
-   - **People** step — add `<ENG_GROUP_OID>=user` (from `.env.local`) as a
-     console-managed mapping, **in the UI**. Then, in the same signed-in tab,
-     open `http://localhost:8480/api/v1/me/capabilities` and read
-     `session_groups`: as `wardyn-admin` it must contain both `wardyn.admin`
-     and `<ADMIN_GROUP_OID>` (from `.env.local`) — proof that
-     `groupMembershipClaims: SecurityGroup` took on the app registration
-     (`02-app.sh`'s PATCH). If `<ADMIN_GROUP_OID>` is missing, step 3 below
-     will fail before you get there. **Note:** this deliberately does not trip the console's
-     posture-flip guard (the one that warns when a role map goes from
-     empty to non-empty mid-session) — the chart's own
-     `WARDYN_OIDC_ROLE_MAP` is already non-empty (`Wardyn.Admin=admin`)
-     before this UI write, so the guard's precondition never fires; this is
-     proven by Go test, not a gap in this walk.
-   - **Egress demo**, **Secrets**, **Finish** — walk each screen to
-     completion.
-3. **Sign in as `wardyn-member`** (new browser profile / incognito — the
-   admin session's cookie is still live otherwise) — the **groups-claim
-   path**: `roles` carries `Wardyn.Member` (passes the app's "assignment
-   required" gate only, matches no `WARDYN_OIDC_ROLE_MAP` entry — the chart
-   map has none for it, by design), and `groups` carries the eng group's
-   object id, which the **console row you just added** resolves to member.
-   Confirm the same way as step 2: open
-   `http://localhost:8480/api/v1/me/capabilities` and check `session_groups`
-   contains `<ENG_GROUP_OID>` (from `.env.local`). Confirm you land in
-   member's own (unforced, since People is admin-scoped) Getting Started, and
-   **launch a run** — the assertion here is that the run **launches** (`201`,
-   pod scheduled), proving the member path works end to end, not just
-   authenticates. It won't necessarily *complete*: an actual agent turn needs
-   a model credential this runbook doesn't provision (an admin adds a model
-   provider under Settings → Model providers, and the member connects their
-   own credential for it, if you want to watch a full run).
-4. **`wardyn-outsider` — the two-gate demo.** `wardyn-outsider` has no group
-   and no App Role assignment (`03-people.sh`). Use a fresh browser profile /
-   incognito window, or sign out of Entra first, for **both** sign-ins below
-   — a live `wardyn-admin` or `wardyn-member` (or even a prior `wardyn-outsider`)
-   session in the same tab is silently reused instead of prompting for
-   credentials, and the step then "passes" without testing anything.
-   - With `appRoleAssignmentRequired: true` still set (Step 2's `02-app.sh`
-     default): sign in as `wardyn-outsider` and confirm Entra itself refuses
-     the sign-in with **AADSTS50105** ("the user is not assigned to a role
-     for the application") — **before Wardyn's own callback is ever hit**.
-     Screenshot it.
+   - **People** step — add `<ENG_GROUP_OID>=user` (from `.env.local`) as a console-managed mapping, **in the UI**.
+   - Then, in the same signed-in tab, open `http://localhost:8480/api/v1/me/capabilities` and read `session_groups`: as `wardyn-admin` it must contain both `wardyn.admin` and `<ADMIN_GROUP_OID>` (from `.env.local`) — proof that `groupMembershipClaims: SecurityGroup` took on the app registration (`02-app.sh`'s PATCH).
+   - If `<ADMIN_GROUP_OID>` is missing, step 3 below will fail before you get there.
+   - **Note:** this deliberately does not trip the console's posture-flip guard (the one that warns when a role map goes from empty to non-empty mid-session).
+   - The chart's own `WARDYN_OIDC_ROLE_MAP` is already non-empty (`Wardyn.Admin=admin`) before this UI write, so the guard's precondition never fires; this is proven by Go test, not a gap in this walk.
+   - **Egress demo**, **Secrets**, **Finish** — walk each screen to completion.
+3. **Sign in as `wardyn-member`** (new browser profile / incognito — the admin session's cookie is still live otherwise) — the **groups-claim path**: `roles` carries `Wardyn.Member` (passes the app's "assignment required" gate only, matches no `WARDYN_OIDC_ROLE_MAP` entry);
+   - the chart map has none for it, by design, and `groups` carries the eng group's object id, which the **console row you just added** resolves to member.
+   - Confirm the same way as step 2: open `http://localhost:8480/api/v1/me/capabilities` and check `session_groups` contains `<ENG_GROUP_OID>` (from `.env.local`).
+   - Confirm you land in member's own (unforced, since People is admin-scoped) Getting Started, and **launch a run**.
+   - The assertion here is that the run **launches** (`201`, pod scheduled), proving the member path works end to end, not just authenticates.
+   > [!NOTE]
+   > It won't necessarily *complete*: an actual agent turn needs a model credential this runbook doesn't provision (an admin adds a model provider under Settings → Model providers,
+   >
+   > and the member connects their own credential for it, if you want to watch a full run).
+4. **`wardyn-outsider` — the two-gate demo.** `wardyn-outsider` has no group and no App Role assignment (`03-people.sh`).
+   - Use a fresh browser profile / incognito window, or sign out of Entra first, for **both** sign-ins below.
+   - A live `wardyn-admin` or `wardyn-member` (or even a prior `wardyn-outsider`) session in the same tab is silently reused instead of prompting for credentials, and the step then "passes" without testing anything.
+   - With `appRoleAssignmentRequired: true` still set (Step 2's `02-app.sh` default):
+     - sign in as `wardyn-outsider` and confirm Entra itself refuses the sign-in with **AADSTS50105** ("the user is not assigned to a role for the application") — **before Wardyn's own callback is ever hit**.
+   - Screenshot it.
    - Toggle the gate off:
      ```sh
      source deploy/azure-entra-sso/.env.local
@@ -352,30 +229,18 @@ observation) as you go.
        --headers "Content-Type=application/json" \
        --body '{"appRoleAssignmentRequired": false}'
      ```
-     Sign in as `wardyn-outsider` again (same fresh-profile / signed-out rule
-     as above): Entra now admits the sign-in (empty `roles`, no matching
-     `groups` entry), and **Wardyn's own gate** denies it instead —
-     redirected to `/?auth_error=no_role`. Screenshot it. Two independent
-     gates, two independent denials; this is the point of the demo. Restore
-     `appRoleAssignmentRequired: true` afterward if you're continuing to use
-     this tenant for anything else.
-5. **ID-token email-claim assertion.** In the signed-in tab, open
-   `http://localhost:8480/api/v1/me` and read the `email` field: non-empty
-   means the optional `idToken.email` claim (`02-app.sh`'s PATCH) arrived and
-   the user object's `mail` attribute was actually populated. **Named
-   fallback** if it's empty: sign in with the recovery admin token
-   (`kubectl --context kind-wardyn-entra -n wardyn get secret wardyn-auth -o
-   jsonpath='{.data.admin-token}' | base64 -d`) and confirm Wardyn still
-   functions without it — `email` is best-effort here (Context above), never
-   load-bearing for anything this runbook proves.
+   - Sign in as `wardyn-outsider` again (same fresh-profile / signed-out rule as above): Entra now admits the sign-in (empty `roles`, no matching `groups` entry), and **Wardyn's own gate** denies it instead — redirected to `/?auth_error=no_role`.
+   - Screenshot it.
+   - Two independent gates, two independent denials; this is the point of the demo.
+   - Restore `appRoleAssignmentRequired: true` afterward if you're continuing to use this tenant for anything else.
+5. **ID-token email-claim assertion.** In the signed-in tab, open `http://localhost:8480/api/v1/me` and read the `email` field: non-empty means the optional `idToken.email` claim (`02-app.sh`'s PATCH) arrived and the user object's `mail` attribute was actually populated.
+   - **Named fallback** if it's empty: sign in with the recovery admin token (`kubectl --context kind-wardyn-entra -n wardyn get secret wardyn-auth -o jsonpath='{.data.admin-token}' | base64 -d`) and confirm Wardyn still functions without it — `email` is best-effort here (Context above), never load-bearing for anything this runbook proves.
 
 ## Pre-creating a person by object id
 
-On an Entra ID issuer, a person who has never signed in is set up by their
-tenant id and object id, not their `sub` (Entra's `sub` is per app
-registration and unknown until that first sign-in). See
-[docs/OPERATIONS.md](../../docs/OPERATIONS.md#tokens-for-a-person-who-never-signs-in)
-for the keying rule. Both ids are GUIDs; read them from any of these:
+- On an Entra ID issuer, a person who has never signed in is set up by their tenant id and object id, not their `sub` (Entra's `sub` is per app registration and unknown until that first sign-in).
+- See [docs/OPERATIONS.md](../../docs/OPERATIONS.md#tokens-for-a-person-who-never-signs-in) for the keying rule.
+- Both ids are GUIDs; read them from any of these:
 
 | Where | Tenant id | Object id |
 |---|---|---|
@@ -384,28 +249,22 @@ for the keying rule. Both ids are GUIDs; read them from any of these:
 | Azure CLI | `az account show --query tenantId -o tsv` | `az ad user show --id <upn> --query id -o tsv` |
 | This runbook | `TENANT_ID` in `.env.local` | `WARDYN_ADMIN_OID` / `WARDYN_MEMBER_OID` in `.env.local` (`03-people.sh`) |
 
-The object id is the user's `id` in Graph, the value the id_token's `oid`
-claim carries. Do not use the app's service principal or the app registration's
-object id. Then, signed in as an admin or `security_admin`, call
-`POST /api/v1/people` with
+- The object id is the user's `id` in Graph, the value the id_token's `oid` claim carries.
+- Do not use the app's service principal or the app registration's object id.
+- Then, signed in as an admin or `security_admin`, call `POST /api/v1/people` with
 
 ```json
 {"tenant_id":"<tenant id>","object_id":"<object id>","email":"<their email>"}
 ```
 
-which answers `201` with `"principal":"entra:<tenant id>:<object id>"`.
-No token is created for them: they sign in and create their own.
-Their first sign-in becomes that principal and writes a `person.attach` audit
-row naming the pairwise `sub` it arrived with.
+- which answers `201` with `"principal":"entra:<tenant id>:<object id>"`.
+- No token is created for them: they sign in and create their own.
+- Their first sign-in becomes that principal and writes a `person.attach` audit row naming the pairwise `sub` it arrived with.
 
 ## Playwright — what's automated vs. what this runbook is for
 
-The live Entra login flow is **not part of `make ci`** — it drives
-Microsoft's own hosted login UI, an external dependency CI cannot depend on
-being stable, reachable, or unchanged run to run. The automated suite (`make
-ci`, `scripts/run-ui-e2e.sh`) carries Wardyn's own product behavior through
-seams and Go tests instead — this runbook is what live-verifies the **IdP
-half** those seams stub out.
+- The live Entra login flow is **not part of `make ci`** — it drives Microsoft's own hosted login UI, an external dependency CI cannot depend on being stable, reachable, or unchanged run to run.
+- The automated suite (`make ci`, [`scripts/run-ui-e2e.sh`](../../scripts/run-ui-e2e.sh)) carries Wardyn's own product behavior through seams and Go tests instead — this runbook is what live-verifies the **IdP half** those seams stub out.
 
 ## Teardown
 
@@ -415,15 +274,9 @@ deploy/azure-entra-sso/teardown.sh --dry-run  # lists only, deletes nothing
 deploy/azure-entra-sso/teardown.sh --yes      # skips the prompt, for scripted use
 ```
 
-Lists the app registration, the 3 users and the 2 groups it is about to
-delete before touching anything, and refuses to delete without an explicit
-go-ahead — a `y`/`yes` at the prompt, or `--yes` to skip it. Then deletes the
-app registration (and its service principal), the 3 users, and the 2 groups.
-Prints — does not run — the cluster/Secret teardown (same
-`WARDYN_QUICKSTART_CLUSTER=wardyn-entra ... --down` line as Step 3, plus the
-`kubectl delete secret wardyn-entra-oidc` line) so an operator supervising a
-live run keeps control of when the cluster actually goes away. The very last
-step is manual and printed as a pointer, not scripted: **Azure Portal →
-Microsoft Entra ID → Manage tenants → (the throwaway tenant) → Delete** — do
-this once teardown.sh's object deletions are confirmed, per the Prelude's
-promise.
+- Lists the app registration, the 3 users and the 2 groups it is about to delete before touching anything, and refuses to delete without an explicit go-ahead.
+- A `y`/`yes` at the prompt, or `--yes` to skip it.
+- Then deletes the app registration (and its service principal), the 3 users, and the 2 groups.
+- Prints — does not run — the cluster/Secret teardown (same `WARDYN_QUICKSTART_CLUSTER=wardyn-entra ... --down` line as Step 3, plus the `kubectl delete secret wardyn-entra-oidc` line) so an operator supervising a live run keeps control of when the cluster actually goes away.
+- The very last step is manual and printed as a pointer, not scripted: **Azure Portal → Microsoft Entra ID → Manage tenants → (the throwaway tenant) → Delete**.
+- Do this once teardown.sh's object deletions are confirmed, per the Prelude's promise.

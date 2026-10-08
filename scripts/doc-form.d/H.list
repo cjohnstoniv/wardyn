@@ -1,0 +1,3 @@
+deploy/helm/wardyn/README.md
+deploy/kind/sso/README.md
+deploy/azure-entra-sso/README.md
