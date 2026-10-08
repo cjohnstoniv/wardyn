@@ -73,8 +73,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   characters uses the explicit form. Ordinary policies render unchanged. The policy-source parser
   now refuses, with a line and column, text the CLI's YAML reader would read as a different
   policy: a bare carriage return or a raw U+0085, U+2028 or U+2029; a number with a leading zero
-  (`017` is octal 15 there); and an unquoted date, `1_000`, `0b1` or `0X1F`, which it reads as a
-  timestamp or number. Quoting the value, or CRLF line endings, is accepted. It also refuses more
+  (`017` is octal 15 there); an unquoted date, `1_000`, `0b1` or `0X1F`, which it reads as a
+  timestamp or number; and a `:` straight before `,`, `]` or `}` after an unquoted flow key, which
+  it keeps as text. Quoting the value, or CRLF line endings, is accepted. It also refuses more
   than 64 levels of nesting and source over 1 MiB before parsing, so a pasted pathological
   document can no longer abort the page on a second parse. Explicit JSON mode refuses text that is
   not JSON — trailing commas, comments, single quotes, unquoted keys and other YAML-only syntax —
