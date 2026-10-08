@@ -52,7 +52,10 @@
 #   - a span or word "path.go:123" (go md ts sh) is a line citation: FAIL
 #     here, counted as a WARN everywhere else. Cite the symbol instead.
 #   - link text that is one backtick span naming a tracked path must be that
-#     path (repo-relative) and the link must point at it.
+#     path (repo-relative) and the link must point at it. Like the rule above,
+#     it applies only to a span with a '/': link text `install.sh` (a bare file
+#     name) may point at any file, for the same reason `install.sh` alone is
+#     not a reference.
 #   Skipped: fenced code, headings, spans that resolve to nothing (runtime
 #   paths such as /etc/wardyn).
 set -euo pipefail
@@ -422,7 +425,7 @@ def check_must_link(src, fails):
         sm = re.fullmatch(r'(`+)(.+?)\1', label, re.DOTALL)
         if sm:
             span = sm.group(2).strip()
-            want = named_path(src, span)
+            want = named_path(src, span) if '/' in span else None  # a bare name is not a reference
             if want is not None and not LINE_CITE.match(span):
                 tgt = m.group('target').strip().strip('<>')
                 status, _ = resolve(src, tgt)
