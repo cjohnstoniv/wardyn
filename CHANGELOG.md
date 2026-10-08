@@ -92,6 +92,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The Integrations, Launch presets, Console branding and Managed laptops operations pages are now
   bullets, tables and alerts, with every repository file they cite linked. No rule, default or limit
   changed.
+- Threat model residuals 1 to 40 are bullets, one sentence each, with every repository file they cite
+  linked. Numbers, order and wording are kept; no residual, default or limit changed.
 
 ### Fixed
 
