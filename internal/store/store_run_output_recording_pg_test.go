@@ -215,3 +215,20 @@ func TestPG_RecordingOutputOnlyTerminalBacklogIsBounded(t *testing.T) {
 		t.Fatalf("bounded terminal page %v %v", ids, err)
 	}
 }
+
+// The stale-pending list takes its age in seconds, like the retention delete:
+// Go prints a sub-millisecond duration in units a Postgres interval refuses.
+func TestPG_RecordingOutputStalePendingAgeBelowAMillisecond(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	stale := persistRun(t, t.Context(), pool, newRun(types.RunCompleted)).ID
+	claimedLater := persistRun(t, t.Context(), pool, newRun(types.RunCompleted)).ID
+	if _, err := pool.Exec(t.Context(), `INSERT INTO run_outputs (run_id, source, claimed_at)
+		VALUES ($1, 'stdout', now() - interval '1 hour'), ($2, 'stdout', now() + interval '1 hour')`, stale, claimedLater); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := pg.ListStalePendingRunOutputs(t.Context(), 500*time.Microsecond, 10)
+	if err != nil || len(ids) != 1 || ids[0] != stale {
+		t.Fatalf("stale pending at a 500-microsecond age = %v, %v; want only the row claimed an hour ago", ids, err)
+	}
+}
