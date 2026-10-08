@@ -18,6 +18,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Migration `0135_run_output_recording_recovery` adds durable recovery claims and recording-only
   output erasure fences. Preserve its erased rows across retention and backups, and grant the app
   role `SELECT, INSERT, UPDATE` on `run_output_recording_recovery`.
+- Migration `0136_components` adds the `components` table for saved custom components (organisation
+  rows and personal rows); grant the app role `SELECT, INSERT, UPDATE, DELETE` on `components`.
+- Migration `0137_run_components` adds `run_components`, the components each run launched with. Erasing
+  a person clears the content of their rows and keeps a content-free row as the run's authorization
+  record; preserve these rows with backups and grant the app role `SELECT, INSERT, UPDATE`.
 
 ### Added
 
