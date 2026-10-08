@@ -71,6 +71,11 @@ type preflightResponse struct {
 	// deployment with no such row, or one whose only Azure DevOps row is
 	// shared).
 	GitCredential *SCMAccess `json:"git_credential,omitempty"`
+	// Components is what the run is given access to (componentFacts), from the
+	// spec and the gate's answers above — the preview's rows, with the
+	// credential verdicts only this door reads. Absent for a run with no
+	// repository on a Git provider and no component.
+	Components []componentFact `json:"components,omitempty"`
 }
 
 // preflightBurst and preflightLimiterMaxPeople size the per-person preflight
@@ -470,5 +475,6 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// and seedAndAdmitWorkspace each gate at launch.
 	runRepos := append([]string{req.Repo, req.DevcontainerRepo}, repoLocatorsOf(spec.WorkspaceRepos)...)
 	resp.GitCredential = s.gitCredentialFactForRepos(ctx, oidcHumanFromContext(ctx), runRepos)
+	resp.Components = componentFacts(req, spec, scmSite, comps, resp.GitCredential)
 	writeJSON(w, http.StatusOK, resp)
 }
