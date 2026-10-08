@@ -1,7 +1,3 @@
 # kind path key words reason
 table	docs/OPERATIONS.md	| `reason` | Raised when | Shape |	PLAN §4.4: byte-stable denial table read by internal/api/authz_denied_doc_test.go and cmd/wardynd/docs_r3_guard_test.go
 sentence	docs/OPERATIONS.md	a6a3136c113995c5a35fb21d9c15718795d08a07	39	no clause joiner; four parallel "when" clauses
-sentence	docs/OPERATIONS.md	4be3d749bc57ef90c0f847f111938e2c9fe533d6	36	the only joiner left is inside the compound subject
-sentence	docs/OPERATIONS.md	992f7261929f1afcc2788084cc15bda56c25ec8f	40	the dashes enclose a parenthetical; the ";" after it was already used for the two-part split
-sentence	docs/OPERATIONS.md	f6f878773ed5a65ac2dfd00f642d28eee505f2a0	36	the dashes enclose a parenthetical
-sentence	docs/OPERATIONS.md	3285e87c2d13e3c10dfdda54f20bf40680d2575c	37	the semicolons are inside a parenthesis

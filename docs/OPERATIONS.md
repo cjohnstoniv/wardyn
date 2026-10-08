@@ -3581,7 +3581,10 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
   - A limit set later reaches new sessions but does not sever ones already open: a terminal, SSH session or UI-app session opened before the limit was set runs until it ends.
   - `deny_ui_apps` does not close an SSH port forward to the app; `deny_interactive` does.
 - **The autonomy rubric (0.8, #77).**
-  - A profile may also carry `limits.autonomy_rubric`, nine closed fields — three egress postures (`egress_open`, `egress_reviewed`, `egress_sealed`), three secret postures (`secrets_powerful`, `secrets_baseline`, `secrets_none`) and three enforced confinement classes (`confinement_cc1`, `confinement_cc2`, `confinement_cc3`) — each unset or one of four autonomy levels: `L0` attended (interactive only, supervised seeding), `L1` gated (adds non-interactive runs, but `tool_approvals` is derived to `hold`), `L2` unattended (adds `auto` approval and `seed_auto_tools`), and `L3` (adds `task_mode=exec`, the door that routes around every other gate, so it is the top rung).
+  - A profile may also carry `limits.autonomy_rubric`, nine closed fields — three egress postures (`egress_open`, `egress_reviewed`, `egress_sealed`), three secret postures (`secrets_powerful`, `secrets_baseline`, `secrets_none`) and three enforced confinement classes (`confinement_cc1`, `confinement_cc2`, `confinement_cc3`).
+    - Each is unset or one of four autonomy levels:
+      - `L0` attended (interactive only, supervised seeding), `L1` gated (adds non-interactive runs, but `tool_approvals` is derived to `hold`),
+      - `L2` unattended (adds `auto` approval and `seed_auto_tools`), and `L3` (adds `task_mode=exec`, the door that routes around every other gate, so it is the top rung).
   - Below `L3`, an interactive run with a task must use `interactive_start=agent`: the shell startup form (`interactive_start` unset or `shell`) runs the task at sandbox boot the way exec does, and is refused (`runs.interactive_start`).
   - `resolveRunAutonomy` ([`internal/api/runs_autonomy.go`](../internal/api/runs_autonomy.go)) grades the run's real posture — egress reach graded on the same union `unionRunEgress` builds, secret power, and the already-enforced confinement class — against the assigned profile's rubric and folds every field the posture matches to its **minimum** level.
   - A nil rubric, or a posture none of the nine fields caps, binds nothing (today's behaviour, unchanged).
@@ -3651,9 +3654,9 @@ A deployment that hits BOTH conditions (no role map, no admin list, AND `WARDYN_
 - Three of the reasons below are NOT member denials at all.
   - 0.7.4 added a RUN-TOKEN tier (`run_terminal`, `run_not_found`; 0.8 adds `run_kept`), raised by `internalAuth`'s liveness gate against a sandbox sidecar's own run token rather than against a person.
   - They live in this table because the action, the shape and the `reason` field are the same one an operator greps; the `actor_type` (`agent`) is what tells them apart.
-- One FIELD rides beside the reason since 0.7.4: `user_view: true` (renamed in 0.8 from `member_mode` — see [Renamed in 0.8](#renamed-in-08); pre-0.8 rows keep `member_mode`).
-  - It is on every ADMIN-TIER `403` below: the two `requireOperator` / `requireSecurityOperator` chokepoints and the in-handler refusals that raise the same two reasons.
-  - It is set when the refused caller is an admin exercising [the User view](operations/member-mode.md).
+- One FIELD rides beside the reason since 0.7.4: `user_view: true`.
+  - (Renamed in 0.8 from `member_mode` — see [Renamed in 0.8](#renamed-in-08); pre-0.8 rows keep `member_mode`.)
+  - It is on every ADMIN-TIER `403` below — the two `requireOperator` / `requireSecurityOperator` chokepoints and the in-handler refusals that raise the same two reasons — when the refused caller is an admin exercising [the User view](operations/member-mode.md).
   - It is a marker, not a reason — the `reason`, the status code and the body are unchanged, and the key is absent entirely for an ordinary member.
   - A burst of denials carrying it is an admin walking the member path, not an incident.
 - **A ceiling refusal names the policy that caused it.**
