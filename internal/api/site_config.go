@@ -812,6 +812,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		"sign_in_help_url":  saved.SignInHelpURL,
 	}
 	auditPolicyHelp(datum, saved.PolicyHelp, present["policy_help"])
+	auditComponentSettings(datum, saved.Components, present["components"])
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true
 	}
