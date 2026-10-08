@@ -36,7 +36,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   masked tail after the run ends. Durable claims support bounded restart retries; large joined
   recordings or a backlog that outlives masking coverage may remain unrecoverable. Recording
   reader permissions and durable erasure fences cover the derived copy; final stdout and pane
-  snapshots remain intact (#1831).
+  snapshots remain intact. A run's Output tab labels that output "From recording" and says its
+  full delivery could not be verified, shows a capture gap as a gap rather than a run that printed
+  nothing, and shows an erased recording as erased. Its capture-gap notice now reads "Some or all
+  of this run's output could not be recovered." for every source, and Retry after a failed read
+  keeps keyboard focus (#1831).
 - New Run's shared request builder refuses multiple workspace attachments with saved or default
   policies, preventing a referenced policy request from omitting extra attachments. Changing policy
   modes or attachments invalidates prior preflight results (#1901).
