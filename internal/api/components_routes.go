@@ -98,17 +98,16 @@ func saveRefusal(w http.ResponseWriter, reason, msg string) {
 // share an operator secret and name a literal address; a person's may not), then
 // the two the types layer leaves to the api (a reserved secret name, and a
 // shared secret the operator has not stored). "" reason means saveable.
+//
+// A reserved name is the run gate's own rule (componentSecretReserved), whatever
+// the delivery: a row the gate would refuse to attach is not saved.
 func (s *Server) componentSaveRefusal(ctx context.Context, c types.Component) (reason, msg string) {
 	if err := c.Validate(proxy.ValidDomainEntry); err != nil {
 		return reasonComponentDefinitionInvalid, "invalid component: " + err.Error()
 	}
 	var operatorHas map[string]bool
 	for i, sec := range c.Definition.Secrets {
-		reserved := nameSinkReservedSecret(sec.SecretName)
-		if sec.Delivery.Mode == types.ComponentDeliveryHeader {
-			reserved = sinkReservedSecret(sec.SecretName)
-		}
-		if reserved {
+		if componentSecretReserved(sec.SecretName) {
 			return reasonComponentDefinitionInvalid, fmt.Sprintf("invalid component: definition.secrets[%d].secret_name: %q is managed by Wardyn", i, sec.SecretName)
 		}
 		if !sec.Shared {

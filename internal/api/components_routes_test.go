@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -123,6 +124,12 @@ func TestComponents_SaveRefusals(t *testing.T) {
 		{"a secret name Wardyn manages (G-3)", hdr("wardyn-signing-key", ""), "managed by Wardyn"},
 		{"a harness sign-in blob (G-3)", hdr("wardyn-harness-anthropic-oauth", ""), "managed by Wardyn"},
 		{"a model-provider credential into the environment", `{"secrets":[{"secret_name":"` + providerSecretPrefix + `abc-key","delivery":{"mode":"env","var":"MY_KEY"}}]}`, "managed by Wardyn"},
+		// The run gate's whole reserved set, whatever the delivery: a name it refuses must not save.
+		{"a model-provider credential in a header", hdr(providerSecretPrefix+"abc-key", ""), "managed by Wardyn"},
+		{"a retired Anthropic model credential", hdr("anthropic-api-key", ""), "managed by Wardyn"},
+		{"a retired OpenAI model credential", hdr("openai-api-key", ""), "managed by Wardyn"},
+		{"the AWS sign-in sentinel", hdr(types.AWSSSOAccessTokenSecret, ""), "managed by Wardyn"},
+		{"the Azure DevOps sign-in sentinel", hdr(types.ADOEntraAccessTokenSecret, ""), "managed by Wardyn"},
 		{"a file name that is not a token", `{"secrets":[{"secret_name":"k","delivery":{"mode":"file","file":"Bad Name"}}]}`, "file"},
 	}
 	for _, c := range cases {
