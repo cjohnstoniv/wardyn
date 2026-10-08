@@ -67,6 +67,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   by default and refuses non-loopback listeners in real-tmux mode. Each backend startup mints a fresh
   admin token and derived person credentials, shared with its own Playwright process; explicit test
   token overrides remain supported. The canonical runner preserves explicit hosts and base-path URLs (#1813).
+- Escape on a New Run form with unsaved changes opens the "Leave without saving?" dialog instead of
+  doing nothing. An untouched form still leaves at once, and the Runs button and the page's own links
+  ask the same way (#1920).
 - A configured metrics listener now refuses daemon startup if its address cannot bind,
   before background workers or optional gateways start (#1902). Unset remains off.
 - The terminal takeover regression test now waits for completed input writes separately
@@ -84,9 +87,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Patch preparation refuses duplicate CHANGELOG heading keys after merging and after the
   release-commit step, including resumed candidates, before checks or publication work. (#1913)
 - **Image download verification (#1905).** The image-pin gate checks every Dockerfile curl download for a same-file checksum before use and refuses ignored failures or unsupported shell forms. Claude native downloads now pin their manifest; alternate versions require an explicit manifest checksum and native channel downloads fail clearly. AWS installer and signature downloads gain per-architecture checksums while retaining GPG verification. Staged installs and npm remain supported. The embedded code-server shell-quote issue remains tracked in #1904.
-- Escape on a New Run form with unsaved changes opens the "Leave without saving?" dialog instead of
-  doing nothing. An untouched form still leaves at once, and the Runs button and the page's own links
-  ask the same way (#1920).
 
 ## [0.8.8] — 2026-10-07
 
