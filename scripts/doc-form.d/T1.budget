@@ -1,2 +1,2 @@
-# Prose-word budget (scripts/doc-form.sh): path=N. N is the prose words of the file before this lane, so growth fails.
-threatmodel/THREAT-MODEL.md=48923
+# Prose-word budget (scripts/doc-form.sh): path=N. N is the measured prose words of this rewrite: the base count (48923) plus the words of the cell-expansion headings and summary cells, so growth fails.
+threatmodel/THREAT-MODEL.md=49117
