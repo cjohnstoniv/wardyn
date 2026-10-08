@@ -483,7 +483,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	launch := createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, adoGrade, bedrockGrade), gw: gw,
 		wsRefs: wsRefs, driveMount: driveMount, ephemeralDirs: ephemeralDirs,
-		runToken: id.Token, created: created,
+		runToken: id.Token, created: created, comps: comps,
 	}
 	launchCtx := context.WithoutCancel(ctx)
 	s.goBackground(func() { s.finishCreateRunLaunch(launchCtx, launch) })

@@ -84,6 +84,7 @@ const (
 	reasonOwnerModelCredentialErased = "model_credential_erased" // the secret this run's proxy would inject no longer exists
 	reasonOwnerModelProviderDisabled = "model_provider_disabled" // the integration supplying this run's credential, or the run's model provider, was turned off
 	reasonOwnerModelProviderGone     = "model_provider_gone"     // the model provider that authored this run's credential was deleted (or re-created under a new UID)
+	reasonOwnerComponentGone         = "component_gone"          // an organisation's component this run was launched with has since been deleted
 	// reasonOwnerUnverifiable is extendRefusal's own bucket (run_owner_authority.go):
 	// three arms (proxy config unreadable, config does not load, capability
 	// re-check itself failed) that all answer the identical client-facing fact —
@@ -883,3 +884,9 @@ const (
 	reasonComponentHostCollision          = "component_host_collision"           // a header delivery names a host that already carries a credential on the run
 	reasonComponentResidentDeliveryDenied = "component_resident_delivery_denied" // the organisation turned off env and file delivery (components.deny_resident_delivery)
 )
+
+// reasonCredentialHostCollision is dispatch's own finding (settleCredentialHosts),
+// on the failed run's run.create row: two of the credentials dispatch authored
+// are bound to one host, and the proxy carries one per host. The gate's
+// component_host_collision is the same rule asked before the run exists.
+const reasonCredentialHostCollision = "credential_host_collision"

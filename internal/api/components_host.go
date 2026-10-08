@@ -37,7 +37,7 @@ func (s *Server) newComponentHostBounds(r *http.Request, sc types.SiteConfig, sp
 		deny:         slices.Concat(ceiling.Spec.DeniedDomains, spec.DeniedDomains, workspaceDeniedEgress(wsRefs)),
 		model:        modelServingDestinations(sc),
 		serving:      s.modelServingHosts(sc),
-		credentialed: s.credentialedDestinations(r, sc, spec),
+		credentialed: credentialedDestinations(sc, spec, runIdentitySubject(r.Context(), principalFromRequest(r))),
 	}
 }
 
@@ -86,7 +86,11 @@ func modelServingDestinations(sc types.SiteConfig) []types.Destination {
 // at all (servesModel). A credential dispatch authors from a person's captured
 // sign-in on a host no configuration names — the AWS access-portal host of a
 // Bedrock sign-in — is not visible here; dispatch compares again.
-func (s *Server) credentialedDestinations(r *http.Request, sc types.SiteConfig, spec types.RunPolicySpec) []types.Destination {
+//
+// subject is the run identity's subject, which the Azure DevOps lane resolves
+// from. The gate asks with the caller's; dispatch asks again with the run
+// owner's, over the site config it reads then (settleCredentialHosts).
+func credentialedDestinations(sc types.SiteConfig, spec types.RunPolicySpec, subject string) []types.Destination {
 	var hosts []string
 	for _, g := range spec.EligibleGrants {
 		if g.Kind == types.GrantAPIKey {
@@ -94,7 +98,6 @@ func (s *Server) credentialedDestinations(r *http.Request, sc types.SiteConfig, 
 		}
 	}
 	// The pair dispatch resolves the lane from (resolveRunAutonomy does too).
-	subject := runIdentitySubject(r.Context(), principalFromRequest(r))
 	if ado, on := resolveADOEntraRun(sc, repoLocatorsOf(spec.WorkspaceRepos), subject); on {
 		hosts = append(hosts, ado.laneHosts()...)
 	}
