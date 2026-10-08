@@ -5,22 +5,16 @@ description: Generate a Wardyn sandbox policy + CLI invocation (or full pipeline
 
 # Wardyn CI — generate the config and invocation
 
-Goal: produce (a) a `RunPolicySpec` JSON, (b) the launch invocation — a
-`scripts/ci-run.sh` env block (throwaway stack, or an existing control plane via
-`WARDYN_URL`) or a direct `wardyn run` command — and (c) if asked, the pipeline
-YAML.
-Reuse the shipped machinery; never hand-roll what exists.
+- Goal: produce (a) a `RunPolicySpec` JSON, (b) the launch invocation —
+  - a [`scripts/ci-run.sh`](../../../scripts/ci-run.sh) env block (throwaway stack, or an existing control plane via `WARDYN_URL`) or a direct `wardyn run` command — and (c) if asked, the pipeline YAML.
+- Reuse the shipped machinery; never hand-roll what exists.
 
 ## Ground truth (read these, don't restate from memory)
 
-- Policy schema + field semantics: `RunPolicySpec` is in `internal/types/policy.go`,
-  `GrantSpec` is in `internal/types/types.go` — the validator is `validatePolicySpec`
-  in `internal/api/policy.go`.
-- Baseline policies: `examples/policies/` (`ci.json` = the unattended baseline;
-  `claude-llm.json` = model-access grants; that dir's README explains each).
-- The one-shot wrapper + env table + exit codes: `scripts/ci-run.sh` and `docs/CI.md`.
-- Pipeline examples to copy from: `docs/ci/github-actions.yml`,
-  `docs/ci/azure-pipelines.yml`.
+- Policy schema + field semantics: `RunPolicySpec` is in [`internal/types/policy.go`](../../../internal/types/policy.go), `GrantSpec` is in [`internal/types/types.go`](../../../internal/types/types.go) — the validator is `validatePolicySpec` in [`internal/api/policy.go`](../../../internal/api/policy.go).
+- Baseline policies: `examples/policies/` (`ci.json` = the unattended baseline; `claude-llm.json` = model-access grants; that dir's README explains each).
+- The one-shot wrapper + env table + exit codes: [`scripts/ci-run.sh`](../../../scripts/ci-run.sh) and [`docs/CI.md`](../../../docs/CI.md).
+- Pipeline examples to copy from: [`docs/ci/github-actions.yml`](../../../docs/ci/github-actions.yml), [`docs/ci/azure-pipelines.yml`](../../../docs/ci/azure-pipelines.yml).
 
 ## Recipe
 
@@ -30,8 +24,7 @@ Reuse the shipped machinery; never hand-roll what exists.
    - Agent task (e.g. claude-code fixing/refactoring) → harness mode: needs an
      existing control plane and a CI principal's model credential (step 3).
 
-2. **Author the policy from `examples/policies/ci.json`**, changing as little
-   as possible. Non-negotiable for unattended runs:
+2. **Author the policy from [`examples/policies/ci.json`](../../../examples/policies/ci.json)**, changing as little as possible. Non-negotiable for unattended runs:
    - `"first_use_approval": "always_deny"` (never `wait_for_review` — it holds
      connections for a human who isn't there).
    - `allowed_domains`: exactly the hosts the task needs — package registries,
@@ -43,16 +36,12 @@ Reuse the shipped machinery; never hand-roll what exists.
      `WARDYN_CI_SECRETS`: `ci-run.sh` refuses it.
    - Keep `auto_stop_after_sec` bounded (baseline: 3600).
 
-3. **Model access (harness mode only).** A model credential is a **person's
-   own**: a dedicated CI principal stores it once through
-   `PUT /model-providers/{id}/credential` (or the console) on the deployment
-   CI launches on. The pipeline sets `WARDYN_URL`, `WARDYN_CI_TOKEN` (that
-   principal's own `wdn_` token) and `WARDYN_CI_MODEL_PROVIDER=<id>`;
-   `ci-run.sh` checks the credential is usable and launches on that provider
-   (`docs/CI.md` § "CI's identity"). Nothing in the policy or the env block
-   carries the key. `ci-run.sh`'s throwaway stack has no person on it, so it
-   runs `exec` mode only. Subscription modes are refused in CI — do not
-   propose them.
+3. **Model access (harness mode only).**
+   - A model credential is a **person's own**: a dedicated CI principal stores it once through `PUT /model-providers/{id}/credential` (or the console) on the deployment CI launches on.
+   - The pipeline sets `WARDYN_URL`, `WARDYN_CI_TOKEN` (that principal's own `wdn_` token) and `WARDYN_CI_MODEL_PROVIDER=<id>`; `ci-run.sh` checks the credential is usable and launches on that provider ([`docs/CI.md`](../../../docs/CI.md#cis-identity) § "CI's identity").
+   - Nothing in the policy or the env block carries the key.
+   - `ci-run.sh`'s throwaway stack has no person on it, so it runs `exec` mode only.
+   - Subscription modes are refused in CI — do not propose them.
 
 4. **Validate before shipping the config**: with a control plane up, POST the
    exact create-run body to `/api/v1/runs/preflight` (dry-run, mints nothing)
@@ -67,8 +56,7 @@ Reuse the shipped machinery; never hand-roll what exists.
    `always_deny`.
 
 6. **Emit the invocation.**
-   - Pipeline job: a `ci-run.sh` env block (copy the shape from
-     `docs/ci/github-actions.yml` / `azure-pipelines.yml`) — exec mode on a
+   - Pipeline job: a `ci-run.sh` env block (copy the shape from [`docs/ci/github-actions.yml`](../../../docs/ci/github-actions.yml) / `azure-pipelines.yml`) — exec mode on a
      throwaway stack, or `WARDYN_URL` + `WARDYN_CI_TOKEN` (+
      `WARDYN_CI_MODEL_PROVIDER` for harness mode) on an existing one.
    - Direct CLI on an existing control plane: `wardyn run --agent <a>
@@ -76,8 +64,7 @@ Reuse the shipped machinery; never hand-roll what exists.
      [--model-provider <id>] --task '<t>' --policy-file <f> --wait
      --timeout 30m` with `WARDYN_URL` + `WARDYN_TOKEN` set — the CI
      principal's own `wdn_` token, not the shared `WARDYN_ADMIN_TOKEN`.
-   - State the exit-code contract (0 / task's code / 2 / 124 — table in
-     `docs/CI.md`) so the pipeline gate is explicit.
+   - State the exit-code contract (0 / task's code / 2 / 124 — table in [`docs/CI.md`](../../../docs/CI.md#exit-codes)) so the pipeline gate is explicit.
 
 ## Sanity checks before handing over
 

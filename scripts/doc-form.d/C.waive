@@ -1,0 +1,2 @@
+# kind	path	key	words	reason
+sentence	docs/CI.md	72ed27010ab3ca11ff64440e339d08fbb0c8f18b	37	one sentence of 37 words with no clause joiner (a ", which" relative clause closes it); text kept byte-identical (ledger row R0139)
