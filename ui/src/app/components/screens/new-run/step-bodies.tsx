@@ -6,7 +6,7 @@
 // The Run panel's "what to run" controls — run type, agent, run mode, and the
 // one text field each run shape needs. Purely presentational: the screen still
 // owns `state` and passes `patch` down, same contract as WorkspaceCard.
-import * as React from "react";
+import type * as React from "react";
 import type { SetupHarnessTool } from "../../../lib/types";
 import { Seg } from "./new-run-primitives";
 import { AgentPicker } from "./agent-picker";
@@ -44,16 +44,16 @@ export interface WhatToRunStepProps {
 // A command is one line, in mono, behind a prompt glyph that is decoration and
 // never part of the value or the field's name. Enter neither launches nor adds
 // a line; a pasted line break is joined by the browser.
-const CommandInput = React.forwardRef<HTMLInputElement, React.ComponentProps<typeof Input>>(function CommandInput(props, ref) {
+function CommandInput(props: React.ComponentPropsWithoutRef<typeof Input>) {
   return (
     <div className="relative">
       <span aria-hidden="true" className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 font-mono text-sm text-muted-foreground">
         $
       </span>
-      <Input ref={ref} type="text" autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false} {...props} className="pl-8 font-mono" />
+      <Input type="text" autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false} {...props} className="pl-8 font-mono" />
     </div>
   );
-});
+}
 
 // Run type, agent, run mode, then the task/seed/tool-approval fields that mode
 // needs. Task, Command and Startup command each hold their own value.
