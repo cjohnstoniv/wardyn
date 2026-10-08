@@ -187,6 +187,11 @@ const (
 	// Unlike every other kind: NOT BROKERED (no mint/approval/TTL/JTI); RESIDENT FOR THE WHOLE RUN (readable via /proc/self/environ as the agent uid);
 	// NO REVOCATION (killing the run doesn't un-disclose it). ADMIN-ONLY by default — see threatmodel/THREAT-MODEL.md §5.1a.
 	GrantEnvSecret GrantKind = "env_secret"
+	// GrantFileSecret places a stored secret in a FILE inside the sandbox at dispatch — the third DOCUMENTED EXCEPTION to the no-resident-secret invariant.
+	// Like GrantEnvSecret: NOT BROKERED (no mint/approval/TTL/JTI), RESIDENT FOR THE WHOLE RUN, NO REVOCATION (killing the run doesn't un-disclose it).
+	// The path is fixed, runner.ComponentSecretDir plus the scope's file name, never authored. ADMIN-ONLY by default for a policy author, under the same
+	// switch as GrantEnvSecret; a person's OWN secret reaches a run this way through a custom component, under the component permission.
+	GrantFileSecret GrantKind = "file_secret"
 )
 
 // GrantSpec is a credential scope description. The broker enforces the invariant: a minted
@@ -194,7 +199,8 @@ const (
 type GrantSpec struct {
 	Kind GrantKind `json:"kind"`
 	// Scope is kind-specific: {repos,permissions} for github_token; {host,header} for api_key;
-	// {host,secret_name,username?} for git_pat; {host,key_secret_ref,username?,known_hosts_secret_ref?} for ssh_key.
+	// {host,secret_name,username?} for git_pat; {host,key_secret_ref,username?,known_hosts_secret_ref?} for ssh_key;
+	// {name,secret_name} for env_secret; {file,secret_name} for file_secret.
 	Scope json.RawMessage `json:"scope"`
 	// TTL of the minted credential. Max (and default) 1h.
 	TTLSeconds int `json:"ttl_seconds,omitempty"`

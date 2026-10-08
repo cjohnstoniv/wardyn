@@ -523,6 +523,53 @@ func envSecretScopeFields(scope json.RawMessage) (name, secretName string, err e
 	return sc.Name, sc.SecretName, nil
 }
 
+// fileSecretScopeFields decodes a file_secret grant scope {file, secret_name}.
+// Both are REQUIRED (fail closed). file is the NAME the stored secret_name's
+// value is delivered under at dispatch, in runner.ComponentSecretDir
+// (resolveFileSecretGrants) — a name, never a path, so the grammar has no
+// separator and cannot start with a dot: no traversal, no hidden file, no
+// "." or "..". Strict, unlike envSecretScopeFields: the kind is new, nothing
+// shipped carries another key, and a "path" or "mode" an author expected to
+// be honoured must be refused rather than silently ignored.
+func fileSecretScopeFields(scope json.RawMessage) (file, secretName string, err error) {
+	var sc struct {
+		File       string `json:"file"`
+		SecretName string `json:"secret_name"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(scope))
+	dec.DisallowUnknownFields()
+	if err = dec.Decode(&sc); err != nil {
+		return "", "", err
+	}
+	if sc.File == "" || sc.SecretName == "" {
+		return "", "", errors.New("file_secret scope requires file and secret_name")
+	}
+	if !validFileSecretName(sc.File) {
+		return "", "", fmt.Errorf("file_secret file %q must match [a-z0-9][a-z0-9_.-]{0,62}: a file name, not a path", sc.File)
+	}
+	if !secretNameRE.MatchString(sc.SecretName) {
+		return "", "", fmt.Errorf("file_secret secret_name %q is not a valid secret name", sc.SecretName)
+	}
+	return sc.File, sc.SecretName, nil
+}
+
+// validFileSecretName is the file token grammar, [a-z0-9][a-z0-9_.-]{0,62},
+// hand-rolled for the reason validEnvVarName is.
+func validFileSecretName(s string) bool {
+	if s == "" || len(s) > 63 {
+		return false
+	}
+	for i, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case i > 0 && (c == '_' || c == '.' || c == '-'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // validEnvVarName reports whether s is a POSIX-portable, upper-case environment
 // variable name. Hand-rolled rather than regexp: one pass, no package-level
 // MustCompile, and the whole rule is three character classes wide.
