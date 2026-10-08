@@ -91,6 +91,19 @@ describe("nesting and size are checked before anything recurses", () => {
     expect(editPolicySource(nested(65), ["b"], 1, "yaml")).toMatchObject({ ok: false, message: TOO_DEEP });
   });
 
+  // The server's cap counts bytes: about 350,000 three-byte characters pass
+  // 1 MiB in UTF-8 while staying near a third of it in UTF-16 units.
+  it.each<PolicySourceFormat>(["yaml", "json"])("measures the %s limit in UTF-8 bytes", (format) => {
+    const wrap = (body: string) => (format === "json" ? `{"a":"${body}"}` : `a: ${body}`);
+    const room = (1 << 20) - wrap("").length;
+    const fits = wrap("\u20ac".repeat(Math.floor(room / 3)) + "x".repeat(room % 3));
+    expect(new TextEncoder().encode(fits).length).toBe(1 << 20);
+    expect(parsePolicySource(fits, format)).toMatchObject({ ok: true });
+    expect(parsePolicySource(wrap("\u20ac".repeat(Math.floor(room / 3) + 1)), format)).toEqual({
+      ok: false, line: 1, column: 1, message: "Policy source is larger than 1 MiB: shorten it.",
+    });
+  });
+
   // The server refuses a request body over 1 MiB, so no larger policy can launch.
   it.each<PolicySourceFormat>(["yaml", "json"])("refuses %s source over 1 MiB before reading it", (format) => {
     const fits = format === "json" ? `{"a":"${"x".repeat((1 << 20) - 8)}"}` : `a: ${"x".repeat((1 << 20) - 3)}`;
