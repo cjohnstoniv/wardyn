@@ -337,15 +337,22 @@ describe("New Run — the Run panel", () => {
     setField(await screen.findByLabelText("Title"), "Refund flow");
     expect(launch()).toBeEnabled();
 
-    await user.type(screen.getByLabelText("Title"), "{Enter}");
+    // A real Enter key press on the focused field: keydown, keypress, keyup,
+    // and the implicit submission a form would get from it.
+    const enter = async (field: HTMLElement) => {
+      field.focus();
+      await user.keyboard("{Enter}");
+    };
+    await enter(screen.getByLabelText("Title"));
     await user.click(screen.getByRole("radio", { name: /^Terminal/ }));
-    await user.type(screen.getByLabelText("Startup command (optional)"), "npm run dev{Enter}");
+    setField(screen.getByLabelText("Startup command (optional)"), "npm run dev");
+    await enter(screen.getByLabelText("Startup command (optional)"));
     expect(screen.getByLabelText("Startup command (optional)")).toHaveValue("npm run dev");
     await user.click(screen.getByRole("radio", { name: "Shell command" }));
-    await user.type(screen.getByLabelText("Command"), "make test{Enter}");
+    setField(screen.getByLabelText("Command"), "make test");
+    await enter(screen.getByLabelText("Command"));
     expect(screen.getByLabelText("Command")).toHaveValue("make test");
-    nav().getByRole("button", { name: "Workspace" }).focus();
-    await user.keyboard("{Enter}");
+    await enter(nav().getByRole("button", { name: "Workspace" }));
     expect(heading("Workspace")).toBeVisible();
 
     expect(createRunMock).not.toHaveBeenCalled();

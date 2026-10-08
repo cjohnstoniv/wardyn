@@ -68,8 +68,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   admin token and derived person credentials, shared with its own Playwright process; explicit test
   token overrides remain supported. The canonical runner preserves explicit hosts and base-path URLs (#1813).
 - Escape on a New Run form with unsaved changes opens the "Leave without saving?" dialog instead of
-  doing nothing. An untouched form still leaves at once, and the Runs button and the page's own links
-  ask the same way (#1920).
+  doing nothing. An untouched form still leaves at once. The Runs button, the page's own links, the
+  sidebar, the view switch and the browser's Back button ask the same way (#1920).
 - A configured metrics listener now refuses daemon startup if its address cannot bind,
   before background workers or optional gateways start (#1902). Unset remains off.
 - The terminal takeover regression test now waits for completed input writes separately
