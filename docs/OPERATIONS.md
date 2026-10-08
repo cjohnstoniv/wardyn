@@ -4740,7 +4740,10 @@ Delivery per install path:
 - `egress_redirects` is a list of `{from, to, token_secret_ref, token_integration_ref, ecosystem}` entries.
 - Each substitutes a public/upstream URL or host for a corporate-internal one in every run's egress, with an optional token injected proxy-side as a Bearer credential for `to`'s host (the sandbox never holds it).
 
-The egress entry a redirect adds is scoped to `to`'s **port** — the one `to` spells, else the default of the scheme `to` spells (`80` for an explicit `http://`, `443` otherwise) — the same port its TLS termination and token injection use — so a `to` on a literal IP is never trusted on some other port of that address; reach the mirror on a different port by naming that port in `to`.
+- The egress entry a redirect adds is scoped to `to`'s **port**: the one `to` spells, else the default of the scheme `to` spells (`80` for an explicit `http://`, `443` otherwise).
+- That is the same port its TLS termination and token injection use.
+- So a `to` on a literal IP is never trusted on some other port of that address.
+- Reach the mirror on a different port by naming that port in `to`.
 
 - It replaced the old `artifact_overrides` map (one entry per package ecosystem) because a corporate estate redirects container registries and internal appliances too.
 - The shape generalized to "a list of From → To pairs over any URL, host, or IP".
