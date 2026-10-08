@@ -158,7 +158,7 @@ Two statements about FIPS 140-3, kept apart:
   - Its wardynd is built with `GOFIPS140=v1.0.0-c2097c7c`, the frozen Go Cryptographic Module v1.0.0 snapshot.
   - Go's FIPS 140-3 documentation (<https://go.dev/doc/security/fips140>) gives that module's CMVP certificate as #5247 and its CAVP certificate as A6650.
   - The release job reads the setting back out of the pushed image (`go version -m` must print exactly `build GOFIPS140=v1.0.0-c2097c7c`, on both platforms) and fails if it does not; `scripts/check-fips-image.sh <image-ref> v1.0.0-c2097c7c` runs the same check by hand ([script](../../scripts/check-fips-image.sh)).
-  - That check is what makes the tag mean something: `GODEBUG=fips140=only` at run time is a diagnostic that selects no module snapshot, and passes for an ordinary build.
+  - That check makes the tag mean something: `GODEBUG=fips140=only` at run time is a diagnostic that selects no module snapshot, and passes for an ordinary build.
 
 > [!IMPORTANT]
 > **Wardyn itself is not certified.** No part of Wardyn holds a FIPS 140-3 certification, and nothing here claims one, or that a deployment running this image is compliant. Only the Go module is validated; the rest of wardynd is ordinary code around it.
@@ -303,7 +303,7 @@ docker exec -i wardyn-postgres psql -U wardyn -d wardyn \
 
 With `WARDYN_KEK=transit`, each stored credential is still sealed in Postgres (AES-256-GCM under its own data key, as above).
 
-- The data key is wrapped by your Vault's Transit engine instead, rather than a key derived from `WARDYN_AGE_KEY`.
+- The data key is wrapped by your Vault's Transit engine instead of a key derived from `WARDYN_AGE_KEY`.
 - The key-encryption key never leaves Vault, and every unwrap is one Transit `decrypt` in your Vault audit device.
 - The database alone decrypts nothing; neither does the database plus anything on the Wardyn host, once no row is sealed under the age key and `WARDYN_AGE_KEY` is unset.
 - Wardyn's boot keys are wrapped by Vault too: under the same Transit key by default, or under their own key and role when `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` is set (see the platform split below).
@@ -678,7 +678,7 @@ With `WARDYN_SECRET_STORE=vaultkv`, every stored credential's value lives in you
 - Wardyn does no at-rest cryptography for such a row.
 - The per-person keys that seal run masking copies still need a key to wrap under: `WARDYN_AGE_KEY`, or a key service (`WARDYN_KEK=transit` or `azurekv`).
 - A serving wardynd refuses to start with neither, and the chart refuses the render; the maintenance modes (`-migrate-secrets`, `-rewrap`) still run. With a key service, `WARDYN_AGE_KEY` is unset once every row is in Vault.
-- Every read is one Vault read, so it appears in your Vault audit device (with the path and the token's entity; values HMAC'd) as well as in Wardyn's audit log.
+- Every read is one Vault read, so it appears in your Vault audit device (with the path and the token's entity; values HMAC'd) and in Wardyn's audit log.
 - Wardyn's own boot keys (signing, session, UI-session, SSH host, internal CA) live there too.
 
 **Paths.** Under the mount (`WARDYN_VAULT_KV_MOUNT`, default `wardyn`) and the install's prefix (`WARDYN_VAULT_KV_PREFIX`; the chart sets the release namespace):
@@ -839,7 +839,7 @@ Leave out `purge/action` to withhold purge (see "Removing a credential" below).
 - A read derives the name from the row's owner and name and refuses a row that points to any other name or vault. It then refuses a value whose tags name another row.
 - A replace is a new **version** of the same name, and every earlier version is **disabled**: Key Vault cannot delete old versions.
 - A write lists the versions before it writes and disables only those, so it never disables a newer one; writes to one credential wait for each other across replicas.
-- Once the name holds `WARDYN_AZURE_KV_MAX_VERSIONS` versions, the next write starts a new generation: a fresh name, and the old generation is deleted. The default is 100, well under the 500 at which Key Vault's backup of a secret fails — the vault's own count decides, not the pointer row.
+- Once the name holds `WARDYN_AZURE_KV_MAX_VERSIONS` versions, the next write starts a new generation: a fresh name, and the old generation is deleted. The default is 100, well under the 500 at which Key Vault's secret backup fails — the vault's own count decides, not the pointer row.
 - A read that loaded the row just before such a write committed can find the old name already deleted. It is refused once, with no grace, and the next read follows the row to the new name.
 - Each write is one transaction in the vault's secret-create limit (300 per 10 seconds, shared with key and certificate imports), plus a version listing and one update per version it disables.
 

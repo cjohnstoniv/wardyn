@@ -21,7 +21,7 @@ flowchart LR
 
 | Gap | What's refused or unenforced | Why, or what to do |
 | --- | --- | --- |
-| ⛔ No BYOI or devcontainer builds | A `wardyn-byoi/`-prefixed image ref is refused before any pod is created. `WARDYN_ENVBUILD` devcontainer builds are Docker-only for the same reason, unaffected by `k8s.enabled`. | Ephemeral containers can't honor the selftest-then-task double-exec BYOI needs ([`internal/runner/k8s/errors.go`](../../internal/runner/k8s/errors.go)'s `errBYOIUnsupported`, [`internal/runner/k8s/exec.go`](../../internal/runner/k8s/exec.go)). |
+| ⛔ No BYOI or devcontainer builds | A `wardyn-byoi/`-prefixed image ref is refused before any pod is created. `WARDYN_ENVBUILD` devcontainer builds are Docker-only too, unaffected by `k8s.enabled`. | Same reason for both: ephemeral containers can't honor the selftest-then-task double-exec BYOI needs ([`internal/runner/k8s/errors.go`](../../internal/runner/k8s/errors.go)'s `errBYOIUnsupported`, [`internal/runner/k8s/exec.go`](../../internal/runner/k8s/exec.go)). |
 | ⛔ No `local_dir` / host-path workspace mounts | A policy with any `WorkspaceMounts` entry fails the run closed with a clear error ([`internal/runner/k8s/sandbox.go`](../../internal/runner/k8s/sandbox.go)'s `errMountsUnsupported`). Only a *local directory* source is refused; git-clone workspaces (`WorkspaceRepos`) are unaffected. | A k8s pod has no path back to an arbitrary directory on wardynd's own host. |
 | ⛔ No host-directory staging | The same `errMountsUnsupported` refusal covers any host-path mount — there's no host filesystem to stage from. A model provider's credential injection and the Bedrock AWS SSO exchange are substrate-agnostic (they happen at `wardyn-proxy`), so they work unchanged on k8s | |
 | 🟡 No in-sandbox DNS | Every sandbox pod is `DNSPolicy: DNSNone` with a single nameserver, `127.0.0.1`. Nothing listens there, so a DNS query fails FAST (connection refused) rather than a real timeout ([`internal/runner/k8s/sandbox.go`](../../internal/runner/k8s/sandbox.go)). | Only the pinned `wardyn-proxy` sidecar resolves hostnames, matching the Compose substrate's proxy-only egress posture. Parity, not a new gap, but the mechanism is k8s-specific. |
@@ -39,7 +39,7 @@ flowchart LR
 - Placement metadata cannot override the reserved labels (`wardyn.managed`, `wardyn.run-id`, `wardyn.component`) the run NetworkPolicies select on: wardynd refuses to boot, naming the key.
 
 - Wardyn sets no `cluster-autoscaler.kubernetes.io/safe-to-evict` annotation by default.
-- Setting it to `"true"` lets the cluster autoscaler evict a pod mid-run when it scales a node down, which ends a live run; setting it to `"false"` keeps the node up while a run is on it.
+- Setting it to `"true"` lets the cluster autoscaler evict a pod mid-run when it scales a node down, which ends a live run; `"false"` keeps the node up while a run is on it.
 
 - **PIDs.** `ResourceLimits.PidsLimit` is not enforced on Kubernetes: the substrate logs a warning at pod create and runs with no per-pod cap ([`internal/runner/k8s/sandbox.go`](../../internal/runner/k8s/sandbox.go)). The backstop is the node-level kubelet `podPidsLimit`.
 - **Run count.** `WARDYN_MAX_CONCURRENT_RUNS` caps how many non-terminal runs the deployment holds ([docs/ENV.md](../ENV.md)); it bounds the pods a deployment can ask for, not what a node can fit.
@@ -88,7 +88,7 @@ flowchart LR
    - Failed cleanup can be retried by the control plane's orphan sweep ([`internal/api/reconcile.go`](../../internal/api/reconcile.go), implemented here by [`internal/runner/k8s/lifecycle.go`](../../internal/runner/k8s/lifecycle.go)'s `SweepOrphanedSandboxes`), on the next boot and on its cadence after.
    - Sweep candidates must be past `undispatchedGrace`; cleanup is best-effort and can take longer when the Kubernetes API is unavailable. A user drive's claim is never touched by it.
    - Two narrowings of that window since 0.7.3. First: an ordinary stop/kill of a run whose agent pod is ALREADY gone now reclaims the siblings itself. The sandbox ref is the agent pod name, so the run id needs no live pod to read it from.
-   - Second: the sweep lists the per-run Secret and both NetworkPolicies as well as the pods. A run whose agent AND proxy pods are both gone (a deleted node takes them together) is still reachable, not stranded.
+   - Second: the sweep lists the per-run Secret and both NetworkPolicies and the pods. A run whose agent AND proxy pods are both gone (a deleted node takes them together) is still reachable, not stranded.
 2. **The kubelet measures periodically** (~10s housekeeping), so a fast enough burst can overshoot the limit before the next tick catches it.
 3. **With neither a policy-authored `disk_mib` nor a `default_disk_mib`** on the deployment's storage provider, a run's `disk_mib` is simply absent — BOTH `ephemeral-storage` keys stay off the pod. Node-level eviction (a cluster-wide, not per-run, bound) is the only thing holding the line, same shape as the PIDs gap above.
    - Whenever a limit IS set, the agent container also carries an explicit `ephemeral-storage` request: 256Mi, or the limit itself when smaller. So the scheduler never inherits the org's whole ceiling as a request (Kubernetes copies an unset request from the limit).

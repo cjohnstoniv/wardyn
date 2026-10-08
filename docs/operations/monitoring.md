@@ -19,7 +19,7 @@ flowchart LR
 
 ## Counters and gauges
 
-| Name | What it counts | |
+| Name | What it counts | Detail |
 | --- | --- | --- |
 | Runs by terminal state, approval decisions by outcome, egress denies, credential mints, sandbox launch-latency sum/count | The base counters — every one only moves on success, so two gauges sit beside them: a dead store and an idle cluster otherwise scrape identically | |
 | `wardyn_store_up` | Gauge, 1 when Postgres answers the same bounded ping `/readyz` makes. A *ping*, not proof of work: a reachable pool can still fail individual queries | |

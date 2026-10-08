@@ -89,7 +89,7 @@ Revive is refused, nothing changed, when:
 
 - The run's captured profile no longer exists, or now denies a host its git broker needs.
 - The model credential its proxy would inject has been erased, or its provider disabled.
-- The run is past its end and hasn't been extended yet — extend it first.
+- The run is past its end and not yet extended — extend it first.
 - The run is already kept by its own end, and either it's a task run (not interactive) or it's past its files grace — the agent can't be started again; start a new run instead.
 
 A live run, one lost to an `outage` or a `reboot`, or a kept run that's interactive, extended past its own end and still inside its files grace (#1061), is revivable today.
