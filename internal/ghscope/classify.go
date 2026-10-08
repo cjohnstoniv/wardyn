@@ -75,14 +75,18 @@ func Classify(req Request) (Verdict, error) {
 	return Verdict{}, fmt.Errorf("ghscope: %q is not a GitHub host this catalogue classifies", req.Host)
 }
 
+// methodOverrideHeaders are the spellings of "act as this method instead"
+// that some servers and frameworks honour.
+var methodOverrideHeaders = []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"}
+
 // methodOf is the request's method and whether it is a read. HEAD reads as
 // GET. OPTIONS, TRACE and CONNECT are not API calls and are refused. So is any
-// request carrying X-HTTP-Method-Override: whether GitHub honours it is not
+// request carrying a method-override header: whether GitHub honours one is not
 // documented, so the method the server would act on is not knowable.
 func methodOf(req Request) (read bool, method string, err error) {
 	for k := range req.Header {
-		if strings.EqualFold(k, "X-HTTP-Method-Override") {
-			return false, "", fmt.Errorf("ghscope: the request carries X-HTTP-Method-Override — the method the server acts on is not knowable")
+		if slices.ContainsFunc(methodOverrideHeaders, func(h string) bool { return strings.EqualFold(k, h) }) {
+			return false, "", fmt.Errorf("ghscope: the request carries %s — the method the server acts on is not knowable", k)
 		}
 	}
 	switch method = strings.ToUpper(strings.TrimSpace(req.Method)); method {

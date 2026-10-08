@@ -251,6 +251,7 @@ func TestClassifyRESTContentWrites(t *testing.T) {
 		"POST /contents/x", "PATCH /contents",
 		"POST /merges", "POST /merge-upstream",
 		"POST /branches/main/rename", "POST /branches/wardyn/run/x/rename",
+		"POST /branches/wardyn/run1/protection/rename", "POST /branches/feat/protection/x/rename",
 		"PUT /pulls/5/merge", "PUT /pulls/5/merge-async", "PUT /pulls/5/update-branch",
 		"POST /pulls/5/merge",
 		"POST /releases", "PATCH /releases/5", "DELETE /releases/5",

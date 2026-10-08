@@ -63,7 +63,9 @@ var capabilityPermissions = map[Capability]map[string]string{
 // an empty result handed to a minter would be the widest token there is, not
 // the narrowest. A capability that is not grantable is an ERROR for the same
 // reason ScopesFor's is in adoscope: an unclassified write must be refused,
-// not minted for.
+// not minted for. A caller MUST treat a non-nil error as "refuse": the map it
+// returns then is nil, and a nil permission map handed to a minter is the
+// all-permissions request above.
 func PermissionsFor(caps []Capability) (map[string]string, error) {
 	out := map[string]string{"metadata": levelRead}
 	for _, c := range caps {

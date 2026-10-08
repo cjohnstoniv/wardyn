@@ -48,6 +48,10 @@ func repoCapability(read bool, method string, sub []string) Capability {
 	}
 	area := sub[0]
 	switch {
+	case !read && area == "branches" && len(sub) > 2 && sub[len(sub)-1] == "rename":
+		// Before the protection rule: a branch whose own name has a
+		// "protection" segment is still renamed, and a rename moves a ref.
+		return CapRepoContentWriteREST
 	case area == "branches" && len(sub) > 2 && slices.Contains(sub[2:], "protection"):
 		// Branch protection is served only under the administration
 		// permission, reads included. A branch name may hold slashes, so the
@@ -72,7 +76,7 @@ func repoCapability(read bool, method string, sub []string) Capability {
 		return CapUnclassifiedRead
 	case slices.Contains(adminWriteAreas, area):
 		return CapRepoAdmin
-	case slices.Contains(contentWriteAreas, area), area == "branches" && len(sub) > 2 && sub[len(sub)-1] == "rename",
+	case slices.Contains(contentWriteAreas, area),
 		area == "code-scanning" && at(sub, 1) == "alerts" && slices.Contains(sub, "autofix"):
 		return CapRepoContentWriteREST
 	}
