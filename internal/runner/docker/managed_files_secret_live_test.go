@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -81,4 +82,50 @@ func execAsUser(ctx context.Context, t *testing.T, d *Driver, ref, user string, 
 		t.Logf("exec %v as %s: stdcopy warning: %v", argv, user, err)
 	}
 	return stdout.String() + stderr.String()
+}
+
+// On a real daemon an image VOLUME at or above the secret directory becomes an
+// anonymous volume at create, which a removal without RemoveVolumes leaves
+// behind: delivering into it would keep the secret after the run. The
+// delivery must refuse before writing anything. The containers here are this
+// test's own and are removed with their volumes.
+func TestManagedFiles_ASecretIsNeverDeliveredOntoAVolume_RealDocker(t *testing.T) {
+	if os.Getenv("WARDYN_TEST_DOCKER") != "1" {
+		t.Skip("set WARDYN_TEST_DOCKER=1 to run the real-Docker managed-file tests")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	d := newNetworkTestDriver(t)
+	p := runner.ComponentSecretDir + "/api-token"
+	for _, vol := range []string{"/run", runner.ComponentSecretDir} {
+		t.Run(vol, func(t *testing.T) {
+			image := commitImage(ctx, t, d, "adduser -D -u 1000 agent", "1000:1000", "VOLUME "+vol)
+			created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+				Name:   "wardyn-managed-vol-" + uuid.NewString()[:8],
+				Config: &container.Config{Image: image, Cmd: []string{"true"}},
+			})
+			if err != nil {
+				t.Fatalf("create container: %v", err)
+			}
+			t.Cleanup(func() {
+				_, _ = d.cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+			})
+			insp, err := d.cli.ContainerInspect(ctx, created.ID, client.ContainerInspectOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if volumeOverSecretDir(insp.Container) != vol {
+				t.Fatalf("the daemon reports mounts %+v; want an anonymous volume at %s for this test to mean anything", insp.Container.Mounts, vol)
+			}
+			err = d.deliverManagedFiles(ctx, created.ID, []runner.ManagedFile{
+				{Path: p, Mode: runner.ComponentSecretFileMode, AgentOwned: true, Content: []byte("volume-file-secret-0001")},
+			})
+			if err == nil || !strings.Contains(err.Error(), "outlive the sandbox") {
+				t.Fatalf("delivery onto a volume at %s = %v; it must be refused for that reason", vol, err)
+			}
+			if _, err := d.cli.ContainerStatPath(ctx, created.ID, client.ContainerStatPathOptions{Path: p}); !isNotFound(err) {
+				t.Errorf("%s exists after the refusal (stat err %v); nothing may be written", p, err)
+			}
+		})
+	}
 }

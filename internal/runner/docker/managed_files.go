@@ -11,11 +11,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -128,6 +131,11 @@ func (d *Driver) checkManagedFileImage(ctx context.Context, containerID string, 
 	if uid == 0 {
 		return 0, fmt.Errorf("docker: managed files need an image whose USER is a non-root user; this image (USER %q) runs its workload as root, which owns %s and may rename %s aside and replace the file", user, managedFileAnchors[dirs[0]], dirs[0])
 	}
+	if slices.Contains(dirs, runner.ComponentSecretDir) {
+		if v := volumeOverSecretDir(insp.Container); v != "" {
+			return 0, fmt.Errorf("docker: a secret delivered as a file must land on the container's own filesystem; this container has a volume or mount at %s (declared by the image, or by the run), so the file would be written onto it and outlive the sandbox", v)
+		}
+	}
 	for _, dir := range dirs {
 		anchor, ok := managedFileAnchors[dir]
 		if !ok {
@@ -149,6 +157,36 @@ func (d *Driver) checkManagedFileImage(ctx context.Context, containerID string, 
 		}
 	}
 	return uid, nil
+}
+
+// volumeOverSecretDir names the first volume or mount (the image's VOLUME
+// declarations, which the daemon backs with an anonymous volume at create, and
+// every mount the container has) at, above or below the secret directory's
+// chain from its anchor down, or "" when there is none. A file extracted there
+// would land on the volume rather than the container's rootfs, and an
+// anonymous volume outlives the container (removal does not take it), so the
+// secret would survive the run and its owner's erasure.
+func volumeOverSecretDir(insp container.InspectResponse) string {
+	var dests []string
+	for _, m := range insp.Mounts {
+		dests = append(dests, m.Destination)
+	}
+	if insp.Config != nil {
+		dests = append(dests, slices.Collect(maps.Keys(insp.Config.Volumes))...)
+	}
+	slices.Sort(dests)
+	anchor := managedFileAnchors[runner.ComponentSecretDir]
+	for _, d := range dests {
+		if d = path.Clean(d); pathWithin(runner.ComponentSecretDir, d) || pathWithin(d, anchor) {
+			return d
+		}
+	}
+	return ""
+}
+
+// pathWithin reports whether p is root or lies under it (both clean, absolute).
+func pathWithin(p, root string) bool {
+	return p == root || root == "/" || strings.HasPrefix(p, root+"/")
 }
 
 // managedFileUID is the uid a workload runs as under USER user: numeric as

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/system"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -574,6 +575,82 @@ func TestCreateSandbox_RefusesAMisplacedSecretBeforeCreatingAnything(t *testing.
 		}
 		if len(fd.networks) != 0 || len(fd.containers) != 0 || len(fd.copies) != 0 {
 			t.Errorf("%s: the refusal created objects on the daemon: %d networks, %d containers, %d copies", f.Path, len(fd.networks), len(fd.containers), len(fd.copies))
+		}
+	}
+}
+
+// An image that declares a volume over the secret directory's chain gets an
+// anonymous volume there at create, and the daemon would extract the file onto
+// it: a volume outlives the container, so the secret would survive the run and
+// its owner's erasure. Refused before any copy; a volume elsewhere, or a
+// ceiling-only delivery, is unaffected.
+func TestCreateSandbox_ASecretIsNeverDeliveredOntoAVolume(t *testing.T) {
+	const onVolume = "would be written onto it and outlive the sandbox"
+	for _, tc := range []struct {
+		name    string
+		volumes []string
+		files   []runner.ManagedFile
+		want    string // "" means delivered
+	}{
+		{name: "VOLUME /run", volumes: []string{"/run"}, want: onVolume},
+		{name: "VOLUME /run/wardyn", volumes: []string{"/run/wardyn"}, want: onVolume},
+		{name: "VOLUME on the secret directory", volumes: []string{runner.ComponentSecretDir}, want: onVolume},
+		{name: "VOLUME below the anchor", volumes: []string{"/run/lock"}, want: onVolume},
+		{name: "VOLUME /run with a trailing slash", volumes: []string{"/run/"}, want: onVolume},
+		{name: "VOLUME elsewhere", volumes: []string{"/data"}},
+		{name: "a sibling sharing the prefix", volumes: []string{"/runner"}},
+		{name: "ceiling only, VOLUME /run", volumes: []string{"/run"},
+			files: []runner.ManagedFile{{Path: runner.ManagedFileDir + "/managed-settings.json", Content: []byte("{}")}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newManagedFake()
+			f.imageVolumes = map[string][]string{"busybox:latest": tc.volumes}
+			d := newTestDriver(f)
+			spec := managedSecretSpec()
+			if tc.files != nil {
+				spec.ManagedFiles = tc.files
+			}
+			_, err := d.CreateSandbox(context.Background(), spec)
+			started := slices.Contains(f.startedNames, agentContainerName(spec.RunID))
+			if tc.want == "" {
+				if err != nil || len(f.copies) != 1 || !started {
+					t.Fatalf("err = %v, %d copies, started = %v; want delivered", err, len(f.copies), started)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want a refusal containing %q", err, tc.want)
+			}
+			if len(f.copies) != 0 || started {
+				t.Errorf("the refusal still copied %d archives / started the agent = %v", len(f.copies), started)
+			}
+		})
+	}
+}
+
+// The check reads every mount the container has, not only image volumes: a
+// bind or volume mount at, above or below the chain refuses too.
+func TestVolumeOverSecretDir(t *testing.T) {
+	for _, tc := range []struct {
+		mounts  []string
+		volumes []string
+		want    string
+	}{
+		{},
+		{mounts: []string{"/home/agent/work", "/home/agent/drive"}},
+		{mounts: []string{"/run"}, want: "/run"},
+		{mounts: []string{runner.ComponentSecretDir + "/api-token"}, want: runner.ComponentSecretDir + "/api-token"},
+		{mounts: []string{"/home/agent/work"}, volumes: []string{"/run/wardyn"}, want: "/run/wardyn"},
+	} {
+		insp := container.InspectResponse{Config: &container.Config{Volumes: map[string]struct{}{}}}
+		for _, m := range tc.mounts {
+			insp.Mounts = append(insp.Mounts, container.MountPoint{Destination: m})
+		}
+		for _, v := range tc.volumes {
+			insp.Config.Volumes[v] = struct{}{}
+		}
+		if got := volumeOverSecretDir(insp); got != tc.want {
+			t.Errorf("mounts %v volumes %v: volumeOverSecretDir = %q, want %q", tc.mounts, tc.volumes, got, tc.want)
 		}
 	}
 }
