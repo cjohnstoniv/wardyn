@@ -274,7 +274,8 @@ test("viewing a policy shows its fields: id, min confinement, egress and eligibl
   // "Barrier" and its chip shows the user label "Wall" — the CC2 wire code lives
   // only in the chip tooltip + the raw-JSON escape hatch, never as visible copy.
   await expect(sheet.getByText("Policy ID")).toBeVisible();
-  await expect(sheet.getByText("Barrier")).toBeVisible();
+  // The collapsed policy document below also has a "Barrier" section; the grid's label comes first.
+  await expect(sheet.getByText("Barrier", { exact: true }).first()).toBeVisible();
   await expect(sheet.getByText("Created")).toBeVisible();
   await expect(sheet.getByText("Updated")).toBeVisible();
   await expect(sheet.getByText("Wall").first()).toBeVisible();
