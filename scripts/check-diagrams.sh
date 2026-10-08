@@ -6,7 +6,9 @@
 # (rendered via mermaid-cli), (b) pass the label-truth manifest — each
 # load-bearing label string must exist BOTH at its cited source and in a
 # diagram, so a renamed enum AND a stale/typo'd diagram label each fail CI —
-# and (c) pass the diagram style rules below.
+# and (c) pass the diagram style rules below. A local SVG the docs show
+# (`![…](x.svg)`, `<img src>`, `<source srcset>`) counts as a diagram for (b):
+# its <text>/<tspan> content joins the label haystack.
 #
 # Usage: scripts/check-diagrams.sh [--render-png DIR]   (PNGs for visual review)
 set -euo pipefail
@@ -15,7 +17,8 @@ cd "$ROOT"
 
 DOCS=(README.md ARCHITECTURE.md threatmodel/THREAT-MODEL.md docs/AZURE-DEVOPS.md
       docs/operations/monitoring.md docs/operations/run-lifetime.md
-      docs/operations/kubernetes-known-gaps.md docs/operations/secrets-and-keys.md)
+      docs/operations/kubernetes-known-gaps.md docs/operations/secrets-and-keys.md
+      RELEASING.md)
 RENDER_DIR=""
 [ "${1:-}" = "--render-png" ] && RENDER_DIR="${2:?--render-png needs a dir}"
 
@@ -70,6 +73,56 @@ for f in "$TMP"/*.mmd; do
   fi
 done
 
+# ── images: R9 alt text, and SVG <text> into the label haystack ──────────────
+# Outside code fences. A local .svg must exist; its <text>/<tspan> content is
+# written to $TMP/<name>.svgtxt, one text node per line. Remote images (badges)
+# are checked for alt text only.
+python3 - "$TMP" "${DOCS[@]}" <<'PY' || fail=1
+import os, re, sys
+import xml.etree.ElementTree as ET
+tmp, docs = sys.argv[1], sys.argv[2:]
+md_img = re.compile(r'!\[([^]]*)\]\(')
+html_img = re.compile(r'<img\b[^>]*>', re.I)
+alt_attr = re.compile(r'\balt\s*=\s*"([^"]*)"', re.I)
+svg_refs = [re.compile(r'!\[[^]]*\]\(([^)]+\.svg)\)'),
+            re.compile(r'<img[^>]*src="([^"]+\.svg)"'),
+            re.compile(r'<source[^>]*srcset="([^"]+\.svg)"')]
+rc, svgs = 0, 0
+for doc in docs:
+    fenced = False
+    for no, line in enumerate(open(doc, encoding='utf-8'), 1):
+        if line.lstrip().startswith('```'):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        for m in md_img.finditer(line):
+            if not m.group(1).strip():
+                print(f"  FAIL R9 {doc}:{no}: image without alt text: {line.strip()}"); rc = 1
+        for tag in html_img.findall(line):
+            a = alt_attr.search(tag)
+            if not a or not a.group(1).strip():
+                print(f"  FAIL R9 {doc}:{no}: <img> without alt text: {tag}"); rc = 1
+        for rx in svg_refs:
+            for ref in rx.findall(line):
+                if re.match(r'[a-z]+:', ref):
+                    continue
+                path = os.path.normpath(os.path.join(os.path.dirname(doc), ref))
+                try:
+                    root = ET.parse(path).getroot()
+                except (OSError, ET.ParseError) as e:
+                    print(f"  FAIL svg {doc}:{no}: {ref} unreadable: {e}"); rc = 1
+                    continue
+                texts = [''.join(el.itertext()).strip() for el in root.iter()
+                         if isinstance(el.tag, str) and el.tag.rsplit('}', 1)[-1] == 'text']
+                name = os.path.splitext(os.path.basename(path))[0]
+                with open(os.path.join(tmp, name + '.svgtxt'), 'w', encoding='utf-8') as out:
+                    out.write('\n'.join(t for t in texts if t) + '\n')
+                svgs += 1
+print(f"checked images in {len(docs)} docs; {svgs} SVG reference(s) read")
+sys.exit(rc)
+PY
+
 # ── label-truth manifest: diagram label -> the source that must contain it ───
 # Format: <needle>\t<file>. Both sides are required: the needle must appear at
 # the cited source AND in some extracted diagram, so neither can drift alone.
@@ -78,11 +131,13 @@ done
 # removed); no diagram or prose in DOCS names it any more, so a both-sides
 # entry would fail on the diagram half. Re-add the entry — do not weaken the
 # rule — if a doc starts naming it again.
+HAY=("$TMP"/*.mmd)
+for f in "$TMP"/*.svgtxt; do [ -e "$f" ] && HAY+=("$f"); done
 while IFS=$'\t' read -r needle src; do
   [ -z "$needle" ] && continue
   case "$needle" in \#*) continue;; esac
   grep -qF -- "$needle" "$src" || { echo "  FAIL label-truth: '$needle' not found in $src"; fail=1; }
-  grep -qF -- "$needle" "$TMP"/*.mmd || { echo "  FAIL label-truth: '$needle' is in no mermaid diagram"; fail=1; }
+  grep -qF -- "$needle" "${HAY[@]}" || { echo "  FAIL label-truth: '$needle' is in no mermaid diagram or SVG text"; fail=1; }
 done <<'MANIFEST'
 PENDING	internal/types/types.go
 STARTING	internal/types/types.go
@@ -133,6 +188,8 @@ PROSE
 # R5 no `direction` inside a subgraph — silently discarded once an edge crosses it
 # R7 ≤3 `<br/>` per node label — more is a bullet list drawn as one blob
 # R8 every fence needs an edge, unless marked `%% nesting` (containment, not flow)
+# R9 every `![alt](…)` and `<img alt="…">` in a DOCS file has non-empty alt text;
+#    `alt=""` fails (checked in the image scan above, not per fence)
 for f in "$TMP"/*.mmd; do
   awk -v name="$(basename "$f")" -v maxlabel=32 '
     function label(lab) {
