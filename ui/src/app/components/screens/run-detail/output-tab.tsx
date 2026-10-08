@@ -157,7 +157,11 @@ export function OutputTab({
 
   const o = out!;
   const pane = o.source === "pane_snapshot";
-  const recording = o.source === "recording";
+  // A recording the server could not recover from (missing, invalid or not
+  // mask-covered) arrives as an empty recording-source gap row. It shows the
+  // approved O4 frame: Command output and the gap notice, with no recovery claim.
+  const unrecovered = o.source === "recording" && o.capture_gap && o.output === "";
+  const recording = o.source === "recording" && !unrecovered;
   const sourceLabel = recording ? RUN_OUTPUT.sourceRecording : pane ? RUN_OUTPUT.sourcePane : RUN_OUTPUT.sourceStdout;
   // The warnings that limit what the bytes mean describe the region, with or without a body.
   const recoveredId = `${noticeId}-recovered`;
@@ -188,7 +192,7 @@ export function OutputTab({
         {recording && <Notice id={recoveredId}>{RUN_OUTPUT.recordingRecovered}</Notice>}
         {o.mask_scope === "globals_only" && <Notice>{RUN_OUTPUT.globalsOnly}</Notice>}
         {o.capture_gap && <Notice id={gapId}>{RUN_OUTPUT.captureGap}</Notice>}
-        {o.incomplete && !recording && <Notice>{RUN_OUTPUT.incomplete}</Notice>}
+        {o.incomplete && o.source !== "recording" && <Notice>{RUN_OUTPUT.incomplete}</Notice>}
         {o.truncated && <Notice>{RUN_OUTPUT.truncated}</Notice>}
         {pane && <p className="text-xs text-muted-foreground">{RUN_OUTPUT.paneCaption}</p>}
       </div>

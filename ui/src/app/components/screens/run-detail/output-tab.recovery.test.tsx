@@ -85,6 +85,22 @@ const ROWS: Row[] = [
   ["gap-malformed", { ...gapRow, output: "" }, "sourceStdout", ["captureGap"], null],
   ["gap-uncovered", { ...gapRow, output: "" }, "sourceStdout", ["captureGap"], null],
   ["gap-partial-stdout", { ...gapRow, output: PARTIAL }, "sourceStdout", ["captureGap"], null],
+  // The server's own row for a missing, invalid or mask-uncovered recovery
+  // (recordingOutputGap): recording source, incomplete, gap, empty. Drawn as O4.
+  [
+    "gap-recording-unrecovered (server wire)",
+    { source: "recording", complete: true, incomplete: true, capture_gap: true, output: "" },
+    "sourceStdout",
+    ["captureGap"],
+    null,
+  ],
+  [
+    "gap-recording-unrecovered, live",
+    { source: "recording", complete: false, captured_at: undefined, incomplete: true, capture_gap: true, output: "" },
+    "sourceStdout",
+    ["captureGap"],
+    null,
+  ],
   [
     "gap-partial-recording",
     { ...recRow, capture_gap: true, output: PARTIAL },

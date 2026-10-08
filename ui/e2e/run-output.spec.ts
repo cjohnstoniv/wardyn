@@ -145,6 +145,24 @@ test.describe("Run output tab", () => {
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("");
   });
 
+  test("a recording the server could not recover from is drawn as a plain gap, with no recovery claim", async ({
+    page,
+  }) => {
+    // The server's own row for a missing, invalid or mask-uncovered recovery.
+    await page.route(OUTPUT_GLOB, (route) =>
+      route.fulfill({ json: recording({ capture_gap: true, output: "" }) }),
+    );
+    await openOutputTab(page);
+    const pre = page.getByRole("region", { name: RUN_OUTPUT.sourceStdout });
+    await expect(pre).toBeVisible();
+    await expect(pre).toHaveAccessibleDescription(RUN_OUTPUT.captureGap);
+    await expect(page.getByText(RUN_OUTPUT.sourceRecording)).toHaveCount(0);
+    await expect(page.getByText(RUN_OUTPUT.recordingRecovered)).toHaveCount(0);
+    await expect(page.getByText(RUN_OUTPUT.incomplete)).toHaveCount(0);
+    await expect(page.getByText(RUN_OUTPUT.emptyFinal)).toHaveCount(0);
+    expect(await pre.evaluate((el) => el.textContent)).toBe("");
+  });
+
   test("every notice at 390 px: recovery, mask, gap, tail-limit in order, nothing clipped", async ({ page }) => {
     await page.route(OUTPUT_GLOB, (route) =>
       route.fulfill({ json: recording({ mask_scope: "globals_only", capture_gap: true, truncated: true }) }),
