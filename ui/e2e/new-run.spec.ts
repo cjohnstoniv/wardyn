@@ -50,6 +50,8 @@ async function expectLaunchReachable(page: Page, height: number) {
   const launch = page.getByRole("button", { name: "Launch run" });
   for (const panel of ["run", "workspace", "access", "policy"] as const) {
     await goToNewRunPanel(page, panel);
+    // Over the page's own scroller, so the wheel scrolls the page.
+    await page.getByRole("heading", { name: "New run" }).hover();
     await page.mouse.wheel(0, 400);
     await expect(launch).toBeVisible();
     await launch.scrollIntoViewIfNeeded();
@@ -73,7 +75,8 @@ test.describe("New run — one page", () => {
     await openNewRun(page);
     // The wizard rendered inside a Dialog; nothing modal should be present.
     await expect(page.getByRole("dialog")).toHaveCount(0);
-    await expect(page.getByRole("heading", { name: "What to run" })).toBeVisible();
+    // It opens on the Run panel, the first of the four.
+    await expect(page.getByRole("heading", { name: "Run", exact: true, level: 2 })).toBeVisible();
   });
 
   // The form's fields follow the run mode. Interactive is the default, and an
@@ -326,7 +329,10 @@ test.describe("New run — no barrier can be built (#214)", () => {
     // view the click came from. So this proves the actual destination, not
     // just the URL: the Environment step itself, not the read-only member
     // recap plain /setup used to strand this caller on.
+    // The typed title makes the draft dirty, and this screen's own links ask
+    // before they leave it (#1920).
     await route.click();
+    await page.getByRole("alertdialog", { name: "Leave without saving?" }).getByRole("button", { name: "Discard changes" }).click();
     await expect(page).toHaveURL(/\/admin\/setup\?step=environment/);
     await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible();
   });
@@ -847,6 +853,9 @@ test.describe("New run rail — credentials and recording are read, not asserted
       await expect(rail(page).getByText("Barrier", { exact: true })).toBeHidden();
       for (const panel of ["run", "workspace", "access", "policy"] as const) {
         await goToNewRunPanel(page, panel);
+        // Reachable, as on the desktop pins: at 320px the console shell is
+        // itself a little taller than the viewport, so the document scrolls.
+        await page.getByRole("button", { name: "Launch run" }).scrollIntoViewIfNeeded();
         const box = (await page.getByRole("button", { name: "Launch run" }).boundingBox())!;
         expect(box.y, `Launch top edge on ${panel}`).toBeGreaterThanOrEqual(0);
         expect(box.y + box.height, `Launch bottom edge on ${panel}`).toBeLessThanOrEqual(size.height);
