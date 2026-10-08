@@ -170,6 +170,23 @@ test.describe("New run — one page", () => {
     await expect(page.getByTestId("policy-document").getByText("Allow-all egress (block-list only)")).toBeVisible();
   });
 
+  // The editor's own confirmation is a dialog like any other on this screen:
+  // Escape closes it and is consumed there, so it never also leaves New Run.
+  test("Escape in the Switch to JSON confirmation closes it and stays on New Run", async ({ page }) => {
+    await openNewRun(page);
+    const spec = await editNewRunPolicy(page);
+    const before = await spec.inputValue();
+    await page.getByTestId("policy-format-switch").getByRole("button", { name: "JSON" }).click();
+    const confirm = page.getByRole("alertdialog", { name: "Switch to JSON?" });
+    await expect(confirm).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(confirm).toHaveCount(0);
+    await expect(page).toHaveURL(/\/runs\/new$/);
+    // Nothing was converted, and the draft is still not dirty: Escape now leaves at once.
+    await expect(page.getByLabel("Spec (YAML)")).toHaveValue(before);
+  });
+
   // The Edit-hosts dialog's job — pick hosts, set the unlisted rule, block hosts
   // outright — is the source itself now. New Run's editor carries no Fields
   // rail (#1922; Policies keeps it): a key is typed, and the read view names
