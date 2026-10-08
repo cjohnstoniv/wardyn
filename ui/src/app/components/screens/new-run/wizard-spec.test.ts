@@ -303,7 +303,7 @@ describe("buildSpec — runType (agent run vs governed command)", () => {
   });
 
   it("emits task_mode: exec for a governed command", () => {
-    const { run } = buildSpec({ ...initialWizardState(), runType: "command", task: "npm test" });
+    const { run } = buildSpec({ ...initialWizardState(), runType: "command", command: "npm test" });
     expect(run.task_mode).toBe("exec");
     expect(run.task).toBe("npm test");
   });

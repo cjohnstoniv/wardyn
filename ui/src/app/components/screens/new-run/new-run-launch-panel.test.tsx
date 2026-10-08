@@ -52,6 +52,7 @@ function renderPanel(over: Partial<NewRunLaunchPanelProps>) {
     noBarrier: false,
     mode: "batch",
     task: "do it",
+    title: "A run",
     policyMode: "custom",
     specParsedOk: true,
     selectedPolicyId: undefined,

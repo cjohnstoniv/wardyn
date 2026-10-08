@@ -3,18 +3,21 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// New Run's "What to run" section body — split out because new-run-screen.tsx
-// sits at the file-size gate's ceiling (scripts/check-file-size.sh, 1000
-// lines), same reason as policy-lane.ts/wizard-spec.ts/use-launch.ts. Purely
-// presentational: the screen still owns `state` and passes `patch` down, same
-// contract as WorkspaceCard.
+// The Run panel's "what to run" controls — run type, agent, run mode, and the
+// one text field each run shape needs. Purely presentational: the screen still
+// owns `state` and passes `patch` down, same contract as WorkspaceCard.
+import * as React from "react";
 import type { SetupHarnessTool } from "../../../lib/types";
-import { SectionCard, Seg } from "./new-run-primitives";
+import { Seg } from "./new-run-primitives";
 import { AgentPicker } from "./agent-picker";
+import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
+import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
 import { Field } from "../../wardyn/form-primitives";
 import { RUN_MODE } from "../../wardyn/copy";
+import { NEW_RUN_FLOW } from "../../wardyn/copy/new-run-flow";
+import { ISSUE_TARGET } from "./new-run-launch-gates";
 import { effectiveToolApprovals } from "./policy-lane";
 import type { WizardState } from "./wizard-types";
 
@@ -25,14 +28,41 @@ export interface WhatToRunStepProps {
   isInteractive: boolean;
   agentName: string;
   harnesses: SetupHarnessTool[] | undefined;
+  /** The model provider picker, which sits between the run mode and the field
+   *  that mode selects. */
+  provider: React.ReactNode;
+  /** The required Task or Command is empty; `describedBy` names the line above
+   *  Launch while it is the one that says so. */
+  taskInvalid: boolean;
+  taskDescribedBy: string | undefined;
+  /** The run's tool_rules in one line (the rail's own sentence), or null. */
+  toolRules: string | null;
+  /** Reveals Policy on the tool rules. */
+  onToolRules: () => void;
 }
 
-// "What to run" — run type, agent, run mode, and the task/seed/tool-approval
-// fields each mode needs. Moved verbatim out of new-run-screen.tsx.
-export function WhatToRunStep({ state, patch, isAgent, isInteractive, agentName, harnesses }: WhatToRunStepProps) {
+// A command is one line, in mono, behind a prompt glyph that is decoration and
+// never part of the value or the field's name. Enter neither launches nor adds
+// a line; a pasted line break is joined by the browser.
+const CommandInput = React.forwardRef<HTMLInputElement, React.ComponentProps<typeof Input>>(function CommandInput(props, ref) {
   return (
-    <SectionCard title="What to run">
-      <div className="space-y-4">
+    <div className="relative">
+      <span aria-hidden="true" className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 font-mono text-sm text-muted-foreground">
+        $
+      </span>
+      <Input ref={ref} type="text" autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false} {...props} className="pl-8 font-mono" />
+    </div>
+  );
+});
+
+// Run type, agent, run mode, then the task/seed/tool-approval fields that mode
+// needs. Task, Command and Startup command each hold their own value.
+export function WhatToRunStep({
+  state, patch, isAgent, isInteractive, agentName, harnesses, provider, taskInvalid, taskDescribedBy, toolRules, onToolRules,
+}: WhatToRunStepProps) {
+  const toolApprovals = effectiveToolApprovals(state.agent, state.toolApprovals);
+  return (
+      <>
         {/* The choice that proves a run needn't involve AI at all. */}
         <Seg
           label="Run type"
@@ -52,6 +82,7 @@ export function WhatToRunStep({ state, patch, isAgent, isInteractive, agentName,
             Hidden for Shell command, which is unattended by definition. */}
         {isAgent && (
           <Seg
+            id={ISSUE_TARGET.RUN_MODE}
             label="Run mode"
             value={state.mode}
             onChange={(id) => patch({ mode: id as WizardState["mode"] })}
@@ -67,6 +98,8 @@ export function WhatToRunStep({ state, patch, isAgent, isInteractive, agentName,
             ]}
           />
         )}
+
+        {provider}
 
         {isInteractive ? (
           // What an interactive run actually configures is what greets you
@@ -105,13 +138,11 @@ export function WhatToRunStep({ state, patch, isAgent, isInteractive, agentName,
                 htmlFor="nr-seed"
                 hint="Runs at boot, before you attach. Leave it blank to come up idle instead."
               >
-                <Textarea
+                <CommandInput
                   id="nr-seed"
-                  rows={2}
-                  className="font-mono"
                   placeholder="npm ci && npm run dev"
-                  value={state.task}
-                  onChange={(e) => patch({ task: e.target.value })}
+                  value={state.startupCommand}
+                  onChange={(e) => patch({ startupCommand: e.target.value })}
                 />
               </Field>
             )}
@@ -150,15 +181,28 @@ export function WhatToRunStep({ state, patch, isAgent, isInteractive, agentName,
                   : "Run verbatim in the sandbox. No agent, no model — the same governance either way."
               }
             >
-              <Textarea
-                id="nr-task"
-                rows={4}
-                required
-                className={isAgent ? undefined : "font-mono"}
-                placeholder={isAgent ? "Fix the flaky test in payments/refund_test.go" : "make test"}
-                value={state.task}
-                onChange={(e) => patch({ task: e.target.value })}
-              />
+              {isAgent ? (
+                <Textarea
+                  id={ISSUE_TARGET.TASK}
+                  rows={4}
+                  required
+                  placeholder="Fix the flaky test in payments/refund_test.go"
+                  value={state.task}
+                  onChange={(e) => patch({ task: e.target.value })}
+                  aria-invalid={taskInvalid || undefined}
+                  aria-describedby={taskDescribedBy}
+                />
+              ) : (
+                <CommandInput
+                  id={ISSUE_TARGET.TASK}
+                  required
+                  placeholder="make test"
+                  value={state.command}
+                  onChange={(e) => patch({ command: e.target.value })}
+                  aria-invalid={taskInvalid || undefined}
+                  aria-describedby={taskDescribedBy}
+                />
+              )}
             </Field>
             {/* Autonomous agent runs only — a shell command has no tool
                 calls to approve, and codex has no external approval
@@ -166,7 +210,7 @@ export function WhatToRunStep({ state, patch, isAgent, isInteractive, agentName,
             {isAgent && (
               <Seg
                 label="Tool approvals"
-                value={effectiveToolApprovals(state.agent, state.toolApprovals)}
+                value={toolApprovals}
                 onChange={(id) => patch({ toolApprovals: id as WizardState["toolApprovals"] })}
                 hint={
                   state.agent === "codex-cli"
@@ -177,15 +221,25 @@ export function WhatToRunStep({ state, patch, isAgent, isInteractive, agentName,
                   { id: "auto", label: "Auto — the sandbox is the boundary" },
                   {
                     id: "hold",
-                    label: "Hold in Wardyn — every tool call parks as an approval",
+                    label: NEW_RUN_FLOW.HOLD_LABEL,
                     disabled: state.agent === "codex-cli",
                   },
                 ]}
               />
             )}
+            {/* Which calls a hold actually stops is the policy's tool rules:
+                the rail's own sentence, and the way to them. Rule editing stays
+                in Policy. */}
+            {isAgent && toolApprovals === "hold" && (
+              <div className="-mt-2 flex flex-wrap items-baseline gap-2 text-xs text-muted-foreground">
+                {toolRules && <span>{toolRules}</span>}
+                <Button type="button" variant="link" size="sm" className="h-auto p-0 text-xs" onClick={onToolRules}>
+                  {NEW_RUN_FLOW.TOOL_RULES_LINK}
+                </Button>
+              </div>
+            )}
           </>
         )}
-      </div>
-    </SectionCard>
+      </>
   );
 }

@@ -64,11 +64,6 @@ export const RAIL_CREDENTIAL = {
   // residency "sandbox", Bedrock family. The operator's own sentence.
   SANDBOX_BEDROCK:
     "Model credential — AWS credentials sign inside the sandbox, so this run holds them for its lifetime.",
-  // Whose credential that is, in the Barrier chip's shape because it is the
-  // same kind of fact: a bound, stated up front. OWNERSHIP, not status — it
-  // must not reuse "Your AWS sign-in" (a SIGNED-IN success chip, #541), which
-  // would tell a person who had not signed in that they had.
-  SANDBOX_BEDROCK_CHIP_PER_USER: "Per-person AWS sign-in",
   // Nothing resolved: the rail states no residency it was not given. Only a
   // dry run of this exact body can settle it.
   RESOLVED_AT_LAUNCH: "Resolved at launch.",

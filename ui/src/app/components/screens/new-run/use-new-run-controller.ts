@@ -28,6 +28,7 @@ import {
   seedAllowedDomains,
   primaryWorkspaceId,
   resolvedModelProviders,
+  runPromptText,
   titleFromTask,
   workspacePin,
   type RunPrefill,
@@ -35,7 +36,8 @@ import {
 } from "./wizard-types";
 import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import { useLaunch } from "./use-launch";
-import { launchGates } from "./new-run-launch-gates";
+import { launchGates, preflightHolds, withPreflightIssues } from "./new-run-launch-gates";
+import { useGuardedNavClick, useRequestLeave, useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { providerCandidates as candidatesForAgent, providerGate } from "./model-provider-lane";
 import { useModelProviderPick } from "./use-model-provider-pick";
 import { useNewRunPolicy } from "./use-new-run-policy";
@@ -145,13 +147,18 @@ export function useNewRunController() {
   // answer the server's own resolver gives.
   const { drive: userDrive, deniedByProfile: driveDeniedBy, unavailable: driveUnavailable } = useUserDrive();
 
-  // #1197 L2: the title default tracks the task's first line until the
-  // operator writes their own. Keyed on state.task (and the edited flag) alone,
-  // so it never fires on an unrelated field's change.
+  // #1197 L2: the title default tracks the first line of the Task (or the
+  // Command) until the operator writes their own, shown in the field and
+  // editable. A terminal-started interactive run has nothing to derive it from:
+  // Title stays empty there and holds Launch until typed (#1922). Keyed on that
+  // source text (and the edited flag) alone, so it never fires on an unrelated
+  // field's change.
+  const titleSource =
+    state.runType !== "agent" ? state.command : state.mode === "interactive" && state.interactiveStart === "shell" ? "" : state.task;
   React.useEffect(() => {
     if (titleUserEdited) return;
-    setState((s) => ({ ...s, title: titleFromTask(s.task) }));
-  }, [state.task, titleUserEdited]);
+    setState((s) => ({ ...s, title: titleFromTask(titleSource) }));
+  }, [titleSource, titleUserEdited]);
 
   // An untouched form opens on the starters that follow the model providers,
   // once /setup/status has named them: the policy body and the Network seed.
@@ -304,7 +311,8 @@ export function useNewRunController() {
   const gates = launchGates({
     isAgent,
     mode: state.mode,
-    task: state.task,
+    task: runPromptText(state),
+    title: state.title,
     policyMode,
     specParsedOk: policy.parsed.ok,
     selectedPolicyId: state.selectedPolicyId,
@@ -356,7 +364,7 @@ export function useNewRunController() {
     merged: policy.merged,
     onLaunchError: policy.adoDoor.notifyLaunchError,
     autoCheck: {
-      local: !gates.problem && !gates.referenceWorkspaceBlocked && !gates.workspaceUnavailable && !policy.noBarrierOnHost,
+      local: gates.issues.length === 0 && !gates.referenceWorkspaceBlocked && !gates.workspaceUnavailable && !policy.noBarrierOnHost,
       // No runner configured: Launch is not refused, so the backend row never holds it.
       backendArm: !policy.noBarrierOnHost && !!availableClasses,
       modelArm: isAgent && !isInteractive,
@@ -397,36 +405,60 @@ export function useNewRunController() {
   const onPickPolicy = (id: string) => patch({ selectedPolicyId: id });
   const onPolicyModeChange = (mode: PolicyMode) => setPolicyMode(mode);
 
-  // Rulebook §8: Esc backs out quietly, with no prompt for an untouched form.
+  // Every reason Launch is held, the form's own and preflight's, in the order
+  // the line above Launch names them. The launch panel derives the same list
+  // from the same inputs; the panel nav counts it.
+  const issues = withPreflightIssues(
+    gates.issues,
+    preflightHolds({
+      isAgent,
+      isInteractive,
+      agentName,
+      noBarrier: policy.noBarrierOnHost,
+      runnerUnknown: !availableClasses,
+      preflightFresh,
+      setupItems: preflightResult?.setup_items,
+    }),
+    agentName,
+  );
+
+  // Rulebook §8: Esc backs out quietly, with no prompt for an untouched form,
+  // and with the shared unsaved dialog for a dirty one (#1920).
   //
   // "Untouched" is the WHOLE form, not four scalar fields: an edited policy
   // body, an attached workspace, a changed barrier or run mode are all work
   // this would throw away. One whole-state comparison rather than a field list,
-  // so a control added to this screen cannot quietly fall outside it.
-  //
-  // ponytail: a DIRTY form ignores Esc rather than prompting to discard — the
-  // explicit discard prompt the rulebook asks for needs copy M4 does not draw,
-  // and the ghost "Runs" button is still one click away. Wire the prompt when
-  // the mock carries its words.
+  // so a control added to this screen cannot quietly fall outside it. Which
+  // panel is on screen is not part of the draft, so it is never dirty.
   const dirty = submittedDraft !== draftSnapshot && (
     policyMode !== "custom" ||
     specText !== pristineSpec.current ||
     JSON.stringify(state) !== JSON.stringify(initialWizardState(pristineCc, undefined, modelProviders)));
+  // What the shared guard holds for this draft: the words the person typed.
+  useUnsavedGuard("new-run", dirty, () =>
+    [state.title, state.description, runPromptText(state), policyMode === "custom" ? specText : ""].filter(Boolean).join("\n\n"),
+  );
+  const requestLeave = useRequestLeave();
+  // Esc and the ghost Runs button leave through here, and this screen's own
+  // links through guardLink: at once when nothing is dirty, after Discard
+  // changes otherwise.
+  const leave = React.useCallback(() => requestLeave(() => void navigate("/runs")), [requestLeave, navigate]);
+  const guardLink = useGuardedNavClick(navigate);
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // defaultPrevented is load-bearing: Radix's DismissableLayer preventDefaults
       // Escape on document capture and THEN dismisses, but the event still
-      // reaches window — so closing a Select or the Add-workspace dialog was also
-      // leaving the screen.
-      if (e.key !== "Escape" || e.defaultPrevented || dirty) return;
-      void navigate("/runs");
+      // reaches window — so closing a Select, the Add-workspace dialog or the
+      // unsaved dialog itself was also leaving the screen.
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      leave();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [dirty, navigate]);
+  }, [leave]);
 
   return {
-    navigate, prefill, state, setTitleUserEdited,
+    leave, guardLink, issues, prefill, state, setTitleUserEdited,
     patch, knownTitles, isAgent, isInteractive,
     agentName, harnesses, workspaces, caps,
     modelProviders, setAddWsOpen, userDrive, driveDeniedBy,

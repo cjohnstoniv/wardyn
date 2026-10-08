@@ -468,10 +468,13 @@ export function PolicyPanel({
               from. Only rendered on a parsed document — there is no spec object
               to edit otherwise, the same gate the Insert buttons take. */}
           {parsed.ok && (
-            <ToolRulesSection
-              spec={parsed.spec}
-              onSpecChange={(next) => onChange(JSON.stringify(next, null, 2))}
-            />
+            // The id is where New Run's "Tool rules" link lands.
+            <div id={`policy-tool-rules-${instance}`}>
+              <ToolRulesSection
+                spec={parsed.spec}
+                onSpecChange={(next) => onChange(JSON.stringify(next, null, 2))}
+              />
+            </div>
           )}
 
           {/* push_rules gets the identical treatment (#57): the one field that

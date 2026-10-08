@@ -11,20 +11,19 @@
 // no screen state — every sentence it shows is derived UP in the screen, so the
 // rail cannot describe one run while Launch sends another.
 //
-// It stays a FIXED 320px beside the form and wraps UNDER it below lg, sections
-// side by side. Squeezing a 320px rail into a phone column is how the
-// consequences of a choice end up unreadable exactly where they are hardest to
-// scroll back to.
+// It stays a FIXED 320px beside the panels from lg up, bounded to the viewport
+// with its own scroll. Below lg it is the page's persistent footer instead: the
+// decision block and Launch always on screen, the sections behind one toggle.
+// ONE element restyled by the breakpoint — never two rails in the
+// accessibility tree, and never a second Launch.
 import * as React from "react";
-import { Link } from "react-router-dom";
-import { Loader2, TriangleAlert } from "lucide-react";
-import type { SetupModelProvider } from "../../../lib/types";
+import { ChevronRight, Loader2, TriangleAlert } from "lucide-react";
 import { Button, buttonVariants } from "../../ui/button";
-import { ConfinementChip, RiskBadge } from "../../wardyn/primitives";
-import { AGENTS } from "../../../lib/workspace-providers-copy";
+import { cn } from "../../ui/utils";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
-import { NO_BARRIER, RAIL, RAIL_CHECK, RAIL_PROVIDER, RAIL_SETUP } from "../../wardyn/copy";
+import { RAIL } from "../../wardyn/copy";
+import { NEW_RUN_FLOW } from "../../wardyn/copy/new-run-flow";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { useOperator, useUserViewSuperAdmin } from "../../wardyn/operator-context";
 import { useViewAccess } from "../../wardyn/console-view";
@@ -42,26 +41,13 @@ import type { RunRailProps } from "./new-run-rail-types";
 import { useDraftIdentity } from "./use-run-checks";
 import { getAuthGeneration } from "../../../lib/api/core";
 import { RunRailSummary } from "./new-run-rail-summary";
-
-/** The exact sentence R5b/R5c's gate names — NOT_GRANTED for R5b;
- *  DEFAULT_OFF_ONLY with no other candidate, DEFAULT_OFF otherwise, for R5c —
- *  shared by ModelProviderSection's own inline line (new-run-rail-credentials.tsx)
- *  and RunRail's launch-problem caption (F4, Opus review round 2): the caption
- *  is suppressed ONLY when launch.problem is exactly this string, never for
- *  some OTHER, higher-priority problem (an empty title, …) that happens to be
- *  showing while a gate is also active. undefined with no gate (R9's shape, or
- *  the ordinary R1-R4/R6-R8 ones). */
-function gateSentence(modelProvider: RunRailProps["modelProvider"]): string | undefined {
-  const gate = modelProvider?.gate;
-  if (!modelProvider || !gate) return undefined;
-  if (gate.kind === "not_granted") return RAIL_PROVIDER.NOT_GRANTED(modelProvider.harnessLabel);
-  const name = gate.provider.name ?? gate.provider.id;
-  return modelProvider.candidates.length === 0
-    ? RAIL_PROVIDER.DEFAULT_OFF_ONLY(name, modelProvider.harnessLabel)
-    : RAIL_PROVIDER.DEFAULT_OFF(name, modelProvider.harnessLabel);
-}
+import { RailHold, RailVerdict } from "./new-run-rail-decision";
+import { shownIssue } from "./new-run-launch-gates";
 
 export function RunRail({
+  panel,
+  onIssue,
+  guardLink,
   governanceProfile,
   governanceContact,
   savedPolicy,
@@ -90,8 +76,6 @@ export function RunRail({
   const userViewSuperAdmin = useUserViewSuperAdmin();
   const access = useViewAccess();
   const canSetUpBarrier = operator || (access === "session-user" && userViewSuperAdmin);
-  // M1 S1: only rows that need attention; `satisfied` stays hidden.
-  const setupRows = (preflight.result?.setup_items ?? []).filter((i) => i.status === "missing" || i.status === "unverified");
   // Both of finding 1's facts, read rather than asserted: where the model
   // credential lands, and whether this deployment records anything at all.
   // `recordingDisabled` is tri-state — undefined until /healthz answers.
@@ -99,18 +83,41 @@ export function RunRail({
   const door = useModelAccessDoor();
 
   // Focus returns to Launch, not to #main-content (which would drop the
-  // member at the top of the form they were mid-way through), when this
-  // rail's own control opened the door. The door owns the return target: the
-  // rail's own sign-in control unmounts the moment the state it described
-  // clears (a completed sign-in), so by the time the dialog's onCloseAutoFocus
-  // runs, document.activeElement — what a bare openDoor() would have
-  // captured — is a detached node and focusOpener() fails, falling through to
-  // #main-content; a separate effect here racing Radix's own FocusScope exit
-  // trap cannot reliably win either. Passing Launch explicitly as `returnTo`
-  // makes it the captured opener directly.
+  // member at the top of the form they were mid-way through), when a launch
+  // or preflight refusal opened the door. The door owns the return target, so
+  // nothing here races the dialog's own focus restoration.
   const launchRef = React.useRef<HTMLButtonElement>(null);
 
-  const onProviderSignIn = (p: SetupModelProvider) => door.openDoor({ for: { provider: p.id }, returnTo: launchRef.current });
+  // Below lg: whether the sections are showing. A view preference, not part
+  // of the draft.
+  const [sectionsOpen, setSectionsOpen] = React.useState(false);
+  // Below lg the rail is a sticky footer over the page's own scroller, so that
+  // scroller reserves the footer's MEASURED height (it grows with an open
+  // summary or a wrapped refusal): a control brought into view by focus never
+  // lands underneath it. 1024px is the theme's lg breakpoint.
+  const asideRef = React.useRef<HTMLElement>(null);
+  React.useEffect(() => {
+    const aside = asideRef.current;
+    const scroller = aside?.closest<HTMLElement>("main");
+    if (!aside || !scroller || typeof window.matchMedia !== "function") return;
+    const wide = window.matchMedia("(min-width: 1024px)");
+    const sync = () => {
+      scroller.style.scrollPaddingBottom = wide.matches ? "" : `${aside.offsetHeight}px`;
+    };
+    const observer = new ResizeObserver(sync);
+    observer.observe(aside);
+    wide.addEventListener("change", sync);
+    sync();
+    return () => {
+      observer.disconnect();
+      wide.removeEventListener("change", sync);
+      scroller.style.scrollPaddingBottom = "";
+    };
+  }, []);
+
+  // The issue named above Launch: the first one, unless the panel on screen
+  // already prints it beside its own control.
+  const shown = launch.issue ? shownIssue([launch.issue], panel) : null;
 
   // The server refused this click for the person's own model credential (422,
   // reason model_credential — the class failure-block.tsx grades a dead run by).
@@ -193,19 +200,43 @@ export function RunRail({
   }, [refusal, door]);
 
   return (
-    // A sticky box is clamped by its containing block — with
-    // ceiling + tool rules + 3 warnings (member/warnings path) the rail's
-    // real content runs ~700-730px, below the fold at 1280x650 with no way
-    // to reach Launch. Bounded to the viewport with its own scroll.
+    // Bounded to the viewport with its own scroll: with ceiling + tool rules +
+    // 3 warnings the rail's real content runs past the fold at 1280x650. The
+    // sections take the scroll first; a decision block too tall for what is
+    // left joins the aside's own scroll, so its reason is never clipped and
+    // Launch stays reachable.
     //
     // 100vh - 5rem, not -3rem: the sticky container is app-shell.tsx's
     // <main> (its own overflow-y:auto scroller), which starts below the
     // h-14 (3.5rem/56px) header — sticky's `top-6` (1.5rem/24px) offset is
     // relative to that scroller, not the viewport, so the rail's stuck
     // position sits at 3.5rem+1.5rem = 5rem from the viewport top, not 1.5rem.
-    <aside className="h-fit rounded-xl border border-border bg-card p-4 lg:sticky lg:top-6 lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto">
-      <p className="mb-3 text-sm font-semibold text-foreground">What this run can do</p>
+    <aside
+      ref={asideRef}
+      aria-label={NEW_RUN_FLOW.RAIL_TITLE}
+      className="scroll-thin sticky bottom-0 z-10 -mx-6 -mb-6 flex max-h-[60vh] flex-col overflow-y-auto border-t border-border bg-card px-6 py-3 lg:top-6 lg:bottom-auto lg:z-auto lg:mx-0 lg:mb-0 lg:h-fit lg:max-h-[calc(100vh-5rem)] lg:rounded-xl lg:border lg:p-4"
+    >
+      <button
+        type="button"
+        aria-expanded={sectionsOpen}
+        aria-controls="nr-rail-sections"
+        onClick={() => setSectionsOpen((open) => !open)}
+        className="flex w-full shrink-0 items-center gap-1.5 py-0.5 text-left text-sm font-semibold text-foreground lg:hidden"
+      >
+        <ChevronRight className={cn("size-3 shrink-0", sectionsOpen && "rotate-90")} aria-hidden="true" />
+        {NEW_RUN_FLOW.RAIL_TITLE}
+      </button>
+      <p className="mb-3 hidden shrink-0 text-sm font-semibold text-foreground lg:block">{NEW_RUN_FLOW.RAIL_TITLE}</p>
 
+      {/* Focusable so a keyboard can scroll it; the summary comes before the
+          decision block in reading order at every width. */}
+      <div
+        id="nr-rail-sections"
+        tabIndex={0}
+        role="group"
+        aria-label={NEW_RUN_FLOW.RAIL_TITLE}
+        className={cn("scroll-thin my-2 max-h-48 overflow-y-auto lg:my-0 lg:block lg:max-h-none lg:min-h-24", !sectionsOpen && "hidden")}
+      >
       <RunRailSummary
         governanceProfile={governanceProfile}
         governanceContact={governanceContact}
@@ -222,8 +253,11 @@ export function RunRail({
         agentRow={agentRow}
         modelProvider={modelProvider}
         recordingDisabled={recordingDisabled}
-        onProviderSignIn={onProviderSignIn}
+        guardLink={guardLink}
       />
+      </div>
+
+      <RailVerdict preflight={preflight} />
 
       {launch.error && (
         // key={launch.errorSeq}: a re-announce of the SAME sentence still
@@ -241,6 +275,8 @@ export function RunRail({
         </p>
       )}
       {launch.error && <PolicyRemedy policy={launch.policy} className="mt-1 block" />}
+
+      <RailHold launch={launch} shown={shown} onIssue={(issue) => onIssue?.(issue)} canSetUpBarrier={canSetUpBarrier} guardLink={guardLink} />
 
       {/* Preflight lives on the Policy panel, next to the document it checks —
           one button, not two competing ones. Its result stays here, beside
@@ -269,128 +305,6 @@ export function RunRail({
           Launch run
         </Button>
       </div>
-      {/* A disabled button that doesn't say why is a dead end: without
-          client-side validation, an empty form would launch and the server's
-          rejection would arrive after the fact. Suppressed ONLY when
-          launch.problem IS the gate's (R5c's) own sentence — Opus review
-          round 2, F4: ModelProviderSection above already names that exact
-          fact inline, beside the select itself, so repeating it below would
-          only echo it — but a DIFFERENT, higher-priority problem (an empty
-          title, an unparseable policy, …) must still show here even while a
-          gate is also active, since it's a separate reason nothing has
-          launched yet. */}
-      {launch.problem && !launch.inFlight && launch.problem !== gateSentence(modelProvider) && (
-        <p className="mt-2 text-center text-xs text-muted-foreground">
-          {launch.problem}
-          {/* f-f4: the same CTA, under the same operator/super-admin rule, as
-              the no-barrier line below. */}
-          {launch.problem === RAIL_SETUP.BACKEND_BLOCK && canSetUpBarrier && (
-            <>
-              {" "}
-              <Link to={NO_BARRIER.ADMIN_ROUTE} className="font-medium text-info hover:underline">
-                {NO_BARRIER.CTA}
-              </Link>
-              .
-            </>
-          )}
-          {launch.problemLink && (
-            <>
-              {" "}
-              <Link to={launch.problemLink.to} className="font-medium text-info hover:underline">
-                {launch.problemLink.label}
-              </Link>
-            </>
-          )}
-        </p>
-      )}
-      {/* #214 — the one control that genuinely cannot work says so beside
-          itself, not in a tooltip, with a route to the step that fixes it.
-          A separate line from `problem` above (never both: the Barrier
-          section's own TierPicker card already gives the detailed reason;
-          this is Launch's own, short pointer to the fix).
-
-          #1328 review round 2, R2-1 — the CTA itself renders only for a
-          caller who can actually reach the Environment step: an operator
-          (already resolves NO_BARRIER.ADMIN_ROUTE directly, whichever view
-          they're in) or a super admin in the User view (#1335: session-user
-          AND /me's user_view_super_admin — ViewGate's own "to-admin"
-          interstitial asks before switching, see NO_BARRIER's doc comment).
-          Everyone else reads the reason alone, a security admin in the User
-          view included; there is nothing behind that route they may open. */}
-      {launch.noBarrier && !launch.inFlight && (
-        <p className="mt-2 text-center text-xs text-muted-foreground">
-          {NO_BARRIER.LAUNCH_REASON}
-          {canSetUpBarrier && (
-            <>
-              {" "}
-              <Link to={NO_BARRIER.ADMIN_ROUTE} className="font-medium text-info hover:underline">
-                {NO_BARRIER.CTA}
-              </Link>
-              .
-            </>
-          )}
-        </p>
-      )}
-
-      {(preflight.checking || preflight.notChecked) && (
-        <p data-testid="preflight-check-state" className="mt-2 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-          {preflight.checking ? (
-            <>
-              <Loader2 className="size-3 animate-spin" />
-              {RAIL_CHECK.CHECKING}
-            </>
-          ) : (
-            RAIL_CHECK.NOT_CHECKED
-          )}
-        </p>
-      )}
-
-      {preflight.error && (
-        <p
-          key={preflight.errorSeq}
-          role="alert"
-          className="mt-3 flex items-start gap-1.5 text-xs text-danger"
-        >
-          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-          <span>
-            <span className="sr-only">{RAIL.PREFLIGHT_ERROR_LABEL}</span> {preflight.error}
-          </span>
-        </p>
-      )}
-      {/* Unframed: a bordered box inside the rail card is a card in a card
-          (CONSOLE-RULES §9). A divider is what separates a section from the
-          section above it. */}
-      {preflight.result && (
-        <div className="mt-4 border-t border-border pt-3" data-testid="preflight-result">
-          <div className="mb-1.5 flex flex-wrap items-center gap-2">
-            {preflight.result.overall_risk && <RiskBadge level={preflight.result.overall_risk} />}
-            <ConfinementChip value={preflight.result.enforced_confinement_class} />
-          </div>
-          {setupRows.length > 0 && (
-            <div className="mb-1.5">
-              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{RAIL_SETUP.HEADING}</p>
-              <ul className="space-y-0.5 text-xs">
-                {setupRows.map((r) => (
-                  <li key={r.id} className={r.kind === "backend" && r.status === "missing" ? "text-danger" : "text-warning"}>
-                    {r.label}
-                    {r.detail ? ` — ${r.detail}` : ""}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {preflight.result.warnings && preflight.result.warnings.length > 0 ? (
-            <ul className="list-disc space-y-0.5 pl-4 text-xs text-warning">
-              {preflight.result.warnings.map((w, i) => (
-                <li key={i}>{w}</li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-xs text-muted-foreground">{AGENTS.EFFECTIVE_NONE}</p>
-          )}
-        </div>
-      )}
-
       {/* #386's launch door (§2.4): opened automatically on a git_credential
           422, and closable without launching — the screen owns the popup
           (use-ado-connect.ts), this dialog only asks. `org` is the 422

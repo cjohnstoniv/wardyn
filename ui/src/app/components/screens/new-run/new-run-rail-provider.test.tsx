@@ -14,7 +14,7 @@
 // providers_ungranted fact.
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../../lib/api/health", () => ({
@@ -29,6 +29,7 @@ vi.mock("../settings/harness-login-pane", () => ({
 }));
 
 import { RunRail } from "./new-run-rail";
+import { RunProviderPicker } from "./run-panel";
 import { RAIL_CREDENTIAL, RAIL_PROVIDER } from "../../wardyn/copy";
 import { RAIL_MODEL_ACCESS, MODEL_ACCESS_BANNER } from "../../wardyn/model-access-copy";
 import { CLAUDE_DOOR, CONNECTIONS, DOOR, KEY_DOOR } from "../../wardyn/copy/door";
@@ -52,34 +53,49 @@ function baseLaunch(overrides: Partial<ComponentProps<typeof RunRail>["launch"]>
   };
 }
 
-function renderRail(opts: {
+// The provider's two homes, composed as the screen composes them (#1922): the
+// picker on the Run panel, and — when a test is about the rail — the rail with
+// the Run panel on screen. `launch.problem` is named as the issue it is.
+function renderProvider(opts: {
   status: Parameters<typeof WithDoor>[0]["status"];
   modelProvider?: ComponentProps<typeof RunRail>["modelProvider"];
   showModelWarning?: boolean;
   launch?: Partial<ComponentProps<typeof RunRail>["launch"]>;
+  rail?: boolean;
+  issueInline?: boolean;
 }) {
+  const m = opts.modelProvider;
+  const problem = opts.launch?.problem ?? null;
+  const withRail = opts.rail || opts.launch !== undefined || opts.showModelWarning !== undefined;
   render(
     <WithDoor status={opts.status} path="/runs/new" operator={false} principal="bob@acme.example">
-      <RunRail
-        cc="CC1"
-        showModelWarning={opts.showModelWarning ?? false}
-        startup="It starts."
-        showHoldNote={false}
-        toolRules={null}
-        unattended={false}
-        launch={baseLaunch(opts.launch)}
-        preflight={{ error: null, errorSeq: 0, result: null }}
-        modelProvider={opts.modelProvider}
-        adoDialog={{
-          open: false,
-          connecting: false,
-          org: "",
-          blockedUrl: null,
-          onConfirm: () => {},
-          onFallbackClick: () => {},
-          onCancel: () => {},
-        }}
-      />
+      {m && (m.candidates.length > 0 || m.gate) && <RunProviderPicker modelProvider={m} />}
+      {withRail && (
+        <RunRail
+          panel="run"
+          cc="CC1"
+          showModelWarning={opts.showModelWarning ?? false}
+          startup="It starts."
+          showHoldNote={false}
+          toolRules={null}
+          unattended={false}
+          launch={baseLaunch({
+            ...opts.launch,
+            issue: problem ? { panel: "run", focus: "nr-provider", text: problem, inline: opts.issueInline } : null,
+          })}
+          preflight={{ error: null, errorSeq: 0, result: null }}
+          modelProvider={m}
+          adoDialog={{
+            open: false,
+            connecting: false,
+            org: "",
+            blockedUrl: null,
+            onConfirm: () => {},
+            onFallbackClick: () => {},
+            onCancel: () => {},
+          }}
+        />
+      )}
     </WithDoor>,
   );
 }
@@ -87,7 +103,7 @@ function renderRail(opts: {
 describe("R1 — one candidate: a static line, no picker (QC-1)", () => {
   it("names the provider and states residency from its kind — no Select at all", async () => {
     const status = providerStatus([{ provider: bedrock, state: "live" }]);
-    renderRail({
+    renderProvider({
       status,
       modelProvider: { candidates: [bedrock], access: status.provider_access, selectedId: bedrock.id, onChange: () => {}, changeNote: null, harnessLabel: "Claude Code" },
     });
@@ -98,7 +114,7 @@ describe("R1 — one candidate: a static line, no picker (QC-1)", () => {
 
   it("R4: a key/token/subscription kind reads the proxy sentence instead", async () => {
     const status = providerStatus([{ provider: gateway, state: "live" }]);
-    renderRail({
+    renderProvider({
       status,
       modelProvider: { candidates: [gateway], access: status.provider_access, selectedId: gateway.id, onChange: () => {}, changeNote: null, harnessLabel: "Claude Code" },
     });
@@ -110,7 +126,7 @@ describe("R1 — one candidate: a static line, no picker (QC-1)", () => {
 describe("R1 — one candidate, not connected: the R3 line and its door render under the static line", () => {
   it("bedrock_sso: names AWS and its button opens that provider's sign-in door", async () => {
     const status = providerStatus([{ provider: bedrock, state: "not_configured" }]);
-    renderRail({
+    renderProvider({
       status,
       modelProvider: { candidates: [bedrock], access: status.provider_access, selectedId: bedrock.id, onChange: () => {}, changeNote: null, harnessLabel: "Claude Code" },
     });
@@ -123,7 +139,7 @@ describe("R1 — one candidate, not connected: the R3 line and its door render u
 
   it("anthropic_subscription: names Claude and its button opens the Claude door", async () => {
     const status = providerStatus([{ provider: claude, state: "not_configured" }]);
-    renderRail({
+    renderProvider({
       status,
       modelProvider: { candidates: [claude], access: status.provider_access, selectedId: claude.id, onChange: () => {}, changeNote: null, harnessLabel: "Claude Code" },
     });
@@ -141,7 +157,7 @@ describe("R2/R6 — several candidates: a Select, each option stating what you p
       { provider: gateway, defaultFor: ["claude-code"], state: "live" },
       { provider: claude, state: "live" },
     ]);
-    renderRail({
+    renderProvider({
       status,
       modelProvider: {
         candidates: [gateway, claude],
@@ -163,7 +179,7 @@ describe("R2/R6 — several candidates: a Select, each option stating what you p
       { provider: claude, state: "not_configured" },
     ]);
     const onChange = vi.fn();
-    renderRail({
+    renderProvider({
       status,
       modelProvider: { candidates: [gateway, claude], access: status.provider_access, selectedId: undefined, onChange, changeNote: null, harnessLabel: "Claude Code" },
     });
@@ -179,7 +195,7 @@ describe("R7 — an agent switch that invalidated the selection names the change
   it("renders the CHANGED sentence the screen composed", async () => {
     const status = providerStatus([{ provider: claude, state: "live" }]);
     const note = RAIL_PROVIDER.CHANGED("Claude subscription", "Corp gateway", "Claude Code");
-    renderRail({
+    renderProvider({
       status,
       modelProvider: { candidates: [claude, MODEL_PROVIDERS.anthropicKey], access: status.provider_access, selectedId: claude.id, onChange: () => {}, changeNote: note, harnessLabel: "Claude Code" },
     });
@@ -193,7 +209,7 @@ describe("R3 — selected, not connected: a warning and its own door (§5.8)", (
       { provider: bedrock, state: "not_configured" },
       { provider: claude, state: "live" },
     ]);
-    renderRail({
+    renderProvider({
       status,
       modelProvider: {
         candidates: [bedrock, claude],
@@ -215,7 +231,7 @@ describe("R3 — selected, not connected: a warning and its own door (§5.8)", (
       { provider: gateway, state: "not_configured" },
       { provider: claude, state: "live" },
     ]);
-    renderRail({
+    renderProvider({
       status,
       modelProvider: {
         candidates: [gateway, claude],
@@ -241,7 +257,7 @@ describe("R3 — selected, not connected: a warning and its own door (§5.8)", (
       { provider: bedrock, state: "not_applicable" },
       { provider: claude, state: "live" },
     ]);
-    renderRail({
+    renderProvider({
       status,
       modelProvider: {
         candidates: [bedrock, claude],
@@ -262,7 +278,7 @@ describe("R3 — selected, not connected: a warning and its own door (§5.8)", (
       { provider: bedrock, state: "live" },
       { provider: claude, state: "live" },
     ]);
-    renderRail({
+    renderProvider({
       status,
       modelProvider: {
         candidates: [bedrock, claude],
@@ -286,7 +302,7 @@ describe("R3 — selected, not connected: a warning and its own door (§5.8)", (
       { provider: anthropicKey, state: "not_configured" },
       { provider: claude, state: "live" },
     ]);
-    renderRail({
+    renderProvider({
       status,
       modelProvider: {
         candidates: [anthropicKey, claude],
@@ -307,7 +323,7 @@ describe("R3 — selected, not connected: a warning and its own door (§5.8)", (
       { provider: claude, state: "not_configured" },
       { provider: anthropicKey, state: "live" },
     ]);
-    renderRail({
+    renderProvider({
       status,
       modelProvider: {
         candidates: [claude, anthropicKey],
@@ -331,7 +347,7 @@ describe("R3 — selected, not connected: a warning and its own door (§5.8)", (
 describe("R9 — no candidate for this agent: today's shape, unchanged", () => {
   it("an empty candidate list renders no picker and falls through to the deployment warning", async () => {
     const status = providerStatus([]);
-    renderRail({
+    renderProvider({
       status,
       showModelWarning: true,
       modelProvider: { candidates: [], access: [], selectedId: undefined, onChange: () => {}, changeNote: null, harnessLabel: "Claude Code" },
@@ -350,7 +366,7 @@ describe("R9 — no candidate for this agent: today's shape, unchanged", () => {
 describe("R5b — granted none: the server's providers_ungranted fact", () => {
   it("names NOT_GRANTED with no Select, candidates empty", async () => {
     const status = providerStatus([]);
-    renderRail({
+    renderProvider({
       status,
       modelProvider: {
         candidates: [],
@@ -369,9 +385,10 @@ describe("R5b — granted none: the server's providers_ungranted fact", () => {
   it("the gate's own sentence, passed as the launch problem, is suppressed on the caption", async () => {
     const status = providerStatus([]);
     const sentence = RAIL_PROVIDER.NOT_GRANTED("Claude Code");
-    renderRail({
+    renderProvider({
       status,
       launch: { problem: sentence },
+      issueInline: true,
       modelProvider: {
         candidates: [],
         access: [],
@@ -382,8 +399,8 @@ describe("R5b — granted none: the server's providers_ungranted fact", () => {
         harnessLabel: "Claude Code",
       },
     });
-    // Exactly one match — the inline ModelProviderSection line, not a second
-    // caption copy (mirrors F4's default_off case below).
+    // Exactly one match — the line beside the picker on the Run panel, not a
+    // second copy above Launch (mirrors F4's default_off case below).
     expect(await screen.findByText(sentence)).toBeInTheDocument();
     expect(screen.getAllByText(sentence)).toHaveLength(1);
   });
@@ -396,7 +413,7 @@ describe("R5b — granted none: the server's providers_ungranted fact", () => {
 describe("R5c — the default is turned off: never auto-picked, even alone", () => {
   it("with another candidate: a Select with the placeholder, nothing preselected, naming the disabled default", async () => {
     const status = providerStatus([{ provider: claude, state: "live" }]);
-    renderRail({
+    renderProvider({
       status,
       modelProvider: {
         candidates: [claude],
@@ -417,7 +434,7 @@ describe("R5c — the default is turned off: never auto-picked, even alone", () 
 
   it("with no other candidate: no Select at all, naming the disabled default", async () => {
     const status = providerStatus([]);
-    renderRail({
+    renderProvider({
       status,
       modelProvider: {
         candidates: [],
@@ -441,7 +458,7 @@ describe("R5c — the default is turned off: never auto-picked, even alone", () 
 describe("F4 — a gate suppresses only its OWN sentence on the launch caption", () => {
   it("a title problem still shows under Launch even with a default_off gate", async () => {
     const status = providerStatus([]);
-    renderRail({
+    renderProvider({
       status,
       launch: { problem: "Give this run a title." },
       modelProvider: {
@@ -460,9 +477,10 @@ describe("F4 — a gate suppresses only its OWN sentence on the launch caption",
   it("the gate's OWN sentence, passed as the problem, is suppressed on the caption (still shown inline above)", async () => {
     const status = providerStatus([]);
     const sentence = RAIL_PROVIDER.DEFAULT_OFF_ONLY("Corp gateway", "Claude Code");
-    renderRail({
+    renderProvider({
       status,
       launch: { problem: sentence },
+      issueInline: true,
       modelProvider: {
         candidates: [],
         access: [],
@@ -476,5 +494,45 @@ describe("F4 — a gate suppresses only its OWN sentence on the launch caption",
     // Exactly one match in the document — the inline line, not a second
     // caption copy — so getByText (not queryAllByText) proves it.
     expect(await screen.findByText(sentence)).toBeInTheDocument();
+  });
+});
+
+// #1922: the picker moved to the Run panel; the rail keeps what it states about
+// the provider this run uses, and asks nothing.
+describe("the rail's Credentials summary", () => {
+  it("R1 and a picked candidate read as one static line with its residency", async () => {
+    const status = providerStatus([{ provider: bedrock, state: "not_configured" }, { provider: gateway, state: "live" }]);
+    const modelProvider = { candidates: [bedrock, gateway], access: status.provider_access, selectedId: bedrock.id, onChange: () => {}, changeNote: null, harnessLabel: "Claude Code" };
+    renderProvider({ status, rail: true, modelProvider });
+    const rail = within(screen.getByRole("complementary"));
+    expect(rail.getByText(RAIL_PROVIDER.STATIC("Bedrock (prod)"))).toBeInTheDocument();
+    expect(rail.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK)).toBeInTheDocument();
+    // Not connected is said in warning tone and holds nothing: the launch door asks.
+    expect(rail.getByText(RAIL_PROVIDER.NOT_SIGNED_IN("Bedrock (prod)"))).toHaveClass("text-warning");
+    expect(rail.queryByRole("combobox")).toBeNull();
+    expect(rail.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeNull();
+    expect(rail.getByRole("button", { name: "Launch run" })).toBeEnabled();
+    // The chip that used to follow the sandbox sentence is gone from both homes.
+    expect(screen.queryByText("Per-person AWS sign-in")).toBeNull();
+  });
+
+  it("several candidates and no pick: resolved at launch, never a guessed provider", async () => {
+    const status = providerStatus([{ provider: claude, state: "live" }, { provider: gateway, state: "live" }]);
+    renderProvider({
+      status,
+      rail: true,
+      modelProvider: { candidates: [claude, gateway], access: status.provider_access, selectedId: undefined, onChange: () => {}, changeNote: null, harnessLabel: "Claude Code" },
+    });
+    expect(within(screen.getByRole("complementary")).getByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH)).toBeInTheDocument();
+  });
+
+  it("a gate with nothing picked is said beside the picker only: no empty Credentials heading", async () => {
+    renderProvider({
+      status: providerStatus([]),
+      rail: true,
+      modelProvider: { candidates: [], access: [], selectedId: undefined, onChange: () => {}, changeNote: null, gate: { kind: "not_granted" }, harnessLabel: "Claude Code" },
+    });
+    expect(within(screen.getByRole("complementary")).queryByText("Credentials")).toBeNull();
+    expect(screen.getAllByText(RAIL_PROVIDER.NOT_GRANTED("Claude Code"))).toHaveLength(1);
   });
 });

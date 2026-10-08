@@ -114,13 +114,17 @@ export interface WizardState {
   // run.workspaces[] entry carrying its enabledOptional/readOnly options.
   workspaces: RunWorkspaceSelection[];
   mode: RunMode;
-  // The agent's PROMPT for a batch run, or the shell command for a "command"
-  // run. For an INTERACTIVE run this is instead the OPTIONAL boot seed —
-  // interpreted per interactiveStart (an initial prompt for "agent", a startup
-  // command for "shell") and fired once, at sandbox boot, in the persistent
-  // session the human's attach later joins. Empty stays today's pure-idle
-  // behavior.
+  // The agent's PROMPT: a batch run's Task, or an agent-started interactive
+  // run's OPTIONAL boot seed (the Initial prompt), fired once at sandbox boot in
+  // the persistent session the human's attach later joins. Empty stays today's
+  // pure-idle behavior.
   task: string;
+  // A "command" run's shell command, and a terminal-started interactive run's
+  // optional Startup command. Each field holds its OWN value (#1922): a prompt
+  // typed as a Task can never be sent as a command line. runPromptText picks
+  // the one this run shape sends.
+  command: string;
+  startupCommand: string;
   // What an INTERACTIVE run's attach shell opens with: the image's agent CLI in
   // the prepared workspace, or a bare terminal there. Ignored for every other
   // run mode. Defaults to "agent": you picked "Agent task" and named an agent.
@@ -320,7 +324,12 @@ export function runPrefill(run: ClonableRun, created: RunCreateRequestFacts = {}
       // Asked of the roster, never of a second literal pair — WIZARD_AGENTS is
       // what widens when a third harness ships.
       ...(isWizardAgent(run.agent) ? { agent: run.agent } : {}),
-      task: run.task,
+      // The row holds ONE text; the audit row says which field it was typed in.
+      ...(created.task_mode === "exec"
+        ? { command: run.task }
+        : run.interactive && created.interactive_start === "shell"
+          ? { startupCommand: run.task }
+          : { task: run.task }),
       mode: run.interactive ? "interactive" : "batch",
       interactiveStart: created.interactive_start === "shell" ? "shell" : "agent",
       seedAutoTools: created.seed_auto_tools === true,
@@ -371,6 +380,14 @@ export function cloneFromAudit(run: ClonableRun, events: AuditEvent[]): RunPrefi
 // validate.go's own doc comment); this is the console's default, not a
 // second validation rule.
 const MAX_PREFILLED_TITLE_LEN = 80;
+
+/** The one text this run shape sends as `task`: the Command for a shell run, the
+ *  Startup command for a terminal-started interactive run, the Task/Initial
+ *  prompt otherwise. Launch, the gates and the rail all read it here. */
+export function runPromptText(s: Pick<WizardState, "runType" | "mode" | "interactiveStart" | "task" | "command" | "startupCommand">): string {
+  if (s.runType !== "agent") return s.command;
+  return s.mode === "interactive" && s.interactiveStart === "shell" ? s.startupCommand : s.task;
+}
 
 export function titleFromTask(task: string): string {
   const firstLine = task.split("\n", 1)[0];
@@ -426,6 +443,8 @@ function freshWizardState(defaultCc: ConfinementClass, providers?: readonly Setu
     // parity. See pass3-ux-proposal.md §4.
     mode: "interactive",
     task: "",
+    command: "",
+    startupCommand: "",
     // You chose "Agent task" and named an agent; attaching should hand you that
     // agent, not a prompt you then have to type its name at. Opt out for a
     // plain terminal in the same prepared workspace.
