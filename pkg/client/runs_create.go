@@ -136,6 +136,10 @@ type CreateRunRequest struct {
 	// their own identity, so this flag can only ever ask for the storage the
 	// caller was already granted.
 	Drive *DriveSelection `json:"drive,omitempty"`
+	// Components attaches custom components to this run: each entry names a
+	// stored component by id or carries a run-only definition inline. Nil and
+	// empty are the same and attach nothing, byte for byte today.
+	Components []ComponentRef `json:"components,omitempty"`
 	// Preset launches the named launch preset (see Preset): the server
 	// expands it into the equivalent explicit request and runs the unchanged
 	// create path under the caller's own ceiling. Alongside it only Title,
