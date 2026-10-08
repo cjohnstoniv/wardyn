@@ -96,3 +96,57 @@ describe("nesting and size are checked before anything recurses", () => {
     expect(parsePolicySource(`${fits} `, format)).toEqual({ ok: false, line: 1, column: 1, message: "Policy source is too large." });
   });
 });
+
+describe("plain scalars the CLI's reader resolves differently", () => {
+  const LEADING_ZERO = "Leading zeros are ambiguous: remove them, or quote the value.";
+  const QUOTE_IT = "Ambiguous unquoted value: quote it.";
+
+  it.each([
+    ["a leading-zero integer", "auto_stop_after_sec: 017", 1, 22, LEADING_ZERO],
+    ["a signed leading-zero integer", "a:\n  n: -017", 2, 6, LEADING_ZERO],
+    ["a leading zero before an 8", "ttl_seconds: 08", 1, 14, LEADING_ZERO],
+    ["a zero-padded zero", "n: 00", 1, 4, LEADING_ZERO],
+    ["a leading-zero decimal fraction", "n: 01.5", 1, 4, LEADING_ZERO],
+    ["a leading-zero flow item", "a: [1, 017]", 1, 8, LEADING_ZERO],
+    ["an unquoted date", "tool_rules:\n  - pattern: 2000-10-07", 2, 14, QUOTE_IT],
+    ["an unquoted date-time", "a: 2001-12-14t21:59:43.10-05:00", 1, 4, QUOTE_IT],
+    ["a space-separated timestamp", "a: 2001-12-14 21:59:43.10 -5", 1, 4, QUOTE_IT],
+    ["an unquoted date key", "2000-10-07: x", 1, 1, QUOTE_IT],
+    ["underscored digits", "auto_stop_after_sec: 3_600", 1, 22, QUOTE_IT],
+    ["a trailing underscore", "n: 1_", 1, 4, QUOTE_IT],
+    ["a binary literal", "n: 0b101", 1, 4, QUOTE_IT],
+    ["an uppercase hex prefix", "n: 0X1F", 1, 4, QUOTE_IT],
+    ["a signed hex literal", "n: -0x10", 1, 4, QUOTE_IT],
+    ["a signed octal literal", "n: +0o17", 1, 4, QUOTE_IT],
+    ["an underscored hex literal", "n: 0x_1F", 1, 4, QUOTE_IT],
+  ])("refuses %s at its location", (_, source, line, column, message) => {
+    const parsed = parsePolicySource(source);
+    expect(parsed).toEqual({ ok: false, line, column, message });
+    expect(parsed).not.toHaveProperty("value");
+  });
+
+  it.each<[string, string, unknown]>([
+    ["zero, signed zero and plain decimals", "a: 0\nb: -0\nc: 3600\nd: 0.5\ne: -1.25", { a: 0, b: 0, c: 3600, d: 0.5, e: -1.25 }],
+    ["lower-case hex, 0o octal and exponents", "a: 0x1F\nb: 0o17\nc: 1e3\nd: 1.5E-3", { a: 31, b: 15, c: 1000, d: 0.0015 }],
+    ["quoted look-alikes", "a: \"017\"\nb: '2000-10-07'\nc: \"1_000\"\nd: \"0b1\"", { a: "017", b: "2000-10-07", c: "1_000", d: "0b1" }],
+    ["a date in a block scalar", "a: |\n  2000-10-07\n", { a: "2000-10-07\n" }],
+    ["strings that only start like numbers", "a:\n  - 1.2.3\n  - 10.0.0.1\n  - 1password.com\n  - 30s\n  - 2024-q3\n  - _1\n  - 1e3x\n",
+      { a: ["1.2.3", "10.0.0.1", "1password.com", "30s", "2024-q3", "_1", "1e3x"] }],
+    ["YAML 1.1 words, strings in both readers", "a: yes\nb: off\nc: on\nd: y", { a: "yes", b: "off", c: "on", d: "y" }],
+  ])("accepts %s", (_, source, value) => {
+    expect(parsePolicySource(source)).toEqual({ ok: true, value });
+  });
+
+  it("quotes ambiguous strings and keys that a structured edit writes", () => {
+    const values = ["017", "1_000", "0b1", "0X1F", "-0x10", "2000-10-07", "2001-12-14 21:59:43.10 -5"];
+    const edited = editPolicySource("a: plain\n", ["a"], "2000-10-07", "yaml");
+    if (!edited.ok) throw new Error(edited.message);
+    expect(edited.source).toBe('a: "2000-10-07"\n');
+    const list = editPolicySource("{}", ["values"], values, "yaml");
+    if (!list.ok) throw new Error(list.message);
+    expect(parsePolicySource(list.source)).toEqual({ ok: true, value: { values } });
+    const keys = editPolicySource("{}", ["map"], Object.fromEntries(values.map((key, index) => [key, index])), "yaml");
+    if (!keys.ok) throw new Error(keys.message);
+    expect(parsePolicySource(keys.source)).toEqual({ ok: true, value: { map: Object.fromEntries(values.map((key, index) => [key, index])) } });
+  });
+});

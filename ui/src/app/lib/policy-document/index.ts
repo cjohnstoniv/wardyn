@@ -79,6 +79,18 @@ function safeNumber(value: number): boolean {
   return Number.isFinite(value) && (!Number.isInteger(value) || Number.isSafeInteger(value));
 }
 
+// gopkg.in/yaml.v3, the CLI's --policy-file reader, resolves some plain scalars
+// differently from YAML 1.2 core here: 017 is octal 15 there, 1_000, 0b1 and
+// 0X1F are numbers, and a date is a timestamp. Refused rather than guessed.
+// yaml.v3 tries numbers only for text starting with a sign, digit or dot, and
+// drops every underscore first.
+const NUMBER_LIKE = /^[-+]?(?:0[box][\da-f]+|(?:\.\d+|\d+(?:\.\d*)?)(?:e[-+]?\d+)?)$/i;
+const DATE_LIKE = /^\d{4}-\d\d?-\d\d?(?:[Tt\s]|$)/;
+
+function ambiguousString(text: string): boolean {
+  return (/^[-+.\d]/.test(text) && NUMBER_LIKE.test(text.replace(/_/g, ""))) || DATE_LIKE.test(text);
+}
+
 function documentValue(document: Document, lines: LineCounter): PolicySourceResult {
   if (!isMap(document.contents)) {
     return failure(lines, document.contents?.range?.[0] ?? 0, "Policy source must be a mapping.");
@@ -95,7 +107,12 @@ function documentValue(document: Document, lines: LineCounter): PolicySourceResu
     else if (isNode(node) && node.tag) message = "Explicit tags are not allowed.";
     else if (isScalar(node)) {
       const value = node.value;
-      if (typeof value === "bigint") {
+      const plain = node.type === "PLAIN" ? node.source ?? "" : undefined;
+      if (plain !== undefined && typeof value === "string" && ambiguousString(plain)) {
+        message = "Ambiguous unquoted value: quote it.";
+      } else if (plain !== undefined && typeof value !== "string" && /^[-+]?0\d/.test(plain)) {
+        message = "Leading zeros are ambiguous: remove them, or quote the value.";
+      } else if (typeof value === "bigint") {
         // Checking before Number() is essential: rounding can hide an unsafe integer.
         if (value < BigInt(Number.MIN_SAFE_INTEGER) || value > BigInt(Number.MAX_SAFE_INTEGER)) {
           message = "Numbers must be finite and within the safe integer range.";
@@ -285,11 +302,14 @@ export function editPolicySource(
       parsed.document.setIn(path, next);
     }
     // Authored text already passed readSource, so only new strings can hold a
-    // CR or a character that must be escaped; only double quotes keep them
-    // exact (a block scalar would turn CRLF into LF).
+    // CR or a character that must be escaped, or be ambiguous when plain; only
+    // double quotes keep them exact (a block scalar would turn CRLF into LF).
     visit(parsed.document, {
       Scalar(_, node) {
-        if (typeof node.value === "string" && /[\r\x85\u2028\u2029]/.test(node.value)) node.type = "QUOTE_DOUBLE";
+        if (typeof node.value !== "string") return;
+        if (/[\r\x85\u2028\u2029]/.test(node.value) || ((node.type ?? "PLAIN") === "PLAIN" && ambiguousString(node.value))) {
+          node.type = "QUOTE_DOUBLE";
+        }
       },
     });
     const edited = escapeBreaks(parsed.document.toString());
