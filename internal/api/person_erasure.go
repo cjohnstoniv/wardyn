@@ -70,6 +70,9 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport) *erasure.
 			return data, err
 		}
 	}
+	if _, ok := s.cfg.Store.(store.ComponentStore); ok {
+		steps[erasure.Components] = s.eraseComponentsOf
+	}
 	if s.cfg.MaskManifests != nil {
 		steps[erasure.MaskCopies] = s.eraseMaskCopies
 	}
