@@ -1,3 +1,3 @@
-# Prose must not grow (base counts); share is the strict paragraph share ceiling.
-docs/POLICIES.md=16622 share=30
+# Prose must not grow beyond the base count plus cell-expansion headings and summaries (itemised in lane-reports/docs/P-worker.md Round 2).
+docs/POLICIES.md=17132 share=12
 examples/policies/README.md=1349 share=5

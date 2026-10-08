@@ -1,2 +1,3 @@
 # Asserted against every cap in scripts/doc-form.sh (strict tier).
+# docs/POLICIES.md is not listed yet: after the cell-expansions it has 1 sentence over the cap that cannot be split (the 36-word colon sentence in the git_pat_narrowing_unsupported_host row) and 1 sentence-waiver; see lane-reports/docs/P-worker.md Round 2.
 examples/policies/README.md
