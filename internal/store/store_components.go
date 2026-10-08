@@ -23,6 +23,11 @@ const componentCols = `id, owner, name, definition, version, created_by, created
 
 // CreateComponent — see ComponentStore.
 func (s PG) CreateComponent(ctx context.Context, c types.Component) (types.Component, error) {
+	return createComponentQ(ctx, s.Pool, c)
+}
+
+// createComponentQ is CreateComponent's statement on q, so a caller's transaction can hold it.
+func createComponentQ(ctx context.Context, q Querier, c types.Component) (types.Component, error) {
 	if c.ID == uuid.Nil {
 		return types.Component{}, errors.New("store: create component: the caller chooses the id")
 	}
@@ -30,11 +35,11 @@ func (s PG) CreateComponent(ctx context.Context, c types.Component) (types.Compo
 	if err != nil {
 		return types.Component{}, err
 	}
-	const q = `
+	const stmt = `
 		INSERT INTO components (id, owner, name, definition, version, created_by, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, 1, $5, now(), now())
 		RETURNING ` + componentCols
-	return scanComponent(s.Pool.QueryRow(ctx, q, c.ID, c.Owner, c.Name, def, c.CreatedBy))
+	return scanComponent(q.QueryRow(ctx, stmt, c.ID, c.Owner, c.Name, def, c.CreatedBy))
 }
 
 // UpdateComponent — see ComponentStore.
