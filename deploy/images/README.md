@@ -4,6 +4,101 @@ This directory contains the OCI image definitions for coding-agent sandboxes
 governed by Wardyn.  Each subdirectory is one agent image, except `common/`
 (a shared shell library COPY'd into them).
 
+## Download verification
+
+`scripts/check-image-pins.sh` checks every Dockerfile curl download, including
+local-only recipes. Its bounded shell recognizer requires literal output
+filenames, checks of those same files before any intervening command, and
+fail-closed sequencing: an initial `set -e` with unconditional commands, or
+an uninterrupted `&&` chain ending the RUN. Consecutive downloads may precede
+their individual checks. `if`/`case` bodies must finish their checks before
+leaving the branch. Unsupported syntax fails with a file/line diagnostic;
+the guard does not execute shell or establish the provenance of a hash.
+`scripts/test-image-pins.sh` exercises the accepted and rejected forms.
+
+The supported command names are defined in `scripts/lib/image_downloads.py`.
+The recognizer validates that subset before classifying package names or
+stdout diagnostics as inert curl references. Command-name expansion, shell
+wrappers, generated command text, and stdout redirection/pipelines from data
+emitters are unsupported (checksum/hash-validation pipelines and stderr
+diagnostics are the exceptions). An initial `set -e` must run in the parent
+shell; setting it inside a pipeline does not protect later commands.
+
+Curl arguments retain their quote context: variable expansions must be plain
+and double-quoted, and command substitutions, parameter operators and unquoted
+globs refuse. URL variables must have a literal protocol prefix from an
+assignment that runs before the download. Assignments that can be skipped
+cannot establish that property. Alternatively, place `--` before the quoted
+URL, after all options.
+This prevents a URL value from injecting another output or becoming a curl
+config option. Dynamic filenames remain unsupported. The guard does not
+derive `--remote-name` filenames from variables; use a literal URL or `-o`.
+It does not interpret arbitrary shell, decode generated programs, or inspect commands
+hidden inside other files or installed tools.
+
+Checksum input must contain one 64-hex field and a literal filename. The guard
+accepts a literal hash, a variable assigned a literal 64-hex value in the same
+RUN, or a variable validated before downloading with this exact fail-closed
+pipeline:
+
+```sh
+printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'
+```
+
+GNU grep's `-z` makes newlines part of the record and `-x` matches the entire
+record, so leading/trailing whitespace and additional lines refuse. Shell
+variables cannot contain NUL. See the [GNU grep manual](https://www.gnu.org/software/grep/manual/grep.html).
+The guard discards this fact after reassignment and does not infer validation
+from a branch that may be skipped. Build-argument and manifest-derived hashes
+use the validator; unchanged literal noVNC/websockify pins are proved directly.
+The affected recipes also use `sha256sum --strict -c -`.
+[`--strict`](https://www.gnu.org/software/coreutils/manual/coreutils.html#cksum-common-options)
+rejects malformed checksum records; it does not replace the single-field proof
+or establish where the expected hash came from.
+
+Claude's native download pins the manifest before reading the binary's hash.
+The default version has a baked manifest pin; alternate exact versions require
+`CLAUDE_MANIFEST_SHA256`. Native downloads refuse `stable`/`latest`; npm and
+host-staged binaries retain their version/channel behavior. See
+[native installs](../../docs/adoption/corp-image-authoring.md#native-binary-agent-installs-opt-in-when-public-npm-is-blocked).
+
+AWS CLI downloads check both the installer zip and detached signature against
+per-architecture SHA256 pins, then verify the signature with the baked AWS
+key before extraction. An alternate `AWS_CLI_VERSION` requires both
+`AWS_CLI_SHA256` and `AWS_CLI_SIG_SHA256`, obtained and reviewed for the target
+architecture. The Makefile forwards these build arguments. Staged AWS
+installers still trust the staging host; they do not use the download pins or
+signature path.
+
+### code-server's embedded shell-quote tracking
+
+[#1904](https://github.com/cjohnstoniv/wardyn/issues/1904) remains open.
+Inspection of both official code-server 4.139.1 Linux release archives on
+2026-10-07 found the same `@devcontainers/cli` 0.88.0 bundle and shrinkwrap:
+
+| Artifact | SHA256 |
+| --- | --- |
+| [amd64 archive](https://github.com/coder/code-server/releases/download/v4.139.1/code-server-4.139.1-linux-amd64.tar.gz) | `53029be6c5781b7bca49b815fcc9a2a3fc111813ad8c9965b2c0f0d2985a0674` |
+| [arm64 archive](https://github.com/coder/code-server/releases/download/v4.139.1/code-server-4.139.1-linux-arm64.tar.gz) | `0edb4b60d9c4744b2dd14b0911e3c2e6dd8c6f3c13bd58bda23ae744e59e7df1` |
+| `lib/vscode/node_modules/@devcontainers/cli/dist/spec-node/devContainersSpecCLI.js` (both) | `f49753e8ead0a8dc2c8d257169eab6fe338b1c162c778353f0b085ad343bf833` |
+| `lib/vscode/npm-shrinkwrap.json` (both) | `dfcafb7490d47210f39ea1f4bd4d45fbc3c859e398ff895ee239f94214609ec4` |
+
+The bundle inlines the old `quote()` implementation: its comment-token branch
+checks the comment itself but does not reject a line terminator in a following
+string. Isolating that bundled function reproduces the
+[upstream advisory](https://github.com/ljharb/shell-quote/security/advisories/GHSA-pqg4-j6r4-53mv)
+output without executing it as shell. The bundle exports this through `Gb`
+and imports it as `yp`; the inspected consumer references call `yp.parse`,
+not `yp.quote`. That limited static inspection found no affected call path;
+it is not a general reachability proof. The shrinkwrap still records
+`shell-quote` 1.10.0.
+
+The Dockerfile's replacement of the separate module with 1.11.0 changes neither
+the inlined function nor the shrinkwrap. Keep the tracking issue open and the
+replacement in place until a candidate [code-server release](https://github.com/coder/code-server/releases)
+has been inspected for both the embedded code and metadata; a clean scanner
+result alone does not establish this.
+
 ## Image contract
 
 Every image that runs a real agent task MUST satisfy the invariants below.  What

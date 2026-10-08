@@ -42,7 +42,8 @@ export function unsavedSnapshot(): string | null {
  *  passing a fresh closure every render (the common case: it closes over the
  *  latest draft) doesn't re-register on every keystroke — only `id`/`dirty`
  *  changing does. */
-export function useRegisterUnsaved(id: string, dirty: boolean, getText: () => string): void {
+export function useRegisterUnsaved(id: string, dirty: boolean, getText: () => string): () => void {
+  const registration = React.useMemo(() => ({ id, release: () => {} }), [id]);
   const getTextRef = React.useRef(getText);
   // Updated in an EFFECT, not during render: a ref write during render is a
   // side effect React doesn't know about (breaks under concurrent rendering,
@@ -53,6 +54,9 @@ export function useRegisterUnsaved(id: string, dirty: boolean, getText: () => st
   });
   React.useEffect(() => {
     if (!dirty) return undefined;
-    return registerUnsaved(id, () => getTextRef.current());
-  }, [id, dirty]);
+    const release = registerUnsaved(registration.id, () => getTextRef.current());
+    registration.release = release;
+    return release;
+  }, [dirty, registration]);
+  return React.useCallback(() => registration.release(), [registration]);
 }

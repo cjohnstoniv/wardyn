@@ -38,9 +38,11 @@ vi.mock("react-router-dom", async () => {
 });
 const preflightRunMock = vi.fn();
 const createRunMock = vi.fn();
+vi.mock("../../../lib/api/policy-preview", () => ({ previewRunPolicy: vi.fn().mockResolvedValue({ spec: {}, pending: [], warnings: [], repository_access: [] }) }));
 vi.mock("../../../lib/api/runs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api/runs")>();
   return {
+    ...actual,
     isCredentialRefusal: actual.isCredentialRefusal,
     isGitCredentialRefusal: actual.isGitCredentialRefusal,
     runs: {
@@ -90,7 +92,7 @@ const user = userEvent.setup({ pointerEventsCheck: 0 });
 function renderScreen(me: Me = baseMe()) {
   return render(
     <MemoryRouter>
-      <OperatorProvider
+      <OperatorProvider principal="test-owner"
         operator
         userDrive={me.user_drive}
         userDriveDeniedByProfile={me.user_drive_denied_by_profile}
@@ -546,7 +548,8 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
   // `useMyCapabilities(true)` breaks.
   it("passes useMyCapabilities the operator's own exemption (enabled=false for an operator)", async () => {
     renderScreen();
-    await waitFor(() => expect(myCapabilitiesMock).toHaveBeenCalledWith(false));
+    // The second argument scopes the read to the draft's identity revision.
+    await waitFor(() => expect(myCapabilitiesMock).toHaveBeenCalledWith(false, expect.any(String)));
   });
 });
 

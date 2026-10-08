@@ -11,6 +11,7 @@ import { runs } from "../../../lib/api/runs";
 import { HttpError, setSignedOutHold } from "../../../lib/api/core";
 import type { PreflightResult } from "../../../lib/types";
 import { makeWorkspace } from "../../../../test/factories";
+import { getAuthGeneration } from "../../../lib/api/core";
 import { useLaunch, PREFLIGHT_DEBOUNCE_MS, type UseLaunchParams } from "./use-launch";
 import { initialWizardState } from "./wizard-types";
 import { mergeRunSelections } from "./wizard-spec";
@@ -21,6 +22,7 @@ const workspaces = [
   makeWorkspace({ id: "ws-c", kind: "local_dir", source: "/data/c" }),
 ];
 const ready: PreflightResult = { enforced_confinement_class: "CC1", setup_items: [] };
+vi.mock("../../../lib/api/policy-preview", () => ({ previewRunPolicy: vi.fn().mockResolvedValue({ spec: {}, pending: [], warnings: [], repository_access: [] }) }));
 const createRun = vi.fn();
 const preflightRun = vi.fn();
 
@@ -37,6 +39,7 @@ function params(over: Partial<UseLaunchParams> = {}): UseLaunchParams {
     merged: mergeRunSelections({ allowed_domains: [], first_use_approval: "deny_with_review", min_confinement_class: "CC1" }, state, workspaces),
     autoCheck: { local: true, backendArm: true, modelArm: true },
     doorOpen: false,
+    adoDoorOpen: false, identity: { principal: "owner", resolved: true, revision: 1, authGeneration: getAuthGeneration() }, externalRevision: "1", sourceRefreshPending: false, onCreated: () => {},
     ...over,
   };
 }

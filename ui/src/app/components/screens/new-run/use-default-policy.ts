@@ -24,20 +24,20 @@ export function previewSpec(p: DefaultPolicy): RunPolicySpec {
   return spec;
 }
 
-export function useDefaultPolicy(): { read: DefaultPolicyRead; retry: () => void } {
+export function useDefaultPolicy(scope: string, enabled: boolean): DefaultPolicyRead {
   const [read, setRead] = React.useState<DefaultPolicyRead>({ status: "loading" });
-  const [attempt, setAttempt] = React.useState(0);
+  const [loadedScope, setLoadedScope] = React.useState(scope);
   React.useEffect(() => {
     let alive = true;
+    if (!enabled) return;
     setRead({ status: "loading" });
     policiesApi
       .getDefaultPolicy()
-      .then((policy) => alive && setRead({ status: "ready", policy }))
-      .catch(() => alive && setRead({ status: "error" }));
+      .then((policy) => { if (alive) { setLoadedScope(scope); setRead({ status: "ready", policy }); } })
+      .catch(() => { if (alive) { setLoadedScope(scope); setRead({ status: "error" }); } });
     return () => {
       alive = false;
     };
-  }, [attempt]);
-  const retry = React.useCallback(() => setAttempt((n) => n + 1), []);
-  return { read, retry };
+  }, [scope, enabled]);
+  return loadedScope === scope && enabled ? read : { status: "loading" };
 }

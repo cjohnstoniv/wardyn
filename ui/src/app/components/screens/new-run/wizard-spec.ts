@@ -32,7 +32,6 @@ import {
   dedupe,
   gitPatConfigured,
   parseRepoList,
-  resolvableSources,
   resolveWorkspace,
   resolveWorkspaceMounts,
   toRunWorkspacesWire,
@@ -47,7 +46,7 @@ import type {
 
 // Why buildSpec unions a host into allowed_domains without the operator ever
 // toggling it in the Network card (D6/claim3).
-export type ImpliedEgressWhy = "GitHub access" | "model key" | "Git PAT" | "repo workspace";
+export type ImpliedEgressWhy = "GitHub access" | "model key" | "Git PAT";
 
 export interface ImpliedEgressHost {
   host: string;
@@ -61,7 +60,6 @@ export interface ImpliedEgressHost {
 // operator is shown and what actually ships cannot drift (D6/claim3).
 export function impliedEgressHosts(
   state: WizardState,
-  workspaces: Workspace[] = [],
   providers?: readonly SetupModelProvider[],
 ): ImpliedEgressHost[] {
   const out: ImpliedEgressHost[] = [];
@@ -76,24 +74,10 @@ export function impliedEgressHosts(
   if (impliedLlmHost) {
     out.push({ host: impliedLlmHost, why: "model key" });
   }
-  // Any repo-kind selection implies the GitHub clone hosts even with the
-  // GitHub grant untouched — claim 3's sharpest sub-case. When the grant IS
-  // on, name that as the reason instead; same two hosts either way.
-  // resolvableSources (not the flattened w.kind) so a multi-source workspace
-  // whose repo isn't sources[0] is still recognized (PARITY-2).
-  const hasRepoSelection = state.workspaces.some((sel) => {
-    const w = resolveWorkspace(sel, workspaces);
-    return !!w && resolvableSources(w).some((s) => s.type === "repo");
-  });
   if (state.githubEnabled) {
     out.push(
       { host: "github.com", why: "GitHub access" },
       { host: "*.githubusercontent.com", why: "GitHub access" },
-    );
-  } else if (hasRepoSelection) {
-    out.push(
-      { host: "github.com", why: "repo workspace" },
-      { host: "*.githubusercontent.com", why: "repo workspace" },
     );
   }
   // Gated on the SAME predicate as the grant emission (D5/claim4): a host
@@ -335,7 +319,7 @@ export function buildSpec(
   // approval. impliedEgressHosts is the ONE list (D6/claim3) — step-egress.tsx
   // renders the SAME hosts as "Added by grants:" chips, so the two can never
   // disagree about what buildSpec actually unions in here.
-  const requiredHosts = impliedEgressHosts(state, workspaces, providers).map((h) => h.host);
+  const requiredHosts = impliedEgressHosts(state, providers).map((h) => h.host);
 
   // Allow-all egress: deny-list only. allowed_domains may be empty and first-use
   // approval is inert, so we drop the run's own required hosts (everything
@@ -456,7 +440,7 @@ export function mergeRunSelections(
     .filter(Boolean);
   const have = new Set(authored.allowed_domains ?? []);
   const hosts = dedupe([
-    ...impliedEgressHosts(state, workspaces, providers).map((h) => h.host),
+    ...impliedEgressHosts(state, providers).map((h) => h.host),
     ...pins,
   ]).filter((h) => !have.has(h));
 

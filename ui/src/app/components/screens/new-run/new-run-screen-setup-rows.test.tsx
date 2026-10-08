@@ -22,9 +22,11 @@ vi.mock("../../../lib/api/policies", () => ({
   },
 }));
 const preflightRunMock = vi.fn();
+vi.mock("../../../lib/api/policy-preview", () => ({ previewRunPolicy: vi.fn().mockResolvedValue({ spec: {}, pending: [], warnings: [], repository_access: [] }) }));
 vi.mock("../../../lib/api/runs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api/runs")>();
   return {
+    ...actual,
     isCredentialRefusal: actual.isCredentialRefusal,
     isGitCredentialRefusal: actual.isGitCredentialRefusal,
     runs: {
@@ -80,7 +82,7 @@ async function preflighted(items: SetupItem[], classes: Array<"CC1" | "CC2" | "C
   });
   render(
     <MemoryRouter>
-      <OperatorProvider operator>
+      <OperatorProvider principal="test-owner" operator>
         <NewRunScreen />
       </OperatorProvider>
     </MemoryRouter>,

@@ -48,9 +48,11 @@ import { PROVIDERS_EXTRA } from "../../lib/workspace-providers-copy";
 import { SIGNIN } from "../../lib/sign-in-copy";
 import { SSO_SIGN_IN, TOKEN_LABEL } from "../screens/sign-in";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
-import { useOperatorResolved, usePrincipal } from "./operator-context";
+import { useOperator, useRequestIdentity, useRole, useSecurityOperator } from "./operator-context";
+import { getAuthGeneration, isSignedOutHold, onAuthChange } from "../../lib/api/core";
 import { appURL } from "../../lib/base-path";
 import { useSessionPoll } from "./use-session-poll";
+import { isSwitching } from "./console-view";
 
 // A function, not a constant: the base path is read when the link is used.
 const ssoLoginURL = () => appURL("/auth/login");
@@ -118,18 +120,21 @@ function renewVerdict(from: Renewal, me: Me, principalResolved: boolean): "other
 
 export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   const reauth = useReauth();
-  const principal = usePrincipal();
+  const { principal, operatorResolved: principalResolved, authGeneration } = useRequestIdentity();
+  const confirmedGeneration = React.useRef(authGeneration);
+  const observedGeneration = React.useSyncExternalStore(onAuthChange, getAuthGeneration);
+  const needsConfirmation = observedGeneration !== authGeneration;
+  const role = useRole(), operator = useOperator(), securityOperator = useSecurityOperator();
   // SF-29: whether `principal` is a settled fact rather than app-shell's
   // still-loading "…" or its own fail-open "unknown" (health.ts's whoami()
   // returns null, so identityResolved/operatorResolved stays false, for both
   // cases — see OperatorResolvedContext's own R4-F110 precedent for this same
   // class of bug). An unsettled principal cannot prove who signs back in is
   // the same person, so it counts as someone else (fail closed, below).
-  const principalResolved = useOperatorResolved();
   const location = useLocation();
   const navigate = useNavigate();
   // Same person, narrower role: this page is no longer theirs.
-  const [narrowed, setNarrowed] = React.useState<Me | null>(null);
+  const [narrowed, setNarrowed] = React.useState<{ me: Me; generation: number } | null>(null);
   const [token, setTokenValue] = React.useState("");
   // Same defaults and rule as sign-in.tsx: the token form until the daemon
   // says otherwise, SSO only once it says so.
@@ -137,8 +142,8 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   const cancelRef = React.useRef<HTMLButtonElement>(null);
   const { renewal, watch, setWatch } = reauth;
   // Whether a renewal has begun a sign-in at all — a window or a tab that
-  // opened — since this layer mounted, and it stays mounted for as long as one
-  // is watched. A renewal whose window was refused, and nothing else, has
+  // opened — while a renewal or its watch is active. A fresh quiet phase
+  // resets it. A renewal whose window was refused, and nothing else, has
   // nothing that can land.
   const began = React.useRef(false);
   const { copied, copy } = useCopyToClipboard();
@@ -147,7 +152,9 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     if (copied) toast.success(PROVIDERS_EXTRA.CONFLICT_COPIED_TOAST);
   }, [copied]);
 
+  const active = reauth.phase !== "none" || watch !== null;
   React.useEffect(() => {
+    if (!active) return;
     let alive = true;
     void health.health().then((h) => {
       if (!alive || Object.keys(h).length === 0) return;
@@ -156,12 +163,12 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [active]);
 
   // Both read through a ref: the poll that calls them was started renders ago.
-  // Outside a renewal nobody was signed in, so any live /me is the answer —
-  // except under a watch, whose renewal the person backed out of: the same
-  // person with the same authority changes nothing there, whatever the expiry.
+  // Renewal and quiet-watch answers also compare expiry; ordinary confirmation
+  // checks the current owner and authority in succeed. A watch confirms the
+  // same owner without finishing the renewal they backed out of.
   const watching = watch !== null && reauth.phase === "none";
   const verdict = React.useRef((_me: Me): ReturnType<typeof renewVerdict> => "other");
   verdict.current = (me: Me) => {
@@ -176,8 +183,25 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     setWatch({ ...watch, from: { ...watch.from, principal, role, operator, securityOperator } });
   };
   const succeed = React.useRef((_me: Me) => {});
-  const { status, setStatus, busy, startPoll, stopPoll, submitToken: checkToken } = useSessionPoll((me) => {
-    if (verdict.current(me) === "waiting") return false;
+  const quiet = !active;
+  const { status, setStatus, busy, startPoll, stopPoll, checkOnce, submitToken: checkToken } = useSessionPoll((me) => {
+    if (reauth.endingSession?.()) return true;
+    if (isSwitching() || (quiet && isSignedOutHold())) return false;
+    if (verdict.current(me) === "waiting") {
+      // A live same-owner read confirms request ownership without claiming that renewal finished.
+      const generation = getAuthGeneration();
+      if (principalResolved && me.principal === principal) {
+        if (confirmedGeneration.current !== generation) {
+          confirmedGeneration.current = generation;
+          onResumed(me);
+        }
+        if (watching && !began.current) {
+          setWatch(null);
+          return true;
+        }
+      }
+      return false;
+    }
     succeed.current(me);
     return true;
   });
@@ -193,9 +217,13 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
       return;
     }
     if (!roleCanReach(location.pathname, me.role)) {
-      setNarrowed(me);
+      setNarrowed({ me, generation: getAuthGeneration() });
       // A renewal or a watch has no dialog up yet, and the dialog is what says so.
       if (reauth.phase !== "dialog") reauth.setPhase("dialog");
+      return;
+    }
+    if (quiet && (me.role !== role || me.operator !== operator || me.security_operator !== securityOperator)) {
+      reauth.reloadAs(location.pathname + location.search);
       return;
     }
     // A save refused in the lapse is said beside that screen's own Save when
@@ -214,6 +242,14 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     carryOn(me);
     reauth.setPhase("none");
   };
+
+  React.useEffect(() => {
+    if (!quiet) return;
+    began.current = false;
+    if (!needsConfirmation) return;
+    checkOnce();
+    return stopPoll;
+  }, [quiet, needsConfirmation, checkOnce, stopPoll]);
 
   // A renewal begins with its window already open (or refused): only the wait
   // starts here. However it ends — renewed, someone else, Cancel, a new
@@ -235,6 +271,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     };
   }, [renewal, startPoll, stopPoll, setStatus]);
 
+  // A cancelled blocked popup needs one confirmation read; a started sign-in stays watched.
   // A watch: the renewal was cancelled, the page works, and nothing shows.
   // Paused while the page is held — nothing is written then, and whoever
   // signs in is measured before it carries on — and over at its bound.
@@ -260,7 +297,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   // a sign-in it began can still land, so who answers /me is watched from here.
   const cancelRenew = () => {
     setStatus("idle");
-    if (renewal && began.current) setWatch({ from: renewal, until: whileRedeemable() });
+    if (renewal) setWatch({ from: renewal, until: whileRedeemable() });
     reauth.endRenew();
   };
 
@@ -306,7 +343,12 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   };
 
   const goToRuns = () => {
-    if (narrowed) carryOn(narrowed);
+    if (narrowed && narrowed.generation !== getAuthGeneration()) {
+      // A delayed acknowledgement cannot confirm a replacement session.
+      reauth.reloadAs("/runs");
+      return;
+    }
+    if (narrowed) carryOn(narrowed.me);
     reauth.clearWriteDropped();
     reauth.setPhase("none");
     void navigate("/runs", { replace: true });

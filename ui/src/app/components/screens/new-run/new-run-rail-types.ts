@@ -94,6 +94,7 @@ export interface RunRailProps {
     /** The request Launch would send right now. A click-armed relaunch after
      *  sign-in only fires while this still equals the body the click was for. */
     body?: string | null;
+    draftRevision?: number;
   };
   preflight: {
     /** Re-runs preflight on the current body — a preflight-origin sign-in's

@@ -6,12 +6,12 @@
 import * as React from "react";
 import { act } from "react";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { renderHook, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BrowserRouter, MemoryRouter, NavLink, Route, Routes, useNavigate } from "react-router-dom";
 import { UnsavedGuardProvider, useGuardedNavClick, useUnsavedGuard } from "./use-unsaved-guard";
 import { UNSAVED } from "./unsaved-copy";
-import { registerUnsaved } from "./unsaved-registry";
+import { registerUnsaved, unsavedSnapshot } from "./unsaved-registry";
 
 // Mirrors the real call site (app-shell.tsx#SidebarNav): a guarded click sits
 // on an actual <NavLink>, since a clean click lets the LINK's own navigation
@@ -353,4 +353,22 @@ describe("UnsavedGuardProvider — Back with jsdom's REAL history, no mocked go(
       unregister();
     }
   });
+});
+
+
+it("a successful owner can release its registry and unload guard before synchronous navigation", () => {
+  const { result, rerender, unmount } = renderHook(({ id }) => useUnsavedGuard(id, true, () => id), { initialProps: { id: "old-run" } });
+  const oldRelease = result.current;
+  rerender({ id: "new-run" });
+  act(() => oldRelease());
+  expect(unsavedSnapshot()).toBe("new-run");
+  let event = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(event);
+  expect(event.defaultPrevented).toBe(true);
+  act(() => result.current());
+  expect(unsavedSnapshot()).toBeNull();
+  event = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(event);
+  expect(event.defaultPrevented).toBe(false);
+  unmount();
 });

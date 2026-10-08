@@ -7,6 +7,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getToken, onAuthChange, onUnauthorized, setSignedOutHold, setToken, wfetch } from "./core";
 
 const changed = vi.fn();
+let unsubscribe: () => void;
+let unsubscribeObserver: (() => void) | undefined;
 const unauthorized = vi.fn();
 const fetchMock = vi.fn<typeof fetch>();
 beforeEach(() => {
@@ -15,12 +17,13 @@ beforeEach(() => {
   changed.mockClear();
   unauthorized.mockClear();
   fetchMock.mockReset();
-  onAuthChange(changed);
+  unsubscribe = onAuthChange(changed);
   onUnauthorized(unauthorized);
   vi.stubGlobal("fetch", fetchMock);
 });
 afterEach(() => {
-  onAuthChange(null);
+  unsubscribe();
+  unsubscribeObserver?.();
   onUnauthorized(() => {});
   setSignedOutHold(false);
   vi.unstubAllGlobals();
@@ -28,7 +31,7 @@ afterEach(() => {
 
 it("publishes token changes after storage settles, including clearing", () => {
   const observed: (string | null)[] = [];
-  onAuthChange(() => observed.push(getToken()));
+  unsubscribeObserver = onAuthChange(() => observed.push(getToken()));
   setToken("first");
   setToken("first", true);
   setToken("second");
@@ -37,12 +40,14 @@ it("publishes token changes after storage settles, including clearing", () => {
 });
 
 it.each(["/auth/logout", "/me/view"])("publishes %s settlement for success, failure and an uncertain network outcome", async (path) => {
+  // The logout is the one write that carries endsSession (health.ts), which is what core.ts keys on.
+  const init = path === "/auth/logout" ? { method: "POST", endsSession: true as const } : { method: "POST" };
   for (const status of [200, 500]) {
     fetchMock.mockResolvedValueOnce(new Response("", { status }));
-    await wfetch(path, { method: "POST" });
+    await wfetch(path, init);
   }
   fetchMock.mockRejectedValueOnce(new TypeError("offline"));
-  await expect(wfetch(path, { method: "POST" })).rejects.toThrow("offline");
+  await expect(wfetch(path, init)).rejects.toThrow("offline");
   expect(changed).toHaveBeenCalledTimes(3);
   expect(fetchMock).toHaveBeenCalledTimes(3);
 });
@@ -80,4 +85,15 @@ it("a held cookie mutation is refused unsent without a settlement notification",
   await expect(wfetch("/me/view", { method: "POST" })).rejects.toMatchObject({ status: 401 });
   expect(changed).not.toHaveBeenCalled();
   expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it("independent listeners dispose without disabling a replacement", () => {
+  const second = vi.fn();
+  const off = onAuthChange(second);
+  setToken("first");
+  unsubscribe();
+  setToken("second");
+  off();
+  expect(changed).toHaveBeenCalledTimes(1);
+  expect(second).toHaveBeenCalledTimes(2);
 });

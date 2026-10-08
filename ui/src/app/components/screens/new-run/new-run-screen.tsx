@@ -36,12 +36,12 @@ import { Chip } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { RUN } from "../../wardyn/copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
-import { PolicyPanel, type PolicyMode } from "../../wardyn/policy-panel";
+import { PolicyPanel } from "../../wardyn/policy-panel";
 import { TierPicker, allowedFromFloor } from "../../wardyn/tier-picker";
 import { TIER_PICKER } from "../../../lib/tier-picker-copy";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { WorkspaceCard } from "./workspace-card";
-import { barrierRequirementReason, clearedSpecOnCustomSwitch } from "./policy-lane";
+import { barrierRequirementReason } from "./policy-lane";
 import { WhatToRunStep } from "./step-bodies";
 import { previewSpec } from "./use-default-policy";
 import { NewRunLaunchPanel } from "./new-run-launch-panel";
@@ -57,14 +57,14 @@ export function NewRunScreen() {
     probeSettled, availableClasses, vaultReason, specText,
     onSpecChange, preflight, preflighting, policyMode,
     gates, adoCeiling, defaultRead, defaultPolicy,
-    governanceProfile, retryDefault, securityOperator, operatorResolved,
-    setSpecText, setPolicyMode, onPickPolicy, savedPolicies,
+    governanceProfile, retryDefault,
+    onPolicyModeChange, onPickPolicy, savedPolicies,
     adoAccess, operator, hasAdditions, added,
     governanceContact, llmReady, pushRules, unattended,
     launch, launchDisabled, launchSpinning, launching,
     policiesLoaded, pin, error, errorSeq,
-    errorPolicy, credentialRefused, refusedProvider, currentBody,
-    preflightRefusal, preflightIsCurrent, preflightFresh, preflightBlock,
+    errorPolicy, credentialRefused, refusedProvider, currentBody, draftRevision,
+    preflightRefusal, invalidateChecks, preflightIsCurrent, preflightFresh, preflightBlock,
     preflightNotChecked, preflightError, preflightErrorSeq, preflightResult,
     providerCandidates, providerAccess, onModelProviderChange, providerChangeNote,
     providerGateState, addWsOpen, reloadWorkspaces,
@@ -254,15 +254,7 @@ export function NewRunScreen() {
                     problem: gates.defaultWorkspaceProblem,
                     onRetry: retryDefault,
                   },
-                  onModeChange: (m: PolicyMode) => {
-                    // Only leaving Saved can leave a loaded (redacted) stored body
-                    // in the editor; Default and Custom never touch the document.
-                    if (policyMode === "saved" && m !== "saved") {
-                      const c = clearedSpecOnCustomSwitch(false, securityOperator && operatorResolved, !!state.selectedPolicyId, modelProviders);
-                      if (c) setSpecText(c);
-                    }
-                    setPolicyMode(m);
-                  },
+                  onModeChange: onPolicyModeChange,
                   picker: (
                     <div className="space-y-2">
                       <Select value={state.selectedPolicyId ?? ""} onValueChange={onPickPolicy}>
@@ -406,7 +398,8 @@ export function NewRunScreen() {
           credentialRefused={credentialRefused}
           refusedProvider={refusedProvider}
           launchBody={currentBody}
-          onPreflight={preflight}
+          draftRevision={draftRevision}
+          onPreflight={async () => invalidateChecks()}
           preflightRefusal={preflightRefusal}
           preflightIsCurrent={preflightIsCurrent}
           preflightFresh={preflightFresh}
