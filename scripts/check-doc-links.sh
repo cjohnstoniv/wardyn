@@ -41,11 +41,13 @@
 #
 # MUST-LINK rule (docs named in scripts/doc-form.d/*.links, one path per line;
 # docs/design/** is never subject to it — it quotes frozen strings):
-#   - a backticked span, or a bare word, that names a tracked file or
-#     directory (repo-relative or relative to the doc) and is not a link's
-#     text FAILS: write it as a link. Names: path.ext for go md sh ts tsx
-#     yaml yml json sql toml py mjs css html example (optional #fragment),
-#     Makefile/Dockerfile/LICENSE/NOTICE, and directories containing a '/'.
+#   - a backticked span, or a bare word, that names a tracked FILE
+#     (repo-relative or relative to the doc) and is not a link's text FAILS:
+#     write it as a link. Names: dir/path.ext for go md sh ts tsx yaml yml
+#     json sql toml py mjs css html example (optional #fragment), and
+#     dir/Makefile, dir/Dockerfile, dir/LICENSE, dir/NOTICE. Not references:
+#     directories (`scripts/`, or a token that resolves to one), names with
+#     no '/' (`Makefile`, `main.go`), the doc's own path, a lone '/'.
 #   - a span or word "path.go:123" (go md ts sh) is a line citation: FAIL
 #     here, counted as a WARN everywhere else. Cite the symbol instead.
 #   - link text that is one backtick span naming a tracked path must be that
@@ -357,6 +359,23 @@ def named_path(src, token):
     return None
 
 
+def file_reference(src, token):
+    """The tracked FILE a token refers to under the must-link rule, or None.
+    Files only (STYLE 4.2): a token with no '/' (a bare name such as
+    `Makefile` or `main.go`), a directory (a trailing '/' or a token that
+    resolves to one), the doc's own path, and prose such as a lone '/' are
+    not references."""
+    if '/' not in token or token.endswith('/'):
+        return None
+    if not (PATH_FILE.match(token) or PATH_NAMED.match(token)):
+        return None
+    bare = token.split('#', 1)[0]
+    for c in (bare, posixpath.normpath(posixpath.join(posixpath.dirname(src), bare))):
+        if c in fileset:
+            return None if c == src else c
+    return None
+
+
 def clean_word(w):
     """A prose word with the punctuation a sentence wraps around it removed."""
     w = re.sub(r'^[(\[{"\'*_<]+', '', w)
@@ -378,7 +397,7 @@ def check_must_link(src, fails):
         if LINE_CITE.match(token):
             fails.append(f'{src}:{line}: line citation `{token}`: cite the symbol, not the line')
             return
-        hit = named_path(src, token)
+        hit = file_reference(src, token)
         if hit is not None:
             n_checked += 1
             kind = 'span' if from_span else 'word'

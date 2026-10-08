@@ -159,8 +159,22 @@ printf '# M\n\nSee `docs/b.md` for more.\n' > "$TMP/docs/m.md"
 bad "a backticked file name that is not a link" "span \`docs/b.md\` names tracked docs/b.md"
 printf '# M\n\nSee docs/b.md for more.\n' > "$TMP/docs/m.md"
 bad "a bare file name that is not a link" "word \`docs/b.md\` names tracked docs/b.md"
-printf '# M\n\nSee `internal/` here.\n' > "$TMP/docs/m.md"
-bad "a backticked directory that is not a link" "names tracked internal"
+printf '# M\n\nSee `docs/sub/file.md` here.\n' > "$TMP/docs/m.md"
+bad "a repo-relative file in a subdirectory" "names tracked docs/sub/file.md"
+printf '# M\n\nSee `sub/file.md` here.\n' > "$TMP/docs/m.md"
+bad "a file named relative to the doc" "names tracked docs/sub/file.md"
+echo 'all:' > "$TMP/docs/sub/Makefile"
+printf '# M\n\nSee `docs/sub/Makefile` here.\n' > "$TMP/docs/m.md"
+bad "a Makefile with a directory" "names tracked docs/sub/Makefile"
+# Not references (STYLE 4.2: files only): the doc's own path, directories
+# (trailing '/', or a token that resolves to one), a name with no '/', a lone
+# '/' between two words. Every one of these names a tracked thing here.
+echo 'x' > "$TMP/Makefile"
+printf '%s\n' '# M' '' \
+  'This page is `docs/m.md`. Sources live in `internal/` and under internal/ (bare word).' \
+  'Also `docs/`, `docs/sub`, `docs/sub/` and the file `Makefile`; one / two; `x.go`.' > "$TMP/docs/m.md"
+ok "own path, directories, names without a '/', a lone '/'"
+rm "$TMP/Makefile" "$TMP/docs/sub/Makefile"
 printf '# M\n\nSee `internal/x.go:12` here.\n' > "$TMP/docs/m.md"
 bad "a line citation" "line citation"
 printf '# M\n\nSee [`docs/a.md`](b.md) here.\n' > "$TMP/docs/m.md"
