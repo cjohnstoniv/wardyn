@@ -403,20 +403,28 @@ func (s *Server) createOrgComponent(w http.ResponseWriter, r *http.Request, cs s
 	writeJSON(w, http.StatusCreated, componentSaved(created))
 }
 
-// handleDeleteComponent is DELETE /components/{id}. The row goes; its
-// restriction stays, so the id is never open to anyone — a deleted component's
-// door must not read as unrestricted. The allow and deny rows naming it are
-// swept: they grant a thing that no longer exists.
+// handleDeleteComponent is DELETE /components/{id}. The row goes and its id ends
+// restricted, so it is never open to anyone — a deleted component's door must
+// not read as unrestricted, whether or not the restriction had been lifted
+// while the component lived. The allow and deny rows naming it are swept: they
+// grant a thing that no longer exists. The store does all three in one
+// transaction, so a failure leaves the component as it was and writes no audit
+// row, and restriction_kept below is a fact about what committed.
 func (s *Server) handleDeleteComponent(w http.ResponseWriter, r *http.Request) {
 	cs, ok := s.componentStoreOr501(w)
 	if !ok {
+		return
+	}
+	deleter, ok := cs.(store.RestrictedComponentDeleter)
+	if !ok {
+		writeErrorReason(w, http.StatusNotImplemented, reasonComponentStoreUnavailable, "components require the Postgres store backend")
 		return
 	}
 	id, ok := parseIDParam(w, r, "id", "component")
 	if !ok {
 		return
 	}
-	deleted, err := cs.DeleteComponent(r.Context(), id, "")
+	deleted, swept, err := deleter.DeleteRestrictedComponent(r.Context(), id, capComponent, principalFromRequest(r))
 	if notFoundIf(w, err, "component", reasonComponentNotFound) {
 		return
 	}
@@ -424,34 +432,9 @@ func (s *Server) handleDeleteComponent(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "delete component", err)
 		return
 	}
-	swept, err := s.sweepComponentGrants(r.Context(), id)
-	if err != nil {
-		writeServerError(w, r, "sweep component grants", err)
-		return
-	}
 	datum := componentWriteDatum(deleted, "delete")
 	datum["grants_removed"], datum["restriction_kept"] = swept, true
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"component.delete", id.String(), "success", mustJSON(datum)))
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// sweepComponentGrants removes the capability grants whose value is this
-// component's id, and returns how many it removed.
-func (s *Server) sweepComponentGrants(ctx context.Context, id uuid.UUID) (int, error) {
-	grants, err := s.cfg.Store.ListCapabilityGrants(ctx)
-	if err != nil {
-		return 0, err
-	}
-	n := 0
-	for _, g := range grants {
-		if g.Capability != capComponent || strings.TrimSpace(g.Value) != id.String() {
-			continue
-		}
-		if err := s.cfg.Store.DeleteCapabilityGrant(ctx, g.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
-			return n, err
-		}
-		n++
-	}
-	return n, nil
 }
