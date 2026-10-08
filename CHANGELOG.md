@@ -31,6 +31,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
   performs no runner or share probe. Its independent per-person limit defaults to 60/minute with a burst of 15,
   configured by `WARDYN_POLICY_PREVIEW_RATE_PER_MIN`. Repository facts preserve full SSH paths and keep
   differing Azure DevOps profiles and ceilings in separate groups; see `docs/sdk.md` (#1918).
+- New Run is four panels — Run, Workspace, Access and Policy — that can be visited in any order, with
+  Launch reachable from every one. Each panel's button counts what is holding Launch on it, and the
+  reason above Launch is a link that shows the right panel and focuses the control to fix. On narrow
+  screens the rail becomes a footer that keeps the verdict and Launch on screen (#1922).
+
+### Changed
+
+- New Run requires a Title. An untyped title is filled from the first line of the Task or Command
+  and stays editable; a run with neither, such as an interactive terminal session, needs one typed.
+  Run details now open the Run panel (#1922).
+- New Run's Command and Startup command are single-line command inputs, and Task, Command and
+  Startup command each keep their own text, so a prompt typed as a Task is never sent as a command.
+  Multi-line scripts are not supported in these fields (#1922).
+- New Run's model provider picker moved from the rail to the Run panel; the rail keeps a summary.
+  A workspace that is not available, or whose git provider is not enabled, is shown as an error
+  beside the Workspace picker, and the second now holds Launch. The "Per-person AWS sign-in" chip is
+  removed, and the Hold option reads "Hold in Wardyn — tool calls wait for approval, by tool rule"
+  with a link to the policy's tool rules (#1922).
 
 ### Fixed
 
@@ -78,6 +96,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   by default and refuses non-loopback listeners in real-tmux mode. Each backend startup mints a fresh
   admin token and derived person credentials, shared with its own Playwright process; explicit test
   token overrides remain supported. The canonical runner preserves explicit hosts and base-path URLs (#1813).
+- Escape on a New Run form with unsaved changes opens the "Leave without saving?" dialog instead of
+  doing nothing. An untouched form still leaves at once. The Runs button, the page's own links, the
+  sidebar, the view switch and the browser's Back button ask the same way (#1920).
 - A configured metrics listener now refuses daemon startup if its address cannot bind,
   before background workers or optional gateways start (#1902). Unset remains off.
 - The terminal takeover regression test now waits for completed input writes separately

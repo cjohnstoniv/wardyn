@@ -196,6 +196,26 @@ export async function navTo(page: Page, label: NavLabel): Promise<void> {
 // #125: a launch that answers 2xx always navigates in the same tick now,
 // warnings or not — there is no longer a held screen to click through, so
 // this is just the click and the wait.
+/** New Run's four panels (#1922). */
+export type NewRunPanel = "run" | "workspace" | "access" | "policy";
+
+const NEW_RUN_PANEL: Record<NewRunPanel, string> = { run: "Run", workspace: "Workspace", access: "Access", policy: "Policy" };
+
+/**
+ * Shows one of New Run's four panels through its panel nav, as a person does.
+ * A control on a panel that is not on screen is hidden, so every spec that
+ * drives New Run reaches its controls through here. Calling it for the panel
+ * already on screen changes nothing.
+ */
+export async function goToNewRunPanel(page: Page, panel: NewRunPanel): Promise<void> {
+  // The button's name may carry an issue count ("Run 1 issue").
+  const step = page
+    .getByRole("navigation", { name: "New run" })
+    .getByRole("button", { name: new RegExp(`^${NEW_RUN_PANEL[panel]}\\b`) });
+  if ((await step.getAttribute("aria-current")) !== "step") await step.click();
+  await expect(step).toHaveAttribute("aria-current", "step");
+}
+
 export async function launchRun(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Launch run" }).click();
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/, { timeout: 15_000 });

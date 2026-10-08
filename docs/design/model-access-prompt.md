@@ -217,7 +217,7 @@ renders its own sign-in control, so the shell strip drops its button here and ke
 | Proxy-injected | `PROXY` | Model credential — injected by the proxy at launch; never written into the sandbox. |
 | Proxy-injected, staged placeholder mounted | `PROXY_STAGED` | Model credential — this deployment injects it at the proxy; the sign-in mounted into the sandbox is staged as a placeholder. |
 | Sandbox-resident, Bedrock family | `SANDBOX_BEDROCK` | Model credential — AWS credentials sign inside the sandbox, so this run holds them for its lifetime. |
-| …chip, per-user row | `SANDBOX_BEDROCK_CHIP_PER_USER` | Per-person AWS sign-in |
+| …chip, per-user row | — | Removed in 0.8.9 (#1922): the sentence above stands alone. Was `SANDBOX_BEDROCK_CHIP_PER_USER`, "Per-person AWS sign-in". |
 | …chip, shared row | `SANDBOX_BEDROCK_CHIP_SHARED` | Admin's credential |
 | Sandbox-resident, Claude subscription (`WARDYN_SUBSCRIPTION_INJECT=off`) | `SANDBOX_SUBSCRIPTION` | Model credential — this deployment mounts the Claude sign-in into the sandbox, so this run holds it for its lifetime. |
 | Image-resident (a `none` roster row, BYOA) | `IMAGE` | Wardyn wires no model credential — the image brings its own, and Wardyn cannot say where it lives. |

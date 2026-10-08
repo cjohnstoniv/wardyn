@@ -100,6 +100,7 @@ import { act, beat, caption, centerInFrame, chapter, PACE, spotlight } from "./o
 // out of stage() inside a test body rather than closing over a module binding.
 import { stage } from "./stage";
 import { sweepStaleState } from "./sweep";
+import { newRunPanel } from "./funnel";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -492,6 +493,7 @@ test("A4 — save, then reuse", async () => {
   // "Reuse a saved policy" is the Policy panel's MODE ROW (an OptionCard — an
   // aria-pressed <button> whose accessible name is its title plus its hint, so
   // prefix-match the title). The picker renders once this half is lit.
+  await newRunPanel(page, "policy");
   await act(page, page.getByRole("button", { name: /^Reuse a saved policy/ }), "Select saved policy.");
   await act(page, page.getByRole("combobox", { name: "Saved policy" }));
   await act(page, page.getByRole("option", { name: POLICY_NAME }));

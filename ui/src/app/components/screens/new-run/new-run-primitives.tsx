@@ -42,12 +42,15 @@ export function Seg({
   onChange,
   label,
   hint,
+  id,
 }: {
   options: { id: string; label: string; disabled?: boolean }[];
   value: string;
   onChange: (id: string) => void;
   label: string;
   hint?: React.ReactNode;
+  /** The group's id, when an issue link has to find it. */
+  id?: string;
 }) {
   const labelId = React.useId();
   return (
@@ -55,7 +58,7 @@ export function Seg({
       <div id={labelId} className="text-sm font-medium text-foreground">
         {label}
       </div>
-      <div role="radiogroup" aria-labelledby={labelId} className="flex flex-wrap gap-2">
+      <div id={id} role="radiogroup" aria-labelledby={labelId} className="flex flex-wrap gap-2">
       {options.map((o) => (
         <button
           key={o.id}

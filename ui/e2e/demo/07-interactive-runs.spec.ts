@@ -84,7 +84,7 @@ import {
   spotlight,
   typeInTerminal,
 } from "./overlay";
-import { decide } from "./funnel";
+import { decide, newRunPanel } from "./funnel";
 import { sweepStaleState } from "./sweep";
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll.
 import { stage } from "./stage";
@@ -226,6 +226,7 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   await beat(page, BEAT_SHORT + 400);
 
   const title = page.getByLabel("Title");
+  await newRunPanel(page, "run");
   await title.fill(RUN_TITLE);
 
   // Agent task this time — and Interactive, which is the video.
@@ -268,6 +269,7 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   // deny_with_review) — confined by construction, the same default the old
   // "Confined" radio asserted. Clicking the Minimal chip re-asserts it for
   // the camera in one click.
+  await newRunPanel(page, "policy");
   await act(page, page.getByRole("button", { name: "Minimal" }), "Minimal — confined.");
   await caption(page, "And the network is still default-deny — nothing out unless we list it.");
   await beat(page, PACE.read);
