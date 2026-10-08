@@ -275,6 +275,12 @@ Three more the tier inherits rather than introduces:
 | `/etc/wardyn/site-config.json` | **MDM** | `0644` | corporate network facts and provider policy; see [below](#etcwardynsite-configjson). | environment-shaped, identical across the fleet, and re-applied after a reset |
 | `/etc/wardyn/age.key` | **the installer, on the device** | `0600` | the age X25519 identity backing this laptop's secret store (`WARDYN_AGE_KEY`) | **never via MDM** — see below |
 
+### `/etc/wardyn/site-config.json`
+
+- corporate network facts — upstream proxy, artifact mirrors, SCM hosts —
+- and, since 0.7.2, the org's **provider policy**: `workspace_providers` and `agent_providers` (`wardyn site-config set`; see the note below this table) —
+- and, since 0.8.4, `branding.logo_path`, a logo file under `/etc/wardyn` ([Console branding](operations/console-branding.md)).
+
 **The two provider blocks, and why an old MDM file cannot delete them.**
 
 - `workspace_providers` says which git hosts and org paths a run may clone from, which credential lanes it may use there, and the ephemeral/drive storage ceilings.
@@ -284,12 +290,6 @@ Three more the tier inherits rather than introduces:
 - `set` prints which post-0.6.6 keys it left as the server already had them.
 - That carry-forward is what stops the 5-minute converge on a laptop whose MDM file predates 0.7.2 from silently deleting the org's provider policy on every tick.
 - To CLEAR a block deliberately, write it as `{}` — the only clear form that behaves the same on this door and on the API.
-
-### `/etc/wardyn/site-config.json`
-
-- corporate network facts — upstream proxy, artifact mirrors, SCM hosts —
-- and, since 0.7.2, the org's **provider policy**: `workspace_providers` and `agent_providers` (`wardyn site-config set`; see the note below this table) —
-- and, since 0.8.4, `branding.logo_path`, a logo file under `/etc/wardyn` ([Console branding](operations/console-branding.md)).
 
 ### An org `default_disk_mib` runs UNCAPPED here, with a warning
 
@@ -359,18 +359,14 @@ Five files, all under [`deploy/desktop/`](../deploy/desktop/):
 ### `install.sh`
 
 - Run once per device, as root (an MDM package's postinstall step, or by hand for a pilot).
-- Creates `/etc/wardyn`,
-- mints `age.key` if one doesn't already exist (`wardynd -gen-age-key`, `0600`, never overwritten — see [What the enrolment mint pulls](#what-the-enrolment-mint-pulls), because that one command runs a container image as root),
-- and registers the platform's converge job —
-- [`com.wardyn.daemon.plist`](../deploy/desktop/com.wardyn.daemon.plist) with launchd on macOS, `wardyn.service` + `wardyn.timer` with systemd on Linux —
-- pointed at `wardyn-desktop.sh` wherever the installer bundle sits on disk.
+- Creates `/etc/wardyn`, mints `age.key` if one doesn't already exist (`wardynd -gen-age-key`, `0600`, never overwritten — see [What the enrolment mint pulls](#what-the-enrolment-mint-pulls), because that one command runs a container image as root),
+- and registers the platform's converge job — [`com.wardyn.daemon.plist`](../deploy/desktop/com.wardyn.daemon.plist) with launchd on macOS, `wardyn.service` + `wardyn.timer` with systemd on Linux — pointed at `wardyn-desktop.sh` wherever the installer bundle sits on disk.
 - `--uninstall` reverses it (keeping `age.key` and the database); `--uninstall --purge` destroys both.
 
 ### `com.wardyn.daemon.plist`
 
 - The launchd `LaunchDaemon`.
-- Runs `wardyn-desktop.sh up` at load and every 5 minutes after (`StartInterval`) —
-- the same "re-assert, don't assume" posture MDM uses for the files it owns, not a foreground process launchd has to keep alive
+- Runs `wardyn-desktop.sh up` at load and every 5 minutes after (`StartInterval`) — the same "re-assert, don't assume" posture MDM uses for the files it owns, not a foreground process launchd has to keep alive
 - (`wardynd`'s own container carries `restart: unless-stopped`; this job's only work is making sure the *stack* is up).
 
 ### `wardyn.service` + `wardyn.timer`
@@ -384,11 +380,9 @@ Five files, all under [`deploy/desktop/`](../deploy/desktop/):
 
 - What the plist actually runs.
 - Reads the envelope out of `/etc/wardyn`,
-- brings up [`deploy/desktop/docker-compose.yaml`](../deploy/desktop/docker-compose.yaml) (which `include:`s the same [compose stack](../deploy/compose/README.md) every other single-host deployment uses,
-- and exports `WARDYN_MANAGED_DIR=/etc/wardyn` so that stack's own read-only mount gives `WARDYN_DEFAULT_POLICY` sight of the managed policy file),
+- brings up [`deploy/desktop/docker-compose.yaml`](../deploy/desktop/docker-compose.yaml) (which `include:`s the same [compose stack](../deploy/compose/README.md) every other single-host deployment uses, and exports `WARDYN_MANAGED_DIR=/etc/wardyn` so that stack's own read-only mount gives `WARDYN_DEFAULT_POLICY` sight of the managed policy file),
 - waits for `/healthz` on the published port (`WARDYN_UP_PORT`: process environment including `secret.env`, then `wardyn.env`, then 8080;
-- a value that is not a whole number from 1 to 65535 stops the launcher with a message naming the key),
-- and idempotently applies `site-config.json` if MDM has delivered one.
+- a value that is not a whole number from 1 to 65535 stops the launcher with a message naming the key), and idempotently applies `site-config.json` if MDM has delivered one.
 
 ### What the enrolment mint pulls
 
@@ -683,6 +677,6 @@ diff <(curl -fsS http://127.0.0.1:8080/api/v1/policies/default | python3 -c "${N
 ```
 
 - That last line should print no diff at all.
-- The point is confirming a real launchd job, on a real Mac, against a real Docker Desktop or Colima install, actually brings the stack up and serves the managed policy
-  - (once normalized for the three `omitempty` keys above, a real content difference still shows).
+- The point is confirming a real launchd job, on a real Mac, against a real Docker Desktop or Colima install,
+  - actually brings the stack up and serves the managed policy (once normalized for the three `omitempty` keys above, a real content difference still shows).
 - Anything else it prints (a launchd load failure, a Colima `WARDYN_DOCKER_SOCK` miss, a healthz timeout) is exactly the gap this smoke run exists to find.

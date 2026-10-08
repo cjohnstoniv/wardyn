@@ -99,7 +99,7 @@ Only the first two rules below remove content. Nothing else is removed or reloca
 - No `github.com/…/blob/…` URLs for in-repo targets, except text printed at runtime, which pins `main` or a tag.
 - No leading `/`. `./` only for a same-directory target that would otherwise read as a bare word.
 - Code spans, not references: commands, flags, bare file names (`main.go`), directories (`scripts/`), runtime paths (`/etc/wardyn`) and the doc's own path.
-- A link whose text is a backtick span that resolves to a tracked path must target that same path.
+- A link whose text is a backtick span with a directory part that resolves to a tracked path must target that same path.
 - The backticked path is repo-relative; the target adds one `../` per directory level of the writing file. The gate catches a wrong depth.
 
 ### 2.2 Threat-model citations
