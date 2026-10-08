@@ -47,8 +47,10 @@
 # blockquote text still count against the sentence cap — a 39-word sentence
 # hiding in a table cell is exactly the prose creep rule 5 is for.
 #
-# BUDGET (grow-fails): "--budget <doc>=<N>" (repeatable) and lines "path=N" in
-# scripts/doc-form.d/*.budget fail when a doc's PROSE words exceed N. Prose
+# BUDGET (grow-fails): "--budget '<doc>=<N>[ share=<S>]'" (repeatable) and
+# lines "path=N share=S" in scripts/doc-form.d/*.budget ("share=S" optional)
+# fail when a doc's PROSE words exceed N, or when its STRICT paragraph share
+# (the measure above, on any tier) exceeds S percent. Prose
 # words = whitespace-separated words outside code fences, excluding table
 # pipes, table separator rows, blockquote markers and list markers. wc -w is
 # not the measure: converting prose to tables adds markup words, so wc -w can
@@ -95,7 +97,7 @@ MAX_CELL_WORDS=40
 # (sentence length, the original paragraph share, summary) until a lane lists
 # them — a listed doc moves from ASSERTED_DOCS to the strict set. The report
 # prints each legacy doc's strict numbers so the remaining debt stays visible.
-# scripts/doc-form.d/*.budget ("path=N") adds prose-word budgets. Both file
+# scripts/doc-form.d/*.budget ("path=N share=S") adds budgets. Both file
 # kinds skip blank lines and '#' comments. nullglob keeps an empty directory
 # from yielding a literal '*.list'.
 shopt -s nullglob
@@ -117,31 +119,35 @@ for d in "${ASSERTED_DOCS[@]}"; do
   [[ $strict -eq 0 ]] && LEGACY_DOCS+=("$d")
 done
 
+# A budget is "<doc>=<N>" or "<doc>=<N> share=<S>"; runs of whitespace are
+# collapsed to one space so a file line and a quoted --budget argument parse
+# the same way.
 BUDGETS=()
+norm_budget() { local -a w; read -r -a w <<<"$1" || true; echo "${w[*]-}"; }
 for f in scripts/doc-form.d/*.budget; do
   while IFS= read -r line || [[ -n "$line" ]]; do
-    line="${line%%#*}"
-    line="${line//[[:space:]]/}"
+    line="$(norm_budget "${line%%#*}")"
     [[ -z "$line" ]] && continue
     BUDGETS+=("$line")
   done < "$f"
 done
 shopt -u nullglob
 
-# --budget <doc>=<N> (repeatable), in addition to the *.budget files.
+# --budget '<doc>=<N>[ share=<S>]' (repeatable), in addition to the *.budget files.
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --budget)
-      [[ $# -ge 2 ]] || { echo "doc-form.sh: --budget needs <doc>=<N>" >&2; exit 2; }
-      BUDGETS+=("$2"); shift 2 ;;
+      [[ $# -ge 2 ]] || { echo "doc-form.sh: --budget needs <doc>=<N>[ share=<S>]" >&2; exit 2; }
+      BUDGETS+=("$(norm_budget "$2")"); shift 2 ;;
     --budget=*)
-      BUDGETS+=("${1#--budget=}"); shift ;;
+      BUDGETS+=("$(norm_budget "${1#--budget=}")"); shift ;;
     *)
-      echo "usage: doc-form.sh [--budget <doc>=<N>]..." >&2; exit 2 ;;
+      echo "usage: doc-form.sh [--budget '<doc>=<N>[ share=<S>]']..." >&2; exit 2 ;;
   esac
 done
 for b in "${BUDGETS[@]+"${BUDGETS[@]}"}"; do
-  [[ "$b" =~ ^[^=]+=[0-9]+$ ]] || { echo "doc-form.sh: bad budget '$b' (want <doc>=<N>)" >&2; exit 2; }
+  [[ "$b" =~ ^[^=\ ]+=[0-9]+(\ share=[0-9]+)?$ ]] ||
+    { echo "doc-form.sh: bad budget '$b' (want <doc>=<N>[ share=<S>])" >&2; exit 2; }
 done
 
 python3 - "${MAX_SENTENCE_WORDS}" "${MAX_PARAGRAPH_SHARE}" "${MAX_PARAGRAPH_WORDS}" \
@@ -491,23 +497,34 @@ for path in asserted_paths:
         fail = 1
 
 print()
-print(f"=== doc-form prose-word budgets ({len(budget_specs)} docs; a doc whose prose grew fails) ===")
+print(f"=== doc-form prose-word budgets ({len(budget_specs)} docs; a doc whose prose or share grew fails) ===")
 if not budget_specs:
     print("  no budgets set")
 for spec in budget_specs:
-    path, _, limit = spec.rpartition('=')
+    first, _, share_part = spec.partition(' ')
+    path, _, limit = first.partition('=')
     limit = int(limit)
+    # share=S gates the STRICT share (quote lines and over-cap items are
+    # prose), whatever tier the doc is on.
+    max_doc_share = int(share_part[len('share='):]) if share_part else None
     try:
         r = analyze(path)
     except FileNotFoundError:
         print(f"  FAIL {path}: file not found")
         fail = 1
         continue
+    ok = True
     if r['prose_words'] > limit:
         print(f"  FAIL {path}: {r['prose_words']} prose words (budget {limit}, over by {r['prose_words'] - limit})")
-        fail = 1
+        ok = False
+    if max_doc_share is not None and r['share'] > max_doc_share:
+        print(f"  FAIL {path}: strict paragraph share {r['share']:.1f}% (budget share {max_doc_share}%)")
+        ok = False
+    if ok:
+        shown = f", strict share {r['share']:.1f}% (budget {max_doc_share}%)" if max_doc_share is not None else ''
+        print(f"  ok   {path} ({r['prose_words']} prose words, budget {limit}{shown})")
     else:
-        print(f"  ok   {path} ({r['prose_words']} prose words, budget {limit})")
+        fail = 1
 
 print()
 print("doc-form gate: " + ("PASS" if fail == 0 else "FAIL"))

@@ -200,6 +200,41 @@ if run_gate --budget docs/scratch/budget.md=11 --budget docs/scratch/budget.md=3
 fi
 if run_gate --budget docs/scratch/missing.md=5; then fail "a budget on a missing doc must FAIL"; fi
 if run_gate --budget not-a-budget; then fail "a malformed --budget must be refused"; fi
+if run_gate --budget 'docs/scratch/budget.md=11 share=x'; then fail "a malformed share= must be refused"; fi
 echo "ok  budget files, repeated flags, missing docs and bad specs"
+
+# 9. share=S gates the STRICT share. This page has 5 counted lines, 2 of
+#    them prose (the summary and the quote line): strict share 40.0%. The
+#    legacy measure would say 20% (it does not count quote lines), so a gate
+#    on the wrong measure passes share=39.
+cat > "$TMP/docs/scratch/share.md" <<'DOC'
+# Scratch
+
+Summary line here.
+
+## Section
+
+- one
+
+> quoted.
+DOC
+run_gate --budget 'docs/scratch/share.md=7 share=40' ||
+  fail "a doc AT its share budget must PASS: $(gate_says --budget 'docs/scratch/share.md=7 share=40')"
+echo "ok  a doc at its share budget passes"
+out="$(gate_says --budget 'docs/scratch/share.md=7 share=39')"
+grep -qF "strict paragraph share 40.0% (budget share 39%)" <<<"$out" ||
+  fail "a doc over its share budget must FAIL and say so: $out"
+if run_gate --budget 'docs/scratch/share.md=7 share=39'; then
+  fail "a doc over its share budget must exit non-zero"
+fi
+echo "ok  a doc over its share budget fails (strict share, not legacy)"
+printf 'docs/scratch/share.md=7\tshare=39   # grew\n' > "$TMP/scripts/doc-form.d/t.budget"
+out="$(gate_says)"
+grep -qF "strict paragraph share 40.0% (budget share 39%)" <<<"$out" ||
+  fail "a *.budget line 'path=N share=S' over its share must FAIL and say so: $out"
+echo "docs/scratch/share.md=7 share=40" > "$TMP/scripts/doc-form.d/t.budget"
+run_gate || fail "a *.budget line 'path=N share=S' at its share must PASS: $(gate_says)"
+rm -f "$TMP/scripts/doc-form.d/t.budget"
+echo "ok  a *.budget line 'path=N share=S' is read and gated"
 
 echo "doc-form tests: PASS"
