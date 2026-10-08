@@ -374,6 +374,11 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 		// rule — an injection rule is a host/header/format binding and has no
 		// business carrying identity.
 		Snapshot json.RawMessage `json:"snapshot"`
+		// Shared is DECLARED for the same reason and read the same way: from
+		// the grant, by apiKeyScopeShared, never carried onto the rule. Only
+		// the component gate authors it (an org component's operator-provided
+		// secret); validateEligibleGrantMode refuses it in any authored policy.
+		Shared bool `json:"shared"`
 		// PinPath/PinQuery narrow WHICH requests to Host may carry the
 		// credential. Unlike Snapshot they ARE the rule's business — they
 		// describe the request, not the identity — so they are carried through
@@ -409,6 +414,32 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 		Host: sc.Host, Header: sc.Header, SecretName: sc.SecretName, Format: sc.Format,
 		RequireTLS: sc.RequireTLS, PinPath: sc.PinPath, PinQuery: sc.PinQuery, PinRoutes: sc.PinRoutes,
 	}, nil
+}
+
+// apiKeyScopeShared reports whether an api_key grant scope sets `shared`: the
+// one reader of a field injectionRuleFromScope accepts and throws away. A
+// lenient one-field decode, so it answers for any scope shape; an undecodable
+// scope is not shared (the strict decode refuses it on its own).
+func apiKeyScopeShared(scope json.RawMessage) bool {
+	var sc struct {
+		Shared bool `json:"shared"`
+	}
+	return json.Unmarshal(scope, &sc) == nil && sc.Shared
+}
+
+// injectionGrantRead is the namespace the injection sink reads an api_key
+// grant's stored secret from, and whether that read is own-row-only
+// (secretstore.GrantRead). A `shared` grant — an org component's provided
+// secret — reads the OPERATOR's row and only it, whoever owns the run and
+// whatever they hold under the same name; every other grant is
+// grantReadOwner's rule, unchanged. It reads the scope and nothing else, so a
+// shared grant still takes the sink's one value read and the tail after it
+// (format, mask registration, audit, expiry) like every other grant.
+func injectionGrantRead(scope json.RawMessage, subject string, ownerOnly, operatorOwned bool) (owner string, ownRowOnly bool) {
+	if apiKeyScopeShared(scope) {
+		return "", true
+	}
+	return grantReadOwner(subject, ownerOnly, operatorOwned), ownerOnly
 }
 
 // githubScopeRepos decodes a github_token grant scope {"repos":[...]} and returns

@@ -546,6 +546,14 @@ func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 		if sinkReservedSecret(rule.SecretName) {
 			return fmt.Errorf("eligible_grants[%d]: api_key references reserved secret name %q", i, rule.SecretName)
 		}
+		// `shared` pins the sink's read to the OPERATOR's namespace, which is
+		// the component gate's to decide for an org component's provided
+		// secret and nobody's to author: a policy setting it would hand the
+		// run an operator credential by name. Here, in the arm the strict and
+		// the lenient (recorded) decodes share, so every authored door refuses it.
+		if apiKeyScopeShared(g.Scope) {
+			return fmt.Errorf("eligible_grants[%d]: api_key scope sets shared: shared is set by Wardyn for an org component, never authored", i)
+		}
 		if !egress.ValidHeaderName(rule.Header) {
 			return fmt.Errorf("eligible_grants[%d]: api_key header %q is not a valid HTTP header name", i, rule.Header)
 		}
