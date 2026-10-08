@@ -1,0 +1,5 @@
+# Asserted against every cap in scripts/doc-form.sh (strict tier).
+docs/operations/integrations.md
+docs/operations/launch-presets.md
+docs/operations/console-branding.md
+docs/operations/hybrid-laptops.md

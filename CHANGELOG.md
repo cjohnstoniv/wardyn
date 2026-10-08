@@ -81,6 +81,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   opens with is YAML. New Run's editor no longer shows the safety meter, the Fields list and its
   Insert buttons, or the host-count chips; Policies keeps them. Under a saved or default policy the
   Hold option's tool rules link lands on that read-only policy (#1922).
+- The Integrations, Launch presets, Console branding and Managed laptops operations pages are now
+  bullets, tables and alerts, with every repository file they cite linked. No rule, default or limit
+  changed.
 
 ### Fixed
 

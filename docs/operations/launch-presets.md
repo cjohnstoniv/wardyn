@@ -2,11 +2,9 @@
 
 # Launch presets
 
-A launch preset is a named, versioned bundle of `POST /runs` fields
-(image, repo, workspace, drive, a stored `policy_id` or an
-`inline_policy` with its `ui_apps` and ports). A non-console launcher
-sends the preset name plus the per-launch fields instead of the whole
-spec. A preset grants nothing beyond the caller's own ceiling.
+- A launch preset is a named, versioned bundle of `POST /runs` fields (image, repo, workspace, drive, a stored `policy_id` or an `inline_policy` with its `ui_apps` and ports).
+- A non-console launcher sends the preset name plus the per-launch fields instead of the whole spec.
+- A preset grants nothing beyond the caller's own ceiling.
 
 ## Sending a preset
 
@@ -17,14 +15,10 @@ curl -fsS -X POST "$WARDYN_URL/api/v1/runs" -H "Authorization: Bearer $TOKEN" \
 
 1. The server replaces the request body with the preset's stored one.
 2. It keeps the caller's own `title` and `task`.
-3. It runs the unchanged create path: the caller's governance ceiling,
-   capability grants, owner-scoped secrets and drive apply exactly as they
-   would to the same request sent explicitly. A preset that exceeds a
-   member's ceiling is refused the same way an explicit request is.
+3. It runs the unchanged create path: the caller's governance ceiling, capability grants, owner-scoped secrets and drive apply exactly as they would to the same request sent explicitly. A preset that exceeds a member's ceiling is refused the same way an explicit request is.
 4. `POST /runs/preflight` expands a preset the same way.
 
-Alongside `preset`, a request may set only `title`, `task` and
-`preset_version`.
+- Alongside `preset`, a request may set only `title`, `task` and `preset_version`.
 
 | Refusal | Status | Reason | When |
 | --- | --- | --- | --- |
@@ -32,7 +26,7 @@ Alongside `preset`, a request may set only `title`, `task` and
 | Unknown or closed preset | `422` | `preset_unknown` | The name doesn't exist, or isn't open to the caller's user type |
 | Stale version | `409` | `preset_version_changed` | `preset_version` pins a version the preset has since moved past |
 
-The run records `preset` and `preset_version` it was launched from.
+- The run records `preset` and `preset_version` it was launched from.
 
 ## Routes
 
@@ -42,26 +36,22 @@ The run records `preset` and `preset_version` it was launched from.
 | `PUT /presets/{name}` | Admin only. Creates the preset at version 1, or replaces it and moves the version by one; an identical body changes nothing, not even the version |
 | `DELETE /presets/{name}` | Admin only. Runs launched from it keep their stamp |
 
-A write checks the name, the user types it names, and that the request is a
-well-formed create body with no per-launch field. Everything else is checked
-at launch, under the launching caller.
+- A write checks the name, the user types it names, and that the request is a well-formed create body with no per-launch field.
+- Everything else is checked at launch, under the launching caller.
 
-`ui_apps` in an `inline_policy` reach a member only where their ceiling
-admits them. To hand members an app, point the preset at a stored policy they
-are granted.
+> [!NOTE]
+> `ui_apps` in an `inline_policy` reach a member only where their ceiling admits them. To hand members an app, point the preset at a stored policy they are granted.
 
 ## Audit
 
-Every write that lands is audited (`preset.create`, `preset.update`,
-`preset.delete`; see [AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md)). The create and
-update rows carry the stored request — the only record of what an older
-version contained.
+- Every write that lands is audited (`preset.create`, `preset.update`, `preset.delete`; see [AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md)).
+- The create and update rows carry the stored request — the only record of what an older version contained.
 
 ## Round-trip
 
 Presets round-trip declaratively, like drives:
 
-1. Export the current presets:
+1. Export the presets:
    ```sh
    wardyn preset get > presets.json
    ```

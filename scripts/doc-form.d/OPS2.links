@@ -1,0 +1,5 @@
+# The must-link rule in scripts/check-doc-links.sh applies to these docs.
+docs/operations/integrations.md
+docs/operations/launch-presets.md
+docs/operations/console-branding.md
+docs/operations/hybrid-laptops.md
