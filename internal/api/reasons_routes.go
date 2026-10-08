@@ -868,3 +868,15 @@ const (
 // owner's identity is deactivated or was suspended since the caller was admitted (leaver
 // deprovisioning). One sentence, so a suspension reads like a cut session.
 const reasonIdentityDeactivated = "identity_deactivated"
+
+// The component routes (components_routes.go): a person's saved components under
+// /me/components and the organisation's under /components. The gate's own
+// refusals (a run naming a component) are declared with the gate.
+const (
+	reasonComponentDefinitionInvalid = "component_definition_invalid" // the definition failed the shared validator, or names a secret Wardyn manages
+	reasonComponentSecretMissing     = "component_secret_missing"     // an org component shares a secret the operator has not stored
+	reasonComponentCapReached        = "component_cap_reached"        // the person, or the organisation, is at the saved-component limit
+	reasonComponentNameConflict      = "component_name_conflict"      // another component of this owner already has the name (or, for an org id, the id)
+	reasonComponentNotFound          = "component_not_found"          // no such component of this owner's; another person's and an absent id answer alike
+	reasonComponentStoreUnavailable  = "component_store_unavailable"  // this store cannot hold components
+)

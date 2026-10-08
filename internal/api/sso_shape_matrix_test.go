@@ -205,6 +205,9 @@ func probeOwnerRoute(t *testing.T, srv *Server, method, pattern string, rc class
 }
 
 func seedOwnedBy(ast *authzStore, aap *authzApprovals, rs *recording.FSStore, e routeEntity, owner string) uuid.UUID {
+	if e == entityComponent {
+		return ast.seedComponent(owner)
+	}
 	id := uuid.New()
 	ast.mu.Lock()
 	if e == entityWorkspace {
