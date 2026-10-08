@@ -13,20 +13,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// runComponents is what the component gate decided about one run's components,
-// in the shape the autonomy gate reads. It is declared here, with only the two
-// fields the cap needs, so resolveRunAutonomy's signature exists before the
-// gate that fills it; the gate's lane moves it beside that gate and adds the
-// rest. The zero value means "no components" and caps nothing: it is what every
-// lane that runs no component gate passes (record, scan, verify, revive).
-type runComponents struct {
-	// selfDefined counts the attached components the launcher defined: inline,
-	// or a saved one they own. An organisation's component never counts.
-	selfDefined int
-	// settings is the site config's components block, as the gate read it.
-	settings types.ComponentSettings
-}
-
 // componentAutonomyCause is the bound_by entry, and the sentence clause, that
 // names the organisation's cap. It sits beside the rubric's own field names
 // (egress_open, secrets_powerful, …), so it is spelled the same way.

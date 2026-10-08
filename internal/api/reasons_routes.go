@@ -868,3 +868,18 @@ const (
 // owner's identity is deactivated or was suspended since the caller was admitted (leaver
 // deprovisioning). One sentence, so a suspension reads like a cut session.
 const reasonIdentityDeactivated = "identity_deactivated"
+
+// applyRunComponents' own refusals (components_run.go): the component gate at
+// POST /runs, its Review and the policy preview. Who may attach a component is
+// not here — that is authz's capability_component / capability_feature.
+const (
+	reasonComponentRefInvalid             = "component_ref_invalid"              // components[] is malformed: too many entries, an entry naming both or neither of id and inline, or one component twice
+	reasonComponentStoreUnavailable       = "component_store_unavailable"        // this deployment's store cannot record components
+	reasonComponentDefinitionInvalid      = "component_definition_invalid"       // the component's definition breaks a rule: a host, a delivery, a name Wardyn manages, a model provider's variable
+	reasonComponentSecretNotOwned         = "component_secret_not_owned"         // a secret the component delivers is not one the caller holds in their own namespace
+	reasonComponentSecretMissing          = "component_secret_missing"           // a secret the organisation provides for the component has not been stored
+	reasonComponentHostDenied             = "component_host_denied"              // a host of the component is on a deny list, or is not one the caller's egress_host rows allow
+	reasonComponentHostServesModel        = "component_host_serves_model"        // a host of the component serves a model on this deployment
+	reasonComponentHostCollision          = "component_host_collision"           // a header delivery names a host that already carries a credential on the run
+	reasonComponentResidentDeliveryDenied = "component_resident_delivery_denied" // the organisation turned off env and file delivery (components.deny_resident_delivery)
+)
