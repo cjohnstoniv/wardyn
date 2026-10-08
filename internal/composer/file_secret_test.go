@@ -55,3 +55,34 @@ func TestGrade_FileSecretIsHigh(t *testing.T) {
 		t.Errorf("file_secret graded %+v, want HIGH naming the whole-run residency", it)
 	}
 }
+
+// A profile may list a file_secret pairing the deployment lists, as it may an
+// env_secret one, and only that pairing: GrantWithin (the profile-write
+// comparator) and Leq (which ranks a whole ceiling through it) agree.
+func TestGrantWithin_FileSecretPairing(t *testing.T) {
+	listed := fileSecretGrant("api-token", "corp-token")
+	deployment := types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: []types.GrantSpec{listed}}
+	for _, tc := range []struct {
+		name string
+		g    types.GrantSpec
+		ok   bool
+	}{
+		{"the listed pairing", listed, true},
+		{"approval forced on (a narrowing)", func() types.GrantSpec { g := listed; g.RequiresApproval = true; return g }(), true},
+		{"owner_only set (a narrowing)", func() types.GrantSpec { g := listed; g.OwnerOnly = true; return g }(), true},
+		{"another file name", fileSecretGrant("elsewhere", "corp-token"), false},
+		{"another secret", fileSecretGrant("api-token", "prod-db-password"), false},
+	} {
+		err := GrantWithin(tc.g, deployment.EligibleGrants)
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: GrantWithin = %v, want within=%v", tc.name, err, tc.ok)
+		}
+		profile := types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: []types.GrantSpec{tc.g}}
+		if got := Leq(profile, deployment, types.GovernanceLimits{}, types.GovernanceLimits{}); got != tc.ok {
+			t.Errorf("%s: Leq = %v, want %v", tc.name, got, tc.ok)
+		}
+	}
+	if err := GrantWithin(listed, nil); err == nil || !strings.Contains(err.Error(), "not in the deployment ceiling") {
+		t.Errorf("a file_secret against an empty ceiling = %v, want refused as not in the ceiling (not as an unknown kind)", err)
+	}
+}
