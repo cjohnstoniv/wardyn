@@ -230,7 +230,7 @@ describe("NewRunScreen — the additions line counts the union, not the sum", ()
   // fresh screen has nothing to announce.
   it("says nothing when the JSON already carries every implied host", async () => {
     renderScreen();
-    await screen.findByLabelText(/Spec \(JSON\)/);
+    await screen.findByLabelText(/Spec \(YAML\)/);
     expect(screen.queryByTestId("run-spec-additions")).not.toBeInTheDocument();
   });
 
@@ -241,7 +241,7 @@ describe("NewRunScreen — the additions line counts the union, not the sum", ()
   // which knows nothing about a grant the operator typed.
   it("pins a hand-written api_key grant's host, allow-all included", async () => {
     renderScreen();
-    const box = await screen.findByLabelText(/Spec \(JSON\)/);
+    const box = await screen.findByLabelText(/Spec \(YAML\)/);
     await user.clear(box);
     fireEvent.change(box, {
       target: {
@@ -862,7 +862,7 @@ describe("NewRunScreen — the keyboard contract", () => {
   // away without a word.
   it("counts an edited policy body as dirty on its own", async () => {
     renderScreen();
-    const spec = (await screen.findByLabelText("Spec (JSON)")) as HTMLTextAreaElement;
+    const spec = (await screen.findByLabelText(/^Spec \(YAML\)/)) as HTMLTextAreaElement;
 
     fireEvent.change(spec, {
       target: { value: '{"min_confinement_class": "CC1", "auto_stop_after_sec": 7200}' },

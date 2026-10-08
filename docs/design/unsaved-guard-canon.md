@@ -50,7 +50,7 @@ beside its title while they differ:
 - **Providers screen** (`providers-screen.tsx`) — the `PageHeader` title, driven by the combined
   Git/Storage draft (they share one document and one Save) or the Agents tab's own draft.
 - **Git tab**, **Storage tab** — both chip on that same combined Git/Storage dirty fact, via their
-  Segmented tab labels (`permissions.tsx#Segmented`'s new `dirty` option), so an edit made on one tab
+  Segmented tab labels (`wardyn/segmented.tsx#Segmented`'s `dirty` option), so an edit made on one tab
   is still visible from the other.
 - **Agents tab** (`agents-tab.tsx`) — its own separate resource and draft; chips its own Segmented
   label via an `onDirtyChange` callback to the parent screen.

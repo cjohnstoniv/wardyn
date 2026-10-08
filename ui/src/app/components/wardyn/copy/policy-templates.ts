@@ -30,6 +30,11 @@ export const POLICY_TEMPLATE_COPY = {
   DEFAULT_TITLE: "Use the default policy",
   DEFAULT_HINT: "Launch under the policy set for this deployment.",
   DEFAULT_HINT_PROFILE: (name: string) => `Launch under the policy set by your profile, ${name}.`,
+  // The other two modes' cards; the literals moved here unchanged from policy-panel.tsx.
+  SAVED_TITLE: "Reuse a saved policy",
+  SAVED_HINT: "One your operators already wrote and named.",
+  CUSTOM_TITLE: "Custom policy",
+  CUSTOM_HINT: "Start from a template and edit the spec for this run.",
   DEFAULT_PREVIEW: "Default policy, read-only",
   // The attached workspace still mounts into the run, so the note says so.
   DEFAULT_NOTE:

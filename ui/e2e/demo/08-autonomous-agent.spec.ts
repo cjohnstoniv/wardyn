@@ -70,6 +70,7 @@ import { act, beat, caption, centerInFrame, chapter, ffwdEnd, ffwdStart, PACE, s
 import { stage } from "./stage";
 import { clearWorkspace, decide, newRunPanel } from "./funnel";
 import { sweepStaleState } from "./sweep";
+import { readSpec, SPEC_LABEL } from "../policy-source";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -406,9 +407,9 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // fill rather than a hardcoded literal so the floor (min_confinement_class)
   // stays whatever is actually on screen — same pattern policies.spec.ts's
   // fillEditor uses for this textarea.
-  const specBox = page.getByLabel("Spec (JSON)");
+  const specBox = page.getByLabel(SPEC_LABEL);
   const heldSpec = JSON.stringify(
-    { ...JSON.parse(await specBox.inputValue()), first_use_approval: "wait_for_review" },
+    { ...(await readSpec(specBox)), first_use_approval: "wait_for_review" },
     null,
     2,
   );

@@ -155,7 +155,7 @@ describe("NewRunScreen — Use the default policy", () => {
 
   it("shows the read-only preview and hides the editor and the additions box", async () => {
     renderScreen();
-    expect(screen.getByLabelText("Spec (JSON)")).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Spec \(YAML\)/)).toBeInTheDocument();
     goToPanel("Policy");
     await chooseDefault();
     expect(await screen.findByText(C.DEFAULT_PREVIEW)).toBeInTheDocument();
@@ -166,7 +166,7 @@ describe("NewRunScreen — Use the default policy", () => {
         "This run launches under this policy as it stands. Your attached workspace mounts into it; nothing else on this page is merged.",
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByLabelText("Spec (JSON)")).toBeNull();
+    expect(screen.queryByLabelText(/^Spec \(YAML\)/)).toBeNull();
     expect(screen.queryByTestId("run-spec-additions")).toBeNull();
     expect(screen.queryByTestId("safety-meter")).toBeNull();
     expect(screen.getByRole("button", { name: /^Check again$/ })).toBeEnabled();
@@ -177,7 +177,7 @@ describe("NewRunScreen — Use the default policy", () => {
     // The title is required and its issue is named first, so it is given.
     setField(await screen.findByLabelText("Title"), "Default mode");
     // Break the Custom document, then choose Default: the broken document is not on the wire.
-    setField(await screen.findByLabelText("Spec (JSON)"), "{ not json");
+    setField(await screen.findByLabelText(/^Spec \(YAML\)/), "{ not json");
     expect(await screen.findByText("The policy spec isn't valid JSON.")).toBeInTheDocument();
     goToPanel("Policy");
     await chooseDefault();
@@ -217,11 +217,11 @@ describe("NewRunScreen — Use the default policy", () => {
   it("Custom -> Default -> Custom keeps the Custom document", async () => {
     renderScreen();
     const edited = JSON.stringify({ ...DEFAULT_SPEC, allowed_domains: ["mine.example"] });
-    setField(await screen.findByLabelText("Spec (JSON)"), edited);
+    setField(await screen.findByLabelText(/^Spec \(YAML\)/), edited);
     goToPanel("Policy");
     await chooseDefault();
     await user.click(screen.getByRole("button", { name: /^Custom policy/ }));
-    expect((screen.getByLabelText("Spec (JSON)") as HTMLTextAreaElement).value).toBe(edited);
+    expect((screen.getByLabelText(/^Spec \(YAML\)/) as HTMLTextAreaElement).value).toBe(edited);
   });
 
   it("the existing options still behave: Reuse a saved policy is the title and launches by reference", async () => {
@@ -367,6 +367,6 @@ describe("NewRunScreen — the default preview's loading line", () => {
     expect(screen.getByText(C.DEFAULT_LOADING).closest("[role=status]")).not.toBeNull();
     // The cards keep working while it loads.
     await user.click(screen.getByRole("button", { name: /^Custom policy/ }));
-    expect(screen.getByLabelText("Spec (JSON)")).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Spec \(YAML\)/)).toBeInTheDocument();
   });
 });

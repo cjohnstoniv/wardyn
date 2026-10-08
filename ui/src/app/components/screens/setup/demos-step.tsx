@@ -30,7 +30,7 @@ import {
 } from "../demos/demo-runner";
 import { type Demo } from "../demos/demo-catalog";
 import { ProfileReview } from "../profile-review";
-import { YamlBlock } from "../../wardyn/code-block";
+import { YamlBlock } from "../../wardyn/yaml-block";
 import { useOperator } from "../../wardyn/operator-context";
 import type { SetupStepId } from "./steps";
 

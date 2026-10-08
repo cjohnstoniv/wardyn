@@ -18,6 +18,7 @@ vi.mock("../../lib/api/runs", () => ({
 
 import { FIELD_HELP } from "./policy-field-help";
 import {
+  parseSpec,
   POLICY_TEMPLATES,
   PolicyPanel,
   templateText,
@@ -63,22 +64,33 @@ function Harness({
   return <PolicyPanel instance={instance} value={text} onChange={setText} {...rest} />;
 }
 
+// YAML is the format the editor opens in; "Spec (JSON)" is the label only once
+// JSON is chosen.
 function specBox(): HTMLTextAreaElement {
-  return screen.getByLabelText("Spec (JSON)") as HTMLTextAreaElement;
+  return screen.getByLabelText(/^Spec \((YAML|JSON)\)/) as HTMLTextAreaElement;
+}
+
+// What a source reads as, in the format the editor opens in. JSON text reads
+// the same way: it is YAML too.
+function read(text: string): RunPolicySpec {
+  const parsed = parseSpec(text);
+  if (!parsed.ok) throw new Error(parsed.message);
+  return parsed.spec;
 }
 
 const VALID = JSON.stringify({ allowed_domains: ["api.anthropic.com"], min_confinement_class: "CC2" }, null, 2);
 
 describe("PolicyPanel — templates", () => {
-  it("every template is parseable JSON that round-trips its const", () => {
+  it("every template round-trips its const, as YAML (the default) and as JSON", () => {
     for (const t of POLICY_TEMPLATES) {
-      expect(JSON.parse(templateText(t))).toEqual(t.spec);
+      expect(read(templateText(t))).toEqual(t.spec);
+      expect(JSON.parse(templateText(t, "json"))).toEqual(t.spec);
     }
   });
 
   it("every template carries auto_stop_after_sec: 3600 EXCEPT allow-all (a load-bearing omission)", () => {
     for (const t of POLICY_TEMPLATES) {
-      const parsed = JSON.parse(templateText(t)) as RunPolicySpec;
+      const parsed = read(templateText(t));
       if (t.id === "allow-all") {
         // allow-all's two highs (allow-all egress + the omitted idle cap =
         // never-reap) are what make the safety meter's "Weakest" reachable
@@ -114,8 +126,9 @@ describe("PolicyPanel — templates", () => {
 
     await user.click(screen.getByRole("button", { name: t.label }));
 
+    expect(screen.getByLabelText(/^Spec \(YAML\)/)).toBe(specBox());
     expect(specBox().value).toBe(templateText(t));
-    expect(JSON.parse(specBox().value)).toEqual(t.spec);
+    expect(read(specBox().value)).toEqual(t.spec);
   });
 });
 
@@ -174,13 +187,13 @@ describe("PolicyPanel — helper rail", () => {
 
     await user.click(screen.getByRole("button", { name: "Insert resources" }));
 
-    const merged = JSON.parse(specBox().value) as RunPolicySpec;
+    const merged = read(specBox().value);
     expect(merged.allowed_domains).toEqual(["api.anthropic.com"]);
     expect(merged.min_confinement_class).toBe("CC2");
     expect(merged.resources).toEqual(FIELD_HELP.resources.snippet);
   });
 
-  it("insert is disabled while the JSON does not parse", async () => {
+  it("insert is disabled while the source does not parse", async () => {
     render(<Harness initial="{ not json" />);
     for (const key of Object.keys(FIELD_HELP)) {
       expect(screen.getByRole("button", { name: `Insert ${key}` })).toBeDisabled();
@@ -192,13 +205,15 @@ describe("PolicyPanel — live derivations", () => {
   it("reports a parse failure instead of deriving from nothing", () => {
     render(<Harness initial="{ not json" />);
     const status = screen.getByRole("status");
-    expect(within(status).getByText(/invalid json/i)).toBeInTheDocument();
-    expect(within(status).queryByText("Valid JSON")).toBeNull();
+    expect(within(status).getByText(/^Invalid YAML — /)).toBeInTheDocument();
+    expect(within(status).queryByText("Valid YAML")).toBeNull();
+    // Where it broke, as its own line the field is described by.
+    expect(screen.getByText(/^Line \d+, column \d+$/)).toBeInTheDocument();
   });
 
-  it("a top-level array is a parse failure too (a spec is an object)", () => {
+  it("a top-level array is a parse failure too (a spec is a mapping)", () => {
     render(<Harness initial="[]" />);
-    expect(screen.getByText(/must be a JSON object/i)).toBeInTheDocument();
+    expect(screen.getByText("Invalid YAML — Policy source must be a mapping.")).toBeInTheDocument();
   });
 
   it("derives egress, lifecycle and the barrier floor from a valid spec", async () => {
@@ -207,7 +222,7 @@ describe("PolicyPanel — live derivations", () => {
     await user.click(screen.getByRole("button", { name: "CI baseline" }));
 
     const status = screen.getByRole("status");
-    expect(within(status).getByText("Valid JSON")).toBeInTheDocument();
+    expect(within(status).getByText("Valid YAML")).toBeInTheDocument();
     expect(within(status).getByText("No egress")).toBeInTheDocument();
     expect(within(status).getByText("Auto-stop: 60 min idle")).toBeInTheDocument();
     // min_confinement_class CC1 renders as the friendly barrier label.
@@ -254,7 +269,7 @@ describe("PolicyPanel — run instance extras", () => {
       />,
     );
     expect(screen.getByText("policy picker")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Spec (JSON)")).toBeNull();
+    expect(screen.queryByLabelText(/^Spec \(/)).toBeNull();
 
     await user.click(screen.getByRole("button", { name: /custom policy/i }));
     expect(onModeChange).toHaveBeenCalledWith("custom");
@@ -302,7 +317,7 @@ describe("PolicyPanel — the tool_rules section", () => {
   const user = userEvent.setup({ pointerEventsCheck: 0 });
 
   function currentSpec(): RunPolicySpec {
-    return JSON.parse(specBox().value) as RunPolicySpec;
+    return read(specBox().value);
   }
 
   it("adds a rule and persists it into the spec document", async () => {
@@ -418,7 +433,7 @@ describe("PolicyPanel — the push_rules section", () => {
   const user = userEvent.setup({ pointerEventsCheck: 0 });
 
   function currentSpec(): RunPolicySpec {
-    return JSON.parse(specBox().value) as RunPolicySpec;
+    return read(specBox().value);
   }
 
   it("renders alongside the tool_rules section, not in place of it", () => {
@@ -512,5 +527,59 @@ describe("toolRulesSummary", () => {
         ],
       }),
     ).toBe("1 rule · Read allowed. Anything else is denied.");
+  });
+});
+
+// The editor holds one authored string. A structured control is a parse, one
+// key rewritten, and the string again — so what the person typed around that
+// key, comments included, is still there afterwards.
+describe("PolicyPanel — one source string, YAML unless JSON is chosen", () => {
+  const COMMENTED = "# floor first\nmin_confinement_class: CC2 # wall\nallowed_domains:\n  - api.anthropic.com # model\n";
+
+  it("Insert and the rule sections keep the comments around the key they write", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<Harness initial={COMMENTED} />);
+
+    await user.click(screen.getByRole("button", { name: "Insert resources" }));
+    await user.click(screen.getByRole("button", { name: "Add rule" }));
+    setField(screen.getByLabelText("Tool 1"), "Bash");
+
+    const text = specBox().value;
+    expect(text).toContain("# floor first");
+    expect(text).toContain("min_confinement_class: CC2 # wall");
+    expect(text).toContain("- api.anthropic.com # model");
+    expect(read(text).resources).toEqual(FIELD_HELP.resources.snippet);
+    expect(read(text).tool_rules).toEqual([{ tool: "Bash", effect: "hold" }]);
+  });
+
+  it("keeps its own format when the caller holds none: JSON is a confirmed choice, and templates follow it", async () => {
+    const user = userEvent.setup();
+    render(<Harness initial={COMMENTED} />);
+    await user.click(screen.getByRole("button", { name: "JSON" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Switch to JSON" }));
+
+    const box = await screen.findByLabelText(/^Spec \(JSON\)/);
+    expect(box).toHaveValue(JSON.stringify(read(COMMENTED), null, 2));
+    expect(within(screen.getByRole("status")).getByText("Valid JSON")).toBeInTheDocument();
+
+    const t = POLICY_TEMPLATES.find((x) => x.id === "ci")!;
+    await user.click(screen.getByRole("button", { name: t.label }));
+    expect(box).toHaveValue(templateText(t, "json"));
+  });
+
+  it("hands a conversion to the caller that holds the format", async () => {
+    const user = userEvent.setup();
+    const onFormatChange = vi.fn();
+    render(<Harness initial={'{"allowed_domains": []}'} format="json" onFormatChange={onFormatChange} />);
+    expect(screen.getByLabelText(/^Spec \(JSON\)/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "YAML" }));
+    expect(onFormatChange).toHaveBeenCalledWith("yaml");
+    expect(specBox().value).toBe("allowed_domains: []\n");
+  });
+
+  it("explicit JSON is strict: YAML text under it is invalid, with JSON's own words", () => {
+    render(<Harness initial={COMMENTED} format="json" onFormatChange={() => {}} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/^Invalid JSON — /);
+    expect(screen.getByRole("button", { name: "Insert resources" })).toBeDisabled();
   });
 });

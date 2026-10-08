@@ -113,6 +113,7 @@ import { dexSignIn, dexSignOut } from "./sso";
 // SIGNED-OUT context: 04c's session does not carry over, so this episode signs
 // itself in on camera.
 import { stage } from "./stage";
+import { SPEC_LABEL } from "../policy-source";
 import { newRunPanel } from "./funnel";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
@@ -399,7 +400,7 @@ async function memberRunForm(title: string, narrate: boolean): Promise<void> {
       ? "Minimal policy — the spec box holds the rules this run starts with. You'll write your own in 'Your first policy'." // C39a
       : undefined,
   );
-  await page.getByRole("textbox", { name: "Spec (JSON)" }).fill(MEMBER_SPEC);
+  await page.getByLabel(SPEC_LABEL).fill(MEMBER_SPEC);
   await act(
     page,
     page.getByRole("radio", { name: /^Fence/ }),

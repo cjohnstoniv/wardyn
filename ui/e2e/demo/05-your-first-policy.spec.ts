@@ -100,6 +100,7 @@ import { act, beat, caption, centerInFrame, chapter, PACE, spotlight } from "./o
 // out of stage() inside a test body rather than closing over a module binding.
 import { stage } from "./stage";
 import { sweepStaleState } from "./sweep";
+import { SPEC_LABEL } from "../policy-source";
 import { newRunPanel } from "./funnel";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
@@ -303,7 +304,7 @@ test("A2 — the safety meter", async () => {
   const page = stage();
   const dlg = editorDialog(page);
   const meter = dlg.getByTestId("safety-meter");
-  const specBox = dlg.getByLabel("Spec (JSON)");
+  const specBox = dlg.getByLabel(SPEC_LABEL);
 
   // The meter is already grading Act 1's Package-registries document. Introduce
   // it, then surface its own title — it grades the DOCUMENT, not any one run.
@@ -376,7 +377,7 @@ test("A3 — the confinement floor", async () => {
   test.setTimeout(180_000);
   const page = stage();
   const dlg = editorDialog(page);
-  const specBox = dlg.getByLabel("Spec (JSON)");
+  const specBox = dlg.getByLabel(SPEC_LABEL);
 
   // Settle on the policy we will save — floored at CC2, two hosts, review-first.
   await specBox.fill(JSON.stringify(POLICY_SPEC, null, 2));

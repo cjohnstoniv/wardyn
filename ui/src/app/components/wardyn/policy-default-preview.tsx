@@ -12,7 +12,7 @@ import type { RunPolicySpec } from "../../lib/types";
 import { useDeferredBusy } from "../../lib/use-deferred-busy";
 import { POLICY_TEMPLATE_COPY as C } from "./copy/policy-templates";
 import { Button } from "../ui/button";
-import { YamlBlock } from "./code-block";
+import { PolicyDocumentView } from "./policy-document/policy-document";
 import { SectionLabel } from "./primitives";
 import { STATES } from "./states";
 
@@ -45,7 +45,9 @@ export function DefaultPolicyPreview({ view }: { view: DefaultPolicyView }) {
       )}
       {view.status === "ready" && view.spec && (
         <>
-          <YamlBlock value={view.spec} />
+          {/* Read-only: this lane launches under the default as it stands. A
+              member's read arrives with some values blanked, and says so. */}
+          <PolicyDocumentView spec={view.spec} />
           <p className="text-meta text-muted-foreground">{C.DEFAULT_NOTE}</p>
         </>
       )}

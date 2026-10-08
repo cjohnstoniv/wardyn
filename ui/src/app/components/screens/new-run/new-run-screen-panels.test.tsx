@@ -386,7 +386,7 @@ describe("New Run — Tool approvals under Hold", () => {
     renderScreen();
     await user.click(await screen.findByRole("radio", { name: /^Autonomous/ }));
     await user.click(screen.getByRole("radio", { name: HOLD }));
-    fireEvent.change(screen.getByLabelText("Spec (JSON)"), {
+    fireEvent.change(screen.getByLabelText(/^Spec \(YAML\)/), {
       target: { value: JSON.stringify({ min_confinement_class: "CC1", tool_rules: [{ tool: "Bash", effect: "hold" }] }) },
     });
     const sentence = "1 rule · Bash held. Anything else is held.";

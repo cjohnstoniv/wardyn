@@ -23,14 +23,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
-- A strict YAML/JSON policy-source parser and comment-preserving edit helpers for the upcoming
-  policy editors. Ambiguous keys, aliases, tags, directives and unsafe numbers are refused before
-  JSON conversion. Editor integration follows separately (#1917).
+- A strict YAML/JSON policy-source parser and comment-preserving edit helpers for the policy
+  editors. Ambiguous keys, aliases, tags, directives and unsafe numbers are refused before JSON
+  conversion (#1917).
 - `POST /api/v1/runs/policy-preview` returns authorized, clamped and redacted policy facts for incomplete
   run drafts, with readiness checks marked pending. It reads no credential values, renews nothing and
   performs no runner or share probe. Its independent per-person limit defaults to 60/minute with a burst of 15,
   configured by `WARDYN_POLICY_PREVIEW_RATE_PER_MIN`. Repository facts preserve full SSH paths and keep
   differing Azure DevOps profiles and ceilings in separate groups; see `docs/sdk.md` (#1918).
+- The console shows a policy as one read-only document with Summary, YAML and JSON views: on
+  Policies (the default and each saved policy), in the governance profile editor, on a run's Policy
+  tab and for New Run's default policy. Summary names every setting in plain words under headings
+  and lists repeated values once under one title; a key it does not know still appears, under its
+  raw name. Copy YAML and Copy JSON copy the policy in that format. Viewing never changes a
+  policy (#1921).
 - New Run is four panels — Run, Workspace, Access and Policy — that can be visited in any order, with
   Launch reachable from every one. Each panel's button counts what is holding Launch on it, and the
   reason above Launch is a link that shows the right panel and focuses the control to fix. On narrow
@@ -38,6 +44,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- Policy editors open in YAML (`Spec (YAML)`) in Policies, Governance and New Run. JSON remains an
+  explicit choice (`Spec (JSON)`), and JSON text pasted into the YAML editor is still read. A source
+  that does not parse names its line and column, holds the structured controls, and cannot be
+  saved. Templates, Insert and the rule sections rewrite only the keys they change, so comments
+  elsewhere in the text survive an edit; comments are not stored when a policy is saved or a run
+  launches. Switching YAML to JSON asks first, because it drops them (#1921).
+- A governance profile's ceiling reads first and is edited through "Edit policy". A run's Policy
+  tab Summary draws a row only for what the policy sets, so the "None" and "Standard limit" rows
+  are gone; tool rules are listed one per line and an idle stop reads "Stops after N minutes"
+  (#1921).
 - New Run requires a Title. An untyped title is filled from the first line of the Task or Command
   and stays editable; a run with neither, such as an interactive terminal session, needs one typed.
   Run details now open the Run panel (#1922).
@@ -116,6 +132,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Patch preparation refuses duplicate CHANGELOG heading keys after merging and after the
   release-commit step, including resumed candidates, before checks or publication work. (#1913)
 - **Image download verification (#1905).** The image-pin gate checks every Dockerfile curl download for a same-file checksum before use and refuses ignored failures or unsupported shell forms. Claude native downloads now pin their manifest; alternate versions require an explicit manifest checksum and native channel downloads fail clearly. AWS installer and signature downloads gain per-architecture checksums while retaining GPG verification. Staged installs and npm remain supported. The embedded code-server shell-quote issue remains tracked in #1904.
+- Policy YAML shown and copied in the console now reads back as the policy it was made from in
+  the console, and in `wardyn … --policy-file` for any value the server stores. A string holding
+  a line break or control character, a mapping key YAML would read as another type or trim
+  (`true`, `1`, an empty or padded key), and a string starting with `_` or `+_` are quoted;
+  U+0085, U+2028, U+2029, a byte order mark, DEL, C1 controls, U+FFFE and U+FFFF are written as
+  `\u` escapes; a key over 1024 characters uses the explicit form. Ordinary policies render unchanged. The policy-source parser now refuses, with a line and
+  column, text the CLI's YAML reader would read as a different policy: a bare carriage return, a
+  raw U+0085, U+2028 or U+2029, or a byte order mark after the first byte; a number with a leading
+  zero (`017` is octal 15 there); an unquoted date, `1_000`, `0b1` or `0X1F`, which it reads as a
+  timestamp or number; a `:` straight before `,`, `]` or `}` after an unquoted flow key, or a `?`
+  starting a flow item; anchors; block scalar indentation indicators (`|1`); and an escaped line
+  break inside double quotes. Quoting the value, or CRLF line endings, is accepted. It also
+  refuses an unpaired UTF-16 surrogate, which the server would store as U+FFFD, and, before
+  parsing, source over 1 MiB of UTF-8 or nested more than 64 levels deep, so a pasted
+  pathological document can no longer abort the page on a second parse. Explicit JSON mode
+  refuses text that is not JSON — trailing commas, comments, single quotes, unquoted keys and
+  other YAML-only syntax — while still refusing duplicate keys and unsafe numbers. Structured
+  edits write exactly the requested value, quoting it where needed (#1921).
 
 ## [0.8.8] — 2026-10-07
 

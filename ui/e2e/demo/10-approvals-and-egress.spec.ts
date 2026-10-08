@@ -95,6 +95,7 @@ import { stage } from "./stage";
 import { APPROVAL_APPEARS, decide, newRunPanel } from "./funnel";
 import { sweepStaleState } from "./sweep";
 import { termText } from "../terminal-text";
+import { SPEC_LABEL } from "../policy-source";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -794,9 +795,9 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   // never fire while the take still went green.
   await newRunPanel(page, "policy");
   await expect(
-    page.getByLabel("Spec (JSON)"),
+    page.getByLabel(SPEC_LABEL),
     "the default first_use_approval is no longer deny_with_review",
-  ).toHaveValue(/"first_use_approval": "deny_with_review"/);
+  ).toHaveValue(/"?first_use_approval"?: "?deny_with_review"?/);
 
   // Silent launch, same reasoning as the Terminal click above.
   await act(page, page.getByRole("button", { name: "Launch run" }));
