@@ -98,6 +98,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The compose demo README, the agent images README, the build images operations page and the
   devcontainer build page (ENVBUILD) are now bullets, tables and alerts, with every repository file
   they cite linked. No rule, default or limit changed.
+- `docs/USERS.md`, `docs/SSH.md` and `docs/UI-SANDBOXES.md` are restructured into short bullets,
+  tables and callouts, with every file reference a link and no sentence over 35 words. The console's
+  quoted strings, defaults, limits, refusals and upgrade steps are unchanged.
 
 ### Fixed
 
