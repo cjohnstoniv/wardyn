@@ -65,7 +65,7 @@ func (e *OverlayError) Error() string { return fmt.Sprintf("%s: %s: %s", e.Reaso
 // widen. This is the resolve-time reading, where the base may have narrowed
 // since the overlay was written. It returns an error, and a zero Authority,
 // when no representable result exists: a disjoint allowed_methods or
-// azure_devops_capabilities (never [], which both read as "all"), two different
+// azure_devops_capabilities or github_capabilities (never [], which all read as "all"), two different
 // llm_inspection values, or limits the writer would refuse.
 func ApplyOverlay(base Authority, ov Overlay) (Authority, []string, error) {
 	m := meeter{out: cloneAuthority(base)}
@@ -150,6 +150,9 @@ func (m *meeter) validatePresence(ov Overlay) {
 	}
 	if c.AzureDevOpsCapabilities != nil && len(*c.AzureDevOpsCapabilities) == 0 {
 		m.fail(ReasonOverlayInvalid, "azure_devops_capabilities", "an empty list would mean the provider row's default profile; omit the field to inherit the base's")
+	}
+	if c.GitHubCapabilities != nil && len(*c.GitHubCapabilities) == 0 {
+		m.fail(ReasonOverlayInvalid, "github_capabilities", "an empty list would mean the provider row's default profile; omit the field to inherit the base's")
 	}
 	if c.LLMInspection != nil && len(c.LLMInspection.WorkspaceSecretValues) > 0 {
 		m.fail(ReasonOverlayInvalid, "llm_inspection.workspace_secret_values", "resolved secret values are never authored")
