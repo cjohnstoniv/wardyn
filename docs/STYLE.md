@@ -1,6 +1,7 @@
 # Documentation style
 
 Rules for every tracked Markdown file. `make lint` checks form and links; `make diagrams` checks visuals.
+[Enforcement](#4-enforcement) lists the docs each gate fails.
 
 ## 1. Form
 
@@ -31,6 +32,7 @@ Rules for every tracked Markdown file. `make lint` checks form and links; `make 
 - Prose share = paragraph, quote and over-cap item lines, over non-blank lines.
 - A blockquote is prose. An alert's marker line is exempt from the word count; its body is not.
 - Aim below the caps: sentences ≤ 25 words, paragraphs ≤ 3 sentences.
+- No summary line under an H2 unless the section exceeds 150 words and its first line is not already a summary.
 - No lead-in or stub lines ("Apply it:", "Result:"). Put the fact in the bullet.
 
 ### 1.3 Page length
@@ -41,17 +43,17 @@ Rules for every tracked Markdown file. `make lint` checks form and links; `make 
 | How-to / task page | 800–2,000 | 3,000 |
 | Concept page | 1,000–2,500 | 4,000 |
 | Multi-task runbook | ≤ 4,000 per H3 | none per file |
-| Threat model | ≤ 250 per lettered sub-residual | none per file |
+| Threat model | ≤ 250 per lettered sub-residual; an unlettered residual counts as one | none per file |
 | Front door / index | ≤ 1,500 | 2,000 |
 
 - A residual over its cap stays verbatim inside `<details>` under a ≤ 40-word summary.
-- An H3 over its ceiling becomes a task page only when no guard reads it by the parent's path ([Stable headings](#stable-headings)).
+- An H3 over its ceiling becomes a task page under `docs/operations/` only when no guard reads it by the parent's path ([Stable headings](#stable-headings)).
 
 ### 1.4 Wording
 
 - Plain words: use, run, refuse, stop. No hedging filler ("it should be noted", "essentially").
 - Parallel bullets, one fact each; a contrast or condition pair stays together ("X is masked; Y is not").
-- Present tense, active voice; second person for procedures.
+- Present tense, active voice; second person for procedures, third person for mechanism.
 - Numbers, limits, defaults, ports, timeouts: backticked, exact, with the unit.
 - A version qualifier that bounds current behaviour stays ("runs that predate 0.8.6"). Release narration becomes a link to the [changelog](../CHANGELOG.md).
 - No model, tool or vendor names for the tooling that produced text or visuals. Wardyn's own identifiers (image names, `--agent` values, harness directories) are code and stay in backticks.
@@ -66,6 +68,7 @@ Keep verbatim, whatever the form:
 - Refusal sentences and console or server copy quoted in a doc.
 - Defaults, limits, units, exit codes, reason codes, audit actions, env vars, flags, routes, migration stems.
 - Every string a guard pins, markers and backticks included. Whitespace may re-wrap unless the guard reads raw bytes.
+- The pins live in `_test.go` doc guards, most under `cmd/wardynd/` and `internal/api/`, and in shell gates under `scripts/`.
 - Every table a parser reads: same column count, header row and first-cell shape.
 - Code fences, byte-identical.
 
@@ -73,22 +76,28 @@ A pinned sentence that reads badly stays verbatim in an alert, with a summary ab
 
 ### 1.6 Compression
 
+Only the first two rules below remove content. Nothing else is removed or relocated.
+
 - A fact appears once, at its home; every other doc links there.
 - A history note goes when nobody upgrading still needs it. A version note stays when it bounds current behaviour, is an upgrade or rollback fact, or is pinned.
 - Rationale stays in place, terse; never move it to an appendix.
 - The gate counts prose words: outside code fences, minus table pipes and list markers. `wc -w` never gates.
-- A rewrite whose prose words grew fails unless the doc's budget line allows it.
+- A budget line (`path=N share=S`) fails a doc whose prose words exceed `N` or whose prose share exceeds `S` percent. No budget line means no cap.
+- A rewrite sets `N` to its before-count minus one, so growth fails.
 
 ## 2. Linking
 
 ### 2.1 Rules
 
 - Every reference to a repo file is a relative Markdown link once the doc is in the must-link list.
+- The link gate checks only a tracked path that has a directory part and ends in `.go` `.md` `.sh` `.ts` `.tsx` `.yaml` `.yml` `.json` `.sql` `.toml` `.py` `.mjs` `.css` `.html` `.example`, or is named `Makefile`, `Dockerfile`, `LICENSE` or `NOTICE`.
+- Link other tracked files too; the gate skips them, fenced code and headings.
 - Code is cited by symbol, never by line. Shape: `` [`internal/api/runs.go#Server.createRun`](../internal/api/runs.go) ``; methods are `Type.Method`.
 - Doc sections are cited by heading anchor: `[Second user, same host](OPERATIONS.md#second-user-same-host)`, never "see §X".
 - Anchors follow GitHub's slugger: lowercase; drop every character that is not a letter, digit, space, hyphen or underscore; spaces become hyphens. Nothing is collapsed or trimmed, so " — " becomes `--`. A repeated heading gets `-1`, `-2`.
 - Headings carry no emphasis markers and no links: `_x_` or `**x**` changes the slug.
-- No `github.com/…/blob/…` URLs for in-repo targets, except text printed at runtime, which pins `main` or a tag. No leading `/`.
+- No `github.com/…/blob/…` URLs for in-repo targets, except text printed at runtime, which pins `main` or a tag.
+- No leading `/`. `./` only for a same-directory target that would otherwise read as a bare word.
 - Code spans, not references: commands, flags, bare file names (`main.go`), directories (`scripts/`), runtime paths (`/etc/wardyn`) and the doc's own path.
 - A link whose text is a backtick span that resolves to a tracked path must target that same path.
 - The backticked path is repo-relative; the target adds one `../` per directory level of the writing file. The gate catches a wrong depth.
@@ -105,37 +114,41 @@ The citation guard ([`cmd/wardynd/citation_guard_test.go`](../cmd/wardynd/citati
 ## 3. Visuals
 
 - A visual replaces ≥ 150 words of mechanism prose, or shows an order, a boundary or a containment a table cannot. One idea per visual.
+- A visual never carries a fact the text does not also state in checkable form.
 - Every label is real text in a committed file (SVG `<text>`, or a Mermaid label), never pixels. Labels that name code match the symbol byte for byte; `make diagrams` checks them.
 - Alt text on every image: one sentence on what it shows.
 - Light and dark: `<picture>` with a `prefers-color-scheme: dark` source and two files, because an SVG shown as an image ignores the page's colours.
 - `docs/img/<id>.svg` is the source; a `.webp` render sits beside it only when GitHub cannot render the visual. One row per visual in the [image index](img/README.md).
 - An SVG shown through `<img>` or `<picture>` loads no external file: fonts, textures and icons are inline (`data:` URIs) or absent.
-- No hostnames, tokens, account or customer data in any visual. Existing Mermaid fences stay; new visuals are SVG files.
+- No foreign copyright or metadata line in an SVG. No hostnames, tokens, account or customer data in any visual.
+- No new Mermaid fences. An existing fence stays only until its SVG replacement ships.
 
 ## 4. Enforcement
 
-| Check | Script | `make` target |
-|---|---|---|
-| Form, prose budget and share | [`scripts/doc-form.sh`](../scripts/doc-form.sh) | `lint` |
-| Links resolve (file and anchor); file references are links in the must-link docs | [`scripts/check-doc-links.sh`](../scripts/check-doc-links.sh) | `doc-links`, also in `lint` |
-| Diagram syntax, label truth, alt text | [`scripts/check-diagrams.sh`](../scripts/check-diagrams.sh) | `diagrams` |
-| Citation shape and resolution | [`cmd/wardynd/citation_guard_test.go`](../cmd/wardynd/citation_guard_test.go) | `test` |
+| Check | Script | `make` target | Fails on |
+|---|---|---|---|
+| Form, prose budget and share | [`scripts/doc-form.sh`](../scripts/doc-form.sh) | `lint` | Docs a `.list` names (the strict tier); budget: docs with a `.budget` line |
+| Links resolve (file and anchor); file references are links | [`scripts/check-doc-links.sh`](../scripts/check-doc-links.sh) | `doc-links`, also in `lint` | Every tracked `.md` except the frozen files; must-link: docs a `.links` names |
+| Diagram syntax and style, label truth, alt text, SVG location | [`scripts/check-diagrams.sh`](../scripts/check-diagrams.sh) | `diagrams` | Docs in its `DOCS` list |
+| Citation shape and resolution | [`cmd/wardynd/citation_guard_test.go`](../cmd/wardynd/citation_guard_test.go) | `test` | The threat model docs and [USERS.md](USERS.md) |
 
 - Each script's header comment defines its rule. [doc-form.d](../scripts/doc-form.d/README) holds the lists: asserted docs (`.list`), budgets (`.budget`), must-link docs (`.links`).
+- Ten `docs/operations/` pages named in the form script keep their older checks until a `.list` names them. No other doc fails the caps.
+- A doc that gains a visual joins `DOCS` in the same change; until then no gate checks its alt text or labels.
 - Dead links in [CHANGELOG.md](../CHANGELOG.md), [CHANGELOG-ARCHIVE.md](../CHANGELOG-ARCHIVE.md) and the third-party notices are counted, never failed. `docs/design/` is exempt from must-link.
 - A `:NNN` suffix after a `.go`, `.md`, `.ts` or `.sh` name is a line citation: it fails in a must-link doc and warns elsewhere.
 - A guard change never weakens its check: state what it protected and how the new text still does.
 
 ## Stable headings
 
-Code, scripts and other docs quote these headings. Renaming one updates the quoting code in the same change.
+Code, scripts and other docs quote these headings and strings. Changing one updates the quoting code in the same change.
 
 [OPERATIONS.md](OPERATIONS.md):
 
 | Heading | Quoted by |
 |---|---|
 | [Multi-user: who can change what](OPERATIONS.md#multi-user-who-can-change-what) | [`docs/README.md`](README.md), [`scripts/setup.sh`](../scripts/setup.sh), [`internal/api/runs_create_validate.go`](../internal/api/runs_create_validate.go) |
-| [Who decides who gets in: chart vs console vs IdP](OPERATIONS.md#who-decides-who-gets-in-chart-vs-console-vs-idp) | [`.claude/skills/wardyn-k8s-setup/SKILL.md`](../.claude/skills/wardyn-k8s-setup/SKILL.md), [`deploy/helm/wardyn/README.md`](../deploy/helm/wardyn/README.md) |
+| [Who decides who gets in: chart vs console vs IdP](OPERATIONS.md#who-decides-who-gets-in-chart-vs-console-vs-idp) | [the Kubernetes setup skill](../.claude/skills/wardyn-k8s-setup/SKILL.md), [`deploy/helm/wardyn/README.md`](../deploy/helm/wardyn/README.md) |
 | [Three roles, and who sets the walls](OPERATIONS.md#three-roles-and-who-sets-the-walls) | [`docs/README.md`](README.md) |
 | `**What admin-only still means**` and its 2-column table | [`internal/api/operations_tier_doc_test.go`](../internal/api/operations_tier_doc_test.go) |
 | [Every denial that isn't a 404](OPERATIONS.md#every-denial-that-isnt-a-404), with its rows keyed by `reason` | [`internal/api/authz_denied_doc_test.go`](../internal/api/authz_denied_doc_test.go) |
@@ -156,7 +169,7 @@ Code, scripts and other docs quote these headings. Renaming one updates the quot
 
 Other docs:
 
-| Doc | Heading | Quoted by |
+| Doc | Heading or string | Quoted by |
 |---|---|---|
 | [POLICIES.md](POLICIES.md) | [Bound the token itself: a GitHub ruleset](POLICIES.md#bound-the-token-itself-a-github-ruleset) | [`internal/broker/broker.go`](../internal/broker/broker.go), [`internal/api/setup_checks.go`](../internal/api/setup_checks.go) |
 | [POLICIES.md](POLICIES.md) | The 11 anchors the console's field help links to: `top-level`, `first_use_approval-modes`, `eligible_grants--grantspec`, `workspace_mounts--workspacemount`, `workspace_repos--workspacerepo`, `llm_inspection--llminspectionspec`, `resources--resourcelimits`, `ui_apps--uiapp`, `tool_rules--toolrule`, `git_push_any_branch-the-per-run-opt-out`, `push_rules--pushrulesspec` | [`ui/src/app/components/wardyn/policy-field-help.ts`](../ui/src/app/components/wardyn/policy-field-help.ts) |
@@ -165,5 +178,17 @@ Other docs:
 | [sdk.md](sdk.md) | Each `Reason` / `Meaning` table, up to the next `## ` | [`internal/api/reason_docs_guard_test.go`](../internal/api/reason_docs_guard_test.go) |
 | [SSH.md](SSH.md) | [Bounds](SSH.md#bounds) | [`ui/src/app/components/screens/ssh-keys.tsx`](../ui/src/app/components/screens/ssh-keys.tsx), [`internal/api/sshgateway.go`](../internal/api/sshgateway.go), [`internal/store/store_apitokens.go`](../internal/store/store_apitokens.go) |
 | [VERIFY.md](VERIFY.md) | Numbered headings `## 1.` and `## 6.` | [`install.sh`](../install.sh), [`scripts/up.sh`](../scripts/up.sh) |
-| [AZURE-DEVOPS.md](AZURE-DEVOPS.md) | [How pushes work](AZURE-DEVOPS.md#how-pushes-work), [The app registration](AZURE-DEVOPS.md#the-app-registration), [Choosing how people connect](AZURE-DEVOPS.md#choosing-how-people-connect), [Upgrading](AZURE-DEVOPS.md#upgrading), [What bounds a token-creating credential](AZURE-DEVOPS.md#what-bounds-a-token-creating-credential) | Checks outside this tree |
-| [Helm README](../deploy/helm/wardyn/README.md) | [Split SSH exposure](../deploy/helm/wardyn/README.md#split-ssh-exposure) | [`.claude/skills/wardyn-k8s-setup/SKILL.md`](../.claude/skills/wardyn-k8s-setup/SKILL.md) |
+| [AZURE-DEVOPS.md](AZURE-DEVOPS.md) | [How pushes work](AZURE-DEVOPS.md#how-pushes-work), [The app registration](AZURE-DEVOPS.md#the-app-registration), [Choosing how people connect](AZURE-DEVOPS.md#choosing-how-people-connect), [Upgrading](AZURE-DEVOPS.md#upgrading), [What bounds a token-creating credential](AZURE-DEVOPS.md#what-bounds-a-token-creating-credential) | [`docs/POLICIES.md`](POLICIES.md), [`docs/ENV.md`](ENV.md), [`deploy/azure-entra-sso/README.md`](../deploy/azure-entra-sso/README.md), the page's own links |
+| [Helm README](../deploy/helm/wardyn/README.md) | [Split SSH exposure](../deploy/helm/wardyn/README.md#split-ssh-exposure) | [the Kubernetes setup skill](../.claude/skills/wardyn-k8s-setup/SKILL.md) |
+| [THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) | Prefixes `### CC3 —`, `### 4.2 The unconditional IP guard` | [`cmd/wardynd/threatmodel_claims_guard_test.go`](../cmd/wardynd/threatmodel_claims_guard_test.go), [`cmd/wardynd/docs_r3_guard_test.go`](../cmd/wardynd/docs_r3_guard_test.go) |
+| [THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) | `Resident-secret exceptions`, up to ``**`ssh_key` and `git_pat` ``; a line starting `Nine closed kinds` (a count word) | [`cmd/wardynd/threatmodel_claims_guard_test.go`](../cmd/wardynd/threatmodel_claims_guard_test.go) |
+| [THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) | Section number `5.1a`; [Console auth token storage](../threatmodel/THREAT-MODEL.md#console-auth-token-storage) | [`ARCHITECTURE.md`](../ARCHITECTURE.md), [`docs/DATA-FLOW.md`](DATA-FLOW.md), [`docs/DESKTOP.md`](DESKTOP.md), [`docs/POLICIES.md`](POLICIES.md), [`cmd/wardynd/threatmodel_claims_guard_test.go`](../cmd/wardynd/threatmodel_claims_guard_test.go) |
+| [THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) | Residual numbers (`#NN`) | [`scripts/up.sh`](../scripts/up.sh), [`scripts/test-install-sh-trust.sh`](../scripts/test-install-sh-trust.sh), [`Makefile`](../Makefile), [`cmd/wardynd/threatmodel_claims_guard_test.go`](../cmd/wardynd/threatmodel_claims_guard_test.go) |
+| [THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) | `` explicit kill** path (`handleKillRun`) runs this fixed order: ``, a blank line, then a list opening `1. **` | [`internal/api/killorder_doc_test.go`](../internal/api/killorder_doc_test.go) |
+| [AGENT-THREAT-MODEL.md](../threatmodel/AGENT-THREAT-MODEL.md) | The row whose first cell is `14` | [`cmd/wardynd/docs_086_review_doc_test.go`](../cmd/wardynd/docs_086_review_doc_test.go) |
+| [ARCHITECTURE.md](../ARCHITECTURE.md) | `authoritative, complete table`, then any table up to the indented `Secret values are masked` | [`cmd/wardynd/threatmodel_claims_guard_test.go`](../cmd/wardynd/threatmodel_claims_guard_test.go) |
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | [Branching, issues and pull requests](../CONTRIBUTING.md#branching-issues-and-pull-requests) | [`docs/README.md`](README.md), [`RELEASING.md`](../RELEASING.md) |
+| [RELEASING.md](../RELEASING.md) | [How a release is prepared](../RELEASING.md#how-a-release-is-prepared) | [`docs/README.md`](README.md) |
+| [RELEASING.md](../RELEASING.md) | `` ci.yml` job list: `` and the job names up to the first ` — ` | [`cmd/wardynd/releasing_joblist_guard_test.go`](../cmd/wardynd/releasing_joblist_guard_test.go) |
+| [RELEASING.md](../RELEASING.md) | The `for img in …; do` line; the `"contexts": [` array | [`cmd/wardynd/published_images_guard_test.go`](../cmd/wardynd/published_images_guard_test.go), [`scripts/test-claims-match-code.sh`](../scripts/test-claims-match-code.sh) |
+| [integrations.md](operations/integrations.md) | [Azure Foundry (`azure_foundry`)](operations/integrations.md#azure-foundry-azure_foundry); the row that starts with `azure_foundry` | [`cmd/wardynd/docs_086_review_doc_test.go`](../cmd/wardynd/docs_086_review_doc_test.go) |
