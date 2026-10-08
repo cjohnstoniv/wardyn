@@ -18,9 +18,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
-- A strict YAML/JSON policy-source parser and comment-preserving edit helpers for the upcoming
-  policy editors. Ambiguous keys, aliases, tags, directives and unsafe numbers are refused before
-  JSON conversion. Editor integration follows separately (#1917).
+- A strict YAML/JSON policy-source parser and comment-preserving edit helpers for the policy
+  editors. Ambiguous keys, aliases, tags, directives and unsafe numbers are refused before JSON
+  conversion (#1917).
 - `POST /api/v1/runs/policy-preview` returns authorized, clamped and redacted policy facts for incomplete
   run drafts, with readiness checks marked pending. It reads no credential values, renews nothing and
   performs no runner or share probe. Its independent per-person limit defaults to 60/minute with a burst of 15,
