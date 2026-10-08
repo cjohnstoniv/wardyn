@@ -88,8 +88,8 @@ func (s *Server) ownsComponent(w http.ResponseWriter, r *http.Request, cs store.
 	return row, true
 }
 
-// componentRefused writes the 422 for a definition the save routes refuse.
-func componentRefused(w http.ResponseWriter, reason, msg string) {
+// saveRefusal writes the 422 for a definition the save routes refuse.
+func saveRefusal(w http.ResponseWriter, reason, msg string) {
 	writeErrorReason(w, http.StatusUnprocessableEntity, reason, msg)
 }
 
@@ -183,7 +183,7 @@ func (s *Server) handleSaveMyComponent(w http.ResponseWriter, r *http.Request) {
 	}
 	c := types.Component{ID: uuid.New(), Owner: owner, Name: req.Name, Definition: req.Definition, CreatedBy: owner}
 	if reason, msg := s.componentSaveRefusal(r.Context(), c); reason != "" {
-		componentRefused(w, reason, msg)
+		saveRefusal(w, reason, msg)
 		return
 	}
 	rows, err := cs.ListComponents(r.Context(), owner)
@@ -192,7 +192,7 @@ func (s *Server) handleSaveMyComponent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(rows) >= componentsMaxPerPerson {
-		componentRefused(w, reasonComponentCapReached, fmt.Sprintf("too many saved components (max %d); remove one first", componentsMaxPerPerson))
+		saveRefusal(w, reasonComponentCapReached, fmt.Sprintf("too many saved components (max %d); remove one first", componentsMaxPerPerson))
 		return
 	}
 	if componentNameTaken(rows, c.Name, c.ID) {
@@ -242,7 +242,7 @@ func (s *Server) handleUpdateMyComponent(w http.ResponseWriter, r *http.Request)
 	}
 	c := types.Component{ID: row.ID, Owner: owner, Name: req.Name, Definition: req.Definition}
 	if reason, msg := s.componentSaveRefusal(r.Context(), c); reason != "" {
-		componentRefused(w, reason, msg)
+		saveRefusal(w, reason, msg)
 		return
 	}
 	s.updateComponent(w, r, cs, c)
@@ -348,7 +348,7 @@ func (s *Server) handlePutComponent(w http.ResponseWriter, r *http.Request) {
 	}
 	c := types.Component{ID: id, Name: req.Name, Definition: req.Definition, CreatedBy: principalFromRequest(r)}
 	if reason, msg := s.componentSaveRefusal(r.Context(), c); reason != "" {
-		componentRefused(w, reason, msg)
+		saveRefusal(w, reason, msg)
 		return
 	}
 	_, err := cs.GetComponent(r.Context(), id, "")
@@ -374,7 +374,7 @@ func (s *Server) createOrgComponent(w http.ResponseWriter, r *http.Request, cs s
 		return
 	}
 	if len(rows) >= componentsMaxOrg {
-		componentRefused(w, reasonComponentCapReached, fmt.Sprintf("too many organisation components (max %d); remove one first", componentsMaxOrg))
+		saveRefusal(w, reasonComponentCapReached, fmt.Sprintf("too many organisation components (max %d); remove one first", componentsMaxOrg))
 		return
 	}
 	if componentNameTaken(rows, c.Name, c.ID) {
