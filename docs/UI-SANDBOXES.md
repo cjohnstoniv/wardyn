@@ -440,9 +440,9 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 - **Bounded staleness, not a frozen bearer.** The cookie carries its own
   issued-at, so `WARDYN_UI_SANDBOX_SESSION_TTL` applies to sessions already in
   browsers — shortening it takes effect at once.
-  - On top of that, the relay re-asserts the owner rule against the freshly-loaded run and consults the revoke cutoff `POST /sessions/revoke` stamps,
-    - against the time the ticket was **admitted** (not redeemed), by `sub` or by email,
-    - **on every new connection, and at least every 30 seconds on a reused one**
+  - On top of that, the relay re-asserts the owner rule against the freshly-loaded run and consults the revoke cutoff `POST /sessions/revoke` stamps:
+    - against the time the ticket was **admitted** (not redeemed), by `sub` or by email;
+    - **on every new connection, and at least every 30 seconds on a reused one**.
   - Relay connections are pooled, so a busy tab can ride one warm connection for a long time and the request-path check is what bounds it.
   - An off-boarded or revoked human therefore stops being
     able to use the app within 30 seconds.

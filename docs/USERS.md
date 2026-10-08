@@ -29,12 +29,11 @@ sandboxes inside the ceiling your admin set. There is nothing to install.
 - If your admin has set an autonomy rubric on your profile, it caps what a run
   may do unattended, graded on what your run actually reaches and holds — not on
   you personally.
-- Four levels: `L0` (attended — interactive only), `L1` (gated — non-interactive
-  runs are allowed, but a claude-code run's tool approvals are switched from
-  `auto` to `hold`).
-- So the agent still stops for you at every gated call; `L2` (unattended —
-  auto-approval and seeded auto tools are allowed) and `L3` (adds
-  `task_mode=exec`, unsupervised execution) go further.
+- Four levels:
+  - `L0` (attended — interactive only),
+  - `L1` (gated — non-interactive runs are allowed, but a claude-code run's tool approvals are switched from `auto` to `hold`, so the agent still stops for you at every gated call),
+  - `L2` (unattended — auto-approval and seeded auto tools are allowed),
+  - `L3` (adds `task_mode=exec`, unsupervised execution).
 - Below `L3`, an interactive run with a task must use
   `interactive_start=agent`; the shell startup form (`interactive_start` unset or
   `shell`) runs your task at sandbox boot before anyone attaches, and is refused

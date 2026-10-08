@@ -71,9 +71,8 @@ curl -sf -X POST "$WARDYN_URL/api/v1/me/ssh-keys" \
 
 - The fingerprint primary key is **global** — correct for auth, since a key
   must map to exactly one principal, never two.
-- That means it is also, by construction, possible for someone else to register a public key you also hold before you do
-  - (e.g. a key whose public half you've posted somewhere, like a GitHub profile),
-  - after which your own `POST` 409s indefinitely
+- That means it is also, by construction, possible for someone else to register a public key you also hold before you do (e.g. a key whose public half you've posted somewhere, like a GitHub profile).
+- After which your own `POST` 409s indefinitely.
 - The API never confirms who holds it, so there is no self-service resolution.
 - An operator can free the slot at the database directly, once the rightful
   owner is verified out-of-band:
@@ -552,7 +551,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
 >
 > So work done over those paths leaves no session evidence — do not present Remote-SSH as the recommended developer path without saying so.
 >
-> The interactive SSH **shell** *is* recorded through the browser terminal's same masking pipeline, but an unregistered secret can remain in cleartext. There is **no delete-one route**; age-based retention (default: keep forever) is the removal mechanism. See [Recording](#recording).
+> The interactive SSH **shell** *is* recorded through the browser terminal's same masking pipeline, but an unregistered secret can remain in cleartext. There is **no delete-one route**; age-based retention (default: keep forever) is the removal mechanism.
 
 - Every SSH **shell** session (`ssh <run-id>@host`, no subsystem/forward) is
   recorded exactly like the browser terminal: same tmux session, same masked
