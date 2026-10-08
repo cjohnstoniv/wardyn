@@ -92,7 +92,7 @@ export function TerminalPane({
                     : RUN_COCKPIT.recordingMissing
             }
             action={
-              <button onClick={onGoRecording} className="text-xs font-medium text-primary hover:underline">
+              <button onClick={onGoRecording} className="text-xs font-medium text-info hover:underline">
                 Open the Recording tab →
               </button>
             }
