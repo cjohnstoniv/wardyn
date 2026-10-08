@@ -406,7 +406,8 @@ type ComponentStore interface {
 	// PutRunComponents writes run runID's snapshot, once, in one transaction; each row's position
 	// in comps is its ordinal, and its RunID, Ordinal and Erased fields are not read. ErrNotFound
 	// when the run does not exist; ErrConflict when it already has a snapshot, which is never
-	// replaced — its rows are the run's authorization record.
+	// replaced — its rows are the run's authorization record. An empty comps is refused: a run
+	// launched without components writes no snapshot, so the caller does not call this.
 	PutRunComponents(ctx context.Context, runID uuid.UUID, comps []types.RunComponent) error
 	// ListRunComponents returns a run's snapshot in request order, erased rows included (Erased,
 	// with only SelfDefined left beside the key); empty for a run launched without components.

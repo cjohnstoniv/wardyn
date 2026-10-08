@@ -60,6 +60,11 @@ const (
 	MaxComponentConfigValueBytes = 4096
 	MaxComponentNameRunes        = 64
 	MaxComponentRefs             = 8
+	// MaxComponentEnvNameBytes bounds an env var or config key name;
+	// MaxComponentHeaderFormatBytes the header value template, which the
+	// proxy writes onto every injected request.
+	MaxComponentEnvNameBytes      = 128
+	MaxComponentHeaderFormatBytes = 512
 )
 
 // ComponentDefinition is the whole contract of a custom component: the hosts
@@ -279,6 +284,11 @@ func validateComponentDelivery(s ComponentSecret, d ComponentDefinition) (string
 		if err := ValidInjectionFormat(del.Format); err != nil {
 			return "", fmt.Errorf("delivery.%w", err)
 		}
+		// Go's transport refuses a control byte only when it writes the
+		// request, which would fail the run late rather than here.
+		if len(del.Format) > MaxComponentHeaderFormatBytes || !printable(del.Format) {
+			return "", fmt.Errorf("delivery.format: must be printable text of at most %d bytes", MaxComponentHeaderFormatBytes)
+		}
 		return "header " + del.Host, nil
 	case ComponentDeliveryEnv:
 		if del.Host != "" || del.Header != "" || del.Format != "" || del.PlainHTTP || del.File != "" {
@@ -335,6 +345,9 @@ func validHeaderHost(host string, hosts []string) error {
 // WARDYN_* names configure the sandbox harness itself, so authoring one would
 // turn a component into a dispatch-config override.
 func validComponentEnvName(name string) error {
+	if len(name) > MaxComponentEnvNameBytes {
+		return fmt.Errorf("must be at most %d bytes", MaxComponentEnvNameBytes)
+	}
 	if !componentEnvNameRE.MatchString(name) {
 		return fmt.Errorf("%q must match [A-Z_][A-Z0-9_]*", name)
 	}
