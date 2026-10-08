@@ -27,17 +27,17 @@ func erasureComponentDef() types.ComponentDefinition {
 	return types.ComponentDefinition{Hosts: []string{"api.example.com"}, Config: map[string]string{"REGION": "eu-west-1"}}
 }
 
-// componentFixture is one person's saved component, an organisation component, and a run of the
+// erasureComponentFixture is one person's saved component, an organisation component, and a run of the
 // person's that launched with both, so its snapshot holds an org row and a self-defined one.
-type componentFixture struct {
+type erasureComponentFixture struct {
 	saved, org types.Component
 	runID      uuid.UUID
 }
 
-func seedComponentFixture(t *testing.T, st store.PG, owner string, runID uuid.UUID) componentFixture {
+func seedComponentFixture(t *testing.T, st store.PG, owner string, runID uuid.UUID) erasureComponentFixture {
 	t.Helper()
 	ctx := context.Background()
-	f := componentFixture{runID: runID}
+	f := erasureComponentFixture{runID: runID}
 	var err error
 	if f.saved, err = st.CreateComponent(ctx, types.Component{ID: uuid.New(), Owner: owner, Name: "mine-" + owner, Definition: erasureComponentDef(), CreatedBy: owner}); err != nil {
 		t.Fatal(err)
@@ -61,7 +61,7 @@ func seedComponentFixture(t *testing.T, st store.PG, owner string, runID uuid.UU
 // requireErased checks f after owner's erasure: the saved component gone and the organisation's kept,
 // the run row intact, the org snapshot row untouched, both self-defined rows left as null-content
 // tombstones that still say self-defined, and nothing of owner readable from run_components.
-func (f componentFixture) requireErased(t *testing.T, st store.PG, owner string) {
+func (f erasureComponentFixture) requireErased(t *testing.T, st store.PG, owner string) {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := st.GetComponent(ctx, f.saved.ID, owner); err == nil {
@@ -133,18 +133,14 @@ func TestPG_PersonErasure_ComponentsScope(t *testing.T) {
 	}
 }
 
-// A8 (ADDENDA A23): a components-only erasure, then the custom-component feature denied, must leave a
-// lost run's revive refused. The erasure half is TestPG_PersonErasure_ComponentsScope; the refusal
-// is C7's re-check of the doors the run_components rows record, which this branch does not have. The
-// body is complete so that C7 enables it by deleting the Skip line and nothing else.
-//
-// C7 swaps: the want-reason literal for reasonOwnerCapabilityComponent (that constant arrives with
-// C3/C7, so a literal keeps this compiling on the base), and nothing in the setup. The revive entry
-// is the real route, POST /runs/{id}/revive, as TestPG_ReviveAndExtendRecheckOwnerAuthority uses it.
+// A components-only erasure, then the custom-component feature denied, must leave a lost run's revive
+// refused. The erasure half is TestPG_PersonErasure_ComponentsScope; the refusal is the owner
+// re-check of the doors the run_components rows still record once their content is gone
+// (persistedLaunchDoors). The revive entry is the real route, POST /runs/{id}/revive, as
+// TestPG_ReviveAndExtendRecheckOwnerAuthority uses it.
 func TestPG_PersonErasure_ComponentsOnlyThenDeniedFeatureRefusesRevive(t *testing.T) {
-	t.Skip("pending C7: revive re-checks the run_components tombstone doors; run after C7 merges")
 	const owner = "sub-pg-components"
-	const wantReason = "owner_capability_component"
+	const wantReason = reasonOwnerCapabilityComponent
 	h, _ := newRunOwnerPGHarness(t)
 	ctx := t.Context()
 	pg := h.srv.cfg.Store.(store.PG)
