@@ -41,10 +41,10 @@
 
 - **Settings** (the Admin view's sidebar) is the one surface for these — a Model provider card, a radio group over concrete lanes; the standalone `/integrations` page is deleted.
 - **The Git host card retired in 0.7.2.**
-  - Its three git credential lanes (GitHub App, PAT, SSH key) render INSIDE the provider row they apply to, on the Workspace Providers screen (`/admin/providers`).
+  - Its three git credential lanes (GitHub App, PAT, SSH key) now render INSIDE the provider row they apply to, on the Workspace Providers screen (`/admin/providers`).
   - Settings keeps a card in its place that summarizes the provider policy and links there.
 - The lanes are the same radio group over the same concrete lanes. What changed: "which git hosts this org clones from" and "how a run authenticates to them" stopped being two surfaces that could disagree.
-- A row's `lanes` list says which of the three it permits at all (a lane a row does not permit drops its wiring, with a warning on the 201).
+- A row's `lanes` list now says which of the three it permits at all (a lane a row does not permit drops its wiring, with a warning on the 201).
 - Rows are also DERIVED from what already exists (stored secret names, site config, setup status), so an operator who never opens Settings keeps identical run behavior.
 - Host proxy and Egress redirection are deliberately NOT here — that's network topology, configured under **Network** on the same `SiteConfig` document.
 

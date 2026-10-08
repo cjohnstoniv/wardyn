@@ -45,7 +45,7 @@ Revoking a device:
 | `org_federation.lag` | That laptop's `/healthz` | The same value, human-readable |
 
 - Whenever forwarding isn't advancing, lag grows at the rate the laptop writes new audit rows.
-- That's true whether the organisation is unreachable or has refused a batch, since the forwarder re-reads the local head on every tick.
+- That's true whether the organisation is unreachable or has refused a batch, since the forwarder re-reads the local head on every tick either way.
 - Lag alone can't tell the two apart. Once forwarding resumes, the backlog drains and the gauge falls.
 
 #### A refusal's evidence is what tells them apart

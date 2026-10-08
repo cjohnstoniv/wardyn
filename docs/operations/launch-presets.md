@@ -51,7 +51,7 @@ curl -fsS -X POST "$WARDYN_URL/api/v1/runs" -H "Authorization: Bearer $TOKEN" \
 
 Presets round-trip declaratively, like drives:
 
-1. Export the presets:
+1. Export the current presets:
    ```sh
    wardyn preset get > presets.json
    ```

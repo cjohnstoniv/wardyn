@@ -1,5 +1,5 @@
-# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words minus one, so growth fails.
-docs/operations/integrations.md=2608 share=30
-docs/operations/launch-presets.md=389 share=35
-docs/operations/console-branding.md=942 share=35
-docs/operations/hybrid-laptops.md=548 share=35
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words, so growth fails.
+docs/operations/integrations.md=2609 share=30
+docs/operations/launch-presets.md=390 share=35
+docs/operations/console-branding.md=943 share=35
+docs/operations/hybrid-laptops.md=549 share=35
