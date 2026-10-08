@@ -66,28 +66,25 @@ export function toYaml(value: unknown, indent = 0): string {
   if (typeof value === "boolean" || typeof value === "number") return String(value);
   if (typeof value === "string") return yamlScalar(value);
   if (Array.isArray(value)) {
-    if (value.length === 0) return "[]";
+    if (!value.length) return "[]";
     return value
-      .map((item) =>
-        // A nested block opens on the dash's own line: drop its first indent.
-        isYamlContainer(item) ? `${pad}- ${toYaml(item, indent + 1).slice(pad.length + 2)}` : `${pad}- ${toYaml(item, 0)}`,
-      )
+      // A nested block opens on the dash's own line: drop its first indent.
+      .map((item) => `${pad}- ${isYamlContainer(item) ? toYaml(item, indent + 1).slice(pad.length + 2) : toYaml(item, 0)}`)
       .join("\n");
   }
   const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined);
-  if (entries.length === 0) return "{}";
+  if (!entries.length) return "{}";
   return entries
     .map(([k, v]) => {
       const key = yamlScalar(k);
       // YAML allows an implicit key at most 1024 characters before its colon.
-      const head = `${pad}${key.length > 1024 ? `? ${key}\n${pad}` : key}:`;
-      return isYamlContainer(v) ? `${head}\n${toYaml(v, indent + 1)}` : `${head} ${toYaml(v, 0)}`;
+      return `${pad}${key.length > 1024 ? `? ${key}\n${pad}` : key}:${isYamlContainer(v) ? `\n${toYaml(v, indent + 1)}` : ` ${toYaml(v, 0)}`}`;
     })
     .join("\n");
 }
 
+// Arrays too: a JSON array has no keys beyond its indices.
 function isYamlContainer(v: unknown): boolean {
-  if (Array.isArray(v)) return v.length > 0;
   return v !== null && typeof v === "object" && Object.keys(v as object).length > 0;
 }
 
