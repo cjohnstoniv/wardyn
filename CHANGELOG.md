@@ -102,6 +102,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   tables and callouts, with every file reference a link and no sentence over 35 words. The console's
   quoted strings, defaults, limits, refusals and upgrade steps are unchanged.
 - The Helm chart README and the two SSO runbooks under `deploy/` (`kind/sso`, `azure-entra-sso`) are restructured into bullets, tables and alerts with their file references linked; no value, default or step changes.
+- The repository README, the docs index and the try-it walkthrough are restructured into bullets, tables and callouts with their file references linked; each gains one section heading. No command, default, limit or refusal changed.
 
 ### Fixed
 

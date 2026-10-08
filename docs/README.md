@@ -1,7 +1,9 @@
 # Wardyn docs
 
-Start at the repo [README](../README.md) — it, the in-product Getting Started
-wizard — with its built-in demo steps — is the first-run path. Everything here is the next question.
+- Start at the repo [README](../README.md) — it, the in-product Getting Started wizard — with its built-in demo steps — is the first-run path.
+- Everything here is the next question.
+
+## Index
 
 | If you want to… | Read |
 |---|---|
@@ -43,7 +45,5 @@ wizard — with its built-in demo steps — is the first-run path. Everything he
 
 ## Field reports
 
-[adoption/](adoption/) is different in kind: point-in-time field reports from real
-deployments, kept verbatim (including the gaps still open). They are evidence, not
-guides — a report describes one host on one date and is never updated to match the
-current release.
+- [adoption/](adoption/) is different in kind: point-in-time field reports from real deployments, kept verbatim (including the gaps still open).
+- They are evidence, not guides — a report describes one host on one date and is never updated to match the current release.
