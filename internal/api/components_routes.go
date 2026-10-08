@@ -424,13 +424,19 @@ func (s *Server) handleDeleteComponent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	deleted, swept, err := deleter.DeleteRestrictedComponent(r.Context(), id, capComponent, principalFromRequest(r))
+	deleted, swept, restored, err := deleter.DeleteRestrictedComponent(r.Context(), id, capComponent, principalFromRequest(r))
 	if notFoundIf(w, err, "component", reasonComponentNotFound) {
 		return
 	}
 	if err != nil {
 		writeServerError(w, r, "delete component", err)
 		return
+	}
+	if restored {
+		// The delete put back a restriction a lift had removed: a flip of the restrictions table,
+		// audited as the create path audits its own insert.
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"capability.availability.write", capComponent, "success", mustJSON(availabilityAuditData(capComponent, id.String(), true))))
 	}
 	datum := componentWriteDatum(deleted, "delete")
 	datum["grants_removed"], datum["restriction_kept"] = swept, true

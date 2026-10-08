@@ -79,15 +79,16 @@ func (f *fakeComponentStore) CreateRestrictedComponent(ctx context.Context, c ty
 	return created, nil
 }
 
-func (f *fakeComponentStore) DeleteRestrictedComponent(ctx context.Context, id uuid.UUID, capability, _ string) (types.Component, int, error) {
+func (f *fakeComponentStore) DeleteRestrictedComponent(ctx context.Context, id uuid.UUID, capability, _ string) (types.Component, int, bool, error) {
 	deleted, err := f.DeleteComponent(ctx, id, "")
 	if err != nil {
-		return types.Component{}, 0, err
+		return types.Component{}, 0, false, err
 	}
 	f.cmu.Lock()
+	restored := !f.restricted[capability+"/"+id.String()]
 	f.restricted[capability+"/"+id.String()] = true
 	f.cmu.Unlock()
-	return deleted, 0, nil
+	return deleted, 0, restored, nil
 }
 
 func (f *fakeComponentStore) UpdateComponent(_ context.Context, c types.Component) (types.Component, error) {

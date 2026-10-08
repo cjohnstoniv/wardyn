@@ -119,7 +119,7 @@ func TestPG_Components_DeleteRestrictedLeavesTheIDClosed(t *testing.T) {
 	}
 
 	for _, absent := range []uuid.UUID{other, personal} {
-		if _, _, err := st.DeleteRestrictedComponent(ctx, absent, kind, "admin-1"); !errors.Is(err, store.ErrNotFound) {
+		if _, _, _, err := st.DeleteRestrictedComponent(ctx, absent, kind, "admin-1"); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("an id that is no org row's: err = %v, want ErrNotFound", err)
 		}
 		if restrictedOf(t, st, kind, absent) {
@@ -130,7 +130,7 @@ func TestPG_Components_DeleteRestrictedLeavesTheIDClosed(t *testing.T) {
 		t.Fatalf("a person's row after the org delete of its id: %v", err)
 	}
 
-	deleted, n, err := st.DeleteRestrictedComponent(ctx, id, kind, "admin-1")
+	deleted, n, _, err := st.DeleteRestrictedComponent(ctx, id, kind, "admin-1")
 	if err != nil || deleted.ID != id || deleted.Name != name || n != 1 {
 		t.Fatalf("delete = %+v, %d grants, %v; want the row and its one grant", deleted, n, err)
 	}
@@ -153,5 +153,72 @@ func TestPG_Components_DeleteRestrictedLeavesTheIDClosed(t *testing.T) {
 	slices.Sort(values)
 	if want := []string{"*", other.String()}; !slices.Equal(values, want) {
 		t.Fatalf("grants left for the subject = %v, want the wildcard and the other id's: %v", values, want)
+	}
+}
+
+// TestPG_Components_LiftNeedsAnOrgRowAndCreateClearsEarlyGrants: a lift writes only while an org row
+// has the id (a deleted id and a person's row id answer ErrNotFound and keep their restriction), a
+// create removes a grant that named its id first, and a delete reports whether it put a restriction back.
+func TestPG_Components_LiftNeedsAnOrgRowAndCreateClearsEarlyGrants(t *testing.T) {
+	st := store.NewPG(runsPGPool(t))
+	ctx := context.Background()
+	const kind = "component"
+
+	id, personal := uuid.New(), uuid.New()
+	subject := "c8f-" + uuid.NewString()
+	t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = st.Pool.Exec(bg, `DELETE FROM components WHERE id = ANY($1)`, []uuid.UUID{id, personal})
+		_, _ = st.Pool.Exec(bg, `DELETE FROM capability_grants WHERE subject = $1`, subject)
+		for _, v := range []uuid.UUID{id, personal} {
+			_ = st.SetCapabilityRestriction(bg, kind, v.String(), false, "test")
+		}
+	})
+
+	if _, err := st.UpsertCapabilityGrant(ctx, types.CapabilityGrant{
+		SubjectType: types.CapabilitySubjectUser, Subject: subject, Capability: kind, Value: id.String(), Effect: types.CapabilityAllow,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateRestrictedComponent(ctx, types.Component{ID: id, Name: "Early-" + uuid.NewString()}, kind, "admin-1"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	left, err := st.ListCapabilityGrantsFor(ctx, []string{subject}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range left {
+		if g.Subject == subject {
+			t.Fatalf("grant after the create = %+v; want the early grant gone", g)
+		}
+	}
+
+	if _, err := st.CreateComponent(ctx, types.Component{ID: personal, Owner: subject, Name: "Mine"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetCapabilityRestriction(ctx, kind, personal.String(), true, "seed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.LiftComponentRestriction(ctx, personal, "sec-1"); !errors.Is(err, store.ErrNotFound) || !restrictedOf(t, st, kind, personal) {
+		t.Fatalf("lift for a person's row id: err = %v, restricted = %v; want ErrNotFound and still restricted", err, restrictedOf(t, st, kind, personal))
+	}
+
+	// Still restricted: the delete puts nothing back.
+	if _, _, restored, err := st.DeleteRestrictedComponent(ctx, id, kind, "admin-1"); err != nil || restored {
+		t.Fatalf("delete of a restricted id: restored = %v, %v; want false", restored, err)
+	}
+	if err := st.LiftComponentRestriction(ctx, id, "sec-1"); !errors.Is(err, store.ErrNotFound) || !restrictedOf(t, st, kind, id) {
+		t.Fatalf("lift of a deleted id: err = %v, restricted = %v; want ErrNotFound and still restricted", err, restrictedOf(t, st, kind, id))
+	}
+
+	// Live and lifted: the lift writes, and the delete reports it put the restriction back.
+	if _, err := st.CreateRestrictedComponent(ctx, types.Component{ID: id, Name: "Again-" + uuid.NewString()}, kind, "admin-1"); err != nil {
+		t.Fatalf("re-create: %v", err)
+	}
+	if err := st.LiftComponentRestriction(ctx, id, "sec-1"); err != nil || restrictedOf(t, st, kind, id) {
+		t.Fatalf("lift of a live id: err = %v, restricted = %v; want nil and open", err, restrictedOf(t, st, kind, id))
+	}
+	if _, _, restored, err := st.DeleteRestrictedComponent(ctx, id, kind, "admin-1"); err != nil || !restored || !restrictedOf(t, st, kind, id) {
+		t.Fatalf("delete of a lifted id: restored = %v, %v; want true and restricted", restored, err)
 	}
 }

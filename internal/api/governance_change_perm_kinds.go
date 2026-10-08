@@ -338,7 +338,18 @@ func applyAvailabilityChange(s *Server, r *http.Request, q store.Querier, ch typ
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonAvailabilityKindNotRestrictable,
 			"%q can't be restricted to a list; only the resources people are offered can be.", p.Kind)
 	}
-	if err := store.SetCapabilityRestrictionQ(ctx, q, p.Kind, p.Value, p.Restricted, ch.ProposedBy); err != nil {
+	if p.Kind == capComponent && !p.Restricted {
+		// The component's own seam: an id that is no org component stays closed, and the change stays pending.
+		id, err := uuid.Parse(p.Value)
+		if err != nil {
+			return govApplied{}, err
+		}
+		if err := store.LiftComponentRestrictionQ(ctx, q, id, ch.ProposedBy); errors.Is(err, store.ErrNotFound) {
+			return govApplied{}, writeRefusal(http.StatusNotFound, reasonComponentNotFound, "component not found")
+		} else if err != nil {
+			return govApplied{}, err
+		}
+	} else if err := store.SetCapabilityRestrictionQ(ctx, q, p.Kind, p.Value, p.Restricted, ch.ProposedBy); err != nil {
 		return govApplied{}, err
 	}
 	return govApplied{action: "capability.availability.write", target: p.Kind, data: availabilityAuditData(p.Kind, p.Value, p.Restricted)}, nil
