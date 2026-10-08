@@ -357,7 +357,31 @@ waive_fails "a table waiver without PLAN §" 'must cite a plan section ("PLAN §
 printf 'table\tdocs/scratch/tbl.md\t| Nope | Meaning |\tPLAN §4.2\n' > "$WAIVE"
 waive_fails "a table waiver whose header matches no table" "has this header line"
 printf 'table\tdocs/scratch/tbl.md\t| Other | Meaning |\tPLAN §4.2\n' > "$WAIVE"
-waive_fails "a table waiver for a table with no over-cap cell" "no cell of this table is over the cap"
+waive_fails "a table waiver for a table with no over-cap cell" "no cell or sentence of this table is over the cap"
+# A table waiver also waives the over-cap sentences inside that table's cells;
+# the same sentence outside the table still fails.
+S60="$(sentence 60)"
+page > "$TMP/docs/scratch/tbl.md" <<DOC
+| Option | Meaning |
+| --- | --- |
+| \`a\` | $S60 |
+
+| Other | Meaning |
+| --- | --- |
+| \`c\` | short |
+DOC
+printf 'table\tdocs/scratch/tbl.md\t| Option | Meaning |\tkept as a table, PLAN §4.2\n' > "$WAIVE"
+run_gate || fail "a table waiver must waive a 60-word sentence inside its cells: $(gate_says)"
+grep -qF "long_sentences: 1 (1 waived)" <<<"$(gate_says)" || fail "the table's sentence must be counted and waived: $(gate_says)"
+echo "ok  a table waiver waives an over-cap sentence inside its cells"
+page > "$TMP/docs/scratch/tbl.md" <<DOC
+| Option | Meaning |
+| --- | --- |
+| \`a\` | $S60 |
+
+$S60
+DOC
+waive_fails "the same sentence outside the waived table" "60-word sentence (max 35)"
 rm -f "$WAIVE"
 
 echo "doc-form tests: PASS"

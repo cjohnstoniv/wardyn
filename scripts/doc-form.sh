@@ -81,8 +81,11 @@
 #       the line to paste.
 #   table<TAB>path<TAB>header line<TAB>reason
 #       every over-cap cell of the one table whose first row equals the header
-#       line; the reason must cite a "PLAN §" section. Sentences inside those
-#       cells still need their own sentence waiver.
+#       line, and every over-cap sentence inside any cell of that table (a
+#       table the plan keeps byte-stable cannot have its sentences split
+#       either); the reason must cite a "PLAN §" section. Sentence waivers
+#       elsewhere are unchanged. Table waivers apply first, so a sentence
+#       waiver for a sentence in a waived table matches nothing and fails.
 # A malformed waiver, a refused one, and one that matches nothing all fail the
 # gate. The report prints "long_sentences: N (M waived)" and "long_blocks: N
 # (M waived)"; only the unwaived items fail.
@@ -391,7 +394,7 @@ def apply_waivers(path, long_sentences, long_blocks, tables):
     """Mark the items this doc's waivers cover; return [(where, message)] for
     every waiver that is refused or matches nothing."""
     errors = []
-    for w in WAIVERS.get(path, []):
+    for w in sorted(WAIVERS.get(path, []), key=lambda w: w['kind'] != 'table'):
         if w['kind'] == 'sentence':
             hit = next((s for s in long_sentences if s['sha'] == w['sha'] and not s['waived']), None)
             if hit is None:
@@ -405,14 +408,15 @@ def apply_waivers(path, long_sentences, long_blocks, tables):
         else:
             n_tables = tables.count(w['header'])
             cells = [b for b in long_blocks if b['what'] == 'table cell' and b['table'] == w['header'] and not b['waived']]
+            sents = [x for x in long_sentences if x['table'] == w['header'] and not x['waived']]
             if n_tables == 0:
                 errors.append((w['where'], 'no table in ' + path + ' has this header line'))
             elif n_tables > 1:
                 errors.append((w['where'], f'{n_tables} tables in {path} share this header line'))
-            elif not cells:
-                errors.append((w['where'], 'no cell of this table is over the cap'))
+            elif not cells and not sents:
+                errors.append((w['where'], 'no cell or sentence of this table is over the cap'))
             else:
-                for b in cells:
+                for b in cells + sents:
                     b['waived'] = True
     return errors
 
@@ -449,13 +453,13 @@ def analyze(path):
         return {'n': n, 'what': what, 'cap': cap, 'snippet': text[:100],
                 'table': table, 'waived': False}
 
-    def check_sentences(text):
+    def check_sentences(text, table=None):
         for s in sentences_from_block(text):
             n = nwords(s)
             if n > max_words:
                 long_sentences.append({'n': n, 'snippet': s.replace(SPAN_GAP, ' ')[:100],
                                        'text': fold(s), 'joiner': joiner_in(s),
-                                       'sha': sentence_sha1(s), 'waived': False})
+                                       'sha': sentence_sha1(s), 'table': table, 'waived': False})
 
     def flush_block():
         nonlocal cur, paragraph_lines
@@ -505,7 +509,7 @@ def analyze(path):
             # Each cell is checked on its own: a table row is data, not a
             # flowing paragraph, so joining cells together (or joining rows)
             # would manufacture sentences that were never written as one.
-            check_sentences(cell)
+            check_sentences(cell, table_head)
 
     for raw in lines:
         # A table is the run of table rows; any other line (blank, fence, text)
