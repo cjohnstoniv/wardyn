@@ -120,7 +120,11 @@ browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
   the shared registry. A valid large joined recording can time out on every
   attempt because each retry reads from the beginning. A timeout keeps the work
   pending and preserves any earlier final row; it does not certify an empty or
-  complete capture. An unfinished claim permits takeover after five minutes, and
+  complete capture. In a leader pass a read that outlives its budget is that
+  run's outcome alone: it is logged with the run id, and the pass still counts
+  as a success for the `run_output` sweep's health. A recording store that
+  fails, or a database call that does not answer in time, is still the pass's
+  error. An unfinished claim permits takeover after five minutes, and
   selection favors never-claimed work, then the oldest claim, so one slow cast
   yields later passes to other runs. This bounds work, not delivery latency or
   backlog capacity: sustained load can exceed what the leader recovers before

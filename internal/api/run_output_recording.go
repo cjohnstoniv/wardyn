@@ -19,6 +19,10 @@ import (
 
 const recordingOutputSource = "recording"
 
+// errRecordingOutputOverBudget is a source read that ended on its deadline
+// rather than failing: the work stays pending for a later attempt.
+var errRecordingOutputOverBudget = errors.New("recording output read outlived its budget")
+
 func (s *Server) recordingOutputEnabled(ctx context.Context, run types.AgentRun) bool {
 	if s.cfg.RecordingStore == nil || s.cfg.ExecOutputTailOff || s.runOutputStore() == nil ||
 		run.Interactive || runIsUnrecordable(run) || s.runOutputExpiredByRetention(run) {
@@ -88,10 +92,12 @@ func (s *Server) recoverRecordingOutput(ctx context.Context, st store.RunOutputS
 			return err
 		}
 		row, reason := s.readRecordingOutput(ctx, run.ID)
-		if reason == "recording_unavailable" {
+		switch reason {
+		case "recording_over_budget":
+			return errRecordingOutputOverBudget
+		case "recording_unavailable":
 			return errors.New("recording output source is temporarily unavailable")
-		}
-		if reason == "recording_erased" {
+		case "recording_erased":
 			_, err := st.EraseRecordingRunOutputs(ctx, []uuid.UUID{run.ID})
 			return err
 		}
@@ -166,7 +172,11 @@ func (s *Server) readRecordingOutput(ctx context.Context, runID uuid.UUID) (stor
 	case <-readCtx.Done():
 		readErr = readCtx.Err()
 	}
-	out, truncated, _, uncovered := tail.seal(!s.maskCovered(ctx, runID), true)
+	// A read that ran out of time keeps no bytes, so it asks no closing coverage
+	// question: in a sweep pass the caller's own deadline is what ended it, and
+	// a coverage read on that context could only answer "uncovered".
+	overBudget := readErr != nil && errors.Is(readCtx.Err(), context.DeadlineExceeded)
+	out, truncated, _, uncovered := tail.seal(!overBudget && !s.maskCovered(ctx, runID), true)
 	s.releaseRunOutput(runID, tail)
 	if errors.Is(readErr, recording.ErrErased) {
 		clear(out)
@@ -178,11 +188,13 @@ func (s *Server) readRecordingOutput(ctx context.Context, runID uuid.UUID) (stor
 	}
 	if readErr != nil {
 		clear(out)
-		if errors.Is(readErr, recording.ErrNotFound) {
+		switch {
+		case errors.Is(readErr, recording.ErrNotFound):
 			return gap, "recording_missing"
-		}
-		if errors.Is(readErr, recording.ErrInvalidCast) {
+		case errors.Is(readErr, recording.ErrInvalidCast):
 			return gap, "recording_invalid"
+		case overBudget:
+			return gap, "recording_over_budget"
 		}
 		return gap, "recording_unavailable"
 	}
@@ -227,8 +239,13 @@ func (s *Server) sweepRecordingOutputs(ctx context.Context, st store.RunOutputSt
 		if run.Interactive || runIsUnrecordable(run) {
 			continue
 		}
-		if err := s.recoverRecordingOutput(ctx, st, run); err != nil &&
-			!errors.Is(err, store.ErrRunOutputErased) && !errors.Is(err, store.ErrRecordingOutputErased) {
+		err = s.recoverRecordingOutput(ctx, st, run)
+		switch {
+		case errors.Is(err, errRecordingOutputOverBudget):
+			// That run's outcome, not the pass's: a sandbox sizes its own recording,
+			// and one slow read must not turn the whole sweep's health stale.
+			s.logRecordingOutputError(ctx, run.ID, err)
+		case err != nil && !errors.Is(err, store.ErrRunOutputErased) && !errors.Is(err, store.ErrRecordingOutputErased):
 			return err
 		}
 	}

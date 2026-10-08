@@ -323,3 +323,46 @@ func TestRecordingOutput_AuditsRecoveryAsSuccessAndGapAsFailure(t *testing.T) {
 		}
 	}
 }
+
+// One recording that outlives its read budget is that run's outcome, not the
+// pass's: it stays pending and the pass still succeeds. A source that fails is
+// still the pass's error.
+func TestRecordingOutput_SweepKeepsAnOverBudgetReadPendingWithoutFailingThePass(t *testing.T) {
+	f, rs := newRecordingOutputFixture(t)
+	f.srv.runOutputRecoverWaitOverride = 20 * time.Millisecond
+	saveOutputCast(t, rs, f.run.ID, partsHeader+`[0,"o","marker\n"]`+"\n")
+	if err := f.mem.QueueRecordingRunOutput(t.Context(), f.run.ID, 0, time.Minute, true); err != nil {
+		t.Fatal(err)
+	}
+	pending := func() bool {
+		f.mem.mu.Lock()
+		defer f.mem.mu.Unlock()
+		p := f.mem.recording[f.run.ID]
+		return p.requested > p.completed
+	}
+	// One open func for the whole test: an over-budget read is abandoned, not
+	// joined, so its goroutine may still be inside open when the pass returns.
+	var outage atomic.Bool
+	rs.open = func(ctx context.Context, _ string) (io.ReadCloser, error) {
+		if outage.Load() {
+			return nil, errors.New("storage outage")
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if err := f.srv.SweepRunOutputs(t.Context()); err != nil {
+		t.Fatalf("an over-budget read failed the whole pass: %v", err)
+	}
+	if _, found := f.mem.row(f.run.ID); found || !pending() {
+		t.Fatal("an over-budget read was finalized or lost its work")
+	}
+	f.mem.mu.Lock()
+	p := f.mem.recording[f.run.ID]
+	p.claimedAt = time.Now().Add(-2 * runOutputPendingStale)
+	f.mem.recording[f.run.ID] = p
+	f.mem.mu.Unlock()
+	outage.Store(true)
+	if err := f.srv.SweepRunOutputs(t.Context()); err == nil || !pending() {
+		t.Fatalf("a failing source must stay the pass's error with its work pending: %v", err)
+	}
+}

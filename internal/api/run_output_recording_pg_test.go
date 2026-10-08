@@ -349,3 +349,34 @@ func TestRecordingOutputPG_UploadReceiptDoesNotNeedRunnerCapabilities(t *testing
 		t.Fatalf("the run's end did not recover the kept cast: %q final=%v", raw, final)
 	}
 }
+
+// In a leader pass the pass's own deadline is what ends a slow read, and the
+// coverage read that closes a recovery cannot answer on an expired context.
+// That is still a read over its budget: not an uncovered run, not a failed pass.
+func TestRecordingOutputPG_SweepDeadlineInsideAReadIsNotAGapOrAFailedPass(t *testing.T) {
+	l := newMaskLab(t)
+	a := l.recordingReplica()
+	run := l.run()
+	a.dispatch(t, run, "slow-secret-value")
+	run = l.recordingRunEnded(run)
+	source := a.srv.cfg.RecordingStore
+	saveOutputCast(t, source, run.ID, partsHeader+`[0,"o","slow marker\n"]`+"\n")
+	if err := store.NewPG(l.pool).QueueRecordingRunOutput(t.Context(), run.ID, 0, time.Minute, true); err != nil {
+		t.Fatal(err)
+	}
+	a.srv.cfg.RecordingStore = &outputRecordingStore{Store: source, open: func(ctx context.Context, _ string) (io.ReadCloser, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if err := a.srv.SweepRunOutputs(ctx); err != nil {
+		t.Fatalf("the pass's deadline inside one read failed the pass: %v", err)
+	}
+	if l.count(`SELECT count(*) FROM run_outputs WHERE run_id=$1`, run.ID) != 0 {
+		t.Fatal("a read over its budget was finalized")
+	}
+	if l.count(`SELECT count(*) FROM run_output_recording_recovery WHERE run_id=$1 AND requested_generation>completed_generation`, run.ID) != 1 {
+		t.Fatal("a read over its budget lost its durable work")
+	}
+}
