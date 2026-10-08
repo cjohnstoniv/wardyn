@@ -19,6 +19,7 @@ vi.mock("../../../lib/api/runs", () => ({
   runs: { getPolicy: (...a: unknown[]) => getPolicyMock(...a) },
 }));
 
+import { aheadByHours } from "../../../lib/test-clock";
 import { toYaml } from "../../wardyn/code-block";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { PolicyTab } from "./policy-tab";
@@ -387,7 +388,7 @@ describe("PolicyTab — changes grouped by cause", () => {
         changes: [
           change({ cause: "mirror", field: "allowed_domains", removed: ["pypi.org"] }),
           // A restart's removal happened later: it is not a change made at start.
-          change({ cause: "restart", field: "allowed_domains", removed: ["paste.example"], at: "2026-09-30T10:00:00Z" }),
+          change({ cause: "restart", field: "allowed_domains", removed: ["paste.example"], at: aheadByHours(-24) }),
         ],
       }),
     );
