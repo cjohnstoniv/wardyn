@@ -105,6 +105,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The operations manual's API-token, portal-delegation, roles and governance-profile, denial-reason,
   run-policy, second-user and workspace-tier sections are now bullets, nested lists and alerts, with
   every repository file they cite linked. No rule, default or limit changed.
+- The policy reference and the example-policy notes read as bullets, alerts and tables with every file reference a link; no field, default or limit changed.
 
 ### Fixed
 

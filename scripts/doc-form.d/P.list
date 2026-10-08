@@ -1,0 +1,3 @@
+# Asserted against every cap in scripts/doc-form.sh (strict tier).
+docs/POLICIES.md
+examples/policies/README.md
