@@ -115,6 +115,9 @@ func (s PG) eraseComponentRowsOf(ctx context.Context, stmt, owner string) (int, 
 
 // PutRunComponents — see ComponentStore.
 func (s PG) PutRunComponents(ctx context.Context, runID uuid.UUID, comps []types.RunComponent) error {
+	if len(comps) == 0 {
+		return errors.New("store: put run components: no components; a run without any writes no snapshot")
+	}
 	defs := make([][]byte, len(comps))
 	for i, c := range comps {
 		def, err := marshalComponentDefinition(c.Definition)

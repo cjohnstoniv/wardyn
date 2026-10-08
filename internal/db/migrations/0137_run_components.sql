@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS run_components (
         THEN name IS NULL AND version IS NULL AND definition IS NULL AND component_id IS NULL AND self_defined
         ELSE name IS NOT NULL AND version IS NOT NULL AND definition IS NOT NULL END),
     -- An org row is never self-defined, and a person's row always is: only the launcher's own attach.
-    CHECK (owner IS NULL OR (owner = '') = NOT self_defined)
+    CHECK (owner IS NULL OR (owner = '') = NOT self_defined),
+    -- Every row names a door: the custom-component feature, or the org component's own grant.
+    CHECK (self_defined OR component_id IS NOT NULL)
 );
 CREATE INDEX IF NOT EXISTS run_components_owner_idx ON run_components (owner) WHERE owner <> '';

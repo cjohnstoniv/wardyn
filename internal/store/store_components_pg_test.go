@@ -263,6 +263,7 @@ func TestPG_RunComponents_SnapshotAndCascade(t *testing.T) {
 	other := persistRun(t, ctx, pool, newRun(types.RunRunning))
 	for name, bad := range map[string]types.RunComponent{
 		"an org row marked self-defined":  {Name: "x", SelfDefined: true},
+		"an org row naming no component":  {Name: "x"},
 		"a person's row not self-defined": {Owner: alice, Name: "x"},
 	} {
 		if err := st.PutRunComponents(ctx, other.ID, []types.RunComponent{bad}); err == nil {
@@ -273,6 +274,12 @@ func TestPG_RunComponents_SnapshotAndCascade(t *testing.T) {
 		t.Fatalf("refused puts left %+v, %v; want nothing written", got, err)
 	}
 
+	// An empty snapshot is refused, not silently accepted: it would write nothing to be written once.
+	for _, empty := range [][]types.RunComponent{nil, {}} {
+		if err := st.PutRunComponents(ctx, other.ID, empty); err == nil || errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrConflict) {
+			t.Fatalf("put of %#v: err = %v, want a refusal that is neither ErrNotFound nor ErrConflict", empty, err)
+		}
+	}
 	if err := st.PutRunComponents(ctx, uuid.New(), rows); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("put for a run that does not exist: err = %v, want ErrNotFound", err)
 	}

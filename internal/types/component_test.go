@@ -511,3 +511,53 @@ func TestDestinationVetoPrecedesValidate(t *testing.T) {
 		t.Errorf("Validate alone = %v, want the spelling refusal a veto must come before", err)
 	}
 }
+
+// A person authors every field below, and the proxy writes the format onto
+// every injected request: each is bounded, and a control byte in the format
+// is refused here rather than by the transport mid-run.
+func TestComponentDefinitionValidate_BoundsPersonAuthoredLengths(t *testing.T) {
+	mib := strings.Repeat("A", 1<<20)
+	headerWith := func(format string) types.ComponentDefinition {
+		return types.ComponentDefinition{Hosts: []string{"api.example.com"}, Secrets: []types.ComponentSecret{{
+			SecretName: "k", Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryHeader, Host: "api.example.com", Format: format},
+		}}}
+	}
+	atLimit := func(n int) string { return strings.Repeat("A", n) }
+	for name, d := range map[string]types.ComponentDefinition{
+		"format at 512 bytes":     headerWith("%s" + strings.Repeat("x", types.MaxComponentHeaderFormatBytes-2)),
+		"format with unicode":     headerWith("Clé %s"),
+		"env var at 128 bytes":    {Secrets: []types.ComponentSecret{env("k", atLimit(types.MaxComponentEnvNameBytes))}},
+		"config key at 128 bytes": {Config: map[string]string{atLimit(types.MaxComponentEnvNameBytes): "v"}},
+	} {
+		if err := d.Validate(proxy.ValidDomainEntry, true); err != nil {
+			t.Errorf("%s: Validate = %v, want nil", name, err)
+		}
+	}
+	for name, tc := range map[string]struct {
+		def  types.ComponentDefinition
+		want string
+	}{
+		"format of 513 bytes": {headerWith("%s" + strings.Repeat("x", types.MaxComponentHeaderFormatBytes-1)), "secrets[0].delivery.format: must be printable text of at most 512 bytes"},
+		"format of 1 MiB":     {headerWith("%s" + mib), "secrets[0].delivery.format: "},
+		"format with NUL":     {headerWith("Bearer %s\x00"), "secrets[0].delivery.format: "},
+		"format with a tab":   {headerWith("Bearer\t%s"), "secrets[0].delivery.format: "},
+		"format with DEL":     {headerWith("Bearer %s\x7f"), "secrets[0].delivery.format: "},
+		"env var of 129 bytes": {
+			types.ComponentDefinition{Secrets: []types.ComponentSecret{env("k", atLimit(types.MaxComponentEnvNameBytes+1))}},
+			"secrets[0].delivery.var: must be at most 128 bytes",
+		},
+		"env var of 1 MiB": {types.ComponentDefinition{Secrets: []types.ComponentSecret{env("k", mib)}}, "secrets[0].delivery.var: must be at most 128 bytes"},
+		"config key of 129 bytes": {
+			types.ComponentDefinition{Config: map[string]string{atLimit(types.MaxComponentEnvNameBytes + 1): "v"}},
+			"config: key must be at most 128 bytes",
+		},
+		"config key of 1 MiB": {types.ComponentDefinition{Config: map[string]string{mib: "v"}}, "config: key must be at most 128 bytes"},
+	} {
+		for _, personDefined := range []bool{false, true} {
+			err := tc.def.Validate(proxy.ValidDomainEntry, personDefined)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("%s (person-defined %v): Validate = %v, want an error containing %q", name, personDefined, err, tc.want)
+			}
+		}
+	}
+}
