@@ -38,8 +38,8 @@ func runRequestEnums(req createRunRequest) (types.ConfinementClass, *runRefusal)
 	if req.ToolApprovals != "" && req.ToolApprovals != "auto" && req.ToolApprovals != "hold" {
 		return "", runError(http.StatusBadRequest, reasonToolApprovalsUnknown, fmt.Sprintf("unknown tool_approvals %q (want auto or hold)", req.ToolApprovals))
 	}
-	// codex-cli has no external tool-approval contract (Part C's spike verified
-	// that only as far as codex's own docs go) — refuse the request outright
+	// codex-cli has no external tool-approval contract (verified only as far
+	// as that harness's own docs go) — refuse the request outright
 	// rather than silently falling back to today's unsupervised skip-permissions,
 	// which would contradict the "hold" the caller explicitly asked for.
 	if req.ToolApprovals == "hold" && req.Agent == "codex-cli" {

@@ -1,18 +1,18 @@
 # M-F — 0.8.9 independent console fixes
 
-Status: **packet ready for review; Claude Design prototype and owner approval pending**. This packet independently covers #1901, #1906 and #1908. It does not depend on M-R. Implementation-plan authorization is not visual approval. No product rendering was changed to prepare this packet.
+Status: **approved by the owner 2026-10-08** against the design prototype Version 3 (`1791421176-82e4`, `Main.dc.html` sha256 `831800dc…f91e0`). This packet independently covers #1901, #1906 and #1908. It does not depend on M-R. Implementation-plan authorization is not visual approval. No product rendering was changed to prepare this packet.
 
-Baseline: `7b08fd722ca4dcfd9d2d59e6f1cb8ecab54d8dcf`. Design authority: `docs/design/CONSOLE-RULES.md`, `docs/design/SYNC.md`, `.design-sync/NOTES.md`, and approved `088/mock-packets/088-mock.md` C2/M2/C3. The prototype must use the account-accessible Claude Design console design-system project. A local project ID is not verification; see `design-access.md` for the access evidence and remaining gate.
+Baseline: `7b08fd722ca4dcfd9d2d59e6f1cb8ecab54d8dcf`. Design authority: `docs/design/CONSOLE-RULES.md`, `docs/design/SYNC.md`, `.design-sync/NOTES.md`, and the approved 0.8.8 mock decisions C2/M2/C3. The prototype must be built on the console design-system project (see `docs/design/SYNC.md`); a local project ID is not verification.
 
 Top three corrections: refuse saved-policy workspace loss; use the information token for the Recording link; reconcile sign-in reads without abandoning a still-visible renewal. Reuse `OptionCard`, `Field`, `Button`, `CopyButton`, `DeviceCode`, `Loader2`, the existing waiting strip, the existing renewal strip and their existing status regions. No new color, type size, radius, elevation or copy vocabulary beyond the one declared #1901 sentence.
 
 ## 1. What it unblocks
 
-| Fix | Product scope | Independent lane |
-|---|---|---|
-| #1901 | Default and saved policy bodies carry one workspace by reference. With two or more attached, refuse Launch, Check again and all shared builder paths; preserve all attachments and show the remedy. Custom policy retains its multi-workspace behavior. | F |
-| #1906 | In the terminal notice, the existing “Open the Recording tab →” control uses `text-info`. The action and words are unchanged. | H |
-| #1908 | Older `/me` reads cannot overwrite the result of a newer sign-in event; a visible renewal keeps checking beyond the old 21-minute quiet-watch bound; waiting device-code reads refresh every 5 seconds and on focus/visibility return without focus theft or repeated announcements. | H |
+| Fix | Product scope |
+|---|---|
+| #1901 | Default and saved policy bodies carry one workspace by reference. With two or more attached, refuse Launch, Check again and all shared builder paths; preserve all attachments and show the remedy. Custom policy retains its multi-workspace behavior. |
+| #1906 | In the terminal notice, the existing “Open the Recording tab →” control uses `text-info`. The action and words are unchanged. |
+| #1908 | Older `/me` reads cannot overwrite the result of a newer sign-in event; a visible renewal keeps checking beyond the old 21-minute quiet-watch bound; waiting device-code reads refresh every 5 seconds and on focus/visibility return without focus theft or repeated announcements. |
 
 ## 2. Surfaces
 
@@ -134,7 +134,7 @@ The session-expiry banner, login-sandbox explanatory note, general terminal noti
 
 Device-code strip Tab order remains Open the verification page, Copy code, Retry only on error, then the existing terminal controls. The verification link remains an anchor with `target="_blank" rel="noopener noreferrer"`, with its host nearby. The renewal strip retains its existing Cancel-first focus contract, described status, fallback link or retry button, and Escape handling. Polling intervals are not live countdowns.
 
-Regression evidence required from F/H: shared-builder refusal tests for saved and default (Launch/manual check/automatic check), preserving 2+ attachments and custom recovery; `terminal-notice` token regression; controllable pending-read sign-in race; visible renewal past 21 minutes; bounded cancelled watch; 5-second device reads plus focus/visibility refresh; unchanged repeated answers produce neither repeated status announcements nor focus movement. Keep `new-run-screen-form.test.tsx` defaultPrevented tests and 088 sign-in/renewal tests. Integration still runs full UI Playwright outside `make ci`.
+Regression evidence required: shared-builder refusal tests for saved and default (Launch/manual check/automatic check), preserving 2+ attachments and custom recovery; `terminal-notice` token regression; controllable pending-read sign-in race; visible renewal past 21 minutes; bounded cancelled watch; 5-second device reads plus focus/visibility refresh; unchanged repeated answers produce neither repeated status announcements nor focus movement. Keep `new-run-screen-form.test.tsx` defaultPrevented tests and 088 sign-in/renewal tests. The full UI Playwright suite runs outside `make ci`.
 
 ## 5. Decisions for this independent approval
 
@@ -143,6 +143,6 @@ Regression evidence required from F/H: shared-builder refusal tests for saved an
 - **F-D3:** #1906 changes only the link's semantic color token. Existing link copy and tab navigation remain.
 - **F-D4:** #1908 changes read ownership, timing and refresh triggers, with no copy changes. A visible renewal remains measured; the quiet bound belongs only to a cancelled background watch.
 - **F-D5:** Duplicate poll answers are silent and do not move focus. Existing owner-only, startup-watch, failure and successful-renewal transitions remain.
-- **F-D6:** Approving M-F must identify its concrete Claude Design prototype URL/revision and the decisions above. It does not approve M-R or M-O. Packet text alone does not satisfy the remote prototype gate.
+- **F-D6:** Approving M-F must identify its concrete design prototype URL/revision and the decisions above. It does not approve M-R or M-O. Packet text alone does not satisfy the remote prototype gate.
 
-Owner approval record: **pending**. Claude Design prototype URL/revision: **not created or verified yet**.
+Owner approval record: **approved 2026-10-08** ("yes"). Design prototype: Version 3, version id `1791421176-82e4`.

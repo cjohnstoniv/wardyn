@@ -120,7 +120,11 @@ browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
   the shared registry. A valid large joined recording can time out on every
   attempt because each retry reads from the beginning. A timeout keeps the work
   pending and preserves any earlier final row; it does not certify an empty or
-  complete capture. An unfinished claim permits takeover after five minutes, and
+  complete capture. In a leader pass a read that outlives its budget is that
+  run's outcome alone: it is logged with the run id, and the pass still counts
+  as a success for the `run_output` sweep's health. A recording store that
+  fails, or a database call that does not answer in time, is still the pass's
+  error. An unfinished claim permits takeover after five minutes, and
   selection favors never-claimed work, then the oldest claim, so one slow cast
   yields later passes to other runs. This bounds work, not delivery latency or
   backlog capacity: sustained load can exceed what the leader recovers before
@@ -139,6 +143,19 @@ browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
   the window, and a run whose output was erased (below) answers
   `404 run_output_erased`. A deployment that turned recordings off so terminals
   are not kept should decide on these two settings too.
+- **The window is counted from when a row was written.** The sweep deletes a
+  row `WARDYN_RUN_OUTPUT_RETENTION_DAYS` after its `captured_at`. Direct stdout
+  is written as the run is finalized, so for it that is the run's end. A
+  recording-derived row is written when its recovery commits. No recovery
+  commits for a run that ended longer ago than the window, but one that
+  commits inside it is then kept for a full window of its own, so such a row
+  can outlive the run's end by more than the window. For a row that holds
+  output the excess is small in normal operation: recovering bytes needs the
+  run's masking manifest, which the run-secret sweep removes about an hour
+  after the run's last change (`api.RunSecretGrace`, checked every 15
+  minutes). A `capture_gap` row holds no output. It can be written later, by
+  an authorized read anywhere in the window when the run has no row yet, and
+  is then kept for a full window from that read.
 - **Another replica's live tail.** With persistence on, a replica that holds no
   tail for a live run answers the read from `run_output_chunks`, where the
   dispatching replica keeps what its masker has passed (`complete` is false).
@@ -251,7 +268,13 @@ browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
   - The recording commit and recovery-obligation commit use separate stores.
     A crash between them leaves a committed recording without a successful
     receipt or queued recovery. An authorized terminal missing/gap output read
-    repairs that window, with a five-minute cooldown. Transient source failures
+    repairs that window, with a five-minute cooldown. A failed obligation commit
+    is the same window: the upload answers `500` although the recording is
+    stored, and the recorder does not retry its final upload. The receipt never
+    waits on the runner. When the runner's capabilities cannot be read at upload
+    time, the stored recording is acknowledged and that upload queues nothing;
+    terminal finalization asks the runner again, and the same read repairs an
+    upload that arrived after the run ended. Transient source failures
     leave durable pending work; no recovery is possible once masking coverage
     or output retention has expired.
 
@@ -1150,6 +1173,20 @@ on `run_output_recording_recovery` (migration `0135_run_output_recording_recover
 for the source fence and recovery claims. Retain its erased rows with database
 backups; the absence of a run foreign key deliberately preserves the fence after
 run deletion or identifier reuse.
+
+**A limit on how many runs one erasure can cover.** The `run_outputs` and
+`recordings` scopes each take one Postgres advisory lock for every run the person
+created, all in one transaction. Postgres keeps every session's locks in one shared
+table sized from `max_locks_per_transaction` × `max_connections` (64 × 100 by
+default), so a person with more runs than that table can take cannot have either
+scope erased in one call. The order of magnitude is ten thousand runs: on a default
+Postgres 17, 10,000 advisory locks in one transaction succeed and 20,000 fail with
+`out of shared memory` (SQLSTATE 53200). The scope then fails closed and as a whole.
+Its transaction rolls back, so no fence or tombstone is written and no row is
+deleted; the `recordings` scope stops before it deletes any recording; the erasure
+answers `500` `erasure_incomplete`. Nothing is half-erased, and nothing is fenced
+either. A retry fails the same way until `max_locks_per_transaction` is raised,
+which needs a Postgres restart: raise it, then retry the same scopes.
 
 The Postgres fence (migration `0133_recording_erasures`) survives retention and replica/process restarts. The filesystem
 store syncs its `.erased/<key>.cast` marker before deleting casts and the shared-volume `.log` fallback;
@@ -2813,7 +2850,7 @@ hosts a workspace scan seeded, the model provider's own egress, and the grants
 `applyWorkspaceRequirements` re-adds at launch are all left untouched no matter
 what a member holds.
 
-**The nine kinds** — a closed set, written down once in Go (`capabilityKinds`,
+**The ten kinds** — a closed set, written down once in Go (`capabilityKinds`,
 `internal/api/capabilities.go`) rather than as a schema CHECK:
 
 | Kind | Value | Direction | What it bounds, and where |
@@ -2827,9 +2864,10 @@ what a member holds.
 | `model_provider` | exact model provider id | narrows | which model provider (Settings → Model providers, `SiteConfig.ModelProviders`) a person's run may use — the one the request names (`model_provider`, `wardyn run --model-provider`), the one a workspace pins (`llm_cred.provider_ref`), or the agent's default reaching them (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; create and Review alike). **A workspace pin is gated too**: every model credential is the person's own, so a pin naming a provider they aren't granted refuses the run rather than being exempt. Such a person never sees that pin's id (0.8.2, #1018): a workspace read (`GET /workspaces`, `GET /workspaces/{id}`, the update response) answers `llm_cred: {"provider_unavailable": true}` in its place, and the launch refusal names no provider. Inert with no model-provider block |
 | `feature` | `ssh_key` or `api_token` | narrows | whether a member may add an SSH key (`POST /me/ssh-keys`) or mint an API token (`POST /me/tokens`) at all — one check at each mint door (the token door keeps its user-view `409`; the SSH door stores a capped key, #564). Mint only: a key or token that already exists keeps working until it is removed or revoked. Any other value is refused at write time (`400`) |
 | `policy` | stored policy uuid | narrows | which stored policy a member may select for their own run (`policy_id` on `POST /runs`/preflight, `denyUserRequest`, same seam). Only the choice: the selected row is still bounded by the member's ceiling, and a run that names no policy is not gated. Checked before the row is read, so an ungranted id is refused whether or not it exists |
+| `component` | org component uuid | narrows | which org component (an admin-written row) a person may attach to their own run (`componentAttachRefusal`, `internal/api/components_authz.go`). An org component's id is restricted ("Available to") from its create, so nobody may attach it until an allow row names it — a wildcard allow does not. A component a person defines themselves is the `feature` value `custom_component`'s question, not this kind's |
 
 `*` as a value matches everything of that kind, spelled the same way for all
-nine. 0.8 retired a tenth, `integration`, with the AI integrations it bounded: a
+ten. 0.8 retired one more, `integration`, with the AI integrations it bounded: a
 run's `integration_id` is refused with a `422` for everyone, so there is nothing
 left for it to gate. Its stored grant rows are inert, and a new one is refused. `egress_host` values are matched by `entryCoversAny`
 (`internal/api/artifact_redirect.go`) — the *same* matcher that decides whether
@@ -3905,6 +3943,7 @@ the owner or email, only the `reason` and `target` it always had.
 | `capability_model_provider` | a member's run would use a model provider they aren't granted — the one they named (`model_provider`), the one the workspace pins, or, when no single granted provider is left, the ones serving the agent (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; target `runs.model_provider`), and on revive/restart/extend as the owner (the run's recorded provider, `internal/api/run_owner_authority.go`). Review answers the same refusal as create. Since 0.8.2 (#1018) a provider the member NAMED in the request is answered exactly as an id no provider has — the `422` `model_provider_unavailable` "there is no model provider by that name" sentence, whatever the provider's state — because provider ids are guessable; only this row records the true reason. A provider the workspace's pin names, which a workspace read hides from them, is refused `403` with the sentence that names no provider, and the row carries `provider`. The key door (`PUT` and `DELETE /model-providers/{id}/credential`, target `model_provider.credential`; a `DELETE` by a person who still holds a key for the provider is not refused) and the sign-in door (`/model-providers/{id}/sign-in`, target `model_provider.sign_in`) likewise answer the `404` an unknown id gets (`denyProviderAsMissing`, `internal/api/model_provider_credentials.go`). Only the unnamed case — the one provider serving the agent, or none granted — answers `403`, with the one sentence that names no provider (the row carries `provider` when exactly one serves) | ⛔ `403` when no provider was named; otherwise byte-identical to an unknown id (`422` at create and Review, `404` at the key and sign-in doors) |
 | `capability_feature` | a member tried to add an SSH key (target `me.ssh_keys`) or mint an API token (target `me.tokens`) and that feature is not available to them. Checked before the key or token is validated or stored | ⛔ `403` |
 | `capability_policy` | `policy_id`: a member selected a stored policy they aren't granted (`denyUserRequest`, target `runs.policy`, on `POST /runs` and preflight alike), and on revive/restart/extend as the owner (`internal/api/run_owner_authority.go`) | ⛔ `403` |
+| `capability_component` | a person tried to attach an org component they aren't granted (`componentAttachRefusal`, `internal/api/components_authz.go`, target `runs.component`). An org component is usable by nobody until an allow row names its id. The body names nothing about the component — not its name, hosts, secrets or id | ⛔ `403` |
 | `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` below autonomy level L3 (`runs.task_mode`), a non-interactive run below autonomy level L1 (`runs.interactive`), `seed_auto_tools` below autonomy level L2 (`runs.seed_auto_tools`), an agent with no tool-approval lane — BYOA (`agent` unset) or any agent other than `claude-code` — at a resolved level of exactly L1, where an unattended run's tool calls would otherwise be derived to `hold` (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `userDriveDoorRefusal`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`) or under a profile carrying `deny_task_mode_exec` (`runs.interactive_start`, `denyUserGovernance`), since it runs at sandbox boot unattended the way exec does, and — 0.8.2 — a terminal attach into a run whose profile carries `deny_interactive` (`runs.attach`) or a UI-gateway session into one whose profile carries `deny_ui_apps` (`runs.ui_apps`, which is also the target of the `dropped` row when that limit strips `ui_apps` at create; `internal/api/governance_run_doors.go`). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
 | `governance_overlay_unsatisfiable` | the governance profile that binds this person, or the run's own, is composed (0.8.6) and nothing satisfies it together with the profile or deployment default it builds on — the deployment default narrowed until an overlay's `allowed_methods` are disjoint with it, or an overlay and base that name different `llm_inspection` modes — so the launch (`governance.ceiling`, on create and preflight alike) and every live door refuse rather than guess: a terminal attach (`runs.attach`), a UI-gateway session (`runs.ui_apps`), a revive and an end extension (the `owner_profile_*` refusals' `403` sibling). A base or a chain that cannot be read is a `500` or `503`, never this reason, and is never read as the deployment's policy. The sentence names the person's own profile and never a base; an administrator sees which profile failed on `GET /governance` (`effective.error`). The SAME value is the `409` a profile write returns when a base change would leave a profile built on it in this state | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterUserGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_USER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
@@ -3968,7 +4007,7 @@ audit call, so it is a bare 403 with no audit trail at all.
 **What's still not built.** No custom roles: the tier set is the three fixed ones
 (admin, `security_admin`, member — see "Three roles, and who sets the walls"), and
 a capability grant only narrows or widens what a member may reach, it can never
-mint a tier. Only the nine kinds above are grantable; there is no general
+mint a tier. Only the ten kinds above are grantable; there is no general
 per-resource permission model (a run is still owner-or-admin only — no "read-only
 share" or "co-owner" concept), no tenant/org columns, and no separation of duty
 among super admins — every admin (and the admin token, always) can rewrite the

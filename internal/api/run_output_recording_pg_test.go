@@ -323,3 +323,60 @@ func TestRecordingOutputPG_FreshnessLostBetweenPartsDropsWholeResult(t *testing.
 		t.Fatalf("lost freshness kept %q gap=%v incomplete=%v scope=%v", out, gap, incomplete, scope)
 	}
 }
+
+// The receipt says the cast is kept. Whether its output is owed is the runner's
+// to say, and a runner that cannot be asked fails no upload and queues nothing:
+// the run's end asks again.
+func TestRecordingOutputPG_UploadReceiptDoesNotNeedRunnerCapabilities(t *testing.T) {
+	l := newMaskLab(t)
+	a := l.recordingReplica()
+	run := l.run()
+	a.dispatch(t, run, "caps-secret-value")
+	a.srv.cfg.Runner = &outputRunner{fakeRunner: &fakeRunner{capsErr: errors.New("substrate unreachable")}}
+	if w := l.upload(a, run, partsHeader+`[0,"o","kept caps-secret-value\n"]`+"\n"); w.Code != http.StatusNoContent {
+		t.Fatalf("a stored cast was refused its receipt: %d %s", w.Code, w.Body)
+	}
+	if evs := l.recEvents("recording.upload"); len(evs) != 1 || evs[0].Outcome != "success" {
+		t.Fatalf("upload audit = %+v, want one success", evs)
+	}
+	if l.count(`SELECT count(*) FROM run_output_recording_recovery WHERE run_id=$1`, run.ID) != 0 {
+		t.Fatal("an unreadable capability queued recovery that may not be owed")
+	}
+	run = l.recordingRunEnded(run)
+	b := l.recordingReplica()
+	b.srv.FinishRunOutput(t.Context(), run.ID)
+	if raw, final := l.storedOutput(run.ID); string(raw) != "kept <secret-hidden>\n" || !final {
+		t.Fatalf("the run's end did not recover the kept cast: %q final=%v", raw, final)
+	}
+}
+
+// In a leader pass the pass's own deadline is what ends a slow read, and the
+// coverage read that closes a recovery cannot answer on an expired context.
+// That is still a read over its budget: not an uncovered run, not a failed pass.
+func TestRecordingOutputPG_SweepDeadlineInsideAReadIsNotAGapOrAFailedPass(t *testing.T) {
+	l := newMaskLab(t)
+	a := l.recordingReplica()
+	run := l.run()
+	a.dispatch(t, run, "slow-secret-value")
+	run = l.recordingRunEnded(run)
+	source := a.srv.cfg.RecordingStore
+	saveOutputCast(t, source, run.ID, partsHeader+`[0,"o","slow marker\n"]`+"\n")
+	if err := store.NewPG(l.pool).QueueRecordingRunOutput(t.Context(), run.ID, 0, time.Minute, true); err != nil {
+		t.Fatal(err)
+	}
+	a.srv.cfg.RecordingStore = &outputRecordingStore{Store: source, open: func(ctx context.Context, _ string) (io.ReadCloser, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if err := a.srv.SweepRunOutputs(ctx); err != nil {
+		t.Fatalf("the pass's deadline inside one read failed the pass: %v", err)
+	}
+	if l.count(`SELECT count(*) FROM run_outputs WHERE run_id=$1`, run.ID) != 0 {
+		t.Fatal("a read over its budget was finalized")
+	}
+	if l.count(`SELECT count(*) FROM run_output_recording_recovery WHERE run_id=$1 AND requested_generation>completed_generation`, run.ID) != 1 {
+		t.Fatal("a read over its budget lost its durable work")
+	}
+}

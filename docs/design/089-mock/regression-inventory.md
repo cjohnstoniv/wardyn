@@ -1,6 +1,6 @@
 # Regression inventory for M-F / M-R / M-O
 
-Generated from baseline `7b08fd722ca4dcfd9d2d59e6f1cb8ecab54d8dcf` on 2026-10-07. This is an implementation/check inventory, not evidence that the redesigned UI or a prototype has passed. No existing tests were removed or modified for lane M.
+Generated from baseline `7b08fd722ca4dcfd9d2d59e6f1cb8ecab54d8dcf` on 2026-10-07. This is an implementation/check inventory, not evidence that the redesigned UI or a prototype has passed. No existing tests were removed or modified.
 
 ## Relocated and preserved anchors
 
@@ -35,7 +35,7 @@ Both current `new-run.spec.ts` 1280×650 Launch reachability cases are re-derive
 
 ## Baseline New Run e2e census (39 files)
 
-Command: `rg -l "runs/new|New run" ui/e2e -g "*.spec.ts"` (exit 0). Grouped by location; files can cover more than one lane.
+Command: `rg -l "runs/new|New run" ui/e2e -g "*.spec.ts"` (exit 0). Grouped by location; files can cover more than one area.
 
 ### Console and doors
 
@@ -177,8 +177,8 @@ Command: `rg -l -F "isn't valid JSON" ui/src ui/e2e` (exit 0). Replace only the 
 
 `git log -S "onMode(m)" -- ui/src/app/components/screens/run-detail/policy-tab.tsx` identifies `9671137178cb3779a985a0e13759eb4d23ea09e9`. Its commit body introduced read-only policy provenance/change groups, Summary/YAML and Copy YAML with member Hidden rendering. Deleting its local switcher is justified only by replacing it with the existing shared Segmented while retaining those contracts.
 
-`rg -n "Segmented|policy-tab\.tsx|run-policy-view" /home/cjohn/containerized-agent-envs/local -g "*.md" -g "*.txt" -g "!**/scratch/**"` (exit 0) found the older local `ux-0.5-mock/CANON-STRINGS.md` Segmented vocabulary. The matched local note provides no authorization to delete the pattern or rename Summary. The future implementation commit must record these two introducing commits and the local check in its body. Lane M deletes no code.
+The future implementation commit must record these two introducing commits in its body. This packet deletes no code.
 
 ## Required completion evidence
 
-Appropriate targeted Vitest, three-editor/source tests, real production bundle split assertion, unchanged file-size cap, `scripts/lane-preflight.sh`, full `make ci`, full `go test ./...` (including cmd guards) and `scripts/run-ui-e2e.sh` separately. Integration owns real PostgreSQL and kind cases, including recording-on Kubernetes output. Report actual commands, environment, exit codes and skips; this inventory does not mark them run.
+Appropriate targeted Vitest, three-editor/source tests, real production bundle split assertion, unchanged file-size cap, `scripts/lane-preflight.sh`, full `make ci`, full `go test ./...` (including cmd guards) and `scripts/run-ui-e2e.sh` separately. Real PostgreSQL and kind cases, including recording-on Kubernetes output, run separately. Report actual commands, environment, exit codes and skips; this inventory does not mark them run.
