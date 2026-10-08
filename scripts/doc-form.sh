@@ -41,11 +41,34 @@
 # Per-block caps (every one fails the gate, listed as long_blocks):
 #   MAX_PARAGRAPH_WORDS  one paragraph block (consecutive prose lines; a
 #                        blockquote paragraph counts the same way)
-#   MAX_ITEM_WORDS       one list item with its continuation lines
+#   MAX_ITEM_WORDS       one list item with its continuation lines, indented
+#                        or lazy (an unindented line directly after the item
+#                        renders inside it, so it counts; for the share it
+#                        stays a paragraph line)
 #   MAX_CELL_WORDS       one table cell
 # plus MAX_SENTENCE_WORDS for any sentence, wherever it sits. Table cells and
 # blockquote text still count against the sentence cap — a 39-word sentence
 # hiding in a table cell is exactly the prose creep rule 5 is for.
+#
+# Known gap: text inside a code fence is outside every measure (caps, share,
+# budget). Fenced prose is the one way left to hide words from this gate; the
+# fact ledger (docs-overhaul tools/doc-facts.py) does not count fence text as
+# rendered prose either, so a rewrite that fences a sentence cannot claim it
+# as kept there.
+#
+# LEGACY TIER: the ten ASSERTED_DOCS that no *.list names keep the checks of
+# the gate before the caps (sentence, the old paragraph share, summary), but
+# through this parser, not the old one: it re-implements the old rules. On all
+# 154 tracked .md files the old share and summary are identical; the sentence
+# sets are identical on 151. The differences are all old false positives,
+# where the old parser counted markup as words or joined blocks that render
+# separately: a "[!IMPORTANT]" alert marker read as a word, a "-" marker of a
+# list inside a quote read as a word, and quoted table rows joined into one
+# sentence (member-mode.md, OPERATIONS.md, TRY-IT.md). The first review of
+# this parser found 7 differing documents: three went away once lazy
+# continuation lines join their item again (as the old parser did), and one
+# (the Helm README) was this parser dropping a quote line that starts with
+# "#141)" as a heading; inside a quote only "#" plus a space is a heading now.
 #
 # BUDGET (grow-fails): "--budget '<doc>=<N>[ share=<S>]'" (repeatable) and
 # lines "path=N share=S" in scripts/doc-form.d/*.budget ("share=S" optional)
@@ -175,6 +198,7 @@ asserted_paths = strict_paths + legacy_paths
 BULLET = re.compile(r'^\s*([-*+]|\d+\.)\s')
 TABLE = re.compile(r'^\s*\|')
 HEADING = re.compile(r'^#')
+ATX_HEADING = re.compile(r'^#{1,6}(\s|$)')
 QUOTE = re.compile(r'^\s*>')
 FENCE = re.compile(r'^\s*```')
 # A GitHub alert's marker line: "> [!NOTE]" and friends. Markup, not prose.
@@ -318,20 +342,27 @@ def analyze(path):
         if cur['kind'] == 'item' and cur['words'] > max_item:
             long_blocks.append((cur['words'], 'list item' + where, max_item, text[:100]))
             # An item over the cap is prose in a list's clothing: its lines
-            # join the paragraph share (quote lines are already counted).
+            # join the paragraph share (quote lines are already counted, and
+            # so are lazy continuation lines, which are paragraph lines).
             if not cur['quote']:
-                paragraph_lines += cur['lines']
+                paragraph_lines += cur['lines'] - cur['lazy']
         cur = None
 
     def open_block(kind, quote):
         nonlocal cur
         flush_block()
-        cur = {'kind': kind, 'quote': quote, 'words': 0, 'lines': 0, 'texts': []}
+        cur = {'kind': kind, 'quote': quote, 'words': 0, 'lines': 0, 'lazy': 0, 'texts': []}
 
     def add_to_block(text):
         cur['words'] += nwords(text)
         cur['lines'] += 1
         cur['texts'].append(text)
+
+    def in_item(quote):
+        """A paragraph line right after an item's line (no blank line
+        between) is that item's lazy continuation: CommonMark renders it
+        inside the item, so it counts toward the item cap."""
+        return cur is not None and cur['kind'] == 'item' and cur['quote'] == quote
 
     def do_table(text):
         flush_block()
@@ -388,13 +419,17 @@ def analyze(path):
                 total_nonblank += 1
                 paragraph_lines += 1  # a quote is prose
                 sub = classify(text, prev_sub)
+                if sub == 'heading' and not ATX_HEADING.match(text):
+                    # "> #141) — ..." wraps a sentence onto a line that starts
+                    # with '#'; only '#' + space is a heading inside a quote.
+                    sub = 'paragraph'
                 prev_sub = sub
                 if sub == 'bullet':
                     if BULLET.match(text) or cur is None or cur['kind'] != 'item':
                         open_block('item', True)
                     add_to_block(prose_text(text))
                 elif sub == 'paragraph':
-                    if cur is None or cur['kind'] != 'paragraph' or not cur['quote']:
+                    if not in_item(True) and (cur is None or cur['kind'] != 'paragraph' or not cur['quote']):
                         open_block('paragraph', True)
                     add_to_block(text)
                 elif sub == 'table':
@@ -404,8 +439,12 @@ def analyze(path):
         else:
             total_nonblank += 1
             if kind == 'paragraph':
+                # Still a paragraph line for the share, even when it is a
+                # lazy continuation of an item.
                 paragraph_lines += 1
-                if cur is None or cur['kind'] != 'paragraph' or cur['quote']:
+                if in_item(False):
+                    cur['lazy'] += 1
+                elif cur is None or cur['kind'] != 'paragraph' or cur['quote']:
                     open_block('paragraph', False)
                 add_to_block(raw)
             elif kind == 'bullet':

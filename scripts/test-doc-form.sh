@@ -89,6 +89,13 @@ page > "$TMP/docs/scratch/item.md" <<DOC
 DOC
 check_fails "a 70-word list item with a continuation line" "70-word list item (max 60)"
 
+scratch lazy
+page > "$TMP/docs/scratch/lazy.md" <<DOC
+- $(words 50)
+$(words 50)
+DOC
+check_fails "a 100-word list item with an unindented (lazy) continuation line" "100-word list item (max 60)"
+
 scratch bigitem
 page > "$TMP/docs/scratch/bigitem.md" <<DOC
 - $(words 40)
@@ -155,6 +162,23 @@ echo "ok  a legacy page is not held to the new caps"
 echo "docs/operations/launch-presets.md" > "$LIST"
 check_fails "the same page once a lane lists it" "90-word paragraph (max 80)"
 rm -f "$LIST"
+cp "$ROOT/docs/operations/launch-presets.md" "$TMP/docs/operations/launch-presets.md"
+
+# 6b. The legacy tier re-implements the old rules; it does not run the old
+#     parser. Pinned quote-adjacent shape: a 35-word sentence under an alert
+#     marker passes (the old parser counted "[!NOTE]" as a 36th word, a false
+#     positive), and a real 36-word sentence in the same quote still fails.
+sentence() { awk -v n="$1" 'BEGIN { for (i = 1; i <= n; i++) printf "w%s%s", i, (i == n ? "." : " "); }'; }
+printf '\n> [!NOTE]\n> %s\n' "$(sentence 35)" >> "$TMP/docs/operations/launch-presets.md"
+run_gate || fail "an alert marker must not count as a word of the legacy sentence pass: $(gate_says)"
+echo "ok  a legacy page: the alert marker is not a word of its sentence"
+printf '> %s\n' "$(sentence 36)" >> "$TMP/docs/operations/launch-presets.md"
+check_fails "a legacy page with a 36-word sentence in a quote" "36-word sentence (max 35)"
+cp "$ROOT/docs/operations/launch-presets.md" "$TMP/docs/operations/launch-presets.md"
+#     A quoted sentence wrapped onto a line that starts with "#141)" is still
+#     one sentence: '#' without a space is not a heading inside a quote.
+printf '\n> %s\n> #141) %s\n' "$(words 20 | tr -d .)" "$(sentence 15)" >> "$TMP/docs/operations/launch-presets.md"
+check_fails "a legacy page with a 36-word quoted sentence wrapped at '#141)'" "36-word sentence (max 35)"
 cp "$ROOT/docs/operations/launch-presets.md" "$TMP/docs/operations/launch-presets.md"
 
 # 7. Budget: prose words = words outside fences, minus table pipes, separator
