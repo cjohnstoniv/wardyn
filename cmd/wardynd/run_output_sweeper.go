@@ -17,7 +17,7 @@ import (
 // persisted output past WARDYN_RUN_OUTPUT_RETENTION_DAYS and resolves the
 // pending rows of terminal runs whose capture was abandoned. Not configurable,
 // like the other fixed housekeeping cadences.
-const runOutputSweepInterval = time.Hour
+const runOutputSweepInterval = time.Minute
 
 // runOutputSweeper is the *api.Server surface the sweep needs, narrowed so a
 // test can drive a tick without a store.
@@ -25,25 +25,28 @@ type runOutputSweeper interface {
 	SweepRunOutputs(context.Context) error
 }
 
-// runRunOutputSweeper ticks the sweep every interval until ctx ends; the first
-// tick is one interval in, as for the other sweepers. ticks records each tick
+// runRunOutputSweeper recovers restart work promptly, before masking retention
+// expires, then ticks every interval until ctx ends. ticks records each tick
 // as the run_output sweep (nil records nothing); an error is an attempt
 // without a success.
 func runRunOutputSweeper(ctx context.Context, srv runOutputSweeper, interval time.Duration, ticks *sweephealth.Tracker) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
+		if ctx.Err() != nil {
+			return
+		}
+		_ = ticks.Tick(ctx, sweephealth.RunOutput, func(ctx context.Context) error {
+			err := srv.SweepRunOutputs(ctx)
+			if err != nil {
+				slog.WarnContext(ctx, "wardynd: run output sweep error", slog.Any("err", err))
+			}
+			return err
+		})
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_ = ticks.Tick(ctx, sweephealth.RunOutput, func(ctx context.Context) error {
-				err := srv.SweepRunOutputs(ctx)
-				if err != nil {
-					slog.WarnContext(ctx, "wardynd: run output sweep error", slog.Any("err", err))
-				}
-				return err
-			})
 		}
 	}
 }
