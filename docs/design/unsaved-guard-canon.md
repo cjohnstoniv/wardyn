@@ -74,6 +74,10 @@ One shared hook (`ui/src/app/lib/use-unsaved-guard.tsx`) and one shared registry
   `useBlocker` isn't available. In-app navigation is guarded by intercepting the sidebar link's click
   itself (`useGuardedNavClick`, `app-shell.tsx#SidebarNav`) rather than the router — a blocking
   confirm dialog (`UnsavedGuardProvider`), never an inline banner a click could sail past.
+- New Run registers its draft the same way (`new-run/use-new-run-controller.ts`, #1920). Its Escape
+  key and ghost Runs button ask through `useRequestLeave`, and its own links through
+  `useGuardedNavClick`: an untouched form leaves at once, a dirty one gets this dialog. Which panel
+  is on screen is not part of the draft. The draft stops being dirty only when a launch succeeds.
 
 ## 5. Save conflict (412)
 

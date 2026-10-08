@@ -26,6 +26,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
   performs no runner or share probe. Its independent per-person limit defaults to 60/minute with a burst of 15,
   configured by `WARDYN_POLICY_PREVIEW_RATE_PER_MIN`. Repository facts preserve full SSH paths and keep
   differing Azure DevOps profiles and ceilings in separate groups; see `docs/sdk.md` (#1918).
+- New Run is four panels — Run, Workspace, Access and Policy — that can be visited in any order, with
+  Launch reachable from every one. Each panel's button counts what is holding Launch on it, and the
+  reason above Launch is a link that shows the right panel and focuses the control to fix. On narrow
+  screens the rail becomes a footer that keeps the verdict and Launch on screen (#1922).
+
+### Changed
+
+- New Run requires a Title. An untyped title is filled from the first line of the Task or Command
+  and stays editable; a run with neither, such as an interactive terminal session, needs one typed.
+  Run details now open the Run panel (#1922).
+- New Run's Command and Startup command are single-line command inputs, and Task, Command and
+  Startup command each keep their own text, so a prompt typed as a Task is never sent as a command.
+  Multi-line scripts are not supported in these fields (#1922).
+- New Run's model provider picker moved from the rail to the Run panel; the rail keeps a summary.
+  A workspace that is not available, or whose git provider is not enabled, is shown as an error
+  beside the Workspace picker, and the second now holds Launch. The "Per-person AWS sign-in" chip is
+  removed, and the Hold option reads "Hold in Wardyn — tool calls wait for approval, by tool rule"
+  with a link to the policy's tool rules (#1922).
 
 ### Fixed
 
@@ -66,6 +84,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Patch preparation refuses duplicate CHANGELOG heading keys after merging and after the
   release-commit step, including resumed candidates, before checks or publication work. (#1913)
 - **Image download verification (#1905).** The image-pin gate checks every Dockerfile curl download for a same-file checksum before use and refuses ignored failures or unsupported shell forms. Claude native downloads now pin their manifest; alternate versions require an explicit manifest checksum and native channel downloads fail clearly. AWS installer and signature downloads gain per-architecture checksums while retaining GPG verification. Staged installs and npm remain supported. The embedded code-server shell-quote issue remains tracked in #1904.
+- Escape on a New Run form with unsaved changes opens the "Leave without saving?" dialog instead of
+  doing nothing. An untouched form still leaves at once, and the Runs button and the page's own links
+  ask the same way (#1920).
 
 ## [0.8.8] — 2026-10-07
 
