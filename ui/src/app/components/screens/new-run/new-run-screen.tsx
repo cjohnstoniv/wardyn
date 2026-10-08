@@ -47,6 +47,7 @@ export function NewRunScreen() {
     preflightNotChecked, preflightError, preflightErrorSeq, preflightResult,
     providerCandidates, providerAccess, onModelProviderChange, providerChangeNote,
     providerGateState, addWsOpen, reloadWorkspaces,
+    setPolicyEditing, setPolicyView,
   } = c;
   const { panel, go, reveal } = useNewRunPanels();
   // The issue the line above Launch names; a control it belongs to points its
@@ -117,12 +118,18 @@ export function NewRunScreen() {
               issues={issues}
               shown={shown}
               toolRules={policy.toolRules}
-              onToolRules={() =>
-                // The editable rules when the custom source parses, the source
-                // itself when it does not, the mode row otherwise: a saved or
-                // default policy is read-only here.
-                go("policy", policyMode !== "custom" ? ISSUE_TARGET.POLICY_MODE : policy.parsed.ok ? ISSUE_TARGET.TOOL_RULES : ISSUE_TARGET.POLICY_SOURCE)
-              }
+              onToolRules={() => {
+                // A saved or default policy is read-only here: the link lands
+                // on its Summary. A custom one opens for editing, on the rules
+                // when the source parses and on the source when it does not.
+                if (policyMode !== "custom") {
+                  setPolicyView("summary");
+                  go("policy", ISSUE_TARGET.POLICY_READ);
+                  return;
+                }
+                setPolicyEditing(true);
+                go("policy", policy.parsed.ok ? ISSUE_TARGET.TOOL_RULES : ISSUE_TARGET.POLICY_SOURCE);
+              }}
             />
           </Panel>
 
@@ -165,7 +172,11 @@ export function NewRunScreen() {
             describe or gate one run while Launch sends another. */}
         <NewRunLaunchPanel
           panel={panel}
-          onIssue={reveal}
+          onIssue={(issue) => {
+            // The source is on screen only while editing: its issue opens the editor first.
+            if (issue.focus === ISSUE_TARGET.POLICY_SOURCE) setPolicyEditing(true);
+            reveal(issue);
+          }}
           guardLink={guardLink}
           governanceProfile={governanceProfile}
           governanceContact={governanceContact}

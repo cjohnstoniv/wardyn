@@ -25,7 +25,7 @@ import { test, expect } from "@playwright/test";
 import { act, beat, caption, chapter, PACE, spotlight } from "./overlay";
 import { stage } from "./stage";
 import { SPEC_LABEL } from "../policy-source";
-import { newRunPanel } from "./funnel";
+import { newRunEditPolicy } from "./funnel";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -134,7 +134,7 @@ test("V04c act 3 — the member's view of the same install", async () => {
   await page.goto("/runs/new");
   await page.getByRole("combobox", { name: "Title" }).fill("reach for the outside world");
   await act(page, page.getByRole("radio", { name: /^Terminal/ }), "Their own run — a terminal, nothing mounted.");
-  await newRunPanel(page, "policy");
+  await newRunEditPolicy(page);
   await act(page, page.getByRole("button", { name: "Minimal" }), "Minimal policy: unlisted hosts raise an approval.");
   const spec = page.getByLabel(SPEC_LABEL);
   await spec.fill(JSON.stringify({

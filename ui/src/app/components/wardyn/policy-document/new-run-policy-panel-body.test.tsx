@@ -374,11 +374,19 @@ describe("NewRunPolicyPanelBody — preview states", () => {
     expect(screen.getByText("Checking this run…")).toBeInTheDocument();
   });
 
-  it("a refused draft is not previewed, and its sentence sits beside the modes", () => {
+  it("a refused draft is not previewed, and its sentence sits beside Check again, which names it", () => {
     const problem = "The default policy launches with one workspace. Remove the extra workspace, or choose Custom policy to keep them all.";
-    render(<Screen initial={{ mode: "default" }} modeProblem={problem} preview={preview({ result: result(SAVED), fresh: true })} />);
-    expect(screen.getByText(problem)).toBeInTheDocument();
+    render(<Screen initial={{ mode: "default" }} modeProblem={problem} onCheck={() => {}} checkDisabled preview={preview({ result: result(SAVED), fresh: true })} />);
+    const hold = screen.getByText(problem);
+    expect(hold).toHaveAttribute("role", "status");
+    expect(screen.getAllByText(problem)).toHaveLength(1);
     expect(screen.queryByRole("heading", { name: "Network" })).toBeNull();
+    // In the document block, directly ahead of the row Check again is in.
+    const check = button("Check again");
+    expect(screen.getByTestId("policy-document")).toContainElement(hold);
+    expect(hold.nextElementSibling).toContainElement(check);
+    expect(check).toBeDisabled();
+    expect(check).toHaveAccessibleDescription(problem);
   });
 
   it("a member's preview with hidden values says so above the raw views", async () => {

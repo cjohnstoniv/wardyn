@@ -17,6 +17,7 @@ import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { RAIL_PROVIDER, RAIL_SETUP, RUN } from "../../wardyn/copy";
 import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
 import { NEW_RUN_FLOW } from "../../wardyn/copy/new-run-flow";
+import { POLICY_DOCUMENT } from "../../wardyn/copy/policy-document";
 import { POLICY_TEMPLATE_COPY } from "../../wardyn/copy/policy-templates";
 import type { PolicyMode } from "../../wardyn/policy-panel";
 import { savedPolicyGone } from "./policy-lane";
@@ -37,6 +38,8 @@ export const ISSUE_TARGET = {
   POLICY_MODE: "nr-policy-mode",
   SAVED_POLICY: "nr-saved-policy",
   POLICY_SOURCE: "policy-spec-run",
+  /** The read view's heading: where a link to a read-only policy lands. */
+  POLICY_READ: "nr-policy-read-title",
   BARRIER: "nr-barrier",
   TOOL_RULES: "policy-tool-rules-run",
 } as const;
@@ -143,7 +146,7 @@ export function launchGates(i: LaunchGateInputs): LaunchGates {
   // launches by reference and the default lane sends no policy at all, so
   // neither puts a document on the wire.
   if (i.policyMode === "custom" && !i.specParsedOk) {
-    issues.push({ panel: "policy", focus: ISSUE_TARGET.POLICY_SOURCE, text: "The policy spec isn't valid JSON." });
+    issues.push({ panel: "policy", focus: ISSUE_TARGET.POLICY_SOURCE, text: POLICY_DOCUMENT.INVALID_GATE });
   } else if (savedPolicyGone(i.policyMode, i.selectedPolicyId, i.savedPolicy, i.policiesLoaded)) {
     issues.push({ panel: "policy", focus: ISSUE_TARGET.SAVED_POLICY, text: RUN.POLICY_GONE, inline: true }); // F2-F5
   } else if (i.policyMode === "saved" && !i.selectedPolicyId) {

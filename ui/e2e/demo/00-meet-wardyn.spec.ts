@@ -77,7 +77,7 @@ import {
   typeInTerminal,
 } from "./overlay";
 import { apiHeaders, BEAT_SHORT, pollScreen, silentCard } from "./demos";
-import { APPROVAL_APPEARS, decide, newRunPanel } from "./funnel";
+import { APPROVAL_APPEARS, decide, newRunEditPolicy, newRunPanel } from "./funnel";
 import { bootRun, REPLAY_OVER, RUN_BOOTS, RUN_OVER, waitUnlessGone } from "./runs";
 import { sweepStaleState } from "./sweep";
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll
@@ -499,7 +499,7 @@ test("V00 act 2 — a run, and a knock at the door", async () => {
   // because a changed default would make the approval below never fire while
   // the take still went green.
   const spec = page.getByLabel(SPEC_LABEL);
-  await newRunPanel(page, "policy");
+  await newRunEditPolicy(page);
   await expect(spec, "the default first_use_approval is no longer deny_with_review").toHaveValue(
     /"?first_use_approval"?: "?deny_with_review"?/,
   );

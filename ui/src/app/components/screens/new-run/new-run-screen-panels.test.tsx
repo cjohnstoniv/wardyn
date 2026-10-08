@@ -47,7 +47,7 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { DENIED } from "../../../lib/permissions-copy";
 import { NEW_RUN_FLOW } from "../../wardyn/copy/new-run-flow";
 import { setField } from "../../../../test/set-field";
-import { goToPanel } from "../../../../test/new-run-panel";
+import { editPolicy, goToPanel } from "../../../../test/new-run-panel";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -386,7 +386,7 @@ describe("New Run — Tool approvals under Hold", () => {
     renderScreen();
     await user.click(await screen.findByRole("radio", { name: /^Autonomous/ }));
     await user.click(screen.getByRole("radio", { name: HOLD }));
-    fireEvent.change(screen.getByLabelText(/^Spec \(YAML\)/), {
+    fireEvent.change(await editPolicy(), {
       target: { value: JSON.stringify({ min_confinement_class: "CC1", tool_rules: [{ tool: "Bash", effect: "hold" }] }) },
     });
     const sentence = "1 rule · Bash held. Anything else is held.";

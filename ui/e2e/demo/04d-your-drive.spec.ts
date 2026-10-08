@@ -114,7 +114,7 @@ import { dexSignIn, dexSignOut } from "./sso";
 // itself in on camera.
 import { stage } from "./stage";
 import { SPEC_LABEL } from "../policy-source";
-import { newRunPanel } from "./funnel";
+import { newRunEditPolicy, newRunPanel } from "./funnel";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -392,7 +392,7 @@ async function memberRunForm(title: string, narrate: boolean): Promise<void> {
     page.getByRole("radio", { name: /^Terminal/ }),
     narrate ? "A plain command window. No AI agent, and no key to any AI service." : undefined, // C38
   );
-  await newRunPanel(page, "policy");
+  await newRunEditPolicy(page);
   await act(
     page,
     page.getByRole("button", { name: "Minimal" }),

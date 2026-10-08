@@ -28,7 +28,8 @@ vi.mock("../../../lib/api/policies", () => ({
 }));
 const createRunMock = vi.fn();
 const preflightRunMock = vi.fn();
-vi.mock("../../../lib/api/policy-preview", () => ({ previewRunPolicy: vi.fn().mockResolvedValue({ spec: {}, pending: [], warnings: [], repository_access: [] }) }));
+const previewRunPolicyMock = vi.fn();
+vi.mock("../../../lib/api/policy-preview", () => ({ previewRunPolicy: (...a: unknown[]) => previewRunPolicyMock(...a) }));
 vi.mock("../../../lib/api/runs", async () => ({
   ...await vi.importActual<typeof import("../../../lib/api/runs")>("../../../lib/api/runs"),
   runs: {
@@ -54,7 +55,7 @@ import { NewRunScreen } from "./new-run-screen";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { POLICY_TEMPLATE_COPY as C } from "../../wardyn/copy/policy-templates";
 import { setField } from "../../../../test/set-field";
-import { goToPanel } from "../../../../test/new-run-panel";
+import { editPolicy, goToPanel } from "../../../../test/new-run-panel";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -74,6 +75,9 @@ function renderScreen() {
   );
 }
 
+// The preview is read 800 ms after the draft settles.
+const PREVIEW_WAIT = { timeout: 4000 };
+
 const chooseDefault = async () =>
   user.click(await screen.findByRole("button", { name: new RegExp(C.DEFAULT_TITLE) }));
 
@@ -86,6 +90,18 @@ beforeEach(() => {
     warnings: [],
   });
   getDefaultPolicyMock.mockReset().mockResolvedValue(DEFAULT_SPEC);
+  // The server's preview of the request: the inline policy it was sent, else the default.
+  previewRunPolicyMock.mockReset().mockImplementation((input: { inline_policy?: unknown }) =>
+    Promise.resolve({
+      spec: input.inline_policy ?? DEFAULT_SPEC,
+      source: { kind: input.inline_policy ? "inline" : "default" },
+      provisional: true,
+      redacted: false,
+      pending: [],
+      warnings: [],
+      repository_access: [],
+    }),
+  );
   listPoliciesMock.mockReset().mockResolvedValue([]);
   listWorkspacesMock.mockReset().mockResolvedValue([]);
   myCapabilitiesMock.mockReset().mockReturnValue(null);
@@ -155,18 +171,23 @@ describe("NewRunScreen — Use the default policy", () => {
 
   it("shows the read-only preview and hides the editor and the additions box", async () => {
     renderScreen();
-    expect(screen.getByLabelText(/^Spec \(YAML\)/)).toBeInTheDocument();
     goToPanel("Policy");
+    expect(await screen.findByRole("button", { name: "Edit policy" })).toBeInTheDocument();
     await chooseDefault();
     expect(await screen.findByText(C.DEFAULT_PREVIEW)).toBeInTheDocument();
-    expect(await screen.findByText(/api\.default\.example/)).toBeInTheDocument();
+    // The read view is the server's preview of this request, not the page's own copy of the default.
+    expect(await screen.findByText(/api\.default\.example/, {}, PREVIEW_WAIT)).toBeInTheDocument();
+    expect(previewRunPolicyMock.mock.lastCall![0]).not.toHaveProperty("inline_policy");
     // The words, not the constant: the workspace still mounts, and the note must not say otherwise.
     expect(
       screen.getByText(
         "This run launches under this policy as it stands. Your attached workspace mounts into it; nothing else on this page is merged.",
       ),
     ).toBeInTheDocument();
+    // Read-only: no editor and no way into one, only a copy to customize.
     expect(screen.queryByLabelText(/^Spec \(YAML\)/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit policy" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Customize for this run" })).toBeInTheDocument();
     expect(screen.queryByTestId("run-spec-additions")).toBeNull();
     expect(screen.queryByTestId("safety-meter")).toBeNull();
     expect(screen.getByRole("button", { name: /^Check again$/ })).toBeEnabled();
@@ -177,11 +198,10 @@ describe("NewRunScreen — Use the default policy", () => {
     // The title is required and its issue is named first, so it is given.
     setField(await screen.findByLabelText("Title"), "Default mode");
     // Break the Custom document, then choose Default: the broken document is not on the wire.
-    setField(await screen.findByLabelText(/^Spec \(YAML\)/), "{ not json");
-    expect(await screen.findByText("The policy spec isn't valid JSON.")).toBeInTheDocument();
-    goToPanel("Policy");
+    setField(await editPolicy(), "{ not json");
+    expect(await screen.findByText("The policy spec isn't valid YAML or JSON.")).toBeInTheDocument();
     await chooseDefault();
-    expect(screen.queryByText("The policy spec isn't valid JSON.")).toBeNull();
+    expect(screen.queryByText("The policy spec isn't valid YAML or JSON.")).toBeNull();
     expect(screen.queryByText("Pick a saved policy, or write a custom one.")).toBeNull();
     setField(screen.getByLabelText("Title"), "default run");
     await user.click(screen.getByRole("button", { name: "Launch run" }));
@@ -210,15 +230,15 @@ describe("NewRunScreen — Use the default policy", () => {
     expect(screen.getByRole("button", { name: "Launch run" })).toBeEnabled();
 
     await user.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText(/api\.default\.example/)).toBeInTheDocument();
+    expect(await screen.findByText(C.DEFAULT_NOTE)).toBeInTheDocument();
     expect(screen.queryByText(C.DEFAULT_UNAVAILABLE)).toBeNull();
+    expect(await screen.findByText(/api\.default\.example/, {}, PREVIEW_WAIT)).toBeInTheDocument();
   });
 
   it("Custom -> Default -> Custom keeps the Custom document", async () => {
     renderScreen();
     const edited = JSON.stringify({ ...DEFAULT_SPEC, allowed_domains: ["mine.example"] });
-    setField(await screen.findByLabelText(/^Spec \(YAML\)/), edited);
-    goToPanel("Policy");
+    setField(await editPolicy(), edited);
     await chooseDefault();
     await user.click(screen.getByRole("button", { name: /^Custom policy/ }));
     expect((screen.getByLabelText(/^Spec \(YAML\)/) as HTMLTextAreaElement).value).toBe(edited);
@@ -289,6 +309,7 @@ describe("NewRunScreen — the default policy with two workspaces attached", () 
     const hold = screen.getByText(SENTENCE);
     expect(hold).toHaveAttribute("role", "status");
     expect(hold.closest("aside")).toBeNull();
+    expect(hold.nextElementSibling).toContainElement(screen.getByRole("button", { name: /^Check again$/ }));
     expect(screen.queryByRole("button", { name: SENTENCE })).toBeNull();
     expect(screen.getByRole("button", { name: "Launch run" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^Check again$/ })).toBeDisabled();
@@ -367,6 +388,6 @@ describe("NewRunScreen — the default preview's loading line", () => {
     expect(screen.getByText(C.DEFAULT_LOADING).closest("[role=status]")).not.toBeNull();
     // The cards keep working while it loads.
     await user.click(screen.getByRole("button", { name: /^Custom policy/ }));
-    expect(screen.getByLabelText(/^Spec \(YAML\)/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit policy" })).toBeInTheDocument();
   });
 });

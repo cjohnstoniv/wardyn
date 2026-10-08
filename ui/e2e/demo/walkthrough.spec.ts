@@ -48,7 +48,7 @@ import { act, beat, caption, chapter, PACE, spotlight, typeInTerminal } from "./
 // The funnel helpers and decide() live in funnel.ts — every video in the 0.5
 // series needs them, and this file is no longer the only spec in the project.
 import { stage } from "./stage";
-import { advance, APPROVAL_APPEARS, clearWorkspace, decide, newRunPanel } from "./funnel";
+import { advance, APPROVAL_APPEARS, clearWorkspace, decide, newRunEditPolicy, newRunPanel } from "./funnel";
 import { termText } from "../terminal-text";
 import { readSpec, SPEC_LABEL } from "../policy-source";
 
@@ -461,7 +461,7 @@ test("act 5 — a real run", async () => {
   // construction, the same default the old "Confined" radio asserted. The
   // click below re-asserts the Minimal chip rather than changing anything —
   // same "for the camera" role the old radio click played.
-  await newRunPanel(page, "policy");
+  await newRunEditPolicy(page);
   await act(page, page.getByRole("button", { name: "Minimal" }), "Confined: default-deny egress, and only what we list gets through.");
 
   // Network — the load-bearing part of the whole run.
@@ -487,7 +487,10 @@ test("act 5 — a real run", async () => {
   );
   await specBox.fill(heldSpec);
   await beat(page, PACE.read);
-  await expect(page.getByText("1 domain allowed")).toBeVisible({ timeout: 15_000 });
+  // The read view lists what the run will be allowed to reach: the one host.
+  await expect(
+    page.getByTestId("policy-document").getByText("api.anthropic.com", { exact: true }).first(),
+  ).toBeVisible({ timeout: 15_000 });
 
   // The model-host toggle chip (network-dialog.tsx) this if/else used to
   // drive is DELETED — Minimal's allowed_domains always includes

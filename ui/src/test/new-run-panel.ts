@@ -13,3 +13,13 @@ export function goToPanel(panel: "Run" | "Workspace" | "Access" | "Policy"): voi
     within(screen.getByRole("navigation", { name: "New run" })).getByRole("button", { name: new RegExp(`^${panel}`) }),
   );
 }
+
+/** Opens the custom policy's source the way a person does: the Policy panel,
+ *  then "Edit policy". Reading is the default, so the source field does not
+ *  exist until this is called. Returns the field. */
+export async function editPolicy(): Promise<HTMLTextAreaElement> {
+  goToPanel("Policy");
+  const field = /^Spec \((YAML|JSON)\)/;
+  if (!screen.queryByLabelText(field)) fireEvent.click(await screen.findByRole("button", { name: "Edit policy" }));
+  return (await screen.findByLabelText(field)) as HTMLTextAreaElement;
+}

@@ -68,7 +68,7 @@ import { act, beat, caption, centerInFrame, chapter, ffwdEnd, ffwdStart, PACE, s
 // importing it is what registers this file's beforeAll/afterAll, and each beat
 // reads the page out of stage() rather than closing over a module-level `let`.
 import { stage } from "./stage";
-import { clearWorkspace, decide, newRunPanel } from "./funnel";
+import { clearWorkspace, decide, newRunEditPolicy, newRunPanel } from "./funnel";
 import { sweepStaleState } from "./sweep";
 import { readSpec, SPEC_LABEL } from "../policy-source";
 
@@ -391,7 +391,7 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // construction, the same default the old "Confined" radio asserted. The
   // click below is still for the camera, same as the old one: it re-asserts
   // the Minimal chip rather than changing anything.
-  await newRunPanel(page, "policy");
+  await newRunEditPolicy(page);
   await act(page, page.getByRole("button", { name: "Minimal" }), "Confined — the network starts closed.");
   await caption(page, "We'll give it the one destination it needs and let everything else ask.");
   await beat(page, PACE.read + 400);
@@ -436,7 +436,10 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // connected. This run launches; its first model call fails.") would sit in
   // frame for the whole beat and make a liar of the next line — and of the
   // entire run, which would launch and fail its first model call.
-  await expect(page.getByText("1 domain allowed")).toBeVisible({ timeout: 20_000 });
+  // The read view lists what the run will be allowed to reach: the one host.
+  await expect(
+    page.getByTestId("policy-document").getByText("api.anthropic.com", { exact: true }).first(),
+  ).toBeVisible({ timeout: 20_000 });
   await expect(
     page.getByText(/No model provider is connected/),
     "no model provider is connected — V01's model step did not stick, and this run cannot do its task",
