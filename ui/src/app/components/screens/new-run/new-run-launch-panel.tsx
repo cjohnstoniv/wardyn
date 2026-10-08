@@ -279,6 +279,7 @@ export function NewRunLaunchPanel({
         // `noBarrier` in, so `disabled` never duplicates it): the rail states
         // ITS OWN reason beside Launch, so `problem` never also carries it.
         workspaceUnavailable,
+        referenceHold: gates.referenceWorkspaceBlocked,
         noBarrier,
         error,
         errorSeq,

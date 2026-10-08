@@ -1,8 +1,8 @@
 # M-R — New Run panels and shared policy document
 
-Status: **parser-diagnostic and field-semantics amendment awaiting written review; Claude Design prototype and owner approval pending**. Tracker #1916 under #1914. The earlier written packet was independently accepted at `036dd8081c137268036404110a0c5e235a0a33f8`; that acceptance does not cover this amendment. This independently approvable packet gates rendering in V/P and the visual portions of D. Nonvisual parser, preview, request-controller and mechanical split work can proceed under the execution contract. No product rendering code was changed to prepare this packet.
+Status: **parser-diagnostic and field-semantics amendment awaiting written review; design prototype and owner approval pending**. Tracker #1916. This independently approvable packet gates the rendering of the New Run panels, the shared policy viewer and editor, and the visual portions of the draft work. Nonvisual parser, preview, request-controller and mechanical split work can proceed meanwhile. No product rendering code was changed to prepare this packet.
 
-Baseline: `7b08fd722ca4dcfd9d2d59e6f1cb8ecab54d8dcf`. Read together with `regression-inventory.md`, `canon-inventory.md`, and the historical `design-access.md`; README records the current connection status. All three 089 review reports and the accepted execution contracts inform this packet; superseded plan wording is not canon. Claude Design must use the console design-system project verified through DesignSync. The remote component bundle and prototype are not yet verified, so these frames remain authoring instructions, not screenshots or proof of a remote prototype.
+Baseline: `7b08fd722ca4dcfd9d2d59e6f1cb8ecab54d8dcf`. Read together with `regression-inventory.md` and `canon-inventory.md`. Superseded plan wording is not canon. The prototype must use the console design-system project (see `docs/design/SYNC.md`). The component bundle and prototype are not yet verified, so these frames remain authoring instructions, not screenshots or proof of a remote prototype.
 
 Top three corrections: make the launch draft navigable without losing state; preserve the complete nine-section rail and its final verdict reading order; provide one read-only policy document and explicit YAML editing without mutating inspected policies. Existing tokens, four body type rungs, three elevations and one primary action apply. No new color, radius, ad-hoc size or elevation is proposed.
 
@@ -10,13 +10,13 @@ Reuse `Button`, `Field`, `OptionCard`, `Chip`, `WidgetCard`, `SectionCard`, `Sec
 
 ## 1. What it unblocks
 
-| Lane / surface | Result |
+| Surface | Result |
 |---|---|
-| D/P — New Run | Four freely navigable panels: Run, Workspace, Access, Policy. The source string and all selections survive panel/view changes, invalid edits and connection doors. Launch is available from every panel with the same gates. |
-| V — shared read-only viewer | `PolicyDocument` supplies Summary/YAML/JSON views to New Run, Policies, Governance and Run detail. Wrappers keep loading, history, provenance and freshness. Run detail retains the policy the run actually used. |
-| V/Y — explicit source editor | YAML is the default editable source; explicit JSON editing remains. View changes do not convert the source. Structured edits preserve unrelated YAML comments during the session. |
-| P — Access | Existing supported access controls become relevant to selected workspaces/model/source. Reasons explain each row. There is one editable source for ADO/PAT, and no new generic API/MCP/runtime catalog. |
-| F carry-forward | M-F's default/saved 2+ workspace refusal appears in the new panels and still refuses every builder path without dropping attachments. |
+| New Run | Four freely navigable panels: Run, Workspace, Access, Policy. The source string and all selections survive panel/view changes, invalid edits and connection doors. Launch is available from every panel with the same gates. |
+| Shared read-only viewer | `PolicyDocument` supplies Summary/YAML/JSON views to New Run, Policies, Governance and Run detail. Wrappers keep loading, history, provenance and freshness. Run detail retains the policy the run actually used. |
+| Explicit source editor | YAML is the default editable source; explicit JSON editing remains. View changes do not convert the source. Structured edits preserve unrelated YAML comments during the session. |
+| Access | Existing supported access controls become relevant to selected workspaces/model/source. Reasons explain each row. There is one editable source for ADO/PAT, and no new generic API/MCP/runtime catalog. |
+| Carried forward from M-F | M-F's default/saved 2+ workspace refusal appears in the new panels and still refuses every builder path without dropping attachments. |
 
 ## 2. Surfaces
 
@@ -209,7 +209,7 @@ The `Spec (JSON)`/validity literals currently live in `policy-panel.tsx`; centra
 
 ### Strict-parser diagnostics — new written-review and owner-approval proposal
 
-This inventory reads the actual Y source at `3b4af5aee746aff0c496bb370001295d50973e25`, with exact `yaml@2.9.1`. It incorporates the earlier handoff supplement prepared at `9656bfdc2f42007925f1704d0f779d1dddca297c`; those parser bytes are unchanged. These diagnostics are internal and unrendered at that candidate. Listing them here proposes their presentation; it neither accepts Y's implementation nor approves new product copy. See `canon-inventory.md` for the separate candidate hash, distinct from the original source baseline.
+This inventory reads the actual policy-document parser (`ui/src/app/lib/policy-document/index.ts`), with exact `yaml@2.9.1`. These diagnostics are internal and unrendered today. Listing them here proposes their presentation; it does not approve new product copy. See `canon-inventory.md` for the separate parser hash, distinct from the original source baseline.
 
 All fixed messages below live in `ui/src/app/lib/policy-document/index.ts`, in the named symbol. Consumers use the returned diagnostic verbatim rather than duplicating these strings in `POLICY_DOCUMENT` or the eager `copy.ts` barrel. Parse failures use the existing outer `INVALID_YAML(message)` / `INVALID_JSON(message)` templates and the proposed `SOURCE_POSITION(line,column)`. A refused structured operation on valid source shows its message and position beside the originating control without an invalid-source label. A successful strict parse proves a JSON-compatible mapping, not server policy validation, authorization or launch readiness.
 
@@ -309,7 +309,7 @@ The leave dialog reuses `UNSAVED`/`UNSAVED_GUARD` from the existing guard: “Le
 
 ### Invalid-source diagnostic frames and interaction
 
-These written fixtures extend R4 and the planned `/m-r/policy/invalid` scenario; they are not implemented screens or browser evidence. Each invalid-parse fixture must be driveable in the real Claude Design prototype in both editor formats where applicable. Its displayed diagnostic comes from the parser result, with the format-specific outer label and separate position above; operation refusals retain valid-source status as specified below. `parsePolicySource` failures expose only `ok`, `line`, `column`, `message`, never `value` or a Document.
+These written fixtures extend R4 and the planned `/m-r/policy/invalid` scenario; they are not implemented screens or browser evidence. Each invalid-parse fixture must be driveable in the real design prototype in both editor formats where applicable. Its displayed diagnostic comes from the parser result, with the format-specific outer label and separate position above; operation refusals retain valid-source status as specified below. `parsePolicySource` failures expose only `ok`, `line`, `column`, `message`, never `value` or a Document.
 
 | Fixture / transition | Diagnostic and state to demonstrate |
 |---|---|
@@ -404,7 +404,7 @@ Binary acceptance evidence: default/saved/custom launches and refusal paths; inv
 - **R-D11:** Access composes existing supported catalogs with dependency reasons and each field's existing empty/absent semantics. No new generic API/MCP/runtime foundation, hidden-source exposure or duplicate ADO/PAT editor.
 - **R-D12:** Default/saved extra workspaces are refused everywhere using M-F's exact copy. Custom retains every attachment. No automatic dropping or mode switch.
 - **R-D13:** Hoist Segmented and remove the Policy-tab duplicate only after its recorded provenance check; preserve all original consumers and dirty-name semantics. `regression-inventory.md` records that provenance for the eventual implementation commit body.
-- **R-D14:** Approval identifies this concrete Claude Design prototype URL/revision and these decisions, including narrow layout/focus and copy amendments. M-F and M-O remain independent. This textual packet alone does not satisfy the blocked remote-prototype gate.
-- **R-D15 — new proposal:** Approve the strict-parser diagnostic inventory and variable-data treatment, `SOURCE_POSITION` copy, invalid-source frames and local announcement/focus/Copy/Summary/rail/preview rules above. This amendment needs independent written review and then the real Claude Design/DesignSync state walkthrough and owner decision before any diagnostic rendering is wired.
+- **R-D14:** Approval identifies this concrete design prototype URL/revision and these decisions, including narrow layout/focus and copy amendments. M-F and M-O remain independent. This textual packet alone does not satisfy the blocked remote-prototype gate.
+- **R-D15 — new proposal:** Approve the strict-parser diagnostic inventory and variable-data treatment, `SOURCE_POSITION` copy, invalid-source frames and local announcement/focus/Copy/Summary/rail/preview rules above. This amendment needs independent written review and then the real design-prototype state walkthrough and owner decision before any diagnostic rendering is wired.
 
-Owner approval record: **pending**. Claude Design prototype URL/revision: **not created or verified yet**.
+Owner approval record: **pending**. Design prototype URL/revision: **not created or verified yet**.

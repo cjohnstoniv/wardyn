@@ -306,8 +306,8 @@ func (s PG) ListStalePendingRunOutputs(ctx context.Context, age time.Duration, l
 	}
 	rows, err := s.Pool.Query(ctx, `
 		SELECT o.run_id FROM run_outputs o JOIN agent_runs r ON r.id = o.run_id
-		WHERE o.captured_at IS NULL AND o.claimed_at < now() - $1::interval AND r.state <> ALL($2)
-		ORDER BY o.claimed_at LIMIT $3`, age.String(), nonTerminal, limit)
+		WHERE o.captured_at IS NULL AND o.claimed_at < now() - make_interval(secs => $1) AND r.state <> ALL($2)
+		ORDER BY o.claimed_at LIMIT $3`, age.Seconds(), nonTerminal, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: list stale pending run outputs: %w", err)
 	}
