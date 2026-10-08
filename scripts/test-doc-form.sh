@@ -261,4 +261,84 @@ run_gate || fail "a *.budget line 'path=N share=S' at its share must PASS: $(gat
 rm -f "$TMP/scripts/doc-form.d/t.budget"
 echo "ok  a *.budget line 'path=N share=S' is read and gated"
 
+# 10. Waivers: scripts/doc-form.d/*.waive keeps a named over-cap item visible
+#     (counted, "(M waived)") instead of failing on it. Sentence waivers take
+#     36-40 words and no clause joiner; table waivers take a PLAN § reason;
+#     a waiver that matches nothing fails. sha1 is of the folded sentence.
+WAIVE="$TMP/scripts/doc-form.d/t.waive"
+sha() { printf '%s' "$1" | sha1sum | cut -d' ' -f1; }
+waive_fails() { # description, expected message fragment
+  local out
+  if run_gate; then fail "$1 must FAIL"; fi
+  out="$(gate_says)"
+  grep -qF -- "$2" <<<"$out" || fail "$1 failed without naming it ($2): $out"
+  echo "ok  $1 fails"
+}
+
+S38="$(sentence 38)"
+scratch waived
+page > "$TMP/docs/scratch/waived.md" <<DOC
+$S38
+DOC
+rm -f "$WAIVE"
+out="$(gate_says)"
+grep -qF "38-word sentence (max 35)" <<<"$out" || fail "an unwaived 38-word sentence must FAIL: $out"
+grep -qF "$(printf 'waivable as: sentence\tdocs/scratch/waived.md\t%s\t38' "$(sha "$S38")")" <<<"$out" ||
+  fail "a waivable failing sentence must print the waiver line to paste: $out"
+echo "ok  a doc with no waiver file fails as before and prints the line to paste"
+
+printf '# lane waivers\n\nsentence\tdocs/scratch/waived.md\t%s\t38\tone clause, kept whole\n' "$(sha "$S38")" > "$WAIVE"
+run_gate || fail "a waived 38-word sentence with no joiner must PASS: $(gate_says)"
+grep -qF "long_sentences: 1 (1 waived)" <<<"$(gate_says)" || fail "the waived sentence must still be counted: $(gate_says)"
+echo "ok  a 38-word sentence with no joiner, waived, passes and is counted"
+
+SJ="$(sentence 38 | sed 's/w19 /w19; /')"
+page > "$TMP/docs/scratch/waived.md" <<DOC
+$SJ
+DOC
+printf 'sentence\tdocs/scratch/waived.md\t%s\t38\treason\n' "$(sha "$SJ")" > "$WAIVE"
+waive_fails "the same waiver on a 38-word sentence with a joiner" 'contains the clause joiner ";"'
+
+S45="$(sentence 45)"
+page > "$TMP/docs/scratch/waived.md" <<DOC
+$S45
+DOC
+printf 'sentence\tdocs/scratch/waived.md\t%s\t45\treason\n' "$(sha "$S45")" > "$WAIVE"
+waive_fails "a waiver on a 45-word sentence" "only 36-40-word sentences can be waived"
+printf 'sentence\tdocs/scratch/waived.md\t%s\t38\treason\n' "$(sha "$S45")" > "$WAIVE"
+waive_fails "a 45-word sentence waived as 38 words" "declares 38 words but the sentence has 45"
+
+page > "$TMP/docs/scratch/waived.md" <<DOC
+$S38
+DOC
+printf 'sentence\tdocs/scratch/waived.md\t%s\t38\treason\n' "$(sha "$S38 changed")" > "$WAIVE"
+waive_fails "a sentence waiver that matches nothing" "matches no over-cap sentence"
+printf 'sentence\tdocs/scratch/waived.md\tnot-a-hash\t38\treason\n' > "$WAIVE"
+waive_fails "a sentence waiver with a malformed sha1" "is not 40 lowercase hex digits"
+printf 'sentence\tdocs/scratch/waived.md\t%s\t38\n' "$(sha "$S38")" > "$WAIVE"
+waive_fails "a sentence waiver with no reason" "want sentence<TAB>path<TAB>sha1<TAB>words<TAB>reason"
+
+scratch tbl
+page > "$TMP/docs/scratch/tbl.md" <<DOC
+| Option | Meaning |
+| --- | --- |
+| \`a\` | $(words 45) |
+| \`b\` | $(words 50) |
+
+| Other | Meaning |
+| --- | --- |
+| \`c\` | short |
+DOC
+printf 'table\tdocs/scratch/tbl.md\t| Option | Meaning |\tkept as a table, PLAN §4.2\n' > "$WAIVE"
+run_gate || fail "a table waiver with a PLAN § reason must PASS: $(gate_says)"
+grep -qF "long_blocks: 2 (2 waived)" <<<"$(gate_says)" || fail "both over-cap cells must be counted and waived: $(gate_says)"
+echo "ok  a table waiver with a PLAN § reason passes its over-cap cells"
+printf 'table\tdocs/scratch/tbl.md\t| Option | Meaning |\tkept as a table\n' > "$WAIVE"
+waive_fails "a table waiver without PLAN §" 'must cite a plan section ("PLAN §")'
+printf 'table\tdocs/scratch/tbl.md\t| Nope | Meaning |\tPLAN §4.2\n' > "$WAIVE"
+waive_fails "a table waiver whose header matches no table" "has this header line"
+printf 'table\tdocs/scratch/tbl.md\t| Other | Meaning |\tPLAN §4.2\n' > "$WAIVE"
+waive_fails "a table waiver for a table with no over-cap cell" "no cell of this table is over the cap"
+rm -f "$WAIVE"
+
 echo "doc-form tests: PASS"
