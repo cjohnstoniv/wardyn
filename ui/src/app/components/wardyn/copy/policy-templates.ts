@@ -39,10 +39,13 @@ export const POLICY_TEMPLATE_COPY = {
   // The attached workspace still mounts into the run, so the note says so.
   DEFAULT_NOTE:
     "This run launches under this policy as it stands. Your attached workspace mounts into it; nothing else on this page is merged.",
-  // The default lane carries one workspace by reference, so a second attached
-  // one holds Launch and Check again rather than being left out of the run.
+  // The default and saved lanes carry one workspace by reference, so a second
+  // attached one holds Launch and Check again rather than being left out of
+  // the run (M-F, approved 2026-10-08).
   DEFAULT_ONE_WORKSPACE:
     "The default policy launches with one workspace. Remove the extra workspace, or choose Custom policy to keep them all.",
+  SAVED_ONE_WORKSPACE:
+    "A saved policy launches with one workspace. Remove the extra workspace, or choose Custom policy to keep them all.",
   DEFAULT_LOADING: "Loading the default policy…",
   DEFAULT_UNAVAILABLE: "Couldn't load the default policy to show here. The run still launches under it.",
 } as const;

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, ADMIN_TOKEN, gotoConsole, navTo } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, goToNewRunPanel } from "./fixtures";
 import { ADO_ACCESS } from "../src/app/lib/ado-access-copy";
 import { ADO_ENTRA_EDITOR } from "../src/app/lib/workspace-providers-copy";
 import type { RunPolicySpec } from "../src/app/lib/types";
@@ -134,12 +134,15 @@ test("New Run summarises the picked saved policy's Azure DevOps access", async (
     await gotoConsole(page);
     await page.getByRole("button", { name: "New run" }).click();
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await goToNewRunPanel(page, "policy");
     await page.getByRole("button", { name: /^Reuse a saved policy/ }).click();
     const summary = page.getByTestId("ado-access-summary");
 
     for (const [name, , line] of policies) {
+      await goToNewRunPanel(page, "policy");
       await page.getByRole("combobox", { name: "Saved policy" }).click();
       await page.getByRole("option", { name }).click();
+      await goToNewRunPanel(page, "access");
       await expect(summary).toHaveText(line);
     }
     await expect(summary.getByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE)).toBeVisible();

@@ -296,9 +296,10 @@ type runOutputResponse struct {
 	Truncated bool   `json:"truncated"` // output does not start at the run's first byte
 	// Complete is true only for a final capture: a stored final row, or a
 	// memory tail whose drain barrier closed and whose holdback was flushed. A
-	// run that has finished is not yet complete until then.
+	// run that has finished is not yet complete until then. A later recording
+	// upload can improve a finalized recording attempt.
 	Complete   bool       `json:"complete"`
-	Source     string     `json:"source"`                // "stdout"
+	Source     string     `json:"source"`                // "stdout", "pane_snapshot" or "recording"
 	Incomplete bool       `json:"incomplete"`            // bytes may be missing: a drain timed out or failed, or a chunk was dropped
 	CaptureGap bool       `json:"capture_gap"`           // the output could not be captured (no tail held, nothing to recover)
 	MaskScope  string     `json:"mask_scope,omitempty"`  // "run": masked against the run's complete manifest throughout; "globals_only": not
@@ -314,7 +315,8 @@ type runOutputResponse struct {
 // (409); a final row, served on any replica with no manifest and no lease
 // (200); a live read of an uncovered run (503, ha-l2.0's refusal); a live
 // tail in this process (200); the live chunks another replica wrote (200); a pending row
-// with nothing to read (409, read again shortly);
+// with nothing to read (409, read again shortly); for recordingReader's callers
+// only, a run whose recording-derived output was erased (410, recording_erased);
 // an interactive run (409, which is also what a pane snapshot's non-reader
 // gets: only recordingReader's callers are served one); a run on a runner that
 // cannot capture output (409, run_output_not_captured); a runner whose capabilities
@@ -353,12 +355,22 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 			"this deployment keeps no run output (WARDYN_EXEC_OUTPUT_TAIL=off)")
 		return
 	}
-	// A pane snapshot is a person's last terminal screen, the surface the
-	// recording gate protects: only the run's owner or an operator reads it.
-	// Anyone else who got past getRunAuthorized (a security_admin) is refused
-	// in the answer an interactive run with no snapshot gets, so the row's
-	// existence is not revealed; the refusal is audited.
-	if found && row.Source == paneSnapshotSource && !s.recordingReader(r, run) {
+	// The recording gate covers stored bytes, recovery facts and source reads,
+	// including when the configured recording backend has since been disabled.
+	reader := s.recordingReader(r, run)
+	if reader {
+		row, found, err = s.repairRecordingOutput(r.Context(), run, row, found)
+		if errors.Is(err, store.ErrRunOutputErased) {
+			s.fenceRunOutput(id)
+			writeErrorReason(w, http.StatusNotFound, reasonRunOutputErased, "this run's output was erased")
+			return
+		}
+		if err != nil {
+			writeServerError(w, r, "read run output", err)
+			return
+		}
+	}
+	if found && (row.Source == paneSnapshotSource || row.Source == recordingOutputSource) && !reader {
 		s.recordRefusal(r.Context(), r, authz.Deny(authz.ReasonNotOwner, id.String(), "").OnRun(id))
 		found = false
 	}
@@ -404,11 +416,22 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	s.refuseNoRunOutput(w, r, run, row, found, reader)
+}
+
+// refuseNoRunOutput is handleRunOutput's last answer: nothing was served, and
+// the cases say why, in the order its doc comment lists. reader is
+// recordingReader's verdict, the only caller told of a recording erasure.
+func (s *Server) refuseNoRunOutput(w http.ResponseWriter, r *http.Request, run types.AgentRun, row store.RunOutput, found, reader bool) {
 	uncaptured, captureKnown := s.execOutputCapture(r.Context())
 	switch {
 	case found:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept,
 			"this run's output is still being captured: read it again shortly")
+	case reader && row.RecordingErased:
+		// Last, not first: the fence covers the derived copy only, and direct
+		// stdout this process or another replica still holds was served above.
+		writeErrorReason(w, http.StatusGone, reasonRecordingErased, "recordings for this run have been erased")
 	case run.Interactive:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputInteractive, s.interactiveNothingKept(r, run))
 	case uncaptured:

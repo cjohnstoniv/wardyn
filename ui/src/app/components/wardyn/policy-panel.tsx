@@ -63,6 +63,10 @@ export type PolicyPanelInstance = "run" | "policies";
 /** The run instance's mode row: launch under the deployment default, reuse a stored policy, or author one. */
 export type PolicyMode = "default" | "saved" | "custom";
 
+/** The id of the sentence that says why Check again and Launch are held in the
+ *  default and saved modes; both buttons name it as their description. */
+export const POLICY_HOLD_ID = "policy-workspace-hold";
+
 /* ---------- templates ---------- */
 
 export interface PolicyTemplate {
@@ -283,6 +287,9 @@ export interface PolicyPanelProps {
     onModeChange: (mode: PolicyMode) => void;
     picker: React.ReactNode;
     defaultPolicy: DefaultPolicyView;
+    /** Why Check again and Launch are held in the default and saved modes
+     *  (more workspaces attached than the reference carries), when they are. */
+    hold?: string | null;
   };
   className?: string;
 }
@@ -425,7 +432,12 @@ export function PolicyPanel({
                   to get wrong by hand (a duplicate tool, a typo'd effect, a wire
                   word the server refuses). Each needs a parsed spec to edit, so
                   they render only on one — the gate the Insert buttons take. */}
-              {parsed.ok && <ToolRulesSection spec={parsed.spec} onSpecChange={onSpecChange} />}
+              {parsed.ok && (
+                // The id is where New Run's "Tool rules" link lands.
+                <div id={`policy-tool-rules-${instance}`}>
+                  <ToolRulesSection spec={parsed.spec} onSpecChange={onSpecChange} />
+                </div>
+              )}
               {parsed.ok && <PushRulesSection spec={parsed.spec} onSpecChange={onSpecChange} />}
               {parsed.ok && <ADOCapabilitiesSection spec={parsed.spec} ceiling={adoCeiling} onSpecChange={onSpecChange} />}
               {/* git_pat narrowing (repos, access, api, forge): one block per
@@ -486,6 +498,12 @@ export function PolicyPanel({
         />
       )}
 
+      {mode !== "custom" && policyMode?.hold && (
+        <p id={POLICY_HOLD_ID} role="status" className="text-meta text-warning">
+          {policyMode.hold}
+        </p>
+      )}
+
       {onPreflight && (
         <div className="flex flex-wrap items-center gap-2">
           <Button
@@ -494,6 +512,7 @@ export function PolicyPanel({
             size="sm"
             onClick={onPreflight}
             disabled={preflightBusy || preflightDisabled || (mode === "custom" && !parsed.ok)}
+            aria-describedby={mode !== "custom" && policyMode?.hold ? POLICY_HOLD_ID : undefined}
           >
             <ShieldCheck className="size-4" />
             {RAIL_CHECK.BUTTON}

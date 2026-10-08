@@ -214,3 +214,13 @@ export async function decide(
     await expect(rows.filter({ hasText: host })).toHaveCount(0, { timeout: 20_000 });
   }
 }
+
+/** Shows one of New Run's four panels (#1922) the way the viewer would: a
+ *  filmed, silent click on the panel nav. A no-op for the panel on screen. */
+export async function newRunPanel(page: Page, panel: "run" | "workspace" | "access" | "policy"): Promise<void> {
+  const name = { run: "Run", workspace: "Workspace", access: "Access", policy: "Policy" }[panel];
+  const step = page.getByRole("navigation", { name: "New run" }).getByRole("button", { name: new RegExp(`^${name}\\b`) });
+  if ((await step.getAttribute("aria-current")) === "step") return;
+  await act(page, step);
+  await expect(step).toHaveAttribute("aria-current", "step");
+}

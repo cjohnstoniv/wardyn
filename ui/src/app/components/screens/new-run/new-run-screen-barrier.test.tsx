@@ -65,6 +65,7 @@ import { ViewAccessProvider } from "../../wardyn/console-view";
 import { NO_BARRIER, RUN } from "../../wardyn/copy";
 import { TIER_PICKER } from "../../../lib/tier-picker-copy";
 import { setField } from "../../../../test/set-field";
+import { goToPanel } from "../../../../test/new-run-panel";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -143,6 +144,7 @@ describe("NewRunScreen — an untouched Barrier omits confinement_class", () => 
     renderScreen();
     await screen.findByRole("button", { name: /Launch run/ });
     setField(screen.getByLabelText("Title"), "Touched barrier");
+    goToPanel("Policy");
     await user.click(await screen.findByRole("radio", { name: "Wall" }));
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
@@ -164,6 +166,7 @@ describe("NewRunScreen — no runner configured reads as unknown, not confirmed-
     renderScreen();
     await screen.findByRole("button", { name: /Launch run/ });
     for (const name of ["Fence", "Wall", "Vault"]) {
+      goToPanel("Policy");
       expect(screen.getByRole("radio", { name })).not.toBeDisabled();
     }
     expect(screen.queryByText(/isn't installed on this host/)).not.toBeInTheDocument();
@@ -243,6 +246,7 @@ describe("NewRunScreen — a member's governance ceiling folds into the Barrier 
     mockConfinementClasses = ["CC1", "CC2", "CC3"];
     getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC2" });
     renderScreen(); // operator:true
+    goToPanel("Policy");
     expect(await screen.findByRole("radio", { name: "Fence" })).toBeInTheDocument();
     expect(screen.queryByText(/set by your admin/)).toBeNull();
   });
@@ -297,6 +301,7 @@ describe("NewRunScreen — a member's governance ceiling folds into the Barrier 
     ]);
     renderAsMember();
     // The Custom lane IS clamped for every non-operator.
+    goToPanel("Policy");
     await waitFor(() => {
       expect(screen.getByRole("radio", { name: "Wall" })).toBeInTheDocument();
       expect(screen.queryByRole("radio", { name: "Fence" })).toBeNull();
@@ -373,6 +378,7 @@ describe("NewRunScreen — a cloned run reaches the wire as the run it cloned", 
     // Wait for the barrier probe to settle — this is the effect that can
     // overwrite the prefill, so asserting before it lands would pass regardless.
     await screen.findByRole("button", { name: /Launch run/ });
+    goToPanel("Policy");
     await waitFor(() =>
       expect(screen.getByRole("radio", { name: "Vault" })).toHaveAttribute("aria-checked", "true"),
     );
@@ -444,6 +450,7 @@ describe("NewRunScreen — a cloned run reaches the wire as the run it cloned", 
         </OperatorProvider>
       </MemoryRouter>,
     );
+    goToPanel("Policy");
     await waitFor(() =>
       expect(screen.getByRole("radio", { name: "Wall" })).toHaveAttribute("aria-checked", "true"),
     );
@@ -627,7 +634,8 @@ describe("NewRunScreen — #1238 tier picker states", () => {
     expect(await screen.findByText(RUN.BARRIER_UNKNOWN)).toBeInTheDocument();
     expect(screen.getAllByText("Unverified").length).toBeGreaterThan(0);
     expect(screen.queryByText("Ready")).toBeNull();
-    // Unknown never blocks launch.
+    // Unknown never blocks launch: with the required title given, nothing holds it.
+    setField(screen.getByLabelText("Title"), "Unknown barrier");
     expect(screen.getByRole("button", { name: /Launch run/ })).not.toBeDisabled();
   });
 
@@ -688,6 +696,7 @@ describe("NewRunScreen — #1238 tier picker states", () => {
       </MemoryRouter>
     );
     const { rerender } = render(ui(false));
+    goToPanel("Policy");
     await waitFor(() => expect(screen.getByRole("radio", { name: "Wall" })).toBeInTheDocument());
     expect(screen.queryByRole("radio", { name: "Fence" })).toBeNull();
     rerender(ui(true));
@@ -710,6 +719,7 @@ describe("NewRunScreen — #1238 tier picker states", () => {
     const { rerender } = render(ui(false));
     expect(await screen.findByText(/Your admin requires Vault/)).toBeInTheDocument();
     rerender(ui(true));
+    goToPanel("Policy");
     expect(await screen.findByRole("radio", { name: "Wall" })).toHaveAttribute("aria-checked", "true");
     expect(screen.queryByText("Vault")).toBeNull();
   });

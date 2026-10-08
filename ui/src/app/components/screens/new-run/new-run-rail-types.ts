@@ -12,10 +12,20 @@ import type {
   SetupModelProvider,
   SetupProviderAccess,
 } from "../../../lib/types";
+import type * as React from "react";
 import type { PolicyRef } from "../../../lib/api/health";
 import type { ProviderGate } from "./model-provider-lane";
+import type { LaunchIssue, NewRunPanelId } from "./new-run-launch-gates";
 
 export interface RunRailProps {
+  /** The panel on screen: an issue that panel prints beside its own control is
+   *  not repeated above Launch. Absent, every issue is named here. */
+  panel?: NewRunPanelId;
+  /** Shows the panel that owns an issue and focuses its control. */
+  onIssue?: (issue: LaunchIssue) => void;
+  /** The click handler for a link that leaves the draft: it asks the unsaved
+   *  guard first (use-unsaved-guard.tsx's useGuardedNavClick). */
+  guardLink?: (to: string) => (e: React.MouseEvent) => void;
   /**
    * The governance profile bounding this caller, from GET /policies/default's
    * governance_profile_name. Undefined for a caller with no assignment — the
@@ -59,6 +69,8 @@ export interface RunRailProps {
     inFlight: boolean;
     /** Why Launch cannot be pressed — a disabled button that won't say is a dead end. */
     problem: string | null;
+    /** `problem` as the issue it is: the panel and control that own it. */
+    issue?: LaunchIssue | null;
     /** A fresh server refusal for THIS body holds Launch (use-launch's
      *  preflightBlock). No text of its own: the preflight alert below already
      *  shows the server's sentence, or the `problem` line the folded rows use. */
@@ -71,6 +83,11 @@ export interface RunRailProps {
      *  same sentence a second time. Optional so every other caller (this
      *  type's only other use is new-run-screen.tsx) is unaffected. */
     workspaceUnavailable?: boolean;
+    /** The default or saved policy cannot carry the attached workspaces: an
+     *  ADDITIONAL disable whose sentence the Policy panel already shows beside
+     *  Check again (POLICY_HOLD_ID), so the rail names it as Launch's
+     *  description instead of repeating it. */
+    referenceHold?: boolean;
     /** #214: a settled probe reports this host can build no barrier at
      *  all — Launch disables for it (new-run-screen.tsx's own bit), and the
      *  rail states the reason here, beside Launch, with a route to the step

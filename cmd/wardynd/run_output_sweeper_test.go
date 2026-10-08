@@ -89,7 +89,17 @@ func TestRunOutputSweeper_RecordsItsTick(t *testing.T) {
 	}
 }
 
-// run_output is registered, hourly, only when persistence is on.
+func TestRunOutputSweeper_RestartWorkDoesNotWaitForFirstInterval(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	srv := &fakeOutputSweeper{}
+	ms := sweephealth.NewMemStore()
+	tr := sweephealth.New(ms, "restarted", nil)
+	startRunOutputSweeper(ctx, nil, srv, time.Hour, tr)
+	waitTick(t, ms, func(tk sweephealth.Tick) bool { return !tk.SucceededAt.IsZero() })
+}
+
+// run_output is registered only when persistence is on.
 func TestRegisterSweepHealth_RunOutputFollowsPersistence(t *testing.T) {
 	for _, on := range []bool{true, false} {
 		clk := &healthClock{t: time.Now()}
@@ -100,7 +110,7 @@ func TestRegisterSweepHealth_RunOutputFollowsPersistence(t *testing.T) {
 				got = s.Interval
 			}
 		}
-		if want := map[bool]time.Duration{true: time.Hour, false: 0}[on]; got != want {
+		if want := map[bool]time.Duration{true: time.Minute, false: 0}[on]; got != want {
 			t.Errorf("persist=%v: run_output registered at %v, want %v", on, got, want)
 		}
 	}

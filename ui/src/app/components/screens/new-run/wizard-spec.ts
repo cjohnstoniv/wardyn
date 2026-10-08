@@ -34,6 +34,7 @@ import {
   parseRepoList,
   resolveWorkspace,
   resolveWorkspaceMounts,
+  runPromptText,
   toRunWorkspacesWire,
 } from "./wizard-types";
 import type { SetupModelProvider } from "../../../lib/types";
@@ -122,7 +123,7 @@ export function buildSpec(
     // pure-idle behavior, unchanged — so a mode toggle that leaves stray batch
     // text behind still needs the operator to have typed it INTO an interactive
     // seed field to ship it, never a leftover from before the toggle.
-    task: state.task.trim(),
+    task: runPromptText(state).trim(),
     confinement_class: state.confinementClass,
     interactive,
   };

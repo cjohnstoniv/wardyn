@@ -19,6 +19,7 @@ import { ReauthLayer } from "./reauth-layer";
 import { OperatorProvider } from "./operator-context";
 import { ReauthContext, useReauthController, type Reauth, type Renewal } from "../../lib/reauth";
 import { REAUTH_DIALOG, REAUTH_EXTRA, REAUTH_RENEW } from "../../lib/reauth-copy";
+import { RENEW_STRIP_SLOT } from "../../lib/use-session-renew";
 import { shortTime } from "../../lib/format";
 import type { Me } from "../../lib/api/health";
 import { TOKEN_LABEL } from "../screens/sign-in";
@@ -344,6 +345,79 @@ describe("ReauthLayer — a renewal from the expiry banner", () => {
     await poll(2);
     expect(onResumed).toHaveBeenCalledExactlyOnceWith(alice({ session_expires_at: LATER }));
     expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  // The shell draws the banner while no renewal waits and the strip in its slot
+  // while one does (app-shell.tsx): the same two places, with the banner's real
+  // button text, so the layer finds its way back to it.
+  function BannerAndStrip({ from, lapseButton }: { from: Renewal; lapseButton?: boolean }) {
+    const { reauth, lapse } = useReauthController(vi.fn());
+    return (
+      <ReauthContext.Provider value={reauth}>
+        {reauth.phase !== "renew" && (
+          <div role="status">
+            <span>Your session is expiring soon.</span>
+            <button type="button" onClick={() => reauth.startRenew(from)}>
+              {REAUTH_RENEW.CTA}
+            </button>
+          </div>
+        )}
+        <div id={RENEW_STRIP_SLOT} />
+        {lapseButton && <button type="button" onClick={() => lapse({ write: true })}>a 401 elsewhere</button>}
+        {(reauth.phase !== "none" || reauth.watch) && <ReauthLayer onResumed={vi.fn()} />}
+        <main id="main-content" tabIndex={-1} />
+      </ReauthContext.Provider>
+    );
+  }
+  function bannerShown(lapseButton = false) {
+    const from: Renewal = {
+      principal: "alice", role: "admin", operator: true, securityOperator: true, expiresAt: UNTIL,
+      popup: signInWindow() as unknown as Window,
+    };
+    render(
+      <MemoryRouter initialEntries={["/admin/settings"]}>
+        <OperatorProvider operator operatorResolved principal="alice">
+          <BannerAndStrip from={from} lapseButton={lapseButton} />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    return screen.getByRole("button", { name: REAUTH_RENEW.CTA });
+  }
+
+  // M-F F6: the strip, and the Cancel that held focus, are gone after Cancel or
+  // Escape; focus goes to the banner's own button that comes back, not to the document.
+  it("Cancel returns focus to the banner's Sign in again", () => {
+    answer = { body: alice(), status: 200 };
+    fireEvent.click(bannerShown());
+    expect(screen.getByRole("button", { name: REAUTH_RENEW.CANCEL })).toHaveFocus();
+    cancel();
+    expect(screen.queryByRole("button", { name: REAUTH_RENEW.CANCEL })).toBeNull();
+    expect(screen.getByRole("button", { name: REAUTH_RENEW.CTA })).toHaveFocus();
+  });
+
+  it("Escape in the strip is consumed and returns focus to the banner's Sign in again", () => {
+    answer = { body: alice(), status: 200 };
+    fireEvent.click(bannerShown());
+    const cancelButton = screen.getByRole("button", { name: REAUTH_RENEW.CANCEL });
+    expect(fireEvent.keyDown(cancelButton, { key: "Escape" })).toBe(false);
+    expect(screen.getByRole("button", { name: REAUTH_RENEW.CTA })).toHaveFocus();
+  });
+
+  it("Cancel after a request was refused leaves focus to the dialog, not the banner", () => {
+    answer = { body: alice(), status: 200 };
+    fireEvent.click(bannerShown(true));
+    fireEvent.click(screen.getByRole("button", { name: "a 401 elsewhere" }));
+    cancel();
+    expect(screen.getByRole("dialog", { name: REAUTH_DIALOG.TITLE })).toBeInTheDocument();
+    expect(document.activeElement).not.toBe(screen.queryByRole("button", { name: REAUTH_RENEW.CTA }));
+  });
+
+  it("a renewal that succeeds puts focus on the page, never on the banner", async () => {
+    answer = { body: alice(), status: 200 };
+    fireEvent.click(bannerShown());
+    answer = { body: alice({ session_expires_at: LATER }), status: 200 };
+    await poll(2);
+    expect(document.getElementById("main-content")).toHaveFocus();
   });
 
   it("a refused window offers the sign-in in a new tab; an outage reads as one and waiting resumes after it", async () => {

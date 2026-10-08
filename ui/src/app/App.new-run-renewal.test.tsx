@@ -18,6 +18,7 @@ import { REAUTH_DIALOG, REAUTH_RENEW } from "./lib/reauth-copy";
 import { SIGN_IN_AGAIN } from "./lib/session-renew-copy";
 import { baseStatus } from "./lib/test-fixtures";
 import { setField } from "../test/set-field";
+import { UNSAVED } from "./lib/unsaved-copy";
 
 // The next route does not participate in confirming the draft owner's identity.
 vi.mock("./components/screens/run-detail", () => ({ RunDetailScreen: () => <p>Created run</p> }));
@@ -110,6 +111,14 @@ afterEach(async () => {
   setSignedOutHold(false);
   Object.defineProperty(window, "location", { value: realLocation, configurable: true });
 });
+
+// A dirty New Run draft is registered with the shared unsaved guard (#1920), so
+// a view switch asks before it leaves. These cases are about what the switch
+// does once the person has chosen to leave.
+function switchToAdmin() {
+  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
+  fireEvent.click(screen.getByRole("button", { name: UNSAVED.DISCARD }));
+}
 
 async function draft() {
   const view = render(<MemoryRouter initialEntries={["/runs/new"]}><App /></MemoryRouter>);
@@ -229,7 +238,7 @@ it("unmount retires a cancellation confirmation even when the response ignores a
 it("reviewer: failed view switch retains a launchable same-owner draft", async () => {
   me = { ...me, user_view: true, user_view_super_admin: true };
   await draft();
-  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
+  switchToAdmin();
   await screen.findByText(CONSOLE_VIEW.SWITCH_FAILED);
   await tick(1000);
   act(() => void window.dispatchEvent(new Event("focus")));
@@ -248,7 +257,7 @@ it.each([false, true])("a failed view switch (offline=%s) confirms automatically
   viewFailsOffline = offline;
   await draft();
   const checked = count("/api/v1/runs/policy-preview");
-  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
+  switchToAdmin();
   await screen.findByText(CONSOLE_VIEW.SWITCH_FAILED);
   await tick(0);
   await tick(1000);
@@ -273,7 +282,7 @@ it.each(["quiet", "renewal", "watch"])("a delayed failed view body resumes %s co
   const finish = pendingView();
   const checked = count("/api/v1/runs/policy-preview");
   const before = count("/api/v1/me", "GET");
-  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
+  switchToAdmin();
   await tick(1000);
   expect(count("/api/v1/me", "GET")).toBeGreaterThan(before);
   expect(screen.queryByText(CONSOLE_VIEW.SWITCH_FAILED)).toBeNull();
@@ -304,7 +313,7 @@ it("an explicit token check waits for the pending view body without losing its c
   const finish = pendingView();
   const checked = count("/api/v1/runs/policy-preview");
   meStatus = 401;
-  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
+  switchToAdmin();
   const dialog = await screen.findByRole("dialog");
   meStatus = 200;
   setField(within(dialog).getByLabelText("Admin token"), "confirmed-token");
@@ -334,7 +343,7 @@ it.each(["same", "other", "401", "unmount"])("view settlement discards an older 
   const finish = pendingView();
   const old = pendingMe();
   const checked = count("/api/v1/runs/policy-preview");
-  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
+  switchToAdmin();
   await tick(0);
   expect(old.signal).toBeDefined();
   const current = pendingMe();
@@ -373,7 +382,7 @@ it("a delayed successful view switch keeps its reload guard and never adopts the
   await draft();
   const finish = pendingView(200);
   const checked = count("/api/v1/runs/policy-preview");
-  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
+  switchToAdmin();
   await tick(1000);
   expect(assign).not.toHaveBeenCalled();
   expect(count("/api/v1/runs/policy-preview")).toBe(checked);
@@ -393,7 +402,7 @@ it("a delayed view 401 ends reconciliation in the explicit sign-in hold", async 
   await draft();
   const finish = pendingView(401);
   const checked = count("/api/v1/runs/policy-preview");
-  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
+  switchToAdmin();
   await tick(1000);
   expect(screen.queryByRole("dialog")).toBeNull();
   await act(async () => finish());
@@ -565,7 +574,7 @@ it("a cookie-only 401 keeps the normal confirmation held without advancing auth 
   me = { ...me, user_view: true, user_view_super_admin: true };
   await draft();
   meStatus = 401;
-  fireEvent.click(screen.getByRole("button", { name: CONSOLE_VIEW.ADMIN }));
+  switchToAdmin();
   await screen.findByText(CONSOLE_VIEW.SWITCH_FAILED);
   await tick(0);
   await screen.findByRole("dialog");

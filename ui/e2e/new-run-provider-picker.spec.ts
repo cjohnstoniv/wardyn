@@ -100,7 +100,15 @@ test.describe("New Run rail — the provider picker (#542)", () => {
     await navToRoute(page, "/runs/new");
     await page.getByRole("combobox", { name: RAIL_PROVIDER.LABEL }).click();
     await page.getByRole("option", { name: "Corp gateway — your token · not available" }).click();
-    await expect(page.getByText("No token is available for Corp gateway.")).toBeVisible();
+    // Beside the picker on the Run panel, with the way to add one; the rail's
+    // Credentials summary states the same fact and asks nothing (#1922).
+    await expect(page.locator("#nr-provider").getByText("No token is available for Corp gateway.")).toBeVisible();
+    const rail = page.getByRole("complementary", { name: "What this run can do" });
+    await expect(rail.getByText("No token is available for Corp gateway.")).toBeVisible();
+    await expect(rail.getByRole("combobox")).toHaveCount(0);
+    // Not connected never holds Launch: the launch door asks.
+    await page.getByLabel("Title").fill("Not connected e2e");
+    await expect(page.getByRole("button", { name: "Launch run" })).toBeEnabled();
   });
 
   test("R1: a sole candidate needs no picker, and its id still reaches the wire", async ({ page }) => {
@@ -114,7 +122,11 @@ test.describe("New Run rail — the provider picker (#542)", () => {
     await navToRoute(page, "/runs/new");
     await page.getByLabel("Title").fill("Sole provider e2e");
 
-    await expect(page.getByText(RAIL_PROVIDER.STATIC("Bedrock (prod)"))).toBeVisible();
+    // Stated on the Run panel, where a picker would be, and in the rail's summary.
+    await expect(page.locator("#nr-provider").getByText(RAIL_PROVIDER.STATIC("Bedrock (prod)"))).toBeVisible();
+    await expect(
+      page.getByRole("complementary", { name: "What this run can do" }).getByText(RAIL_PROVIDER.STATIC("Bedrock (prod)")),
+    ).toBeVisible();
     await expect(page.getByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toHaveCount(0);
 
     const sentReq = page.waitForRequest((r) => r.url().endsWith("/api/v1/runs") && r.method() === "POST");

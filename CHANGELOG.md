@@ -15,6 +15,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   root's `.erased` directory and `*.lock` files alongside the recordings.
 - Migration `0134_mask_owner_erasures` retains owner erasure fences independently of masking rows;
   retain this table with database backups and grant the app role `SELECT, INSERT, UPDATE`.
+- Migration `0135_run_output_recording_recovery` adds durable recovery claims and recording-only
+  output erasure fences, and lets `run_outputs` hold a `recording` source. Take a database dump
+  before upgrading; rollback requires restoring that dump. Split-role installs grant the app role
+  `SELECT, INSERT, UPDATE` on `run_output_recording_recovery`. Keep the table in database backups:
+  its erased rows are the fence, and retention never removes them.
 
 ### Added
 
@@ -32,6 +37,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and lists repeated values once under one title; a key it does not know still appears, under its
   raw name. Copy YAML and Copy JSON copy the policy in that format. Viewing never changes a
   policy (#1921).
+- New Run is four panels — Run, Workspace, Access and Policy — that can be visited in any order, with
+  Launch reachable from every one. Each panel's button counts what is holding Launch on it, and the
+  reason above Launch is a link that shows the right panel and focuses the control to fix. On narrow
+  screens the rail becomes a footer that keeps the verdict and Launch on screen (#1922).
 
 ### Changed
 
@@ -45,16 +54,51 @@ and does not yet follow semantic versioning (interfaces are not stable).
   tab Summary draws a row only for what the policy sets, so the "None" and "Standard limit" rows
   are gone; tool rules are listed one per line and an idle stop reads "Stops after N minutes"
   (#1921).
+- New Run requires a Title. An untyped title is filled from the first line of the Task or Command
+  and stays editable; a run with neither, such as an interactive terminal session, needs one typed.
+  Run details now open the Run panel (#1922).
+- New Run's Command and Startup command are single-line command inputs, and Task, Command and
+  Startup command each keep their own text, so a prompt typed as a Task is never sent as a command.
+  Multi-line scripts are not supported in these fields (#1922).
+- New Run's model provider picker moved from the rail to the Run panel; the rail keeps a summary.
+  A workspace that is not available, or whose git provider is not enabled, is shown as an error
+  beside the Workspace picker, and the second now holds Launch. The "Per-person AWS sign-in" chip is
+  removed, and the Hold option reads "Hold in Wardyn — tool calls wait for approval, by tool rule"
+  with a link to the policy's tool rules (#1922).
 
 ### Fixed
 
-- New Run's shared request builder refuses multiple workspace attachments with saved or default
-  policies, preventing a referenced policy request from omitting extra attachments. Changing policy
-  modes or attachments invalidates prior preflight results (#1901).
+- Recording-on Kubernetes task output is recovered from the run's available recording into a
+  masked tail after the run ends (#1831). A recovered row is always marked `source: "recording"`
+  and `incomplete: true`. A missing, invalid or uncovered recording is stated as a `capture_gap`,
+  never served as a clean empty capture. Erasure wins: a recordings or output erasure, or expired
+  output retention, stops a recovery at its final commit, and the recording's reader permissions
+  cover the derived copy. Durable claims support bounded restart retries; large joined recordings
+  or a backlog that outlives masking coverage may remain unrecoverable. Final stdout and pane
+  snapshots remain intact. The `run.output.finalize` audit row gains a `source` key and records a
+  recovered row as `success`, a recording gap as `failure`. A run's Output tab labels recovered output
+  "From recording" and says its full delivery could not be verified, shows a capture gap as a gap rather
+  than a run that printed nothing, and shows an erased recording as erased. Its capture-gap notice now
+  reads "Some or all of this run's output could not be recovered." for every source, and Retry after a
+  failed read keeps keyboard focus.
+- New Run's default and saved policies carry one workspace by reference. With a second workspace
+  attached, Launch and Check again are held and the Policy card says why once, beside Check again
+  ("A saved policy launches with one workspace. Remove the extra workspace, or choose Custom policy to
+  keep them all.", or the existing default-policy sentence). The shared request builder refuses the same
+  case, so nothing is sent; no workspace is ever removed and the mode never switches by itself. Custom
+  policy keeps all of them. Removing a workspace chip moves focus to the next chip's Remove button, else
+  the previous one, else the Workspace select. Changing policy modes or attachments invalidates prior
+  preflight results (#1901).
+- The "Open the Recording tab →" link in a finished run's terminal notice uses the information colour
+  like the notice's other links, instead of the teal reserved for primary actions. Its words and the
+  tab it opens are unchanged (#1906).
 - Sign-in reconciliation discards session reads superseded by observed auth changes and keeps a visible
-  renewal checking until it ends. Only a cancelled background watch has the existing quiet deadline.
-  Run sign-in codes refresh on focus and visible return, serialize pending reads, and reset when the
-  run or principal changes (#1908).
+  renewal checking until it succeeds, is cancelled or the session ends. Only a cancelled background watch
+  has the existing quiet deadline. After Cancel or Escape on the renewal strip, focus returns to the
+  banner's "Sign in again" and the Escape does not also leave New Run. Run sign-in codes refresh on
+  focus and visible return, serialize pending reads, update once when the code or link changes without
+  moving focus or re-announcing an identical answer, leave when the sign-in is no longer waiting, and
+  reset when the run or principal changes (#1908).
 - Mask-copy erasure now durably fences in-flight credential reads and renewals,
   including an owner with no existing masking rows. Delayed AWS and Entra replies
   cannot restore erased globals; new sign-ins use a fresh generation. Registration
@@ -68,6 +112,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   by default and refuses non-loopback listeners in real-tmux mode. Each backend startup mints a fresh
   admin token and derived person credentials, shared with its own Playwright process; explicit test
   token overrides remain supported. The canonical runner preserves explicit hosts and base-path URLs (#1813).
+- Escape on a New Run form with unsaved changes opens the "Leave without saving?" dialog instead of
+  doing nothing. An untouched form still leaves at once. The Runs button, the page's own links, the
+  sidebar, the view switch and the browser's Back button ask the same way (#1920).
 - A configured metrics listener now refuses daemon startup if its address cannot bind,
   before background workers or optional gateways start (#1902). Unset remains off.
 - The terminal takeover regression test now waits for completed input writes separately

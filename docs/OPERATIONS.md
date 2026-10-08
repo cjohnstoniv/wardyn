@@ -101,23 +101,61 @@ answers `409 run_output_interactive` like any interactive run. A sign-in whose
 browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
 `wardyn run sign-in <run-id>` (below).
 
-- **Not captured on Kubernetes in this release.** The Kubernetes runner runs a
-  task under the session recorder, which writes nothing to the container's log,
-  so it keeps no output. The read answers `409 run_output_not_captured` ("Output
-  isn't captured for Kubernetes runs yet. The run's recording has it."), and the
-  run's recording holds the full output. Kubernetes runs from 0.8.5 kept an
-  empty row and still read as complete and empty. The rest of this section
-  describes the Docker runner, and a Kubernetes runner with recordings off.
-- **It is not a recording, and it is stored.** It lives outside the recording
-  store and works with `WARDYN_RECORDING_STORE=off`. With
+- **Recording-on Kubernetes output.** The session recorder writes no task
+  stdout to the container log. With output persistence and recording enabled,
+  terminal noninteractive runs recover the available asciicast output payloads
+  into a masked tail with `source: "recording"`. Numbered parts are joined in
+  order; input events and attach-session casts are excluded. `incomplete` is
+  always true: recorder delivery is best effort and has no verified end marker.
+  Missing, invalid or uncovered recordings yield `capture_gap`. The run's owner
+  or an operator may read these rows, including gaps; a foreign security admin
+  gets the same refusal as if no recording output existed. A stored row remains
+  available under that gate if recording is later disabled.
+- **Recording recovery has a fixed budget.** A successful eligible upload queues
+  recovery durably before its receipt. Terminal finalization and authorized reads
+  can attempt it; the elected leader retries pending work immediately on startup
+  and every minute. Each source read has a ten-second budget, and a leader pass
+  shares ten seconds across a page of at most 200 runs. Decoded output is masked
+  in bounded 512 KiB batches before tail truncation; every batch still refreshes
+  the shared registry. A valid large joined recording can time out on every
+  attempt because each retry reads from the beginning. A timeout keeps the work
+  pending and preserves any earlier final row; it does not certify an empty or
+  complete capture. In a leader pass a read that outlives its budget is that
+  run's outcome alone: it is logged with the run id, and the pass still counts
+  as a success for the `run_output` sweep's health. A recording store that
+  fails, or a database call that does not answer in time, is still the pass's
+  error. An unfinished claim permits takeover after five minutes, and
+  selection favors never-claimed work, then the oldest claim, so one slow cast
+  yields later passes to other runs. This bounds work, not delivery latency or
+  backlog capacity: sustained load can exceed what the leader recovers before
+  `api.RunSecretGrace` removes the run's masking manifest. Lost coverage refuses
+  further source reads and yields a gap unless a better row already exists;
+  expired output retention retires the obligation without recreating output.
+  Keep the original recording when it is needed under its own retention policy;
+  a durable recovery obligation does not guarantee a derived output row.
+- **Persistent output.** Direct stdout lives outside the recording store and
+  works with `WARDYN_RECORDING_STORE=off`. With
   `WARDYN_RUN_OUTPUT_PERSIST` on (the default) the final tail of each run is
   written once, masked, to the `run_outputs` table when the run ends, so it
   **is in Postgres and in its backups** for `WARDYN_RUN_OUTPUT_RETENTION_DAYS`
   (default `30`; `0` keeps it forever) and any replica serves it, with or
-  without a restart. An hourly sweeper on the elected leader deletes rows past
+  without a restart. A sweep every minute on the elected leader deletes rows past
   the window, and a run whose output was erased (below) answers
   `404 run_output_erased`. A deployment that turned recordings off so terminals
   are not kept should decide on these two settings too.
+- **The window is counted from when a row was written.** The sweep deletes a
+  row `WARDYN_RUN_OUTPUT_RETENTION_DAYS` after its `captured_at`. Direct stdout
+  is written as the run is finalized, so for it that is the run's end. A
+  recording-derived row is written when its recovery commits. No recovery
+  commits for a run that ended longer ago than the window, but one that
+  commits inside it is then kept for a full window of its own, so such a row
+  can outlive the run's end by more than the window. For a row that holds
+  output the excess is small in normal operation: recovering bytes needs the
+  run's masking manifest, which the run-secret sweep removes about an hour
+  after the run's last change (`api.RunSecretGrace`, checked every 15
+  minutes). A `capture_gap` row holds no output. It can be written later, by
+  an authorized read anywhere in the window when the run has no row yet, and
+  is then kept for a full window from that read.
 - **Another replica's live tail.** With persistence on, a replica that holds no
   tail for a live run answers the read from `run_output_chunks`, where the
   dispatching replica keeps what its masker has passed (`complete` is false).
@@ -130,8 +168,8 @@ browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
   dropped. The row says what it is: `complete` is true only for a final capture,
   `incomplete` when the wait ran out, a copy failed or a byte was dropped, and
   `capture_gap` when this process held no tail (for example a run adopted after
-  a restart) and could not read the output back from the substrate, so there are
-  no bytes to keep. A write that fails is retried with
+  a restart) and could not read the output back from the substrate. A gap may keep
+  masked partial stdout chunks that had already reached Postgres. A write that fails is retried with
   capped backoff, the bytes held in memory, and audited as `run.output.finalize`;
   a clean capture writes no audit row.
 - **A pane snapshot for an interactive run Wardyn stops.** When Wardyn itself
@@ -195,7 +233,8 @@ browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
     long as the pod lives, so the new process re-reads it from its first byte
     into a fresh tail, and a run adopted while still running resumes following
     it. The run keeps all of its output: before the restart, during the handoff
-    and after. With recordings on there is no output to re-read (above).
+    and after. With recordings on the terminal path reads the available recording
+    instead, under the same masking-coverage requirement.
   - **Docker** keeps a log only for an exec-less agent (a krun microVM), which
     is re-read the same way. An exec agent's terminal is a hijacked stream that
     dockerd does not log and that cannot be re-attached after the process that
@@ -215,9 +254,29 @@ browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
     timeout and after the credential revoke cascade, so a sandbox that writes an
     endless log cannot delay boot or a run's teardown: the row is written
     `incomplete`, with what was read.
-  - The hourly sweeper resolves a terminal run's pending row, once its claim is
+  - The sweep every minute resolves a terminal run's pending row, once its claim is
     five minutes old, the same way: by recovery under the same rules, or to a
     `capture_gap` row.
+  - Recording uploads commit their recovery obligation before a successful
+    receipt. A restarted leader immediately checks a bounded page of terminal
+    work, then retries every minute; an abandoned claim is available after five
+    minutes. Source reads, decoding and masking happen outside output transactions.
+    The final write checks the exact claim and upload generation, erasure fences,
+    masking manifest and output retention deadline. Final stdout and pane rows
+    are preserved. A later committed upload can improve a recording result even
+    when `complete` is already true; that flag describes the capture attempt.
+  - The recording commit and recovery-obligation commit use separate stores.
+    A crash between them leaves a committed recording without a successful
+    receipt or queued recovery. An authorized terminal missing/gap output read
+    repairs that window, with a five-minute cooldown. A failed obligation commit
+    is the same window: the upload answers `500` although the recording is
+    stored, and the recorder does not retry its final upload. The receipt never
+    waits on the runner. When the runner's capabilities cannot be read at upload
+    time, the stored recording is acknowledged and that upload queues nothing;
+    terminal finalization asks the runner again, and the same read repairs an
+    upload that arrived after the run ended. Transient source failures
+    leave durable pending work; no recovery is possible once masking coverage
+    or output retention has expired.
 
   Runs that finished before the upgrade have no row and read
   `409 run_output_not_kept`.
@@ -1082,7 +1141,7 @@ erases one person's retained records by explicit scope, in one audited act
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
 | `run_tasks` | the task text of the runs the person created |
 | `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
-| `recordings` | their session recordings, with a durable per-run fence against later writes. Opt-in: nothing deletes a recording unless this scope is asked for |
+| `recordings` | their session recordings and `source: "recording"` output rows, with durable per-run fences against later writes; direct stdout and pane snapshots retain their independent `run_outputs` scope |
 | `mask_copies` | the masking manifests of those runs, after their live attaches, SSH shells and relays are fenced |
 
 The scopes run in the order above whatever order the body lists them: the person's live
@@ -1099,6 +1158,35 @@ Authentication, masking availability, part limits and upload size limits keep th
 priority. Reads after erasure return no recording; a reader already opened before erasure may retain
 bytes, and bytes already handed out cannot be revoked. Streaming uploads may finish into temporary
 files or buffers, which are discarded instead of committed. A new run ID records normally.
+
+Before deleting configured recordings, the adapter installs a durable source-specific
+output fence and removes only recording-derived rows. An already-open recording reader
+therefore cannot recreate those rows. This fence applies even when recording or output
+persistence is currently disabled, survives retention and run deletion, and preserves
+independent stdout/pane output. The reported recording count covers the currently
+configured recording store only: disconnected old backends, exported files and backups
+are independent copies. A failure after the derived fence leaves the recordings scope
+incomplete, so retry it rather than treating every copy as erased.
+
+Split migrator/app-role installations grant the app role `SELECT, INSERT, UPDATE`
+on `run_output_recording_recovery` (migration `0135_run_output_recording_recovery`)
+for the source fence and recovery claims. Retain its erased rows with database
+backups; the absence of a run foreign key deliberately preserves the fence after
+run deletion or identifier reuse.
+
+**A limit on how many runs one erasure can cover.** The `run_outputs` and
+`recordings` scopes each take one Postgres advisory lock for every run the person
+created, all in one transaction. Postgres keeps every session's locks in one shared
+table sized from `max_locks_per_transaction` × `max_connections` (64 × 100 by
+default), so a person with more runs than that table can take cannot have either
+scope erased in one call. The order of magnitude is ten thousand runs: on a default
+Postgres 17, 10,000 advisory locks in one transaction succeed and 20,000 fail with
+`out of shared memory` (SQLSTATE 53200). The scope then fails closed and as a whole.
+Its transaction rolls back, so no fence or tombstone is written and no row is
+deleted; the `recordings` scope stops before it deletes any recording; the erasure
+answers `500` `erasure_incomplete`. Nothing is half-erased, and nothing is fenced
+either. A retry fails the same way until `max_locks_per_transaction` is raised,
+which needs a Postgres restart: raise it, then retry the same scopes.
 
 The Postgres fence (migration `0133_recording_erasures`) survives retention and replica/process restarts. The filesystem
 store syncs its `.erased/<key>.cast` marker before deleting casts and the shared-volume `.log` fallback;

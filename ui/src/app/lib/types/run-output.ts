@@ -8,9 +8,9 @@ export interface RunOutput {
   output: string;
   /** The output does not start at the run's first byte. */
   truncated: boolean;
-  /** A final capture; false while the run's output is still being kept. */
+  /** A final capture attempt; later recording uploads may improve it. */
   complete: boolean;
-  /** "stdout" (command output) or "pane_snapshot" (an interactive run's last screen). */
+  /** "stdout", "pane_snapshot", or "recording"; the latter two require the recording reader gate. */
   source: string;
   incomplete: boolean;
   capture_gap: boolean;

@@ -401,14 +401,15 @@ func (d *miscCovRecordingDeleter) DeleteRun(_ context.Context, runID string) (in
 func TestMiscCovEraseRecordingsOf(t *testing.T) {
 	a, b := uuid.MustParse("00000000-0000-4000-8000-0000000000e1"), uuid.MustParse("00000000-0000-4000-8000-0000000000e2")
 
-	t.Run("no recording store has nothing to delete", func(t *testing.T) {
+	// A disabled recording backend still owes the derived-output fence (#1831), which needs the person's runs.
+	t.Run("no recording store deletes nothing and still reads the run list for the derived-output fence", func(t *testing.T) {
 		_, srv, st, _ := miscCovPersonRig(t)
 		got, err := srv.eraseRecordingsOf(t.Context(), "bob")
 		if m, _ := got.(map[string]any); err != nil || m["recordings"] != 0 {
 			t.Fatalf("got %v, %v; want recordings 0", got, err)
 		}
-		if len(st.callLog()) != 0 {
-			t.Errorf("the store was asked: %v", st.callLog())
+		if !slices.Equal(st.callLog(), []string{"runs:bob"}) {
+			t.Errorf("store calls = %v, want the run list alone", st.callLog())
 		}
 	})
 	t.Run("a store that cannot delete is not available, never reported erased", func(t *testing.T) {

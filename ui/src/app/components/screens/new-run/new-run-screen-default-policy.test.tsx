@@ -54,6 +54,7 @@ import { NewRunScreen } from "./new-run-screen";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { POLICY_TEMPLATE_COPY as C } from "../../wardyn/copy/policy-templates";
 import { setField } from "../../../../test/set-field";
+import { goToPanel } from "../../../../test/new-run-panel";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -93,6 +94,7 @@ beforeEach(() => {
 describe("NewRunScreen — Use the default policy", () => {
   it("the mode row reads Default, Saved, Custom, with Custom preselected", async () => {
     renderScreen();
+    goToPanel("Policy");
     const def = await screen.findByRole("button", { name: /^Use the default policy/ });
     const saved = screen.getByRole("button", { name: /^Reuse a saved policy/ });
     const custom = screen.getByRole("button", { name: /^Custom policy/ });
@@ -103,6 +105,7 @@ describe("NewRunScreen — Use the default policy", () => {
 
   it("sends neither policy_id nor inline_policy, and Check again sends the same body", async () => {
     renderScreen();
+    goToPanel("Policy");
     await chooseDefault();
     setField(screen.getByLabelText("Title"), "default run");
 
@@ -135,6 +138,7 @@ describe("NewRunScreen — Use the default policy", () => {
         </OperatorProvider>
       </MemoryRouter>,
     );
+    goToPanel("Policy");
     await chooseDefault();
     setField(screen.getByLabelText("Title"), "default run");
     await user.click(screen.getByRole("button", { name: /^Check again$/ }));
@@ -152,6 +156,7 @@ describe("NewRunScreen — Use the default policy", () => {
   it("shows the read-only preview and hides the editor and the additions box", async () => {
     renderScreen();
     expect(screen.getByLabelText(/^Spec \(YAML\)/)).toBeInTheDocument();
+    goToPanel("Policy");
     await chooseDefault();
     expect(await screen.findByText(C.DEFAULT_PREVIEW)).toBeInTheDocument();
     expect(await screen.findByText(/api\.default\.example/)).toBeInTheDocument();
@@ -169,9 +174,12 @@ describe("NewRunScreen — Use the default policy", () => {
 
   it("neither the spec-parse refusal nor the pick-a-policy refusal fires in default mode", async () => {
     renderScreen();
+    // The title is required and its issue is named first, so it is given.
+    setField(await screen.findByLabelText("Title"), "Default mode");
     // Break the Custom document, then choose Default: the broken document is not on the wire.
     setField(await screen.findByLabelText(/^Spec \(YAML\)/), "{ not json");
     expect(await screen.findByText("The policy spec isn't valid JSON.")).toBeInTheDocument();
+    goToPanel("Policy");
     await chooseDefault();
     expect(screen.queryByText("The policy spec isn't valid JSON.")).toBeNull();
     expect(screen.queryByText("Pick a saved policy, or write a custom one.")).toBeNull();
@@ -195,6 +203,7 @@ describe("NewRunScreen — Use the default policy", () => {
   it("a failed preview read says so, offers Retry, and leaves Launch enabled", async () => {
     getDefaultPolicyMock.mockRejectedValueOnce(new Error("down"));
     renderScreen();
+    goToPanel("Policy");
     await chooseDefault();
     expect(await screen.findByText(C.DEFAULT_UNAVAILABLE)).toBeInTheDocument();
     setField(screen.getByLabelText("Title"), "default run");
@@ -209,6 +218,7 @@ describe("NewRunScreen — Use the default policy", () => {
     renderScreen();
     const edited = JSON.stringify({ ...DEFAULT_SPEC, allowed_domains: ["mine.example"] });
     setField(await screen.findByLabelText(/^Spec \(YAML\)/), edited);
+    goToPanel("Policy");
     await chooseDefault();
     await user.click(screen.getByRole("button", { name: /^Custom policy/ }));
     expect((screen.getByLabelText(/^Spec \(YAML\)/) as HTMLTextAreaElement).value).toBe(edited);
@@ -217,6 +227,7 @@ describe("NewRunScreen — Use the default policy", () => {
   it("the existing options still behave: Reuse a saved policy is the title and launches by reference", async () => {
     listPoliciesMock.mockResolvedValue([{ id: "pol_1", name: "Team policy", spec: DEFAULT_SPEC }]);
     renderScreen();
+    goToPanel("Policy");
     await user.click(await screen.findByRole("button", { name: /^Reuse a saved policy/ }));
     await user.click(screen.getByRole("combobox", { name: "Saved policy" }));
     await user.click(await screen.findByRole("option", { name: "Team policy" }));
@@ -263,22 +274,35 @@ describe("NewRunScreen — the default policy with two workspaces attached", () 
         </OperatorProvider>
       </MemoryRouter>,
     );
+    goToPanel("Policy");
     await chooseDefault();
     await waitFor(() => expect(screen.getByTestId("nr-workspace-extras")).toHaveTextContent("repo-b"));
     setField(screen.getByLabelText("Title"), "default two workspaces");
   }
 
-  it("holds Launch and Check again, says why, and sends no request", async () => {
+  it("holds Launch and Check again, says why once, and sends no request", async () => {
     await renderTwoAttachedOnDefault();
 
-    // Beside Launch, and in the default-policy panel beside Check again.
-    await waitFor(() => expect(screen.getAllByText(SENTENCE)).toHaveLength(2));
-    const panel = screen.getByText(C.DEFAULT_PREVIEW).parentElement!;
-    expect(within(panel).getByText(SENTENCE)).toBeInTheDocument();
+    // Printed once (#1922, M-F). While Policy is on screen: beside Check again,
+    // never in the rail, and both held buttons name it as their description.
+    await waitFor(() => expect(screen.getAllByText(SENTENCE)).toHaveLength(1));
+    const hold = screen.getByText(SENTENCE);
+    expect(hold).toHaveAttribute("role", "status");
+    expect(hold.closest("aside")).toBeNull();
+    expect(screen.queryByRole("button", { name: SENTENCE })).toBeNull();
     expect(screen.getByRole("button", { name: "Launch run" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^Check again$/ })).toBeDisabled();
-    // Nothing is hidden or cleared: the chip and its Remove control stay.
+    expect(screen.getByRole("button", { name: "Launch run" })).toHaveAccessibleDescription(SENTENCE);
+    expect(screen.getByRole("button", { name: /^Check again$/ })).toHaveAccessibleDescription(SENTENCE);
+    expect(within(screen.getByRole("navigation", { name: "New run" })).getByRole("button", { name: "Policy 1 issue" })).toBeInTheDocument();
+    // From any other panel: above Launch instead, as the way back to the mode row.
+    goToPanel("Workspace");
+    expect(hold).not.toBeVisible();
+    expect(screen.getByRole("button", { name: SENTENCE })).toBeInTheDocument();
+    // Nothing is hidden or cleared, and the mode never switches by itself.
     expect(screen.getByRole("button", { name: "Remove repo-b" })).toBeInTheDocument();
+    goToPanel("Policy");
+    expect(screen.getByRole("button", { name: new RegExp(C.DEFAULT_TITLE) })).toHaveAttribute("aria-pressed", "true");
 
     // No launch, and no automatic check either, once the debounce has passed.
     preflightRunMock.mockClear();
@@ -290,8 +314,18 @@ describe("NewRunScreen — the default policy with two workspaces attached", () 
     expect(preflightRunMock).not.toHaveBeenCalled();
   });
 
+  it("coexists with the default-policy read failing: Retry stays and the hold stays", async () => {
+    getDefaultPolicyMock.mockRejectedValue(new Error("boom"));
+    await renderTwoAttachedOnDefault();
+    expect(await screen.findByText(C.DEFAULT_UNAVAILABLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(screen.getAllByText(SENTENCE)).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Launch run" })).toBeDisabled();
+  });
+
   it("launches with the remaining workspace once the extra one is removed", async () => {
     await renderTwoAttachedOnDefault();
+    goToPanel("Workspace");
     await user.click(screen.getByRole("button", { name: "Remove repo-b" }));
 
     await waitFor(() => expect(screen.queryByText(SENTENCE)).toBeNull());
@@ -324,6 +358,7 @@ describe("NewRunScreen — the default preview's loading line", () => {
   it("appears only after a second of waiting", async () => {
     getDefaultPolicyMock.mockReturnValue(new Promise(() => {}));
     renderScreen();
+    goToPanel("Policy");
     await chooseDefault();
     expect(screen.queryByText(C.DEFAULT_LOADING)).toBeNull();
     await act(async () => {

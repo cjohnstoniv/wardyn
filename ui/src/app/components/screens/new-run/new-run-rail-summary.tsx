@@ -4,7 +4,7 @@
  */
 
 import { Link } from "react-router-dom";
-import type { PushRulesSpec, SCMAccess, SetupModelProvider } from "../../../lib/types";
+import type { PushRulesSpec, SCMAccess } from "../../../lib/types";
 import { PUSH } from "../../wardyn/copy/push";
 import { AutonomyChip, Chip } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
@@ -14,7 +14,7 @@ import type { SCMAccessPAT } from "../../../lib/types/ado-pat";
 import { RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { RailSection } from "./new-run-primitives";
 import { PolicyRemedy } from "../../wardyn/policy-remedy";
-import { CredentialFacts, ModelProviderSection } from "./new-run-rail-credentials";
+import { CredentialFacts, ProviderSummary, summaryProvider } from "./new-run-rail-credentials";
 import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
 import type { RunRailProps } from "./new-run-rail-types";
 
@@ -65,14 +65,13 @@ export function pushRulesIsSet(s: PushRulesSpec | undefined): boolean {
 export function RunRailSummary({
   governanceProfile, governanceContact, savedPolicy, cc, showModelWarning,
   modelBlocked, startup, showHoldNote, toolRules, pushRules, unattended,
-  preflight, agentRow, modelProvider, recordingDisabled, onProviderSignIn,
+  preflight, agentRow, modelProvider, recordingDisabled, guardLink,
 }: Pick<RunRailProps,
   "governanceProfile" | "governanceContact" | "savedPolicy" | "cc" | "showModelWarning" |
   "modelBlocked" | "startup" | "showHoldNote" | "toolRules" | "pushRules" | "unattended" |
-  "preflight" | "agentRow" | "modelProvider"
+  "preflight" | "agentRow" | "modelProvider" | "guardLink"
 > & {
   recordingDisabled: boolean | undefined;
-  onProviderSignIn: (provider: SetupModelProvider) => void;
 }) {
   const cred = preflight.result?.model_credential;
   const gitCredential = preflight.result?.git_credential; // #386, informational — see GitCredentialLine
@@ -81,6 +80,11 @@ export function RunRailSummary({
   // CredentialFacts/showModelWarning entirely; with neither (no block, or none
   // serving this agent — R9) that legacy path is unchanged below.
   const hasProviderCandidates = !!modelProvider && (modelProvider.candidates.length > 0 || !!modelProvider.gate);
+  // The picker itself lives on the Run panel (#1922); the rail states the
+  // provider this run uses. A gate with nothing picked is said beside the
+  // picker, so the rail has no provider line then.
+  const provider = hasProviderCandidates && modelProvider ? summaryProvider(modelProvider) : undefined;
+  const providerUnresolved = hasProviderCandidates && !provider && !modelProvider?.gate;
   // A run with no model credential to describe (a shell command — the screen
   // withholds agentRow for one), no model-access line and no warning to raise
   // has no Credentials section at all, rather than a heading over nothing.
@@ -89,7 +93,10 @@ export function RunRailSummary({
   // gitCredential (nothing to say, see GitCredentialLine above) must not by
   // itself open an empty heading over a shell run with nothing else to show.
   const showCredentials =
-    hasProviderCandidates || showModelWarning || !!cred || !!agentRow || gitCredentialSpeaks(gitCredential);
+    !!provider ||
+    providerUnresolved ||
+    (!hasProviderCandidates && (showModelWarning || !!cred || !!agentRow)) ||
+    gitCredentialSpeaks(gitCredential);
   // With no provider connected and nothing resolved, "Resolved at launch."
   // and the Preflight hint must not sit directly under "No model provider is
   // connected. This run launches; its first model call fails." Nothing
@@ -182,24 +189,14 @@ export function RunRailSummary({
             R6–R8) supersedes the legacy no-provider banner and
             CredentialFacts below entirely; R9 (no candidate at all) keeps
             exactly today's shape. */}
-        {hasProviderCandidates && modelProvider && (
-          <ModelProviderSection
-            candidates={modelProvider.candidates}
-            access={modelProvider.access}
-            selectedId={modelProvider.selectedId}
-            onChange={modelProvider.onChange}
-            changeNote={modelProvider.changeNote}
-            onSignIn={onProviderSignIn}
-            gate={modelProvider.gate}
-            harnessLabel={modelProvider.harnessLabel}
-          />
-        )}
+        {provider && <ProviderSummary provider={provider} access={modelProvider?.access} />}
+        {providerUnresolved && <CredentialFacts preflightRun={!!preflight.result} />}
         {!hasProviderCandidates && showModelWarning && !modelBlocked && (
           <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
             {RAIL_MODEL_ACCESS.NO_PROVIDER}{" "}
             {/* The action that fills the gap rides next to the
                 need, not only in a footer. Links are --info, never teal. */}
-            <Link to="/account" className="font-medium text-info hover:underline">
+            <Link to="/account" className="font-medium text-info hover:underline" onClick={guardLink?.("/account")}>
               {RAIL_MODEL_ACCESS.NO_PROVIDER_CTA}
             </Link>
           </p>

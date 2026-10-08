@@ -16,6 +16,7 @@ import {
   navToRoute,
   sidebarLink,
   launchRun,
+  goToNewRunPanel,
 } from "./fixtures";
 import { DRIVES, DRIVE_MEMBER, PEOPLE, PERM, PREVIEW } from "../src/app/lib/user-drives-copy";
 import { GOVERNANCE as GOV, MEMBER } from "../src/app/lib/governance-copy";
@@ -585,6 +586,7 @@ test.describe("drives — what the member is told at New run", () => {
     await navToRoute(page, "/runs/new");
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
 
+    await goToNewRunPanel(page, "workspace");
     await expect(page.getByTestId("nr-drive")).toHaveCount(0);
     await expect(page.getByTestId("nr-drive-reason")).toHaveCount(0);
     await expect(page.getByText(DRIVE_MEMBER.NR_CHECKBOX)).toHaveCount(0);
@@ -598,6 +600,7 @@ test.describe("drives — what the member is told at New run", () => {
     await navToRoute(page, "/runs/new");
 
     const block = page.getByTestId("nr-drive");
+    await goToNewRunPanel(page, "workspace");
     await expect(block).toBeVisible();
     await expect(block.getByText(DRIVE_MEMBER.NR_CHECKBOX)).toBeVisible();
     // The hint names the drive, the size and the mode of the MOUNT — and the
@@ -634,6 +637,7 @@ test.describe("drives — what the member is told at New run", () => {
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
 
+    await goToNewRunPanel(page, "workspace");
     await expect(page.getByTestId("nr-drive")).toBeVisible();
     await expect(page.getByText(DRIVE_MEMBER.NR_HINT(NAME, SIZE, DRIVES.MODE_RO_INLINE))).toBeVisible();
     await expect(page.getByText(DRIVE_MEMBER.NR_RO_NOTE)).toBeVisible();
@@ -649,6 +653,7 @@ test.describe("drives — what the member is told at New run", () => {
     await navToRoute(page, "/runs/new");
 
     // An unmountable drive is not a disabled checkbox with a tooltip.
+    await goToNewRunPanel(page, "workspace");
     await expect(page.getByTestId("nr-drive-reason")).toHaveText(DRIVE_MEMBER.NR_PAUSED);
     await expect(page.getByTestId("nr-drive")).toHaveCount(0);
     await expect(page.locator("#nr-drive-mount")).toHaveCount(0);
@@ -662,6 +667,7 @@ test.describe("drives — what the member is told at New run", () => {
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
 
+    await goToNewRunPanel(page, "workspace");
     await expect(page.getByTestId("nr-drive-reason")).toHaveText(DRIVE_MEMBER.NR_DENIED("walled"));
     await expect(page.getByTestId("nr-drive")).toHaveCount(0);
     await expect(page.getByText(DRIVE_MEMBER.NR_CHECKBOX)).toHaveCount(0);
@@ -692,6 +698,7 @@ test.describe("drives — what the member is told at New run", () => {
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
 
+    await goToNewRunPanel(page, "workspace");
     await expect(page.getByTestId("nr-drive-reason")).toHaveText(DRIVE_MEMBER.NR_GOVERNANCE_UNAVAILABLE);
     await expect(page.getByTestId("nr-drive")).toHaveCount(0);
   });
@@ -701,6 +708,7 @@ test.describe("drives — what the member is told at New run", () => {
       await mockMemberDriveUnavailable(page, token);
       await gotoConsole(page);
       await navToRoute(page, "/runs/new");
+      await goToNewRunPanel(page, "workspace");
       await expect(page.getByTestId("nr-drive-reason")).toHaveText(DRIVE_MEMBER.NR_UNAVAILABLE);
       await expect(page.getByTestId("nr-drive")).toHaveCount(0);
     }
@@ -712,6 +720,7 @@ test.describe("drives — what the member is told at New run", () => {
     await mockMemberDriveUnavailable(page, "groups_snapshot_stale");
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
+    await goToNewRunPanel(page, "workspace");
     await expect(page.getByTestId("nr-drive-reason")).toHaveText(MEMBER.DENIED_STALE_GROUPS);
     await expect(page.getByTestId("nr-drive")).toHaveCount(0);
   });
@@ -753,8 +762,10 @@ test.describe("drives — ticking the box puts `drive` on the wire", () => {
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
 
+    await goToNewRunPanel(page, "workspace");
     await page.locator("#nr-drive-mount").click();
     await expect(page.locator("#nr-drive-mount")).toBeChecked();
+    await goToNewRunPanel(page, "run");
     await page.getByLabel("Title").fill("e2e drive mount");
     await page.getByRole("button", { name: "Launch run" }).click();
 
@@ -776,8 +787,10 @@ test.describe("drives — ticking the box puts `drive` on the wire", () => {
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
 
+    await goToNewRunPanel(page, "workspace");
     await page.locator("#nr-drive-mount").click();
     await page.locator("#nr-drive-readonly").click();
+    await goToNewRunPanel(page, "run");
     await page.getByLabel("Title").fill("e2e drive mount ro");
     await page.getByRole("button", { name: "Launch run" }).click();
 
@@ -796,8 +809,10 @@ test.describe("drives — ticking the box puts `drive` on the wire", () => {
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
     // On the SCREEN THAT DRAWS IT — asserted before the launch, not from /runs,
     // where its absence would be true of every screen in the app.
+    await goToNewRunPanel(page, "workspace");
     await expect(page.getByTestId("nr-drive")).toHaveCount(0);
 
+    await goToNewRunPanel(page, "run");
     await page.getByLabel("Title").fill("e2e no drive");
     await launchRun(page);
     expect(seen.body).not.toBeNull();
@@ -817,6 +832,7 @@ test.describe("drives — an admin's New run says none of the member's sentences
 
     // Without this the four member assertions above would pass just as well on
     // a screen that renders the block for everybody.
+    await goToNewRunPanel(page, "workspace");
     await expect(page.getByTestId("nr-drive")).toHaveCount(0);
     await expect(page.getByTestId("nr-drive-reason")).toHaveCount(0);
     for (const s of [
