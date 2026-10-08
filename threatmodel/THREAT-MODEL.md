@@ -84,7 +84,7 @@ coverage verdict pointing back into this document.
      `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`, plus that forge's
      `ssh.<forge>` SSH-over-443 endpoint — so the brokered route is the only route to those host
      NAMES.
-   - `wardyn-git-helper` no longer mints an installation token into a brokered sandbox at all.
+   - And `wardyn-git-helper` no longer mints an installation token into a brokered sandbox at all.
    - It is a NAME deny: the verdict keys on the host string the sandbox asked for, so a raw-IP
      `CONNECT` is a different key, which `allow_all_egress` would permit (measured).
    - See [`docs/POLICIES.md`](../docs/POLICIES.md).
@@ -112,7 +112,7 @@ coverage verdict pointing back into this document.
    - Either way it is not a second lane on a brokered forge: for a forge a run IS brokered for,
      `api.validateGrantLaneExclusivity` refuses a policy declaring a `github_token` grant alongside
      an `ssh_key` **or** `git_pat` grant for it.
-   - Dispatch's `api.dropBrokeredGrants` withholds any already-stored `ssh_key` **or** `git_pat`
+   - And dispatch's `api.dropBrokeredGrants` withholds any already-stored `ssh_key` **or** `git_pat`
      grant from the sandbox env (audited `run.ssh.drop`) on top of denying the endpoint — the key
      is never resident, not merely unreachable.
    - With the PAT broker on, the proxy also refuses a raw mint of every `git_pat` grant id of the
@@ -264,7 +264,7 @@ that ceiling down; each run receives only the minimal subset its task needs.
 - Four egress layers stack outward: L0 structural confinement (Docker) and the L2 proxy carry
   enforcement on every path, L1 is shipped on Kubernetes (canary-proven NetworkPolicy; the Docker
   nftables form remains planned).
-- L3 is partial — its decision half ships, its interception half does not.
+- And L3 is partial — its decision half ships, its interception half does not.
 
 **Substrate delta: Docker (L0) vs Kubernetes (L1).**
 
@@ -596,7 +596,7 @@ one in v0.7.2, three in 0.8 and one in 0.8.9, and lost one in 0.8.
   Review).
 - It deliberately exempts no admin pin: every model credential is the person's own, so a pin is no
   admin grant of access.
-- A pin naming an ungranted provider refuses the run rather than falling through to another
+- And a pin naming an ungranted provider refuses the run rather than falling through to another
   provider.
 - Since #547 nothing admin-authored hands a run a model credential in the
   provider's place: a run's `integration_id` is refused, an AI-integration pin
@@ -627,7 +627,7 @@ switch; and a store error answers `500` rather than reading as permission.
 
 - Deny sits ABOVE the switch so one host can be blacklisted for one contractor without taking the
   deployment fail-closed.
-- There is no user-over-group precedence (a user allow overriding a group deny is a breach report,
+- And there is no user-over-group precedence (a user allow overriding a group deny is a breach report,
   not a feature).
 - `egress_host` values match via `entryCoversAny` — the
   SAME matcher the egress substitution drop uses, never a second one that could
@@ -786,7 +786,7 @@ narrowing them would brick workspace runs at scale.
     (`runtimeSupportsRecursiveReadOnly`,
     [`internal/runner/docker/hardening.go`](../internal/runner/docker/hardening.go)), the bind
     still goes in read-only either way.
-  - The loss is WARNed on the run it affects rather than assumed away (`driveBindOptions`).
+  - And the loss is WARNed on the run it affects rather than assumed away (`driveBindOptions`).
   - The residual is a host submount UNDER the person's home — an autofs home, a second export
     mounted below the first — writable inside a sandbox holding a read-only drive.
   - Asking unconditionally is not the alternative: it failed every CC2 run with a read-only drive
@@ -800,7 +800,7 @@ narrowing them would brick workspace runs at scale.
 - **The resolver decides; the driver validates its own inputs.**
   - That split is the boundary.
   - The API half derives the object (never the caller).
-  - The runner half re-checks the object it was handed as the last thing before the sandbox is
+  - And the runner half re-checks the object it was handed as the last thing before the sandbox is
     created, because a share directory can be repointed between the write and the run.
   - On Docker (`Driver.driveMount`) a drive runs the ordinary bind deny matrix
     (`ValidateTarget` on every backend; for `host_path`, `ValidateMountSource` inside
@@ -909,7 +909,7 @@ narrowing them would brick workspace runs at scale.
   - A mounted drive is **exfiltration loot and a persistence vector**, and nothing above changes
     that: whatever egress the run's policy allows can carry the drive's bytes out (the model-API
     channel of residual #1 included).
-  - A prompt-injected run that writes a WRITABLE drive poisons the NEXT run, which is what makes a
+  - And a prompt-injected run that writes a WRITABLE drive poisons the NEXT run, which is what makes a
     drive different from every other mount: it is state the product hands back on purpose.
   - What bounds it is the read-only default, the `DenyUserDrive` door and the run's unchanged
     egress policy.
