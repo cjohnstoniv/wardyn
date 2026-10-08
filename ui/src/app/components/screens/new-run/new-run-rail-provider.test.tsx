@@ -14,7 +14,7 @@
 // providers_ungranted fact.
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../../lib/api/health", () => ({
@@ -534,5 +534,36 @@ describe("the rail's Credentials summary", () => {
     });
     expect(within(screen.getByRole("complementary")).queryByText("Credentials")).toBeNull();
     expect(screen.getAllByText(RAIL_PROVIDER.NOT_GRANTED("Claude Code"))).toHaveLength(1);
+  });
+});
+
+// #1920: the door carries its return target. The control that opens it is gone
+// the moment a sign-in completes, so the two outcomes land in different places.
+describe("the Run panel's provider door returns focus", () => {
+  const two = (state: "not_configured" | "live") => {
+    const status = providerStatus([{ provider: claude, state }, { provider: gateway, state: "live" }]);
+    return {
+      status,
+      modelProvider: { candidates: [claude, gateway], access: status.provider_access, selectedId: claude.id, onChange: () => {}, changeNote: null, harnessLabel: "Claude Code" },
+    };
+  };
+
+  it("a cancelled door returns to the control that opened it", async () => {
+    renderProvider(two("not_configured"));
+    const signIn = await screen.findByRole("button", { name: CONNECTIONS.SIGN_IN_CLAUDE });
+    await userEvent.click(signIn);
+    await screen.findByRole("dialog", { name: CLAUDE_DOOR.TITLE });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(signIn).toHaveFocus();
+  });
+
+  it("a completed sign-in returns to the provider picker", async () => {
+    renderProvider(two("not_configured"));
+    await userEvent.click(await screen.findByRole("button", { name: CONNECTIONS.SIGN_IN_CLAUDE }));
+    await screen.findByRole("dialog", { name: CLAUDE_DOOR.TITLE });
+    await userEvent.click(screen.getByRole("button", { name: "fake pane" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toHaveFocus();
   });
 });
