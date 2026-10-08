@@ -18,6 +18,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// componentRefusalBody is the one body every org component refusal answers.
+const componentRefusalBody = `{"error":"This component isn't available to you. Ask your admin.","reason":"capability_component"}`
+
 const (
 	compOrgID    = "6f0c1d2e-0000-4000-8000-0000000c0301"
 	compOtherID  = "6f0c1d2e-0000-4000-8000-0000000c0302"
@@ -129,6 +132,11 @@ func TestComponentKind_NobodyUntilGranted(t *testing.T) {
 		allowed    bool
 	}{
 		{"restricted, no rows: nobody", restricted, false, nil, nil, compOrgID, false},
+		{"restricted, no rows, asked in uppercase: nobody", restricted, false, nil, nil, strings.ToUpper(compOrgID), false},
+		{"restricted, no rows, asked braced: nobody", restricted, false, nil, nil, "{" + compOrgID + "}", false},
+		{"not a uuid: refused with the same bytes", restricted, false, nil, nil, "jira-api", false},
+		{"restricted, a person allow naming it, asked in uppercase", restricted, false,
+			[]types.CapabilityGrant{grant(types.CapabilitySubjectUser, capSub, capComponent, compOrgID, allow)}, nil, strings.ToUpper(compOrgID), true},
 		{"restricted, a wildcard allow for everyone lists nobody", restricted, false,
 			[]types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capComponent, capWildcard, allow)}, nil, compOrgID, false},
 		{"restricted, enforced, wildcard allow: still nobody", restricted, true,
@@ -158,6 +166,9 @@ func TestComponentKind_NobodyUntilGranted(t *testing.T) {
 			if (code == 0) != c.allowed {
 				t.Fatalf("admitted = %v (%d %s), want %v", code == 0, code, body, c.allowed)
 			}
+			if code != 0 && (code != http.StatusForbidden || strings.TrimSpace(body) != componentRefusalBody) {
+				t.Errorf("refused %d %s, want 403 %s", code, body, componentRefusalBody)
+			}
 		})
 	}
 }
@@ -183,9 +194,8 @@ func TestComponentRefusalNamesNothing(t *testing.T) {
 
 	ungrantedCode, ungranted, srv := attach(t, &capStore{grants: []types.CapabilityGrant{allowGranted}, restricted: restricted}, member, compOrgID)
 	absentCode, absent, _ := attach(t, &capStore{enf: map[string]bool{capComponent: true}}, member, compAbsentID)
-	const want = `{"error":"This component isn't available to you. Ask your admin.","reason":"capability_component"}`
-	if ungrantedCode != http.StatusForbidden || strings.TrimSpace(ungranted) != want {
-		t.Errorf("ungranted = %d %s, want 403 %s", ungrantedCode, ungranted, want)
+	if ungrantedCode != http.StatusForbidden || strings.TrimSpace(ungranted) != componentRefusalBody {
+		t.Errorf("ungranted = %d %s, want 403 %s", ungrantedCode, ungranted, componentRefusalBody)
 	}
 	if absentCode != ungrantedCode || absent != ungranted {
 		t.Errorf("absent = %d %q, ungranted = %d %q: the two must be byte-identical", absentCode, absent, ungrantedCode, ungranted)
