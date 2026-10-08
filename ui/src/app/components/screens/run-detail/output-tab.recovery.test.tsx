@@ -32,7 +32,7 @@ const out = (o: Partial<RunOutput> = {}): RunOutput => ({
   incomplete: false,
   capture_gap: false,
   mask_scope: "run",
-  captured_at: "2026-10-03T14:02:00Z",
+  captured_at: aheadByHours(-24),
   ...o,
 });
 const recording = (o: Partial<RunOutput> = {}) => out({ source: "recording", incomplete: true, ...o });
