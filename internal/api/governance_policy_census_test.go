@@ -17,8 +17,11 @@ import (
 // ceiling must name the policy, and a list of today's doors cannot promise that:
 // this scan can. It fails when
 //
-//   - authz.Deny is called with ReasonGovernanceProfile or ReasonRunQuota and the
-//     decision never goes through .WithPolicy(...), or
+//   - authz.Deny is called with ReasonGovernanceProfile, ReasonRunQuota or
+//     ReasonComponentAutonomy — or with the autonomy ladder's reason, `<x>.reason`
+//     for an x the function declares as an autonomySource, which is one of the
+//     first and the third by construction — and the decision never goes
+//     through .WithPolicy(...), or
 //   - reasonRecordCeilingLimit reaches writeErrorReason instead of
 //     writeErrorReasonPolicy (that door bypasses refuse, so WithPolicy cannot
 //     reach it).
@@ -26,6 +29,64 @@ import (
 // It reads syntax only, so it cannot see a decision built into a variable and
 // wrapped elsewhere; a door that wants that shape has to be added here by hand,
 // which is the point of making it fail first.
+
+// ladderReasons returns every `<x>.reason` expression in f whose x the enclosing
+// function declares as an autonomySource (a parameter or a var): the reason the
+// autonomy ladder refuses with. Syntax only, like the rest of this guard.
+func ladderReasons(f *ast.File) map[ast.Expr]bool {
+	out := map[ast.Expr]bool{}
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		names := map[string]bool{}
+		declare := func(typ ast.Expr, idents []*ast.Ident) {
+			if isBare(typ, "autonomySource") {
+				for _, id := range idents {
+					names[id.Name] = true
+				}
+			}
+		}
+		for _, p := range fn.Type.Params.List {
+			declare(p.Type, p.Names)
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if vs, ok := n.(*ast.ValueSpec); ok && vs.Type != nil {
+				declare(vs.Type, vs.Names)
+			}
+			return true
+		})
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "reason" {
+				if id, ok := sel.X.(*ast.Ident); ok && names[id.Name] {
+					out[sel] = true
+				}
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// ceilingRefusals is every authz.Deny in f whose reason is a ceiling refusal's.
+func ceilingRefusals(f *ast.File) []*ast.CallExpr {
+	ladder := ladderReasons(f)
+	var out []*ast.CallExpr
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || !isQualified(call.Fun, "authz", "Deny") || len(call.Args) == 0 {
+			return true
+		}
+		reason := call.Args[0]
+		if isQualified(reason, "authz", "ReasonGovernanceProfile") || isQualified(reason, "authz", "ReasonRunQuota") ||
+			isQualified(reason, "authz", "ReasonComponentAutonomy") || ladder[reason] {
+			out = append(out, call)
+		}
+		return true
+	})
+	return out
+}
 
 // policyCensusViolations lists, as "file:line: what", every ceiling refusal in f
 // that would ship without its policy.
@@ -58,16 +119,17 @@ func policyCensusViolations(fset *token.FileSet, name string, f *ast.File) []str
 	at := func(n ast.Node, what string) {
 		out = append(out, fmt.Sprintf("%s:%d: %s", name, fset.Position(n.Pos()).Line, what))
 	}
+	for _, call := range ceilingRefusals(f) {
+		if !wrapped[call] {
+			at(call, "a governance_profile, run_quota or component_autonomy refusal that never reaches .WithPolicy(...)")
+		}
+	}
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		switch {
-		case isQualified(call.Fun, "authz", "Deny") && len(call.Args) > 0 && !wrapped[call] &&
-			(isQualified(call.Args[0], "authz", "ReasonGovernanceProfile") || isQualified(call.Args[0], "authz", "ReasonRunQuota")):
-			at(call, "a governance_profile or run_quota refusal that never reaches .WithPolicy(...)")
-		case isBare(call.Fun, "writeErrorReason") && callMentions(call, "reasonRecordCeilingLimit"):
+		if isBare(call.Fun, "writeErrorReason") && callMentions(call, "reasonRecordCeilingLimit") {
 			at(call, "reasonRecordCeilingLimit written by writeErrorReason, not writeErrorReasonPolicy")
 		}
 		return true
@@ -108,7 +170,7 @@ func TestEveryCeilingRefusalNamesThePolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	fset := token.NewFileSet()
-	scanned := 0
+	scanned, ladder := 0, 0
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -122,9 +184,18 @@ func TestEveryCeilingRefusalNamesThePolicy(t *testing.T) {
 		for _, v := range policyCensusViolations(fset, name, f) {
 			t.Error(v)
 		}
+		if name == "runs_autonomy.go" {
+			ladder = len(ceilingRefusals(f))
+		}
 	}
 	if scanned == 0 {
 		t.Fatal("scanned no source files")
+	}
+	// The autonomy ladder refuses through autonomySource (governance_profile or
+	// component_autonomy): five doors. Fewer seen means the guard went blind
+	// to them, not that they went away.
+	if ladder < 5 {
+		t.Errorf("the census sees %d ceiling refusals in runs_autonomy.go, want the ladder's 5", ladder)
 	}
 }
 
@@ -146,6 +217,16 @@ func f() { writeErrorReason(w, http.StatusForbidden, reasonRecordCeilingLimit, "
 func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.x", "no").OnRun(id).WithPolicy(p)) }`, 0},
 		{"reasonRecordCeilingLimit through writeErrorReasonPolicy passes", `package api
 func f() { writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, "no", ref) }`, 0},
+		{"an unwrapped component_autonomy refusal", `package api
+func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonComponentAutonomy, "runs.x", "no")) }`, 1},
+		{"an unwrapped ladder refusal through an autonomySource parameter", `package api
+func f(s *Server, src autonomySource) { s.refuse(w, r, authz.Deny(src.reason, "runs.x", "no")) }`, 1},
+		{"an unwrapped ladder refusal through an autonomySource var", `package api
+func f(s *Server) { var src autonomySource; s.refuse(w, r, authz.Deny(src.reason, "runs.x", "no")) }`, 1},
+		{"a wrapped ladder refusal passes", `package api
+func f(s *Server, src autonomySource) { s.refuse(w, r, authz.Deny(src.reason, "runs.x", "no").WithPolicy(src.policy)) }`, 0},
+		{"another type's reason field is not the ladder's", `package api
+func f(s *Server, k capKind) { s.refuse(w, r, authz.Deny(k.reason, "runs.x", "no")) }`, 0},
 		{"an unrelated reason is not a ceiling refusal", `package api
 func f(s *Server) { s.refuse(w, r, authz.Deny(authz.ReasonNotOwner, "run", "no")) }`, 0},
 	} {
