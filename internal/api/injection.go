@@ -4,9 +4,13 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -181,18 +185,33 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// strings and the lookup falls back to the operator row: today's single
 	// namespace, unchanged, for every pre-0.7 deployment. An owner_only grant
 	// never falls back (secretstore.GrantRead).
-	gctx, _ := secretstore.GrantRead(r.Context(), minted.OwnerOnly)
+	//
+	// A `shared` grant — the secret an organisation provides for its component
+	// — changes WHERE this one read looks and nothing after it: the operator's
+	// namespace and only it, whatever the run's owner holds under the same
+	// name (injectionGrantRead). The value it finds takes the same format,
+	// mask registration, audit row and expiry as every other stored key.
+	read, err := s.injectionReadFor(r.Context(), claims, grantID, minted)
+	var secret []byte
+	gctx, _ := secretstore.GrantRead(r.Context(), read.ownRowOnly)
 	rctx, row := secretstore.SiteAudited(gctx)
-	secret, err := s.cfg.Secrets.For(grantReadOwner(claims.Sub, minted.OwnerOnly, claims.OperatorOwned)).Get(rctx, minted.Injection.SecretName)
+	if err == nil {
+		secret, err = s.cfg.Secrets.For(read.owner).Get(rctx, minted.Injection.SecretName)
+	}
 	if err != nil {
 		// Fail closed; the proxy refuses to start without its injections, and
 		// mid-run it acts on the status: see storeReadRefusal.
 		status, reason, body := storeReadRefusal(minted.Injection.SecretName, err)
+		if read.shared && status != http.StatusServiceUnavailable {
+			// The proxy relays this body into the sandbox, and the name of a
+			// secret the organisation provides is the operator's.
+			body = sinkSharedSecretRefused
+		}
 		slog.WarnContext(r.Context(), "wardynd: a stored credential could not be read for injection",
 			slog.String("secret", minted.Injection.SecretName), slog.String("reason", reason), slog.Any("err", err))
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", minted.Injection.SecretName, "failure",
-			mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "reason": reason, "grant_id": grantID, "owner": claims.Sub}, row))))
+			mustJSON(withStoreRow(read.stamp(map[string]any{"purpose": "proxy-injection", "reason": reason, "grant_id": grantID, "owner": claims.Sub}), row))))
 		// reason reaches the wire now (#656 slice 3), matching
 		// injection_bedrock_bearer.go's identical fix.
 		writeErrorReason(w, status, reason, body)
@@ -210,7 +229,7 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", minted.Injection.SecretName, "success",
-		mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub}, row))))
+		mustJSON(withStoreRow(read.stamp(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub}), row))))
 
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host:      minted.Injection.Host,
@@ -219,6 +238,54 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		JTI:       minted.JTI,
 		ExpiresAt: s.storedKeyExpiry(minted),
 	})
+}
+
+// DRAFT (M2 canon pending) — the sink's answer when the secret an organisation
+// provides for its component cannot be read. It names nothing: the run's owner
+// did not choose the secret and may not learn what it is called.
+const sinkSharedSecretRefused = "The credential your organisation provides for this run could not be read, so nothing was substituted. Ask your admin."
+
+// injectionRead is where handleInternalInjection's one stored-key read looks:
+// the namespace, whether only that namespace's own row may answer (no operator
+// fallback), and whether the grant is a `shared` one.
+type injectionRead struct {
+	owner      string
+	ownRowOnly bool
+	shared     bool
+}
+
+// stamp marks a secret.read row for a `shared` grant: the value was the
+// operator's, by the grant's own declaration. Every other row is unchanged.
+func (rd injectionRead) stamp(data map[string]any) map[string]any {
+	if rd.shared {
+		data["secret_scope"] = "operator"
+	}
+	return data
+}
+
+// injectionReadFor decides where the grant's stored secret is read from. The
+// `shared` flag lives in the grant's SCOPE, which the broker's mint does not
+// carry, so the grant is read back through the run's own grant list — which
+// re-proves it belongs to this run. It selects a namespace and reads no value.
+//
+// A grant list that cannot be read is an error, and the caller refuses the
+// read as it refuses an unreachable store: answering "not shared" for a grant
+// that is would read the run owner's own row of the same name first, which is
+// exactly what `shared` exists to rule out. A grant the list does not hold
+// carries no declaration and reads as every grant did before the flag existed.
+func (s *Server) injectionReadFor(ctx context.Context, claims *identity.Claims, grantID uuid.UUID, minted broker.Minted) (injectionRead, error) {
+	var scope json.RawMessage
+	if s.cfg.Store != nil {
+		grants, err := s.cfg.Store.ListGrantsByRun(ctx, claims.RunID)
+		if err != nil {
+			return injectionRead{ownRowOnly: true}, fmt.Errorf("%w: read the run's grants: %w", secretstore.ErrUnavailable, err)
+		}
+		if i := slices.IndexFunc(grants, func(g types.CredentialGrant) bool { return g.ID == grantID }); i >= 0 {
+			scope = grants[i].Spec.Scope
+		}
+	}
+	owner, ownRowOnly := injectionGrantRead(scope, claims.Sub, minted.OwnerOnly, claims.OperatorOwned)
+	return injectionRead{owner: owner, ownRowOnly: ownRowOnly, shared: apiKeyScopeShared(scope)}, nil
 }
 
 // storedKeyTTL is how long the proxy may inject a stored key before it asks
