@@ -1,0 +1,251 @@
+[
+ {
+  "name": "a sealed policy in block YAML with comments",
+  "source": "# sealed, keyless\nallowed_domains: []\nfirst_use_approval: always_deny  # no review\nmin_confinement_class: CC1\nauto_stop_after_sec: 900\neligible_grants:\n  - kind: git_pat\n    scope:\n      host: github.com\n      repos: [acme/one, \"acme/two\"]\n    ttl_seconds: 3600\n    requires_approval: false\n",
+  "console": {
+   "value": {
+    "allowed_domains": [],
+    "first_use_approval": "always_deny",
+    "min_confinement_class": "CC1",
+    "auto_stop_after_sec": 900,
+    "eligible_grants": [
+     {
+      "kind": "git_pat",
+      "scope": {
+       "host": "github.com",
+       "repos": [
+        "acme/one",
+        "acme/two"
+       ]
+      },
+      "ttl_seconds": 3600,
+      "requires_approval": false
+     }
+    ]
+   }
+  }
+ },
+ {
+  "name": "the same policy as explicit JSON",
+  "format": "json",
+  "source": "{\n  \"allowed_domains\": [],\n  \"first_use_approval\": \"always_deny\",\n  \"min_confinement_class\": \"CC1\",\n  \"auto_stop_after_sec\": 900,\n  \"eligible_grants\": [\n    {\n      \"kind\": \"git_pat\",\n      \"scope\": {\n        \"host\": \"github.com\",\n        \"repos\": [\n          \"acme/one\",\n          \"acme/two\"\n        ]\n      },\n      \"ttl_seconds\": 3600,\n      \"requires_approval\": false\n    }\n  ]\n}\n",
+  "console": {
+   "value": {
+    "allowed_domains": [],
+    "first_use_approval": "always_deny",
+    "min_confinement_class": "CC1",
+    "auto_stop_after_sec": 900,
+    "eligible_grants": [
+     {
+      "kind": "git_pat",
+      "scope": {
+       "host": "github.com",
+       "repos": [
+        "acme/one",
+        "acme/two"
+       ]
+      },
+      "ttl_seconds": 3600,
+      "requires_approval": false
+     }
+    ]
+   }
+  }
+ },
+ {
+  "name": "CRLF line endings with a literal block marker",
+  "source": "llm_inspection:\r\n  mode: block\r\n  classified_markers:\r\n    - |\r\n      TOP SECRET\r\n      line two\r\n    - plain marker\r\n",
+  "console": {
+   "value": {
+    "llm_inspection": {
+     "mode": "block",
+     "classified_markers": [
+      "TOP SECRET\nline two\n",
+      "plain marker"
+     ]
+    }
+   }
+  }
+ },
+ {
+  "name": "U+0085, U+2028 and U+2029 as the console's YAML view writes them",
+  "emitted": true,
+  "source": "llm_inspection:\n  classified_markers:\n    - \"x: y\\Nz\"\n    - \"a\\Lb\\Pc\"",
+  "console": {
+   "value": {
+    "llm_inspection": {
+     "classified_markers": [
+      "x: y\u0085z",
+      "a\u2028b\u2029c"
+     ]
+    }
+   }
+  }
+ },
+ {
+  "name": "the same characters as JSON escapes",
+  "format": "json",
+  "source": "{\"llm_inspection\": {\"classified_markers\": [\"x: y\\u0085z\", \"a\\u2028b\\u2029c\"]}}\n",
+  "console": {
+   "value": {
+    "llm_inspection": {
+     "classified_markers": [
+      "x: y\u0085z",
+      "a\u2028b\u2029c"
+     ]
+    }
+   }
+  }
+ },
+ {
+  "name": "numbers both readers read alike",
+  "source": "auto_stop_after_sec: 0\nllm_inspection:\n  max_scan_bytes: 1e6\neligible_grants:\n  - kind: api_key\n    ttl_seconds: 0xE10\n  - kind: api_key\n    ttl_seconds: 0o17\n",
+  "console": {
+   "value": {
+    "auto_stop_after_sec": 0,
+    "llm_inspection": {
+     "max_scan_bytes": 1000000
+    },
+    "eligible_grants": [
+     {
+      "kind": "api_key",
+      "ttl_seconds": 3600
+     },
+     {
+      "kind": "api_key",
+      "ttl_seconds": 15
+     }
+    ]
+   }
+  }
+ },
+ {
+  "name": "quoted look-alikes stay strings",
+  "source": "tool_rules:\n  - tool: Bash\n    pattern: \"2000-10-07\"\n    effect: deny\n  - tool: Bash\n    pattern: '017'\n    effect: hold\n  - tool: Bash\n    pattern: \"3_600\"\n    effect: allow\n",
+  "console": {
+   "value": {
+    "tool_rules": [
+     {
+      "tool": "Bash",
+      "pattern": "2000-10-07",
+      "effect": "deny"
+     },
+     {
+      "tool": "Bash",
+      "pattern": "017",
+      "effect": "hold"
+     },
+     {
+      "tool": "Bash",
+      "pattern": "3_600",
+      "effect": "allow"
+     }
+    ]
+   }
+  }
+ },
+ {
+  "name": "YAML 1.1 words are strings in both readers",
+  "source": "allowed_methods: [GET, yes, no, on, off, y, n]\n",
+  "console": {
+   "value": {
+    "allowed_methods": [
+     "GET",
+     "yes",
+     "no",
+     "on",
+     "off",
+     "y",
+     "n"
+    ]
+   }
+  }
+ },
+ {
+  "name": "strings that only start like numbers",
+  "source": "allowed_domains:\n  - 1password.com\n  - 10.0.0.1\n  - 2024-q3.example.com\n",
+  "console": {
+   "value": {
+    "allowed_domains": [
+     "1password.com",
+     "10.0.0.1",
+     "2024-q3.example.com"
+    ]
+   }
+  }
+ },
+ {
+  "name": "a leading-zero integer",
+  "source": "auto_stop_after_sec: 017\n",
+  "console": {
+   "error": "Leading zeros are ambiguous: remove them, or quote the value."
+  },
+  "cli": {
+   "auto_stop_after_sec": 15
+  }
+ },
+ {
+  "name": "an unquoted date",
+  "source": "tool_rules:\n  - tool: Bash\n    pattern: 2000-10-07\n    effect: deny\n",
+  "console": {
+   "error": "Ambiguous unquoted value: quote it."
+  },
+  "cli": {
+   "tool_rules": [
+    {
+     "tool": "Bash",
+     "pattern": "2000-10-07T00:00:00Z",
+     "effect": "deny"
+    }
+   ]
+  }
+ },
+ {
+  "name": "underscored digits",
+  "source": "auto_stop_after_sec: 3_600\n",
+  "console": {
+   "error": "Ambiguous unquoted value: quote it."
+  },
+  "cli": {
+   "auto_stop_after_sec": 3600
+  }
+ },
+ {
+  "name": "a raw U+0085 inside quotes",
+  "source": "llm_inspection:\n  classified_markers: [\"x: y\u0085z\"]\n",
+  "console": {
+   "error": "Unescaped U+0085: write it as \\u0085 in a quoted string."
+  },
+  "cli": {
+   "llm_inspection": {
+    "classified_markers": [
+     "x: y z"
+    ]
+   }
+  }
+ },
+ {
+  "name": "a raw U+2028 ending a comment",
+  "source": "auto_stop_after_sec: 900 # idle cap\u2028min_confinement_class: CC2\n",
+  "console": {
+   "error": "Unescaped U+2028: write it as \\u2028 in a quoted string."
+  },
+  "cli": {
+   "auto_stop_after_sec": 900,
+   "min_confinement_class": "CC2"
+  }
+ },
+ {
+  "name": "a bare CR line ending",
+  "source": "allowed_domains:\r  - api.example.com\rfirst_use_approval: always_deny\r",
+  "console": {
+   "error": "Bare carriage return: use LF or CRLF line endings."
+  },
+  "cli": {
+   "allowed_domains": [
+    "api.example.com"
+   ],
+   "first_use_approval": "always_deny"
+  }
+ }
+]

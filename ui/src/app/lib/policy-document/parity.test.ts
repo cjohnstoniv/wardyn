@@ -6,8 +6,11 @@
 // One policy text must never read as two policies. The CLI's --policy-file
 // reader is gopkg.in/yaml.v3 (cmd/wardyn policyToJSON); text the two readers
 // would read differently is refused here instead of guessed.
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { editPolicySource, parsePolicySource, type PolicySourceFormat } from ".";
+import { toYaml } from "../../components/wardyn/code-block";
+import { editPolicySource, parsePolicySource, type PolicySourceFormat, type PolicySourceMapping } from ".";
 
 const STRAY_BREAK = /\r(?!\n)|[\x85\u2028\u2029]/;
 
@@ -148,5 +151,32 @@ describe("plain scalars the CLI's reader resolves differently", () => {
     const keys = editPolicySource("{}", ["map"], Object.fromEntries(values.map((key, index) => [key, index])), "yaml");
     if (!keys.ok) throw new Error(keys.message);
     expect(parsePolicySource(keys.source)).toEqual({ ok: true, value: { map: Object.fromEntries(values.map((key, index) => [key, index])) } });
+  });
+});
+
+// cmd/wardyn's TestPolicyToJSON_ReadsWhatTheConsoleReads reads the same file
+// and asserts the CLI produces this value for every snippet accepted here.
+type ParityCase = {
+  name: string;
+  source: string;
+  format?: PolicySourceFormat;
+  emitted?: boolean;
+  console: { value: PolicySourceMapping } | { error: string };
+};
+const parityCases = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, "../../../../../cmd/wardyn/testdata/policy-reader-parity.json"), "utf8"),
+) as ParityCase[];
+
+describe("the cross-reader fixture shared with the CLI's tests", () => {
+  it("holds accepted and refused snippets", () => {
+    expect(parityCases.filter((c) => "value" in c.console).length).toBeGreaterThanOrEqual(8);
+    expect(parityCases.filter((c) => "error" in c.console).length).toBeGreaterThanOrEqual(5);
+  });
+
+  it.each(parityCases.map((c) => [c.name, c] as const))("reads %s as the fixture says", (_, c) => {
+    const parsed = parsePolicySource(c.source, c.format);
+    if ("value" in c.console) expect(parsed).toEqual({ ok: true, value: c.console.value });
+    else expect(parsed).toMatchObject({ ok: false, message: c.console.error });
+    if (c.emitted && "value" in c.console) expect(toYaml(c.console.value)).toBe(c.source);
   });
 });
