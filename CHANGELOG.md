@@ -92,6 +92,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The Integrations, Launch presets, Console branding and Managed laptops operations pages are now
   bullets, tables and alerts, with every repository file they cite linked. No rule, default or limit
   changed.
+- The Desktop tier page is now bullets, tables and alerts, with every repository file it cites linked.
+  No rule, default, limit or heading changed.
 
 ### Fixed
 
