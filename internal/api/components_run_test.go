@@ -213,6 +213,9 @@ func TestRunComponents_AttachExpandsRecordsAndAudits(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create = %d %s, want 201", w.Code, w.Body.String())
 	}
+	if strings.Contains(w.Body.String(), compOperatorSecret) {
+		t.Errorf("the 201 names the organisation's secret: %s", w.Body.String())
+	}
 	var created struct {
 		ID uuid.UUID `json:"id"`
 	}
@@ -337,9 +340,16 @@ func TestRunComponents_GateRecordsWhatLaterStagesRead(t *testing.T) {
 		SecretName: "not-stored", Shared: true, Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryHeader, Host: "org-api.example"}}}})
 	req := createRunRequest{Components: []types.ComponentRef{
 		{Inline: &types.ComponentDefinition{
-			Hosts:   []string{"svc.example", "api.anthropic.com.evil.example"},
-			Secrets: []types.ComponentSecret{{SecretName: compOwnSecret, Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryHeader, Host: "svc.example"}}},
-			Config:  map[string]string{"REGION": "eu"},
+			Hosts: []string{"svc.example", "api.anthropic.com.evil.example"},
+			Secrets: []types.ComponentSecret{
+				{SecretName: compOwnSecret, Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryHeader, Host: "svc.example"}},
+				// Not stored yet, twice; and a name only the OPERATOR holds,
+				// which is not the person's and is never read as present.
+				{SecretName: "not-stored-yet", Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryEnv, Var: "A"}},
+				{SecretName: "not-stored-yet", Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryEnv, Var: "B"}},
+				{SecretName: compOperatorSecret, Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryEnv, Var: "C"}},
+			},
+			Config: map[string]string{"REGION": "eu"},
 		}},
 		{ID: &orgID},
 	}}
@@ -356,27 +366,69 @@ func TestRunComponents_GateRecordsWhatLaterStagesRead(t *testing.T) {
 		t.Errorf("mitmHosts = %v, configEnv = %v", comps.mitmHosts, comps.configEnv)
 	}
 	if own, org := comps.attached[0], comps.attached[1]; own.source != componentSourceInline || own.needsAdminSecret ||
+		!slices.Equal(own.needsOwnSecrets, []string{"not-stored-yet", compOperatorSecret}) ||
 		!slices.Equal(own.addedHosts, []string{"svc.example", "api.anthropic.com.evil.example"}) ||
-		org.source != componentSourceOrg || !org.needsAdminSecret || !slices.Equal(org.addedHosts, []string{"org-api.example"}) {
+		org.source != componentSourceOrg || !org.needsAdminSecret || len(org.needsOwnSecrets) != 0 ||
+		!slices.Equal(org.addedHosts, []string{"org-api.example"}) {
 		t.Errorf("attached = %+v", comps.attached)
 	}
-	// The other two doors refuse the same request for the missing secret.
+	// The preview still expands the draft: its grants are on the spec it shows.
+	if len(spec.EligibleGrants) != 5 {
+		t.Errorf("preview grants = %d, want the five the draft asks for", len(spec.EligibleGrants))
+	}
+	// The other two doors refuse the same request, the person's own missing
+	// secret first, and leave the spec alone.
 	spec = govDeployment()
 	if _, refusal := f.srv.applyRunComponents(r, req, &spec, governanceCeiling{Spec: govDeployment()}, nil, true); refusal == nil ||
-		refusal.body.Reason != reasonComponentSecretMissing || len(spec.EligibleGrants) != 0 {
-		t.Errorf("launch: refusal = %+v, grants = %v, want component_secret_missing and an untouched spec", refusal, spec.EligibleGrants)
+		refusal.body.Reason != reasonComponentSecretNotOwned || len(spec.EligibleGrants) != 0 {
+		t.Errorf("launch: refusal = %+v, grants = %v, want component_secret_not_owned and an untouched spec", refusal, spec.EligibleGrants)
+	}
+	req.Components = req.Components[1:]
+	if _, refusal := f.srv.applyRunComponents(r, req, &spec, governanceCeiling{Spec: govDeployment()}, nil, true); refusal == nil ||
+		refusal.body.Reason != reasonComponentSecretMissing || strings.Contains(refusal.body.Error, "not-stored") {
+		t.Errorf("launch, org component alone: refusal = %+v, want component_secret_missing naming no secret", refusal)
 	}
 }
 
-// The dry doors expand the same way, and a member's view of the spec never
-// carries a secret name.
+// The dry doors expand the same way, and no door's body tells a member a
+// secret's name they did not type: the preview's spec carries no secret name
+// at all, and Review's checklist shows a secret the organisation provides as
+// "Provided by your admin", keyed by its host.
 func TestRunComponents_DryDoorsAdmitWhatLaunchAdmits(t *testing.T) {
 	f := newComponentFixture(t)
-	body := componentBody(inlineComponent([]string{"person-api.example"}, headerSecret(compOwnSecret, "person-api.example")))
-	if w := f.ask(t, componentDoors[1], body); w.Code != http.StatusOK {
+	orgRef := f.org(compOrgID, types.ComponentDefinition{
+		Hosts: []string{"org-api.example"},
+		Secrets: []types.ComponentSecret{{SecretName: compOperatorSecret, Shared: true,
+			Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryHeader, Host: "org-api.example"}}},
+	})
+	body := componentBody(inlineComponent([]string{"person-api.example"}, headerSecret(compOwnSecret, "person-api.example")), orgRef)
+	w := f.ask(t, componentDoors[1], body)
+	if w.Code != http.StatusOK {
 		t.Fatalf("preflight = %d %s, want 200", w.Code, w.Body.String())
 	}
-	w := f.ask(t, componentDoors[2], body)
+	if strings.Contains(w.Body.String(), compOperatorSecret) {
+		t.Errorf("Review names the organisation's secret: %s", w.Body.String())
+	}
+	var pre struct {
+		Items []json.RawMessage `json:"setup_items"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &pre); err != nil {
+		t.Fatal(err)
+	}
+	var secretItems []string
+	for _, it := range pre.Items {
+		if strings.Contains(string(it), `"kind":"secret"`) {
+			secretItems = append(secretItems, string(it))
+		}
+	}
+	if want := []string{
+		`{"kind":"secret","id":"secret:person-secret","label":"Secret: person-secret","required_by":"an api_key grant (person-api.example)","status":"satisfied","residency":"proxy_injected"}`,
+		`{"kind":"secret","id":"secret:provided:org-api.example","label":"Provided by your admin","required_by":"an api_key grant (org-api.example)","status":"satisfied","residency":"proxy_injected"}`,
+	}; !slices.Equal(secretItems, want) {
+		t.Errorf("Review's secret rows =\n %v\nwant\n %v", secretItems, want)
+	}
+
+	w = f.ask(t, componentDoors[2], body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("preview = %d %s, want 200", w.Code, w.Body.String())
 	}
@@ -384,14 +436,46 @@ func TestRunComponents_DryDoorsAdmitWhatLaunchAdmits(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &preview); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(preview.Spec.AllowedDomains, "person-api.example") {
-		t.Errorf("preview allowed_domains = %v, want the component's host", preview.Spec.AllowedDomains)
+	if !slices.Contains(preview.Spec.AllowedDomains, "person-api.example") || !slices.Contains(preview.Spec.AllowedDomains, "org-api.example") {
+		t.Errorf("preview allowed_domains = %v, want both components' hosts", preview.Spec.AllowedDomains)
 	}
-	if strings.Contains(w.Body.String(), compOwnSecret) {
+	if strings.Contains(w.Body.String(), compOwnSecret) || strings.Contains(w.Body.String(), compOperatorSecret) {
 		t.Errorf("preview carries a secret name: %s", w.Body.String())
 	}
 	if len(f.st.snapshots) != 0 || len(f.componentAudit(0, "run.component.attach")) != 0 {
 		t.Error("a dry door persisted or audited a component")
+	}
+
+	// And at launch: the 201, with the same two components.
+	if w := f.ask(t, componentDoors[0], body); w.Code != http.StatusCreated || strings.Contains(w.Body.String(), compOperatorSecret) {
+		t.Errorf("create = %d %s, want a 201 that names no organisation secret", w.Code, w.Body.String())
+	}
+}
+
+// The checklist row for a secret the organisation provides, on its own: no
+// name in any field and nothing for the person to add, stored or not; and a
+// secret of the person's own that happens to share the name keeps its row.
+func TestSetupSecretItems_ASharedGrantIsNeverNamed(t *testing.T) {
+	spec := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{
+		componentGrant(types.ComponentSecret{SecretName: "same-name", Shared: true,
+			Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryHeader, Host: "org-api.example"}}),
+		componentGrant(types.ComponentSecret{SecretName: "same-name",
+			Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryHeader, Host: "own-api.example"}}),
+	}}
+	for _, present := range []bool{true, false} {
+		status := map[bool]string{true: "satisfied", false: "missing"}[present]
+		items := setupSecretItems(spec, map[string]bool{"same-name": present})
+		if len(items) != 2 {
+			t.Fatalf("items = %+v, want the organisation's row and the person's", items)
+		}
+		shared, raw := items[0], mustJSON(items[0])
+		if strings.Contains(string(raw), "same-name") || shared.Fix != nil || shared.Status != status ||
+			shared.ID != "secret:provided:org-api.example" || shared.Label != "Provided by your admin" {
+			t.Errorf("present=%v: shared row = %s", present, raw)
+		}
+		if own := items[1]; own.ID != "secret:same-name" || own.Status != status || (own.Fix == nil) == !present {
+			t.Errorf("present=%v: own row = %+v", present, own)
+		}
 	}
 }
 
@@ -657,12 +741,14 @@ func TestRunComponents_DefinitionRefusals(t *testing.T) {
 // organisation must be the caller's own, and the answer never depends on what
 // the operator holds — so the gate cannot be used to learn the operator's
 // secret names. A secret the organisation provides is the reverse: read from
-// the operator's namespace alone, and reported without its name.
+// the operator's namespace alone, and reported without its name. Launch and
+// Review refuse either one missing; the policy preview keeps its body and
+// records it on the component.
 func TestRunComponents_Secrets(t *testing.T) {
 	notOwned := func(name string) componentCase {
 		return componentCase{name: "not the caller's own: " + name,
 			setup:  refs(inlineComponent([]string{"svc.example"}, headerSecret(name, "svc.example"))),
-			status: 422, reason: "component_secret_not_owned",
+			status: 422, reason: "component_secret_not_owned", previewAdmits: true,
 			sentence: `components[0]: inline.secrets[0].secret_name: you have no secret named "` + name + `" of your own. Store it under Your account first.`}
 	}
 	orgSecret := func(sec types.ComponentSecret) func(f *componentFixture) []any {
@@ -675,7 +761,7 @@ func TestRunComponents_Secrets(t *testing.T) {
 		notOwned(compOperatorSecret), // the operator has it; the person does not
 		notOwned("nobody-has-this"),  // nobody has it: the same answer but for the name
 		{name: "an organisation's component with a secret of the person's own", setup: orgSecret(types.ComponentSecret{SecretName: "nobody-has-this"}),
-			status: 422, reason: "component_secret_not_owned",
+			status: 422, reason: "component_secret_not_owned", previewAdmits: true,
 			sentence: `components[0]: this component needs a secret of your own named "nobody-has-this". Store it under Your account first.`},
 		{name: "a shared secret the operator has not stored", setup: orgSecret(types.ComponentSecret{SecretName: "nobody-has-this", Shared: true}),
 			status: 422, reason: "component_secret_missing", previewAdmits: true,
@@ -746,6 +832,15 @@ func TestRunComponents_HostRefusals(t *testing.T) {
 		componentCase{name: "a redirect's target on another port", setup: func(f *componentFixture) []any {
 			f.st.siteConfig.EgressRedirects = []types.EgressRedirect{{Ecosystem: "npm", To: "https://mirror.corp.example:8443/npm/"}}
 			return []any{inlineComponent([]string{"mirror.corp.example"}, headerSecret(compOwnSecret, "mirror.corp.example"))}
+		}, status: 422, reason: "component_host_collision"},
+		componentCase{name: "a public host an ecosystem redirect stands in for", setup: func(f *componentFixture) []any {
+			f.st.siteConfig.EgressRedirects = []types.EgressRedirect{{Ecosystem: "npm", To: "https://mirror.corp.example/npm/"}}
+			return []any{inlineComponent([]string{"registry.npmjs.org"}, headerSecret(compOwnSecret, "registry.npmjs.org"))}
+		}, status: 422, reason: "component_host_collision",
+			sentence: `components[0]: inline.secrets[0].delivery.host: "registry.npmjs.org" already has a credential on this run, and a host carries only one`},
+		componentCase{name: "the host a network redirect moves", setup: func(f *componentFixture) []any {
+			f.st.siteConfig.EgressRedirects = []types.EgressRedirect{{From: "https://Public.Vendor.Example/api", To: "relay.corp.example:8443"}}
+			return []any{inlineComponent([]string{"public.vendor.example:443"}, headerSecret(compOwnSecret, "public.vendor.example"))}
 		}, status: 422, reason: "component_host_collision"},
 		componentCase{name: "another component's header host", setup: refs(
 			inlineComponent([]string{"svc.example"}, headerSecret(compOwnSecret, "svc.example")),
@@ -1087,6 +1182,12 @@ func TestRunComponents_OperatorOwnedRunReadsTheOperatorNamespace(t *testing.T) {
 			t.Errorf("%s with the operator's secret = %d %s, want success", door, w.Code, w.Body.String())
 		}
 		w := ask(door, compOwnSecret) // a person's row is not the operator's
+		if door == componentDoors[2] {
+			if w.Code != http.StatusOK {
+				t.Errorf("preview with a person's secret = %d %s, want 200 (the preview records it)", w.Code, w.Body.String())
+			}
+			continue
+		}
 		if got := decodeErrorBody(t, w); w.Code != http.StatusUnprocessableEntity || got.Reason != "component_secret_not_owned" {
 			t.Errorf("%s with a person's secret = %d %s, want 422 component_secret_not_owned", door, w.Code, w.Body.String())
 		}

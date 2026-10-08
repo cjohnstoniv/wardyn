@@ -67,8 +67,8 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	if _, refusal = s.unionDirectGitHubEgress(r, req, &spec, ceiling); refusal.write(s, w, r) {
 		return
 	}
-	// false: the preview reports a secret the organisation has not provided
-	// rather than refusing it; every other bound is launch's.
+	// false: the preview reports a secret that is not stored yet rather than
+	// refusing it; every other bound is launch's.
 	comps, refusal := s.applyRunComponents(r, req, &spec, ceiling, wsRefs, false)
 	if refusal.write(s, w, r) {
 		return

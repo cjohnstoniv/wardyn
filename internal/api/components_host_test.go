@@ -32,7 +32,11 @@ func TestDestinationOverlaps(t *testing.T) {
 			{ID: "gw", Kind: types.ModelProviderCustomEndpoint, BaseURL: "https://llm.corp.example:8443/v1"},
 			{ID: "br", Kind: types.ModelProviderBedrockBearer, Bedrock: &types.BedrockSettings{Region: "eu-west-1"}},
 		}},
-		EgressRedirects: []types.EgressRedirect{{To: "https://mirror.corp.example:8443/npm/"}},
+		EgressRedirects: []types.EgressRedirect{
+			{To: "https://mirror.corp.example:8443/npm/"},
+			{Ecosystem: "pip", To: "https://pypi.corp.example/simple/"},
+			{From: "https://public.vendor.example/api", To: "relay.corp.example"},
+		},
 	}
 	spec := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{
 		{Kind: types.GrantAPIKey, Scope: json.RawMessage(`{"host":"Api.Vendor.Example","secret_name":"k"}`)},
@@ -76,7 +80,12 @@ func TestDestinationOverlaps(t *testing.T) {
 		"vendor.example": false, "other.vendor.example": false,
 		// A corporate redirect's target, which the redirect reaches on :8443.
 		"mirror.corp.example": true, "mirror.corp.example:443": true,
-		"svc.example": false,
+		// The public hosts a redirect stands in for: an ecosystem's registry
+		// table, a network-only row's From host.
+		"pypi.org": true, "files.pythonhosted.org:8443": true, "pypi.corp.example": true, "*.pythonhosted.org": true,
+		"public.vendor.example": true, "PUBLIC.vendor.example.": true, "relay.corp.example": true,
+		"registry.npmjs.org": false, // no npm redirect is configured here
+		"svc.example":        false,
 	} {
 		if got := b.collides(mustDestination(t, entry)); got != want {
 			t.Errorf("collides(%q) = %v, want %v", entry, got, want)
