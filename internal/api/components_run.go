@@ -57,9 +57,13 @@ type attachedComponent struct {
 	source   string
 	// addedHosts is what this component added to the run's allowed domains.
 	addedHosts []string
-	// needsAdminSecret is set on the policy preview alone, where a secret the
-	// organisation provides and has not stored is a fact to show rather than a
-	// refusal: the other two doors refuse it.
+	// needsOwnSecrets and needsAdminSecret are set on the policy preview alone,
+	// where a secret that is not stored yet is a fact to show rather than a
+	// refusal; the other two doors refuse both. needsOwnSecrets names, in the
+	// definition's order, each secret of their own the caller has still to
+	// store. needsAdminSecret says the organisation has not stored one it
+	// provides — never which: that name is the operator's.
+	needsOwnSecrets  []string
 	needsAdminSecret bool
 }
 
@@ -97,7 +101,8 @@ type componentRefusal struct {
 // component naming it is refused; and before the confinement floor, the
 // model-provider choice and the autonomy grade, which must read the expanded
 // spec. credentials is false on the policy preview alone, which reports a
-// secret the organisation has not provided rather than refusing it.
+// secret that is not stored yet — the caller's own, or one the organisation
+// provides — rather than refusing it.
 //
 // It refuses and names the item, where the member's policy pipeline drops: an
 // inline policy is a wish-list, a component is a selection the person can
@@ -233,7 +238,7 @@ func (s *Server) admitComponent(r *http.Request, adm *componentAdmission, i int,
 	if problem := componentDefinitionProblem(c); problem != "" {
 		return attachedComponent{}, componentRefused(c, i, reasonComponentDefinitionInvalid, problem, "has a definition that is not valid here.")
 	}
-	if refused := s.componentSecretsOwned(r, adm, c, i); refused != nil {
+	if refused := s.componentSecretsOwned(r, adm, &c, i); refused != nil {
 		return attachedComponent{}, refused
 	}
 	if refused := s.componentHostsBounded(r, adm, c, i); refused != nil {
