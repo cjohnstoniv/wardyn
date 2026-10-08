@@ -1174,6 +1174,20 @@ for the source fence and recovery claims. Retain its erased rows with database
 backups; the absence of a run foreign key deliberately preserves the fence after
 run deletion or identifier reuse.
 
+**A limit on how many runs one erasure can cover.** The `run_outputs` and
+`recordings` scopes each take one Postgres advisory lock for every run the person
+created, all in one transaction. Postgres keeps every session's locks in one shared
+table sized from `max_locks_per_transaction` × `max_connections` (64 × 100 by
+default), so a person with more runs than that table can take cannot have either
+scope erased in one call. The order of magnitude is ten thousand runs: on a default
+Postgres 17, 10,000 advisory locks in one transaction succeed and 20,000 fail with
+`out of shared memory` (SQLSTATE 53200). The scope then fails closed and as a whole.
+Its transaction rolls back, so no fence or tombstone is written and no row is
+deleted; the `recordings` scope stops before it deletes any recording; the erasure
+answers `500` `erasure_incomplete`. Nothing is half-erased, and nothing is fenced
+either. A retry fails the same way until `max_locks_per_transaction` is raised,
+which needs a Postgres restart: raise it, then retry the same scopes.
+
 The Postgres fence (migration `0133_recording_erasures`) survives retention and replica/process restarts. The filesystem
 store syncs its `.erased/<key>.cast` marker before deleting casts and the shared-volume `.log` fallback;
 `<run>.lock` files retain their identities so waiting writers use the same lock. Keep these
