@@ -325,5 +325,16 @@
     "host": 1
    }
   }
+ },
+ {
+  "name": "a block scalar indentation indicator",
+  "source": "a: |1\n  x\n  \nb: 1\n",
+  "console": {
+   "error": "Indentation indicators are not allowed: remove the digit after | or >."
+  },
+  "cli": {
+   "a": " x\n \n",
+   "b": 1
+  }
  }
 ]

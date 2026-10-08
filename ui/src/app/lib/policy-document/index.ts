@@ -68,6 +68,12 @@ function structureProblem(tokens: readonly CST.Token[], source: string): [number
     if (!token) continue;
     const level = "items" in token ? depth + 1 : depth;
     if (level > MAX_DEPTH) return [token.offset, TOO_DEEP];
+    // With an explicit indentation indicator yaml.v3 keeps a trailing
+    // whitespace-only line as content (as YAML 1.2 says); yaml here drops it.
+    const header = token.type === "block-scalar" ? token.props.find((prop) => prop.type === "block-scalar-header") : undefined;
+    if (header && "source" in header && /\d/.test(header.source)) {
+      return [header.offset, "Indentation indicators are not allowed: remove the digit after | or >."];
+    }
     if ("value" in token) pending.push([token.value, level]);
     if (!("items" in token)) continue;
     for (const item of token.items) {

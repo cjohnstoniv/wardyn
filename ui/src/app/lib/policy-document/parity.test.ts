@@ -264,3 +264,28 @@ describe("a '?' starting a flow item", () => {
     expect(parsePolicySource(source)).toEqual({ ok: true, value });
   });
 });
+
+// With an explicit indentation indicator, a trailing whitespace-only line is
+// content to gopkg.in/yaml.v3 (as YAML 1.2 says) and dropped here:
+// `a: |1` over " x" and "  " is " x\n" here and " x\n \n" there.
+describe("block scalar indentation indicators", () => {
+  const INDICATOR = "Indentation indicators are not allowed: remove the digit after | or >.";
+
+  it.each([
+    ["a literal with an indicator", "a: |1\n  x\n  \nb: 1", 1, 4],
+    ["a folded scalar with an indicator", "a: >1\n  x", 1, 4],
+    ["an indicator after a chomping indicator", "a: >-1\n  x", 1, 4],
+    ["an indicator before a chomping indicator", "a: |2+\n   x", 1, 4],
+    ["an indicator in a sequence item", "a:\n  - |2\n     x", 2, 5],
+  ])("refuses %s at the header", (_, source, line, column) => {
+    expect(parsePolicySource(source)).toEqual({ ok: false, line, column, message: INDICATOR });
+  });
+
+  it.each<[string, string, unknown]>([
+    ["a literal block", "a: |\n  x\n  y\n", { a: "x\ny\n" }],
+    ["a folded block with chomping", "a: >-\n  x\n  y\n", { a: "x y" }],
+    ["a kept literal block", "a: |+\n  x\n\n", { a: "x\n\n" }],
+  ])("accepts %s", (_, source, value) => {
+    expect(parsePolicySource(source)).toEqual({ ok: true, value });
+  });
+});
