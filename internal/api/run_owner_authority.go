@@ -30,6 +30,12 @@ import (
 // inject, and rebuilds the deployment-wide parts of the proxy config from the
 // current configuration instead of reusing the rendered copy.
 //
+// A run's components are read back from its run_components rows, which outlive
+// the erasure of everything a person typed into them: each row still says
+// whether its component was the owner's own (the custom_component feature) or
+// an organisation's (that component's grant), so the door is re-checked after
+// the content is gone. No rows at all is a run launched without components.
+//
 // Two doors cannot be read back from the run, and are not re-checked: an
 // explicit integration_id (the run row does not record it) and an explicit
 // image (the row cannot tell a member-named image from the convention image
@@ -57,6 +63,14 @@ type ownerRefusal struct {
 // admin's revive, restart or extension of their run needs an allow row for
 // the owner's sub, type or everyone. The owner's own session passes.
 func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun, callerIsOwner bool, repos []string) (*ownerRefusal, error) {
+	// Before either exemption below: a deleted component is gone for everyone.
+	comps, err := s.runComponentSnapshot(ctx, run.ID)
+	if err != nil {
+		return nil, err
+	}
+	if ref, err := s.componentGoneRefusal(ctx, comps); ref != nil || err != nil {
+		return ref, err
+	}
 	if callerIsOwner && s.runUngoverned(ctx) {
 		return nil, nil
 	}
@@ -70,7 +84,7 @@ func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun,
 	if err != nil {
 		return nil, err
 	}
-	for _, d := range persistedLaunchDoors(run, rows) {
+	for _, d := range persistedLaunchDoors(run, rows, comps) {
 		var allowed bool
 		if callerIsOwner {
 			allowed, err = s.capSeamAllowed(ctx, d.kind, d.value)
@@ -108,7 +122,10 @@ func capabilityLostReason(kind string) string {
 		return reasonOwnerCapabilityPolicy
 	case capWorkspaceProvider:
 		return reasonOwnerCapabilityWorkspaceProvider
-	case capComponent:
+	case capComponent, capFeature:
+		// The one feature value a run records is custom_component, the door of
+		// a component its owner defined: either kind is the run's permission to
+		// carry a component.
 		return reasonOwnerCapabilityComponent
 	default:
 		return reasonOwnerCapabilityUnknown
@@ -121,9 +138,14 @@ func capabilityLostReason(kind string) string {
 type door struct{ kind, value, label string }
 
 // persistedLaunchDoors is the launch doors the run row records, rows being the
-// git provider rows of its repos. A legacy row with no model provider or no
-// selected policy adds no door for it.
-func persistedLaunchDoors(run types.AgentRun, rows []types.GitProvider) []door {
+// git provider rows of its repos and comps its component snapshot. A legacy
+// row with no model provider or no selected policy adds no door for it.
+//
+// A component's door is read off the snapshot row and nothing else: an
+// organisation's component needs that component's grant, and any component the
+// owner defined — inline, saved, or erased since, which leaves the row and
+// clears its content — needs the custom_component feature, asked once.
+func persistedLaunchDoors(run types.AgentRun, rows []types.GitProvider, comps []types.RunComponent) []door {
 	var doors []door
 	if run.Agent != "" {
 		doors = append(doors, door{capAgent, run.Agent, run.Agent})
@@ -140,7 +162,68 @@ func persistedLaunchDoors(run types.AgentRun, rows []types.GitProvider) []door {
 	for _, row := range rows {
 		doors = append(doors, door{capWorkspaceProvider, row.ID, "this deployment's " + string(row.Kind) + " provider"})
 	}
+	selfDefined := false
+	for _, c := range comps {
+		switch {
+		case c.SelfDefined:
+			selfDefined = true
+		case c.ComponentID != nil:
+			// Named by what it is, never its id or name: the refusal says
+			// nothing about an organisation's component, as at the attach door.
+			doors = append(doors, door{capComponent, c.ComponentID.String(), "a component your organisation provides"})
+		}
+	}
+	if selfDefined {
+		doors = append(doors, door{capFeature, featureCustomComponent, "custom components"})
+	}
 	return doors
+}
+
+// runComponentSnapshot is the run's component snapshot, erased rows included.
+// Empty for a run launched without components, and on a store that keeps none.
+func (s *Server) runComponentSnapshot(ctx context.Context, runID uuid.UUID) ([]types.RunComponent, error) {
+	st, ok := s.cfg.Store.(store.ComponentStore)
+	if !ok {
+		return nil, nil
+	}
+	comps, err := st.ListRunComponents(ctx, runID)
+	if err != nil {
+		return nil, fmt.Errorf("read the run's components: %w", err)
+	}
+	return comps, nil
+}
+
+// componentGoneRefusal refuses a run that carried an organisation's component
+// which no longer exists. Deleting a component withdraws it: its grant rows
+// say nothing any more, so the capability re-check alone could read a deleted
+// component's door as open, and the revived proxy would carry its hosts and
+// the credential the organisation provided for it again. Asked of every
+// caller, the owner's own admin session included.
+func (s *Server) componentGoneRefusal(ctx context.Context, comps []types.RunComponent) (*ownerRefusal, error) {
+	st, ok := s.cfg.Store.(store.ComponentStore)
+	if !ok {
+		return nil, nil
+	}
+	gone := &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerComponentGone,
+		msg: "a component this run was launched with no longer exists; start a new run"}
+	for _, c := range comps {
+		if c.SelfDefined {
+			continue
+		}
+		// An organisation's row always names its component; one that does not
+		// names nothing that could still exist.
+		if c.ComponentID == nil {
+			return gone, nil
+		}
+		_, err := st.GetComponent(ctx, *c.ComponentID, "")
+		if errors.Is(err, store.ErrNotFound) {
+			return gone, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read the run's component: %w", err)
+		}
+	}
+	return nil, nil
 }
 
 // ownerProviderRows is the git provider rows repos resolve to, as the
@@ -277,17 +360,37 @@ func (s *Server) modelCredentialRefusal(ctx context.Context, run types.AgentRun,
 		}
 		var scope struct {
 			SecretName string `json:"secret_name"`
+			Shared     bool   `json:"shared"`
 		}
 		if err := json.Unmarshal(g.Spec.Scope, &scope); err != nil || scope.SecretName == "" {
 			continue
 		}
-		present, err := s.secretPresentFor(ctx, runIdentitySubject(ctx, run.CreatedBy), scope.SecretName)
+		// The check looks where the sink reads the grant, and names the
+		// secret only where the name is the owner's own to know. A shared
+		// grant is read from the operator's namespace alone, and what the
+		// organisation's secret is called is the operator's. An owner_only
+		// grant is read from the owner's namespace alone, and is theirs. Any
+		// other grant on a person's run may be answered by the operator's
+		// row, so its refusal names the host and not the secret.
+		subject := runIdentitySubject(ctx, run.CreatedBy)
+		namespaces := []string{subject, ""}
+		gone := fmt.Sprintf("the credential this run injects for %s no longer exists; start a new run", in.Host)
+		switch {
+		case scope.Shared:
+			namespaces = []string{""}
+			gone = fmt.Sprintf("the credential your organisation provides for %s on this run no longer exists; ask your admin, then start a new run", in.Host)
+		case g.Spec.OwnerOnly:
+			namespaces = []string{grantReadOwner(subject, true, run.OperatorOwned)}
+			fallthrough
+		case run.OperatorOwned:
+			gone = fmt.Sprintf("the credential this run injects for %s (secret %s) no longer exists; start a new run", in.Host, scope.SecretName)
+		}
+		present, err := s.secretPresentIn(ctx, namespaces, scope.SecretName)
 		if err != nil {
 			return nil, err
 		}
 		if !present {
-			return &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerModelCredentialErased, msg: fmt.Sprintf(
-				"the credential this run injects for %s (secret %s) no longer exists; start a new run", in.Host, scope.SecretName)}, nil
+			return &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerModelCredentialErased, msg: gone}, nil
 		}
 		if sc == nil {
 			got, err := s.cfg.Store.GetSiteConfig(ctx)
@@ -345,13 +448,13 @@ func (s *Server) modelProviderRefusal(ctx context.Context, run types.AgentRun) (
 	return nil, nil
 }
 
-// secretPresentFor reports whether name exists in owner's namespace or the
-// operator's. A store that cannot list is an error, never "present".
-func (s *Server) secretPresentFor(ctx context.Context, owner, name string) (bool, error) {
+// secretPresentIn reports whether name exists in any of namespaces ("" is the
+// operator's). A store that cannot list is an error, never "present".
+func (s *Server) secretPresentIn(ctx context.Context, namespaces []string, name string) (bool, error) {
 	if s.cfg.Secrets == nil {
 		return false, errors.New("no secret store configured")
 	}
-	for _, ns := range []string{owner, ""} {
+	for _, ns := range namespaces {
 		names, err := s.cfg.Secrets.For(ns).List(ctx)
 		if err != nil && !errors.Is(err, secretstore.ErrNotFound) {
 			return false, fmt.Errorf("list secrets: %w", err)
@@ -429,6 +532,7 @@ func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg
 		if rerr := s.stripRevivedModelInjections(ctx, run, cfg); rerr != nil {
 			return rerr
 		}
+		s.pruneUnpairedInterception(cfg)
 		ref, err = s.modelCredentialRefusal(ctx, run, cfg)
 	}
 	if err == nil && ref == nil {

@@ -25,6 +25,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Migration `0137_run_components` adds `run_components`, the components each run launched with. Erasing
   a person clears the content of their rows and keeps a content-free row as the run's authorization
   record; preserve these rows with backups and grant the app role `SELECT, INSERT, UPDATE`.
+- A run with two credentials bound to one host is now refused (422 `credential_host_collision` at
+  `POST /runs`, its Review and the policy preview): two `api_key` grants for one host in a policy, or a
+  policy credential on a host that a token-bearing redirect, the Azure DevOps lane or a `git_pat` API
+  grant also credentials. Before, the proxy kept whichever rule it was handed last.
+- On a run that uses the per-person Azure DevOps lane, a redirect whose target is an Azure DevOps host
+  (a package feed on `pkgs.dev.azure.com`, for example) is served with the person's own token, not the
+  redirect's: the redirect still applies, without its token. Runs that do not use the lane keep the
+  redirect's token.
 
 ### Added
 

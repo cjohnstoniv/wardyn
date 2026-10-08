@@ -105,6 +105,9 @@ type dispatchParams struct {
 	// runs inline in the create request, so the snapshot has no staleness window
 	// to be stale in. See user_drives_run.go.
 	Drive *types.DriveMount
+	// Components is the dispatch half of the run's components, from the gate's
+	// decision at create (runs_dispatch_components.go). Zero for every other lane.
+	Components componentDispatch
 }
 
 // dispatchRun launches the sandbox via the runner and advances run state. On any
@@ -336,6 +339,18 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// unreadable roster, needlessly harsh for one dropped pool connection.
 	siteCfg, siteCfgErr := s.siteConfigForDispatch(ctx)
 
+	// THE PER-PERSON AZURE DEVOPS LANE, decided from the roster this dispatch
+	// already read and the run's own repositories (resolveADOEntraRun). Decided
+	// HERE, ahead of the redirect plan, which leaves a lane host's credential to
+	// the lane (laneCarriesHost), and of the LLM phase, where the per-run CA this
+	// lane cannot run without is minted; it is AUTHORED after both.
+	// A failed site-config read decides nothing — no row, no lane.
+	var adoRun adoEntraRun
+	var adoInject bool
+	if siteCfgErr == nil {
+		adoRun, adoInject = resolveADOEntraRun(siteCfg, repoLocatorsOf(policy.WorkspaceRepos), runIdentitySubject(ctx, run.CreatedBy))
+	}
+
 	var artifactPlan artifactRedirectPlan
 	if siteCfgErr == nil {
 		// Capture the run's PRE-substitution egress: it decides which redirects are
@@ -347,7 +362,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// cannot keep reaching the public host the operator redirected away
 		// (GAP-EGRESS-4); deny beats allow-all in the proxy's evaluator.
 		policy.DeniedDomains = appendNetworkRedirectDenials(policy.DeniedDomains, siteCfg)
-		artifactPlan = s.planArtifactRedirect(ctx, run, siteCfg, preDomains)
+		artifactPlan = s.planArtifactRedirect(ctx, run, siteCfg, preDomains, resolvedLaneHosts(adoRun, adoInject))
 		for k, v := range artifactPlan.env {
 			sandboxEnv[k] = v
 		}
@@ -356,17 +371,6 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		}
 	}
 	artifactInject := len(artifactPlan.injections) > 0
-
-	// THE PER-PERSON AZURE DEVOPS LANE, decided from the roster this dispatch
-	// already read and the run's own repositories (resolveADOEntraRun). Decided
-	// HERE, ahead of the LLM phase, only because that phase is where the per-run
-	// CA is minted and this lane cannot run without one; it is AUTHORED after it.
-	// A failed site-config read decides nothing — no row, no lane.
-	var adoRun adoEntraRun
-	var adoInject bool
-	if siteCfgErr == nil {
-		adoRun, adoInject = resolveADOEntraRun(siteCfg, repoLocatorsOf(policy.WorkspaceRepos), runIdentitySubject(ctx, run.CreatedBy))
-	}
 
 	// LLM transport resolution (precedence: host-staged subscription > managed >
 	// Bedrock > api-key gateway): sets the sandbox auth env (+ the codex-cli
@@ -432,7 +436,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordRunDiskCap(ctx, run.ID, policy.Resources)
 	// Record the reservation the driver will apply (best-effort, like the disk cap above).
 	s.recordRunSizing(ctx, run.ID, resourceLimitsToRunner(policy.Resources))
-	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts)
+	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
@@ -454,6 +458,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// p.ExtraEnv and the model provider arm's auth vars) so its refusal to overwrite
 	// an already-set variable covers every platform-authored key, not just the
 	// ones written above it. See resolveEnvSecretGrants.
+	s.applyComponentConfigEnv(ctx, run, p.Components.Config, sandboxEnv)
 	secretEnvKeys := s.resolveEnvSecretGrants(ctx, run, policy, sandboxEnv)
 
 	// Split the composed environment into its non-secret and credential-bearing
@@ -464,8 +469,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	resources := resourceLimitsToRunner(policy.Resources)
 	resources.DiskMiBFilled = diskFilled
 	// The git_pat allowlist AFTER the ceiling re-assertion narrowed p.GitPATGrants,
-	// with each narrowed grant's scope read from its stored row.
-	patGrants, ok := s.scopedPATGrants(ctx, run, p, grantRows)
+	// with each narrowed grant's scope read from its stored row — and, with every
+	// credential now authored, the one-credential-per-host re-check.
+	patGrants, ok := s.settleCredentialHosts(ctx, run, &p, policy, siteCfg, grantRows, injections)
 	if !ok {
 		return
 	}
@@ -509,7 +515,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// TLS-MITM (beyond the built-in LLM hosts) so a registry token injects on
 			// the wire. Only hosts with a resolved token injection appear here — a
 			// tight per-host allowlist, never a blanket. See isMITMHost widening.
-			MITMHosts: slices.Concat(artifactPlan.mitmHosts, plan.bedrockMITMHosts, ado.mitmHosts, plan.azure.mitmHosts),
+			MITMHosts: slices.Concat(artifactPlan.mitmHosts, plan.bedrockMITMHosts, ado.mitmHosts, plan.azure.mitmHosts, p.Components.MITMHosts),
 			// MITM the BUILT-IN LLM hosts only when that's actually intended for this
 			// run — subscription OAuth injection or intercept_tls content inspection.
 			// The CA above may also be minted purely for artifact-token injection, so

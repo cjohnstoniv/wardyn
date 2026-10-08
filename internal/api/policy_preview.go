@@ -67,7 +67,13 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	if _, refusal = s.unionDirectGitHubEgress(r, req, &spec, ceiling); refusal.write(s, w, r) {
 		return
 	}
-	if _, err := enforcedConfinement(spec, reqCC, nil); err != nil {
+	// false: the preview reports a secret that is not stored yet rather than
+	// refusing it; every other bound is launch's.
+	comps, refusal := s.applyRunComponents(r, req, &spec, ceiling, wsRefs, false)
+	if refusal.write(s, w, r) {
+		return
+	}
+	if _, err := enforcedConfinement(confinementFloorSpec(spec, comps), reqCC, nil); err != nil {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return
 	}

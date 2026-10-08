@@ -49,8 +49,9 @@ const (
 
 // ComponentFileDelivery says whether this build can deliver a secret as a
 // file. While false, Validate refuses the mode, so no definition can promise a
-// delivery nothing performs. The change that adds the file lane sets it true.
-const ComponentFileDelivery = false
+// delivery nothing performs. True since the file lane exists (the file_secret
+// grant and its dispatch).
+const ComponentFileDelivery = true
 
 // Bounds on one definition and on one run's attachments.
 const (
@@ -354,7 +355,56 @@ func validComponentEnvName(name string) error {
 	if strings.HasPrefix(name, "WARDYN_") {
 		return fmt.Errorf("%q is reserved: WARDYN_* configures the sandbox itself", name)
 	}
+	if reservedComponentEnvName(name) {
+		return fmt.Errorf("%q is reserved: it decides how programs in the sandbox start, or how they reach the network, and a component may not set it", name)
+	}
 	return nil
+}
+
+// reservedComponentEnvNames and reservedComponentEnvPrefixes are the variables
+// no component may set, an organisation's or a person's, as a config key or as
+// the variable a secret is delivered in. One closed list.
+//
+// The agent, the recorder that wraps it and the hold on its tool calls all
+// start INSIDE the sandbox, under the environment dispatch composes. A
+// variable that decides which program a name resolves to, what a runtime loads
+// before its own code, or where a shell reads its startup from would let
+// whoever wrote the component run their own code in those processes before
+// the first held call. The proxy and trust variables are here for a plainer
+// reason: Wardyn sets them, so a component's value would be dropped at
+// dispatch, and refusing by name says so when the component is written.
+var reservedComponentEnvNames = map[string]bool{
+	// Which program runs, and where a shell or a session starts from.
+	"PATH": true, "HOME": true, "SHELL": true, "BASH_ENV": true, "ENV": true, "PROMPT_COMMAND": true,
+	// What a language runtime loads before the program's own code.
+	"NODE_OPTIONS": true, "NODE_PATH": true,
+	"PYTHONPATH": true, "PYTHONHOME": true, "PYTHONSTARTUP": true,
+	"PERL5OPT": true, "PERL5LIB": true, "RUBYOPT": true, "RUBYLIB": true,
+	// The helpers git runs, and the agent's own configuration directory.
+	"GIT_EXEC_PATH": true, "GIT_SSH": true, "GIT_SSH_COMMAND": true, "GIT_PROXY_COMMAND": true,
+	"CLAUDE_CONFIG_DIR": true,
+	// The route to the proxy and the trust Wardyn installs for it.
+	"HTTP_PROXY": true, "HTTPS_PROXY": true, "ALL_PROXY": true, "NO_PROXY": true,
+	"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "REQUESTS_CA_BUNDLE": true, "CURL_CA_BUNDLE": true,
+	"NODE_EXTRA_CA_CERTS": true, "GIT_SSL_CAINFO": true, "GIT_SSL_NO_VERIFY": true,
+}
+
+// The dynamic loader's variables, git's injected configuration, and the
+// agent's own switches. WARDYN_ is refused beside them, with its own sentence.
+var reservedComponentEnvPrefixes = []string{"LD_", "GIT_CONFIG_", "CLAUDE_CODE_"}
+
+// reservedComponentEnvName reports whether name is one a component may not
+// set (WARDYN_* aside, which validComponentEnvName refuses first).
+func reservedComponentEnvName(name string) bool {
+	if reservedComponentEnvNames[name] {
+		return true
+	}
+	for _, p := range reservedComponentEnvPrefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidComponentName checks a component's display name: 1 to
