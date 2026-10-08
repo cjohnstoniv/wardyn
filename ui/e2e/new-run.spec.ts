@@ -20,7 +20,7 @@
 // ai_provider integration now (console-agents, 0.7.3: a Bedrock region+model
 // are configured for the roster-pin e2e), so the model-provider warning
 // below is unconditionally absent, not merely an environment fact.
-import { test, expect, gotoConsole, ADMIN_TOKEN, launchRun } from "./fixtures";
+import { test, expect, gotoConsole, ADMIN_TOKEN, launchRun, goToNewRunPanel } from "./fixtures";
 import { NO_BARRIER, RAIL, RAIL_CREDENTIAL, RAIL_PROVIDER, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
 import { MODEL_ACCESS_BANNER } from "../src/app/components/wardyn/model-access-copy";
 import { CC_META } from "../src/app/components/wardyn/cc-meta";
@@ -37,6 +37,28 @@ import type { ConfinementClass } from "../src/app/lib/types";
 // exists nowhere, so that one is still spelled out, to be asserted absent.
 const OLD_UNCONDITIONAL_CREDENTIAL_LINE =
   "Minted at launch, injected by the proxy. Never written into the sandbox.";
+
+// The New Run rail: the one complementary region named for what it answers.
+const rail = (page: Page) => page.getByRole("complementary", { name: "What this run can do" });
+
+// Launch is on screen from every panel at this viewport height, scrolled to if
+// the rail is taller than what is left of it. `lg:sticky lg:top-6` only
+// settles the rail once the PAGE has scrolled past that offset, so the page is
+// scrolled first, as a person filling in a long panel already would have.
+async function expectLaunchReachable(page: Page, height: number) {
+  const launch = page.getByRole("button", { name: "Launch run" });
+  for (const panel of ["run", "workspace", "access", "policy"] as const) {
+    await goToNewRunPanel(page, panel);
+    await page.mouse.wheel(0, 400);
+    await expect(launch).toBeVisible();
+    await launch.scrollIntoViewIfNeeded();
+    const box = await launch.boundingBox();
+    expect(box, `Launch run boundingBox on ${panel}`).not.toBeNull();
+    expect(box!.y, `Launch run top edge on ${panel}`).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height, `Launch run bottom edge on ${panel}`).toBeLessThanOrEqual(height);
+  }
+  await goToNewRunPanel(page, "run");
+}
 
 async function openNewRun(page: Page) {
   await gotoConsole(page);
@@ -87,6 +109,7 @@ test.describe("New run — one page", () => {
     const spec = page.getByLabel("Spec (JSON)");
 
     // Opens on the Minimal template: one host, a review rule, a CC2 floor.
+    await goToNewRunPanel(page, "policy");
     await expect(spec).toHaveValue(/"api\.anthropic\.com"/);
     await expect(page.getByText("Valid JSON")).toBeVisible();
     await expect(page.getByText("1 domain allowed")).toBeVisible();
@@ -97,8 +120,10 @@ test.describe("New run — one page", () => {
 
     // A broken document says so instead of deriving from nothing, and Launch
     // stops rather than posting a body nobody can read.
+    await goToNewRunPanel(page, "run");
     await page.getByLabel("Title").fill("e2e smoke");
     await expect(page.getByRole("button", { name: "Launch run" })).toBeEnabled();
+    await goToNewRunPanel(page, "policy");
     await spec.fill("{ not json");
     await expect(page.getByText(/Invalid JSON/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Launch run" })).toBeDisabled();
@@ -110,6 +135,7 @@ test.describe("New run — one page", () => {
   // now, named for what it actually does.
   test("the allow-all template says block-list only, never 'unrestricted'", async ({ page }) => {
     await openNewRun(page);
+    await goToNewRunPanel(page, "policy");
     await page.getByRole("button", { name: "Allow-all — observe first" }).click();
 
     await expect(page.getByLabel("Spec (JSON)")).toHaveValue(/"allow_all_egress": true/);
@@ -123,6 +149,7 @@ test.describe("New run — one page", () => {
     await openNewRun(page);
     const spec = page.getByLabel("Spec (JSON)");
 
+    await goToNewRunPanel(page, "policy");
     await page.getByRole("button", { name: "Insert denied_domains" }).click();
     await expect(spec).toHaveValue(/"denied_domains"/);
     // A deny beats an allow in both egress modes, so it is counted separately.
@@ -137,6 +164,9 @@ test.describe("New run — one page", () => {
   // the page is merged into a stored spec.
   test("the mode row swaps the editor for the saved-policy picker", async ({ page }) => {
     await openNewRun(page);
+    // The required title first: the line above Launch names one issue at a time.
+    await page.getByLabel("Title").fill("e2e saved mode");
+    await goToNewRunPanel(page, "policy");
     await expect(page.getByLabel("Spec (JSON)")).toBeVisible();
 
     await page.getByRole("button", { name: /Reuse a saved policy/ }).click();
@@ -157,14 +187,71 @@ test.describe("New run — one page", () => {
   // or fail on who ran it. It is pinned in new-run-screen.test.tsx instead,
   // where the SetupStatus is controlled.
 
-  // #1197 L2: a title is no longer required to launch — the server never
-  // enforced one, only this screen did, and now the console default derives
-  // one from the task instead of refusing to launch without one.
-  test("Launch does not require a title", async ({ page }) => {
+  // #1922: a title is required. A fresh form (interactive, no prompt) has
+  // nothing to derive one from, so Launch waits and says so once, as a link
+  // that puts focus on the field from whichever panel is on screen.
+  test("Launch requires a title, and says so with a link to the field", async ({ page }) => {
     await openNewRun(page);
     const launch = page.getByRole("button", { name: "Launch run" });
+    const title = page.getByLabel("Title");
+    await expect(title).toBeFocused();
+    await expect(launch).toBeDisabled();
+    await expect(title).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByRole("navigation", { name: "New run" }).getByRole("button", { name: "Run 1 issue" })).toBeVisible();
+
+    await goToNewRunPanel(page, "policy");
+    await page.getByRole("button", { name: "Give this run a title." }).click();
+    await expect(title).toBeFocused();
+
+    await title.fill("e2e required title");
     await expect(launch).toBeEnabled();
     await expect(page.getByText("Give this run a title.")).toHaveCount(0);
+  });
+
+  // The title is prefilled, visibly and editably, from the first line of the
+  // Command, and Command is one line: Enter neither launches nor adds a line.
+  test("Command is a single-line input whose first line prefills the title", async ({ page }) => {
+    await openNewRun(page);
+    await page.getByRole("radio", { name: "Shell command" }).click();
+    const command = page.getByLabel("Command");
+    await expect(command).toHaveJSProperty("tagName", "INPUT");
+    await command.fill("make test");
+    await command.press("Enter");
+    await expect(command).toHaveValue("make test");
+    await expect(page).toHaveURL(/\/runs\/new$/);
+    await expect(page.getByLabel("Title")).toHaveValue("make test");
+    await expect(page.getByRole("button", { name: "Launch run" })).toBeEnabled();
+
+    // A Task typed for an agent is its own value, never the command.
+    await page.getByRole("radio", { name: "Agent task" }).click();
+    await page.getByRole("radio", { name: /^Autonomous/ }).click();
+    await expect(page.getByLabel("Task")).toHaveValue("");
+  });
+
+  // #1920: Esc leaves an untouched form at once and asks before leaving a
+  // dirty one; the ghost Runs button goes through the same guard.
+  test("Esc and Runs ask before leaving a dirty form, and leave an untouched one", async ({ page }) => {
+    await openNewRun(page);
+    await page.getByLabel("Title").fill("e2e dirty leave");
+    await page.keyboard.press("Escape");
+    const dialog = page.getByRole("alertdialog", { name: "Leave without saving?" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Keep editing" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page).toHaveURL(/\/runs\/new$/);
+    await expect(page.getByLabel("Title")).toHaveValue("e2e dirty leave");
+
+    await page.getByRole("button", { name: "Runs", exact: true }).click();
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Discard changes" }).click();
+    await expect(page).toHaveURL(/\/runs$/);
+
+    // Untouched — moving between panels is not a change.
+    await page.getByRole("button", { name: "New run" }).click();
+    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await goToNewRunPanel(page, "workspace");
+    await page.keyboard.press("Escape");
+    await expect(page).toHaveURL(/\/runs$/);
   });
 
   test("launching creates a run and lands on its detail page", async ({ page }) => {
@@ -198,13 +285,13 @@ test.describe("New run — no barrier can be built (#214)", () => {
     });
   }
 
-  test("the Barrier control lives in its own section, above Policy", async ({ page }) => {
+  test("the Barrier control leads the Policy panel, above the policy modes", async ({ page }) => {
     await openNewRun(page);
-    const barrierSection = page.getByRole("heading", { name: "Barrier", exact: true }).locator("..").locator("..");
-    await expect(barrierSection.getByRole("radiogroup", { name: "Barrier tier" })).toBeVisible();
-    // Not inside the Policy card any more.
-    const policySection = page.getByRole("heading", { name: "Policy", exact: true }).locator("..").locator("..");
-    await expect(policySection.getByRole("radiogroup")).toHaveCount(0);
+    await goToNewRunPanel(page, "policy");
+    const barrier = page.getByRole("radiogroup", { name: "Barrier tier" });
+    await expect(barrier).toBeVisible();
+    const modes = page.getByRole("button", { name: /^Custom policy/ });
+    expect((await barrier.boundingBox())!.y).toBeLessThan((await modes.boundingBox())!.y);
   });
 
   test("disables Launch with its reason beside it and a route to the Environment step", async ({ page }) => {
@@ -279,6 +366,7 @@ test.describe("New run — Preflight sends the body Launch sends", () => {
     await openNewRun(page);
     await page.getByLabel("Title").fill("e2e preflight parity");
 
+    await goToNewRunPanel(page, "policy");
     await page.getByRole("button", { name: /^Check again$/ }).click();
     await expect(page.getByTestId("preflight-result")).toBeVisible();
 
@@ -303,8 +391,10 @@ test.describe("New run — Use the default policy", () => {
       }
     });
     await openNewRun(page);
+    await goToNewRunPanel(page, "policy");
     await page.getByRole("button", { name: /^Use the default policy/ }).click();
     await expect(page.getByLabel("Spec (JSON)")).toHaveCount(0);
+    await goToNewRunPanel(page, "run");
     await page.getByLabel("Title").fill("e2e default policy");
     await launchRun(page);
 
@@ -363,13 +453,15 @@ test.describe("New run — clone from a killed run", () => {
     await expect(page.getByRole("combobox", { name: "Agent" })).toHaveText(/Claude Code/);
     // Barrier carried — the run's own confinement_class, whatever it is.
     const barrierLabel = CC_META[source.confinement_class as ConfinementClass].label;
+    await goToNewRunPanel(page, "policy");
     await expect(
       page.getByRole("radiogroup", { name: "Barrier" }).getByRole("radio", { name: barrierLabel }),
     ).toHaveAttribute("aria-checked", "true");
 
     // Title does NOT clone verbatim (fixture 7 was seeded untitled) — but
-    // #1197 L2's prefill fills it from the cloned task, so Launch is already
-    // enabled with no title of the operator's own typed yet.
+    // #1197 L2's prefill fills it from the cloned task, so the required title
+    // is already there and Launch is enabled with none typed by hand.
+    await goToNewRunPanel(page, "run");
     const launch = page.getByRole("button", { name: "Launch run" });
     await expect(page.getByLabel("Title")).toHaveValue(source.task);
     await expect(launch).toBeEnabled();
@@ -412,10 +504,26 @@ test.describe("New run — workspace-card 'not an enabled provider' state", () =
     await page.getByRole("button", { name: "New run" }).click();
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
 
+    await goToNewRunPanel(page, "workspace");
     await page.getByRole("combobox").filter({ hasText: /Ephemeral scratch/ }).click();
     await page.getByRole("option", { name: "payments" }).click();
 
-    await expect(page.getByText(PROVIDERS.CARD_NOT_ADMITTED)).toBeVisible();
+    // An issue (#1922): error tone beside the Select, counted on the panel's
+    // nav button, and it holds Launch.
+    const note = page.getByText(PROVIDERS.CARD_NOT_ADMITTED);
+    await expect(note).toBeVisible();
+    await expect(note).toHaveClass(/text-danger/);
+    await expect(page.locator("#nr-workspace")).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByRole("navigation", { name: "New run" }).getByRole("button", { name: /^Workspace 1 issue/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Launch run" })).toBeDisabled();
+
+    // From another panel it is named above Launch instead — once — and the
+    // link leads back to the Select.
+    await goToNewRunPanel(page, "run");
+    await page.getByLabel("Title").fill("e2e not admitted");
+    await expect(page.getByText(PROVIDERS.CARD_NOT_ADMITTED)).toHaveCount(1);
+    await page.getByRole("button", { name: PROVIDERS.CARD_NOT_ADMITTED }).click();
+    await expect(page.locator("#nr-workspace")).toBeFocused();
   });
 });
 
@@ -509,13 +617,16 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
     await expect(page.getByText(/Bounded by "Contractor ceiling"/)).toBeVisible();
 
     // Switch to the Saved-policy lane and pick the tool_rules-bearing policy.
+    await goToNewRunPanel(page, "policy");
     await page.getByRole("button", { name: /^Reuse a saved policy/ }).click();
     await page.getByRole("combobox", { name: "Saved policy" }).click();
     await page.getByRole("option", { name: "e2e rail-height policy" }).click();
     await expect(page.getByText("Tool rules", { exact: true })).toBeVisible();
-    // A title isn't required to launch (#1197 L2) — filled anyway so the rail
-    // this test measures matches what an operator actually fills in.
+    await goToNewRunPanel(page, "run");
     await page.getByLabel("Title").fill("e2e rail-height");
+    // Re-derived for the four-panel layout (#1922): Launch is reachable from
+    // every panel, with the whole rail showing.
+    await expectLaunchReachable(page, 650);
 
     // Reachable via scroll — not "fits with no scroll needed" (the rail is
     // legitimately taller than the viewport here; that's what
@@ -626,8 +737,8 @@ test.describe("New run rail — credentials and recording are read, not asserted
       // Nothing is clicked: the state every person is in at the decision point,
       // and the state the old copy answered with "never written into the sandbox".
       await expect(page.getByTestId("preflight-result")).toHaveCount(0);
-      await expect(page.getByText(RAIL_PROVIDER.STATIC(E2E_PROVIDER.name), { exact: true })).toBeVisible();
-      await expect(page.getByText(RAIL_CREDENTIAL.PROXY, { exact: true })).toBeVisible();
+      await expect(rail(page).getByText(RAIL_PROVIDER.STATIC(E2E_PROVIDER.name), { exact: true })).toBeVisible();
+      await expect(rail(page).getByText(RAIL_CREDENTIAL.PROXY, { exact: true })).toBeVisible();
       await expect(page.getByText(RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT)).toHaveCount(0);
       await expect(
         page.getByText(recordingOff ? RECORDING_DISABLED_TITLE : RAIL_RECORDING_ON, { exact: true }),
@@ -660,6 +771,7 @@ test.describe("New run rail — credentials and recording are read, not asserted
 
     await openNewRun(page);
     await expect(page.getByText(RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT, { exact: true })).toBeVisible();
+    await goToNewRunPanel(page, "policy");
     await page.getByRole("button", { name: "Check again" }).click();
     await expect(page.getByTestId("preflight-result")).toBeVisible();
     await expect(page.getByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH, { exact: true })).toBeVisible();
@@ -692,33 +804,65 @@ test.describe("New run rail — credentials and recording are read, not asserted
     await bedrockProviderStatus(page);
 
     await openNewRun(page);
-    await expect(page.getByText(RAIL_PROVIDER.STATIC(E2E_BEDROCK.name), { exact: true })).toBeVisible();
-    await expect(page.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK, { exact: true })).toBeVisible();
-    await expect(
-      page.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER, { exact: true }),
-    ).toBeVisible();
+    // The rail's Credentials summary; the Run panel's picker states the same
+    // two facts beside the control that chooses the provider.
+    await expect(rail(page).getByText(RAIL_PROVIDER.STATIC(E2E_BEDROCK.name), { exact: true })).toBeVisible();
+    await expect(rail(page).getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK, { exact: true })).toBeVisible();
+    // #1922: the "Per-person AWS sign-in" chip is removed from both.
+    await expect(page.getByText("Per-person AWS sign-in", { exact: true })).toHaveCount(0);
     await expect(page.getByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH)).toHaveCount(0);
   });
 
   // Under a Bedrock SSO provider the rail's provider section (the provider
-  // line above the residency sentence and chip) once pushed Launch about 25px
-  // below a 1280x650 viewport, out of scroll reach. The launch panel split out
-  // of new-run-screen.tsx (#1360) keeps it reachable; this pins that.
+  // line above the residency sentence) once pushed Launch about 25px below a
+  // 1280x650 viewport, out of scroll reach. Re-derived for the four-panel
+  // layout (#1922): reachable from every panel.
   test("under a Bedrock SSO provider, Launch stays reachable at 1280x650", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 650 });
     await bedrockProviderStatus(page);
 
     await openNewRun(page);
-    await expect(page.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER, { exact: true })).toBeVisible();
+    await expect(rail(page).getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK, { exact: true })).toBeVisible();
     await page.getByLabel("Title").fill("e2e rail residency");
-    await page.mouse.wheel(0, 400);
-    const launch = page.getByRole("button", { name: "Launch run" });
-    await launch.scrollIntoViewIfNeeded();
-    const box = await launch.boundingBox();
-    expect(box, "Launch run boundingBox").not.toBeNull();
-    expect(box!.y, "Launch run top edge").toBeGreaterThanOrEqual(0);
-    expect(box!.y + box!.height, "Launch run bottom edge").toBeLessThanOrEqual(650);
+    await expectLaunchReachable(page, 650);
   });
+
+  // Below lg the rail is the page's footer: one rail and one Launch, on screen
+  // from every panel without horizontal scroll, the sections behind a toggle.
+  for (const size of [
+    { width: 390, height: 844 },
+    { width: 320, height: 568 },
+  ]) {
+    test(`at ${size.width}x${size.height} the footer keeps Launch on screen from every panel`, async ({ page }) => {
+      await bedrockProviderStatus(page);
+      // Opened at the default size (the shell's own nav needs it), then narrowed.
+      await openNewRun(page);
+      await page.setViewportSize(size);
+      await expect(rail(page)).toHaveCount(1);
+      await expect(page.getByRole("button", { name: "Launch run" })).toHaveCount(1);
+
+      const toggle = rail(page).getByRole("button", { name: "What this run can do" });
+      await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      await expect(rail(page).getByText("Barrier", { exact: true })).toBeHidden();
+      for (const panel of ["run", "workspace", "access", "policy"] as const) {
+        await goToNewRunPanel(page, panel);
+        const box = (await page.getByRole("button", { name: "Launch run" }).boundingBox())!;
+        expect(box.y, `Launch top edge on ${panel}`).toBeGreaterThanOrEqual(0);
+        expect(box.y + box.height, `Launch bottom edge on ${panel}`).toBeLessThanOrEqual(size.height);
+        const fits = await page.locator("#main-content").evaluate((main) => main.scrollWidth <= main.clientWidth);
+        expect(fits, `no horizontal scroll on ${panel}`).toBe(true);
+      }
+
+      // Expanding shows the summary above the decision block, keeps focus on
+      // the toggle, and leaves Launch on screen.
+      await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-expanded", "true");
+      await expect(toggle).toBeFocused();
+      await expect(rail(page).getByText("Barrier", { exact: true })).toBeVisible();
+      const open = (await page.getByRole("button", { name: "Launch run" }).boundingBox())!;
+      expect(open.y + open.height, "Launch bottom edge, summary open").toBeLessThanOrEqual(size.height);
+    });
+  }
 
   // The launch door: create's 422 lands untruncated in the rail (launch.error),
   // and one carrying reason model_credential opens the door of the provider it
@@ -811,6 +955,7 @@ test.describe("New run rail — the Autonomy section (#93/#96)", () => {
     // prevent: reading bound_by[0] alone would drop confinement_cc1 here.
     await mockPreflightAutonomy(page, ["secrets_powerful", "confinement_cc1"]);
     await openNewRun(page);
+    await goToNewRunPanel(page, "policy");
     await page.getByRole("button", { name: "Check again" }).click();
     await expect(page.getByTestId("preflight-result")).toBeVisible();
 
@@ -824,6 +969,7 @@ test.describe("New run rail — the Autonomy section (#93/#96)", () => {
     page,
   }) => {
     await openNewRun(page);
+    await goToNewRunPanel(page, "policy");
     await page.getByRole("button", { name: "Check again" }).click();
     await expect(page.getByTestId("preflight-result")).toBeVisible();
     await expect(page.getByText(AUTONOMY_RAIL.HEADING, { exact: true })).toBeVisible();
@@ -848,6 +994,7 @@ test.describe("New run rail — namespace quota sentences (P7)", () => {
       route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ error: breach, reason: "namespace_quota_exceeded" }) }),
     );
     await openNewRun(page);
+    await goToNewRunPanel(page, "policy");
     await page.getByRole("button", { name: "Check again" }).click();
     await expect(page.getByRole("alert")).toContainText(breach);
     await expect(page.getByTestId("preflight-result")).toHaveCount(0);
@@ -873,6 +1020,7 @@ test.describe("New run rail — namespace quota sentences (P7)", () => {
       await route.fulfill({ response, json });
     });
     await openNewRun(page);
+    await goToNewRunPanel(page, "policy");
     await page.getByRole("button", { name: "Check again" }).click();
     const result = page.getByTestId("preflight-result");
     await expect(result.getByRole("listitem").filter({ hasText: nearFull })).toHaveCount(1);
