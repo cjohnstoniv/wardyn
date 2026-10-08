@@ -11,10 +11,14 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -129,11 +133,86 @@ func TestPG_PersonErasure_ComponentsScope(t *testing.T) {
 	}
 }
 
-// A8: a components-only erasure, then the feature denied, must leave a revived run refused. The
-// erasure half is TestPG_PersonErasure_ComponentsScope; the revive half needs the C7 lane's re-check of
-// a run's component rows, which this branch does not have.
+// A8 (ADDENDA A23): a components-only erasure, then the custom-component feature denied, must leave a
+// lost run's revive refused. The erasure half is TestPG_PersonErasure_ComponentsScope; the refusal
+// is C7's re-check of the doors the run_components rows record, which this branch does not have. The
+// body is complete so that C7 enables it by deleting the Skip line and nothing else.
+//
+// C7 swaps: the want-reason literal for reasonOwnerCapabilityComponent (that constant arrives with
+// C3/C7, so a literal keeps this compiling on the base), and nothing in the setup. The revive entry
+// is the real route, POST /runs/{id}/revive, as TestPG_ReviveAndExtendRecheckOwnerAuthority uses it.
 func TestPG_PersonErasure_ComponentsOnlyThenDeniedFeatureRefusesRevive(t *testing.T) {
 	t.Skip("pending C7: revive re-checks the run_components tombstone doors; run after C7 merges")
+	const owner = "sub-pg-components"
+	const wantReason = "owner_capability_component"
+	h, _ := newRunOwnerPGHarness(t)
+	ctx := t.Context()
+	pg := h.srv.cfg.Store.(store.PG)
+
+	// A lost run of the person's, with a stored proxy config to revive from.
+	run, err := pg.CreateRun(ctx, types.AgentRun{ID: uuid.New(), CreatedBy: owner, Agent: "claude-code",
+		ConfinementClass: types.CC1, State: types.RunRunning, RunnerTarget: "docker", Task: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.State != types.RunRunning {
+		if ok, err := pg.UpdateRunStateIf(ctx, run.ID, run.State, types.RunRunning); err != nil || !ok {
+			t.Fatalf("UpdateRunStateIf: %v %v", ok, err)
+		}
+	}
+	if err := pg.SetSandboxRef(ctx, run.ID, "wardyn-agent-"+run.ID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := pg.MarkRunLost(ctx, run.ID, types.LostOutage, time.Now(), 0); err != nil || !ok {
+		t.Fatalf("MarkRunLost: %v %v", ok, err)
+	}
+	cfg, err := runner.BuildProxyConfig(run.ID, runner.ProxyConfig{
+		RunToken: "old", ControlPlaneURL: "http://127.0.0.1:8081",
+		Policy: types.RunPolicySpec{AllowedDomains: []string{"api.example.com"}},
+	}, runner.ProxyListenPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.srv.cfg.RunConfigKey = make([]byte, 32)
+	if err := h.srv.storeRunProxyConfig(ctx, run.ID, cfg); err != nil {
+		t.Fatal(err)
+	}
+	rn := &pgReviveRunner{fakeRunner: &fakeRunner{}}
+	h.srv.cfg.Runner = rn
+	h.srv.cfg.ControlPlaneURL = "http://127.0.0.1:8080"
+
+	// The run carried the person's own components; erase the components scope and nothing else.
+	f := seedComponentFixture(t, pg, owner, run.ID)
+	if w := do(t, h.srv, http.MethodPost, "/api/v1/people/"+owner+"/erasure", adminToken, erasureBody("components")); w.Code != http.StatusOK {
+		t.Fatalf("erasure = %d %s", w.Code, w.Body)
+	}
+	f.requireErased(t, pg, owner)
+
+	// Deny the feature for everyone, then revive as the owner and as an admin.
+	if _, err := pg.UpsertCapabilityGrant(ctx, grant(types.CapabilitySubjectAll, "", capFeature, "custom_component", types.CapabilityDeny)); err != nil {
+		t.Fatal(err)
+	}
+	session := ssoSession(t, owner, ownerEmail, oidc.RoleUser)
+	path := "/api/v1/runs/" + run.ID.String() + "/revive"
+	for _, asOwner := range []bool{true, false} {
+		var w *httptest.ResponseRecorder
+		if asOwner {
+			w = doSSO(t, h.srv, http.MethodPost, path, session, "")
+		} else {
+			w = do(t, h.srv, http.MethodPost, path, adminToken, "")
+		}
+		var body struct {
+			Reason string `json:"reason"`
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		if w.Code != http.StatusForbidden || body.Reason != wantReason || rn.replaced != 0 {
+			t.Fatalf("revive (owner %v) after components erasure and a denied feature = %d %s (replaced %d), want 403 %s and no new proxy",
+				asOwner, w.Code, w.Body, rn.replaced, wantReason)
+		}
+	}
+	if r, err := pg.GetRun(ctx, run.ID); err != nil || r.LostAt == nil {
+		t.Errorf("the run after the refusals = %+v, %v, want intact and still lost", r, err)
+	}
 }
 
 // A SCIM DELETE erases the same way: the person's components and snapshot content go, the snapshot rows

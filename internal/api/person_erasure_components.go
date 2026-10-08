@@ -20,11 +20,12 @@ func (s *Server) componentStore() (store.ComponentStore, error) {
 }
 
 // eraseComponentsOf is the components scope: it deletes the components the person saved and clears
-// what the snapshot of every run says about the ones they defined. It never deletes a snapshot
-// row. That row is the run's record that it carried components, and revive reads it to ask again
-// whether the run may keep what they reached; with the row gone, the run would look as if it
-// never had any. The organisation's components are untouched. The GitHub connection's numeric id
-// sits in the credential blob, so the credentials scope erases it and nothing here does.
+// the content of the run snapshots (run_components) of the ones they defined. It never deletes a
+// snapshot row. That row is the run's record that it carried components, and revive reads it to ask
+// again whether the run may keep what they reached; with the row gone, the run would look as if it
+// never had any. The organisation's components are untouched. It reaches nothing else: a run's
+// resolved policy and injection grants are the run's own record and are kept (ADDENDA A22), and the
+// GitHub connection's numeric id sits in the credential blob, so the credentials scope erases it.
 func (s *Server) eraseComponentsOf(ctx context.Context, person string) (any, error) {
 	cs, err := s.componentStore()
 	if err != nil {
