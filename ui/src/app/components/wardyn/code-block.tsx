@@ -94,11 +94,13 @@ function isYamlContainer(v: unknown): boolean {
 // yamlScalar quotes a string — a value or a mapping key — only when a plain YAML
 // scalar would be ambiguous: empty, a control character other than tab (a raw line
 // break ends the scalar), special indicators, leading/trailing space, or text that
-// would parse as a number/bool/null. Uses JSON string quoting for the quoted form.
+// would parse as a number/bool/null. Uses JSON string quoting for the quoted form,
+// plus YAML's escapes for U+0085, U+2028 and U+2029, which JSON leaves raw and the
+// CLI's YAML reader (gopkg.in/yaml.v3) takes as line breaks even inside quotes.
 // One expression on purpose: this module ships in the size-budgeted entry chunk.
 function yamlScalar(s: string): string {
-  return /^$|[\0-\b\n-\x1f:#[\]{}",&*!|>'%@`]|^[\s?-]|\s$|^(true|false|null|yes|no|on|off|~)$|^[+-]?[\d.]/i.test(s)
-    ? JSON.stringify(s)
+  return /^$|[\0-\b\n-\x1f\x85\u2028\u2029:#[\]{}",&*!|>'%@`]|^[\s?-]|\s$|^(true|false|null|yes|no|on|off|~)$|^[+-]?[\d.]/i.test(s)
+    ? JSON.stringify(s).replace(/\x85/g, "\\N").replace(/\u2028/g, "\\L").replace(/\u2029/g, "\\P")
     : s;
 }
 
