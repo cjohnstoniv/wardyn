@@ -3131,10 +3131,8 @@ page.
 
 ### Per-user API tokens: stop sharing the admin token
 
-`WARDYN_ADMIN_TOKEN` is one string, deployment-wide admin, attributable to nobody.
-A **per-user API token** is the replacement: a human mints one for their own
-automation, it carries *their* identity and *their* role, and it is revocable on
-its own.
+- `WARDYN_ADMIN_TOKEN` is one string, deployment-wide admin, attributable to nobody.
+- A **per-user API token** is the replacement: a human mints one for their own automation, it carries *their* identity and *their* role, and it is revocable on its own.
 
 | Call | Who | What |
 |---|---|---|
@@ -3144,152 +3142,92 @@ its own.
 | `GET /api/v1/tokens` | admin or `security_admin` | every token in the deployment |
 | `DELETE /api/v1/tokens/{id}` | admin or `security_admin` | revoke anyone's |
 
-Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn session revoke`) also
-revokes their API tokens, removes their registered SSH keys, and refuses their
-UI-app sessions at the next re-check, whether the revoke names the subject or
-the email. The `all` arm
-applies all three actions deployment-wide, including the calling admin's own
-credentials. Plan to re-mint tokens and register SSH keys again after a global
-revoke.
+- Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn session revoke`) also revokes their API tokens, removes their registered SSH keys, and refuses their UI-app sessions at the next re-check, whether the revoke names the subject or the email.
+  - The `all` arm applies all three actions deployment-wide, including the calling admin's own credentials.
+  - Plan to re-mint tokens and register SSH keys again after a global revoke.
+- To end only a person's browser sessions, send `"sessions_only": true` with `sub`: a session-only cut is stamped and nothing else changes.
+  - Their browser sessions end on every instance; their API tokens, SSH keys and portal-delegated tokens keep working, and an API token can still approve a governance change.
+  - No token-borne credential is refused by the cut; an event stream a token opened before the cut closes at its next keepalive and reconnects.
+  - It is refused (`sessions_revoke_param_invalid`) with `all`.
+  - The audit row is the usual `session.revoke`, with `sessions_only` set and both counts `0`.
+  - The People drawer's "Sign out everywhere" sends it.
+- **No `role` parameter on `POST /me/tokens`.**
+  - A token always mints at the caller's own current role; there is no deliberately-downgraded mint.
+  - Still open at 0.8.
+- **Deleting one API token leaves its registered SSH keys in place.**
+  - Use session revocation to remove the person's tokens and keys together, or `DELETE /api/v1/people/{principal}/ssh-keys` (admin or `security_admin`) to remove only their keys and receive `{"count": N}`.
+  - A deleted key cannot authenticate again or open a new channel on an established SSH connection.
+  - Existing channels continue until they close or their run is torn down.
+  - Follow [SSH access revocation](SSH.md#revoking-access-during-an-incident) for the full offboarding sequence, including stored credentials and affected-run teardown.
+- **Name them by either identity.**
+  - `--sub` takes the OIDC `sub` **or** the email.
+  - The session cutoff and token sweep match an exact subject or a case-insensitive email.
+  - SSH-key removal resolves the stored principal, giving an exact known subject precedence over an email alias; an ambiguous name or unresolved email cannot be reported as completed key removal.
+  - Session revocation also stamps the resolved subject's cutoff, because SSH keys carry a subject without an email.
+  - SSH registration and access check the cutoff so a registration in flight cannot outlive the revoke.
+- A complete revoke answers `204`.
+  - A `500` may follow a successful session cutoff if token revocation, SSH-principal resolution, canonical-subject cutoff or key deletion then fails.
+  - Both credential operations are attempted, and the `session.revoke` audit records `tokens_revoked`, `ssh_keys_deleted` and outcome `failure` for partial work.
+  - Resolve the reported failure and retry; each count describes that call only.
 
-To end only a person's browser sessions, send `"sessions_only": true` with
-`sub`: a session-only cut is stamped and nothing else changes. Their browser
-sessions end on every instance; their API tokens, SSH keys and portal-delegated
-tokens keep working, and an API token can still approve a governance change:
-no token-borne credential is refused by the cut; an event stream a token opened
-before the cut closes at its next keepalive and reconnects. It is refused
-(`sessions_revoke_param_invalid`) with `all`.
-The audit row is the usual `session.revoke`, with `sessions_only` set and both
-counts `0`. The People drawer's "Sign out everywhere" sends it.
+> [!NOTE]
+> Sessions remain stateless signed cookies, so the audit cannot count active browser sessions or prove that a person has no already-open SSH channels.
 
-**No `role` parameter on `POST /me/tokens`.** A token always mints at the
-caller's own current role; there is no deliberately-downgraded mint. Still
-open at 0.8.
-
-**Deleting one API token leaves its registered SSH keys in place.** Use session
-revocation to remove the person's tokens and keys together, or
-`DELETE /api/v1/people/{principal}/ssh-keys` (admin or `security_admin`) to remove
-only their keys and receive `{"count": N}`. A deleted key cannot authenticate
-again or open a new channel on an established SSH connection. Existing channels
-continue until they close or their run is torn down. Follow
-[SSH access revocation](SSH.md#revoking-access-during-an-incident) for the full
-offboarding sequence, including stored credentials and affected-run teardown.
-
-**Name them by either identity.** `--sub` takes the OIDC `sub` **or** the email.
-The session cutoff and token sweep match an exact subject or a case-insensitive
-email. SSH-key removal resolves the stored principal, giving an exact known
-subject precedence over an email alias; an ambiguous name or unresolved email cannot
-be reported as completed key removal. Session revocation also stamps the resolved
-subject's cutoff, because SSH keys carry a subject without an email. SSH registration
-and access check the cutoff so a registration in flight cannot outlive the revoke.
-
-A complete revoke answers `204`. A `500` may follow a successful session cutoff
-if token revocation, SSH-principal resolution, canonical-subject cutoff or key
-deletion then fails. Both
-credential operations are attempted, and the `session.revoke` audit records
-`tokens_revoked`, `ssh_keys_deleted` and outcome `failure` for partial work.
-Resolve the reported failure and retry; each count describes that call only.
-Sessions remain stateless signed cookies, so the audit cannot count active
-browser sessions or prove that a person has no already-open SSH channels.
-
-Use one as an ordinary bearer: `Authorization: Bearer wdn_…`. Downstream it is
-indistinguishable from that human's console session — run ownership, the
-admin/member gate and capability grants all resolve to the owning human — so a
-member's token reaches exactly the routes their session reaches, and no more. A
-token is **never** the admin identity: minting one requires a verified SSO human,
-so neither the admin token nor local mode can mint one, and a token cannot mint a
-second API token.
-
-Only `hex(sha256(token))` is stored, so a lost token is re-minted, never
-recovered, and a database reader (a reporting role, a hot standby, a `pg_dump` in
-a backup bucket) cannot lift a usable credential off a row. `last_used_at` is best
-effort and is the signal for "which of these are dead"; revoke those.
-
-**Both halves are stamps re-checked at login.** A token carries the role AND
-the group snapshot its owner held when they minted it, and every request it
-authenticates republishes them, so downstream it is that human as they were at
-mint time, or at their most recent sign-in since — whichever is later.
-
-Their next successful sign-in **re-stamps the role, the group snapshot, and the
-snapshot's own completeness bit** on every unrevoked token they hold — the same
-`OnLogin` hook that has re-stamped their SSH keys since 0.6, now widened to
-carry groups too — so a demotion, or a group membership change, reaches
-outstanding tokens at that human's own next login rather than immediately. A token's stamp is
-timed: `api_tokens.identity_stamped_at` is set at mint and again at every one of those re-stamps.
-By default nothing ages a stamp out on its own, so a human who is demoted in the identity provider
-and never signs in again keeps the role and groups their tokens were minted with. Set
-`WARDYN_ROLE_STAMP_TTL` (default off) to bound that: a token whose stamp is older than the TTL is
-refused with `401` and the reason `role_stamp_stale` (an `authz.denied` audit row) until its owner
-signs in again, which re-stamps it with their current role. A console session older than the TTL is
-sent back through sign-in, so a stamp you can tune is also the age of the longest role a session
-can carry (with `WARDYN_OIDC_SESSION_TTL` unset a session already ends at the ID token's own
-expiry, and with it set at that TTL after sign-in, so the role-stamp TTL only matters when it is
-shorter than the session). The ID token's expiry is today the only identity-provider-driven bound on
-a console session, and `WARDYN_ROLE_STAMP_TTL` is off by default. So a session lengthened with
-`WARDYN_OIDC_SESSION_TTL` (at most `24h`) should be paired with a role-stamp TTL, or a person
-disabled only at the identity provider keeps the console until the session TTL runs out. Wardyn keeps no identity-provider token and cannot re-derive a role on a timer;
-re-login is the only refresh. Turning the TTL on asks every token holder to sign in once, because
-the backfill dated existing stamps at mint. A login never revives a revoked token, and a stamp is
-one statement, so a failed re-stamp leaves that person's tokens stale, never half-updated.
-What ends a token is its **expiry** (below) or **explicit revocation**; neither waits for that
-next login, and neither needs the TTL.
-
-**A token can expire.** `api_tokens.expires_at` is nullable: NULL means the
-token never expires, which is every token minted before 0.8.6. `POST /me/tokens`
-takes an optional `ttl_seconds`. Omitted or zero gets `WARDYN_API_TOKEN_MAX_TTL`
-when you have set one (see [ENV.md](ENV.md)) and no expiry when you have not; a
-value above that cap is clamped to it, and the `token.create` audit row records
-the clamp (`ttl_clamped_from_seconds`); a negative value is a `400` and mints
-nothing. The console's mint form sends no TTL, so on a deployment with a cap it
-gets the cap. An expired token is refused as a revoked one is, the same `401`
-with the same body, so expiry is no way to learn that a token once existed. Both
-lists show `expires_at`. The cap applies to tokens minted after it is set; it
-never shortens one already minted, so an operator who wants those gone revokes
-them. There is no default cap: turning one on is what starts failing CI tokens
-on its own schedule. Console sessions are unaffected and keep their own cookie
-expiry.
-
-A demotion made on the People page is now one of those explicit revocations:
-when a role-mapping write or delete takes a tier away from a value, Wardyn
-revokes the outstanding tokens of every principal whose own derivation that
-edit demotes and whose stamp still carries what was lost, and reports the
-number as `tokens_revoked` in the response and the audit row. It is scoped to
-that demotion — a promotion, an unrelated value, and a member-stamped
-credential naming the same group are all left alone — and a token whose group
-snapshot is missing or partial cannot be re-derived, so an elevated stamp in
-that state is revoked rather than assumed safe.
-
-**A token carries its holder's user type too** (`api_tokens.user_type`,
-stamped at mint and re-stamped with the role at the next sign-in), and a
-type change made on the People page revokes rather than waits: when a
-role-mapping write or delete changes the user type a value derives, Wardyn
-revokes every live token still carrying the old type that names the value
-(by principal, email or group) or whose group snapshot is missing or
-partial, and counts them in the same `tokens_revoked`. On the first type
-assignment to a value that derived Standard user before, that last arm is
-every Standard-user token whose snapshot is missing or partial — every token
-minted before 0.7 whose holder has not signed in since, and every
-truncated-snapshot token — whether or not its holder has anything to do with
-the value; `stale_token_snapshots` counts only the tokens that name the value,
-so `tokens_revoked` can exceed it. The holder mints a new token after signing
-in. A type change made in `WARDYN_OIDC_ROLE_MAP`
-has no People-page edit to act on, so it reaches a token only at its
-holder's next sign-in — revoke explicitly when that is too late. A user type
-a live token still carries cannot be deleted (`409`, naming the count).
-The type arm only compares the edited value's own before/after type against
-a token's stamp, so a holder whose effective type shifts because a
-different, higher-priority group is the one actually edited — or because
-the edited value's own prior derivation was empty rather than `standard` —
-keeps a stale stamp until that holder's next sign-in or an explicit revoke,
-the same as a `WARDYN_OIDC_ROLE_MAP` edit above.
-
-That matters most for the tier 0.7 added. A human demoted out of `security_admin`
-keeps, through any token they minted while they held it, exactly what the tier
-governs: profile authoring and assignment, capability-grant writes, session and
-token revocation, escalated approval decisions on anyone's run, workspace
-`approved-egress`/`denied-egress` writes, and audit-chain verify. What it does not
-gain is anything the tier itself never had — a token reaches no shell, no attach
-ticket on a foreign run, and no capability grant widens it to admin.
+- Use one as an ordinary bearer: `Authorization: Bearer wdn_…`.
+  - Downstream it is indistinguishable from that human's console session — run ownership, the admin/member gate and capability grants all resolve to the owning human.
+  - So a member's token reaches exactly the routes their session reaches, and no more.
+  - A token is **never** the admin identity: minting one requires a verified SSO human, so neither the admin token nor local mode can mint one, and a token cannot mint a second API token.
+- Only `hex(sha256(token))` is stored, so a lost token is re-minted, never recovered, and a database reader (a reporting role, a hot standby, a `pg_dump` in a backup bucket) cannot lift a usable credential off a row.
+  - `last_used_at` is best effort and is the signal for "which of these are dead"; revoke those.
+- **Both halves are stamps re-checked at login.**
+  - A token carries the role AND the group snapshot its owner held when they minted it, and every request it authenticates republishes them.
+  - So downstream it is that human as they were at mint time, or at their most recent sign-in since — whichever is later.
+  - Their next successful sign-in **re-stamps the role, the group snapshot, and the snapshot's own completeness bit** on every unrevoked token they hold.
+  - This is the same `OnLogin` hook that has re-stamped their SSH keys since 0.6, now widened to carry groups too.
+  - So a demotion, or a group membership change, reaches outstanding tokens at that human's own next login rather than immediately.
+  - A token's stamp is timed: `api_tokens.identity_stamped_at` is set at mint and again at every one of those re-stamps.
+  - By default nothing ages a stamp out on its own, so a human who is demoted in the identity provider and never signs in again keeps the role and groups their tokens were minted with.
+  - Set `WARDYN_ROLE_STAMP_TTL` (default off) to bound that.
+  - A token whose stamp is older than the TTL is refused with `401` and the reason `role_stamp_stale` (an `authz.denied` audit row) until its owner signs in again, which re-stamps it with their current role.
+  - A console session older than the TTL is sent back through sign-in.
+  - So a stamp you can tune is also the age of the longest role a session can carry.
+  - (With `WARDYN_OIDC_SESSION_TTL` unset a session already ends at the ID token's own expiry, and with it set at that TTL after sign-in, so the role-stamp TTL only matters when it is shorter than the session.)
+  - The ID token's expiry is today the only identity-provider-driven bound on a console session, and `WARDYN_ROLE_STAMP_TTL` is off by default.
+  - So a session lengthened with `WARDYN_OIDC_SESSION_TTL` (at most `24h`) should be paired with a role-stamp TTL, or a person disabled only at the identity provider keeps the console until the session TTL runs out.
+  - Wardyn keeps no identity-provider token and cannot re-derive a role on a timer; re-login is the only refresh.
+  - Turning the TTL on asks every token holder to sign in once, because the backfill dated existing stamps at mint.
+  - A login never revives a revoked token, and a stamp is one statement, so a failed re-stamp leaves that person's tokens stale, never half-updated.
+  - What ends a token is its **expiry** (below) or **explicit revocation**; neither waits for that next login, and neither needs the TTL.
+- **A token can expire.**
+  - `api_tokens.expires_at` is nullable: NULL means the token never expires, which is every token minted before 0.8.6.
+  - `POST /me/tokens` takes an optional `ttl_seconds`.
+  - Omitted or zero gets `WARDYN_API_TOKEN_MAX_TTL` when you have set one (see [ENV.md](ENV.md)) and no expiry when you have not.
+  - A value above that cap is clamped to it, and the `token.create` audit row records the clamp (`ttl_clamped_from_seconds`); a negative value is a `400` and mints nothing.
+  - The console's mint form sends no TTL, so on a deployment with a cap it gets the cap.
+  - An expired token is refused as a revoked one is, the same `401` with the same body, so expiry is no way to learn that a token once existed.
+  - Both lists show `expires_at`.
+  - The cap applies to tokens minted after it is set; it never shortens one already minted, so an operator who wants those gone revokes them.
+  - There is no default cap: turning one on is what starts failing CI tokens on its own schedule.
+  - Console sessions are unaffected and keep their own cookie expiry.
+- A demotion made on the People page is now one of those explicit revocations.
+  - When a role-mapping write or delete takes a tier away from a value, Wardyn revokes the outstanding tokens of every principal whose own derivation that edit demotes and whose stamp still carries what was lost.
+  - It reports the number as `tokens_revoked` in the response and the audit row.
+  - It is scoped to that demotion — a promotion, an unrelated value, and a member-stamped credential naming the same group are all left alone.
+  - A token whose group snapshot is missing or partial cannot be re-derived, so an elevated stamp in that state is revoked rather than assumed safe.
+- **A token carries its holder's user type too** (`api_tokens.user_type`, stamped at mint and re-stamped with the role at the next sign-in), and a type change made on the People page revokes rather than waits.
+  - When a role-mapping write or delete changes the user type a value derives, Wardyn revokes every live token still carrying the old type that names the value (by principal, email or group) or whose group snapshot is missing or partial, and counts them in the same `tokens_revoked`.
+  - On the first type assignment to a value that derived Standard user before, that last arm is every Standard-user token whose snapshot is missing or partial.
+  - That is every token minted before 0.7 whose holder has not signed in since, and every truncated-snapshot token, whether or not its holder has anything to do with the value.
+  - `stale_token_snapshots` counts only the tokens that name the value, so `tokens_revoked` can exceed it.
+  - The holder mints a new token after signing in.
+  - A type change made in `WARDYN_OIDC_ROLE_MAP` has no People-page edit to act on, so it reaches a token only at its holder's next sign-in — revoke explicitly when that is too late.
+  - A user type a live token still carries cannot be deleted (`409`, naming the count).
+  - The type arm only compares the edited value's own before/after type against a token's stamp.
+  - So a holder whose effective type shifts because a different, higher-priority group is the one actually edited — or because the edited value's own prior derivation was empty rather than `standard` — keeps a stale stamp until that holder's next sign-in or an explicit revoke, the same as a `WARDYN_OIDC_ROLE_MAP` edit above.
+- That matters most for the tier 0.7 added.
+  - A human demoted out of `security_admin` keeps, through any token they minted while they held it, exactly what the tier governs:
+    - profile authoring and assignment, capability-grant writes, session and token revocation, escalated approval decisions on anyone's run, workspace `approved-egress`/`denied-egress` writes, and audit-chain verify.
+  - What it does not gain is anything the tier itself never had — a token reaches no shell, no attach ticket on a foreign run, and no capability grant widens it to admin.
 
 **So revoke it, and check that you named the right person.**
 
@@ -3312,38 +3250,27 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
   -d '{"sub":"alice@corp.com","sessions_only":true}' $WARDYN/api/v1/sessions/revoke
 ```
 
-A revoked token is never re-stamped — it keeps whatever role it carried when it
-was revoked, so the trail still says what that credential actually was.
+- A revoked token is never re-stamped — it keeps whatever role it carried when it was revoked, so the trail still says what that credential actually was.
+- The `session.revoke` audit row carries `tokens_revoked`.
+  - That count is the receipt: a **zero** against a human you believe holds tokens means the identifier matched nobody, not that there was nothing to revoke.
+  - Sessions are stateless, so that half cannot be counted, and only this half can tell you.
+- Both `token.create` and `token.revoke` are audited ([`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md)); the revoke row names the token's owner.
 
-The `session.revoke` audit row carries `tokens_revoked`. That count is the
-receipt: a **zero** against a human you believe holds tokens means the identifier
-matched nobody, not that there was nothing to revoke — sessions are stateless, so
-that half cannot be counted, and only this half can tell you. Both
-`token.create` and `token.revoke` are audited
-([`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md)); the revoke row names the token's
-owner. Offboarding a person means revoking their tokens explicitly — a demoted
-or departed human who never signs in again is not caught by the login-time
-re-stamp, and the row outlives their access to your IdP either way. It is
-published as a residual (`threatmodel/THREAT-MODEL.md` §5, "A per-user API
-token's role AND group snapshot are bounded-stale, not frozen").
+> [!IMPORTANT]
+> Offboarding a person means revoking their tokens explicitly.
+> A demoted or departed human who never signs in again is not caught by the login-time re-stamp, and the row outlives their access to your IdP either way.
+> It is published as a residual ([`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5, "A per-user API token's role AND group snapshot are bounded-stale, not frozen").
 
 ### Tokens for a person who never signs in
 
-**No one can create a token that acts as another person (0.8.5).** An admin or
-`security_admin` can still set a person up before their first sign-in, but
-cannot mint a token for them: `POST /api/v1/people/{principal}/tokens` answers
-every caller `403` with reason `person_token_mint_removed` ("No one can create
-a token that acts as another person. They sign in and create their own."),
-whether or not the person exists. No role, flag or environment variable turns
-it back on. A token an admin created for someone else acted as that person
-while the admin held its plaintext, which is the reach this closes.
-
-For people who never open the console, the interim path is that the person
-signs in once and creates their own token (`POST /api/v1/me/tokens`, or the
-console; see [CI.md](CI.md)). It is never the deployment's admin token. A
-trusted front-end that acts for people who ARE signed in to it uses
-[delegation](#delegated-run-management-portals) instead: it never holds a
-long-lived token for anyone.
+- **No one can create a token that acts as another person (0.8.5).**
+  - An admin or `security_admin` can still set a person up before their first sign-in, but cannot mint a token for them.
+  - `POST /api/v1/people/{principal}/tokens` answers every caller `403` with reason `person_token_mint_removed` ("No one can create a token that acts as another person. They sign in and create their own."), whether or not the person exists.
+  - No role, flag or environment variable turns it back on.
+  - A token an admin created for someone else acted as that person while the admin held its plaintext, which is the reach this closes.
+- For people who never open the console, the interim path is that the person signs in once and creates their own token (`POST /api/v1/me/tokens`, or the console; see [CI.md](CI.md)).
+  - It is never the deployment's admin token.
+  - A trusted front-end that acts for people who ARE signed in to it uses [delegation](#delegated-run-management-portals) instead: it never holds a long-lived token for anyone.
 
 | Call | What |
 |---|---|
@@ -3353,88 +3280,58 @@ long-lived token for anyone.
 | `GET /api/v1/people/{principal}/tokens` | that person's tokens, revoked ones included |
 | `GET /api/v1/tokens?minted_for_others=true` | every live token an admin created for someone else before this change (metadata only, never a plaintext); also on the console's Admin > Credentials page |
 
-**Tokens already minted keep working until you revoke them.** Nothing is
-revoked by the upgrade. List them with `GET /api/v1/tokens?minted_for_others=true`
-(each row carries `minted_by`, the admin who created it), and revoke one with
-`DELETE /api/v1/tokens/{id}`, or all of a person's with `POST /sessions/revoke`
-for their `sub`. The revoke's `token.revoke` audit row carries `minted_by`. The
-owner sees `minted_by` on their own `GET /me/tokens`. At the person's sign-in
-the usual login re-stamp applies, with one difference: if their real role
-differs from the token's stamp, a token an admin created for them is **revoked**
-instead of re-stamped, otherwise whoever kept the plaintext would hold a higher
-tier's credential. When the role is unchanged, the token is re-stamped with the
-person's real groups at that sign-in and keeps working. Until then its groups
-are unknown, so every group-tier ceiling, drive allocation or deny grant fails
-closed for it, as for a truncated session.
-
-**Keying rule: a person is their identity provider's `sub`.** A sign-in resolves
-to exactly the id_token's `sub`, case-sensitive, and nothing else. So `principal`
-must be that string exactly. A person's first sign-in attaches to the row by
-subject equality alone and stamps `first_signed_in_at`. The email is your
-assertion. Before a first sign-in it is the only input role derivation has
-(an email-keyed role mapping, else the default role), and it **never attaches
-anyone**. Someone else who signs in with the same email has a different subject,
-lands on a different principal and reaches none of this person's runs, tokens,
-secrets or drive. The real person signing in under a subject you mistyped also
-attaches to nothing: revoke the orphaned tokens and create the person again.
-
-**On Entra ID, key a person who has never signed in by object id.** Entra's
-`sub` is pairwise: it is different for every app registration and unknown until
-the person's first sign-in. So on a deployment whose issuer is Entra ID
-(`login.microsoftonline.com`, `.us`, `login.partner.microsoftonline.cn` or
-`sts.windows.net`), create them with `tenant_id` and `object_id` instead of
-`principal`. Both are GUIDs; find them as described in
-[deploy/azure-entra-sso/README.md](../deploy/azure-entra-sso/README.md#pre-creating-a-person-by-object-id).
-Their principal is `entra:<tenant_id>:<object_id>`, which is what you pass as
-`{principal}` to list their tokens. Wardyn records this deployment's
-issuer with them. A sign-in becomes this person only when its issuer, `tid`
-and `oid` claims all equal the recorded ones exactly, and then on every
-sign-in, so re-registering the app does not orphan them. Nothing else attaches
-them: not the email, not the object id under another tenant or issuer, and not
-a `sub` spelling their principal. A sign-in whose `sub` starts with `entra:`,
-in any case, is refused (no real Entra `sub` has a colon). Each such sign-in
-writes a `person.attach` audit row naming the person and the pairwise `sub`.
-
-Set up by object id only someone who has **never signed in**. Someone who has
-already signed in is known under their pairwise `sub`, and an object-id record
-never re-keys them. If you give their email, `POST /people` refuses the record
-with `409`, because the email already names their subject. Without an email
-Wardyn cannot tell at create time (it does not record a sign-in's `oid`), so
-the check happens at sign-in instead. A sign-in that matches the record but
-whose `sub` already names someone here keeps that `sub`: a person record, or an
-API token, SSH key, run, workspace or stored secret they own (a secret includes
-the credential a sign-in captures for them). It does not attach, and it
-writes a `person.attach` row with outcome `denied` and `reason:"sub_known"`
-naming both. The record then stays unused. Confirm such a person by `principal`
-(the `sub` on one of their tokens or runs) instead. Setting up an Entra person by email alone
-is not supported. On an Entra issuer the plain form refuses a `principal` in
-the `entra:` namespace (`422`, `person_principal_reserved`), since no sign-in
-can become it. On any other issuer the object-id form is refused `422`, and
-sign-in keys people by `sub` exactly as before.
-
-`POST /people` answers `409` rather than create an ambiguous identity. That
-happens when the email already names another known subject, when the subject is
-already known under a different email, when the subject differs from a known
-one only by case, or when the subject is another person's email. It answers
-`422` for the reserved subjects `admin-token`, the local-mode operator,
-`local:…`, `device:…`, `delegate:…` and `subject:…`, in any case — the same set a sign-in is refused for
-(see "Some subjects never sign in").
-
-Revocation of any such token is immediate either way: `DELETE /api/v1/tokens/{id}`,
-or the person's own `DELETE /api/v1/me/tokens/{id}`.
+- **Tokens already minted keep working until you revoke them.**
+  - Nothing is revoked by the upgrade.
+  - List them with `GET /api/v1/tokens?minted_for_others=true` (each row carries `minted_by`, the admin who created it), and revoke one with `DELETE /api/v1/tokens/{id}`, or all of a person's with `POST /sessions/revoke` for their `sub`.
+  - The revoke's `token.revoke` audit row carries `minted_by`.
+  - The owner sees `minted_by` on their own `GET /me/tokens`.
+  - At the person's sign-in the usual login re-stamp applies, with one difference.
+  - If their real role differs from the token's stamp, a token an admin created for them is **revoked** instead of re-stamped, otherwise whoever kept the plaintext would hold a higher tier's credential.
+  - When the role is unchanged, the token is re-stamped with the person's real groups at that sign-in and keeps working.
+  - Until then its groups are unknown, so every group-tier ceiling, drive allocation or deny grant fails closed for it, as for a truncated session.
+- **Keying rule: a person is their identity provider's `sub`.**
+  - A sign-in resolves to exactly the id_token's `sub`, case-sensitive, and nothing else.
+  - So `principal` must be that string exactly.
+  - A person's first sign-in attaches to the row by subject equality alone and stamps `first_signed_in_at`.
+  - The email is your assertion.
+  - Before a first sign-in it is the only input role derivation has (an email-keyed role mapping, else the default role), and it **never attaches anyone**.
+  - Someone else who signs in with the same email has a different subject, lands on a different principal and reaches none of this person's runs, tokens, secrets or drive.
+  - The real person signing in under a subject you mistyped also attaches to nothing: revoke the orphaned tokens and create the person again.
+- **On Entra ID, key a person who has never signed in by object id.**
+  - Entra's `sub` is pairwise: it is different for every app registration and unknown until the person's first sign-in.
+  - So on a deployment whose issuer is Entra ID (`login.microsoftonline.com`, `.us`, `login.partner.microsoftonline.cn` or `sts.windows.net`), create them with `tenant_id` and `object_id` instead of `principal`.
+  - Both are GUIDs; find them as described in [deploy/azure-entra-sso/README.md](../deploy/azure-entra-sso/README.md#pre-creating-a-person-by-object-id).
+  - Their principal is `entra:<tenant_id>:<object_id>`, which is what you pass as `{principal}` to list their tokens.
+  - Wardyn records this deployment's issuer with them.
+  - A sign-in becomes this person only when its issuer, `tid` and `oid` claims all equal the recorded ones exactly, and then on every sign-in, so re-registering the app does not orphan them.
+  - Nothing else attaches them: not the email, not the object id under another tenant or issuer, and not a `sub` spelling their principal.
+  - A sign-in whose `sub` starts with `entra:`, in any case, is refused (no real Entra `sub` has a colon).
+  - Each such sign-in writes a `person.attach` audit row naming the person and the pairwise `sub`.
+- Set up by object id only someone who has **never signed in**.
+  - Someone who has already signed in is known under their pairwise `sub`, and an object-id record never re-keys them.
+  - If you give their email, `POST /people` refuses the record with `409`, because the email already names their subject.
+  - Without an email Wardyn cannot tell at create time (it does not record a sign-in's `oid`), so the check happens at sign-in instead.
+  - A sign-in that matches the record but whose `sub` already names someone here keeps that `sub`:
+    - a person record, or an API token, SSH key, run, workspace or stored secret they own (a secret includes the credential a sign-in captures for them).
+  - It does not attach, and it writes a `person.attach` row with outcome `denied` and `reason:"sub_known"` naming both.
+  - The record then stays unused.
+  - Confirm such a person by `principal` (the `sub` on one of their tokens or runs) instead.
+  - Setting up an Entra person by email alone is not supported.
+  - On an Entra issuer the plain form refuses a `principal` in the `entra:` namespace (`422`, `person_principal_reserved`), since no sign-in can become it.
+  - On any other issuer the object-id form is refused `422`, and sign-in keys people by `sub` exactly as before.
+- `POST /people` answers `409` rather than create an ambiguous identity.
+  - That happens when the email already names another known subject, when the subject is already known under a different email, when the subject differs from a known one only by case, or when the subject is another person's email.
+  - It answers `422` for the reserved subjects `admin-token`, the local-mode operator, `local:…`, `device:…`, `delegate:…` and `subject:…`, in any case — the same set a sign-in is refused for (see "Some subjects never sign in").
+- Revocation of any such token is immediate either way: `DELETE /api/v1/tokens/{id}`, or the person's own `DELETE /api/v1/me/tokens/{id}`.
 
 ### Delegated run management (portals)
 
-A trusted front-end — a portal — can create, list, extend, stop and open runs
-for the person signed in to it, without holding that person's API token. The
-portal trades the person's own live identity-provider token for a short
-delegated token (RFC 8693 token exchange). The rule is **no impersonation;
-delegation is recorded as delegation**: the person owns and is the actor of
-everything the token does, and every audit row names the portal beside them.
+- A trusted front-end — a portal — can create, list, extend, stop and open runs for the person signed in to it, without holding that person's API token.
+- The portal trades the person's own live identity-provider token for a short delegated token (RFC 8693 token exchange).
+- The rule is **no impersonation; delegation is recorded as delegation**: the person owns and is the actor of everything the token does, and every audit row names the portal beside them.
 
-**Register a portal** (super admin only). The portal must sign people in
-against the same identity provider and issuer as Wardyn, with a group claim in
-its tokens.
+- **Register a portal** (super admin only).
+  - The portal must sign people in against the same identity provider and issuer as Wardyn, with a group claim in its tokens.
 
 | Call | What |
 |---|---|
@@ -3442,12 +3339,11 @@ its tokens.
 | `GET /api/v1/admin/delegates` | every portal, revoked ones included (admin or `security_admin`) |
 | `DELETE /api/v1/admin/delegates/{id}` | revoke it (admin or `security_admin`) |
 
-The portal acts only for people in its `group`, matched against the group
-claim of the person's own token (canonicalized the way a sign-in snapshot is).
-`idp_client_id` cannot be Wardyn's own client id.
+- The portal acts only for people in its `group`, matched against the group claim of the person's own token (canonicalized the way a sign-in snapshot is).
+- `idp_client_id` cannot be Wardyn's own client id.
 
-**Exchange.** `POST /api/v1/token`, form-encoded, the portal's id and
-credential as HTTP Basic:
+- **Exchange.**
+  - `POST /api/v1/token`, form-encoded, the portal's id and credential as HTTP Basic:
 
 ```
 grant_type=urn:ietf:params:oauth:grant-type:token-exchange
@@ -3455,17 +3351,13 @@ subject_token=<the person's token>
 subject_token_type=urn:ietf:params:oauth:token-type:access_token   (or …:id_token, …:jwt)
 ```
 
-The subject token must verify against Wardyn's issuer and key set, be
-unexpired, carry an `iat`, and be either an access token for Wardyn (`aud`
-holds Wardyn's client id) that the portal requested (`azp` is the portal's
-client id), or a token issued to the portal itself (`aud` is exactly the
-portal's client id). The person is then admitted exactly as a sign-in would
-admit them — reserved subjects, the email-domain gate, role and user-type
-derivation from the token's own claims. On success the answer is
-`{"access_token":"wdg_…","token_type":"Bearer","expires_in":600,…}`: ten
-minutes, no refresh token. A portal that needs longer exchanges the person's
-live token again. `actor_token` is refused (the authenticated portal is the
-actor), and a delegated token cannot itself be exchanged.
+- The subject token must verify against Wardyn's issuer and key set, be unexpired, carry an `iat`, and be either:
+  - an access token for Wardyn (`aud` holds Wardyn's client id) that the portal requested (`azp` is the portal's client id), or
+  - a token issued to the portal itself (`aud` is exactly the portal's client id).
+- The person is then admitted exactly as a sign-in would admit them — reserved subjects, the email-domain gate, role and user-type derivation from the token's own claims.
+- On success the answer is `{"access_token":"wdg_…","token_type":"Bearer","expires_in":600,…}`: ten minutes, no refresh token.
+- A portal that needs longer exchanges the person's live token again.
+- `actor_token` is refused (the authenticated portal is the actor), and a delegated token cannot itself be exchanged.
 
 | Answer | Why |
 |---|---|
@@ -3473,157 +3365,100 @@ actor), and a delegated token cannot itself be exchanged.
 | `400 invalid_grant` | the subject token did not verify, was not issued to or for the portal, or its person was refused as a sign-in would be, or their sessions were revoked after it was issued |
 | `403 access_denied` | the person is not in the portal's group |
 
-**What a delegated token can do.** Exactly: `POST /runs`, `POST
-/runs/preflight`, `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/events` (the
-lifecycle stream, at most 32 open per person across every portal and their own
-clients), `PATCH /runs/{id}` (end and wait), `POST /runs/{id}/kill`, `POST /runs/{id}/attach-ticket` (also
-`/attach/ticket`, and the UI-gateway ticket), and `GET /me`. Every other
-route answers `403` with reason `delegation_scope` and an `authz.denied` row —
-including secrets, API tokens, SSH keys, approving or denying the person's own
-held egress, revive, and every admin route. Setting a secret and adding an SSH
-key also refuse a delegated request in their own handlers, so a later change to
-the allow-list cannot open them. The person is always treated at
-**user** reach, whatever their own role: an admin acting through a portal
-reaches only their own runs. Ownership, secrets, drives and the governance
-ceiling all resolve on the person.
-
-**What is recorded.** Each exchange writes `delegation.exchange` (actor
-`delegate:<id>`, target the person). Every row a delegated request writes —
-the API's, the identity provider's, the attach and UI-gateway rows of a
-ticket it minted — has the person as actor and `data.via =
-{"delegate":"<portal id>","grant":"<token id>"}`. A run it launches carries
-`created_via` (the portal id) on the run row and in the API.
-
-**Revocation.** Revoking the portal ends every delegated token it holds on
-their next request. `POST /api/v1/sessions/revoke` for the person ends theirs
-the same way and refuses new exchanges of tokens issued before it. A disable
-done only at the identity provider takes effect at the next exchange, so at
-most ten minutes. An open `GET /runs/{id}/events` stream re-checks its token at
-each keepalive (about every 15 seconds) and ends when the portal has been revoked
-or the token has expired, rather than at its five-minute hold. A UI-app session
-a portal opened (through an attach ticket) is a credential derived from that
-grant and is bounded by it: redemption and every 30-second re-check ask whether
-the portal is registered and the grant unexpired, and the session cookie is
-capped at the grant's expiry, so it lasts at most about ten minutes. Revoking the
-portal ends it at the next re-check. Open WebSocket streams are the exception: a
-terminal or relayed socket already established keeps working until it closes or
-the run ends. Runs a portal launched keep running after it is revoked: they are
-the person's runs.
+- **What a delegated token can do.**
+  - Exactly: `POST /runs`, `POST /runs/preflight`, `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/events` (the lifecycle stream, at most 32 open per person across every portal and their own clients), `PATCH /runs/{id}` (end and wait), `POST /runs/{id}/kill`, `POST /runs/{id}/attach-ticket` (also `/attach/ticket`, and the UI-gateway ticket), and `GET /me`.
+  - Every other route answers `403` with reason `delegation_scope` and an `authz.denied` row — including secrets, API tokens, SSH keys, approving or denying the person's own held egress, revive, and every admin route.
+  - Setting a secret and adding an SSH key also refuse a delegated request in their own handlers, so a later change to the allow-list cannot open them.
+  - The person is always treated at **user** reach, whatever their own role: an admin acting through a portal reaches only their own runs.
+  - Ownership, secrets, drives and the governance ceiling all resolve on the person.
+- **What is recorded.**
+  - Each exchange writes `delegation.exchange` (actor `delegate:<id>`, target the person).
+  - Every row a delegated request writes — the API's, the identity provider's, the attach and UI-gateway rows of a ticket it minted — has the person as actor and `data.via = {"delegate":"<portal id>","grant":"<token id>"}`.
+  - A run it launches carries `created_via` (the portal id) on the run row and in the API.
+- **Revocation.**
+  - Revoking the portal ends every delegated token it holds on their next request.
+  - `POST /api/v1/sessions/revoke` for the person ends theirs the same way and refuses new exchanges of tokens issued before it.
+  - A disable done only at the identity provider takes effect at the next exchange, so at most ten minutes.
+  - An open `GET /runs/{id}/events` stream re-checks its token at each keepalive (about every 15 seconds) and ends when the portal has been revoked or the token has expired, rather than at its five-minute hold.
+  - A UI-app session a portal opened (through an attach ticket) is a credential derived from that grant and is bounded by it.
+  - Redemption and every 30-second re-check ask whether the portal is registered and the grant unexpired, and the session cookie is capped at the grant's expiry, so it lasts at most about ten minutes.
+  - Revoking the portal ends it at the next re-check.
+  - Open WebSocket streams are the exception: a terminal or relayed socket already established keeps working until it closes or the run ends.
+  - Runs a portal launched keep running after it is revoked: they are the person's runs.
 
 ### Three roles, and who sets the walls
 
-**Super admin (the deployer).** Installs the chart, connects the IdP, and owns
-everything only the chart can say: the issuer and client, the boot role map
-(`WARDYN_OIDC_ROLE_MAP` — chart rows always win), the operator allowlist
-(`WARDYN_OIDC_OPERATOR_EMAILS` — also the boot posture floor), the default role,
-the deployment ceiling (`WARDYN_DEFAULT_POLICY`), trust roots, integrations, base
-images, and the People page (who gets in, and who else is an admin). The admin
-bearer token is the break-glass and remains exempt from every console lockout
-guard.
+- **Super admin (the deployer).**
+  - Installs the chart, connects the IdP, and owns everything only the chart can say:
+    - the issuer and client, the boot role map (`WARDYN_OIDC_ROLE_MAP` — chart rows always win), the operator allowlist (`WARDYN_OIDC_OPERATOR_EMAILS` — also the boot posture floor),
+    - the default role, the deployment ceiling (`WARDYN_DEFAULT_POLICY`), trust roots, integrations, base images,
+    - and the People page (who gets in, and who else is an admin).
+  - The admin bearer token is the break-glass and remains exempt from every console lockout guard.
+- **Security admin (`security_admin`).**
+  - A mapped tier — never a default, and never derivable from the operator allowlist; you create one by mapping an IdP App Role or group to `security_admin` in the role map (chart or People page).
+  - Security admins read the whole workspace inventory AND any workspace in it — the list, the row (projected), its build status (image and log blanked) and its **observed egress**.
+  - That is because they decide that workspace's allowed and denied hosts and the observed traffic is the input to that decision.
+  - `GET /workspaces/{id}/env-as-code` is NOT in that set (owner-or-super, since F287): its files carry the internal registry coordinate, the site-config artifact redirects and the operator's setup commands, none of which are an egress-decision input.
+  - They cannot otherwise WRITE a workspace: renaming, reassigning, deleting, binding credential material and launching a recording all stay with the super admin.
+  - Security admins author and assign **governance profiles** (named ceilings bound to users or groups), write the org allow/denylists (capability grants).
+  - They decide escalated approvals — egress, credential, tool — on anyone's run.
+  - They revoke sessions and API tokens, and verify the audit chain.
+  - They can also **stop** any run in the deployment — killing a foreign run is incident response, and the most time-critical thing this tier does — which is deliberately *not* the same as reaching INTO one:
+    - no attach ticket, no shell, no credential material, no host.
+  - Inspect-or-stop is the whole of that warrant.
+  - (The batch form, the sandbox sweep, stays admin-only: it drives the container runtime across every run at once, which is host reach rather than run reach.)
+  - They **promote** a workspace's recorded egress into its allowlist, but they cannot **record** one.
+  - Launching a recording session opens an interactive sandbox with open egress, the workspace's directory bind-mounted and its credentials injected, which is reach into a run, credential material and the host.
+  - These are the three things this tier is defined never to have.
+  - So `POST /workspaces/{id}/record` is admin-only and the console shows a security admin that control disabled beside the promote control it leaves live.
+  - They also cannot touch the People page, integrations, site-config writes, base images, or the deploy funnel.
+  - They run under a governance profile themselves if one is assigned to them, since only `admin` is exempt from ceiling resolution.
+  - A profile can only make the deployer's stored credentials *less* available, never more — and a security admin widening their own egress is an audited act, visible in the log they cannot rewrite.
+  - No capability grant can widen anyone to admin; that invariant is what makes delegating `/permissions` safe.
+- **A security admin's revocations reach the super admin, deliberately.**
+  - "Revoke sessions and API tokens" above is not scoped to members: `POST /api/v1/sessions/revoke` applies no target-role check, so a security admin may cut a *super admin's* sessions and tokens by `sub`.
+  - The `{"all":true}` arm logs out **every** principal and revokes **every** live API token in the deployment — CI and automation credentials included — in one audited call.
+  - That is the tier working as designed.
+  - Incident response is the security admin's job, the two tiers deliberately do not nest (a security admin still cannot reach into a run, and their SSH key and attach ticket still stamp `user`).
+  - A revocation only ever *subtracts* reach — it grants the caller nothing.
+- What bounds it is that a revocation is not a lockout.
+  - The session cutoff is a **timestamp**, not a flag: signing in again mints a session issued after the cutoff, which clears it with no operator action.
+  - The **admin bearer token never consults revocations at all**, so the break-glass above survives a `{"all":true}` — a security admin cannot use this to lock the deployer out of undoing it.
 
-**Security admin (`security_admin`).** A mapped tier — never a default, and never
-derivable from the operator allowlist; you create one by mapping an IdP App Role
-or group to `security_admin` in the role map (chart or People page). Security
-admins read the whole workspace inventory AND any workspace in it — the list,
-the row (projected), its build status (image and log blanked) and its
-**observed egress** — because they decide that workspace's allowed and denied
-hosts and the observed traffic is the input to that decision.
-`GET /workspaces/{id}/env-as-code` is NOT in that set (owner-or-super, since
-F287): its files carry the internal registry coordinate, the site-config
-artifact redirects and the operator's setup commands, none of which are an
-egress-decision input. They cannot otherwise WRITE a workspace: renaming,
-reassigning, deleting, binding credential material and launching a recording all
-stay with the super admin. Security
-admins author and assign **governance profiles** (named ceilings bound to users or
-groups), write the org allow/denylists (capability grants), decide escalated
-approvals — egress, credential, tool — on anyone's run, revoke sessions and API
-tokens, and verify the audit chain. They can also **stop** any run in the
-deployment — killing a foreign run is incident response, and the most
-time-critical thing this tier does — which is deliberately *not* the same as
-reaching INTO one: no attach ticket, no shell, no credential material, no host.
-Inspect-or-stop is the whole of that warrant. (The batch form, the sandbox
-sweep, stays admin-only: it drives the container runtime across every run at
-once, which is host reach rather than run reach.) They **promote** a workspace's recorded
-egress into its allowlist, but they cannot **record** one: launching a recording
-session opens an interactive sandbox with open egress, the workspace's directory
-bind-mounted and its credentials injected, which is reach into a run, credential
-material and the host — the three things this tier is defined never to have — so
-`POST /workspaces/{id}/record` is admin-only and the console shows a security
-admin that control disabled beside the promote control it leaves live. They also
-cannot touch the People page, integrations, site-config writes, base images, or
-the deploy funnel — and they run
-under a governance profile themselves if one is assigned to them, since only
-`admin` is exempt from ceiling resolution. A profile can only make the deployer's
-stored credentials *less* available, never more — and a security admin widening
-their own egress is an audited act, visible in the log they cannot rewrite. No
-capability grant can widen anyone to admin; that invariant is what makes
-delegating `/permissions` safe.
+> [!WARNING]
+> API tokens are the one part that does not self-heal: they are revoked permanently and must be re-minted, so treat `{"all":true}` as an incident lever rather than a routine one.
 
-**A security admin's revocations reach the super admin, deliberately.** "Revoke
-sessions and API tokens" above is not scoped to members: `POST
-/api/v1/sessions/revoke` applies no target-role check, so a security admin may
-cut a *super admin's* sessions and tokens by `sub`, and the `{"all":true}` arm
-logs out **every** principal and revokes **every** live API token in the
-deployment — CI and automation credentials included — in one audited call. That
-is the tier working as designed. Incident response is the security admin's job,
-the two tiers deliberately do not nest (a security admin still cannot reach into
-a run, and their SSH key and attach ticket still stamp `user`), and a
-revocation only ever *subtracts* reach — it grants the caller nothing.
-
-What bounds it is that a revocation is not a lockout. The session cutoff is a
-**timestamp**, not a flag: signing in again mints a session issued after the
-cutoff, which clears it with no operator action. The **admin bearer token never
-consults revocations at all**, so the break-glass above survives a
-`{"all":true}` — a security admin cannot use this to lock the deployer out of
-undoing it. API tokens are the one part that does not self-heal: they are
-revoked permanently and must be re-minted, so treat `{"all":true}` as an
-incident lever rather than a routine one. Every call is audited as
-`session.revoke` with its scope and the number of tokens revoked, under the
-calling security admin's own principal.
-
-**User (member).** Signs in, runs agents inside the governance profile their group
-is assigned (or the deployment ceiling if none). The profile is enforced outside
-the sandbox: inline policies are clamped to it, saved policies are clamped to it
-on selection (for anyone a profile is assigned to), authoring no policy at all
-yields it, and its denied hosts are re-asserted when the run is dispatched — a
-denied host cannot receive an injected or brokered credential at all. What a
-member can change is what the profile leaves open; what they can ask for is an
-escalation on the Approvals page.
-
-**Governance profiles.** One profile per subject; when several match, the most
-specific wins (user beats group beats user type beats everyone; priority breaks group ties) — the
-Governance page shows the resolved answer, and `GET /policies/default` returns the
-ceiling that actually binds the caller. A profile is either **standalone** or **composed**
-(0.8.6). The walkthrough below covers composed profiles from authoring to rollback; the
-design record is `docs/design/0.8/0.8.6-comp.md`.
-
-*Standalone and composed.* A standalone profile replaces the deployment ceiling for its
-subjects, exactly as on 0.8.5. A composed profile stores no ceiling of its own. It names a
-**base**, which is another profile (`base_profile_id`) or, when that is null, the deployment
-default, and an **overlay** (`overlay`, plus `overlay_limits` for the limits) that can only narrow
-that base. The ceiling that binds is `ApplyOverlay(effective(base), overlay)`, computed whenever
-authority is read and never stored, so a change to a base reaches every profile built on it. A
-composed row's own `ceiling` and `limits` columns are `{}`, and the API adds a read-only
-`effective: {ceiling, limits}` beside them.
-
-*Authoring.* A profile names at most one base. A chain is at most three profiles deep, counting
-the profile itself (a baseline, a division and a team), and a chain cannot loop; a write that would
-make a cycle or push any existing descendant past three is a `409`
-(`governance_profile_cycle`, `governance_profile_depth`). An overlay lists only the fields it
-narrows; an absent field inherits the base unchanged, and a present empty list is a value
-(`allowed_domains: []` narrows to no domains, `allowed_methods: []` is refused because it would
-mean every method). The write is strict: an overlay that names something its base does not permit
-(a domain the base's `allowed_domains` does not cover under the proxy's own matcher, a method the
-base excludes, `allow_all_egress` on a base without it, a grant the base's grants do not dominate)
-is `400 governance_overlay_invalid`, and so is an overlay whose meet with the base would be empty
-rather than narrow. A `PUT` that omits `base_profile_id`, `overlay`, `overlay_limits` or
-`contact` keeps the stored value, so an older client cannot flatten a profile by accident; only an
-explicit `null` clears one, and `overlay: null` turns the profile back into a standalone one (the
-request must then carry a valid `ceiling`).
-
-*Resolution, and what the meet does.* Resolution reads the chain once and composes from the
-deployment down. Each field has its own meet, taken after the runtime's own defaults are applied
-to both sides, so a zero that means "the default" is never read as "smaller":
+- Every call is audited as `session.revoke` with its scope and the number of tokens revoked, under the calling security admin's own principal.
+- **User (member).**
+  - Signs in, runs agents inside the governance profile their group is assigned (or the deployment ceiling if none).
+  - The profile is enforced outside the sandbox: inline policies are clamped to it, saved policies are clamped to it on selection (for anyone a profile is assigned to).
+  - Authoring no policy at all yields it, and its denied hosts are re-asserted when the run is dispatched.
+  - A denied host cannot receive an injected or brokered credential at all.
+  - What a member can change is what the profile leaves open; what they can ask for is an escalation on the Approvals page.
+- **Governance profiles.**
+  - One profile per subject; when several match, the most specific wins (user beats group beats user type beats everyone; priority breaks group ties).
+  - The Governance page shows the resolved answer, and `GET /policies/default` returns the ceiling that actually binds the caller.
+  - A profile is either **standalone** or **composed** (0.8.6).
+  - The walkthrough below covers composed profiles from authoring to rollback; the design record is [`docs/design/0.8/0.8.6-comp.md`](design/0.8/0.8.6-comp.md).
+- *Standalone and composed.*
+  - A standalone profile replaces the deployment ceiling for its subjects, exactly as on 0.8.5.
+  - A composed profile stores no ceiling of its own.
+  - It names a **base**, which is another profile (`base_profile_id`) or, when that is null, the deployment default, and an **overlay** (`overlay`, plus `overlay_limits` for the limits) that can only narrow that base.
+  - The ceiling that binds is `ApplyOverlay(effective(base), overlay)`, computed whenever authority is read and never stored, so a change to a base reaches every profile built on it.
+  - A composed row's own `ceiling` and `limits` columns are `{}`, and the API adds a read-only `effective: {ceiling, limits}` beside them.
+- *Authoring.*
+  - A profile names at most one base.
+  - A chain is at most three profiles deep, counting the profile itself (a baseline, a division and a team), and a chain cannot loop.
+  - A write that would make a cycle or push any existing descendant past three is a `409` (`governance_profile_cycle`, `governance_profile_depth`).
+  - An overlay lists only the fields it narrows.
+  - An absent field inherits the base unchanged, and a present empty list is a value (`allowed_domains: []` narrows to no domains, `allowed_methods: []` is refused because it would mean every method).
+  - The write is strict.
+  - An overlay that names something its base does not permit (a domain the base's `allowed_domains` does not cover under the proxy's own matcher, a method the base excludes, `allow_all_egress` on a base without it, a grant the base's grants do not dominate) is `400 governance_overlay_invalid`, and so is an overlay whose meet with the base would be empty rather than narrow.
+  - A `PUT` that omits `base_profile_id`, `overlay`, `overlay_limits` or `contact` keeps the stored value, so an older client cannot flatten a profile by accident.
+  - Only an explicit `null` clears one, and `overlay: null` turns the profile back into a standalone one (the request must then carry a valid `ceiling`).
+- *Resolution, and what the meet does.*
+  - Resolution reads the chain once and composes from the deployment down.
+  - Each field has its own meet, taken after the runtime's own defaults are applied to both sides, so a zero that means "the default" is never read as "smaller":
 
 | `RunPolicySpec` field | Unset means | Meet |
 |---|---|---|
@@ -3663,65 +3498,48 @@ to both sides, so a zero that means "the default" is never read as "smaller":
 | `allow_no_end`, `user_changes_limits` | false | AND |
 | `pause_idle_after_sec` | 0 is pause only runs waiting for a decision | smaller positive |
 
-*Worked example.* An organisation keeps three profiles. The **baseline** is a composed profile
-with no base (so the deployment default is its base) and an overlay that sets `allowed_domains` to
-the package registries and the forge, `first_use_approval` to `always_deny`, and `limits.max_cpu_millis` to
-4000. The **division** profile names the baseline as its base and an overlay that drops the forge
-host from `allowed_domains` and sets `max_concurrent_runs` to 6. The **team** profile names the
-division and an overlay that sets `allowed_methods` to `GET` and `HEAD`, `denied_domains` to one
-extra host, and `max_cpu_millis` to 2000. Assigned to the team's group, the team profile binds
-this: the registries only, the forge dropped, `GET` and `HEAD` only, the extra host denied,
-2000 millicores (the smaller of 4000 and 2000), six concurrent runs, and the baseline's
-`always_deny`. Later the baseline's owner narrows `max_cpu_millis` to 1000: the next read of
-the division and the team gives 1000, with no write to either. A baseline edit that would leave
-a descendant empty (it narrows `allowed_methods` to `POST` while the team overlay allows only `GET` and `HEAD`) is refused with
-`409 governance_overlay_unsatisfiable` naming that descendant. Widening the baseline later widens every field a descendant's overlay leaves unset, as any
-base edit does. It never switches on an overlay entry the base did not permit, because an overlay
-is checked against the base at write.
+- *Worked example.*
+  - An organisation keeps three profiles.
+  - The **baseline** is a composed profile with no base (so the deployment default is its base) and an overlay that sets `allowed_domains` to the package registries and the forge, `first_use_approval` to `always_deny`, and `limits.max_cpu_millis` to 4000.
+  - The **division** profile names the baseline as its base and an overlay that drops the forge host from `allowed_domains` and sets `max_concurrent_runs` to 6.
+  - The **team** profile names the division and an overlay that sets `allowed_methods` to `GET` and `HEAD`, `denied_domains` to one extra host, and `max_cpu_millis` to 2000.
+  - Assigned to the team's group, the team profile binds this:
+    - the registries only, the forge dropped, `GET` and `HEAD` only, the extra host denied, 2000 millicores (the smaller of 4000 and 2000), six concurrent runs, and the baseline's `always_deny`.
+  - Later the baseline's owner narrows `max_cpu_millis` to 1000: the next read of the division and the team gives 1000, with no write to either.
+  - A baseline edit that would leave a descendant empty (it narrows `allowed_methods` to `POST` while the team overlay allows only `GET` and `HEAD`) is refused with `409 governance_overlay_unsatisfiable` naming that descendant.
+  - Widening the baseline later widens every field a descendant's overlay leaves unset, as any base edit does.
+  - It never switches on an overlay entry the base did not permit, because an overlay is checked against the base at write.
+- *A base that moves under an overlay.*
+  - A write is strict, but a base edit, or a redeploy that narrows the deployment default, is someone else's act arriving later.
+  - At resolve the meet drops what the base no longer covers: the run's `201` lists the drop in `clamp_warnings` (naming only the member's own profile), and an administrator sees it in that profile's `effective.warnings` on `GET /governance`.
+  - If nothing satisfies the base and the overlay together (the deployment default narrowed until their `allowed_methods` are disjoint, say), the launch and every live door refuse with `403 governance_overlay_unsatisfiable`, audited, until an administrator fixes it.
+  - A chain that cannot be read, or one that loops or runs deeper than three, fails the same doors with a `500` or `503`.
+  - Neither case is ever read as the deployment's policy.
+  - An administrator sees which profile failed on `GET /governance` (`effective.error`).
+- *Every reader sees the composed answer.*
+  - Create, preflight and dispatch, and the doors that bind runs already going (attach and SSH, UI apps, revive, the limits re-clamp, end extension, the run policy view and the preview) all resolve through one code path.
+  - A source guard fails if any other code reads a raw profile row.
+  - A profile edit still reaches an already-running proxy only through the denies re-asserted at revive or restart.
+  - A base edit now does so for a whole subtree at once, so one edit has a larger reach and the same delay.
+- *What a member sees.*
+  - A member sees their own profile's name and contact, and the effective content: `GET /policies/default`, `/me` and denial bodies serve the profile that binds them, never the chain.
+  - A base's name, overlay and contact are not disclosed, and a profile with no `contact` falls back to the site's `policy_help` rather than inherit a base's contact, since that would name the base.
+  - Only an admin or a `security_admin` can read the graph (`GET /governance`).
+  - When you write an example for a member, show the effective result and the profile's own name; do not describe the structure behind it.
+- *Deleting and unassigning.*
+  - Deleting a profile requires unassigning it first, and a base that still has profiles built on it is a `409` naming them (never a silent widening).
+- *Exporting a graph (CLI and SDK).*
+  - `wardyn governance get` exports a composed graph and `wardyn governance set` applies it to another install; the Go client's `ApplyGovernance` does the same ([`docs/sdk.md`](sdk.md), "Composed profile graphs").
+  - Profiles are written bases first, every graph reference (`base_profile_id`, an assignment's `profile_id`) is remapped through the target's names to ids, the read-only `effective` view is never written back, and prune deletes descendants before bases.
+  - Under second-person approval (four-eyes) a write may return `202`: a child whose base is still pending, and an assignment whose profile is pending, are deferred and reported, not sent with a dangling id.
+  - Apply again once the base is approved.
+- *Upgrade and rollback.*
+  - The 0.8.6 migration only adds nullable columns, so every existing profile is standalone and resolves exactly as on 0.8.5.
+  - An older SDK or CLI sees `ceiling: {}` on a composed profile; its re-apply compares equal and sends nothing, and a `PUT` it does send omits the composition fields, which are kept.
 
-*A base that moves under an overlay.* A write is strict, but a base edit, or a redeploy that
-narrows the deployment default, is someone else's act arriving later. At resolve the meet drops
-what the base no longer covers: the run's `201` lists the drop in `clamp_warnings` (naming only the member's own profile), and an administrator sees it in that profile's `effective.warnings` on `GET /governance`. If nothing
-satisfies the base and the overlay together (the deployment default narrowed until their
-`allowed_methods` are disjoint, say), the launch and every live door refuse with `403
-governance_overlay_unsatisfiable`, audited, until an administrator fixes it. A chain that cannot
-be read, or one that loops or runs deeper than three, fails the same doors with a `500` or `503`.
-Neither case is ever read as the deployment's policy. An administrator sees which profile failed on `GET /governance`
-(`effective.error`).
-
-*Every reader sees the composed answer.* Create, preflight and dispatch, and the doors that bind
-runs already going (attach and SSH, UI apps, revive, the limits re-clamp, end extension, the run
-policy view and the preview) all resolve through one code path, and a source guard fails if any
-other code reads a raw profile row. A profile edit still reaches an already-running proxy only
-through the denies re-asserted at revive or restart; a base edit now does so for a whole
-subtree at once, so one edit has a larger reach and the same delay.
-
-*What a member sees.* A member sees their own profile's name and contact, and the effective
-content: `GET /policies/default`, `/me` and denial bodies serve the profile that binds them,
-never the chain. A base's name, overlay and contact are not disclosed, and a profile with no
-`contact` falls back to the site's `policy_help` rather than inherit a base's contact, since that
-would name the base. Only an admin or a `security_admin` can read the graph (`GET /governance`). When you write
-an example for a member, show the effective result and the profile's own name; do not describe
-the structure behind it.
-
-*Deleting and unassigning.* Deleting a profile requires unassigning it first, and a base that
-still has profiles built on it is a `409` naming them (never a silent widening).
-
-*Exporting a graph (CLI and SDK).* `wardyn governance get` exports a composed graph and
-`wardyn governance set` applies it to another install; the Go client's `ApplyGovernance` does the
-same (`docs/sdk.md`, "Composed profile graphs"). Profiles are written bases first, every graph
-reference (`base_profile_id`, an assignment's `profile_id`) is remapped through the target's
-names to ids, the read-only `effective` view is never written back, and prune deletes
-descendants before bases. Under second-person approval (four-eyes) a write may return `202`:
-a child whose base is still pending, and an assignment whose profile is pending, are
-deferred and reported, not sent with a dangling id; apply again once the base is approved.
-
-*Upgrade and rollback.* The 0.8.6 migration only adds nullable columns, so every existing
-profile is standalone and resolves exactly as on 0.8.5. An older SDK or CLI sees `ceiling: {}`
-on a composed profile; its re-apply compares equal and sends nothing, and a `PUT` it does send
-omits the composition fields, which are kept. There is no downgrade: a 0.8.5 binary refuses a database the migration
-has touched, and converting composed profiles to standalone first changes nothing it sees. Restore the
-pre-upgrade dump, which holds no composed profile.
+> [!IMPORTANT]
+> There is no downgrade: a 0.8.5 binary refuses a database the migration has touched, and converting composed profiles to standalone first changes nothing it sees.
+> Restore the pre-upgrade dump, which holds no composed profile.
 
 *Residual risks.*
 
@@ -3736,193 +3554,114 @@ pre-upgrade dump, which holds no composed profile.
   so some narrowing edits still need a second approver. That is the safe direction.
 - Operators resolve no profile; that is a separate predicate from composition.
 
-Stated honestly: profiles narrow by omission — a profile that omits
-secret grants revokes them for its subjects (the editor warns); a member's
-long-lived API token keeps the group snapshot it was minted with until re-minted.
-Sandbox size is the exception: a profile that omits `resources`, or leaves one of
-its fields at zero, inherits the deployment's size for that field (the default
-policy's `resources`, else `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` /
-`WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`), so omission never grows a sandbox. A profile
-that sets a size keeps it, and the profile's `limits.max_cpu_millis` and
-`limits.max_memory_mib` (0 is unlimited, negatives refused) cap CPU and memory
-for its assigned members at create, preflight and dispatch; operators are exempt.
+Stated honestly: profiles narrow by omission — a profile that omits secret grants revokes them for its subjects (the editor warns).
 
-**Limits that reach a running run (0.8.2, #1391, #1392).** Two limits bind past
-create, keyed on the profile the run was created under as it stands now, so a
-limit set later reaches runs already going (a deleted profile binds nothing).
-`deny_interactive` also refuses a terminal attach (`wardyn run attach` and the
-console terminal) and every SSH-gateway connection into any run under the
-profile, exec runs and the run's owner included (a super admin enters only a
-run of their own or one with no personal owner, so the exemption below reaches no
-person's run); the attach is an `authz.denied`
-row (`governance_profile`, target `runs.attach`), the SSH refusal an
-`ssh.authenticate` failure naming the profile. The harness sign-in run is exempt,
-as it is at create. `deny_ui_apps` strips `ui_apps` from a run at create, with a
-`clamp_warnings` sentence and a `dropped` row at target `runs.ui_apps`, and the UI
-gateway refuses a session into a run created under the profile. An empty ceiling
-`ui_apps` is still no opinion, so a profile without the limit behaves as before.
-A super admin is exempt from both at every door, as at create; a security admin
-is bound. A limit set later reaches new sessions but does not sever ones already
-open: a terminal, SSH session or UI-app session opened before the limit was set
-runs until it ends. `deny_ui_apps` does not close an SSH port forward to the app;
-`deny_interactive` does.
-
-**The autonomy rubric (0.8, #77).** A profile may also carry `limits.autonomy_rubric`,
-nine closed fields — three egress postures (`egress_open`, `egress_reviewed`,
-`egress_sealed`), three secret postures (`secrets_powerful`, `secrets_baseline`,
-`secrets_none`) and three enforced confinement classes (`confinement_cc1`,
-`confinement_cc2`, `confinement_cc3`) — each unset or one of four autonomy levels:
-`L0` attended (interactive only, supervised seeding), `L1` gated (adds
-non-interactive runs, but `tool_approvals` is derived to `hold`), `L2` unattended
-(adds `auto` approval and `seed_auto_tools`), and `L3` (adds `task_mode=exec`, the
-door that routes around every other gate, so it is the top rung). Below `L3`, an
-interactive run with a task must use `interactive_start=agent`: the shell startup
-form (`interactive_start` unset or `shell`) runs the task at sandbox boot the way
-exec does, and is refused (`runs.interactive_start`). `resolveRunAutonomy`
-(`internal/api/runs_autonomy.go`) grades the run's real posture — egress reach
-graded on the same union `unionRunEgress` builds, secret power, and the
-already-enforced confinement class — against the assigned profile's rubric and
-folds every field the posture matches to its **minimum** level; a nil rubric, or a
-posture none of the nine fields caps, binds nothing (today's behaviour, unchanged).
-The same function backs both `POST /runs` and `POST /runs/preflight`, so the level
-Review shows is the level launch enforces. A run whose declared shape exceeds its
-resolved level is refused `governance_profile` (see
-[§ Every denial that isn't a 404](#every-denial-that-isnt-a-404) for its `target`s). A
-non-interactive run resolved to exactly `L1` is not refused when its agent has a
-tool-approval lane (claude-code): it launches with its tool approvals derived to
-`hold`, and the 201 carries a warning saying so. Any other agent — codex-cli, a
-BYOA image — has no lane to derive a hold into, so the same run is refused with
-target `runs.agent`.
-The resolution — level, posture, and every rubric field that tied at that level
-(`bound_by`) — rides the create audit row's `autonomy` field and is frozen on
-`agent_runs.autonomy_level`. **Not in the posture:** the model-provider hosts
-egress dispatch resolves from global configuration after this gate runs (a Bedrock
-run's region, for one), and any stored-credential residency — a run's autonomy
-level is graded on what the run can reach and hold, not on where its model
-credential lives.
+- A member's long-lived API token keeps the group snapshot it was minted with until re-minted.
+- Sandbox size is the exception.
+  - A profile that omits `resources`, or leaves one of its fields at zero, inherits the deployment's size for that field (the default policy's `resources`, else `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`), so omission never grows a sandbox.
+  - A profile that sets a size keeps it, and the profile's `limits.max_cpu_millis` and `limits.max_memory_mib` (0 is unlimited, negatives refused) cap CPU and memory for its assigned members at create, preflight and dispatch; operators are exempt.
+- **Limits that reach a running run (0.8.2, #1391, #1392).**
+  - Two limits bind past create, keyed on the profile the run was created under as it stands now, so a limit set later reaches runs already going (a deleted profile binds nothing).
+  - `deny_interactive` also refuses a terminal attach (`wardyn run attach` and the console terminal) and every SSH-gateway connection into any run under the profile, exec runs and the run's owner included.
+  - (A super admin enters only a run of their own or one with no personal owner, so the exemption below reaches no person's run.)
+  - The attach is an `authz.denied` row (`governance_profile`, target `runs.attach`), the SSH refusal an `ssh.authenticate` failure naming the profile.
+  - The harness sign-in run is exempt, as it is at create.
+  - `deny_ui_apps` strips `ui_apps` from a run at create, with a `clamp_warnings` sentence and a `dropped` row at target `runs.ui_apps`, and the UI gateway refuses a session into a run created under the profile.
+  - An empty ceiling `ui_apps` is still no opinion, so a profile without the limit behaves as before.
+  - A super admin is exempt from both at every door, as at create; a security admin is bound.
+  - A limit set later reaches new sessions but does not sever ones already open: a terminal, SSH session or UI-app session opened before the limit was set runs until it ends.
+  - `deny_ui_apps` does not close an SSH port forward to the app; `deny_interactive` does.
+- **The autonomy rubric (0.8, #77).**
+  - A profile may also carry `limits.autonomy_rubric`, nine closed fields — three egress postures (`egress_open`, `egress_reviewed`, `egress_sealed`), three secret postures (`secrets_powerful`, `secrets_baseline`, `secrets_none`) and three enforced confinement classes (`confinement_cc1`, `confinement_cc2`, `confinement_cc3`) — each unset or one of four autonomy levels: `L0` attended (interactive only, supervised seeding), `L1` gated (adds non-interactive runs, but `tool_approvals` is derived to `hold`), `L2` unattended (adds `auto` approval and `seed_auto_tools`), and `L3` (adds `task_mode=exec`, the door that routes around every other gate, so it is the top rung).
+  - Below `L3`, an interactive run with a task must use `interactive_start=agent`: the shell startup form (`interactive_start` unset or `shell`) runs the task at sandbox boot the way exec does, and is refused (`runs.interactive_start`).
+  - `resolveRunAutonomy` ([`internal/api/runs_autonomy.go`](../internal/api/runs_autonomy.go)) grades the run's real posture — egress reach graded on the same union `unionRunEgress` builds, secret power, and the already-enforced confinement class — against the assigned profile's rubric and folds every field the posture matches to its **minimum** level.
+  - A nil rubric, or a posture none of the nine fields caps, binds nothing (today's behaviour, unchanged).
+  - The same function backs both `POST /runs` and `POST /runs/preflight`, so the level Review shows is the level launch enforces.
+  - A run whose declared shape exceeds its resolved level is refused `governance_profile` (see [§ Every denial that isn't a 404](#every-denial-that-isnt-a-404) for its `target`s).
+  - A non-interactive run resolved to exactly `L1` is not refused when its agent has a tool-approval lane (claude-code): it launches with its tool approvals derived to `hold`, and the 201 carries a warning saying so.
+  - Any other agent — codex-cli, a BYOA image — has no lane to derive a hold into, so the same run is refused with target `runs.agent`.
+  - The resolution — level, posture, and every rubric field that tied at that level (`bound_by`) — rides the create audit row's `autonomy` field and is frozen on `agent_runs.autonomy_level`.
+  - **Not in the posture:** the model-provider hosts egress dispatch resolves from global configuration after this gate runs (a Bedrock run's region, for one), and any stored-credential residency.
+  - A run's autonomy level is graded on what the run can reach and hold, not on where its model credential lives.
 
 ### When everyone is an admin, and what a refused person is told
 
-**The everyone-is-an-admin warning.** With SSO configured, the setup checklist's
-"Who is an admin" row grades `warn` — holding the console in the People step and
-showing every admin a banner above every page — on either of two conditions
-(#491):
+**The everyone-is-an-admin warning.** With SSO configured, the setup checklist's "Who is an admin" row grades `warn` — holding the console in the People step and showing every admin a banner above every page — on either of two conditions (#491):
 
-- **No role map and no admin list.** A person nobody has mapped derives `admin`
-  when there is **neither** a role map (the chart's `WARDYN_OIDC_ROLE_MAP` or a
-  People-step row) **nor** an admin list (the operator allowlist,
-  `WARDYN_OIDC_OPERATOR_EMAILS`). An admin list alone is enough to clear this:
-  an unmatched person then derives `member`.
+- **No role map and no admin list.**
+  - A person nobody has mapped derives `admin` when there is **neither** a role map (the chart's `WARDYN_OIDC_ROLE_MAP` or a People-step row) **nor** an admin list (the operator allowlist, `WARDYN_OIDC_OPERATOR_EMAILS`).
+  - An admin list alone is enough to clear this: an unmatched person then derives `member`.
 - **A role map IS set (chart or People step), but `WARDYN_OIDC_DEFAULT_ROLE=admin`.**
-  Every sign-in the map doesn't match still falls through to `admin` — before
-  #491 this read `ok`, since a role map being set was all the check looked for.
-  Fix by setting `WARDYN_OIDC_DEFAULT_ROLE` to `user` or a user type instead.
-  An admin list alone does not trip this: with no role map, a sign-in the
-  (empty) map doesn't match derives `member` regardless of the default role.
+  - Every sign-in the map doesn't match still falls through to `admin` — before #491 this read `ok`, since a role map being set was all the check looked for.
+  - Fix by setting `WARDYN_OIDC_DEFAULT_ROLE` to `user` or a user type instead.
+  - An admin list alone does not trip this: with no role map, a sign-in the (empty) map doesn't match derives `member` regardless of the default role.
 
-A deployment that hits BOTH conditions (no role map, no admin list, AND
-`WARDYN_OIDC_DEFAULT_ROLE=admin`) reads the first condition's own sentence —
-one banner, not two competing ones. Members see neither.
+A deployment that hits BOTH conditions (no role map, no admin list, AND `WARDYN_OIDC_DEFAULT_ROLE=admin`) reads the first condition's own sentence — one banner, not two competing ones. Members see neither.
 
-**Request-access help (`sign_in_help_text`, `sign_in_help_url`).** Two optional
-SiteConfig fields, edited on the People step ("When someone can't sign in") or
-through `PUT /site-config`. The sign-in page shows them under Wardyn's own
-sentence — never instead of it — on the four refusals a person cannot clear
-alone: no role, an email domain that isn't allowed, too many groups to list, and
-a missing `email_verified` claim. Timeouts and configuration errors get nothing.
-**Both are public by design:** the anonymous `/healthz` publishes them, because
-the reader has, by definition, not signed in — so name your request process, not
-your internal systems. The text is plain text (at most 1,000 characters; no
-line breaks, control characters, line/paragraph separators or invisible format
-characters such as bidi overrides and zero-width spaces; quotes are fine) and is
-rendered as text, never markup. The link must be an `https://` address with a
-real host name — no spaces, no `user:pass@`, none of those hidden characters, a
-query string is fine — and always reads "Request access". A link saved as
-`http://` before 0.8 keeps working and is published unchanged, but the setup
-checklist warns about it (row `sign_in_help_url`) until you change it; a save
-that sends it back unchanged is accepted, and a new `http://` link is refused.
-That includes an MDM or CLI baseline (`wardyn site-config set`) whose `http://`
-link differs from the stored one: the whole re-apply is refused with a 400 on
-every boot (`wardyn-desktop.sh` logs "site-config set failed") until the
-baseline file names an `https://` link.
-Every write records both values in the clear on `site_config.write`. A write outside those bounds is refused with a 400 naming the
-field, and a stored value that no longer passes is dropped from `/healthz`
-rather than published. Like the provider blocks, a body that does not name a
-field carries the stored value forward; name it as `""` to clear it.
+- **Request-access help (`sign_in_help_text`, `sign_in_help_url`).**
+  - Two optional SiteConfig fields, edited on the People step ("When someone can't sign in") or through `PUT /site-config`.
+  - The sign-in page shows them under Wardyn's own sentence — never instead of it — on the four refusals a person cannot clear alone:
+    - no role, an email domain that isn't allowed, too many groups to list, and a missing `email_verified` claim.
+  - Timeouts and configuration errors get nothing.
+  - **Both are public by design:** the anonymous `/healthz` publishes them, because the reader has, by definition, not signed in — so name your request process, not your internal systems.
+  - The text is plain text (at most 1,000 characters; no line breaks, control characters, line/paragraph separators or invisible format characters such as bidi overrides and zero-width spaces; quotes are fine) and is rendered as text, never markup.
+  - The link must be an `https://` address with a real host name — no spaces, no `user:pass@`, none of those hidden characters, a query string is fine — and always reads "Request access".
+  - A link saved as `http://` before 0.8 keeps working and is published unchanged, but the setup checklist warns about it (row `sign_in_help_url`) until you change it.
+  - A save that sends it back unchanged is accepted, and a new `http://` link is refused.
+  - That includes an MDM or CLI baseline (`wardyn site-config set`) whose `http://` link differs from the stored one.
+  - The whole re-apply is refused with a 400 on every boot (`wardyn-desktop.sh` logs "site-config set failed") until the baseline file names an `https://` link.
+  - Every write records both values in the clear on `site_config.write`.
+  - A write outside those bounds is refused with a 400 naming the field, and a stored value that no longer passes is dropped from `/healthz` rather than published.
+  - Like the provider blocks, a body that does not name a field carries the stored value forward; name it as `""` to clear it.
 
 ### UI apps with more than one user: use host mode
 
-If the UI-sandbox gateway is on and more than one person uses this install, set
-`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` (`uiSandbox.originTemplate` in the chart),
-e.g. `https://run-{run}.ui.example.com`, with wildcard DNS and a wildcard
-certificate. Without it the gateway runs in path mode: every run's relayed app
-is served from ONE browser origin, separated only by a path-scoped cookie. That
-cookie decides which session a request carries, but not what a page may read:
-any relayed page on that origin can script any other page there that is open
-in the same browser. That is the shared-origin residual
-([THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 #18).
+- If the UI-sandbox gateway is on and more than one person uses this install, set `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` (`uiSandbox.originTemplate` in the chart), e.g. `https://run-{run}.ui.example.com`, with wildcard DNS and a wildcard certificate.
+- Without it the gateway runs in path mode: every run's relayed app is served from ONE browser origin, separated only by a path-scoped cookie.
 
-Two controls keep another user's app out of that origin in your browser: the
-enter ticket is bound to the browser that minted it, so nobody can push you
-into their app with a link or a form, and a relayed app cannot register a
-service worker outside its own path
-([UI-SANDBOXES.md §3](UI-SANDBOXES.md#3-open-an-app) and
-[Bounds](UI-SANDBOXES.md#bounds)). They leave one boundary to the path cookie alone: your
-own apps can still reach each other. Host mode gives every run its own origin,
-which the browser itself isolates, and it refuses an enter served on any other
-run's host. Path mode is for a single-user or demo install.
+> [!WARNING]
+> That cookie decides which session a request carries, but not what a page may read: any relayed page on that origin can script any other page there that is open in the same browser.
+> That is the shared-origin residual ([THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 #18).
 
-Either mode needs the console and the gateway on **the same site** (one
-registrable domain, one scheme): the enter binding is a cookie the console's
-fetch sets on the gateway, and a browser refuses that across sites. Open then
-fails with an error that says so.
+- Two controls keep another user's app out of that origin in your browser.
+  - The enter ticket is bound to the browser that minted it, so nobody can push you into their app with a link or a form.
+  - A relayed app cannot register a service worker outside its own path ([UI-SANDBOXES.md §3](UI-SANDBOXES.md#3-open-an-app) and [Bounds](UI-SANDBOXES.md#bounds)).
+- They leave one boundary to the path cookie alone: your own apps can still reach each other.
+- Host mode gives every run its own origin, which the browser itself isolates, and it refuses an enter served on any other run's host.
+- Path mode is for a single-user or demo install.
+- Either mode needs the console and the gateway on **the same site** (one registrable domain, one scheme).
+  - The enter binding is a cookie the console's fetch sets on the gateway, and a browser refuses that across sites.
+  - Open then fails with an error that says so.
 
 ### Every denial that isn't a 404
 
-(This section is the source of record for `authz.denied`'s `reason` values;
-[`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md) is the vocabulary reference for every
-*other* audit `action` and points back here for this one.)
+> [!NOTE]
+> (This section is the source of record for `authz.denied`'s `reason` values; [`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md) is the vocabulary reference for every *other* audit `action` and points back here for this one.)
 
-Every member denial that isn't a plain foreign-resource 404 is audited under
-`authz.denied`, whose `reason` field is the whole vocabulary.
-
-Three of the reasons below are NOT member denials at all: 0.7.4 added a RUN-TOKEN
-tier (`run_terminal`, `run_not_found`; 0.8 adds `run_kept`), raised by `internalAuth`'s liveness
-gate against a sandbox sidecar's own run token rather than against a person. They
-live in this table because the action, the shape and the `reason` field are the
-same one an operator greps; the `actor_type` (`agent`) is what tells them apart.
-
-One FIELD rides beside the reason since 0.7.4: `user_view: true` (renamed in 0.8
-from `member_mode` — see [Renamed in 0.8](#renamed-in-08); pre-0.8 rows keep
-`member_mode`), on every ADMIN-TIER `403` below — the two `requireOperator` /
-`requireSecurityOperator` chokepoints and the in-handler refusals that raise the
-same two reasons — when the refused caller is an admin exercising
-[the User view](operations/member-mode.md). It is a marker, not a
-reason — the `reason`, the status code and the body are unchanged, and the key
-is absent entirely for an ordinary member. A burst of denials carrying it is an
-admin walking the member path, not an incident.
-
-**A ceiling refusal names the policy that caused it.** A refusal made by the resolved
-ceiling (`governance_profile` and `run_quota`, plus the Record Mode and provider sign-in
-launches that answer `record_ceiling_limit`) carries a `policy` object beside `error` and
-`reason`: `source` (`profile` or `deployment`), the leaf profile's `name`, and the contact
-it published (`owner`, `email`, `request_url`, `request_text`, each present only when set
-and still valid). A member bound by the deployment is named as `deployment` with the
-site config's `policy_help`. An operator is never refused by a ceiling, so never gets one.
-The `error` text and the status are unchanged. The key is never on a hidden door (the
-`404` twin of a missing resource) and never on a decision whose wire reason was rewritten,
-so those stay byte-identical to a missing resource. An `authz.denied` row never carries
-the owner or email, only the `reason` and `target` it always had.
-
-- `GET /me` carries `governance_contact`: the caller's own `policy` object, or `null` for
-  an operator, when the ceiling cannot be resolved, and on a stale group snapshot. It
-  never fails the read, and for a member bound by the deployment it is `{"source":
-  "deployment"}` without a site-config read.
-- `GET /runs/{id}` carries `policy`: the profile the run was launched under, else the
-  deployment's `policy_help`, else the key is absent. A store failure omits it.
-- `wardyn` prints one `governed by …, to request a change: …` line after the error when the
-  refusal carries a `policy`. Exit codes are unchanged, and the Go SDK exposes it as
-  `APIError.Policy`.
+- Every member denial that isn't a plain foreign-resource 404 is audited under `authz.denied`, whose `reason` field is the whole vocabulary.
+- Three of the reasons below are NOT member denials at all.
+  - 0.7.4 added a RUN-TOKEN tier (`run_terminal`, `run_not_found`; 0.8 adds `run_kept`), raised by `internalAuth`'s liveness gate against a sandbox sidecar's own run token rather than against a person.
+  - They live in this table because the action, the shape and the `reason` field are the same one an operator greps; the `actor_type` (`agent`) is what tells them apart.
+- One FIELD rides beside the reason since 0.7.4: `user_view: true` (renamed in 0.8 from `member_mode` — see [Renamed in 0.8](#renamed-in-08); pre-0.8 rows keep `member_mode`), on every ADMIN-TIER `403` below — the two `requireOperator` / `requireSecurityOperator` chokepoints and the in-handler refusals that raise the same two reasons — when the refused caller is an admin exercising [the User view](operations/member-mode.md).
+  - It is a marker, not a reason — the `reason`, the status code and the body are unchanged, and the key is absent entirely for an ordinary member.
+  - A burst of denials carrying it is an admin walking the member path, not an incident.
+- **A ceiling refusal names the policy that caused it.**
+  - A refusal made by the resolved ceiling (`governance_profile` and `run_quota`, plus the Record Mode and provider sign-in launches that answer `record_ceiling_limit`) carries a `policy` object beside `error` and `reason`:
+    - `source` (`profile` or `deployment`), the leaf profile's `name`, and the contact it published (`owner`, `email`, `request_url`, `request_text`, each present only when set and still valid).
+  - A member bound by the deployment is named as `deployment` with the site config's `policy_help`.
+  - An operator is never refused by a ceiling, so never gets one.
+  - The `error` text and the status are unchanged.
+  - The key is never on a hidden door (the `404` twin of a missing resource) and never on a decision whose wire reason was rewritten, so those stay byte-identical to a missing resource.
+  - An `authz.denied` row never carries the owner or email, only the `reason` and `target` it always had.
+  - `GET /me` carries `governance_contact`: the caller's own `policy` object, or `null` for
+    an operator, when the ceiling cannot be resolved, and on a stale group snapshot. It
+    never fails the read, and for a member bound by the deployment it is `{"source":
+    "deployment"}` without a site-config read.
+  - `GET /runs/{id}` carries `policy`: the profile the run was launched under, else the
+    deployment's `policy_help`, else the key is absent. A store failure omits it.
+  - `wardyn` prints one `governed by …, to request a change: …` line after the error when the
+    refusal carries a `policy`. Exit codes are unchanged, and the Go SDK exposes it as
+    `APIError.Policy`.
 
 | `reason` | Raised when | Shape |
 |---|---|---|
@@ -3930,7 +3669,7 @@ the owner or email, only the `reason` and `target` it always had.
 | `admin_view` | an admin in the user view launched a run (`POST /runs` or `POST /runs/preflight`) after the type the view looks through was deleted. Not audited on its own — the cause row is `user_view_type_deleted`, which the launch response answered; see that row for the shape and the marker | ⛔ `409` |
 | `security_admin_surface` | a member requested a route on the SECURITY tier (`requireSecurityOperator` — admin or `security_admin`), and also raised in-handler by `resolveAlwaysTarget` for `decision_scope=always` on a route that lives on the member group — the same predicate on a route a member may legally reach. The `403` body is byte-identical to `admin_surface`'s on purpose, so a refusal never maps which tier a route sits on; only this reason distinguishes them, which is what lets a rule tell "a member hit an admin route" from "a member hit a security-tier route" | ⛔ `403` |
 | `not_owner` | a member reached a run/approval/recording, or a member-OWNED workspace (`owned_by`, migration 0048), that exists but isn't theirs | ⛔ `404` (byte-identical to missing) |
-| `attach_ticket_foreign_run` | a caller who is not the run's owner — **including a `security_admin`** — asked to mint a PTY attach ticket for a run they did not create. Its own reason rather than `not_owner` so an auditor can see the security tier refused a foreign shell without inferring it from the path (`internal/api/attach_ticket.go`) | ⛔ `404` (byte-identical to missing) |
+| `attach_ticket_foreign_run` | a caller who is not the run's owner — **including a `security_admin`** — asked to mint a PTY attach ticket for a run they did not create. Its own reason rather than `not_owner` so an auditor can see the security tier refused a foreign shell without inferring it from the path ([`internal/api/attach_ticket.go`](../internal/api/attach_ticket.go)) | ⛔ `404` (byte-identical to missing) |
 | `run_owner_only` | 0.8.5 (#1476): a **super admin** asked for interactive entry (attach-ticket mint or consume, the cookie attach lane, a UI app, take-over) to a run that is not theirs and has a personal owner. A `403` with the body `{"error":"only the person who started this run can open it interactively","reason":"run_owner_only"}`, not the `404` above, because the admin can already see the run. A run with no personal owner (operator-owned service or local runs) stays enterable. Kill, approve, policy, grants, revoke, audit, revive, resume and end are unchanged | ⛔ `403` |
 | `recording_governed` | 0.8.6: with `WARDYN_GOVERN_ADMIN_RUNS` on, an admin whose runs are governed (an SSO admin, an admin-role personal token) asked for Record Mode (`POST /workspaces/{id}/record`). Refused first, before the ceiling read and the import-step claim, at target `workspaces.record`; the body says Record Mode is refused for admins whose runs are governed and that the operator can allow it by setting `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` to `recording`. That setting lifts it for that lane, and each recording is then marked `governance_exempt` on `run.record.start`. The admin token and local mode are never refused. See [Constrained-admin mode](operations/member-mode.md#constrained-admin-mode) | ⛔ `403` |
 | `key_domain_unknown` | 0.8.6: `PUT /key-domains/assignments/{subject_type}/{subject}` named a key domain the deployment's key domains file (`WARDYN_KEY_DOMAINS_FILE`, chart `kek.domains`) does not declare. The body names the declared domains; nothing was written. Domains come from the file alone, so the API can only choose among them | ⛔ `422` |
@@ -3939,26 +3678,26 @@ the owner or email, only the `reason` and `target` it always had.
 | `capability_workspace` | `workspace_id`: a member named a workspace they aren't granted (`403`). Launching: an `inline_policy` `workspace_repos` entry for an ungranted workspace was dropped — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_egress_host` | deciding: the approval's host isn't granted (`403`). Launching: member-authored allowlist entries were dropped from an `inline_policy` — the run still launches | ⛔ `403`, or 🟡 a drop |
 | `capability_secret` | a member's `inline_policy` grant referenced a secret they aren't granted — dropped, not rejected | 🟡 drop |
-| `capability_agent` | `agent`: a member named an agent they aren't granted (`denyUserRequest`, `internal/api/runs_create_validate.go`) | ⛔ `403` |
-| `capability_workspace_provider` | a member's work would come from a git provider row they aren't granted — the row `admitRepoURL` resolves the repository's derived clone URL to (`internal/api/workspace_providers.go`). Six doors: `POST /runs` over the resolved spec's repos and over the legacy `repo` field (target `runs.workspace_provider`), and `POST /workspaces`, `PUT /workspaces/{id}`, `POST /workspaces/{id}/scan` and `POST /workspaces/{id}/build` (target `workspaces.source_provider`). The body names the provider KIND and nothing else — never a base URL, never the row id, because `GET /workspace-providers` is a security-tier door for exactly that reason. Silent on a deployment with no provider rows, and on a repository whose host no row CLAIMS (including one still admitted through the legacy `scm_hosts` list): there is no row for a grant to name | ⛔ `403` |
-| `capability_model_provider` | a member's run would use a model provider they aren't granted — the one they named (`model_provider`), the one the workspace pins, or, when no single granted provider is left, the ones serving the agent (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; target `runs.model_provider`), and on revive/restart/extend as the owner (the run's recorded provider, `internal/api/run_owner_authority.go`). Review answers the same refusal as create. Since 0.8.2 (#1018) a provider the member NAMED in the request is answered exactly as an id no provider has — the `422` `model_provider_unavailable` "there is no model provider by that name" sentence, whatever the provider's state — because provider ids are guessable; only this row records the true reason. A provider the workspace's pin names, which a workspace read hides from them, is refused `403` with the sentence that names no provider, and the row carries `provider`. The key door (`PUT` and `DELETE /model-providers/{id}/credential`, target `model_provider.credential`; a `DELETE` by a person who still holds a key for the provider is not refused) and the sign-in door (`/model-providers/{id}/sign-in`, target `model_provider.sign_in`) likewise answer the `404` an unknown id gets (`denyProviderAsMissing`, `internal/api/model_provider_credentials.go`). Only the unnamed case — the one provider serving the agent, or none granted — answers `403`, with the one sentence that names no provider (the row carries `provider` when exactly one serves) | ⛔ `403` when no provider was named; otherwise byte-identical to an unknown id (`422` at create and Review, `404` at the key and sign-in doors) |
+| `capability_agent` | `agent`: a member named an agent they aren't granted (`denyUserRequest`, [`internal/api/runs_create_validate.go`](../internal/api/runs_create_validate.go)) | ⛔ `403` |
+| `capability_workspace_provider` | a member's work would come from a git provider row they aren't granted — the row `admitRepoURL` resolves the repository's derived clone URL to ([`internal/api/workspace_providers.go`](../internal/api/workspace_providers.go)). Six doors: `POST /runs` over the resolved spec's repos and over the legacy `repo` field (target `runs.workspace_provider`), and `POST /workspaces`, `PUT /workspaces/{id}`, `POST /workspaces/{id}/scan` and `POST /workspaces/{id}/build` (target `workspaces.source_provider`). The body names the provider KIND and nothing else — never a base URL, never the row id, because `GET /workspace-providers` is a security-tier door for exactly that reason. Silent on a deployment with no provider rows, and on a repository whose host no row CLAIMS (including one still admitted through the legacy `scm_hosts` list): there is no row for a grant to name | ⛔ `403` |
+| `capability_model_provider` | a member's run would use a model provider they aren't granted — the one they named (`model_provider`), the one the workspace pins, or, when no single granted provider is left, the ones serving the agent (`enforceRunModelProvider`, [`internal/api/run_model_provider.go`](../internal/api/run_model_provider.go); target `runs.model_provider`), and on revive/restart/extend as the owner (the run's recorded provider, [`internal/api/run_owner_authority.go`](../internal/api/run_owner_authority.go)). Review answers the same refusal as create. Since 0.8.2 (#1018) a provider the member NAMED in the request is answered exactly as an id no provider has — the `422` `model_provider_unavailable` "there is no model provider by that name" sentence, whatever the provider's state — because provider ids are guessable; only this row records the true reason. A provider the workspace's pin names, which a workspace read hides from them, is refused `403` with the sentence that names no provider, and the row carries `provider`. The key door (`PUT` and `DELETE /model-providers/{id}/credential`, target `model_provider.credential`; a `DELETE` by a person who still holds a key for the provider is not refused) and the sign-in door (`/model-providers/{id}/sign-in`, target `model_provider.sign_in`) likewise answer the `404` an unknown id gets (`denyProviderAsMissing`, [`internal/api/model_provider_credentials.go`](../internal/api/model_provider_credentials.go)). Only the unnamed case — the one provider serving the agent, or none granted — answers `403`, with the one sentence that names no provider (the row carries `provider` when exactly one serves) | ⛔ `403` when no provider was named; otherwise byte-identical to an unknown id (`422` at create and Review, `404` at the key and sign-in doors) |
 | `capability_feature` | a member tried to add an SSH key (target `me.ssh_keys`) or mint an API token (target `me.tokens`) and that feature is not available to them. Checked before the key or token is validated or stored | ⛔ `403` |
-| `capability_policy` | `policy_id`: a member selected a stored policy they aren't granted (`denyUserRequest`, target `runs.policy`, on `POST /runs` and preflight alike), and on revive/restart/extend as the owner (`internal/api/run_owner_authority.go`) | ⛔ `403` |
-| `capability_component` | a person tried to attach an org component they aren't granted (`componentAttachRefusal`, `internal/api/components_authz.go`, target `runs.component`). An org component is usable by nobody until an allow row names its id. The body names nothing about the component — not its name, hosts, secrets or id | ⛔ `403` |
-| `component_autonomy` | the organisation's autonomy cap on runs that carry a component the launcher defined themselves (site config `components.autonomy_cap`, `L1` or `L0`) alone bound the run's autonomy level, at create and Review alike (`resolveRunAutonomy` → `foldComponentCap`, `internal/api/runs_autonomy_components.go`). Same rungs and targets as the `governance_profile` autonomy refusals below (`runs.task_mode`, `runs.interactive_start`, `runs.seed_auto_tools`, `runs.interactive`, `runs.agent`). It applies with or without a governance profile; under one the lower level wins, and a tie refuses as `governance_profile` with `custom_component` among its causes. The body's `policy` is the deployment's, not the profile's. With no cap set (the default) nothing is refused | ⛔ `403` |
-| `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` below autonomy level L3 (`runs.task_mode`), a non-interactive run below autonomy level L1 (`runs.interactive`), `seed_auto_tools` below autonomy level L2 (`runs.seed_auto_tools`), an agent with no tool-approval lane — BYOA (`agent` unset) or any agent other than `claude-code` — at a resolved level of exactly L1, where an unattended run's tool calls would otherwise be derived to `hold` (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `userDriveDoorRefusal`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`) or under a profile carrying `deny_task_mode_exec` (`runs.interactive_start`, `denyUserGovernance`), since it runs at sandbox boot unattended the way exec does, and — 0.8.2 — a terminal attach into a run whose profile carries `deny_interactive` (`runs.attach`) or a UI-gateway session into one whose profile carries `deny_ui_apps` (`runs.ui_apps`, which is also the target of the `dropped` row when that limit strips `ui_apps` at create; `internal/api/governance_run_doors.go`). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
+| `capability_policy` | `policy_id`: a member selected a stored policy they aren't granted (`denyUserRequest`, target `runs.policy`, on `POST /runs` and preflight alike), and on revive/restart/extend as the owner ([`internal/api/run_owner_authority.go`](../internal/api/run_owner_authority.go)) | ⛔ `403` |
+| `capability_component` | a person tried to attach an org component they aren't granted (`componentAttachRefusal`, [`internal/api/components_authz.go`](../internal/api/components_authz.go), target `runs.component`). An org component is usable by nobody until an allow row names its id. The body names nothing about the component — not its name, hosts, secrets or id | ⛔ `403` |
+| `component_autonomy` | the organisation's autonomy cap on runs that carry a component the launcher defined themselves (site config `components.autonomy_cap`, `L1` or `L0`) alone bound the run's autonomy level, at create and Review alike (`resolveRunAutonomy` → `foldComponentCap`, [`internal/api/runs_autonomy_components.go`](../internal/api/runs_autonomy_components.go)). Same rungs and targets as the `governance_profile` autonomy refusals below (`runs.task_mode`, `runs.interactive_start`, `runs.seed_auto_tools`, `runs.interactive`, `runs.agent`). It applies with or without a governance profile; under one the lower level wins, and a tie refuses as `governance_profile` with `custom_component` among its causes. The body's `policy` is the deployment's, not the profile's. With no cap set (the default) nothing is refused | ⛔ `403` |
+| `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` below autonomy level L3 (`runs.task_mode`), a non-interactive run below autonomy level L1 (`runs.interactive`), `seed_auto_tools` below autonomy level L2 (`runs.seed_auto_tools`), an agent with no tool-approval lane — BYOA (`agent` unset) or any agent other than `claude-code` — at a resolved level of exactly L1, where an unattended run's tool calls would otherwise be derived to `hold` (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `userDriveDoorRefusal`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`) or under a profile carrying `deny_task_mode_exec` (`runs.interactive_start`, `denyUserGovernance`), since it runs at sandbox boot unattended the way exec does, and — 0.8.2 — a terminal attach into a run whose profile carries `deny_interactive` (`runs.attach`) or a UI-gateway session into one whose profile carries `deny_ui_apps` (`runs.ui_apps`, which is also the target of the `dropped` row when that limit strips `ui_apps` at create; [`internal/api/governance_run_doors.go`](../internal/api/governance_run_doors.go)). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
 | `governance_overlay_unsatisfiable` | the governance profile that binds this person, or the run's own, is composed (0.8.6) and nothing satisfies it together with the profile or deployment default it builds on — the deployment default narrowed until an overlay's `allowed_methods` are disjoint with it, or an overlay and base that name different `llm_inspection` modes — so the launch (`governance.ceiling`, on create and preflight alike) and every live door refuse rather than guess: a terminal attach (`runs.attach`), a UI-gateway session (`runs.ui_apps`), a revive and an end extension (the `owner_profile_*` refusals' `403` sibling). A base or a chain that cannot be read is a `500` or `503`, never this reason, and is never read as the deployment's policy. The sentence names the person's own profile and never a base; an administrator sees which profile failed on `GET /governance` (`effective.error`). The SAME value is the `409` a profile write returns when a base change would leave a profile built on it in this state | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterUserGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_USER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
-| `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Decided by one rule, `selectByTier` (`internal/api/select_by_tier.go`), and emitted ONCE per request at each of its two entrances: `ceilingWithUnusableGroups` (`internal/api/governance.go`) at target `governance.ceiling`, and `driveWithUnusableGroups` (`internal/api/user_drives_resolve.go`) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
+| `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Decided by one rule, `selectByTier` ([`internal/api/select_by_tier.go`](../internal/api/select_by_tier.go)), and emitted ONCE per request at each of its two entrances: `ceilingWithUnusableGroups` ([`internal/api/governance.go`](../internal/api/governance.go)) at target `governance.ceiling`, and `driveWithUnusableGroups` ([`internal/api/user_drives_resolve.go`](../internal/api/user_drives_resolve.go)) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval, or `WARDYN_CAPABILITY_SECOND_HUMAN` is set and the caller deciding an Azure DevOps capability escalation, is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it. Also `WARDYN_GOVERNANCE_SECOND_HUMAN` (target `governance.change`, a new target and not a new reason): the approver of a held governance change is its proposer, by principal or by case-folded email | ⛔ `403` |
-| `model_provider_unavailable` | #987: at create and Review alike, and at the admin record door (`POST /workspaces/{id}/record`, the same writer) (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; target `runs.model_provider`), the run's model provider cannot credential it: no provider by that name, it is off, it does not serve the agent, several serve it and none is chosen or the default, the caller has no usable credential of their own for it (`remedy` `model_credential`, the one case a sign-in or a stored key repairs), or a policy grant would set a model-credential variable beside it. The row carries `provider` and `kind` when the refusal names one; the 422 body keeps its `provider`, `kind` and `reason` fields. A provider the member is not granted is `capability_model_provider` instead, one row, never both | ⛔ `422` |
+| `model_provider_unavailable` | #987: at create and Review alike, and at the admin record door (`POST /workspaces/{id}/record`, the same writer) (`enforceRunModelProvider`, [`internal/api/run_model_provider.go`](../internal/api/run_model_provider.go); target `runs.model_provider`), the run's model provider cannot credential it: no provider by that name, it is off, it does not serve the agent, several serve it and none is chosen or the default, the caller has no usable credential of their own for it (`remedy` `model_credential`, the one case a sign-in or a stored key repairs), or a policy grant would set a model-credential variable beside it. The row carries `provider` and `kind` when the refusal names one; the 422 body keeps its `provider`, `kind` and `reason` fields. A provider the member is not granted is `capability_model_provider` instead, one row, never both | ⛔ `422` |
 | `run_terminal` | 0.7.4: a RUN TOKEN, not a member — the run whose token authenticated an `/internal/*` call has gone terminal (`internalAuth`'s liveness gate). Token verification cannot catch this: the revoke cascade is best-effort, so a killed run whose revocation write failed still presents a token that verifies. `actor_type` is `agent`, the target is the request path, and the terminal state the run was found in rides beside the reason as its own `run_state` datum — the reason itself stays a closed value, because that is what a SIEM rule is written against. The three tail-upload doors — `/internal/recordings/`, `/internal/scan-results/`, `/internal/sso-token/` — are exempt for five minutes after the run went terminal, because those uploads race the watcher that ends it | ⛔ `403` |
 | `run_not_found` | 0.7.4: the same gate, when the run the token names has no row at all | ⛔ `403` |
 | `run_kept` | 0.8 (#1176): the same gate, when the run the token names is still `RUNNING` but kept — ended by its lease, or lost to a reboot or an outage. Its proxy is stopped on purpose and its identity is not revoked (a revive mints a fresh token under it), so the token the stopped proxy still holds would otherwise verify until it lapses. The kept reason rides beside the reason as `lost_reason`. A kept run later killed or torn down is refused as `run_terminal` instead. The three tail-upload doors are exempt for five minutes after the run was kept. Token renew refuses the same runs on its own path (`identity.renew`, `run_lost:<lost_reason>`) | ⛔ `403` |
 | `user_type_unknown` | 0.8: the user type stamped on the caller's session no longer exists (it was deleted after they signed in). Every control that names a type refuses rather than resolving without it — the capability resolvers, the governance ceiling and the drive resolver — at target `user_type`, with the missing id as the `user_type` datum. Written once per request, however many of those controls refuse it, and not for a display read (`GET /me`). The body is the sentence `Your user type no longer exists…`, whose remedy is an admin's (give the person another type) and then the person's (sign in again) | ⛔ `403` |
 | `delegation_scope` | 0.8 (#1142): a portal's delegated token asked for a route outside the delegation allow-list ([Delegated run management](#delegated-run-management-portals)), or reached `PUT /secrets/{name}` or `POST /me/ssh-keys`, which refuse a delegated request themselves whatever the allow-list says (0.8.2, #1234). The row's actor is the person and its `data.via` names the portal | ⛔ `403` |
 | `role_stamp_stale` | 0.8.6: `WARDYN_ROLE_STAMP_TTL` is set and the `wdn_` API token presented carries a role and group stamp (`api_tokens.identity_stamped_at`) older than it, or never stamped. Checked by `apiTokenAuth` after the token resolves and before it counts as used; target `api_token`, and the row's actor is the token's owner. The body is `this token's role is out of date: its owner must sign in again to refresh it`; the owner's next sign-in re-stamps the token and it works again. A revoked token is not this refusal: it stays an ordinary `401` | ⛔ `401` |
-| `event_stream_cap` | 0.8.2 (#1407): the caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (`maxRunEventStreams`, `internal/api/run_events.go`; target the run id). A portal's streams count against its person, and every admin-token caller is one principal. Not audited — a caller who IS authorized and hit a limit, like `run_quota` | ⛔ `422` |
+| `event_stream_cap` | 0.8.2 (#1407): the caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (`maxRunEventStreams`, [`internal/api/run_events.go`](../internal/api/run_events.go); target the run id). A portal's streams count against its person, and every admin-token caller is one principal. Not audited — a caller who IS authorized and hit a limit, like `run_quota` | ⛔ `422` |
 | `mask_state_unavailable` | 0.8.6: a door that relays or persists a run's output — the recording upload (`PUT /internal/recordings/{runID}` and its parts, target `recordings.upload`), the live attach (`GET /runs/{id}/attach`, target `runs.attach`), the SSH shell (target `ssh.shell`, a channel error, not an HTTP status) and the live output read (`GET /runs/{id}/output`, target `runs.output`) — cannot prove the run's masking corpus complete on this server, so it refuses instead of passing bytes through. Since the shared masking registry the same reason also answers an injection or capture route (targets `injection.resolve` and `credential.capture`) whose value could not be committed to the masking registry: the value is not handed out. The run has no complete, unfenced masking manifest in Postgres (`run_mask_manifest`): it was dispatched before 0.8.6, its dispatch never finished committing it, its person is being erased, or Postgres did not answer. The exec relay (`task_mode=exec` output tail) refuses by keeping nothing. The row's `data.mask_scope` is `globals_only`. An attach, shell or upload already in flight ends at the next beat (about two seconds) when the run stops being covered, an attach with close status `1013`. Not hidden: the caller can already see the run | ⛔ `503` |
 | `audit_export_partition_filter` | 0.8.6: `GET /audit/export?partition=` carried another filter (`run_id`, `since`, `until`, `action`, `action_prefix`, `actor`, `actor_type`, `outcome` or `origin`). A partition export always covers the whole partition, so its footer digest can be checked against `audit_partition_digest`; remove the other parameters. Input shape rather than a denial, so it is not audited | ⛔ `400` |
 | `audit_retention_not_oldest` | 0.8.6: `POST /audit/retention/drop` named a partition that is not the oldest retained one. Only the oldest partition can be dropped, so a drop never removes an interior link of the chain. Target `audit.retention`, `partition` beside it | ⛔ `409` |
@@ -3969,87 +3708,51 @@ the owner or email, only the `reason` and `target` it always had.
 | `user_view_type_deleted` | 0.8: an admin in the user view made a request after the user type the view looks through was deleted. The request is refused — never answered as the admin, because its tier was already read as `user` — and the session's view is turned off on the cookie, so the next request is in the Admin view. The body is `The <type> user type was removed, so you're back in the Admin view…`; `POST /runs` and `POST /runs/preflight` answer `409` with `reason` `admin_view` instead. The row carries `user_view: true` and the deleted `user_type`. `GET /me` is never refused: it drops back and says so (`user_view_dropped`) | ⛔ `403` |
 | `user_view_preview` | 0.8.6, with `WARDYN_GOVERN_ADMIN_RUNS` on: an admin or security admin whose User view looks through a user type other than their own stamped type sent a request that is not a `GET`, `HEAD` or `OPTIONS` (`POST /runs`, `POST /runs/preflight`, a workspace create, any write). The view is a read-only preview. The body names the remedy: switch the view to your own type to make changes or launch. `POST /me/view`, `POST /auth/logout` and `POST /policies/grade` are still served. The row carries `user_view: true`, `viewed_user_type` and `stamped_user_type` | ⛔ `409` |
 
-The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member
-whose whole allowlist is ungranted gets a run with no member-authored egress, not
-a `403`, because the run's admin-authored egress is still there. A drop is never
-silent: it comes back as a **warning on the launch response itself** (a console
-toast, `wardyn run`'s stderr), appears the same way in a preflight/Review dry-run
-*before* launch, and is recorded as an audit event at launch — one event per
-reason with the affected values beside it, not one per dropped host. A preflight
-dry-run writes no **drop** rows — a drop is not a denial, and it is recorded at
-launch. A dry run that is **refused** does audit, though: every gate preflight
-reproduces is the real gate, so a refused door writes its own `authz.denied` row
-from inside the shared path (`refuse`, `internal/api/refusal.go`), with **`run_id` NULL**,
-because there is no run. A dry run that passes writes nothing at all. That is
-deliberate rather than suppressed: the row records that this principal was
-refused this capability, which is true whether or not they went on to launch, and
-a gate that audits at one door and not at the identical door one handler over is
-the drift the shared path exists to prevent.
+- The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member whose whole allowlist is ungranted gets a run with no member-authored egress, not a `403`, because the run's admin-authored egress is still there.
+- A drop is never silent.
+  - It comes back as a **warning on the launch response itself** (a console toast, `wardyn run`'s stderr), appears the same way in a preflight/Review dry-run *before* launch, and is recorded as an audit event at launch.
+  - That is one event per reason with the affected values beside it, not one per dropped host.
+  - A preflight dry-run writes no **drop** rows — a drop is not a denial, and it is recorded at launch.
+- A dry run that is **refused** does audit, though.
+  - Every gate preflight reproduces is the real gate, so a refused door writes its own `authz.denied` row from inside the shared path (`refuse`, [`internal/api/refusal.go`](../internal/api/refusal.go)), with **`run_id` NULL**, because there is no run.
+  - A dry run that passes writes nothing at all.
+  - That is deliberate rather than suppressed: the row records that this principal was refused this capability, which is true whether or not they went on to launch.
+  - A gate that audits at one door and not at the identical door one handler over is the drift the shared path exists to prevent.
+- `run_id` NULL does not mark a dry run, because a launch refused before its run row exists carries it too.
+  - Every row written while serving the preflight request carries **`dry_run: true`** instead, stamped from the request context by `audit.DryRunRecorder` ([`internal/audit/dryrun.go`](../internal/audit/dryrun.go)) so no door's detail can set or clear it; a launch row never carries it.
+  - Review re-resolves on every edit, so a member editing against a closed door would otherwise write a row per keystroke.
+  - `audit.DenialCoalescer` ([`internal/audit/coalesce.go`](../internal/audit/coalesce.go)) writes the first refusal for an actor, target and `reason` in full and counts identical repeats for ten minutes, then appends one **`preflight.denial.coalesce`** row (`count` including the first row, `suppressed`, `first_at`, `last_at`).
+  - Nothing already written is changed, a window with no repeat writes no summary, and a launch refusal is never coalesced.
+  - The windows live in the replica that served the request, so a multi-replica deployment writes one summary per replica, and open windows are flushed on graceful shutdown.
+  - Rows written before 0.8.6 carry no marker (`handlePreflightRun`, [`internal/api/preflight.go`](../internal/api/preflight.go)).
+- A 404 on a resource that genuinely doesn't exist stays silent by design.
 
-`run_id` NULL does not mark a dry run, because a launch refused before its run
-row exists carries it too. Every row written while serving the preflight request
-carries **`dry_run: true`** instead, stamped from the request context by
-`audit.DryRunRecorder` (`internal/audit/dryrun.go`) so no door's detail can set or
-clear it; a launch row never carries it. Review re-resolves on every edit, so a
-member editing against a closed door would otherwise write a row per keystroke.
-`audit.DenialCoalescer` (`internal/audit/coalesce.go`) writes the first refusal
-for an actor, target and `reason` in full and counts identical repeats for ten
-minutes, then appends one **`preflight.denial.coalesce`** row (`count` including
-the first row, `suppressed`, `first_at`, `last_at`). Nothing already written is
-changed, a window with no repeat writes no summary, and a launch refusal is never
-coalesced. The windows live in the replica that served the request, so a
-multi-replica deployment writes one summary per replica, and open windows are
-flushed on graceful shutdown. Rows written before 0.8.6 carry no marker
-(`handlePreflightRun`, `internal/api/preflight.go`).
+> [!NOTE]
+> One exception: the `always`-scope 403 above returns before `decide()` reaches any audit call, so it is a bare 403 with no audit trail at all.
 
-A 404 on a resource that genuinely doesn't exist stays silent by design. One
-exception: the `always`-scope 403 above returns before `decide()` reaches any
-audit call, so it is a bare 403 with no audit trail at all.
-
-**What's still not built.** No custom roles: the tier set is the three fixed ones
-(admin, `security_admin`, member — see "Three roles, and who sets the walls"), and
-a capability grant only narrows or widens what a member may reach, it can never
-mint a tier. Only the ten kinds above are grantable; there is no general
-per-resource permission model (a run is still owner-or-admin only — no "read-only
-share" or "co-owner" concept), no tenant/org columns, and no separation of duty
-among super admins — every admin (and the admin token, always) can rewrite the
-policy that bounds them
-(`threatmodel/THREAT-MODEL.md` residual #14, still open).
-
-The SSH gateway's admin override is a **bounded-stale stamp**, not a live role
-check, and since 0.8.5 it reaches only runs with no personal owner
-(`operator_owned`; a fresh admin key on a person's run is refused
-`run_owner_only`): since migration `0043` a key authorizes when `run.created_by == the key's
-principal` OR (the run is operator-owned AND the key's `role` column reads `admin` AND its `role_checked_at`
-(migration `0046`) is no older than `WARDYN_SSH_ROLE_TTL` (default `24h`)). The
-stamp is written at `POST /me/ssh-keys` time from the registering session's role
-and RE-stamped — both columns — on every OIDC login for that principal, across
-every key they hold. The gateway never reads the role live at connect time (SSH
-carries no session for `requireOperator`), so a demoted admin's key loses the
-override at their next login (re-stamped `role=user`) or once `role_checked_at`
-ages past the TTL — whichever comes first; deleting the key (`DELETE
-/me/ssh-keys/{fingerprint}`, self-service) and re-registering is the immediate
-lever. Strictly weaker than the web terminal's live `requireOperator` gate, but no
-longer unboundedly so. The same TTL is why **an admin upgrading from 0.5 (or pre-`0046`)
-does not get the override on the key they already have until it is refreshed**:
-`0043` backfills every pre-existing row as `member` (fail-closed; `0074` renames it `user`) and `0046`
-backfills `role_checked_at` as `NULL`, which `sshAuth` treats as infinitely
-stale. A member's key never satisfies the override, and neither does a key an
-admin registered while in the user view, which is stored capped (migration
-`0070_ssh_key_view_capped`; `docs/SSH.md`'s Bounds section;
-`threatmodel/THREAT-MODEL.md` residual #15). See
-[ROADMAP.md](../ROADMAP.md) for what's queued.
-
-**None of this governance is a paid tier.** The admin/member split, the capability
-grants, the approval broker and the append-only audit log all ship in the
-Apache-2.0 build — no license key, no "Premium" gate, no entitlement check
-anywhere in the tree — and the gating is completeness-tested:
-`internal/api/authz_test.go` walks every route the router registers and fails the
-build if any one is missing from its `routeMatrix`, so a new route must be
-classified admin/member/owner/anonymous/internal before it can ship;
-`internal/api/rbac_test.go` then proves the widest admin-gated routes really do
-403 a member. What Wardyn gives up is *breadth* — a deliberate two-tier split, not
-per-user roles or multi-org depth — not the governance itself.
+- **What's still not built.**
+  - No custom roles: the tier set is the three fixed ones (admin, `security_admin`, member — see "[Three roles, and who sets the walls](#three-roles-and-who-sets-the-walls)").
+  - A capability grant only narrows or widens what a member may reach, it can never mint a tier.
+  - Only the ten kinds above are grantable; there is no general per-resource permission model (a run is still owner-or-admin only — no "read-only share" or "co-owner" concept), no tenant/org columns.
+  - No separation of duty among super admins — every admin (and the admin token, always) can rewrite the policy that bounds them ([`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) residual #14, still open).
+- The SSH gateway's admin override is a **bounded-stale stamp**, not a live role check.
+  - Since 0.8.5 it reaches only runs with no personal owner (`operator_owned`; a fresh admin key on a person's run is refused `run_owner_only`).
+  - Since migration `0043` a key authorizes when `run.created_by == the key's principal` OR (the run is operator-owned AND the key's `role` column reads `admin` AND its `role_checked_at` (migration `0046`) is no older than `WARDYN_SSH_ROLE_TTL` (default `24h`)).
+  - The stamp is written at `POST /me/ssh-keys` time from the registering session's role and RE-stamped — both columns — on every OIDC login for that principal, across every key they hold.
+  - The gateway never reads the role live at connect time (SSH carries no session for `requireOperator`).
+  - So a demoted admin's key loses the override at their next login (re-stamped `role=user`) or once `role_checked_at` ages past the TTL — whichever comes first.
+  - Deleting the key (`DELETE /me/ssh-keys/{fingerprint}`, self-service) and re-registering is the immediate lever.
+  - Strictly weaker than the web terminal's live `requireOperator` gate, but no longer unboundedly so.
+  - The same TTL is why **an admin upgrading from 0.5 (or pre-`0046`) does not get the override on the key they already have until it is refreshed**.
+  - `0043` backfills every pre-existing row as `member` (fail-closed; `0074` renames it `user`) and `0046` backfills `role_checked_at` as `NULL`, which `sshAuth` treats as infinitely stale.
+  - A member's key never satisfies the override, and neither does a key an admin registered while in the user view, which is stored capped (migration `0070_ssh_key_view_capped`; [`docs/SSH.md`](SSH.md#bounds)'s Bounds section; [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) residual #15).
+  - See [ROADMAP.md](../ROADMAP.md) for what's queued.
+- **None of this governance is a paid tier.**
+  - The admin/member split, the capability grants, the approval broker and the append-only audit log all ship in the Apache-2.0 build — no license key, no "Premium" gate, no entitlement check anywhere in the tree.
+  - The gating is completeness-tested: [`internal/api/authz_test.go`](../internal/api/authz_test.go) walks every route the router registers and fails the build if any one is missing from its `routeMatrix`.
+  - So a new route must be classified admin/member/owner/anonymous/internal before it can ship.
+  - [`internal/api/rbac_test.go`](../internal/api/rbac_test.go) then proves the widest admin-gated routes really do 403 a member.
+  - What Wardyn gives up is *breadth* — a deliberate two-tier split, not per-user roles or multi-org depth — not the governance itself.
 
 ## The policy a run got
 
@@ -4063,39 +3766,30 @@ enforces, not a re-derivation:
 - **The policy itself** is the `run.policy.resolve` envelope, as a normal policy
   document, with restart denies (`run.revive` `denied_added`) folded in.
 - **Where it started** is the `policy_source` datum on the run's `run.create`
-  row: the saved policy (id, and its name and content as they read at launch), an
-  inline policy, the default, or the governance profile the run's creator was
-  bound to. It is recorded already redacted, because the run's creator can read
-  that row through `GET /audit`.
+  row:
+  - the saved policy (id, and its name and content as they read at launch), an inline policy, the default, or the governance profile the run's creator was bound to.
+  - It is recorded already redacted, because the run's creator can read that row through `GET /audit`.
 - **What changed at launch** is each difference between the two, given a cause:
   `workspace`, `source_control`, `mirror`, `model_access`, `git_broker`,
-  `profile`, `org_disk`, `restart`, `limits` or `launch`. The launch audit rows
-  (`run.egress.add`, `run.requirement.*`, `run.artifact.redirect`,
-  `run.bedrock.configure`, `run.egress.confine`, `run.ceiling.reassert`,
-  `run.revive`) name the cause first; the rest are derived; anything nothing
-  names is `launch`. `limits` is only ever claimed for a member the governance
-  bound applied to.
+  `profile`, `org_disk`, `restart`, `limits` or `launch`.
+  - The launch audit rows (`run.egress.add`, `run.requirement.*`, `run.artifact.redirect`, `run.bedrock.configure`, `run.egress.confine`, `run.ceiling.reassert`, `run.revive`) name the cause first; the rest are derived; anything nothing names is `launch`. `limits` is only ever claimed for a member the governance bound applied to.
 - **Whether the saved policy has moved** (`stored_policy_now`) compares the
   saved policy today with its recorded launch content. A run from before the
   record existed can only say the policy was updated after launch, which a rename
   alone also does.
 
-**Who can read it.** Whoever can read the run (`GET /runs/{id}`): its creator or
-an admin. Anyone else gets the run's own `404` and a `not_owner` audit row. A
-portal's delegated token is refused `403` `delegation_scope`: the route is not on
-the delegation list. Below the security admin tier the policy's mount sources
-read `<redacted>` and grant secret names are dropped (`redacted: true`), the same
-rule as reading a policy; `llm_inspection` secret values are never returned. The
-result is a policy document you can reuse as is only from the security admin tier
-up; below it, fill in the hidden values first.
+**Who can read it.**
 
-**What it does not cover:** hosts approved while the run was running (Approvals),
-credentials the run was handed (Credentials), folders added from a workspace or a
-drive, and Azure DevOps access that came from the connection's defaults. A run
-that has not reached sandbox setup answers `state: "not_yet"`, and one that ended
-before it `"never"`; the CLI prints the sentence and exits `1` so a redirect never
-writes an empty file. A run from before `policy_source` existed answers
-`complete: false`: its changes list only what the launch rows state.
+- Whoever can read the run (`GET /runs/{id}`): its creator or an admin.
+- Anyone else gets the run's own `404` and a `not_owner` audit row.
+- A portal's delegated token is refused `403` `delegation_scope`: the route is not on the delegation list.
+- Below the security admin tier the policy's mount sources read `<redacted>` and grant secret names are dropped (`redacted: true`), the same rule as reading a policy; `llm_inspection` secret values are never returned.
+- The result is a policy document you can reuse as is only from the security admin tier up; below it, fill in the hidden values first.
+
+**What it does not cover:** hosts approved while the run was running (Approvals), credentials the run was handed (Credentials), folders added from a workspace or a drive, and Azure DevOps access that came from the connection's defaults.
+
+- A run that has not reached sandbox setup answers `state: "not_yet"`, and one that ended before it `"never"`; the CLI prints the sentence and exits `1` so a redirect never writes an empty file.
+- A run from before `policy_source` existed answers `complete: false`: its changes list only what the launch rows state.
 
 ## Run lifetime: lease, extend, revive, ends
 
@@ -4107,70 +3801,45 @@ Moved to [member-mode.md](operations/member-mode.md).
 
 ## Second user, same host
 
-> This recipe gives a second person their own SSO identity instead of the shared
-> admin token. What that identity *can do* is exactly the **admin/member** model
-> in [Multi-user: who can change what](#multi-user-who-can-change-what) above.
-> Under OIDC, `WARDYN_OIDC_OPERATOR_EMAILS` is the boot-required allowlist — an
-> empty one **refuses to boot** unless `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true`,
-> which, absent a role map, instead makes every signed-in human admin
-> (`validateOperatorPosture`, `cmd/wardynd/boot_posture.go`). The admin token is always an admin and cannot be
-> demoted ([ROADMAP.md](../ROADMAP.md)).
+> [!NOTE]
+> This recipe gives a second person their own SSO identity instead of the shared admin token.
+> What that identity *can do* is exactly the **admin/member** model in [Multi-user: who can change what](#multi-user-who-can-change-what) above.
+> Under OIDC, `WARDYN_OIDC_OPERATOR_EMAILS` is the boot-required allowlist — an empty one **refuses to boot** unless `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true`, which, absent a role map, instead makes every signed-in human admin (`validateOperatorPosture`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)).
+> The admin token is always an admin and cannot be demoted ([ROADMAP.md](../ROADMAP.md)).
 
-A **remote** second person is a dead end regardless: both the bundled Dex and
-wardynd publish loopback-only (`127.0.0.1:PORT`,
-`deploy/compose/docker-compose.yaml`) by design. What *does* work is two people on
-the same box, each with their own identity, and takes setup `make setup` does not
-do for you:
+- A **remote** second person is a dead end regardless: both the bundled Dex and wardynd publish loopback-only (`127.0.0.1:PORT`, [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)) by design.
+- What *does* work is two people on the same box, each with their own identity, and takes setup `make setup` does not do for you:
 
-> **Read this before you hand someone a shell on this box.** "Loopback-only"
-> bounds the network, not the *host*: every local user reaches `127.0.0.1`, and
-> two of the published ports are not behind any Wardyn identity at all.
+> [!WARNING]
+> **Read this before you hand someone a shell on this box.** "Loopback-only" bounds the network, not the *host*: every local user reaches `127.0.0.1`, and two of the published ports are not behind any Wardyn identity at all.
 >
-> - **Postgres, `127.0.0.1:${WARDYN_PG_PORT:-5432}`, password `wardyn-dev`** —
->   a literal published in this repository and written into every stack
->   `deploy/compose/docker-compose.yaml` starts. It is Wardyn's whole system of
->   record: `psql -h 127.0.0.1 -U wardyn wardyn` from the second person's own
->   shell reads and REWRITES every run, every policy decision and the
->   append-only audit log, under no Wardyn role and leaving no Wardyn audit
->   entry. The admin/member split below is enforced by wardynd, so anything that
->   goes around wardynd is not subject to it.
-> - **The devcontainer-build registry, `127.0.0.1:${WARDYN_REGISTRY_PORT:-5010}`,
->   with no authentication** — any local user can push a layer that a later
->   `WARDYN_ENVBUILD_PUSHED_REF` run pulls and executes.
+> - **Postgres, `127.0.0.1:${WARDYN_PG_PORT:-5432}`, password `wardyn-dev`** — a literal published in this repository and written into every stack [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml) starts.
+>   - It is Wardyn's whole system of record.
+>   - `psql -h 127.0.0.1 -U wardyn wardyn` from the second person's own shell reads and REWRITES every run, every policy decision and the append-only audit log, under no Wardyn role and leaving no Wardyn audit entry.
+>   - The admin/member split below is enforced by wardynd, so anything that goes around wardynd is not subject to it.
+> - **The devcontainer-build registry, `127.0.0.1:${WARDYN_REGISTRY_PORT:-5010}`, with no authentication** — any local user can push a layer that a later `WARDYN_ENVBUILD_PUSHED_REF` run pulls and executes.
 >
-> Both are governed by host access, so a second person you do not trust with the
-> database is a second person you do not put on this box. Repoint them
-> (`WARDYN_PG_PORT` / `WARDYN_REGISTRY_PORT`) and firewall the loopback ports if
-> your host has more users than that — Wardyn does not do it for you. This is
-> `threatmodel/THREAT-MODEL.md` residual #23 (the shipped default deployment
-> collapses the audited insider into the trusted operator) seen from the
-> operator's side.
+> Both are governed by host access, so a second person you do not trust with the database is a second person you do not put on this box.
+> Repoint them (`WARDYN_PG_PORT` / `WARDYN_REGISTRY_PORT`) and firewall the loopback ports if your host has more users than that — Wardyn does not do it for you.
+> This is [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) residual #23 (the shipped default deployment collapses the audited insider into the trusted operator) seen from the operator's side.
 
-1. **Turn local mode off.** The containerized `make setup` path writes
-   `WARDYN_LOCAL_MODE=true` into `deploy/compose/.env` (see the
-   `WARDYN_ADMIN_TOKEN` row in [ENV.md](ENV.md)); left in place alongside a
-   configured OIDC issuer, wardynd **refuses to boot** rather than silently
-   winning over OIDC (`resolveLocalMode`, `cmd/wardynd/boot_flags.go`: an
-   explicit `-local-mode` with `-oidc-issuer` also set is refused unless
-   `WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC=true` overrides it — and if you do override
-   it, no login is ever required, for anyone, regardless of what you configure
-   below). A `make setup` re-run refuses outright on this combination
-   (`refuse_local_mode_with_oidc`, `scripts/up.sh`), rather than proceeding into
-   a boot that would then fail. In
-   `deploy/compose/.env`:
+1. **Turn local mode off.**
+   - The containerized `make setup` path writes `WARDYN_LOCAL_MODE=true` into `deploy/compose/.env` (see the `WARDYN_ADMIN_TOKEN` row in [ENV.md](ENV.md)).
+   - Left in place alongside a configured OIDC issuer, wardynd **refuses to boot** rather than silently winning over OIDC (`resolveLocalMode`, [`cmd/wardynd/boot_flags.go`](../cmd/wardynd/boot_flags.go)).
+   - An explicit `-local-mode` with `-oidc-issuer` also set is refused unless `WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC=true` overrides it.
+   - If you do override it, no login is ever required, for anyone, regardless of what you configure below.
+   - A `make setup` re-run refuses outright on this combination (`refuse_local_mode_with_oidc`, [`scripts/up.sh`](../scripts/up.sh)), rather than proceeding into a boot that would then fail.
+
+   In `deploy/compose/.env`:
 
    ```sh
    WARDYN_LOCAL_MODE=false
    ```
 
-2. **Turn Dex on, and choose who's an admin.** Dex is the `sso` compose profile;
-   every other OIDC var already defaults to match the bundled
-   `deploy/compose/dex.yaml` client (defaults in the `wardynd` service's
-   `environment` block in `docker-compose.yaml`), so the two you set are the
-   issuer and the operator allowlist. With OIDC configured an **empty** `WARDYN_OIDC_OPERATOR_EMAILS`
-   refuses to boot, so list yourself: everyone listed is an **admin**, everyone
-   else who can sign in is a **member** (add `WARDYN_OIDC_ROLE_MAP` to derive
-   admin/member from SSO roles/groups instead).
+2. **Turn Dex on, and choose who's an admin.**
+   - Dex is the `sso` compose profile.
+   - Every other OIDC var already defaults to match the bundled [`deploy/compose/dex.yaml`](../deploy/compose/dex.yaml) client (defaults in the `wardynd` service's `environment` block in `docker-compose.yaml`), so the two you set are the issuer and the operator allowlist.
+   - With OIDC configured an **empty** `WARDYN_OIDC_OPERATOR_EMAILS` refuses to boot, so list yourself: everyone listed is an **admin**, everyone else who can sign in is a **member** (add `WARDYN_OIDC_ROLE_MAP` to derive admin/member from SSO roles/groups instead).
 
    ```sh
    echo 'WARDYN_OIDC_ISSUER=http://localhost:5556'        >> deploy/compose/.env
@@ -4178,20 +3847,14 @@ do for you:
    docker compose -f deploy/compose/docker-compose.yaml --profile sso up -d dex wardynd
    ```
 
-   Not a soft gate: wardynd runs synchronous OIDC discovery against the issuer at
-   boot and **exits nonzero if it fails** (`cmd/wardynd/boot_deps.go`) — an
-   unreachable Dex refuses the whole boot, not just SSO. Compose's `depends_on:
-   dex: condition: service_healthy` sequences this for the command above; it only
-   bites if you later restart wardynd alone while Dex is down.
+   - Not a soft gate: wardynd runs synchronous OIDC discovery against the issuer at boot and **exits nonzero if it fails** ([`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)) — an unreachable Dex refuses the whole boot, not just SSO.
+   - Compose's `depends_on: dex: condition: service_healthy` sequences this for the command above; it only bites if you later restart wardynd alone while Dex is down.
 
-3. **Give a third person their own login** (0.7.4 already ships
-   `demo@wardyn.local` and `member@wardyn.local` below — this recipe adds a
-   third identity). For the bundled Dex, `staticPasswords` in
-   `deploy/compose/dex.yaml` is the authentication list —
-   `enablePasswordDB: true` with no external connector means an email absent from
-   it has no password to authenticate with, full stop. (Dex authenticates, the
-   operator list authorizes.) Mint a bcrypt hash (any bcrypt tool at the same
-   cost works):
+3. **Give a third person their own login** (0.7.4 already ships `demo@wardyn.local` and `member@wardyn.local` below — this recipe adds a third identity).
+   - For the bundled Dex, `staticPasswords` in [`deploy/compose/dex.yaml`](../deploy/compose/dex.yaml) is the authentication list — `enablePasswordDB: true` with no external connector means an email absent from it has no password to authenticate with, full stop.
+   - (Dex authenticates, the operator list authorizes.)
+
+   Mint a bcrypt hash (any bcrypt tool at the same cost works):
 
    ```sh
    htpasswd -bnBC 10 "" 'their-password' | tr -d ':\n'
@@ -4222,46 +3885,28 @@ do for you:
    docker compose -f deploy/compose/docker-compose.yaml restart dex
    ```
 
-4. **Each person signs in on their own.** The browser is redirected to Dex
-   directly for the login leg, so both `:8080` (wardynd/UI) and `:5556` (Dex)
-   must be reachable from each browser — trivial at a shared console, an `ssh -L
-   8080:localhost:8080 -L 5556:localhost:5556 <host>` tunnel per person otherwise
-   (a tunnel to the existing loopback bind, not a change to Wardyn's network
-   posture). Each clicks **Sign in with SSO**.
+4. **Each person signs in on their own.**
+   - The browser is redirected to Dex directly for the login leg.
+   - So both `:8080` (wardynd/UI) and `:5556` (Dex) must be reachable from each browser.
+   - That is trivial at a shared console, an `ssh -L 8080:localhost:8080 -L 5556:localhost:5556 <host>` tunnel per person otherwise (a tunnel to the existing loopback bind, not a change to Wardyn's network posture).
+   - Each clicks **Sign in with SSO**.
 
-`WARDYN_OIDC_EMAIL_DOMAINS` is a separate knob with a different failure mode: an
-**unset** value is not "deny all", it fails **open** — any account the IdP
-authenticates gets a session, and without the domains list the `email_verified`
-claim is not checked at all unless `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` is on
-(the domain check lives inside the domains branch — `AllowedEmailDomains`,
-`internal/auth/oidc/oidc.go`). Compose already pins it
-to `wardyn.local` (`docker-compose.yaml`), so this stack is fail-closed as
-shipped; re-point it when you swap Dex for a corporate IdP.
+> [!WARNING]
+> `WARDYN_OIDC_EMAIL_DOMAINS` is a separate knob with a different failure mode: an **unset** value is not "deny all", it fails **open**.
+> Any account the IdP authenticates gets a session, and without the domains list the `email_verified` claim is not checked at all unless `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` is on (the domain check lives inside the domains branch — `AllowedEmailDomains`, [`internal/auth/oidc/oidc.go`](../internal/auth/oidc/oidc.go)).
 
-`WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED=true` applies the `email_verified` check
-without a domains list (default off): a missing claim counts as unverified and is
-refused, exactly as below, so on an IdP that never sends it (Entra) it denies every
-login.
-
-With the domains list set, `email_verified` **absent** from the id_token and
-`email_verified: false` are two different denials, logged and coded separately
-(`auth_error=email_verified_absent` vs `email_unverified`). Entra ID tokens
-typically omit the claim entirely rather than sending it false — every login
-against such a tenant with the domains list set is denied, by design, with no
-opt-in flag to relax it. On such an IdP prefer `WARDYN_OIDC_ROLE_MAP` against the
-signed `roles`/`groups` claims (plus the app registration's "assignment required"
-setting) instead of the domains list.
-
-`WARDYN_OIDC_CLIENT_SECRET` is optional: PKCE S256 is sent on every login
-regardless, so a **public client** registration (a SPA/native-app client type
-with no secret — some IdPs refuse to issue one for a confidential client) works
-the same as a confidential one. Leave it unset for that shape; nothing else in
-the OIDC config changes. **Exception (0.8.2):** an Azure DevOps row with
-`token_mode: minted_pat` needs a confidential app. The row must name Wardyn's own
-sign-in app and this secret must be set, or saving the row is a 400 and the row
-is unusable (`ado_pat_needs_console_app`). On a public-client registration, move
-the console redirect URI to the **Web** platform, add a client secret and set this
-variable; `AADSTS700025` means the redirect is still on a public-client platform.
+- Compose already pins it to `wardyn.local` (`docker-compose.yaml`), so this stack is fail-closed as shipped; re-point it when you swap Dex for a corporate IdP.
+- `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED=true` applies the `email_verified` check without a domains list (default off): a missing claim counts as unverified and is refused, exactly as below, so on an IdP that never sends it (Entra) it denies every login.
+- With the domains list set, `email_verified` **absent** from the id_token and `email_verified: false` are two different denials, logged and coded separately (`auth_error=email_verified_absent` vs `email_unverified`).
+  - Entra ID tokens typically omit the claim entirely rather than sending it false.
+  - Every login against such a tenant with the domains list set is denied, by design, with no opt-in flag to relax it.
+  - On such an IdP prefer `WARDYN_OIDC_ROLE_MAP` against the signed `roles`/`groups` claims (plus the app registration's "assignment required" setting) instead of the domains list.
+- `WARDYN_OIDC_CLIENT_SECRET` is optional: PKCE S256 is sent on every login regardless.
+  - So a **public client** registration (a SPA/native-app client type with no secret — some IdPs refuse to issue one for a confidential client) works the same as a confidential one.
+  - Leave it unset for that shape; nothing else in the OIDC config changes.
+  - **Exception (0.8.2):** an Azure DevOps row with `token_mode: minted_pat` needs a confidential app.
+  - The row must name Wardyn's own sign-in app and this secret must be set, or saving the row is a 400 and the row is unusable (`ado_pat_needs_console_app`).
+  - On a public-client registration, move the console redirect URI to the **Web** platform, add a client secret and set this variable; `AADSTS700025` means the redirect is still on a public-client platform.
 
 ## Launch presets
 
@@ -4275,55 +3920,33 @@ Moved to [console-branding.md](operations/console-branding.md).
 
 A workspace is not one unit of configuration. Wardyn splits it into three:
 
-1. **Source** (tier 1) — a repo or local directory configured ONCE, in a
-   shared library: its own requirements contract, its own scan profile and
-   status, deduplicated by canonical identity (locator + ref). `GET/POST
-   /api/v1/sources`, `GET/DELETE /api/v1/sources/{id}`, `POST
-   /api/v1/sources/{id}/scan` (`mountLibraryRoutes`,
-   `internal/api/sources.go`) — there is no separate
-   `/sources/{id}/requirements` route, and no `PUT` either. A source's own
-   contract is authored by re-`POST`ing an existing identity to
-   `POST /api/v1/sources` with a new requirements body, which APPLIES it
-   (WSPIPE-8); the write-once `handleUpdateSource` that `PUT` used to reach is
-   gone, not stubbed.
+1. **Source** (tier 1) — a repo or local directory configured ONCE, in a shared library: its own requirements contract, its own scan profile and status, deduplicated by canonical identity (locator + ref).
+   - `GET/POST /api/v1/sources`, `GET/DELETE /api/v1/sources/{id}`, `POST /api/v1/sources/{id}/scan` (`mountLibraryRoutes`, [`internal/api/sources.go`](../internal/api/sources.go)) — there is no separate `/sources/{id}/requirements` route, and no `PUT` either.
+   - A source's own contract is authored by re-`POST`ing an existing identity to `POST /api/v1/sources` with a new requirements body, which APPLIES it (WSPIPE-8); the write-once `handleUpdateSource` that `PUT` used to reach is gone, not stubbed.
 2. **Base image** (tier 2) — a shared catalog row: registry, custom, or BYO.
-   "Recommended" is never a catalog kind — it is a per-workspace DERIVED
-   build, excluded by a database CHECK constraint, not by convention.
-   `GET/POST /api/v1/base-images`, `DELETE /api/v1/base-images/{id}` — there
-   is no `GET` by id (`handleGetBaseImage` went with its route).
-3. **Workspace** (tier 3) — an ordered list of attachments (library sources, or
-   inline ephemeral scratch dirs) plus an optional catalog image. Attachment
-   order is load-bearing: `attachments[0]` is the primary, the same rule a
-   single `sources[0]` carried before the split. The floor is one attachment —
-   an ephemeral scratch dir, seeded structurally so the invalid empty state
-   cannot be built.
+   - "Recommended" is never a catalog kind — it is a per-workspace DERIVED build, excluded by a database CHECK constraint, not by convention.
+   - `GET/POST /api/v1/base-images`, `DELETE /api/v1/base-images/{id}` — there is no `GET` by id (`handleGetBaseImage` went with its route).
+3. **Workspace** (tier 3) — an ordered list of attachments (library sources, or inline ephemeral scratch dirs) plus an optional catalog image.
+   - Attachment order is load-bearing: `attachments[0]` is the primary, the same rule a single `sources[0]` carried before the split.
+   - The floor is one attachment — an ephemeral scratch dir, seeded structurally so the invalid empty state cannot be built.
 
-`wardyn source list|create|scan|rm` manages tier 1 from the CLI; `wardyn
-workspace create --attach SOURCE-ID[@target][:ro|:rw]` composes a workspace from
-already-configured sources. Deleting a source or image that workspaces still use
-answers `409` naming every workspace attaching it (`handleDeleteSource` /
-`handleDeleteBaseImage`); `?force=1` detaches them instead — for an image that
-means "fall back to the derived recommended build", for a source it un-mounts
-code, which is why the refusal is the default.
+- `wardyn source list|create|scan|rm` manages tier 1 from the CLI; `wardyn workspace create --attach SOURCE-ID[@target][:ro|:rw]` composes a workspace from already-configured sources.
+- Deleting a source or image that workspaces still use answers `409` naming every workspace attaching it (`handleDeleteSource` / `handleDeleteBaseImage`).
+- `?force=1` detaches them instead — for an image that means "fall back to the derived recommended build", for a source it un-mounts code, which is why the refusal is the default.
 
 ### The effective contract is one pure fold
 
 A workspace's effective requirements come from `FoldWorkspaceContract`
-(`internal/types/workspace_contract.go`) over its attachments, the attached
+([`internal/types/workspace_contract.go`](../internal/types/workspace_contract.go)) over its attachments, the attached
 sources' own contracts, and the workspace's own overlay rows — computed at the
 store's hydrate pass, never stored duplicated. Precedence, in order:
 
 - each attachment contributes its source's contract, in attachment order;
-- a `write:<path>` row is DROPPED unless `<path>` is that source's own locator —
-  a shared source cannot declare write access to a path it doesn't own and
-  silently widen a sibling mount in every workspace that attaches it;
-- when two attachments contribute the same key the merge is fail-closed: the
-  LEVEL takes the strongest contributor (required beats optional), the
-  PROVENANCE the weakest (`scan_seeded` beats `operator_set`), so a row that came
-  from reading untrusted repo content never auto-grants a credential even when
-  another contributor declared the same key as a direct operator act;
-- the workspace's own overlay rows replace the merged value outright — an overlay
-  cannot REMOVE a key (a per-attachment override does that, next).
+- a `write:<path>` row is DROPPED unless `<path>` is that source's own locator.
+  - A shared source cannot declare write access to a path it doesn't own and silently widen a sibling mount in every workspace that attaches it;
+- when two attachments contribute the same key the merge is fail-closed: the LEVEL takes the strongest contributor (required beats optional), the PROVENANCE the weakest (`scan_seeded` beats `operator_set`).
+  - So a row that came from reading untrusted repo content never auto-grants a credential even when another contributor declared the same key as a direct operator act;
+- the workspace's own overlay rows replace the merged value outright — an overlay cannot REMOVE a key (a per-attachment override does that, next).
 
 With no attachments, or all-ephemeral ones, the fold is exactly the overlay —
 which makes migration `0031` provably behavior-identical for every workspace that
@@ -4331,27 +3954,20 @@ predates it.
 
 ### Per-attachment overrides are modeled but not yet operator-reachable
 
-`WorkspaceAttachment.Overrides` lets a workspace disable (`off`) or re-lane
-(`optional`/`required`) a requirement key ONE of its attached sources declares —
-mount a repo read-only to read its code without inheriting its build secrets, say
-— and the fold above honors it. **There is no write path to it yet**: no field on
-the workspace write endpoints, no CLI flag, no wizard control sets `Overrides`,
-and every attachment Wardyn builds today carries `SourceID`/`Target`/`Writable`
-only. Modeled and folded, not operator-reachable, until a write surface ships.
+- `WorkspaceAttachment.Overrides` lets a workspace disable (`off`) or re-lane (`optional`/`required`) a requirement key ONE of its attached sources declares — mount a repo read-only to read its code without inheriting its build secrets, say.
+- The fold above honors it.
+
+> [!IMPORTANT]
+> **There is no write path to it yet**: no field on the workspace write endpoints, no CLI flag, no wizard control sets `Overrides`, and every attachment Wardyn builds today carries `SourceID`/`Target`/`Writable` only.
+> Modeled and folded, not operator-reachable, until a write surface ships.
 
 ### The requirements contract: Required or Optional, nothing else
 
-Every control a source or workspace can carry — a secret by name, an egress host,
-write access to a directory, a named integration — is a row with ONE axis:
-**Required** rides along with every run that attaches the workspace, **Optional**
-is a per-run opt-in. `PUT /api/v1/workspaces/{id}/requirements` writes the
-workspace's own overlay rows (`handleSetWorkspaceRequirements`,
-`internal/api/workspace_requirements.go`); the workspace detail page is the
-surface that writes them. Launch and preflight both read
-`effectiveRequirements(ws)` — the same fold — so Review can never predict
-something launch won't do. A `scan_seeded` requirement can never auto-grant a
-secret on its own: the scanner reads untrusted repo content, so only an operator's
-direct declaration attaches a credential (the fail-closed provenance rule above).
+- Every control a source or workspace can carry — a secret by name, an egress host, write access to a directory, a named integration — is a row with ONE axis.
+- **Required** rides along with every run that attaches the workspace, **Optional** is a per-run opt-in.
+- `PUT /api/v1/workspaces/{id}/requirements` writes the workspace's own overlay rows (`handleSetWorkspaceRequirements`, [`internal/api/workspace_requirements.go`](../internal/api/workspace_requirements.go)); the workspace detail page is the surface that writes them.
+- Launch and preflight both read `effectiveRequirements(ws)` — the same fold — so Review can never predict something launch won't do.
+- A `scan_seeded` requirement can never auto-grant a secret on its own: the scanner reads untrusted repo content, so only an operator's direct declaration attaches a credential (the fail-closed provenance rule above).
 
 ## Integrations
 

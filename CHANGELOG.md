@@ -92,6 +92,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The Integrations, Launch presets, Console branding and Managed laptops operations pages are now
   bullets, tables and alerts, with every repository file they cite linked. No rule, default or limit
   changed.
+- The operations manual's API-token, portal-delegation, roles and governance-profile, denial-reason,
+  run-policy, second-user and workspace-tier sections are now bullets, nested lists and alerts, with
+  every repository file they cite linked. No rule, default or limit changed.
 
 ### Fixed
 

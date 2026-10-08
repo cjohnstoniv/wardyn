@@ -1,0 +1,2 @@
+# Prose-word budget (scripts/doc-form.sh): path=N. N is the prose word count of the shared file at the lane's base, so growth fails.
+docs/OPERATIONS.md=82986

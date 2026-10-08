@@ -1,0 +1,7 @@
+# Sentences of 36-40 words left whole: no clause joiner a split could honestly cut at.
+# Columns (tab-separated): doc, words (doc-form count), opening words of the sentence (verbatim), reason.
+docs/OPERATIONS.md	39	That happens when the email already names another known subject	no clause joiner; four parallel "when" clauses
+docs/OPERATIONS.md	36	Create, preflight and dispatch, and the doors that bind runs already going	the only joiner is inside the compound subject
+docs/OPERATIONS.md	40	`resolveRunAutonomy` ([`internal/api/runs_autonomy.go`](../internal/api/runs_autonomy.go)) grades the run's real posture	the dashes enclose a parenthetical; the ";" after it was already used for the two-part split
+docs/OPERATIONS.md	36	With SSO configured, the setup checklist's "Who is an admin" row grades `warn`	the dashes enclose a parenthetical
+docs/OPERATIONS.md	37	The text is plain text (at most 1,000 characters;	the semicolons are inside a parenthesis
