@@ -1,0 +1,2 @@
+# kind	path	key	words	reason
+sentence	threatmodel/THREAT-MODEL.md	TBD	37	residual 14, "So a local caller cannot mint a named member's stored ..." (R0579): one clause plus a "which" clause, no clause joiner; sha1 filled from the gate at integration

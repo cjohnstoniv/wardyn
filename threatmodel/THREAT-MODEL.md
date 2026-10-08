@@ -945,7 +945,9 @@ hiding them would repeat the failure mode we are designed to avoid.
    - §5.1a is the claims contract.
 
 2. **Domain fronting and exfil via dual-use allowlisted domains** are not closed below the optional L2 TLS-intercept+DLP tier: hostname-only filtering (CONNECT/SNI) is domain-frontable.
-   - That tier is **shipped**, off by default, opt-in per policy (`intercept_tls`, contract in §5.1a) — but bounded to operator-listed MITM-eligible hosts (`isMITMHost`, [`internal/egress/proxy/mitm.go`](../internal/egress/proxy/mitm.go)), the full container path is not proven in default CI, with per-workspace ephemeral-CA injection into arbitrary agent images and QUIC/UDP/raw-TCP coverage unconfirmed/unbuilt.
+   - That tier is **shipped**, off by default, opt-in per policy (`intercept_tls`, contract in §5.1a).
+   - But bounded to operator-listed MITM-eligible hosts (`isMITMHost`, [`internal/egress/proxy/mitm.go`](../internal/egress/proxy/mitm.go)).
+   - The full container path is not proven in default CI, with per-workspace ephemeral-CA injection into arbitrary agent images and QUIC/UDP/raw-TCP coverage unconfirmed/unbuilt.
 
 3. **DNS-tunneling through the mandatory permitted resolver** is a residual channel below the TLS-intercept tier.
 
@@ -998,7 +1000,8 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Broader-fleet validation is the follow-up.
 
 13. **A BYOI base is trusted-by-the-operator, and the wrap that adds Wardyn's tools runs on the HOST — and so does the RECOMMENDED devcontainer build.**
-    - `internal/envbuild` gates two lanes behind one `WARDYN_ENVBUILD` flag: `FinalizeBase` (the BYOI wrap — a `FROM` + `COPY` that executes nothing the base controls) and the ENVBUILDER stage (the "Recommended — built for this workspace" build, which clones the source and genuinely RUNS its `Dockerfile`/features/`onCreateCommand`).
+    - `internal/envbuild` gates two lanes behind one `WARDYN_ENVBUILD` flag.
+    - `FinalizeBase` (the BYOI wrap — a `FROM` + `COPY` that executes nothing the base controls) and the ENVBUILDER stage (the "Recommended — built for this workspace" build, which clones the source and genuinely RUNS its `Dockerfile`/features/`onCreateCommand`).
     - Both run on the host Docker daemon, outside the untrusted-build sandbox and outside every confinement tier.
     - **Default posture differs by deployment:** a bare-binary or host-mode `wardynd` defaults `WARDYN_ENVBUILD` off; the compose stack (`make setup`) defaults it ON, so on the flagship install the RECOMMENDED path runs build-time code by default.
     - Wrapping is **not vetting**:
@@ -1028,20 +1031,23 @@ hiding them would repeat the failure mode we are designed to avoid.
     | Route cluster | Operator list SET | List UNSET |
     |---|---|---|
     | Policy CRUD; workspace CRUD incl. the scoped `approved-egress` / `llm-cred` / `requirements` widening writes; `GET`/`PUT /site-config` + its two connectivity probes (each launches a sandbox on the operator's behalf); source-library and base-image catalog CRUD; integration writes (`PUT`/`DELETE /integrations/{id}`); the attach WebSocket's ticket-LESS fallback lane (`GET /runs/{id}/attach` falling back to session-cookie auth when no `?ticket=` is presented) | 403 for members | any signed-in human, via the one `humanOrAdminAuth` group ([`internal/api/http.go`](../internal/api/http.go); the route registrations in [`internal/api/routes.go`](../internal/api/routes.go) say so at each site) |
-    | Minting an attach ticket (`POST /runs/{id}/attach/ticket`); deciding an `egress_domain` approval on a run one owns | owner-or-admin — **moved DOWN since v0.5, deliberately NOT in the 403 list.** The WebSocket re-checks the ticket's own stamped role/principal at consume time, since the ticket-bearing lane never runs this gate (`handleAttachWS`); `credential` and `tool_call` approvals stay ADMIN-TIER-only regardless of ownership (residual #17) — and "admin tier" now means `isSecurityOperator`, which `authorizeUserDecision` consults BEFORE it looks at `Kind` or owner, so a `security_admin` decides any kind on any run | same |
-    | Reading a waiting sign-in's device code (`GET /runs/{id}/sign-in`) | **the run's owner only** (`getRunForEntry`, the interactive-entry rule of #1476): approving the verification page binds the approver's cloud identity to the owner's stored session, so a super admin on a person's run is refused `403 run_owner_only` and the security tier gets the byte-identical 404. The answer is only what a strict parse of the latest attempt finds in the sandbox-controlled pane, read once and bounded (the snapshot's 3 s, 64 KiB, stderr discarded, the exec always closed), and it is `waiting` only while an `aws sso login` process is running in the sandbox: the same exec checks that first and prints it on a line of its own ahead of the pane, read exactly, so pane text cannot stand in for it (`signInReadScript`). The process list is the sandbox's own, as the pane is: a sandbox that forges both gets a `waiting` answer whose link is still held to the IAM Identity Center hosts. No pane text or code is logged, stored or audited, and a run whose capture is audited answers `not_waiting` from that row, never from the stored blob | same |
-    | Secret write/delete/list (`PUT`/`DELETE /secrets/{name}`, `GET /secrets`) | **self-service since v0.7** (migration `0050_secret_owned_by.sql`), so it is NOT in the 403 cluster above: any signed-in human manages their OWN row, scoped by `secretOwnerFromRequest`. A member never reaches another principal's row (the store is namespaced per owner — `Secrets.For(owner)` cannot resolve it) nor the reserved model-credential names (refused for everyone, operator included); cross-principal reads/deletes go through `?owner=` and stay operator-only. The LIST returns names only, never values, and is capability-narrowed (`handleListSecrets`, kind `secret`) | same |
-    | Capability-grant CRUD (`/permissions`) and the per-kind enforcement switches | **`securityOps`, not `operatorOnly`** (`mountPermissionRoutes`): admin OR `security_admin`. So the tier that WRITES the rows is not the tier they BOUND — grants bound members, and the resolver exempts `isOperator` only. `/access` role mappings, by contrast, stay `operatorOnly` (asset #8): the second tier governs posture and cannot mint a tier | same |
+    | Minting an attach ticket (`POST /runs/{id}/attach/ticket`); deciding an `egress_domain` approval on a run one owns | owner-or-admin, deliberately not in the 403 list ([Residual 14: attach tickets](#residual-14-attach-tickets)) | same |
+    | Reading a waiting sign-in's device code (`GET /runs/{id}/sign-in`) | **the run's owner only** ([Residual 14: sign-in device codes](#residual-14-sign-in-device-codes)) | same |
+    | Secret write/delete/list (`PUT`/`DELETE /secrets/{name}`, `GET /secrets`) | **self-service since v0.7**, each person their own rows ([Residual 14: secrets](#residual-14-secrets)) | same |
+    | Capability-grant CRUD (`/permissions`) and the per-kind enforcement switches | admin OR `security_admin` ([Residual 14: capability grants](#residual-14-capability-grants)) | same |
     | `POST /runs`, every read | open to any signed-in human, by design | same |
-    | `POST /runs/{id}/kill` | **owner-or-admin, not open** (`getRunAuthorized` → `ownsRunOrAdmin`): a member killing a run they did not create gets the byte-identical 404 a missing run would, audited `authz.denied` / `not_owner`. `ownsRunOrAdmin` is `isSecurityOperator`, so a `security_admin` may stop ANY run — deliberately: inspect-or-stop is the whole of that tier's warrant over a foreign run | same |
+    | `POST /runs/{id}/kill` | **owner-or-admin, not open** ([Residual 14: kill](#residual-14-kill)) | same |
 
     - The admin token and local mode are always operators (one shared credential carries no human to demote).
     - Local mode's `X-Wardyn-Principal` dev override is ATTRIBUTION ONLY.
     - It names `created_by`, the sponsor claim and the audit actor.
     - But the run identity's `sub` — the string that selects the SECRET NAMESPACE at broker-mint and proxy-inject time — is taken from the principal wardynd injected, never from the header (`api.runIdentitySubject`).
     - So a local caller cannot mint a named member's stored `git_pat`/`ssh_key` by claiming to be them, which matters on a database that already carries member-owned rows from an SSO-configured era and is later served in local mode.
-    - So the §1 insider raises their own ceiling rather than exceeding it: `PUT` a wide-open policy, or point every run's upstream proxy at a host they control (site-config names a secret ref, and `PUT /secrets/{name}` is in the same group).
-    - What bounds this is the operator allowlist where it applies, otherwise attribution not prevention — every such write is audited (`policy.create`/`update`/`delete`, `secret.write`/`secret.delete`, `site_config.write`, `harness.credential.capture`/`disconnected`) — plus optional narrowing to a verified-email domain (`WARDYN_OIDC_EMAIL_DOMAINS`).
+    - So the §1 insider raises their own ceiling rather than exceeding it.
+    - `PUT` a wide-open policy, or point every run's upstream proxy at a host they control (site-config names a secret ref, and `PUT /secrets/{name}` is in the same group).
+    - What bounds this is the operator allowlist where it applies, otherwise attribution not prevention.
+    - Every such write is audited (`policy.create`/`update`/`delete`, `secret.write`/`secret.delete`, `site_config.write`, `harness.credential.capture`/`disconnected`).
+    - Plus optional narrowing to a verified-email domain (`WARDYN_OIDC_EMAIL_DOMAINS`).
     - When that list is empty, `oidc.CallbackHandler` checks neither the email's domain nor `email_verified`; email-based operator assignment then trusts the IdP's email claim.
     - Set the domain and operator lists together, or explicitly trust that claim.
     - In local and admin-token mode the only principal IS the admin, so the gap collapses into #9.
@@ -1061,12 +1067,50 @@ hiding them would repeat the failure mode we are designed to avoid.
       - So: separation of duty BETWEEN the two admin tiers is shipped and testable; separation of duty WITHIN the super admin tier remains [`ROADMAP.md`](../ROADMAP.md)'s v1.0 item.
       - [`SECURITY.md`](../SECURITY.md) scopes its out-of-scope disclosure to match — an escalation ACROSS the `security_admin`/super-admin boundary, or a bypass of the four-eyes rule, is an in-scope report.
 
+#### Residual 14: attach tickets
+
+- owner-or-admin — **moved DOWN since v0.5, deliberately NOT in the 403 list.**
+- The WebSocket re-checks the ticket's own stamped role/principal at consume time, since the ticket-bearing lane never runs this gate (`handleAttachWS`).
+- `credential` and `tool_call` approvals stay ADMIN-TIER-only regardless of ownership (residual #17).
+- And "admin tier" now means `isSecurityOperator`, which `authorizeUserDecision` consults BEFORE it looks at `Kind` or owner, so a `security_admin` decides any kind on any run.
+
+#### Residual 14: sign-in device codes
+
+- **the run's owner only** (`getRunForEntry`, the interactive-entry rule of #1476).
+- Approving the verification page binds the approver's cloud identity to the owner's stored session, so a super admin on a person's run is refused `403 run_owner_only` and the security tier gets the byte-identical 404.
+- The answer is only what a strict parse of the latest attempt finds in the sandbox-controlled pane, read once and bounded (the snapshot's 3 s, 64 KiB, stderr discarded, the exec always closed).
+- And it is `waiting` only while an `aws sso login` process is running in the sandbox.
+- The same exec checks that first and prints it on a line of its own ahead of the pane, read exactly, so pane text cannot stand in for it (`signInReadScript`).
+- The process list is the sandbox's own, as the pane is.
+- A sandbox that forges both gets a `waiting` answer whose link is still held to the IAM Identity Center hosts.
+- No pane text or code is logged, stored or audited, and a run whose capture is audited answers `not_waiting` from that row, never from the stored blob.
+
+#### Residual 14: secrets
+
+- **self-service since v0.7** (migration `0050_secret_owned_by.sql`), so it is NOT in the 403 cluster above.
+- Any signed-in human manages their OWN row, scoped by `secretOwnerFromRequest`.
+- A member never reaches another principal's row (the store is namespaced per owner — `Secrets.For(owner)` cannot resolve it) nor the reserved model-credential names (refused for everyone, operator included).
+- Cross-principal reads/deletes go through `?owner=` and stay operator-only.
+- The LIST returns names only, never values, and is capability-narrowed (`handleListSecrets`, kind `secret`).
+
+#### Residual 14: capability grants
+
+- **`securityOps`, not `operatorOnly`** (`mountPermissionRoutes`): admin OR `security_admin`.
+- So the tier that WRITES the rows is not the tier they BOUND — grants bound members, and the resolver exempts `isOperator` only.
+- `/access` role mappings, by contrast, stay `operatorOnly` (asset #8): the second tier governs posture and cannot mint a tier.
+
+#### Residual 14: kill
+
+- **owner-or-admin, not open** (`getRunAuthorized` → `ownsRunOrAdmin`): a member killing a run they did not create gets the byte-identical 404 a missing run would, audited `authz.denied` / `not_owner`.
+- `ownsRunOrAdmin` is `isSecurityOperator`, so a `security_admin` may stop ANY run — deliberately: inspect-or-stop is the whole of that tier's warrant over a foreign run.
+
 15. **SSH gateway's admin override is a bounded-stale stamp, not a live role check.**
     - Since `0043_ssh_key_role.sql` (v0.6), SSH authorization ([`docs/SSH.md`](../docs/SSH.md)) is `run.created_by == the connecting key's registered principal` OR (since 0.8.5, #1476, only on a run with no personal owner — an operator-owned service or local run) the key's `role` column reads `admin` ([`internal/api/sshgateway.go`](../internal/api/sshgateway.go)'s `sshAuth`; a fresh admin key on a person's run is refused `run_owner_only`) — but `role` is stamped at `POST /me/ssh-keys` time from the registering session's role, and `sshAuth` never consults the CURRENT role live.
     - `0046_ssh_key_role_checked_at.sql` narrows the staleness from unbounded to bounded.
     - Every successful OIDC login re-stamps BOTH `role` and `role_checked_at` for that principal's keys (`oidc.Config.OnLogin`, wired in [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go) to `store.RefreshSSHKeyRoles`).
     - And `sshAuth` and `sshCurrentKey` refuse the override once `role_checked_at` exceeds `WARDYN_SSH_ROLE_TTL` (default `24h`) — including when never stamped (`NULL`, infinitely stale, the fail-closed reading for every pre-`0046` row).
-    - Still bounded-stale, never live: a demoted admin's key keeps granting the override until their next login (re-stamping `role=member`), the TTL aging out on its own, or the key being deleted (`DELETE /me/ssh-keys/{fingerprint}`, `DELETE /people/{principal}/ssh-keys`, or session revocation).
+    - Still bounded-stale, never live.
+    - A demoted admin's key keeps granting the override until their next login (re-stamping `role=member`), the TTL aging out on its own, or the key being deleted (`DELETE /me/ssh-keys/{fingerprint}`, `DELETE /people/{principal}/ssh-keys`, or session revocation).
     - A member's key never satisfies the override regardless of drift — only `role==admin` does, reachable only by holding the admin role at a stamping moment.
     - Audited distinctly (`ssh.authenticate` success carries `override:true` when the owner check failed and the role check passed; a TTL-refused attempt is an `ssh.authenticate` failure with its own reason string).
     - No in-place role-update endpoint exists; the re-register path is still immediate.
@@ -1170,7 +1214,9 @@ hiding them would repeat the failure mode we are designed to avoid.
         - `GET /permissions` (admin) and `GET /me/capabilities` (member) report which kinds are actually enforced; deny rows are the on-ramp that works with every switch still off.
       - **A `group` DENY is evaluated as a REFUSAL when the caller's group snapshot cannot answer — not evaporated (v0.7 closed the fail-open).**
         - Group membership is snapshotted at LOGIN into the signed session cookie, capped at 2048 bytes and dropped from the sorted end (`maxSessionGroupsBytes`, [`internal/auth/oidc/derive.go`](../internal/auth/oidc/derive.go)).
-        - Two shapes reach v0.7: a CURRENT cookie whose group list was dropped at that cap (or an IdP that never sent the claim — an Entra groups overage), and a pre-0.7 API TOKEN, which never recorded whether its snapshot was complete (`apiTokenAuth` reads that NULL marker as truncated, migration `0052`).
+        - Two shapes reach v0.7.
+        - A CURRENT cookie whose group list was dropped at that cap (or an IdP that never sent the claim — an Entra groups overage).
+        - And a pre-0.7 API TOKEN, which never recorded whether its snapshot was complete (`apiTokenAuth` reads that NULL marker as truncated, migration `0052`).
         - A pre-0.7 COOKIE is not one of them, and that is worth stating precisely because the older text implied it was.
         - `SessionCodecVersion` is stamped by `encodeSession` and `decodeSession` requires an EXACT match, so a payload carrying a different version — or none, which is every pre-0.7 cookie — is `ErrInvalidSession`, not a half-trusted session.
         - `Middleware` falls through with no principal, the browser is bounced to sign in, and `CallbackHandler` mints a current cookie.
@@ -1246,10 +1292,14 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The workspace-noun instance of residual #14's one-operator-tier, bounded the same way.
 
 28. **A configured `WARDYN_TRUSTED_CA_FILE` makes the corporate middlebox a trusted issuer for `wardynd`, every proxy sidecar, and every sandbox — not merely tolerated on one hop.**
-    - The bundle is additive to the system roots, so while the knob is set the middlebox can read and rewrite anything the three processes send over TLS: `wardynd`'s own OIDC discovery, GitHub App transport and audit-webhook calls (all on the one mutated `http.DefaultTransport`); the proxy sidecar's forward and control-plane transports; and — because `installSandboxTrustedCA` appends the same PEM into the sandbox's CA trust — the agent's TLS clients on a passthrough (non-MITM'd) CONNECT tunnel.
+    - The bundle is additive to the system roots, so while the knob is set the middlebox can read and rewrite anything the three processes send over TLS.
+    - `wardynd`'s own OIDC discovery, GitHub App transport and audit-webhook calls (all on the one mutated `http.DefaultTransport`).
+    - The proxy sidecar's forward and control-plane transports.
+    - And — because `installSandboxTrustedCA` appends the same PEM into the sandbox's CA trust — the agent's TLS clients on a passthrough (non-MITM'd) CONNECT tunnel.
     - Wardyn's own inspection/masking (the `llm_inspection` guardrail, the per-run MITM CA) sits INSIDE that envelope, not above it.
     - There is no certificate pinning anywhere this trust applies — the bound is scope, not depth.
-    - The PEM is operator-set at process boot only (read once, never a `SiteConfig` field an admin API write or a member could reach, never agent-reachable), additive rather than a replacement, and named in [`docs/OPERATIONS.md`](../docs/OPERATIONS.md) and [`docs/adoption/corp-image-authoring.md`](../docs/adoption/corp-image-authoring.md).
+    - The PEM is operator-set at process boot only (read once, never a `SiteConfig` field an admin API write or a member could reach, never agent-reachable), additive rather than a replacement.
+    - And named in [`docs/OPERATIONS.md`](../docs/OPERATIONS.md) and [`docs/adoption/corp-image-authoring.md`](../docs/adoption/corp-image-authoring.md).
     - A BYOI base missing every system CA-bundle path loses public trust for its OpenSSL-shaped clients entirely once this is set (residual #13 sharpened) — a named, accepted ceiling, not a gap.
 
 29. **A person's model credential is disclosed to whatever host an admin nominates as the provider's internal gateway.**
@@ -1270,7 +1320,8 @@ hiding them would repeat the failure mode we are designed to avoid.
 
 30. **`/healthz` is anonymous and now also names the k8s substrate's NetworkPolicy posture, not merely its confinement classes.**
     - `handleHealthz` already discloses `confinement_classes` to any unauthenticated caller; it now adds `network_policy` (`k8sNetpolVerdict`'s "enforced"/"unenforced"/"acknowledged"), present only on a k8s substrate.
-    - Same disclosure class as the fields beside it — a runtime posture fact, not a credential or a topology detail — and it lets an operator's own monitoring catch an unenforced-but-allowed cluster without an admin token.
+    - Same disclosure class as the fields beside it — a runtime posture fact, not a credential or a topology detail.
+    - And it lets an operator's own monitoring catch an unenforced-but-allowed cluster without an admin token.
 
 31. **Directory autocomplete grants the control plane read of the WHOLE directory, and the daemon dials out to get it.**
     - `WARDYN_DIRECTORY_PROVIDER=entra` (§I) authenticates `internal/directory`'s connector as an application against Microsoft Graph, which can enumerate every user and group in the tenant — not a scoped slice — and makes wardynd itself reach `login.microsoftonline.com:443` and `graph.microsoft.com:443`, outside the egress sidecar and outside any run policy.
@@ -1418,7 +1469,9 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Since 0.7 the demotion itself also ends it early.
     - A People-page role-mapping write or delete that takes a tier away from a value revokes the affected principals' unrevoked tokens in the same call ([`internal/api/apitokens.go`](../internal/api/apitokens.go), `revokeDemotedRoleSnapshots`).
     - So the window for a demotion performed through that surface closes at the edit rather than at the demoted human's next sign-in.
-    - The residual that remains is the same shape #15 already has: a human who never signs in again, and any change made outside the People page — a chart-map edit or an IdP-side group removal — which still waits for that human's next login or an explicit revoke.
+    - The residual that remains is the same shape #15 already has.
+    - A human who never signs in again.
+    - And any change made outside the People page — a chart-map edit or an IdP-side group removal — which still waits for that human's next login or an explicit revoke.
     - Since 0.8 a token also carries its holder's user type (`api_tokens.user_type`), re-stamped at the same login.
     - And a People-page edit that changes the type a value derives revokes every live token still carrying the old type that names the value or whose group snapshot is unanswerable (`revokeDemotedRoleSnapshots`, the type arm).
     - The chart-remap arm of this residual is the same shape.
