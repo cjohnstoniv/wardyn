@@ -202,16 +202,25 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		// Fail closed; the proxy refuses to start without its injections, and
 		// mid-run it acts on the status: see storeReadRefusal.
 		status, reason, body := storeReadRefusal(minted.Injection.SecretName, err)
-		if read.shared && status != http.StatusServiceUnavailable {
-			// The proxy relays this body into the sandbox, and the name of a
-			// secret the organisation provides is the operator's.
+		// The proxy relays this body into the sandbox, so it names the secret
+		// only where the name is the run's own to know.
+		switch {
+		case errors.Is(err, errGrantNotOfRun):
+			body = sinkGrantNotOfRun
+		case status == http.StatusServiceUnavailable:
+		case read.shared:
 			body = sinkSharedSecretRefused
+		case read.operatorNamespace() && !claims.OperatorOwned:
+			body = sinkSecretRefusedUnnamed
+			if reason == reasonSinkSecretNotFound {
+				body = sinkSecretMissingUnnamed
+			}
 		}
 		slog.WarnContext(r.Context(), "wardynd: a stored credential could not be read for injection",
 			slog.String("secret", minted.Injection.SecretName), slog.String("reason", reason), slog.Any("err", err))
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"secret.read", minted.Injection.SecretName, "failure",
-			mustJSON(withStoreRow(read.stamp(map[string]any{"purpose": "proxy-injection", "reason": reason, "grant_id": grantID, "owner": claims.Sub}), row))))
+			"secret.read", read.auditTarget(minted.Injection.SecretName, grantID), "failure",
+			mustJSON(read.auditData(map[string]any{"purpose": "proxy-injection", "reason": reason, "grant_id": grantID, "owner": claims.Sub}, row))))
 		// reason reaches the wire now (#656 slice 3), matching
 		// injection_bedrock_bearer.go's identical fix.
 		writeErrorReason(w, status, reason, body)
@@ -228,8 +237,8 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-		"secret.read", minted.Injection.SecretName, "success",
-		mustJSON(withStoreRow(read.stamp(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub}), row))))
+		"secret.read", read.auditTarget(minted.Injection.SecretName, grantID), "success",
+		mustJSON(read.auditData(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub}, row))))
 
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host:      minted.Injection.Host,
@@ -240,10 +249,27 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// DRAFT (M2 canon pending) — the sink's answer when the secret an organisation
-// provides for its component cannot be read. It names nothing: the run's owner
-// did not choose the secret and may not learn what it is called.
-const sinkSharedSecretRefused = "The credential your organisation provides for this run could not be read, so nothing was substituted. Ask your admin."
+// DRAFT (M2 canon pending) — the sink's answers when a stored secret cannot be
+// read and its name is not the run's own to know. The proxy relays the body
+// into the sandbox. sinkSharedSecretRefused is for the secret an organisation
+// provides for its component. sinkSecretMissingUnnamed and
+// sinkSecretRefusedUnnamed are storeReadRefusal's two sentences without the
+// name, for a read on a person's run that may land in the operator's
+// namespace, where the name could be the operator's: they keep "not in the
+// store" apart from "exists but was refused", because setting a refused
+// secret again would overwrite what an operator may need to inspect.
+// sinkGrantNotOfRun is for a grant the run's own list does not hold.
+const (
+	sinkSharedSecretRefused  = "The credential your organisation provides for this run could not be read, so nothing was substituted. Ask your admin."
+	sinkSecretMissingUnnamed = "A credential this run uses is not in the store, so nothing was substituted. If it is a secret of your own, set it (`wardyn secret set`); otherwise ask your admin."
+	sinkSecretRefusedUnnamed = "A credential this run uses exists but could not be used: the store refused it " +
+		"(its value is gone or bound to another row, or Wardyn's access to it was revoked). Nothing was substituted; ask an admin to check it."
+	sinkGrantNotOfRun = "This credential is not one of this run's grants, so nothing was substituted."
+)
+
+// errGrantNotOfRun is a grant the broker minted for that the run's own grant
+// list does not hold.
+var errGrantNotOfRun = errors.New("the run's grant list does not hold this grant")
 
 // injectionRead is where handleInternalInjection's one stored-key read looks:
 // the namespace, whether only that namespace's own row may answer (no operator
@@ -252,15 +278,40 @@ type injectionRead struct {
 	owner      string
 	ownRowOnly bool
 	shared     bool
+	// unknown: the grant's scope could not be read, so whether it is shared
+	// is not known and the read is refused.
+	unknown bool
 }
 
-// stamp marks a secret.read row for a `shared` grant: the value was the
-// operator's, by the grant's own declaration. Every other row is unchanged.
-func (rd injectionRead) stamp(data map[string]any) map[string]any {
+// operatorNamespace reports whether the read can be answered from the
+// operator's namespace: it is the one read, or the fallback is open.
+func (rd injectionRead) operatorNamespace() bool {
+	return rd.owner == "" || !rd.ownRowOnly
+}
+
+// auditTarget is the secret.read row's target. A run's owner may read their
+// own run's audit rows, and what an organisation's secret is called is the
+// operator's: a `shared` grant's row names the grant, which an operator can
+// join to its scope, and never the secret. So does the row of a grant whose
+// scope could not be read, which may be a shared one.
+func (rd injectionRead) auditTarget(secretName string, grantID uuid.UUID) string {
+	if rd.shared || rd.unknown {
+		return grantID.String()
+	}
+	return secretName
+}
+
+// auditData completes a secret.read row. A `shared` grant's row is stamped
+// with the operator scope and carries nothing of the row it read — the row's
+// ref spells the secret's name. Every other row is what it always was.
+func (rd injectionRead) auditData(data map[string]any, row *secretstore.Row) map[string]any {
 	if rd.shared {
 		data["secret_scope"] = "operator"
 	}
-	return data
+	if rd.shared || rd.unknown {
+		return data
+	}
+	return withStoreRow(data, row)
 }
 
 // injectionReadFor decides where the grant's stored secret is read from. The
@@ -268,21 +319,24 @@ func (rd injectionRead) stamp(data map[string]any) map[string]any {
 // carry, so the grant is read back through the run's own grant list — which
 // re-proves it belongs to this run. It selects a namespace and reads no value.
 //
-// A grant list that cannot be read is an error, and the caller refuses the
-// read as it refuses an unreachable store: answering "not shared" for a grant
-// that is would read the run owner's own row of the same name first, which is
-// exactly what `shared` exists to rule out. A grant the list does not hold
-// carries no declaration and reads as every grant did before the flag existed.
+// Without that answer the read is refused, never guessed: reading a grant that
+// is shared as if it were not would look in the run owner's own namespace
+// first, which is exactly what `shared` exists to rule out. A list that cannot
+// be read refuses as an unreachable store does; a list that does not hold the
+// grant refuses outright. A deployment with no store keeps no grant rows and
+// has no shared grants.
 func (s *Server) injectionReadFor(ctx context.Context, claims *identity.Claims, grantID uuid.UUID, minted broker.Minted) (injectionRead, error) {
 	var scope json.RawMessage
 	if s.cfg.Store != nil {
 		grants, err := s.cfg.Store.ListGrantsByRun(ctx, claims.RunID)
 		if err != nil {
-			return injectionRead{ownRowOnly: true}, fmt.Errorf("%w: read the run's grants: %w", secretstore.ErrUnavailable, err)
+			return injectionRead{ownRowOnly: true, unknown: true}, fmt.Errorf("%w: read the run's grants: %w", secretstore.ErrUnavailable, err)
 		}
-		if i := slices.IndexFunc(grants, func(g types.CredentialGrant) bool { return g.ID == grantID }); i >= 0 {
-			scope = grants[i].Spec.Scope
+		i := slices.IndexFunc(grants, func(g types.CredentialGrant) bool { return g.ID == grantID })
+		if i < 0 {
+			return injectionRead{ownRowOnly: true, unknown: true}, errGrantNotOfRun
 		}
+		scope = grants[i].Spec.Scope
 	}
 	owner, ownRowOnly := injectionGrantRead(scope, claims.Sub, minted.OwnerOnly, claims.OperatorOwned)
 	return injectionRead{owner: owner, ownRowOnly: ownRowOnly, shared: apiKeyScopeShared(scope)}, nil

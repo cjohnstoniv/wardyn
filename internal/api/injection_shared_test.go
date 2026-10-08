@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
@@ -114,21 +115,46 @@ func (s *sharedSink) resolve(t *testing.T) (int, string, injectionResponse) {
 	return rr.Code, rr.Body.String(), resp
 }
 
-// reads is the data of every secret.read row for the shared name, by outcome.
+// reads is the data of every secret.read row of the run, by outcome, with the
+// row's target under "target".
 func (s *sharedSink) reads(t *testing.T, outcome string) []map[string]any {
 	t.Helper()
 	var out []map[string]any
 	for _, ev := range s.h.audit.snapshot() {
-		if ev.Action != "secret.read" || ev.Target != sharedSecretName || ev.Outcome != outcome {
+		if ev.Action != "secret.read" || ev.RunID == nil || *ev.RunID != s.runID || ev.Outcome != outcome {
 			continue
 		}
 		var d map[string]any
 		if err := json.Unmarshal(ev.Data, &d); err != nil {
 			t.Fatal(err)
 		}
+		d["target"] = ev.Target
 		out = append(out, d)
 	}
 	return out
+}
+
+// memberAuditTrail is what the run's owner reads back of their own run:
+// every row the sink recorded for it, served through GET /audit under the
+// member's own session and the scope gate that lets them.
+func (s *sharedSink) memberAuditTrail(t *testing.T) string {
+	t.Helper()
+	var rows []types.AuditEvent
+	for _, ev := range s.h.audit.snapshot() {
+		if ev.RunID != nil && *ev.RunID == s.runID {
+			rows = append(rows, ev)
+		}
+	}
+	h := newHarness(t)
+	st := &auditScopeStore{runs: map[uuid.UUID]types.AgentRun{s.runID: {ID: s.runID, CreatedBy: sharedOwner}}}
+	st.auditByRun = map[uuid.UUID][]types.AuditEvent{s.runID: rows}
+	cfg := baseTestConfig(h, st)
+	cfg.OIDC = &oidc.Authenticator{}
+	w := doSSO(t, New(cfg), http.MethodGet, "/api/v1/audit?run_id="+s.runID.String(), ssoSession(t, sharedOwner, "owner@corp.example", oidc.RoleUser), "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "secret.read") {
+		t.Fatalf("GET /audit as the run's owner = %d %s, want the run's secret.read rows", w.Code, w.Body.String())
+	}
+	return w.Body.String()
 }
 
 const sharedScope = `{"host":"org-api.example","require_tls":true,"secret_name":"org-tool-token","shared":true}`
@@ -164,9 +190,17 @@ func TestInternalInjection_SharedGrantReadsTheOperatorRowThroughTheSameTail(t *t
 		t.Errorf("the value is not masked for the run: %q", got)
 	}
 	ok := s.reads(t, "success")
-	if len(ok) != 1 || ok[0]["secret_scope"] != "operator" || ok[0]["row_owner"] != "" || ok[0]["jti"] != "jti-shared" ||
+	if len(ok) != 1 || ok[0]["secret_scope"] != "operator" || ok[0]["jti"] != "jti-shared" ||
 		ok[0]["owner"] != sharedOwner || ok[0]["grant_id"] != s.grant.String() || ok[0]["purpose"] != "proxy-injection" {
-		t.Errorf("secret.read success rows = %v, want one, stamped with the operator scope and the operator's row", ok)
+		t.Errorf("secret.read success rows = %v, want one, stamped with the operator scope", ok)
+	}
+	// The row names the grant, never the secret: the run's owner reads this
+	// row, and what the organisation's secret is called is the operator's.
+	if len(ok) == 1 && ok[0]["target"] != s.grant.String() {
+		t.Errorf("secret.read target = %v, want the grant id %s", ok[0]["target"], s.grant)
+	}
+	if trail := s.memberAuditTrail(t); strings.Contains(trail, sharedSecretName) || !strings.Contains(trail, s.grant.String()) {
+		t.Errorf("the run's owner reads the organisation's secret name in their own run's audit rows: %s", trail)
 	}
 }
 
@@ -213,8 +247,11 @@ func TestInternalInjection_SharedGrantNeverFallsBackToTheOwnersRow(t *testing.T)
 		t.Errorf("the refusal of a shared grant = %s, want the name-free sentence", body)
 	}
 	failed := s.reads(t, "failure")
-	if len(failed) != 1 || failed[0]["secret_scope"] != "operator" || failed[0]["reason"] != reasonSinkSecretNotFound {
-		t.Errorf("secret.read failure rows = %v, want one, stamped with the operator scope", failed)
+	if len(failed) != 1 || failed[0]["secret_scope"] != "operator" || failed[0]["reason"] != reasonSinkSecretNotFound || failed[0]["target"] != s.grant.String() {
+		t.Errorf("secret.read failure rows = %v, want one, stamped with the operator scope and naming the grant", failed)
+	}
+	if trail := s.memberAuditTrail(t); strings.Contains(trail, sharedSecretName) {
+		t.Errorf("the run's owner reads the organisation's secret name in a failed read's audit row: %s", trail)
 	}
 	if len(s.mask.puts) != 0 {
 		t.Errorf("a refused read committed %q to the mask record", s.mask.puts)
@@ -235,8 +272,8 @@ func TestInternalInjection_AnUnsharedGrantReadsAsBefore(t *testing.T) {
 				t.Fatalf("resolve = %d %s, want the owner's own row", code, body)
 			}
 			ok := s.reads(t, "success")
-			if len(ok) != 1 || ok[0]["row_owner"] != sharedOwner {
-				t.Fatalf("secret.read success rows = %v, want one naming the owner's row", ok)
+			if len(ok) != 1 || ok[0]["row_owner"] != sharedOwner || ok[0]["target"] != sharedSecretName {
+				t.Fatalf("secret.read success rows = %v, want one naming the secret and the owner's row, as before", ok)
 			}
 			if _, stamped := ok[0]["secret_scope"]; stamped {
 				t.Errorf("an unshared grant's row carries secret_scope: %v", ok[0])
@@ -263,15 +300,93 @@ func TestInternalInjection_AnUnreadableGrantListRefusesTheRead(t *testing.T) {
 	}
 }
 
-// A grant the run's list does not hold declares nothing, and reads as every
-// grant did before the flag existed.
-func TestInternalInjection_AGrantOutsideTheRunsListIsNotShared(t *testing.T) {
+// A grant the run's own list does not hold is refused: without its scope the
+// sink cannot know whether it is shared, and reading it as unshared would look
+// in the owner's namespace first. Nothing is read, and neither the answer nor
+// the audit row names the secret.
+func TestInternalInjection_AGrantOutsideTheRunsListIsRefused(t *testing.T) {
 	s := newSharedSink(t, sharedScope, false)
 	s.st.grants = nil
 	code, body, resp := s.resolve(t)
-	if code != http.StatusOK || resp.Value != "Bearer "+sharedMember {
-		t.Fatalf("resolve = %d %s, want the owner-then-operator read", code, body)
+	if code != http.StatusFailedDependency {
+		t.Fatalf("resolve = %d %s, want 424: the grant is not one of the run's", code, body)
 	}
+	if resp.Value != "" || strings.Contains(body, sharedOperator) || strings.Contains(body, sharedMember) || strings.Contains(body, sharedSecretName) {
+		t.Errorf("the refusal carries a value or the secret's name: %s", body)
+	}
+	if len(s.mask.puts) != 0 || len(s.reads(t, "success")) != 0 {
+		t.Error("a refused resolve read or recorded a value")
+	}
+	failed := s.reads(t, "failure")
+	if len(failed) != 1 || failed[0]["target"] != s.grant.String() {
+		t.Errorf("secret.read failure rows = %v, want one naming the grant", failed)
+	}
+}
+
+// An unshared grant that is the owner's own (owner_only) is refused with the
+// sentence it always was: the name is theirs.
+func TestInternalInjection_AnOwnersOwnGrantsRefusalIsUnchanged(t *testing.T) {
+	s := newSharedSink(t, `{"host":"org-api.example","require_tls":true,"secret_name":"org-tool-token"}`, true)
+	if err := s.h.srv.cfg.Secrets.For(sharedOwner).Delete(t.Context(), sharedSecretName); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.h.srv.cfg.Secrets.Delete(t.Context(), sharedSecretName); err != nil {
+		t.Fatal(err)
+	}
+	code, body, _ := s.resolve(t)
+	if code != http.StatusFailedDependency || !strings.Contains(body, "secret "+sharedSecretName+" is not in the store") {
+		t.Fatalf("resolve = %d %s, want the existing 424 sentence", code, body)
+	}
+	if failed := s.reads(t, "failure"); len(failed) != 1 || failed[0]["secret_scope"] != nil || failed[0]["target"] != sharedSecretName {
+		t.Errorf("secret.read failure rows = %v, want one naming the secret, without secret_scope", failed)
+	}
+}
+
+// A read on a person's run that the operator's row may answer — an unshared
+// grant that is not owner_only, an integration's credential among them — is
+// refused without the secret's name: the proxy relays the body into the
+// sandbox, and the name may be the operator's. An operator's own run is told.
+func TestInternalInjection_ARefusalOnAPersonsRunNeverNamesAnOperatorSecret(t *testing.T) {
+	const scope = `{"host":"org-api.example","require_tls":true,"secret_name":"org-tool-token"}`
+	gone := func(s *sharedSink) {
+		t.Helper()
+		if err := s.h.srv.cfg.Secrets.For(sharedOwner).Delete(t.Context(), sharedSecretName); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.h.srv.cfg.Secrets.Delete(t.Context(), sharedSecretName); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("a person's run", func(t *testing.T) {
+		s := newSharedSink(t, scope, false)
+		gone(s)
+		code, body, _ := s.resolve(t)
+		if code != http.StatusFailedDependency || errorReasonOf(body) != reasonSinkSecretNotFound {
+			t.Fatalf("resolve = %d %s, want 424 %s", code, body, reasonSinkSecretNotFound)
+		}
+		if strings.Contains(body, sharedSecretName) {
+			t.Errorf("the refusal relayed into a person's sandbox names the secret: %s", body)
+		}
+		// It still says the secret is missing, not refused: the two are
+		// different repairs.
+		if !strings.Contains(body, "not in the store") || strings.Contains(body, "the store refused it") {
+			t.Errorf("the unnamed refusal = %s, want the missing-secret sentence", body)
+		}
+	})
+	t.Run("an operator's run", func(t *testing.T) {
+		s := newSharedSink(t, scope, false)
+		gone(s)
+		// An operator-owned run: one created by the admin token or in local mode.
+		id, err := s.h.idp.MintRunIdentity(t.Context(), s.runID, adminTokenPrincipal, "", internalAudience, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.token = id.Token
+		code, body, _ := s.resolve(t)
+		if code != http.StatusFailedDependency || !strings.Contains(body, "secret "+sharedSecretName+" is not in the store") {
+			t.Fatalf("resolve = %d %s, want the operator told which secret", code, body)
+		}
+	})
 }
 
 func errorReasonOf(body string) string {
