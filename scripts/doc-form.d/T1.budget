@@ -1,0 +1,2 @@
+# Prose-word budget (scripts/doc-form.sh): path=N. N is the prose words of the file before this lane, so growth fails.
+threatmodel/THREAT-MODEL.md=48923
