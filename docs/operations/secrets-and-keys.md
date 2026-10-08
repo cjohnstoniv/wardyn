@@ -251,7 +251,7 @@ docker exec -i wardyn-postgres psql -U wardyn -d wardyn \
 | Situation | What to do |
 | --- | --- |
 | **Rollback.** The previous key file is kept as `<key-file>.bak`, `0600`, until *you* delete it | Restoring it is only half an undo — the database is already re-encrypted, so `.bak` is usable **only** together with the Postgres dump from step 1 |
-| Once the rotated deployment is confirmed working | Delete `.bak`: leaving it leaves a second copy of a retired master key on disk |
+| ↳ | Once the rotated deployment is confirmed working, delete `.bak`: leaving it leaves a second copy of a retired master key on disk |
 | A step after the commit fails (the key file could not be replaced) | The error says so and names `<key-file>.new`. That file holds the new identity, and at that point is the **only** key that reads the store — save it before doing anything else |
 | Always | **Back the key up off-host.** Rotation re-encrypts what is there; it cannot recover a key you have already lost |
 
