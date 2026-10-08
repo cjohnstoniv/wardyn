@@ -493,7 +493,7 @@ func withLeaseMarker(data json.RawMessage, scope types.ApprovalScope) json.RawMe
 // clamped to the contents:write + pull_requests:write ceiling and tagged with
 // the per-run branch namespace. api_key resolves to a proxy InjectionRule
 // (secret value never returned). cloud_sts is refused (caller already checked),
-// and so is env_secret — see its case.
+// and so are env_secret and file_secret — see their case.
 func (b *Broker) mintKind(ctx context.Context, caller *identity.Claims, spec types.GrantSpec) (Minted, error) {
 	ttl := ttlFor(spec)
 	switch spec.Kind {
@@ -516,6 +516,10 @@ func (b *Broker) mintKind(ctx context.Context, caller *identity.Claims, spec typ
 		// clear refusal — not a token, and not a puzzling "unknown kind" for a
 		// kind this binary knows perfectly well.
 		return Minted{}, fmt.Errorf("%w: %q is delivered as a sandbox env var at dispatch, not minted", ErrUnknownGrantKind, spec.Kind)
+	case types.GrantFileSecret:
+		// env_secret's refusal, for the file it is delivered as instead
+		// (api.resolveFileSecretGrants): no mint, no TTL, no JTI.
+		return Minted{}, fmt.Errorf("%w: %q is delivered as a sandbox file at dispatch, not minted", ErrUnknownGrantKind, spec.Kind)
 	default:
 		return Minted{}, fmt.Errorf("%w: %q", ErrUnknownGrantKind, spec.Kind)
 	}

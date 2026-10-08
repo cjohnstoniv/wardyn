@@ -73,7 +73,7 @@ func leqSubsetWhenSet(a, b []string) bool {
 	return len(a) > 0 && !slices.ContainsFunc(a, func(s string) bool { return !slices.Contains(b, s) })
 }
 
-// leqCapabilities is azure_devops_capabilities: an empty b is the provider
+// leqCapabilities is azure_devops_capabilities and github_capabilities: an empty b is the provider
 // row's default profile, which a list cannot be proven within, so only an empty
 // a is within it; otherwise a must name a non-empty subset of b.
 func leqCapabilities(a, b []string) bool {
@@ -132,7 +132,8 @@ func leqPosture(a, b types.RunPolicySpec) bool {
 	if confinementRank(a.MinConfinementClass) < confinementRank(b.MinConfinementClass) ||
 		!notLooser(a.AutoStopAfterSec, b.AutoStopAfterSec) ||
 		(a.GitPushAnyBranch && !b.GitPushAnyBranch) ||
-		!leqCapabilities(capStrings(a.AzureDevOpsCapabilities), capStrings(b.AzureDevOpsCapabilities)) {
+		!leqCapabilities(capStrings(a.AzureDevOpsCapabilities), capStrings(b.AzureDevOpsCapabilities)) ||
+		!leqCapabilities(capStrings(a.GitHubCapabilities), capStrings(b.GitHubCapabilities)) {
 		return false
 	}
 	for _, g := range a.EligibleGrants {

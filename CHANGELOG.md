@@ -20,6 +20,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   before upgrading; rollback requires restoring that dump. Split-role installs grant the app role
   `SELECT, INSERT, UPDATE` on `run_output_recording_recovery`. Keep the table in database backups:
   its erased rows are the fence, and retention never removes them.
+- Migration `0136_components` adds the `components` table for saved custom components (organisation
+  rows and personal rows); grant the app role `SELECT, INSERT, UPDATE, DELETE` on `components`.
+- Migration `0137_run_components` adds `run_components`, the components each run launched with. Erasing
+  a person clears the content of their rows and keeps a content-free row as the run's authorization
+  record; preserve these rows with backups and grant the app role `SELECT, INSERT, UPDATE`.
 
 ### Added
 

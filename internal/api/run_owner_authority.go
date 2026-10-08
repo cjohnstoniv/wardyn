@@ -90,12 +90,12 @@ func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun,
 
 // capabilityLostReason is ownerCapabilityRefusal's wire reason for a closed
 // launch-door capability, kept as a lookup rather than string-concatenating
-// "capability_"+kind (#656 slice 3): the five kinds persistedLaunchDoors can
+// "capability_"+kind (#656 slice 3): the kinds persistedLaunchDoors can
 // ever produce are capabilities.go's own cap* consts, a closed set, so the
 // reason is one of reasons_routes.go's own reasonOwnerCapability* literals —
 // visible to TestReasonDocsMatchReasonsGo, which reads both reasons files'
 // string literals, not a runtime concatenation. reasonOwnerCapabilityUnknown
-// is defensive only: none of the five known kinds falls through to it today.
+// is defensive only: none of the known kinds falls through to it today.
 func capabilityLostReason(kind string) string {
 	switch kind {
 	case capAgent:
@@ -108,6 +108,8 @@ func capabilityLostReason(kind string) string {
 		return reasonOwnerCapabilityPolicy
 	case capWorkspaceProvider:
 		return reasonOwnerCapabilityWorkspaceProvider
+	case capComponent:
+		return reasonOwnerCapabilityComponent
 	default:
 		return reasonOwnerCapabilityUnknown
 	}

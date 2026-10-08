@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -133,9 +134,10 @@ func governSites() []governSite {
 			}},
 		{"runs_policy.go resolvePolicy", plain,
 			func(t *testing.T, s *Server, ctx context.Context) bool {
-				c := governanceCeiling{Spec: types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{"code_read"}}}
+				c := governanceCeiling{Spec: types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{"code_read"},
+					GitHubCapabilities: []ghscope.Capability{"code_read"}}}
 				spec, _, _, err := s.resolvePolicy(ctx, nil, c)
-				return err == nil && len(spec.AzureDevOpsCapabilities) == 0
+				return err == nil && len(spec.AzureDevOpsCapabilities) == 0 && len(spec.GitHubCapabilities) == 0
 			}},
 		{"governance_run_doors.go boundUIApps", plain,
 			func(t *testing.T, s *Server, ctx context.Context) bool {

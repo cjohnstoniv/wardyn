@@ -257,7 +257,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// only be the one this level was graded against (adoEntraGrade).
 	// bedrockGrade is the same freeze for the Amazon Bedrock model credential
 	// the gate graded from modelCred (bedrockCredGrade).
-	autonomy, autonomyWarns, scmSite, adoGrade, bedrockGrade, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling, modelCred)
+	autonomy, autonomyWarns, scmSite, adoGrade, bedrockGrade, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling, modelCred, runComponents{})
 	if !ok {
 		return
 	}

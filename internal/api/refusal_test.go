@@ -140,6 +140,7 @@ var adHocReasonLiterals = map[string]string{
 	"reasons_routes.go:capability_model_provider":     "ownerCapabilityRefusal's own wire reason (run_owner_authority.go) for a revive/extend re-check, not authz.Deny",
 	"reasons_routes.go:capability_policy":             "ownerCapabilityRefusal's own wire reason (run_owner_authority.go) for a revive/extend re-check, not authz.Deny",
 	"reasons_routes.go:capability_workspace_provider": "ownerCapabilityRefusal's own wire reason (run_owner_authority.go) for a revive/extend re-check, not authz.Deny",
+	"reasons_routes.go:capability_component":          "ownerCapabilityRefusal's own wire reason (run_owner_authority.go) for a revive/extend re-check, not authz.Deny",
 }
 
 // roleComparisons counts the == / != comparisons against a stamped admin role

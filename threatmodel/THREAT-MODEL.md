@@ -294,7 +294,7 @@ fail-closed gate".
 | Confused-deputy against the token broker | SVID-authenticated callers; egress allowlist and injection-rule registration are separate capabilities. | B4 |
 | Insider hiding behind agent identity | `sub=human` + `act=agent-run-SPIFFE-ID` + `sponsor` in every token, commit and audit event. The agent never replaces the human in the chain — it is added to it. | AU, ID |
 | Insider exceeding own access via agent | Minted credentials are scoped to the task, not the human's full access; the agent never inherits developer credentials. PARTIAL: that ceiling is set by policy/site-config, and rewriting either is an OPERATOR act — policy CRUD and `PUT /site-config` sit behind `requireOperator`, so with `WARDYN_OIDC_OPERATOR_EMAILS` set a signed-in viewer cannot raise their own ceiling. Above that line nothing separates duties — residual #14. | B5, ID |
-| Member escalating past a capability grant | **[v0.6 shipped; two kinds added in v0.7, one in v0.7.2, one in v0.8]** Capability grants (`capability_grants`, migration `0042`) bound what a MEMBER chose on the eight closed kinds `capabilityKinds` names, resolved deny-before-allow-before-switch by one resolver (`capAllowed`/`capGranted`). **EVERY switch ships OFF** — fail-open by design, residual #20 — and a capability never narrows what the ADMIN pre-authorized. Mechanism: §4.3 | B5, ID, AU |
+| Member escalating past a capability grant | **[v0.6 shipped; two kinds added in v0.7, one in v0.7.2, one in v0.8]** Capability grants (`capability_grants`, migration `0042`) bound what a MEMBER chose on the ten closed kinds `capabilityKinds` names, resolved deny-before-allow-before-switch by one resolver (`capAllowed`/`capGranted`). **EVERY switch ships OFF** — fail-open by design, residual #20 — and a capability never narrows what the ADMIN pre-authorized. Mechanism: §4.3 | B5, ID, AU |
 | Member mounting a host directory the operator never allowed | **[v0.6 shipped]** A member-owned workspace is the ONLY path on which a non-operator supplies a host bind source, gated additively: operator deny-list, then a canonicalized real path inside an operator/MDM-set root, then a credential-dotfile deny-list. Unset roots = no member host mounts at all. Mechanism: §4.4. Residuals #25, #26 | B1, ID |
 | Audit tampering by in-sandbox actor | Append-only Postgres log (UPDATE/DELETE trigger raises exception) **[shipped]**; tamper-proof eBPF/Tetragon ground-truth stream **[shipped]** (host sensor + `wardyn-tetragon-ingest` → `kernel.*` via `POST /api/v1/internal/groundtruth`), correlated on `run_id`, exported free to SIEM. PTY replay is tamper-EVIDENT, not tamper-proof: the upload route accepts a run-token-authenticated PUT for the run's whole lifetime and upserts on conflict, so an in-sandbox actor can overwrite its own cast before the run ends — but every upload emits its own `recording.upload` row, so the overwrite is visible even though the replaced bytes are not recoverable. A long run's cast arrives in parts (wardyn-rec's tail upload, `/recordings/{run}/parts/{n}`), each capped at 64 MiB and audited as its own `recording.upload` row, so the same route can also add parts, up to `types.RecordingMaxParts` (2048: no run-lifetime or disk limit bounds an honest run's part count, so it is a named ceiling above five and a half years of 24 h parts or 64 GiB of output). Past it the proxy and the control plane refuse the part (413, audited `reason: part_limit`), so a run's stored recording is bounded at 2048 uploads of at most 64 MiB, and a replay or list render at 2048 reads. Each part is masked with the secrets registered when it arrives, so a value printed before it is registered stays in an earlier part. Detection-only (the `ld-linux`/`mmap` bypass is flagged, never blocked); honestly degradable (`/healthz` reports `ebpf_groundtruth=unavailable`); host eBPF is blind inside CC3/Kata (`kernel.sensor.bypass`). | AU |
 | Audit rewriting by a DATABASE-level actor (past the append-only triggers) | **[v0.6 shipped]** Migration `0047_audit_hash_chain.sql` makes ONE such rewrite detectable: every post-migration row carries a `row_hash` computed **inside Postgres** in a `BEFORE INSERT` trigger, so the writer cannot choose it. **Tamper-EVIDENCE, not tamper-proofness** — a re-chained tail verifies clean. Detail: §4.5 | AU |
@@ -508,11 +508,11 @@ lane — is §5.1a's disclosed TOCTOU residual; the guard itself still runs ther
 
 ### 4.3 Capability grants (v0.6) — the mechanism
 
-Nine closed kinds — the set is `capabilityKinds` (`internal/api/capabilities.go`),
-and it grew by two in v0.7, one in v0.7.2 and three in 0.8, and lost one in 0.8:
+Ten closed kinds — the set is `capabilityKinds` (`internal/api/capabilities.go`),
+and it grew by two in v0.7, one in v0.7.2, three in 0.8 and one in 0.8.9, and lost one in 0.8:
 `integration`, which bounded the AI-provider integration a member named on a run,
 retired with the AI integrations — `req.IntegrationID` is refused for everyone, so
-there is nothing left to gate. Eight NARROW what a member could already do:
+there is nothing left to gate. Nine NARROW what a member could already do:
 `egress_host` (the hosts on their inline policy, and which host they may decide an
 `egress_domain` approval for), `secret` (which secret names an inline policy may
 reference, and which names `GET /secrets` lists back), `workspace` (which
@@ -528,6 +528,9 @@ closed set refused at write time otherwise, one check at each mint door; mint
 only, so an existing key or token outlives a later deny until it is removed or
 revoked) and `policy` (which stored policy a member may select, `req.PolicyID`;
 the choice only, since the selected row is still clamped to their ceiling).
+0.8.9's `component` bounds which org component (an admin-written row, by id) a
+person may attach to their own run; an org component's id is restricted from its
+create, so nobody may attach it until an allow row names it.
 `workspace`, `agent` and `policy` are enforced at
 `denyUserRequest`, on launch and preflight alike. `workspace_provider` is deliberately a bound on
 the PROVIDER ROW and not on the repository: admission here is URL-prefix

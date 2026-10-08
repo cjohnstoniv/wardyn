@@ -634,7 +634,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	}
 	onWaiting, endStartWait := s.runStatusDetailWriter(ctx, run.ID)
 	spec.OnWaiting = s.runEvents.onWaiting(run.ID, onWaiting)
-	if !s.completeMaskManifest(ctx, run) {
+	// The file_secret files join the spec last, so the manifest completes over their values.
+	if !s.completeMaskManifestWithFileSecrets(ctx, run, policy, &spec) {
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)

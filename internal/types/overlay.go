@@ -11,6 +11,7 @@ import (
 	"io"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 )
 
 // CeilingOverlay is the part of a RunPolicySpec a composed governance profile
@@ -43,6 +44,7 @@ type CeilingOverlay struct {
 	GitPushAnyBranch        *bool                  `json:"git_push_any_branch,omitempty"`
 	PushRules               *PushRulesOverlay      `json:"push_rules,omitempty"`
 	AzureDevOpsCapabilities *[]adoscope.Capability `json:"azure_devops_capabilities,omitempty"`
+	GitHubCapabilities      *[]ghscope.Capability  `json:"github_capabilities,omitempty"`
 }
 
 // ResourcesOverlay mirrors ResourceLimits with per-field presence.

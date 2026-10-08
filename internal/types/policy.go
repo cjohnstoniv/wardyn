@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 )
 
 // policy.go carries the RUN POLICY seam — RunPolicy plus every shape its spec is made of: the
@@ -204,6 +205,12 @@ type RunPolicySpec struct {
 	// run naming anything outside it, and the resolver re-checks the live ceiling on every request.
 	// Empty/absent keeps the row's default_profile. Inert for a run not on that lane.
 	AzureDevOpsCapabilities []adoscope.Capability `json:"azure_devops_capabilities,omitempty"`
+	// GitHubCapabilities is AzureDevOpsCapabilities' GitHub twin, with the same meaning: THIS
+	// run's GitHub capabilities in place of the GitHub provider row's default_profile, chosen only
+	// within the row's capability_ceiling. Empty/absent keeps the row's default_profile. Nothing
+	// reads it yet — the row block and the lanes that honour it land after this field — so today
+	// it is stored, narrowed and compared, and inert at dispatch.
+	GitHubCapabilities []ghscope.Capability `json:"github_capabilities,omitempty"`
 }
 
 // PushRulesSpec declares content rules for a run's brokered git pushes — the counterpart to
@@ -329,6 +336,7 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	out.UIApps = append([]UIApp(nil), s.UIApps...)
 	out.ToolRules = append([]ToolRule(nil), s.ToolRules...)
 	out.AzureDevOpsCapabilities = append([]adoscope.Capability(nil), s.AzureDevOpsCapabilities...)
+	out.GitHubCapabilities = append([]ghscope.Capability(nil), s.GitHubCapabilities...)
 	if s.LLMInspection != nil {
 		li := *s.LLMInspection
 		// Deep-copy the nested slice fields too, or this "clone" still aliases

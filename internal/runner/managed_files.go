@@ -16,6 +16,11 @@ import (
 // process can run — never materialised from inside the image (agent runs as
 // uid 1000) or via a post-start root exec (races the main process). On
 // Kubernetes it travels in the per-run Secret like SecretEnv.
+//
+// AgentOwned is the one other thing this type carries: a SECRET delivered to
+// the agent as a file, which is the opposite contract — the agent must be able
+// to read it and nobody else should — and shares only the delivery (same
+// window, same per-run Secret).
 type ManagedFile struct {
 	// Path is the absolute in-sandbox path, already cleaned. See
 	// ValidateManagedFiles for the shape both substrates can honour.
@@ -24,6 +29,13 @@ type ManagedFile struct {
 	// Group- and other-writable modes are refused: the file would be writable
 	// by the agent's own supplementary groups, which defeats the field.
 	Mode fs.FileMode
+	// AgentOwned marks a delivered secret: readable by the agent's user and, as
+	// far as the substrate can say it, by nobody else. Only under
+	// ComponentSecretDir, only at ComponentSecretFileMode (ValidateManagedFiles).
+	// Its owner can chmod and rewrite it, so it is NOT a ceiling — which is why
+	// it is refused in ManagedFileDir. What each substrate delivers is stated on
+	// its driver (docker: managedFilesTar; Kubernetes: managedFileVolumes).
+	AgentOwned bool
 	// Content is the exact file body. Delivered byte for byte; no trailing
 	// newline is added.
 	Content []byte
@@ -41,6 +53,25 @@ const DefaultManagedFileMode fs.FileMode = 0o644
 // joins only once checked against each of those.
 const ManagedFileDir = "/etc/claude-code"
 
+// ComponentSecretDir is the one directory a delivered secret (AgentOwned) lands
+// in. Fixed, never authored: a file_secret grant names a FILE, not a path.
+//
+// It joined the allowlist against the three things ManagedFileDir's comment
+// asks of a second location, read for what a secret needs rather than a
+// ceiling: no mount can cover it (ValidateTarget admits nothing under /run, and
+// neither driver mounts there), nothing either driver does after delivery
+// loosens it, and no Wardyn image ships it — the docker driver refuses an image
+// that does, and one whose /run is a link, so the value cannot be written
+// anywhere else. Whether the agent could later replace the directory is not
+// asked: the file is the agent's own secret, not a bound on it.
+const ComponentSecretDir = "/run/wardyn/secrets"
+
+// ComponentSecretFileMode is the only mode an AgentOwned file is delivered
+// with: owner read. Docker owns the file by the agent's uid, so this is the
+// whole of who can read it; Kubernetes cannot set a projected file's owner and
+// says what it does instead (managedFileVolumes).
+const ComponentSecretFileMode fs.FileMode = 0o400
+
 // ManagedFilesMaxBytes caps the total content one spec may carry. The binding
 // constraint is Kubernetes: every managed file rides the same per-run Secret
 // (capped at 1 MiB) as the proxy config and SecretEnv, so this is refused on
@@ -49,7 +80,7 @@ const ManagedFilesMaxBytes = 256 << 10
 
 // ValidateManagedFiles reports whether files can be delivered on EVERY
 // substrate. Drivers call it before they create anything, so an impossible
-// request is refused rather than half-applied. On Kubernetes, ManagedFileDir
+// request is refused rather than half-applied. On Kubernetes, each directory
 // becomes the mount point of a read-only Secret volume, not a subPath mount
 // (the apiserver forbids that on the agent's ephemeral container).
 func ValidateManagedFiles(files []ManagedFile) error {
@@ -63,8 +94,12 @@ func ValidateManagedFiles(files []ManagedFile) error {
 			return fmt.Errorf("managed file %q: path must be absolute", f.Path)
 		case path.Clean(f.Path) != f.Path:
 			return fmt.Errorf("managed file %q: path must be clean (no %q, %q or trailing separator)", f.Path, "..", "//")
-		case path.Dir(f.Path) != ManagedFileDir:
+		case path.Dir(f.Path) != ManagedFileDir && path.Dir(f.Path) != ComponentSecretDir:
 			return fmt.Errorf("managed file %q: a managed file must sit directly in %s; anywhere else the agent could rename its directory aside, a mount could hide it, or delivery could write into a directory it did not create", f.Path, ManagedFileDir)
+		case f.AgentOwned != (path.Dir(f.Path) == ComponentSecretDir):
+			return fmt.Errorf("managed file %q: an agent-owned file is a delivered secret and sits in %s, and nothing else does; in %s it would be a ceiling its own subject can rewrite", f.Path, ComponentSecretDir, ManagedFileDir)
+		case f.AgentOwned && f.FileMode() != ComponentSecretFileMode:
+			return fmt.Errorf("managed file %q: an agent-owned file is delivered at mode %04o and no other, so only its owner can read it", f.Path, ComponentSecretFileMode.Perm())
 		case seen[f.Path]:
 			return fmt.Errorf("managed file %q: duplicate path", f.Path)
 		}

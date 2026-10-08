@@ -128,8 +128,8 @@ func (s *Server) filterUserGrants(ctx context.Context, owner string, allowedDoma
 		// to drop. It stays because filterUserGrants is the grant gate and a
 		// gate that trusts its caller to have already applied half its rule is
 		// one refactor away from applying none of it.
-		if g.Kind == types.GrantEnvSecret && userEnvSecretIsAdminOnly() {
-			warns = append(warns, envSecretAdminOnlyWarning(secretRef))
+		if residentSecretKind(g.Kind) && userEnvSecretIsAdminOnly() {
+			warns = append(warns, envSecretAdminOnlyWarning(g.Kind, secretRef))
 			continue
 		}
 		if !storedSecretPairingInCeiling(g, ceiling) {
@@ -178,6 +178,11 @@ func storedSecretGrantPairing(g types.GrantSpec) (host, secretRef, knownHostsRef
 		// only, so two names that compare equal ARE equal.
 		n, sn, e := envSecretScopeFields(g.Scope)
 		return n, sn, "", true, e
+	case types.GrantFileSecret:
+		// The FILE name takes the host slot, for env_secret's reason: the
+		// ceiling comparison is then an exact (file, secret) pairing.
+		f, sn, e := fileSecretScopeFields(g.Scope)
+		return f, sn, "", true, e
 	case types.GrantGitHubToken, types.GrantCloudSTS:
 		// Genuinely name no stored secret: github_token mints an App
 		// installation token (scope-intersected by composer.Clamp), cloud_sts is
@@ -298,6 +303,18 @@ func (s *Server) secretRefsOf(spec types.RunPolicySpec) ([]neededSecret, error) 
 			if khRef != "" {
 				needed = append(needed, neededSecret{khRef, types.GrantSSHKey, g.OwnerOnly, ""})
 			}
+		case types.GrantFileSecret:
+			// A resident value, so the wider guard, as for git_pat. Collected,
+			// unlike env_secret, so a missing secret is a 422 at create rather
+			// than a file that silently never arrives.
+			_, secretName, derr := fileSecretScopeFields(g.Scope)
+			if derr != nil {
+				return nil, fmt.Errorf("file_secret grant scope invalid: %w", derr)
+			}
+			if nameSinkReservedSecret(secretName) {
+				return nil, fmt.Errorf("file_secret grant references reserved secret name %q", secretName)
+			}
+			needed = append(needed, neededSecret{secretName, types.GrantFileSecret, g.OwnerOnly, ""})
 		default:
 			continue
 		}
