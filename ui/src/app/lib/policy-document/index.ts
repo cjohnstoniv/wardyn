@@ -96,11 +96,84 @@ function readSource(source: string):
   }
 }
 
-// JSON goes through this same boundary: JSON.parse would silently keep the last
-// duplicate key. No failed parse exposes a previously valid value or Document.
-export function parsePolicySource(source: string): PolicySourceResult {
+const JSON_SPACE = /[ \t\n\r]*/y;
+// A string up to, not including, its closing quote.
+const JSON_STRING = /"(?:[ !#-[\]-\uffff]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*/y;
+const JSON_ATOM = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null/y;
+
+// JSON.parse judges whether source is JSON; engines disagree on whether their
+// error says where, so this walks the same grammar only to find that place.
+function jsonSyntaxError(source: string): PolicySourceError {
+  let at = 0;
+  const skip = (pattern: RegExp): boolean => {
+    pattern.lastIndex = at;
+    if (!pattern.test(source)) return false;
+    at = pattern.lastIndex;
+    return true;
+  };
+  const take = (char: string): boolean => {
+    if (source[at] !== char) return false;
+    at++;
+    return true;
+  };
+  const eat = (char: string): boolean => skip(JSON_SPACE) && take(char);
+  const string = (): boolean => skip(JSON_SPACE) && skip(JSON_STRING) && take('"');
+  const value = (): boolean => {
+    if (eat("{")) {
+      if (eat("}")) return true;
+      do {
+        if (!(string() && eat(":") && value())) return false;
+      } while (eat(","));
+      return eat("}");
+    }
+    if (eat("[")) {
+      if (eat("]")) return true;
+      do {
+        if (!value()) return false;
+      } while (eat(","));
+      return eat("]");
+    }
+    return source[at] === '"' ? string() : skip(JSON_ATOM);
+  };
+  let message = "Policy source is not valid JSON.";
+  try {
+    if (value() && skip(JSON_SPACE) && at === source.length) at = 0;
+    else {
+      message = at < source.length
+        ? `Unexpected ${JSON.stringify(String.fromCodePoint(source.codePointAt(at) ?? 0))} in JSON.`
+        : "Unexpected end of JSON.";
+    }
+  } catch {
+    at = 0; // Nesting too deep to walk: refused without a place to point at.
+  }
+  const before = source.slice(0, at).split("\n");
+  return { ok: false, line: before.length, column: before[before.length - 1].length + 1, message };
+}
+
+// The AST walk supplies the value in both formats: JSON.parse would silently
+// keep the last duplicate key and round an unsafe integer. Explicit JSON must
+// also be JSON by JSON.parse's grammar and read the same both ways (JSON allows
+// a bare carriage return as whitespace; the YAML reading keeps it as content).
+// No failed parse exposes a previously valid value or Document.
+export function parsePolicySource(source: string, format: PolicySourceFormat = "yaml"): PolicySourceResult {
+  let json: unknown;
+  if (format === "json") {
+    try {
+      json = JSON.parse(source);
+    } catch {
+      return jsonSyntaxError(source);
+    }
+  }
   const parsed = readSource(source);
-  return parsed.ok ? { ok: true, value: parsed.value } : parsed;
+  if (!parsed.ok) return parsed;
+  try {
+    if (format === "json" && JSON.stringify(parsed.value) !== JSON.stringify(json)) {
+      return caught(new Error("Policy source reads differently as JSON and as YAML."));
+    }
+  } catch (error) {
+    return caught(error);
+  }
+  return { ok: true, value: parsed.value };
 }
 
 function jsonEditValue(value: unknown): boolean {
