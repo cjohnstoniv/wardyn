@@ -16,8 +16,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Migration `0134_mask_owner_erasures` retains owner erasure fences independently of masking rows;
   retain this table with database backups and grant the app role `SELECT, INSERT, UPDATE`.
 - Migration `0135_run_output_recording_recovery` adds durable recovery claims and recording-only
-  output erasure fences. Preserve its erased rows across retention and backups, and grant the app
-  role `SELECT, INSERT, UPDATE` on `run_output_recording_recovery`.
+  output erasure fences, and lets `run_outputs` hold a `recording` source. Take a database dump
+  before upgrading; rollback requires restoring that dump. Split-role installs grant the app role
+  `SELECT, INSERT, UPDATE` on `run_output_recording_recovery`. Keep the table in database backups:
+  its erased rows are the fence, and retention never removes them.
 
 ### Added
 
@@ -32,11 +34,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
-- Recording-on Kubernetes task output can recover the available recording into an incomplete,
-  masked tail after the run ends. Durable claims support bounded restart retries; large joined
-  recordings or a backlog that outlives masking coverage may remain unrecoverable. Recording
-  reader permissions and durable erasure fences cover the derived copy; final stdout and pane
-  snapshots remain intact (#1831).
+- Recording-on Kubernetes task output is recovered from the run's available recording into a
+  masked tail after the run ends (#1831). A recovered row is always marked `source: "recording"`
+  and `incomplete: true`. A missing, invalid or uncovered recording is stated as a `capture_gap`,
+  never served as a clean empty capture. Erasure wins: a recordings or output erasure, or expired
+  output retention, stops a recovery at its final commit, and the recording's reader permissions
+  cover the derived copy. Durable claims support bounded restart retries; large joined recordings
+  or a backlog that outlives masking coverage may remain unrecoverable. Final stdout and pane
+  snapshots remain intact. The `run.output.finalize` audit row gains a `source` key and records a
+  recovered row as `success`, a recording gap as `failure`.
 - New Run's shared request builder refuses multiple workspace attachments with saved or default
   policies, preventing a referenced policy request from omitting extra attachments. Changing policy
   modes or attachments invalidates prior preflight results (#1901).
