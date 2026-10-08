@@ -5,7 +5,7 @@
 
 // Only lazy policy consumers may import this module; code-block's display
 // emitter is reachable from the eager Runs screen and must stay dependency-free.
-import { Composer, isAlias, isMap, isNode, isPair, isScalar, LineCounter, Parser, visit, type Document } from "yaml";
+import { Composer, isAlias, isMap, isNode, isPair, isScalar, LineCounter, Parser, visit, type CST, type Document } from "yaml";
 
 export type PolicySourceValue = null | boolean | number | string | PolicySourceValue[] | PolicySourceMapping;
 export type PolicySourceMapping = { [key: string]: PolicySourceValue };
@@ -23,8 +23,72 @@ function caught(error: unknown): PolicySourceError {
   return { ok: false, line: 1, column: 1, message: error instanceof Error ? error.message : "Policy source could not be read." };
 }
 
+function located(source: string, offset: number, message: string): PolicySourceError {
+  const before = source.slice(0, offset).split("\n");
+  return { ok: false, line: before.length, column: before[before.length - 1].length + 1, message };
+}
+
+// yaml here breaks lines only at LF and CRLF. The CLI's --policy-file reader
+// (gopkg.in/yaml.v3) also breaks at a bare CR, U+0085, U+2028 and U+2029, so
+// the same text would read as a different policy there. Escapes are fine.
+const STRAY_BREAK = /\r(?!\n)|[\x85\u2028\u2029]/;
+
+function strayBreak(source: string): PolicySourceError | undefined {
+  const at = source.search(STRAY_BREAK);
+  if (at < 0) return undefined;
+  const code = source.charCodeAt(at).toString(16).padStart(4, "0");
+  return located(source, at, source[at] === "\r"
+    ? "Bare carriage return: use LF or CRLF line endings."
+    : `Unescaped U+${code.toUpperCase()}: write it as \\u${code} in a quoted string.`);
+}
+
+// The server refuses a request body over 1 MiB, so no larger policy can launch.
+const MAX_SOURCE_LENGTH = 1 << 20;
+// Far above any real policy; composing, converting and the JSON locator recurse
+// once per level, and a stack overflow there left V8 unable to compile the next
+// regular expression, aborting the page on a later parse.
+const MAX_DEPTH = 64;
+const TOO_DEEP = "Policy source is nested too deeply.";
+
+function unreadable(source: string): PolicySourceError | undefined {
+  if (source.length > MAX_SOURCE_LENGTH) return { ok: false, line: 1, column: 1, message: "Policy source is too large." };
+  return strayBreak(source);
+}
+
+// The tokenizer does not recurse, so nesting is measured on its output before
+// anything that does sees it.
+function nestingOffset(tokens: readonly CST.Token[]): number | undefined {
+  const pending: [CST.Token | null | undefined, number][] = tokens.map((token) => [token, 0]);
+  for (let next = pending.pop(); next; next = pending.pop()) {
+    const [token, depth] = next;
+    if (!token) continue;
+    const level = "items" in token ? depth + 1 : depth;
+    if (level > MAX_DEPTH) return token.offset;
+    if ("value" in token) pending.push([token.value, level]);
+    if ("items" in token) for (const item of token.items) pending.push([item.key, level], [item.value, level]);
+  }
+  return undefined;
+}
+
+// Written text must never hold those characters raw; only quoted strings can.
+function escapeBreaks(text: string): string {
+  return text.replace(/[\x85\u2028\u2029]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
 function safeNumber(value: number): boolean {
   return Number.isFinite(value) && (!Number.isInteger(value) || Number.isSafeInteger(value));
+}
+
+// gopkg.in/yaml.v3, the CLI's --policy-file reader, resolves some plain scalars
+// differently from YAML 1.2 core here: 017 is octal 15 there, 1_000, 0b1 and
+// 0X1F are numbers, and a date is a timestamp. Refused rather than guessed.
+// yaml.v3 tries numbers only for text starting with a sign, digit or dot, and
+// drops every underscore first.
+const NUMBER_LIKE = /^[-+]?(?:0[box][\da-f]+|(?:\.\d+|\d+(?:\.\d*)?)(?:e[-+]?\d+)?)$/i;
+const DATE_LIKE = /^\d{4}-\d\d?-\d\d?(?:[Tt\s]|$)/;
+
+function ambiguousString(text: string): boolean {
+  return (/^[-+.\d]/.test(text) && NUMBER_LIKE.test(text.replace(/_/g, ""))) || DATE_LIKE.test(text);
 }
 
 function documentValue(document: Document, lines: LineCounter): PolicySourceResult {
@@ -43,7 +107,12 @@ function documentValue(document: Document, lines: LineCounter): PolicySourceResu
     else if (isNode(node) && node.tag) message = "Explicit tags are not allowed.";
     else if (isScalar(node)) {
       const value = node.value;
-      if (typeof value === "bigint") {
+      const plain = node.type === "PLAIN" ? node.source ?? "" : undefined;
+      if (plain !== undefined && typeof value === "string" && ambiguousString(plain)) {
+        message = "Ambiguous unquoted value: quote it.";
+      } else if (plain !== undefined && typeof value !== "string" && /^[-+]?0\d/.test(plain)) {
+        message = "Leading zeros are ambiguous: remove them, or quote the value.";
+      } else if (typeof value === "bigint") {
         // Checking before Number() is essential: rounding can hide an unsafe integer.
         if (value < BigInt(Number.MIN_SAFE_INTEGER) || value > BigInt(Number.MAX_SAFE_INTEGER)) {
           message = "Numbers must be finite and within the safe integer range.";
@@ -72,6 +141,8 @@ function readSource(source: string):
     // Inspect tokens, not lines: %YAML and %TAG inside strings are ordinary text.
     const directive = tokens.find((token) => token.type === "directive");
     if (directive) return failure(lines, directive.offset, "Directives are not allowed.");
+    const deep = nestingOffset(tokens);
+    if (deep !== undefined) return failure(lines, deep, TOO_DEEP);
     const documents = [...new Composer({
       version: "1.2",
       schema: "core",
@@ -118,18 +189,24 @@ function jsonSyntaxError(source: string): PolicySourceError {
   };
   const eat = (char: string): boolean => skip(JSON_SPACE) && take(char);
   const string = (): boolean => skip(JSON_SPACE) && skip(JSON_STRING) && take('"');
-  const value = (): boolean => {
-    if (eat("{")) {
+  const open = (char: string, depth: number): boolean => {
+    if (!eat(char)) return false;
+    if (depth < MAX_DEPTH) return true;
+    at--;
+    throw new RangeError(TOO_DEEP);
+  };
+  const value = (depth: number): boolean => {
+    if (open("{", depth)) {
       if (eat("}")) return true;
       do {
-        if (!(string() && eat(":") && value())) return false;
+        if (!(string() && eat(":") && value(depth + 1))) return false;
       } while (eat(","));
       return eat("}");
     }
-    if (eat("[")) {
+    if (open("[", depth)) {
       if (eat("]")) return true;
       do {
-        if (!value()) return false;
+        if (!value(depth + 1)) return false;
       } while (eat(","));
       return eat("]");
     }
@@ -137,25 +214,25 @@ function jsonSyntaxError(source: string): PolicySourceError {
   };
   let message = "Policy source is not valid JSON.";
   try {
-    if (value() && skip(JSON_SPACE) && at === source.length) at = 0;
+    if (value(0) && skip(JSON_SPACE) && at === source.length) at = 0;
     else {
       message = at < source.length
         ? `Unexpected ${JSON.stringify(String.fromCodePoint(source.codePointAt(at) ?? 0))} in JSON.`
         : "Unexpected end of JSON.";
     }
   } catch {
-    at = 0; // Nesting too deep to walk: refused without a place to point at.
+    message = TOO_DEEP; // the only throw: `at` is the bracket past the limit
   }
-  const before = source.slice(0, at).split("\n");
-  return { ok: false, line: before.length, column: before[before.length - 1].length + 1, message };
+  return located(source, at, message);
 }
 
 // The AST walk supplies the value in both formats: JSON.parse would silently
 // keep the last duplicate key and round an unsafe integer. Explicit JSON must
-// also be JSON by JSON.parse's grammar and read the same both ways (JSON allows
-// a bare carriage return as whitespace; the YAML reading keeps it as content).
-// No failed parse exposes a previously valid value or Document.
+// also be JSON by JSON.parse's grammar and read the same both ways. No failed
+// parse exposes a previously valid value or Document.
 export function parsePolicySource(source: string, format: PolicySourceFormat = "yaml"): PolicySourceResult {
+  const refused = unreadable(source);
+  if (refused) return refused;
   let json: unknown;
   if (format === "json") {
     try {
@@ -210,7 +287,7 @@ export function editPolicySource(
   value: PolicySourceValue | undefined,
   format: PolicySourceFormat,
 ): PolicySourceEditResult {
-  const parsed = readSource(source);
+  const parsed = unreadable(source) ?? readSource(source);
   if (!parsed.ok) return parsed;
   try {
     if (!validPath(parsed.value, path)) return caught(new Error("The edit must name a mapping field or a sequence item without gaps."));
@@ -224,11 +301,22 @@ export function editPolicySource(
         : value;
       parsed.document.setIn(path, next);
     }
-    const edited = parsed.document.toString();
+    // Authored text already passed readSource, so only new strings can hold a
+    // CR or a character that must be escaped, or be ambiguous when plain; only
+    // double quotes keep them exact (a block scalar would turn CRLF into LF).
+    visit(parsed.document, {
+      Scalar(_, node) {
+        if (typeof node.value !== "string") return;
+        if (/[\r\x85\u2028\u2029]/.test(node.value) || ((node.type ?? "PLAIN") === "PLAIN" && ambiguousString(node.value))) {
+          node.type = "QUOTE_DOUBLE";
+        }
+      },
+    });
+    const edited = escapeBreaks(parsed.document.toString());
     const checked = parsePolicySource(edited);
     if (!checked.ok) return checked;
     // JSON is the wire/storage representation, so its conversion drops comments.
-    return { ok: true, source: format === "json" ? JSON.stringify(checked.value, null, 2) : edited };
+    return { ok: true, source: format === "json" ? escapeBreaks(JSON.stringify(checked.value, null, 2)) : edited };
   } catch (error) {
     return caught(error);
   }

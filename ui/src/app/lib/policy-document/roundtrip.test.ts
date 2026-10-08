@@ -22,8 +22,10 @@ function expectRoundTrip(value: PolicySourceMapping) {
   expect(parsed).toEqual({ ok: true, value });
   if (!parsed.ok) throw new Error(parsed.message);
   expect(JSON.stringify(parsed.value)).toBe(JSON.stringify(value));
-  // The same value written as JSON must stay acceptable to explicit JSON mode.
-  expect(parsePolicySource(JSON.stringify(value, null, 2), "json")).toEqual({ ok: true, value });
+  // The same value written as JSON (line-break characters escaped, as every
+  // writer here does) must stay acceptable to explicit JSON mode.
+  const json = JSON.stringify(value, null, 2).replace(/[\x85\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  expect(parsePolicySource(json, "json")).toEqual({ ok: true, value });
 }
 
 const STRINGS = [

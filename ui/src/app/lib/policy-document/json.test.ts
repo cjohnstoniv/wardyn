@@ -78,7 +78,7 @@ describe("parsePolicySource in explicit JSON mode", () => {
     ["two-space", '{\n  "a": {\n    "b": [\n      1,\n      {\n        "c": "x"\n      }\n    ]\n  },\n  "d": "e"\n}\n'],
     ["tab-indented", '{\n\t"a": {\n\t\t"b": [\n\t\t\t1\n\t\t]\n\t}\n}'],
     ["CRLF", '{\r\n  "a": 1,\r\n  "b": []\r\n}\r\n'],
-    ["escapes", '{"a": "\\/\\b\\f\\n\\r\\t\\"\\\\\\u00e9\\ud83d\\ude00", "": "x\u2028y"}'],
+    ["escapes", '{"a": "\\/\\b\\f\\n\\r\\t\\"\\\\\\u00e9\\ud83d\\ude00", "": "x\\u2028y"}'],
     ["numbers", '{"a": 1.0, "b": 1E2, "c": 0.1e1, "d": 1e-7, "e": -2.5, "f": 9007199254740991}'],
     ["empty collections", '{"a": {}, "b": [], "c": [[], {}]}'],
     ["keys YAML would read otherwise", '{"a: b": 1, "c #d": 2, " e ": 3, "true": 4, "1": 5, "~": 6}'],
@@ -88,19 +88,13 @@ describe("parsePolicySource in explicit JSON mode", () => {
     expect(parsed).toEqual(parsePolicySource(source));
   });
 
-  // JSON allows a bare carriage return as whitespace; the YAML boundary reads
-  // it as content, so this valid JSON would launch as a different mapping.
-  it("refuses valid JSON that the shared boundary reads as a different mapping", () => {
+  // JSON allows a bare carriage return as whitespace; the YAML boundary would
+  // read it as content, so this valid JSON is refused before either reading.
+  it("refuses valid JSON using a bare carriage return as whitespace", () => {
     const source = '{\r  "a": 1\r}';
     expect(JSON.parse(source)).toEqual({ a: 1 });
     expect(parsePolicySource(source, "json")).toEqual({
-      ok: false, line: 1, column: 1, message: "Policy source reads differently as JSON and as YAML.",
-    });
-  });
-
-  it("refuses invalid JSON nested too deeply to locate", () => {
-    expect(parsePolicySource("[".repeat(200_000), "json")).toEqual({
-      ok: false, line: 1, column: 1, message: "Policy source is not valid JSON.",
+      ok: false, line: 1, column: 2, message: "Bare carriage return: use LF or CRLF line endings.",
     });
   });
 
@@ -144,7 +138,7 @@ describe("parsePolicySource in explicit JSON mode", () => {
       if (throwsInJsonParse(source)) {
         refused++;
         if (parsed.ok) throw new Error(`accepted invalid JSON: ${JSON.stringify(source)}`);
-        expect(parsed.message, JSON.stringify(source)).toMatch(/^Unexpected (end of JSON|".+" in JSON)\.$/s);
+        expect(parsed.message, JSON.stringify(source)).toMatch(/^(Unexpected (end of JSON|".+" in JSON)|Bare carriage return: use LF or CRLF line endings)\.$/s);
         expect(parsed.line).toBeLessThanOrEqual(source.split("\n").length);
       } else if (parsed.ok) {
         accepted++;

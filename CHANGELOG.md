@@ -85,13 +85,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Patch preparation refuses duplicate CHANGELOG heading keys after merging and after the
   release-commit step, including resumed candidates, before checks or publication work. (#1913)
 - **Image download verification (#1905).** The image-pin gate checks every Dockerfile curl download for a same-file checksum before use and refuses ignored failures or unsupported shell forms. Claude native downloads now pin their manifest; alternate versions require an explicit manifest checksum and native channel downloads fail clearly. AWS installer and signature downloads gain per-architecture checksums while retaining GPG verification. Staged installs and npm remain supported. The embedded code-server shell-quote issue remains tracked in #1904.
-- Policy YAML shown and copied in the console now reads back as the policy it was made from. A
-  string holding a line break or control character, and a mapping key YAML would read as another
-  type or trim (`true`, `1`, an empty or padded key), are quoted; a key over 1024 characters uses
-  the explicit form. Ordinary policies render unchanged. The policy-source parser's explicit JSON
-  mode now refuses text that is not JSON — trailing commas, comments, single quotes, unquoted keys
-  and other YAML-only syntax — with a line and column, while still refusing duplicate keys and
-  unsafe numbers (#1921).
+- Policy YAML shown and copied in the console now reads back as the policy it was made from, in
+  the console and in `wardyn … --policy-file`. A string holding a line break or control character,
+  and a mapping key YAML would read as another type or trim (`true`, `1`, an empty or padded key),
+  are quoted; U+0085, U+2028 and U+2029 are written as `\N`, `\L` and `\P`; a key over 1024
+  characters uses the explicit form. Ordinary policies render unchanged. The policy-source parser
+  now refuses, with a line and column, text the CLI's YAML reader would read as a different
+  policy: a bare carriage return or a raw U+0085, U+2028 or U+2029; a number with a leading zero
+  (`017` is octal 15 there); and an unquoted date, `1_000`, `0b1` or `0X1F`, which it reads as a
+  timestamp or number. Quoting the value, or CRLF line endings, is accepted. It also refuses more
+  than 64 levels of nesting and source over 1 MiB before parsing, so a pasted pathological
+  document can no longer abort the page on a second parse. Explicit JSON mode refuses text that is
+  not JSON — trailing commas, comments, single quotes, unquoted keys and other YAML-only syntax —
+  while still refusing duplicate keys and unsafe numbers (#1921).
 
 ## [0.8.8] — 2026-10-07
 

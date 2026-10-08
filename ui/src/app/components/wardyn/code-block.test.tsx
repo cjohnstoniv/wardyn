@@ -63,6 +63,17 @@ describe("toYaml", () => {
     );
   });
 
+  // The CLI's --policy-file reader (gopkg.in/yaml.v3) breaks lines at U+0085,
+  // U+2028 and U+2029, inside quotes too: written raw, the copied YAML would
+  // read there as a different string.
+  it("quotes and escapes U+0085, U+2028 and U+2029 in values and keys", () => {
+    const yaml = toYaml({ a: "x: y\u0085z", b: "nel\u0085x", c: [" ls\u2028x", "ps\u2029"], "k\u2028": 1 });
+    expect(yaml).toBe(
+      ['a: "x: y\\Nz"', 'b: "nel\\Nx"', "c:", '  - " ls\\Lx"', '  - "ps\\P"', '"k\\L": 1'].join("\n"),
+    );
+    expect(yaml).not.toMatch(/[\x85\u2028\u2029]/);
+  });
+
   // YAML allows an implicit key at most 1024 characters before its colon.
   it("writes a key longer than 1024 characters in the explicit form", () => {
     const key = "k".repeat(1025);
