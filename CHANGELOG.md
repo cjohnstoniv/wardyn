@@ -42,7 +42,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   cover the derived copy. Durable claims support bounded restart retries; large joined recordings
   or a backlog that outlives masking coverage may remain unrecoverable. Final stdout and pane
   snapshots remain intact. The `run.output.finalize` audit row gains a `source` key and records a
-  recovered row as `success`, a recording gap as `failure`.
+  recovered row as `success`, a recording gap as `failure`. A run's Output tab labels recovered output
+  "From recording" and says its full delivery could not be verified, shows a capture gap as a gap rather
+  than a run that printed nothing, and shows an erased recording as erased. Its capture-gap notice now
+  reads "Some or all of this run's output could not be recovered." for every source, and Retry after a
+  failed read keeps keyboard focus.
 - New Run's default and saved policies carry one workspace by reference. With a second workspace
   attached, Launch and Check again are held and the Policy card says why once, beside Check again
   ("A saved policy launches with one workspace. Remove the extra workspace, or choose Custom policy to
