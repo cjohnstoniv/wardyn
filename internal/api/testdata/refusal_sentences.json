@@ -87,7 +87,7 @@
   {
     "reason": "capKinds[capComponent].reason",
     "target": "\"runs.component\"",
-    "sentence": "\"This component isn't available to you. Ask your admin.\""
+    "sentence": "componentUnavailableRefusal"
   },
   {
     "reason": "capKinds[capFeature].reason",
@@ -128,6 +128,11 @@
     "reason": "capKinds[kind].reason",
     "target": "target",
     "sentence": "msg"
+  },
+  {
+    "reason": "capability_component",
+    "target": "\"runs.component\"",
+    "sentence": "componentUnavailableRefusal"
   },
   {
     "reason": "capability_egress_host",

@@ -512,7 +512,7 @@ Ten closed kinds — the set is `capabilityKinds` (`internal/api/capabilities.go
 and it grew by two in v0.7, one in v0.7.2, three in 0.8 and one in 0.8.9, and lost one in 0.8:
 `integration`, which bounded the AI-provider integration a member named on a run,
 retired with the AI integrations — `req.IntegrationID` is refused for everyone, so
-there is nothing left to gate. Eight NARROW what a member could already do:
+there is nothing left to gate. Nine NARROW what a member could already do:
 `egress_host` (the hosts on their inline policy, and which host they may decide an
 `egress_domain` approval for), `secret` (which secret names an inline policy may
 reference, and which names `GET /secrets` lists back), `workspace` (which
