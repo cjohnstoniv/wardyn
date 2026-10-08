@@ -70,7 +70,7 @@
  {
   "name": "U+0085, U+2028 and U+2029 as the console's YAML view writes them",
   "emitted": true,
-  "source": "llm_inspection:\n  classified_markers:\n    - \"x: y\\Nz\"\n    - \"a\\Lb\\Pc\"",
+  "source": "llm_inspection:\n  classified_markers:\n    - \"x: y\\u0085z\"\n    - \"a\\u2028b\\u2029c\"",
   "console": {
    "value": {
     "llm_inspection": {
@@ -258,6 +258,156 @@
    "allowed_domains": [
     "api.example.com:"
    ]
+  }
+ },
+ {
+  "name": "a +_ string as the console's YAML view writes it",
+  "emitted": true,
+  "source": "pattern: \"+_1\"",
+  "console": {
+   "value": {
+    "pattern": "+_1"
+   }
+  }
+ },
+ {
+  "name": "a plain +_ number-like string",
+  "source": "pattern: +_1\n",
+  "console": {
+   "error": "Ambiguous unquoted value: quote it."
+  },
+  "cli": {
+   "pattern": 1
+  }
+ },
+ {
+  "name": "an anchor name holding ':' on a key",
+  "source": "&x:y a: 1\n",
+  "console": {
+   "error": "Anchors are not allowed."
+  },
+  "cli": {
+   ":y a": 1
+  }
+ },
+ {
+  "name": "an anchor name holding ':' on a value",
+  "source": "a: &x:y 1\n",
+  "console": {
+   "error": "Anchors are not allowed."
+  },
+  "cli": {
+   "a": ":y 1"
+  }
+ },
+ {
+  "name": "a '?' starting a flow sequence item",
+  "source": "allowed_domains: [?x]\n",
+  "console": {
+   "error": "Ambiguous '?' starting a flow item: quote the item."
+  },
+  "cli": {
+   "allowed_domains": [
+    {
+     "x": null
+    }
+   ]
+  }
+ },
+ {
+  "name": "a '?' starting a flow mapping key",
+  "source": "scope: {?host: 1}\n",
+  "console": {
+   "error": "Ambiguous '?' starting a flow item: quote the item."
+  },
+  "cli": {
+   "scope": {
+    "host": 1
+   }
+  }
+ },
+ {
+  "name": "a block scalar indentation indicator",
+  "source": "a: |1\n  x\n  \nb: 1\n",
+  "console": {
+   "error": "Indentation indicators are not allowed: remove the digit after | or >."
+  },
+  "cli": {
+   "a": " x\n \n",
+   "b": 1
+  }
+ },
+ {
+  "name": "an escaped line break before an empty line",
+  "source": "a: \"x\\\n\n  y\"\n",
+  "console": {
+   "error": "Escaped line break in a quoted string: write the string on one line."
+  },
+  "cli": {
+   "a": "x\ny"
+  }
+ },
+ {
+  "name": "a byte order mark at byte 0",
+  "source": "\ufeffa: 1\n",
+  "console": {
+   "value": {
+    "a": 1
+   }
+  }
+ },
+ {
+  "name": "a byte order mark as the console's YAML view writes it",
+  "emitted": true,
+  "source": "a: \"x\\ufeffy\"",
+  "console": {
+   "value": {
+    "a": "x\ufeffy"
+   }
+  }
+ },
+ {
+  "name": "a byte order mark starting a later line",
+  "source": "\n\ufeffa: 1\n",
+  "console": {
+   "error": "Byte order mark inside the text: remove it, or write it as \\ufeff in a quoted string."
+  },
+  "cli": {
+   "\ufeffa": 1
+  }
+ },
+ {
+  "name": "a doubled leading byte order mark",
+  "source": "\ufeff\ufeffa: 1\n",
+  "console": {
+   "error": "Byte order mark inside the text: remove it, or write it as \\ufeff in a quoted string."
+  },
+  "cli": {
+   "a": 1
+  }
+ },
+ {
+  "name": "a lone surrogate escape in JSON",
+  "format": "json",
+  "source": "{\"a\": \"\\ud83d\"}\n",
+  "console": {
+   "error": "Unpaired UTF-16 surrogate: remove it."
+  },
+  "cliError": true
+ },
+ {
+  "name": "DEL, C1, U+FFFE and U+FFFF as the console's YAML view writes them",
+  "emitted": true,
+  "source": "tool_rules:\n  - tool: Bash\n    pattern: \"x\\u007fy\\u0090z\\ufffew\\uffffv\"",
+  "console": {
+   "value": {
+    "tool_rules": [
+     {
+      "tool": "Bash",
+      "pattern": "x\u007fy\u0090z\ufffew\uffffv"
+     }
+    ]
+   }
   }
  }
 ]

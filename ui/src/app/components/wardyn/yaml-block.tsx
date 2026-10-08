@@ -41,41 +41,41 @@ export function toYaml(value: unknown, indent = 0): string {
   if (typeof value === "boolean" || typeof value === "number") return String(value);
   if (typeof value === "string") return yamlScalar(value);
   if (Array.isArray(value)) {
-    if (value.length === 0) return "[]";
+    if (!value.length) return "[]";
     return value
-      .map((item) =>
-        // A nested block opens on the dash's own line: drop its first indent.
-        isYamlContainer(item) ? `${pad}- ${toYaml(item, indent + 1).slice(pad.length + 2)}` : `${pad}- ${toYaml(item, 0)}`,
-      )
+      // A nested block opens on the dash's own line: drop its first indent.
+      .map((item) => `${pad}- ${isYamlContainer(item) ? toYaml(item, indent + 1).slice(pad.length + 2) : toYaml(item, 0)}`)
       .join("\n");
   }
   const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined);
-  if (entries.length === 0) return "{}";
+  if (!entries.length) return "{}";
   return entries
     .map(([k, v]) => {
       const key = yamlScalar(k);
       // YAML allows an implicit key at most 1024 characters before its colon.
-      const head = `${pad}${key.length > 1024 ? `? ${key}\n${pad}` : key}:`;
-      return isYamlContainer(v) ? `${head}\n${toYaml(v, indent + 1)}` : `${head} ${toYaml(v, 0)}`;
+      return `${pad}${key.length > 1024 ? `? ${key}\n${pad}` : key}:${isYamlContainer(v) ? `\n${toYaml(v, indent + 1)}` : ` ${toYaml(v, 0)}`}`;
     })
     .join("\n");
 }
 
+// Arrays too: a JSON array has no keys beyond its indices.
 function isYamlContainer(v: unknown): boolean {
-  if (Array.isArray(v)) return v.length > 0;
   return v !== null && typeof v === "object" && Object.keys(v as object).length > 0;
 }
 
 // yamlScalar quotes a string — a value or a mapping key — only when a plain YAML
 // scalar would be ambiguous: empty, a control character other than tab (a raw line
 // break ends the scalar), special indicators, leading/trailing space, or text that
-// would parse as a number/bool/null. Uses JSON string quoting for the quoted form,
-// plus YAML's escapes for U+0085, U+2028 and U+2029, which JSON leaves raw and the
-// CLI's YAML reader (gopkg.in/yaml.v3) takes as line breaks even inside quotes.
-// One expression on purpose: small, and free of any YAML library.
+// would parse as a number/bool/null (a leading - is caught by ^[\s?-]; the CLI's
+// reader drops underscores first, so +_1 is a number there). Uses JSON string
+// quoting for the quoted form, plus \u escapes for what JSON leaves raw and the
+// CLI's YAML reader (gopkg.in/yaml.v3) reads differently or refuses: U+0085, U+2028
+// and U+2029 (line breaks to it, even inside quotes), a byte order mark, DEL, C1
+// controls, U+FFFE and U+FFFF. One expression on purpose: small, and free of any
+// YAML library.
 function yamlScalar(s: string): string {
-  return /^$|[\0-\b\n-\x1f\x85\u2028\u2029:#[\]{}",&*!|>'%@`]|^[\s?-]|\s$|^(true|false|null|yes|no|on|off|~)$|^[+-]?[\d.]/i.test(s)
-    ? JSON.stringify(s).replace(/\x85/g, "\\N").replace(/\u2028/g, "\\L").replace(/\u2029/g, "\\P")
+  return /^$|[\0-\b\n-\x1f\x7f-\x9f\u2028\u2029\ufeff\ufffe\uffff:#[\]{}",&*!|>'%@`]|^[\s?-]|\s$|^(true|false|null|yes|no|on|off|~)$|^\+?[\d._]/i.test(s)
+    ? JSON.stringify(s).replace(/[\x7f-\x9f\u2028\u2029\ufeff\ufffe\uffff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)
     : s;
 }
 

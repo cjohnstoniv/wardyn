@@ -24,18 +24,18 @@ function expectRoundTrip(value: PolicySourceMapping) {
   expect(JSON.stringify(parsed.value)).toBe(JSON.stringify(value));
   // The same value written as JSON (line-break characters escaped, as every
   // writer here does) must stay acceptable to explicit JSON mode.
-  const json = JSON.stringify(value, null, 2).replace(/[\x85\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  const json = JSON.stringify(value, null, 2).replace(/[\x85\u2028\u2029\ufeff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
   expect(parsePolicySource(json, "json")).toEqual({ ok: true, value });
 }
 
 const STRINGS = [
   "", " ", "  leading", "trailing  ", "\tx", "x\t", "in\tner", "echo one\necho two", "\n", "x\n", "\nx", "a\r\nb", "a\rb",
   "\u0000", "bell\u0007", "esc\u001b[0m", "del\u007f", "nel\u0085x", "c1\u009fx", "ls\u2028x", "ps\u2029x", "\ufeffbom",
-  "x\ufeffy", "nb\u00a0sp", "\u00a0", "é😀", "\ud800", "a: b", "a:b", "a:", ":a", "a #b", "a#b", "#a", "- a", "-a", "-",
+  "x\ufeffy", "nb\u00a0sp", "\u00a0", "é😀", "a: b", "a:b", "a:", ":a", "a #b", "a#b", "#a", "- a", "-a", "-",
   "? a", "?a", "'single'", '"double"', "it's", 'say "hi"', "back\\slash", "\\n", "[a]", "{a}", "a,b", "&a", "*a", "!a",
   "|", ">", "%a", "@a", "`a`", "<<", "=", "a=b", "true", "True", "TRUE", "false", "null", "Null", "NULL", "~", "yes",
   "No", "on", "OFF", "y", "n", "0", "-1", "+1", "017", "0o17", "0x1f", "1e3", "1.5", ".5", "1_000", "1:30",
-  "2000-10-07", "2001-12-14 21:59:43.10 -5", ".nan", ".NaN", ".inf", "-.inf", "+.Inf", "NaN", "Infinity", "---", "...",
+  "2000-10-07", "2001-12-14 21:59:43.10 -5", "+_1", "+_.5", "+__1e3", "+_0x1F", "_1", "-_1", ".nan", ".NaN", ".inf", "-.inf", "+.Inf", "NaN", "Infinity", "---", "...",
   "--- a", "%YAML 1.1", "!!binary aGk=", "*missing", "&anchor x", "key: [flow, {a: b}]", "# comment", "a\n# b\n- c\n",
   "https://github.com/acme/one", "*.githubusercontent.com", "Bearer %s", "rm\\s+-rf\\b", "api.anthropic.com",
   "__proto__", "constructor", "x".repeat(1024), "x".repeat(1025), "\n".repeat(600),

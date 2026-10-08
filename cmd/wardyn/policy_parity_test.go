@@ -16,7 +16,8 @@ import (
 // parser (ui/src/app/lib/policy-document, parity.test.ts) asserts each
 // snippet's outcome in testdata/policy-reader-parity.json; for every snippet it
 // accepts, policyToJSON must produce the same JSON. For a snippet it refuses,
-// the file records what the CLI reads instead, the reason for the refusal.
+// the file records what the CLI reads instead, the reason for the refusal, or
+// that the CLI refuses it too.
 func TestPolicyToJSON_ReadsWhatTheConsoleReads(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "policy-reader-parity.json"))
 	if err != nil {
@@ -29,7 +30,8 @@ func TestPolicyToJSON_ReadsWhatTheConsoleReads(t *testing.T) {
 			Value json.RawMessage `json:"value"`
 			Error string          `json:"error"`
 		} `json:"console"`
-		CLI json.RawMessage `json:"cli"`
+		CLI      json.RawMessage `json:"cli"`
+		CLIError bool            `json:"cliError"`
 	}
 	if err := json.Unmarshal(raw, &cases); err != nil {
 		t.Fatal(err)
@@ -43,10 +45,16 @@ func TestPolicyToJSON_ReadsWhatTheConsoleReads(t *testing.T) {
 			} else {
 				accepted++
 			}
-			if (c.Console.Error == "") == (c.Console.Value == nil) || want == nil {
-				t.Fatalf("case needs exactly one console outcome, and a cli reading when refused")
+			if (c.Console.Error == "") == (c.Console.Value == nil) || (want == nil) == !c.CLIError {
+				t.Fatalf("case needs exactly one console outcome, and a cli reading or cliError when refused")
 			}
 			got, err := policyToJSON([]byte(c.Source))
+			if c.CLIError {
+				if err == nil {
+					t.Fatalf("CLI reads %s; the fixture says it refuses", got)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("policyToJSON: %v", err)
 			}

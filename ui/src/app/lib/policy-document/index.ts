@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Only lazy policy consumers may import this module; code-block's display
-// emitter is reachable from the eager Runs screen and must stay dependency-free.
+// Only lazy policy consumers may import this module. The display emitter
+// (wardyn/yaml-block.tsx) stays free of this library: read-only surfaces such as
+// the run page load it without the parser.
 import { Composer, isAlias, isMap, isNode, isPair, isScalar, LineCounter, Parser, visit, type CST, type Document } from "yaml";
 
 export type PolicySourceValue = null | boolean | number | string | PolicySourceValue[] | PolicySourceMapping;
@@ -43,22 +44,32 @@ function strayBreak(source: string): PolicySourceError | undefined {
 }
 
 // The server refuses a request body over 1 MiB, so no larger policy can launch.
-const MAX_SOURCE_LENGTH = 1 << 20;
+const MAX_SOURCE_BYTES = 1 << 20;
 // Far above any real policy; composing, converting and the JSON locator recurse
 // once per level, and a stack overflow there left V8 unable to compile the next
 // regular expression, aborting the page on a later parse.
 const MAX_DEPTH = 64;
-const TOO_DEEP = "Policy source is nested too deeply.";
+const TOO_DEEP = `Policy source is nested more than ${MAX_DEPTH} levels deep: flatten it.`;
 
 function unreadable(source: string): PolicySourceError | undefined {
-  if (source.length > MAX_SOURCE_LENGTH) return { ok: false, line: 1, column: 1, message: "Policy source is too large." };
+  // UTF-8 never takes fewer bytes than UTF-16 units, so the length alone
+  // settles a long source without encoding it.
+  if (source.length > MAX_SOURCE_BYTES || new TextEncoder().encode(source).length > MAX_SOURCE_BYTES) {
+    return { ok: false, line: 1, column: 1, message: "Policy source is larger than 1 MiB: shorten it." };
+  }
+  // gopkg.in/yaml.v3 strips a byte order mark only at byte 0, yaml here only
+  // before the first content line; anywhere else they read the text differently.
+  const bom = source.indexOf("\ufeff", 1);
+  if (bom > 0) return located(source, bom, "Byte order mark inside the text: remove it, or write it as \\ufeff in a quoted string.");
   return strayBreak(source);
 }
 
 // The tokenizer does not recurse, so its output is checked before anything
-// that does sees it: nesting depth, and a ':' straight before ',', ']' or '}'
-// after an unquoted flow key. YAML 1.2 ends the key there ([x:] is [{x: null}]);
-// gopkg.in/yaml.v3 keeps the ':' in the scalar (["x:"]).
+// that does sees it: nesting depth, and two flow shapes gopkg.in/yaml.v3 reads
+// differently from YAML 1.2. A ':' straight before ',', ']' or '}' ends an
+// unquoted key here ([x:] is [{x: null}]) but stays in the scalar there
+// (["x:"]); a '?' starting an item is a plain scalar here ([?x] is ["?x"]) but
+// an explicit-key indicator there ([{x: null}]).
 function structureProblem(tokens: readonly CST.Token[], source: string): [number, string] | undefined {
   const pending: [CST.Token | null | undefined, number][] = tokens.map((token) => [token, 0]);
   for (let next = pending.pop(); next; next = pending.pop()) {
@@ -66,12 +77,28 @@ function structureProblem(tokens: readonly CST.Token[], source: string): [number
     if (!token) continue;
     const level = "items" in token ? depth + 1 : depth;
     if (level > MAX_DEPTH) return [token.offset, TOO_DEEP];
+    // With an explicit indentation indicator yaml.v3 keeps a trailing
+    // whitespace-only line as content (as YAML 1.2 says); yaml here drops it.
+    const header = token.type === "block-scalar" ? token.props.find((prop) => prop.type === "block-scalar-header") : undefined;
+    if (header && "source" in header && /\d/.test(header.source)) {
+      return [header.offset, "Indentation indicators are not allowed: remove the digit after | or >."];
+    }
+    // An escaped line break before an empty line keeps it as "\n" in yaml.v3
+    // (as YAML 1.2 says); yaml here folds it to a space.
+    const escaped = token.type === "double-quoted-scalar" ? /(?:^|[^\\])(?:\\\\)*\\\r?\n/.exec(token.source) : null;
+    if (escaped) {
+      return [token.offset + escaped.index + escaped[0].lastIndexOf("\\"), "Escaped line break in a quoted string: write the string on one line."];
+    }
     if ("value" in token) pending.push([token.value, level]);
     if (!("items" in token)) continue;
     for (const item of token.items) {
-      const colon = item.sep?.find((sep) => sep.type === "map-value-ind");
-      if (token.type === "flow-collection" && colon && item.key?.type === "scalar" && /[,\]}]/.test(source[colon.offset + 1] ?? "")) {
-        return [colon.offset, "Ambiguous ':' after an unquoted key: add a space after it, or quote the key."];
+      if (token.type === "flow-collection") {
+        const colon = item.sep?.find((sep) => sep.type === "map-value-ind");
+        if (colon && item.key?.type === "scalar" && /[,\]}]/.test(source[colon.offset + 1] ?? "")) {
+          return [colon.offset, "Ambiguous ':' after an unquoted key: add a space after it, or quote the key."];
+        }
+        const question = [item.key, item.value].find((part) => part?.type === "scalar" && part.source.startsWith("?"));
+        if (question) return [question.offset, "Ambiguous '?' starting a flow item: quote the item."];
       }
       pending.push([item.key, level], [item.value, level]);
     }
@@ -79,9 +106,10 @@ function structureProblem(tokens: readonly CST.Token[], source: string): [number
   return undefined;
 }
 
-// Written text must never hold those characters raw; only quoted strings can.
+// Written text must never hold those characters, or a byte order mark past
+// byte 0, raw; only quoted strings can escape them.
 function escapeBreaks(text: string): string {
-  return text.replace(/[\x85\u2028\u2029]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  return text.replace(/[\x85\u2028\u2029\ufeff]/g, (char, at: number) => (at ? `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}` : char));
 }
 
 function safeNumber(value: number): boolean {
@@ -100,7 +128,7 @@ function ambiguousString(text: string): boolean {
   return (/^[-+.\d]/.test(text) && NUMBER_LIKE.test(text.replace(/_/g, ""))) || DATE_LIKE.test(text);
 }
 
-function documentValue(document: Document, lines: LineCounter): PolicySourceResult {
+function documentValue(document: Document, lines: LineCounter, source: string): PolicySourceResult {
   if (!isMap(document.contents)) {
     return failure(lines, document.contents?.range?.[0] ?? 0, "Policy source must be a mapping.");
   }
@@ -113,11 +141,20 @@ function documentValue(document: Document, lines: LineCounter): PolicySourceResu
       if (!isScalar(node.key) || typeof node.key.value !== "string") message = "Mapping keys must be strings.";
       else if (node.key.value === "<<") message = "Merge keys (<<) are not allowed.";
     } else if (isAlias(node)) message = "Aliases are not allowed.";
-    else if (isNode(node) && node.tag) message = "Explicit tags are not allowed.";
+    else if (isNode(node) && node.anchor) {
+      // Aliases are refused, so an anchor is never needed; and gopkg.in/yaml.v3
+      // ends a name at ':' or '?', reading the rest as the next scalar.
+      message = "Anchors are not allowed.";
+      offset = source.lastIndexOf(`&${node.anchor}`, offset);
+    } else if (isNode(node) && node.tag) message = "Explicit tags are not allowed.";
     else if (isScalar(node)) {
       const value = node.value;
       const plain = node.type === "PLAIN" ? node.source ?? "" : undefined;
-      if (plain !== undefined && typeof value === "string" && ambiguousString(plain)) {
+      // JSON.stringify sends an unpaired surrogate as a \u escape that the
+      // server's encoding/json stores as U+FFFD.
+      if (typeof value === "string" && /[\ud800-\udbff](?![\udc00-\udfff])|(?:^|[^\ud800-\udbff])[\udc00-\udfff]/.test(value)) {
+        message = "Unpaired UTF-16 surrogate: remove it.";
+      } else if (plain !== undefined && typeof value === "string" && ambiguousString(plain)) {
         message = "Ambiguous unquoted value: quote it.";
       } else if (plain !== undefined && typeof value !== "string" && /^[-+]?0\d/.test(plain)) {
         message = "Leading zeros are ambiguous: remove them, or quote the value.";
@@ -169,7 +206,7 @@ function readSource(source: string):
     const document = documents[0];
     const issue = document.errors[0] ?? document.warnings[0];
     if (issue) return failure(lines, issue.pos[0], `${issue.code}: ${issue.message}`);
-    const parsed = documentValue(document, lines);
+    const parsed = documentValue(document, lines, source);
     return parsed.ok ? { ...parsed, document } : parsed;
   } catch (error) {
     return caught(error);
@@ -305,23 +342,28 @@ export function editPolicySource(
       if (!parsed.document.hasIn(path)) return { ok: true, source };
       parsed.document.deleteIn(path);
     } else {
-      const next = value !== null && typeof value === "object"
-        ? parsed.document.createNode(value, { aliasDuplicateObjects: false })
-        : value;
-      parsed.document.setIn(path, next);
+      // A new value goes in as a Scalar node, never a raw string, so the pass
+      // below sees and quotes it; an existing scalar keeps its node, and with
+      // it its comment, when only its value changes.
+      const replacesScalar = isScalar(parsed.document.getIn(path, true)) && (value === null || typeof value !== "object");
+      parsed.document.setIn(path, replacesScalar ? value : parsed.document.createNode(value, { aliasDuplicateObjects: false }));
     }
     // Authored text already passed readSource, so only new strings can hold a
-    // CR or a character that must be escaped, or be ambiguous when plain; only
-    // double quotes keep them exact (a block scalar would turn CRLF into LF).
+    // CR, a byte order mark or a character that must be escaped, or be refused
+    // when plain; double quotes keep them exact (a block scalar would turn CRLF
+    // into LF).
     visit(parsed.document, {
       Scalar(_, node) {
         if (typeof node.value !== "string") return;
-        if (/[\r\x85\u2028\u2029]/.test(node.value) || ((node.type ?? "PLAIN") === "PLAIN" && ambiguousString(node.value))) {
+        const plain = (node.type ?? "PLAIN") === "PLAIN";
+        if (/[\r\x85\u2028\u2029\ufeff]/.test(node.value) || (plain && (ambiguousString(node.value) || node.value.startsWith("?")))) {
           node.type = "QUOTE_DOUBLE";
         }
       },
     });
-    const edited = escapeBreaks(parsed.document.toString());
+    // No folding: yaml folds a long double-quoted string with escaped line
+    // breaks, which the parse below refuses.
+    const edited = escapeBreaks(parsed.document.toString({ lineWidth: 0 }));
     const checked = parsePolicySource(edited);
     if (!checked.ok) return checked;
     // JSON is the wire/storage representation, so its conversion drops comments.

@@ -58,6 +58,14 @@ describe("toYaml", () => {
     );
   });
 
+  // gopkg.in/yaml.v3 drops underscores before reading a number, so a plain
+  // +_1 is 1 to the CLI.
+  it("quotes strings starting with an underscore after an optional plus", () => {
+    expect(toYaml({ a: "+_1", b: "_1", c: ["+__1e3", "+_0x1F"], "+_.5": 1 })).toBe(
+      ['a: "+_1"', 'b: "_1"', "c:", '  - "+__1e3"', '  - "+_0x1F"', '"+_.5": 1'].join("\n"),
+    );
+  });
+
   it("keeps a tab inside a value and ordinary keys unquoted", () => {
     expect(toYaml({ pattern: "echo\tone", "x-api-key": "a b", "acme/one": 1 })).toBe(
       "pattern: echo\tone\nx-api-key: a b\nacme/one: 1",
@@ -70,9 +78,23 @@ describe("toYaml", () => {
   it("quotes and escapes U+0085, U+2028 and U+2029 in values and keys", () => {
     const yaml = toYaml({ a: "x: y\u0085z", b: "nel\u0085x", c: [" ls\u2028x", "ps\u2029"], "k\u2028": 1 });
     expect(yaml).toBe(
-      ['a: "x: y\\Nz"', 'b: "nel\\Nx"', "c:", '  - " ls\\Lx"', '  - "ps\\P"', '"k\\L": 1'].join("\n"),
+      ['a: "x: y\\u0085z"', 'b: "nel\\u0085x"', "c:", '  - " ls\\u2028x"', '  - "ps\\u2029"', '"k\\u2028": 1'].join("\n"),
     );
     expect(yaml).not.toMatch(/[\x85\u2028\u2029]/);
+  });
+
+  // Both readers keep a byte order mark only at byte 0 and disagree elsewhere,
+  // so a raw one is refused; JSON leaves it unescaped.
+  it("quotes and escapes a byte order mark", () => {
+    expect(toYaml({ a: "x\ufeffy", "\ufeffk": 1 })).toBe(['a: "x\\ufeffy"', '"\\ufeffk": 1'].join("\n"));
+  });
+
+  // gopkg.in/yaml.v3 refuses a whole document holding a raw DEL, C1 control,
+  // U+FFFE or U+FFFF; escaped, it reads them as the same characters.
+  it("quotes and escapes DEL, C1 controls, U+FFFE and U+FFFF", () => {
+    const yaml = toYaml({ a: "x\u007fy", b: ["c1\u0080x", "c1\u009fx"], c: "x\ufffey\uffffz", "k\u007f": 1 });
+    expect(yaml).toBe(['a: "x\\u007fy"', "b:", '  - "c1\\u0080x"', '  - "c1\\u009fx"', 'c: "x\\ufffey\\uffffz"', '"k\\u007f": 1'].join("\n"));
+    expect(yaml).not.toMatch(/[\u007f-\u009f\ufffe\uffff]/);
   });
 
   // YAML allows an implicit key at most 1024 characters before its colon.

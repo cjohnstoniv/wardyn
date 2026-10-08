@@ -57,7 +57,7 @@ describe("line breaks the readers split differently", () => {
 
 describe("nesting and size are checked before anything recurses", () => {
   const nested = (levels: number) => '{"a":' + "[".repeat(levels - 1) + "]".repeat(levels - 1) + "}";
-  const TOO_DEEP = "Policy source is nested too deeply.";
+  const TOO_DEEP = "Policy source is nested more than 64 levels deep: flatten it.";
 
   // A stack overflow while composing used to leave V8 unable to compile the
   // next regular expression: the second parse aborted the whole process.
@@ -91,12 +91,25 @@ describe("nesting and size are checked before anything recurses", () => {
     expect(editPolicySource(nested(65), ["b"], 1, "yaml")).toMatchObject({ ok: false, message: TOO_DEEP });
   });
 
+  // The server's cap counts bytes: about 350,000 three-byte characters pass
+  // 1 MiB in UTF-8 while staying near a third of it in UTF-16 units.
+  it.each<PolicySourceFormat>(["yaml", "json"])("measures the %s limit in UTF-8 bytes", (format) => {
+    const wrap = (body: string) => (format === "json" ? `{"a":"${body}"}` : `a: ${body}`);
+    const room = (1 << 20) - wrap("").length;
+    const fits = wrap("\u20ac".repeat(Math.floor(room / 3)) + "x".repeat(room % 3));
+    expect(new TextEncoder().encode(fits).length).toBe(1 << 20);
+    expect(parsePolicySource(fits, format)).toMatchObject({ ok: true });
+    expect(parsePolicySource(wrap("\u20ac".repeat(Math.floor(room / 3) + 1)), format)).toEqual({
+      ok: false, line: 1, column: 1, message: "Policy source is larger than 1 MiB: shorten it.",
+    });
+  });
+
   // The server refuses a request body over 1 MiB, so no larger policy can launch.
   it.each<PolicySourceFormat>(["yaml", "json"])("refuses %s source over 1 MiB before reading it", (format) => {
     const fits = format === "json" ? `{"a":"${"x".repeat((1 << 20) - 8)}"}` : `a: ${"x".repeat((1 << 20) - 3)}`;
     expect(fits.length).toBe(1 << 20);
     expect(parsePolicySource(fits, format)).toMatchObject({ ok: true });
-    expect(parsePolicySource(`${fits} `, format)).toEqual({ ok: false, line: 1, column: 1, message: "Policy source is too large." });
+    expect(parsePolicySource(`${fits} `, format)).toEqual({ ok: false, line: 1, column: 1, message: "Policy source is larger than 1 MiB: shorten it." });
   });
 });
 
@@ -162,6 +175,9 @@ type ParityCase = {
   format?: PolicySourceFormat;
   emitted?: boolean;
   console: { value: PolicySourceMapping } | { error: string };
+  // For a refused snippet: what the CLI reads instead, or that it refuses too.
+  cli?: unknown;
+  cliError?: boolean;
 };
 const parityCases = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, "../../../../../cmd/wardyn/testdata/policy-reader-parity.json"), "utf8"),
@@ -212,5 +228,187 @@ describe("a ':' directly before a flow indicator", () => {
     const edited = editPolicySource("a: [x, {y: 1}]\n", ["a", 2], { k: null }, "yaml");
     if (!edited.ok) throw new Error(edited.message);
     expect(parsePolicySource(edited.source)).toEqual({ ok: true, value: { a: ["x", { y: 1 }, { k: null }] } });
+  });
+});
+
+// gopkg.in/yaml.v3 ends an anchor name at ':' or '?' and reads the rest as the
+// next scalar: `&x:y a: 1` is {"a": 1} here and {":y a": 1} there. Aliases are
+// already refused, so an anchor can never be used; it is refused outright.
+describe("anchors", () => {
+  const ANCHOR = "Anchors are not allowed.";
+
+  it.each([
+    ["an anchor name with ':' on a key", "&x:y a: 1", 1, 1],
+    ["an anchor name with ':' on a value", "a: &x:y 1", 1, 4],
+    ["an anchor name with '?'", "&x?y a: 1", 1, 1],
+    ["an anchored root mapping", "&x:y {}", 1, 1],
+    ["a plain anchor", "a: &label x", 1, 4],
+    ["an anchor in a flow sequence", "a: [&x b]", 1, 5],
+    ["an anchored block mapping", "a: &m\n  b: 1", 1, 4],
+  ])("refuses %s at the '&'", (_, source, line, column) => {
+    expect(parsePolicySource(source)).toEqual({ ok: false, line, column, message: ANCHOR });
+  });
+
+  it("accepts '&' inside scalars", () => {
+    expect(parsePolicySource('a: x&y\nb: "&z"\nc: \'&w\'')).toEqual({ ok: true, value: { a: "x&y", b: "&z", c: "&w" } });
+  });
+});
+
+// Inside a flow collection gopkg.in/yaml.v3 takes '?' as the explicit-key
+// indicator whatever follows it; YAML 1.2 reads ?x as a plain scalar. So
+// [?x] is ["?x"] here and [{"x": null}] there.
+describe("a '?' starting a flow item", () => {
+  const QUESTION = "Ambiguous '?' starting a flow item: quote the item.";
+
+  it.each([
+    ["a flow sequence item", "allowed_domains: [?x]", 1, 19],
+    ["a flow mapping key", "scope: {?host: 1}", 1, 9],
+    ["a flow pair key", "a: [?x: 1]", 1, 5],
+    ["a '?' before a quoted JSON key", '{"a": [?"b"]}', 1, 8],
+    ["a later flow item", "a: [y, ?z]", 1, 8],
+  ])("refuses %s at the '?'", (_, source, line, column) => {
+    expect(parsePolicySource(source)).toEqual({ ok: false, line, column, message: QUESTION });
+  });
+
+  it.each<[string, string, unknown]>([
+    ["an explicit key with a space", "a: [? x]", { a: [{ x: null }] }],
+    ["a block value", "a: ?x", { a: "?x" }],
+    ["a block key", "?x: 1", { "?x": 1 }],
+    ["a quoted flow item", 'a: ["?x"]', { a: ["?x"] }],
+    ["a '?' later in a flow item", "a: [x?]", { a: ["x?"] }],
+  ])("accepts %s", (_, source, value) => {
+    expect(parsePolicySource(source)).toEqual({ ok: true, value });
+  });
+});
+
+// With an explicit indentation indicator, a trailing whitespace-only line is
+// content to gopkg.in/yaml.v3 (as YAML 1.2 says) and dropped here:
+// `a: |1` over " x" and "  " is " x\n" here and " x\n \n" there.
+describe("block scalar indentation indicators", () => {
+  const INDICATOR = "Indentation indicators are not allowed: remove the digit after | or >.";
+
+  it.each([
+    ["a literal with an indicator", "a: |1\n  x\n  \nb: 1", 1, 4],
+    ["a folded scalar with an indicator", "a: >1\n  x", 1, 4],
+    ["an indicator after a chomping indicator", "a: >-1\n  x", 1, 4],
+    ["an indicator before a chomping indicator", "a: |2+\n   x", 1, 4],
+    ["an indicator in a sequence item", "a:\n  - |2\n     x", 2, 5],
+  ])("refuses %s at the header", (_, source, line, column) => {
+    expect(parsePolicySource(source)).toEqual({ ok: false, line, column, message: INDICATOR });
+  });
+
+  it.each<[string, string, unknown]>([
+    ["a literal block", "a: |\n  x\n  y\n", { a: "x\ny\n" }],
+    ["a folded block with chomping", "a: >-\n  x\n  y\n", { a: "x y" }],
+    ["a kept literal block", "a: |+\n  x\n\n", { a: "x\n\n" }],
+  ])("accepts %s", (_, source, value) => {
+    expect(parsePolicySource(source)).toEqual({ ok: true, value });
+  });
+});
+
+// An escaped line break followed by an empty line keeps that line as "\n" in
+// gopkg.in/yaml.v3 (as YAML 1.2 says) and folds it to a space here.
+describe("escaped line breaks in double-quoted strings", () => {
+  const ESCAPED = "Escaped line break in a quoted string: write the string on one line.";
+
+  it.each([
+    ["one before an empty line", 'a: "x\\\n\n  y"', 1, 6],
+    ["one before a continuation", 'a: "x\\\n  y"', 1, 6],
+    ["one before CRLF", 'a: "x\\\r\n  y"', 1, 6],
+    ["one in a key", '"k\\\n  z": 1', 1, 3],
+    ["one after an escaped backslash", 'a: "x\\\\\\\n  y"', 1, 8],
+  ])("refuses %s at the backslash", (_, source, line, column) => {
+    expect(parsePolicySource(source)).toEqual({ ok: false, line, column, message: ESCAPED });
+  });
+
+  it.each<[string, string, unknown]>([
+    ["an escaped backslash before a line break", 'a: "x\\\\\n  y"', { a: "x\\ y" }],
+    ["a folded line break", 'a: "x\n  y"', { a: "x y" }],
+    ["a \\n escape", 'a: "x\\ny"', { a: "x\ny" }],
+    ["a single-quoted backslash before a line break", "a: 'x\\\n  y'", { a: "x\\ y" }],
+  ])("accepts %s", (_, source, value) => {
+    expect(parsePolicySource(source)).toEqual({ ok: true, value });
+  });
+});
+
+// gopkg.in/yaml.v3 strips a byte order mark only at byte 0 and yaml here only
+// before the first content line: `<LF><BOM>a: 1` reads as {"a": 1} here and
+// {"<BOM>a": 1} there, and a doubled BOM the other way round.
+describe("byte order marks", () => {
+  const BOM = "Byte order mark inside the text: remove it, or write it as \\ufeff in a quoted string.";
+
+  it.each<[string, PolicySourceFormat, string, number, number]>([
+    ["one starting the second line", "yaml", "a: 1\n\ufeffb: 2", 2, 1],
+    ["one after a comment line", "yaml", "# c\n\ufeffa: 1", 2, 1],
+    ["a doubled leading one", "yaml", "\ufeff\ufeffa: 1", 1, 2],
+    ["one inside a plain value", "yaml", "a: x\ufeffy", 1, 5],
+    ["one inside a quoted value", "yaml", 'a: "x\ufeffy"', 1, 6],
+    ["one inside a JSON string", "json", '{"a": "x\ufeffy"}', 1, 9],
+  ])("refuses %s at the mark", (_, format, source, line, column) => {
+    expect(parsePolicySource(source, format)).toEqual({ ok: false, line, column, message: BOM });
+  });
+
+  it("accepts one leading mark and the escaped form", () => {
+    expect(parsePolicySource("\ufeffa: 1")).toEqual({ ok: true, value: { a: 1 } });
+    expect(parsePolicySource('a: "x\\ufeffy"')).toEqual({ ok: true, value: { a: "x\ufeffy" } });
+    expect(parsePolicySource('{"a": "x\\ufeffy"}', "json")).toEqual({ ok: true, value: { a: "x\ufeffy" } });
+  });
+
+  it.each<PolicySourceFormat>(["yaml", "json"])("never writes a raw mark from a %s edit", (format) => {
+    const edited = editPolicySource("\ufeffa: 1\n", ["b"], ["x\ufeffy", "\ufefflead"], format);
+    if (!edited.ok) throw new Error(edited.message);
+    expect(edited.source.slice(1)).not.toMatch(/\ufeff/);
+    expect(parsePolicySource(edited.source, format)).toEqual({ ok: true, value: { a: 1, b: ["x\ufeffy", "\ufefflead"] } });
+  });
+});
+
+// JSON.stringify sends an unpaired surrogate as a \u escape, which the
+// server's encoding/json stores as U+FFFD, and the CLI's YAML reader refuses.
+describe("unpaired surrogates", () => {
+  const SURROGATE = "Unpaired UTF-16 surrogate: remove it.";
+
+  it.each<[string, PolicySourceFormat, string, number, number]>([
+    ["a lone high surrogate in JSON", "json", '{"a": "\\ud83d"}', 1, 7],
+    ["a lone low surrogate in a JSON key", "json", '{"\\udc00": 1}', 1, 2],
+    ["a reversed pair in JSON", "json", '{"a": "\\ude00\\ud83d"}', 1, 7],
+    ["a lone surrogate escape in YAML", "yaml", 'a: "x\\ud800"', 1, 4],
+  ])("refuses %s at the string", (_, format, source, line, column) => {
+    expect(parsePolicySource(source, format)).toEqual({ ok: false, line, column, message: SURROGATE });
+  });
+
+  it("accepts a surrogate pair, escaped or raw", () => {
+    expect(parsePolicySource('{"a": "\\ud83d\\ude00", "b": "😀"}', "json")).toEqual({ ok: true, value: { a: "😀", b: "😀" } });
+    expect(parsePolicySource('a: "\\ud83d\\ude00"')).toEqual({ ok: true, value: { a: "😀" } });
+  });
+});
+
+// Every way an edit can place a value: the written source must read back as
+// exactly that value, never as other text and never as a refusal.
+describe("structured edits write exactly the requested value", () => {
+  const PATHS: [string, string, (string | number)[]][] = [
+    ["a new key", "a: 1\n", ["b"]],
+    ["an existing scalar", "a: 1 # kept\n", ["a"]],
+    ["a replaced list", "l: [1]\n", ["l"]],
+    ["a new nested key", "m: {k: 1}\n", ["m", "z"]],
+    ["a sequence append", "l: [1]\n", ["l", 1]],
+    ["a replaced sequence item", "l: [1]\n", ["l", 0]],
+  ];
+  const VALUES = ["x\u2028y", "x\u2029y", "x\ufeffy", "+_1", "2000-10-07", "x\u0085y", "x\ry", "x\r\ny", "017", "1_000", "x: y", "x:", "", " x", "?x", "?", "x\u007fy",
+    "a".repeat(200) + ": b", "word ".repeat(40).trim()];
+  const CASES = PATHS.flatMap(([where, source, path]) =>
+    (["yaml", "json"] as const).flatMap((format) =>
+      VALUES.map((value) => [`${JSON.stringify(value.length > 30 ? `${value.slice(0, 12)}… (${value.length})` : value)} as ${where} (${format})`, source, path, value, format] as const)));
+
+  it.each(CASES)("writes %s", (_, source, path, value, format) => {
+    const edited = editPolicySource(source, path, value, format);
+    if (!edited.ok) throw new Error(`${edited.line}:${edited.column} ${edited.message}`);
+    const read = parsePolicySource(edited.source, format);
+    if (!read.ok) throw new Error(read.message);
+    expect(path.reduce<unknown>((node, key) => (node as Record<string | number, unknown>)[key], read.value)).toBe(value);
+  });
+
+  it("keeps the comment on an edited existing scalar", () => {
+    const edited = editPolicySource("a: 1 # kept\n", ["a"], "x\u2028y", "yaml");
+    expect(edited).toEqual({ ok: true, source: 'a: "x\\u2028y" # kept\n' });
   });
 });
