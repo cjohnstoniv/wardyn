@@ -85,9 +85,16 @@ var goPathSpan = regexp.MustCompile("`([A-Za-z0-9_./-]+\\.go)`")
 // sentence naming four symbols and two files gives no evidence about which
 // belongs to which, and a cross-product would invent claims the document never
 // made and then fail on them.
+//
+// The path span may be link-wrapped — "`Sym` in [`pkg/f.go`](../pkg/f.go)" —
+// because a reader should be able to click through. The wrapper is optional
+// syntax around the SAME backticked span, so goPathSpan still finds the path
+// (rule 1) and the pair is still resolved (rule 2); without it a linked
+// citation would drop out of the pair count unchecked. The link target is not
+// read here: whether it matches the span is the link gate's job.
 var (
-	symbolThenPath = regexp.MustCompile("`([A-Za-z_][A-Za-z0-9_.]*)`(?:\\s*(?:,|—|-|in|is in|lives in|,? see)\\s*)`([A-Za-z0-9_./-]+\\.go)`")
-	pathThenSymbol = regexp.MustCompile("`([A-Za-z0-9_./-]+\\.go)`\\s*(?:,|—|-|:)?\\s*`([A-Za-z_][A-Za-z0-9_.]*)`")
+	symbolThenPath = regexp.MustCompile("`([A-Za-z_][A-Za-z0-9_.]*)`(?:\\s*(?:,|—|-|in|is in|lives in|,? see)\\s*)\\[?`([A-Za-z0-9_./-]+\\.go)`(?:\\]\\([^)]*\\))?")
+	pathThenSymbol = regexp.MustCompile("\\[?`([A-Za-z0-9_./-]+\\.go)`(?:\\]\\([^)]*\\))?\\s*(?:,|—|-|:)?\\s*`([A-Za-z_][A-Za-z0-9_.]*)`")
 )
 
 // TestSecurityDocsCitationsResolve is the other half of the citation rule. Its
@@ -161,41 +168,55 @@ func TestSecurityDocsCitationsResolve(t *testing.T) {
 			t.Fatalf("read %s: %v", doc, err)
 		}
 		rel, _ := filepath.Rel(root, doc)
-		for i, line := range strings.Split(string(b), "\n") {
-			for _, m := range goPathSpan.FindAllStringSubmatch(line, -1) {
-				paths++
-				if _, ok := resolve(m[1]); !ok {
-					t.Errorf("%s:%d cites %s, which does not exist — a security document that sends a reviewer to a file that is not there is asserting rigour it does not have", rel, i+1, m[1])
-				}
+		p, q := checkDocCitations(rel, string(b), resolve, t.Errorf)
+		paths += p
+		pairs += q
+	}
+	if citationsVacuous(paths, pairs) {
+		t.Fatalf("resolved %d .go paths and %d (symbol, file) pairs — one of the two citation shapes vanished from the threat model; teach the guard the new one rather than letting it pass on nothing", paths, pairs)
+	}
+	t.Logf("resolved %d .go path citations and %d (symbol, file) pairs across %d documents", paths, pairs, len(docs))
+}
+
+// checkDocCitations applies rules 1 and 2 above to one document's text and
+// returns how many path spans and (symbol, file) pairs it checked. Split out of
+// the test so citation_shapes_test.go can drive the same code over fixtures.
+func checkDocCitations(rel, text string, resolve func(string) (string, bool), errorf func(string, ...any)) (paths, pairs int) {
+	for i, line := range strings.Split(text, "\n") {
+		for _, m := range goPathSpan.FindAllStringSubmatch(line, -1) {
+			paths++
+			if _, ok := resolve(m[1]); !ok {
+				errorf("%s:%d cites %s, which does not exist — a security document that sends a reviewer to a file that is not there is asserting rigour it does not have", rel, i+1, m[1])
 			}
-			for _, re := range []*regexp.Regexp{symbolThenPath, pathThenSymbol} {
-				for _, m := range re.FindAllStringSubmatch(line, -1) {
-					sym, cited := m[1], m[2]
-					if strings.HasSuffix(sym, ".go") {
-						sym, cited = m[2], m[1]
-					}
-					src, ok := resolve(cited)
-					if !ok {
-						continue // already reported by the path rule above
-					}
-					pairs++
-					tail := sym
-					if idx := strings.LastIndex(tail, "."); idx >= 0 {
-						tail = tail[idx+1:]
-					}
-					if !strings.Contains(src, tail) {
-						t.Errorf("%s:%d cites %s in %s, but %q appears nowhere in that file — the citation names the wrong file (cite the symbol AND the file it is actually in)", rel, i+1, sym, cited, tail)
-					}
+		}
+		for _, re := range []*regexp.Regexp{symbolThenPath, pathThenSymbol} {
+			for _, m := range re.FindAllStringSubmatch(line, -1) {
+				sym, cited := m[1], m[2]
+				if strings.HasSuffix(sym, ".go") {
+					sym, cited = m[2], m[1]
+				}
+				src, ok := resolve(cited)
+				if !ok {
+					continue // already reported by the path rule above
+				}
+				pairs++
+				tail := sym
+				if idx := strings.LastIndex(tail, "."); idx >= 0 {
+					tail = tail[idx+1:]
+				}
+				if !strings.Contains(src, tail) {
+					errorf("%s:%d cites %s in %s, but %q appears nowhere in that file — the citation names the wrong file (cite the symbol AND the file it is actually in)", rel, i+1, sym, cited, tail)
 				}
 			}
 		}
 	}
-	// Guard the guard: a doc whose citations all changed shape would pass
-	// vacuously, which is the failure this whole file exists to refuse.
-	if paths == 0 || pairs == 0 {
-		t.Fatalf("resolved %d .go paths and %d (symbol, file) pairs — one of the two citation shapes vanished from the threat model; teach the guard the new one rather than letting it pass on nothing", paths, pairs)
-	}
-	t.Logf("resolved %d .go path citations and %d (symbol, file) pairs across %d documents", paths, pairs, len(docs))
+	return paths, pairs
+}
+
+// citationsVacuous guards the guard: a doc whose citations all changed shape
+// would pass vacuously, which is the failure this whole file exists to refuse.
+func citationsVacuous(paths, pairs int) bool {
+	return paths == 0 || pairs == 0
 }
 
 // TestMembersDocCitesSymbolsNotLineNumbers extends the same rule to
