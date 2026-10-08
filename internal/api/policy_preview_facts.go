@@ -25,6 +25,9 @@ type policyPreviewResponse struct {
 	Warnings         []string                  `json:"warnings"`
 	Pending          []policyPreviewPending    `json:"pending"`
 	RepositoryAccess []policyPreviewRepository `json:"repository_access"`
+	// Components is what the draft is given access to (componentFacts): absent
+	// for a draft with no repository on a Git provider and no component.
+	Components []componentFact `json:"components,omitempty"`
 }
 
 type policyPreviewPending string
@@ -55,7 +58,7 @@ type policyPreviewRepository struct {
 }
 
 func policyPreviewFacts(req createRunRequest, spec types.RunPolicySpec, source policySourceRecord,
-	warnings []string, site types.SiteConfig, choice runProviderChoice) policyPreviewResponse {
+	warnings []string, site types.SiteConfig, choice runProviderChoice, comps runComponents) policyPreviewResponse {
 	out := redactSpecForRead(spec, false)
 	if out.LLMInspection != nil {
 		inspection := *out.LLMInspection
@@ -71,6 +74,7 @@ func policyPreviewFacts(req createRunRequest, spec types.RunPolicySpec, source p
 		Provisional: true, Redacted: redacted,
 		Warnings: previewSafeWarnings(warnings), Pending: previewPending(req, choice),
 		RepositoryAccess: previewRepositoryAccess(req, out, site),
+		Components:       componentFacts(req, spec, site, comps, nil),
 	}
 }
 
@@ -95,8 +99,19 @@ func previewSafeWarnings(warnings []string) []string {
 	return out
 }
 
-func previewRepositoryAccess(req createRunRequest, spec types.RunPolicySpec, site types.SiteConfig) []policyPreviewRepository {
-	out := []policyPreviewRepository{}
+// previewRepo is one of a draft's repositories as the read doors describe it:
+// the provider kind it classifies to, the address its row clones from, its own
+// address without credentials, and the admission verdict that classified it.
+type previewRepo struct {
+	kind, org, url string
+	locator, host  string // as the draft names it; the host git will dial
+	verdict        providerVerdict
+}
+
+// previewRepos classifies every repository the draft names, in the order it
+// names them. One that cannot be read is left out: admission refuses it.
+func previewRepos(req createRunRequest, spec types.RunPolicySpec, site types.SiteConfig) []previewRepo {
+	var out []previewRepo
 	for _, repo := range presentRepos(append(repoLocatorsOf(spec.WorkspaceRepos), req.Repo, req.DevcontainerRepo)) {
 		clone := repoCloneURL(repo)
 		target, ok := parseCloneTarget(clone, adoServerHosts(site))
@@ -110,7 +125,8 @@ func previewRepositoryAccess(req createRunRequest, spec types.RunPolicySpec, sit
 		if normalized == "" {
 			continue
 		}
-		row := admitRepoURL(site, clone).Provider
+		verdict := admitRepoURL(site, clone)
+		row := verdict.Provider
 		kind, org := "other", ""
 		switch {
 		case row.Kind == types.GitProviderAzureDevOps:
@@ -120,7 +136,16 @@ func previewRepositoryAccess(req createRunRequest, spec types.RunPolicySpec, sit
 		case adoServicesHost(target.host):
 			kind = "azure_devops"
 		}
-		access := policyPreviewRepository{Kind: kind, Org: org, Repos: []string{}, DefaultProfile: []adoscope.Capability{}, CapabilityCeiling: []adoscope.Capability{}}
+		out = append(out, previewRepo{kind: kind, org: org, url: normalized, locator: repo, host: target.host, verdict: verdict})
+	}
+	return out
+}
+
+func previewRepositoryAccess(req createRunRequest, spec types.RunPolicySpec, site types.SiteConfig) []policyPreviewRepository {
+	out := []policyPreviewRepository{}
+	for _, repo := range previewRepos(req, spec, site) {
+		row, normalized := repo.verdict.Provider, repo.url
+		access := policyPreviewRepository{Kind: repo.kind, Org: repo.org, Repos: []string{}, DefaultProfile: []adoscope.Capability{}, CapabilityCeiling: []adoscope.Capability{}}
 		if row.Entra != nil {
 			access.DefaultProfile = row.Entra.Profile()
 			slices.Sort(access.DefaultProfile)

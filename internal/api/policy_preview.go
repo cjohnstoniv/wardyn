@@ -102,7 +102,7 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reason, detail)
 		return
 	}
-	response := policyPreviewFacts(req, spec, source, warnings, site, choice)
+	response := policyPreviewFacts(req, spec, source, warnings, site, choice, comps)
 	if narrowed != "" {
 		response.Warnings = append(response.Warnings, narrowed)
 	}
