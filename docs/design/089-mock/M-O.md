@@ -1,8 +1,8 @@
 # M-O — recording-recovered Kubernetes output (#1831)
 
-Status: **packet ready for review; Claude Design prototype and owner approval pending**. This independently approvable packet covers lane O's Output-tab rendering. Durable recording/mask erasure work and nonvisual output capture proceed in their lanes; this packet grants no visual approval.
+Status: **packet ready for review; design prototype and owner approval pending**. This independently approvable packet covers the Output-tab rendering. Durable recording and mask erasure work and nonvisual output capture proceed separately; this packet grants no visual approval.
 
-Baseline: `7b08fd722ca4dcfd9d2d59e6f1cb8ecab54d8dcf`. Authority: `docs/design/CONSOLE-RULES.md`, `docs/design/SYNC.md`, `.design-sync/NOTES.md`, approved 088 C4 and existing M8 Output canon. See `design-access.md` for the unverified remote-project status. No product rendering code changed to prepare this artifact.
+Baseline: `7b08fd722ca4dcfd9d2d59e6f1cb8ecab54d8dcf`. Authority: `docs/design/CONSOLE-RULES.md`, `docs/design/SYNC.md`, `.design-sync/NOTES.md`, approved 088 C4 and existing M8 Output canon. No product rendering code changed to prepare this artifact.
 
 Top three corrections: show recovered output when available; distinguish capture gaps from clean empty output; preserve erased/expired/masking refusal states. Reuse `Chip`, `CopyButton`, existing Output `Notice`, `EmptyState`, `ErrorState`, and the current focusable output block. No new color, size, radius or elevation. This packet does not restyle the existing output block.
 
@@ -12,7 +12,7 @@ For recording-on Kubernetes runs, the server may recover output from the availab
 
 Missing, malformed or uncovered recovery data yields a capture-gap result, not a clean empty result or an invented refusal. The existing `PG.SaveGapRunOutput` can store `source: "stdout"`, empty output and `incomplete: false`; `handleRunOutput` serves that final row as HTTP 200 with `complete: true` and `capture_gap: true`. Gap rendering therefore depends on `capture_gap`, independently of source or `incomplete`. This packet corrects the proposed UI contract; the current product rendering has not been changed.
 
-Lane O depends on the recording/mask erasure fences and M-O's owner-approved remote prototype for its visual portion. M-F and M-R approvals are independent.
+The Output-tab rendering depends on the recording/mask erasure fences and on M-O's owner-approved prototype for its visual portion. M-F and M-R approvals are independent.
 
 ## 2. Surfaces
 
@@ -63,7 +63,7 @@ O5 — partial recording plus a gap uses O1 with both recovery and gap notices a
 
 An uncovered recovery writes no unsafe bytes and produces the gap result above. An unsafe live read can instead be refused by the masking gate; these are separate server outcomes. Keep the server's gate order. The legacy `run_output_not_captured` branch is not a fallback for failed recovery, and its “The run's recording has it.” sentence must never appear in a gap frame. The wire gap flag has no restart-cause field, so no gap frame may infer a restart.
 
-Prototype routes to supply: `/m-o/recovered-final`, `/m-o/recovered-live`, `/m-o/recovered-truncated`, `/m-o/recovered-mask-gap`, `/m-o/gap-empty-stdout`, `/m-o/gap-partial-recording`, `/m-o/loading-saving`, `/m-o/refusals`, `/m-o/interactive`. The gap route exposes missing/malformed/uncovered fixtures separately. Driveable fixture controls switch true server-state combinations; a route cannot toggle `incomplete` off for a recording-recovered result. Freeze the real Claude Design URL/revision after remote creation.
+Prototype routes to supply: `/m-o/recovered-final`, `/m-o/recovered-live`, `/m-o/recovered-truncated`, `/m-o/recovered-mask-gap`, `/m-o/gap-empty-stdout`, `/m-o/gap-partial-recording`, `/m-o/loading-saving`, `/m-o/refusals`, `/m-o/interactive`. The gap route exposes missing/malformed/uncovered fixtures separately. Driveable fixture controls switch true server-state combinations; a route cannot toggle `incomplete` off for a recording-recovered result. Freeze the real prototype URL/revision after it is created.
 
 ## 3. Exact strings and homes
 
@@ -149,7 +149,7 @@ The following acceptance fixtures pin the mapping for the prototype and later im
 
 Exercise each missing/malformed/uncovered fixture independently; assert HTTP-200 frame (`run-output-text`), absence of `run-output-refusal`, absent clean-empty/recording-exists/restart claims, source-specific accessible name, warning description, stable focus and exact empty Copy payload. For partial recording with/without gap, assert incomplete true, the exact applicable warnings, actual text and exact Copy payload; polling must not move focus or reread it. Independently return each genuine off/not-kept/erased/expired/mask/auth response and verify its established refusal semantics with no successful-output region or stale Copy data; do not turn a refusal into a gap. Keep the clean-empty stdout controls above to show that suppression depends on recovery/gap, not body length alone.
 
-Preserve test IDs `run-output-text` and `run-output-refusal`; add the fixtures above to the existing Output unit/e2e families, alongside final-versus-complete distinction, notice combinations and refusal precedence. The local packet validator checks these fixture expectations and rejects the pre-correction packet; it does not exercise the product. Backend lane O must supply real recording-on Kubernetes regression evidence; a mocked prototype does not establish that capture works.
+Preserve test IDs `run-output-text` and `run-output-refusal`; add the fixtures above to the existing Output unit/e2e families, alongside final-versus-complete distinction, notice combinations and refusal precedence. These fixture expectations are written proposals; they do not exercise the product. Backend work must supply real recording-on Kubernetes regression evidence; a mocked prototype does not establish that capture works.
 
 ## 5. Decisions for this independent approval
 
@@ -158,7 +158,7 @@ Preserve test IDs `run-output-text` and `run-output-refusal`; add the fixtures a
 - **O-D3:** `final` means capture stopped updating. It does not claim full delivery. No new “complete” UI word is added. Empty recovery and every empty capture gap suppress clean-empty sentences regardless of source/incomplete. Missing/malformed/uncovered recovery maps to the actual HTTP-200 gap result.
 - **O-D4:** Existing off/erased/expired/mask/authorization refusals win over recovery; no client-side fallback reconstructs denied output.
 - **O-D5:** The approved M8/088 output structure, interactive-state matrix, IDs, enabled exact-byte Copy contract (including empty strings) and focusable plain-text region remain. Gap/recovery regions gain visible-warning descriptions.
-- **O-D6:** Approval identifies M-O's concrete Claude Design URL/revision and these decisions. It does not approve M-F/M-R. The packet and local source inventory alone do not satisfy the remote prototype gate.
+- **O-D6:** Approval identifies M-O's concrete design prototype URL/revision and these decisions. It does not approve M-F/M-R. The packet and local source inventory alone do not satisfy the remote prototype gate.
 - **O-D7:** Amend `RUN_OUTPUT.captureGap` to exactly “Some or all of this run's output could not be recovered.” for all sources. No restart or recording-exists claim is inferred from the gap flag. This copy amendment is proposed, unimplemented and pending owner approval.
 
-Owner approval record: **pending**. Claude Design prototype URL/revision: **not created or verified yet**.
+Owner approval record: **pending**. Design prototype URL/revision: **not created or verified yet**.
