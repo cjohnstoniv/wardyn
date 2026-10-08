@@ -26,6 +26,7 @@ wizard — with its built-in demo steps — is the first-run path. Everything he
 | See which exported functions have no test (`make test-gaps`) | [TEST-GAPS.md](TEST-GAPS.md) |
 | Run the live tests against real Entra/ADO/Bedrock | [LIVE-TESTS.md](LIVE-TESTS.md) |
 | Swap a component (identity, secret store, recording, substrate) | [PLUGGABILITY.md](PLUGGABILITY.md) |
+| Write or edit a doc (form, size caps, links, visuals, the headings code quotes) | [STYLE.md](STYLE.md) |
 | Design or review a console screen (color budget, type rungs, elevation, status glyphs) | [design/CONSOLE-RULES.md](design/CONSOLE-RULES.md) |
 | Understand the design, or contribute | [../ARCHITECTURE.md](../ARCHITECTURE.md), [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | Plan a change — issues, branches, pull requests, what "done" means | [../CONTRIBUTING.md](../CONTRIBUTING.md#branching-issues-and-pull-requests) |

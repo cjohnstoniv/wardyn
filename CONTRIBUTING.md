@@ -165,6 +165,7 @@ the kind SSO walk, the Playwright suite) — that gate quoted in the PR body.
    - No panics in library code
    - Security decisions fail closed
    - Audit events use dotted action names
+   - Docs follow the [documentation style guide](docs/STYLE.md)
 5. Run the gate: `make ci` (the daemon-free merge gate, and the widest gate a contributor needs — build, lint, Go tests, UI, diagrams, supply chain). Maintainers run the strict superset `make release-check` before a tag.
 6. Commit with sign-off: `git commit -s`
 7. Push and open a pull request that closes the issue
