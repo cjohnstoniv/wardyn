@@ -16,10 +16,13 @@ import { useMyCapabilities } from "../../../lib/capabilities";
 import {
   useOperator,
   useOperatorResolved,
+  useSecurityOperator,
   useUserDrive,
 } from "../../wardyn/operator-context";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { type PolicyMode } from "../../wardyn/policy-panel";
+import type { PolicyView } from "../../wardyn/policy-document/policy-document";
+import type { PolicySourceFormat } from "../../wardyn/policy-document/policy-source";
 import { vaultRequirementReason } from "../setup/environment-step";
 import { defaultSpecText } from "./policy-lane";
 import {
@@ -42,6 +45,7 @@ import { providerCandidates as candidatesForAgent, providerGate } from "./model-
 import { useModelProviderPick } from "./use-model-provider-pick";
 import { useNewRunPolicy } from "./use-new-run-policy";
 import { useNewRunSources } from "./use-new-run-sources";
+import { usePolicyReadPreview } from "./use-policy-read-preview";
 import { useDraftIdentity } from "./use-run-checks";
 
 export function useNewRunController() {
@@ -85,6 +89,14 @@ export function useNewRunController() {
   // Clicking the Minimal CHIP afterwards is an authored act and still floors
   // CC2 — that corner stays, with its reason line and preflight naming it.
   const [specText, setSpecText] = React.useState(() => defaultSpecText());
+  // The format the custom source is written in: YAML unless the person converts it.
+  const [specFormat, setSpecFormat] = React.useState<PolicySourceFormat>("yaml");
+  // How the Policy panel is being looked at. Reading is the default; neither the
+  // open editor nor the view chosen is part of the draft, so neither is dirty.
+  const [policyEditing, setPolicyEditing] = React.useState(false);
+  const [policyView, setPolicyView] = React.useState<PolicyView>("summary");
+  // The custom source was seeded from the safe starter because its source had hidden values.
+  const [safeCustom, setSafeCustom] = React.useState(false);
   // The floor the LAST SUCCESSFUL parse authored — sticky across a broken
   // edit: a half-typed document must not momentarily drop the floor and
   // re-open a barrier tier the operator's own policy forbids.
@@ -211,6 +223,10 @@ export function useNewRunController() {
     setState(initialWizardState("CC1"));
     setCcTouched(false);
     setPolicyMode("custom");
+    setSpecFormat("yaml");
+    setPolicyEditing(false);
+    setPolicyView("summary");
+    setSafeCustom(false);
     setTitleUserEdited(false);
     setSubmittedDraft(null);
     setDraftOwner(identity.principal);
@@ -243,6 +259,7 @@ export function useNewRunController() {
     patch,
     policyMode,
     specText,
+    specFormat,
     parsedFloor,
     setParsedFloor,
     savedPolicies,
@@ -404,6 +421,38 @@ export function useNewRunController() {
   // A reference never becomes authored source, including a redacted stored policy.
   const onPickPolicy = (id: string) => patch({ selectedPolicyId: id });
   const onPolicyModeChange = (mode: PolicyMode) => setPolicyMode(mode);
+  // An explicit conversion: the editor hands back the source rewritten in the new format.
+  const onSpecFormatChange = (format: PolicySourceFormat, source: string) => {
+    setSpecFormat(format);
+    onSpecChange(source);
+  };
+  // "Customize for this run": the panel body decides the seed (the readable
+  // source, or the safe starter when values are hidden); the draft takes it.
+  const onCustomizePolicy = (seed: { source: string; format: PolicySourceFormat; safe: boolean }) => {
+    setPolicyMode("custom");
+    onSpecFormatChange(seed.format, seed.source);
+    setSafeCustom(seed.safe);
+    setPolicyEditing(true);
+    setPolicyView("yaml");
+  };
+  // A stored or default policy read is known complete only for a security
+  // operator the server has confirmed: a member's read has secret names removed
+  // without a marker, so it is never copied into editable text.
+  const sourceComplete = useSecurityOperator() && operatorResolved;
+  // The read view's preview: the checks' own answer, or the last one for this
+  // person and policy choice while the next is on its way or the source does not parse.
+  const policyPreview = usePolicyReadPreview(
+    preview,
+    JSON.stringify([identity.principal, identity.authGeneration, identity.revision, policyMode, policyMode === "saved" ? state.selectedPolicyId : null]),
+    policyMode === "custom" && !policy.parsed.ok,
+  );
+  // "Check again" refreshes both reads of this draft. Preflight goes first: it
+  // is the manual call, and it cancels whatever automatic check was pending.
+  const checkAgain = () => {
+    const checked = preflight();
+    void preview.retry();
+    return checked;
+  };
 
   // Every reason Launch is held, the form's own and preflight's, in the order
   // the line above Launch names them. The launch panel derives the same list
@@ -468,6 +517,9 @@ export function useNewRunController() {
     gates, adoCeiling, defaultRead, defaultPolicy,
     governanceProfile, retryDefault, operatorResolved,
     onPolicyModeChange, onPickPolicy, savedPolicies,
+    specFormat, onSpecFormatChange, policyEditing, setPolicyEditing, policyView, setPolicyView,
+    safeCustom, onCustomizePolicy, sourceComplete, policyPreview, checkAgain, ccTouched,
+    customUntouched: specText === pristineSpec.current, safeStarter: defaultSpecText(modelProviders),
     adoAccess, operator, hasAdditions, added,
     governanceContact, llmReady, pushRules, unattended,
     launch, launchDisabled, launchSpinning, launching,

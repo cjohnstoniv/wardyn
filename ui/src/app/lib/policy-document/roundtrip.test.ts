@@ -147,7 +147,9 @@ describe("shipped policy specimens", () => {
   it("round-trips every template, the default custom policy and every demo policy", () => {
     const specs: unknown[] = [...DEMOS, ...SECRETS_DEMOS].map((demo) => demo.policy);
     for (const providers of PROVIDER_SETS) {
-      specs.push(JSON.parse(defaultSpecText(providers)), ...policyTemplates(providers).map((template) => template.spec));
+      const seeded = parsePolicySource(defaultSpecText(providers));
+      if (!seeded.ok) throw new Error(`${seeded.line}:${seeded.column} ${seeded.message}`);
+      specs.push(seeded.value, ...policyTemplates(providers).map((template) => template.spec));
     }
     expect(specs.length).toBeGreaterThan(30);
     for (const spec of specs) expectRoundTrip(spec as PolicySourceMapping);

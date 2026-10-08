@@ -12,6 +12,7 @@ import { CC_ORDER, type ConfinementClass } from "../../../lib/types";
 import { ccRank } from "./new-run-primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { minimalSpec, type PolicyMode } from "../../wardyn/policy-panel";
+import { specToSource } from "../../wardyn/policy-document/policy-source";
 import type { SetupModelProvider } from "../../../lib/types";
 import type { WizardAgent, WizardState } from "./wizard-types";
 
@@ -20,9 +21,9 @@ import type { WizardAgent, WizardState } from "./wizard-types";
 // left to seed this from (the server now picks the strongest installed class
 // at or above the floor), and CC1 is the one floor every host can build, so
 // the document this opens with is never itself the reason a fresh Custom
-// edit can't launch.
+// edit can't launch. Written as YAML, the format the editor opens in.
 export function defaultSpecText(providers?: readonly SetupModelProvider[]): string {
-  return JSON.stringify({ ...minimalSpec(providers), min_confinement_class: "CC1" }, null, 2);
+  return specToSource({ ...minimalSpec(providers), min_confinement_class: "CC1" });
 }
 
 // codex-cli has no external tool-approval contract (buildSpec already

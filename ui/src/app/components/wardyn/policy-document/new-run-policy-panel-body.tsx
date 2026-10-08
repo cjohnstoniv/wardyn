@@ -35,7 +35,7 @@ import { RAIL_CHECK } from "../copy";
 import { POLICY_DOCUMENT as D } from "../copy/policy-document";
 import { POLICY_TEMPLATE_COPY as C } from "../copy/policy-templates";
 import { OptionCard } from "../form-primitives";
-import { policyTemplates, templateText, type PolicyMode } from "../policy-panel";
+import { POLICY_HOLD_ID, policyTemplates, templateText, type PolicyMode } from "../policy-panel";
 import { PushRulesSection } from "../policy-push-rules";
 import { templateProviders } from "../policy-template-providers";
 import { ToolRulesSection } from "../policy-tool-rules";
@@ -51,8 +51,17 @@ import {
   type PolicySourceFormat,
 } from "./policy-source";
 
-const SOURCE_ID = "policy-spec-run";
-const EDIT_ID = "nr-policy-edit";
+// Where the screen's links land: the source, the button that opens it, the mode
+// cards, the tool rules and the read view's heading.
+export const NEW_RUN_POLICY_IDS = {
+  SOURCE: "policy-spec-run",
+  EDIT: "nr-policy-edit",
+  MODES: "nr-policy-mode",
+  TOOL_RULES: "policy-tool-rules-run",
+  READ: "nr-policy-read-title",
+} as const;
+const SOURCE_ID = NEW_RUN_POLICY_IDS.SOURCE;
+const EDIT_ID = NEW_RUN_POLICY_IDS.EDIT;
 
 /** The screen's policy-preview read, as much of it as the read view needs. */
 export interface NewRunPolicyPreview {
@@ -75,7 +84,9 @@ export interface NewRunPolicyPanelBodyProps {
   mode: PolicyMode;
   /** Switching mode never touches the custom source: the screen keeps it, invalid text and comments included. */
   onModeChange: (mode: PolicyMode) => void;
-  /** A gate sentence that belongs beside the mode cards (the one-workspace refusal). */
+  /** Why Check again and Launch are held in the default and saved modes (more
+   *  workspaces attached than the reference carries). Printed once, beside
+   *  Check again; both buttons name it as their description (POLICY_HOLD_ID). */
   modeProblem?: string | null;
   /** Default mode: the governance profile that sets the default, when one does. */
   defaultProfileName?: string;
@@ -185,6 +196,14 @@ export function NewRunPolicyPanelBody(props: NewRunPolicyPanelBodyProps) {
   let stale = false;
   const notes: React.ReactNode[] = [];
   if (custom && props.safeCustom) notes.push(<Note key="safe">{D.SAFE_CUSTOM}</Note>);
+  // Said once, in the line above the row Check again is in; it and Launch name it.
+  if (props.modeProblem) {
+    notes.push(
+      <p key="hold" id={POLICY_HOLD_ID} role="status" className="text-xs text-warning">
+        {props.modeProblem}
+      </p>,
+    );
+  }
   if (invalid) {
     // An earlier preview may stay, marked out of date; without one, nothing is invented.
     if (result) {
@@ -228,7 +247,7 @@ export function NewRunPolicyPanelBody(props: NewRunPolicyPanelBodyProps) {
     <div className="flex min-w-0 flex-col gap-3" data-testid="nr-policy-panel-body">
       {props.barrier}
 
-      <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(170px,100%),1fr))]">
+      <div id={NEW_RUN_POLICY_IDS.MODES} tabIndex={-1} className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(170px,100%),1fr))]">
         <OptionCard
           selected={mode === "default"}
           onClick={() => props.onModeChange("default")}
@@ -238,11 +257,6 @@ export function NewRunPolicyPanelBody(props: NewRunPolicyPanelBodyProps) {
         <OptionCard selected={mode === "saved"} onClick={() => props.onModeChange("saved")} title={C.SAVED_TITLE} hint={C.SAVED_HINT} />
         <OptionCard selected={custom} onClick={() => props.onModeChange("custom")} title={C.CUSTOM_TITLE} hint={C.CUSTOM_HINT} />
       </div>
-      {props.modeProblem && (
-        <p role="status" className="text-xs text-warning">
-          {props.modeProblem}
-        </p>
-      )}
 
       {mode === "saved" && props.savedPicker}
       {mode === "default" && (
@@ -266,9 +280,9 @@ export function NewRunPolicyPanelBody(props: NewRunPolicyPanelBodyProps) {
         </div>
       )}
 
-      <section aria-labelledby="nr-policy-read-title" className="flex min-w-0 flex-col gap-3">
+      <section aria-labelledby={NEW_RUN_POLICY_IDS.READ} className="flex min-w-0 flex-col gap-3">
         <div className="flex flex-col gap-1">
-          <h3 id="nr-policy-read-title" className="text-sm font-semibold text-foreground">
+          <h3 id={NEW_RUN_POLICY_IDS.READ} tabIndex={-1} className="text-sm font-semibold text-foreground outline-offset-4">
             {D.THIS_RUN}
           </h3>
           <p className="text-sm text-muted-foreground">
@@ -309,6 +323,7 @@ export function NewRunPolicyPanelBody(props: NewRunPolicyPanelBodyProps) {
                   size="sm"
                   onClick={props.onCheck}
                   disabled={props.checkBusy || props.checkDisabled || invalid}
+                  aria-describedby={props.modeProblem ? POLICY_HOLD_ID : undefined}
                 >
                   <ShieldCheck className="size-4" />
                   {RAIL_CHECK.BUTTON}
@@ -348,7 +363,11 @@ export function NewRunPolicyPanelBody(props: NewRunPolicyPanelBodyProps) {
                   <p className="mt-1.5 text-meta text-muted-foreground">{C.FROM_PROVIDERS(providerNames)}</p>
                 )}
               </div>
-              {parsed.ok && <ToolRulesSection spec={parsed.spec} onSpecChange={onSpecChange} />}
+              {parsed.ok && (
+                <div id={NEW_RUN_POLICY_IDS.TOOL_RULES}>
+                  <ToolRulesSection spec={parsed.spec} onSpecChange={onSpecChange} />
+                </div>
+              )}
               {parsed.ok && <PushRulesSection spec={parsed.spec} onSpecChange={onSpecChange} />}
               {parsed.ok && props.structuredExtra?.({ spec: parsed.spec, onSpecChange })}
             </>

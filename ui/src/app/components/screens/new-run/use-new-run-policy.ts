@@ -25,6 +25,7 @@ import {
 import { ccRank as rank } from "./new-run-primitives";
 import { useAdoLaunchDoor } from "./new-run-rail";
 import { parseSpec, toolRulesSummary, unparseableFloorClass, type PolicyMode } from "../../wardyn/policy-panel";
+import type { PolicySourceFormat } from "../../wardyn/policy-document/policy-source";
 import { barrierReasons, combineFloors, governanceRemovedTier } from "./policy-lane";
 import { mergeRunSelections } from "./wizard-spec";
 import type { WizardState } from "./wizard-types";
@@ -34,6 +35,8 @@ export interface UseNewRunPolicyParams {
   patch: (p: Partial<WizardState>) => void;
   policyMode: PolicyMode;
   specText: string;
+  /** The format `specText` is written in: one parse serves the gates, the merge and the editor. */
+  specFormat: PolicySourceFormat;
   parsedFloor: ConfinementClass | undefined;
   setParsedFloor: React.Dispatch<React.SetStateAction<ConfinementClass | undefined>>;
   savedPolicies: { id: string; name: string; spec: RunPolicySpec }[];
@@ -56,6 +59,7 @@ export function useNewRunPolicy({
   patch,
   policyMode,
   specText,
+  specFormat,
   parsedFloor,
   setParsedFloor,
   savedPolicies,
@@ -69,7 +73,7 @@ export function useNewRunPolicy({
   setPristineCc,
 }: UseNewRunPolicyParams) {
   const cc = state.confinementClass;
-  const parsed = React.useMemo(() => parseSpec(specText), [specText]);
+  const parsed = React.useMemo(() => parseSpec(specText, specFormat), [specText, specFormat]);
 
   // C5's one real trap (policy-panel.tsx's own doc) — the field is present and
   // this build can't spell it.

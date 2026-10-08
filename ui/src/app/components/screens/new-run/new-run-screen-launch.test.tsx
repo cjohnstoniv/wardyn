@@ -107,7 +107,7 @@ import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { HttpError } from "../../../lib/api/core";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { setField } from "../../../../test/set-field";
-import { goToPanel } from "../../../../test/new-run-panel";
+import { editPolicy, goToPanel } from "../../../../test/new-run-panel";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -345,7 +345,7 @@ describe("NewRunScreen — the Agent picker reads the harness roster", () => {
 describe("NewRunScreen — the unparseable barrier-class hint", () => {
   it("renders when the JSON parses but min_confinement_class names no real class", async () => {
     renderScreen();
-    const textarea = await screen.findByLabelText(/^Spec \(YAML\)/);
+    const textarea = await editPolicy();
     fireEvent.change(textarea, {
       target: { value: JSON.stringify({ min_confinement_class: "vault", allowed_domains: [] }, null, 2) },
     });
@@ -354,7 +354,7 @@ describe("NewRunScreen — the unparseable barrier-class hint", () => {
 
   it("says nothing when the field is simply absent", async () => {
     renderScreen();
-    const textarea = await screen.findByLabelText(/^Spec \(YAML\)/);
+    const textarea = await editPolicy();
     fireEvent.change(textarea, { target: { value: JSON.stringify({ allowed_domains: [] }, null, 2) } });
     expect(screen.queryByText(/isn't a barrier class/)).not.toBeInTheDocument();
   });

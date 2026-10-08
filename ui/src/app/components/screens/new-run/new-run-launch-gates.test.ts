@@ -126,7 +126,7 @@ describe("New Run launch issues", () => {
 
   it("an unparseable custom policy is an issue on Policy, at the source", () => {
     expect(gates({ ...custom, specParsedOk: false }).issues).toEqual([
-      { panel: "policy", focus: ISSUE_TARGET.POLICY_SOURCE, text: "The policy spec isn't valid JSON." },
+      { panel: "policy", focus: ISSUE_TARGET.POLICY_SOURCE, text: "The policy spec isn't valid YAML or JSON." },
     ]);
   });
 
