@@ -92,6 +92,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The Integrations, Launch presets, Console branding and Managed laptops operations pages are now
   bullets, tables and alerts, with every repository file they cite linked. No rule, default or limit
   changed.
+- The compose demo README, the agent images README, the build images operations page and the
+  devcontainer build page (ENVBUILD) are now bullets, tables and alerts, with every repository file
+  they cite linked. No rule, default or limit changed.
 
 ### Fixed
 
