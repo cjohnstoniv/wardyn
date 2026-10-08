@@ -55,17 +55,26 @@ function unreadable(source: string): PolicySourceError | undefined {
   return strayBreak(source);
 }
 
-// The tokenizer does not recurse, so nesting is measured on its output before
-// anything that does sees it.
-function nestingOffset(tokens: readonly CST.Token[]): number | undefined {
+// The tokenizer does not recurse, so its output is checked before anything
+// that does sees it: nesting depth, and a ':' straight before ',', ']' or '}'
+// after an unquoted flow key. YAML 1.2 ends the key there ([x:] is [{x: null}]);
+// gopkg.in/yaml.v3 keeps the ':' in the scalar (["x:"]).
+function structureProblem(tokens: readonly CST.Token[], source: string): [number, string] | undefined {
   const pending: [CST.Token | null | undefined, number][] = tokens.map((token) => [token, 0]);
   for (let next = pending.pop(); next; next = pending.pop()) {
     const [token, depth] = next;
     if (!token) continue;
     const level = "items" in token ? depth + 1 : depth;
-    if (level > MAX_DEPTH) return token.offset;
+    if (level > MAX_DEPTH) return [token.offset, TOO_DEEP];
     if ("value" in token) pending.push([token.value, level]);
-    if ("items" in token) for (const item of token.items) pending.push([item.key, level], [item.value, level]);
+    if (!("items" in token)) continue;
+    for (const item of token.items) {
+      const colon = item.sep?.find((sep) => sep.type === "map-value-ind");
+      if (token.type === "flow-collection" && colon && item.key?.type === "scalar" && /[,\]}]/.test(source[colon.offset + 1] ?? "")) {
+        return [colon.offset, "Ambiguous ':' after an unquoted key: add a space after it, or quote the key."];
+      }
+      pending.push([item.key, level], [item.value, level]);
+    }
   }
   return undefined;
 }
@@ -141,8 +150,8 @@ function readSource(source: string):
     // Inspect tokens, not lines: %YAML and %TAG inside strings are ordinary text.
     const directive = tokens.find((token) => token.type === "directive");
     if (directive) return failure(lines, directive.offset, "Directives are not allowed.");
-    const deep = nestingOffset(tokens);
-    if (deep !== undefined) return failure(lines, deep, TOO_DEEP);
+    const problem = structureProblem(tokens, source);
+    if (problem) return failure(lines, ...problem);
     const documents = [...new Composer({
       version: "1.2",
       schema: "core",

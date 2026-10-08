@@ -247,5 +247,17 @@
    ],
    "first_use_approval": "always_deny"
   }
+ },
+ {
+  "name": "a colon closing a flow item",
+  "source": "allowed_domains: [api.example.com:]\n",
+  "console": {
+   "error": "Ambiguous ':' after an unquoted key: add a space after it, or quote the key."
+  },
+  "cli": {
+   "allowed_domains": [
+    "api.example.com:"
+   ]
+  }
  }
 ]

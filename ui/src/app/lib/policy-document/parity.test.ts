@@ -180,3 +180,37 @@ describe("the cross-reader fixture shared with the CLI's tests", () => {
     if (c.emitted && "value" in c.console) expect(toYaml(c.console.value)).toBe(c.source);
   });
 });
+
+// YAML 1.2 (yaml here) ends a plain key at a ':' followed by ',', ']' or '}';
+// gopkg.in/yaml.v3 keeps that ':' in the scalar, so [x:] is [{x: null}] here
+// and ["x:"] there. Found by the console-versus-CLI differential.
+describe("a ':' directly before a flow indicator", () => {
+  const COLON = "Ambiguous ':' after an unquoted key: add a space after it, or quote the key.";
+
+  it.each([
+    ["a flow sequence item", "allowed_domains: [api.example.com:]", 1, 34],
+    ["a flow mapping key", "a: {x:, y: 1}", 1, 6],
+    ["a key spaced from its colon", "a: [x :]", 1, 7],
+    ["a nested flow item", "a: [[x:]]", 1, 7],
+    ["an explicit flow key", "a: [? x:]", 1, 8],
+    ["an inner item only", "a: [x: [y:]]", 1, 10],
+  ])("refuses %s at the ':'", (_, source, line, column) => {
+    expect(parsePolicySource(source)).toEqual({ ok: false, line, column, message: COLON });
+  });
+
+  it.each<[string, string, unknown]>([
+    ["a space after the ':'", "a: [x: ]", { a: [{ x: null }] }],
+    ["a value after the ':'", "a: [x: 1]", { a: [{ x: 1 }] }],
+    ["a ':' inside a plain scalar", "a: [x:1]", { a: ["x:1"] }],
+    ["a quoted key", 'a: ["x":, {"y":}]', { a: [{ x: null }, { y: null }] }],
+    ["a line break after the ':'", "a: [x:\n]", { a: [{ x: null }] }],
+  ])("accepts %s", (_, source, value) => {
+    expect(parsePolicySource(source)).toEqual({ ok: true, value });
+  });
+
+  it("never writes the shape from a structured edit", () => {
+    const edited = editPolicySource("a: [x, {y: 1}]\n", ["a", 2], { k: null }, "yaml");
+    if (!edited.ok) throw new Error(edited.message);
+    expect(parsePolicySource(edited.source)).toEqual({ ok: true, value: { a: ["x", { y: 1 }, { k: null }] } });
+  });
+});
