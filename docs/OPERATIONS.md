@@ -4738,8 +4738,8 @@ What you get depends on whether `ecosystem` is set:
 | empty (**network only**) | 🟢 yes | 🟢 yes | ⛔ no |
 
 - An ecosystem row gets the per-tool config file `EmitArtifactConfig` ([`internal/workspacescan/gen.go`](../internal/workspacescan/gen.go)) writes at workspace-import time — `.npmrc`, `.config/pip/pip.conf`, `.cargo/config.toml`, `.m2/settings.xml`, `GOPROXY`/`GOSUMDB`, or `.nuget/NuGet/NuGet.Config` — on top of the egress substitution and token injection every redirect gets.
-- A network-only row (empty `ecosystem`: a container registry, an internal appliance, a bare host or IP) gets the network half only.
-- Host substituted into the run's egress allowlist, token injected proxy-side, but **no config file is written** — there is no `.npmrc` equivalent for an arbitrary host.
+- A network-only row (empty `ecosystem`: a container registry, an internal appliance, a bare host or IP) gets the network half only:
+  - host substituted into the run's egress allowlist, token injected proxy-side, but **no config file is written** — there is no `.npmrc` equivalent for an arbitrary host.
 - That is a real cost: the workspace still needs telling to pull from the mirror itself (`docker login` against the internal registry, an appliance client's own config), or a run reaches an allowed, credentialed host that nothing in the sandbox asks for.
 
 > [!WARNING]
@@ -5135,8 +5135,8 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 
 The pane will wait; the **runner** will not wait forever, and these are the bounds an operator sizes:
 
-- `WARDYN_SANDBOX_START_TIMEOUT` (default **3 minutes**) is one absolute deadline for the whole sandbox start, counted from the moment the proxy pod is created and spent across BOTH pods.
-  - The proxy's scheduling, image pull, config-staging init container and Ready, then the agent's pull and Running.
+- `WARDYN_SANDBOX_START_TIMEOUT` (default **3 minutes**) is one absolute deadline for the whole sandbox start, counted from the moment the proxy pod is created and spent across BOTH pods:
+  - the proxy's scheduling, image pull, config-staging init container and Ready, then the agent's pull and Running.
   - It is not restarted when the agent pod is created, and a change in the reason a pod is stuck never resets it.
   - A first pull of the `aws-sso` image was measured at **131 seconds** on a reporting estate, which is most of the default; raise it for a slower registry.
   - Before 0.8.6 this was a fixed 3 minutes for the agent plus a separate fixed 90 seconds for the proxy's IP.
