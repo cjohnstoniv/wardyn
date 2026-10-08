@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -97,6 +99,47 @@ func TestRunDoors_TwoCredentialsForOneHostAreRefusedAtEveryDoor(t *testing.T) {
 				if w.Code >= 300 && decodeErrorBody(t, w).Reason == reasonCredentialHostCollision {
 					t.Errorf("%s = %d %s, want no credential collision", door, w.Code, w.Body.String())
 				}
+			}
+		})
+	}
+}
+
+// feedToken is the secret the feed redirect's token is stored under.
+const feedToken = "feed-token"
+
+// feedRedirect is a token-bearing redirect whose target is a package feed on
+// an Azure DevOps host the per-person lane also credentials.
+func feedRedirect() types.EgressRedirect {
+	return types.EgressRedirect{From: "https://registry.npmjs.org/", Ecosystem: "npm", TokenSecretRef: feedToken,
+		To: "https://pkgs.dev.azure.com/contoso/_packaging/feed/npm/registry/"}
+}
+
+// feedSite is a deployment with the per-person Azure DevOps lane and that redirect.
+func feedSite() types.SiteConfig {
+	sc := adoSite(adoEntraTestRow())
+	sc.EgressRedirects = []types.EgressRedirect{feedRedirect()}
+	return sc
+}
+
+// On a run the per-person Azure DevOps lane resolves for, a token-bearing
+// redirect whose target is a lane host is not a second credential: the lane
+// carries that host, and the redirect is applied without its token. Launch,
+// Review and the policy preview all admit the run.
+func TestRunDoors_ALaneRunWithATokenRedirectOntoALaneHostIsAdmitted(t *testing.T) {
+	body := `{"agent":"claude-code","task":"t","confinement_class":"CC2","inline_policy":{"min_confinement_class":"CC2",` +
+		`"allowed_domains":["api.anthropic.com"],"workspace_repos":[{"repo":"` + adoTestRepo + `"}]}}`
+	for door, want := range map[string]int{
+		"/api/v1/runs": http.StatusCreated, "/api/v1/runs/preflight": http.StatusOK, "/api/v1/runs/policy-preview": http.StatusOK,
+	} {
+		t.Run(door, func(t *testing.T) {
+			srv, st, _ := govEscapeFixture(t, &capStore{})
+			st.workspaces = []types.Workspace{{ID: uuid.New(), Name: "ado",
+				Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: adoTestRepo}}}}
+			st.siteConfig = feedSite()
+			// The session's subject is the lane's owner, as at dispatch.
+			w := doSSO(t, srv, http.MethodPost, door, govSession(t, adoTestOwner, []string{"eng"}, false), body)
+			if w.Code != want {
+				t.Fatalf("%s = %d %s, want %d: the lane carries the feed host's credential", door, w.Code, w.Body.String(), want)
 			}
 		})
 	}

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -462,5 +463,111 @@ func TestDispatch_ComponentHostCollisionReusesTheGatesSet(t *testing.T) {
 				t.Error("the caller's policy was edited")
 			}
 		})
+	}
+}
+
+// laneDispatchStore is siteDispatchStore that keeps the grants dispatch writes.
+type laneDispatchStore struct {
+	*siteDispatchStore
+	lmu     sync.Mutex
+	written []types.CredentialGrant
+}
+
+func (s *laneDispatchStore) CreateGrant(_ context.Context, g types.CredentialGrant) (types.CredentialGrant, error) {
+	s.lmu.Lock()
+	defer s.lmu.Unlock()
+	s.written = append(s.written, g)
+	return g, nil
+}
+
+func (s *laneDispatchStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
+	s.lmu.Lock()
+	defer s.lmu.Unlock()
+	return slices.Clone(s.written), nil
+}
+
+// dispatchWithFeedRedirect dispatches a run that reaches the public npm
+// registry on a deployment whose npm redirect targets a package feed on an
+// Azure DevOps host, with a token. repos decides whether the per-person Azure
+// DevOps lane resolves for the run.
+func dispatchWithFeedRedirect(t *testing.T, repos []types.WorkspaceRepo) (runner.SandboxSpec, *dispatchTestStore, *laneDispatchStore, []types.AuditEvent, types.AgentRun) {
+	t.Helper()
+	fr := &fakeRunner{}
+	srv, st, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
+	ls := &laneDispatchStore{siteDispatchStore: &siteDispatchStore{dispatchTestStore: st, site: feedSite()}}
+	srv.cfg.Store = ls
+	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{feedToken: []byte("feed-token-value")}}
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+		RunToken: "run-token", Image: "wardyn/claude-code:latest",
+		Policy: types.RunPolicySpec{MinConfinementClass: types.CC1, AllowedDomains: []string{"registry.npmjs.org"}, WorkspaceRepos: repos},
+	})
+	return fr.lastSpec, st, ls, audit.snapshot(), run
+}
+
+// A run on the per-person Azure DevOps lane, with a token-bearing redirect
+// whose target is a lane host: the lane carries that host's credential. The
+// redirect still applies — the run's allowlist swaps the public registry for
+// the feed — but dispatch authors no grant, no injection rule and no
+// interception entry for the redirect's token, and says so on the audit row.
+// The proxy is handed one rule for the host, the lane's.
+func TestDispatch_ALaneRunLeavesARedirectOntoALaneHostWithoutItsToken(t *testing.T) {
+	const feedHost = "pkgs.dev.azure.com"
+	spec, st, ls, events, run := dispatchWithFeedRedirect(t, []types.WorkspaceRepo{{Repo: adoTestRepo}})
+	if got := st.State(); got == types.RunFailed {
+		t.Fatalf("the run failed at dispatch (%q); want it launched with the lane's credential on the feed host", st.FailureHint())
+	}
+	pc := spec.ProxyConfig
+	var onFeed []egress.InjectionRule
+	for _, in := range pc.Injection {
+		if in.Rule.SecretName == feedToken {
+			t.Errorf("the redirect's token is on the run: rule %+v", in.Rule)
+		}
+		if hostEqual(in.Rule.Host, feedHost) {
+			onFeed = append(onFeed, in.Rule)
+		}
+	}
+	if len(onFeed) != 1 || onFeed[0].SecretName != types.ADOEntraAccessTokenSecret || !onFeed[0].RequireTLS {
+		t.Fatalf("rules for %s = %+v, want exactly the lane's", feedHost, onFeed)
+	}
+	if _, found := credentialHostCollision(pc.Injection, pc.PATGrants); found {
+		t.Error("the composed proxy config still carries two credentials for one host")
+	}
+	for _, g := range ls.written {
+		if strings.Contains(string(g.Spec.Scope), feedToken) {
+			t.Errorf("a grant row was written for the redirect's token: %s", g.Spec.Scope)
+		}
+	}
+	assertNoDuplicateBareMITMHost(t, pc.MITMHosts)
+	// The allowlist swap is kept: the feed is reachable, the public registry is not listed.
+	if slices.Contains(pc.Policy.AllowedDomains, "registry.npmjs.org") ||
+		!slices.ContainsFunc(pc.Policy.AllowedDomains, func(d string) bool { return hostEqual(egressEntryHost(d), feedHost) }) {
+		t.Errorf("allowed domains = %v, want the public registry swapped for the feed host", pc.Policy.AllowedDomains)
+	}
+	ev := findAudit(events, run.ID, "run.artifact.redirect", "warn")
+	if ev == nil || !strings.Contains(string(ev.Data), "the per-person Azure DevOps lane carries this host's credential") ||
+		!strings.Contains(string(ev.Data), "redirect applied without token injection") {
+		t.Errorf("run.artifact.redirect warn = %v, want the row that says the lane carries the host", ev)
+	}
+	if ok := findAudit(events, run.ID, "run.artifact.redirect", "success"); ok != nil {
+		t.Errorf("a token injection was audited for the redirect: %s", ok.Data)
+	}
+}
+
+// The same redirect on a run the lane does not resolve for keeps its token, as
+// it always did.
+func TestDispatch_ARunOffTheLaneKeepsTheRedirectsToken(t *testing.T) {
+	spec, st, _, events, run := dispatchWithFeedRedirect(t, nil)
+	if got := st.State(); got == types.RunFailed {
+		t.Fatalf("the run failed at dispatch: %q", st.FailureHint())
+	}
+	pc := spec.ProxyConfig
+	if len(pc.Injection) != 1 || pc.Injection[0].Rule.SecretName != feedToken || !hostEqual(pc.Injection[0].Rule.Host, "pkgs.dev.azure.com") {
+		t.Fatalf("injection rules = %+v, want the redirect's token on the feed host", pc.Injection)
+	}
+	if len(pc.MITMHosts) != 1 || componentMITMHost(pc.MITMHosts[0]) != "pkgs.dev.azure.com" {
+		t.Errorf("MITMHosts = %v, want the feed host", pc.MITMHosts)
+	}
+	if findAudit(events, run.ID, "run.artifact.redirect", "success") == nil || findAudit(events, run.ID, "run.artifact.redirect", "warn") != nil {
+		t.Error("want the redirect's token injection audited as a success, and no lane row")
 	}
 }

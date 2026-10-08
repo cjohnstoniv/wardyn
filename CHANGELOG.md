@@ -29,6 +29,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `POST /runs`, its Review and the policy preview): two `api_key` grants for one host in a policy, or a
   policy credential on a host that a token-bearing redirect, the Azure DevOps lane or a `git_pat` API
   grant also credentials. Before, the proxy kept whichever rule it was handed last.
+- On a run that uses the per-person Azure DevOps lane, a redirect whose target is an Azure DevOps host
+  (a package feed on `pkgs.dev.azure.com`, for example) is served with the person's own token, not the
+  redirect's: the redirect still applies, without its token. Runs that do not use the lane keep the
+  redirect's token.
 
 ### Added
 

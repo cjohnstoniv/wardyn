@@ -50,12 +50,29 @@ func TestAdmissionCredentialHosts(t *testing.T) {
 		{name: "a policy credential on an Azure DevOps lane host", spec: types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: adoTestRepo}},
 			EligibleGrants: []types.GrantSpec{apiKeyOn("dev.azure.com")}},
 			site: adoSite(adoEntraTestRow()), subject: adoTestOwner, hosts: len(adoContosoHosts) + 1, collide: true},
-		{name: "a token redirect onto an Azure DevOps lane host, with no credential in the policy", spec: types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: adoTestRepo}}},
+		// The lane takes the host: a token redirect onto a lane host is not a
+		// second credential on a run the lane resolves for.
+		{name: "a token redirect onto an Azure DevOps lane host, the lane resolves", spec: types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: adoTestRepo}}},
+			site: feedSite(), subject: adoTestOwner, hosts: len(adoContosoHosts)},
+		{name: "the same redirect on another port of the lane host", spec: types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: adoTestRepo}}},
 			site: func() types.SiteConfig {
 				sc := adoSite(adoEntraTestRow())
-				sc.EgressRedirects = []types.EgressRedirect{mirror("https://pkgs.dev.azure.com/contoso/_packaging/feed/npm/registry/", "tok")}
+				sc.EgressRedirects = []types.EgressRedirect{mirror("https://PKGS.dev.azure.com:8443/contoso/_packaging/feed/npm/registry/", "tok")}
 				return sc
-			}(), subject: adoTestOwner, hosts: len(adoContosoHosts) + 1, collide: true},
+			}(), subject: adoTestOwner, hosts: len(adoContosoHosts)},
+		{name: "the same redirect on a run the lane does not resolve for keeps its token", spec: types.RunPolicySpec{},
+			site: feedSite(), subject: adoTestOwner, hosts: 1},
+		{name: "a policy credential on that redirect's host, no lane", spec: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{apiKeyOn("pkgs.dev.azure.com")}},
+			site: feedSite(), subject: adoTestOwner, hosts: 2, collide: true},
+		{name: "a policy credential on a lane host is still a second credential, redirect or not", spec: types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: adoTestRepo}},
+			EligibleGrants: []types.GrantSpec{apiKeyOn("pkgs.dev.azure.com")}},
+			site: feedSite(), subject: adoTestOwner, hosts: len(adoContosoHosts) + 1, collide: true},
+		{name: "a token redirect onto a host the lane does not carry, beside the lane", spec: types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: adoTestRepo}}},
+			site: func() types.SiteConfig {
+				sc := adoSite(adoEntraTestRow())
+				sc.EgressRedirects = []types.EgressRedirect{mirror("https://mirror.corp/npm", "tok")}
+				return sc
+			}(), subject: adoTestOwner, hosts: len(adoContosoHosts) + 1},
 		{name: "the lane does not resolve for nobody", spec: types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: adoTestRepo}},
 			EligibleGrants: []types.GrantSpec{apiKeyOn("dev.azure.com")}}, site: adoSite(adoEntraTestRow()), hosts: 1},
 	} {

@@ -339,6 +339,18 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// unreadable roster, needlessly harsh for one dropped pool connection.
 	siteCfg, siteCfgErr := s.siteConfigForDispatch(ctx)
 
+	// THE PER-PERSON AZURE DEVOPS LANE, decided from the roster this dispatch
+	// already read and the run's own repositories (resolveADOEntraRun). Decided
+	// HERE, ahead of the redirect plan, which leaves a lane host's credential to
+	// the lane (laneCarriesHost), and of the LLM phase, where the per-run CA this
+	// lane cannot run without is minted; it is AUTHORED after both.
+	// A failed site-config read decides nothing — no row, no lane.
+	var adoRun adoEntraRun
+	var adoInject bool
+	if siteCfgErr == nil {
+		adoRun, adoInject = resolveADOEntraRun(siteCfg, repoLocatorsOf(policy.WorkspaceRepos), runIdentitySubject(ctx, run.CreatedBy))
+	}
+
 	var artifactPlan artifactRedirectPlan
 	if siteCfgErr == nil {
 		// Capture the run's PRE-substitution egress: it decides which redirects are
@@ -350,7 +362,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// cannot keep reaching the public host the operator redirected away
 		// (GAP-EGRESS-4); deny beats allow-all in the proxy's evaluator.
 		policy.DeniedDomains = appendNetworkRedirectDenials(policy.DeniedDomains, siteCfg)
-		artifactPlan = s.planArtifactRedirect(ctx, run, siteCfg, preDomains)
+		artifactPlan = s.planArtifactRedirect(ctx, run, siteCfg, preDomains, resolvedLaneHosts(adoRun, adoInject))
 		for k, v := range artifactPlan.env {
 			sandboxEnv[k] = v
 		}
@@ -359,17 +371,6 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		}
 	}
 	artifactInject := len(artifactPlan.injections) > 0
-
-	// THE PER-PERSON AZURE DEVOPS LANE, decided from the roster this dispatch
-	// already read and the run's own repositories (resolveADOEntraRun). Decided
-	// HERE, ahead of the LLM phase, only because that phase is where the per-run
-	// CA is minted and this lane cannot run without one; it is AUTHORED after it.
-	// A failed site-config read decides nothing — no row, no lane.
-	var adoRun adoEntraRun
-	var adoInject bool
-	if siteCfgErr == nil {
-		adoRun, adoInject = resolveADOEntraRun(siteCfg, repoLocatorsOf(policy.WorkspaceRepos), runIdentitySubject(ctx, run.CreatedBy))
-	}
 
 	// LLM transport resolution (precedence: host-staged subscription > managed >
 	// Bedrock > api-key gateway): sets the sandbox auth env (+ the codex-cli

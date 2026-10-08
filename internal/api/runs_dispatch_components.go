@@ -211,7 +211,9 @@ func firstCredentialCollision(hosts []credentialedHost) (first, second int, foun
 //   - the target of each redirect that carries a token, once per host: one
 //     mirror behind several ecosystems is one credential. A redirect with no
 //     token authors no credential, so its target is not listed here (a
-//     component's header there is the component gate's own refusal).
+//     component's header there is the component gate's own refusal). Nor is
+//     one whose target the lane carries (laneCarriesHost): dispatch leaves
+//     that redirect's token out, so there is one credential on the host.
 //
 // A grant whose scope names no host binds nothing and is not listed.
 func admissionCredentialHosts(spec types.RunPolicySpec, sc types.SiteConfig, subject string) []credentialedHost {
@@ -233,21 +235,46 @@ func admissionCredentialHosts(spec types.RunPolicySpec, sc types.SiteConfig, sub
 			}
 		}
 	}
-	if ado, on := resolveADOEntraRun(sc, repoLocatorsOf(spec.WorkspaceRepos), subject); on {
-		for _, h := range ado.laneHosts() {
-			add(h)
-		}
+	laneHosts := resolvedLaneHosts(resolveADOEntraRun(sc, repoLocatorsOf(spec.WorkspaceRepos), subject))
+	for _, h := range laneHosts {
+		add(h)
 	}
 	var mirrors []string
 	for _, red := range sc.EgressRedirects {
 		host := hostrules.HostOf(red.To)
-		if (red.TokenSecretRef == "" && red.TokenIntegrationRef == "") || slices.ContainsFunc(mirrors, func(m string) bool { return hostEqual(m, host) }) {
+		if (red.TokenSecretRef == "" && red.TokenIntegrationRef == "") || laneCarriesHost(laneHosts, host) ||
+			slices.ContainsFunc(mirrors, func(m string) bool { return hostEqual(m, host) }) {
 			continue
 		}
 		mirrors = append(mirrors, host)
 		add(host)
 	}
 	return hosts
+}
+
+// laneCarriesHost reports whether host is one the per-person Azure DevOps lane
+// credentials on this run. laneHosts is the resolved lane's hosts
+// (resolveADOEntraRun), nil for a run the lane does not resolve for.
+//
+// It is the one precedence rule between the lane and a token-bearing redirect
+// whose target is a lane host — a package feed on an Azure DevOps host used as
+// a mirror. The lane takes the host: its credential is the person's own,
+// scoped by the capabilities of the run, and the proxy already judges every
+// request to a lane host as the lane's. The doors ask it here and dispatch
+// asks it in planArtifactRedirect, both from the same resolved pair, so they
+// cannot decide differently.
+func laneCarriesHost(laneHosts []string, host string) bool {
+	h := credentialedHost{host: host}
+	return slices.ContainsFunc(laneHosts, func(l string) bool { return h.overlaps(credentialedHost{host: l}) })
+}
+
+// resolvedLaneHosts is the lane's hosts for a run it resolves for, and none
+// for a run it does not.
+func resolvedLaneHosts(ado adoEntraRun, on bool) []string {
+	if !on {
+		return nil
+	}
+	return ado.laneHosts()
 }
 
 // DRAFT (M2 canon pending) — the three doors' refusal of a run whose policy

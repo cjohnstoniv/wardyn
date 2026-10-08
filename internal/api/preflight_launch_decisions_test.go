@@ -236,6 +236,15 @@ func TestPreflightDecisionsEqualLaunch_Components(t *testing.T) {
 			tokenRedirectOnAPolicyCredential(f)
 			return nil
 		}},
+		// The per-person Azure DevOps lane takes a lane host from a token
+		// redirect: both doors admit the run.
+		"a token redirect onto an Azure DevOps lane host, the lane resolves": {setup: func(f *componentFixture) []any {
+			f.srv.cfg.DefaultPolicy.WorkspaceRepos = []types.WorkspaceRepo{{Repo: adoTestRepo}}
+			f.st.workspaces = []types.Workspace{{ID: kernelWorkspaceID, Name: "ado",
+				Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: adoTestRepo}}}}
+			f.st.siteConfig = feedSite()
+			return nil
+		}},
 	}
 	refusals := 0
 	for _, name := range sortedKeys(requests) {
