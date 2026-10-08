@@ -55,7 +55,9 @@ func TestDispatch_ComponentHeaderHostIsInterceptedOn443(t *testing.T) {
 	person := map[string]any{"inline": map[string]any{
 		"hosts":   []string{"person-api.example", "person-api.example:8443"},
 		"secrets": []any{headerSecret(compOwnSecret, "person-api.example")},
-		"config":  map[string]string{"PERSON_REGION": "person-eu", "HTTPS_PROXY": "http://elsewhere.example:1"},
+		// GIT_AUTHOR_NAME is a variable the platform sets and the validator does
+		// not reserve: the one kind of key dispatch's own drop still meets.
+		"config": map[string]string{"PERSON_REGION": "person-eu", "GIT_AUTHOR_NAME": "someone-else"},
 	}}
 	if w := f.ask(t, componentDoors[0], componentBody(person, orgRef)); w.Code != http.StatusCreated {
 		t.Fatalf("create = %d %s, want 201", w.Code, w.Body.String())
@@ -94,8 +96,8 @@ func TestDispatch_ComponentHeaderHostIsInterceptedOn443(t *testing.T) {
 	if got := spec.Env["PERSON_REGION"]; got != "person-eu" {
 		t.Errorf("Env[PERSON_REGION] = %q, want the component's config", got)
 	}
-	if got := spec.Env["HTTPS_PROXY"]; strings.Contains(got, "elsewhere.example") || got == "" {
-		t.Errorf("Env[HTTPS_PROXY] = %q: a component's config replaced a platform variable", got)
+	if got := spec.Env["GIT_AUTHOR_NAME"]; got == "someone-else" || got == "" {
+		t.Errorf("Env[GIT_AUTHOR_NAME] = %q: a component's config replaced a platform variable", got)
 	}
 	for k, v := range spec.Env {
 		if strings.Contains(v, "own-value") || strings.Contains(v, "operator-value") {
@@ -111,7 +113,7 @@ func TestDispatch_ComponentHeaderHostIsInterceptedOn443(t *testing.T) {
 		}
 	}
 	if len(drops) != 1 || !strings.Contains(drops[0], `"dropped":1`) || !strings.Contains(drops[0], `"source":"inline"`) ||
-		strings.Contains(drops[0], "HTTPS_PROXY") || strings.Contains(drops[0], "keys") {
+		strings.Contains(drops[0], "GIT_AUTHOR_NAME") || strings.Contains(drops[0], "keys") {
 		t.Errorf("run.component_config.drop rows = %v, want one counting the person's dropped variable without naming it", drops)
 	}
 }
