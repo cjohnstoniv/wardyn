@@ -113,7 +113,7 @@ import { dexSignIn, dexSignOut } from "./sso";
 // SIGNED-OUT context: 04c's session does not carry over, so this episode signs
 // itself in on camera.
 import { stage } from "./stage";
-import { goToNewRunPanel } from "../fixtures";
+import { newRunPanel } from "./funnel";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -391,7 +391,7 @@ async function memberRunForm(title: string, narrate: boolean): Promise<void> {
     page.getByRole("radio", { name: /^Terminal/ }),
     narrate ? "A plain command window. No AI agent, and no key to any AI service." : undefined, // C38
   );
-  await goToNewRunPanel(page, "policy");
+  await newRunPanel(page, "policy");
   await act(
     page,
     page.getByRole("button", { name: "Minimal" }),
@@ -751,7 +751,7 @@ test("V04d act 3 — the member writes a note, and ends the run", async () => {
   await beat(page, BEAT_SHORT);
 
   const mount = page.locator("#nr-drive-mount");
-  await goToNewRunPanel(page, "workspace");
+  await newRunPanel(page, "workspace");
   await expect(mount, "the drive checkbox must start unchecked — mounting is the person's choice").not.toBeChecked();
   await act(page, mount);
   await expect(mount).toBeChecked();
@@ -871,7 +871,7 @@ test("V04d act 4 — a brand-new sandbox, and the same directory", async () => {
   await beat(page, PACE.read);
 
   const driveBlock = page.getByTestId("nr-drive");
-  await goToNewRunPanel(page, "workspace");
+  await newRunPanel(page, "workspace");
   await centerInFrame(driveBlock);
   await act(page, page.locator("#nr-drive-mount"));
   // NR_READONLY_TOGGLE renders only for a WRITABLE allocation and only

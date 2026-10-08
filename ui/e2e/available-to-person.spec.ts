@@ -264,6 +264,9 @@ test.describe("Available to — New Run's Launch button (#922)", () => {
     await page.getByRole("combobox", { name: "Workspace" }).click();
     await page.getByRole("option", { name: "e2e-922-nr-workspace" }).click();
 
+    // The title is required (#1922); with it given, nothing else holds Launch.
+    await goToNewRunPanel(page, "run");
+    await page.getByLabel("Title").fill("e2e available");
     const launch = page.getByRole("button", { name: "Launch run" });
     await expect(launch).toBeEnabled();
     await expect(page.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toHaveCount(0);
@@ -344,6 +347,9 @@ test.describe("Available to — a workspace's own per-value restriction (#1267)"
     await page.getByRole("combobox", { name: "Workspace" }).click();
     await page.getByRole("option", { name: "e2e-1267-workspace" }).click();
 
+    // The title is required (#1922); with it given, nothing else holds Launch.
+    await goToNewRunPanel(page, "run");
+    await page.getByLabel("Title").fill("e2e available");
     const launch = page.getByRole("button", { name: "Launch run" });
     await expect(launch).toBeEnabled();
     await expect(page.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toHaveCount(0);

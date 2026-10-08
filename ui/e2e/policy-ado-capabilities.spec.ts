@@ -138,6 +138,7 @@ test("New Run summarises the picked saved policy's Azure DevOps access", async (
     const summary = page.getByTestId("ado-access-summary");
 
     for (const [name, , line] of policies) {
+      await goToNewRunPanel(page, "policy");
       await page.getByRole("combobox", { name: "Saved policy" }).click();
       await page.getByRole("option", { name }).click();
       await goToNewRunPanel(page, "access");

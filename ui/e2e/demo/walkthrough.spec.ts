@@ -48,9 +48,8 @@ import { act, beat, caption, chapter, PACE, spotlight, typeInTerminal } from "./
 // The funnel helpers and decide() live in funnel.ts — every video in the 0.5
 // series needs them, and this file is no longer the only spec in the project.
 import { stage } from "./stage";
-import { advance, APPROVAL_APPEARS, clearWorkspace, decide } from "./funnel";
+import { advance, APPROVAL_APPEARS, clearWorkspace, decide, newRunPanel } from "./funnel";
 import { termText } from "../terminal-text";
-import { goToNewRunPanel } from "../fixtures";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -383,7 +382,7 @@ test("act 5 — a real run", async () => {
   // and it is the key the Runs board groups by, so it is also what this run
   // will be called everywhere it appears later in the film.
   const titleBox = page.getByLabel("Title");
-  await goToNewRunPanel(page, "run");
+  await newRunPanel(page, "run");
   await spotlight(page, titleBox);
   await titleBox.fill(DEMO_TITLE);
   await spotlight(page, null);
@@ -446,7 +445,7 @@ test("act 5 — a real run", async () => {
   // getByRole("combobox", {name}) can never match it. Filtering on the
   // placeholder text is the honest workaround until the control gets a label —
   // an unnamed combobox is a real a11y gap, not just a test inconvenience.
-  await goToNewRunPanel(page, "workspace");
+  await newRunPanel(page, "workspace");
   await act(
     page,
     page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" }),
@@ -461,7 +460,7 @@ test("act 5 — a real run", async () => {
   // construction, the same default the old "Confined" radio asserted. The
   // click below re-asserts the Minimal chip rather than changing anything —
   // same "for the camera" role the old radio click played.
-  await goToNewRunPanel(page, "policy");
+  await newRunPanel(page, "policy");
   await act(page, page.getByRole("button", { name: "Minimal" }), "Confined: default-deny egress, and only what we list gets through.");
 
   // Network — the load-bearing part of the whole run.
@@ -606,7 +605,7 @@ test("act 5 — a real run", async () => {
 
   const proofTitleBox = page.getByLabel("Title");
   await spotlight(page, proofTitleBox);
-  await goToNewRunPanel(page, "run");
+  await newRunPanel(page, "run");
   await proofTitleBox.fill(PROOF_RUN_TITLE);
   await spotlight(page, null);
 
@@ -617,7 +616,7 @@ test("act 5 — a real run", async () => {
     page.getByRole("radio", { name: /^Terminal/ }),
     "A bare shell this time. No agent, no task — just prove the point.",
   );
-  await goToNewRunPanel(page, "workspace");
+  await newRunPanel(page, "workspace");
   await act(
     page,
     page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" }),

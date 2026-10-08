@@ -82,7 +82,7 @@ import { act, beat, caption, centerInFrame, chapter, PACE, spotlight } from "./o
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll
 // (one browser, one context, one recorded page).
 import { stage } from "./stage";
-import { goToNewRunPanel } from "../fixtures";
+import { newRunPanel } from "./funnel";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -270,7 +270,7 @@ test("V06 beat 1 — name it, aim it", async () => {
 
   // Title first — the board groups by it, and an untitled run is a loose card.
   const title = page.getByLabel("Title");
-  await goToNewRunPanel(page, "run");
+  await newRunPanel(page, "run");
   await spotlight(page, title);
   await caption(page, "Give the run a name.");
   await beat(page, BEAT_SHORT);
@@ -316,8 +316,10 @@ test("V06 beat 2 — the envelope, by reference", async () => {
   test.setTimeout(180_000);
   const page = stage();
 
-  // The workspace video 04 built. The combobox's option carries the name.
-  const wsPicker = page.getByRole("combobox").filter({ hasText: /workspace|Ephemeral/i }).first();
+  // The workspace video 04 built, on New Run's Workspace panel (#1922). The
+  // combobox's option carries the name.
+  await newRunPanel(page, "workspace");
+  const wsPicker = page.getByRole("combobox", { name: "Workspace" });
   await act(page, wsPicker, "Attach the workspace we just created.");
   // DIALOG-STALE: "This is the blast radius we established in the last episode."
   // — the workspace is episode 04's; the LAST episode (05) established the
@@ -336,7 +338,7 @@ test("V06 beat 2 — the envelope, by reference", async () => {
   // reference rather than authoring a fresh spec inline. "Reuse a saved policy"
   // is the Policy panel's mode row (policy-panel.tsx) — an aria-pressed <button>
   // whose accessible name is its title plus its hint, so prefix-match the title.
-  // Switching to it HIDES the template chips and the spec-JSON textarea
+  // Switching to it hides the template chips and the spec-JSON textarea
   // (usingSaved renders only the picker), which is why every inline-authoring
   // locator the old beat drove — the spec box, the CI-baseline chip, the "No
   // egress" chip, the first_use_approval "Insert" rail row — is gone here, and
@@ -356,6 +358,7 @@ test("V06 beat 2 — the envelope, by reference", async () => {
   //     happens." / "We can hold it for approval." / "We can deny it, but let it
   //     ask." / "Or we can deny it silently.") — the stored policy already fixed
   //     the mode (deny_with_review); the run does not re-choose it
+  await newRunPanel(page, "policy");
   await caption(page, "In 'Your first policy', we saved our rules as first-policy.");
   await beat(page, PACE.read);
   await caption(page, "This run doesn't need a new policy — it can reuse first-policy.");
@@ -445,8 +448,10 @@ test("V06 beat 2 — the envelope, by reference", async () => {
 
   // The envelope recap — re-pointed at the reused policy in the rail (its old
   // targets, the "No egress" chip and the first_use_approval rail row, exist only
-  // in inline mode).
-  await spotlight(page, page.getByRole("heading", { name: "Workspace", level: 3 }).locator("xpath=ancestor::section[1]"));
+  // in inline mode). The workspace is its own panel now (#1922); the rail stays
+  // beside every panel.
+  await newRunPanel(page, "workspace");
+  await spotlight(page, page.getByRole("heading", { name: "Workspace", level: 2 }).locator("xpath=ancestor::section[1]"));
   await caption(page, "The workspace defines what it can touch.");
   await beat(page, PACE.read);
   await spotlight(page, railPolicy);

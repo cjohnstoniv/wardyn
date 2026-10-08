@@ -92,10 +92,9 @@ import {
 // (one browser, one context, one recorded page), and every beat reads the page
 // out of stage() inside a test body rather than closing over a module binding.
 import { stage } from "./stage";
-import { APPROVAL_APPEARS, decide } from "./funnel";
+import { APPROVAL_APPEARS, decide, newRunPanel } from "./funnel";
 import { sweepStaleState } from "./sweep";
 import { termText } from "../terminal-text";
-import { goToNewRunPanel } from "../fixtures";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -769,14 +768,14 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   // Deliberately UNNARRATED from here through the launch and the boot below:
   // the owner's B6 line names only the FIRST click ("Create a new run…"),
   // and the next spoken line waits until there is something to decide.
-  await goToNewRunPanel(page, "run");
+  await newRunPanel(page, "run");
   await act(page, page.getByRole("radio", { name: /^Terminal/ }));
 
   // The workspace trigger has NO accessible name (the Agent select beside it is
   // labelled, this one was never wired up), so it is addressed by its
   // placeholder text — an honest workaround for a real a11y gap, not a test
   // convenience.
-  await goToNewRunPanel(page, "workspace");
+  await newRunPanel(page, "workspace");
   await act(page, page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" }));
   await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE, "i") }).first());
 
@@ -793,7 +792,7 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
   // Asserted straight off the JSON textarea rather than a radio's
   // aria-checked, because a changed default would make the approval below
   // never fire while the take still went green.
-  await goToNewRunPanel(page, "policy");
+  await newRunPanel(page, "policy");
   await expect(
     page.getByLabel("Spec (JSON)"),
     "the default first_use_approval is no longer deny_with_review",
@@ -905,13 +904,13 @@ test("beat 8 — a new run, and nothing to click", async () => {
 
   const titleBox = page.getByLabel("Title");
   // Fill before ringing — see beat 6's identical fix (S3: point at content).
-  await goToNewRunPanel(page, "run");
+  await newRunPanel(page, "run");
   await titleBox.fill(PROOF_RUN_TITLE);
   await spotlight(page, titleBox);
   await spotlight(page, null);
 
   await act(page, page.getByRole("radio", { name: /^Terminal/ }));
-  await goToNewRunPanel(page, "workspace");
+  await newRunPanel(page, "workspace");
   await act(page, page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" }));
   await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE, "i") }).first());
 

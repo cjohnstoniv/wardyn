@@ -68,9 +68,8 @@ import { act, beat, caption, centerInFrame, chapter, ffwdEnd, ffwdStart, PACE, s
 // importing it is what registers this file's beforeAll/afterAll, and each beat
 // reads the page out of stage() rather than closing over a module-level `let`.
 import { stage } from "./stage";
-import { clearWorkspace, decide } from "./funnel";
+import { clearWorkspace, decide, newRunPanel } from "./funnel";
 import { sweepStaleState } from "./sweep";
-import { goToNewRunPanel } from "../fixtures";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -287,7 +286,7 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // it appears afterwards — including in the verifier.
   const titleBox = page.getByLabel("Title");
   await spotlight(page, titleBox);
-  await goToNewRunPanel(page, "run");
+  await newRunPanel(page, "run");
   await titleBox.fill(RUN_TITLE);
   await caption(page, "Give it a name.");
   await beat(page, BEAT_SHORT);
@@ -376,7 +375,7 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // getByRole("combobox", {name}) can never match it. Filtering on the
   // placeholder text is the honest workaround until the control gets a label —
   // an unnamed combobox is a real a11y gap, not just a test inconvenience.
-  await goToNewRunPanel(page, "workspace");
+  await newRunPanel(page, "workspace");
   await act(page, page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" }), "Attach the workspace.");
   await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE_NAME, "i") }).first());
   await caption(page, "Same workspace as before — real code, writable because we granted it.");
@@ -391,7 +390,7 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // construction, the same default the old "Confined" radio asserted. The
   // click below is still for the camera, same as the old one: it re-asserts
   // the Minimal chip rather than changing anything.
-  await goToNewRunPanel(page, "policy");
+  await newRunPanel(page, "policy");
   await act(page, page.getByRole("button", { name: "Minimal" }), "Confined — the network starts closed.");
   await caption(page, "We'll give it the one destination it needs and let everything else ask.");
   await beat(page, PACE.read + 400);

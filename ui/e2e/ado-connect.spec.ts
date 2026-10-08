@@ -330,6 +330,7 @@ test.describe("New Run, a row that creates a token for each run", () => {
       await route.fulfill({ status: 403, json: { error: "cannot create a token", reason: "ado_pat_consent_needed" } });
     });
     await openNewRun(page, false);
+    await goToNewRunPanel(page, "run");
     await page.getByLabel("Title").fill("e2e ado consent");
     await page.getByRole("button", { name: "Launch run" }).click();
     await goToNewRunPanel(page, "access");
