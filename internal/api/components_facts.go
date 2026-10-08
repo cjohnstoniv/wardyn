@@ -78,8 +78,9 @@ const (
 	componentReady = "ready"
 	// componentNeedsInput: the person has something to supply (Requirements).
 	componentNeedsInput = "needs_input"
-	// componentUnavailable: the organisation has not stored a secret it
-	// provides; only an admin can.
+	// componentUnavailable: nothing the caller can supply would make it ready —
+	// the organisation has not stored a secret it provides, or the caller is no
+	// person and the provider wants one's connection.
 	componentUnavailable = "unavailable"
 	// componentUnknown: the door did not read what would answer it.
 	componentUnknown = "unknown"
@@ -235,7 +236,9 @@ func gitGrantServes(g types.GrantSpec, repo previewRepo) bool {
 // gitProviderStatus is the person's connection to the provider where the door
 // read it: Review's git_credential fact, for the Azure DevOps organisation it
 // graded. Every other row — the preview's, and a GitHub one, which no door
-// grades yet — is unknown rather than a guess.
+// grades yet — is unknown rather than a guess. A caller that is no person (the
+// shared admin token) has no connection to make: unavailable, never a prompt
+// to sign in.
 func gitProviderStatus(repo previewRepo, scm *SCMAccess) string {
 	if scm == nil || scm.Kind != repo.kind || scm.Org != repo.org {
 		return componentUnknown
@@ -243,6 +246,8 @@ func gitProviderStatus(repo previewRepo, scm *SCMAccess) string {
 	switch scm.State {
 	case modelAccessLive, modelAccessExpiring:
 		return componentReady
+	case modelAccessNotApplicable:
+		return componentUnavailable
 	}
 	return componentNeedsInput
 }

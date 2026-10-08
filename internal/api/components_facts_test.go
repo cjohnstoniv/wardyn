@@ -506,6 +506,7 @@ func TestComponentFacts_GitProviderRows(t *testing.T) {
 		lanes     []types.GitLane // of the GitHub row
 		repos     []string
 		connected bool
+		mechanism bool // asked with the shared admin token: no person to connect
 		preview   []gitFact
 		review    []gitFact
 	}{
@@ -521,6 +522,8 @@ func TestComponentFacts_GitProviderRows(t *testing.T) {
 			preview: []gitFact{ado("unknown")}, review: []gitFact{ado("needs_input")}},
 		{name: "Azure DevOps alone, connected", policy: open, repos: []string{scmTestADORepo}, connected: true,
 			preview: []gitFact{ado("unknown")}, review: []gitFact{ado("ready")}},
+		{name: "Azure DevOps alone, a caller that is no person", policy: open, repos: []string{scmTestADORepo}, mechanism: true,
+			preview: []gitFact{ado("unknown")}, review: []gitFact{ado("unavailable")}},
 		{name: "both", policy: open, repos: []string{scmTestADORepo, ghRepo},
 			preview: []gitFact{ado("unknown"), github("direct")}, review: []gitFact{ado("needs_input"), github("direct")}},
 	} {
@@ -547,6 +550,9 @@ func TestComponentFacts_GitProviderRows(t *testing.T) {
 			}
 			body := `{"agent":"claude-code","task":"do the thing","workspace_id":"` + adoCreateWorkspace(t, st, sources...).String() + `"}`
 			op := adoOperatorToken(st)
+			if tc.mechanism {
+				op = adminToken
+			}
 			for door, want := range map[string][]gitFact{componentDoors[2]: tc.preview, componentDoors[1]: tc.review} {
 				w := do(t, srv, http.MethodPost, door, op, body)
 				got := gitFacts(t, door, w)
@@ -558,6 +564,11 @@ func TestComponentFacts_GitProviderRows(t *testing.T) {
 						got[i].Status != want[i].Status || got[i].Lane != want[i].Lane || got[i].Org != want[i].Org || !slices.Equal(got[i].Repos, want[i].Repos) {
 						t.Errorf("%s git_provider facts[%d] = %+v, want %+v", door, i, got[i], want[i])
 					}
+				}
+				// The Git fact and Review's own git_credential fact agree: a
+				// caller with nothing to sign in as is offered no sign-in.
+				if tc.mechanism && door == componentDoors[1] && !strings.Contains(w.Body.String(), `"git_credential":{"state":"not_applicable"`) {
+					t.Errorf("%s git_credential is not not_applicable: %s", door, w.Body.String())
 				}
 				if strings.Contains(w.Body.String(), "github-private-row") || strings.Contains(w.Body.String(), scmTestRowID) {
 					t.Errorf("%s names a provider row: %s", door, w.Body.String())
