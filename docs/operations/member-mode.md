@@ -139,74 +139,36 @@ their own runs, workspaces and secrets are still theirs (ceilings 1 and
 | Minting an API token (`POST /me/tokens`) | REFUSES instead of clamping, with `409`. A token carries a role stamp re-derived from your REAL role at your next sign-in, so one minted "as a member" would quietly become an admin credential that outlives the mode. Exit first |
 | Registering an SSH key (`POST /me/ssh-keys`) | Allowed in the mode; the key is stored **capped** (migration `0070_ssh_key_view_capped`) — a member key for good. Your sign-in re-stamp leaves its role at `user`, and the SSH gateway never grants it the admin override, even while you are an admin. It reaches your own runs and nothing else. An uncapped admin key is registered outside the mode, and since 0.8.5 it reaches only runs with no personal owner |
 
-> **It shows you what a member SEES. It is not proof that a member is
-> REFUSED.** Four ceilings, all deliberate:
->
-> 1. **Role only.** Runs, workspaces and secrets you created stay yours,
->    so owner-legal paths still pass for you where they would 404 for
->    someone else. `GET /me/capabilities` and every governance ceiling
->    resolve against your real group snapshot — the mode clamps the role,
->    never the group tier.
-> 2. **Credentials you already hold are not clamped — the mode is
->    per-SESSION.** The SSH gateway reads the role stamped on the KEY in
->    the database, refreshed only at login (`WARDYN_SSH_ROLE_TTL`). So an
->    admin in member mode still holds the admin override on other
->    people's runs over SSH. By the identical argument, any `wdn_` API
->    token you already hold keeps its own stamped role (the token lane
->    replays the DB row, never the session), as does the deployment admin
->    bearer token. The `409` token door and the capped key door stop NEW
->    credentials — they cannot reach into old ones. Your browser session
->    is clamped; another credential of yours is a different session.
-> 3. **Rolling upgrades.** The flag rides the existing session cookie
->    with no codec bump (a bump would sign every live session out
->    mid-rollout, which is worse). During a rolling Kubernetes upgrade a
->    replica still running the previous version ignores the flag and
->    answers your requests as an admin. Finish the rollout before you
->    rely on what you see.
-> 4. **Model access and ownership still resolve to you.** The mode clamps
->    the role and deliberately leaves your subject alone. Under a
->    `per_user` roster row your own captured AWS SSO session is what
->    `/setup/status`, run create and dispatch all resolve — an admin who
->    has signed in sees a live credential while "viewing as member". This
->    is what the 0.7.4 field report was misled by.
->
-> For the question "would a member actually be refused this?", use a real
-> second identity — recipe below. The two compose: toggle for the fast
-> look, second identity for the proof.
->
-> **Ceiling 4, and the other posture.** The *second* posture — **Preview
-> as a new user** — is what shows the not-signed-in state. It's reached
-> from the Permissions header in the **Admin view**. It's not offered
-> from inside the User view, and not at all on a deployment whose roster
-> row is `shared` (there is nothing for the preview to hide) or against a
-> pre-0.7.5 daemon. (`user_preview_available`, `internal/api/me.go`, is
-> ANDed with the caller's EFFECTIVE (clamped) admin tier. That's the same
-> clamp that made ceiling 4 true in the first place, so the button is
-> gone the instant either posture clamps
-> `isOperator`/`isSecurityOperator` false.)
-> Inside that second posture the ceiling reads the other way round: your
-> sign-in is *hidden, not removed*, and a rolling upgrade (ceiling 3)
-> hides nothing at all.
->
-> **The preview shows the STATE, not the FLOW.** Signing in is refused
-> inside it (`409`), by design — a capture made there would land on your
-> own identity and overwrite your real session. So it reproduces what a
-> member with no credential SEES; it cannot rehearse a member's FIRST
-> SIGN-IN. That still needs a real second identity —
-> `member@wardyn.local` in the kind quickstart, `wardyn-member` on Entra.
->
-> **Rolling upgrades, for the preview specifically.** The posture rides
-> the same session cookie as the mode, as a second `omitempty` bool with
-> no codec bump. A replica still running 0.7.4 ignores it: it shows you
-> your OWN credential AND does not refuse the sign-in, so *"sign-in is
-> refused inside the preview"* does not hold mid-upgrade.
->
-> In the other direction a 0.7.5 console POSTing `no_credential` to a
-> 0.7.4 replica gets a `400` from the strict body decode
-> (`DisallowUnknownFields`), and the mode is NOT entered — the button
-> says so. The switch keeps working throughout, because the console
-> sends the key only for the new posture.
-> Finish the rollout before you rely on what you see.
+> [!IMPORTANT]
+> **It shows you what a member SEES. It is not proof that a member is REFUSED.** Four ceilings, all deliberate:
+
+| Ceiling | Shows | Does not prove |
+| --- | --- | --- |
+| **1. Role only.** | The mode clamps the role, never the group tier. | Runs, workspaces and secrets you created stay yours, so owner-legal paths still pass for you where they would 404 for someone else. `GET /me/capabilities` and every governance ceiling resolve against your real group snapshot. |
+| **2. Credentials you already hold are not clamped — the mode is per-SESSION.** | Your browser session is clamped; another credential of yours is a different session. | The SSH gateway reads the role stamped on the KEY in the database, refreshed only at login (`WARDYN_SSH_ROLE_TTL`). So an admin in member mode still holds the admin override on other people's runs over SSH. |
+| **2.** | The `409` token door and the capped key door stop NEW credentials — they cannot reach into old ones. | By the identical argument, any `wdn_` API token you already hold keeps its own stamped role (the token lane replays the DB row, never the session), as does the deployment admin bearer token. |
+| **3. Rolling upgrades.** | The flag rides the existing session cookie with no codec bump (a bump would sign every live session out mid-rollout, which is worse). | During a rolling Kubernetes upgrade a replica still running the previous version ignores the flag and answers your requests as an admin. Finish the rollout before you rely on what you see. |
+| **4. Model access and ownership still resolve to you.** | The mode clamps the role and deliberately leaves your subject alone. This is what the 0.7.4 field report was misled by. | Under a `per_user` roster row your own captured AWS SSO session is what `/setup/status`, run create and dispatch all resolve — an admin who has signed in sees a live credential while "viewing as member". |
+
+For the question "would a member actually be refused this?", use a real
+second identity — recipe below. The two compose: toggle for the fast
+look, second identity for the proof.
+
+**Ceiling 4, and the other posture.**
+
+| The *second* posture — **Preview as a new user** — is what shows the not-signed-in state. |
+| --- |
+| It's reached from the Permissions header in the **Admin view**. |
+| It's not offered from inside the User view, and not at all on a deployment whose roster row is `shared` (there is nothing for the preview to hide) or against a pre-0.7.5 daemon. |
+| `user_preview_available` (`internal/api/me.go`) is ANDed with the caller's EFFECTIVE (clamped) admin tier. |
+| That's the same clamp that made ceiling 4 true, so the button is gone the instant either posture clamps `isOperator`/`isSecurityOperator` false. |
+| Inside it the ceiling reads the other way round: your sign-in is *hidden, not removed*, and a rolling upgrade (ceiling 3) hides nothing at all. |
+| **The preview shows the STATE, not the FLOW.** Signing in is refused inside it (`409`), by design — a capture made there would land on your own identity and overwrite your real session. |
+| So it reproduces what a member with no credential SEES; it cannot rehearse a member's FIRST SIGN-IN. That still needs a real second identity — `member@wardyn.local` in the kind quickstart, `wardyn-member` on Entra. |
+| **Rolling upgrades, for the preview specifically.** The posture rides the same session cookie as the mode, as a second `omitempty` bool with no codec bump. |
+| A replica still running 0.7.4 ignores it: it shows you your OWN credential AND does not refuse the sign-in, so *"sign-in is refused inside the preview"* does not hold mid-upgrade. |
+| In the other direction a 0.7.5 console POSTing `no_credential` to a 0.7.4 replica gets a `400` from the strict body decode (`DisallowUnknownFields`), and the mode is NOT entered — the button says so. |
+| The switch keeps working throughout, because the console sends the key only for the new posture. |
 
 Note the name collision: the `WARDYN_USER_DESKTOP` environment variable
 ([ENV.md](../ENV.md)) is a different, unrelated thing. It's a boot-time
