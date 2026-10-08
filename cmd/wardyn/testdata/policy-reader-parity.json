@@ -70,7 +70,7 @@
  {
   "name": "U+0085, U+2028 and U+2029 as the console's YAML view writes them",
   "emitted": true,
-  "source": "llm_inspection:\n  classified_markers:\n    - \"x: y\\Nz\"\n    - \"a\\Lb\\Pc\"",
+  "source": "llm_inspection:\n  classified_markers:\n    - \"x: y\\u0085z\"\n    - \"a\\u2028b\\u2029c\"",
   "console": {
    "value": {
     "llm_inspection": {
@@ -394,5 +394,20 @@
    "error": "Unpaired UTF-16 surrogate: remove it."
   },
   "cliError": true
+ },
+ {
+  "name": "DEL, C1, U+FFFE and U+FFFF as the console's YAML view writes them",
+  "emitted": true,
+  "source": "tool_rules:\n  - tool: Bash\n    pattern: \"x\\u007fy\\u0090z\\ufffew\\uffffv\"",
+  "console": {
+   "value": {
+    "tool_rules": [
+     {
+      "tool": "Bash",
+      "pattern": "x\u007fy\u0090z\ufffew\uffffv"
+     }
+    ]
+   }
+  }
  }
 ]

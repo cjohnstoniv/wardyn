@@ -77,7 +77,7 @@ describe("toYaml", () => {
   it("quotes and escapes U+0085, U+2028 and U+2029 in values and keys", () => {
     const yaml = toYaml({ a: "x: y\u0085z", b: "nel\u0085x", c: [" ls\u2028x", "ps\u2029"], "k\u2028": 1 });
     expect(yaml).toBe(
-      ['a: "x: y\\Nz"', 'b: "nel\\Nx"', "c:", '  - " ls\\Lx"', '  - "ps\\P"', '"k\\L": 1'].join("\n"),
+      ['a: "x: y\\u0085z"', 'b: "nel\\u0085x"', "c:", '  - " ls\\u2028x"', '  - "ps\\u2029"', '"k\\u2028": 1'].join("\n"),
     );
     expect(yaml).not.toMatch(/[\x85\u2028\u2029]/);
   });
@@ -86,6 +86,14 @@ describe("toYaml", () => {
   // so a raw one is refused; JSON leaves it unescaped.
   it("quotes and escapes a byte order mark", () => {
     expect(toYaml({ a: "x\ufeffy", "\ufeffk": 1 })).toBe(['a: "x\\ufeffy"', '"\\ufeffk": 1'].join("\n"));
+  });
+
+  // gopkg.in/yaml.v3 refuses a whole document holding a raw DEL, C1 control,
+  // U+FFFE or U+FFFF; escaped, it reads them as the same characters.
+  it("quotes and escapes DEL, C1 controls, U+FFFE and U+FFFF", () => {
+    const yaml = toYaml({ a: "x\u007fy", b: ["c1\u0080x", "c1\u009fx"], c: "x\ufffey\uffffz", "k\u007f": 1 });
+    expect(yaml).toBe(['a: "x\\u007fy"', "b:", '  - "c1\\u0080x"', '  - "c1\\u009fx"', 'c: "x\\ufffey\\uffffz"', '"k\\u007f": 1'].join("\n"));
+    expect(yaml).not.toMatch(/[\u007f-\u009f\ufffe\uffff]/);
   });
 
   // YAML allows an implicit key at most 1024 characters before its colon.

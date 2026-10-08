@@ -91,16 +91,16 @@ function isYamlContainer(v: unknown): boolean {
 // yamlScalar quotes a string — a value or a mapping key — only when a plain YAML
 // scalar would be ambiguous: empty, a control character other than tab (a raw line
 // break ends the scalar), special indicators, leading/trailing space, or text that
-// would parse as a number/bool/null (a leading - is caught above; the CLI's reader
-// drops underscores first, so +_1 is a number there). Uses JSON string quoting for
-// the quoted form, plus YAML's escapes for U+0085, U+2028 and U+2029, which JSON
-// leaves raw and the CLI's YAML reader (gopkg.in/yaml.v3) takes as line breaks even
-// inside quotes, and for a byte order mark, which the readers keep in different
-// places. One expression on purpose: this module ships in the size-budgeted entry
-// chunk.
+// would parse as a number/bool/null (a leading - is caught by ^[\s?-]; the CLI's
+// reader drops underscores first, so +_1 is a number there). Uses JSON string
+// quoting for the quoted form, plus \u escapes for what JSON leaves raw and the
+// CLI's YAML reader (gopkg.in/yaml.v3) reads differently or refuses: U+0085, U+2028
+// and U+2029 (line breaks to it, even inside quotes), a byte order mark, DEL, C1
+// controls, U+FFFE and U+FFFF. One expression on purpose: this module ships in the
+// size-budgeted entry chunk.
 function yamlScalar(s: string): string {
-  return /^$|[\0-\b\n-\x1f\x85\u2028\u2029\ufeff:#[\]{}",&*!|>'%@`]|^[\s?-]|\s$|^(true|false|null|yes|no|on|off|~)$|^\+?[\d._]/i.test(s)
-    ? JSON.stringify(s).replace(/\x85/g, "\\N").replace(/\u2028/g, "\\L").replace(/\u2029/g, "\\P").replace(/\ufeff/g, "\\ufeff")
+  return /^$|[\0-\b\n-\x1f\x7f-\x9f\u2028\u2029\ufeff\ufffe\uffff:#[\]{}",&*!|>'%@`]|^[\s?-]|\s$|^(true|false|null|yes|no|on|off|~)$|^\+?[\d._]/i.test(s)
+    ? JSON.stringify(s).replace(/[\x7f-\x9f\u2028\u2029\ufeff\ufffe\uffff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)
     : s;
 }
 
