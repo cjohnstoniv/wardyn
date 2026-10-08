@@ -74,51 +74,63 @@ for f in "$TMP"/*.mmd; do
 done
 
 # ── images: R9 alt text, and SVG <text> into the label haystack ──────────────
-# Outside code fences. A local .svg must exist; its <text>/<tspan> content is
-# written to $TMP/<name>.svgtxt, one text node per line. Remote images (badges)
-# are checked for alt text only.
+# Outside code fences, over the whole file so a tag split across lines is still
+# seen. A local .svg must be a tracked file under docs/img/; its <text>/<tspan>
+# content is written to $TMP/<path with / as __>.svgtxt, one text node per
+# line. Remote images (badges) are checked for alt text only.
 python3 - "$TMP" "${DOCS[@]}" <<'PY' || fail=1
-import os, re, sys
+import os, re, subprocess, sys
 import xml.etree.ElementTree as ET
 tmp, docs = sys.argv[1], sys.argv[2:]
+img_dir = os.path.realpath('docs/img') + os.sep
 md_img = re.compile(r'!\[([^]]*)\]\(')
 html_img = re.compile(r'<img\b[^>]*>', re.I)
 alt_attr = re.compile(r'\balt\s*=\s*"([^"]*)"', re.I)
 svg_refs = [re.compile(r'!\[[^]]*\]\(([^)]+\.svg)\)'),
-            re.compile(r'<img[^>]*src="([^"]+\.svg)"'),
-            re.compile(r'<source[^>]*srcset="([^"]+\.svg)"')]
+            re.compile(r'<img[^>]*src="([^"]+\.svg)"', re.I),
+            re.compile(r'<source[^>]*srcset="([^"]+\.svg)"', re.I)]
 rc, svgs = 0, 0
+def fail(msg):
+    global rc
+    print("  FAIL " + msg); rc = 1
 for doc in docs:
-    fenced = False
-    for no, line in enumerate(open(doc, encoding='utf-8'), 1):
+    lines, fenced = [], False
+    for line in open(doc, encoding='utf-8'):
         if line.lstrip().startswith('```'):
             fenced = not fenced
-            continue
-        if fenced:
-            continue
-        for m in md_img.finditer(line):
-            if not m.group(1).strip():
-                print(f"  FAIL R9 {doc}:{no}: image without alt text: {line.strip()}"); rc = 1
-        for tag in html_img.findall(line):
-            a = alt_attr.search(tag)
-            if not a or not a.group(1).strip():
-                print(f"  FAIL R9 {doc}:{no}: <img> without alt text: {tag}"); rc = 1
-        for rx in svg_refs:
-            for ref in rx.findall(line):
-                if re.match(r'[a-z]+:', ref):
-                    continue
-                path = os.path.normpath(os.path.join(os.path.dirname(doc), ref))
-                try:
-                    root = ET.parse(path).getroot()
-                except (OSError, ET.ParseError) as e:
-                    print(f"  FAIL svg {doc}:{no}: {ref} unreadable: {e}"); rc = 1
-                    continue
-                texts = [''.join(el.itertext()).strip() for el in root.iter()
-                         if isinstance(el.tag, str) and el.tag.rsplit('}', 1)[-1] == 'text']
-                name = os.path.splitext(os.path.basename(path))[0]
-                with open(os.path.join(tmp, name + '.svgtxt'), 'w', encoding='utf-8') as out:
-                    out.write('\n'.join(t for t in texts if t) + '\n')
-                svgs += 1
+            lines.append('\n')
+        else:
+            lines.append('\n' if fenced else line)
+    text = ''.join(lines)
+    at = lambda m: f"{doc}:{text.count(chr(10), 0, m.start()) + 1}"
+    flat = lambda t: ' '.join(t.split())
+    for m in md_img.finditer(text):
+        if not m.group(1).strip():
+            fail(f"R9 {at(m)}: image without alt text")
+    for m in html_img.finditer(text):
+        a = alt_attr.search(m.group(0))
+        if not a or not a.group(1).strip():
+            fail(f"R9 {at(m)}: <img> without alt text: {flat(m.group(0))}")
+    for rx in svg_refs:
+        for m in rx.finditer(text):
+            ref = m.group(1)
+            if re.match(r'[a-z]+:|//', ref):
+                continue
+            path = os.path.relpath(os.path.realpath(os.path.join(os.path.dirname(doc), ref)))
+            if not os.path.realpath(path).startswith(img_dir):
+                fail(f"svg {at(m)}: {ref} resolves to {path}, outside docs/img/"); continue
+            if subprocess.run(['git', 'ls-files', '--error-unmatch', '--', path],
+                              capture_output=True).returncode != 0:
+                fail(f"svg {at(m)}: {path} is not a tracked file"); continue
+            try:
+                root = ET.parse(path).getroot()
+            except (OSError, ET.ParseError) as e:
+                fail(f"svg {at(m)}: {ref} unreadable: {e}"); continue
+            texts = [''.join(el.itertext()).strip() for el in root.iter()
+                     if isinstance(el.tag, str) and el.tag.rsplit('}', 1)[-1] == 'text']
+            with open(os.path.join(tmp, path.replace('/', '__') + '.svgtxt'), 'w', encoding='utf-8') as out:
+                out.write('\n'.join(t for t in texts if t) + '\n')
+            svgs += 1
 print(f"checked images in {len(docs)} docs; {svgs} SVG reference(s) read")
 sys.exit(rc)
 PY
