@@ -69,6 +69,14 @@ const FALLBACK_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const LOGIN_REDEEMABLE_MS = (2 * 10 + 1) * 60 * 1000;
 const whileRedeemable = () => Date.now() + LOGIN_REDEEMABLE_MS;
 
+// The expiry banner's "Sign in again", which stands in the slot's place whenever
+// no renewal waits. The banner is eager and this layer is not, so it is found by
+// where it stands and what it says rather than by an id the entry chunk would carry.
+function bannerSignInAgain(): HTMLElement | undefined {
+  const banner = document.getElementById(RENEW_STRIP_SLOT)?.previousElementSibling;
+  return Array.from(banner?.querySelectorAll("button") ?? []).find((b) => b.textContent === REAUTH_RENEW.CTA);
+}
+
 // The sign-in in a new tab, opened from the click so this page holds a handle
 // Cancel can close; null when the browser refuses that as well. Severed like
 // the window (lib/use-session-renew.ts).
@@ -293,9 +301,20 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     setTokenValue("");
   }, [reauth.phase, setStatus]);
 
+  // Cancel takes the strip, and the focus on it, away; the banner that comes
+  // back gets the focus rather than the document. A cancel that lands on the
+  // dialog (a request was refused meanwhile) leaves it to the dialog.
+  const focusBanner = React.useRef(false);
+  React.useEffect(() => {
+    if (renewal || !focusBanner.current) return;
+    focusBanner.current = false;
+    if (reauth.phase === "none") bannerSignInAgain()?.focus();
+  }, [renewal, reauth.phase]);
+
   // Cancel closes the window (the renewal's effect), and that proves nothing:
   // a sign-in it began can still land, so who answers /me is watched from here.
   const cancelRenew = () => {
+    focusBanner.current = true;
     setStatus("idle");
     if (renewal) setWatch({ from: renewal, until: whileRedeemable() });
     reauth.endRenew();

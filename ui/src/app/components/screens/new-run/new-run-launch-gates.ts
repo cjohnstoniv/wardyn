@@ -86,10 +86,11 @@ export interface LaunchGates {
   issues: LaunchIssue[];
   /** The picked workspace refuses this caller (#922). */
   workspaceUnavailable: boolean;
-  /** The default lane's own refusal, for the default-policy panel to show
-   *  beside Check again: set whenever it applies, even while `problem` is
-   *  carrying an earlier arm's sentence. */
-  defaultWorkspaceProblem: string | null;
+  /** The reference lane's own refusal (default or saved, one sentence each),
+   *  printed beside Check again while Policy is on screen: set whenever it
+   *  applies. It is also an inline issue, so the line above Launch names it
+   *  only from another panel. */
+  referenceWorkspaceProblem: string | null;
   /** Neither reference policy mode can carry extra workspace attachments. */
   referenceWorkspaceBlocked: boolean;
 }
@@ -162,17 +163,21 @@ export function launchGates(i: LaunchGateInputs): LaunchGates {
   }
 
   const referenceWorkspaceBlocked = referenceLaneDropsWorkspace(i.policyMode, i.attachedWorkspaces);
-  const defaultWorkspaceProblem = i.policyMode === "default" && referenceWorkspaceBlocked
-    ? POLICY_TEMPLATE_COPY.DEFAULT_ONE_WORKSPACE
-    : null;
-  if (defaultWorkspaceProblem) {
-    issues.push({ panel: "policy", focus: ISSUE_TARGET.POLICY_MODE, text: defaultWorkspaceProblem, inline: true });
+  // M-F: one sentence per reference lane, printed once beside Check again
+  // (policy-panel.tsx's POLICY_HOLD_ID) and named above Launch from any other panel.
+  const referenceWorkspaceProblem = !referenceWorkspaceBlocked
+    ? null
+    : i.policyMode === "saved"
+      ? POLICY_TEMPLATE_COPY.SAVED_ONE_WORKSPACE
+      : POLICY_TEMPLATE_COPY.DEFAULT_ONE_WORKSPACE;
+  if (referenceWorkspaceProblem) {
+    issues.push({ panel: "policy", focus: ISSUE_TARGET.POLICY_MODE, text: referenceWorkspaceProblem, inline: true });
   }
 
   const provider = i.isAgent ? providerIssue(i) : null;
   if (provider) issues.push(provider);
 
-  return { issues, workspaceUnavailable, defaultWorkspaceProblem, referenceWorkspaceBlocked };
+  return { issues, workspaceUnavailable, referenceWorkspaceProblem, referenceWorkspaceBlocked };
 }
 
 export interface PreflightHoldInputs {

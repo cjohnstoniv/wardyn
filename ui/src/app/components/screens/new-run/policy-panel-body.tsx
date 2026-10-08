@@ -125,7 +125,7 @@ export function PolicyPanelBody({ c, active, issues, shown, guardLink }: PolicyP
           onChange={onSpecChange}
           onPreflight={preflight}
           preflightBusy={preflighting}
-          preflightDisabled={(policyMode === "saved" && !state.selectedPolicyId) || !!gates.defaultWorkspaceProblem}
+          preflightDisabled={(policyMode === "saved" && !state.selectedPolicyId) || gates.referenceWorkspaceBlocked}
           interactive={isInteractive}
           adoCeiling={adoCeiling}
           modelProviders={modelProviders}
@@ -135,9 +135,11 @@ export function PolicyPanelBody({ c, active, issues, shown, guardLink }: PolicyP
               status: defaultRead.status,
               spec: defaultPolicy && previewSpec(defaultPolicy),
               profileName: governanceProfile,
-              problem: gates.defaultWorkspaceProblem,
               onRetry: retryDefault,
             },
+            // Printed once, beside Check again; Check again and Launch name it
+            // as their description (policy-panel.tsx's POLICY_HOLD_ID).
+            hold: gates.referenceWorkspaceProblem,
             onModeChange: onPolicyModeChange,
             picker: (
               <div className="space-y-2">

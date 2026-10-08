@@ -51,6 +51,10 @@ export type PolicyPanelInstance = "run" | "policies";
 /** The run instance's mode row: launch under the deployment default, reuse a stored policy, or author one. */
 export type PolicyMode = "default" | "saved" | "custom";
 
+/** The id of the sentence that says why Check again and Launch are held in the
+ *  default and saved modes; both buttons name it as their description. */
+export const POLICY_HOLD_ID = "policy-workspace-hold";
+
 /* ---------- templates ---------- */
 
 export interface PolicyTemplate {
@@ -332,6 +336,9 @@ export interface PolicyPanelProps {
     onModeChange: (mode: PolicyMode) => void;
     picker: React.ReactNode;
     defaultPolicy: DefaultPolicyView;
+    /** Why Check again and Launch are held in the default and saved modes
+     *  (more workspaces attached than the reference carries), when they are. */
+    hold?: string | null;
   };
   className?: string;
 }
@@ -572,6 +579,12 @@ export function PolicyPanel({
         </>
       )}
 
+      {mode !== "custom" && policyMode?.hold && (
+        <p id={POLICY_HOLD_ID} role="status" className="text-meta text-warning">
+          {policyMode.hold}
+        </p>
+      )}
+
       {onPreflight && (
         <div className="flex flex-wrap items-center gap-2">
           <Button
@@ -580,6 +593,7 @@ export function PolicyPanel({
             size="sm"
             onClick={onPreflight}
             disabled={preflightBusy || preflightDisabled || (mode === "custom" && !parsed.ok)}
+            aria-describedby={mode !== "custom" && policyMode?.hold ? POLICY_HOLD_ID : undefined}
           >
             <ShieldCheck className="size-4" />
             {RAIL_CHECK.BUTTON}

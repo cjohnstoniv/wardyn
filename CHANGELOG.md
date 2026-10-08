@@ -47,13 +47,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
-- New Run's shared request builder refuses multiple workspace attachments with saved or default
-  policies, preventing a referenced policy request from omitting extra attachments. Changing policy
-  modes or attachments invalidates prior preflight results (#1901).
+- New Run's default and saved policies carry one workspace by reference. With a second workspace
+  attached, Launch and Check again are held and the Policy card says why once, beside Check again
+  ("A saved policy launches with one workspace. Remove the extra workspace, or choose Custom policy to
+  keep them all.", or the existing default-policy sentence). The shared request builder refuses the same
+  case, so nothing is sent; no workspace is ever removed and the mode never switches by itself. Custom
+  policy keeps all of them. Removing a workspace chip moves focus to the next chip's Remove button, else
+  the previous one, else the Workspace select. Changing policy modes or attachments invalidates prior
+  preflight results (#1901).
+- The "Open the Recording tab →" link in a finished run's terminal notice uses the information colour
+  like the notice's other links, instead of the teal reserved for primary actions. Its words and the
+  tab it opens are unchanged (#1906).
 - Sign-in reconciliation discards session reads superseded by observed auth changes and keeps a visible
-  renewal checking until it ends. Only a cancelled background watch has the existing quiet deadline.
-  Run sign-in codes refresh on focus and visible return, serialize pending reads, and reset when the
-  run or principal changes (#1908).
+  renewal checking until it succeeds, is cancelled or the session ends. Only a cancelled background watch
+  has the existing quiet deadline. After Cancel or Escape on the renewal strip, focus returns to the
+  banner's "Sign in again" and the Escape does not also leave New Run. Run sign-in codes refresh on
+  focus and visible return, serialize pending reads, update once when the code or link changes without
+  moving focus or re-announcing an identical answer, leave when the sign-in is no longer waiting, and
+  reset when the run or principal changes (#1908).
 - Mask-copy erasure now durably fences in-flight credential reads and renewals,
   including an owner with no existing masking rows. Delayed AWS and Entra replies
   cannot restore erased globals; new sign-ins use a fresh generation. Registration

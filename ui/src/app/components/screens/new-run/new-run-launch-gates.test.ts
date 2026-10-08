@@ -49,20 +49,39 @@ function gates(over: Partial<LaunchGateInputs> = {}) {
 const texts = (over: Partial<LaunchGateInputs> = {}) => gates(over).issues.map((i) => i.text);
 
 describe("New Run local reference workspace gate", () => {
-  it.each(["default", "saved", "custom"] as const)("%s exposes the attachment gate independently of its visible sentence", (policyMode) => {
+  it.each(["default", "saved", "custom"] as const)("%s exposes the attachment gate and its mode sentence", (policyMode) => {
+    const sentence = {
+      default: "The default policy launches with one workspace. Remove the extra workspace, or choose Custom policy to keep them all.",
+      saved: "A saved policy launches with one workspace. Remove the extra workspace, or choose Custom policy to keep them all.",
+      custom: null,
+    }[policyMode];
     for (const attachedWorkspaces of [0, 1, 2, 4]) {
       const result = gates({ policyMode, attachedWorkspaces });
       expect(result.referenceWorkspaceBlocked).toBe(policyMode !== "custom" && attachedWorkspaces > 1);
-      expect(result.defaultWorkspaceProblem).toBe(policyMode === "default" && attachedWorkspaces > 1
-        ? POLICY_TEMPLATE_COPY.DEFAULT_ONE_WORKSPACE
-        : null);
+      expect(result.referenceWorkspaceProblem).toBe(attachedWorkspaces > 1 ? sentence : null);
     }
+    expect(POLICY_TEMPLATE_COPY.SAVED_ONE_WORKSPACE).toBe(
+      "A saved policy launches with one workspace. Remove the extra workspace, or choose Custom policy to keep them all.",
+    );
+  });
+
+  it.each(["default", "saved"] as const)("%s alone is an inline Policy issue: the panel says it once", (policyMode) => {
+    const result = gates({ policyMode, mode: "batch", task: "do it" });
+    expect(result.issues).toEqual([
+      { panel: "policy", focus: ISSUE_TARGET.POLICY_MODE, text: result.referenceWorkspaceProblem, inline: true },
+    ]);
+    expect(result.referenceWorkspaceBlocked).toBe(true);
+    expect(result.referenceWorkspaceProblem).not.toBeNull();
+    // Beside Check again while Policy is on screen; above Launch from any other panel.
+    expect(shownIssue(result.issues, "policy")).toBeNull();
+    expect(shownIssue(result.issues, "workspace")).toBe(result.issues[0]);
   });
 
   it.each(["default", "saved"] as const)("%s retains earlier task validation while recording the attachment refusal", (policyMode) => {
     const result = gates({ policyMode, mode: "batch" });
     expect(result.issues[0].text).toBe("An autonomous run needs a task to perform.");
     expect(result.referenceWorkspaceBlocked).toBe(true);
+    expect(result.referenceWorkspaceProblem).not.toBeNull();
   });
 
   it("a saved policy known to be gone retains its earlier problem", () => {

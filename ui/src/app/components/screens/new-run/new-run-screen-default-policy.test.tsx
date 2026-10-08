@@ -280,23 +280,29 @@ describe("NewRunScreen — the default policy with two workspaces attached", () 
     setField(screen.getByLabelText("Title"), "default two workspaces");
   }
 
-  it("holds Launch and Check again, says why, and sends no request", async () => {
+  it("holds Launch and Check again, says why once, and sends no request", async () => {
     await renderTwoAttachedOnDefault();
 
-    // Printed once (#1922). While Policy is on screen: in the default-policy
-    // panel beside Check again, and not a second time above Launch.
-    const panel = screen.getByText(C.DEFAULT_PREVIEW).parentElement!;
-    await waitFor(() => expect(within(panel).getByText(SENTENCE)).toBeVisible());
+    // Printed once (#1922, M-F). While Policy is on screen: beside Check again,
+    // never in the rail, and both held buttons name it as their description.
+    await waitFor(() => expect(screen.getAllByText(SENTENCE)).toHaveLength(1));
+    const hold = screen.getByText(SENTENCE);
+    expect(hold).toHaveAttribute("role", "status");
+    expect(hold.closest("aside")).toBeNull();
     expect(screen.queryByRole("button", { name: SENTENCE })).toBeNull();
     expect(screen.getByRole("button", { name: "Launch run" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^Check again$/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Launch run" })).toHaveAccessibleDescription(SENTENCE);
+    expect(screen.getByRole("button", { name: /^Check again$/ })).toHaveAccessibleDescription(SENTENCE);
     expect(within(screen.getByRole("navigation", { name: "New run" })).getByRole("button", { name: "Policy 1 issue" })).toBeInTheDocument();
-    // From any other panel: above Launch, as the way back to the mode row.
+    // From any other panel: above Launch instead, as the way back to the mode row.
     goToPanel("Workspace");
-    expect(within(panel).getByText(SENTENCE)).not.toBeVisible();
+    expect(hold).not.toBeVisible();
     expect(screen.getByRole("button", { name: SENTENCE })).toBeInTheDocument();
-    // Nothing is hidden or cleared: the chip and its Remove control stay.
+    // Nothing is hidden or cleared, and the mode never switches by itself.
     expect(screen.getByRole("button", { name: "Remove repo-b" })).toBeInTheDocument();
+    goToPanel("Policy");
+    expect(screen.getByRole("button", { name: new RegExp(C.DEFAULT_TITLE) })).toHaveAttribute("aria-pressed", "true");
 
     // No launch, and no automatic check either, once the debounce has passed.
     preflightRunMock.mockClear();
@@ -306,6 +312,15 @@ describe("NewRunScreen — the default policy with two workspaces attached", () 
     });
     expect(createRunMock).not.toHaveBeenCalled();
     expect(preflightRunMock).not.toHaveBeenCalled();
+  });
+
+  it("coexists with the default-policy read failing: Retry stays and the hold stays", async () => {
+    getDefaultPolicyMock.mockRejectedValue(new Error("boom"));
+    await renderTwoAttachedOnDefault();
+    expect(await screen.findByText(C.DEFAULT_UNAVAILABLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(screen.getAllByText(SENTENCE)).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Launch run" })).toBeDisabled();
   });
 
   it("launches with the remaining workspace once the extra one is removed", async () => {

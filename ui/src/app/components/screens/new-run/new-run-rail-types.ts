@@ -83,6 +83,11 @@ export interface RunRailProps {
      *  same sentence a second time. Optional so every other caller (this
      *  type's only other use is new-run-screen.tsx) is unaffected. */
     workspaceUnavailable?: boolean;
+    /** The default or saved policy cannot carry the attached workspaces: an
+     *  ADDITIONAL disable whose sentence the Policy panel already shows beside
+     *  Check again (POLICY_HOLD_ID), so the rail names it as Launch's
+     *  description instead of repeating it. */
+    referenceHold?: boolean;
     /** #214: a settled probe reports this host can build no barrier at
      *  all — Launch disables for it (new-run-screen.tsx's own bit), and the
      *  rail states the reason here, beside Launch, with a route to the step
