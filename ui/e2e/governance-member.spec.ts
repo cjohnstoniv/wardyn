@@ -137,12 +137,13 @@ test.describe("governance — the member's own picker obeys the floor (T-9)", ()
     await navToRoute(page, "/runs/new");
 
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    // The barrier leads the Policy panel (#1922).
+    await goToNewRunPanel(page, "policy");
     await expect(page.getByText("Vault · set by your admin")).toBeVisible();
     // No control at all — not Fence/Wall disabled, not present. (The
     // authored-policy spec's OWN floor chip, unrelated to this governance
     // floor, legitimately renders "Fence" elsewhere on this page — the
     // radiogroup is what actually proves "no picker".)
-    await goToNewRunPanel(page, "policy");
     await expect(page.getByRole("radio", { name: "Fence" })).toHaveCount(0);
     await expect(page.getByRole("radio", { name: "Wall" })).toHaveCount(0);
     await expect(page.getByRole("radio", { name: "Vault" })).toHaveCount(0);
@@ -157,6 +158,7 @@ test.describe("governance — the member's own picker obeys the floor (T-9)", ()
     await navToRoute(page, "/runs/new");
 
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await goToNewRunPanel(page, "policy");
     // Review P2-6: the governance-sourced wording, not the generic one —
     // this member's floor IS the governance ceiling's doing.
     await expect(
@@ -165,7 +167,6 @@ test.describe("governance — the member's own picker obeys the floor (T-9)", ()
     // Never the false claim that Wall (the strongest tier this host DOES
     // have) is what the member gets.
     await expect(page.getByText("Wall · set by your admin")).toHaveCount(0);
-    await goToNewRunPanel(page, "policy");
     await expect(page.getByRole("radio", { name: "Wall" })).toHaveCount(0);
   });
 
