@@ -239,7 +239,7 @@
 |---|---|
 | `git_pat_narrowing_needs_broker` | the grant sets `repos`, `access` or `api` and `WARDYN_GIT_PAT_BROKER` is `off`: the PAT is resident in the sandbox |
 | `git_pat_narrowing_ssh_conflict` | the same policy holds an `ssh_key` for the same forge (`github.com` and `ssh.github.com` are one forge): SSH is a second push path the broker cannot see. Also refused when the policy is written |
-| `git_pat_narrowing_unsupported_host` | the host is served by a lane that does not read the axes: an Azure DevOps host or one the run's Azure DevOps gate covers, or the host of a forge the run is GitHub-brokered for |
+| `git_pat_narrowing_unsupported_host` | the host is served by a lane that does not read the axes. An Azure DevOps host or one the run's Azure DevOps gate covers, or the host of a forge the run is GitHub-brokered for |
 | `git_pat_api_forge_disabled` | the grant sets `api` for `bitbucket_server` and `WARDYN_GIT_PAT_API_BITBUCKET_SERVER` is off. Also refused (`400`) when the policy or a governance profile is written |
 
 
