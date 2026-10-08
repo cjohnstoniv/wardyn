@@ -65,6 +65,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   beside the Workspace picker, and the second now holds Launch. The "Per-person AWS sign-in" chip is
   removed, and the Hold option reads "Hold in Wardyn — tool calls wait for approval, by tool rule"
   with a link to the policy's tool rules (#1922).
+- New Run's Policy panel opens on the policy this run will get, read-only, as the server previews it
+  for the current draft, with Summary, YAML and JSON views. "Edit policy" opens a custom policy's
+  source and "Done editing" closes it; neither changes the draft. A saved or default policy is
+  read-only there, and "Customize for this run" copies it into a custom one, starting from a safe
+  policy when the reader's copy may have values removed. An edit keeps the last preview on screen,
+  marked out of date, until the next one arrives. A source that does not parse holds its structured
+  controls, sends no check, keeps the last preview marked out of date, and holds Launch with "The
+  policy spec isn't valid YAML or JSON." (was "The policy spec isn't valid JSON."). The source New Run
+  opens with is YAML. New Run's editor no longer shows the safety meter, the Fields list and its
+  Insert buttons, or the host-count chips; Policies keeps them. Under a saved or default policy the
+  Hold option's tool rules link lands on that read-only policy (#1922).
 
 ### Fixed
 
