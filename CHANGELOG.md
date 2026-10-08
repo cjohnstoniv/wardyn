@@ -81,6 +81,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   opens with is YAML. New Run's editor no longer shows the safety meter, the Fields list and its
   Insert buttons, or the host-count chips; Policies keeps them. Under a saved or default policy the
   Hold option's tool rules link lands on that read-only policy (#1922).
+- `docs/OPERATIONS.md`: the Network section ("Network: upstream proxy and egress redirects") is now
+  bullets, tables and callouts, and every file it names is a link. No fact, default, limit or step changed.
 
 ### Fixed
 
