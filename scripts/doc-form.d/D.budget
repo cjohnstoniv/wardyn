@@ -1,0 +1,2 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words, so growth fails.
+docs/DESKTOP.md=6994 share=35
