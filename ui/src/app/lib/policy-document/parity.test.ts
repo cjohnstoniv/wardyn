@@ -314,3 +314,34 @@ describe("escaped line breaks in double-quoted strings", () => {
     expect(parsePolicySource(source)).toEqual({ ok: true, value });
   });
 });
+
+// gopkg.in/yaml.v3 strips a byte order mark only at byte 0 and yaml here only
+// before the first content line: `<LF><BOM>a: 1` reads as {"a": 1} here and
+// {"<BOM>a": 1} there, and a doubled BOM the other way round.
+describe("byte order marks", () => {
+  const BOM = "Byte order mark inside the text: remove it, or write it as \\ufeff in a quoted string.";
+
+  it.each<[string, PolicySourceFormat, string, number, number]>([
+    ["one starting the second line", "yaml", "a: 1\n\ufeffb: 2", 2, 1],
+    ["one after a comment line", "yaml", "# c\n\ufeffa: 1", 2, 1],
+    ["a doubled leading one", "yaml", "\ufeff\ufeffa: 1", 1, 2],
+    ["one inside a plain value", "yaml", "a: x\ufeffy", 1, 5],
+    ["one inside a quoted value", "yaml", 'a: "x\ufeffy"', 1, 6],
+    ["one inside a JSON string", "json", '{"a": "x\ufeffy"}', 1, 9],
+  ])("refuses %s at the mark", (_, format, source, line, column) => {
+    expect(parsePolicySource(source, format)).toEqual({ ok: false, line, column, message: BOM });
+  });
+
+  it("accepts one leading mark and the escaped form", () => {
+    expect(parsePolicySource("\ufeffa: 1")).toEqual({ ok: true, value: { a: 1 } });
+    expect(parsePolicySource('a: "x\\ufeffy"')).toEqual({ ok: true, value: { a: "x\ufeffy" } });
+    expect(parsePolicySource('{"a": "x\\ufeffy"}', "json")).toEqual({ ok: true, value: { a: "x\ufeffy" } });
+  });
+
+  it.each<PolicySourceFormat>(["yaml", "json"])("never writes a raw mark from a %s edit", (format) => {
+    const edited = editPolicySource("\ufeffa: 1\n", ["b"], ["x\ufeffy", "\ufefflead"], format);
+    if (!edited.ok) throw new Error(edited.message);
+    expect(edited.source.slice(1)).not.toMatch(/\ufeff/);
+    expect(parsePolicySource(edited.source, format)).toEqual({ ok: true, value: { a: 1, b: ["x\ufeffy", "\ufefflead"] } });
+  });
+});

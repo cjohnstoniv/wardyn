@@ -95,11 +95,12 @@ function isYamlContainer(v: unknown): boolean {
 // drops underscores first, so +_1 is a number there). Uses JSON string quoting for
 // the quoted form, plus YAML's escapes for U+0085, U+2028 and U+2029, which JSON
 // leaves raw and the CLI's YAML reader (gopkg.in/yaml.v3) takes as line breaks even
-// inside quotes. One expression on purpose: this module ships in the size-budgeted
-// entry chunk.
+// inside quotes, and for a byte order mark, which the readers keep in different
+// places. One expression on purpose: this module ships in the size-budgeted entry
+// chunk.
 function yamlScalar(s: string): string {
-  return /^$|[\0-\b\n-\x1f\x85\u2028\u2029:#[\]{}",&*!|>'%@`]|^[\s?-]|\s$|^(true|false|null|yes|no|on|off|~)$|^\+?[\d._]/i.test(s)
-    ? JSON.stringify(s).replace(/\x85/g, "\\N").replace(/\u2028/g, "\\L").replace(/\u2029/g, "\\P")
+  return /^$|[\0-\b\n-\x1f\x85\u2028\u2029\ufeff:#[\]{}",&*!|>'%@`]|^[\s?-]|\s$|^(true|false|null|yes|no|on|off|~)$|^\+?[\d._]/i.test(s)
+    ? JSON.stringify(s).replace(/\x85/g, "\\N").replace(/\u2028/g, "\\L").replace(/\u2029/g, "\\P").replace(/\ufeff/g, "\\ufeff")
     : s;
 }
 

@@ -52,6 +52,10 @@ const TOO_DEEP = "Policy source is nested too deeply.";
 
 function unreadable(source: string): PolicySourceError | undefined {
   if (source.length > MAX_SOURCE_LENGTH) return { ok: false, line: 1, column: 1, message: "Policy source is too large." };
+  // gopkg.in/yaml.v3 strips a byte order mark only at byte 0, yaml here only
+  // before the first content line; anywhere else they read the text differently.
+  const bom = source.indexOf("\ufeff", 1);
+  if (bom > 0) return located(source, bom, "Byte order mark inside the text: remove it, or write it as \\ufeff in a quoted string.");
   return strayBreak(source);
 }
 
@@ -97,9 +101,10 @@ function structureProblem(tokens: readonly CST.Token[], source: string): [number
   return undefined;
 }
 
-// Written text must never hold those characters raw; only quoted strings can.
+// Written text must never hold those characters, or a byte order mark past
+// byte 0, raw; only quoted strings can escape them.
 function escapeBreaks(text: string): string {
-  return text.replace(/[\x85\u2028\u2029]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  return text.replace(/[\x85\u2028\u2029\ufeff]/g, (char, at: number) => (at ? `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}` : char));
 }
 
 function safeNumber(value: number): boolean {
@@ -334,12 +339,13 @@ export function editPolicySource(
       parsed.document.setIn(path, next);
     }
     // Authored text already passed readSource, so only new strings can hold a
-    // CR or a character that must be escaped, or be ambiguous when plain; only
+    // CR, a byte order mark or a character that must be escaped, or be
+    // ambiguous when plain; only
     // double quotes keep them exact (a block scalar would turn CRLF into LF).
     visit(parsed.document, {
       Scalar(_, node) {
         if (typeof node.value !== "string") return;
-        if (/[\r\x85\u2028\u2029]/.test(node.value) || ((node.type ?? "PLAIN") === "PLAIN" && ambiguousString(node.value))) {
+        if (/[\r\x85\u2028\u2029\ufeff]/.test(node.value) || ((node.type ?? "PLAIN") === "PLAIN" && ambiguousString(node.value))) {
           node.type = "QUOTE_DOUBLE";
         }
       },

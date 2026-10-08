@@ -82,6 +82,12 @@ describe("toYaml", () => {
     expect(yaml).not.toMatch(/[\x85\u2028\u2029]/);
   });
 
+  // Both readers keep a byte order mark only at byte 0 and disagree elsewhere,
+  // so a raw one is refused; JSON leaves it unescaped.
+  it("quotes and escapes a byte order mark", () => {
+    expect(toYaml({ a: "x\ufeffy", "\ufeffk": 1 })).toBe(['a: "x\\ufeffy"', '"\\ufeffk": 1'].join("\n"));
+  });
+
   // YAML allows an implicit key at most 1024 characters before its colon.
   it("writes a key longer than 1024 characters in the explicit form", () => {
     const key = "k".repeat(1025);

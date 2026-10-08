@@ -346,5 +346,44 @@
   "cli": {
    "a": "x\ny"
   }
+ },
+ {
+  "name": "a byte order mark at byte 0",
+  "source": "\ufeffa: 1\n",
+  "console": {
+   "value": {
+    "a": 1
+   }
+  }
+ },
+ {
+  "name": "a byte order mark as the console's YAML view writes it",
+  "emitted": true,
+  "source": "a: \"x\\ufeffy\"",
+  "console": {
+   "value": {
+    "a": "x\ufeffy"
+   }
+  }
+ },
+ {
+  "name": "a byte order mark starting a later line",
+  "source": "\n\ufeffa: 1\n",
+  "console": {
+   "error": "Byte order mark inside the text: remove it, or write it as \\ufeff in a quoted string."
+  },
+  "cli": {
+   "\ufeffa": 1
+  }
+ },
+ {
+  "name": "a doubled leading byte order mark",
+  "source": "\ufeff\ufeffa: 1\n",
+  "console": {
+   "error": "Byte order mark inside the text: remove it, or write it as \\ufeff in a quoted string."
+  },
+  "cli": {
+   "a": 1
+  }
  }
 ]
