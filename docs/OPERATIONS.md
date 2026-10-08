@@ -3215,7 +3215,10 @@ page.
   - It is scoped to that demotion — a promotion, an unrelated value, and a member-stamped credential naming the same group are all left alone.
   - A token whose group snapshot is missing or partial cannot be re-derived, so an elevated stamp in that state is revoked rather than assumed safe.
 - **A token carries its holder's user type too** (`api_tokens.user_type`, stamped at mint and re-stamped with the role at the next sign-in), and a type change made on the People page revokes rather than waits.
-  - When a role-mapping write or delete changes the user type a value derives, Wardyn revokes every live token still carrying the old type that names the value (by principal, email or group) or whose group snapshot is missing or partial, and counts them in the same `tokens_revoked`.
+  - When a role-mapping write or delete changes the user type a value derives, Wardyn revokes every live token:
+    - still carrying the old type that names the value (by principal, email or group), or
+    - whose group snapshot is missing or partial.
+  - It counts them in the same `tokens_revoked`.
   - On the first type assignment to a value that derived Standard user before, that last arm is every Standard-user token whose snapshot is missing or partial.
   - That is every token minted before 0.7 whose holder has not signed in since, and every truncated-snapshot token, whether or not its holder has anything to do with the value.
   - `stale_token_snapshots` counts only the tokens that name the value, so `tokens_revoked` can exceed it.
@@ -3223,7 +3226,8 @@ page.
   - A type change made in `WARDYN_OIDC_ROLE_MAP` has no People-page edit to act on, so it reaches a token only at its holder's next sign-in — revoke explicitly when that is too late.
   - A user type a live token still carries cannot be deleted (`409`, naming the count).
   - The type arm only compares the edited value's own before/after type against a token's stamp.
-  - So a holder whose effective type shifts because a different, higher-priority group is the one actually edited — or because the edited value's own prior derivation was empty rather than `standard` — keeps a stale stamp until that holder's next sign-in or an explicit revoke, the same as a `WARDYN_OIDC_ROLE_MAP` edit above.
+  - So consider a holder whose effective type shifts because a different, higher-priority group is the one actually edited — or because the edited value's own prior derivation was empty rather than `standard`.
+  - That holder keeps a stale stamp until that holder's next sign-in or an explicit revoke, the same as a `WARDYN_OIDC_ROLE_MAP` edit above.
 - That matters most for the tier 0.7 added.
   - A human demoted out of `security_admin` keeps, through any token they minted while they held it, exactly what the tier governs:
     - profile authoring and assignment, capability-grant writes, session and token revocation, escalated approval decisions on anyone's run, workspace `approved-egress`/`denied-egress` writes, and audit-chain verify.
@@ -3403,7 +3407,9 @@ subject_token_type=urn:ietf:params:oauth:token-type:access_token   (or …:id_to
   - Security admins author and assign **governance profiles** (named ceilings bound to users or groups), write the org allow/denylists (capability grants).
   - They decide escalated approvals — egress, credential, tool — on anyone's run.
   - They revoke sessions and API tokens, and verify the audit chain.
-  - They can also **stop** any run in the deployment — killing a foreign run is incident response, and the most time-critical thing this tier does — which is deliberately *not* the same as reaching INTO one:
+  - They can also **stop** any run in the deployment.
+  - Killing a foreign run is incident response, and the most time-critical thing this tier does.
+  - It is a stop, which is deliberately *not* the same as reaching INTO one:
     - no attach ticket, no shell, no credential material, no host.
   - Inspect-or-stop is the whole of that warrant.
   - (The batch form, the sandbox sweep, stays admin-only: it drives the container runtime across every run at once, which is host reach rather than run reach.)
@@ -3453,7 +3459,10 @@ subject_token_type=urn:ietf:params:oauth:token-type:access_token   (or …:id_to
   - An overlay lists only the fields it narrows.
   - An absent field inherits the base unchanged, and a present empty list is a value (`allowed_domains: []` narrows to no domains, `allowed_methods: []` is refused because it would mean every method).
   - The write is strict.
-  - An overlay that names something its base does not permit (a domain the base's `allowed_domains` does not cover under the proxy's own matcher, a method the base excludes, `allow_all_egress` on a base without it, a grant the base's grants do not dominate) is `400 governance_overlay_invalid`, and so is an overlay whose meet with the base would be empty rather than narrow.
+  - Take an overlay that names something its base does not permit:
+    - a domain the base's `allowed_domains` does not cover under the proxy's own matcher, a method the base excludes,
+    - `allow_all_egress` on a base without it, a grant the base's grants do not dominate.
+  - Such an overlay is `400 governance_overlay_invalid`, and so is an overlay whose meet with the base would be empty rather than narrow.
   - A `PUT` that omits `base_profile_id`, `overlay`, `overlay_limits` or `contact` keeps the stored value, so an older client cannot flatten a profile by accident.
   - Only an explicit `null` clears one, and `overlay: null` turns the profile back into a standalone one (the request must then carry a valid `ceiling`).
 - *Resolution, and what the meet does.*
@@ -3642,7 +3651,9 @@ A deployment that hits BOTH conditions (no role map, no admin list, AND `WARDYN_
 - Three of the reasons below are NOT member denials at all.
   - 0.7.4 added a RUN-TOKEN tier (`run_terminal`, `run_not_found`; 0.8 adds `run_kept`), raised by `internalAuth`'s liveness gate against a sandbox sidecar's own run token rather than against a person.
   - They live in this table because the action, the shape and the `reason` field are the same one an operator greps; the `actor_type` (`agent`) is what tells them apart.
-- One FIELD rides beside the reason since 0.7.4: `user_view: true` (renamed in 0.8 from `member_mode` — see [Renamed in 0.8](#renamed-in-08); pre-0.8 rows keep `member_mode`), on every ADMIN-TIER `403` below — the two `requireOperator` / `requireSecurityOperator` chokepoints and the in-handler refusals that raise the same two reasons — when the refused caller is an admin exercising [the User view](operations/member-mode.md).
+- One FIELD rides beside the reason since 0.7.4: `user_view: true` (renamed in 0.8 from `member_mode` — see [Renamed in 0.8](#renamed-in-08); pre-0.8 rows keep `member_mode`).
+  - It is on every ADMIN-TIER `403` below: the two `requireOperator` / `requireSecurityOperator` chokepoints and the in-handler refusals that raise the same two reasons.
+  - It is set when the refused caller is an admin exercising [the User view](operations/member-mode.md).
   - It is a marker, not a reason — the `reason`, the status code and the body are unchanged, and the key is absent entirely for an ordinary member.
   - A burst of denials carrying it is an admin walking the member path, not an incident.
 - **A ceiling refusal names the policy that caused it.**
