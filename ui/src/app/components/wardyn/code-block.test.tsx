@@ -57,6 +57,14 @@ describe("toYaml", () => {
     );
   });
 
+  // gopkg.in/yaml.v3 drops underscores before reading a number, so a plain
+  // +_1 is 1 to the CLI.
+  it("quotes strings starting with an underscore after an optional plus", () => {
+    expect(toYaml({ a: "+_1", b: "_1", c: ["+__1e3", "+_0x1F"], "+_.5": 1 })).toBe(
+      ['a: "+_1"', 'b: "_1"', "c:", '  - "+__1e3"', '  - "+_0x1F"', '"+_.5": 1'].join("\n"),
+    );
+  });
+
   it("keeps a tab inside a value and ordinary keys unquoted", () => {
     expect(toYaml({ pattern: "echo\tone", "x-api-key": "a b", "acme/one": 1 })).toBe(
       "pattern: echo\tone\nx-api-key: a b\nacme/one: 1",

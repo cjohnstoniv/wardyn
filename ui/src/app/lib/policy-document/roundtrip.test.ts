@@ -35,7 +35,7 @@ const STRINGS = [
   "? a", "?a", "'single'", '"double"', "it's", 'say "hi"', "back\\slash", "\\n", "[a]", "{a}", "a,b", "&a", "*a", "!a",
   "|", ">", "%a", "@a", "`a`", "<<", "=", "a=b", "true", "True", "TRUE", "false", "null", "Null", "NULL", "~", "yes",
   "No", "on", "OFF", "y", "n", "0", "-1", "+1", "017", "0o17", "0x1f", "1e3", "1.5", ".5", "1_000", "1:30",
-  "2000-10-07", "2001-12-14 21:59:43.10 -5", ".nan", ".NaN", ".inf", "-.inf", "+.Inf", "NaN", "Infinity", "---", "...",
+  "2000-10-07", "2001-12-14 21:59:43.10 -5", "+_1", "+_.5", "+__1e3", "+_0x1F", "_1", "-_1", ".nan", ".NaN", ".inf", "-.inf", "+.Inf", "NaN", "Infinity", "---", "...",
   "--- a", "%YAML 1.1", "!!binary aGk=", "*missing", "&anchor x", "key: [flow, {a: b}]", "# comment", "a\n# b\n- c\n",
   "https://github.com/acme/one", "*.githubusercontent.com", "Bearer %s", "rm\\s+-rf\\b", "api.anthropic.com",
   "__proto__", "constructor", "x".repeat(1024), "x".repeat(1025), "\n".repeat(600),

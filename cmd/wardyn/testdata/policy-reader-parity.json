@@ -259,5 +259,25 @@
     "api.example.com:"
    ]
   }
+ },
+ {
+  "name": "a +_ string as the console's YAML view writes it",
+  "emitted": true,
+  "source": "pattern: \"+_1\"",
+  "console": {
+   "value": {
+    "pattern": "+_1"
+   }
+  }
+ },
+ {
+  "name": "a plain +_ number-like string",
+  "source": "pattern: +_1\n",
+  "console": {
+   "error": "Ambiguous unquoted value: quote it."
+  },
+  "cli": {
+   "pattern": 1
+  }
  }
 ]
