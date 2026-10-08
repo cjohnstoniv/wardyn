@@ -85,6 +85,11 @@
     "sentence": "\"you are not granted agent \" + req.Agent + \" — ask an admin to grant it, or launch one you hold\""
   },
   {
+    "reason": "capKinds[capComponent].reason",
+    "target": "\"runs.component\"",
+    "sentence": "\"This component isn't available to you. Ask your admin.\""
+  },
+  {
     "reason": "capKinds[capFeature].reason",
     "target": "\"me.ssh_keys\"",
     "sentence": "sshKeyFeatureRefusal"
@@ -93,6 +98,11 @@
     "reason": "capKinds[capFeature].reason",
     "target": "\"me.tokens\"",
     "sentence": "apiTokenFeatureRefusal"
+  },
+  {
+    "reason": "capKinds[capFeature].reason",
+    "target": "\"runs.component\"",
+    "sentence": "\"Custom components aren't turned on for you. Ask your admin.\""
   },
   {
     "reason": "capKinds[capPolicy].reason",

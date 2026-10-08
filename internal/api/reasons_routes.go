@@ -68,7 +68,7 @@ const (
 	reasonOwnerProfileUnreadable = "profile_unreadable" // the owner's captured governance profile could not be read back
 	reasonOwnerProfileGone       = "profile_gone"       // the governance profile captured at launch no longer exists
 	// reasonOwnerCapability* names the launch door persistedLaunchDoors found
-	// closed: the SAME five capability kinds capabilities.go's own cap* consts
+	// closed: the SAME six capability kinds capabilities.go's own cap* consts
 	// enumerate, so the reason names the kind rather than repeating a run's
 	// specific agent/workspace/policy id (never on the wire).
 	reasonOwnerCapabilityAgent             = "capability_agent"
@@ -76,8 +76,9 @@ const (
 	reasonOwnerCapabilityModelProvider     = "capability_model_provider"
 	reasonOwnerCapabilityPolicy            = "capability_policy"
 	reasonOwnerCapabilityWorkspaceProvider = "capability_workspace_provider"
+	reasonOwnerCapabilityComponent         = "capability_component"
 	// reasonOwnerCapabilityUnknown is defensive only: capabilityLostReason's
-	// (run_owner_authority.go) fallback for a capability kind outside the five
+	// (run_owner_authority.go) fallback for a capability kind outside the six
 	// above, which persistedLaunchDoors cannot produce today.
 	reasonOwnerCapabilityUnknown     = "capability_unknown"
 	reasonOwnerModelCredentialErased = "model_credential_erased" // the secret this run's proxy would inject no longer exists

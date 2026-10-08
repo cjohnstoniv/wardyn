@@ -30,6 +30,7 @@ const (
 	ReasonCapabilityWorkspace            Reason = "capability_workspace"
 	ReasonCapabilityWorkspaceProvider    Reason = "capability_workspace_provider"
 	ReasonCapabilityModelProvider        Reason = "capability_model_provider"
+	ReasonCapabilityComponent            Reason = "capability_component"
 	ReasonGovernanceProfile              Reason = "governance_profile"
 	ReasonGovernanceOverlayUnsatisfiable Reason = "governance_overlay_unsatisfiable"
 	ReasonGrantPairingNotEligible        Reason = "grant_pairing_not_eligible"
@@ -128,6 +129,7 @@ var refusals = map[Reason]Refusal{
 	ReasonCapabilityWorkspace:            {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityWorkspaceProvider:    {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityModelProvider:        {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityComponent:            {Effect: EffectDeny, Audit: true},
 	ReasonGovernanceProfile:              {Effect: EffectDeny, Audit: true},
 	ReasonGovernanceOverlayUnsatisfiable: {Effect: EffectDeny, Audit: true},
 	ReasonGrantPairingNotEligible:        {Effect: EffectDeny, Audit: true},

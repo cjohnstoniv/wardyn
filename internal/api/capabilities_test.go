@@ -721,7 +721,7 @@ func TestCapabilitySubjectsStaleSnapshot(t *testing.T) {
 // devcontainer_repo, which is deliberately NOT a capability: it executes
 // attacker-authored build config and stays unconditionally admin-only.
 func TestCapabilityKindsAreTheClosedSet(t *testing.T) {
-	want := []string{"egress_host", "secret", "workspace", "image", "agent", "workspace_provider", "model_provider", "feature", "policy"}
+	want := []string{"egress_host", "secret", "workspace", "image", "agent", "workspace_provider", "model_provider", "feature", "policy", "component"}
 	if !slices.Equal(capabilityKinds, want) {
 		t.Errorf("capabilityKinds = %v, want %v (and ui/src/app/lib/permissions-copy.ts must match)", capabilityKinds, want)
 	}

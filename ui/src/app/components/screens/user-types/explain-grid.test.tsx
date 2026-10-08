@@ -105,7 +105,7 @@ beforeEach(() => {
 });
 
 describe("ExplainGrid — the request", () => {
-  it("asks for the type by its id, across main's nine kinds in order", async () => {
+  it("asks for the type by its id, across main's ten kinds in order", async () => {
     answer([]);
     renderGrid();
     await screen.findByTestId("explain-grid");
@@ -119,6 +119,7 @@ describe("ExplainGrid — the request", () => {
       "model_provider",
       "feature",
       "policy",
+      "component",
     ]);
   });
 

@@ -23,7 +23,7 @@
 // The closed set, in the order the admin screen renders them. Mirrors the Go
 // slice in internal/api/capabilities.go — a new kind is a Go constant plus a
 // row here, no DDL.
-export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image", "agent", "workspace_provider", "model_provider", "feature", "policy"] as const;
+export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image", "agent", "workspace_provider", "model_provider", "feature", "policy", "component"] as const;
 export type CapabilityKind = (typeof CAPABILITY_KINDS)[number];
 
 // Whether granting this kind takes power away from members ("narrows" — the
@@ -149,6 +149,19 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
     unenforced: "Members can select any stored policy for a run they launch.",
     enforced:
       "A member can only select policies granted to them. A run naming another one is refused at launch, with the reason. A run with no policy is never refused for it.",
+    direction: "narrows",
+  },
+  // Org components (0.8.9). Every org component is "Available to: nobody" from
+  // its create, so an allow must name its id — a * allow reaches none of them.
+  // Draft wording until the component catalog's mock round settles it.
+  component: {
+    label: "Components",
+    blurb: "Which org components a member may add to a run of their own.",
+    valueLabel: "Component",
+    valueHint: "The component's id. An allow must name one; use * only to deny every component.",
+    unenforced:
+      "Members can add an org component once it is available to them. A new one is available to nobody until you add people.",
+    enforced: "A member can only add org components granted to them by id. A run naming another one is refused at launch.",
     direction: "narrows",
   },
 };

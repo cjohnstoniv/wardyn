@@ -660,7 +660,8 @@ func ownerSessionAs(t *testing.T) *http.Cookie {
 // yields exactly the re-checked kinds.
 func TestPersistedDoorsClassifyEveryKind(t *testing.T) {
 	rechecked := []string{capAgent, capWorkspace, capWorkspaceProvider, capModelProvider, capPolicy}
-	unrecoverable := []string{capImage}
+	// capComponent: the run row records no component ids yet (no run_components).
+	unrecoverable := []string{capImage, capComponent}
 	notALaunchDoor := []string{capEgressHost, capSecret, capFeature}
 	for _, kind := range capabilityKinds {
 		n := 0
