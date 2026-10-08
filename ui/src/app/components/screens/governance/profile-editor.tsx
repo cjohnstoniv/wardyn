@@ -40,7 +40,7 @@ import { CC_META } from "../../wardyn/cc-meta";
 import { FIELD_HELP } from "../../wardyn/policy-field-help";
 import { Field, fieldHintId, Switch } from "../../wardyn/form-primitives";
 import { PolicyPanel, minimalSpec, parseSpec } from "../../wardyn/policy-panel";
-import { Segmented } from "../permissions";
+import { Segmented } from "../../wardyn/segmented";
 import { Note, withMono } from "./display";
 import {
   asOverlay,

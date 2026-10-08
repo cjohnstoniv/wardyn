@@ -55,9 +55,9 @@ import { SubmittedNote } from "./governance/submitted-note";
 import { PageHeader } from "../wardyn/page-header";
 import { PreviewAsNewUser } from "../wardyn/user-preview";
 import { Chip } from "../wardyn/primitives";
+import { Segmented } from "../wardyn/segmented";
 import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
-import { UNSAVED } from "../../lib/unsaved-copy";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { useUserTypeName, useUserTypes } from "../../lib/use-user-types";
 
@@ -68,9 +68,9 @@ const ADMIN_TOKEN_PRINCIPAL = "admin-token";
 // The subject-type segments, in the order the add form offers them, paired with
 // the hint each one puts under the Who field.
 //
-// Exported, with SUBJECT_LABEL and subjectText below, for the SAME reason
-// Segmented is: the governance assignments block and the drive allocations
-// block author a subject with this exact vocabulary, and three copies of it is
+// Exported, with SUBJECT_LABEL and subjectText below, because the governance
+// assignments block and the drive allocations block author a subject with this
+// exact vocabulary (through wardyn/segmented.tsx), and three copies of it is
 // how a capability grant, a profile assignment and an allocation start
 // disagreeing about what "Everyone signed in" means. ONE home, beside the
 // control that renders it.
@@ -92,7 +92,7 @@ export const SUBJECTS: { value: PickableSubjectType; label: string; hint: string
 // The "Who" input for a user_type subject — a closed <Select> of the org's
 // types, never free text: a type is a bounded, admin-authored set (unlike a
 // user or a group, which the directory search assists but never enumerates).
-// Exported for the SAME reason Segmented/SUBJECTS are: the governance
+// Exported for the SAME reason SUBJECTS is: the governance
 // assignments block and the drive allocations block need this exact control
 // too, and a third hand-rolled copy is how the three forms disagree about
 // what picking "a user type" looks like.
@@ -188,66 +188,6 @@ function Note({
     >
       {children}
     </p>
-  );
-}
-
-// A two- or three-way segmented picker. Buttons with aria-pressed, not tabs and
-// not a Select: these are form choices, they are all visible at once in the
-// mock, and a plain button is the one control that stays clickable in both the
-// vitest and Playwright harnesses without a pointer-events dance.
-// Exported: the People step's role-mappings add form (access-panel.tsx) reuses
-// this exact idiom for its Admin/Member picker per the mock's own note ("per
-// the /permissions idiom") rather than a second near-identical component.
-export function Segmented<T extends string>({
-  value,
-  options,
-  onChange,
-  disabled,
-}: {
-  value: T;
-  options: {
-    value: T;
-    label: string;
-    /** #460 — this option's own draft differs from what loaded; renders the
-     *  dirty chip beside its label, the tab's own "title". Optional: only
-     *  providers-screen.tsx's Git/Storage/Agents options set it today. */
-    dirty?: boolean;
-  }[];
-  onChange: (v: T) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="inline-flex w-fit overflow-hidden rounded-lg border border-border-strong">
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          aria-pressed={value === o.value}
-          disabled={disabled}
-          onClick={() => onChange(o.value)}
-          className={cn(
-            "flex items-center gap-1.5 border-l border-border px-3 py-1.5 text-xs transition-colors first:border-l-0 disabled:cursor-not-allowed disabled:opacity-50",
-            value === o.value
-              ? o.value === "deny"
-                ? "bg-danger-subtle font-medium text-danger"
-                : "bg-muted font-medium text-foreground"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {o.label}
-          {/* aria-hidden: the chip is a VISUAL echo of a fact already
-              announced elsewhere (the PageHeader chip, the beside-Save
-              marker) — folding its text into this button's accessible name
-              would silently break every exact-string `getByRole(...,
-              {name: o.label})` lookup the moment the tab it names is dirty. */}
-          {o.dirty && (
-            <span aria-hidden="true" data-testid={`tab-dirty-chip-${o.value}`}>
-              <Chip tone="warning">{UNSAVED.DIRTY_CHIP}</Chip>
-            </span>
-          )}
-        </button>
-      ))}
-    </div>
   );
 }
 
