@@ -300,6 +300,11 @@ export interface RunPolicySpec {
   // Omitted keeps the row's default. Authored via ADOCapabilitiesSection
   // (policy-ado-capabilities.tsx) beside the raw JSON.
   azure_devops_capabilities?: string[];
+  // azure_devops_capabilities' GitHub twin (mirrors Go's
+  // RunPolicySpec.GitHubCapabilities): this run's GitHub capabilities in place
+  // of the GitHub provider row's default_profile, within its capability_ceiling.
+  // Omitted keeps the row's default. No GitHub lane reads it yet.
+  github_capabilities?: string[];
 }
 
 export interface RunPolicy {
