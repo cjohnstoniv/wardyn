@@ -217,6 +217,16 @@ export const FIELD_HELP = [
 ];
 DOC
 stage
+# Group A has a floor: a tree with no "--" anchor link checks nothing there.
+out="$(cd "$TMP" && ./scripts/check-doc-links.sh --selftest 2>&1 || true)"
+if (cd "$TMP" && ./scripts/check-doc-links.sh --selftest >/dev/null 2>&1); then
+  fail "the self-test must FAIL when it finds no double-dash anchor: $out"
+fi
+grep -qF "at least one double-dash anchor is checked" <<<"$out" ||
+  fail "the self-test must name its empty group A: $out"
+echo "ok  the self-test fails when group A checks no anchor"
+echo '[rules](POLICIES.md#push_rules--pushrulesspec)' > "$TMP/docs/uses-anchor.md"
+stage
 (cd "$TMP" && ./scripts/check-doc-links.sh --selftest >/dev/null 2>&1) || fail "the self-test must PASS on a correct slugger: $(cd "$TMP" && ./scripts/check-doc-links.sh --selftest 2>&1 | head -5)"
 echo "ok  the self-test passes with a GitHub slugger"
 sed -i "s/    return ''.join(keep)\$/    return ''.join(keep).replace('--', '-')/" "$TMP/scripts/check-doc-links.sh"

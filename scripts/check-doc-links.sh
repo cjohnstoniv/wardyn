@@ -27,7 +27,8 @@
 # headings, or an id=/name= attribute in its raw HTML.
 #
 # The slugger is GitHub's (github-slugger): lowercase the heading's rendered
-# text; keep letters, marks, numbers, '_' and '-'; drop everything else;
+# text; keep letters, marks, decimal digits, letter numbers (Nl), '_' and
+# '-'; drop everything else, other numbers (No: ², ½) included;
 # spaces become '-'. NOTHING is collapsed or trimmed, so "A — B" is "a--b" and
 # a heading that ends in a dash keeps it. A repeated slug gains -1, -2, ...
 # Backticks and '*' emphasis are removed; so is '_' emphasis around a whole
@@ -149,7 +150,10 @@ def slug_base(text):
     keep = []
     for ch in heading_plain(text).lower():
         cat = unicodedata.category(ch)
-        if cat[0] in 'LMN' or ch in '_- ':
+        # Letters, marks (U+FE0F included), decimal digits and letter
+        # numbers (Nl: Roman numerals). Other numbers (No: ², ½) are
+        # stripped, as github-slugger's character ranges strip them.
+        if cat[0] in 'LM' or cat in ('Nd', 'Nl') or ch in '_- ':
             keep.append('-' if ch == ' ' else ch)
     return ''.join(keep)
 
@@ -468,6 +472,9 @@ def selftest():
         ok = dest in fileset and frag in get_doc(dest).anchors
         check('A', f'{src}:{line} -> {dest}#{frag}', ok)
     group_a = len(anchors)
+    # Floor: a tree where no "--" anchor is found means the scan above saw
+    # nothing, not that every anchor is right.
+    check('A', 'at least one double-dash anchor is checked', group_a > 0, '(found 0)')
 
     # B. The `doc:` values the console's policy-field help links to.
     group_b = 0
@@ -506,6 +513,9 @@ def selftest():
         ('HTTP/2 & TLS 1.3?', 'http2--tls-13'),
         ('A [link](x.md) here', 'a-link-here'),
         ('`_keep_` this', '_keep_-this'),
+        ('x² squared ½ cup', 'x-squared--cup'),
+        ('Chapter Ⅻ', 'chapter-ⅻ'),
+        ('⚠️ Daemon trust', '\ufe0f-daemon-trust'),
     ]
     for text, want in cases:
         got = slug_base(text)
