@@ -235,11 +235,10 @@ coverage verdict pointing back into this document.
 | **B3 — Sandbox vs. MCP/tool gateway** | 🟡 **partial (L3)** | The per-tool-call decision plane ships; tool-call egress interception is planned: [detail](#b3--sandbox-vs-mcptool-gateway). |
 | **B4 — Agent-run identity vs. token broker** | 🟢 shipped | SVID-authenticated; the broker is the only thing that can turn an identity and an approval into a credential. |
 | **B5 — Approval gate vs. credential issuance** | 🟢 shipped | Novel coupling: a high-risk action's approval is what mints the scoped token. No prior art; threat-modeled fresh in §4. |
-| **B6 — Runner data plane vs. control plane** | 🟡 partial | **Transport: TLS with a pinned CA [v0.7.12 shipped].** Every proxy→control-plane call — the credential resolve (`GET /api/v1/internal/injection/{grant}`, the one API that returns a secret VALUE), mints, token renewal, decisions, approvals, uploads — rides wardynd's proxy-facing TLS listener (`WARDYN_INTERNAL_LISTEN`), and the proxy trusts only wardynd's own internal CA for it (`internal/hoptls`: minted on first boot into the secret store as `wardyn-internal-ca`, handed to each proxy in its sealed config; never the system roots, never `WARDYN_TRUSTED_CA_FILE`). `http://` is refused at wardynd boot and at proxy start unless the URL's host is loopback (`hoptls.CheckURL`). **Authentication: bearer, not mTLS.** A per-run token (minted by the embedded identity provider, verified via `internalAuth`) authenticates the proxy; mTLS via X.509-SVID is **[planned, arrives with SPIRE]**. So the pinned CA authenticates the server to the proxy, and the bearer the proxy to the server. `wardyn-tetragon-ingest` rides the same listener under the same rule [0.8]: its audit-write-only bearer (`aud=wardyn-groundtruth`) goes to `https://wardynd:8443`, pinned to the internal CA, whose public certificate wardynd publishes beside `WARDYN_GROUNDTRUTH_TOKEN_FILE`; the ingest refuses a non-loopback `http://` URL and an `https://` URL with no CA file (`controlPlaneClient`). The chart grants the runs namespace the internal port only, never `http`. Whenever the internal listener runs, the console listener refuses `/api/v1/internal/*` with a 404 (`api.Server.Handler`) [0.8], so the pinned hop is the only way in and a bearer sent to the console is never honoured. **Residuals:** no current-version component sends a bearer to wardynd in plaintext on a non-loopback install. A caller misconfigured onto the console listener (or a pre-0.7.12 compose run still in flight after an upgrade) still puts its bearer on that wire before the 404; it is refused, not prevented. A loopback-only local install has no internal listener and serves the surface on the console. Whoever can read wardynd's secret store with its age key holds the CA key, the same custody as the signing key. A compromised runner is assumed; the control plane never trusts runner-asserted identity claims. |
+| **B6 — Runner data plane vs. control plane** | 🟡 partial | TLS with a pinned CA and a per-run bearer, not mTLS: [detail](#b6--runner-data-plane-vs-control-plane). |
 | **B7 — Control plane vs. SIEM/customer** | 🟢 shipped | Outbound-only export (OTLP/HEC/syslog); no inbound trust. |
-| **B8 — Untrusted build container vs. host daemon + registry** | 🟢 shipped | The devcontainer build / BYOI wrap (`internal/envbuild`) runs on the HOST Docker daemon, before any confinement tier exists. Capped (CapDrop ALL, resource limits) but not sandboxed by a Confinement Class and not behind `wardyn-proxy`. |
-| | | Reaches only `WARDYN_ENVBUILD_BUILD_NETWORK` (compose default: the dedicated `${WARDYN_NS:-wardyn}-envbuild` bridge (`WARDYN_ENVBUILD_BUILD_NETWORK` in [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)); bare-binary and host mode default to `none` (`effectiveBuildNetwork`, [`internal/envbuild/builder.go`](../internal/envbuild/builder.go)); never `host`, which stays a warned-against override) plus the layer-cache registry, which is multi-homed and unauthenticated (the `registry` service in [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)). Residual #13. |
-| **B9 — SSH gateway pre-auth listener vs. everything else** | 🟢 **[v0.5+ shipped]** | An anonymous-until-authenticated TCP listener (`WARDYN_SSH_LISTEN`). The DAEMON default is off — no var set, no listener, no host key generated — but **two shipped deployments turn it on for every install**: the one-line installer writes `WARDYN_SSH_LISTEN=:2222` into every `.env` it creates *and backfills it on upgrade*, and the desktop envelope ships it on. So this boundary is live on every managed laptop and every `curl … \| sh` box, bound to loopback by the compose host-port publish (`127.0.0.1:2222`) rather than left unexposed. Registered-public-key-only auth; the trust root is the `ssh_public_keys` registry a human writes via self-service `/api/v1/me/ssh-keys`, so this boundary is exactly as strong as that registration step and the pre-auth DoS bounds (§4). Once authenticated, a session is bounded by owner-or-admin authorization (residual #15) and runs entirely inside B1: shell/exec/sftp/`-L` are bridged into the EXISTING sandbox via the same `Runner.Attach`/`ExecStream` calls the browser terminal uses. A new front door, not a new back door. |
+| **B8 — Untrusted build container vs. host daemon + registry** | 🟢 shipped | The image build runs on the host daemon before any confinement tier: [detail](#b8--untrusted-build-container-vs-host-daemon--registry). |
+| **B9 — SSH gateway pre-auth listener vs. everything else** | 🟢 **[v0.5+ shipped]** | Off in the daemon by default, on in the one-line installer and the desktop envelope: [detail](#b9--ssh-gateway-pre-auth-listener-vs-everything-else). |
 | **B10 — UI-sandbox gateway origin vs. the console origin** | 🟢 **[v0.6 shipped]** | A second HTTP listener (`WARDYN_UI_SANDBOX_LISTEN`, off by default — no var set, no listener, not even a relay cookie key generated) relaying one policy-declared sandbox loopback port to a browser ([`docs/UI-SANDBOXES.md`](../docs/UI-SANDBOXES.md)). |
 | | | What crosses is **content authored inside B1** — the relayed app's own HTML/JS executing in the operator's browser — so this is a BROWSER-ORIGIN boundary and the separate origin is the enforcement. |
 | | | Boot refuses a listen address equal to `-listen`, because on the console's origin that sandbox-authored code could read the console's token storage (see "Console auth token storage") and drive every admin action. |
@@ -296,6 +295,80 @@ that ceiling down; each run receives only the minimal subset its task needs.
     replacement for it, and does not change this boundary's bypass class.
   - A run correctly resolved to an unattended level still depends on the same in-sandbox,
     cooperative `tool_rules`/`wardyn-toolgate` decision plane once it launches.
+
+### B6 — Runner data plane vs. control plane
+
+- **Transport: TLS with a pinned CA [v0.7.12 shipped].**
+  - Every proxy→control-plane call — the credential resolve
+    (`GET /api/v1/internal/injection/{grant}`, the one API that returns a secret VALUE), mints,
+    token renewal, decisions, approvals, uploads — rides wardynd's proxy-facing TLS listener
+    (`WARDYN_INTERNAL_LISTEN`).
+  - And the proxy trusts only wardynd's own internal CA for it
+    - (`internal/hoptls`: minted on first boot into the secret store as `wardyn-internal-ca`, handed
+      to each proxy in its sealed config; never the system roots, never `WARDYN_TRUSTED_CA_FILE`).
+  - `http://` is refused at wardynd boot and at proxy start unless the URL's host is loopback
+    (`hoptls.CheckURL`).
+- **Authentication: bearer, not mTLS.**
+  - A per-run token (minted by the embedded identity provider, verified via `internalAuth`)
+    authenticates the proxy; mTLS via X.509-SVID is **[planned, arrives with SPIRE]**.
+  - So the pinned CA authenticates the server to the proxy, and the bearer the proxy to the server.
+- `wardyn-tetragon-ingest` rides the same listener under the same rule [0.8]:
+  - its audit-write-only bearer (`aud=wardyn-groundtruth`) goes to `https://wardynd:8443`, pinned to
+    the internal CA, whose public certificate wardynd publishes beside
+    `WARDYN_GROUNDTRUTH_TOKEN_FILE`.
+  - The ingest refuses a non-loopback `http://` URL and an `https://` URL with no CA file
+    (`controlPlaneClient`).
+- The chart grants the runs namespace the internal port only, never `http`.
+- Whenever the internal listener runs, the console listener refuses `/api/v1/internal/*` with a 404
+  (`api.Server.Handler`) [0.8],
+  - so the pinned hop is the only way in and a bearer sent to the console is never honoured.
+- **Residuals:** no current-version component sends a bearer to wardynd in plaintext on a
+  non-loopback install.
+  - A caller misconfigured onto the console listener (or a pre-0.7.12 compose run still in flight
+    after an upgrade) still puts its bearer on that wire before the 404; it is refused, not
+    prevented.
+  - A loopback-only local install has no internal listener and serves the surface on the console.
+  - Whoever can read wardynd's secret store with its age key holds the CA key, the same custody as
+    the signing key.
+  - A compromised runner is assumed; the control plane never trusts runner-asserted identity
+    claims.
+
+### B8 — Untrusted build container vs. host daemon + registry
+
+- The devcontainer build / BYOI wrap (`internal/envbuild`) runs on the HOST Docker daemon, before
+  any confinement tier exists.
+- Capped (CapDrop ALL, resource limits) but not sandboxed by a Confinement Class and not behind
+  `wardyn-proxy`.
+- Reaches only `WARDYN_ENVBUILD_BUILD_NETWORK`:
+  - compose default: the dedicated `${WARDYN_NS:-wardyn}-envbuild` bridge
+    (`WARDYN_ENVBUILD_BUILD_NETWORK` in
+    [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml));
+  - bare-binary and host mode default to `none` (`effectiveBuildNetwork`,
+    [`internal/envbuild/builder.go`](../internal/envbuild/builder.go));
+  - never `host`, which stays a warned-against override.
+- Plus the layer-cache registry, which is multi-homed and unauthenticated (the `registry` service in
+  [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)).
+- Residual #13.
+
+### B9 — SSH gateway pre-auth listener vs. everything else
+
+- An anonymous-until-authenticated TCP listener (`WARDYN_SSH_LISTEN`).
+- The DAEMON default is off — no var set, no listener, no host key generated — but **two shipped
+  deployments turn it on for every install**:
+  - the one-line installer writes `WARDYN_SSH_LISTEN=:2222` into every `.env` it creates *and
+    backfills it on upgrade*,
+  - and the desktop envelope ships it on.
+- So this boundary is live on every managed laptop and every `curl … | sh` box, bound to loopback by
+  the compose host-port publish (`127.0.0.1:2222`) rather than left unexposed.
+- Registered-public-key-only auth; the trust root is the `ssh_public_keys` registry a human writes
+  via self-service `/api/v1/me/ssh-keys`,
+  - so this boundary is exactly as strong as that registration step and the pre-auth DoS bounds
+    ([§4](#4-in-scope-defenses)).
+- Once authenticated, a session is bounded by owner-or-admin authorization (residual #15) and runs
+  entirely inside B1:
+  - shell/exec/sftp/`-L` are bridged into the EXISTING sandbox via the same
+    `Runner.Attach`/`ExecStream` calls the browser terminal uses.
+- A new front door, not a new back door.
 
 ---
 
@@ -376,7 +449,7 @@ is not the deployment described above.**
 | Insider exceeding own access via agent | Minted credentials are scoped to the task, not the human's full access; the agent never inherits developer credentials. | B5, ID |
 | | PARTIAL: that ceiling is set by policy/site-config, and rewriting either is an OPERATOR act — policy CRUD and `PUT /site-config` sit behind `requireOperator`, so with `WARDYN_OIDC_OPERATOR_EMAILS` set a signed-in viewer cannot raise their own ceiling. | |
 | | Above that line nothing separates duties — residual #14. | |
-| Member escalating past a capability grant | **[v0.6 shipped; two kinds added in v0.7, one in v0.7.2, one in v0.8]** Capability grants (`capability_grants`, migration `0042`) bound what a MEMBER chose on the ten closed kinds `capabilityKinds` names, resolved deny-before-allow-before-switch by one resolver (`capAllowed`/`capGranted`). **EVERY switch ships OFF** — fail-open by design, residual #20 — and a capability never narrows what the ADMIN pre-authorized. Mechanism: [§4.3](#43-capability-grants-v06--the-mechanism) | B5, ID, AU |
+| Member escalating past a capability grant | **[v0.6 shipped]** Capability grants bound a member; every switch ships OFF: [detail](#member-escalating-past-a-capability-grant). | B5, ID, AU |
 | Member mounting a host directory the operator never allowed | **[v0.6 shipped]** A member-owned workspace is the ONLY path on which a non-operator supplies a host bind source, gated additively: operator deny-list, then a canonicalized real path inside an operator/MDM-set root, then a credential-dotfile deny-list. | B1, ID |
 | | Unset roots = no member host mounts at all. Mechanism: [§4.4](#44-member-authored-host-mounts-v06--the-gate). Residuals #25, #26 | |
 | Audit tampering by in-sandbox actor | Append-only log, ground-truth stream and tamper-evident PTY casts: [detail](#audit-tampering-by-in-sandbox-actor). | AU |
@@ -447,6 +520,16 @@ is not the deployment described above.**
 - What is NOT bounded is VOLUME: nothing rate-limits how many approvals one run may raise, so
   approval flooding/fatigue (AGENT-THREAT-MODEL row 13) is the live attack here.
 - And the operator's lever is `tool_rules` — a `deny` answers proxy-side without waking anyone.
+
+### Member escalating past a capability grant
+
+- **[v0.6 shipped; two kinds added in v0.7, one in v0.7.2, one in v0.8]**
+- Capability grants (`capability_grants`, migration `0042`) bound what a MEMBER chose on the ten
+  closed kinds `capabilityKinds` names, resolved deny-before-allow-before-switch by one resolver
+  (`capAllowed`/`capGranted`).
+- **EVERY switch ships OFF** — fail-open by design, residual #20 — and a capability never narrows
+  what the ADMIN pre-authorized.
+- Mechanism: [§4.3](#43-capability-grants-v06--the-mechanism)
 
 ### Audit tampering by in-sandbox actor
 
@@ -811,21 +894,24 @@ one in v0.7.2, three in 0.8 and one in 0.8.9, and lost one in 0.8.
   the AI integrations — `req.IntegrationID` is refused for everyone, so there is nothing left to
   gate.
 - Nine NARROW what a member could already do:
-  `egress_host` (the hosts on their inline policy, and which host they may decide an
-  `egress_domain` approval for), `secret` (which secret names an inline policy may
-  reference, and which names `GET /secrets` lists back), `workspace` (which
-  onboarded workspace they may launch against), `agent` (which harness — `req.Agent`,
-  their own free-text choice) and — v0.7.2 — `workspace_provider` (which git provider
-  row the repositories a member's work comes from may belong to: the row
-  `admitRepoURL` resolves a derived clone URL to, checked at every one of the SIX
-  doors a member can reach a clone through — `POST /runs` over both the resolved
-  spec and the legacy `repo` field, workspace create and EDIT, and the two
-  server-side clones, Scan and Build) and — v0.8 — `feature` (whether a member may
-  add an SSH key or mint an API token at all: values `ssh_key` and `api_token`, a
-  closed set refused at write time otherwise, one check at each mint door; mint
-  only, so an existing key or token outlives a later deny until it is removed or
-  revoked) and `policy` (which stored policy a member may select, `req.PolicyID`;
-  the choice only, since the selected row is still clamped to their ceiling).
+  - `egress_host` (the hosts on their inline policy, and which host they may decide an
+    `egress_domain` approval for),
+  - `secret` (which secret names an inline policy may reference, and which names `GET /secrets`
+    lists back),
+  - `workspace` (which onboarded workspace they may launch against),
+  - `agent` (which harness — `req.Agent`, their own free-text choice)
+  - and — v0.7.2 — `workspace_provider` (which git provider row the repositories a member's work
+    comes from may belong to:
+  - the row `admitRepoURL` resolves a derived clone URL to, checked at every one of the SIX doors a
+    member can reach a clone through —
+  - `POST /runs` over both the resolved spec and the legacy `repo` field, workspace create and EDIT,
+    and the two server-side clones, Scan and Build)
+  - and — v0.8 — `feature` (whether a member may add an SSH key or mint an API token at all:
+  - values `ssh_key` and `api_token`, a closed set refused at write time otherwise, one check at each
+    mint door;
+  - mint only, so an existing key or token outlives a later deny until it is removed or revoked)
+  - and `policy` (which stored policy a member may select, `req.PolicyID`; the choice only, since the
+    selected row is still clamped to their ceiling).
 - 0.8.9's `component` bounds which org component (an admin-written row, by id) a person may attach
   to their own run.
 - An org component's id is restricted from its create, so nobody may attach it until an allow row
@@ -1055,27 +1141,27 @@ ADMIN pre-authorized** —
   - The API half derives the object (never the caller).
   - And the runner half re-checks the object it was handed as the last thing before the sandbox is
     created, because a share directory can be repointed between the write and the run.
-  - On Docker (`Driver.driveMount`) a drive runs the ordinary bind deny matrix
-    (`ValidateTarget` on every backend; for `host_path`, `ValidateMountSource` inside
-    `UserDriveMountSourceCheck` — `ValidateMount` itself is deliberately not run a
-    second time) and, for a `host_path` drive, the deployment's ceiling on the
-    symlink-RESOLVED real path
-    (`UserDriveMountSourceCheck`) — plus three refusals a drive alone needs: a source
-    that resolves to the configured ROOT rather than a subdirectory (that would bind
-    everyone's home into one sandbox); a source that resolves OUTSIDE THIS DRIVE'S
-    OWN `host_root`, carried on the mount and asserted by
-    `UserDriveHomeWithinItsRoot` (the deployment ceiling is the operator's outer
-    bound over every drive at once, so on a deployment with two share drives it
-    cannot tell one drive's tree from the other's — a home replaced by a link to the
-    same-named home under the OTHER drive's root satisfies it, and an absent
-    `host_root` on a share mount is a refusal rather than a skip); and a source whose
-    resolved directory NAME is not the home the resolver derived — which closes the
-    DIFFERENTLY-NAMED sibling-symlink case (alice's directory replaced host-side by
-    a link to bob's) and only that: the assertion is on the BASE NAME, because a
-    share may legitimately file its homes in subdirectories of the root
-    (`<root>/alice` → `<root>/2024/alice`), so a link onto a SAME-NAMED directory
-    nested inside another principal's home (`<root>/alice` → `<root>/bob/alice`)
-    passes every one of these checks — see residual #33.
+  - On Docker (`Driver.driveMount`) a drive runs the ordinary bind deny matrix (`ValidateTarget` on
+    every backend; for `host_path`, `ValidateMountSource` inside `UserDriveMountSourceCheck` —
+    `ValidateMount` itself is deliberately not run a second time)
+    - and, for a `host_path` drive, the deployment's ceiling on the symlink-RESOLVED real path
+      (`UserDriveMountSourceCheck`) —
+    - plus three refusals a drive alone needs:
+    - a source that resolves to the configured ROOT rather than a subdirectory (that would bind
+      everyone's home into one sandbox);
+    - a source that resolves OUTSIDE THIS DRIVE'S OWN `host_root`, carried on the mount and asserted
+      by `UserDriveHomeWithinItsRoot`
+    - (the deployment ceiling is the operator's outer bound over every drive at once, so on a
+      deployment with two share drives it cannot tell one drive's tree from the other's —
+    - a home replaced by a link to the same-named home under the OTHER drive's root satisfies it, and
+      an absent `host_root` on a share mount is a refusal rather than a skip);
+    - and a source whose resolved directory NAME is not the home the resolver derived —
+    - which closes the DIFFERENTLY-NAMED sibling-symlink case (alice's directory replaced host-side
+      by a link to bob's) and only that:
+    - the assertion is on the BASE NAME, because a share may legitimately file its homes in
+      subdirectories of the root (`<root>/alice` → `<root>/2024/alice`),
+    - so a link onto a SAME-NAMED directory nested inside another principal's home
+      (`<root>/alice` → `<root>/bob/alice`) passes every one of these checks — see residual #33.
   - The target is pinned to `runner.DriveTarget` on BOTH substrates (`errDriveTargetInvalid` in
     each driver), so a drive can never be mounted over the credential staging directory or the
     workspace.
