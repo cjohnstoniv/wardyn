@@ -74,6 +74,7 @@ func TestAutonomyPostureAxes(t *testing.T) {
 			{"git_pat is powerful", []types.GrantSpec{{Kind: types.GrantGitPAT}}, types.AutonomySecretsPowerful},
 			{"ssh_key is powerful", []types.GrantSpec{{Kind: types.GrantSSHKey}}, types.AutonomySecretsPowerful},
 			{"env_secret is powerful", []types.GrantSpec{{Kind: types.GrantEnvSecret}}, types.AutonomySecretsPowerful},
+			{"file_secret is powerful", []types.GrantSpec{{Kind: types.GrantFileSecret}}, types.AutonomySecretsPowerful},
 			// The scan must not stop at the first non-powerful grant.
 			{"a powerful grant behind a baseline one still wins",
 				[]types.GrantSpec{apiKey("api.anthropic.com"), {Kind: types.GrantSSHKey}}, types.AutonomySecretsPowerful},

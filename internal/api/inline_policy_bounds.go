@@ -16,7 +16,9 @@ import (
 
 // userEnvSecretIsAdminOnly is THE env_secret posture rule, in one place: a
 // NON-OPERATOR does not hold an env_secret grant unless the deployment opened
-// envAllowMemberEnvSecret.
+// envAllowMemberEnvSecret. It is file_secret's rule too (residentSecretKind):
+// the same raw value in the sandbox for the run's whole life, in a file
+// rather than the process environment, under the same one switch.
 //
 // It takes no ceiling and no principal's assignment, because the rule needs
 // neither — it is a role check plus an env switch. That is exactly what made
@@ -32,11 +34,18 @@ import (
 // not about the ceiling.
 func userEnvSecretIsAdminOnly() bool { return !envEnabled(envAllowMemberEnvSecret) }
 
+// residentSecretKind reports the two policy-authorable kinds whose value is
+// RESIDENT in the sandbox for the whole run: env_secret and file_secret.
+func residentSecretKind(k types.GrantKind) bool {
+	return k == types.GrantEnvSecret || k == types.GrantFileSecret
+}
+
 // envSecretAdminOnlyWarning is the one message both drop sites use, so the
 // member sees the same sentence in Review whichever path bounded their run.
-func envSecretAdminOnlyWarning(secretRef string) string {
-	return fmt.Sprintf("dropped env_secret grant for %q: env_secret is admin-only (an operator can open it with %s)",
-		secretRef, envAllowMemberEnvSecret)
+// It names the kind dropped.
+func envSecretAdminOnlyWarning(kind types.GrantKind, secretRef string) string {
+	return fmt.Sprintf("dropped %s grant for %q: %s is admin-only (an operator can open it with %s)",
+		kind, secretRef, kind, envAllowMemberEnvSecret)
 }
 
 // dropAdminOnlyEnvSecretGrants applies userEnvSecretIsAdminOnly to a spec a
@@ -49,7 +58,9 @@ func envSecretAdminOnlyWarning(secretRef string) string {
 // the clone), while an env_secret is a raw value in the process environment for
 // the run's whole life, with no mint, no TTL and nothing to revoke (see
 // GrantEnvSecret). "The operator listed this pairing" is a weaker statement here
-// than for every other kind, so it is not the statement this rule rests on.
+// than for every other kind, so it is not the statement this rule rests on. A
+// file_secret is the same raw value in a file (GrantFileSecret) and is dropped
+// the same way; the name is kept because every caller already reads it.
 //
 // The drop is AUDITED, not merely warned, under the SAME authz.denied reason
 // filterUserGrants' drops already carry (`grant_pairing_not_eligible`, a
@@ -64,14 +75,14 @@ func envSecretAdminOnlyWarning(secretRef string) string {
 // — same three-tier doctrine as resolveRunPolicy's inline clamp.
 func dropAdminOnlyEnvSecretGrants(grants []types.GrantSpec) ([]types.GrantSpec, []string, []capDrop) {
 	if !userEnvSecretIsAdminOnly() || !slices.ContainsFunc(grants,
-		func(g types.GrantSpec) bool { return g.Kind == types.GrantEnvSecret }) {
+		func(g types.GrantSpec) bool { return residentSecretKind(g.Kind) }) {
 		return grants, nil, nil
 	}
 	kept := make([]types.GrantSpec, 0, len(grants))
 	var warns []string
 	var drops []capDrop
 	for _, g := range grants {
-		if g.Kind != types.GrantEnvSecret {
+		if !residentSecretKind(g.Kind) {
 			kept = append(kept, g)
 			continue
 		}
@@ -82,7 +93,7 @@ func dropAdminOnlyEnvSecretGrants(grants []types.GrantSpec) ([]types.GrantSpec, 
 		// later validatePolicySpec/validateInlineSecretRefs still see a spec
 		// with nothing left to be malformed about.
 		_, secretRef, _, _, _ := storedSecretGrantPairing(g)
-		w := envSecretAdminOnlyWarning(secretRef)
+		w := envSecretAdminOnlyWarning(g.Kind, secretRef)
 		warns = append(warns, w)
 		drops = append(drops, capDrop{reason: authz.ReasonGrantPairingNotEligible, detail: w})
 	}

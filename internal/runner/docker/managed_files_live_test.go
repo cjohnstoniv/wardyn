@@ -135,8 +135,8 @@ func replaceManagedFile(ctx context.Context, t *testing.T, d *Driver, ref, p str
 }
 
 // commitImage commits busybox:latest after running script in it as root, with
-// USER user. Removed at cleanup.
-func commitImage(ctx context.Context, t *testing.T, d *Driver, script, user string) string {
+// USER user and any further Dockerfile changes. Removed at cleanup.
+func commitImage(ctx context.Context, t *testing.T, d *Driver, script, user string, changes ...string) string {
 	t.Helper()
 	if err := d.ensureImage(ctx, "busybox:latest", func() {}); err != nil {
 		t.Fatalf("ensure busybox: %v", err)
@@ -170,7 +170,7 @@ func commitImage(ctx context.Context, t *testing.T, d *Driver, script, user stri
 		t.Fatalf("wait image builder: %v", err)
 	}
 	ref := "wardyn-managed-agent:" + suffix
-	if _, err := cli.ContainerCommit(ctx, created.ID, client.ContainerCommitOptions{Reference: ref, Changes: []string{"USER " + user}}); err != nil {
+	if _, err := cli.ContainerCommit(ctx, created.ID, client.ContainerCommitOptions{Reference: ref, Changes: append([]string{"USER " + user}, changes...)}); err != nil {
 		t.Fatalf("commit agent image: %v", err)
 	}
 	t.Cleanup(func() {

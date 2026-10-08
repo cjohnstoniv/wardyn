@@ -495,7 +495,7 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 	switch g.Kind {
 	case types.GrantGitHubToken, types.GrantCloudSTS, types.GrantAPIKey, types.GrantGitPAT,
-		types.GrantSSHKey, types.GrantEnvSecret:
+		types.GrantSSHKey, types.GrantEnvSecret, types.GrantFileSecret:
 	default:
 		return fmt.Errorf("eligible_grants[%d]: unknown kind %q", i, g.Kind)
 	}
@@ -545,6 +545,14 @@ func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 		}
 		if sinkReservedSecret(rule.SecretName) {
 			return fmt.Errorf("eligible_grants[%d]: api_key references reserved secret name %q", i, rule.SecretName)
+		}
+		// `shared` pins the sink's read to the OPERATOR's namespace, which is
+		// the component gate's to decide for an org component's provided
+		// secret and nobody's to author: a policy setting it would hand the
+		// run an operator credential by name. Here, in the arm the strict and
+		// the lenient (recorded) decodes share, so every authored door refuses it.
+		if apiKeyScopeShared(g.Scope) {
+			return fmt.Errorf("eligible_grants[%d]: api_key scope sets shared: shared is set by Wardyn for an org component, never authored", i)
 		}
 		if !egress.ValidHeaderName(rule.Header) {
 			return fmt.Errorf("eligible_grants[%d]: api_key header %q is not a valid HTTP header name", i, rule.Header)
@@ -615,6 +623,30 @@ func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 			return fmt.Errorf("eligible_grants[%d]: env_secret cannot require approval — it is resolved at dispatch, "+
 				"not minted, so there is no mint for an approval to gate", i)
 		}
+	}
+	if g.Kind == types.GrantFileSecret {
+		return validateFileSecretScope(i, g)
+	}
+	return nil
+}
+
+// validateFileSecretScope is the file_secret arm of validateEligibleGrantMode,
+// env_secret's rules for the same reasons: a file name the dispatch sink
+// writes into a fixed directory (fileSecretScopeFields), a secret name that is
+// never a reserved platform-internal one (the wider guard — the value lands in
+// the sandbox), and no requires_approval, since nothing is minted for an
+// approval to gate. resolveFileSecretGrants re-checks the first two.
+func validateFileSecretScope(i int, g types.GrantSpec) error {
+	_, secretName, err := fileSecretScopeFields(g.Scope)
+	if err != nil {
+		return fmt.Errorf("eligible_grants[%d]: file_secret scope invalid: %w", i, err)
+	}
+	if nameSinkReservedSecret(secretName) {
+		return fmt.Errorf("eligible_grants[%d]: file_secret references reserved secret name %q", i, secretName)
+	}
+	if g.RequiresApproval {
+		return fmt.Errorf("eligible_grants[%d]: file_secret cannot require approval — it is resolved at dispatch, "+
+			"not minted, so there is no mint for an approval to gate", i)
 	}
 	return nil
 }
