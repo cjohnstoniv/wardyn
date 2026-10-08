@@ -61,7 +61,7 @@ func TestManagedFilesTar(t *testing.T) {
 		{Path: "/etc/claude-code/managed-settings.json", Mode: 0o644, Content: []byte(`{"a":1}`)},
 		{Path: "/etc/claude-code/locked", Mode: 0o444, Content: []byte("x")},
 		{Path: "/etc/claude-code/rules", Content: []byte("r")},
-	})
+	}, 1000)
 	if err != nil {
 		t.Fatalf("managedFilesTar: %v", err)
 	}
@@ -91,11 +91,11 @@ func TestManagedFilesTar(t *testing.T) {
 // substrate-side verification.
 func TestManagedFilesTarIsDeterministic(t *testing.T) {
 	files := []runner.ManagedFile{{Path: "/etc/claude-code/f", Content: []byte("body")}}
-	a, err := managedFilesTar(files)
+	a, err := managedFilesTar(files, 1000)
 	if err != nil {
 		t.Fatalf("managedFilesTar: %v", err)
 	}
-	b, err := managedFilesTar(files)
+	b, err := managedFilesTar(files, 1000)
 	if err != nil {
 		t.Fatalf("managedFilesTar: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestManagedFilesTarIsDeterministic(t *testing.T) {
 }
 
 func TestManagedFilesTarRefusesAnInvalidSpec(t *testing.T) {
-	if _, err := managedFilesTar([]runner.ManagedFile{{Path: "/etc/f", Content: []byte("x")}}); err == nil {
+	if _, err := managedFilesTar([]runner.ManagedFile{{Path: "/etc/f", Content: []byte("x")}}, 1000); err == nil {
 		t.Fatal("managedFilesTar accepted a path outside runner.ManagedFileDir; it must run the shared contract check")
 	}
 }
@@ -336,18 +336,19 @@ func TestExecLessPath_DeliversManagedFilesBeforeStart(t *testing.T) {
 // a tmpfs over it hides the delivered file (and lets the agent create its own),
 // and recording setup's root chmod 0777 would hand the directory to the agent.
 func TestManagedFileDirIsNeitherCoveredNorLoosenedAfterStart(t *testing.T) {
-	covers := func(p string) bool {
-		return p == "/" || p == runner.ManagedFileDir ||
-			strings.HasPrefix(runner.ManagedFileDir, p+"/") || strings.HasPrefix(p, runner.ManagedFileDir+"/")
-	}
-	for tgt := range hardenedHostConfig("none", "", runner.Resources{}, system.Info{}).Tmpfs {
-		if covers(tgt) {
-			t.Errorf("the agent's tmpfs at %s covers %s", tgt, runner.ManagedFileDir)
+	for _, managed := range []string{runner.ManagedFileDir, runner.ComponentSecretDir} {
+		covers := func(p string) bool {
+			return p == "/" || p == managed || strings.HasPrefix(managed, p+"/") || strings.HasPrefix(p, managed+"/")
 		}
-	}
-	for _, dir := range recordingChmodDirs(Config{Record: true, RecordingMount: "wardyn-recordings"}) {
-		if covers(dir) {
-			t.Errorf("recording setup chmods %s 0777, which covers %s", dir, runner.ManagedFileDir)
+		for tgt := range hardenedHostConfig("none", "", runner.Resources{}, system.Info{}).Tmpfs {
+			if covers(tgt) {
+				t.Errorf("the agent's tmpfs at %s covers %s", tgt, managed)
+			}
+		}
+		for _, dir := range recordingChmodDirs(Config{Record: true, RecordingMount: "wardyn-recordings"}) {
+			if covers(dir) {
+				t.Errorf("recording setup chmods %s 0777, which covers %s", dir, managed)
+			}
 		}
 	}
 }
@@ -406,5 +407,173 @@ func TestCreateSandbox_ManagedFilesNeedANonRootUserAndARootOwnedEtc(t *testing.T
 				t.Errorf("the refusal still copied %d archives / started the agent = %v", len(f.copies), started)
 			}
 		})
+	}
+}
+
+// secretFile is a delivered secret as dispatch builds one.
+func secretFile(name, value string) runner.ManagedFile {
+	return runner.ManagedFile{Path: runner.ComponentSecretDir + "/" + name, Mode: runner.ComponentSecretFileMode, AgentOwned: true, Content: []byte(value)}
+}
+
+// A delivered secret's header alone carries the agent's uid: 0400 owned by the
+// uid the image's USER runs as, so that uid and no other in the sandbox reads
+// it. Every ceiling beside it stays 0/0 — the exception does not leak.
+func TestManagedFilesTar_ASecretIsOwnedByTheAgentAlone(t *testing.T) {
+	buf, err := managedFilesTar([]runner.ManagedFile{
+		{Path: "/etc/claude-code/managed-settings.json", Content: []byte("{}")},
+		secretFile("api-token", "file-secret-value"),
+	}, 1234)
+	if err != nil {
+		t.Fatalf("managedFilesTar: %v", err)
+	}
+	got := readTar(t, buf.Bytes())
+	want := []tarEntry{
+		{name: "etc/claude-code/managed-settings.json", typ: tar.TypeReg, mode: 0o644, uid: 0, gid: 0, body: "{}"},
+		{name: "run/wardyn/secrets/api-token", typ: tar.TypeReg, mode: 0o400, uid: 1234, gid: 0, body: "file-secret-value"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("archive = %+v, want %+v (no directory entries; the secret alone owned by the agent's uid at 0400)", got, want)
+	}
+}
+
+// managedSecretSpec is testSpec plus one delivered secret.
+func managedSecretSpec() runner.SandboxSpec {
+	spec := testSpec()
+	spec.ManagedFiles = []runner.ManagedFile{secretFile("api-token", "file-secret-value")}
+	return spec
+}
+
+// The owner is the uid the image's USER RUNS as — numeric as written, or a
+// name resolved in the image's own /etc/passwd — the same answer the root
+// refusal reads, so the file is the agent's and nobody else's.
+func TestCreateSandbox_DeliversASecretOwnedByTheImageUser(t *testing.T) {
+	for _, tc := range []struct {
+		name, user, passwd string
+		uid                int
+	}{
+		{name: "numeric", user: "1234:1234", uid: 1234},
+		{name: "by name", user: "agent", passwd: "root:x:0:0::/root:/bin/sh\nagent:x:1000:1000::/home/agent:/bin/sh\n", uid: 1000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newManagedFake()
+			f.imageUsers["busybox:latest"] = tc.user
+			f.passwd = tc.passwd
+			f.runDir = &tar.Header{Name: "run/", Typeflag: tar.TypeDir, Mode: 0o755}
+			d := newTestDriver(f)
+			spec := managedSecretSpec()
+			if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
+				t.Fatalf("CreateSandbox: %v", err)
+			}
+			if len(f.copies) != 1 {
+				t.Fatalf("got %d copies, want 1", len(f.copies))
+			}
+			cp := f.copies[0]
+			if cp.afterStart || cp.copyUIDGID || cp.dest != "/" {
+				t.Fatalf("copy = afterStart %v copyUIDGID %v dest %q; want before start, no daemon chown, at /", cp.afterStart, cp.copyUIDGID, cp.dest)
+			}
+			got := readTar(t, cp.archive)
+			if len(got) != 1 || got[0].name != "run/wardyn/secrets/api-token" || got[0].uid != tc.uid || got[0].gid != 0 || got[0].mode != 0o400 {
+				t.Fatalf("archive = %+v, want one entry run/wardyn/secrets/api-token owned %d:0 at 0400", got, tc.uid)
+			}
+		})
+	}
+}
+
+// A secret lands in runner.ComponentSecretDir or nowhere: a /run the agent
+// could write, or one that is a link, would let the delivery follow it out of
+// the fixed directory (onto a bind mount, a host directory), and a directory
+// already there was not made by the delivery. An image with no /run at all is
+// fine — the delivery creates it root-owned like everything below it. A
+// secret-only delivery does not answer for /etc, which is the ceiling's anchor.
+func TestCreateSandbox_ASecretLandsOnlyInTheFixedDirectory(t *testing.T) {
+	const (
+		badRun = "/run is a directory owned by root and not writable by group or others"
+		exists = "already exists"
+	)
+	cases := []struct {
+		name     string
+		runDir   *tar.Header
+		existing []string
+		etc      *tar.Header
+		want     string // "" means delivered
+	}{
+		{name: "a root-owned /run", runDir: &tar.Header{Name: "run/", Typeflag: tar.TypeDir, Mode: 0o755}},
+		{name: "no /run in the image", runDir: nil},
+		{name: "a writable /etc does not matter here", runDir: &tar.Header{Name: "run/", Typeflag: tar.TypeDir, Mode: 0o755}, etc: &tar.Header{Name: "etc/", Typeflag: tar.TypeDir, Mode: 0o777}},
+		{name: "/run a link", runDir: &tar.Header{Name: "run", Typeflag: tar.TypeSymlink, Linkname: "/home/agent/work", Mode: 0o777}, want: badRun},
+		{name: "/run world-writable", runDir: &tar.Header{Name: "run/", Typeflag: tar.TypeDir, Mode: 0o777}, want: badRun},
+		{name: "/run group-writable", runDir: &tar.Header{Name: "run/", Typeflag: tar.TypeDir, Mode: 0o775}, want: badRun},
+		{name: "/run owned by the agent", runDir: &tar.Header{Name: "run/", Typeflag: tar.TypeDir, Mode: 0o755, Uid: 1000}, want: badRun},
+		{name: "/run/wardyn shipped (or a link)", runDir: &tar.Header{Name: "run/", Typeflag: tar.TypeDir, Mode: 0o755}, existing: []string{"/run/wardyn"}, want: exists},
+		{name: "the secret directory shipped", runDir: &tar.Header{Name: "run/", Typeflag: tar.TypeDir, Mode: 0o755}, existing: []string{runner.ComponentSecretDir}, want: exists},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newManagedFake()
+			f.runDir = tc.runDir
+			f.etcDir = tc.etc
+			f.existingPaths = map[string]bool{}
+			for _, p := range tc.existing {
+				f.existingPaths[p] = true
+			}
+			d := newTestDriver(f)
+			spec := managedSecretSpec()
+			_, err := d.CreateSandbox(context.Background(), spec)
+			started := slices.Contains(f.startedNames, agentContainerName(spec.RunID))
+			if tc.want == "" {
+				if err != nil || len(f.copies) != 1 || !started {
+					t.Fatalf("err = %v, %d copies, started = %v; want the secret delivered and the agent started", err, len(f.copies), started)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want a refusal containing %q", err, tc.want)
+			}
+			if strings.Contains(err.Error(), "file-secret-value") {
+				t.Errorf("the refusal carries the secret's value: %v", err)
+			}
+			if len(f.copies) != 0 || started {
+				t.Errorf("the refusal still copied %d archives / started the agent = %v", len(f.copies), started)
+			}
+		})
+	}
+}
+
+// The image rules that hold the ceiling hold a secret too: a workload running
+// as root owns everything, so no file is "the agent's alone".
+func TestCreateSandbox_ASecretNeedsANonRootUser(t *testing.T) {
+	for _, user := range []string{"", "0", "0:0"} {
+		f := newManagedFake()
+		f.imageUsers["busybox:latest"] = user
+		d := newTestDriver(f)
+		spec := managedSecretSpec()
+		_, err := d.CreateSandbox(context.Background(), spec)
+		if err == nil || !strings.Contains(err.Error(), "USER is a non-root user") {
+			t.Fatalf("USER %q: err = %v, want the non-root refusal", user, err)
+		}
+		if len(f.copies) != 0 {
+			t.Errorf("USER %q: the refusal still copied %d archives", user, len(f.copies))
+		}
+	}
+}
+
+// The shared contract runs before anything exists on the daemon: an
+// agent-owned file outside runner.ComponentSecretDir, or inside the ceiling's
+// directory, is refused with no network and no container made.
+func TestCreateSandbox_RefusesAMisplacedSecretBeforeCreatingAnything(t *testing.T) {
+	for _, f := range []runner.ManagedFile{
+		{Path: "/tmp/x", Mode: runner.ComponentSecretFileMode, AgentOwned: true, Content: []byte("v")},
+		{Path: runner.ManagedFileDir + "/managed-settings.json", Mode: runner.ComponentSecretFileMode, AgentOwned: true, Content: []byte("v")},
+	} {
+		fd := newManagedFake()
+		d := newTestDriver(fd)
+		spec := testSpec()
+		spec.ManagedFiles = []runner.ManagedFile{f}
+		if _, err := d.CreateSandbox(context.Background(), spec); err == nil {
+			t.Fatalf("CreateSandbox accepted an agent-owned file at %s", f.Path)
+		}
+		if len(fd.networks) != 0 || len(fd.containers) != 0 || len(fd.copies) != 0 {
+			t.Errorf("%s: the refusal created objects on the daemon: %d networks, %d containers, %d copies", f.Path, len(fd.networks), len(fd.containers), len(fd.copies))
+		}
 	}
 }

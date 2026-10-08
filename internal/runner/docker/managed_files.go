@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -41,31 +42,37 @@ var managedFileEpoch = time.Unix(0, 0).UTC()
 // CopyToContainerOptions.CopyUIDGID stays FALSE — that flag would instead
 // make the daemon chown the tree to the IMAGE'S USER (uid 1000 for every
 // Wardyn agent image), exactly the agent-writable outcome runner.ManagedFile
-// exists to rule out.
+// exists to rule out. The one exception is an AgentOwned file (a delivered
+// secret), whose header alone carries the agent's uid; see managedFilesTar.
 //
 // IT NEVER DELIVERS INTO A DIRECTORY THAT ALREADY EXISTS. The daemon creates
 // a missing directory root-owned 0755; one already there — shipped by the
 // image, or a bind mount — is refused, since the stat carries a mode but no
-// owner and can't tell an agent-owned directory from a HOST one.
+// owner and can't tell an agent-owned directory from a HOST one. That holds
+// for every directory between the delivery's and its anchor
+// (managedFileAnchors): a link there would carry the file somewhere else.
 //
 // NOR INTO AN IMAGE THAT COULD UNDO IT. See checkManagedFileImage.
 func (d *Driver) deliverManagedFiles(ctx context.Context, containerID string, files []runner.ManagedFile) error {
 	if len(files) == 0 {
 		return nil
 	}
-	if err := d.checkManagedFileImage(ctx, containerID); err != nil {
+	agentUID, err := d.checkManagedFileImage(ctx, containerID, files)
+	if err != nil {
 		return err
 	}
 	for _, dir := range runner.ManagedFileDirs(files) {
-		_, err := d.cli.ContainerStatPath(ctx, containerID, client.ContainerStatPathOptions{Path: dir})
-		if err == nil {
-			return fmt.Errorf("docker: managed file directory %s already exists in the container (shipped by the image or mounted there); a managed file is delivered only into a directory the delivery creates, never into one it would have to trust or re-own", dir)
-		}
-		if !isNotFound(err) {
-			return fmt.Errorf("docker: stat managed file directory %s: %w", dir, err)
+		for p := dir; p != managedFileAnchors[dir] && p != "/"; p = path.Dir(p) {
+			_, err := d.cli.ContainerStatPath(ctx, containerID, client.ContainerStatPathOptions{Path: p})
+			if err == nil {
+				return fmt.Errorf("docker: managed file directory %s already exists in the container (shipped by the image or mounted there); a managed file is delivered only into a directory the delivery creates, never into one it would have to trust or re-own", p)
+			}
+			if !isNotFound(err) {
+				return fmt.Errorf("docker: stat managed file directory %s: %w", p, err)
+			}
 		}
 	}
-	archive, err := managedFilesTar(files)
+	archive, err := managedFilesTar(files, agentUID)
 	if err != nil {
 		return fmt.Errorf("docker: build managed-file archive: %w", err)
 	}
@@ -81,20 +88,33 @@ func (d *Driver) deliverManagedFiles(ctx context.Context, containerID string, fi
 	return nil
 }
 
+// managedFileAnchors is, per directory a managed file may be delivered into,
+// the image directory its safety rests on: a real directory owned by root and
+// writable by nobody else, below which deliverManagedFiles creates every
+// directory itself. /run may instead be absent, since the delivery then
+// creates it root-owned like the rest; /etc must be there, as it always has.
+var managedFileAnchors = map[string]string{
+	runner.ManagedFileDir:     "/etc",
+	runner.ComponentSecretDir: "/run",
+}
+
 // checkManagedFileImage refuses a container whose image would let the agent
-// replace a root-owned file in runner.ManagedFileDir. That directory holds
-// only because the agent can neither write /etc nor act as its owner, and
-// both depend on the image here: the workload runs as the image's USER, and
-// /etc is the image's own. So USER must resolve to a non-root uid, and /etc
-// must be root-owned and not writable by group or others. (Kubernetes runs
-// the agent as uid 1000 on a read-only mount point regardless of the image.)
+// replace a root-owned file in runner.ManagedFileDir, or carry a delivered
+// secret out of runner.ComponentSecretDir. Both hold only because the agent
+// can neither write the directory's anchor (managedFileAnchors) nor act as its
+// owner, and both depend on the image here: the workload runs as the image's
+// USER, and the anchor is the image's own. So USER must resolve to a non-root
+// uid, and each anchor must be a root-owned directory not writable by group or
+// others — a link there is refused, since the delivery would follow it. It
+// returns that uid: an AgentOwned file is owned by it. (Kubernetes runs the
+// agent as uid 1000 on a read-only mount point regardless of the image.)
 //
 // Everything is read via the archive API, never by exec: nothing may run in
 // the container before the managed files are in place.
-func (d *Driver) checkManagedFileImage(ctx context.Context, containerID string) error {
+func (d *Driver) checkManagedFileImage(ctx context.Context, containerID string, files []runner.ManagedFile) (uint64, error) {
 	insp, err := d.cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
-		return fmt.Errorf("docker: inspect for managed files: %w", err)
+		return 0, fmt.Errorf("docker: inspect for managed files: %w", err)
 	}
 	var user string
 	if insp.Container.Config != nil {
@@ -102,23 +122,33 @@ func (d *Driver) checkManagedFileImage(ctx context.Context, containerID string) 
 	}
 	uid, err := d.managedFileUID(ctx, containerID, user)
 	if err != nil {
-		return err
+		return 0, err
 	}
+	dirs := runner.ManagedFileDirs(files)
 	if uid == 0 {
-		return fmt.Errorf("docker: managed files need an image whose USER is a non-root user; this image (USER %q) runs its workload as root, which owns /etc and may rename %s aside and replace the file", user, runner.ManagedFileDir)
+		return 0, fmt.Errorf("docker: managed files need an image whose USER is a non-root user; this image (USER %q) runs its workload as root, which owns %s and may rename %s aside and replace the file", user, managedFileAnchors[dirs[0]], dirs[0])
 	}
-	etc, _, err := d.firstArchiveEntry(ctx, containerID, "/etc", 0)
-	if err != nil {
-		return fmt.Errorf("docker: read /etc for managed files: %w", err)
-	}
-	if etc.Typeflag != tar.TypeDir || etc.Uid != 0 || etc.Mode&0o022 != 0 {
-		what := fmt.Sprintf("owned by uid %d with mode %04o", etc.Uid, etc.Mode&0o7777)
-		if etc.Typeflag != tar.TypeDir {
-			what = "not a directory"
+	for _, dir := range dirs {
+		anchor, ok := managedFileAnchors[dir]
+		if !ok {
+			return 0, fmt.Errorf("docker: managed file directory %s has no anchor this driver checks", dir)
 		}
-		return fmt.Errorf("docker: managed files need an image whose /etc is a directory owned by root and not writable by group or others; this image's /etc is %s, so the workload may rename %s aside and replace the file", what, runner.ManagedFileDir)
+		ent, _, err := d.firstArchiveEntry(ctx, containerID, anchor, 0)
+		if err != nil {
+			if anchor != "/etc" && isNotFound(err) {
+				continue
+			}
+			return 0, fmt.Errorf("docker: read %s for managed files: %w", anchor, err)
+		}
+		if ent.Typeflag != tar.TypeDir || ent.Uid != 0 || ent.Mode&0o022 != 0 {
+			what := fmt.Sprintf("owned by uid %d with mode %04o", ent.Uid, ent.Mode&0o7777)
+			if ent.Typeflag != tar.TypeDir {
+				what = "not a directory"
+			}
+			return 0, fmt.Errorf("docker: managed files need an image whose %s is a directory owned by root and not writable by group or others; this image's %s is %s, so the workload may rename %s aside and replace the file", anchor, anchor, what, dir)
+		}
 	}
-	return nil
+	return uid, nil
 }
 
 // managedFileUID is the uid a workload runs as under USER user: numeric as
@@ -171,24 +201,34 @@ func (d *Driver) firstArchiveEntry(ctx context.Context, containerID, p string, l
 // one entry per file, root-owned at its own mode, with numeric uid/gid 0
 // rather than a user NAME the daemon would resolve against /etc/passwd.
 //
+// An AgentOwned file (a delivered secret) is the exception: its header
+// carries agentUID, the uid the image's USER runs as, with gid 0 at
+// runner.ComponentSecretFileMode (0400) — so on this substrate the agent's
+// uid, and no other uid in the sandbox, can read it. Its directory is still
+// created root-owned 0755, so the agent cannot add or swap a sibling.
+//
 // It carries NO directory entries. The daemon applies a directory entry's
 // owner/mode to a directory that already exists — an earlier version of this
 // archive re-owned a host bind-mount source to root that way — whereas a
 // file whose directory is missing gets it created root-owned 0755, ancestors
 // untouched.
-func managedFilesTar(files []runner.ManagedFile) (*bytes.Buffer, error) {
+func managedFilesTar(files []runner.ManagedFile, agentUID uint64) (*bytes.Buffer, error) {
 	if err := runner.ValidateManagedFiles(files); err != nil {
 		return nil, err
 	}
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	for _, f := range files {
+		uid := 0
+		if f.AgentOwned {
+			uid = int(agentUID)
+		}
 		if err := tw.WriteHeader(&tar.Header{
 			Typeflag: tar.TypeReg,
 			Name:     strings.TrimPrefix(f.Path, "/"),
 			Mode:     int64(f.FileMode().Perm()),
 			Size:     int64(len(f.Content)),
-			Uid:      0,
+			Uid:      uid,
 			Gid:      0,
 			ModTime:  managedFileEpoch,
 		}); err != nil {

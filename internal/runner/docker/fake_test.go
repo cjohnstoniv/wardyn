@@ -123,6 +123,9 @@ type fakeDocker struct {
 	// 0755 directory), and passwd is /etc/passwd's content ("" : absent).
 	etcDir *tar.Header
 	passwd string
+	// runDir is the /run entry CopyFromContainer reports (nil: absent, as in
+	// an image that ships no /run).
+	runDir *tar.Header
 
 	// failpoints
 	failCreateContainer string   // name prefix that should fail on create
@@ -595,6 +598,8 @@ func (f *fakeDocker) CopyFromContainer(ctx context.Context, id string, opts clie
 			hdr = f.etcDir
 		}
 		_ = tw.WriteHeader(hdr)
+	case opts.SourcePath == "/run" && f.runDir != nil:
+		_ = tw.WriteHeader(f.runDir)
 	case opts.SourcePath == "/etc/passwd" && f.passwd != "":
 		_ = tw.WriteHeader(&tar.Header{Name: "passwd", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(f.passwd))})
 		_, _ = tw.Write([]byte(f.passwd))
