@@ -29,7 +29,7 @@
 // ado-launch-door.spec.ts's own comment) — neither pin here touches that
 // surface.
 import { createHash, randomBytes } from "node:crypto";
-import { test, expect, ADMIN_TOKEN, TOKEN_KEY, gotoConsole, navTo, navToRoute, sql } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, TOKEN_KEY, gotoConsole, navTo, navToRoute, sql, goToNewRunPanel } from "./fixtures";
 import { DENIED } from "../src/app/lib/permissions-copy";
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
@@ -247,6 +247,7 @@ test.describe("Available to — New Run's Launch button (#922)", () => {
     await page.addInitScript(([key, tok]) => localStorage.setItem(key, tok), [TOKEN_KEY, seedUserTokenRaw("standard")]);
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
+    await goToNewRunPanel(page, "workspace");
     await page.getByRole("combobox", { name: "Workspace" }).click();
     await page.getByRole("option", { name: "e2e-922-nr-workspace" }).click();
 
@@ -259,6 +260,7 @@ test.describe("Available to — New Run's Launch button (#922)", () => {
     await page.addInitScript(([key, tok]) => localStorage.setItem(key, tok), [TOKEN_KEY, seedUserTokenRaw(WORKSPACE_KIND_TYPE)]);
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
+    await goToNewRunPanel(page, "workspace");
     await page.getByRole("combobox", { name: "Workspace" }).click();
     await page.getByRole("option", { name: "e2e-922-nr-workspace" }).click();
 
@@ -325,6 +327,7 @@ test.describe("Available to — a workspace's own per-value restriction (#1267)"
     await page.addInitScript(([key, tok]) => localStorage.setItem(key, tok), [TOKEN_KEY, seedUserTokenRaw("standard")]);
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
+    await goToNewRunPanel(page, "workspace");
     await page.getByRole("combobox", { name: "Workspace" }).click();
     await page.getByRole("option", { name: "e2e-1267-workspace" }).click();
 
@@ -337,6 +340,7 @@ test.describe("Available to — a workspace's own per-value restriction (#1267)"
     await page.addInitScript(([key, tok]) => localStorage.setItem(key, tok), [TOKEN_KEY, seedUserTokenRaw(LISTED_TYPE)]);
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
+    await goToNewRunPanel(page, "workspace");
     await page.getByRole("combobox", { name: "Workspace" }).click();
     await page.getByRole("option", { name: "e2e-1267-workspace" }).click();
 

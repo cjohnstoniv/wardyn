@@ -89,6 +89,7 @@ import { sweepStaleState } from "./sweep";
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll.
 import { stage } from "./stage";
 import { termText } from "../terminal-text";
+import { goToNewRunPanel } from "../fixtures";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -226,6 +227,7 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   await beat(page, BEAT_SHORT + 400);
 
   const title = page.getByLabel("Title");
+  await goToNewRunPanel(page, "run");
   await title.fill(RUN_TITLE);
 
   // Agent task this time — and Interactive, which is the video.
@@ -268,6 +270,7 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   // deny_with_review) — confined by construction, the same default the old
   // "Confined" radio asserted. Clicking the Minimal chip re-asserts it for
   // the camera in one click.
+  await goToNewRunPanel(page, "policy");
   await act(page, page.getByRole("button", { name: "Minimal" }), "Minimal — confined.");
   await caption(page, "And the network is still default-deny — nothing out unless we list it.");
   await beat(page, PACE.read);

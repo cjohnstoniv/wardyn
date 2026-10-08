@@ -13,7 +13,7 @@
 // ado-pat-copy.ts, never retyped: the vitest pin owns the characters, this
 // spec owns that a browser draws them and that no state scrolls sideways at 390px.
 import type { Page } from "@playwright/test";
-import { test, expect, gotoConsole, navToRoute, expandCard, sql } from "./fixtures";
+import { test, expect, gotoConsole, navToRoute, expandCard, sql, goToNewRunPanel } from "./fixtures";
 import { ADO_PAT } from "../src/app/lib/ado-pat-copy";
 import { adoCapName } from "../src/app/lib/ado-access-copy";
 
@@ -284,6 +284,7 @@ test.describe("New Run, a row that creates a token for each run", () => {
     await gotoConsole(page);
     await page.getByRole("button", { name: "New run" }).click();
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await goToNewRunPanel(page, "policy");
     if (saved) await page.getByRole("button", { name: /^Reuse a saved policy/ }).click();
   }
 
@@ -294,6 +295,7 @@ test.describe("New Run, a row that creates a token for each run", () => {
       route.fulfill({ json: access.state === "live" ? [{ state: "live", source: "org" }] : [] }),
     );
     await openNewRun(page);
+    await goToNewRunPanel(page, "access");
     await expect(page.getByTestId("ado-run-token-line")).toHaveText(
       `${ADO_PAT.NEWRUN_LINE_PREFIX}${adoCapName("code_read")}${ADO_PAT.NEWRUN_LINE_SUFFIX}`,
     );
@@ -312,9 +314,12 @@ test.describe("New Run, a row that creates a token for each run", () => {
       await route.fulfill({ status: 403, json: { error: ADO_PAT.LAUNCH_POLICY_REFUSED, reason: "ado_pat_policy_blocked" } });
     });
     await openNewRun(page, false);
+    await goToNewRunPanel(page, "access");
     await expect(page.getByTestId("ado-launch-note")).toHaveCount(0);
+    await goToNewRunPanel(page, "run");
     await page.getByLabel("Title").fill("e2e ado token policy");
     await page.getByRole("button", { name: "Launch run" }).click();
+    await goToNewRunPanel(page, "access");
     await expect(page.getByTestId("ado-launch-note")).toHaveText(ADO_PAT.LAUNCH_POLICY_REFUSED);
   });
 
@@ -327,12 +332,14 @@ test.describe("New Run, a row that creates a token for each run", () => {
     await openNewRun(page, false);
     await page.getByLabel("Title").fill("e2e ado consent");
     await page.getByRole("button", { name: "Launch run" }).click();
+    await goToNewRunPanel(page, "access");
     await expect(page.getByTestId("ado-launch-note").getByText(ADO_PAT.LAUNCH_NOT_CONNECTED)).toBeVisible();
   });
 
   test("a row on the Entra sign-in lane draws neither line", async ({ page }) => {
     await spliceAccess(page, () => ({ token_mode: "bearer", state: "live", source: "org" }));
     await openNewRun(page);
+    await goToNewRunPanel(page, "access");
     await expect(page.getByTestId("ado-run-token-line")).toHaveCount(0);
     await expect(page.getByTestId("ado-launch-note")).toHaveCount(0);
   });
@@ -453,7 +460,9 @@ test.describe("no horizontal scroll at 390px", () => {
 
     access = { token_mode: "minted_pat", state: "not_configured" };
     await page.goto("/runs/new");
+    await goToNewRunPanel(page, "policy");
     await page.getByRole("button", { name: /^Reuse a saved policy/ }).click();
+    await goToNewRunPanel(page, "access");
     await expect(page.getByTestId("ado-launch-note")).toBeVisible();
     expect(await noHorizontalScroll(page)).toBe(true);
 

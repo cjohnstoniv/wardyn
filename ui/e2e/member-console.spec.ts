@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { test, expect, ADMIN_TOKEN, MEMBER_PRINCIPAL, asRealMember, asRealSecurityAdmin, consoleAPI, gotoConsole, mockMemberRole, navToRoute, sidebarLink, sql } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, MEMBER_PRINCIPAL, asRealMember, asRealSecurityAdmin, consoleAPI, gotoConsole, mockMemberRole, navToRoute, sidebarLink, sql, goToNewRunPanel } from "./fixtures";
 import { DENIED } from "../src/app/lib/permissions-copy";
 
 test.describe("member console — real member navigation", () => {
@@ -156,6 +156,7 @@ test.describe("member why-denied (mocked /me role, real enforcement)", () => {
     // The workspace Select's trigger carries no accessible name of its own —
     // its content IS the current selection, so filter on that.
     const picker = page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" });
+    await goToNewRunPanel(page, "workspace");
     await picker.click();
     const option = page.getByRole("option", { name: /payments/ });
     await expect(option).toBeVisible();

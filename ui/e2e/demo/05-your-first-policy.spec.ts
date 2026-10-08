@@ -100,6 +100,7 @@ import { act, beat, caption, centerInFrame, chapter, PACE, spotlight } from "./o
 // out of stage() inside a test body rather than closing over a module binding.
 import { stage } from "./stage";
 import { sweepStaleState } from "./sweep";
+import { goToNewRunPanel } from "../fixtures";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -227,6 +228,7 @@ test("A1 — the panel and its templates", async () => {
   // The operator gate, named. A member's button is disabled (policies.tsx) and
   // act() would simply park on it for the full 45s action timeout.
   const newPolicyBtn = page.getByRole("button", { name: "New policy" });
+  await goToNewRunPanel(page, "policy");
   await expect(
     newPolicyBtn,
     "the New policy button is disabled — this session is not an operator (shoot in local mode)",
@@ -492,6 +494,7 @@ test("A4 — save, then reuse", async () => {
   // "Reuse a saved policy" is the Policy panel's MODE ROW (an OptionCard — an
   // aria-pressed <button> whose accessible name is its title plus its hint, so
   // prefix-match the title). The picker renders once this half is lit.
+  await goToNewRunPanel(page, "policy");
   await act(page, page.getByRole("button", { name: /^Reuse a saved policy/ }), "Select saved policy.");
   await act(page, page.getByRole("combobox", { name: "Saved policy" }));
   await act(page, page.getByRole("option", { name: POLICY_NAME }));

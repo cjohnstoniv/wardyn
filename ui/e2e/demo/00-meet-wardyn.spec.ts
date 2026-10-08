@@ -84,6 +84,7 @@ import { sweepStaleState } from "./sweep";
 // (one browser, one context, one recorded page), and every beat reads the page
 // out of stage() inside a test body rather than closing over a module binding.
 import { stage } from "./stage";
+import { goToNewRunPanel } from "../fixtures";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -481,6 +482,7 @@ test("V00 act 2 — a run, and a knock at the door", async () => {
   // option label, so prefix-match it. The startup field it reveals is left
   // BLANK — the run comes up idle with a shell, which is what act 2 and act 3
   // type into, and it is why Title is the only required field on this lane.
+  await goToNewRunPanel(page, "run");
   await act(page, page.getByRole("radio", { name: /^Terminal/ }), "A plain command window. No AI agent, and no key to any AI service."); // C20
   await caption(page, "The rules don't care who's typing — a person or an agent gets the same answer."); // C21
   await beat(page, PACE.read);
@@ -488,6 +490,7 @@ test("V00 act 2 — a run, and a knock at the door", async () => {
   // The workspace trigger has NO accessible name (the Agent select beside it is
   // labelled, this one was never wired up), so it is addressed by its
   // placeholder text — an honest workaround for a real a11y gap.
+  await goToNewRunPanel(page, "workspace");
   await act(page, page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" }), "Our workspace."); // C22
   await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE, "i") }).first());
 
@@ -496,6 +499,7 @@ test("V00 act 2 — a run, and a knock at the door", async () => {
   // because a changed default would make the approval below never fire while
   // the take still went green.
   const spec = page.getByLabel("Spec (JSON)");
+  await goToNewRunPanel(page, "policy");
   await expect(spec, "the default first_use_approval is no longer deny_with_review").toHaveValue(
     /"first_use_approval": "deny_with_review"/,
   );

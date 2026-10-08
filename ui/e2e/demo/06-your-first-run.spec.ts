@@ -82,6 +82,7 @@ import { act, beat, caption, centerInFrame, chapter, PACE, spotlight } from "./o
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll
 // (one browser, one context, one recorded page).
 import { stage } from "./stage";
+import { goToNewRunPanel } from "../fixtures";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -269,6 +270,7 @@ test("V06 beat 1 — name it, aim it", async () => {
 
   // Title first — the board groups by it, and an untitled run is a loose card.
   const title = page.getByLabel("Title");
+  await goToNewRunPanel(page, "run");
   await spotlight(page, title);
   await caption(page, "Give the run a name.");
   await beat(page, BEAT_SHORT);

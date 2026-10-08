@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, mockMemberRole, navToRoute, sidebarLink } from "./fixtures";
+import { test, expect, gotoConsole, mockMemberRole, navToRoute, sidebarLink, goToNewRunPanel } from "./fixtures";
 import { GOVERNANCE as GOV, MEMBER } from "../src/app/lib/governance-copy";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import type { Page } from "@playwright/test";
@@ -142,6 +142,7 @@ test.describe("governance — the member's own picker obeys the floor (T-9)", ()
     // authored-policy spec's OWN floor chip, unrelated to this governance
     // floor, legitimately renders "Fence" elsewhere on this page — the
     // radiogroup is what actually proves "no picker".)
+    await goToNewRunPanel(page, "policy");
     await expect(page.getByRole("radio", { name: "Fence" })).toHaveCount(0);
     await expect(page.getByRole("radio", { name: "Wall" })).toHaveCount(0);
     await expect(page.getByRole("radio", { name: "Vault" })).toHaveCount(0);
@@ -164,6 +165,7 @@ test.describe("governance — the member's own picker obeys the floor (T-9)", ()
     // Never the false claim that Wall (the strongest tier this host DOES
     // have) is what the member gets.
     await expect(page.getByText("Wall · set by your admin")).toHaveCount(0);
+    await goToNewRunPanel(page, "policy");
     await expect(page.getByRole("radio", { name: "Wall" })).toHaveCount(0);
   });
 
@@ -174,6 +176,7 @@ test.describe("governance — the member's own picker obeys the floor (T-9)", ()
     await navToRoute(page, "/runs/new");
 
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await goToNewRunPanel(page, "policy");
     await expect(page.getByRole("radio", { name: "Fence" })).toBeVisible();
     await expect(page.getByRole("radio", { name: "Wall" })).toBeVisible();
     await expect(page.getByRole("radio", { name: "Vault" })).toHaveCount(0);
