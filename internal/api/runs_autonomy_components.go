@@ -13,20 +13,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// runComponents is what the component gate decided about one run's components,
-// in the shape the autonomy gate reads. It is declared here, with only the two
-// fields the cap needs, so resolveRunAutonomy's signature exists before the
-// gate that fills it; the gate's lane moves it beside that gate and adds the
-// rest. The zero value means "no components" and caps nothing: it is what every
-// lane that runs no component gate passes (record, scan, verify, revive).
-type runComponents struct {
-	// selfDefined counts the attached components the launcher defined: inline,
-	// or a saved one they own. An organisation's component never counts.
-	selfDefined int
-	// settings is the site config's components block, as the gate read it.
-	settings types.ComponentSettings
-}
-
 // componentAutonomyCause is the bound_by entry, and the sentence clause, that
 // names the organisation's cap. It sits beside the rubric's own field names
 // (egress_open, secrets_powerful, …), so it is spelled the same way.
@@ -42,11 +28,20 @@ const componentAutonomySource = "your organisation's rule for runs that use your
 // "" (no cap) otherwise. "" is also the default setting, so with nothing set no
 // run is capped — the owner's "warn only" default; the run is still marked as
 // carrying reach its launcher added, by the gate and not here.
+//
+// PUT /site-config stores only "", L1 or L0 (validateComponentSettings). A
+// stored value outside that set reached the document some other way, and is
+// read as the strictest cap rather than as a level the ladder has no rung for:
+// a cap can only tighten.
 func componentAutonomyCap(comps runComponents) types.AutonomyLevel {
 	if comps.selfDefined == 0 {
 		return ""
 	}
-	return comps.settings.AutonomyCap
+	switch level := comps.settings.AutonomyCap; level {
+	case "", types.AutonomyL1, types.AutonomyL0:
+		return level
+	}
+	return types.AutonomyL0
 }
 
 // autonomySource is who decided the level the ladder enforces: the phrase its

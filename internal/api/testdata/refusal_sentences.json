@@ -135,6 +135,11 @@
     "sentence": "componentUnavailableRefusal"
   },
   {
+    "reason": "capability_component",
+    "target": "\"runs.component\"",
+    "sentence": "componentUnavailableRefusal"
+  },
+  {
     "reason": "capability_egress_host",
     "target": "id.String()",
     "sentence": "\"you are not granted egress host \" + host + \" — an admin decides this one, or can grant it to you\""

@@ -32,6 +32,8 @@ const (
 	// FAILED. The driver's own error text is in the 500 body and in the audit
 	// row; this is the one line the console shows under the badge.
 	createRunGrantAbortHint = "the run's credential grants could not be recorded, so it was never started"
+	// createRunComponentsAbortHint is the same for the run's component snapshot.
+	createRunComponentsAbortHint = "the run's components could not be recorded, so it was never started"
 	// devcontainerNoBuilderWarning is the 201 warning for a devcontainer_repo run
 	// on a deployment with no image builder wired: the build silently fell
 	// through to the convention image, which is a different sandbox from the one
@@ -210,6 +212,14 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if refusal.write(s, w, r) {
 		return
 	}
+	// The run's components, bounded and expanded onto the spec here: after the
+	// folds above, so a host an admin already credentialed is seen; before the
+	// floor, the model-provider choice and the autonomy grade below, which read
+	// what a component adds. See applyRunComponents.
+	comps, refusal := s.applyRunComponents(r, req, &spec, ceiling, wsRefs, true)
+	if refusal.write(s, w, r) {
+		return
+	}
 
 	// The primary host workspace directory this run will operate in (if any), used
 	// below to DISCOURAGE — warn, never block — sharing a directory with another
@@ -219,7 +229,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Resolve + gate the confinement class (request vs policy floor, the CC3
 	// blast-radius floor now computed on the FOLDED spec, runner capability
 	// membership, cloud_sts grant gating) — invariant 5, fail closed.
-	enforced, ok := s.resolveEnforcedConfinement(ctx, w, spec, reqCC)
+	enforced, ok := s.resolveEnforcedConfinement(ctx, w, confinementFloorSpec(spec, comps), reqCC)
 	if !ok {
 		return
 	}
@@ -257,7 +267,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// only be the one this level was graded against (adoEntraGrade).
 	// bedrockGrade is the same freeze for the Amazon Bedrock model credential
 	// the gate graded from modelCred (bedrockCredGrade).
-	autonomy, autonomyWarns, scmSite, adoGrade, bedrockGrade, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling, modelCred, runComponents{})
+	autonomy, autonomyWarns, scmSite, adoGrade, bedrockGrade, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling, modelCred, comps)
 	if !ok {
 		return
 	}
@@ -364,6 +374,15 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// keeps the two concerns independent.
 	abort := s.abortHalfBuiltRun(ctx, runID)
 
+	// The components this run launched with, recorded before anything else is
+	// built on the row: a revive re-checks the doors they needed from this
+	// snapshot, so a run that could not record it must not start.
+	if err := s.persistRunComponents(ctx, runID, comps); err != nil {
+		abort(createRunComponentsAbortHint)
+		writeServerError(w, r, "record run components", err)
+		return
+	}
+
 	// resolveRunPolicy's own notes come FIRST: they are the ones that say the
 	// run is narrower than what the caller asked for, and launch is the ONLY
 	// place a member sees that — preflight, which carries the same notes, is
@@ -419,9 +438,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	createData := createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
 	createData["policy_source"] = policySource
+	comps.stampRunCreate(createData)
 	s.markGovernanceExempt(ctx, createData)
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createData))))
+	s.auditRunComponents(ctx, runID, createdByType, createdBy, comps)
 
 	// Model-resolution fail-fast, as a warning; see noModelAccessWarning.
 	warnings = append(warnings, noModelAccessWarning(req, mpChoice)...)
@@ -429,7 +450,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
 	// ADO SCM lanes) — never the LLM; see unionRunEgress.
-	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo, scmSite, directGitHubAdded)
+	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo, scmSite, directGitHubAdded, comps)
 
 	// …and say so when one of those operator-approved workspace hosts is walled
 	// off by the caller's own governance profile. The union above still happened

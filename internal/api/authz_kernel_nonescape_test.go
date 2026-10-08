@@ -61,6 +61,9 @@ var kernelDoors = map[string][]string{
 	"decidableKindAndOwner": {"capEgressHost"},
 	// Attaching a component: an org row by id, a person-defined one by feature.
 	"componentAttachRefusal": {"capComponent", "capFeature"},
+	// The hosts a component reaches: the same egress_host rows that bound an
+	// inline policy's hosts.
+	"componentHostsBounded": {"capEgressHost"},
 	// Minting a personal credential.
 	"handleAddSSHKey":      {"capFeature"},
 	"handleCreateAPIToken": {"capFeature"},

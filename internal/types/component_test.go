@@ -232,23 +232,26 @@ func nSecrets(n int) []types.ComponentSecret {
 	return out
 }
 
-// File delivery is refused until a build can perform it, so a definition can
-// never promise a delivery nothing makes. The sentence is the one a person
-// reads; ComponentFileDelivery flipping true turns the same input valid.
+// File delivery follows the build: this one has the file lane, so the mode is
+// accepted and its file name is held to the one-element grammar. A build with
+// ComponentFileDelivery false refuses the mode outright.
 func TestComponentDefinitionValidate_FileDeliveryFollowsTheBuild(t *testing.T) {
-	d := types.ComponentDefinition{Secrets: []types.ComponentSecret{{
-		SecretName: "k", Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryFile, File: "service-account.json"},
-	}}}
-	err := d.Validate(proxy.ValidDomainEntry, true)
-	if types.ComponentFileDelivery {
-		if err != nil {
-			t.Fatalf("Validate = %v, want nil: this build delivers files", err)
-		}
-		return
+	file := func(name string) types.ComponentDefinition {
+		return types.ComponentDefinition{Secrets: []types.ComponentSecret{{
+			SecretName: "k", Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryFile, File: name},
+		}}}
 	}
-	const want = "secrets[0].delivery.mode: file delivery is not available in this release"
-	if err == nil || err.Error() != want {
-		t.Fatalf("Validate = %v, want %q", err, want)
+	if !types.ComponentFileDelivery {
+		t.Fatal("ComponentFileDelivery is false: this build has the file lane, so the mode must be accepted")
+	}
+	if err := file("service-account.json").Validate(proxy.ValidDomainEntry, true); err != nil {
+		t.Fatalf("Validate = %v, want nil: this build delivers files", err)
+	}
+	for _, bad := range []string{"", "../etc/passwd", ".env", "a/b", "A"} {
+		err := file(bad).Validate(proxy.ValidDomainEntry, true)
+		if err == nil || !strings.HasPrefix(err.Error(), "secrets[0].delivery.file: ") {
+			t.Errorf("file %q: Validate = %v, want a delivery.file refusal", bad, err)
+		}
 	}
 }
 

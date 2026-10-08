@@ -663,6 +663,9 @@ func (s *Server) applySSHLaneWarnings(ctx context.Context, req createRunRequest,
 //   - ADO SCM lane: a git_pat grant for an Azure DevOps host needs
 //     dev.azure.com + *.visualstudio.com reachable (see adoEgressDomains) —
 //     nothing else adds these for ADO. Mirrors the SSH lane.
+//   - Components: nothing is unioned here — the component gate did, before
+//     the run was graded (applyRunComponents) — but each one's addition is
+//     audited here with the rest, under kind `component`.
 //
 // wsRefs is the run's referenced onboarded workspaces, resolved by the caller
 // (it also feeds the workspace cred binding + image resolution). legacyRepo is
@@ -672,7 +675,7 @@ func (s *Server) applySSHLaneWarnings(ctx context.Context, req createRunRequest,
 // hosts dispatched here are the hosts that were graded. Extracted verbatim
 // from handleCreateRun.
 func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, gw grantWiring, wsRefs []types.Workspace, legacyRepo string,
-	scmSite types.SiteConfig, directGitHubAdded []string,
+	scmSite types.SiteConfig, directGitHubAdded []string, comps runComponents,
 ) {
 	// Direct GitHub candidates were bounded before grading; audit them only now
 	// that a run exists, alongside the dispatch-only additions.
@@ -683,6 +686,12 @@ func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *type
 		}
 	}
 	auditAdded("github_direct", directGitHubAdded)
+	// A component's hosts were bounded and unioned by the gate, before grading,
+	// like the direct GitHub candidates; the rows name what each one added.
+	for _, data := range comps.egressAudit() {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.egress.add",
+			runID.String(), "success", mustJSON(data)))
+	}
 	auditAdded("workspace", unionWorkspaceEgress(spec, wsRefs))
 	// Repo clone host(s) each referenced workspace needs: a
 	// non-GitHub HTTPS clone (GitLab, self-hosted git) reaches its forge as an

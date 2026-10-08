@@ -9,8 +9,8 @@ import (
 )
 
 // The file name is joined onto a fixed directory, so it must be one path
-// element that cannot climb out of it. Pinned on the pattern itself because
-// Validate refuses the whole mode while ComponentFileDelivery is false.
+// element that cannot climb out of it. Pinned on the pattern itself, which is
+// the whole rule Validate applies to the name.
 func TestComponentFileToken(t *testing.T) {
 	for _, ok := range []string{"a", "service-account.json", "9.pem", "a_b.c-d", "a" + strings.Repeat("b", 62)} {
 		if !componentFileTokenRE.MatchString(ok) {

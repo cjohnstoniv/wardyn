@@ -172,3 +172,86 @@ func decisionsOf(t *testing.T, events []types.AuditEvent, w *httptest.ResponseRe
 	}
 	return d
 }
+
+// TestPreflightDecisionsEqualLaunch_Components is the same comparison for the
+// component gate: Review and launch are asked the same component request over
+// one store and must decide it the same — every refusal with the same status
+// and bytes, and for an authorization refusal the same authz.denied row.
+func TestPreflightDecisionsEqualLaunch_Components(t *testing.T) {
+	type request struct {
+		setup func(f *componentFixture) []any
+		// refused: the status both doors must answer; 0 for an admitted run.
+		refused int
+	}
+	denyAll := func(f *componentFixture, kind, value string) {
+		f.cs.grants = append(f.cs.grants, grant(types.CapabilitySubjectAll, "", kind, value, types.CapabilityDeny))
+	}
+	own := inlineComponent([]string{"svc.example", "files.svc.example:8443"}, headerSecret(compOwnSecret, "svc.example"), envSecret(compOwnSecret, "SVC_TOKEN"))
+	requests := map[string]request{
+		"a person's own component": {setup: refs(own)},
+		"an organisation's component, granted": {setup: func(f *componentFixture) []any {
+			f.cs.restricted = map[string]map[string]bool{capComponent: {compOrgID: true}}
+			f.cs.grants = []types.CapabilityGrant{grant(types.CapabilitySubjectGroup, "eng", capComponent, compOrgID, types.CapabilityAllow)}
+			return []any{f.org(compOrgID, types.ComponentDefinition{Hosts: []string{"org-api.example"}})}
+		}},
+		"an organisation's component, not granted": {refused: http.StatusForbidden, setup: func(f *componentFixture) []any {
+			f.cs.restricted = map[string]map[string]bool{capComponent: {compOrgID: true}}
+			return []any{f.org(compOrgID, types.ComponentDefinition{Hosts: []string{"org-api.example"}})}
+		}},
+		"an id that names nothing": {refused: http.StatusForbidden, setup: refs(map[string]any{"id": compAbsentID})},
+		"custom components turned off": {refused: http.StatusForbidden, setup: func(f *componentFixture) []any {
+			denyAll(f, capFeature, featureCustomComponent)
+			return []any{own}
+		}},
+		"a host the organisation blocks": {refused: http.StatusUnprocessableEntity, setup: func(f *componentFixture) []any {
+			f.srv.cfg.DefaultPolicy.DeniedDomains = []string{"svc.example"}
+			return []any{own}
+		}},
+		"a host the person's egress rows block": {refused: http.StatusUnprocessableEntity, setup: func(f *componentFixture) []any {
+			denyAll(f, capEgressHost, "files.svc.example")
+			return []any{own}
+		}},
+		"a model's host": {refused: http.StatusUnprocessableEntity, setup: refs(inlineComponent([]string{"*.openai.com"}))},
+		"a secret that is not the person's": {refused: http.StatusUnprocessableEntity,
+			setup: refs(inlineComponent([]string{"svc.example"}, headerSecret(compOperatorSecret, "svc.example")))},
+		"a shared secret the operator has not stored": {refused: http.StatusUnprocessableEntity, setup: func(f *componentFixture) []any {
+			return []any{f.org(compOrgID, types.ComponentDefinition{Hosts: []string{"org-api.example"}, Secrets: []types.ComponentSecret{{
+				SecretName: "not-stored", Shared: true, Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryHeader, Host: "org-api.example"}}}})}
+		}},
+		"the organisation's autonomy cap": {refused: http.StatusForbidden, setup: func(f *componentFixture) []any {
+			f.st.siteConfig.Components = &types.ComponentSettings{AutonomyCap: types.AutonomyL0}
+			return []any{own}
+		}},
+	}
+	refusals := 0
+	for _, name := range sortedKeys(requests) {
+		req := requests[name]
+		f := newComponentFixture(t)
+		body := componentBody(req.setup(f)...)
+		ask := func(path string) doorDecisions {
+			before := len(f.rec.snapshot())
+			w := f.ask(t, path, body)
+			return decisionsOf(t, f.rec.snapshot()[before:], w)
+		}
+		pre, launch := ask("/api/v1/runs/preflight"), ask("/api/v1/runs")
+		if req.refused == 0 {
+			if pre.code >= 300 || launch.code >= 300 {
+				t.Errorf("%s: preflight %d %s, launch %d %s, want both admitted", name, pre.code, pre.body, launch.code, launch.body)
+			}
+			continue
+		}
+		refusals++
+		if pre.code != req.refused || launch.code != req.refused || pre.body != launch.body {
+			t.Errorf("%s: preflight %d %s, launch %d %s, want %d and the same sentence", name, pre.code, pre.body, launch.code, launch.body, req.refused)
+		}
+		if !slices.Equal(pre.refused, launch.refused) {
+			t.Errorf("%s: refused differently\npreflight: %v\nlaunch:    %v", name, pre.refused, launch.refused)
+		}
+		if req.refused == http.StatusForbidden && len(launch.refused) != 1 {
+			t.Errorf("%s: authz.denied rows = %v, want one", name, launch.refused)
+		}
+	}
+	if refusals == 0 {
+		t.Fatal("no refusal was compared")
+	}
+}

@@ -123,7 +123,7 @@ func TestComponents_SaveRefusals(t *testing.T) {
 		{"a secret name Wardyn manages (G-3)", hdr("wardyn-signing-key", ""), "managed by Wardyn"},
 		{"a harness sign-in blob (G-3)", hdr("wardyn-harness-anthropic-oauth", ""), "managed by Wardyn"},
 		{"a model-provider credential into the environment", `{"secrets":[{"secret_name":"` + providerSecretPrefix + `abc-key","delivery":{"mode":"env","var":"MY_KEY"}}]}`, "managed by Wardyn"},
-		{"file delivery, not available in this release", `{"secrets":[{"secret_name":"k","delivery":{"mode":"file","file":"token"}}]}`, "file"},
+		{"a file name that is not a token", `{"secrets":[{"secret_name":"k","delivery":{"mode":"file","file":"Bad Name"}}]}`, "file"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
