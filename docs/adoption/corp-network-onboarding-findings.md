@@ -246,7 +246,7 @@ model, not just the feature). B3 still needs a maintainer design call.
   the whole run, no mint/TTL/JTI (the broker refuses the kind), nothing for the kill-switch to revoke.
   Bounded by: a `[A-Z_][A-Z0-9_]*`, non-`WARDYN_` variable name; reserved secret names refused at write
   and at the sink; no overwriting a platform-authored variable; `requires_approval` refused rather than
-  silently ignored; and **admin-only unless `WARDYN_ALLOW_MEMBER_ENV_SECRET`**. See
+  silently ignored; and **admin-only unless `WARDYN_ALLOW_USER_ENV_SECRET`**. See
   `docs/POLICIES.md` and `threatmodel/THREAT-MODEL.md` §5.1a.
 
 - **B2 — `git_pat` approval is single-use, so there is no "approve once per sandbox".** `git_pat`

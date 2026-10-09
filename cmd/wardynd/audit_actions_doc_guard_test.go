@@ -603,10 +603,6 @@ var auditActionGrammarAllow = map[string]bool{
 	// renamed alone.
 	"run.lost":         true,
 	"run.lost.expired": true,
-	// The user view's compat row: dual-emitted beside auth.user_view.set under
-	// its exact pre-0.8 name for one minor (OD-18, #617), which is its whole
-	// purpose. Removed in 0.9.
-	"auth.member_mode": true,
 	// The 0.8 upgrade's two one-time rows (#548), written by migration
 	// 0100_model_provider_conversion under the names the issue and its design
 	// record fixed before this grammar saw them. Past tense on purpose: each

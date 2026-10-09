@@ -35,23 +35,6 @@ func EnvOr(key, def string) string {
 	return def
 }
 
-// EnvAlias lets a deprecated env var name go on working for one deprecation window while a new name takes
-// over. Empty counts as unset for both. If newEnv is unset and oldEnv set, copies oldEnv into newEnv and
-// reports aliased. If both are set, newEnv wins; a differing value reports ignored, since a dropped old
-// value can be a longer deny list the operator still believes is in force. Must run before ANY flag parse
-// or other read of either name.
-func EnvAlias(newEnv, oldEnv string) (aliased, ignored bool) {
-	oldV := os.Getenv(oldEnv)
-	if oldV == "" {
-		return false, false
-	}
-	if newV := os.Getenv(newEnv); newV != "" {
-		return false, newV != oldV
-	}
-	os.Setenv(newEnv, oldV) //nolint:errcheck // this process's own env; Setenv cannot fail here
-	return true, false
-}
-
 // FlagEnv defines a string flag whose default is overridden by an env var. Unset/empty keeps the default;
 // the escape hatch for a genuinely-intended blank is `-name=`.
 //

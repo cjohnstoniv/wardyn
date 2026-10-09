@@ -5214,8 +5214,8 @@ Moved, with the sections that followed it here, to [secrets-and-keys.md](operati
 |---|---|---|
 | The toggle ("view as member"/the user view) | `POST /me/member-mode {"enabled":bool}` | `POST /me/view {"view":"user"\|"admin","user_type":"…"}` |
 | `/me` fields | `member_mode`, `member_mode_no_credential`, `member_preview_available` | `user_view`, `user_view_no_credential`, `user_preview_available` |
-| Audit action | `auth.member_mode` | `auth.user_view.set` — **dual-emitted** alongside `auth.member_mode` (identical `Data`) for one minor (0.8.x, OD-18), so a dashboard or SIEM rule still filtering on the old name keeps seeing rows; the compat row is removed in 0.9 |
-| `authz.denied` datum | `member_mode: true` | `user_view: true` — a clean rename, not dual-emitted (it lives inside `authz.denied`'s own row, which is not itself renamed) |
+| Audit action | `auth.member_mode` | `auth.user_view.set` (dual-emitted through 0.8.x only) |
+| `authz.denied` datum | `member_mode: true` | `user_view: true` — a clean rename, never dual-emitted |
 | `authz.denied` reason | `byoi_member` | `byoi_user` |
 | Go: `runner` package | `MemberMountPolicy`, `SandboxSpec.MemberMountRoots`, `ParseMemberMountPolicy`, `ValidateMemberMount`, `ValidateMemberMountSource`, `deniedMemberSegment`, `memberCeilingRoots`, `validateMemberSource` | `UserMountPolicy`, `SandboxSpec.UserMountRoots`, `ParseUserMountPolicy`, `ValidateUserMount`, `ValidateUserMountSource`, `deniedUserSegment`, `userCeilingRoots`, `validateUserSource` |
 | Go: `internal/auth/oidc` | `SetMemberMode` | `SetUserView` (grew a `typeID` param the same release, #835/UT-13) |
@@ -5234,14 +5234,18 @@ Moved, with the sections that followed it here, to [secrets-and-keys.md](operati
   file's own "view as member" prose ([Exercising member mode as an
   admin](operations/member-mode.md)) — #620, the docs pass.
 - The console's remaining "member" copy — #618.
-- `oidc.LegacyRoleMember`/`oidc.LegacyRoleMemberWarning` and the `member`
-  role-map value itself, which keep working and warn through 0.8.x by design
-  (see "A chart that still says `=member`" in the CHANGELOG's #608 entry) —
-  removed in 0.9, not renamed now.
 - The `classMember` route-classification identifier (`internal/api`'s authz
   matrix) — a tier classification, not this feature; out of scope.
 
 ## Upgrades
+
+> [!IMPORTANT]
+> **Upgrading to 0.9 removes three compatibility behaviours. Check them first.**
+
+- **The `member` role.** `WARDYN_OIDC_ROLE_MAP` entries ending `=member` and `WARDYN_OIDC_DEFAULT_ROLE=member` refuse boot, naming the entry.
+  - Run `wardyn setup status --pre-upgrade` first; it lists each leftover (`--role-map` and `--default-role` override the environment). Remap them to `user` or a user type id.
+- **The `MEMBER` spellings of the `USER` variables** are ignored: see [ENV.md](ENV.md#removed-in-09).
+- **A plain `http://` OIDC issuer** with TLS refuses boot; use `https://`.
 
 - Migrations are **forward-only**.
 - `internal/db` records each applied filename in `schema_migrations` and applies anything new on boot, under an advisory lock so concurrent starts do not race.

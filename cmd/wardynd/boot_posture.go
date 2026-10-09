@@ -441,6 +441,9 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateOIDCSessionTTL(*f.oidcSessionTTL); err != nil {
 		return err
 	}
+	if err := plaintextIssuerRefusal(*f.oidcIssuer, *f.oidcInternalIss, posture); err != nil {
+		return err
+	}
 	if _, err := scimConfig(f, posture); err != nil {
 		return err
 	}
@@ -514,35 +517,38 @@ func validateOIDCSessionTTL(ttl time.Duration) error {
 // so loudly about, returned rather than logged so a test can pin each one.
 func bootPostureWarnings(f *bootFlags, posture tlsPosture) []string {
 	var out []string
-	out = append(out, plaintextIssuerWarnings(*f.oidcIssuer, *f.oidcInternalIss, posture)...)
 	if w := uiGatewaySharesConsoleHostWarning(*f.uiListen, *f.uiAdvertise, *f.uiOriginTemplate, *f.oidcRedirectURL, posture); w != "" {
 		out = append(out, w)
 	}
 	return out
 }
 
-// plaintextIssuerWarnings names each OIDC issuer URL that is http:// on a host
-// that is not loopback (#156). The Compose demo is exempt: it serves the
-// console without TLS (no secure cookies) and reaches its bundled Dex at
-// http://dex:5556. Any deployment with a TLS posture is not the demo, and
-// its discovery document, JWKS and token exchange would cross the network in
-// the clear — or, for the public issuer, send the browser's sign-in there.
-// A warning, not a refusal: an in-cluster IdP behind a mesh is a real setup.
-func plaintextIssuerWarnings(issuer, internalIssuer string, posture tlsPosture) []string {
+// plaintextIssuerRefusal refuses each OIDC issuer URL that is http:// on a host
+// that is not loopback (#156; a warning through 0.8.x, a refusal since 0.9).
+// The Compose demo is exempt: it serves the console without TLS (no secure
+// cookies) and reaches its bundled Dex at http://dex:5556. Any deployment with
+// a TLS posture is not the demo, and its discovery document, JWKS and token
+// exchange would cross the network in the clear — or, for the public issuer,
+// send the browser's sign-in there. An in-cluster IdP behind a mesh serves
+// https:// through it; there is no override.
+func plaintextIssuerRefusal(issuer, internalIssuer string, posture tlsPosture) error {
 	if !posture.secureCookies || strings.TrimSpace(issuer) == "" {
 		return nil // OIDC is configured by the public issuer; an internal one alone is dead config
 	}
-	var out []string
+	var bad []string
 	for _, c := range []struct{ env, raw string }{
 		{"WARDYN_OIDC_ISSUER", issuer}, {"WARDYN_OIDC_INTERNAL_ISSUER", internalIssuer},
 	} {
 		if u, err := url.Parse(strings.TrimSpace(c.raw)); err == nil && strings.EqualFold(u.Scheme, "http") && !urlHostIsLoopback(u.Hostname()) {
-			out = append(out, fmt.Sprintf("wardynd: %s %q is plain http:// on a host that is not loopback while the console is served over TLS — "+
-				"sign-in discovery, keys and the token exchange cross the network unencrypted; use an https:// issuer "+
-				"(plain http:// is for the Compose demo's bundled Dex only)", c.env, c.raw))
+			bad = append(bad, fmt.Sprintf("%s %q", c.env, c.raw))
 		}
 	}
-	return out
+	if len(bad) == 0 {
+		return nil
+	}
+	return fmt.Errorf("refusing to start: %s is plain http:// on a host that is not loopback while the console is served over TLS — "+
+		"sign-in discovery, keys and the token exchange would cross the network unencrypted; use an https:// issuer "+
+		"(plain http:// is for the Compose demo's bundled Dex only; a 0.8.x warning became this refusal in 0.9)", strings.Join(bad, " and "))
 }
 
 // urlHostIsLoopback reports whether a URL's hostname is "localhost" or a

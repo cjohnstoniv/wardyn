@@ -13,36 +13,48 @@ import (
 
 var tlsServed = tlsPosture{tlsEnabled: true, secureCookies: true}
 
-// TestBootPosturePlaintextIssuerWarnings pins #156: a non-loopback http:// issuer warns
-// once the console has a TLS posture, names the variable, and stays silent for
-// https, for loopback, and for the plaintext Compose demo's bundled Dex.
-func TestBootPosturePlaintextIssuerWarnings(t *testing.T) {
+// TestBootPosturePlaintextIssuerRefusal pins #156 as a refusal: a non-loopback http:// issuer is
+// refused once the console has a TLS posture, the error names each offending variable, and
+// https, loopback and the plaintext Compose demo's bundled Dex still boot.
+func TestBootPosturePlaintextIssuerRefusal(t *testing.T) {
 	for _, tc := range []struct {
 		name, issuer, internal string
 		posture                tlsPosture
-		want                   []string // env names that must be named, in order
+		want                   []string // env names that must be named, in order; none = boots
 	}{
-		{name: "https issuer is silent", issuer: "https://login.example.com/v2.0", posture: tlsServed},
-		{name: "loopback http public issuer is silent", issuer: "http://localhost:5556", posture: tlsServed},
-		{name: "loopback ip is silent", issuer: "http://127.0.0.1:5556", internal: "http://[::1]:5556", posture: tlsServed},
-		{name: "no issuer is silent", posture: tlsServed},
-		{name: "compose demo internal dex is silent", issuer: "http://localhost:5556", internal: "http://dex:5556"},
-		{name: "oidc off: compose default internal issuer is silent", internal: "http://dex:5556", posture: tlsServed},
-		{name: "plaintext public issuer warns", issuer: "http://idp.example.com/", posture: tlsServed, want: []string{"WARDYN_OIDC_ISSUER"}},
-		{name: "plaintext internal issuer warns", issuer: "https://idp.example.com/", internal: "http://dex:5556", posture: tlsServed, want: []string{"WARDYN_OIDC_INTERNAL_ISSUER"}},
-		{name: "both warn", issuer: "http://idp.example.com", internal: "http://10.0.0.7:5556", posture: tlsServed,
+		{name: "https issuer boots", issuer: "https://login.example.com/v2.0", posture: tlsServed},
+		{name: "loopback http public issuer boots", issuer: "http://localhost:5556", posture: tlsServed},
+		{name: "loopback ip boots", issuer: "http://127.0.0.1:5556", internal: "http://[::1]:5556", posture: tlsServed},
+		{name: "no issuer boots", posture: tlsServed},
+		{name: "compose demo internal dex boots", issuer: "http://localhost:5556", internal: "http://dex:5556"},
+		{name: "oidc off: compose default internal issuer boots", internal: "http://dex:5556", posture: tlsServed},
+		{name: "plaintext public issuer is refused", issuer: "http://idp.example.com/", posture: tlsServed, want: []string{"WARDYN_OIDC_ISSUER"}},
+		{name: "plaintext internal issuer is refused", issuer: "https://idp.example.com/", internal: "http://dex:5556", posture: tlsServed, want: []string{"WARDYN_OIDC_INTERNAL_ISSUER"}},
+		{name: "both are named", issuer: "http://idp.example.com", internal: "http://10.0.0.7:5556", posture: tlsServed,
 			want: []string{"WARDYN_OIDC_ISSUER", "WARDYN_OIDC_INTERNAL_ISSUER"}},
 		{name: "scheme is case-folded", issuer: "HTTP://idp.example.com", posture: tlsServed, want: []string{"WARDYN_OIDC_ISSUER"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := plaintextIssuerWarnings(tc.issuer, tc.internal, tc.posture)
-			if len(got) != len(tc.want) {
-				t.Fatalf("warnings = %q, want one per %v", got, tc.want)
-			}
-			for i, w := range got {
-				if !strings.Contains(w, tc.want[i]) || !strings.Contains(w, "plain http://") {
-					t.Errorf("warning %d = %q, want it to name %s and the plain http:// issue", i, w, tc.want[i])
+			err := plaintextIssuerRefusal(tc.issuer, tc.internal, tc.posture)
+			if len(tc.want) == 0 {
+				if err != nil {
+					t.Fatalf("refused a config that boots: %v", err)
 				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("booted with a plaintext issuer; want a refusal naming %v", tc.want)
+			}
+			if !strings.Contains(err.Error(), "refusing to start") || !strings.Contains(err.Error(), "plain http://") {
+				t.Errorf("refusal = %q, want it to refuse and name the plain http:// issue", err)
+			}
+			last := -1
+			for _, w := range tc.want {
+				i := strings.Index(err.Error(), w+" ")
+				if i < 0 || i < last {
+					t.Fatalf("refusal = %q, want %s named in order", err, w)
+				}
+				last = i
 			}
 		})
 	}
@@ -85,10 +97,10 @@ func TestBootPostureUIGatewaySharesConsoleHost(t *testing.T) {
 	}
 }
 
-// TestValidateBootPostureLogsTheWarnings proves the wiring: both warnings
-// reach the process log from validateBootPosture, and a good config logs none.
-func TestValidateBootPostureLogsTheWarnings(t *testing.T) {
-	run := func(issuer, advertise string) string {
+// TestValidateBootPostureWiring proves the wiring: a plaintext issuer fails validateBootPosture,
+// the gateway-host warning reaches the process log from it, and a good config logs none.
+func TestValidateBootPostureWiring(t *testing.T) {
+	run := func(issuer, advertise string) (string, error) {
 		var buf bytes.Buffer
 		prev := slog.Default()
 		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
@@ -110,15 +122,16 @@ func TestValidateBootPostureLogsTheWarnings(t *testing.T) {
 			internalListen: &ssh, metricsListen: &ssh,
 			oidcSessionTTL: &sessionTTL,
 		}
-		if err := validateBootPosture(f, tlsServed); err != nil {
-			t.Fatal(err)
-		}
-		return buf.String()
+		err := validateBootPosture(f, tlsServed)
+		return buf.String(), err
 	}
-	if out := run("http://idp.example.com", "https://wardyn.example.com:8081"); !strings.Contains(out, "WARDYN_OIDC_ISSUER") || !strings.Contains(out, "WARDYN_UI_SANDBOX_ADVERTISE") {
-		t.Errorf("bad config logged %q, want both warnings", out)
+	if _, err := run("http://idp.example.com", "https://wardyn-ui.example.com"); err == nil || !strings.Contains(err.Error(), "WARDYN_OIDC_ISSUER") {
+		t.Errorf("plaintext issuer: err = %v, want a refusal naming WARDYN_OIDC_ISSUER", err)
 	}
-	if out := run("https://idp.example.com", "https://wardyn-ui.example.com"); strings.Contains(out, "level=WARN") {
-		t.Errorf("good config logged %q, want no warning", out)
+	if out, err := run("https://idp.example.com", "https://wardyn.example.com:8081"); err != nil || !strings.Contains(out, "WARDYN_UI_SANDBOX_ADVERTISE") {
+		t.Errorf("bad gateway host: err = %v, log %q, want the warning and a boot", err, out)
+	}
+	if out, err := run("https://idp.example.com", "https://wardyn-ui.example.com"); err != nil || strings.Contains(out, "level=WARN") {
+		t.Errorf("good config: err = %v, log %q, want a clean boot", err, out)
 	}
 }

@@ -1462,3 +1462,29 @@ func TestAccess_InvalidRoleNamesAllThreeRoles(t *testing.T) {
 		t.Errorf("a refused role must not reach the store; rows = %+v", st.rows)
 	}
 }
+
+// TestAccess_RemovedMemberRoleRefusedAtWrite: 0.9 removed the "member" alias, so a People row
+// cannot be saved with it, as a role or as the user type of a user row, and nothing reaches the store.
+func TestAccess_RemovedMemberRoleRefusedAtWrite(t *testing.T) {
+	auth := newAccessAuth(t, nil, "", nil, nil)
+	st := &roleMapStore{}
+	srv := accessServer(t, auth, st)
+
+	for name, body := range map[string]string{
+		"as a role":      `{"value":"eng-team","role":"member"}`,
+		"as a user type": `{"value":"eng-team","role":"user","user_type":"member"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, body)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "member") {
+				t.Errorf("the refusal should name the value: %s", w.Body.String())
+			}
+		})
+	}
+	if len(st.rows) != 0 {
+		t.Errorf("a refused row must not reach the store; rows = %+v", st.rows)
+	}
+}
