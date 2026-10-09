@@ -362,4 +362,108 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsValues)).toEqual(new Set(goValues));
   });
 
+  // Components (#1914). The stored shapes and their SDK/server twins, then the
+  // facts both dry-run doors return. ComponentSaved embeds Component in Go, so
+  // it is pinned separately below, as ModelProvidersRead is.
+  it.each([
+    ["internal/types/component.go", "ComponentDelivery", "ComponentDelivery"],
+    ["internal/types/component.go", "ComponentSecret", "ComponentSecret"],
+    ["internal/types/component.go", "ComponentDefinition", "ComponentDefinition"],
+    ["internal/types/component.go", "Component", "Component"],
+    ["internal/types/component.go", "ComponentRef", "ComponentRef"],
+    ["pkg/client/components.go", "ComponentRequest", "ComponentRequest"],
+    ["pkg/client/components.go", "ComponentRequirement", "ComponentRequirement"],
+    ["pkg/client/components.go", "ComponentSecretView", "ComponentSecretView"],
+    ["pkg/client/components.go", "OrgComponentView", "OrgComponentView"],
+    ["pkg/client/components.go", "MyComponents", "MyComponents"],
+    ["internal/api/components_facts.go", "componentFact", "ComponentFact"],
+    ["internal/api/components_facts.go", "componentSecretFact", "ComponentSecretFact"],
+    ["internal/types/site_config.go", "ComponentSettings", "ComponentSettings", "site.ts"],
+    ["internal/api/preflight.go", "preflightResponse", "PreflightResult", "runs.ts"],
+  ])("%s %s: full parity with the TS %s mirror", (goFile, goName, tsName, tsFile = "components.ts") => {
+    const goTags = goJSONTags(readFileSync(join(root, goFile), "utf8"), goName);
+    expect(goTags.length).toBeGreaterThanOrEqual(2); // stale-regex guard
+    const ts = readFileSync(join(root, "ui/src/app/lib/types", tsFile), "utf8");
+    expect(new Set(tsInterfaceTopKeys(ts, tsName))).toEqual(new Set(goTags));
+  });
+
+  it("ComponentSaved (POST/PUT /me/components, PUT /components/{id}): Component plus requirements", () => {
+    const go = readFileSync(join(root, "pkg/client/components.go"), "utf8");
+    expect(go).toMatch(/type ComponentSaved struct \{\n\tComponent\n/);
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/components.ts"), "utf8");
+    expect(ts).toMatch(/export interface ComponentSaved extends Component \{/);
+    expect(new Set(tsInterfaceTopKeys(ts, "ComponentSaved"))).toEqual(new Set(goJSONTags(go, "ComponentSaved")));
+  });
+
+  it("component closed value sets (delivery modes, fact status, reason, lane, kind) match Go", () => {
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/components.ts"), "utf8");
+    const typeGo = readFileSync(join(root, "internal/types/component.go"), "utf8");
+    const factsGo = readFileSync(join(root, "internal/api/components_facts.go"), "utf8");
+    const runGo = readFileSync(join(root, "internal/api/components_run.go"), "utf8");
+    const providerGo = readFileSync(join(root, "internal/types/workspace_provider.go"), "utf8");
+    const union = (name: string) => {
+      const m = new RegExp(`export type ${name} =([^;]+);`).exec(stripComments(ts));
+      if (!m) throw new Error(`type ${name} not found`);
+      return new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]));
+    };
+    // Open-ended on purpose: every const of the Go type, whatever its name, so an
+    // ADDED value fails until the TS union names it (a name list would only catch renames).
+    const consts = (src: string, pattern: string) => new Set([...src.matchAll(new RegExp(pattern, "g"))].map((m) => m[1]));
+    expect(union("ComponentDeliveryMode")).toEqual(consts(typeGo, '\\bComponentDelivery\\w+\\s*=\\s*"([a-z_]+)"'));
+    const statusSrc = /What a fact's status says\.\s*\nconst \(([\s\S]*?)\n\)/.exec(factsGo)?.[1];
+    expect(statusSrc, "the fact status const block moved").toBeDefined();
+    expect(union("ComponentFactStatus")).toEqual(consts(statusSrc!, '\\bcomponent\\w+\\s*=\\s*"([a-z_]+)"'));
+    expect(union("ComponentFactStatus").size).toBeGreaterThanOrEqual(4);
+    // org, self and inline are the gate's; "workspace" is the Git provider row's literal.
+    expect(union("ComponentFactReason")).toEqual(new Set([...consts(runGo, '\\bcomponentSource\\w+\\s*=\\s*"([a-z_]+)"'), "workspace"]));
+    expect(factsGo).toMatch(/Reason: "workspace"/);
+    expect(union("ComponentFactLane")).toEqual(
+      new Set([...consts(providerGo, '\\bGitLane\\w+\\s+GitLane = "([a-z_]+)"'), ...consts(factsGo, '\\bgitLane\\w+\\s*=\\s*"([a-z_]+)"')]),
+    );
+    expect(union("ComponentFactKind")).toEqual(
+      new Set([...typeGo.matchAll(/Component(?:Custom|GitProvider)\s+ComponentKind = "([a-z_]+)"/g)].map((m) => m[1])),
+    );
+  });
+
+  // Every Go GrantKind, so an added kind fails until policy.ts names it. policy-tab-copy.ts's
+  // display labels are copy and are not pinned here.
+  it("GrantKind: the TS union is exactly the Go GrantKind consts", () => {
+    const go = readFileSync(join(root, "internal/types/types.go"), "utf8");
+    const policyTs = readFileSync(join(root, "ui/src/app/lib/types/policy.ts"), "utf8");
+    const goKinds = new Set([...go.matchAll(/\bGrant\w+\s+GrantKind = "([a-z_]+)"/g)].map((m) => m[1]));
+    expect(goKinds.size).toBeGreaterThanOrEqual(7);
+    const m = /export type GrantKind =([^;]+);/.exec(stripComments(policyTs));
+    if (!m) throw new Error("type GrantKind not found");
+    expect(new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]))).toEqual(goKinds);
+  });
+
+  // AutonomyResolution.bound_by names a rubric row or the org's component cap.
+  it("AutonomyBoundKey names the Go component-cap cause beside the rubric rows", () => {
+    const go = readFileSync(join(root, "internal/api/runs_autonomy_components.go"), "utf8");
+    const cause = /\bcomponentAutonomyCause\s*=\s*"([a-z_]+)"/.exec(go)?.[1];
+    expect(cause).toBe("custom_component");
+    const govTs = readFileSync(join(root, "ui/src/app/lib/api/governance.ts"), "utf8");
+    const m = /export type AutonomyBoundKey =([^;]+);/.exec(stripComments(govTs));
+    expect(m?.[1]).toContain(`"${cause}"`);
+    expect(tsInterfaceBody(govTs, "AutonomyResolution")).toMatch(/bound_by\?: AutonomyBoundKey\[\];/);
+  });
+
+  it("SetupItemResidency names every residency the setup checklist emits", () => {
+    const goRaw = readFileSync(join(root, "internal/api/compose_setup.go"), "utf8");
+    const tsRuns = readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8");
+    const union = /export type SetupItemResidency =([^;]+);/.exec(stripComments(tsRuns))?.[1] ?? "";
+    const tsValues = new Set([...union.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]));
+    // Code only: whole-line comments (the field's doc block quotes every value) are dropped,
+    // so a value counts only when something assigns it.
+    const go = goRaw.replace(/^\s*\/\/.*$/gm, "");
+    const assigned = new Set<string>();
+    for (const m of go.matchAll(/\bResidency\s*[:=]\s*"([a-z_]+)"(?!\s*,\s*")/g)) assigned.add(m[1]);
+    // `it.Status, it.Residency = "satisfied", "none"`
+    for (const m of go.matchAll(/\bResidency\s*=\s*"[a-z_]+",\s*"([a-z_]+)"/g)) assigned.add(m[1]);
+    // add(secret, label, residency) in setupSecretItems
+    for (const m of go.matchAll(/\badd\([^\n]*,\s*"([a-z_]+)"\)/g)) assigned.add(m[1]);
+    expect(assigned.size).toBeGreaterThanOrEqual(6);
+    expect(tsValues).toEqual(assigned);
+  });
+
 });
