@@ -1452,7 +1452,7 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	grep -q '^WARDYN_MEMBER_WRITABLE_DENY=/' "$$envf" || { rm -f "$$envf"; echo "compose: the m-prime envelope no longer sets WARDYN_USER_WRITABLE_DENY, so the leftover-name check below proves nothing"; exit 1; }; \
 	out=$$(env -u WARDYN_USER_DESKTOP -u WARDYN_USER_WORKSPACE_ROOTS -u WARDYN_USER_WORKSPACE_ROOTS_MAP -u WARDYN_USER_WRITABLE_ROOTS -u WARDYN_USER_WRITABLE_DENY docker compose --env-file "$$envf" -f deploy/desktop/docker-compose.yaml config 2>&1); rm -f "$$envf"; \
 	for k in WARDYN_MEMBER_MODE WARDYN_MEMBER_WORKSPACE_ROOTS WARDYN_MEMBER_WRITABLE_ROOTS WARDYN_MEMBER_WRITABLE_DENY; do \
-		echo "$$out" | grep -qE "^ *$$k: .+" || { echo "compose: a leftover $$k in an envelope does not reach wardynd, so its boot refusal never sees it"; exit 1; }; \
+		echo "$$out" | grep -E "^ *$$k: " | grep -qv ': ""$$' || { echo "compose: a leftover $$k in an envelope does not reach wardynd, so its boot refusal never sees it"; exit 1; }; \
 	done
 	@# R5 F022: the SSO callback must FOLLOW the published port and honour an
 	@# explicit override, or `WARDYN_UP_PORT=8090 --profile sso` sends the browser
