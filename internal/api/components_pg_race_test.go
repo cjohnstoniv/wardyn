@@ -297,6 +297,8 @@ func TestPG_ComponentEraseDuringCreate_ConcurrentCreatesFailClosedOrAreErased(t 
 	erase := func() *httptest.ResponseRecorder {
 		return do(t, e.h.srv, http.MethodPost, "/api/v1/people/"+e.owner+"/erasure", adminToken, erasureBody("components"))
 	}
+	// admitted is every run of the person's that answered 201, in any phase.
+	admitted := []uuid.UUID{}
 	// check is the invariant once every create and the erase have answered.
 	check := func(t *testing.T, phase string, creates []*httptest.ResponseRecorder, erased *httptest.ResponseRecorder) {
 		t.Helper()
@@ -310,6 +312,7 @@ func TestPG_ComponentEraseDuringCreate_ConcurrentCreatesFailClosedOrAreErased(t 
 			}
 		}
 		e.settle(t, ids)
+		admitted = append(admitted, ids...)
 		for _, run := range ids {
 			if rows := e.snapshot(t, run); len(rows) != 1 || !rows[0].Erased || !rows[0].SelfDefined {
 				t.Errorf("%s: run %s answered 201 and its snapshot after the erasure returned is %+v, want one content-free tombstone (half state: the erased component lives on in the run's snapshot)", phase, run, rows)
@@ -321,7 +324,7 @@ func TestPG_ComponentEraseDuringCreate_ConcurrentCreatesFailClosedOrAreErased(t 
 		// A create that failed closed left a FAILED run, never a dispatched one.
 		var stray int
 		if err := e.pg.Pool.QueryRow(context.Background(), `SELECT count(*) FROM agent_runs
-			WHERE created_by = $1 AND state <> 'FAILED' AND NOT (id = ANY($2))`, e.owner, ids).Scan(&stray); err != nil {
+			WHERE created_by = $1 AND state <> 'FAILED' AND NOT (id = ANY($2))`, e.owner, admitted).Scan(&stray); err != nil {
 			t.Fatal(err)
 		}
 		if stray != 0 {
