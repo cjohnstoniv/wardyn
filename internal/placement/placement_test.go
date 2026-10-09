@@ -152,9 +152,12 @@ func TestCapacityFits(t *testing.T) {
 	}
 }
 
-func TestSourceFor(t *testing.T) {
-	if SourceFor(Local) != SourceRunnerAsserted || SourceFor(Remote) != SourceSubstrate {
+func TestEvidenceFor(t *testing.T) {
+	if EvidenceFor(Local) != EvidenceRunnerAsserted || EvidenceFor(Remote) != EvidenceSubstrate {
 		t.Fatal("a local run is runner_asserted, a remote run substrate")
+	}
+	if EvidenceRunnerAsserted != "runner_asserted" || EvidenceSubstrate != "substrate" {
+		t.Fatal("evidence_source values are substrate and runner_asserted")
 	}
 }
 

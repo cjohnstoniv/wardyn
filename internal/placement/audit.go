@@ -18,7 +18,6 @@ const (
 	ActionRunnerPostureRecord     = "runner.posture.record"
 	ActionRunnerResidentErase     = "runner.resident.erase"
 	ActionCredentialDeliveryWrite = "credential.delivery.write"
-	ActionEgressBaselineWrite     = "egress.baseline.write"
 	ActionSSHSyncTransfer         = "ssh.sync.transfer"
 )
 
@@ -26,6 +25,6 @@ const (
 var AuditActions = []string{
 	ActionRunnerTokenCreate, ActionRunnerTokenRevoke, ActionRunnerEnrol, ActionRunnerClaim, ActionRunnerRevoke,
 	ActionRunnerConnect, ActionRunnerDisconnect, ActionRunnerActionRequest, ActionRunnerActionApply,
-	ActionRunnerPostureRecord, ActionRunnerResidentErase, ActionCredentialDeliveryWrite, ActionEgressBaselineWrite,
+	ActionRunnerPostureRecord, ActionRunnerResidentErase, ActionCredentialDeliveryWrite,
 	ActionSSHSyncTransfer,
 }

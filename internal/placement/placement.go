@@ -67,20 +67,23 @@ func (c Capacity) Fits(cpuMillis, memoryMiB int64) bool {
 	return (cpuMillis <= 0 || cpuMillis <= c.CPUMillisMax) && (memoryMiB <= 0 || memoryMiB <= c.MemoryMiBMax)
 }
 
-// ConfinementSource records who vouches for a run's confinement.
-type ConfinementSource string
+// EvidenceSource records who vouches for the evidence a run produces: its
+// confinement, decisions, recordings, exit codes and capabilities. It is not
+// the run's `confinement_source` (`requested` or `defaulted`, written by
+// run.create): that says who chose the class, this says who can attest it.
+type EvidenceSource string
 
 const (
-	SourceSubstrate      ConfinementSource = "substrate"       // the organisation's own substrate
-	SourceRunnerAsserted ConfinementSource = "runner_asserted" // the runner said so; nobody can verify it
+	EvidenceSubstrate      EvidenceSource = "substrate"       // the organisation's own substrate
+	EvidenceRunnerAsserted EvidenceSource = "runner_asserted" // the runner said so; nobody can verify it
 )
 
-// SourceFor is the confinement source a placement records.
-func SourceFor(p Placement) ConfinementSource {
+// EvidenceFor is the evidence source a placement records.
+func EvidenceFor(p Placement) EvidenceSource {
 	if p == Local {
-		return SourceRunnerAsserted
+		return EvidenceRunnerAsserted
 	}
-	return SourceSubstrate
+	return EvidenceSubstrate
 }
 
 // RunnerSubstrateName is the name an Orchestrator registers a runner's
