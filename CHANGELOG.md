@@ -102,7 +102,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   tables and callouts, with every file reference a link and no sentence over 35 words. The console's
   quoted strings, defaults, limits, refusals and upgrade steps are unchanged.
 - The Helm chart README and the two SSO runbooks under `deploy/` (`kind/sso`, `azure-entra-sso`) are restructured into bullets, tables and alerts with their file references linked; no value, default or step changes.
-- The Azure DevOps page (`docs/AZURE-DEVOPS.md`) is restructured into bullets, tables and alerts with its file references linked; three sentences of 36 to 39 words are kept as written, and no scope, limit, refusal, default, heading or upgrade step changes.
+- The Azure DevOps page (`docs/AZURE-DEVOPS.md`) is restructured into bullets and alerts; its tables, code fences and headings are unchanged, three sentences of 36 to 39 words are kept as written, and no scope, limit, refusal, default or upgrade step changes.
 
 ### Fixed
 

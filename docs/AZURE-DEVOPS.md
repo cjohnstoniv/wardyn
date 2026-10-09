@@ -143,8 +143,8 @@ Add these only for the capabilities some row's ceiling will reach:
 
 - Several capabilities share one scope (`code_write`, `pr`, `policy_admin` and `policy_bypass` all need `vso.code_write`, and `work_write` and `work_admin` both need `vso.work_write`, because Azure DevOps offers no narrower one), and one capability can need several (`security_admin` needs three).
 - The capability, not the scope, is what Wardyn checks on each request.
-- Also add `openid` and `offline_access` —
-  - Wardyn holds a refresh token per person, not a one-time code, so it can renew an access token as runs need one without asking anyone to sign in again for every run.
+- Also add `openid` and `offline_access` — Wardyn holds a refresh token per person, not a one-time code,
+  - so it can renew an access token as runs need one without asking anyone to sign in again for every run.
 - Microsoft's own scope reference flags `vso.code_write`, `vso.code_manage`, `vso.build_execute`, `vso.packaging_write`, `vso.security_manage`, and `vso.serviceendpoint_manage` as **high privilege**.
 - That is not a reason to avoid them
   - a contributor needs `vso.code_write` to push
@@ -368,8 +368,9 @@ That has two consequences worth knowing before you hit them:
   - the person's Settings card reads "Blocked by your organisation",
   - and each refusal is audited as `ado_pat.mint.denied`.
 - The card keeps that state until a token is created or fifteen minutes pass; after that a launch goes through and the run's own create checks again.
-- When the administrator's own **Check organisation settings** is refused by the policy, the row shows a banner naming them ("Azure DevOps refused to create a token for {person}:
-  - your organisation restricts who can create personal access tokens. Add the people who use Wardyn to that policy's allow list, or switch to Entra sign-in.") with a button that switches the row to Entra sign-in.
+- When the administrator's own **Check organisation settings** is refused by the policy,
+  - the row shows a banner naming them
+  - ("Azure DevOps refused to create a token for {person}: your organisation restricts who can create personal access tokens. Add the people who use Wardyn to that policy's allow list, or switch to Entra sign-in.") with a button that switches the row to Entra sign-in.
 - The row shows the same banner, with no check run, naming the person whose launch the organisation refused in the last seven days:
   - the administrator sees it when the row opens, after a member's mint is refused and not only after their own check.
 - The simplest fix is the allow list: one Project Collection Administrator action, adding the people who use Wardyn or their group.
@@ -473,8 +474,8 @@ That has two consequences worth knowing before you hit them:
 
 - After the upgrade, a run reads a stored git token for an Azure DevOps host from its owner's own row only
   - (a person with no token of their own is refused at launch, for every `dev.azure.com` and `*.visualstudio.com` address whether or not a row names it),
-- an `ssh_key` grant for one is dropped with a warning,
-- and the operator can no longer store a secret under a retired shared name (`PUT /secrets` answers `400`, also for the name of any `<org>.visualstudio.com` address no row names).
+  - an `ssh_key` grant for one is dropped with a warning,
+  - and the operator can no longer store a secret under a retired shared name (`PUT /secrets` answers `400`, also for the name of any `<org>.visualstudio.com` address no row names).
 - GitHub and GitLab rows are unchanged.
 
 ## Audit
@@ -619,7 +620,7 @@ Two different things bound what a run can do:
      - It can be broader than the ceiling or the run's capabilities.
      - To keep that token from ever being able to create tokens,
        - a `bearer` row refuses to inject one whose grant names `vso.pats`, `vso.pats_manage`, `vso.tokens`, `vso.tokenadministration` or `user_impersonation`:
-         - that is why the app must not hold them in this mode.
+       - that is why the app must not hold them in this mode.
    - In `own_pat` mode it is whatever scopes the person gave the PAT.
 2. **The request check, enforced by Wardyn's proxy**, in front of the credential in every mode.
    - This is what holds a run to the row's ceiling and to the capabilities the run was granted:
@@ -643,6 +644,7 @@ Two different things bound what a run can do:
 ## Why not device-code sign-in
 
 - Wardyn's Azure DevOps sign-in is an ordinary browser redirect, never the device-code flow.
+
 Two reasons, both load-bearing:
 
 - **Microsoft's own Conditional Access guidance recommends blocking device-code sign-in** by default across an estate, precisely because it is a favored phishing vector
@@ -737,6 +739,7 @@ When a redemption is refused — the refresh token has been revoked or has expir
 - A self-hosted Azure DevOps Server does not accept Microsoft Entra tokens — Microsoft's own documentation limits OAuth 2.0 to Azure DevOps Services and directs on-premises installations to personal access tokens or Windows authentication instead.
 - A Server organisation uses the `pat` lane with `credential_source: per_user` and no `entra` block:
   - each person pastes their own PAT, as in [Your own token](#your-own-token-own_pat), and a shared administrator PAT is no longer an option on a Server row either.
+
 What differs:
 
 - **The address names the collection.**
@@ -778,6 +781,7 @@ What differs:
 - **What was measured, and what only your own organisation can confirm.**
 - Everything above describes what Wardyn asks for and enforces;
   - whether Azure DevOps actually grants what was asked is a fact of your tenant, not something this document or Wardyn's test suite can promise on your behalf.
+
 Measured on a test organisation on 2026-09-30, with a probe app registration holding only `vso.pats` and `vso.pats_manage` (see [LIVE-TESTS.md](LIVE-TESTS.md#personal-access-token-probe-ll2c)):
 
 - Signed in as the test tenant's **administrator** account and, separately, as its **member** account, the token API listed PATs (200) and created a PAT with a multi-scope `scope` string, the scopes separated by a single space. The PAT's scope does not depend on the Entra token's scopes.
