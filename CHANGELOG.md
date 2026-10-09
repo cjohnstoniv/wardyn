@@ -120,6 +120,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- `docs/DESKTOP.md` said whoever registers an SSH public key first owns its fingerprint forever
+  and that the only remedy is out of band. The fingerprint is held until the key is deleted, and an
+  admin or `security_admin` can remove a person's keys with `DELETE /people/{principal}/ssh-keys`.
+  The Desktop page and "Reclaiming a squatted fingerprint" in `docs/SSH.md` now say so; verifying
+  the rightful owner is still out of band, and a member still cannot remove someone else's key.
 - `docs/DESKTOP.md` still said a `wardynd` restart mid-run loses the masking state and then
   records or streams output unmasked, and that failing closed "is not done". Since 0.8.6 each
   run's secret values are committed before its sandbox starts and reloaded after a restart, and a

@@ -133,7 +133,8 @@ Three properties define it:
 Three more the tier inherits rather than introduces:
 
 - the SSH gateway's admin override is a **bounded-stale 24h role stamp**, never a live check;
-- whoever `POST`s a given SSH public key **first owns that fingerprint forever**, and the only remediation is operator-side and out of band — which on m′ the developer explicitly is not;
+- whoever `POST`s a given SSH public key **first owns that fingerprint until that key is deleted**, and registering a key does not prove holding it;
+  - recovery is operator-side: an admin or `security_admin` removes the registrant's keys with `DELETE /people/{principal}/ssh-keys`, once the rightful owner is verified out of band, which on m′ the developer explicitly is not (see [Reclaiming a squatted fingerprint](SSH.md#reclaiming-a-squatted-fingerprint));
 - and compose serves the console and the UI relay on a **shared origin**, a documented residual of this topology.
 
 ### Named gap: the browser lane is not available on this tier
