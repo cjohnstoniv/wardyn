@@ -155,8 +155,10 @@ test("I (model-access-banner): a never-signed-in member is told on every screen,
   // speak over it. The strip, which the rail does not claim, keeps its button.
   await page.goto("/runs/new");
   await page.getByRole("radio", { name: /^Autonomous/ }).click();
-  await expect(page.getByText(RAIL_PROVIDER.STATIC(WALK_PROVIDER_NAME))).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK)).toBeVisible();
+  // Scoped: the Run panel's picker states the same two facts (#1922).
+  const rail = page.getByRole("complementary", { name: "What this run can do" });
+  await expect(rail.getByText(RAIL_PROVIDER.STATIC(WALK_PROVIDER_NAME))).toBeVisible({ timeout: 60_000 });
+  await expect(rail.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK)).toBeVisible();
   await expect(page.getByText(RAIL_MODEL_ACCESS.NO_PROVIDER)).toHaveCount(0);
   await expect(page.getByText(STRIP_NOT_SIGNED_IN)).toBeVisible();
 

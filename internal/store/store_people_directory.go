@@ -80,8 +80,8 @@ type PeopleDirectoryPage struct {
 
 // peopleDirectoryRows is the identity side (one row per principal, over every issuer it has
 // signed in on) full-joined to the people table, so a pre-created person who never signed in and
-// a sub-keyed user with no people row both appear. A person is deactivated only when every
-// identity row of theirs is.
+// a sub-keyed user with no people row both appear. A person is deactivated when every identity
+// row of theirs is or when their people row is (a suspension over SCIM before the first sign-in).
 const peopleDirectoryRows = `
 WITH ident AS (
     SELECT principal,
@@ -100,7 +100,7 @@ WITH ident AS (
            p.principal IS NOT NULL AS pre_created,
            COALESCE(p.first_signed_in_at, i.first_seen) AS first_sign_in_at,
            i.last_login_at AS last_sign_in_at,
-           i.deactivated_at AS deactivated_at
+           COALESCE(i.deactivated_at, p.deactivated_at) AS deactivated_at
       FROM ident i
       FULL JOIN people p ON p.principal = i.principal
 )

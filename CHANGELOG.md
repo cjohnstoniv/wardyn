@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.8.9] — 2026-10-09
+
 ### Before you upgrade
 
 - Migration `0133_recording_erasures` adds durable per-run recording fences. Take a database dump before
