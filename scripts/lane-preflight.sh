@@ -8,19 +8,21 @@
 #
 # Steps, in order: make lint, make staticcheck, make ui-typecheck, go test of
 # the packages holding changed Go files, vitest related for changed UI sources.
-# "Changed" is against the merge base with origin/main, plus the working tree.
+# "Changed" is against the merge base with $BASE (default origin/main), plus the
+# working tree. A lane stacked on a batch branch sets BASE=origin/batch/NNN.
 #
 # This is not the merge gate. Hosted CI and `make ci` stay authoritative, and
 # the union coverage floor (scripts/cover-union.sh) is not checked here.
 #
-# Usage: scripts/lane-preflight.sh
+# Usage: [BASE=<ref>] scripts/lane-preflight.sh
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # shellcheck source=lib/common.sh
 source scripts/lib/common.sh
 
-base=$(git merge-base origin/main HEAD) || die "no merge base with origin/main (run: git fetch origin)"
+BASE="${BASE:-origin/main}"
+base=$(git merge-base "${BASE}" HEAD) || die "no merge base with ${BASE} (run: git fetch origin)"
 changed=$( { git diff --name-only --diff-filter=d "${base}"; git ls-files --others --exclude-standard; } | sort -u )
 
 go_pkgs=()
