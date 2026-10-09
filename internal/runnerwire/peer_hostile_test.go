@@ -275,40 +275,45 @@ func TestReplayBufferAckAheadIsRefusedAndKeepsResumeWorking(t *testing.T) {
 }
 
 // F4: REPLY goroutines waiting on a full replay buffer end when the link does.
+//
+// Three calls each answer with 600 KiB and nobody ACKs, so the first REPLY fits
+// the 1 MiB replay buffer and the other two block in Reserve. The test waits on
+// events, not time: every handler has run, the first REPLY has reached the wire,
+// and exactly the two blocked senders are still in flight. Only then is the link
+// dropped, and the wait for them to end has a generous deadline, since a loaded
+// machine slows a pass but never makes a blocked sender finish.
 func TestReplyGoroutinesEndWhenTheLinkDrops(t *testing.T) {
 	big := strings.Repeat("a", 600<<10)
+	var handled atomic.Int32
 	r := newRaw(t, PeerConfig{Org: false, OnCall: func(context.Context, uint32, string, json.RawMessage) (any, error) {
-		return big, nil // two of these cannot both fit the 1 MiB replay buffer, and nobody ACKs
+		handled.Add(1)
+		return big, nil
 	}})
 	for i := range 3 {
 		r.write(t, callFrame(uint32(2*(i+1)), uint64(i+1)))
 	}
-	deadline := time.Now().Add(3 * time.Second)
-	for {
+	r.readType(t, TypeReply) // the one REPLY that fit
+	inFlight := func() int {
 		r.p.mu.Lock()
-		n := len(r.p.inCalls)
-		r.p.mu.Unlock()
-		if n == 3 {
-			break
-		}
+		defer r.p.mu.Unlock()
+		return len(r.p.inCalls)
+	}
+	waitFor(t, 30*time.Second, "all three handlers to run and two senders to block", func() bool {
+		return handled.Load() == 3 && inFlight() == 2
+	})
+	r.raw.Drop()
+	waitFor(t, 30*time.Second, "the blocked reply senders to end after the link dropped", func() bool { return inFlight() == 0 })
+}
+
+// waitFor polls cond until it holds; the deadline only bounds a hang.
+func waitFor(t *testing.T, limit time.Duration, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(limit)
+	for !cond() {
 		if time.Now().After(deadline) {
-			t.Fatalf("%d calls in flight", n)
+			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(5 * time.Millisecond)
-	}
-	r.raw.Drop()
-	deadline = time.Now().Add(3 * time.Second)
-	for {
-		r.p.mu.Lock()
-		n := len(r.p.inCalls)
-		r.p.mu.Unlock()
-		if n == 0 {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("%d reply goroutines still blocked after the link dropped", n)
-		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 
