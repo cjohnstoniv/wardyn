@@ -9,7 +9,7 @@ Registry of every `WARDYN_*` environment variable **read** by non-test Go in thi
 - A `WARDYN_*` literal read in non-test Go but missing here fails the build, and so does a row here whose last Go reader was deleted.
 - Three more forward-only legs (`#202`) extend the same "undocumented fails the build" rule past Go.
 - Those legs are `pkg/` (folded into the Go walk above), the Playwright e2e backend's shell scripts, and `install.sh`, [`scripts/ci-run.sh`](../scripts/ci-run.sh) and everything under `deploy/images/**`.
-- The shell legs are checked against this file **and** [docs/CI.md](CI.md) together (`TestEnvDoc_OperatorScriptsVarsAreDocumented`).
+- The last leg is checked against this file **and** [docs/CI.md](CI.md) together (`TestEnvDoc_OperatorScriptsVarsAreDocumented`).
 - That closes the undocumented-name gap for those three surfaces only.
 - The rest of `scripts/` (the demo, take and verify harness, `test-report.sh`, `test-repo-guards.sh`, and a few shell-local variables in `setup.sh` and `up.sh`) still uses `WARDYN_*` names with no row here, and no leg checks them.
 - To regenerate the raw list:
@@ -162,9 +162,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_AUDIT_SINKS` 🔒 | string (JSON) | (unset) | audit sink config file/webhook/syslog (flag `-audit-sinks`). A webhook `bearer_token` requires an `https://` url — boot fails rather than replay the SIEM credential in cleartext on every POST. Schema: [Audit sinks](#audit-sinks-wardyn_audit_sinks) below |
 | `WARDYN_APPROVAL_NOTIFY` 🔒 | string (JSON) | (unset) | approval notification config (flag `-approval-notify`): channels that are told when an approval is waiting. Unset or empty means off. Any bad value refuses boot, naming the channel `id` and the rule. [Details](#wardyn_approval_notify) |
 | `WARDYN_AUDIT_SPOOL` | string | `./data/audit-spool.jsonl` | append-only JSONL fallback for failed audit writes (flag `-audit-spool`); a sibling `<path>.quarantine` appears if the store permanently refuses a spooled line |
-| `WARDYN_AUDIT_SEAL` | string | `off` | `off`, `fields` or `full` (flag `-audit-seal`). With `fields`, personal fields reach every audit sink only as ciphertext; reads show the person while their key exists and `[erased]` after. [Details](#wardyn_audit_seal) |
+| `WARDYN_AUDIT_SEAL` | string | `off` | `off`, `fields` or `full` (flag `-audit-seal`). With `fields`, personal fields reach every audit sink only as ciphertext; with `full`, reads show the person while their key exists and `[erased]` after. [Details](#wardyn_audit_seal) |
 | `WARDYN_AUDIT_SOURCE` | string | (unset) | optional static string stamped as an extra top-level `"source"` field on every event a configured sink serializes, never written to Postgres (flag `-audit-source`). [Details](#wardyn_audit_source) |
-| `WARDYN_AGE_KEY` 🔒 | string | (unset) | age X25519 identity (flag `-age-key`). **Unset is not a safe default** (store mode is the exception): wardynd then mints a throwaway identity on every boot, so boot 2 cannot decrypt it and fails closed (`loadOrCreateSecret`, [`cmd/wardynd/boot_keys.go`](../cmd/wardynd/boot_keys.go)). [Details](#wardyn_age_key) |
+| `WARDYN_AGE_KEY` 🔒 | string | (unset) | age X25519 identity (flag `-age-key`). **Unset is not a safe default** (store mode is the exception): it mints a throwaway identity each boot, so boot 2 cannot decrypt what the first boot encrypted and fails closed (`loadOrCreateSecret`, [`cmd/wardynd/boot_keys.go`](../cmd/wardynd/boot_keys.go)). [Details](#wardyn_age_key) |
 | `WARDYN_PLATFORM_KEY_FILE` 🔒 | path | (unset) | local mode only (flag `-platform-key-file`): a file holding a SECOND age identity from which alone wardynd derives the key that wraps its own signing, session, UI-session and SSH host keys. Refused without `WARDYN_AGE_KEY`. [Details](#wardyn_platform_key_file) |
 | `WARDYN_PG_DSN_FILE` | string (path) | (unset) | file holding `WARDYN_PG_DSN`'s value, read once at boot, for a Vault Agent / Secrets Store CSI / Secret-volume file instead of an env var. Setting it together with `WARDYN_PG_DSN` refuses boot (`resolveSecretFiles`, [`cmd/wardynd/secret_file.go`](../cmd/wardynd/secret_file.go)). [Details](#wardyn_pg_dsn_file) |
 | `WARDYN_PG_MIGRATE_DSN_FILE` | string (path) | (unset) | file holding `WARDYN_PG_MIGRATE_DSN`'s value, read once at boot, for a Vault Agent / Secrets Store CSI / Secret-volume file instead of an env var. Setting it together with `WARDYN_PG_MIGRATE_DSN` refuses boot (`resolveSecretFiles`, [`cmd/wardynd/secret_file.go`](../cmd/wardynd/secret_file.go)). [Details](#wardyn_pg_migrate_dsn_file) |
@@ -205,7 +205,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_OIDC_REDIRECT_URL` | string | (unset) | OIDC redirect URL, the URL the **browser** is sent back to; the compose stack defaults it to `http://localhost:${WARDYN_UP_PORT:-8080}/auth/callback` (flag `-oidc-redirect-url`). [Details](#wardyn_oidc_redirect_url) |
 | `WARDYN_OIDC_EMAIL_DOMAINS` | CSV | (unset = any) | Allowed email domains, exact match (list subdomains separately). The domain is matched **printable-ASCII only**, and an address with no domain at all is refused (flag `-oidc-email-domains`). [Details](#wardyn_oidc_email_domains) |
 | `WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED` | bool | `false` | Refuse a sign-in whose ID token does not prove the email is verified. **Entra ID tokens typically omit the claim entirely, so turning this on against an Entra tenant denies every login** (flag `-oidc-require-email-verified`). [Details](#wardyn_oidc_require_email_verified) |
-| `WARDYN_OIDC_EXTRA_SCOPES` | CSV | (unset = none; the authorization request stays `openid profile email`) | Opt-in scopes appended to the authorization request, most commonly `groups` (flag `-oidc-extra-scopes`). A listed scope this document does not advertise **refuses boot**. [Details](#wardyn_oidc_extra_scopes) |
+| `WARDYN_OIDC_EXTRA_SCOPES` | CSV | (unset = none; the authorization request stays `openid profile email`) | Opt-in scopes appended to the authorization request, most commonly `groups` (flag `-oidc-extra-scopes`). A listed scope the provider's discovery document does not advertise **refuses boot**. [Details](#wardyn_oidc_extra_scopes) |
 | `WARDYN_OIDC_OPERATOR_EMAILS` | CSV | (unset = **refused at boot** when OIDC is configured) | Operator (admin) allowlist of the minimal user/admin role gate: a signed-in human whose session email is NOT listed is a **user**. Leaving it empty with OIDC configured is refused at boot (flag `-oidc-operator-emails`). [Details](#wardyn_oidc_operator_emails) |
 | `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST` | bool | `false` | Override: allow boot with OIDC SSO configured but `WARDYN_OIDC_OPERATOR_EMAILS` empty, normally refused (`validateOperatorPosture`, [`cmd/wardynd/main.go`](../cmd/wardynd/main.go)). No effect without OIDC (flag `-allow-oidc-no-operator-list`). [Details](#wardyn_allow_oidc_no_operator_list) |
 | `WARDYN_SSO_ONLY` | bool | `false` | Declare SSO the **only** way into the console. Boot is refused unless OIDC is configured and `WARDYN_ADMIN_TOKEN`, `WARDYN_LOCAL_MODE`, `WARDYN_USER_DESKTOP` and `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST` are all unset (flag `-sso-only`). [Details](#wardyn_sso_only) |
@@ -527,8 +527,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Keep the last `WARDYN_RUN_OUTPUT_TAIL_BYTES` of every non-interactive run's combined stdout/stderr, in wardynd's memory while the run lives and, with `WARDYN_RUN_OUTPUT_PERSIST` on, in Postgres once it ends (the managed-harness sign-in run keeps none.
 - On Kubernetes with recordings on there is no direct stdout to keep: once such a run ends, with `WARDYN_RUN_OUTPUT_PERSIST` on, the available recording is recovered into a masked tail marked `source` `recording` and always `incomplete`.
-- Or a `capture_gap` when the recording is missing, invalid or cannot be proven masked.
-- And only the run's owner or an operator is served it.
+- Or a `capture_gap` when the recording is missing, invalid or cannot be proven masked, and only the run's owner or an operator is served it.
 - A read while the run is live, with persistence off, or by a caller who may see the run but is neither, answers `409` (`run_output_not_captured`)).
 - Readable through `GET /api/v1/runs/{id}/output` by the run's owner or an admin (flag `-exec-output-tail`).
 - Independent of `WARDYN_RECORDING_STORE`: it works with recordings `off`.
@@ -845,9 +844,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - See `validateHybridPosture` ([`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)).
 - Set, boot also enrols this device once (the credential lands in the secret store under the reserved name `wardyn-org-device-credential`, bound to the URL it was enrolled at
 - A boot with a different `WARDYN_ORG_URL` (case, a default port and trailing slashes do not count as different) does not send it there
-- And enrols afresh with a **fresh** `WARDYN_ORG_ENROLMENT_TOKEN` minted for that URL (the spent one is refused there), or refuses to start without one
+- It enrols afresh with a **fresh** `WARDYN_ORG_ENROLMENT_TOKEN` minted for that URL (the spent one is refused there), or refuses to start without one
 - A credential stored before that binding existed is kept and bound to the URL set at its first boot after the upgrade)
-- And starts the audit forwarder, which pushes the local audit table upward every 15 s from a durable cursor, backing off up to 5 min while the org is unreachable
+- It starts the audit forwarder, which pushes the local audit table upward every 15 s from a durable cursor, backing off up to 5 min while the org is unreachable
 - Runs keep working offline and the backlog shows as `/healthz` `org_federation.lag` and `wardyn_org_federation_lag`.
 - An enrolment that fails, the org unreachable included, **refuses the boot**; the service manager retries.
 - The org answers 401 with the device realm for a revoked device and for an unknown one alike (no route tells them apart)
@@ -1022,8 +1021,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Operator (admin) allowlist of the minimal user/admin role gate
 - A signed-in human whose session email is NOT listed is a **user**
-- Owner-scoped: reads their OWN runs/approvals/audit and may launch/kill runs, 403 on configuring the deployment (policy, workspace, site-config **writes**
-- And since R1 the site-config, source-library and base-image **reads** too, which return the operator's internal proxy/SCM/registry hostnames, local_dir host paths and integration credential refs)
+- Owner-scoped: reads their OWN runs/approvals/audit and may launch/kill runs.
+- 403 on configuring the deployment (policy, workspace, site-config **writes**, and since R1 the site-config, source-library and base-image **reads** too, which return the operator's internal proxy/SCM/registry hostnames, local_dir host paths and integration credential refs)
 - On **secret** writes/deletes, and on admin-only **credential**/**tool_call** approvals.
 - A user still **decides** `egress_domain` approvals on, and **attaches** to, their OWN runs
 - Both PTY lanes: the ticket mint (`POST /runs/{id}/attach/ticket`) and the attach WebSocket itself (`GET /runs/{id}/attach`), which falls back to session-cookie auth when no ticket is presented
@@ -1739,8 +1738,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_CREDENTIAL_REAUTH_TIMEOUT`
 
 - How long the proxy **HOLDS** a request while the credential's owner signs in again, instead of failing it (`credhold.go`).
-- Applies to the two lanes whose sign-in the proxy injects
-- The captured-AWS-SSO Bedrock lane (a sandbox's `GetRoleCredentials` call, `WARDYN_AWS_SSO_PROXY_INJECT`) and, from 0.7.10
+- Applies to the two lanes whose sign-in the proxy injects: the captured-AWS-SSO Bedrock lane (a sandbox's `GetRoleCredentials` call, `WARDYN_AWS_SSO_PROXY_INJECT`) and, from 0.7.10
 - The per-person Azure DevOps lane (a request made after the person's Azure DevOps sign-in ended or was blocked by Conditional Access, or after the token a person added themselves reached the expiry they entered)
 - Every other credential is unaffected and every other grant resolves byte-identically to before this existed.
 - Clamped to `[10s, 1800s]`; unparseable or non-positive values keep the default.
