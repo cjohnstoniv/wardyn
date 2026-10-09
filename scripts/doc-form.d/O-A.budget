@@ -1,0 +1,3 @@
+# Prose-word budget (scripts/doc-form.sh): path=N share=S. The shared file's budget after the merged operations
+# rewrites; the itemised count is in O-C.budget. share=35 is the page's target (the last lane on the page sets it).
+docs/OPERATIONS.md=83186 share=35

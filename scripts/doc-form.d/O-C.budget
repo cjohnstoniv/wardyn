@@ -5,4 +5,7 @@
 # joiners turned into full stops, so growth fails.
 # 83150 adds 58: 36 for the person-erasure scope table (the `components` row it lacked, and a first row that no longer
 # leans on a later one) and 22 for the second-human bullet (the Azure DevOps access request a run's owner may decide).
-docs/OPERATIONS.md=83150
+# 83186 adds 36 (state stores, approval notifications): 47 for two cell-expansion headings (2) and their summary
+# cells (45) in "What a purge removes", less 11 for the dashes and joiner words not carried at splits, net of the
+# short subjects added there.
+docs/OPERATIONS.md=83186
