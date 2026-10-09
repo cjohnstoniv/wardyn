@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -179,5 +180,30 @@ func TestPoliciesRequirements_ASecretStoredBetweenSavesReadsPresent(t *testing.T
 	second := savedPolicy(t, do(t, srv, http.MethodPut, "/api/v1/policies/"+first.ID.String(), adminToken, body).Body)
 	if got := requirementStatuses(second.Requirements); got["corp-token"] != "present" {
 		t.Fatalf("second save = %+v, want corp-token present", second.Requirements)
+	}
+}
+
+// TestPoliciesRequirements_UnstorableNamesAreNotListed (C19 review F3): a name
+// the secrets API reserves or retires can never be stored, so an add_secret
+// fix for it can never succeed. The save still accepts it; the list omits it.
+func TestPoliciesRequirements_UnstorableNamesAreNotListed(t *testing.T) {
+	srv := policiesRequirementsServer(t)
+	reserved := types.AWSSSOAccessTokenSecret
+	retired := "anthropic-api-key"
+	if !secretsAPIReserved(reserved) || sinkReservedSecret(reserved) || !slices.Contains(retiredModelCredentialNames, retired) || sinkReservedSecret(retired) {
+		t.Fatalf("the test names the wrong set: reserved=%v/%v retired=%v/%v", secretsAPIReserved(reserved), sinkReservedSecret(reserved),
+			slices.Contains(retiredModelCredentialNames, retired), sinkReservedSecret(retired))
+	}
+	body := `{"name":"p","spec":{"min_confinement_class":"CC2","allowed_domains":["api.stripe.com"],"eligible_grants":[` +
+		`{"kind":"api_key","scope":{"host":"api.stripe.com","secret_name":"` + reserved + `"}},` +
+		`{"kind":"api_key","scope":{"host":"api.stripe.com","secret_name":"` + retired + `"}},` +
+		`{"kind":"env_secret","scope":{"name":"CORP_TOKEN","secret_name":"corp-token"}}]}}`
+	w := do(t, srv, http.MethodPost, "/api/v1/policies", adminToken, body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("save = %d: %s, want the policy still accepted", w.Code, w.Body.String())
+	}
+	got := requirementStatuses(savedPolicy(t, w.Body).Requirements)
+	if len(got) != 1 || got["corp-token"] != "missing" {
+		t.Fatalf("requirements = %+v, want only corp-token", got)
 	}
 }

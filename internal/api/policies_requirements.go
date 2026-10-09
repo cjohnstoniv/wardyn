@@ -5,6 +5,7 @@ package api
 
 import (
 	"net/http"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -39,6 +40,12 @@ func (s *Server) policyRequirements(r *http.Request, spec types.RunPolicySpec, n
 	seen := map[string]bool{}
 	for _, name := range names {
 		if name == "" || seen[name] {
+			continue
+		}
+		// add_secret can never succeed for a name the secrets API refuses to
+		// store, so it is not a requirement the saver can act on. The save itself
+		// is unchanged.
+		if secretsAPIReserved(name) || slices.Contains(retiredModelCredentialNames, name) {
 			continue
 		}
 		seen[name] = true

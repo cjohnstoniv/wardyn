@@ -33,43 +33,43 @@ func secretRequirement(name string, present bool) client.ComponentRequirement {
 
 // componentRequirements is the list for one definition. A secret the person
 // supplies is looked up in hasOwn (the saver's namespace); a `shared` one, which
-// only an organisation row can carry, in hasOperator. A name used by two
-// deliveries is listed once.
+// only an organisation row can carry, in hasOperator. A name is listed once (the
+// wire row has no shared flag); when its reads disagree it reads missing.
 func componentRequirements(def types.ComponentDefinition, hasOwn, hasOperator func(string) bool) []client.ComponentRequirement {
 	out := []client.ComponentRequirement{}
-	seen := map[[2]any]bool{}
+	at := map[string]int{}
 	for _, sec := range def.Secrets {
-		key := [2]any{sec.SecretName, sec.Shared}
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
 		has := hasOwn
 		if sec.Shared {
 			has = hasOperator
 		}
-		out = append(out, secretRequirement(sec.SecretName, has(sec.SecretName)))
+		present := has(sec.SecretName)
+		if i, dup := at[sec.SecretName]; dup {
+			if !present {
+				out[i] = secretRequirement(sec.SecretName, false)
+			}
+			continue
+		}
+		at[sec.SecretName] = len(out)
+		out = append(out, secretRequirement(sec.SecretName, present))
 	}
 	return out
 }
 
-// componentSaveRequirements reads presence for a row being saved: an
-// organisation row (Owner "") and the operator's own request look in the
-// operator namespace; a person's row looks in that person's own rows only, never
-// the operator fallback, so a member cannot learn that the operator holds a
-// name. It is the namespace the run gate checks (callerOwnsSecret).
+// componentSaveRequirements reads presence for a row being saved. A `shared`
+// secret is the operator's, read in the operator namespace. Any other secret is
+// read as the run gate reads it (callerOwnsSecret): a person's row looks in that
+// person's own rows only, never the operator fallback, so a member cannot learn
+// that the operator holds a name; an organisation row (Owner "") looks in the
+// operator's names for an operator-owned request and otherwise in the saver's
+// own rows.
 func (s *Server) componentSaveRequirements(r *http.Request, c types.Component) []client.ComponentRequirement {
 	ctx := r.Context()
-	var operatorNames map[string]bool
-	hasOperator := func(name string) bool {
-		if operatorNames == nil {
-			operatorNames = s.presentSecretNames(ctx)
-		}
-		return operatorNames[name]
+	adm := &componentAdmission{caller: c.Owner}
+	if c.Owner == "" {
+		adm.caller = runIdentitySubject(ctx, principalFromRequest(r))
 	}
-	hasOwn := hasOperator
-	if c.Owner != "" && !operatorOwnedRequest(ctx) {
-		hasOwn = func(name string) bool { return s.ownsSecretMemoized(ctx, c.Owner, name) }
-	}
+	hasOperator := func(name string) bool { return s.operatorSecretNames(ctx, adm)[name] }
+	hasOwn := func(name string) bool { return s.callerOwnsSecret(r, adm, name) }
 	return componentRequirements(c.Definition, hasOwn, hasOperator)
 }

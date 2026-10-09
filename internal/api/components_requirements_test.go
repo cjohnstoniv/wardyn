@@ -5,6 +5,7 @@ package api
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -127,21 +128,73 @@ func TestRequirements_ReservedNameIsRefusedAndNeverListed(t *testing.T) {
 }
 
 // TestRequirements_ComponentRequirementsListsEachSecretOnce pins the pure
-// helper: a name used by two deliveries is one row, shared and own are looked up
-// in their own namespace, and an empty definition is [] not nil.
+// helper: a name is one row however many deliveries or namespaces use it (the
+// wire row has no shared flag), a name whose reads disagree is listed missing,
+// and an empty definition is [] not nil.
 func TestRequirements_ComponentRequirementsListsEachSecretOnce(t *testing.T) {
 	def := types.ComponentDefinition{Secrets: []types.ComponentSecret{
-		{SecretName: "a"}, {SecretName: "a"}, {SecretName: "a", Shared: true}, {SecretName: "b"},
+		{SecretName: "a"}, {SecretName: "a"}, {SecretName: "a", Shared: true}, {SecretName: "b"}, {SecretName: "c"}, {SecretName: "c", Shared: true},
 	}}
-	own := func(n string) bool { return n == "a" }
-	operator := func(n string) bool { return false }
+	own := func(n string) bool { return n == "a" || n == "c" }
+	operator := func(n string) bool { return n == "c" }
 	got := componentRequirements(def, own, operator)
-	if len(got) != 3 || got[0].Status != "present" || got[1].Status != "missing" || got[2].Status != "missing" {
-		t.Fatalf("got %+v, want a(own) present, a(shared) missing, b missing", got)
+	if len(got) != 3 || got[0].Name != "a" || got[0].Status != "missing" || got[1].Name != "b" || got[1].Status != "missing" ||
+		got[2].Name != "c" || got[2].Status != "present" {
+		t.Fatalf("got %+v, want a missing (own present, shared missing: disagree), b missing, c present (both read present), each once", got)
 	}
 	if empty := componentRequirements(types.ComponentDefinition{}, own, operator); empty == nil || len(empty) != 0 {
 		t.Fatalf("empty = %#v, want a non-nil empty list", empty)
 	}
+}
+
+// TestRequirements_OrgRowNonSharedSecretReadsTheGatesNamespace (C19 review F1):
+// a per-person secret on an organisation row is read the way the run gate reads
+// it (callerOwnsSecret): the operator's names for an operator-owned request,
+// otherwise the caller's own rows. A shared secret keeps the operator namespace.
+func TestRequirements_OrgRowNonSharedSecretReadsTheGatesNamespace(t *testing.T) {
+	org := `{"hosts":["api.example.com"],"secrets":[` +
+		`{"secret_name":"mine-only","delivery":{"mode":"env","var":"MINE"}},` +
+		`{"secret_name":"shared-key","delivery":{"mode":"env","var":"OPERATOR"}},` +
+		`{"secret_name":"shared-key","shared":true,"delivery":{"mode":"header","host":"api.example.com"}}]}`
+	statuses := func(t *testing.T, w *httptest.ResponseRecorder) map[string]string {
+		t.Helper()
+		if w.Code != http.StatusCreated {
+			t.Fatalf("org save = %d: %s", w.Code, w.Body.String())
+		}
+		return requirementStatuses(decodeSaved(t, w).Requirements)
+	}
+
+	t.Run("admin token reads the operator namespace", func(t *testing.T) {
+		srv, _, _ := componentsServer(t)
+		// "shared-key" is the operator's; "mine-only" is nobody's.
+		got := statuses(t, do(t, srv, http.MethodPut, "/api/v1/components/"+uuid.NewString(), adminToken, saveComponentBody("Org", org)))
+		if got["shared-key"] != "present" || got["mine-only"] != "missing" {
+			t.Fatalf("statuses = %+v, want the operator-held name present and the unheld one missing", got)
+		}
+	})
+
+	t.Run("SSO admin reads their own rows, not the operator's", func(t *testing.T) {
+		srv, _, _ := componentsServer(t)
+		admin := ssoSession(t, "sub-admin", "adm@corp.example", oidc.RoleAdmin)
+		srv.cfg.Secrets.(*memSecrets).owned["sub-admin"] = map[string][]byte{"mine-only": []byte("v")}
+		// "shared-key" non-shared is held only by the operator: for this caller the
+		// gate says it is not theirs, and the shared use of the same name stays the
+		// operator's, so the one row reads missing.
+		got := statuses(t, doSSO(t, srv, http.MethodPut, "/api/v1/components/"+uuid.NewString(), admin, saveComponentBody("Org", org)))
+		if got["mine-only"] != "present" || got["shared-key"] != "missing" {
+			t.Fatalf("statuses = %+v, want the caller's own name present and the operator-only name missing", got)
+		}
+	})
+
+	t.Run("a shared secret stays the operator's for an SSO admin", func(t *testing.T) {
+		srv, _, _ := componentsServer(t)
+		admin := ssoSession(t, "sub-admin", "adm@corp.example", oidc.RoleAdmin)
+		shared := `{"hosts":["api.example.com"],"secrets":[{"secret_name":"shared-key","shared":true,"delivery":{"mode":"header","host":"api.example.com"}}]}`
+		got := statuses(t, doSSO(t, srv, http.MethodPut, "/api/v1/components/"+uuid.NewString(), admin, saveComponentBody("Org", shared)))
+		if got["shared-key"] != "present" {
+			t.Fatalf("statuses = %+v, want the operator-held shared secret present", got)
+		}
+	})
 }
 
 // TestRequirements_NoSecretIsAnEmptyList: a definition naming no secret answers
