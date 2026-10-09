@@ -1,0 +1,6 @@
+# Prose-word budget (scripts/doc-form.sh): path=N. Lane O-B2 (User drives on Docker, Capabilities). The page
+# measured 83008 prose words at the branch point; the lane's rewrite measures 83085 (+77). Growth is the six
+# cell-expansion headings (19 words: 7+7+1+1+1+2) and the six one-sentence summaries left in their table cells
+# (83 words: 13+13+13+11+18+15), 102 in all; every other edit nets -25 (an em dash that became a full stop
+# no longer counts as a word).
+docs/OPERATIONS.md=83085

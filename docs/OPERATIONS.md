@@ -2200,40 +2200,32 @@ wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes
 
 ### User drives on Docker
 
-A **user drive** is persistent storage an admin registers once and allocates to
-people or groups; a member mounts theirs per run at `/home/agent/drive`. On a
-Docker deployment there are two backends, and the difference is who owns the
-bytes. With `storage.user_drive.disabled` set, all three surfaces answer that one
-switch identically — a run is refused 422, `POST /drives/preview` answers the same
-422, and `GET /me` reports no allocation at all — so nothing in the console ever
-offers a mount the create path refuses (see "Turning drives OFF deployment-wide").
+- A **user drive** is persistent storage an admin registers once and allocates to people or groups; a member mounts theirs per run at `/home/agent/drive`.
+- On a Docker deployment there are two backends, and the difference is who owns the bytes.
+- With `storage.user_drive.disabled` set, all three surfaces answer that one switch identically:
+  - a run is refused 422,
+  - `POST /drives/preview` answers the same 422,
+  - and `GET /me` reports no allocation at all.
+- So nothing in the console ever offers a mount the create path refuses (see "Turning drives OFF deployment-wide").
 
-**`docker_volume` — Wardyn allocates.** A per-person named volume
-(`wardyn-drive-<drive-slug>-<home>`), created on first use with the `local`
-driver and mounted at the reserved target. Nothing to configure. It carries four
-labels: `wardyn.managed=true`; `wardyn.drive` = the **drive row's id** (the name
-folds the drive's SLUG, which a rename changes, and the id never does — so the
-label is the only key that still finds a drive's volumes across one, which is
-what the reclaim recipes below select on); `wardyn.home` = that person's directory name; and
-`wardyn.subject` = a **digest** of the person
-themselves (never their claim — see the restore note below). Reclaim is a
-command, never a button — either `wardyn drive reclaim` ("Reclaiming a departed
-person's storage" above) or, by hand:
+- **`docker_volume` — Wardyn allocates.** A per-person named volume (`wardyn-drive-<drive-slug>-<home>`), created on first use with the `local` driver and mounted at the reserved target.
+  - Nothing to configure.
+  - It carries four labels:
+    - `wardyn.managed=true`;
+    - `wardyn.drive` = the **drive row's id** (the name folds the drive's SLUG, which a rename changes, and the id never does);
+      - So the label is the only key that still finds a drive's volumes across one, which is what the reclaim recipes below select on;
+    - `wardyn.home` = that person's directory name; and `wardyn.subject` = a **digest** of the person themselves (never their claim — see the restore note below).
+  - Reclaim is a command, never a button — either `wardyn drive reclaim` ("[Reclaiming a departed person's storage](#reclaiming-a-departed-persons-storage)" above) or, by hand:
+    - one person: `docker volume rm wardyn-drive-<drive-slug>-<home>` — `POST /drives/preview` prints the object name for a principal —
+      - paste the sign-in subject FIRST: on a `hash` drive the name keys on the first claim, and the API's `home_subject` says which claim it used (the console does not yet show it);
+    - one drive, everybody: `docker volume ls --filter label=wardyn.drive=<drive id>` lists every volume that drive allocated.
 
-- one person: `docker volume rm wardyn-drive-<drive-slug>-<home>` — `POST /drives/preview`
-  prints the object name for a principal — paste the sign-in subject FIRST: on a
-  `hash` drive the name keys on the first claim, and the API's
-  `home_subject` says which claim it used (the console does not yet show it);
-- one drive, everybody: `docker volume ls --filter label=wardyn.drive=<drive id>`
-  lists every volume that drive allocated.
-
-**Restoring one by hand: re-create it with its labels, and with no `--opt`.**
-Wardyn reuses a volume that already answers to the name, but only when it has
-Wardyn's own shape — the `local` driver and **no driver options** — and refuses
-to mount anything else rather than adopt it. That refusal is deliberate: a
-volume an operator precreated with `--opt type=cifs --opt o=…,password=…` would
-otherwise become somebody's drive, on a share credential Wardyn never chose. So
-a restore is
+- **Restoring one by hand: re-create it with its labels, and with no `--opt`.**
+- Wardyn reuses a volume that already answers to the name, but only when it has Wardyn's own shape —
+  - the `local` driver and **no driver options** —
+- and refuses to mount anything else rather than adopt it.
+- That refusal is deliberate: a volume an operator precreated with `--opt type=cifs --opt o=…,password=…` would otherwise become somebody's drive, on a share credential Wardyn never chose.
+- So a restore is
 
 ```
 docker volume create \
@@ -2243,46 +2235,28 @@ docker volume create \
   wardyn-drive-<drive-slug>-<home>
 ```
 
-then copy the data in. `wardyn.drive` carries the **drive row's id** (the `id`
-on `GET /api/v1/drives`, and the `Target` of that drive's `drive.write` audit
-row), not the volume's name — the id is what groups every person's object under
-the drive that allocated them. Get it wrong and Wardyn **refuses** the volume
-rather than adopting it: a label naming a *different* drive is how two drives
-whose home names collided would otherwise hand one member the other's storage.
-A volume restored with **no** `wardyn.drive` label at all still mounts (that is
-the fall-back this path is for, and every volume created before the label
-carried an id has none) — it just no longer answers
-`docker volume ls --filter label=wardyn.drive=<drive id>`.
+- then copy the data in.
+- `wardyn.drive` carries the **drive row's id** (the `id` on `GET /api/v1/drives`, and the `Target` of that drive's `drive.write` audit row), not the volume's name — the id is what groups every person's object under the drive that allocated them.
+- Get it wrong and Wardyn **refuses** the volume rather than adopting it: a label naming a *different* drive is how two drives whose home names collided would otherwise hand one member the other's storage.
+- A volume restored with **no** `wardyn.drive` label at all still mounts (that is the fall-back this path is for, and every volume created before the label carried an id has none).
+- It just no longer answers `docker volume ls --filter label=wardyn.drive=<drive id>`.
 
-Wardyn also stamps **`wardyn.subject`**, a digest of the person the volume was
-allocated to — never their sign-in claim, because `docker volume inspect` echoes
-labels to anyone who can reach the daemon. It is the discriminator `wardyn.drive`
-cannot be: a volume name carries the drive and the *home* and no person at all
-(`DriveObjectName` mints `wardyn-drive-<drive-slug>-<home>`), so one drive whose
-home template folded two people onto one directory would produce one volume that
-*both* their allocations agree belongs to this drive. Wardyn refuses to mount a
-volume stamped for a different person.
+- Wardyn also stamps **`wardyn.subject`**, a digest of the person the volume was allocated to — never their sign-in claim, because `docker volume inspect` echoes labels to anyone who can reach the daemon.
+- It is the discriminator `wardyn.drive` cannot be: a volume name carries the drive and the *home* and no person at all (`DriveObjectName` mints `wardyn-drive-<drive-slug>-<home>`).
+- So one drive whose home template folded two people onto one directory would produce one volume that *both* their allocations agree belongs to this drive.
+- Wardyn refuses to mount a volume stamped for a different person.
 
-A managed drive can no longer be *authored* into that state. The rule is
-`ManagedBackendRejectsTemplate` in `internal/types/user_drive.go`, and as of 0.7
-it refuses **every** non-`hash` template on a `docker_volume` or `k8s_pvc`
-backend — `sub` as well as `email_local` — at **both** enforcement points: the
-write boundary, and the run-time resolver that derives the home. It used to name
-`email_local` alone, and the resolver keyed on `email_local` alone, so a `sub`
-row written by an older binary (or by hand) was refused on write and still
-mounted. The folded homes `wardyn.subject` discriminates are therefore rows from
-before that widening, or hand-made ones — which is exactly why the label is still
-checked rather than assumed away.
+- A managed drive can no longer be *authored* into that state.
+- The rule is `ManagedBackendRejectsTemplate` in [`internal/types/user_drive.go`](../internal/types/user_drive.go).
+- And as of 0.7 it refuses **every** non-`hash` template on a `docker_volume` or `k8s_pvc` backend — `sub` as well as `email_local` — at **both** enforcement points: the write boundary, and the run-time resolver that derives the home.
+- It used to name `email_local` alone, and the resolver keyed on `email_local` alone, so a `sub` row written by an older binary (or by hand) was refused on write and still mounted.
+- The folded homes `wardyn.subject` discriminates are therefore rows from before that widening, or hand-made ones — which is exactly why the label is still checked rather than assumed away.
 
-You need not compute the digest for a restore (it is a truncated sha256 of the
-sign-in subject): **leave `wardyn.subject` off** the `docker volume create`
-above and the volume mounts, exactly as a label-less `wardyn.drive` does.
+- You need not compute the digest for a restore (it is a truncated sha256 of the sign-in subject): **leave `wardyn.subject` off** the `docker volume create` above and the volume mounts, exactly as a label-less `wardyn.drive` does.
 
-**`host_path` — you already mount the share.** Wardyn binds **one person's
-subdirectory** of a tree the *operator* mounted host-side. Wardyn never performs
-the share mount, never holds a share credential, and never creates a volume with
-`--opt type=cifs`: those options are stored with the volume and echoed by
-`docker volume inspect` to anyone who can reach the daemon. The recipe:
+- **`host_path` — you already mount the share.** Wardyn binds **one person's subdirectory** of a tree the *operator* mounted host-side.
+- Wardyn never performs the share mount, never holds a share credential, and never creates a volume with `--opt type=cifs`: those options are stored with the volume and echoed by `docker volume inspect` to anyone who can reach the daemon.
+- The recipe:
 
 1. **Mount the share on the host**, in `fstab` or a systemd mount unit:
 
@@ -2297,240 +2271,158 @@ the share mount, never holds a share credential, and never creates a volume with
    The matching NFS export line, on the NAS:
    `/export/wardyn-drives 10.0.0.0/8(rw,all_squash,anonuid=1000,anongid=1000)`.
 
-2. **Make one `0700` subdirectory per person** under the mount point, named the
-   way the drive's home template resolves. There are three templates —
-   `hash` (a digest of the drive id and the subject), `sub` (the sign-in subject
-   claim verbatim) and `email_local` (the part of the email claim before the
-   `@`, the usual shape of a corporate home) — and a **share** drive may only
-   use `sub` or `email_local`: a hash would name a directory nobody created.
-   Per person, a grant's *home override* pins any other name. Wardyn does **not**
-   `mkdir` on a share — a missing home is a `422` at run create ("directory
-   `<home>` does not exist on the share — ask an admin to create it"), not a
-   directory Wardyn invents inside somebody's NAS.
+2. **Make one `0700` subdirectory per person** under the mount point, named the way the drive's home template resolves.
 
-   Two people whose email addresses share the part before the `@` resolve to the
-   **same** home under `email_local` — the segment is validated, not proven
-   unique. On a share that is a tree you own and can inspect: use `sub`, or a
-   per-person home override, where it can happen.
+   - There are three templates:
+     - `hash` (a digest of the drive id and the subject),
+     - `sub` (the sign-in subject claim verbatim) and `email_local` (the part of the email claim before the `@`, the usual shape of a corporate home)
+   - and a **share** drive may only use `sub` or `email_local`: a hash would name a directory nobody created.
 
-   **A managed drive takes `hash` and nothing else.** As of 0.7 the refusal
-   covers **every** non-`hash` template on a `docker_volume` or `k8s_pvc`
-   backend — `sub` as well as `email_local`. Registering either answers a `400`
-   beginning `invalid drive: home_template "<template>" is not allowed on a
-   managed backend`, and the message names `hash` as the single remedy. Two
-   reasons, and `sub` fails the second one: Wardyn names a managed object after
-   the drive and the home and nothing about the person
-   (`wardyn-drive-<drive-slug>-<home>`), so within one drive `email_local`
-   allocates two colliding people one volume with write access to each other's
-   files whenever the drive is
-   writable — and an object *name* is what `docker volume ls` and
-   `kubectl get pvc` print with no inspect or describe, so a verbatim `sub`
-   publishes the sign-in subject to anyone who can list the daemon or the
-   namespace, in the more exposed of the two places the label vocabulary already
-   refuses to put it. `hash` is unique and reveals nothing, and it is the
-   default; a **share** backend keeps every template, because its tree is one
-   you own and navigate by hand. A row written before this rule is refused at
-   *run* time too (`drive: this deployment cannot mount your drive (…)`), and
-   every managed volume carries a `wardyn.subject` label — a digest of the
-   principal, never the claim — that the driver refuses to mount for anybody
-   else.
+   - Per person, a grant's *home override* pins any other name.
+   - Wardyn does **not** `mkdir` on a share.
+   - A missing home is a `422` at run create ("directory `<home>` does not exist on the share — ask an admin to create it"), not a directory Wardyn invents inside somebody's NAS.
 
-3. **Set the ceiling**: `WARDYN_USER_DRIVE_HOST_ROOTS=/srv/wardyn-drives`
-   ([ENV.md](ENV.md)). Unset means **no `host_path` drive may be registered at
-   all** — the same fail-closed posture `WARDYN_USER_WORKSPACE_ROOTS` takes,
-   one level up: a drive's `host_root` is authored in the database by an admin
-   and its subdirectories are bound into *other people's* sandboxes, so the
-   allowlist over it lives where a console compromise cannot reach it. The
-   driver re-checks the **symlink-resolved real path** against these roots as
-   the last thing before the container is created, so a home directory replaced
-   by a symlink out of the share after the drive was registered is refused at
-   run time too — and it adds two checks the ceiling cannot make, because every
-   other drive's tree and every sibling home are inside it as well. The resolved
-   directory must be **inside this drive's own `host_root`**, which catches a
-   home replaced by a link into *another* `host_path` drive's root (a ceiling
-   naming both roots allows either tree, so it cannot tell one drive's from the
-   other's); and it must still be **named after the person it resolved for**,
-   which catches a home replaced by a link to the home *next to it*. A home
-   symlinked deeper inside its own drive's root — homes filed under a year or a
-   department — still works, as long as the directory keeps its name; a home
-   symlinked onto a *second export* no longer does, even when that export is
-   also a configured root. Give the drive the root its homes actually live
-   under, or register a second drive for the second export.
+   - Two people whose email addresses share the part before the `@` resolve to the **same** home under `email_local` — the segment is validated, not proven unique.
+   - On a share that is a tree you own and can inspect: use `sub`, or a per-person home override, where it can happen.
 
-   **Two `host_path` drives may not nest.** Registering a drive whose
-   `host_root` is inside — or contains — another `host_path` drive's `host_root`
-   answers `422`, naming the other drive. Two `host_path` drives may share one
-   `host_root` — a read-write and a read-only view of `/srv/homes` is a
-   supported shape, and only a NESTED root is refused — and so are sibling
-   trees; what is refused is one drive rooted inside a tree whose directories
-   another drive's members can rewrite from inside a run. They must agree on
-   `home_template`, and a second one that disagrees is refused `409`: a
-   share's storage object is `<host_root>/<home>` with no drive component, so
-   two different derivation rules over one tree hand two different members the
-   same directory (a member whose `sub` is `alice` and a member whose address
-   is `alice@corp.example` both derive `alice`).
+   - **A managed drive takes `hash` and nothing else.**
+   - As of 0.7 the refusal covers **every** non-`hash` template on a `docker_volume` or `k8s_pvc` backend — `sub` as well as `email_local`.
+   - Registering either answers a `400` beginning `invalid drive: home_template "<template>" is not allowed on a managed backend`, and the message names `hash` as the single remedy.
+   - Two reasons, and `sub` fails the second one:
+     - Wardyn names a managed object after the drive and the home and nothing about the person (`wardyn-drive-<drive-slug>-<home>`),
+       - so within one drive `email_local` allocates two colliding people one volume with write access to each other's files whenever the drive is writable
+     - and an object *name* is what `docker volume ls` and `kubectl get pvc` print with no inspect or describe,
+       - so a verbatim `sub` publishes the sign-in subject to anyone who can list the daemon or the namespace, in the more exposed of the two places the label vocabulary already refuses to put it.
+   - `hash` is unique and reveals nothing, and it is the default; a **share** backend keeps every template, because its tree is one you own and navigate by hand.
+   - A row written before this rule is refused at *run* time too (`drive: this deployment cannot mount your drive (…)`).
+   - And every managed volume carries a `wardyn.subject` label — a digest of the principal, never the claim — that the driver refuses to mount for anybody else.
 
-   The question is asked on the stored strings **and again on the
-   symlink-resolved paths**, and either answer refuses — a root that is a link
-   into the other drive's tree nests exactly as surely as a literal path does.
-   So the refusal **names where each root resolves** whenever that differs from
-   what was typed: *host_root "/mnt/teamshare" (resolves to
-   "/srv/shares/alice/team") is inside drive "Corp NAS"'s host_root
-   "/srv/shares" — …*. Without it an admin reads a refusal about two paths that
-   plainly do not nest, and the one fact that explains it — the hop the link
-   makes — is the one thing the console form cannot show them. A root that no
-   longer resolves on this host falls back to the lexical answer rather than to
-   a refusal, so one dead row cannot block every new drive
-   (`driveHostRootNesting`, `internal/api`). Two admins creating nested drives at
-   the same instant can still both be stored — the gate is a read followed by an
-   unconditional write, and the database-level form is 0.7.1.
+3. **Set the ceiling**: `WARDYN_USER_DRIVE_HOST_ROOTS=/srv/wardyn-drives` ([ENV.md](ENV.md)).
 
-   **And the drive ceiling must not overlap `WARDYN_USER_WORKSPACE_ROOTS` —
-   the member ceiling defeats per-person isolation where they meet.** Per-person
-   isolation is the **bind of the subdirectory**: Wardyn hands a run one home out
-   of the share and refuses a source that resolved to the root. A member
-   workspace is a different surface with a different rule — a member names a
-   directory under `WARDYN_USER_WORKSPACE_ROOTS` and binds it **whole**,
-   writable where `WARDYN_USER_WRITABLE_ROOTS` allows it, and that path
-   consults no drive allocation at all. Point the two ceilings at one tree and a
-   member onboards the share as a workspace and mounts **every** person's home.
-   Each list is valid on its own, so wardynd compares the pair at boot and
-   **WARNs** — it does not refuse, because an operator may have opened a tree to
-   both deliberately and a boot refusal would take a running deployment down on
-   upgrade (`MountCeilingOverlapWarnings`,
-   `internal/runner/user_drive_mount.go`). Three shapes earn the line, each
-   behind the prefix `wardynd: mount ceilings overlap — `:
+   - Unset means **no `host_path` drive may be registered at all** — the same fail-closed posture `WARDYN_USER_WORKSPACE_ROOTS` takes, one level up:
+     - a drive's `host_root` is authored in the database by an admin and its subdirectories are bound into *other people's* sandboxes,
+     - so the allowlist over it lives where a console compromise cannot reach it.
+   - The driver re-checks the **symlink-resolved real path** against these roots as the last thing before the container is created,
+     - so a home directory replaced by a symlink out of the share after the drive was registered is refused at run time too.
+     - And it adds two checks the ceiling cannot make, because every other drive's tree and every sibling home are inside it as well.
+   - The resolved directory must be **inside this drive's own `host_root`**, which catches a home replaced by a link into *another* `host_path` drive's root
+     - (a ceiling naming both roots allows either tree, so it cannot tell one drive's from the other's);
+   - and it must still be **named after the person it resolved for**, which catches a home replaced by a link to the home *next to it*.
+   - A home symlinked deeper inside its own drive's root — homes filed under a year or a department — still works, as long as the directory keeps its name.
+   - A home symlinked onto a *second export* no longer does, even when that export is also a configured root.
+   - Give the drive the root its homes actually live under, or register a second drive for the second export.
+
+   - **Two `host_path` drives may not nest.**
+   - Registering a drive whose `host_root` is inside — or contains — another `host_path` drive's `host_root` answers `422`, naming the other drive.
+   - Two `host_path` drives may share one `host_root` — a read-write and a read-only view of `/srv/homes` is a supported shape, and only a NESTED root is refused — and so are sibling trees.
+   - What is refused is one drive rooted inside a tree whose directories another drive's members can rewrite from inside a run.
+   - They must agree on `home_template`, and a second one that disagrees is refused `409`:
+     - a share's storage object is `<host_root>/<home>` with no drive component,
+     - so two different derivation rules over one tree hand two different members the same directory (a member whose `sub` is `alice` and a member whose address is `alice@corp.example` both derive `alice`).
+
+   - The question is asked on the stored strings **and again on the symlink-resolved paths**, and either answer refuses.
+   - A root that is a link into the other drive's tree nests exactly as surely as a literal path does.
+   - So the refusal **names where each root resolves** whenever that differs from what was typed: *host_root "/mnt/teamshare" (resolves to "/srv/shares/alice/team") is inside drive "Corp NAS"'s host_root "/srv/shares" — …*.
+   - Without it an admin reads a refusal about two paths that plainly do not nest.
+   - And the one fact that explains it — the hop the link makes — is the one thing the console form cannot show them.
+   - A root that no longer resolves on this host falls back to the lexical answer rather than to a refusal, so one dead row cannot block every new drive (`driveHostRootNesting`, `internal/api`).
+   - Two admins creating nested drives at the same instant can still both be stored — the gate is a read followed by an unconditional write, and the database-level form is 0.7.1.
+
+   - **And the drive ceiling must not overlap `WARDYN_USER_WORKSPACE_ROOTS` — the member ceiling defeats per-person isolation where they meet.**
+   - Per-person isolation is the **bind of the subdirectory**: Wardyn hands a run one home out of the share and refuses a source that resolved to the root.
+   - A member workspace is a different surface with a different rule — a member names a directory under `WARDYN_USER_WORKSPACE_ROOTS` and binds it **whole**, writable where `WARDYN_USER_WRITABLE_ROOTS` allows it, and that path consults no drive allocation at all.
+   - Point the two ceilings at one tree and a member onboards the share as a workspace and mounts **every** person's home.
+   - Each list is valid on its own, so wardynd compares the pair at boot and **WARNs**.
+   - It does not refuse, because an operator may have opened a tree to both deliberately and a boot refusal would take a running deployment down on upgrade (`MountCeilingOverlapWarnings`, [`internal/runner/user_drive_mount.go`](../internal/runner/user_drive_mount.go)).
+   - Three shapes earn the line, each behind the prefix `wardynd: mount ceilings overlap — `:
 
    | Shape | The line says |
    |---|---|
-   | The two lists name the same tree | ``WARDYN_USER_WORKSPACE_ROOTS and WARDYN_USER_DRIVE_HOST_ROOTS both name "<p>": a member can onboard that directory as a workspace and bind the WHOLE share, every other person's home included, without a drive allocation. Point the drive ceiling at the share and the member ceiling somewhere else`` |
-   | A member root CONTAINS a drive root | ``WARDYN_USER_WORKSPACE_ROOTS contains "<m>", which holds the WARDYN_USER_DRIVE_HOST_ROOTS entry "<d>": a member can onboard that share as a workspace and bind it whole, every other person's home included, without a drive allocation. Point the member ceiling at a tree that does not contain the share`` |
+   | The two lists name the same tree | The line is quoted under [The two lists name the same tree](#the-two-lists-name-the-same-tree) below. |
+   | A member root CONTAINS a drive root | The line is quoted under [A member root CONTAINS a drive root](#a-member-root-contains-a-drive-root) below. |
    | A member root is INSIDE a drive root | ``WARDYN_USER_WORKSPACE_ROOTS contains "<m>", which is INSIDE the WARDYN_USER_DRIVE_HOST_ROOTS entry "<d>": member workspaces would be authored inside a share whose directories Wardyn hands out one person at a time. Point the member ceiling outside the share`` |
 
-   Every member ceiling is compared, the shared list **and** each
-   `WARDYN_USER_WORKSPACE_ROOTS_MAP` per-principal override — an override
-   *replaces* the shared list, so it is a ceiling in its own right. The
-   comparison is **lexical**, on the values as configured: boot is not the place
-   to touch a share that may not be mounted yet.
+   - Every member ceiling is compared, the shared list **and** each `WARDYN_USER_WORKSPACE_ROOTS_MAP` per-principal override — an override *replaces* the shared list, so it is a ceiling in its own right.
+   - The comparison is **lexical**, on the values as configured: boot is not the place to touch a share that may not be mounted yet.
 
-   **What the operator gets when a bind is refused.** The member-facing hint
-   from a driver-side share refusal carries the drive and the directory and
-   never a path; the paths go to the log, on the same run, as
-   `wardyn: user drive: this share mount was refused at bind time` with `source`,
-   `real_path` and `host_root` attributes (`RefuseUserDriveBind`,
-   `internal/runner/user_drive_mount.go`). That split is the rule everywhere on
-   this path — see the member's own refusal vocabulary in
-   [docs/design/user-drives-prompt.md](design/user-drives-prompt.md) §7.7 and
-   §7.9.
+   - **What the operator gets when a bind is refused.**
+   - The member-facing hint from a driver-side share refusal carries the drive and the directory and never a path.
+   - The paths go to the log, on the same run, as `wardyn: user drive: this share mount was refused at bind time` with `source`, `real_path` and `host_root` attributes (`RefuseUserDriveBind`, [`internal/runner/user_drive_mount.go`](../internal/runner/user_drive_mount.go)).
+   - That split is the rule everywhere on this path — see the member's own refusal vocabulary in [docs/design/user-drives-prompt.md](design/user-drives-prompt.md) §7.7 and §7.9.
 
-**On the Compose stack, wardynd must be able to SEE the root — set two
-variables.** The bind's source is resolved by the host daemon (wardynd's
-sandboxes are sibling containers), but the ceiling check resolves symlinks and
-fails closed on a path it cannot stat, so a `host_path` drive registered from a
-containerised wardynd is refused unless the share is visible inside it too.
-`docker-compose.yaml` carries both halves already — nothing to hand-edit:
+- **On the Compose stack, wardynd must be able to SEE the root — set two variables.**
+- The bind's source is resolved by the host daemon (wardynd's sandboxes are sibling containers), but the ceiling check resolves symlinks and fails closed on a path it cannot stat.
+- So a `host_path` drive registered from a containerised wardynd is refused unless the share is visible inside it too.
+- `docker-compose.yaml` carries both halves already — nothing to hand-edit:
 
 ```
 WARDYN_USER_DRIVE_HOST_ROOTS=/srv/wardyn-drives   # the ceiling wardynd enforces
 WARDYN_USER_DRIVE_HOST_ROOT=/srv/wardyn-drives    # compose binds this one, RO, same path
 ```
 
-in `deploy/compose/.env` (or the environment `docker compose` is run with).
-Unset, both default to nothing exposed — the same opt-in posture
-`WARDYN_WORKSPACES_ROOT` and `WARDYN_USER_WORKSPACE_ROOTS` take.
+- in `deploy/compose/.env` (or the environment `docker compose` is run with).
+- Unset, both default to nothing exposed — the same opt-in posture `WARDYN_WORKSPACES_ROOT` and `WARDYN_USER_WORKSPACE_ROOTS` take.
 
-**One root on Compose.** The ceiling is a CSV and may name several roots;
-the bind is singular, because compose cannot expand a CSV into volume lines. A
-deployment whose ceiling names more than one root adds one more volume line per
-extra root in `deploy/compose/docker-compose.yaml`, copied from the
-`WARDYN_USER_DRIVE_HOST_ROOT` line — or runs wardynd on the host, or on
-Kubernetes, where no bind is involved and the ceiling is the only thing to set.
+- **One root on Compose.**
+- The ceiling is a CSV and may name several roots; the bind is singular, because compose cannot expand a CSV into volume lines.
+- A deployment whose ceiling names more than one root adds one more volume line per extra root in [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml), copied from the `WARDYN_USER_DRIVE_HOST_ROOT` line
+  - or runs wardynd on the host, or on Kubernetes, where no bind is involved and the ceiling is the only thing to set.
 
-Read-only is enough for wardynd: it stats the tree and never writes to it. It
-does need **search (`x`) permission down to the person's directory**, though,
-because the bind-time ceiling check resolves symlinks in *wardynd's own
-process* — so a CIFS mount table line like the `dir_mode=0700,uid=1000` one
-above works when wardynd runs as root or as uid 1000, and otherwise needs
-`dir_mode=0750,gid=<wardynd's gid>` (or the equivalent NFS export mode). A
-share wardynd cannot traverse fails every drive on it closed at run create —
-with `drive: this deployment cannot mount your drive (drive "<name>" is on a
-share this deployment does not allow — ask an admin)` when the **root itself**
-is what wardynd cannot resolve, and with `drive: directory <home> does not exist
-on the share — ask an admin to create it` when the root resolves but the
-person's directory does not stat (a home that was never created, and a home
-behind a directory whose permissions hide it, are the same sentence). **Neither
-422 names a path**, deliberately: both are read by the MEMBER, so the diagnosis
-— the drive's `host_root`, the whole `WARDYN_USER_DRIVE_HOST_ROOTS` list, and
-the check's own sentence — goes to wardynd's log instead, as `wardynd: user
-drive: a stored share drive's host_root is no longer allowed by this
-deployment`, which is where the admin who can act on it is looking
-(`driveShareIsBindable`, `internal/api/user_drives_run.go`). The sandbox's own mode comes from
-the allocation, not from this line. A `docker_volume` drive needs none of this —
-there is no host path to see.
+- Read-only is enough for wardynd: it stats the tree and never writes to it.
+- It does need **search (`x`) permission down to the person's directory**, though, because the bind-time ceiling check resolves symlinks in *wardynd's own process*.
+- So a CIFS mount table line like the `dir_mode=0700,uid=1000` one above works when wardynd runs as root or as uid 1000, and otherwise needs `dir_mode=0750,gid=<wardynd's gid>` (or the equivalent NFS export mode).
+- A share wardynd cannot traverse fails every drive on it closed at run create:
+  - with `drive: this deployment cannot mount your drive (drive "<name>" is on a share this deployment does not allow — ask an admin)` when the **root itself** is what wardynd cannot resolve,
+  - and with `drive: directory <home> does not exist on the share — ask an admin to create it` when the root resolves but the person's directory does not stat
+    - (a home that was never created, and a home behind a directory whose permissions hide it, are the same sentence).
+- **Neither 422 names a path**, deliberately: both are read by the MEMBER,
+  - so the diagnosis — the drive's `host_root`, the whole `WARDYN_USER_DRIVE_HOST_ROOTS` list, and the check's own sentence — goes to wardynd's log instead, as `wardynd: user drive: a stored share drive's host_root is no longer allowed by this deployment`,
+  - which is where the admin who can act on it is looking (`driveShareIsBindable`, [`internal/api/user_drives_run.go`](../internal/api/user_drives_run.go)).
+- The sandbox's own mode comes from the allocation, not from this line.
+- A `docker_volume` drive needs none of this — there is no host path to see.
 
-**Why every sandbox is uid 1000, and what that buys.** Every agent image is
-`USER agent` (uid 1000), and every agent image pre-creates `/home/agent/drive`
-owned by agent — the ones built on a public base do it themselves, the ones
-built on a sibling image inherit it — so a fresh managed volume inherits that
-ownership by Docker's copy-up. Isolation between people is the **bind of the
-subdirectory**, never the uid: a run sees its own home and has no path to the
-root or to anyone else's. NFS `AUTH_SYS` trusts the client's uid, which is why
-the export above is Wardyn-dedicated and squashed rather than a corporate home
-tree. Existing corporate home directories owned by per-user uids are supported
-read-only where uid 1000 can read them; where it cannot, Wardyn does **not**
-refuse — the directory only has to EXIST for wardynd's own uid
-(`driveShareIsBindable`), so the mount succeeds and the agent sees permission
-denied at first access.
+- **Why every sandbox is uid 1000, and what that buys.**
+- Every agent image is `USER agent` (uid 1000), and every agent image pre-creates `/home/agent/drive` owned by agent
+  - the ones built on a public base do it themselves, the ones built on a sibling image inherit it
+- So a fresh managed volume inherits that ownership by Docker's copy-up.
+- Isolation between people is the **bind of the subdirectory**, never the uid: a run sees its own home and has no path to the root or to anyone else's.
+- NFS `AUTH_SYS` trusts the client's uid, which is why the export above is Wardyn-dedicated and squashed rather than a corporate home tree.
+- Existing corporate home directories owned by per-user uids are supported read-only where uid 1000 can read them.
+- Where it cannot, Wardyn does **not** refuse — the directory only has to EXIST for wardynd's own uid (`driveShareIsBindable`), so the mount succeeds and the agent sees permission denied at first access.
 
-A **BYOI** image is your own to get right on this one point: a custom base that
-never creates `/home/agent/drive` gets a root-owned one from the daemon at mount
-time, so a drive you allocated writable is unwritable by uid 1000 on its first
-run. `deploy/images/README.md`'s image contract states the one line that fixes
-it; wardynd will not chown volume state to compensate.
+- A **BYOI** image is your own to get right on this one point: a custom base that never creates `/home/agent/drive` gets a root-owned one from the daemon at mount time.
+- So a drive you allocated writable is unwritable by uid 1000 on its first run.
+- [`deploy/images/README.md`](../deploy/images/README.md)'s image contract states the one line that fixes it; wardynd will not chown volume state to compensate.
 
-**gVisor (CC2): if a share bind misbehaves under `runsc`, turn `directfs`
-off.** Wardyn does not claim this is required — `runsc`'s own filesystem
-guidance ([gvisor.dev](https://gvisor.dev/docs/user_guide/filesystem/)) is the
-reference, and whether a given network-backed mount needs direct host-FD access
-disabled depends on the share. If a `host_path` drive reads or writes wrongly
-under CC2 and works under CC1, this is the first thing to try. It is a
-**daemon** setting, not a Wardyn one — add it to the runtime in
-`/etc/docker/daemon.json` and restart the daemon:
+- **gVisor (CC2): if a share bind misbehaves under `runsc`, turn `directfs` off.**
+- Wardyn does not claim this is required — `runsc`'s own filesystem guidance ([gvisor.dev](https://gvisor.dev/docs/user_guide/filesystem/)) is the reference, and whether a given network-backed mount needs direct host-FD access disabled depends on the share.
+- If a `host_path` drive reads or writes wrongly under CC2 and works under CC1, this is the first thing to try.
+- It is a **daemon** setting, not a Wardyn one — add it to the runtime in `/etc/docker/daemon.json` and restart the daemon:
 
 ```json
 { "runtimes": { "runsc": { "path": "/usr/local/bin/runsc", "runtimeArgs": ["--directfs=false"] } } }
 ```
 
-CC1 (`runc`) and CC3 (Kata) need nothing. Wardyn's own runsc tweaks are
-unchanged: this is an operator recipe, and the product does not rewrite your
-daemon config.
+- CC1 (`runc`) and CC3 (Kata) need nothing.
+- Wardyn's own runsc tweaks are unchanged: this is an operator recipe, and the product does not rewrite your daemon config.
 
-**A READ-ONLY share loses its RECURSIVE guarantee under `runsc`, and says so in
-the log.** A read-only bind's `ro` reaches SUBMOUNTS only when the runtime
-declares the OCI `rro` mount option — and gVisor does not (`runsc features`
-lists `ro` and `rbind` and no `rro`), while the daemon **refuses the create
-outright** for a runtime that does not. So Wardyn asks for it only where it is
-declared (`runtimeSupportsRecursiveReadOnly`,
-`internal/runner/docker/hardening.go`; `driveBindOptions`,
-`internal/runner/docker/driver_mounts.go`): the bind still goes in read-only,
-and a submount **under** the person's home — an autofs home, a second export
-mounted below the first — can be writable inside the sandbox. wardynd WARNs on
-the run it affects, with the drive and the home:
+- **A READ-ONLY share loses its RECURSIVE guarantee under `runsc`, and says so in the log.**
+- A read-only bind's `ro` reaches SUBMOUNTS only when the runtime declares the OCI `rro` mount option.
+- And gVisor does not (`runsc features` lists `ro` and `rbind` and no `rro`), while the daemon **refuses the create outright** for a runtime that does not.
+- So Wardyn asks for it only where it is declared (`runtimeSupportsRecursiveReadOnly`, [`internal/runner/docker/hardening.go`](../internal/runner/docker/hardening.go); `driveBindOptions`, [`internal/runner/docker/driver_mounts.go`](../internal/runner/docker/driver_mounts.go)):
+  - the bind still goes in read-only, and a submount **under** the person's home — an autofs home, a second export mounted below the first — can be writable inside the sandbox.
+- wardynd WARNs on the run it affects, with the drive and the home:
 
 ```
 wardyn: user drive: this runtime does not support recursively read-only binds,
 so a submount under the share's home could be writable inside the sandbox
 ```
 
-Asking unconditionally is not the alternative: it made every CC2 run with a
-read-only drive fail at `ContainerCreate` with the daemon's `rro is not
-supported by runtime "runsc"` as the member's failure hint. There is one lever
-— run the drives that need the recursive guarantee at **CC1**, where the
-daemon's default `runc` declares `rro`. Nothing in the sandbox is affected when
-the share carries no submounts.
+- Asking unconditionally is not the alternative: it made every CC2 run with a read-only drive fail at `ContainerCreate` with the daemon's `rro is not supported by runtime "runsc"` as the member's failure hint.
+- There is one lever — run the drives that need the recursive guarantee at **CC1**, where the daemon's default `runc` declares `rro`.
+- Nothing in the sandbox is affected when the share carries no submounts.
 
-**What a drive's SIZE means here.** Quoted verbatim, and the same sentence the
-console renders:
+- **What a drive's SIZE means here.** Quoted verbatim, and the same sentence the console renders:
 
 > Wardyn never enforces a drive's size itself. On Kubernetes the size is the
 > volume request and the storage class decides whether it binds — block disks
@@ -2538,33 +2430,23 @@ console renders:
 > cap, the same gap disk_mib has. A share is bounded by its own quota. The
 > size you see is the allocation, not a guarantee.
 
-Concretely on Docker: a `docker_volume` drive reports `enforcement: none` —
-`--storage-opt size` caps only a container's writable layer, never a volume, and
-an XFS project quota needs `CAP_SYS_ADMIN` the control plane must not hold. A
-`host_path` drive reports `enforcement: external`: the NAS's own quota binds it,
-and Wardyn displays the allocation.
+- Concretely on Docker: a `docker_volume` drive reports `enforcement: none` — `--storage-opt size` caps only a container's writable layer, never a volume, and an XFS project quota needs `CAP_SYS_ADMIN` the control plane must not hold.
+- A `host_path` drive reports `enforcement: external`: the NAS's own quota binds it, and Wardyn displays the allocation.
 
-**A real byte cap on Docker: an XFS project quota, run by the operator, on the
-host, never inside the control plane.** `CAP_SYS_ADMIN` is what WARDYN must not
-hold, not a statement that nothing can enforce a `docker_volume` drive's size —
-the recipe below is exactly the case `types.StorageEnforcementFilesystem` was
-named and reserved for (`internal/types/user_drive.go`: "NOTHING in v1 reports
-this — it is the value the documented operator recipe earns"). Wardyn still
-reports `enforcement: none` on the wire; this is an operator ceiling underneath
-it, invisible to the product and unaffected by a `wardynd` restart.
+- **A real byte cap on Docker: an XFS project quota, run by the operator, on the host, never inside the control plane.**
+- `CAP_SYS_ADMIN` is what WARDYN must not hold, not a statement that nothing can enforce a `docker_volume` drive's size.
+- The recipe below is exactly the case `types.StorageEnforcementFilesystem` was named and reserved for ([`internal/types/user_drive.go`](../internal/types/user_drive.go): "NOTHING in v1 reports this — it is the value the documented operator recipe earns").
+- Wardyn still reports `enforcement: none` on the wire; this is an operator ceiling underneath it, invisible to the product and unaffected by a `wardynd` restart.
 
-1. **The Docker data root must be XFS, mounted with project quotas.** Find it
-   with `docker info -f '{{.DockerRootDir}}'`, then confirm with
-   `xfs_info <that path>` — the output must list `pquota` or `prjquota`. A
-   filesystem created without it needs a remount (`mount -o remount,prjquota
-   <mountpoint>`, persisted in `/etc/fstab`) — a host operation, unrelated to
-   Wardyn, that does not require restarting the daemon.
+1. **The Docker data root must be XFS, mounted with project quotas.**
 
-2. **Assign a project to the volume's own directory, one per drive per
-   person.** Resolve the real path rather than guessing the data root, and
-   resolve the XFS mount point rather than assuming it is the data root itself
-   (a bind-mounted or LVM-backed data root is not always its own filesystem
-   root):
+   - Find it with `docker info -f '{{.DockerRootDir}}'`, then confirm with `xfs_info <that path>` — the output must list `pquota` or `prjquota`.
+   - A filesystem created without it needs a remount (`mount -o remount,prjquota <mountpoint>`, persisted in `/etc/fstab`) — a host operation, unrelated to Wardyn, that does not require restarting the daemon.
+
+2. **Assign a project to the volume's own directory, one per drive per person.**
+
+   - Resolve the real path rather than guessing the data root,
+   - and resolve the XFS mount point rather than assuming it is the data root itself (a bind-mounted or LVM-backed data root is not always its own filesystem root):
 
    ```
    VOL=wardyn-drive-<drive-slug>-<home>                    # from the reclaim recipe above
@@ -2583,303 +2465,224 @@ it, invisible to the product and unaffected by a `wardynd` restart.
    xfs_quota -x -c "report -p" "$MOUNT"
    ```
 
-   A run whose agent then writes past the limit meets the filesystem's own
-   `ENOSPC` — the identical error path a genuinely full disk already takes.
-   Wardyn adds nothing to it and catches nothing from it; that is the whole
-   point of a ceiling that lives below the product rather than in it.
+   - A run whose agent then writes past the limit meets the filesystem's own `ENOSPC` — the identical error path a genuinely full disk already takes.
+   - Wardyn adds nothing to it and catches nothing from it; that is the whole point of a ceiling that lives below the product rather than in it.
 
-Recreating the volume — a restore, or Wardyn re-minting one after a delete —
-does not carry the quota forward: step 2 keys on the volume's directory, which
-changes, so re-run it (or script it as a step your own restore/create tooling
-runs after Wardyn's). A `host_path` share on an XFS-backed NAS can be capped
-the identical way, against the directory the NAS exports; that quota is the
-NAS's own, which is already what `enforcement: external` reports.
+- Recreating the volume — a restore, or Wardyn re-minting one after a delete — does not carry the quota forward:
+  - step 2 keys on the volume's directory, which changes,
+  - so re-run it (or script it as a step your own restore/create tooling runs after Wardyn's).
+- A `host_path` share on an XFS-backed NAS can be capped the identical way, against the directory the NAS exports; that quota is the NAS's own, which is already what `enforcement: external` reports.
 
-**And a ceiling bounds what you may ALLOCATE, not what the volume will hold.**
-Two numbers can cap a drive, and they are refused and applied in different
-places. `storage.user_drive.max_size_mib` on the **Workspace providers** screen
-is the deployment's: a drive or an allocation override above it is refused at
-the write with **422 `size_mib … exceeds this deployment's drive ceiling`** —
-not a 403, because nobody was denied anything, the deployment simply will not
-hold it. A governance profile's `max_drive_size_mib` is the **per-principal**
-one, and it cannot be refused at a write at all: the profile binding a subject
-is resolved from their claims, and a group or `all` allocation names no single
-principal. It is CLAMPED when the drive is resolved (`newResolvedDrive`), folded
-with the deployment's in one expression — the smaller of the two wins, the
-daemon logs which one bit (`bound_by=deployment` or `bound_by=governance_profile`),
-and the run, `GET /me` and `POST /drives/preview` all report the clamped number,
-so the card cannot offer a size the run will not give. Lowering the deployment
-ceiling after drives exist refuses no run and rewrites no row; it clamps from
-the next resolve onward.
+- **And a ceiling bounds what you may ALLOCATE, not what the volume will hold.**
+- Two numbers can cap a drive, and they are refused and applied in different places.
+- `storage.user_drive.max_size_mib` on the **Workspace providers** screen is the deployment's: a drive or an allocation override above it is refused at the write with **422 `size_mib … exceeds this deployment's drive ceiling`**.
+- Not a 403, because nobody was denied anything, the deployment simply will not hold it.
+- A governance profile's `max_drive_size_mib` is the **per-principal** one.
+- And it cannot be refused at a write at all: the profile binding a subject is resolved from their claims, and a group or `all` allocation names no single principal.
+- It is CLAMPED when the drive is resolved (`newResolvedDrive`), folded with the deployment's in one expression —
+  - the smaller of the two wins, the daemon logs which one bit (`bound_by=deployment` or `bound_by=governance_profile`),
+  - and the run, `GET /me` and `POST /drives/preview` all report the clamped number,
+  - so the card cannot offer a size the run will not give.
+- Lowering the deployment ceiling after drives exist refuses no run and rewrites no row; it clamps from the next resolve onward.
 
-On Docker that clamp is a number and nothing more — `enforcement: none` on a
-managed volume, `external` on a share — so treat the ceiling as governance over
-what admins may write down, never as a cap on bytes.
+- On Docker that clamp is a number and nothing more:
+  - `enforcement: none` on a managed volume, `external` on a share — so treat the ceiling as governance over what admins may write down, never as a cap on bytes.
 
-**Turning drives OFF deployment-wide** is `storage.user_drive.disabled` on the
-same screen, and it is a different question from a profile's `deny_user_drive`.
-The switch is asked FIRST and says *this install offers no drives*: every drive
-and allocation write answers **422 "drives are disabled for this deployment"**,
-a run asking for its drive is refused 422 in the same family, and no
-`authz.denied` row is written, because no profile denied anybody. Every drive
-row and every allocation is KEPT — the screen still lists them, above a banner —
-so turning it back on restores exactly what was there. **Deletes are deliberately
-not refused**: `DELETE /drives/{id}` and `DELETE /drives/grants/{id}` keep
-working while the switch is off, so an operator can still tidy up or offboard
-somebody without turning drives back on first (the `ON DELETE RESTRICT` between
-the two is unchanged, so a drive still cannot be deleted out from under an
-allocation). What the switch refuses is every write that CREATES or EDITS one.
-The per-profile door is unchanged and still answers 403 with its `authz.denied`
-row. **All three read surfaces answer the switch identically**, off one site
-(`driveSizeCeilingFor`, `internal/api/user_drives_resolve.go`) so they cannot
-drift: a run asking for its drive is refused 422, `POST /drives/preview` answers
-the same 422 with the same sentence, and `GET /me` reports **no** `user_drive`
-with `user_drive_unavailable: "unavailable"` — never an allocation the create
-path would then refuse.
+- **Turning drives OFF deployment-wide** is `storage.user_drive.disabled` on the same screen, and it is a different question from a profile's `deny_user_drive`.
+- The switch is asked FIRST and says *this install offers no drives*:
+  - every drive and allocation write answers **422 "drives are disabled for this deployment"**,
+  - a run asking for its drive is refused 422 in the same family,
+  - and no `authz.denied` row is written, because no profile denied anybody.
+- Every drive row and every allocation is KEPT — the screen still lists them, above a banner — so turning it back on restores exactly what was there.
+- **Deletes are deliberately not refused**:
+  - `DELETE /drives/{id}` and `DELETE /drives/grants/{id}` keep working while the switch is off,
+  - so an operator can still tidy up or offboard somebody without turning drives back on first (the `ON DELETE RESTRICT` between the two is unchanged, so a drive still cannot be deleted out from under an allocation).
+- What the switch refuses is every write that CREATES or EDITS one.
+- The per-profile door is unchanged and still answers 403 with its `authz.denied` row.
+- **All three read surfaces answer the switch identically**, off one site (`driveSizeCeilingFor`, [`internal/api/user_drives_resolve.go`](../internal/api/user_drives_resolve.go)) so they cannot drift:
+  - a run asking for its drive is refused 422,
+  - `POST /drives/preview` answers the same 422 with the same sentence,
+  - and `GET /me` reports **no** `user_drive` with `user_drive_unavailable: "unavailable"` — never an allocation the create path would then refuse.
+
+#### The two lists name the same tree
+
+- ``WARDYN_USER_WORKSPACE_ROOTS and WARDYN_USER_DRIVE_HOST_ROOTS both name "<p>": a member can onboard that directory as a workspace and bind the WHOLE share, every other person's home included, without a drive allocation. Point the drive ceiling at the share and the member ceiling somewhere else``
+
+#### A member root CONTAINS a drive root
+
+- ``WARDYN_USER_WORKSPACE_ROOTS contains "<m>", which holds the WARDYN_USER_DRIVE_HOST_ROOTS entry "<d>": a member can onboard that share as a workspace and bind it whole, every other person's home included, without a drive allocation. Point the member ceiling at a tree that does not contain the share``
 
 ### Capabilities: what one member, or one group, may do
 
-The role split above is deployment-wide. A **capability grant** is per-human: a
-row naming a *subject*, a *kind*, a *value*, and an effect of `allow` or `deny`
-(`capability_grants`, migration 0042), with a per-kind **enforcement switch**
-beside it (`capability_enforcement`). One sentence is the doctrine, and every rule
-below follows from it: **a capability bounds what the MEMBER chose, never what the
-ADMIN pre-authorized.** So a stored policy, a workspace's own requirements, the
-hosts a workspace scan seeded, the model provider's own egress, and the grants
-`applyWorkspaceRequirements` re-adds at launch are all left untouched no matter
-what a member holds.
+- The role split above is deployment-wide.
+- A **capability grant** is per-human: a row naming a *subject*, a *kind*, a *value*, and an effect of `allow` or `deny` (`capability_grants`, migration 0042), with a per-kind **enforcement switch** beside it (`capability_enforcement`).
+- One sentence is the doctrine, and every rule below follows from it: **a capability bounds what the MEMBER chose, never what the ADMIN pre-authorized.**
+- So a stored policy, a workspace's own requirements, the hosts a workspace scan seeded, the model provider's own egress, and the grants `applyWorkspaceRequirements` re-adds at launch are all left untouched no matter what a member holds.
 
-**The ten kinds** — a closed set, written down once in Go (`capabilityKinds`,
-`internal/api/capabilities.go`) rather than as a schema CHECK:
+- **The ten kinds** — a closed set, written down once in Go (`capabilityKinds`, [`internal/api/capabilities.go`](../internal/api/capabilities.go)) rather than as a schema CHECK:
 
 | Kind | Value | Direction | What it bounds, and where |
 |---|---|---|---|
-| `egress_host` | a host, or a `*.suffix` wildcard | narrows | which host a member may **decide** an `egress_domain` approval for (`authorizeUserDecision`, `internal/api/approvals.go`), and which hosts survive on a member's own `inline_policy` allowlist (`narrowUserInlinePolicy`, `internal/api/inline_policy_bounds.go`) |
-| `secret` | exact secret name | narrows | which stored secret a member's own `inline_policy` grant may reference — both refs of an `ssh_key` grant, key and `known_hosts` — and which names `GET /secrets` lists back to them (`handleListSecrets`, `internal/api/secrets.go`) |
-| `workspace` | workspace uuid | narrows | which onboarded workspace a member may name on `POST /runs`/preflight (`denyUserRequest`, `internal/api/runs_create_validate.go`) |
+| `egress_host` | a host, or a `*.suffix` wildcard | narrows | which host a member may **decide** an `egress_domain` approval for (`authorizeUserDecision`, [`internal/api/approvals.go`](../internal/api/approvals.go)), and which hosts survive on a member's own `inline_policy` allowlist (`narrowUserInlinePolicy`, [`internal/api/inline_policy_bounds.go`](../internal/api/inline_policy_bounds.go)) |
+| `secret` | exact secret name | narrows | which stored secret a member's own `inline_policy` grant may reference — both refs of an `ssh_key` grant, key and `known_hosts` — and which names `GET /secrets` lists back to them (`handleListSecrets`, [`internal/api/secrets.go`](../internal/api/secrets.go)) |
+| `workspace` | workspace uuid | narrows | which onboarded workspace a member may name on `POST /runs`/preflight (`denyUserRequest`, [`internal/api/runs_create_validate.go`](../internal/api/runs_create_validate.go)) |
 | `image` | exact image ref | **widens** | which custom sandbox image a member may launch at all — without a grant, none (same seam) |
 | `agent` | exact `--agent` string | narrows | which agent/harness a member may launch (same seam). Deliberately NOT constrained to the harness catalog, at the gate or at the grant write: `WARDYN_AGENT_IMAGES` custom agents are supported, so a catalog check would make an operator's own entry unwriteable |
-| `workspace_provider` | exact git provider row id | narrows | which git provider row the repositories a member brings in may come from — the row `admitRepoURL` resolves a derived clone URL to (`internal/api/workspace_providers.go`). **Six doors**, every one a member can reach: `POST /runs` over the resolved spec's repos and over the legacy `repo` field, and `POST`/`PUT /workspaces`, `POST /workspaces/{id}/scan` and `.../build` — the last three re-point or perform a SERVER-SIDE clone. It bounds the PROVIDER, not the repository: admission is URL-prefix matching, not a repo ACL. Inert on a deployment with no provider rows, and on a repository whose host no row CLAIMS (a row that claims the host and refuses anyway — disabled, or a base path that did not match — still keys the check) |
-| `model_provider` | exact model provider id | narrows | which model provider (Settings → Model providers, `SiteConfig.ModelProviders`) a person's run may use — the one the request names (`model_provider`, `wardyn run --model-provider`), the one a workspace pins (`llm_cred.provider_ref`), or the agent's default reaching them (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; create and Review alike). **A workspace pin is gated too**: every model credential is the person's own, so a pin naming a provider they aren't granted refuses the run rather than being exempt. Such a person never sees that pin's id (0.8.2, #1018): a workspace read (`GET /workspaces`, `GET /workspaces/{id}`, the update response) answers `llm_cred: {"provider_unavailable": true}` in its place, and the launch refusal names no provider. Inert with no model-provider block |
-| `feature` | `ssh_key` or `api_token` | narrows | whether a member may add an SSH key (`POST /me/ssh-keys`) or mint an API token (`POST /me/tokens`) at all — one check at each mint door (the token door keeps its user-view `409`; the SSH door stores a capped key, #564). Mint only: a key or token that already exists keeps working until it is removed or revoked. Any other value is refused at write time (`400`) |
-| `policy` | stored policy uuid | narrows | which stored policy a member may select for their own run (`policy_id` on `POST /runs`/preflight, `denyUserRequest`, same seam). Only the choice: the selected row is still bounded by the member's ceiling, and a run that names no policy is not gated. Checked before the row is read, so an ungranted id is refused whether or not it exists |
-| `component` | org component uuid | narrows | which org component (an admin-written row) a person may attach to their own run (`componentAttachRefusal`, `internal/api/components_authz.go`). An org component's id is restricted ("Available to") from its create, so nobody may attach it until an allow row names it — a wildcard allow does not. A component a person defines themselves is the `feature` value `custom_component`'s question, not this kind's |
+| `workspace_provider` | exact git provider row id | narrows | which git provider row a member's repositories may come from; see [`workspace_provider`](#workspace_provider) below |
+| `model_provider` | exact model provider id | narrows | which model provider a person's run may use; see [`model_provider`](#model_provider) below |
+| `feature` | `ssh_key` or `api_token` | narrows | whether a member may add an SSH key or mint an API token at all; see [`feature`](#feature) below |
+| `policy` | stored policy uuid | narrows | which stored policy a member may select for their own run (`policy_id` on `POST /runs`/preflight, `denyUserRequest`, same seam). |
+| | | | Only the choice: the selected row is still bounded by the member's ceiling, and a run that names no policy is not gated. |
+| | | | Checked before the row is read, so an ungranted id is refused whether or not it exists |
+| `component` | org component uuid | narrows | which org component (an admin-written row) a person may attach to their own run (`componentAttachRefusal`, [`internal/api/components_authz.go`](../internal/api/components_authz.go)). |
+| | | | An org component's id is restricted ("Available to") from its create, so nobody may attach it until an allow row names it — a wildcard allow does not. |
+| | | | A component a person defines themselves is the `feature` value `custom_component`'s question, not this kind's |
 
-`*` as a value matches everything of that kind, spelled the same way for all
-ten. 0.8 retired one more, `integration`, with the AI integrations it bounded: a
-run's `integration_id` is refused with a `422` for everyone, so there is nothing
-left for it to gate. Its stored grant rows are inert, and a new one is refused. `egress_host` values are matched by `entryCoversAny`
-(`internal/api/artifact_redirect.go`) — the *same* matcher that decides whether
-one allowlist entry covers a host, deliberately not a second one, because two
-host matchers that disagree is how a deny gets bypassed by a port suffix. Every
-other kind is an exact compare. A **deny** on `egress_host` asks that matcher in
-BOTH directions and bites whenever the two sets intersect: `deny
-secret.example.com` stops a member asking for `*.example.com`, `deny *.corp`
-stops one asking for `evil.corp`. An allow still has to COVER the request
-outright — a half-overlapping grant permits nothing — and `*.example.com` never
-covers `example.com`. Grant values are shape-checked at write time by the same
-validator every `allowed_domains` ingest uses, so a value that could never match
-is a `400` rather than a row that quietly does nothing.
+- `*` as a value matches everything of that kind, spelled the same way for all ten.
+- 0.8 retired one more, `integration`, with the AI integrations it bounded: a run's `integration_id` is refused with a `422` for everyone, so there is nothing left for it to gate.
+- Its stored grant rows are inert, and a new one is refused.
+- `egress_host` values are matched by `entryCoversAny` ([`internal/api/artifact_redirect.go`](../internal/api/artifact_redirect.go)):
+  - the *same* matcher that decides whether one allowlist entry covers a host, deliberately not a second one, because two host matchers that disagree is how a deny gets bypassed by a port suffix.
+- Every other kind is an exact compare.
+- A **deny** on `egress_host` asks that matcher in BOTH directions and bites whenever the two sets intersect: `deny secret.example.com` stops a member asking for `*.example.com`, `deny *.corp` stops one asking for `evil.corp`.
+- An allow still has to COVER the request outright — a half-overlapping grant permits nothing — and `*.example.com` never covers `example.com`.
+- Grant values are shape-checked at write time by the same validator every `allowed_domains` ingest uses, so a value that could never match is a `400` rather than a row that quietly does nothing.
 
-`devcontainer_repo` is **not** a kind and stays unconditionally admin-only: it
-hands attacker-authored build configuration to the image builder.
+- `devcontainer_repo` is **not** a kind and stays unconditionally admin-only: it hands attacker-authored build configuration to the image builder.
 
-**Precedence — the order is the design** (`capAllowed`, same file):
+- **Precedence — the order is the design** (`capAllowed`, same file):
 
-1. **admin, admin token, and local mode are exempt.** A capability bounds a
-   member; the admin tier is the one writing the grants.
+1. **admin, admin token, and local mode are exempt.** A capability bounds a member; the admin tier is the one writing the grants.
 2. Any matching **deny** ⇒ refused.
 3. Any matching **allow** ⇒ permitted.
 4. The kind is **not enforced** ⇒ permitted.
 5. Otherwise ⇒ refused.
 
-There is no user-over-group precedence: a deny anywhere wins, because "Bob's user
-allow overrode the group deny" is a breach report. Deny sits *above* the
-enforcement switch on purpose, which makes deny rows the adoption on-ramp:
-blacklist one host for one contractor without flipping the whole deployment
-fail-closed. A store error is never permission — the request answers `500`.
+- There is no user-over-group precedence: a deny anywhere wins, because "Bob's user allow overrode the group deny" is a breach report.
+- Deny sits *above* the enforcement switch on purpose, which makes deny rows the adoption on-ramp: blacklist one host for one contractor without flipping the whole deployment fail-closed.
+- A store error is never permission — the request answers `500`.
 
-**The widening kind reads the same rows the other way.** For `image`
-(`capGranted`) an unenforced kind is *refused*, not permitted, because 0.5 refused
-it too. Both directions obey "an upgrade with no configuration changes nothing".
-So `image` needs *both* the switch on and an exact-ref grant; the other five need
-only the absence of a deny until you enforce them. That rule is also why `agent`
-narrows rather than widens: launching an agent is something every member could
-already do, so a widening kind would
-refuse every member run on every deployment that has not enforced it — i.e. all of
-them on upgrade day.
+- **The widening kind reads the same rows the other way.**
+- For `image` (`capGranted`) an unenforced kind is *refused*, not permitted, because 0.5 refused it too.
+- Both directions obey "an upgrade with no configuration changes nothing".
+- So `image` needs *both* the switch on and an exact-ref grant; the other five need only the absence of a deny until you enforce them.
+- That rule is also why `agent` narrows rather than widens:
+  - launching an agent is something every member could already do,
+  - so a widening kind would refuse every member run on every deployment that has not enforced it — i.e. all of them on upgrade day.
 
-**Default posture: an absent enforcement row is off.** A deployment upgraded from
-0.5 with no rows written behaves byte-for-byte as before. Turning `workspace` on
-with no grants written locks every member out of every workspace at once; write
-the grants (or the targeted denies) first, then flip the switch.
+- **Default posture: an absent enforcement row is off.**
+- A deployment upgraded from 0.5 with no rows written behaves byte-for-byte as before.
+- Turning `workspace` on with no grants written locks every member out of every workspace at once; write the grants (or the targeted denies) first, then flip the switch.
 
-**Subjects, and the group snapshot's ceiling.** A grant's `subject_type` is `user`
-(matches **either** the lowercased OIDC `sub` **or** the email — an admin writing
-a grant shouldn't have to guess which the IdP made authoritative; a deny on either
-identity hits), `group` (the login-time union of the ID token's `roles` and
-`groups` claims, lowercased and deduped — so Entra App Roles are grantable for
-free), `user_type` (everyone of one user type, named by the type's id — 0.8), or
-`all` (every signed-in human).
+- **Subjects, and the group snapshot's ceiling.**
+- A grant's `subject_type` is
+  - `user` (matches **either** the lowercased OIDC `sub` **or** the email — an admin writing a grant shouldn't have to guess which the IdP made authoritative; a deny on either identity hits),
+  - `group` (the login-time union of the ID token's `roles` and `groups` claims, lowercased and deduped — so Entra App Roles are grantable for free),
+  - `user_type` (everyone of one user type, named by the type's id — 0.8),
+  - or `all` (every signed-in human).
 
-A person holds exactly one user type, stamped at sign-in, so a `user_type` row is
-one more subject in the union above: a type **allow** is one more way in, and a
-type **deny** is a wall no user or group allow lifts for anyone of that type. A
-security admin of that type is bound by it like anyone else; only a super admin
-is exempt. The type must exist when the row is written (`400` otherwise), and a
-type cannot be deleted while any grant, governance assignment or drive grant
-names it. For the governance ceiling and user drives the type is a **tier**,
-not a union: `user > group > user_type > all`, so a group assignment overrides
-the type's profile and the type's profile overrides `all`. An API token carries
-no type yet and answers as the built-in `standard` type. A session whose type
-was deleted after sign-in is refused (`403`, `user_type_unknown`) wherever a
-control names a type, never resolved without it.
+- A person holds exactly one user type, stamped at sign-in,
+  - so a `user_type` row is one more subject in the union above:
+    - a type **allow** is one more way in, and a type **deny** is a wall no user or group allow lifts for anyone of that type.
+- A security admin of that type is bound by it like anyone else; only a super admin is exempt.
+- The type must exist when the row is written (`400` otherwise), and a type cannot be deleted while any grant, governance assignment or drive grant names it.
+- For the governance ceiling and user drives the type is a **tier**, not a union: `user > group > user_type > all`, so a group assignment overrides the type's profile and the type's profile overrides `all`.
+- An API token carries no type yet and answers as the built-in `standard` type.
+- A session whose type was deleted after sign-in is refused (`403`, `user_type_unknown`) wherever a control names a type, never resolved without it.
 
-A `group` subject must be **printable ASCII**, and the write is refused with that
-reason when it is not — the same rule a console role mapping already gets. The
-snapshot a group grant is matched against carries printable ASCII only, so a
-subject outside that set is a row that can never match anyone: a deny that
-protects nothing while the Permissions screen renders it as active. The check runs
-on what you typed, *before* lowercasing, so a look-alike character that collapses
-onto one of your ASCII group names (Unicode case folding maps KELVIN SIGN to `k`)
-is refused rather than quietly stored as the real group. The same refusal guards a
-governance assignment's subject, for the same reason.
+- A `group` subject must be **printable ASCII**, and the write is refused with that reason when it is not — the same rule a console role mapping already gets.
+- The snapshot a group grant is matched against carries printable ASCII only.
+- So a subject outside that set is a row that can never match anyone: a deny that protects nothing while the Permissions screen renders it as active.
+- The check runs on what you typed, *before* lowercasing.
+- So a look-alike character that collapses onto one of your ASCII group names (Unicode case folding maps KELVIN SIGN to `k`) is refused rather than quietly stored as the real group.
+- The same refusal guards a governance assignment's subject, for the same reason.
 
-Group membership is a **snapshot taken at login**, carried in the session cookie;
-grants are read from the database per request, so a new grant takes effect on the
-very next request but a *directory* change does not until the human signs in
-again. The snapshot is capped at 2048 payload bytes (`maxSessionGroupsBytes`,
-`internal/auth/oidc/derive.go`) so the signed cookie stays under the ~4096 bytes a
-browser silently drops entirely; groups are sorted and dropped **from the end**,
-so the same human loses the same groups every login instead of a coin flip. That
-is roughly 100 typical group names — past that, grant the user directly, or prefer
-Entra App Roles on the much smaller `roles` claim. `groups_snapshot_stale` on
-`GET /me/capabilities` reports the "can't tell yet" state distinctly from "holds
-no groups", because the two must not read the same — but as of 0.7 it is never a
-*pre-upgrade cookie* that produces it. The session payload carries a codec
-version and `decodeSession` requires an exact match
-(`SessionCodecVersion = 1`, `internal/auth/oidc/session_codec.go`), so a cookie
-minted before 0.7 — which has no `v` key at all — is not a stale-groups session;
-it is not a session, and the human is bounced to sign in. See "Upgrades" below.
+- Group membership is a **snapshot taken at login**, carried in the session cookie.
+- Grants are read from the database per request, so a new grant takes effect on the very next request but a *directory* change does not until the human signs in again.
+- The snapshot is capped at 2048 payload bytes (`maxSessionGroupsBytes`, [`internal/auth/oidc/derive.go`](../internal/auth/oidc/derive.go)) so the signed cookie stays under the ~4096 bytes a browser silently drops entirely.
+- Groups are sorted and dropped **from the end**, so the same human loses the same groups every login instead of a coin flip.
+- That is roughly 100 typical group names — past that, grant the user directly, or prefer Entra App Roles on the much smaller `roles` claim.
+- `groups_snapshot_stale` on `GET /me/capabilities` reports the "can't tell yet" state distinctly from "holds no groups", because the two must not read the same — but as of 0.7 it is never a *pre-upgrade cookie* that produces it.
+- The session payload carries a codec version and `decodeSession` requires an exact match (`SessionCodecVersion = 1`, [`internal/auth/oidc/session_codec.go`](../internal/auth/oidc/session_codec.go)),
+  - so a cookie minted before 0.7 — which has no `v` key at all — is not a stale-groups session;
+  - it is not a session, and the human is bounced to sign in.
+- See "[Upgrades](#upgrades)" below.
 
-**A DENY is never allowed to evaporate with the snapshot.** A group that fell off
-the 2048-byte cut — or one your directory names with a character the snapshot
-cannot carry, or a pre-0.7 API token
-whose completeness was never recorded — has none of its group rows in the scan. For an ALLOW that costs the caller access, which is the safe direction. For
-a DENY it would hand back exactly what the row forbade, so the resolver
-(`capScan`, `internal/api/capabilities.go`) checks whether **any** group-subject
-deny row of that kind could cover the value, and refuses when one could — the
-same scoping the ceiling refusal gets: a deployment with no group deny rows
-behaves byte-for-byte as it did before. The refusal reads as an ordinary
-capability denial, with a server log line naming the unanswerable snapshot;
-signing in again (or re-minting the token) resolves it for good. Where a deny has
-to bite with no store read at all, write it against the **user** (either
-identity).
+- **A DENY is never allowed to evaporate with the snapshot.**
+- A group that fell off the 2048-byte cut — or one your directory names with a character the snapshot cannot carry, or a pre-0.7 API token whose completeness was never recorded —
+  - has none of its group rows in the scan.
+- For an ALLOW that costs the caller access, which is the safe direction.
+- For a DENY it would hand back exactly what the row forbade,
+  - so the resolver (`capScan`, [`internal/api/capabilities.go`](../internal/api/capabilities.go)) checks whether **any** group-subject deny row of that kind could cover the value, and refuses when one could —
+  - the same scoping the ceiling refusal gets: a deployment with no group deny rows behaves byte-for-byte as it did before.
+- The refusal reads as an ordinary capability denial, with a server log line naming the unanswerable snapshot; signing in again (or re-minting the token) resolves it for good.
+- Where a deny has to bite with no store read at all, write it against the **user** (either identity).
 
-**Re-mint pre-0.7 API tokens.** A token minted before 0.7 recorded nothing about
-whether its group snapshot was complete, and that unknown is read as
-"incomplete" — the fail-closed choice. So every request such a token makes takes
-the extra check above, on every capability it touches, for the whole life of the
-token. It is correct but it is not free, and it is the one lasting cost of the
-upgrade: re-minting moves those callers (CI jobs, scripts, the headless `wardyn
-run` lane) back onto the ordinary indexed path and removes the standing
-possibility of a group-completeness refusal they cannot themselves resolve.
-`GET /api/v1/tokens` lists the deployment's tokens with their `last_used_at`, so
-the dead ones can be revoked rather than re-minted.
+- **Re-mint pre-0.7 API tokens.**
+- A token minted before 0.7 recorded nothing about whether its group snapshot was complete, and that unknown is read as "incomplete" — the fail-closed choice.
+- So every request such a token makes takes the extra check above, on every capability it touches, for the whole life of the token.
+- It is correct but it is not free, and it is the one lasting cost of the upgrade:
+  - re-minting moves those callers (CI jobs, scripts, the headless `wardyn run` lane) back onto the ordinary indexed path and removes the standing possibility of a group-completeness refusal they cannot themselves resolve.
+- `GET /api/v1/tokens` lists the deployment's tokens with their `last_used_at`, so the dead ones can be revoked rather than re-minted.
 
-**A third cause of a partial snapshot: the IdP's own overage.** Entra ID stops
-sending the `groups` (or `roles`) claim altogether once a human is in more groups
-than the token limit — **200** for a JWT, 150 for SAML — and sends a `_claim_names` /
-`_claim_sources` pointer to Microsoft Graph in its place. Wardyn does not
-dereference that pointer; it marks the snapshot **truncated** (`sessionGroups`,
-`internal/auth/oidc/derive.go`), which reads downstream exactly like a group that
-fell off the byte cap: the ceiling resolver treats it as unanswerable rather than
-as "asked, there were none". Without that, such a login would arrive
-complete-and-empty and quietly shed every group-tier grant and governance
-assignment. Where members legitimately sit in that many groups, the answers that do not
-depend on the size of the claim are Entra App Roles (the much smaller `roles`
-claim) and user-subject grants.
+- **A third cause of a partial snapshot: the IdP's own overage.**
+- Entra ID stops sending the `groups` (or `roles`) claim altogether once a human is in more groups than the token limit —
+  - **200** for a JWT, 150 for SAML —
+- and sends a `_claim_names` / `_claim_sources` pointer to Microsoft Graph in its place.
+- Wardyn does not dereference that pointer.
+- It marks the snapshot **truncated** (`sessionGroups`, [`internal/auth/oidc/derive.go`](../internal/auth/oidc/derive.go)), which reads downstream exactly like a group that fell off the byte cap:
+  - the ceiling resolver treats it as unanswerable rather than as "asked, there were none".
+- Without that, such a login would arrive complete-and-empty and quietly shed every group-tier grant and governance assignment.
+- Where members legitimately sit in that many groups, the answers that do not depend on the size of the claim are Entra App Roles (the much smaller `roles` claim) and user-subject grants.
 
-**Every workaround that merely SHRINKS the group claim trades a detected failure
-for an undetected one.** An overage is loud: the claim is absent, the snapshot is
-marked truncated, and the resolver refuses rather than guessing. A FILTERED claim
-is silent. Set `groupMembershipClaims: "ApplicationGroup"` — the "Groups assigned
-to the application" option, which Microsoft recommends for exactly this limit —
-and the token carries a smaller list that is *complete by the IdP's account*: no
-`_claim_names`, no truncation bit, nothing downstream to refuse. A governance
-assignment or a group DENY row keyed on a group that is no longer emitted simply
-stops applying. That is the evaporation the truncation bit exists to prevent,
-with the detector switched off, and **Wardyn cannot tell the two claims apart** —
-a filtered claim and a full one are identical in the token.
+- **Every workaround that merely SHRINKS the group claim trades a detected failure for an undetected one.**
+- An overage is loud: the claim is absent, the snapshot is marked truncated, and the resolver refuses rather than guessing.
+- A FILTERED claim is silent.
+- Set `groupMembershipClaims: "ApplicationGroup"` — the "Groups assigned to the application" option, which Microsoft recommends for exactly this limit — and the token carries a smaller list that is *complete by the IdP's account*:
+  - no `_claim_names`, no truncation bit, nothing downstream to refuse.
+- A governance assignment or a group DENY row keyed on a group that is no longer emitted simply stops applying.
+- That is the evaporation the truncation bit exists to prevent, with the detector switched off, and **Wardyn cannot tell the two claims apart**.
+- A filtered claim and a full one are identical in the token.
 
-What that option drops is **nested membership**: "nested groups are not included
-and the user must be a direct member of the group assigned to the application"
-([Configure group claims for
-applications](https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/how-to-connect-fed-group-claims)).
-The same rule governs group-based **App Role** assignment — nested group
-memberships are not supported for group-based assignment to an application, so a
-role assigned to a group reaches its direct members only ([Manage users and
-groups
-assignment](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/assign-user-or-group-access-portal)).
-App Roles are a smaller claim, not automatically a safer one.
+- What that option drops is **nested membership**: "nested groups are not included and the user must be a direct member of the group assigned to the application" ([Configure group claims for applications](https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/how-to-connect-fed-group-claims)).
+- The same rule governs group-based **App Role** assignment.
+- Nested group memberships are not supported for group-based assignment to an application, so a role assigned to a group reaches its direct members only ([Manage users and groups assignment](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/assign-user-or-group-access-portal)).
+- App Roles are a smaller claim, not automatically a safer one.
 
-**So re-key before you change the claim, not after:**
+- **So re-key before you change the claim, not after:**
 
-1. List what resolves by group today: `GET /permissions` for every
-   `subject_type=group` grant — **deny rows first**, since those are the ones
-   whose loss WIDENS somebody — and `GET /governance` for every group-tier
-   assignment.
-2. Re-point each one at something the new claim will still carry: a group the
-   member is a **direct** member of and that is assigned to the application, or
-   the member themselves (`subject_type=user`, or a user-tier assignment).
+1. List what resolves by group today: `GET /permissions` for every `subject_type=group` grant — **deny rows first**, since those are the ones whose loss WIDENS somebody — and `GET /governance` for every group-tier assignment.
+2. Re-point each one at something the new claim will still carry:
+   - a group the member is a **direct** member of and that is assigned to the application, or the member themselves (`subject_type=user`, or a user-tier assignment).
 3. Then change the claim configuration.
-4. Verify with a real login, not by reading the IdP's UI: have an affected member
-   sign in again and read `GET /me/capabilities`, whose `session_groups` is the
-   snapshot their token actually produced. Every group your re-keyed rows name
-   must appear in it. `POST /governance/preview` with that exact list says which
-   profile now resolves for them.
+4. Verify with a real login, not by reading the IdP's UI: have an affected member sign in again and read `GET /me/capabilities`, whose `session_groups` is the snapshot their token actually produced. Every group your re-keyed rows name must appear in it. `POST /governance/preview` with that exact list says which profile now resolves for them.
 
-If the groups cannot be flattened and the rows cannot be re-keyed, user subjects
-are the only shape in this release that a claim-configuration change cannot break
-without telling you (`threatmodel/THREAT-MODEL.md` §5).
+- If the groups cannot be flattened and the rows cannot be re-keyed, user subjects are the only shape in this release that a claim-configuration change cannot break without telling you ([`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5).
 
-An overage also blocks one **role derivation** it must not be allowed to decide.
-The role map is keyed on the very claims the IdP withheld, so an overage login
-matches nothing — and "nothing matched" is then an absence of evidence, not a
-fact. Falling through to `WARDYN_OIDC_DEFAULT_ROLE=admin` would hand that human
-the top tier on the strength of a claim nobody read, promoting exactly the member
-the hidden claim was going to wall. Such a login is **denied**
-(`auth_error=claims_overage`), with a server log line naming the claim and the
-var. The check is narrow, so the ordinary posture is untouched: a login whose
-claims genuinely matched is served as-is (a hidden claim can only ever *narrow* a
-highest-wins match), and so is a fallthrough to `user`, the narrowest tier
-there is — a human in 200+ groups still signs in. Only a default WIDER than
-`user` is refused. The remedy is the operator's, and retrying will not clear
-it: carry the tier on Entra App Roles, map the human's email directly, or stop
-defaulting unmatched humans to `admin`.
+- An overage also blocks one **role derivation** it must not be allowed to decide.
+- The role map is keyed on the very claims the IdP withheld, so an overage login matches nothing — and "nothing matched" is then an absence of evidence, not a fact.
+- Falling through to `WARDYN_OIDC_DEFAULT_ROLE=admin` would hand that human the top tier on the strength of a claim nobody read, promoting exactly the member the hidden claim was going to wall.
+- Such a login is **denied** (`auth_error=claims_overage`), with a server log line naming the claim and the var.
+- The check is narrow, so the ordinary posture is untouched:
+  - a login whose claims genuinely matched is served as-is (a hidden claim can only ever *narrow* a highest-wins match),
+  - and so is a fallthrough to `user`, the narrowest tier there is — a human in 200+ groups still signs in.
+- Only a default WIDER than `user` is refused.
+- The remedy is the operator's, and retrying will not clear it: carry the tier on Entra App Roles, map the human's email directly, or stop defaulting unmatched humans to `admin`.
 
-**What a capability deliberately does not reach.** `always`-scope decisions stay
-on the admin-or-`security_admin` gate even for a member granted the host — a grant must never promote a
-member's decision into durable workspace config. `GET /workspaces` is not
-narrowed: visibility is not capability, the launch gate is what refuses. Machine
-lanes (`/internal/*`, ground-truth ingest, attach tickets) are untouched. And
-where the operator ceiling sets `allow_all_egress` the allowlist is not the gate
-at all, so `egress_host` narrowing does nothing there — the operator's own
-posture, not a switch that failed.
+- **What a capability deliberately does not reach.**
+- `always`-scope decisions stay on the admin-or-`security_admin` gate even for a member granted the host — a grant must never promote a member's decision into durable workspace config.
+- `GET /workspaces` is not narrowed: visibility is not capability, the launch gate is what refuses.
+- Machine lanes (`/internal/*`, ground-truth ingest, attach tickets) are untouched.
+- And where the operator ceiling sets `allow_all_egress` the allowlist is not the gate at all, so `egress_host` narrowing does nothing there — the operator's own posture, not a switch that failed.
 
-**What a person is offered.** The per-person lists the console's pickers read
-hold only what the caller may use, decided by the same resolver the launch doors
-refuse with: the `harnesses` (`agent`) of `GET /setup/status`, and the Azure
-DevOps rows of
-`GET /me/scm-access` and `/setup/status`'s `scm_access` (`workspace_provider`).
-A refused row is dropped whole, so it reads exactly as a resource the deployment
-does not have. If the grant tables cannot be read, those lists come back empty
-rather than unfiltered. Admins are exempt, as at every door; a `security_admin`
-is bounded like a member.
+- **What a person is offered.**
+- The per-person lists the console's pickers read hold only what the caller may use, decided by the same resolver the launch doors refuse with: the `harnesses` (`agent`) of `GET /setup/status`,
+  - and the Azure DevOps rows of `GET /me/scm-access` and `/setup/status`'s `scm_access` (`workspace_provider`).
+- A refused row is dropped whole, so it reads exactly as a resource the deployment does not have.
+- If the grant tables cannot be read, those lists come back empty rather than unfiltered.
+- Admins are exempt, as at every door; a `security_admin` is bounded like a member.
 
-**Managing them** (the seven `/permissions` rows are `securityOps` — admin or
-`security_admin`; the `/access` rows are `operatorOnly`; `GET /me/capabilities`
-is member-safe):
+- **Managing them** (the seven `/permissions` rows are `securityOps` — admin or `security_admin`; the `/access` rows are `operatorOnly`; `GET /me/capabilities` is member-safe):
 
 | Route | Does |
 |---|---|
@@ -2889,43 +2692,70 @@ is member-safe):
 | `PUT /permissions/enforcement` | replace the whole switch map — an omitted kind means *off* |
 | `GET /permissions/availability/{kind}/{value}` | one resource's "Available to": `restricted`, and `allowed_by`, the allow rows naming it |
 | `PUT /permissions/availability/{kind}/{value}` | `{"restricted": true}` turns on "Only…" for one resource, `false` turns it back to Everyone |
-| `GET /permissions/explain?subject_type=&subject=&kinds=` | the Explain grid (K4): for one named `user`, `group` or `user_type` subject, every kind's state — `everyone`, `this_type` (an allow, including one written for `all`), `blocked` (a deny that covers the value), `admins_only` (the widening `image` kind, off or with no allow), or `not_available` (an enforced narrowing kind with no allow, or a restricted value no allow naming it lists this subject) — at the `*` default plus every specific value a grant names or "Available to" restricts (`restricted: true`). Each cell is the resolver's own answer, switch and restriction included, for a person who is exactly that subject: only rows naming that subject or `all` are read, so a user's group and type rows are not included. The subject is folded the way a grant's subject is, and a user type that doesn't exist is refused (`400`); `kinds` defaults to every kind |
+| `GET /permissions/explain?subject_type=&subject=&kinds=` | the Explain grid (K4), one named subject's state for every kind; see [`GET /permissions/explain`](#get-permissionsexplain) below |
 | `GET /access` | the merged role-mapping table (chart + console rows, with collision/shadow provenance) plus the same before/after/changes posture the write guards below evaluate |
 | `POST /access/mappings` | upsert one console role mapping on its natural key (`value`) — `201` new, `200` updated; refused on a chart/operator-allowlist collision, an unmatched-outcome flip without `acknowledge_access_change`, or a write that would remove the caller's own admin access |
 | `DELETE /access/mappings/{id}` | remove one console role mapping — same flip/lockout guards as the write above |
 | `POST /access/preview` | dry-run `roles`/`groups`/email (or the caller's own session) through the SAME derivation a real login would use — no write |
 | `GET /me/capabilities` | member-safe: the caller's OWN grants, the switches, their session groups, `groups_snapshot_stale`, and `kinds_version` (a number that goes up whenever the set of capability kinds changes) |
 
-`PUT /permissions/enforcement` replaces the **whole** map, so an omitted kind is
-an enforced kind switched off: re-fetch `GET /permissions` immediately before
-writing, or a stale admin tab can silently disable a control two admins both
-believe is on. `GET /permissions`'s `ETag` header (a content hash of the
-enforcement map alone, not the grant table) can be sent back as this `PUT`'s
-`If-Match`: a document that changed underneath a stale tab is refused `412`.
-`If-Match` is optional, and the write is audited either way.
+- `PUT /permissions/enforcement` replaces the **whole** map, so an omitted kind is an enforced kind switched off: re-fetch `GET /permissions` immediately before writing, or a stale admin tab can silently disable a control two admins both believe is on.
+- `GET /permissions`'s `ETag` header (a content hash of the enforcement map alone, not the grant table) can be sent back as this `PUT`'s `If-Match`: a document that changed underneath a stale tab is refused `412`.
+- `If-Match` is optional, and the write is audited either way.
 
-**"Available to" (0.8).** `workspace`, `image`, `agent` and
-`workspace_provider` values can each be restricted one at a time (migration
-`0081_capability_restrictions`). A restricted value counts as enforced whatever
-its kind's switch says, and only a caller holding an allow row that names the
-value itself gets it: a `*` allow lists nobody, and a deny still wins. So the
-"Only…" list is the allow rows for that value, written through
-`POST /permissions/grants` for a person, a group or a user type. Security admins
-are bound like anyone; only the admin tier is exempt. On `image`, the one
-widening kind, the restriction also switches that one image on for the people
-listed while the kind stays off for every other image. Turning "Only…" on with
-no allow row naming the value is refused `400`, since the resource would then be
-available to nobody. `egress_host` and `secret` values can't be restricted
-(`400`). The value is the rest of the path, so an image ref's slashes need no
-escaping.
+- **"Available to" (0.8).**
+- `workspace`, `image`, `agent` and `workspace_provider` values can each be restricted one at a time (migration `0081_capability_restrictions`).
+- A restricted value counts as enforced whatever its kind's switch says, and only a caller holding an allow row that names the value itself gets it: a `*` allow lists nobody, and a deny still wins.
+- So the "Only…" list is the allow rows for that value, written through `POST /permissions/grants` for a person, a group or a user type.
+- Security admins are bound like anyone; only the admin tier is exempt.
+- On `image`, the one widening kind, the restriction also switches that one image on for the people listed while the kind stays off for every other image.
+- Turning "Only…" on with no allow row naming the value is refused `400`, since the resource would then be available to nobody.
+- `egress_host` and `secret` values can't be restricted (`400`).
+- The value is the rest of the path, so an image ref's slashes need no escaping.
 
-Writes are audited as `capability.grant.create` / `.updated` / `.deleted`,
-`capability.enforcement.write` and `capability.availability.write`. Enforcement lives in its own table rather than in
-SiteConfig because `PUT /site-config` is a full replace: a stale client
-round-tripping an older document could otherwise silently disable an authorization
-control. There is **no cache** — resolution is two indexed reads per check, so a
-grant applies immediately; a stale permission cache is a security bug, not a slow
-page.
+- Writes are audited as `capability.grant.create` / `.updated` / `.deleted`, `capability.enforcement.write` and `capability.availability.write`.
+- Enforcement lives in its own table rather than in SiteConfig because `PUT /site-config` is a full replace: a stale client round-tripping an older document could otherwise silently disable an authorization control.
+- There is **no cache** — resolution is two indexed reads per check, so a grant applies immediately; a stale permission cache is a security bug, not a slow page.
+
+#### `workspace_provider`
+
+- which git provider row the repositories a member brings in may come from — the row `admitRepoURL` resolves a derived clone URL to ([`internal/api/workspace_providers.go`](../internal/api/workspace_providers.go)).
+- **Six doors**, every one a member can reach: `POST /runs` over the resolved spec's repos and over the legacy `repo` field, and `POST`/`PUT /workspaces`, `POST /workspaces/{id}/scan` and `.../build` — the last three re-point or perform a SERVER-SIDE clone.
+- It bounds the PROVIDER, not the repository: admission is URL-prefix matching, not a repo ACL.
+- Inert on a deployment with no provider rows,
+  - and on a repository whose host no row CLAIMS
+    - (a row that claims the host and refuses anyway — disabled, or a base path that did not match — still keys the check)
+
+#### `model_provider`
+
+- which model provider (Settings → Model providers, `SiteConfig.ModelProviders`) a person's run may use —
+  - the one the request names (`model_provider`, `wardyn run --model-provider`),
+  - the one a workspace pins (`llm_cred.provider_ref`),
+  - or the agent's default reaching them (`enforceRunModelProvider`, [`internal/api/run_model_provider.go`](../internal/api/run_model_provider.go); create and Review alike).
+- **A workspace pin is gated too**: every model credential is the person's own, so a pin naming a provider they aren't granted refuses the run rather than being exempt.
+- Such a person never sees that pin's id (0.8.2, #1018): a workspace read (`GET /workspaces`, `GET /workspaces/{id}`, the update response) answers `llm_cred: {"provider_unavailable": true}` in its place, and the launch refusal names no provider.
+- Inert with no model-provider block
+
+#### `feature`
+
+- whether a member may add an SSH key (`POST /me/ssh-keys`) or mint an API token (`POST /me/tokens`) at all
+- One check at each mint door (the token door keeps its user-view `409`; the SSH door stores a capped key, #564).
+- Mint only: a key or token that already exists keeps working until it is removed or revoked.
+- Any other value is refused at write time (`400`)
+
+#### `GET /permissions/explain`
+
+- the Explain grid (K4): for one named `user`, `group` or `user_type` subject, every kind's state —
+  - `everyone`,
+  - `this_type` (an allow, including one written for `all`),
+  - `blocked` (a deny that covers the value),
+  - `admins_only` (the widening `image` kind, off or with no allow),
+  - or `not_available` (an enforced narrowing kind with no allow, or a restricted value no allow naming it lists this subject)
+- at the `*` default plus every specific value a grant names or "Available to" restricts (`restricted: true`).
+- Each cell is the resolver's own answer, switch and restriction included, for a person who is exactly that subject:
+  - only rows naming that subject or `all` are read,
+  - so a user's group and type rows are not included.
+- The subject is folded the way a grant's subject is, and a user type that doesn't exist is refused (`400`); `kinds` defaults to every kind
 
 ### Per-user API tokens: stop sharing the admin token
 
