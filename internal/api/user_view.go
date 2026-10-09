@@ -181,15 +181,8 @@ func (s *Server) handleSetUserView(w http.ResponseWriter, r *http.Request) {
 			datum["no_credential"] = true
 		}
 	}
-	// Dual-emit for one minor (0.8.x, OD-18): every toggle writes BOTH the new
-	// action name and, for SIEM stability, the old one it replaces — same
-	// datum, so a dashboard still filtering on auth.member_mode keeps seeing
-	// rows until it is repointed. docs/OPERATIONS.md's "Renamed in 0.8"
-	// appendix says so; removed in 0.9.
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"auth.user_view.set", "/api/v1/me/view", "success", mustJSON(datum)))
-	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"auth.member_mode", "/api/v1/me/view", "success", mustJSON(datum)))
 	resp := map[string]any{"user_view": entered, "user_type": nil, "user_view_no_credential": entered && preview}
 	if entered {
 		resp["user_type"] = typeID
@@ -372,13 +365,9 @@ func (s *Server) userViewGate(w http.ResponseWriter, r *http.Request, typeID str
 		return nil
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/api/v1/me" {
-		// Dual-emitted like the toggle (OD-18): a dashboard still on the old
-		// name sees the forced exit too.
 		datum := mustJSON(map[string]any{"enabled": false, "user_type": typeID, "reason": "user_type_deleted"})
 		s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidc.PrincipalFromContext(ctx),
 			"auth.user_view.set", "/api/v1/me", "success", datum))
-		s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidc.PrincipalFromContext(ctx),
-			"auth.member_mode", "/api/v1/me", "success", datum))
 		return r.WithContext(dropped)
 	}
 	// Written here rather than through refuse: the gate runs before the api's

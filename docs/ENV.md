@@ -58,7 +58,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### Renamed in 0.8 (`#203`)
 
-- Owner ruling (2026-09-22, `#203`): Wardyn has no users yet, so these land as a **clean break** — no `cliutil.EnvAlias` shim, no boot warning naming the old spelling, no dual-emit.
+- Owner ruling (2026-09-22, `#203`): Wardyn has no users yet, so these land as a **clean break** — no alias shim, no boot warning naming the old spelling, no dual-emit.
 - Set the OLD name after upgrading and it is simply not read; nothing refuses boot over it, it is just inert.
 - See the CHANGELOG's own "Upgrading" section for the operator -facing summary.
 
@@ -73,6 +73,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - See the `WARDYN_URL` and `WARDYN_CONTROL_PLANE_URL` rows below for the cross-reference.
 - `WARDYN_RUNNER_TARGET` keeps its name but moves to [Test / internal-only](#test--internal-only-not-operator-configuration): it was never operator configuration.
 - `WARDYN_ALLOW_AGENT_TELEMETRY` already reads through `cliutil.EnvBool` as of `#202` — no further change needed.
+
+### Removed in 0.9
+
+- 0.9 stops reading six aliases, each now spelled with `USER` in place of `MEMBER`: `WARDYN_MEMBER_MODE` (now `WARDYN_USER_DESKTOP`), `WARDYN_MEMBER_WORKSPACE_ROOTS`, `WARDYN_MEMBER_WORKSPACE_ROOTS_MAP`, `WARDYN_MEMBER_WRITABLE_ROOTS`, `WARDYN_MEMBER_WRITABLE_DENY` and `WARDYN_ALLOW_MEMBER_ENV_SECRET`.
+- A leftover one refuses boot, naming its replacement.
+- So do a `member` role and a plain `http://` issuer: see [OPERATIONS.md](OPERATIONS.md#upgrades).
 
 ## `wardynd` (control plane)
 
@@ -189,17 +195,18 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SCIM_TOKEN_NEXT_FILE` | string (path) | (unset) | file holding `WARDYN_SCIM_TOKEN_NEXT`'s value, same rules as `WARDYN_SCIM_TOKEN_FILE` |
 | `WARDYN_SCIM_PURGE_AFTER` | duration | `720h` | How long after SCIM suspends a person the purge sweeper purges them: stored credentials and masking copies erased. `0` disables the automatic purge; a negative value refuses boot (flag `-scim-purge-after`). [Details](#wardyn_scim_purge_after) |
 | `WARDYN_SCIM_LEAVER_WORKSPACES` | string | `reassign` | What a purge does with the workspaces the purged person owns: `reassign` hands them to the operator, `keep` leaves them with the person. Any other value refuses boot (flag `-scim-leaver-workspaces`). [Details](#wardyn_scim_leaver_workspaces) |
-| `WARDYN_USER_WORKSPACE_ROOTS` | CSV (absolute paths) | (unset = **members may not mount host directories**) | The absolute host directories a **member's own** `local_dir` workspace source may live under. Unset (the default) fails closed (flag `-member-workspace-roots`). Deprecated alias `WARDYN_MEMBER_WORKSPACE_ROOTS` still works. [Details](#wardyn_user_workspace_roots) |
-| `WARDYN_USER_WORKSPACE_ROOTS_MAP` | JSON | (unset) | Per-member override of the list above, keyed by lowercased OIDC `sub` **or** email; a principal with an entry uses **only** that entry (flag `-member-workspace-roots-map`). Deprecated alias `WARDYN_MEMBER_WORKSPACE_ROOTS_MAP` still works. [Details](#wardyn_user_workspace_roots_map) |
-| `WARDYN_USER_WRITABLE_ROOTS` | CSV (absolute paths) | (unset = **no writable member mounts at all**) | Where a member may mark **their own** mount writable. Unset means every member mount is read-only (flag `-member-writable-roots`). Deprecated alias `WARDYN_MEMBER_WRITABLE_ROOTS` still works. [Details](#wardyn_user_writable_roots) |
-| `WARDYN_USER_WRITABLE_DENY` | CSV (absolute paths) | (unset) | carve-outs from `WARDYN_USER_WRITABLE_ROOTS`. **Deny wins** over allow and is checked first, so a subtree inside a writable root can be pinned read-only for members (flag `-member-writable-deny`). Deprecated alias `WARDYN_MEMBER_WRITABLE_DENY` still works and WARNs at boot through 0.8.x; removed in 0.9. |
+| `WARDYN_USER_WORKSPACE_ROOTS` | CSV (absolute paths) | (unset = **members may not mount host directories**) | The absolute host directories a **member's own** `local_dir` workspace source may live under. Unset (the default) fails closed (flag `-member-workspace-roots`). [Details](#wardyn_user_workspace_roots) |
+| `WARDYN_USER_WORKSPACE_ROOTS_MAP` | JSON | (unset) | Per-member override of the list above, keyed by lowercased OIDC `sub` **or** email; a principal with an entry uses **only** that entry (flag `-member-workspace-roots-map`). [Details](#wardyn_user_workspace_roots_map) |
+| `WARDYN_USER_WRITABLE_ROOTS` | CSV (absolute paths) | (unset = **no writable member mounts at all**) | Where a member may mark **their own** mount writable. Unset means every member mount is read-only (flag `-member-writable-roots`). [Details](#wardyn_user_writable_roots) |
+| `WARDYN_USER_WRITABLE_DENY` | CSV (absolute paths) | (unset) | carve-outs from `WARDYN_USER_WRITABLE_ROOTS`. **Deny wins** over allow and is checked first, so a subtree inside a writable root can be pinned read-only for members (flag `-member-writable-deny`). |
 | `WARDYN_USER_DRIVE_HOST_ROOTS` | CSV (absolute paths) | (unset = **no `host_path` user drive may be registered**) | The absolute host directories a **user drive** of backend `host_path` may be registered inside. Unset (the default) fails closed. It must not name a tree `WARDYN_USER_WORKSPACE_ROOTS` also names; boot WARNs (`MountCeilingOverlapWarnings` and `ParseUserDriveHostRoots`, [`internal/runner/user_drive_mount.go`](../internal/runner/user_drive_mount.go); flag `-user-drive-host-roots`). [Details](#wardyn_user_drive_host_roots) |
 | `WARDYN_TLS_CERT` | string | (unset) | TLS certificate PEM path (flag `-tls-cert`) |
 | `WARDYN_TLS_KEY` 🔒 | string | (unset) | TLS private key PEM path (flag `-tls-key`). Read once at boot; each read refuses a group- or world-writable file. [Details](#wardyn_tls_key) |
 | `WARDYN_TLS_TERMINATED` | bool | `false` | TLS terminates upstream; mark cookies Secure and give the console's `__Host-` names (flag `-tls-terminated`) |
 | `WARDYN_LISTEN_ALLOW_PLAINTEXT` | bool | `false` | Override: allow boot on a specific non-loopback bind serving plain HTTP with no TLS posture configured, normally refused (`refusePlaintextListen`, [`cmd/wardynd/main.go`](../cmd/wardynd/main.go)) (flag `-allow-plaintext-listen`). [Details](#wardyn_listen_allow_plaintext) |
-| `WARDYN_OIDC_ISSUER` | string | (unset) | OIDC public issuer URL; enables human SSO (flag `-oidc-issuer`). An `http://` issuer on a non-loopback host is a **boot warning**, not a refusal — see `WARDYN_OIDC_INTERNAL_ISSUER` for when it fires |
-| `WARDYN_OIDC_INTERNAL_ISSUER` | string | (unset) | Server-reachable OIDC issuer (flag `-oidc-internal-issuer`). An `http://` URL whose host is not loopback draws a **boot warning** (never a refusal) once OIDC is configured and the console has a TLS posture (`plaintextIssuerWarnings`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)). [Details](#wardyn_oidc_internal_issuer) |
+| `WARDYN_OIDC_ISSUER` | string | (unset) | OIDC public issuer URL; enables human SSO (flag `-oidc-issuer`). A non-loopback `http://` issuer is a **boot refusal** since 0.9 when the console has a TLS posture; no opt-out (see `WARDYN_OIDC_INTERNAL_ISSUER`) |
+| `WARDYN_OIDC_INTERNAL_ISSUER` | string | (unset) | Server-reachable OIDC issuer (flag `-oidc-internal-issuer`). An `http://` URL whose host is not loopback is a **boot refusal** once OIDC is configured and the console has a TLS posture (`plaintextIssuerRefusal`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)); a warning through 0.8.x. [Details](#wardyn_oidc_internal_issuer) |
+| `WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT` | string | (unset) | `mesh` lets a plain `http://` internal issuer boot, with a warning, when a service mesh encrypts it (flag `-oidc-internal-issuer-plaintext`); any other value refuses boot. [Details](#wardyn_oidc_internal_issuer) |
 | `WARDYN_OIDC_CLIENT_ID` | string | (unset) | OIDC client id (flag `-oidc-client-id`). An Azure DevOps row in `minted_pat` mode must name this client, and the issuer's tenant, as its own ([docs/AZURE-DEVOPS.md](AZURE-DEVOPS.md)) |
 | `WARDYN_OIDC_CLIENT_SECRET` 🔒 | string | (unset) | OIDC client secret (flag `-oidc-client-secret`). **Optional**: leaving this unset registers a **public client**. **Required for Azure DevOps per-run tokens:** a `minted_pat` Azure DevOps row is refused when the console has no secret. [Details](#wardyn_oidc_client_secret) |
 | `WARDYN_OIDC_REDIRECT_URL` | string | (unset) | OIDC redirect URL, the URL the **browser** is sent back to; the compose stack defaults it to `http://localhost:${WARDYN_UP_PORT:-8080}/auth/callback` (flag `-oidc-redirect-url`). [Details](#wardyn_oidc_redirect_url) |
@@ -210,7 +217,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST` | bool | `false` | Override: allow boot with OIDC SSO configured but `WARDYN_OIDC_OPERATOR_EMAILS` empty, normally refused (`validateOperatorPosture`, [`cmd/wardynd/main.go`](../cmd/wardynd/main.go)). No effect without OIDC (flag `-allow-oidc-no-operator-list`). [Details](#wardyn_allow_oidc_no_operator_list) |
 | `WARDYN_SSO_ONLY` | bool | `false` | Declare SSO the **only** way into the console. Boot is refused unless OIDC is configured and `WARDYN_ADMIN_TOKEN`, `WARDYN_LOCAL_MODE`, `WARDYN_USER_DESKTOP` and `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST` are all unset (flag `-sso-only`). [Details](#wardyn_sso_only) |
 | `WARDYN_OIDC_ROLE_MAP` | CSV (`value=role` pairs) | (unset = role derivation off unless a console-managed mapping actually contributes to the merged map) | Maps an Entra App Role, `groups` claim entry or email to `admin`, `security_admin`, `user` or a user type id (flag `-oidc-role-map`); the only way to `security_admin`; a group deny against a partial snapshot fails closed. [Details](#wardyn_oidc_role_map) |
-| `WARDYN_OIDC_DEFAULT_ROLE` | string (`admin`\|`user`\|a user type id; `security_admin` is refused at boot; the pre-0.8 `member` is accepted as `user`, with a boot warning, until 0.9) | (unset = **deny the login**, this applies once the merged map — chart or console — is non-empty) | Role assigned when a signed-in human's roles, groups or email matched none of the merged map's entries; unset denies that login (flag `-oidc-default-role`). Not applied when the IdP withheld the claims. [Details](#wardyn_oidc_default_role) |
+| `WARDYN_OIDC_DEFAULT_ROLE` | string (`admin`\|`user`\|a user type id; `security_admin` is refused at boot; the pre-0.8 `member` has been refused at boot since 0.9) | (unset = **deny the login**, this applies once the merged map — chart or console — is non-empty) | Role assigned when a signed-in human's roles, groups or email matched none of the merged map's entries; unset denies that login (flag `-oidc-default-role`). Not applied when the IdP withheld the claims. [Details](#wardyn_oidc_default_role) |
 | `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` | bool | `false` | Opt-in for an email-shaped value on a console People-step role mapping only; refused by default (`EMAIL_KEY_REFUSED`, [`internal/api/access.go`](../internal/api/access.go)) (flag `-oidc-allow-email-mappings`). [Details](#wardyn_oidc_allow_email_mappings) |
 | `WARDYN_DIRECTORY_PROVIDER` | string (`entra`) | (unset = **off**) | Identity-directory connector behind the console's "who" autocomplete; unset is the whole feature off. Setting it grants wardynd read of the whole directory (flag `-directory-provider`). [Details](#wardyn_directory_provider) |
 | `WARDYN_DIRECTORY_TENANT` | string | (unset = derived from `WARDYN_OIDC_ISSUER`) | Entra tenant id or verified domain for the connector; unset, it is derived from a commercial-cloud issuer such as `https://login.microsoftonline.com/<tenant>/v2.0`, and any other issuer is a boot refusal (flag `-directory-tenant`). [Details](#wardyn_directory_tenant) |
@@ -833,7 +840,6 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - **And** OIDC is configured (with no signed-in identity there is no role to derive, so every caller is an admin).
 - Set `WARDYN_ORG_URL` as well to enrol this device and forward its audit events to an organisation; leaving that URL unset keeps the desktop standalone.
 - See [Enrolling into an org control plane](DESKTOP.md#enrolling-into-an-org-control-plane), `validateMemberModePosture` ([`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)) and [docs/design/member-role-desktop.md](design/member-role-desktop.md) (flag `-member-mode`).
-- Deprecated alias `WARDYN_MEMBER_MODE` still works and WARNs at boot through 0.8.x; removed in 0.9.
 
 ### `WARDYN_ORG_URL`
 
@@ -914,20 +920,20 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Point it at a dedicated projects directory — **never `$HOME` or `/`**, which boot WARNs about but permits
 - And never a tree `WARDYN_USER_DRIVE_HOST_ROOTS` names (see that row: the overlap lets a member bind a whole share one person's home at a time was the point of, and boot WARNs about the pair).
 - Operator mounts are never narrowed by it.
-- ([`internal/runner/member_mount.go`](../internal/runner/member_mount.go); flag `-member-workspace-roots`) Deprecated alias `WARDYN_MEMBER_WORKSPACE_ROOTS` still works and WARNs at boot through 0.8.x; removed in 0.9.
+- ([`internal/runner/member_mount.go`](../internal/runner/member_mount.go); flag `-member-workspace-roots`)
 
 ### `WARDYN_USER_WORKSPACE_ROOTS_MAP`
 
 - Per-member override of the list above, `{"<principal>": ["/abs/root", ...]}` keyed by lowercased OIDC `sub` **or** email (the same dual-key identity a `capability_grants` `user` subject uses).
 - A principal with an entry uses **only** that entry — per-member **REPLACES** the shared list rather than unioning with it, because per-member exists to *narrow* and a union would make adding a row widen.
 - An entry with an empty list means that member mounts nothing.
-- Malformed JSON, an empty key, or a non-absolute/uncleaned path fails boot closed (flag `-member-workspace-roots-map`) Deprecated alias `WARDYN_MEMBER_WORKSPACE_ROOTS_MAP` still works and WARNs at boot through 0.8.x; removed in 0.9.
+- Malformed JSON, an empty key, or a non-absolute/uncleaned path fails boot closed (flag `-member-workspace-roots-map`)
 
 ### `WARDYN_USER_WRITABLE_ROOTS`
 
 - Where a member may mark **their own** mount writable, matched on the same canonicalized real path as the roots above.
 - Unset means every member mount is read-only regardless of the source's `writable` flag — a writable bind widens the residual, so it is opt-in per subtree.
-- Operators keep their unrestricted per-source writable opt-in (flag `-member-writable-roots`) Deprecated alias `WARDYN_MEMBER_WRITABLE_ROOTS` still works and WARNs at boot through 0.8.x; removed in 0.9.
+- Operators keep their unrestricted per-source writable opt-in (flag `-member-writable-roots`)
 
 ### `WARDYN_USER_DRIVE_HOST_ROOTS`
 
@@ -968,9 +974,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_OIDC_INTERNAL_ISSUER`
 
 - Server-reachable OIDC issuer (flag `-oidc-internal-issuer`).
-- Like `WARDYN_OIDC_ISSUER`, an `http://` URL whose host is not loopback draws a **boot warning** (never a refusal) once OIDC is configured (`WARDYN_OIDC_ISSUER` set) and the console has a TLS posture
-- TLS served directly or `WARDYN_TLS_TERMINATED`: discovery, keys and the token exchange would cross the network unencrypted.
-- The Compose demo's plaintext console and its bundled `http://dex:5556` are exempt (`plaintextIssuerWarnings`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)).
+- A non-loopback `http://` URL is a **boot refusal** (a warning through 0.8.x) once `WARDYN_OIDC_ISSUER` is set and the console has a TLS posture (TLS served directly, or `WARDYN_TLS_TERMINATED`).
+- `WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=mesh` opts out for a service mesh that encrypts the hop, with a boot warning; any other value refuses boot. The public issuer has none.
+- The Compose demo's plaintext console and its bundled `http://dex:5556` are exempt (`plaintextIssuerRefusal`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)).
 
 ### `WARDYN_OIDC_CLIENT_SECRET`
 
@@ -1060,7 +1066,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - An admin tier's matched type is recorded as well, but an `admin` sign-in (a map row or `WARDYN_OIDC_OPERATOR_EMAILS`) is never refused over a type.
 - No type decides anything for that tier, so a tie or a missing type puts it on `standard` with a warning instead.
 - A `security_admin` sign-in is refused like a `user` one.
-- The pre-0.8 value `member` is still accepted as `user` (the built-in `standard` user type), with a boot warning per entry, until 0.9.
+- The pre-0.8 value `member` is no longer accepted: since 0.9 it is a boot refusal naming the entry, like any unknown role value. `wardyn setup status --pre-upgrade` lists the leftovers (see [OPERATIONS.md](OPERATIONS.md#upgrades)).
 - A `groups`-keyed row depends on the IdP actually EMITTING the claim.
 - Wardyn's authorization request is fixed at `openid profile email` and deliberately does not ask for a `groups` scope
 - (Entra defines none and rejects unrecognised ones, and an IdP that merely advertises one may not have granted it to this client registration — asking would be `invalid_scope`, i.e. every human locked out).
@@ -1294,7 +1300,6 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Every other member-reusable kind is bounded after delivery (`api_key` never leaves the broker, `git_pat` reaches git through the helper, `ssh_key` is wiped after the clone).
 - While an `env_secret` is a raw value in the process env for the run's whole life, and a `file_secret` a file for the same time, each with no mint, no TTL and nothing to revoke.
 - An operator's own runs are unaffected either way — the ceiling authority is never clamped by its own ceiling.
-- Deprecated alias `WARDYN_ALLOW_MEMBER_ENV_SECRET` still works and WARNs at boot through 0.8.x; removed in 0.9.
 - A value that is not a bool exits 2 at boot (`#202`; before that it was silently read as unset).
 
 ### `WARDYN_EGRESS_SECOND_HUMAN`

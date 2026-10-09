@@ -60,7 +60,7 @@ export interface Me {
   // present only for method:"sso". Absent for local/token auth, which has no
   // session to expire.
   session_expires_at?: string;
-  // M3 — presentational label of this member's WARDYN_MEMBER_WORKSPACE_ROOTS
+  // M3 — presentational label of this member's WARDYN_USER_WORKSPACE_ROOTS
   // /_MAP constraint (e.g. "/home/agent-projects"). null/absent when no root
   // applies (member-role-desktop.md §DECISIONS O1). Never a value to trust —
   // AddWorkspaceDialog shows it as a hint; ValidateUserMountSource enforces.

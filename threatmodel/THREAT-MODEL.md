@@ -44,7 +44,7 @@ coverage verdict pointing back into this document.
 | **Honest developer** | Requests an agent run; reviews/merges PRs; owns the human `sub` in the delegation chain | 🟡 Trusted-but-accountable. Not granted the agent's runtime access. |
 | **Prompt-injected agent (primary adversary)** | Arbitrary code execution inside its sandbox; reads any in-sandbox file; drives any tool the gateway exposes. Hostile payload arrives via repo content, web fetch, MCP tool output, dependency or issue text. | ⛔ **Untrusted.** This is the threat the whole platform exists to contain. |
 | **Malicious insider (developer)** | Legitimately launches agent runs; uses the agent as laundering/cover for actions they could not perform under their own identity, or to dodge attribution. | 🟡 Authenticated, partially trusted, audited. |
-| **Member on a member-mode desktop (topology m′)** | The human at the keyboard of an org-managed laptop where `WARDYN_MEMBER_MODE=true`: an OIDC session deriving `member`, so `isOperator` is false on every request. | 🟡 Authenticated, partially trusted, audited: [trust detail](#member-on-a-member-mode-desktop-topology-m). |
+| **Member on a member-mode desktop (topology m′)** | The human at the keyboard of an org-managed laptop where `WARDYN_USER_DESKTOP=true`: an OIDC session deriving `user`, so `isOperator` is false on every request. | 🟡 Authenticated, partially trusted, audited: [trust detail](#member-on-a-member-mode-desktop-topology-m). |
 | | Onboards their OWN workspaces and mounts their OWN project directories into runs. Is **root on the laptop**, but is NOT the governance authority — config, policy and the admin credential are MDM/IdP-held. | |
 | **Compromised dependency / supply chain** | Code executing with agent privileges inside the sandbox (build tooling, npm/pip postinstall, MCP server image). | ⛔ Untrusted; collapses into "prompt-injected agent" for containment purposes. |
 | **Repo-supplied devcontainer/build content** | Arbitrary `Dockerfile` `RUN` / devcontainer feature / lifecycle-command execution during a workspace image build (`internal/envbuild`'s ENVBUILDER stage) — BEFORE any confinement tier exists. | ⛔ **Untrusted.** Executes on the host build container, not inside a Confinement Class and not behind `wardyn-proxy` — see residual #13 and boundary B8. |
@@ -981,14 +981,14 @@ ADMIN pre-authorized** —
 - The gate is additive: the operator deny-list (`ValidateMountSource`) runs first and unchanged;
   - then the source's **canonicalized real path** (`filepath.EvalSymlinks`, fail-CLOSED on any
     resolve error — no lexical fallback) must sit inside an operator/MDM-set root
-    (`WARDYN_MEMBER_WORKSPACE_ROOTS`, or that principal's `_MAP` entry, which REPLACES the shared
+    (`WARDYN_USER_WORKSPACE_ROOTS`, or that principal's `_MAP` entry, which REPLACES the shared
     list).
   - And it must neither BE nor TRAVERSE a credential dotfile path (`.ssh`, `.aws`, `.claude`,
     `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.netrc`, `.git-credentials`,
     `.git/config`).
 - Unset roots = **no member host mounts at all**.
-- Writability is a SECOND, narrower allowlist (`WARDYN_MEMBER_WRITABLE_ROOTS` minus
-  `WARDYN_MEMBER_WRITABLE_DENY`, deny first and winning); both unset = every member mount
+- Writability is a SECOND, narrower allowlist (`WARDYN_USER_WRITABLE_ROOTS` minus
+  `WARDYN_USER_WRITABLE_DENY`, deny first and winning); both unset = every member mount
   read-only.
 - Because the within-root test runs on the RESOLVED path, a symlink inside a root aimed out of
   every root is refused — the escape a lexical prefix check misses.
@@ -1142,15 +1142,15 @@ ADMIN pre-authorized** —
     `WARDYN_USER_DRIVE_HOST_ROOTS` (`ParseUserDriveHostRoots`/`UserDriveHostRootCheck`,
     [`internal/runner/user_drive_mount.go`](../internal/runner/user_drive_mount.go)).
   - Unset = **no `host_path` drive may be registered at all**, the posture
-    `WARDYN_MEMBER_WORKSPACE_ROOTS` takes one level down.
+    `WARDYN_USER_WORKSPACE_ROOTS` takes one level down.
   - The root must exist on this host (fail-closed on any resolve error, no lexical fallback),
     - must pass the same host bind-mount deny-list every authored source does,
     - and must neither BE nor TRAVERSE a credential dotfile path — the `deniedUserSegment` list of
       [§4.4](#44-member-authored-host-mounts-v06--the-gate), applied to a drive's resolved root.
 - **And the per-person isolation this ceiling buys is only as good as the OTHER
   ceiling's disjointness.**
-  - `WARDYN_MEMBER_WORKSPACE_ROOTS` bounds a different surface under a different rule: a member
-    names a directory inside it and binds it WHOLE, writable where `WARDYN_MEMBER_WRITABLE_ROOTS`
+  - `WARDYN_USER_WORKSPACE_ROOTS` bounds a different surface under a different rule: a member
+    names a directory inside it and binds it WHOLE, writable where `WARDYN_USER_WRITABLE_ROOTS`
     allows, through a path that consults no drive allocation at all.
   - Point the two ceilings at one tree and the second undoes the first — a member onboards the
     share as a workspace and mounts every person's home, with no drive grant anywhere in it.
@@ -1481,7 +1481,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Every successful OIDC login re-stamps BOTH `role` and `role_checked_at` for that principal's keys (`oidc.Config.OnLogin`, wired in [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go) to `store.RefreshSSHKeyRoles`).
     - And `sshAuth` and `sshCurrentKey` refuse the override once `role_checked_at` exceeds `WARDYN_SSH_ROLE_TTL` (default `24h`) — including when never stamped (`NULL`, infinitely stale, the fail-closed reading for every pre-`0046` row).
     - Still bounded-stale, never live.
-    - A demoted admin's key keeps granting the override until their next login (re-stamping `role=member`), the TTL aging out on its own, or the key being deleted (`DELETE /me/ssh-keys/{fingerprint}`, `DELETE /people/{principal}/ssh-keys`, or session revocation).
+    - A demoted admin's key keeps granting the override until their next login (re-stamping `role=user`), the TTL aging out on its own, or the key being deleted (`DELETE /me/ssh-keys/{fingerprint}`, `DELETE /people/{principal}/ssh-keys`, or session revocation).
     - A member's key never satisfies the override regardless of drift — only `role==admin` does, reachable only by holding the admin role at a stamping moment.
     - Audited distinctly (`ssh.authenticate` success carries `override:true` when the owner check failed and the role check passed; a TTL-refused attempt is an `ssh.authenticate` failure with its own reason string).
     - No in-place role-update endpoint exists; the re-register path is still immediate.
@@ -1563,6 +1563,7 @@ hiding them would repeat the failure mode we are designed to avoid.
       - Boot says so: with secure cookies on and a path-mode gateway whose `WARDYN_UI_SANDBOX_ADVERTISE` host equals the console's (the host of `WARDYN_OIDC_REDIRECT_URL`), wardynd logs a warning naming the remedy.
       - Give the gateway its own hostname, or set `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` (`uiGatewaySharesConsoleHostWarning`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go); #1269).
       - It is a warning, not a refusal: the advertised URL is advisory, so boot cannot tell that it is what a browser reaches.
+    - **Plain `http://` OIDC issuer (#1970):** refused only under secure cookies (`plaintextIssuerRefusal`); `WARDYN_TLS_TERMINATED` is operator-set, not derived; `mesh` opt-out: internal only.
 
 19. **A UI-app session is not recorded — only that it happened.**
     - Session recording (tmux, the PTY recorder, `internal/secretmask` masking, the asciicast upload) covers the terminal lanes: browser attach and SSH shells.
@@ -1651,7 +1652,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The tests pin the ORDERING this depends on; the race itself is not deterministically testable and no test claims to cover it.
 
 26. **A reckless member root is a boot WARNING, not a boot refusal.**
-    - Setting `WARDYN_MEMBER_WORKSPACE_ROOTS` (or a `_MAP` entry, or `WARDYN_MEMBER_WRITABLE_ROOTS`) to `/` or the daemon's own `$HOME` leaves the dotfile deny-list as the ONLY thing between a member and the operator's credentials.
+    - Setting `WARDYN_USER_WORKSPACE_ROOTS` (or a `_MAP` entry, or `WARDYN_USER_WRITABLE_ROOTS`) to `/` or the daemon's own `$HOME` leaves the dotfile deny-list as the ONLY thing between a member and the operator's credentials.
     - And `wardynd` logs that at boot and starts anyway, matching the `LocalMode`-on-unspecified-bind WARN precedent.
     - A deliberate decision (design O4) and the un-bounded corner of residual #25: a member already local-root on such a box is bounded by the deny-list alone.
     - A malformed root DOES refuse boot — an allowlist silently misparsed is worse than one merely wide.
@@ -1742,7 +1743,7 @@ hiding them would repeat the failure mode we are designed to avoid.
       - Nothing in the product tells that shape apart from the legitimate `2024/alice` one, which is the point: the rule bounds the NAME, not the tree, and the tree is the share administrator's to arrange.
       - What is NOT closed is everything ABOVE the path.
       - And the isolation is bounded by the OTHER mount ceiling as well.
-      - A `WARDYN_MEMBER_WORKSPACE_ROOTS` entry that names, contains, or sits inside a drive's root lets a member onboard the share as a WORKSPACE and bind it whole, every home included, through a surface that consults no drive allocation.
+      - A `WARDYN_USER_WORKSPACE_ROOTS` entry that names, contains, or sits inside a drive's root lets a member onboard the share as a WORKSPACE and bind it whole, every home included, through a surface that consults no drive allocation.
       - That pair earns a boot WARNING and not a refusal (`MountCeilingOverlapWarnings`), so a deployment configured that way keeps the hole; §4.6 states the argument.
       - Whoever administers the share decides what is in it.
       - A host-side bind mount of one home over another, hard links, an export re-pointed at a different tree, or per-directory modes that make every home world-readable are all invisible to a path check.
@@ -2593,7 +2594,6 @@ full, under asset #4 (§2).
   - the grant may not overwrite a variable dispatch already set;
   - `requires_approval` is REFUSED rather than silently ignored (there is no mint to gate);
   - and the kind is **admin-only by default** — a member's `env_secret` or `file_secret` grant is dropped even for a ceiling-listed pairing unless the operator sets `WARDYN_ALLOW_USER_ENV_SECRET`.
-  - The older name, `WARDYN_ALLOW_MEMBER_ENV_SECRET`, is an alias that logs a boot warning and is removed in 0.9 (`deprecatedEnvAliases` in [`cmd/wardynd/boot_flags.go`](../cmd/wardynd/boot_flags.go)).
 - That drop is a ROLE check plus the switch, never a ceiling check.
   - So it binds every non-operator on every route a run policy arrives by (an inline body, a stored row the member selected, or the deployment default)
     - and regardless of whether a governance profile is assigned to them (`dropAdminOnlyEnvSecretGrants`).

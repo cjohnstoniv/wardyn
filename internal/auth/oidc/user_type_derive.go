@@ -67,10 +67,10 @@ func UserTypeIDWellFormed(id string) bool {
 }
 
 // UserTypeIDReserved reports whether id is a word a role-map value already
-// means: the three tiers, the retired "member", and "denied".
+// means: the three tiers, the removed "member", and "denied".
 func UserTypeIDReserved(id string) bool {
 	switch id {
-	case RoleAdmin, RoleSecurityAdmin, RoleUser, LegacyRoleMember, "denied":
+	case RoleAdmin, RoleSecurityAdmin, RoleUser, RemovedRoleMember, "denied":
 		return true
 	}
 	return false
