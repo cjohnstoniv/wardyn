@@ -17,9 +17,10 @@ import (
 //
 // The rule is applied where a person below the security tier is served, and
 // to every row, because that is the one place that covers a row already
-// written and a row some later code writes: the broker's credential.mint
-// keeps the grant's scope as the operator's own readers and sinks need it,
-// and an append-only row cannot be corrected afterwards.
+// written and a row some later code writes: dispatch's run.policy.resolve and
+// the broker's credential.mint keep the grant's scope whole, as the security
+// tier and the sinks read it, and an append-only row cannot be corrected
+// afterwards.
 
 // sharedRefs removes shared-secret references from what one reader is served.
 // Two shapes name one:
@@ -35,7 +36,7 @@ import (
 type sharedRefs struct {
 	// grants reads the run's grant list. It is called at most once, and only
 	// when a row names a grant beside a secret; nil answers no such row, which
-	// is right for a spec about to be recorded, where every scope is marked.
+	// is right for a grant's own scope, which carries its own mark.
 	grants func() ([]types.CredentialGrant, error)
 	shared map[string]bool // ids of the run's shared grants; nil until read
 }
@@ -149,8 +150,8 @@ func (sr *sharedRefs) events(evs []types.AuditEvent) ([]types.AuditEvent, error)
 	return out, nil
 }
 
-// withoutSharedSecretRefs is strip for a value that marks its own scopes: a
-// grant scope, a policy spec.
+// withoutSharedSecretRefs is strip for a value that carries its own mark: a
+// grant's scope.
 func withoutSharedSecretRefs(raw json.RawMessage) json.RawMessage {
 	out, _ := (&sharedRefs{}).strip(raw) // no grant list is read, so nothing fails
 	return out

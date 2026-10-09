@@ -881,11 +881,11 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 
 // auditablePolicy returns a Clone of policy safe to write to the append-only
 // audit log: LLMInspection.WorkspaceSecretValues (the real resolved corpus, whose
-// own doc comment says NEVER logged) is replaced by a redacted count, and a
-// `shared` grant's scope loses the name of the organisation's secret it reads,
-// as the sink's secret.read row for that grant carries none. Nothing reads the
-// name back from this row: the sink and a revive take a grant's scope from the
-// run's grant rows, which keep it.
+// own doc comment says NEVER logged) is replaced by a redacted count.
+// Grant scopes are recorded whole, a `shared` grant's secret name included:
+// the security tier reads this row, on the audit feed and as the run's policy
+// view and its export. A run's owner is served it without that name
+// (sharedRefs on the audit reads, redactSpecForUser on the policy view).
 // The caller's live policy is never mutated.
 func auditablePolicy(policy types.RunPolicySpec) types.RunPolicySpec {
 	out := policy.Clone()
@@ -893,9 +893,6 @@ func auditablePolicy(policy types.RunPolicySpec) types.RunPolicySpec {
 		out.LLMInspection.WorkspaceSecretValues = []string{
 			fmt.Sprintf("<%d value(s) redacted>", len(out.LLMInspection.WorkspaceSecretValues)),
 		}
-	}
-	for i := range out.EligibleGrants {
-		out.EligibleGrants[i].Scope = withoutSharedSecretRefs(out.EligibleGrants[i].Scope)
 	}
 	return out
 }

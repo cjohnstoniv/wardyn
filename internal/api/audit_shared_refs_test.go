@@ -39,7 +39,30 @@ type sharedRun struct {
 
 func launchSharedRun(t *testing.T) *sharedRun {
 	t.Helper()
-	f := newComponentFixture(t)
+	return launchSharedRunOn(t, newComponentFixture(t))
+}
+
+// newComponentViewFixture is newComponentFixture over a store that also serves
+// a run's audit rows, which the run's policy view is built from.
+func newComponentViewFixture(t *testing.T) *componentFixture {
+	t.Helper()
+	cs := &capStore{}
+	h := newHarness(t)
+	st := &componentTestStore{govEscapeStore: newGovEscapeStore(cs), snapshots: map[uuid.UUID][]types.RunComponent{}}
+	rec := &recRecorder{}
+	cfg := baseTestConfig(h, &factsViewStore{componentTestStore: st, audit: rec})
+	cfg.Audit, cfg.Broker, cfg.Runner = rec, h.broker, &fakeRunner{}
+	cfg.Secrets = &memSecrets{
+		m:     map[string][]byte{compOperatorSecret: []byte("operator-value"), govCorpSecret: []byte("v")},
+		owned: map[string]map[string][]byte{capSub: {compOwnSecret: []byte("own-value")}},
+	}
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.DefaultPolicy = govDeployment()
+	return &componentFixture{srv: New(cfg), st: st, cs: cs, rec: rec}
+}
+
+func launchSharedRunOn(t *testing.T, f *componentFixture) *sharedRun {
+	t.Helper()
 	ref := f.org(compOrgID, types.ComponentDefinition{
 		Hosts: []string{"org-api.example"},
 		Secrets: []types.ComponentSecret{{SecretName: compOperatorSecret, Shared: true,
@@ -197,11 +220,13 @@ func TestAudit_AMemberNeverReadsASharedSecretsName(t *testing.T) {
 	}
 }
 
-// What dispatch records for the run names no shared secret either, as the
-// sink's secret.read row for that grant names none; a person's own secret
-// keeps its name on the row, and the grant row the sink and a revive read
-// keeps the organisation's.
-func TestDispatch_TheRecordedPolicyNamesNoSharedSecret(t *testing.T) {
+// What dispatch records for the run is the policy with every grant scope
+// whole, the organisation's secret name included: the security tier reads
+// that row, and the sinks receive it. The grant row the sink and a revive read
+// carries the same scope. The run's owner is served the recorded row without
+// the name, and a person's own secret keeps its name for them.
+func TestDispatch_TheRecordedPolicyKeepsEveryGrantScopeWhole(t *testing.T) {
+	const orgScope = `{"host":"org-api.example","require_tls":true,"secret_name":"operator-only-secret","shared":true}`
 	f := newComponentFixture(t)
 	org := f.org(compOrgID, types.ComponentDefinition{
 		Hosts: []string{"org-api.example"},
@@ -220,9 +245,6 @@ func TestDispatch_TheRecordedPolicyNamesNoSharedSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev := waitForRecAudit(t, f.rec, created.ID, "run.policy.resolve", "success")
-	if strings.Contains(string(ev.Data), compOperatorSecret) {
-		t.Errorf("run.policy.resolve names the organisation's secret: %s", ev.Data)
-	}
 	var spec types.RunPolicySpec
 	if err := json.Unmarshal(ev.Data, &spec); err != nil {
 		t.Fatal(err)
@@ -231,21 +253,56 @@ func TestDispatch_TheRecordedPolicyNamesNoSharedSecret(t *testing.T) {
 	for _, g := range spec.EligibleGrants {
 		scopes = append(scopes, string(g.Scope))
 	}
-	want := []string{
-		`{"host":"person-api.example","require_tls":true,"secret_name":"person-secret"}`,
-		`{"host":"org-api.example","require_tls":true,"shared":true}`,
-	}
-	if !slices.Equal(scopes, want) {
+	if want := []string{`{"host":"person-api.example","require_tls":true,"secret_name":"person-secret"}`, orgScope}; !slices.Equal(scopes, want) {
 		t.Errorf("recorded grant scopes =\n %v\nwant\n %v", scopes, want)
 	}
 	grants, err := f.st.ListGrantsByRun(t.Context(), created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.ContainsFunc(grants, func(g types.CredentialGrant) bool {
-		return string(g.Spec.Scope) == `{"host":"org-api.example","require_tls":true,"secret_name":"operator-only-secret","shared":true}`
-	}) {
+	if !slices.ContainsFunc(grants, func(g types.CredentialGrant) bool { return string(g.Spec.Scope) == orgScope }) {
 		t.Errorf("the run's grant rows lost the scope the sink resolves: %+v", grants)
+	}
+
+	run, err := f.st.GetRun(t.Context(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, _ := sharedAuditDoors(t, created.ID, run.CreatedBy, []types.AuditEvent{*ev}, grants...)
+	body := doSSO(t, srv, http.MethodGet, "/api/v1/audit?run_id="+created.ID.String(), ssoSession(t, run.CreatedBy, capEmail, oidc.RoleUser), "").Body.String()
+	if strings.Contains(body, compOperatorSecret) || !strings.Contains(body, `"secret_name":"person-secret"`) ||
+		!strings.Contains(body, `"scope":{"host":"org-api.example","require_tls":true,"shared":true}`) {
+		t.Errorf("the run's owner is served the recorded policy as %s, want it without the organisation's secret name and with their own", body)
+	}
+}
+
+// The run's policy view is the recorded policy under another door (and what
+// `wardyn run policy` exports). An admin and a security admin read the shared
+// grant with its secret name; the run's owner reads the same grant without it.
+func TestRunPolicyView_TheSecurityTierReadsASharedGrantsSecretNameAndTheOwnerDoesNot(t *testing.T) {
+	run := launchSharedRunOn(t, newComponentViewFixture(t))
+	path := "/api/v1/runs/" + run.id.String() + "/policy"
+	srv := run.f.srv
+	for name, get := range map[string]func() *httptest.ResponseRecorder{
+		"the admin token": func() *httptest.ResponseRecorder { return do(t, srv, http.MethodGet, path, adminToken, "") },
+		"an admin": func() *httptest.ResponseRecorder {
+			return doSSO(t, srv, http.MethodGet, path, ssoSession(t, "root", "root@corp.example", oidc.RoleAdmin), "")
+		},
+		"a security admin": func() *httptest.ResponseRecorder {
+			return doSSO(t, srv, http.MethodGet, path, ssoSession(t, "sec", "sec@corp.example", oidc.RoleSecurityAdmin), "")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := get()
+			if body := w.Body.String(); w.Code != http.StatusOK || !strings.Contains(body, `"scope":`+string(run.grant.Spec.Scope)) {
+				t.Errorf("GET %s = %d %s, want the shared grant's scope whole, secret name included", path, w.Code, body)
+			}
+		})
+	}
+	w := doSSO(t, srv, http.MethodGet, path, ssoSession(t, run.owner, capEmail, oidc.RoleUser), "")
+	if body := w.Body.String(); w.Code != http.StatusOK || strings.Contains(body, compOperatorSecret) ||
+		!strings.Contains(body, `"scope":{"host":"org-api.example","require_tls":true,"shared":true}`) {
+		t.Errorf("GET %s as the run's owner = %d %s, want the shared grant without the organisation's secret name", path, w.Code, body)
 	}
 }
 
@@ -277,15 +334,15 @@ func TestAudit_TheSecurityTierReadsTheRowsAsRecorded(t *testing.T) {
 					t.Errorf("%s row served as\n %s\nrecorded as\n %s", rows[i].Action, served[i].Data, rows[i].Data)
 				}
 			}
-			if n := strings.Count(w.Body.String(), `"scope":`+string(run.grant.Spec.Scope)); n != 3 {
-				t.Errorf("the grant's scope is served whole on %d rows, want the three mint rows", n)
+			if n := strings.Count(w.Body.String(), `"scope":`+string(run.grant.Spec.Scope)); n != 4 {
+				t.Errorf("the grant's scope is served whole on %d rows, want the recorded policy and the three mint rows", n)
 			}
 		})
 	}
 }
 
-// Rows written before the rule are served under it. The recorded policy of an
-// earlier build, under its current action name and its pre-0.8 one, and a
+// Rows written before the rule are served under it. The recorded policy,
+// under its current action name and its pre-0.8 one, and a
 // dropped injection, which names its grant by id and carries no mark of its
 // own: the organisation's name is gone from each, a person's own secret keeps
 // its name, and a row with nothing to remove is served as it was written.
@@ -433,8 +490,8 @@ func (s *noAuditReads) QueryAuditEvents(context.Context, uuid.UUID, int) ([]type
 }
 
 // A revive takes a shared credential from the run's grant rows and its stored
-// proxy config, and reads no audit row to do it: the recorded policy carrying
-// no name for that grant changes nothing about what the revived proxy injects.
+// proxy config, and reads no audit row to do it: what a run's audit rows say,
+// or are served as, changes nothing about what the revived proxy injects.
 func TestRevive_ASharedCredentialNeedsNothingFromTheRunsAuditRows(t *testing.T) {
 	f, _ := newModelCredFixture(t)
 	scope := mustJSON(map[string]any{"host": "artifactory.corp.example", "secret_name": "artifactory-token", "shared": true})
@@ -442,10 +499,6 @@ func TestRevive_ASharedCredentialNeedsNothingFromTheRunsAuditRows(t *testing.T) 
 	f.st.site.Integrations = nil
 	f.srv.cfg.Store = &noAuditReads{reviveStore: f.rs, t: t}
 
-	recorded := auditablePolicy(types.RunPolicySpec{EligibleGrants: []types.GrantSpec{f.st.credGrants[0].Spec}})
-	if got := string(recorded.EligibleGrants[0].Scope); strings.Contains(got, "artifactory-token") {
-		t.Fatalf("the recorded policy names the shared secret: %s", got)
-	}
 	if code, body := f.reviveAs(t, true); code != http.StatusOK {
 		t.Fatalf("revive = %d %s, want 200", code, body)
 	}
