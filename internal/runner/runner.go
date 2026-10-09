@@ -51,7 +51,11 @@ type Capabilities struct {
 
 // SandboxSpec is everything a driver needs to create one governed sandbox.
 type SandboxSpec struct {
-	RunID            uuid.UUID
+	RunID uuid.UUID
+	// RunnerID, when set, routes the create to the substrate of that registered
+	// runner (named "runner:<id>"); empty means the cluster. It is a routing
+	// carrier for the orchestrator, not something a substrate reads.
+	RunnerID         string
 	Image            string // resolved agent/workspace OCI image
 	ConfinementClass types.ConfinementClass
 	// Env is non-secret environment. Credential material NEVER passes through
@@ -280,6 +284,16 @@ type Status struct {
 	ExitCode *int
 	Message  string
 }
+
+// ErrRunnerOffline is the answer for a call to a registered runner whose link
+// is down. It is transient: the caller retries or refuses, and never falls back
+// to another substrate.
+var ErrRunnerOffline = errors.New("runner: the runner is offline")
+
+// ErrPendingOnRunner is the answer for a teardown that was queued as a pending
+// action because the runner's link is down. It is not a failure: the action
+// applies when the runner reconnects.
+var ErrPendingOnRunner = errors.New("runner: the action is queued on the offline runner")
 
 // ErrExecNeverStarted: a Runner's Wait returns this when it can prove the
 // agent exec will NEVER reach a terminal state (e.g. ImagePullBackOff) —

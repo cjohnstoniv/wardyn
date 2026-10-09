@@ -19,6 +19,7 @@ package substrate
 
 import (
 	"context"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -69,3 +70,13 @@ type Substrate interface {
 	// KillSandbox is the immediate kill-switch teardown (idempotent).
 	KillSandbox(ctx context.Context, ref string) error
 }
+
+// RemotePrefix starts the Name of every substrate that reaches a registered
+// runner ("runner:<id>"), and every ref such a substrate hands out is prefixed
+// "runner:<id>/". The orchestrator never class-routes to, aggregates
+// capabilities over, or falls back to one.
+const RemotePrefix = "runner:"
+
+// IsRemote reports whether s reaches a registered runner rather than this
+// deployment's own executor.
+func IsRemote(s Substrate) bool { return strings.HasPrefix(s.Name(), RemotePrefix) }

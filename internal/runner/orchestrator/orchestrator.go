@@ -15,7 +15,9 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,6 +56,10 @@ type RefStore interface {
 
 // Orchestrator implements runner.Runner over a set of Substrates.
 type Orchestrator struct {
+	// subsMu guards substrates, which Add and Remove change after boot (a runner
+	// registers and revokes while the control plane serves). Readers take a
+	// snapshot; a substrate is never mutated in place.
+	subsMu     sync.RWMutex
 	substrates []substrate.Substrate
 
 	// refStore, when non-nil, durably mirrors byRef so lifecycle routing (and
@@ -83,11 +89,70 @@ var _ runner.Runner = (*Orchestrator)(nil)
 // a single substrate it is a thin pass-through; with several it routes by class.
 func New(substrates ...substrate.Substrate) *Orchestrator {
 	return &Orchestrator{
-		substrates: substrates,
+		substrates: slices.Clone(substrates),
 		byRef:      make(map[string]substrate.Substrate),
 		classCache: make(map[string]cachedClasses),
 		now:        time.Now,
 	}
+}
+
+// snapshot is the current substrate set, remote ones included, safe to range over.
+func (o *Orchestrator) snapshot() []substrate.Substrate {
+	o.subsMu.RLock()
+	defer o.subsMu.RUnlock()
+	return slices.Clone(o.substrates)
+}
+
+// locals is the snapshot without the remote (runner) substrates: the
+// deployment's own executors. Class routing, capability aggregation, the
+// single-substrate fallback and every non-ref fan-out use it, so a registered
+// runner never changes what the deployment itself can do.
+func (o *Orchestrator) locals() []substrate.Substrate {
+	return slices.DeleteFunc(o.snapshot(), substrate.IsRemote)
+}
+
+// Add registers a substrate (a claimed runner's remote substrate) with the
+// running orchestrator, replacing one of the same name.
+func (o *Orchestrator) Add(s substrate.Substrate) {
+	o.subsMu.Lock()
+	defer o.subsMu.Unlock()
+	for i, have := range o.substrates {
+		if have.Name() == s.Name() {
+			o.substrates[i] = s
+			return
+		}
+	}
+	o.substrates = append(o.substrates, s)
+}
+
+// Remove unregisters the substrate of that name and forgets the refs routed to
+// it, so nothing reaches a revoked runner through a stale route. Removing a
+// name that is not registered does nothing.
+func (o *Orchestrator) Remove(s substrate.Substrate) {
+	name := s.Name()
+	o.subsMu.Lock()
+	o.substrates = slices.DeleteFunc(o.substrates, func(have substrate.Substrate) bool { return have.Name() == name })
+	o.subsMu.Unlock()
+	o.mu.Lock()
+	for ref, have := range o.byRef {
+		if have.Name() == name {
+			delete(o.byRef, ref)
+		}
+	}
+	o.mu.Unlock()
+	o.capsMu.Lock()
+	delete(o.classCache, name)
+	o.capsMu.Unlock()
+}
+
+// runnerSubstrate is the registered substrate named "runner:<id>", or false.
+func (o *Orchestrator) runnerSubstrate(name string) (substrate.Substrate, bool) {
+	for _, s := range o.snapshot() {
+		if s.Name() == name {
+			return s, true
+		}
+	}
+	return nil, false
 }
 
 // classesFor returns a substrate's ClassSupport, served from a short-TTL cache
@@ -126,8 +191,8 @@ func (o *Orchestrator) WithRefStore(rs RefStore) *Orchestrator {
 // Name reports the single substrate's name (so /healthz still shows "docker" for
 // the OCI deployment), or "orchestrator" when several substrates are wired.
 func (o *Orchestrator) Name() string {
-	if len(o.substrates) == 1 {
-		return o.substrates[0].Name()
+	if locals := o.locals(); len(locals) == 1 {
+		return locals[0].Name()
 	}
 	return "orchestrator"
 }
@@ -138,7 +203,7 @@ func (o *Orchestrator) Name() string {
 // is simply skipped. Callers treat the "none support it" error the same as
 // any other check failure: unknown, trust the cache (fail-open).
 func (o *Orchestrator) ImagePresent(ctx context.Context, ref string) (bool, error) {
-	for _, s := range o.substrates {
+	for _, s := range o.locals() {
 		if ic, ok := s.(runner.ImageChecker); ok {
 			return ic.ImagePresent(ctx, ref)
 		}
@@ -153,7 +218,7 @@ func (o *Orchestrator) ImagePresent(ctx context.Context, ref string) (bool, erro
 // check), so with the one substrate production wires per deployment this is
 // unambiguous.
 func (o *Orchestrator) ProbeDrive(ctx context.Context, mount types.DriveMount) (runner.DriveProbe, error) {
-	for _, s := range o.substrates {
+	for _, s := range o.locals() {
 		if dp, ok := s.(runner.DriveProber); ok {
 			return dp.ProbeDrive(ctx, mount)
 		}
@@ -166,7 +231,7 @@ func (o *Orchestrator) ProbeDrive(ctx context.Context, mount types.DriveMount) (
 // With no probing substrate the answer is whether Capabilities can be read,
 // which is the only live call such a substrate has.
 func (o *Orchestrator) ProbeSubstrate(ctx context.Context) runner.SubstrateState {
-	for _, s := range o.substrates {
+	for _, s := range o.locals() {
 		if sp, ok := s.(runner.SubstrateProber); ok {
 			return sp.ProbeSubstrate(ctx)
 		}
@@ -190,7 +255,7 @@ func (o *Orchestrator) ProbeSubstrate(ctx context.Context) runner.SubstrateState
 // backend/target check), so with the one substrate production wires there is
 // nothing to fall through to.
 func (o *Orchestrator) ReclaimDrive(ctx context.Context, mount types.DriveMount) (runner.DriveReclaimOutcome, error) {
-	for _, s := range o.substrates {
+	for _, s := range o.locals() {
 		if dr, ok := s.(runner.DriveReclaimer); ok {
 			return dr.ReclaimDrive(ctx, mount)
 		}
@@ -202,7 +267,7 @@ func (o *Orchestrator) ReclaimDrive(ctx context.Context, mount types.DriveMount)
 // implements it, the same single fan-out ProbeDrive takes. A substrate with no fit to check
 // (docker) is skipped; none at all answers runner.ErrFitUnsupported.
 func (o *Orchestrator) CheckFit(ctx context.Context, res runner.Resources) (runner.Fit, error) {
-	for _, s := range o.substrates {
+	for _, s := range o.locals() {
 		if fc, ok := s.(runner.FitChecker); ok {
 			return fc.CheckFit(ctx, res)
 		}
@@ -231,12 +296,13 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 		Resolved: map[types.ConfinementClass]string{},
 		Freeze:   map[types.ConfinementClass]bool{},
 	}
-	drives := len(o.substrates) > 0
-	managed := len(o.substrates) > 0
+	locals := o.locals()
+	drives := len(locals) > 0
+	managed := len(locals) > 0
 	var enforcement types.StorageEnforcement
 	seen := map[types.ConfinementClass]bool{}
 	var classes []types.ConfinementClass
-	for i, s := range o.substrates {
+	for i, s := range locals {
 		cs, err := o.classesFor(ctx, s)
 		if err != nil {
 			return runner.Capabilities{}, fmt.Errorf("orchestrator: %s classes: %w", s.Name(), err)
@@ -294,13 +360,22 @@ func ephemeralRank(e types.StorageEnforcement) int {
 }
 
 // CreateSandbox routes to a substrate that can enforce the requested class, then
-// delegates and records ref->substrate for subsequent lifecycle ops.
+// delegates and records ref->substrate for subsequent lifecycle ops. A spec
+// naming a RunnerID goes to that runner's substrate instead, or fails
+// runner.ErrRunnerOffline when it is not registered: a placement is honoured
+// or refused, never substituted.
 func (o *Orchestrator) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
-	class := spec.ConfinementClass
-	if class == "" {
-		class = types.CC1
+	var sub substrate.Substrate
+	var err error
+	if spec.RunnerID != "" {
+		sub, err = o.substrateForRunner(spec.RunnerID)
+	} else {
+		class := spec.ConfinementClass
+		if class == "" {
+			class = types.CC1
+		}
+		sub, err = o.substrateFor(ctx, class)
 	}
-	sub, err := o.substrateFor(ctx, class)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
@@ -323,11 +398,19 @@ func (o *Orchestrator) CreateSandbox(ctx context.Context, spec runner.SandboxSpe
 	return sb, nil
 }
 
+// substrateForRunner is the registered substrate of runnerID.
+func (o *Orchestrator) substrateForRunner(runnerID string) (substrate.Substrate, error) {
+	if s, ok := o.runnerSubstrate(substrate.RemotePrefix + runnerID); ok {
+		return s, nil
+	}
+	return nil, fmt.Errorf("%w: runner %s is not registered", runner.ErrRunnerOffline, runnerID)
+}
+
 // substrateFor returns the first substrate that advertises the class. Fails
 // closed when none can enforce it (never silently downgrade).
 func (o *Orchestrator) substrateFor(ctx context.Context, class types.ConfinementClass) (substrate.Substrate, error) {
 	var probeErrs []error
-	for _, s := range o.substrates {
+	for _, s := range o.locals() {
 		cs, err := o.classesFor(ctx, s)
 		if err != nil {
 			// A substrate that can't report capabilities can't be selected, but
@@ -350,27 +433,38 @@ func (o *Orchestrator) substrateFor(ctx context.Context, class types.Confinement
 }
 
 // subForRef resolves the substrate that owns ref. After a control-plane restart
-// the byRef map is empty; with a single substrate we fall back to it (its
+// the byRef map is empty; with a single local substrate we fall back to it (its
 // teardown reconstructs state from the run-id label, so crash recovery is
 // preserved). With several substrates an untracked ref is rehydrated from the
 // RefStore by substrate name; only when that misses too (no store, no row, or a
-// name no longer wired) does resolution fail.
+// name no longer wired) does resolution fail. A runner's ref is routed by the
+// runner id it carries, never by either fallback.
 func (o *Orchestrator) subForRef(ctx context.Context, ref string) (substrate.Substrate, error) {
 	o.mu.Lock()
 	if s, ok := o.byRef[ref]; ok {
 		o.mu.Unlock()
 		return s, nil
 	}
-	if len(o.substrates) == 1 {
-		s := o.substrates[0]
+	o.mu.Unlock()
+	// A runner's ref names its runner, so it never meets the single-substrate
+	// fallback below: it routes to that runner or is offline.
+	if name, ok := remoteNameOfRef(ref); ok {
+		s, ok := o.runnerSubstrate(name)
+		if !ok {
+			return nil, fmt.Errorf("%w: no registered substrate %s for ref %q", runner.ErrRunnerOffline, name, ref)
+		}
+		o.mu.Lock()
+		o.byRef[ref] = s
 		o.mu.Unlock()
 		return s, nil
 	}
-	o.mu.Unlock()
+	if locals := o.locals(); len(locals) == 1 {
+		return locals[0], nil
+	}
 	if o.refStore != nil {
 		name, found, err := o.refStore.GetRef(ctx, ref)
 		if err == nil && found {
-			for _, s := range o.substrates {
+			for _, s := range o.snapshot() {
 				if s.Name() == name {
 					o.mu.Lock()
 					o.byRef[ref] = s
@@ -381,6 +475,19 @@ func (o *Orchestrator) subForRef(ctx context.Context, ref string) (substrate.Sub
 		}
 	}
 	return nil, fmt.Errorf("orchestrator: no substrate tracked for ref %q", ref)
+}
+
+// remoteNameOfRef extracts "runner:<id>" from a ref "runner:<id>/<local ref>".
+func remoteNameOfRef(ref string) (string, bool) {
+	rest, ok := strings.CutPrefix(ref, substrate.RemotePrefix)
+	if !ok {
+		return "", false
+	}
+	id, _, ok := strings.Cut(rest, "/")
+	if !ok || id == "" {
+		return "", false
+	}
+	return substrate.RemotePrefix + id, true
 }
 
 func (o *Orchestrator) Exec(ctx context.Context, ref string, argv []string) (string, error) {
@@ -520,7 +627,7 @@ func (o *Orchestrator) ReplaceProxy(ctx context.Context, ref string, cfgJSON []b
 // already-present image is a cheap local check. There is exactly one
 // revivable substrate today; this loops in case a future one joins it.
 func (o *Orchestrator) EnsureProxyImage(ctx context.Context) error {
-	for _, s := range o.substrates {
+	for _, s := range o.locals() {
 		if rv, ok := s.(runner.ProxyReviver); ok {
 			if err := rv.EnsureProxyImage(ctx); err != nil {
 				return err
@@ -588,7 +695,7 @@ func (o *Orchestrator) SampleCPU(ctx context.Context, refs []string) (map[string
 	out := map[string]float64{}
 	var errs []error
 	asked := false
-	for _, s := range o.substrates {
+	for _, s := range o.locals() {
 		subRefs, routed := byName[s.Name()]
 		smp, ok := s.(runner.ActivitySampler)
 		if !ok || (refs != nil && !routed) {
@@ -611,7 +718,7 @@ func (o *Orchestrator) SampleCPU(ctx context.Context, refs []string) (map[string
 // sandboxes in one call; one that charges per ref sets the budget for all.
 func (o *Orchestrator) BatchSample() bool {
 	sampling := false
-	for _, s := range o.substrates {
+	for _, s := range o.locals() {
 		if smp, ok := s.(runner.ActivitySampler); ok {
 			if !smp.BatchSample() {
 				return false
@@ -642,7 +749,7 @@ func (o *Orchestrator) KillSandbox(ctx context.Context, ref string) error {
 func (o *Orchestrator) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
 	var total int
 	var errs []error
-	for _, s := range o.substrates {
+	for _, s := range o.locals() {
 		sw, ok := s.(interface {
 			SweepOrphanedSandboxes(context.Context, time.Duration, func(uuid.UUID) bool) (int, error)
 		})
