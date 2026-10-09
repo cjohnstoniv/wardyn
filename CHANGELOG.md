@@ -112,6 +112,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Threat model residuals 1 to 40 are bullets, one sentence each, with every repository file they cite
   linked. Numbers, order and wording are kept; no residual, default or limit changed.
 - The Azure DevOps page (`docs/AZURE-DEVOPS.md`) is restructured into bullets and alerts; its tables, code fences and headings are unchanged, three sentences of 36 to 39 words are kept as written, and no scope, limit, refusal, default or upgrade step changes.
+- The pluggable components page, the image verification page, the export control page, the recording read confinement note and the adoption reports index are now bullets, tables and alerts, with every repository file they cite linked. No rule, default or limit changed; the long cells of the pluggable components tables moved to sections of their own.
 
 ### Fixed
 
