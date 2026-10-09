@@ -109,6 +109,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **Threat model: sections 0 to 3, 4 (except 4.1) and 6 to 8 are bullets and split table rows.** Every
   sentence is kept; the longest table cells move into subsections under their table, and file references
   are links.
+- Threat model residuals 1 to 40 are bullets, one sentence each, with every repository file they cite
+  linked. Numbers, order and wording are kept; no residual, default or limit changed.
 
 ### Fixed
 
