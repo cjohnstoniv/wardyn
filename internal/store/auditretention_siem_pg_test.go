@@ -9,8 +9,13 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -94,5 +99,50 @@ func TestPG_RetentionRowsReachTheSIEM(t *testing.T) {
 	wantSent(t, c, sink, "audit.retention.partition_dropped")
 	if st := sweep(t, c.pool); !st.OK || st.AnchorSeq != d.SeqHi {
 		t.Fatalf("verify after the drop = %+v", st)
+	}
+}
+
+// credential.reauth.resolve is written in the resolve's own transaction, past every recorder: the sink gets
+// it once, hashes included, and a resolver that lost the CAS sends nothing.
+func TestPG_ReauthResolveRowReachesTheSIEM(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	sink := &captureSink{}
+	st := store.NewPG(pool)
+	st.SIEM = sink
+	runID := seedReauthRun(t, st)
+	created, err := st.CreateApproval(ctx, types.ApprovalRequest{
+		ID: uuid.New(), RunID: runID, Kind: types.ApprovalCredentialReauth, State: types.ApprovalPending, RequestedAt: time.Now().UTC(),
+		RequestedScope: json.RawMessage(`{"owner":"alice@corp.example"}`),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	ev := func() types.AuditEvent {
+		return types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), RunID: &runID, ActorType: types.ActorHuman, Actor: "alice@corp.example",
+			Action: "credential.reauth.resolve", Target: created.ID.String(), Outcome: "success", Data: json.RawMessage(`{"owner":"alice@corp.example"}`)}
+	}
+	decision := types.ApprovalDecision{State: types.ApprovalApproved, DecidedBy: "alice@corp.example", Reason: "signed in again"}
+
+	if _, err := st.ResolveReauthApproval(ctx, created.ID, decision, ev()); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	got := sink.take()
+	if len(got) != 1 || got[0].Action != "credential.reauth.resolve" {
+		t.Fatalf("the sink received %+v, want exactly one credential.reauth.resolve", got)
+	}
+	var prev, hash string
+	if err := pool.QueryRow(ctx, `SELECT COALESCE(prev_hash,''), COALESCE(row_hash,'') FROM audit_events WHERE id = $1`, got[0].ID).Scan(&prev, &hash); err != nil {
+		t.Fatalf("read the stored row: %v", err)
+	}
+	if hash == "" || got[0].RowHash != hash || got[0].PrevHash != prev {
+		t.Errorf("the sink's hashes %q/%q differ from the stored %q/%q", got[0].PrevHash, got[0].RowHash, prev, hash)
+	}
+
+	if _, err := st.ResolveReauthApproval(ctx, created.ID, decision, ev()); !errors.Is(err, store.ErrAlreadyDecided) {
+		t.Fatalf("a second resolve returned %v, want ErrAlreadyDecided", err)
+	}
+	if got := sink.take(); len(got) != 0 {
+		t.Fatalf("a losing resolver sent %+v to the sink", got)
 	}
 }

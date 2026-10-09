@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -176,29 +177,45 @@ func readFileOrEmpty(path string) string {
 	return string(b)
 }
 
-// sinkMissesStoredHashes lists the stored rows of action whose row hash the sink never received.
-func (rg *sealRig) sinkMissesStoredHashes(action string) []string {
+// sinkHashProblems lists the stored rows of action whose row hash is not in the sink exactly once, and
+// says so when the sink holds a different number of rows of action than the store.
+func (rg *sealRig) sinkHashProblems(action string) []string {
 	rg.t.Helper()
 	rows, err := rg.pool.Query(rg.t.Context(), `SELECT row_hash FROM audit_events WHERE action=$1`, action)
 	if err != nil {
 		rg.t.Fatal(err)
 	}
 	defer rows.Close()
-	sink := readFileOrEmpty(rg.sinkPath)
-	var missing []string
+	// A row's hash also names the row after it (its prev_hash), so count the rows the sink holds by their
+	// own row_hash.
+	sunkBy := map[string]int{}
+	sunk := 0
+	for _, line := range strings.Split(readFileOrEmpty(rg.sinkPath), "\n") {
+		var ev types.AuditEvent
+		if json.Unmarshal([]byte(line), &ev) == nil && ev.Action == action {
+			sunkBy[ev.RowHash]++
+			sunk++
+		}
+	}
+	var problems []string
+	stored := 0
 	for rows.Next() {
 		var h string
 		if err := rows.Scan(&h); err != nil {
 			rg.t.Fatal(err)
 		}
-		if !strings.Contains(sink, h) {
-			missing = append(missing, h)
+		stored++
+		if n := sunkBy[h]; n != 1 {
+			problems = append(problems, fmt.Sprintf("row_hash %s is in the sink %d times", h, n))
 		}
 	}
 	if err := rows.Err(); err != nil {
 		rg.t.Fatal(err)
 	}
-	return missing
+	if sunk != stored {
+		problems = append(problems, fmt.Sprintf("the sink holds %d %s rows, the store %d", sunk, action, stored))
+	}
+	return problems
 }
 
 func (rg *sealRig) noPlaintext(where string, words ...string) {
@@ -269,8 +286,8 @@ func TestPG_AuditSeal_FieldsAreCiphertextEverywhereAndErasureShredsThem(t *testi
 	}
 	rg.noPlaintext("", "alice typed", "bob typed")
 	// The destroy row is written by the database past the chain: the sinks still get it, hash and all.
-	if missing := rg.sinkMissesStoredHashes("principal_key.destroyed"); len(missing) != 0 || !strings.Contains(readFileOrEmpty(rg.sinkPath), `"principal_key.destroyed"`) {
-		t.Errorf("the sink never received principal_key.destroyed (missing hashes %v)", missing)
+	if problems := rg.sinkHashProblems("principal_key.destroyed"); len(problems) != 0 || !strings.Contains(readFileOrEmpty(rg.sinkPath), `"principal_key.destroyed"`) {
+		t.Errorf("the sink did not receive principal_key.destroyed exactly once: %v", problems)
 	}
 }
 
@@ -324,8 +341,8 @@ func TestPG_AuditSeal_AColdKeyWaitsInTheSpoolThenTheDrainReseals(t *testing.T) {
 	}
 	// The rows that waited under the pending key never touched the sinks; the drain sends them once the
 	// store has them, so the sink holds every stored hash and the chain it sees has no gap.
-	if missing := rg.sinkMissesStoredHashes("approval.decide"); len(missing) != 0 {
-		t.Errorf("the sink never received the stored hashes %v", missing)
+	if problems := rg.sinkHashProblems("approval.decide"); len(problems) != 0 {
+		t.Errorf("the sink does not hold every stored approval.decide row exactly once: %v", problems)
 	}
 	rg.noPlaintext("the sink", "typed")
 	got := rg.reasons(rg.a)

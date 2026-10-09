@@ -689,7 +689,7 @@ func TestMiscCovStartAuditRetentionSurvivesAnUnreachableDatabase(t *testing.T) {
 			days := 45
 			f := &bootFlags{auditRetentionDays: &days, auditRetentionAutodrop: &autodrop}
 
-			startAuditRetention(ctx, f, pool, nil, nil)
+			startAuditRetention(ctx, f, store.NewPG(pool), nil)
 
 			// The sweeper has made its first pass once the ensure (and, with autodrop, the drop) has failed.
 			logs.await(t, "audit partition ensure failed")

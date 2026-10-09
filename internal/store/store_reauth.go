@@ -65,6 +65,11 @@ func (s PG) ResolveReauthApproval(ctx context.Context, id uuid.UUID, decision ty
 	if err := tx.Commit(ctx); err != nil {
 		return types.ApprovalRequest{}, fmt.Errorf("store: commit reauth resolve: %w", err)
 	}
+	// The row is written past every recorder chain, so the sinks get it here, with the hashes
+	// InsertAuditEventTx filled in.
+	if s.SIEM != nil {
+		_ = s.SIEM.Emit(context.WithoutCancel(ctx), ev)
+	}
 	return ap, nil
 }
 

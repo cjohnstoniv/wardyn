@@ -551,7 +551,7 @@ func run() error {
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
-	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, siem, feats.recStore, leader, ticks)
+	startBackgroundWorkers(rootCtx, f, srv, run, pool, st, idp, brk, maskedRec, feats.recStore, leader, ticks)
 
 	// SSH gateway accept loop (own goroutine, like the periodic workers above,
 	// and extracted the same way — see startSSHGateway's own doc comment).

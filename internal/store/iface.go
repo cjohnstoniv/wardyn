@@ -361,8 +361,9 @@ type PG struct {
 	// subtracts from the database's own now(). See db.AppClockAgeSQL.
 	Now func() time.Time
 
-	// SIEM, when set, receives the audit rows the database writes itself (the retention policy change and
-	// the partition drop), which no recorder chain sees. Nil sends them nowhere.
+	// SIEM, when set, receives the audit rows this store writes in its own transaction (the retention
+	// policy change, the partition drop, the reauth resolve), which no recorder chain sees. Nil sends them
+	// nowhere.
 	SIEM audit.Sink
 }
 

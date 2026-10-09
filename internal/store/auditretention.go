@@ -94,11 +94,10 @@ func retentionAnnotate(err error, partition string) error {
 
 func (s PG) DropAuditPartition(ctx context.Context, partition, digest, actor string) (AuditRetentionDrop, error) {
 	var d AuditRetentionDrop
-	err := s.withDBAuditRow(ctx, func(tx pgx.Tx) (bool, error) {
-		err := tx.QueryRow(ctx, `SELECT dropped_partition, dropped_rows, COALESCE(dropped_seq_lo, 0), COALESCE(dropped_seq_hi, 0), dropped_digest, dropped_event_seq
+	err := s.withDBAuditRow(ctx, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT dropped_partition, dropped_rows, COALESCE(dropped_seq_lo, 0), COALESCE(dropped_seq_hi, 0), dropped_digest, dropped_event_seq
 			FROM audit_retention_drop($1, $2, $3)`, partition, digest, actor).
 			Scan(&d.Partition, &d.Rows, &d.SeqLo, &d.SeqHi, &d.Digest, &d.EventSeq)
-		return err == nil, err
 	})
 	if err != nil {
 		return AuditRetentionDrop{}, retentionAnnotate(err, partition)
@@ -107,25 +106,36 @@ func (s PG) DropAuditPartition(ctx context.Context, partition, digest, actor str
 }
 
 // withDBAuditRow runs fn, a call to a database function that may write its own audit row through
-// audit_append, in one transaction. fn reports whether it did; once the transaction commits, that row (with
-// its chain hashes) goes to s.SIEM. The function holds the chain lock until the commit, so the high-water
-// mark read before it commits is its own row. Delivery is best-effort, like every other sink emit: the
-// committed row is the record.
-func (s PG) withDBAuditRow(ctx context.Context, fn func(tx pgx.Tx) (wrote bool, err error)) error {
+// audit_append, in one transaction. When the call advanced the chain's high-water mark, the row it wrote
+// (with its chain hashes) goes to s.SIEM once the transaction commits. The function holds the chain lock
+// until the commit, so the mark it advanced to is its own row. Delivery is best-effort, like every other
+// sink emit: the committed row is the record.
+func (s PG) withDBAuditRow(ctx context.Context, fn func(tx pgx.Tx) error) error {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return fmt.Errorf("store: begin audit-writing call: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
-	wrote, err := fn(tx)
-	if err != nil {
+	var before int64
+	if s.SIEM != nil {
+		if before, err = highWaterSeq(ctx, tx); err != nil {
+			return err
+		}
+	}
+	if err := fn(tx); err != nil {
 		return err
 	}
 	var ev types.AuditEvent
-	wrote = wrote && s.SIEM != nil
-	if wrote {
-		if ev, err = readHighWaterAuditRow(ctx, tx); err != nil {
+	wrote := false
+	if s.SIEM != nil {
+		var after int64
+		if after, err = highWaterSeq(ctx, tx); err != nil {
 			return err
+		}
+		if wrote = after > before; wrote {
+			if ev, err = readAuditRowWithHashes(ctx, tx, after); err != nil {
+				return err
+			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -137,13 +147,21 @@ func (s PG) withDBAuditRow(ctx context.Context, fn func(tx pgx.Tx) (wrote bool, 
 	return nil
 }
 
-// readHighWaterAuditRow reads the newest audit row, hashes included.
-func readHighWaterAuditRow(ctx context.Context, tx pgx.Tx) (types.AuditEvent, error) {
+func highWaterSeq(ctx context.Context, tx pgx.Tx) (int64, error) {
+	var seq int64
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(hw_seq, 0) FROM audit_partition_meta`).Scan(&seq); err != nil {
+		return 0, fmt.Errorf("store: read the audit high-water mark: %w", err)
+	}
+	return seq, nil
+}
+
+// readAuditRowWithHashes reads the audit row at seq, chain hashes included.
+func readAuditRowWithHashes(ctx context.Context, tx pgx.Tx, seq int64) (types.AuditEvent, error) {
 	var ev types.AuditEvent
 	var actorType string
 	var data []byte
 	err := tx.QueryRow(ctx, `SELECT `+auditCols+`, COALESCE(prev_hash,''), COALESCE(row_hash,'')
-		FROM audit_events WHERE seq = (SELECT hw_seq FROM audit_partition_meta)`).
+		FROM audit_events WHERE seq = $1`, seq).
 		Scan(&ev.ID, &ev.Time, &ev.RunID, &actorType, &ev.Actor, &ev.Action, &ev.Target, &ev.Outcome, &ev.SourceIP, &data, &ev.PrevHash, &ev.RowHash)
 	if err != nil {
 		return types.AuditEvent{}, fmt.Errorf("store: read the audit row this call wrote: %w", err)
@@ -183,12 +201,10 @@ func (s PG) AutodropAuditPartition(ctx context.Context) (AuditRetentionDrop, boo
 
 func (s PG) SetAuditRetentionPolicy(ctx context.Context, days int) (AuditRetentionPolicyChange, error) {
 	var c AuditRetentionPolicyChange
-	err := s.withDBAuditRow(ctx, func(tx pgx.Tx) (bool, error) {
-		err := tx.QueryRow(ctx, `SELECT outcome, effective_days, pending_days, pending_effective_at
+	err := s.withDBAuditRow(ctx, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT outcome, effective_days, pending_days, pending_effective_at
 			FROM audit_retention_set_policy($1)`, days).
 			Scan(&c.Outcome, &c.EffectiveDays, &c.PendingDays, &c.PendingEffectiveAt)
-		// The function writes its row for every outcome but "unchanged".
-		return err == nil && c.Outcome != "unchanged", err
 	})
 	if err != nil {
 		return AuditRetentionPolicyChange{}, fmt.Errorf("store: set audit retention policy: %w", err)
