@@ -129,6 +129,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   default or limit changed.
 - `docs/OPERATIONS.md`: the sections "Renamed in 0.8", "Upgrades", "Kubernetes: day-2" and "High availability" are
   now bullets, nested lists and callouts, and every file they name is a link. No step, order, default, limit or version changed.
+- The architecture overview, the security policy, the provenance statement, the data-flow page and the agent threat model are now bullets, tables and alerts with their file references linked; no disclosure, limit, refusal or contact detail changed, and three table cells stay long.
 
 ### Fixed
 
