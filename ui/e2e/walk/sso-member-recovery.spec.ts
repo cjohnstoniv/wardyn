@@ -1085,7 +1085,9 @@ test("L0 (setup gate): an admin with a lapsed AWS sign-in of their own opens New
   // the page is still New Run.
   await page.goto("/runs/new");
   await expect(page.getByRole("heading", { name: "New run" })).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText(RAIL_PROVIDER.STATIC(WALK_PROVIDER_NAME))).toBeVisible({ timeout: 60_000 });
+  await expect(
+    page.getByRole("complementary", { name: "What this run can do" }).getByText(RAIL_PROVIDER.STATIC(WALK_PROVIDER_NAME)),
+  ).toBeVisible({ timeout: 60_000 });
   await expect(page).toHaveURL(/\/runs\/new$/);
 });
 
