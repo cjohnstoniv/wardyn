@@ -291,6 +291,8 @@ export function useRunChecks(params: Params) {
     preflightResult: result,
     preflightError: preflightIsCurrent && checked.status !== 429 && error ? getErrorMessage(error) || "No reason was given." : null,
     preflightErrorSeq: checked.errorSeq,
+    /** The envelope's reason for preflight's refusal of this body, "" when it has none. */
+    preflightReason: preflightIsCurrent ? reason : "",
     preflightIsCurrent,
     preflightFresh,
     preflightBlock: preflightFresh && (refused || (autoCheck.backendArm && missing("backend")) || (autoCheck.modelArm && missing("llm_access"))),

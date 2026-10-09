@@ -39,7 +39,7 @@ import {
 } from "./wizard-types";
 import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import { useLaunch } from "./use-launch";
-import { accessIssues, accessRows } from "./access-rows-model";
+import { accessIssues, accessRows, componentRefusal, isComponentReason } from "./access-rows-model";
 import { launchGates, preflightHolds, withPreflightIssues } from "./new-run-launch-gates";
 import { useGuardedNavClick, useRequestLeave, useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { providerCandidates as candidatesForAgent, providerGate } from "./model-provider-lane";
@@ -363,6 +363,7 @@ export function useNewRunController() {
     preflightResult,
     preflightError,
     preflightErrorSeq,
+    preflightReason,
     preflightIsCurrent,
     preflightFresh,
     preflightBlock,
@@ -460,9 +461,12 @@ export function useNewRunController() {
   // from the same inputs; the panel nav counts it.
   // The Access rows come from the same two reads as the rest of the preflight
   // verdict: the policy preview's facts, overlaid by this body's own preflight.
+  // A read that refused one of the run's components has no fact for it: those
+  // components still get a row (refused), so there is something to remove.
+  const refusal = componentRefusal(preview.error) ?? (isComponentReason(preflightReason) ? preflightError ?? "" : null);
   const rows = React.useMemo(
-    () => accessRows(preview.result?.components, preflightResult?.components),
-    [preview.result, preflightResult],
+    () => accessRows(preview.result?.components, preflightResult?.components, state.components, refusal),
+    [preview.result, preflightResult, state.components, refusal],
   );
   const rowIssues = React.useMemo(() => accessIssues(rows), [rows]);
   const issues = withPreflightIssues(

@@ -11,9 +11,11 @@
 // D14: a CUSTOM component that needs input, or was refused, holds Launch. A Git
 // provider or a model provider that needs input is a warning only; it is
 // resolved at its own launch door and never blocks.
+import { HttpError } from "../../../lib/api/core";
 import type { ComponentFact, ComponentSecretFact } from "../../../lib/types/components";
-import type { SetupItem } from "../../../lib/types";
+import type { ComponentRef, SetupItem } from "../../../lib/types";
 import { ACCESS_ROWS as T } from "../../wardyn/copy/components";
+import { refIndexForFact } from "./custom-component-form-model";
 import type { LaunchIssue } from "./new-run-launch-gates";
 
 /** The wire's four, plus the one D14 names that no server version sends yet. */
@@ -126,11 +128,49 @@ export function accessRow(f: ComponentFact): AccessRow {
   };
 }
 
+/** The reasons a dry-run read refuses the run's components with (internal/api's reasons_routes.go). */
+export const isComponentReason = (reason: string): boolean =>
+  reason.startsWith("component_") || reason === "capability_component" || reason === "credential_host_collision";
+
+/** The server's sentence when this error is a refusal of the run's components, else null. */
+export function componentRefusal(error: unknown): string | null {
+  return error instanceof HttpError && error.status >= 400 && error.status < 500 && isComponentReason(error.reason)
+    ? error.message || ""
+    : null;
+}
+
+// A component the server refused has no fact, so the row is built from the ref
+// the person added: the name and hosts they typed, the sentence the server gave.
+function refusedRef(ref: ComponentRef, at: number, sentence: string): AccessRow {
+  const row = accessRow({
+    kind: "custom",
+    id: ref.inline ? `inline:${at}` : (ref.id ?? `inline:${at}`),
+    name: ref.name,
+    reason: "inline",
+    status: "refused" as ComponentFact["status"],
+    requirements: [],
+    hosts: ref.inline?.hosts,
+    self_defined: !!ref.inline,
+  });
+  return { ...row, reason: ref.inline ? row.reason : "", statusNote: sentence || null };
+}
+
+/**
+ * The rows: one per fact (preview overlaid by preflight), then one per component
+ * the run carries that has no fact because a read refused it (`refusal`, the
+ * server's sentence; null when no read did). Without those the person would have
+ * no row to take the refused component off with.
+ */
 export function accessRows(
   preview: readonly ComponentFact[] | undefined,
   preflight: readonly ComponentFact[] | undefined,
+  refs: readonly ComponentRef[] = [],
+  refusal: string | null = null,
 ): AccessRow[] {
-  return overlayFacts(preview, preflight).map(accessRow);
+  const rows = overlayFacts(preview, preflight).map(accessRow);
+  if (refusal === null) return rows;
+  const covered = new Set(rows.filter((r) => r.kind === "custom").map((r) => refIndexForFact(r.id, refs)));
+  return [...rows, ...refs.flatMap((ref, at) => (covered.has(at) ? [] : [refusedRef(ref, at, refusal)]))];
 }
 
 /** The rows that hold Launch, as the issues the panel nav counts and the line above Launch links to. */
