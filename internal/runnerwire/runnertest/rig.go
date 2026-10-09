@@ -90,3 +90,6 @@ func (r *Rig) Events() []runnerwire.Event {
 	defer r.mu.Unlock()
 	return append([]runnerwire.Event(nil), r.events...)
 }
+
+// Streams is the byte streams each peer holds: the org's, then the runner's.
+func (r *Rig) Streams() (org, run int) { return r.Link.StreamCount(), r.Server.Peer.StreamCount() }

@@ -44,3 +44,19 @@ func TestWalkLeavesReachesBytesAndMapValuesAndSkipsUnmarshalled(t *testing.T) {
 	spec.OnWaiting = func(string) {} // json:"-": a callback is no leaf and must not panic the walk
 	_ = hit(spec, "x")
 }
+
+// The walk stops at a depth cap and fails closed rather than recursing without end.
+func TestWalkLeavesDepthCapFailsClosed(t *testing.T) {
+	type node struct{ Next *node }
+	var head *node
+	for range maxWalkDepth + 10 {
+		head = &node{Next: head}
+	}
+	if !walkLeaves(reflect.ValueOf(head), func([]byte) bool { return false }) {
+		t.Fatal("a structure deeper than the cap was walked to the end")
+	}
+	shallow := &node{Next: &node{}}
+	if walkLeaves(reflect.ValueOf(shallow), func([]byte) bool { return false }) {
+		t.Fatal("a shallow structure hit the cap")
+	}
+}

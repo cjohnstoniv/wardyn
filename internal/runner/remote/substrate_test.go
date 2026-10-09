@@ -518,3 +518,41 @@ func TestEraseResidentForgetsTheDigests(t *testing.T) {
 		t.Fatalf("after erase the guard still holds the value: %v", err)
 	}
 }
+
+func waitStreams(t *testing.T, rig *runnertest.Rig, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		org, run := rig.Streams()
+		if org == want && run == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("streams org=%d runner=%d, want %d on both", org, run, want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// N1: a finished output stream is released on both peers. Without it every run
+// leaks one, and past MaxStreams the session refuses every OPEN.
+func TestFinishedOutputStreamsAreReleasedOnBothPeers(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	for range runnerwire.MaxStreams + 40 {
+		w := &lockedBuf{done: make(chan struct{})}
+		create(t, rig, func(s *runner.SandboxSpec) { s.ExecOutput = w })
+		select {
+		case <-w.done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the output drain never ended")
+		}
+	}
+	waitStreams(t, rig, 0)
+	// The session still opens streams: nothing is counting the finished ones.
+	sb, _ := create(t, rig, nil)
+	sess, err := rig.Sub.Attach(ctxT(t), sb.Ref, runner.AttachOptions{})
+	if err != nil {
+		t.Fatalf("Attach after %d output streams: %v", runnerwire.MaxStreams+40, err)
+	}
+	_ = sess.Close()
+}

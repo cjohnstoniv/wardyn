@@ -388,3 +388,45 @@ func TestPG_CredentialGrants_DeliveryRoundTripAndCheck(t *testing.T) {
 		t.Fatalf("legacy grant delivery = %q, %v", d, err)
 	}
 }
+
+// N3: a queue that meets a revoke in flight waits for it (FOR SHARE on the runner row) and then
+// refuses, instead of inserting a row the revoke's DELETE had already passed.
+func TestPG_RunnerActions_QueueWaitsForAnInFlightRevoke(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	r := claimed(t, st, ctx, "alice@example.com")
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM runners WHERE id=$1`, r.ID) })
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck // a no-op after Commit
+	if _, err := tx.Exec(ctx, `UPDATE runners SET state='revoked', revoked_at=now() WHERE id=$1`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	errc := make(chan error, 1)
+	go func() {
+		_, _, err := st.QueueRunnerAction(ctx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: r.ID, RunID: run.ID, Kind: types.RunnerActionKill, Ref: "x"})
+		errc <- err
+	}()
+	select {
+	case err := <-errc:
+		t.Fatalf("the queue did not wait for the revoke in flight (returned %v)", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM runner_pending_actions WHERE runner_id=$1 AND applied_at IS NULL`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errc; !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("queue after the revoke committed = %v, want ErrNotFound", err)
+	}
+	if has, _ := st.RunHasPendingRunnerAction(ctx, run.ID); has {
+		t.Fatal("a row survived the revoke")
+	}
+}

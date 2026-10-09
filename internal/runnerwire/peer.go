@@ -97,6 +97,13 @@ func NewPeer(conn Conn, cfg PeerConfig) *Peer {
 	}
 }
 
+// StreamCount is the byte streams the connection holds, parked ones included.
+func (p *Peer) StreamCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.streams) + len(p.parked)
+}
+
 // Done closes when the link is down; Err says why.
 func (p *Peer) Done() <-chan struct{} { return p.done }
 

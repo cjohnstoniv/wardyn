@@ -36,6 +36,7 @@ type Stream struct {
 	reset        error
 	opened       chan struct{}
 	unacked      int64 // consumed by Read, not yet returned to the sender as WINDOW
+	heldReleased bool  // both ends closed: the unread buffer no longer counts toward Peer.held
 }
 
 func (p *Peer) newStream(id uint32, kind string) *Stream {
@@ -69,7 +70,9 @@ func (s *Stream) Read(b []byte) (int, error) {
 	}
 	n := copy(b, s.buf)
 	s.buf = s.buf[n:]
-	s.p.held.Add(-int64(n))
+	if !s.heldReleased {
+		s.p.held.Add(-int64(n))
+	}
 	s.unacked += int64(n)
 	grant := int64(0)
 	if s.unacked >= StreamWindow/4 {
@@ -126,6 +129,9 @@ func (s *Stream) CloseWrite() error {
 	}
 	s.localClosed = true
 	both := s.remoteClosed
+	if both {
+		s.releaseHeldLocked()
+	}
 	s.mu.Unlock()
 	err := s.p.send(s.ctx, Frame{Type: TypeClose, Stream: s.id})
 	if both {
@@ -155,7 +161,7 @@ func (s *Stream) abort(code uint32) bool {
 		return false
 	}
 	s.reset = &ResetError{Code: code}
-	s.p.held.Add(-int64(len(s.buf)))
+	s.releaseHeldLocked()
 	s.buf = nil
 	s.cond.Broadcast()
 	s.mu.Unlock()
@@ -191,5 +197,18 @@ func (s *Stream) remoteClose() (both bool) {
 	defer s.mu.Unlock()
 	s.remoteClosed = true
 	s.cond.Broadcast()
+	if s.localClosed {
+		s.releaseHeldLocked()
+	}
 	return s.localClosed
+}
+
+// releaseHeldLocked stops counting the unread buffer against the connection,
+// once. A stream that is closed on both ends leaves the peer's table, so a
+// holder that never drains it must not keep its bytes in Peer.held.
+func (s *Stream) releaseHeldLocked() {
+	if !s.heldReleased {
+		s.heldReleased = true
+		s.p.held.Add(-int64(len(s.buf)))
+	}
 }

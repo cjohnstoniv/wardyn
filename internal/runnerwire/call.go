@@ -119,6 +119,10 @@ func (p *Peer) Call(ctx context.Context, method string, args, result any, opts .
 			return finish(rep)
 		case <-ctx.Done():
 			p.mu.Lock()
+			// The tombstone: this entry stays in p.calls until the runner's REPLY
+			// removes it. Bound: one small entry per call this side cancelled and
+			// the runner never answers, so the org drives it, it is per session,
+			// and fail() frees every entry when the link ends.
 			pc.abandoned = true
 			p.mu.Unlock()
 			_ = p.send(p.ctx, Frame{Type: TypeReset, Stream: id, Payload: EncodeReset(ResetCancelled)})

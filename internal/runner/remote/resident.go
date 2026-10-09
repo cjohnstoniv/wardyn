@@ -35,12 +35,22 @@ func (h leafHashes) has(leaf []byte) bool {
 // whether fn returned true for one. It sees what encoding/json would write, in
 // whatever encoding json would give it: a []byte is compared as raw bytes, not
 // as the base64 it marshals to.
-func walkLeaves(v reflect.Value, fn func([]byte) bool) bool {
+func walkLeaves(v reflect.Value, fn func([]byte) bool) bool { return walk(v, 0, fn) }
+
+// maxWalkDepth bounds the recursion. SandboxSpec's type graph is far shallower
+// and has no cycle, so the cap is insurance; past it the walk reports a hit,
+// failing closed: a value that cannot be inspected is not sent.
+const maxWalkDepth = 32
+
+func walk(v reflect.Value, depth int, fn func([]byte) bool) bool {
+	if depth > maxWalkDepth {
+		return true
+	}
 	switch v.Kind() {
 	case reflect.String:
 		return fn([]byte(v.String()))
 	case reflect.Pointer, reflect.Interface:
-		return !v.IsNil() && walkLeaves(v.Elem(), fn)
+		return !v.IsNil() && walk(v.Elem(), depth+1, fn)
 	case reflect.Slice:
 		if v.Type().Elem().Kind() == reflect.Uint8 {
 			return fn(v.Bytes())
@@ -48,13 +58,13 @@ func walkLeaves(v reflect.Value, fn func([]byte) bool) bool {
 		fallthrough
 	case reflect.Array:
 		for i := range v.Len() {
-			if walkLeaves(v.Index(i), fn) {
+			if walk(v.Index(i), depth+1, fn) {
 				return true
 			}
 		}
 	case reflect.Map:
 		for it := v.MapRange(); it.Next(); {
-			if walkLeaves(it.Key(), fn) || walkLeaves(it.Value(), fn) {
+			if walk(it.Key(), depth+1, fn) || walk(it.Value(), depth+1, fn) {
 				return true
 			}
 		}
@@ -65,7 +75,7 @@ func walkLeaves(v reflect.Value, fn func([]byte) bool) bool {
 			if !f.IsExported() || f.Tag.Get("json") == "-" {
 				continue
 			}
-			if walkLeaves(v.Field(i), fn) {
+			if walk(v.Field(i), depth+1, fn) {
 				return true
 			}
 		}

@@ -92,3 +92,11 @@ func (l *Link) TakeStream(id uint32) (*runnerwire.Stream, error) {
 	}
 	return p.TakeStream(id)
 }
+
+// StreamCount is the byte streams the current session holds (0 when none).
+func (l *Link) StreamCount() int {
+	if p := l.current(); p != nil {
+		return p.StreamCount()
+	}
+	return 0
+}

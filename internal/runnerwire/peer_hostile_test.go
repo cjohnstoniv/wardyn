@@ -311,3 +311,53 @@ func TestReplyGoroutinesEndWhenTheLinkDrops(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// N2: a stream closed on both ends leaves the table, and its unread bytes leave
+// the connection's count with it, however the holder drops it.
+func TestBothClosedUndrainedStreamReleasesHeldBytes(t *testing.T) {
+	p := newPair(t, PeerConfig{}, PeerConfig{OnOpen: func(s *Stream, o Open) error {
+		go func() { _, _ = s.Write(bytes.Repeat([]byte{1}, 1000)); _ = s.CloseWrite() }()
+		return nil
+	}})
+	s, err := p.org.Open(ctxT(t), Open{Kind: KindRelay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for p.org.held.Load() != 1000 {
+		if time.Now().After(deadline) {
+			t.Fatalf("held = %d, want 1000", p.org.held.Load())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		s.mu.Lock()
+		closed := s.remoteClosed
+		s.mu.Unlock()
+		if closed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the peer's CLOSE never arrived")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := s.CloseWrite(); err != nil { // both ends closed; the bytes were never read
+		t.Fatal(err)
+	}
+	if h := p.org.held.Load(); h != 0 {
+		t.Fatalf("held = %d after both ends closed, want 0", h)
+	}
+	if n := p.org.StreamCount(); n != 0 {
+		t.Fatalf("%d streams still held", n)
+	}
+	// A late Read of the buffer must not take held below zero.
+	buf := make([]byte, 2000)
+	if n, _ := s.Read(buf); n != 1000 {
+		t.Fatalf("read %d bytes, want the 1000 still buffered", n)
+	}
+	if h := p.org.held.Load(); h != 0 {
+		t.Fatalf("held = %d after a late Read, want 0", h)
+	}
+}

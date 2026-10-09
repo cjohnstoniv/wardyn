@@ -136,6 +136,7 @@ func (s *Substrate) HandleOpen(st *runnerwire.Stream, o runnerwire.Open) error {
 	end := runner.BeginOutputDrain(w)
 	go func() {
 		_, err := io.Copy(w, st)
+		_ = st.Close() // releases the stream on both peers: a finished output must not count toward MaxStreams
 		s.mu.Lock()
 		delete(s.outputs, runID)
 		s.mu.Unlock()
