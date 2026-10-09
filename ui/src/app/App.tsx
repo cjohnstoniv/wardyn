@@ -98,6 +98,13 @@ const ProvidersScreen = React.lazy(() =>
     default: m.ProvidersScreen,
   })),
 );
+// The org's custom components (0.8.9): the catalog and who may use each. Super admin only, no nav item:
+// reached from the Settings card.
+const ComponentsScreen = React.lazy(() =>
+  import("./components/screens/components/components-screen").then((m) => ({
+    default: m.ComponentsScreen,
+  })),
+);
 const PermissionsScreen = React.lazy(() =>
   import("./components/screens/permissions").then((m) => ({
     default: m.PermissionsScreen,
@@ -720,6 +727,7 @@ export default function App() {
             <Route path="/admin/settings" element={suspend(<AdminSettingsScreen />)} />
             <Route path="/admin/providers" element={suspend(<ProvidersScreen />)} />
             <Route path="/admin/drives" element={suspend(<DrivesScreen />)} />
+            <Route path="/admin/components" element={suspend(<ComponentsScreen />)} />
             <Route path="/admin/*" element={<Navigate to="/admin/runs" replace />} />
             <Route path="/account" element={suspend(<YourAccountScreen />)} />
             <Route path="/runs" element={<RunsScreen />} />

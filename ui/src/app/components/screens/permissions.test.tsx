@@ -659,3 +659,114 @@ describe("PermissionsScreen — a 202 is submitted, never saved", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });
+
+// The `custom_component` feature value (component lanes): default ON and narrowing, so its
+// switch is "no deny row for everyone" and moves that one row.
+describe("PermissionsScreen, who may define their own components", () => {
+  const SWITCH = "Allow people to define their own components";
+  const denyRow = (over: Partial<CapabilityGrant> = {}) =>
+    grant({
+      id: "22222222-2222-2222-2222-222222222222",
+      subject_type: "all",
+      subject: "",
+      capability: "feature",
+      value: "custom_component",
+      effect: "deny",
+      ...over,
+    });
+
+  it("on a fresh install it reads Allowed, with the switch on", async () => {
+    renderScreen();
+    expect(await screen.findByText("Custom components")).toBeInTheDocument();
+    expect(screen.getByText("Allowed")).toBeInTheDocument();
+    expect(screen.getByText("Everyone signed in may define their own components. Turn this off to stop it for everyone.")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: SWITCH })).toBeChecked();
+  });
+
+  it("turning it off writes the one deny row for everyone and reads Turned off", async () => {
+    upsertGrantMock.mockResolvedValue({ grant: denyRow(), updated: false });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await user.click(await screen.findByRole("switch", { name: SWITCH }));
+    await waitFor(() =>
+      expect(upsertGrantMock).toHaveBeenCalledWith({
+        subject_type: "all",
+        subject: "",
+        capability: "feature",
+        value: "custom_component",
+        effect: "deny",
+      }),
+    );
+    expect(await screen.findByText("Turned off")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: SWITCH })).not.toBeChecked();
+    // The new row is in the grant table too.
+    expect(screen.getAllByText("custom_component").length).toBeGreaterThan(0);
+  });
+
+  it("turning it back on deletes that row and nothing else", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [denyRow(), grant()], enforcement: {} });
+    deleteGrantMock.mockResolvedValue(undefined);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    expect(await screen.findByText("Turned off")).toBeInTheDocument();
+    expect(screen.getByText("Nobody may define their own components. Components you add and make available still work.")).toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: SWITCH }));
+    await waitFor(() => expect(deleteGrantMock).toHaveBeenCalledWith("22222222-2222-2222-2222-222222222222"));
+    expect(await screen.findByText("Allowed")).toBeInTheDocument();
+    expect(screen.getByText("*.github.com")).toBeInTheDocument();
+  });
+
+  it("only a deny for everyone on this value turns it off", async () => {
+    getPermissionsMock.mockResolvedValue({
+      grants: [
+        denyRow({ id: "33333333-3333-3333-3333-333333333333", subject_type: "group", subject: "contractors" }),
+        denyRow({ id: "44444444-4444-4444-4444-444444444444", value: "ssh_key" }),
+      ],
+      enforcement: {},
+    });
+    renderScreen();
+    expect(await screen.findByText("Allowed")).toBeInTheDocument();
+  });
+
+  it("where the feature rule is enforced, it says only an allow admits a person", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [grant({ capability: "feature", value: "ssh_key" })], enforcement: { feature: true } });
+    renderScreen();
+    expect(await screen.findByText("By allow only")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "The rule for SSH keys and API tokens is enforced, so only people with an allow for custom_component may define their own components.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("a write held for a second person says so and changes nothing", async () => {
+    upsertGrantMock.mockRejectedValue(
+      new PendingChangeError({
+        id: "c1",
+        target_kind: "capability_grant",
+        op: "upsert",
+        target_key: "x",
+        state: "pending",
+        proposed_by: "ana",
+        proposed_at: aheadByHours(-1),
+        expires_at: aheadByHours(20),
+        diff: { changed: [] },
+      }),
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await user.click(await screen.findByRole("switch", { name: SWITCH }));
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(toastError).not.toHaveBeenCalled();
+    expect(screen.getByRole("switch", { name: SWITCH })).toBeChecked();
+  });
+
+  it("a refusal is a toast with the server's words, and the switch stays", async () => {
+    upsertGrantMock.mockRejectedValue(new HttpError(500, "boom"));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await user.click(await screen.findByRole("switch", { name: SWITCH }));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("Failed to save the rule", expect.anything()));
+    expect(screen.getByRole("switch", { name: SWITCH })).toBeChecked();
+  });
+});

@@ -19,6 +19,7 @@ import { Input } from "../ui/input";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog";
 import { Field } from "../wardyn/form-primitives";
 import { Chip, SectionLabel } from "../wardyn/primitives";
+import { COMPONENTS_ADMIN } from "../wardyn/copy/components-admin";
 import { ERASE, ERASE_DATA } from "../wardyn/copy/credentials";
 
 // The order the scopes are listed in (the order they run in is the server's).
@@ -27,9 +28,16 @@ const SCOPES: ErasureScope[] = [
   "audit_personal_fields",
   "run_tasks",
   "run_outputs",
+  "components",
   "mask_copies",
   "recordings",
 ];
+
+// The saved-components scope's words live with the rest of the component copy (lazy).
+const scopeCopy = (s: ErasureScope) =>
+  s === "components"
+    ? { label: COMPONENTS_ADMIN.ERASE_SCOPE_LABEL, hint: COMPONENTS_ADMIN.ERASE_SCOPE_HINT }
+    : ERASE_DATA.SCOPE[s];
 
 const DEFAULT_SCOPES = new Set<ErasureScope>(SCOPES.filter((s) => s !== "recordings"));
 
@@ -112,7 +120,7 @@ export function EraseDataDialog({
             <ul className="space-y-2">
               {result.chosen.map((s) => (
                 <li key={s} className="flex items-center justify-between gap-3 text-sm text-foreground">
-                  <span>{ERASE_DATA.SCOPE[s].label}</span>
+                  <span>{scopeCopy(s).label}</span>
                   {result.erased.has(s) ? (
                     <Chip tone="success">{ERASE_DATA.ERASED}</Chip>
                   ) : (
@@ -155,8 +163,8 @@ export function EraseDataDialog({
                     onCheckedChange={(v) => toggle(s, v === true)}
                   />
                   <label htmlFor={`erase-scope-${s}`} className="cursor-pointer">
-                    <span className="block text-sm text-foreground">{ERASE_DATA.SCOPE[s].label}</span>
-                    <span className="block text-xs text-muted-foreground">{ERASE_DATA.SCOPE[s].hint}</span>
+                    <span className="block text-sm text-foreground">{scopeCopy(s).label}</span>
+                    <span className="block text-xs text-muted-foreground">{scopeCopy(s).hint}</span>
                   </label>
                 </div>
               ))}

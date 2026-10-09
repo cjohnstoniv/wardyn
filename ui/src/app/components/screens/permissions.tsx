@@ -54,6 +54,7 @@ import { Mono } from "../wardyn/code-block";
 import { SubmittedNote } from "./governance/submitted-note";
 import { PageHeader } from "../wardyn/page-header";
 import { PreviewAsNewUser } from "../wardyn/user-preview";
+import { DefineOwnComponentsRow } from "./components/define-own-row";
 import { Chip } from "../wardyn/primitives";
 import { Segmented } from "../wardyn/segmented";
 import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
@@ -319,16 +320,32 @@ export function PermissionsScreen() {
           ) : status === "error" || !snap ? (
             <ErrorState onRetry={load} />
           ) : (
-            CAPABILITY_KINDS.map((kind) => (
-              <KindRow
-                key={kind}
-                kind={kind}
-                enforced={!!snap.enforcement[kind]}
-                grants={grantsFor(kind)}
+            <>
+              {CAPABILITY_KINDS.map((kind) => (
+                <KindRow
+                  key={kind}
+                  kind={kind}
+                  enforced={!!snap.enforcement[kind]}
+                  grants={grantsFor(kind)}
+                  disabled={!securityOperator}
+                  onToggle={(next) => setConfirm({ kind, next })}
+                />
+              ))}
+              {/* The `custom_component` feature value: default on, so its switch is "no deny row". */}
+              <DefineOwnComponentsRow
+                grants={snap.grants}
+                featureEnforced={!!snap.enforcement.feature}
                 disabled={!securityOperator}
-                onToggle={(next) => setConfirm({ kind, next })}
+                onGrants={(grants) => {
+                  setSnap((s) => (s ? { ...s, grants } : s));
+                  setSubmitted(false);
+                }}
+                onSubmitted={() => {
+                  setSubmitted(true);
+                  load();
+                }}
               />
-            ))
+            </>
           )}
         </div>
       </section>

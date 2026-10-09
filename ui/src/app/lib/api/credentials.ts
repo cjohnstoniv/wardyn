@@ -69,6 +69,7 @@ export type ErasureScope =
   | "audit_personal_fields"
   | "run_tasks"
   | "run_outputs"
+  | "components"
   | "mask_copies"
   | "recordings";
 
