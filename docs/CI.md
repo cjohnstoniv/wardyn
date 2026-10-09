@@ -93,7 +93,7 @@ plane request itself (auth/client/server/network), independent of what the run i
 | `3` | client — any other non-2xx response; see [below](#exit-3) |
 | `4` | server-5xx — the control plane returned a server error |
 | `5` | network — couldn't reach the control plane at all (DNS, connection refused, TLS) |
-| `124` | `run --wait` and `run wait-ready`: the wait timed out; see [below](#exit-124) |
+| `124` | `run --wait` and `run wait-ready`: the wait timed out (the run keeps running); see [below](#exit-124) |
 | `1` | the invocation failed **locally**: a usage error, an unreadable `--policy-file`, and more; see [below](#exit-1) |
 | _task's own code_ | `run --wait`: the run ended `FAILED` — the exit is the task/agent's own real exit code (from the `run.complete` audit event), or `1` if that code is missing/unreadable (never `0` on `FAILED`) |
 | _ssh's own remote status_ | `wardyn run ssh` (once connected): ssh(1)'s own remote exit status; see [below](#sshs-own-remote-status) |
@@ -106,8 +106,9 @@ plane request itself (auth/client/server/network), independent of what the run i
 
 #### Exit 3
 
-- client — any other non-2xx response: a 4xx (bad request, not found, conflict, ...), or an unfollowed 3xx redirect (an interposed proxy or a mistyped `--url` —
-- the CLI and the Go SDK never follow redirects, so a redirected write fails instead of being replayed, with its body and bearer, at the `Location`).
+- client — any other non-2xx response:
+  - a 4xx (bad request, not found, conflict, ...), or an unfollowed 3xx redirect
+  - (an interposed proxy or a mistyped `--url` — the CLI and the Go SDK never follow redirects, so a redirected write fails instead of being replayed, with its body and bearer, at the `Location`).
 
 #### Exit 124
 
@@ -120,7 +121,7 @@ plane request itself (auth/client/server/network), independent of what the run i
 - the invocation failed **locally**, before or beside the request:
   - a usage error (unknown flag or argument), a malformed id, an unreadable or schema-invalid `--policy-file`, or a response the CLI could not classify (e.g. a 2xx whose body did not decode).
 - This is `exitCodeFor`'s catch-all in [`cmd/wardyn/main.go`](../cmd/wardyn/main.go), so it is also what a future local failure lands on.
-- **Also** `run --wait`: see the row below
+- **Also** `run --wait`: see [the row below](#exit-codes)
 
 #### ssh's own remote status
 
