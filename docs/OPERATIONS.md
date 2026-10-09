@@ -1495,136 +1495,99 @@ Moved to [hybrid-laptops.md](operations/hybrid-laptops.md).
 
 ## Multi-user: who can change what
 
-The API authenticates with **either** an OIDC session (human SSO) **or** the
-admin bearer token; local mode skips both on a loopback-only bind. That is
-authentication. Authorization is a real three-role model: every OIDC session
-carries an **admin**, **`security_admin`** or **member** role, derived once at
-login (`internal/auth/oidc`'s `deriveRole`) and stamped into the signed session
-cookie — a cookie signed before this existed (pre-0.5) decodes as no session,
-forcing a re-login that derives one fresh.
+- The API authenticates with **either** an OIDC session (human SSO) **or** the admin bearer token; local mode skips both on a loopback-only bind.
+- That is authentication.
+- Authorization is a real three-role model: every OIDC session carries an **admin**, **`security_admin`** or **member** role, derived once at login (`internal/auth/oidc`'s `deriveRole`) and stamped into the signed session cookie.
+- A cookie signed before this existed (pre-0.5) decodes as no session, forcing a re-login that derives one fresh.
 
 | The merged map (chart `WARDYN_OIDC_ROLE_MAP` + console People-step rows) | Signed-in humans | Admin token / local mode |
 |---|---|---|
 | empty | listed in `WARDYN_OIDC_OPERATOR_EMAILS` → **admin**, others → **user**; all **admin** only when the allowlist is also unset (override-only under OIDC — the pre-0.5 behavior) | always **admin** |
 | non-empty | mapped by `roles`/`groups`/email claim to **admin**, **`security_admin`** or **user**; no match falls through to `WARDYN_OIDC_DEFAULT_ROLE` (which takes `admin`/`user` only), or denies the login when that is also unset | always **admin** |
 
-A console-added row keys on this exact same table: adding the deployment's
-*first* row (with the chart map also unset) or removing its *last* one moves the
-map from empty to non-empty or back, exactly like setting or clearing
-`WARDYN_OIDC_ROLE_MAP` itself — which is what `POST`/`DELETE /access/mappings`'
-posture-flip guard warns an admin about before they trip it (see "Managing them"
-below).
-
-The admin token and local mode are **always admin** — a single shared credential
-with no per-human identity to key a role off (the token *is* the admin). That is
-the documented ceiling of the whole gate (`requireOperator`/`isOperator`,
-`internal/api/http.go`), not an oversight.
+- A console-added row keys on this exact same table:
+  - adding the deployment's *first* row (with the chart map also unset) or removing its *last* one moves the map from empty to non-empty or back, exactly like setting or clearing `WARDYN_OIDC_ROLE_MAP` itself,
+  - which is what `POST`/`DELETE /access/mappings`' posture-flip guard warns an admin about before they trip it (see "Managing them" below).
+- The admin token and local mode are **always admin** — a single shared credential with no per-human identity to key a role off (the token *is* the admin).
+- That is the documented ceiling of the whole gate (`requireOperator`/`isOperator`, [`internal/api/http.go`](../internal/api/http.go)), not an oversight.
 
 ### Who decides who gets in: chart vs console vs IdP
 
-Three surfaces share this decision, and only one of them is live without a
-restart.
+Three surfaces share this decision, and only one of them is live without a restart.
 
 | | IdP (Entra) | Chart / env (boot-time bootstrap) | Console (Getting Started → People, live) |
 |---|---|---|---|
 | **What lives here** | People and groups exist here; Entra App Roles and their assignment; the app registration's "Assignment required" switch | `WARDYN_OIDC_ISSUER`/client config; `WARDYN_OIDC_ROLE_MAP` (the bootstrap layer — always wins a duplicate key against a console row); `WARDYN_OIDC_OPERATOR_EMAILS` (top-precedence admin allowlist, also the boot posture floor); `WARDYN_OIDC_DEFAULT_ROLE`; `WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS` | `/access` role mappings (`GET /access`, `POST /access/mappings`, `DELETE /access/mappings/{id}`), a **disjoint union** with the chart map — the console never edits `WARDYN_OIDC_ROLE_MAP` itself, only its own rows |
-| **Wins a collision** | "Assignment required" stops an unassigned user **before Wardyn's callback ever sees a `roles` claim** — a gate Wardyn cannot see through or override | The chart entry, always — a console write that would collide with a chart key or an operator-allowlist email is refused outright (400); a *later* helm upgrade that introduces one anyway leaves the existing console row inert with a "Shadowed" badge instead of silently dropping it | Nothing — a console row only ever fills a gap the chart and the allowlist leave open |
+| **Wins a collision** | "Assignment required" stops an unassigned user **before Wardyn's callback ever sees a `roles` claim** — a gate Wardyn cannot see through or override | The chart entry, always; see [below](#wins-a-collision-chart--env) | Nothing — a console row only ever fills a gap the chart and the allowlist leave open |
 | **Takes effect** | Immediately for Entra's own gate | At boot (a `wardynd` restart/upgrade) | At the affected human's **next sign-in** — canonicalized (trimmed, lowercased) on write; never retroactive, so a person already signed in keeps the role stamped into their current session cookie |
 | **Recovery path** | n/a | The admin bearer token — one shared credential with no per-human identity to demote, so it is the ONE caller the console's lockout guard (below) never binds | n/a — the console surface is the thing that *can* lock an admin out, not a way back from it |
 
 A few things that don't fit the grid:
 
-- **Boot posture is chart-only.** `validateOperatorPosture`
-  (`cmd/wardynd/boot_posture.go`) refuses to boot OIDC at all unless
-  `WARDYN_OIDC_OPERATOR_EMAILS` is set or `WARDYN_OIDC_ROLE_MAP` is non-empty
-  (override: `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST`) — **console rows do not
-  count toward this floor**: they live in the database, read once per login,
-  never at boot, so the chart alone has to justify running OIDC on this install.
-- **The two console writes that can flip everyone's default outcome** — adding
-  the first console row while the chart map is empty, or deleting the last one —
-  are refused (400) without `acknowledge_access_change=true`, and only when the
-  write would actually change what an unmatched, non-allowlisted human gets
-  (computed from `HasOperatorEmails()`/`DefaultRole()` on each side of the
-  write, never a raw row count — a shadowed row contributes to neither side).
-- **The lockout guard** refuses a write that would leave the ACTING admin no
-  longer admin, checked against their own last-sign-in session snapshot — never
-  a live re-check, since a role is a stamped cookie, not a query. A snapshot too
-  stale to reproduce the admin access they demonstrably hold right now (a
-  truncated or pre-0.6 cookie) gets a distinct refusal telling them to sign in
-  again, rather than a false lockout claim on data that can't answer either way.
-- **The preview panel** (`POST /access/preview`) runs the identical derivation a
-  real login would, against pasted claims or the caller's own session, so an
-  admin can see "who would this row make an admin" without waiting for that
-  person to sign in — nothing it does is saved.
-- **Some subjects never sign in.** The callback refuses an identity-provider
-  `sub` that names an identity that is not a person — `admin-token`, the
-  configured `WARDYN_LOCAL_OPERATOR`, or any `local:`/`device:`/`delegate:`/`subject:` name, trimmed
-  and case-folded — with the generic sign-in error and an `auth.fail` row
-  (`reserved_principal`); a session, `wdn_` token or SSH key already carrying
-  one is refused on use. Switching a local-mode install to SSO: the default
-  seat (`local:<os-user>`) stays reserved by its prefix, but a custom
-  `WARDYN_LOCAL_OPERATOR` seat stays reserved only while the variable remains
-  set — unset it, and a person whose `sub` is that name would own the runs
-  local mode created under it. Keep it set. On an Entra ID issuer a `sub`
-  starting with `entra:`, in any case, is refused the same way: that namespace
-  belongs to people set up by object id (see "Tokens for a person who never
-  signs in").
-- **The same claim values do double duty.** The `roles`/`groups` values a role
-  mapping matches are the exact same login-time snapshot a `/permissions`
-  capability grant's `subject_type=group` matches against (see "Subjects, and
-  the group snapshot's ceiling" below) — two levels reading one snapshot, not
-  two systems that happen to agree.
-- **Fail-closed on a wired store error.** If the console's role-mapping store
-  can't be read, a login in progress is **denied** (`auth_error=
-  role_check_unavailable`) rather than silently falling back to the chart-only
-  map — the same code the preview panel surfaces when it can't check a row.
+- **Boot posture is chart-only.**
+  - `validateOperatorPosture` ([`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)) refuses to boot OIDC at all unless `WARDYN_OIDC_OPERATOR_EMAILS` is set or `WARDYN_OIDC_ROLE_MAP` is non-empty (override: `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST`)
+  - **console rows do not count toward this floor**: they live in the database, read once per login, never at boot, so the chart alone has to justify running OIDC on this install.
+- **The two console writes that can flip everyone's default outcome** — adding the first console row while the chart map is empty, or deleting the last one — are refused (400) without `acknowledge_access_change=true`.
+  - That holds only when the write would actually change what an unmatched, non-allowlisted human gets
+  - (computed from `HasOperatorEmails()`/`DefaultRole()` on each side of the write, never a raw row count — a shadowed row contributes to neither side).
+- **The lockout guard** refuses a write that would leave the ACTING admin no longer admin, checked against their own last-sign-in session snapshot
+  - never a live re-check, since a role is a stamped cookie, not a query.
+  - A snapshot too stale to reproduce the admin access they demonstrably hold right now (a truncated or pre-0.6 cookie)
+    - gets a distinct refusal telling them to sign in again,
+    - rather than a false lockout claim on data that can't answer either way.
+- **The preview panel** (`POST /access/preview`) runs the identical derivation a real login would, against pasted claims or the caller's own session,
+  - so an admin can see "who would this row make an admin" without waiting for that person to sign in
+  - nothing it does is saved.
+- **Some subjects never sign in.**
+  - The callback refuses an identity-provider `sub` that names an identity that is not a person — `admin-token`, the configured `WARDYN_LOCAL_OPERATOR`, or any `local:`/`device:`/`delegate:`/`subject:` name, trimmed and case-folded
+    - with the generic sign-in error and an `auth.fail` row (`reserved_principal`);
+    - a session, `wdn_` token or SSH key already carrying one is refused on use.
+  - Switching a local-mode install to SSO:
+    - the default seat (`local:<os-user>`) stays reserved by its prefix, but a custom `WARDYN_LOCAL_OPERATOR` seat stays reserved only while the variable remains set.
+    - Unset it, and a person whose `sub` is that name would own the runs local mode created under it.
+  - Keep it set.
+  - On an Entra ID issuer a `sub` starting with `entra:`, in any case, is refused the same way:
+    - that namespace belongs to people set up by object id (see "[Tokens for a person who never signs in](#tokens-for-a-person-who-never-signs-in)").
+- **The same claim values do double duty.**
+  - The `roles`/`groups` values a role mapping matches are the exact same login-time snapshot a `/permissions` capability grant's `subject_type=group` matches against (see "Subjects, and the group snapshot's ceiling" below).
+  - Two levels reading one snapshot, not two systems that happen to agree.
+- **Fail-closed on a wired store error.**
+  - If the console's role-mapping store can't be read, a login in progress is **denied** (`auth_error= role_check_unavailable`) rather than silently falling back to the chart-only map.
+  - The same code the preview panel surfaces when it can't check a row.
 
-**Deriving the role** (`WARDYN_OIDC_ROLE_MAP`, a CSV of `value=role` pairs, e.g.
-`Wardyn.Admin=admin,eng-team=user,alice@corp.com=admin`; full semantics in
-[ENV.md](ENV.md)): each `value` is matched case-insensitively against the ID
-token's `roles` claim (an Entra App Role — the priority path; app-registration
-walkthrough in `.claude/skills/wardyn-k8s-setup`), its `groups` claim, or the
-signed-in email. Matches fold **highest wins** over three ranks — `user` <
-`security_admin` < `admin` — whichever claim produced them (`roleRank`,
-`internal/auth/oidc/derive.go`): a human matching a `security_admin` row and a
-`user` row is a security admin; one matching an `admin` row anywhere is an
-admin, exactly as before 0.7. `WARDYN_OIDC_OPERATOR_EMAILS` is **not
-replaced**: an email on it is still an *additional* `admin` match
-(`LegacyAdminEmails`), so a deployment adopting the role map keeps its current
-operators with zero re-configuration. `WARDYN_OIDC_DEFAULT_ROLE`
-(`admin`/`user`, unset = deny) covers everyone the map doesn't name —
-`security_admin` is **refused** there and fails boot (`validDefaultRole`,
-`cmd/wardynd/boot_deps.go`): the role map is the only way to reach that tier, so
-it is never the tier granted by fallthrough to everyone nobody named.
+**Deriving the role** (`WARDYN_OIDC_ROLE_MAP`, a CSV of `value=role` pairs, e.g. `Wardyn.Admin=admin,eng-team=user,alice@corp.com=admin`; full semantics in [ENV.md](ENV.md)):
 
-**A `groups`-keyed row needs the `groups` scope requested, on an IdP that gates
-that claim behind one.** The authorization request is fixed at `openid profile
-email`; it does not ask for `groups` by default, so an IdP that only sends
-that claim once a client explicitly requests the scope simply omits it —
-indistinguishable from "this human is in no groups", so a `WARDYN_OIDC_ROLE_MAP`
-row keyed on a group name decides nothing there. `WARDYN_OIDC_EXTRA_SCOPES`
-(see [ENV.md](ENV.md)) opts a deployment into requesting `groups` (or any other
-scope), validated at boot against the provider's own discovery document.
+- Each `value` is matched case-insensitively against the ID token's `roles` claim (an Entra App Role — the priority path; app-registration walkthrough in `.claude/skills/wardyn-k8s-setup`), its `groups` claim, or the signed-in email.
+- Matches fold **highest wins** over three ranks — `user` < `security_admin` < `admin` — whichever claim produced them (`roleRank`, [`internal/auth/oidc/derive.go`](../internal/auth/oidc/derive.go)):
+  - a human matching a `security_admin` row and a `user` row is a security admin;
+  - one matching an `admin` row anywhere is an admin, exactly as before 0.7.
+- `WARDYN_OIDC_OPERATOR_EMAILS` is **not replaced**: an email on it is still an *additional* `admin` match (`LegacyAdminEmails`), so a deployment adopting the role map keeps its current operators with zero re-configuration.
+- `WARDYN_OIDC_DEFAULT_ROLE` (`admin`/`user`, unset = deny) covers everyone the map doesn't name
+  - `security_admin` is **refused** there and fails boot (`validDefaultRole`, [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)):
+  - the role map is the only way to reach that tier, so it is never the tier granted by fallthrough to everyone nobody named.
 
-Both are validated at **boot**, not at first use: a malformed entry (invalid role
-value, non-ASCII key — matching is ASCII-only, so it could never match —
-duplicate key, or non-blank input with no valid entry at all) or an invalid
-`WARDYN_OIDC_DEFAULT_ROLE` fails wardynd's boot outright, naming the var
-(`buildOptionalFeatures`, `cmd/wardynd/boot_deps.go`) — never a silent fallback
-that lets a typo reach a session cookie later. A signed-in human who matches
-nothing in a valid map, with no default role set, is denied at login instead
-("no Wardyn role assigned").
+**A `groups`-keyed row needs the `groups` scope requested, on an IdP that gates that claim behind one.**
 
-**What admin-only still means** — the writes with the widest blast radius stay
-gated on the role being exactly `admin` (`requireOperator`). Since 0.7 a SECOND
-gate covers part of that surface: `requireSecurityOperator` — admin **or**
-`security_admin` — the tier that holds authority over the verdict and over the
-org's ceilings, and never reaches into a run, onto credential material, or onto
-the host. The two tiers overlap and deliberately do not nest: every gated route
-names exactly one of them, and `internal/api/authz_test.go`'s route matrix is
-the authoritative per-route classification (it fails on any route it cannot
-classify). Status icons in the tables throughout this document: 🟢 open/works ·
-🟡 partial or narrowed · ⛔ refused.
+- The authorization request is fixed at `openid profile email`;
+  - it does not ask for `groups` by default, so an IdP that only sends that claim once a client explicitly requests the scope simply omits it
+  - indistinguishable from "this human is in no groups", so a `WARDYN_OIDC_ROLE_MAP` row keyed on a group name decides nothing there.
+- `WARDYN_OIDC_EXTRA_SCOPES` (see [ENV.md](ENV.md)) opts a deployment into requesting `groups` (or any other scope), validated at boot against the provider's own discovery document.
+
+Both are validated at **boot**, not at first use:
+
+- a malformed entry (invalid role value, non-ASCII key — matching is ASCII-only, so it could never match — duplicate key, or non-blank input with no valid entry at all) or an invalid `WARDYN_OIDC_DEFAULT_ROLE`
+- either fails wardynd's boot outright, naming the var (`buildOptionalFeatures`, [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go))
+- never a silent fallback that lets a typo reach a session cookie later.
+
+A signed-in human who matches nothing in a valid map, with no default role set, is denied at login instead ("no Wardyn role assigned").
+
+**What admin-only still means** — the writes with the widest blast radius stay gated on the role being exactly `admin` (`requireOperator`).
+
+- Since 0.7 a SECOND gate covers part of that surface: `requireSecurityOperator` — admin **or** `security_admin`
+  - the tier that holds authority over the verdict and over the org's ceilings,
+  - and never reaches into a run, onto credential material, or onto the host.
+- The two tiers overlap and deliberately do not nest: every gated route names exactly one of them, and [`internal/api/authz_test.go`](../internal/api/authz_test.go)'s route matrix is the authoritative per-route classification (it fails on any route it cannot classify).
+- Status icons in the tables throughout this document: 🟢 open/works · 🟡 partial or narrowed · ⛔ refused.
 
 | Surface | Gate |
 |---|---|
@@ -1665,606 +1628,445 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}` — the enrolment tokens still redeemable and cancelling one before a laptop redeems it: the same pair for tokens, returning neither a token nor its hash | ⛔ admin or `security_admin` |
 | `GET /runs/{id}/attach` — the interactive PTY WebSocket's ticket-less fallback lane is admin only; a member attaches their own run only via a minted attach ticket (`POST /runs/{id}/attach/ticket`), a separate owner-or-admin check inside the handler | ⛔ admin only |
 | workspace CRUD/scan/build | 🟡 owner-or-admin since 0.6 ("Workspace ownership") |
-| `devcontainer_repo` on a run (`denyUserRequest`, `internal/api/runs_create_validate.go`) | ⛔ admin only, never grantable |
+| `devcontainer_repo` on a run (`denyUserRequest`, [`internal/api/runs_create_validate.go`](../internal/api/runs_create_validate.go)) | ⛔ admin only, never grantable |
 | a custom sandbox `image` | 🟡 admin by default; the one power a capability grant can hand a member ("Capabilities") |
 | a member's own onboarded-workspace base image | 🟢 never gated — operator-authored at onboarding, not the member's free-text choice |
-| the `/drives` routes that NAME A HOST PATH — creating, listing, updating, and removing the **user drive** itself (`GET`/`POST /drives`, `PUT`/`DELETE /drives/{id}`, `mountUserDriveRoutes`, `internal/api/user_drives.go`) | ⛔ admin only, deliberately NOT the security-admin tier: a drive names a host path (`host_root`) or a cluster storage class, and "never the host" is the line between the two admin tiers |
+| the `/drives` routes that NAME A HOST PATH — creating, listing, updating, and removing the **user drive** itself (`GET`/`POST /drives`, `PUT`/`DELETE /drives/{id}`, `mountUserDriveRoutes`, [`internal/api/user_drives.go`](../internal/api/user_drives.go)) | ⛔ admin only, deliberately NOT the security-admin tier: a drive names a host path (`host_root`) or a cluster storage class, and "never the host" is the line between the two admin tiers |
 | allocating a drive to people or groups, revoking that allocation, or previewing whose drive resolves — `POST /drives/grants`, `DELETE /drives/grants/{id}`, `POST /drives/preview` (0.8, issue #168) | ⛔ admin or `security_admin`: none of the three names a host path — a security admin's authority over drives is the `DenyUserDrive` door on a governance profile, reached through `/governance` above |
-| `POST /drives/{id}/reclaim` — **destroys** one person's drive storage on the substrate (`internal/api/user_drives_reclaim.go`) | ⛔ admin only, and the only irreversible row in this table. It is fenced four ways: super-admin here; a `409` while a run still holds the object or while the object under that name is not this drive's; a `drive.reclaim` audit row on every attempt that reaches the substrate, `409` refusals included; and on Kubernetes wardynd does not even hold the `delete` verb unless the chart's `drives.reclaim.enabled` is set. There is no console button — API and CLI only |
-| the user-drive **door** — `DenyUserDrive` on a governance profile (`internal/types/governance.go`) | 🟡 security admin too, through `/governance` — a limit on a profile, not a drive; it refuses the mount, it does not deallocate anything |
+| `POST /drives/{id}/reclaim` — **destroys** one person's drive storage on the substrate ([`internal/api/user_drives_reclaim.go`](../internal/api/user_drives_reclaim.go)) | ⛔ admin only, and the only irreversible row in this table. It is fenced four ways: super-admin here; a `409` while a run still holds the object or while the object under that name is not this drive's; a `drive.reclaim` audit row on every attempt that reaches the substrate, `409` refusals included; and on Kubernetes wardynd does not even hold the `delete` verb unless the chart's `drives.reclaim.enabled` is set. There is no console button — API and CLI only |
+| the user-drive **door** — `DenyUserDrive` on a governance profile ([`internal/types/governance.go`](../internal/types/governance.go)) | 🟡 security admin too, through `/governance` — a limit on a profile, not a drive; it refuses the mount, it does not deallocate anything |
 | mounting YOUR OWN drive on a run (`drive.enabled`) | 🟢 the person, per run — read-only unless their allocation says otherwise, and the run flag may only narrow that, never widen it |
 | signing in to a model provider yourself (0.8) — `POST /model-providers/{id}/sign-in` launches the sign-in sandbox for a `bedrock_sso` or `anthropic_subscription` provider, and `PUT /model-providers/{id}/sign-in` stores the Claude setup-token that sandbox printed. Answers only while a model-provider block exists (409 otherwise). The capture lands in the caller's OWN namespace under that provider's name, never anyone else's | 🟡 any signed-in human, admins included, who may launch one of the agents the provider serves (the `agent` capability; otherwise 404, as if it did not exist) AND is granted the provider (the `model_provider` capability; otherwise 403). The admin token under SSO is a mechanism, not a person: 422. The portal, region and pin are the ADMIN'S, from the provider record — a sign-in can never choose another |
 | `POST /runs`, `POST /runs/preflight`, `POST /runs/policy-preview`, `POST /runs/{id}/kill` | 🟢 any signed-in human — using the product is a member act |
 
-**Documented gaps — routes gated but not yet named above.** None today. The
-ten pre-0.7 omissions the F316 completeness check surfaced (the `/sources` and
-`/base-images` writes, the two `/integrations/{id}` writes,
-`POST /admin/sandboxes/sweep`, `POST /setup/onboarding-complete`, and
-`GET /runs/{id}/attach`) each moved into a row above this docs pass;
-`docTierUndocumented` (`internal/api/operations_tier_doc_test.go`) is now
-empty. It stays a RATCHET, not a closed list: `TestOperationsTierTableMatchesRouteMatrix`'s
-completeness check still blocks any new gated route from landing without either
-a row above or a filed entry here.
+**Documented gaps — routes gated but not yet named above.**
+
+- None today.
+- The ten pre-0.7 omissions the F316 completeness check surfaced (the `/sources` and `/base-images` writes, the two `/integrations/{id}` writes, `POST /admin/sandboxes/sweep`, `POST /setup/onboarding-complete`, and `GET /runs/{id}/attach`) each moved into a row above this docs pass; `docTierUndocumented` ([`internal/api/operations_tier_doc_test.go`](../internal/api/operations_tier_doc_test.go)) is now empty.
+- It stays a RATCHET, not a closed list: `TestOperationsTierTableMatchesRouteMatrix`'s completeness check still blocks any new gated route from landing without either a row above or a filed entry here.
+
+#### Wins a collision: chart / env
+
+- The chart entry, always.
+- A console write that would collide with a chart key or an operator-allowlist email is refused outright (400).
+- A *later* helm upgrade that introduces one anyway leaves the existing console row inert with a "Shadowed" badge instead of silently dropping it.
 
 ### Who writes the provider policy: console vs CLI/MDM
 
-An Azure DevOps row has no shared credential. Its `workspace_providers` row names how each person
-connects — `token_mode` `minted_pat` (Wardyn creates a short-lived token for each run in the person's
-name), `bearer` (the person's Entra sign-in) or `own_pat` (a token the person adds themselves) — and an
-Azure DevOps Server row is `lanes: ["pat"]` with `credential_source: per_user`, git only. A shared `pat`
-or `ssh` lane, and an empty `lanes` on such a row, is a 400 at both write doors. See
-[docs/AZURE-DEVOPS.md](AZURE-DEVOPS.md) for the app registration, the row's fields, and what a member
-sees.
+- An Azure DevOps row has no shared credential.
+- Its `workspace_providers` row names how each person connects:
+  - `token_mode` `minted_pat` (Wardyn creates a short-lived token for each run in the person's name), `bearer` (the person's Entra sign-in) or `own_pat` (a token the person adds themselves)
+  - and an Azure DevOps Server row is `lanes: ["pat"]` with `credential_source: per_user`, git only.
+- A shared `pat` or `ssh` lane, and an empty `lanes` on such a row, is a 400 at both write doors.
+- See [docs/AZURE-DEVOPS.md](AZURE-DEVOPS.md) for the app registration, the row's fields, and what a member sees.
 
-A deployment carries at most **one enabled** row that signs a person in on the `entra` lane
-(`minted_pat` or `bearer`): each person signs in to one Azure DevOps organisation. Both write doors
-refuse a second enabled one with a 400 (`git[N].lanes: git[M] already carries the "entra" lane …`); a
-disabled second row is accepted, and enabling it later is refused the same way. A document stored
-before that rule can still hold two; the setup checklist then warns (row `ado_entra_rows`, not
-blocking) until one is disabled. Rows in `own_pat` mode sign nobody in, so any number of them may be
-enabled at once. A `minted_pat` row must name the console's own OIDC application and the console must
-hold a client secret (`WARDYN_OIDC_CLIENT_SECRET`), or it is refused at write and left unusable at
-boot (an error in the daemon log naming `ado_pat_needs_console_app`).
+- A deployment carries at most **one enabled** row that signs a person in on the `entra` lane (`minted_pat` or `bearer`): each person signs in to one Azure DevOps organisation.
+- Both write doors refuse a second enabled one with a 400 (`git[N].lanes: git[M] already carries the "entra" lane …`); a disabled second row is accepted, and enabling it later is refused the same way.
+- A document stored before that rule can still hold two; the setup checklist then warns (row `ado_entra_rows`, not blocking) until one is disabled.
+- Rows in `own_pat` mode sign nobody in, so any number of them may be enabled at once.
+- A `minted_pat` row must name the console's own OIDC application and the console must hold a client secret (`WARDYN_OIDC_CLIENT_SECRET`), or it is refused at write and left unusable at boot (an error in the daemon log naming `ado_pat_needs_console_app`).
 
-**A disabled row stays closed, and says so.** A launch into a disabled git provider row's organisation
-is refused naming the row. Its hosts are left out of `effective_scm_hosts` and out of run egress only
-when no enabled row also names the same host: with several organisations on `dev.azure.com`, one off and
-another on, the host stays effective. `GET /site-config` also returns `withheld_scm_hosts`, read-only
-like `effective_scm_hosts` (a `PUT` ignores it, and it is never stored): one
-`{host, provider_id, provider_kind}` entry per host a disabled row claims that `effective_scm_hosts`
-omits. A host an enabled row also names is not listed. The list is absent when nothing is withheld.
+**A disabled row stays closed, and says so.**
 
-**The upgrade that retired the shared Azure DevOps credentials (0.8.2).** Migration
-`0103_retire_ado_shared_credentials` rewrites the stored rows (a row left with no per-person lane is
-turned **off**, and the setup checklist warns with `ado_rows_off` until an admin turns it on), and
-`wardynd` deletes the stored shared secrets **once**, at the first start after it:
-`git-pat-<host>`, `ssh-key-<host>` and `known-hosts-<host>` for every Azure DevOps host, in the
-operator's namespace and every person's. The deletion is irreversible and audited per namespace as
-`ado_shared_credential.retire` (`docs/AUDIT-ACTIONS.md`). The `boot_once` row named
-`ado_shared_credential_retire` holds the marker; the sweep runs only while its `done_at` is null. A
-secret store that cannot answer at that first start **refuses boot** rather than leave a retired
-credential in place. A host that a GitHub or other non-Azure DevOps row also names is skipped and
-logged, since the name could be that forge's own credential: remove a shared Azure DevOps credential
-there by hand.
+- A launch into a disabled git provider row's organisation is refused naming the row.
+- Its hosts are left out of `effective_scm_hosts` and out of run egress only when no enabled row also names the same host: with several organisations on `dev.azure.com`, one off and another on, the host stays effective.
+- `GET /site-config` also returns `withheld_scm_hosts`, read-only like `effective_scm_hosts` (a `PUT` ignores it, and it is never stored): one `{host, provider_id, provider_kind}` entry per host a disabled row claims that `effective_scm_hosts` omits.
+- A host an enabled row also names is not listed.
+- The list is absent when nothing is withheld.
 
-0.7.2's two provider blocks — `workspace_providers` (which git hosts and org
-paths a run may clone from, which credential lanes it may use there, and the
-ephemeral/drive storage ceilings) and `agent_providers` (which agents this
-deployment offers, the one model-access lane each may use, and whether that
-credential is shared or captured per person) — are **policy fields on
-`SiteConfig`**, not tables of their own. That is deliberate: `SiteConfig` is the
-org→desktop channel MDM already delivers as `/etc/wardyn/site-config.json`
-([DESKTOP.md](DESKTOP.md)), so a provider policy reaches a managed laptop with no
-new plumbing and no DDL. It also means **two doors write them**, and the grid
-below is what tells them apart.
+**The upgrade that retired the shared Azure DevOps credentials (0.8.2).**
+
+- Migration `0103_retire_ado_shared_credentials` rewrites the stored rows (a row left with no per-person lane is turned **off**, and the setup checklist warns with `ado_rows_off` until an admin turns it on),
+  - and `wardynd` deletes the stored shared secrets **once**, at the first start after it:
+  - `git-pat-<host>`, `ssh-key-<host>` and `known-hosts-<host>` for every Azure DevOps host, in the operator's namespace and every person's.
+
+> [!WARNING]
+> The deletion is irreversible and audited per namespace as `ado_shared_credential.retire` ([`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md)).
+
+- The `boot_once` row named `ado_shared_credential_retire` holds the marker; the sweep runs only while its `done_at` is null.
+- A secret store that cannot answer at that first start **refuses boot** rather than leave a retired credential in place.
+- A host that a GitHub or other non-Azure DevOps row also names is skipped and logged, since the name could be that forge's own credential: remove a shared Azure DevOps credential there by hand.
+
+- 0.7.2's two provider blocks
+  - `workspace_providers` (which git hosts and org paths a run may clone from, which credential lanes it may use there, and the ephemeral/drive storage ceilings)
+  - and `agent_providers` (which agents this deployment offers, the one model-access lane each may use, and whether that credential is shared or captured per person)
+  - are **policy fields on `SiteConfig`**, not tables of their own.
+- That is deliberate: `SiteConfig` is the org→desktop channel MDM already delivers as `/etc/wardyn/site-config.json` ([DESKTOP.md](DESKTOP.md)), so a provider policy reaches a managed laptop with no new plumbing and no DDL.
+- It also means **two doors write them**, and the grid below is what tells them apart.
 
 | | Dedicated endpoints (the console's `/admin/providers` screen) | `PUT /site-config` (the CLI / MDM door) |
 |---|---|---|
 | **Route** | `GET`/`PUT /workspace-providers`, `GET`/`PUT /agent-providers` — both verbs admin-only, for the reason the tier table above gives: a base URL names corporate topology and an `sso_start_url` names the org's IdP | `PUT /site-config`, admin-only, a **full-document replace** of everything except integrations |
 | **Writes what** | exactly one block, replaced whole; `{}` is the clear form | the whole document, provider blocks included when the body NAMES them |
-| **A block the body does NOT name** | n/a — the route IS the block | **carried forward**, not cleared (`carryForwardUnnamedSiteConfigFields`, `internal/api/site_config.go`). Without this, every 5-minute converge on a laptop whose MDM file predates 0.7.2 would silently delete the org's provider policy |
-| **Clearing a block** | `{}` | `{}`. Over raw HTTP an explicit `null` also clears; through `wardyn site-config set` it does **not** — the CLI strict-decodes into the pointer field and re-marshals it ABSENT under `omitempty`, so `null` in a file reads as "unnamed" and carries forward. Use `{}` on both doors and the question never arises |
+| **A block the body does NOT name** | n/a — the route IS the block | **carried forward**, not cleared (`carryForwardUnnamedSiteConfigFields`, [`internal/api/site_config.go`](../internal/api/site_config.go)). Without this, every 5-minute converge on a laptop whose MDM file predates 0.7.2 would silently delete the org's provider policy |
+| **Clearing a block** | `{}` | `{}` on both doors; an explicit `null` clears over raw HTTP but not through `wardyn site-config set`; see [below](#clearing-a-block) |
 | **Audit row** | `workspace_provider.write` / `agent_provider.write` — the block's own shape, including `base_urls` in the clear (a provider address is topology, not a credential) and never the `sso_start_url` | `site_config.write`, whose datum carries `git_providers`, `storage_configured`, `agent_providers` and — when the body named `workspace_providers` — `sources_no_longer_admitted`, so an MDM-applied narrowing is reviewable with nobody watching a console |
 | **Narrowing is never silent** | the `PUT` response counts the already-onboarded repo sources and library sources the new block refuses; the console renders it on the save toast | the same count, on the response and in `site_config.write` |
 
-**`https://github.com/<org>` bounds HTTPS clones only — SSH is host-level.** An
-SSH clone URL carries no path a base URL can be compared against
-(`git@github.com:acme/x.git` is not `/acme/x`), so a row scoped to one org
-admits an SSH clone of ANY org on that host, with the deployment's
-`ssh-key-<host>` secret. That is a documented ceiling of 0.7.2, not an
-oversight, and it is never silent: the `/admin/providers` screen says it under the
-row's lanes, and run create puts it on the 201 as a warning (with a
-`run.provider.admit` audit row) whenever a path-scoped row admits an
-SSH repository. **The remedy is the row's own `lanes` list** — drop `ssh` from a
-path-scoped row and its addresses bind again, over the one transport that
-carries a path. Dot-segment and percent-encoded paths do NOT reach this
-question at all: `https://github.com/acme/../evil/repo.git` and
-`…/acme%2Fevil/…` are refused outright at every admission door and at both
-write doors, because git and the server would read such a path differently.
-The one escape that is admitted is an Azure DevOps project or repository name,
-which may carry spaces and most punctuation: every door stores such an address
-in one spelling — `https://dev.azure.com/acme/Payments Platform/_git/Card Auth
-(v2).Service` is stored as `…/Payments%20Platform/_git/Card%20Auth%20(v2).Service`
-— and an escape that decodes to a separator, a dot segment or a control
-character is still refused. An `azure_devops` row may likewise be scoped to such
-a project (`https://tfs.corp.example/Payments Platform`); names compare as
-written, case included. Such a row cannot name a project whose name holds
-``& ' $ ; | < > " ` `` (site-config values refuse them); scope the row to the
-organisation instead. An Azure DevOps Server host takes these names only when
-an `azure_devops` provider row names it.
+**`https://github.com/<org>` bounds HTTPS clones only — SSH is host-level.**
 
-**On the desktop tier this grid has a winner.** `wardyn-desktop.sh` re-applies
-`/etc/wardyn/site-config.json` on every converge tick, so on `a′` — where the
-developer IS the admin and can open `/admin/providers` — an MDM file that NAMES a
-provider block overwrites a local console edit within five minutes, and one that
-omits it leaves the edit standing. See
-[DESKTOP.md § Posture switches are env vars, never site-config](DESKTOP.md#posture-switches-are-env-vars-never-site-config).
+- An SSH clone URL carries no path a base URL can be compared against (`git@github.com:acme/x.git` is not `/acme/x`),
+  - so a row scoped to one org admits an SSH clone of ANY org on that host, with the deployment's `ssh-key-<host>` secret.
+- That is a documented ceiling of 0.7.2, not an oversight, and it is never silent:
+  - the `/admin/providers` screen says it under the row's lanes,
+  - and run create puts it on the 201 as a warning (with a `run.provider.admit` audit row) whenever a path-scoped row admits an SSH repository.
+- **The remedy is the row's own `lanes` list** — drop `ssh` from a path-scoped row and its addresses bind again, over the one transport that carries a path.
+- Dot-segment and percent-encoded paths do NOT reach this question at all: `https://github.com/acme/../evil/repo.git` and `…/acme%2Fevil/…` are refused outright at every admission door and at both write doors, because git and the server would read such a path differently.
+- The one escape that is admitted is an Azure DevOps project or repository name, which may carry spaces and most punctuation:
+  - every door stores such an address in one spelling — `https://dev.azure.com/acme/Payments Platform/_git/Card Auth (v2).Service` is stored as `…/Payments%20Platform/_git/Card%20Auth%20(v2).Service` —
+  - and an escape that decodes to a separator, a dot segment or a control character is still refused.
+- An `azure_devops` row may likewise be scoped to such a project (`https://tfs.corp.example/Payments Platform`); names compare as written, case included.
+- Such a row cannot name a project whose name holds ``& ' $ ; | < > " ` `` (site-config values refuse them); scope the row to the organisation instead. An Azure DevOps Server host takes these names only when an `azure_devops` provider row names it.
 
-**Ownership scoping — real, not just admin-vs-everyone.** A member reaches their
-OWN resources the same way an admin reaches any of them
-(`ownsRunOrAdmin`/`getRunAuthorized`, `internal/api/helpers.go`): `GET`/kill/
-profile/grants on a run, minting its attach ticket, its recording replay, and
-`GET /runs`/`GET /approvals` (each scoped to the caller's own `created_by` rows)
-all answer a foreign resource with the **byte-identical 404** a truly-missing one
-gets — never a 403, so probing another user's run id learns nothing. `GET /audit`
-is **run-scoped, not `created_by`-scoped**: a member must pass `?run_id=` naming
-a run they own — no `run_id`, or one they don't own, both return an empty `200`
-list, so a member's unfiltered audit feed is always empty by design (the console
-reaches it from a run's Audit tab, whose "open full Audit" link carries
-`?run_id=`). `GET /setup/status` redacts operator-diagnostic detail (checks,
-secret names, runner detail) for a member.
+**On the desktop tier this grid has a winner.**
 
-**Workspace ownership (0.6, migration `0048`)** and **Secret ownership (0.7,
-migration `0050`)** are the second and third owned nouns after runs.
-`workspaces.owned_by` / `secrets.owned_by` hold the creating MEMBER's principal;
-`""` — every pre-migration row, and everything an admin writes — means
-**operator-owned**, i.e. exactly today's behavior.
+- `wardyn-desktop.sh` re-applies `/etc/wardyn/site-config.json` on every converge tick,
+  - so on `a′` — where the developer IS the admin and can open `/admin/providers` — an MDM file that NAMES a provider block overwrites a local console edit within five minutes,
+  - and one that omits it leaves the edit standing.
+- See [DESKTOP.md § Posture switches are env vars, never site-config](DESKTOP.md#posture-switches-are-env-vars-never-site-config).
 
-- **Workspace CRUD/scan/build are owner-or-admin, not admin-only**
-  (`getWorkspaceAuthorized`/`getWorkspaceReadable`, `internal/api/helpers.go`).
-  Another member's owned workspace answers the **byte-identical 404** a missing id
-  does. An OPERATOR-owned workspace answers a member's mutation with a **403** —
-  it is listable and readable by every member, so there is no existence to hide.
-  `GET /workspaces` returns the caller's own rows plus the operator-owned ones,
-  never another member's.
-- **A member's `local_dir` source is bounded by operator-set roots**:
-  `WARDYN_USER_WORKSPACE_ROOTS` (and its per-member `_MAP`, which REPLACES the
-  shared list for a principal that has an entry) in [ENV.md](ENV.md). Unset = no
-  member `local_dir` mounts at all (fail closed); writability needs the separate
-  `WARDYN_USER_WRITABLE_ROOTS` minus `WARDYN_USER_WRITABLE_DENY`.
-- **Offboarding is `POST /workspaces/{id}/reassign`** (admin-only): returns the
-  row to the operator (`owned_by=""`) and audits `workspace.reassign` with the
-  departed member in `from_owner`. Idempotent, so a sweep over a departing
-  member's ids never fails halfway. The row's `local_dir` sources stop being
-  member-authored, so the member root and dotfile gates no longer bound them —
-  they become ordinary operator mounts. Treat it like creating the workspace.
-- **Offboarding a USER DRIVE is two halves, and only one of them is a product
-  action — and the ORDER is not the obvious one.** Run `POST /drives/preview`
-  **first, while the allocation still exists**, and write the object name down.
-  The preview answers "what does this deployment say about THIS principal" by
-  running the ordinary resolver (`resolveUserDriveFor`,
-  `internal/api/user_drives_resolve.go`), and the resolver matches on the
-  **grant**: delete the allocation first and the preview resolves nothing, so
-  the one call that names the object a person is about to lose stops being able
-  to name it. Paste the sign-in subject FIRST — on a `hash` drive the name keys
-  on the first claim, and the API's `home_subject` says which claim it used (the
-  console does not yet show it).
+**Ownership scoping — real, not just admin-vs-everyone.**
 
-  *Then* delete the allocation (`DELETE /drives/grants/{id}`, admin-only,
-  audited `drive.grant.delete`). It stops the mount at that person's next run and
-  **deletes no data** — which is why the audit row carries the drive's declared
-  `reclaim` intent (`retain` or `delete`), so the log records what the operator
-  was told to do about the directory this allocation was the last pointer to.
-  What is left behind is one object per person: a Docker named volume, or a
-  subdirectory of the share the operator mounted host-side, or a
-  PersistentVolumeClaim. A **managed** object (`docker_volume`, `k8s_pvc`)
-  carries the drive row's **id** and the person's home name as labels, so a
-  departed member's objects stay findable after the row is gone — that is the
-  recovery path if you skipped the preview; a share's subdirectory and a static
-  claim carry **nothing**, so for those the preview is the only thing that names
-  the object at all. Reclaiming it is a deliberate command — `POST
-  /drives/{id}/reclaim` (`wardyn drive reclaim`), or the substrate command by
-  hand; both stay supported, and "Reclaiming a departed person's storage" below
-  is the runbook for both. Deleting the **drive row** itself
-  is a `409` while any allocation still points at it (`ON DELETE RESTRICT`), so
-  the deallocation is always its own audited event and offboarding can never
-  silently widen anything.
-- **Secret write/delete moved from admin-only to self-service.** Any signed-in
-  human may `PUT`/`DELETE /secrets/{name}` their OWN row
-  (`secretOwnerFromRequest`: `""` for an operator, their own principal for a
-  member). A member's `DELETE` of another principal's row is structurally
-  unreachable (`secretstore.Store.For(owner)` never resolves it) and answers the
-  byte-identical 204 a never-set name gets. The six model-credential
-  names (`anthropic-api-key`, `openai-api-key`, `bedrock-api-key` and the three
-  AWS SigV4 names `aws-access-key-id`/`aws-secret-access-key`/`aws-session-token`)
-  are refused (403 `secret_name_reserved`) for every caller, the operator
-  included: a model credential is stored on a model provider, by the person it
-  belongs to, and wardynd deletes any left from before 0.8.2 at boot
-  (`model_credential.retire` in [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
-- **`GET /secrets` returns `{names, mine}`.** `mine` is always the queried
-  namespace's own rows (reserved names filtered out). `names` keeps its pre-0.7
-  meaning for an admin — the operator namespace, or one member's own rows with
-  `?owner=<principal>` — and for a member narrows to the operator-owned names an
-  eligible grant in the operator's ceiling actually pairs with a host, closing a
-  name-enumeration gap.
-- **A run resolves its owner's row, falling back to the operator's** — never
-  another member's, even when an inline policy names it by hand. The upstream
-  (corporate) proxy secret always stays resolved from the operator namespace:
-  under a configured upstream the sidecar hands the corp proxy a HOSTNAME rather
-  than a pinned address for every host it proxies (all of them, minus
-  `upstream_proxy_no_proxy`), so a member-substitutable value there would put a
-  member in control of which proxy resolves and dials every one of them.
-- **`?owner=<principal>` is admin-only** on `DELETE`/`GET /secrets`, refused
-  with a constant 403 for anyone else. **A `PUT` refuses it for everyone (0.8,
-  `403`, audited `secret.write` `denied`)**: a credential is set only by the
-  person it belongs to, so an admin can remove a person's credentials but never
-  set one their runs would use under their name, and pre-provisioning a member's
-  key before they sign in is no longer possible. The value names a
-  HUMAN and is RESOLVED to the namespace key that person's own writes land in:
-  matched case-insensitively against the principals this deployment knows, and
-  mapped from the email form through the same (principal, email) pairing
-  `POST /sessions/revoke` matches on. A subject is opaque and case-sensitive,
-  so the fold cannot be a first-hit scan: an EXACT subject match wins
-  outright, and a value that folds case-insensitively onto MORE THAN ONE known
-  principal is refused `422` rather than resolved to whichever the directory
-  happened to list first — guessing there would write a credential into the
-  wrong human's namespace. An email address that pairs to no known
-  principal is refused 422 rather than silently creating a namespace its owner
-  never reads, and a cross-namespace `DELETE` that removed nothing answers 404
-  rather than an idempotent 204.
-- **Offboarding a person's credentials is `DELETE /people/{principal}/credentials`**
-  (admin or `security_admin`, 0.8); `GET /model-providers/credentials` first lists what
-  each person holds per model provider, with when it was added and last used. The erase
-  deletes every credential in that person's namespace — keys, tokens and captured
-  sign-ins — and answers `{"count": N}`; the
-  principal resolves as `?owner=` does. In store mode each value leaves Vault or
-  Key Vault before its row, and the answer adds `store`, `purged` and, when Key
-  Vault kept soft-deleted copies, `recoverable_days`: the organisation can
-  recover them for that long unless its vault operators purge them. It never
-  answers success with a credential left behind (`500`, audited
-  `credential.erase` `failure` with the count it did delete; run it again), and
-  it never erases the operator namespace. A renewal of their AWS session, or
-  an Azure DevOps refusal stamp, already in flight finishes first and is erased
-  with the rest: the erase waits for the owner's AWS lock, the Azure DevOps
-  sign-in's lock and the own-token write lock (for a renewal, at most about 21
-  seconds), so a success is final for everything Wardyn itself was writing. That
-  coordination lives in one process: on a deployment with more than one replica
-  a second one can still interleave, and the erase's own re-list reports only a
-  write it can see (tombstones are tracked in #1511). An Azure DevOps sign-in
-  configuration that cannot be read refuses the erase (`503`,
-  `credential_erase_signin_config_unreadable`, nothing erased). A person who
-  reconnects afterwards writes new credentials, which stay. The erase does not
-  reach into a running run: one that already holds a credential in memory keeps
-  it. A run already going keeps a static key
-  (an `api_key` injection is fetched once and cached for the run) until it ends,
-  so also stop their runs (`POST /runs/{id}/kill`, the run kill switch).
-  **Wardyn cannot revoke anything upstream**, with one exception: it first
-  revokes the live Azure DevOps tokens it created for the person's runs
-  (`ado_pat.revoke`, reason `offboarding`; one it cannot revoke expires by
-  itself). Revoke the person's AWS, Anthropic and Azure DevOps sessions, any
-  Azure DevOps token they pasted in themselves, and any gateway token, where
-  they were issued, and disable them in the identity provider. A refused erase (a blank principal
-  `400`, or one naming nobody or several people `422`) is audited
-  `credential.erase` `denied`.
-  **The erasure horizon, on the default (local Postgres) store, is your backup
-  retention — not the API call.** `DELETE /people/{principal}/credentials`
-  removes the live row; it does not, and cannot, reach a `pg_dump` you already
-  took, a replica, or Postgres WAL. Until every backup made before the erase
-  ages out of your retention window, the value is recoverable from it by
-  whoever can read a backup, exactly as it was live (envelope v1 does not
-  change this: the same key-encryption key that opened the row in Postgres
-  opens the same bytes in a restored dump). With `WARDYN_KEK=transit`, the
-  backup is only as erased as the KEK: rotating the Transit key past the old
-  wrap (`wardynd -rewrap`, then raising `min_decryption_version` — "Key
-  service: Vault Transit") is what actually forecloses an old backup, the same
-  way `-rotate-age-key` does for the local key. In store mode (Vault, Azure Key
-  Vault) the value itself never reaches your Postgres backup at all — the
-  store's own deletion/retention is what governs it, as in "Removing a
-  credential, and the erasure horizon" below for Key Vault, or your Vault KV
-  engine's own versioning and delete-version policy.
-- **Offboarding a person, in full.** The erase removes stored credentials and
-  nothing else. In order:
-  0. Find them and see what they hold: `GET /people?q=<email or subject>`
-     (`wardyn people list --q`) lists each match with its live-session, token,
-     SSH-key, credential and running-run counts, which the steps below act on.
-  1. Disable the person in the identity provider, so no new sign-in succeeds.
-  2. `POST /sessions/revoke` with their subject or email: ends their console
-     sessions, refuses a UI-app session at its next re-check (an attach ticket
-     minted before the revoke is refused at redemption) and revokes every `wdn_` API token they hold (its
-     `tokens_revoked` count is the receipt; see "Per-user API tokens: stop
-     sharing the admin token").
-  3. Remove their registered SSH keys and end established SSH connections:
-     [SSH access revocation](SSH.md#revoking-access-during-an-incident).
-  4. Kill their running runs (`POST /runs/{id}/kill`). A run keeps a static
-     key it was handed (an `api_key` injection is cached for the run) until it
-     ends, whatever the erase does.
-  5. Erase their credentials: `DELETE /people/{principal}/credentials`.
-  6. Hand back their workspaces (`POST /workspaces/{id}/reassign`) and their
-     user drives (the two-halves order above).
-  7. Revoke upstream what Wardyn cannot: their AWS, Anthropic and Azure DevOps
-     sessions, a token they pasted in themselves and any gateway token.
+- A member reaches their OWN resources the same way an admin reaches any of them (`ownsRunOrAdmin`/`getRunAuthorized`, [`internal/api/helpers.go`](../internal/api/helpers.go)):
+  - `GET`/kill/profile/grants on a run, minting its attach ticket, its recording replay,
+  - and `GET /runs`/`GET /approvals` (each scoped to the caller's own `created_by` rows) all answer a foreign resource with the **byte-identical 404** a truly-missing one gets
+  - never a 403, so probing another user's run id learns nothing.
+- `GET /audit` is **run-scoped, not `created_by`-scoped**:
+  - a member must pass `?run_id=` naming a run they own
+  - no `run_id`, or one they don't own, both return an empty `200` list,
+  - so a member's unfiltered audit feed is always empty by design
+  - (the console reaches it from a run's Audit tab, whose "open full Audit" link carries `?run_id=`).
+- `GET /setup/status` redacts operator-diagnostic detail (checks, secret names, runner detail) for a member.
 
-  One copy outlives all of this in memory: wardynd keeps an Azure DevOps
-  sign-in's refresh token in its process-wide masking set, so output quoting it
-  is still masked. It is never served or injected from there; it is let go a
-  grace period after the credential is replaced, or when wardynd restarts. A
-  run's own masking copies go the same grace after the run ends.
-- **Dead sign-ins are not kept.** A captured AWS or Azure DevOps sign-in whose
-  refresh token the provider refuses for good (`invalid_grant`) is deleted at
-  that renewal, and a stored AWS sign-in is deleted by a daily sweep once it can
-  no longer be used or renewed (its row's `expires_at`); both audit
-  `credential.expired.delete`. A row the sweep cannot delete is kept, audited
-  `failure`, and retried the next day. The person is then shown as not
-  connected and signs in again. A Conditional Access refusal does not delete
-  anything — the sign-in still works once the person is present. An Azure
-  DevOps sign-in records no expiry, because Entra publishes none for its
-  refresh token: an unused one is kept until the provider refuses it or it is
-  erased.
-- **Cross-user admin access is queryable.** An admin acting on a member-owned
-  workspace stays the ADMIN in the audit actor (no impersonation; delegation
-  is recorded as delegation — [Delegated run management](#delegated-run-management-portals)) with
-  `workspace_owner` naming the member; `secret.write`/`secret.delete` carry
-  `secret_owner` naming the non-"" namespace a write landed in (a member's own
-  ordinary write included) — see [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
-- **Member model access.** A member's model access is their own credential on a
-  model provider; no integration row is derived from anyone's convention-named
-  secret, and no inline `api_key` grant naming a model vendor's host is admitted
-  from a member's own secrets. See
-  [USERS.md § Your model connections](USERS.md#your-model-connections).
+**Workspace ownership (0.6, migration `0048`)** and **Secret ownership (0.7, migration `0050`)** are the second and third owned nouns after runs.
 
-**Deciding an approval is kind-restricted, not just owner-restricted**
-(`decide()`, `internal/api/approvals.go`): a member may approve or deny an
-`egress_domain` approval on a run they own. `credential` and `tool_call`
-approvals stay **admin-only regardless of ownership** — the shipped default
-policy requires approval on `github_token`, so a member self-approving their own
-run's credential request would self-mint a real token, and self-approving a
-`tool_call` re-opens exactly what the clamp (below) exists to bound.
+`workspaces.owned_by` / `secrets.owned_by` hold the creating MEMBER's principal; `""` — every pre-migration row, and everything an admin writes — means **operator-owned**, i.e. exactly today's behavior.
 
-**Optional: require a SECOND human on egress decisions.** Set
-`WARDYN_EGRESS_SECOND_HUMAN=1` and the human who DECIDES an `egress_domain`
-approval may not be the human who created the run. Off by default: turning it on
-unprompted would deadlock every single-operator deployment. Both verbs are covered
-— a self-*deny* is refused too. A refusal is a `403` recorded as `authz.denied`
-with `reason: second_human_required`, landing **before** the decision is written,
-so a refused decision leaves the approval `PENDING`. Scoped to `egress_domain`
-only; `credential`/`tool_call` are already admin-only. A run with an empty
-`created_by` (system-created follow-on runs) has no human creator to be the same
-as, so the rule cannot apply. **Local mode REFUSES the switch** (`503`) rather
-than enforcing it: local mode authenticates nobody, so both the decider and the
-run's `created_by` come from the same client-supplied source — the DEV-ONLY
-`X-Wardyn-Principal` header, honored there by design — and no request in that
-mode can prove a second human decided. Configure SSO to use this switch, or
-leave it unset. The refusal is scoped to `egress_domain` decisions, so nothing
-else in local mode changes.
+- **Workspace CRUD/scan/build are owner-or-admin, not admin-only** (`getWorkspaceAuthorized`/`getWorkspaceReadable`, [`internal/api/helpers.go`](../internal/api/helpers.go)).
+  - Another member's owned workspace answers the **byte-identical 404** a missing id does.
+  - An OPERATOR-owned workspace answers a member's mutation with a **403** — it is listable and readable by every member, so there is no existence to hide.
+  - `GET /workspaces` returns the caller's own rows plus the operator-owned ones, never another member's.
+- **A member's `local_dir` source is bounded by operator-set roots**: `WARDYN_USER_WORKSPACE_ROOTS` (and its per-member `_MAP`, which REPLACES the shared list for a principal that has an entry) in [ENV.md](ENV.md).
+  - Unset = no member `local_dir` mounts at all (fail closed); writability needs the separate `WARDYN_USER_WRITABLE_ROOTS` minus `WARDYN_USER_WRITABLE_DENY`.
+- **Offboarding is `POST /workspaces/{id}/reassign`** (admin-only): returns the row to the operator (`owned_by=""`) and audits `workspace.reassign` with the departed member in `from_owner`.
+  - Idempotent, so a sweep over a departing member's ids never fails halfway.
+  - The row's `local_dir` sources stop being member-authored, so the member root and dotfile gates no longer bound them — they become ordinary operator mounts.
+  - Treat it like creating the workspace.
+- **Offboarding a USER DRIVE is two halves, and only one of them is a product action — and the ORDER is not the obvious one.**
+  - Run `POST /drives/preview` **first, while the allocation still exists**, and write the object name down.
+  - The preview answers "what does this deployment say about THIS principal" by running the ordinary resolver (`resolveUserDriveFor`, [`internal/api/user_drives_resolve.go`](../internal/api/user_drives_resolve.go)), and the resolver matches on the **grant**:
+    - delete the allocation first and the preview resolves nothing,
+    - so the one call that names the object a person is about to lose stops being able to name it.
+  - Paste the sign-in subject FIRST — on a `hash` drive the name keys on the first claim, and the API's `home_subject` says which claim it used (the console does not yet show it).
+  - *Then* delete the allocation (`DELETE /drives/grants/{id}`, admin-only, audited `drive.grant.delete`).
+  - It stops the mount at that person's next run and **deletes no data**
+    - which is why the audit row carries the drive's declared `reclaim` intent (`retain` or `delete`),
+    - so the log records what the operator was told to do about the directory this allocation was the last pointer to.
+  - What is left behind is one object per person: a Docker named volume, or a subdirectory of the share the operator mounted host-side, or a PersistentVolumeClaim.
+  - A **managed** object (`docker_volume`, `k8s_pvc`) carries the drive row's **id** and the person's home name as labels, so a departed member's objects stay findable after the row is gone.
+  - That is the recovery path if you skipped the preview.
+  - A share's subdirectory and a static claim carry **nothing**, so for those the preview is the only thing that names the object at all.
+  - Reclaiming it is a deliberate command — `POST /drives/{id}/reclaim` (`wardyn drive reclaim`), or the substrate command by hand; both stay supported, and "[Reclaiming a departed person's storage](#reclaiming-a-departed-persons-storage)" below is the runbook for both.
+  - Deleting the **drive row** itself is a `409` while any allocation still points at it (`ON DELETE RESTRICT`), so the deallocation is always its own audited event and offboarding can never silently widen anything.
+- **Secret write/delete moved from admin-only to self-service.**
+  - Any signed-in human may `PUT`/`DELETE /secrets/{name}` their OWN row (`secretOwnerFromRequest`: `""` for an operator, their own principal for a member).
+  - A member's `DELETE` of another principal's row is structurally unreachable (`secretstore.Store.For(owner)` never resolves it) and answers the byte-identical 204 a never-set name gets.
+  - The six model-credential names (`anthropic-api-key`, `openai-api-key`, `bedrock-api-key` and the three AWS SigV4 names `aws-access-key-id`/`aws-secret-access-key`/`aws-session-token`) are refused (403 `secret_name_reserved`) for every caller, the operator included:
+    - a model credential is stored on a model provider, by the person it belongs to,
+    - and wardynd deletes any left from before 0.8.2 at boot (`model_credential.retire` in [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
+- **`GET /secrets` returns `{names, mine}`.**
+  - `mine` is always the queried namespace's own rows (reserved names filtered out).
+  - `names` keeps its pre-0.7 meaning for an admin — the operator namespace, or one member's own rows with `?owner=<principal>`
+    - and for a member narrows to the operator-owned names an eligible grant in the operator's ceiling actually pairs with a host, closing a name-enumeration gap.
+- **A run resolves its owner's row, falling back to the operator's** — never another member's, even when an inline policy names it by hand.
+  - The upstream (corporate) proxy secret always stays resolved from the operator namespace:
+    - under a configured upstream the sidecar hands the corp proxy a HOSTNAME rather than a pinned address for every host it proxies (all of them, minus `upstream_proxy_no_proxy`),
+    - so a member-substitutable value there would put a member in control of which proxy resolves and dials every one of them.
+- **`?owner=<principal>` is admin-only** on `DELETE`/`GET /secrets`, refused with a constant 403 for anyone else.
+  - **A `PUT` refuses it for everyone (0.8, `403`, audited `secret.write` `denied`)**:
+    - a credential is set only by the person it belongs to,
+    - so an admin can remove a person's credentials but never set one their runs would use under their name,
+    - and pre-provisioning a member's key before they sign in is no longer possible.
+  - The value names a HUMAN and is RESOLVED to the namespace key that person's own writes land in:
+    - matched case-insensitively against the principals this deployment knows, and mapped from the email form through the same (principal, email) pairing `POST /sessions/revoke` matches on.
+  - A subject is opaque and case-sensitive, so the fold cannot be a first-hit scan:
+    - an EXACT subject match wins outright,
+    - and a value that folds case-insensitively onto MORE THAN ONE known principal is refused `422` rather than resolved to whichever the directory happened to list first
+    - guessing there would write a credential into the wrong human's namespace.
+  - An email address that pairs to no known principal is refused 422 rather than silently creating a namespace its owner never reads, and a cross-namespace `DELETE` that removed nothing answers 404 rather than an idempotent 204.
+- **Offboarding a person's credentials is `DELETE /people/{principal}/credentials`** (admin or `security_admin`, 0.8); `GET /model-providers/credentials` first lists what each person holds per model provider, with when it was added and last used.
+  - The erase deletes every credential in that person's namespace — keys, tokens and captured sign-ins — and answers `{"count": N}`; the principal resolves as `?owner=` does.
+  - In store mode each value leaves Vault or Key Vault before its row,
+    - and the answer adds `store`, `purged` and, when Key Vault kept soft-deleted copies, `recoverable_days`:
+    - the organisation can recover them for that long unless its vault operators purge them.
+  - It never answers success with a credential left behind (`500`, audited `credential.erase` `failure` with the count it did delete; run it again), and it never erases the operator namespace.
+  - A renewal of their AWS session, or an Azure DevOps refusal stamp, already in flight finishes first and is erased with the rest:
+    - the erase waits for the owner's AWS lock, the Azure DevOps sign-in's lock and the own-token write lock (for a renewal, at most about 21 seconds),
+    - so a success is final for everything Wardyn itself was writing.
+  - That coordination lives in one process:
+    - on a deployment with more than one replica a second one can still interleave,
+    - and the erase's own re-list reports only a write it can see (tombstones are tracked in #1511).
+  - An Azure DevOps sign-in configuration that cannot be read refuses the erase (`503`, `credential_erase_signin_config_unreadable`, nothing erased).
+  - A person who reconnects afterwards writes new credentials, which stay.
+  - The erase does not reach into a running run: one that already holds a credential in memory keeps it.
+  - A run already going keeps a static key (an `api_key` injection is fetched once and cached for the run) until it ends, so also stop their runs (`POST /runs/{id}/kill`, the run kill switch).
+  - **Wardyn cannot revoke anything upstream**, with one exception: it first revokes the live Azure DevOps tokens it created for the person's runs (`ado_pat.revoke`, reason `offboarding`; one it cannot revoke expires by itself).
+  - Revoke the person's AWS, Anthropic and Azure DevOps sessions, any Azure DevOps token they pasted in themselves, and any gateway token, where they were issued, and disable them in the identity provider.
+  - A refused erase (a blank principal `400`, or one naming nobody or several people `422`) is audited `credential.erase` `denied`.
+  - **The erasure horizon, on the default (local Postgres) store, is your backup retention — not the API call.**
+    - `DELETE /people/{principal}/credentials` removes the live row; it does not, and cannot, reach a `pg_dump` you already took, a replica, or Postgres WAL.
+    - Until every backup made before the erase ages out of your retention window, the value is recoverable from it by whoever can read a backup,
+      - exactly as it was live
+      - (envelope v1 does not change this: the same key-encryption key that opened the row in Postgres opens the same bytes in a restored dump).
+    - With `WARDYN_KEK=transit`, the backup is only as erased as the KEK:
+      - rotating the Transit key past the old wrap (`wardynd -rewrap`, then raising `min_decryption_version` — "Key service: Vault Transit") is what actually forecloses an old backup,
+      - the same way `-rotate-age-key` does for the local key.
+    - In store mode (Vault, Azure Key Vault) the value itself never reaches your Postgres backup at all
+      - the store's own deletion/retention is what governs it, as in "Removing a credential, and the erasure horizon" below for Key Vault, or your Vault KV engine's own versioning and delete-version policy.
+- **Offboarding a person, in full.**
+  - The erase removes stored credentials and nothing else.
+  - In order:
+    0. Find them and see what they hold: `GET /people?q=<email or subject>` (`wardyn people list --q`) lists each match with its live-session, token, SSH-key, credential and running-run counts, which the steps below act on.
+    1. Disable the person in the identity provider, so no new sign-in succeeds.
+    2. `POST /sessions/revoke` with their subject or email:
+       - ends their console sessions, refuses a UI-app session at its next re-check (an attach ticket minted before the revoke is refused at redemption)
+       - and revokes every `wdn_` API token they hold (its `tokens_revoked` count is the receipt; see "[Per-user API tokens: stop sharing the admin token](#per-user-api-tokens-stop-sharing-the-admin-token)").
+    3. Remove their registered SSH keys and end established SSH connections: [SSH access revocation](SSH.md#revoking-access-during-an-incident).
+    4. Kill their running runs (`POST /runs/{id}/kill`). A run keeps a static key it was handed (an `api_key` injection is cached for the run) until it ends, whatever the erase does.
+    5. Erase their credentials: `DELETE /people/{principal}/credentials`.
+    6. Hand back their workspaces (`POST /workspaces/{id}/reassign`) and their user drives (the two-halves order above).
+    7. Revoke upstream what Wardyn cannot: their AWS, Anthropic and Azure DevOps sessions, a token they pasted in themselves and any gateway token.
+  - One copy outlives all of this in memory: wardynd keeps an Azure DevOps sign-in's refresh token in its process-wide masking set, so output quoting it is still masked.
+  - It is never served or injected from there; it is let go a grace period after the credential is replaced, or when wardynd restarts.
+  - A run's own masking copies go the same grace after the run ends.
+- **Dead sign-ins are not kept.**
+  - A captured AWS or Azure DevOps sign-in whose refresh token the provider refuses for good (`invalid_grant`) is deleted at that renewal,
+    - and a stored AWS sign-in is deleted by a daily sweep once it can no longer be used or renewed (its row's `expires_at`);
+    - both audit `credential.expired.delete`.
+  - A row the sweep cannot delete is kept, audited `failure`, and retried the next day.
+  - The person is then shown as not connected and signs in again.
+  - A Conditional Access refusal does not delete anything — the sign-in still works once the person is present.
+  - An Azure DevOps sign-in records no expiry, because Entra publishes none for its refresh token: an unused one is kept until the provider refuses it or it is erased.
+- **Cross-user admin access is queryable.**
+  - An admin acting on a member-owned workspace stays the ADMIN in the audit actor (no impersonation; delegation is recorded as delegation — [Delegated run management](#delegated-run-management-portals)) with `workspace_owner` naming the member;
+  - `secret.write`/`secret.delete` carry `secret_owner` naming the non-"" namespace a write landed in (a member's own ordinary write included) — see [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
+- **Member model access.**
+  - A member's model access is their own credential on a model provider;
+    - no integration row is derived from anyone's convention-named secret, and no inline `api_key` grant naming a model vendor's host is admitted from a member's own secrets.
+  - See [USERS.md § Your model connections](USERS.md#your-model-connections).
 
-**Optional: the same for Azure DevOps capability escalations.** A member may decide
-an Azure DevOps capability escalation on a run they own, and ownership is the whole
-member rule, so a run's creator can approve their own escalation, admin-class
-capabilities included. Set `WARDYN_CAPABILITY_SECOND_HUMAN=1` and the human who
-creates the run can neither approve nor deny its Azure DevOps escalation; a
-different administrator decides. It is a separate switch, off by default, with
-every rule above: the same `403` / `second_human_required`, the approval left
-`PENDING`, the `503` in local mode (plus a boot warning), and the `admin-token`
-break-glass, whose `approval.second_human.bypass` row names this switch in its
-`switch` field. Each switch governs only its own kind. A run's attention state
-follows the setting, as it does for egress: it stops naming the creator as the
-person who can act.
+**Deciding an approval is kind-restricted, not just owner-restricted** (`decide()`, [`internal/api/approvals.go`](../internal/api/approvals.go)): a member may approve or deny an `egress_domain` approval on a run they own.
 
-**Optional: four-eyes on governance writes.** Set `WARDYN_GOVERNANCE_SECOND_HUMAN=1` and no
-single administrator can change a governance profile, an assignment, a capability grant, the
-enforcement map, a value's availability, a user type's priority, a role mapping or a key-domain
-assignment alone. With it on, a
-human's write to `POST/PUT/DELETE /governance/profiles`, `POST/DELETE /governance/assignments`,
-`POST/DELETE /permissions/grants`, `PUT /permissions/enforcement`, `PUT /permissions/availability/{kind}/*`,
-`PUT /user-types/{id}` (when the priority changes), `POST/DELETE /access/mappings` or
-`PUT/DELETE /key-domains/assignments/{subject_type}/{subject}`
-is decoded and validated exactly as before and then stored as a pending change, answered `202`
-with `Location: /api/v1/governance/changes/{id}` and
-`{"pending_change": {id, target_kind, op, target_key, state, proposed_by, proposed_at, expires_at, diff}}`.
-Nothing is applied. `diff` is rendered by the server, never by a client: the target's current row
-and the proposed one (every ceiling passes the same read-redaction as a read of it) plus the changed
-field paths; for an assignment, `diff.after` embeds the profile it points at as it stood at the
-proposal. A second human approves it with `POST /governance/changes/{id}/approve`, or any
-authorised human rejects it with `POST /governance/changes/{id}/reject` (an optional `reason`, at
-most 512 characters, no control characters, recorded on the change and its audit row only).
-`GET /governance/changes` lists the queue (`?state=` narrows it; pending by default) and
-`GET /governance/changes/{id}` reads one. A change nobody decides expires after
-`WARDYN_GOVERNANCE_CHANGE_TTL` (default `72h`). Nothing notifies anyone that a change is waiting:
-approvers find them through `wardyn governance changes list` or the API.
+- `credential` and `tool_call` approvals stay **admin-only regardless of ownership**
+  - the shipped default policy requires approval on `github_token`,
+  - so a member self-approving their own run's credential request would self-mint a real token, and self-approving a `tool_call` re-opens exactly what the clamp (below) exists to bound.
 
-- **Who may approve.** The approver must pass the predicate of the tier the write was proposed on,
-  never a weaker one. Profile, assignment, grant, enforcement, availability and user-type priority
-  changes are proposed on the security tier, so a security admin or a super admin approves; a security
-  admin may approve a super admin's change. A role mapping is written on the super-admin tier, so only a
-  super admin approves one: a security admin who tries is refused `403` `authz.denied` reason
-  `admin_surface` (target `governance.change`), and role-mapping changes are neither listed to a security
-  admin nor readable by one (`GET /governance/changes/{id}` answers `404`).
-  The predicate is evaluated again inside the approval transaction: an API token that was revoked
-  after it authenticated, one cut off by a session revocation, or one whose role no longer passes
-  is refused and the change stays pending.
-- **Distinct human.** An approval is refused (`403`, `authz.denied`, reason `second_human_required`,
-  target `governance.change`) when the approver's principal equals the proposer's, or when both
-  emails are non-empty and equal once case-folded. The proposer may reject their own change.
-- **What applies.** One transaction locks the change, requires it pending and unexpired, compares
-  the target (and, for an assignment, the profile it points at) and the deployment default with what
-  the proposal reviewed, applies the write, and moves the change to `applied`. A write to the target
-  in between (the break-glass included), a rename or ceiling change of the profile an assignment points
-  at, or a changed deployment default makes the change `stale` (`409` `governance_change_stale`):
-  it never overwrites. The write is re-validated against the current deployment default, so an
-  approval cannot apply what a direct write would refuse. Two approvals racing on one change apply it
-  once; the other is `409` `governance_change_not_pending`. A failure after the write rolls it back.
-- **Exemptions.** Only these apply directly, with no second human: a profile update whose new
-  effective profile is no more permissive than the current one (the same resolved comparison
-  composition uses, `Leq`), a rename that changes nothing else, an availability `PUT` that leaves the
-  restricted bit as it is, and a user type's name or description edit that leaves its priority alone.
-  A profile update that changes the contact is held even when it narrows. Everything else is held,
-  deletes and every assignment write included: deleting an assignment widens its subjects back to the
-  deployment ceiling. No grant, enforcement, availability, priority or role-mapping write has a
-  narrowing exemption, because each can widen: deleting a deny grant, lifting a restriction (which
-  admits every person with no grant write), turning enforcement on, raising a priority (which moves a
-  person matching two types onto the other at their next sign-in).
+**Optional: require a SECOND human on egress decisions.**
+
+- Set `WARDYN_EGRESS_SECOND_HUMAN=1` and the human who DECIDES an `egress_domain` approval may not be the human who created the run.
+- Off by default: turning it on unprompted would deadlock every single-operator deployment.
+- Both verbs are covered — a self-*deny* is refused too.
+- A refusal is a `403` recorded as `authz.denied` with `reason: second_human_required`, landing **before** the decision is written, so a refused decision leaves the approval `PENDING`.
+- Scoped to `egress_domain` only; `credential`/`tool_call` are already admin-only.
+- A run with an empty `created_by` (system-created follow-on runs) has no human creator to be the same as, so the rule cannot apply.
+- **Local mode REFUSES the switch** (`503`) rather than enforcing it:
+  - local mode authenticates nobody, so both the decider and the run's `created_by` come from the same client-supplied source — the DEV-ONLY `X-Wardyn-Principal` header, honored there by design —
+  - and no request in that mode can prove a second human decided.
+- Configure SSO to use this switch, or leave it unset.
+- The refusal is scoped to `egress_domain` decisions, so nothing else in local mode changes.
+
+**Optional: the same for Azure DevOps capability escalations.**
+
+- A member may decide an Azure DevOps capability escalation on a run they own, and ownership is the whole member rule, so a run's creator can approve their own escalation, admin-class capabilities included.
+- Set `WARDYN_CAPABILITY_SECOND_HUMAN=1` and the human who creates the run can neither approve nor deny its Azure DevOps escalation; a different administrator decides.
+- It is a separate switch, off by default, with every rule above:
+  - the same `403` / `second_human_required`, the approval left `PENDING`, the `503` in local mode (plus a boot warning), and the `admin-token` break-glass, whose `approval.second_human.bypass` row names this switch in its `switch` field.
+- Each switch governs only its own kind.
+- A run's attention state follows the setting, as it does for egress: it stops naming the creator as the person who can act.
+
+**Optional: four-eyes on governance writes.**
+
+- Set `WARDYN_GOVERNANCE_SECOND_HUMAN=1` and no single administrator can change a governance profile, an assignment, a capability grant, the enforcement map, a value's availability, a user type's priority, a role mapping or a key-domain assignment alone.
+- With it on, a human's write to `POST/PUT/DELETE /governance/profiles`, `POST/DELETE /governance/assignments`, `POST/DELETE /permissions/grants`, `PUT /permissions/enforcement`, `PUT /permissions/availability/{kind}/*`, `PUT /user-types/{id}` (when the priority changes), `POST/DELETE /access/mappings` or `PUT/DELETE /key-domains/assignments/{subject_type}/{subject}` is decoded and validated exactly as before and then stored as a pending change, answered `202` with `Location: /api/v1/governance/changes/{id}` and `{"pending_change": {id, target_kind, op, target_key, state, proposed_by, proposed_at, expires_at, diff}}`.
+- Nothing is applied.
+- `diff` is rendered by the server, never by a client:
+  - the target's current row and the proposed one (every ceiling passes the same read-redaction as a read of it) plus the changed field paths;
+  - for an assignment, `diff.after` embeds the profile it points at as it stood at the proposal.
+- A second human approves it with `POST /governance/changes/{id}/approve`, or any authorised human rejects it with `POST /governance/changes/{id}/reject` (an optional `reason`, at most 512 characters, no control characters, recorded on the change and its audit row only).
+- `GET /governance/changes` lists the queue (`?state=` narrows it; pending by default) and `GET /governance/changes/{id}` reads one.
+- A change nobody decides expires after `WARDYN_GOVERNANCE_CHANGE_TTL` (default `72h`).
+- Nothing notifies anyone that a change is waiting: approvers find them through `wardyn governance changes list` or the API.
+
+- **Who may approve.**
+  - The approver must pass the predicate of the tier the write was proposed on, never a weaker one.
+  - Profile, assignment, grant, enforcement, availability and user-type priority changes are proposed on the security tier, so a security admin or a super admin approves; a security admin may approve a super admin's change.
+  - A role mapping is written on the super-admin tier, so only a super admin approves one:
+    - a security admin who tries is refused `403` `authz.denied` reason `admin_surface` (target `governance.change`),
+    - and role-mapping changes are neither listed to a security admin nor readable by one (`GET /governance/changes/{id}` answers `404`).
+  - The predicate is evaluated again inside the approval transaction:
+    - an API token that was revoked after it authenticated, one cut off by a session revocation, or one whose role no longer passes is refused and the change stays pending.
+- **Distinct human.**
+  - An approval is refused (`403`, `authz.denied`, reason `second_human_required`, target `governance.change`) when the approver's principal equals the proposer's, or when both emails are non-empty and equal once case-folded.
+  - The proposer may reject their own change.
+- **What applies.**
+  - One transaction locks the change, requires it pending and unexpired, compares the target (and, for an assignment, the profile it points at) and the deployment default with what the proposal reviewed, applies the write,
+    - and moves the change to `applied`.
+  - A write to the target in between (the break-glass included), a rename or ceiling change of the profile an assignment points at, or a changed deployment default makes the change `stale` (`409` `governance_change_stale`): it never overwrites.
+  - The write is re-validated against the current deployment default, so an approval cannot apply what a direct write would refuse.
+  - Two approvals racing on one change apply it once; the other is `409` `governance_change_not_pending`.
+  - A failure after the write rolls it back.
+- **Exemptions.**
+  - Only these apply directly, with no second human:
+    - a profile update whose new effective profile is no more permissive than the current one (the same resolved comparison composition uses, `Leq`),
+    - a rename that changes nothing else,
+    - an availability `PUT` that leaves the restricted bit as it is,
+    - and a user type's name or description edit that leaves its priority alone.
+  - A profile update that changes the contact is held even when it narrows.
+  - Everything else is held, deletes and every assignment write included: deleting an assignment widens its subjects back to the deployment ceiling.
+  - No grant, enforcement, availability, priority or role-mapping write has a narrowing exemption, because each can widen:
+    - deleting a deny grant,
+    - lifting a restriction (which admits every person with no grant write),
+    - turning enforcement on,
+    - raising a priority (which moves a person matching two types onto the other at their next sign-in).
 - **Per target.**
-  - *Capability grant* (`POST`/`DELETE /permissions/grants`): the target is the grant's natural key
-    (subject type, subject, capability, value); a delete by id is resolved to it at proposal, so a
-    pending delete and a pending upsert of one grant collide. Staleness covers the row at that key.
-  - *Enforcement* (`PUT /permissions/enforcement`): the whole-map replacement. A stale `If-Match` is
-    refused `412` at proposal as for a direct write; the approval then compares the map's ETag, and
-    the approval transaction, not the in-process lock a direct write takes, is what serializes it.
-  - *Availability* (`PUT /permissions/availability/{kind}/*`): held whenever the stored restricted bit
-    changes, in either direction. Staleness covers the bit and the allow rows naming the value, so a
-    restriction accepted at proposal is applied only while its list is what it was.
-  - *User-type priority* (`PUT /user-types/{id}`): held when the priority changes, whole (a name and a
-    priority edit together are one held change). A name or description edit alone applies directly.
-  - *Role mapping* (`POST`/`DELETE /access/mappings`): the posture-flip acknowledgement is judged at
-    proposal and carried in the payload, and judged again when the change is applied. The lockout guard
-    runs when the change is applied, against the claim snapshot of the **approver**; the proposer's own
-    facts are not consulted (they may have been demoted since, and the second human is the safeguard
-    against them). The `admin-token` is exempt from the guard as it is on a direct write. The tokens
-    a demotion strands are revoked after the approval commits, as after a direct write.
-- **Break-glass and local mode.** The `admin-token` principal applies a covered write directly and
-  approves a change, each writing `governance.change.bypass` beside the target's own row. A deployment
-  that wants this gate to bind holds the token out of band. Local mode authenticates nobody, so the
-  proposer and approver are both client-supplied: with the switch on it answers every covered write
-  and every approve or reject `503` (`governance_second_human_local_mode`).
-- **Audit.** `governance.change.propose`, `.approve`, `.reject`, `.expire` and `.bypass`
-  ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)). On approval the target's own row (`governance.profile.write`,
-  `governance.assignment.write`, ...) is written too, its actor the approver, carrying `change_id` and
-  `proposed_by`. The proposer, the approver, their emails and a rejection's `reason` are personal fields: the
-  `audit_personal_fields` erasure scope clears them from the change rows, and a pending change whose
-  proposer is erased expires, so a change with no recorded proposer can never be approved.
-- **Residual risks.** The `admin-token` is single-human by design. A database writer can change the
-  tables directly: the audit chain then shows a target row with no `propose`/`approve` pair, which is
-  detection, not prevention. Each change is reviewed alone: two separately approved changes can compose
-  into a widening neither diff shows. Not covered here: the rest of the governance-adjacent writes
-  (workspace egress lists, `/policies`, `/site-config`, `/integrations`, the approval `always` scope,
-  and user-type create and delete stay single-human until their own lanes).
-- **In the console.** The Governance screen's Changes tab lists the pending changes with the server's
-  diff, and an approver approves or rejects there (a reason is optional). A covered write made in the console
-  that is held shows "Submitted for approval" at the place it was made, never a save. Approve is disabled on
-  your own proposal, and the server remains the authority.
+  - *Capability grant* (`POST`/`DELETE /permissions/grants`): the target is the grant's natural key (subject type, subject, capability, value);
+    - a delete by id is resolved to it at proposal, so a pending delete and a pending upsert of one grant collide.
+    - Staleness covers the row at that key.
+  - *Enforcement* (`PUT /permissions/enforcement`): the whole-map replacement.
+    - A stale `If-Match` is refused `412` at proposal as for a direct write; the approval then compares the map's ETag, and the approval transaction, not the in-process lock a direct write takes, is what serializes it.
+  - *Availability* (`PUT /permissions/availability/{kind}/*`): held whenever the stored restricted bit changes, in either direction.
+    - Staleness covers the bit and the allow rows naming the value, so a restriction accepted at proposal is applied only while its list is what it was.
+  - *User-type priority* (`PUT /user-types/{id}`): held when the priority changes, whole (a name and a priority edit together are one held change).
+    - A name or description edit alone applies directly.
+  - *Role mapping* (`POST`/`DELETE /access/mappings`): the posture-flip acknowledgement is judged at proposal and carried in the payload, and judged again when the change is applied.
+    - The lockout guard runs when the change is applied, against the claim snapshot of the **approver**;
+      - the proposer's own facts are not consulted (they may have been demoted since, and the second human is the safeguard against them).
+    - The `admin-token` is exempt from the guard as it is on a direct write.
+    - The tokens a demotion strands are revoked after the approval commits, as after a direct write.
+- **Break-glass and local mode.**
+  - The `admin-token` principal applies a covered write directly and approves a change, each writing `governance.change.bypass` beside the target's own row.
+  - A deployment that wants this gate to bind holds the token out of band.
+  - Local mode authenticates nobody, so the proposer and approver are both client-supplied: with the switch on it answers every covered write and every approve or reject `503` (`governance_second_human_local_mode`).
+- **Audit.**
+  - `governance.change.propose`, `.approve`, `.reject`, `.expire` and `.bypass` ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
+  - On approval the target's own row (`governance.profile.write`, `governance.assignment.write`, ...) is written too, its actor the approver, carrying `change_id` and `proposed_by`.
+  - The proposer, the approver, their emails and a rejection's `reason` are personal fields:
+    - the `audit_personal_fields` erasure scope clears them from the change rows,
+    - and a pending change whose proposer is erased expires, so a change with no recorded proposer can never be approved.
+- **Residual risks.**
+  - The `admin-token` is single-human by design.
+  - A database writer can change the tables directly: the audit chain then shows a target row with no `propose`/`approve` pair, which is detection, not prevention.
+  - Each change is reviewed alone: two separately approved changes can compose into a widening neither diff shows.
+  - Not covered here: the rest of the governance-adjacent writes (workspace egress lists, `/policies`, `/site-config`, `/integrations`, the approval `always` scope, and user-type create and delete stay single-human until their own lanes).
+- **In the console.**
+  - The Governance screen's Changes tab lists the pending changes with the server's diff, and an approver approves or rejects there (a reason is optional).
+  - A covered write made in the console that is held shows "Submitted for approval" at the place it was made, never a save.
+  - Approve is disabled on your own proposal, and the server remains the authority.
 
-**The `admin-token` principal BYPASSES it**, and you should plan around that. A
-bare `WARDYN_ADMIN_TOKEN` caller is attributed `system`/`admin-token` because a
-shared token carries no per-human identity — there is no second human to compare
-it against, and `X-Wardyn-Principal` is ignored off local mode specifically so a
-token bearer cannot forge one. Refusing the token instead would lock you out of
-your own approval queue the moment SSO breaks, so the bypass is the deliberate
-break-glass. It is not silent: every one writes an
-`approval.second_human.bypass` audit event beside the `actor_type=system`
-`approval.decide`. **For this gate to actually bind, treat the admin token as a
-break-glass credential** — configure SSO, and hold the token out of band.
+> [!IMPORTANT]
+> **The `admin-token` principal BYPASSES it**, and you should plan around that.
 
-**A `credential` decision carries one scope: `run` — the per-run credential
-lease.** Every other scope on a `credential` approval is a `400`, and so is any
-scope on a `tool_call`. `run` exists because a `git_pat` installs a *standing*
-credential helper git invokes on every operation
-(`docs/adoption/corp-network-onboarding-findings.md` B2). Approving with
-`decision_scope=run` (`wardyn approval approve <id> --scope run`) makes that one decision
-re-mintable for the rest of the run. Three things bound it:
-**`git_pat` only** (`github_token` is brokered proxy-side, `ssh_key` is
-materialized once and wiped, `api_key` never leaves the broker, so none has the
-standing-consumer problem, and `broker.leaseCoversRemint` refuses a lease for
-them even under a `run`-scoped decision); **per scope** (if the grant's scope no
-longer matches what the human approved, the lease does not carry over); and
-**killed by revocation** (a leased re-mint still runs the whole mint transaction,
-so the kill-switch cascade ends it the moment the revocation commits).
+- A bare `WARDYN_ADMIN_TOKEN` caller is attributed `system`/`admin-token` because a shared token carries no per-human identity
+  - there is no second human to compare it against,
+  - and `X-Wardyn-Principal` is ignored off local mode specifically so a token bearer cannot forge one.
+- Refusing the token instead would lock you out of your own approval queue the moment SSO breaks, so the bypass is the deliberate break-glass.
+- It is not silent: every one writes an `approval.second_human.bypass` audit event beside the `actor_type=system` `approval.decide`.
+- **For this gate to actually bind, treat the admin token as a break-glass credential** — configure SSO, and hold the token out of band.
 
-`credential.mint` carries `lease: true` plus the raw `decision_scope`, so the
-audit says which mints were the human's and which the lease's. The comparison is
-deliberately **raw**, never `ApprovalScope.Normalize()`d — an empty
-`decision_scope` normalizes to `run`, and every credential approval decided
-before this feature carries an empty one, so a normalized comparison would have
-turned every legacy approval into a standing lease on upgrade. Nothing you
-approved before v0.6 leases anything.
+**A `credential` decision carries one scope: `run` — the per-run credential lease.**
 
-**An `egress_domain` decision's *scope* adds a second, narrower gate — and one of
-the four scopes is gated on ROLE, not ownership.** A member who owns the run may
-choose `once`, `run`, or `until`; each stays inside that run's own proxy cache.
-`always` is **admin or `security_admin`, regardless of run ownership**
-(`decide()` rule 6, same file; the check is `isSecurityOperator`, in LOCKSTEP
-with `authorizeUserDecision`): it writes a durable entry onto the run's
-workspace (`approved_egress` on approve, `denied_egress` on deny) — the SAME two
-columns the `approved-egress`/`denied-egress` routes write, and those routes sit
-on that same `securityOps` tier, so the gate keeps the approval queue from being
-a way around them for anyone below it. The
-refusal is a `403`, not the ownership checks' `404`: the caller has already proven
-the approval exists, is `egress_domain`, and is theirs. It is checked before the
-run is confirmed to reference a workspace at all — authorization before
-validation, so a member's rejection depends only on role (see
-[POLICIES.md](POLICIES.md) "Approval decision scopes" for the
-workspace-resolution check this precedes).
+- Every other scope on a `credential` approval is a `400`, and so is any scope on a `tool_call`.
+- `run` exists because a `git_pat` installs a *standing* credential helper git invokes on every operation ([`docs/adoption/corp-network-onboarding-findings.md`](adoption/corp-network-onboarding-findings.md) B2).
+- Approving with `decision_scope=run` (`wardyn approval approve <id> --scope run`) makes that one decision re-mintable for the rest of the run.
+- Three things bound it:
+  - **`git_pat` only** (`github_token` is brokered proxy-side, `ssh_key` is materialized once and wiped, `api_key` never leaves the broker, so none has the standing-consumer problem, and `broker.leaseCoversRemint` refuses a lease for them even under a `run`-scoped decision);
+  - **per scope** (if the grant's scope no longer matches what the human approved, the lease does not carry over);
+  - and **killed by revocation** (a leased re-mint still runs the whole mint transaction, so the kill-switch cascade ends it the moment the revocation commits).
 
-**`PUT /workspaces/{id}/denied-egress` is the only way to undo a `deny · always`
-decision.** Full-replace, same shape as `approved-egress` (omit a host to un-deny
-it — there is no per-host delete). Deny beats allow everywhere the proxy evaluates
-policy, so a `deny · always` on a model-provider host, or one a required
-integration injects into, permanently breaks that workspace's proxy-side
-injection for every future run. `denied-egress`'s validator is deliberately
-narrower than `approved-egress`'s (plain host shape only, no model-provider reject
-set) so it keeps working as the escape hatch even when the workspace is already
-bricked (`handleSetDeniedEgress`, `internal/api/workspaces.go`).
+`credential.mint` carries `lease: true` plus the raw `decision_scope`, so the audit says which mints were the human's and which the lease's.
 
-**A member's own policy is clamped, not trusted.** `POST /runs`' `inline_policy`
-(and its preflight dry-run) is clamped to the operator's `DefaultPolicy` ceiling
-before resolution (`composer.Clamp`, `internal/composer/clamp.go` — the same clamp
-bounds an AI-composed policy and a Record Mode-synthesized one): confinement
-raised to the floor, egress intersected down to the allowlist, `first_use_approval`
-raised to the stricter of the two, `llm_inspection` inherited when the ceiling
-sets one, resources and `auto_stop_after_sec` capped, grants narrowed to what the
-ceiling allows, and `workspace_mounts` dropped entirely. An admin's own
-`inline_policy` is not clamped.
+- The comparison is deliberately **raw**, never `ApprovalScope.Normalize()`d
+  - an empty `decision_scope` normalizes to `run`, and every credential approval decided before this feature carries an empty one,
+  - so a normalized comparison would have turned every legacy approval into a standing lease on upgrade.
+- Nothing you approved before v0.6 leases anything.
 
-**A first claude-code run parks on nothing the product itself needs — on an
-image rebuilt from the 0.7.5 tree.** The claude-code image turns off the CLI's
-own fetches — `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1` (the
-plugin-marketplace auto-install, which is what reached `downloads.claude.ai`
-and `github.com`), `DISABLE_AUTOUPDATER=1` and
-`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`; see
-[corp-image-authoring.md](adoption/corp-image-authoring.md) "Stop the agent
-fetching on its own behalf" — and writes `{"hasCompletedOnboarding": true}` into
-the sandbox's `~/.claude.json` before the CLI starts. Without those, the first
-Claude Code run anybody launched met the CLI's theme picker and then first-use
-approvals for hosts nobody had asked for. The shipped default policy
-(`examples/policies/default.json`) is deliberately unchanged: the fix is that the
-traffic no longer happens, not that those hosts are now allowed. **This applies
-to the claude-code image only** — the `codex-cli` image still reaches for several
-hosts of its own at start (see the CHANGELOG's known gaps). **And only to an
-image actually carrying the three `ENV` lines**: `agent-claude-code` (where they
-were measured) is not a published image — `agent-base` is what ships, and it now
-carries the three lines too, so any image built `FROM ghcr.io/cjohnstoniv/agent-base:0.7.6`
-inherits them. An image on another base, or an older tag pinned in
-`WARDYN_AGENT_IMAGES`, still parks on the CLI's own bootstrap; see
-[corp-image-authoring.md](adoption/corp-image-authoring.md) for the rebuild
-recipe and the CHANGELOG's Known gaps for the full statement.
+**An `egress_domain` decision's *scope* adds a second, narrower gate — and one of the four scopes is gated on ROLE, not ownership.**
 
-What an interactive run still shows on first use is Claude Code's
-**workspace-trust** prompt (`Accessing workspace: …` / `1. Yes, I trust this
-folder`). That one is a security question — it gates a cloned repo's own project
-settings taking effect — and Wardyn does not answer it for you. Pressing Enter
-there raises no approvals. A run launched with *"Let it use tools before I
-attach"* also parks on Claude Code's own *Bypass Permissions mode* confirmation
-(default "No, exit") until someone attaches and chooses Yes — Wardyn does not
-answer that one either ([THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md)
-§4.7).
+- A member who owns the run may choose `once`, `run`, or `until`; each stays inside that run's own proxy cache.
+- `always` is **admin or `security_admin`, regardless of run ownership** (`decide()` rule 6, same file; the check is `isSecurityOperator`, in LOCKSTEP with `authorizeUserDecision`):
+  - it writes a durable entry onto the run's workspace (`approved_egress` on approve, `denied_egress` on deny)
+  - the SAME two columns the `approved-egress`/`denied-egress` routes write, and those routes sit on that same `securityOps` tier,
+  - so the gate keeps the approval queue from being a way around them for anyone below it.
+- The refusal is a `403`, not the ownership checks' `404`: the caller has already proven the approval exists, is `egress_domain`, and is theirs.
+- It is checked before the run is confirmed to reference a workspace at all
+  - authorization before validation, so a member's rejection depends only on role (see [POLICIES.md](POLICIES.md) "Approval decision scopes" for the workspace-resolution check this precedes).
 
-**The desktop tier's standing honesty gap: the operator IS the admin.**
-[The desktop tier](../deploy/desktop/) (`WARDYN_LOCAL_MODE=true`) has no member
-role at all — local-mode callers are *always* admins
-(`Server.requireOperator`'s own doc says so), so the unclamped branch above is the
-default there. An `inline_policy` the developer submits is bounded by nothing
-`WARDYN_DEFAULT_POLICY` sets, and setting one is one ordinary API call. What still
-holds: the unclamped spec lands on the audit feed as `policy.inline.apply` before
-`run.create` ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)), egress still has no route off
-the sandbox except `wardyn-proxy`, and the session is still recorded. A governance
-control, not a containment boundary against the operator holding the laptop. Full
-accounting: [docs/DESKTOP.md](DESKTOP.md) "Tamper posture, stated honestly".
+**`PUT /workspaces/{id}/denied-egress` is the only way to undo a `deny · always` decision.**
+
+- Full-replace, same shape as `approved-egress` (omit a host to un-deny it — there is no per-host delete).
+- Deny beats allow everywhere the proxy evaluates policy, so a `deny · always` on a model-provider host, or one a required integration injects into, permanently breaks that workspace's proxy-side injection for every future run.
+- `denied-egress`'s validator is deliberately narrower than `approved-egress`'s (plain host shape only, no model-provider reject set) so it keeps working as the escape hatch even when the workspace is already bricked (`handleSetDeniedEgress`, [`internal/api/workspaces.go`](../internal/api/workspaces.go)).
+
+**A member's own policy is clamped, not trusted.**
+
+- `POST /runs`' `inline_policy` (and its preflight dry-run) is clamped to the operator's `DefaultPolicy` ceiling before resolution (`composer.Clamp`, [`internal/composer/clamp.go`](../internal/composer/clamp.go) — the same clamp bounds an AI-composed policy and a Record Mode-synthesized one):
+  - confinement raised to the floor, egress intersected down to the allowlist,
+  - `first_use_approval` raised to the stricter of the two, `llm_inspection` inherited when the ceiling sets one,
+  - resources and `auto_stop_after_sec` capped, grants narrowed to what the ceiling allows,
+  - and `workspace_mounts` dropped entirely.
+- An admin's own `inline_policy` is not clamped.
+
+**A first claude-code run parks on nothing the product itself needs — on an image rebuilt from the 0.7.5 tree.**
+
+- The claude-code image turns off the CLI's own fetches — `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1` (the plugin-marketplace auto-install, which is what reached `downloads.claude.ai` and `github.com`), `DISABLE_AUTOUPDATER=1` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`; see [corp-image-authoring.md](adoption/corp-image-authoring.md) "Stop the agent fetching on its own behalf"
+  - and writes `{"hasCompletedOnboarding": true}` into the sandbox's `~/.claude.json` before the CLI starts.
+- Without those, the first Claude Code run anybody launched met the CLI's theme picker and then first-use approvals for hosts nobody had asked for.
+- The shipped default policy ([`examples/policies/default.json`](../examples/policies/default.json)) is deliberately unchanged: the fix is that the traffic no longer happens, not that those hosts are now allowed.
+- **This applies to the claude-code image only** — the `codex-cli` image still reaches for several hosts of its own at start (see the CHANGELOG's known gaps).
+- **And only to an image actually carrying the three `ENV` lines**:
+  - `agent-claude-code` (where they were measured) is not a published image — `agent-base` is what ships, and it now carries the three lines too, so any image built `FROM ghcr.io/cjohnstoniv/agent-base:0.7.6` inherits them.
+- An image on another base, or an older tag pinned in `WARDYN_AGENT_IMAGES`, still parks on the CLI's own bootstrap; see [corp-image-authoring.md](adoption/corp-image-authoring.md) for the rebuild recipe and the CHANGELOG's Known gaps for the full statement.
+
+What an interactive run still shows on first use is Claude Code's **workspace-trust** prompt (`Accessing workspace: …` / `1. Yes, I trust this folder`).
+
+- That one is a security question — it gates a cloned repo's own project settings taking effect — and Wardyn does not answer it for you.
+- Pressing Enter there raises no approvals.
+- A run launched with *"Let it use tools before I attach"* also parks on Claude Code's own *Bypass Permissions mode* confirmation (default "No, exit") until someone attaches and chooses Yes
+  - Wardyn does not answer that one either ([THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §4.7).
+
+> [!WARNING]
+> **The desktop tier's standing honesty gap: the operator IS the admin.**
+> - [The desktop tier](../deploy/desktop/) (`WARDYN_LOCAL_MODE=true`) has no member role at all — local-mode callers are *always* admins (`Server.requireOperator`'s own doc says so), so the unclamped branch above is the default there.
+> - An `inline_policy` the developer submits is bounded by nothing `WARDYN_DEFAULT_POLICY` sets, and setting one is one ordinary API call.
+> - What still holds: the unclamped spec lands on the audit feed as `policy.inline.apply` before `run.create` ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)), egress still has no route off the sandbox except `wardyn-proxy`, and the session is still recorded.
+> - A governance control, not a containment boundary against the operator holding the laptop.
+> - Full accounting: [docs/DESKTOP.md](DESKTOP.md) "Tamper posture, stated honestly".
+
+#### Clearing a block
+
+- `{}`.
+- Over raw HTTP an explicit `null` also clears.
+- Through `wardyn site-config set` it does **not** — the CLI strict-decodes into the pointer field and re-marshals it ABSENT under `omitempty`, so `null` in a file reads as "unnamed" and carries forward.
+- Use `{}` on both doors and the question never arises.
 
 ### Four-eyes on governance writes: a walkthrough
 
-The rules are in "Optional: four-eyes on governance writes" above; this is the order an operator
-works in. The switch and its TTL are in [ENV.md](ENV.md); the audit rows are in
-[AUDIT-ACTIONS.md](AUDIT-ACTIONS.md); the residuals are in
-[THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 "Four-eyes on governance writes".
+- The rules are in "Optional: four-eyes on governance writes" above; this is the order an operator works in.
+- The switch and its TTL are in [ENV.md](ENV.md); the audit rows are in [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md); the residuals are in [THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 "Four-eyes on governance writes".
 
 **1. Before you turn it on.** All four must hold, or the switch deadlocks you or does not bind:
 
-- **SSO is configured.** Local mode authenticates nobody, so with the switch on every covered write
-  and every approve or reject answers `503` `governance_second_human_local_mode`.
-- **The admin token is held out of band.** It applies a covered write directly and approves a change,
-  each audited as `governance.change.bypass`. It is the break-glass and the one way past this gate.
-- **Two humans can approve.** Every covered target except role mappings needs a second security admin
-  or super admin; role mappings need a second super admin (see step 6).
-- **Every CLI and SDK caller is upgraded.** A client built before 0.8.6 decodes the `202` as an empty
-  object ([sdk.md](sdk.md) "Old clients"). Nothing applies without approval, but the error it reports
-  is confusing.
+- **SSO is configured.** Local mode authenticates nobody, so with the switch on every covered write and every approve or reject answers `503` `governance_second_human_local_mode`.
+- **The admin token is held out of band.** It applies a covered write directly and approves a change, each audited as `governance.change.bypass`. It is the break-glass and the one way past this gate.
+- **Two humans can approve.** Every covered target except role mappings needs a second security admin or super admin; role mappings need a second super admin (see step 6).
+- **Every CLI and SDK caller is upgraded.** A client built before 0.8.6 decodes the `202` as an empty object ([sdk.md](sdk.md) "Old clients"). Nothing applies without approval, but the error it reports is confusing.
 
-Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong for your approvers,
-`WARDYN_GOVERNANCE_CHANGE_TTL`) in the daemon's environment; on Kubernetes that is the chart's
-existing `env` map. Both are read at boot. Turning the switch off later leaves pending changes
-approvable and rejectable under the same rules, self-approval included; new writes apply directly.
+Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong for your approvers, `WARDYN_GOVERNANCE_CHANGE_TTL`) in the daemon's environment; on Kubernetes that is the chart's existing `env` map.
 
-**2. What is held, and who approves it.** A write the table lists is held when the condition in its
-row is true, and approved at the tier it was proposed on.
+- Both are read at boot.
+- Turning the switch off later leaves pending changes approvable and rejectable under the same rules, self-approval included; new writes apply directly.
+
+**2. What is held, and who approves it.** A write the table lists is held when the condition in its row is true, and approved at the tier it was proposed on.
 
 | Write | Held when | Approver |
 |---|---|---|
@@ -2277,15 +2079,21 @@ row is true, and approved at the tier it was proposed on.
 | Role mapping upsert, delete | always | **super admin only** |
 | Key-domain assignment set, delete | always | security admin or super admin |
 
-Exempt, so applied directly: a profile update whose new effective profile is no more permissive than
-the current one, a rename or description edit that changes nothing else, an availability `PUT` that
-leaves the restricted bit as it is, and a user-type name or description edit that leaves its priority
-alone. Nothing else narrows by shape: a delete can widen (a deny grant, an assignment, a restriction),
-so no delete is exempt on its own.
+Exempt, so applied directly:
 
-**3. Propose, review, decide.** A held write answers `202` with the change. Its `diff` is the
-server's: the current row, the proposed row and the changed field paths. The proposer, or anyone
-else, then:
+- a profile update whose new effective profile is no more permissive than the current one,
+- a rename or description edit that changes nothing else,
+- an availability `PUT` that leaves the restricted bit as it is,
+- and a user-type name or description edit that leaves its priority alone.
+
+Nothing else narrows by shape: a delete can widen (a deny grant, an assignment, a restriction), so no delete is exempt on its own.
+
+**3. Propose, review, decide.**
+
+- A held write answers `202` with the change.
+- Its `diff` is the server's: the current row, the proposed row and the changed field paths.
+
+The proposer, or anyone else, then:
 
 ```
 wardyn governance set ci-governance.json          # held writes print as pending; exit 0
@@ -2294,84 +2102,73 @@ wardyn governance changes approve <change-id>     # a different human, at the ri
 wardyn governance changes reject <change-id> --reason "widens egress past the review"
 ```
 
-`governance set` exits 0 on a pending result and skips `--prune` until every write is decided, so
-run it again afterwards. Running the SAME document again before then is safe: a target whose held change is that
-very write is reported as pending, with the held change named, and the rest of the file is applied. A
-document edited since is refused at that target (`409` `governance_change_pending`, naming the held
-change) until the held change is decided; nothing of the edit is stored. The console does the same on the Governance screen's Changes tab, with the
-diff in a drawer; Approve is disabled on your own proposal. Nothing notifies an approver that a
-change is waiting, so name who looks, and how often, in your own runbook. There is at most one
-pending change per target: a second proposal at the same target is `409` `governance_change_pending`,
-which names the first and carries it in `pending_change`, with `pending_change_matches` saying
-whether it is the very write that was refused (same operation, same payload). A new profile's target is its name while its
-create waits, so creating the same name again (by `POST`, or `PUT` at any new id) meets the held create.
+- `governance set` exits 0 on a pending result and skips `--prune` until every write is decided, so run it again afterwards.
+- Running the SAME document again before then is safe: a target whose held change is that very write is reported as pending, with the held change named, and the rest of the file is applied.
+- A document edited since is refused at that target (`409` `governance_change_pending`, naming the held change) until the held change is decided; nothing of the edit is stored.
+- The console does the same on the Governance screen's Changes tab, with the diff in a drawer; Approve is disabled on your own proposal.
+- Nothing notifies an approver that a change is waiting, so name who looks, and how often, in your own runbook.
+- There is at most one pending change per target:
+  - a second proposal at the same target is `409` `governance_change_pending`, which names the first and carries it in `pending_change`,
+  - with `pending_change_matches` saying whether it is the very write that was refused (same operation, same payload).
+- A new profile's target is its name while its create waits, so creating the same name again (by `POST`, or `PUT` at any new id) meets the held create.
 
-**4. Expiry and stale changes.** A change nobody decides within the TTL reads as `expired` and cannot
-be approved (`409` `governance_change_not_pending`); propose it again. A change is `stale` (`409`
-`governance_change_stale`) when, at approval, the target, the profile an assignment points at or the
-deployment default differs from what the proposer's diff showed. Approval never overwrites: a stale
-change is dead, and the remedy is to propose the write again against the current state. A direct
-write in between (the break-glass included) is the usual cause.
+**4. Expiry and stale changes.**
 
-**5. Reading the audit.** Filter `GET /audit` by `action_prefix=governance.change.`. A normal change is
-a `governance.change.propose` row (actor the proposer, `Target` the change id) followed by a
-`governance.change.approve` row and, beside it, the target's own row (`governance.profile.write`,
-`capability.grant.create`, `access.role_mapping.write`, ...). That row's actor is the approver and
-it carries `change_id` and `proposed_by`: two named humans for one change. Also look for:
+- A change nobody decides within the TTL reads as `expired` and cannot be approved (`409` `governance_change_not_pending`); propose it again.
+- A change is `stale` (`409` `governance_change_stale`) when, at approval, the target, the profile an assignment points at or the deployment default differs from what the proposer's diff showed.
+- Approval never overwrites: a stale change is dead, and the remedy is to propose the write again against the current state.
+- A direct write in between (the break-glass included) is the usual cause.
 
-- `governance.change.bypass`: the admin token wrote or approved. Alert on it.
-- `governance.change.approve` with outcome `failure`: the approval did not apply (`error` is `stale`,
-  `not_pending` or `error`).
-- `authz.denied` with reason `second_human_required` or `admin_surface` and target
-  `governance.change`: a self-approval, or a security admin at a role-mapping change.
-- A target row with **no** `propose`/`approve` pair beside it, switch on: a write that did not come
-  through the API. See the threat model's "database is not four-eyed" residual.
+**5. Reading the audit.**
 
-**6. One super admin.** Role mappings are written on the super-admin tier, so only a super admin may
-approve one, and nobody approves their own. A deployment with a single super admin therefore cannot
-change a role mapping while the switch is on, except through the admin token (audited as a bypass).
-Add a second super admin before you enable the switch, or accept the token as the path for mapping
-changes. The lockout guard is judged against the **approver's** own roles at apply, so the approver
-cannot be the person whose mapping change would strip their own admin.
+- Filter `GET /audit` by `action_prefix=governance.change.`.
+- A normal change is a `governance.change.propose` row (actor the proposer, `Target` the change id) followed by a `governance.change.approve` row and, beside it, the target's own row (`governance.profile.write`, `capability.grant.create`, `access.role_mapping.write`, ...).
+- That row's actor is the approver and it carries `change_id` and `proposed_by`: two named humans for one change.
+- Also look for:
+  - `governance.change.bypass`: the admin token wrote or approved. Alert on it.
+  - `governance.change.approve` with outcome `failure`: the approval did not apply (`error` is `stale`, `not_pending` or `error`).
+  - `authz.denied` with reason `second_human_required` or `admin_surface` and target `governance.change`: a self-approval, or a security admin at a role-mapping change.
+  - A target row with **no** `propose`/`approve` pair beside it, switch on: a write that did not come through the API. See the threat model's "database is not four-eyed" residual.
 
-**7. What stays single-human.** Workspace approved and denied egress lists, record-egress promotion,
-`/policies`, `/site-config`, `/integrations`, the approval `always` scope, user-type create and
-delete, and the SCIM purge's deletion of a person's own assignments and grants. The threat model
-lists each with its reason.
+**6. One super admin.**
+
+- Role mappings are written on the super-admin tier, so only a super admin may approve one, and nobody approves their own.
+- A deployment with a single super admin therefore cannot change a role mapping while the switch is on, except through the admin token (audited as a bypass).
+- Add a second super admin before you enable the switch, or accept the token as the path for mapping changes.
+- The lockout guard is judged against the **approver's** own roles at apply, so the approver cannot be the person whose mapping change would strip their own admin.
+
+**7. What stays single-human.**
+
+- Workspace approved and denied egress lists, record-egress promotion, `/policies`, `/site-config`, `/integrations`, the approval `always` scope, user-type create and delete, and the SCIM purge's deletion of a person's own assignments and grants.
+- The threat model lists each with its reason.
 
 ### Reclaiming a departed person's storage
 
-Deleting a drive removes its row and deleting an allocation stops the mount;
-neither deletes a byte. The storage object one person's allocation resolved to
-— a Docker named volume, a PersistentVolumeClaim, or a directory on a share —
-outlives both. **Reclaiming it destroys data and nothing undoes it.** On
-Kubernetes, Wardyn deletes the claim; what happens to the bytes then follows the
-StorageClass's `reclaimPolicy`: `Delete` (the usual default) destroys them,
-`Retain` leaves them on the released PersistentVolume until an operator removes it.
+- Deleting a drive removes its row and deleting an allocation stops the mount; neither deletes a byte.
+- The storage object one person's allocation resolved to — a Docker named volume, a PersistentVolumeClaim, or a directory on a share — outlives both.
 
-There are two supported ways, and both stay supported: the substrate command by
-hand (the recipes in "User drives on Docker" and "User drives on Kubernetes"
-below), or the product's own verb.
+> [!WARNING]
+> **Reclaiming it destroys data and nothing undoes it.**
 
-**The verb.** `POST /api/v1/drives/{id}/reclaim`, body
-`{"subject_type":"user","subject":"<the person's sign-in subject>"}`, or from
-the CLI:
+- On Kubernetes, Wardyn deletes the claim; what happens to the bytes then follows the StorageClass's `reclaimPolicy`: `Delete` (the usual default) destroys them, `Retain` leaves them on the released PersistentVolume until an operator removes it.
+
+There are two supported ways, and both stay supported: the substrate command by hand (the recipes in "[User drives on Docker](#user-drives-on-docker)" and "[User drives on Kubernetes](#user-drives-on-kubernetes)" below), or the product's own verb.
+
+**The verb.** `POST /api/v1/drives/{id}/reclaim`, body `{"subject_type":"user","subject":"<the person's sign-in subject>"}`, or from the CLI:
 
 ```sh
 wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes
 ```
 
-It answers `deleted` (this call destroyed the storage) or `already_absent`
-(nothing answered to the name). **There is no console button**: a destructive
-confirmation is a screen, and this one has no approved mock, so the API and the
-CLI are the whole surface in 0.8.
+- It answers `deleted` (this call destroyed the storage) or `already_absent` (nothing answered to the name).
+- **There is no console button**: a destructive confirmation is a screen, and this one has no approved mock, so the API and the CLI are the whole surface in 0.8.
 
-**Do it in this order.** Reclaim the storage **first**, then delete the
-allocation. A home directory an admin pinned (`home_override`) lives on the
-allocation, so once that row is gone the pinned name cannot be recovered from
-the database and the object name this verb derives is the drive template's
-instead — a different directory. Check the name it reports against
-`POST /drives/preview`, which prints the object name for a principal.
+**Do it in this order.**
+
+- Reclaim the storage **first**, then delete the allocation.
+- A home directory an admin pinned (`home_override`) lives on the allocation,
+  - so once that row is gone the pinned name cannot be recovered from the database and the object name this verb derives is the drive template's instead — a different directory.
+- Check the name it reports against `POST /drives/preview`, which prints the object name for a principal.
 
 **What refuses it, and why each one is there:**
 
@@ -2380,25 +2177,26 @@ instead — a different directory. Check the name it reports against
 | `403` | Not a super-admin. Same tier as the rest of `/drives`, for a sharper reason: this one is irreversible |
 | `400` | The `subject_type` is `group` or `all`. Those give **every** person they match their own object, so they name no single thing to destroy — reclaim the people one at a time |
 | `422` | The drive is a share (`host_path`, `k8s_pvc_static`). Wardyn did not create that object and never deletes it; reclaiming it is a change on the share itself. There is no recursive delete in this product, at any privilege, for any backend |
-| `409` | A run still holds the object, a reclaim is already in flight (a claim already `Terminating`), or the object answering to that name is **not this drive's** (the driver re-checks the `wardyn.drive` / `wardyn.home` / `wardyn.subject` labels before issuing any delete, and on Kubernetes binds the delete to the claim it checked: a claim deleted and re-created under the same name in between is refused, never deleted — Docker's volume remove takes no such precondition) |
+| `409` | A run still holds the object, a reclaim is already in flight, or the object is not this drive's; see [below](#409-refusal) |
 | `501` | This deployment's runner cannot reclaim at all — use the substrate command |
 
-**On Kubernetes the daemon does not even hold the verb by default.** The chart's
-Role carries `persistentvolumeclaims: [get, create]` and adds `delete` only
-under `drives.reclaim.enabled` (default `false`, see
-[the chart's values](../deploy/helm/wardyn/values.yaml)). Leave it off and every
-attempt ends in the apiserver's own `403`, recorded as a failed `drive.reclaim`
-row; turn it on only when your offboarding runbook calls the API instead of
-running `kubectl delete pvc` by hand. Nothing else changes either way: no run
-path, no teardown and no sweep can reach a claim on either setting.
+**On Kubernetes the daemon does not even hold the verb by default.**
 
-**Every attempt that reaches the substrate is audited**, `409` refusals and
-failures included, as `drive.reclaim` — naming the drive, the person, the backend, the object and what became of it
-([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)). That row is deliberately the only
-durable record: the drive row and the allocation can both be gone by the time
-anyone reads the trail. The `400`, `422` and `501` answers above, and a daemon
-that cannot read the allocation, are refused before any object is addressed and
-write no `drive.reclaim` row.
+- The chart's Role carries `persistentvolumeclaims: [get, create]` and adds `delete` only under `drives.reclaim.enabled` (default `false`, see [the chart's values](../deploy/helm/wardyn/values.yaml)).
+- Leave it off and every attempt ends in the apiserver's own `403`, recorded as a failed `drive.reclaim` row; turn it on only when your offboarding runbook calls the API instead of running `kubectl delete pvc` by hand.
+- Nothing else changes either way: no run path, no teardown and no sweep can reach a claim on either setting.
+
+**Every attempt that reaches the substrate is audited**, `409` refusals and failures included, as `drive.reclaim` — naming the drive, the person, the backend, the object and what became of it ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
+
+- That row is deliberately the only durable record: the drive row and the allocation can both be gone by the time anyone reads the trail.
+- The `400`, `422` and `501` answers above, and a daemon that cannot read the allocation, are refused before any object is addressed and write no `drive.reclaim` row.
+
+#### 409 refusal
+
+- A run still holds the object, a reclaim is already in flight (a claim already `Terminating`), or the object answering to that name is **not this drive's**
+- The driver re-checks the `wardyn.drive` / `wardyn.home` / `wardyn.subject` labels before issuing any delete,
+- and on Kubernetes binds the delete to the claim it checked: a claim deleted and re-created under the same name in between is refused, never deleted
+- Docker's volume remove takes no such precondition.
 
 ### User drives on Docker
 

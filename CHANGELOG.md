@@ -118,6 +118,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   bullets, tables and callouts, and every file it names is a link. No fact, default, limit or step changed.
 - The repository README, the docs index and the try-it walkthrough are restructured into bullets, tables and callouts with their file references linked; each gains one section heading. No command, default, limit or refusal changed.
 - The CI page, the CI-jobs-as-runs recipe and the `wardyn-ci` skill are now bullets, tables and alerts, with every repository file they cite linked. No rule, default, limit or exit code changed; five long exit-code table cells moved to sections of their own.
+- `docs/OPERATIONS.md`: the multi-user section's access model ("Who decides who gets in", "Who writes the provider policy", "Four-eyes on governance writes" and "Reclaiming a departed person's storage") is now bullets, tables and callouts, every file it names is a link, and its three longest table cells move into subsections under their table. No fact, default, limit or step changed.
 
 ### Fixed
 
