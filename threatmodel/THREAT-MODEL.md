@@ -2047,7 +2047,7 @@ hiding them would repeat the failure mode we are designed to avoid.
       - A deleted or erased credential (`DELETE /people/{principal}/credentials`, or the daily expiry sweep) still decrypts from any earlier backup while both exist.
       - The erasure horizon is the deployment's backup retention, not the API call.
       - **A key service that keeps the KEK away from the database has shipped for two providers.**
-        - `WARDYN_KEK= transit` moves the wrap to Vault or OpenBao's Transit engine, which narrows this to residual 49(c)'s shape — a Vault-side actor, not a database reader alone — rather than closing it.
+        - `WARDYN_KEK=transit` moves the wrap to Vault or OpenBao's Transit engine, which narrows this to residual 49(c)'s shape — a Vault-side actor, not a database reader alone — rather than closing it.
         - And `WARDYN_KEK=azurekv` moves it to Azure Key Vault, with what (d) leaves open.
         - AWS KMS key-wrapping remains planned (Azure Key Vault as a plain external secret STORE has also shipped and inherits this residual unchanged, since Wardyn does no at-rest cryptography of its own on a row held there).
     - (c) **Metadata stays in the clear:** who holds which named credential, and since when, is readable to anyone who can read the table.
