@@ -314,20 +314,17 @@ func TestUserViewRealUserIsIgnoredBeforeTheTypeLookup(t *testing.T) {
 	}
 }
 
-// TestUserViewForcedExitDualEmits (#1020): the forced exit GET /me takes when
-// the viewed type is gone writes auth.member_mode beside auth.user_view.set,
-// with identical data, like the toggle.
-func TestUserViewForcedExitDualEmits(t *testing.T) {
+// TestUserViewForcedExitWritesOneRow (#1020): the forced exit GET /me takes when the viewed type is
+// gone writes auth.user_view.set once, and no row under the removed pre-0.8 name.
+func TestUserViewForcedExitWritesOneRow(t *testing.T) {
 	srv, _, h := uvServer(t)
 	uvGetMe(t, srv, uvSession(t, uvAdminSub, oidc.RoleAdmin, types.UserTypeStandard, "contractor"))
 	set := lastAuditEvent(t, h.audit.events, "auth.user_view.set")
-	compat := lastAuditEvent(t, h.audit.events, "auth.member_mode")
-	if string(set.Data) != string(compat.Data) || set.Actor != compat.Actor || set.Target != compat.Target {
-		t.Fatalf("auth.member_mode = %s by %q at %q, want auth.user_view.set's %s by %q at %q",
-			compat.Data, compat.Actor, compat.Target, set.Data, set.Actor, set.Target)
-	}
 	if !strings.Contains(string(set.Data), `"reason":"user_type_deleted"`) {
 		t.Fatalf("forced exit datum = %s", set.Data)
+	}
+	if got := countAuditEvents(h.audit.events, "auth.member_mode"); got != 0 {
+		t.Fatalf("auth.member_mode count = %d, want 0", got)
 	}
 }
 

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
-	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
 )
 
@@ -181,12 +180,14 @@ type bootFlags struct {
 	auditRetentionDays     *int
 	auditRetentionAutodrop *bool
 
-	oidcIssuer       *string
-	oidcInternalIss  *string
-	oidcClientID     *string
-	oidcClientSecret *string
-	oidcRedirectURL  *string
-	oidcEmailDomains *string
+	oidcIssuer      *string
+	oidcInternalIss *string
+	// oidcInternalIssPlain is the one opt-out of the plaintext internal issuer refusal: "mesh".
+	oidcInternalIssPlain *string
+	oidcClientID         *string
+	oidcClientSecret     *string
+	oidcRedirectURL      *string
+	oidcEmailDomains     *string
 	// oidcRequireEmailVerified feeds oidc.Config.RequireEmailVerified
 	// (WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED, default false): the email_verified
 	// gate without a domain allowlist.
@@ -380,50 +381,12 @@ type bootFlags struct {
 	allowUnknownMigrations *bool
 }
 
-// deprecatedEnvAliases is UT-5's six WARDYN_MEMBER_* → WARDYN_USER_* renames
-// (user-types-design.md rev 4 §6, §4's D5 ruling): {new, old} pairs, resolved
-// before any flag is parsed so every FlagBool/FlagEnv/os.Getenv(new) read below
-// sees the operator's value whichever name they used. No M-surface-2 generic
-// alias mechanism exists yet (issue UT-5 allows "or self-contained"), so this
-// is wardynd's own list rather than a shared registry; a later M-surface-2 PR
-// can fold it into a bigger one using the same cliutil.EnvAlias primitive.
-// Accepted through 0.8.x, removed in 0.9 — same shape as the boot WARN for a
-// chart WARDYN_OIDC_ROLE_MAP entry still saying `=member` (UT-2a).
-var deprecatedEnvAliases = [][2]string{
-	{"WARDYN_USER_DESKTOP", "WARDYN_MEMBER_MODE"},
-	{"WARDYN_USER_WORKSPACE_ROOTS", "WARDYN_MEMBER_WORKSPACE_ROOTS"},
-	{"WARDYN_USER_WORKSPACE_ROOTS_MAP", "WARDYN_MEMBER_WORKSPACE_ROOTS_MAP"},
-	{"WARDYN_USER_WRITABLE_ROOTS", "WARDYN_MEMBER_WRITABLE_ROOTS"},
-	{"WARDYN_USER_WRITABLE_DENY", "WARDYN_MEMBER_WRITABLE_DENY"},
-	{"WARDYN_ALLOW_USER_ENV_SECRET", "WARDYN_ALLOW_MEMBER_ENV_SECRET"},
-}
-
-// resolveDeprecatedEnvAliases applies deprecatedEnvAliases. It WARNs once per
-// deprecated name actually carrying a value, naming 0.9 as the removal release,
-// and WARNs when both spellings are set to different values, naming the one it
-// ignored — for WARDYN_USER_WRITABLE_DENY a silently dropped old list would
-// widen the writable set.
-func resolveDeprecatedEnvAliases() {
-	for _, pair := range deprecatedEnvAliases {
-		newEnv, oldEnv := pair[0], pair[1]
-		aliased, ignored := cliutil.EnvAlias(newEnv, oldEnv)
-		attrs := []any{slog.String("old_env", oldEnv), slog.String("new_env", newEnv)}
-		switch {
-		case aliased:
-			slog.Warn(fmt.Sprintf("wardynd: %s is no longer a variable name; use %s instead. Accepted through 0.8.x, removed in 0.9.", oldEnv, newEnv), attrs...)
-		case ignored:
-			slog.Warn(fmt.Sprintf("wardynd: %s and %s are both set, to different values; using %s and ignoring %s. Unset %s, which is removed in 0.9.", newEnv, oldEnv, newEnv, oldEnv, oldEnv), attrs...)
-		}
-	}
-}
-
 // parseBootFlags declares every wardynd flag (with its WARDYN_* env fallback)
 // and parses the command line. Moved verbatim out of run(); the usage strings
 // carry the operator-facing documentation for each knob.
 //
 //nolint:funlen // A flat table, one line per knob: its length is the knob count, not complexity.
 func parseBootFlags() *bootFlags {
-	resolveDeprecatedEnvAliases()
 	f := &bootFlags{
 		dsn:            flagEnv("dsn", "WARDYN_PG_DSN", "", "Postgres connection string (required)"),
 		migrateDSN:     flagEnv("migrate-dsn", "WARDYN_PG_MIGRATE_DSN", "", "Postgres DSN for a migrator role, used only to run migrations; when set, the main DSN is used only for the least-privilege runtime pool. Empty (default) runs migrations on the main DSN directly"),
@@ -501,20 +464,21 @@ func parseBootFlags() *bootFlags {
 		auditRetentionDays:     flagIntEnv("audit-retention-days", "WARDYN_AUDIT_RETENTION_DAYS", 0, "audit retention window in days (default 0, keep forever); the oldest closed monthly partition older than it can then be dropped, attested and digest-checked. A decrease takes effect 30 days after the boot that first saw it; an increase at once"),
 		auditRetentionAutodrop: flagBool("audit-retention-autodrop", "WARDYN_AUDIT_RETENTION_AUTODROP", false, "let the leader sweeper drop eligible oldest audit partitions itself, as the system actor (default false). UNATTESTED: no operator checked an export first"),
 
-		oidcIssuer:       flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL, browser-facing, matches the id_token iss; enables human SSO when set"),
-		oidcInternalIss:  flagEnv("oidc-internal-issuer", "WARDYN_OIDC_INTERNAL_ISSUER", "", "OIDC issuer URL reachable from wardynd for server-side calls, e.g. http://dex:5556; defaults to the public issuer"),
-		oidcClientID:     flagEnv("oidc-client-id", "WARDYN_OIDC_CLIENT_ID", "", "OIDC client id"),
-		oidcClientSecret: flagEnv("oidc-client-secret", "WARDYN_OIDC_CLIENT_SECRET", "", "OIDC client secret"),
-		oidcRedirectURL:  flagEnv("oidc-redirect-url", "WARDYN_OIDC_REDIRECT_URL", "", "OIDC redirect URL (<base>/auth/callback)"),
-		oidcEmailDomains: flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains; requires email_verified=true when set. Empty (default) applies no domain or email_verified check unless -oidc-require-email-verified is set"), oidcExtraScopes: flagEnv("oidc-extra-scopes", "WARDYN_OIDC_EXTRA_SCOPES", "", `comma-separated scopes appended to the fixed "openid profile email" authorization request, e.g. "groups". Validated at boot against the provider's discovery scopes_supported; an unadvertised scope refuses boot by name. Empty (default) leaves the request unchanged`),
+		oidcIssuer:           flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL, browser-facing, matches the id_token iss; enables human SSO when set"),
+		oidcInternalIss:      flagEnv("oidc-internal-issuer", "WARDYN_OIDC_INTERNAL_ISSUER", "", "OIDC issuer URL reachable from wardynd for server-side calls, e.g. http://dex:5556; defaults to the public issuer"),
+		oidcInternalIssPlain: flagEnv("oidc-internal-issuer-plaintext", "WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT", "", `set to "mesh" to allow a plain http:// internal issuer on a non-loopback host while the console has a TLS posture, when a service mesh encrypts that traffic; boot warns. The public issuer has no opt-out`),
+		oidcClientID:         flagEnv("oidc-client-id", "WARDYN_OIDC_CLIENT_ID", "", "OIDC client id"),
+		oidcClientSecret:     flagEnv("oidc-client-secret", "WARDYN_OIDC_CLIENT_SECRET", "", "OIDC client secret"),
+		oidcRedirectURL:      flagEnv("oidc-redirect-url", "WARDYN_OIDC_REDIRECT_URL", "", "OIDC redirect URL (<base>/auth/callback)"),
+		oidcEmailDomains:     flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains; requires email_verified=true when set. Empty (default) applies no domain or email_verified check unless -oidc-require-email-verified is set"), oidcExtraScopes: flagEnv("oidc-extra-scopes", "WARDYN_OIDC_EXTRA_SCOPES", "", `comma-separated scopes appended to the fixed "openid profile email" authorization request, e.g. "groups". Validated at boot against the provider's discovery scopes_supported; an unadvertised scope refuses boot by name. Empty (default) leaves the request unchanged`),
 		oidcRequireEmailVerified: flagBool("oidc-require-email-verified", "WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED", false, "refuse a sign-in whose id_token has no email_verified claim or has email_verified=false, without needing -oidc-email-domains; an absent claim counts as unverified, so an IdP that never sends it (Entra) locks every human out (default false)"),
 		oidcOperatorEmails:       flagEnv("oidc-operator-emails", "WARDYN_OIDC_OPERATOR_EMAILS", "", "comma-separated operator (admin) emails; a signed-in human not listed is a standard user. Empty with OIDC configured is refused at boot unless -allow-oidc-no-operator-list is set"),
 		// Refused by default (validateOperatorPosture) when OIDC SSO is configured
 		// and the operator allowlist is empty — the same refuse-with-an-escape-hatch
 		// shape as -allow-plaintext-listen above.
 		allowOIDCNoOperatorList: flagBool("allow-oidc-no-operator-list", "WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST", false, "allow boot with OIDC SSO configured but -oidc-operator-emails empty, making every signed-in human admin-equivalent absent a role map; normally refused (default false)"),
-		oidcRoleMap:             flagEnv("oidc-role-map", "WARDYN_OIDC_ROLE_MAP", "", `comma-separated "value=role" pairs mapping an App Role, group or email to "admin", "security_admin" or "user"; highest tier wins (user < security_admin < admin); this map is the only way to grant "security_admin". "member" means "user" until 0.9, with a boot warning. Empty (default) disables role derivation; every signed-in human is "admin"`),
-		oidcDefaultRole:         flagEnv("oidc-default-role", "WARDYN_OIDC_DEFAULT_ROLE", "", `role ("admin" or "user"; "member" means "user" until 0.9, with a boot warning) assigned when -oidc-role-map is set but nothing matched; "security_admin" is refused here. Empty (default) denies that login instead. Ignored when -oidc-role-map is empty`),
+		oidcRoleMap:             flagEnv("oidc-role-map", "WARDYN_OIDC_ROLE_MAP", "", `comma-separated "value=role" pairs mapping an App Role, group or email to "admin", "security_admin" or "user"; highest tier wins (user < security_admin < admin); this map is the only way to grant "security_admin". The pre-0.8 "member" is refused since 0.9. Empty (default) disables role derivation; every signed-in human is "admin"`),
+		oidcDefaultRole:         flagEnv("oidc-default-role", "WARDYN_OIDC_DEFAULT_ROLE", "", `role ("admin", "user" or a user type id; the pre-0.8 "member" is refused since 0.9) assigned when -oidc-role-map is set but nothing matched; "security_admin" is refused here. Empty (default) denies that login instead. Ignored when -oidc-role-map is empty`),
 		oidcAllowEmailMappings:  flagBool("oidc-allow-email-mappings", "WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS", false, "allow an email-shaped value on a console People-step role mapping (POST /access/mappings); refused by default in favor of an App Role or group key (default false)"),
 
 		dirProvider: flagEnv("directory-provider", "WARDYN_DIRECTORY_PROVIDER", "", `identity-directory connector for the console's "who" autocomplete: "entra" (Microsoft Graph) or empty. Empty (default) is the feature off; enabling it grants wardynd read of the whole directory`),

@@ -94,7 +94,7 @@ export interface MeIdentity {
   /** Auth generation captured by that read; old identities cannot send a draft. */
   authGeneration: number;
 
-  // M3 — presentational label of the WARDYN_MEMBER_WORKSPACE_ROOTS/_MAP
+  // M3 — presentational label of the WARDYN_USER_WORKSPACE_ROOTS/_MAP
   // constraint that applies to this signed-in member (GET /me's
   // `member_local_dir_root`), e.g. "/home/agent-projects" (bare — the
   // "under " word comes from permissions-copy.ts's ROOT_HINT template, not
