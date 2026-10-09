@@ -424,7 +424,7 @@ is not the deployment described above.**
 | Attack | Defense | Load-bearing layers |
 |---|---|---|
 | Prompt-injected agent reads resident secrets | Secrets are never in the sandbox, with a named, bounded exception list — **[§5.1a](#51a-llm-egress-content-inspection--the-honest-claims-contract) is the complete set**. | B1, B2, B4 |
-| | Every other credential is late-bound via the broker and injected proxy-side. Output masking **[shipped]**, with two named unmasked paths and a fail-open registry — [§4.1](#41-output-masking-and-the-paths-it-does-not-cover) | |
+| | Every other credential is late-bound via the broker and injected proxy-side. Output masking **[shipped]**, with two named unmasked paths and a registry shared through Postgres that fails closed — [§4.1](#41-output-masking-and-the-paths-it-does-not-cover) | |
 | Env-var proxy bypass (documented industry bypass class) | Designed out at L0: the sandbox network is gatewayless (`Internal:true`), so ignoring the compatibility-only `HTTP_PROXY`/`HTTPS_PROXY` reaches no route. **[shipped]** | L0, B2 |
 | Direct-IP / non-HTTP / metadata-server (169.254.169.254) egress | Closed twice over, independently: **L0 [shipped]** gatewaylessness (no off-host route at all) and **L2 [shipped]**'s unconditional IP guard, which runs AFTER the policy verdict so `allow_all_egress` cannot pass it — [§4.2](#42-the-unconditional-ip-guard-and-its-two-admin-authored-exceptions). | L0, L2 (L1 adds depth) |
 | | L1 🟡 **[planned]** adds kernel-level depth; the metadata block does not wait on it | |
@@ -523,7 +523,7 @@ is not the deployment described above.**
 
 ### Member escalating past a capability grant
 
-- **[v0.6 shipped; two kinds added in v0.7, one in v0.7.2, one in v0.8]**
+- **[v0.6 shipped; two kinds added in v0.7, one in v0.7.2, three in v0.8, one in 0.8.9]**
 - Capability grants (`capability_grants`, migration `0042`) bound what a MEMBER chose on the ten
   closed kinds `capabilityKinds` names, resolved deny-before-allow-before-switch by one resolver
   (`capAllowed`/`capGranted`).
@@ -744,6 +744,7 @@ is not the deployment described above.**
   - This is bounded best-effort recovery, not a completeness or delivery-latency guarantee.
 - **The registry is shared through Postgres and fails closed; four things stay outside it.**
   - `secretmask.Registry` holds every value a run was given, and each replica's in-memory copy is a cache of what is committed.
+  - That is wardynd's registry. The egress proxy's own registry, which masks its decision log and its error bodies, has no Postgres backend and is process-local (`Registry` in [`internal/secretmask/secretmask.go`](../internal/secretmask/secretmask.go)).
   - Dispatch commits a sealed per-run masking manifest (the exact bytes of every rendering the run received) before the sandbox starts.
   - Values registered later, and the per-owner sign-in tokens, are committed to `mask_values` before the call that hands them out returns.
   - Both are sealed under the run owner's key, so destroying that key leaves them undecryptable.
@@ -834,6 +835,10 @@ is not the deployment described above.**
       trust and the token injection are scoped to the same port).
   - `denied_domains` still wins over both (`RunPolicy.AllowsLiteralIP` checks the deny lists
     first).
+  - The trust reads any exact literal in the run's `allowed_domains`, so an organisation's component
+    that lists one gets it too, as admin-authored content [0.8.9].
+  - A person-defined component may not name an address in any spelling, including names a resolver
+    reads as one (`refuseAddressLiteral` in [`internal/types/component_host.go`](../internal/types/component_host.go)).
 - The internal model gateway (residual #29) is NOT a second exception.
   - Its relaxed per-request vet (`Proxy.vetTrustedHost`, reached only via `Proxy.gatewayTarget`)
     is scoped to the brokered `/wardyn/llm/*` route, never an ordinary sandbox CONNECT/MITM naming
@@ -863,10 +868,14 @@ one in v0.7.2, three in 0.8 and one in 0.8.9, and lost one in 0.8.
     member can reach a clone through —
   - `POST /runs` over both the resolved spec and the legacy `repo` field, workspace create and EDIT,
     and the two server-side clones, Scan and Build)
-  - and — v0.8 — `feature` (whether a member may add an SSH key or mint an API token at all:
-  - values `ssh_key` and `api_token`, a closed set refused at write time otherwise, one check at each
-    mint door;
-  - mint only, so an existing key or token outlives a later deny until it is removed or revoked)
+  - and — v0.8 — `feature` (whether a member may add an SSH key or mint an API token at all, and
+    since 0.8.9 whether they may define a component of their own:
+  - values `ssh_key`, `api_token` and `custom_component`, a closed set refused at write time
+    otherwise, one check at each mint door;
+  - mint only for a key or a token, so an existing one outlives a later deny until it is removed or
+    revoked;
+  - `custom_component` is asked when a person saves or attaches their own component, and again for
+    the run's owner at revive, restart and extension)
   - and `policy` (which stored policy a member may select, `req.PolicyID`; the choice only, since the
     selected row is still clamped to their ceiling).
 - 0.8.9's `component` bounds which org component (an admin-written row, by id) a person may attach
@@ -959,6 +968,10 @@ ADMIN pre-authorized** —
   values and went stale the release two more shipped.
 - **EVERY switch ships OFF** — an absent `capability_enforcement` row is not enforced — so a 0.5
   deployment upgraded with no rows behaves byte-for-byte as it did.
+  - One value sets that aside, by the owner's decision: `feature:custom_component` (0.8.9) is a new
+    power, and an unenforced `feature` kind allows it.
+  - So an upgrade with no rows lets every member define components (`featureCustomComponent` in
+    [`internal/api/capabilities.go`](../internal/api/capabilities.go); residual #64).
 - Fail-open BY DESIGN, chosen for adoption over posture; residual #20 states the cost.
 
 ### 4.4 Member-authored host mounts (v0.6) — the gate
@@ -1297,6 +1310,7 @@ hiding them would repeat the failure mode we are designed to avoid.
 2. **Domain fronting and exfil via dual-use allowlisted domains** are not closed below the optional L2 TLS-intercept+DLP tier: hostname-only filtering (CONNECT/SNI) is domain-frontable.
    - That tier is **shipped**, off by default, opt-in per policy (`intercept_tls`, contract in §5.1a).
    - But it is bounded to operator-listed MITM-eligible hosts (`isMITMHost`, [`internal/egress/proxy/mitm.go`](../internal/egress/proxy/mitm.go)).
+   - Since 0.8.9 a component's header host is MITM-eligible too, and on a person's own component the run's owner chose it (residual #64).
    - The full container path is not proven in default CI, with per-workspace ephemeral-CA injection into arbitrary agent images and QUIC/UDP/raw-TCP coverage unconfirmed/unbuilt.
 
 3. **DNS-tunneling through the mandatory permitted resolver** is a residual channel below the TLS-intercept tier.
@@ -1568,6 +1582,7 @@ hiding them would repeat the failure mode we are designed to avoid.
       - **Every enforcement switch ships OFF.**
         - An absent `capability_enforcement` row means *not enforced*, so an upgraded 0.5 deployment behaves exactly as it did until an admin flips a kind on, one at a time.
         - Fail-OPEN as a default, traded for an upgrade that changes nothing — so "Wardyn has per-capability permissioning" is never by itself a statement about a deployment's posture.
+        - One value is the exception: `feature:custom_component` (0.8.9) is allowed while `feature` is unenforced, so an upgrade with no rows DOES change something — every member may define components until a deny row names the value (residual #64).
         - `GET /permissions` (admin) and `GET /me/capabilities` (member) report which kinds are actually enforced; deny rows are the on-ramp that works with every switch still off.
       - **A `group` DENY is evaluated as a REFUSAL when the caller's group snapshot cannot answer — not evaporated (v0.7 closed the fail-open).**
         - Group membership is snapshotted at LOGIN into the signed session cookie, capped at 2048 bytes and dropped from the sorted end (`maxSessionGroupsBytes`, [`internal/auth/oidc/derive.go`](../internal/auth/oidc/derive.go)).
@@ -2286,6 +2301,90 @@ hiding them would repeat the failure mode we are designed to avoid.
     - A narrowing the broker cannot enforce is refused at launch rather than carried as a fiction.
     - The broker off, a same-forge `ssh_key` (a second push path), and an Azure DevOps or GitHub-brokered host (another lane serves it) each fail the run with a named reason.
 
+64. **A run's components let the person launching it choose hosts and deliver their own secrets, and what bounds a delivered secret is where the run may send it (0.8.9).**
+    - A component names hosts, secrets with a delivery each (`header`, `env` or `file`), and plain config.
+    - The component gate turns it into allowed domains and grants that the proxy and dispatch already enforce, at one point shared by the three run doors (`applyRunComponents` in [`internal/api/components_run.go`](../internal/api/components_run.go)).
+    - An organisation's component is written by an admin and attachable by nobody until the security tier grants it or lifts its restriction; a person's own needs `feature:custom_component` (§4.3).
+    - [How a credential reaches a run](../docs/CREDENTIALS.md#a-value-the-program-reads-itself) explains the delivery shapes; §5.1a carries the resident rows.
+    - (a) **On a stock install, a person's own delivered secret can go to any host the run may reach.**
+      - A fresh install has an empty `denied_domains` ([`examples/policies/default.json`](../examples/policies/default.json)), no governance profile, and no `components` block in its site config.
+      - There, a prompt-injected agent in a run that carries a person's own `env` or `file` secret can send its value to any host on the run's allowlist.
+      - That allowlist is the component's own hosts, the policy's allowlist, and the hosts a workspace or a repository adds.
+      - What bounds it: the deny lists and `egress_host` capability rows, the private-address guard (§4.2), the model-host and one-credential-per-host refusals, masking of the registered bytes, and the audit trail.
+      - A value the agent encodes or splits is not masked (§4.1).
+      - Nothing in Wardyn holds or refuses such a run unless the organisation sets `components.autonomy_cap` or a governance profile's rubric binds it (`componentAutonomyCap` in [`internal/api/runs_autonomy_components.go`](../internal/api/runs_autonomy_components.go)).
+      - That is the owner's stated choice: the organisation's outer wall is the limit.
+    - (b) **An allowed host can echo a header credential back into the sandbox.**
+      - The proxy relays the response as it arrives (§5.1a, "Never resident is not never readable").
+      - On a component a person defined, the echoed value is that person's own secret: its header grant is `owner_only` (`componentGrant` in [`internal/api/components_run.go`](../internal/api/components_run.go)).
+      - On an organisation's component with a `shared` secret, the echoed value is the operator's secret, read from the operator's namespace (`injectionGrantRead` in [`internal/api/runs_scm.go`](../internal/api/runs_scm.go)).
+      - So a member granted that component can send requests that carry the operator's credential to the component's host, and an echoing host returns the operator's value into the member's sandbox.
+      - Masking replaces the value in output Wardyn relays or stores, not in the response the workload reads.
+    - (c) **The proxy reads the traffic of a host the run's owner chose.**
+      - The proxy can set a header only inside a connection it terminates, so each header host is intercepted on port `443` with the run's own certificate authority (`isMITMHost` in [`internal/egress/proxy/mitm.go`](../internal/egress/proxy/mitm.go), reason 4).
+      - On a person's own component the run's owner chose that host, under a permission an admin can withdraw.
+      - The proxy sees that host's plaintext, as it does for every intercepted host.
+      - A client that pins the host's certificate, or trusts only a JVM keystore or `DENO_CERT`, fails its handshake to that host (§5.1a).
+    - (d) **Custom components are on by default.**
+      - Where the `feature` kind is not enforced, every signed-in person may define, save and attach their own component until a deny row names `custom_component` (`featureCustomComponent` in [`internal/api/capabilities.go`](../internal/api/capabilities.go)).
+      - Where an admin has already enforced `feature`, nobody below the operator tier may until an allow row covers the value.
+      - With no `components` block there is no autonomy cap, and `env` and `file` delivery are allowed.
+      - Nor does a component's header credential raise the run's confinement floor, as other credentials for a host outside the coding-agent baseline do (`confinementFloorSpec` in [`internal/api/components_run.go`](../internal/api/components_run.go)).
+      - `components.require_vault_for_credentials` restores that floor, and `components.deny_resident_delivery` refuses `env` and `file` delivery for every component.
+      - `components.autonomy_cap` caps a run that carries a component its launcher defined: `L1` holds tool calls, `L0` refuses unattended runs.
+    - (e) **Config is plain text and is not masked.**
+      - A component's `config` is written into the sandbox environment as given and is not registered for masking (`applyComponentConfigEnv` in [`internal/api/runs_dispatch_components.go`](../internal/api/runs_dispatch_components.go)).
+      - It never replaces a variable the platform set, a `WARDYN_*` name or a model-provider variable, and the reserved names of §5.1a's `env_secret` bounds are refused when it is written.
+      - A secret put in `config` is therefore an unmasked resident value.
+    - (f) **The policy allowlist is not asserted over component hosts.**
+      - A component may reach any host the organisation has not denied: the gate consults the deny lists, the workspaces' denies and `egress_host` capability rows, never the ceiling's allowlist (`componentHostsBounded` in [`internal/api/components_run.go`](../internal/api/components_run.go)).
+      - That holds for an organisation's component and for a person's, and dispatch asserts the deny lists again (`reassertCeilingDenies` in [`internal/api/runs_dispatch_ceiling.go`](../internal/api/runs_dispatch_ceiling.go)).
+      - No component host may overlap a host that serves a model on the deployment, at any port.
+      - A person-defined component names DNS names only (§4.2). An exact literal in an allowlist is dialled directly, ahead of any corporate upstream (`trustsExactLiteralIP` in [`internal/egress/proxy/egress_target.go`](../internal/egress/proxy/egress_target.go)).
+      - A person's DNS name takes the ordinary path instead, and meets the private-address guard either way (`egressTarget` in [`internal/egress/proxy/egress_target.go`](../internal/egress/proxy/egress_target.go)).
+      - That path is the corporate upstream when one is configured and the name is not on its bypass list, and the pinned local dial otherwise.
+    - (g) **What admins see of a person's component, and what a granted person sees of an organisation's.**
+      - No route lists another person's saved components: `GET /components` returns the organisation's rows only.
+      - The audit rows the component system writes describe a person's component by id, position, delivery mode and counts, never its name, hosts, header, variable, file or secret names (`auditEntry` in [`internal/api/components_run.go`](../internal/api/components_run.go)).
+      - The run's own records do name them: its resolved policy and grants, `run.policy.resolve`, `run.env_secret.resolve` and `run.file_secret.resolve`.
+      - Erasing the person's `components` scope deletes their saved components and clears their run snapshots, and leaves those run records whole (`eraseComponentsOf` in [`internal/api/person_erasure_components.go`](../internal/api/person_erasure_components.go)).
+      - A person granted an organisation's component sees its name, hosts, delivery modes and config keys, never its secret names or config values (`orgComponentView` in [`internal/api/components_project.go`](../internal/api/components_project.go)).
+      - Its hosts also reach that person's preview and run policy view, as every run host does: a sandbox that can reach a host was never hiding it.
+      - A component the person is not granted is absent from their list, and a reference to it is refused with the same bytes as an id that does not exist.
+    - (h) **Revive keeps what the run launched with and asks again only who may use it.**
+      - Revive never re-resolves the run's policy, so a later edit of a stored component does not reach a revived run.
+      - Revive, restart and extension re-check, for the run's owner, the doors its component rows record: `custom_component` for one the owner defined, the component's own grant for an organisation's (`persistedLaunchDoors` in [`internal/api/run_owner_authority.go`](../internal/api/run_owner_authority.go)).
+      - Erasure clears a row's content and keeps the row, so the re-check still runs.
+      - A run that carried an organisation's component deleted since is refused (`componentGoneRefusal`).
+    - (i) **A security admin grants an organisation's component by its id.**
+      - Grant rows are the security tier's to write, but `GET /components`, the one route that returns an organisation's component whole, is admin-only.
+      - The `component.write` row the security tier reads names the component and counts its hosts, secrets and config keys without listing them.
+      - So a security admin can make a component available that no route has shown them; once a run carries it, that run's `run.policy.resolve` row shows its hosts.
+    - (j) **Two credentials bound for one host fail closed.**
+      - The proxy keeps one credential per bare host, so the three run doors refuse `credential_host_collision` when a run's policy and its deployment bind two to one host, with or without components (`credentialHostRefusal` in [`internal/api/runs_dispatch_components.go`](../internal/api/runs_dispatch_components.go)).
+      - The gate refuses a component header on a host that already carries a credential.
+      - Dispatch reads a later site config than the gate and authors credentials the gate cannot see, so it compares again and fails the run before the sandbox starts (`settleCredentialHosts`).
+      - The proxy refuses a second rule for one host at boot (`buildInjector` in [`internal/egress/proxy/inject.go`](../internal/egress/proxy/inject.go)).
+      - A token-bearing redirect whose target the run's per-person Azure DevOps lane serves is applied without its token rather than refused (`laneCarriesHost` in [`internal/api/runs_dispatch_components.go`](../internal/api/runs_dispatch_components.go)).
+      - The break this documents: a policy with two credentials for one host no longer launches.
+    - (k) **A header goes to the host's standard TLS port only.**
+      - A header delivery names a bare host, and the proxy sets the credential only on that host's port `443` (`validHeaderHost` in [`internal/types/component.go`](../internal/types/component.go)).
+      - A service on another port gets reach through an egress entry with that port, and no header, because the proxy does not terminate that tunnel.
+      - A person's header is sent over TLS only, and a plain-HTTP request to the header host is refused rather than given the credential; only an organisation's component may set `plain_http`.
+    - (l) **Who sees the name of an organisation's shared secret.**
+      - No member-facing body names the secret of a shared grant.
+      - The component view marks it `shared`, a preview reports a missing one without its name, and a refusal relayed into the sandbox names only the organisation's credential.
+      - Every audit row served to a caller below the security tier, whom `auditScope` narrows to runs of their own, loses a shared grant's secret name, whichever action wrote the row (`auditRowsFor` in [`internal/api/audit.go`](../internal/api/audit.go)).
+      - The run's grant list, the mint answer relayed into the sandbox, a record result and a synthesised profile withhold it too.
+      - The `secret.read` row for a shared read names the grant, not the secret.
+      - The security tier (`admin`, `security_admin`) reads rows as recorded: `run.policy.resolve` and `credential.mint` keep the grant scope as dispatched, so the audit sinks and the partition export carry the name.
+      - Not covered, by decision: operator secret names that reach a run's owner on rows unrelated to components (`run.artifact.redirect`, and `credential.mint` or `secret.read` for an integration's or a stored policy's grant), and `workspace_mounts[].source` on `run.policy.resolve`.
+    - (m) **No GitHub capability narrowing ships in 0.8.9.**
+      - A policy's `github_capabilities` is accepted and shown by explain, and no lane reads it: it narrows no GitHub token.
+      - The request classifier that puts every GitHub REST write to a repository's content or refs in a refused class (`CapRepoContentWriteREST` in [`internal/ghscope/capability.go`](../internal/ghscope/capability.go)) is called by no gate in this release.
+      - There is no per-person GitHub lane. The App lane's bounds are those of the `github_token` grant (§5.1a).
+      - Branch confinement and push content rules see `git push` through the broker; they do not inspect a REST call to the forge.
+
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
 - Residual #46 above named what the proxy injects; this narrows WHICH requests it injects onto.
@@ -2416,14 +2515,18 @@ exactly these terms.
 
 - Wardyn's default invariant is "no resident secrets": a credential is late-bound by the broker and injected proxy-side, so the sandbox process never holds it.
 - The table below is the COMPLETE set of places a live credential does land inside a sandbox.
+- It lists what Wardyn places there. A credential the proxy adds can still come back in an allowed host's response; the paragraph after the never-resident list below states that residual.
 - §4 and §8 point here rather than restating a count, because a hardcoded count is exactly how this list drifted before.
 - Each row states what lands, why it cannot be proxy-injected, and what bounds it; where a bound does not exist, it says so.
+- [How a credential reaches a run](../docs/CREDENTIALS.md) explains each delivery shape; this table is the authority for the bounds of the ones that land inside.
 
 | Exception | What lands in the sandbox | Why it can't be proxy-injected | Bounds (and their limits) |
 |---|---|---|---|
 | `ssh_key` grant (SSH SCM lane) | The stored SSH **private key**, as a file the `ssh` client reads | git's SSH transport has no credential-helper seam (`credential.helper` is HTTP-only) | Written `0400` agent-owned at clone time, shredded right after (`wipe_ssh_grants`, before the agent starts); mask-registered at mint. On an UNBROKERED forge that window is a narrowing, not a bound; on a BROKERED forge the grant never reaches the sandbox. Wardyn cannot down-scope or expire an SSH private key where it does remain resident ([`internal/broker/broker.go`](../internal/broker/broker.go) `mintSSHKey`, `deploy/images/*/agent-run`). See below. |
 | `git_pat` grant (Azure DevOps / GitLab), **`WARDYN_GIT_PAT_BROKER=off` only** | Nothing, by default. Under the `off` escape hatch: the **PAT value**, streamed from `wardyn-git-helper` to the sandbox's `git` process | Nothing structural any more — this row is a MODE, not an impossibility. The default (`WARDYN_GIT_PAT_BROKER=on`, since 0.7) removes the opaque CONNECT tunnel instead of trying to inject into it: `agent-run` rewrites the granted hosts to a plain-HTTP broker path (`url.<broker>/git/<host>/.insteadOf`), the proxy terminates the request itself, mints server-side and sets Basic auth on the OUTBOUND leg ([`internal/egress/proxy/pat_broker.go`](../internal/egress/proxy/pat_broker.go)), and the grant ids are withheld from the sandbox env so the in-sandbox helper could not mint anyway. | **Only the `off` mode is resident, and only there do these bounds apply.** Helper emission is gated on a per-run `0400` caller-auth secret and the value is mask-registered at mint — but that gate binds only a caller going through `wardyn-git-helper`: the proxy's local mint route (`POST /wardyn/v1/credentials/mint`) is itself unauthenticated, so a caller that reads the grant id straight out of the sandbox env and POSTs the route directly is not bound at all. **No expiry, no down-scoping** — and that last limit survives the broker: a PAT carries whatever scope the operator issued it with, and there is no GitLab or Azure DevOps Server equivalent of a scoped installation token (Azure DevOps Services gets one through `minted_pat`, residual #62), so `on` makes the credential NON-RESIDENT, never least-privilege (the broker's allowlist is per-HOST for exactly that reason). `off` is an escape hatch for a forge that misbehaves under the rewrite, not a supported posture. See below. |
 | `env_secret` grant (arbitrary tool auth) | The stored secret's **value**, as a sandbox environment variable the operator names (`{"name":"MY_TOKEN","secret_name":"…"}`) | Nothing structural — a COVERAGE gap, not an impossibility. A PAT-authenticated CLI or REST tool reads a `*_TOKEN` env var; `git_pat` wires git's credential helper only and `api_key` injects one header at one host, so neither reaches it. A per-tool proxy shim could; none exists ([`docs/adoption/corp-network-onboarding-findings.md`](../docs/adoption/corp-network-onboarding-findings.md) B1) | **The weakest bounds of any row here, and the kind is designed that way — read them before enabling it.** Resident for the WHOLE run; no mint, no TTL, no JTI, so nothing for the kill-switch to revoke; no expiry or down-scoping. See below. |
+| `file_secret` grant [0.8.9] | The stored secret's **value**, as a file under `/run/wardyn/secrets` named by the grant's scope, never by a path (`ComponentSecretDir` in [`internal/runner/managed_files.go`](../internal/runner/managed_files.go)) | Nothing structural: the `env_secret` coverage gap, for a tool that reads a credentials file instead of a variable | The `env_secret` bounds, under the same switch and role rule, for the WHOLE run, with nothing to revoke. Docker: mode `0400`, the workload's user. Kubernetes: mode `0440`, every process in the pod. See below. |
+| Component secret delivered as `env` or `file` [0.8.9] | The launching person's OWN stored secret, as an `owner_only` `env_secret` or `file_secret` grant (`componentGrant` in [`internal/api/components_run.go`](../internal/api/components_run.go)) | Nothing structural: the person chose a variable or a file over a header. A `shared` secret, the operator's, can only be a header | Not under the `env_secret` switch: the component's permission admits it, and `components.deny_resident_delivery` refuses it deployment-wide. Otherwise the two rows above. See below, and residual #64. |
 | Bedrock **captured-AWS-SSO** mode (containerized `aws sso login`) | **WHOSE session, first: it is always one credential PER PRINCIPAL — a `bedrock_sso` model provider — captured by that person's own sign-in, stored in that person's own secret namespace and read with no fall-through to the operator's row or to any other lane, so the radius per capture is ONE PERSON and their own account/role.** **Which account and role a sign-in may capture is ADMIN-ASSERTED, not person-asserted** — an admin may pin `sso_account_id`/`sso_role_name` on the provider record, and a sign-in (or an uploaded blob) that disagrees with the pin, or with the account the provider's model ARN names, is refused at the capture door rather than accepted and silently wrong; the pin binds at the login sandbox's LAUNCH, so it cannot be re-pointed by an admin edit made while a sign-in is already in flight. **The shared admin bearer token is not a person and cannot hold a session of its own under SSO**: `POST /model-providers/{id}/sign-in` refuses it (`422`) — every login made with the admin token would land in the one `owner: "admin-token"` namespace and overwrite the last capture. Then: a minimal synthetic `~/.aws`: a generated `config` plus the **SSO token cache** (`sso/cache/<sha1>.json`) carrying the SSO **access token** — and the refresh token / client id + secret when the login also registered a client. Delivered base64 in a sandbox env var, materialized by `agent-run`. **0.7.6 (Phase B, shipped): the SSO access token no longer lands here.** With `WARDYN_AWS_SSO_PROXY_INJECT=on` the generated cache file carries an inert placeholder token (`wardyn-proxy-injected`) and a far-future `expiresAt`, and the real access token exists only in wardynd's store and the proxy's memory. The sandbox still receives the generated `config` (start URL, region, account, role — operator configuration, not a credential). With the switch `off` the 0.7.5 bytes are restored for NEW dispatches. | **Nothing — Phase B SHIPPED in 0.7.6, and this row is now an injection, not an exception.** `portal.sso.<region>` `GetRoleCredentials` is `authtype:none` (unsigned), so the proxy carries the session as the `x-amz-sso_bearer_token` **header** on a per-run TLS-MITM'd, dispatch-authored host+port entry with a paired injection grant — the same operator-configured MITM+injection pattern `isMITMHost` already admits for the corp artifact hosts and the Bedrock bearer. The token is never written into the sandbox. **The CC1/CC2 floor question this cell used to carry is moot with the switch on**: there is no longer a credential delivered outside a grant on this lane, so there is nothing for `RequiredConfinementFloor` to be too late for. It returns verbatim the moment `WARDYN_AWS_SSO_PROXY_INJECT=off` is set, which is the documented rollback — an operator who flips it is choosing the 0.7.5 residency, and should read the 0.7.3 deferral above as still current for that posture. **The re-origination is a forward dial like any other MITM host, not exempt from the corporate upstream**: it follows `SiteConfig.upstream_proxy_url`/`upstream_proxy_no_proxy` same as every other dial, and behind a TLS-intercepting corporate proxy it additionally needs `WARDYN_TRUSTED_CA_FILE` staged on the proxy sidecar or the re-dial fails closed the same way any other dial failure does — see [`docs/OPERATIONS.md`](../docs/OPERATIONS.md)'s Phase B section and [`docs/adoption/aws-sso-mitm-upstream-proxy.md`](../docs/adoption/aws-sso-mitm-upstream-proxy.md). | Files written `0600`; token values mask-registered **globally**, not per-run (one capture is reused across runs) — access + refresh at capture, access + refresh again at each control-plane renewal; the refresh token, client id and client secret are WITHHELD from the sandbox cache whenever a refresh token exists, because the CONTROL PLANE renews the session at the real launch and at dispatch (SSO-OIDC `CreateToken`) and is the only party that can persist the rotated pair — one refresher per token. A renewal that cannot be completed marks the captured-SSO lane NOT READY and carries its reason on the dispatch verdict; the refusal that reason is for arrives with the dispatch-time mechanism gate, which is what stops a lapsed credential from crossing to another auth mechanism; withheld from non-model runs; the capture login run is never recorded. **Not bounded:** masking is verbatim-match only, so the base64-encoded copy in the env var is not matched, and Wardyn cannot revoke an SSO session. **Whose credential a capture becomes is decided at LAUNCH, not at upload:** the login run's own `harness.login.start` row carries the `credential_source` + `owner` resolved when the sandbox was launched, and the upload reads that back instead of re-asking the live configuration — a login sandbox lives to its idle cap, so a configuration edit mid-run cannot re-point a capture. **Revocation ceiling, stated rather than implied:** a member's stored session is ended by their next sign-in superseding it, by revoking the session (or the account/permission-set assignment) at IAM Identity Center — the system of record, and the offboarding step — or by its own client-registration expiry. Deleting the Wardyn console account does not delete the blob; an admin's `DELETE /people/{principal}/credentials` does, and so does AWS refusing its refresh token (`invalid_grant`) or the daily sweep once its expiry has passed. **0.7.6:** the injected value is additionally mask-registered **per run** (`MaskRegistry.Add(claims.RunID, token)`) at each resolve, beside the renewal path's existing global registration — the per-run set is evicted for terminal runs past `RunSecretGrace`, the global set has no expiry (the standing ceiling; TTL-aware masking is a follow-up). Injection is pinned to ONE host and port derived from the credential's own region (or the test override), is refused without TLS on every production deployment, and is refused outright — **403, never another credential** — if the run's model provider (its UID), the credential's owner, the account, role or region drift from the snapshot taken at dispatch (`awsSSOScopeSnapshot`). A dead credential HOLDS the call rather than failing it, bounded by `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` (default 600 s, clamped `[10s, 1800s]`); see residual #46. |
 | **Derived AWS role credentials** (every `bedrock_sso` run) | The short-lived role credentials the in-sandbox AWS SDK mints for itself from the SSO session (`portal.sso.<region>` `GetRoleCredentials`) | SigV4 signs in-process, so these stay resident **regardless** of how the SSO session reached the sandbox — Phase B would end the SSO token's residency, not theirs — and in 0.7.6 it did. These role credentials are still resident, still outside Wardyn's sight and still unmaskable, which is why `gradeModelCredential` keeps answering `sandbox` for this lane. Phase B did not change the residency classification, and a reader who "fixes" `credential_residency.go` because the SSO token left the sandbox is reading the wrong row. | Bounded only by their own STS lifetime and the IAM role's scope, both set outside Wardyn. Wardyn never sees these values, so they are **not** mask-registered and cannot be masked. |
 | Container-**login** runs (`harness login`) | **Launched by the person capturing their OWN credential through a model provider's sign-in door; the sandbox is seeded with the ADMIN'S access-portal URL from the provider record and ignores any the caller supplies, so a capture can never be bound to a foreign IdP/account.** The credential the run exists to obtain: `claude setup-token` prints it to the PTY; `aws sso login` writes it to `~/.aws/sso/cache` before `wardyn-aws-sso` uploads it | The credential does not exist yet — there is nothing to inject | A throwaway box: no workspace, no repo, no credential mounts, mints nothing (the AWS flow is seeded with one NON-secret file — a `~/.aws/config` holding the operator's SSO start URL + region, which `aws sso login` cannot run without), default-deny egress pinned to the login flow's hosts, idle auto-stop. **Never recorded** — the recorder is dropped entirely for a `harness login` run (masking could not have covered it: the value arrives after the run's mask snapshot). **0.7.5 — and the sign-in the image now runs itself is not recorded either, deliberately.** The claude-code image's boot pane wraps its seed in `wardyn-rec` (`boot_seed_rec_wrap`, [`deploy/images/common/agent-run-lib.sh`](../deploy/images/common/agent-run-lib.sh)); the aws-sso image's sign-in pane does NOT. It handles the credential this run exists to obtain — the device code, the portal's reply, and the helper's upload — and the recorder is exactly what must not see them, for the same reason the run's recorder is dropped at dispatch: the value arrives after the run's mask snapshot is taken, so masking could not have covered it. The consequence, stated rather than implied: **there is no cast of what happened inside a sign-in sandbox**, including whatever a human typed at the pane's trailing shell after the sign-in finished. That shell has the same bounds as any other attach into this box — the AWS CLI, no repo, no mounts, default-deny egress pinned to the SSO endpoints, and a 30-minute idle cap — and the audit trail still carries the capture (`harness.credential.capture` / `.refused`) and the launch (`harness.login.start`). What is not carried is the keystrokes. |
@@ -2442,6 +2545,7 @@ exactly these terms.
 - `GET /setup/status` does not grade a run.
 - `POST /runs/policy-preview` returns only authorized, clamped, folded and redacted policy facts.
 - It authorizes workspace ownership and provider/drive selection before facts, reads no credential values, and leaves credential-dependent autonomy, tool approvals and dispatch readiness pending.
+- Its component facts read no value either [0.8.9]: a secret is reported from whether a row of that name exists, and one the organisation provides is reported without its name.
 - It performs no quota/capacity/runner/share probe, mint, renewal or dispatch.
 - Identical preview and preflight denials share the existing dry-run audit coalescer; preview has an independent bounded per-person limiter.
 - Preflight still grades launch readiness; create independently resolves all gates.
@@ -2488,23 +2592,59 @@ full, under asset #4 (§2).
   - the secret may not be a reserved platform-internal name (write time AND at the dispatch sink);
   - the grant may not overwrite a variable dispatch already set;
   - `requires_approval` is REFUSED rather than silently ignored (there is no mint to gate);
-  - and the kind is **admin-only by default** — a member's `env_secret` grant is dropped even for a ceiling-listed pairing unless the operator sets `WARDYN_ALLOW_MEMBER_ENV_SECRET`.
+  - and the kind is **admin-only by default** — a member's `env_secret` or `file_secret` grant is dropped even for a ceiling-listed pairing unless the operator sets `WARDYN_ALLOW_USER_ENV_SECRET`.
+  - The older name, `WARDYN_ALLOW_MEMBER_ENV_SECRET`, is an alias that logs a boot warning and is removed in 0.9 (`deprecatedEnvAliases` in [`cmd/wardynd/boot_flags.go`](../cmd/wardynd/boot_flags.go)).
 - That drop is a ROLE check plus the switch, never a ceiling check.
   - So it binds every non-operator on every route a run policy arrives by (an inline body, a stored row the member selected, or the deployment default)
     - and regardless of whether a governance profile is assigned to them (`dropAdminOnlyEnvSecretGrants`).
+- A component's `env` or `file` delivery is not a policy grant, and that switch does not govern it [0.8.9].
+  - The component gate adds it after the policy is resolved, as an `owner_only` grant of the launching person's own secret, so no operator secret of the same name is read (`componentGrant` in [`internal/api/components_run.go`](../internal/api/components_run.go)).
+  - The `custom_component` permission admits it on a person's own component, and the component's grant on an organisation's.
+  - `components.deny_resident_delivery` refuses it for every component, an organisation's included, and header delivery keeps working (`ComponentSettings` in [`internal/types/site_config.go`](../internal/types/site_config.go)).
+  - A variable name that decides how programs in the sandbox start or reach the network (`PATH`, `LD_*`, the proxy and trust variables, and others) is refused (`reservedComponentEnvNames` in [`internal/types/component.go`](../internal/types/component.go)).
 - Prefer `api_key` (never resident) whenever the tool can be pointed at a host + header instead.
+
+**`file_secret` — the same bounds, in a file [0.8.9].**
+
+- Resolved at dispatch (`resolveFileSecretGrants` in [`internal/api/runs_dispatch_files.go`](../internal/api/runs_dispatch_files.go)), and put on the run's masking manifest before the sandbox is created.
+  - The value is masked as stored and without its trailing line break (`fileSecretRenderings`).
+  - `run.file_secret.resolve` names the file and the secret, never the value.
+- The file sits under `/run/wardyn/secrets`, and its name is one name, never a path.
+  - Docker writes it at mode `0400`, owned by the workload's user.
+  - Kubernetes projects it at mode `0440`, read through the pod's file-system group, which every process in the agent pod carries (`agentSecretItemMode` in [`internal/runner/k8s/managed_files.go`](../internal/runner/k8s/managed_files.go)).
+- A runner that cannot place a file fails the run before any value is read (`fileSecretRunnerDelivers` in [`internal/api/runs_dispatch_files.go`](../internal/api/runs_dispatch_files.go)).
+- On Kubernetes a delivered file beside a shared drive is refused, because the drive must never take the pod's file-system group (`errAgentSecretBesideShare`).
+- The broker refuses the kind for minting, as it refuses `env_secret`: killing the run stops the process and does not un-disclose the value.
 
 **Everything else is never-resident** — `api_key`, a Bedrock **bearer** token and a
 Claude sign-in's token, each the person's own on their model provider.
 
 - The value is resolved at the injection sink or re-originated proxy-side, and the sandbox holds only a placeholder or an inert sentinel.
-- GitHub's `github_token` sits between the two lists: its git *transport* is never-resident (broker-injected, see the `git_pat` row), but the credential helper can still mint it in-sandbox.
+- A component's `header` delivery is an `api_key` grant and is never-resident too [0.8.9].
+  - On a person's own component it carries their own secret, `owner_only`.
+  - On an organisation's component a `shared` secret is the operator's, read from the operator's namespace and no other (`injectionGrantRead` in [`internal/api/runs_scm.go`](../internal/api/runs_scm.go)).
+  - Every authored policy refuses the `shared` mark; only the component gate sets it.
+- GitHub's `github_token` is never-resident as well, as the GitHub contrast above states.
+  - On a brokered run the credential helper refuses every GitHub host and the proxy's mint route refuses the grant id, so the installation token never enters the sandbox.
+  - A grant covering no repository mints nothing by any path (`MintInstallationToken` in [`internal/broker/github.go`](../internal/broker/github.go)).
 - A Bedrock bearer provider is therefore the one to prefer when the never-resident posture matters.
   - A bearer token is a *static* `Authorization` header, so the proxy TLS-MITMs `bedrock-runtime.*` and injects it exactly like an api-key
     - (the CA private key stays in proxy memory; the host is an exact, non-wildcard MITM entry with a paired injection rule — the corp-artifact-host trust boundary in `isMITMHost`).
 - That entry is authored as `host:port` — the data-plane port the run actually reaches (443 unless the provider's `bedrock.base_url` names another).
   - So the TLS termination and the bearer injection are scoped to that port exactly as an artifact redirect's are.
   - A CONNECT to the same host on any other port falls through as an opaque tunnel and is never offered the bearer.
+
+**Never resident is not never readable: an allowed host can send the value back.**
+
+- The proxy relays a destination's response to the sandbox as it arrives (`relay` in [`internal/egress/proxy/local_routes.go`](../internal/egress/proxy/local_routes.go)).
+- So a host that echoes request headers returns the credential the proxy added, and the workload reads it in the response.
+- Masking replaces the value in output Wardyn relays or stores. It does not remove it from the response the workload receives.
+- Not holding the value also does not stop the workload from using it: a request it sends to that host carries the header.
+- What bounds it:
+  - the header goes only to the exact host its rule names, and a host carries one credential (`buildInjector` in [`internal/egress/proxy/inject.go`](../internal/egress/proxy/inject.go));
+  - a member's inline `api_key` grant that names an operator's secret must match a pairing the operator listed, header and format included (`storedSecretPairingInCeiling` in [`internal/api/inline_policy_secrets.go`](../internal/api/inline_policy_secrets.go)).
+- On a component's `shared` grant the echoed value is the operator's secret, returned into a member's sandbox (residual #64).
+- [How a credential reaches a run](../docs/CREDENTIALS.md#residuals) states this residual for each kind.
 
 **Known v1 coverage gaps (recorded honestly; not silent):**
 - Only the **system prompt + the last message** of each turn are scanned.
@@ -2577,9 +2717,9 @@ Claude sign-in's token, each the person's own on their model provider.
 - The 32 MiB per-request buffer (only when inspection is enabled) raises proxy memory vs. the prior streaming path.
   - It is bounded per-request AND in aggregate.
     - The extractor's live-heap amplification (~5.3x, and independent of which detectors are on) means two concurrent in-cap bodies would exceed the proxy sidecar's 256 MiB cgroup cap.
-    - So concurrent inspection is limited by a semaphore (`maxConcurrentScans`, [`internal/egress/proxy/llm_routes.go`](../internal/egress/proxy/llm_routes.go)) and `wardyn-proxy` sets the Go GC's soft memory limit from that same cgroup ceiling at boot.
+    - So concurrent inspection is limited by a semaphore (`maxConcurrentScans`, [`internal/egress/proxy/llm_budget.go`](../internal/egress/proxy/llm_budget.go)) and `wardyn-proxy` sets the Go GC's soft memory limit from that same cgroup ceiling at boot.
   - An over-budget request WAITS and is still fully inspected — load never turns into unscanned egress.
-  - That wait is itself BOUNDED, by the request's own context and a wall-clock cap (`scanQueueWait`), because nothing above the call bounds it:
+  - That wait is itself BOUNDED, by the request's own context and a wall-clock cap (`scanQueueWait` in [`internal/egress/proxy/llm_budget.go`](../internal/egress/proxy/llm_budget.go)), because nothing above the call bounds it:
     - the agent-facing listener sets `ReadTimeout 0` so that streaming bodies and CONNECT tunnels work,
     - and only the inner MITM server carries a whole-request deadline.
     - So without the cap one slow-loris POST from the sandbox, holding the single slot across the read of its own body, would park every other inspected request of the run indefinitely,
@@ -2595,7 +2735,8 @@ Claude sign-in's token, each the person's own on their model provider.
   - `install_mitm_ca` writes the per-run CA for OpenSSL-shaped clients (`SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE`/`CURL_CA_BUNDLE`) and Node (`NODE_EXTRA_CA_CERTS`) — never into a JVM's `cacerts` keystore or `DENO_CERT`.
   - A run whose task trusts a MITM'd host through a JVM HTTP client or Deno fails the TLS handshake to that host (closed-direction failure — a loud error, not a silent trust bypass or leaked credential) rather than succeeding through the intercept.
   - Fixing this needs a per-runtime trust-store import at the same install point, tracked as a follow-up.
-  - **Scope:** MITM inspection is **not** mandatory for any egress class — only the LLM hosts (`api.anthropic.com`/`api.openai.com`) and operator-configured corp artifact hosts (`MITMHosts`) are intercepted.
+  - **Scope:** MITM inspection is **not** mandatory for any egress class — only the LLM hosts (`api.anthropic.com`/`api.openai.com`) and the exact hosts dispatch writes into the run's `MITMHosts` are intercepted.
+    - They include operator-configured corp artifact hosts, a model provider's host, the run's own AWS sign-in portal, and, since 0.8.9, the header host of a component attached to the run, on port `443` (`isMITMHost` in [`internal/egress/proxy/mitm.go`](../internal/egress/proxy/mitm.go)).
     - **Every other host, including internal endpoints reached via the upstream corp-proxy lane, is an opaque CONNECT tunnel Wardyn never TLS-terminates.**
   - So a JVM/Deno client reaching an internal API or corp SaaS is unaffected — the gap bites only when such a client is pointed at a MITM-eligible host.
   - Route it through a non-inspected lane, or wait on the follow-up.
@@ -3358,8 +3499,8 @@ production deployments. Requires a registered KVM microVM runtime — `kata*` (p
 
 - ID + L2 proxy-side injection + SecretRegistry late-binding + output masking on the
   brokered-upload/audit/proxy-log paths 🟢 **[shipped]**
-- (the optional `-out-dir` recording fallback is unmasked and the registry is process-local and
-  fails open — both in [§4.1](#41-output-masking-and-the-paths-it-does-not-cover) —
+- (the optional `-out-dir` recording fallback is unmasked, and wardynd's registry is shared through
+  Postgres and fails closed — both in [§4.1](#41-output-masking-and-the-paths-it-does-not-cover) —
   - and there is a named, bounded set of resident-secret exceptions:
     [§5.1a](#51a-llm-egress-content-inspection--the-honest-claims-contract) is the complete list)
 
