@@ -106,6 +106,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   run-policy, second-user and workspace-tier sections are now bullets, nested lists and alerts, with
   every repository file they cite linked. No rule, default or limit changed.
 - The policy reference and the example-policy notes read as bullets, alerts and tables with every file reference a link; no field, default or limit changed.
+- **Threat model: sections 0 to 3, 4 (except 4.1) and 6 to 8 are bullets and split table rows.** Every
+  sentence is kept; the longest table cells move into subsections under their table, and file references
+  are links.
 
 ### Fixed
 
