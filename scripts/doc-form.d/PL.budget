@@ -1,5 +1,5 @@
-# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words; PLUGGABILITY.md adds 158 words for 13 cell-expansion headings (51) and summaries (107), adoption/README.md adds 1 for the H2 the summary rule needs.
-docs/PLUGGABILITY.md=3048 share=35
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words; PLUGGABILITY.md adds 172 words for 13 cell-expansion headings (51) and summaries (121), adoption/README.md adds 1 for the H2 the summary rule needs.
+docs/PLUGGABILITY.md=3062 share=35
 docs/VERIFY.md=1456 share=35
 docs/EXPORT.md=476 share=35
 docs/RECORDING-ROOT-READ.md=524 share=35
