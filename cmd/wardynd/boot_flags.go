@@ -342,6 +342,9 @@ type bootFlags struct {
 	sshAdvertise    *string
 	sshProxyCommand *string
 	sshRoleTTL      *time.Duration
+	// sshMaxSessionsPerRun is api.Config.SSHMaxSessionsPerRun, validated by
+	// validateSSHMaxSessionsPerRun.
+	sshMaxSessionsPerRun *int
 	// apiTokenMaxTTL caps a newly minted API token's lifetime — see
 	// api.Config.APITokenMaxTTL.
 	apiTokenMaxTTL *time.Duration
@@ -638,6 +641,7 @@ func parseBootFlags() *bootFlags {
 		sshProxyCommand:        flagEnv("ssh-proxy-command", "WARDYN_SSH_PROXY_COMMAND", "", `ssh ProxyCommand published on /healthz for people to reach the SSH gateway through a TLS-terminating listener on 443; the console and "wardyn run ssh" show it, the daemon never runs it. No control characters, newlines or single quotes; at most 512 bytes. Empty (default) publishes none`),
 		roleStampTTL:           flagDuration("role-stamp-ttl", "WARDYN_ROLE_STAMP_TTL", 0, "how old an API token's or console session's role stamp may be before its owner must sign in again (duration; 0 = off)"),
 		governanceChangeTTL:    flagDuration("governance-change-ttl", "WARDYN_GOVERNANCE_CHANGE_TTL", 72*time.Hour, "how long a governance change held for a second human (WARDYN_GOVERNANCE_SECOND_HUMAN) waits for approval before it expires (duration; must be positive)"),
+		sshMaxSessionsPerRun:   flagIntEnv("ssh-max-sessions-per-run", "WARDYN_SSH_MAX_SESSIONS_PER_RUN", 4, "most concurrent SSH channels (shell, exec, sftp, -L forward) one run may hold across every connection, integer 1 to 64; wardyn-sync channels have their own cap of 2"),
 		sshRoleTTL:             flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration)"),
 		apiTokenMaxTTL:         flagDuration("api-token-max-ttl", "WARDYN_API_TOKEN_MAX_TTL", 0, "longest lifetime a newly minted API token may have; a mint that asks for none gets this, one that asks for more is clamped to it (duration; 0 = no cap)"),
 		allowUnknownMigrations: flagBool("allow-unknown-migrations", "WARDYN_ALLOW_UNKNOWN_MIGRATIONS", false, "BREAK-GLASS: boot even though the database records migrations this wardynd does not ship (a newer wardynd migrated it). Normally refused — a downgrade is unsupported; restore the pre-upgrade dump instead"),

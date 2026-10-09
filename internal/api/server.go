@@ -580,6 +580,11 @@ type Config struct {
 	// same posture production does rather than an accidental zero-tolerance
 	// TTL that fails every override.
 	SSHRoleTTL time.Duration
+	// SSHMaxSessionsPerRun is WARDYN_SSH_MAX_SESSIONS_PER_RUN: the per-run cap
+	// on concurrent shared SSH channels (session and direct-tcpip). Zero
+	// defaults to defaultSSHSessionsPerRun in New; cmd/wardynd validates the
+	// operator's value at boot.
+	SSHMaxSessionsPerRun int
 	// APITokenMaxTTL is WARDYN_API_TOKEN_MAX_TTL: the longest lifetime a newly
 	// minted API token may have. Zero (the default) means no cap. A mint that
 	// asks for no TTL gets this one; a mint that asks for more is clamped to it.
@@ -718,12 +723,14 @@ type Server struct {
 	refRulesetRow  SetupCheck
 	refRulesetShow bool
 	// sshSessions counts concurrent SSH "session" channels (shell/exec/
-	// subsystem) per run, enforcing maxSSHSessionsPerRun (sshgateway.go). Zero
+	// subsystem) per run, enforcing Config.SSHMaxSessionsPerRun (sshgateway.go);
+	// sshSyncSessions is the separate wardyn-sync count. Zero
 	// value is ready to use. Process-local like lastTouch above — the same
 	// single-replica topology every in-memory bound in this codebase already
 	// assumes (see secretmask.Registry's residual in THREAT-MODEL.md).
-	sshSessionsMu sync.Mutex
-	sshSessions   map[uuid.UUID]int
+	sshSessionsMu   sync.Mutex
+	sshSessions     map[uuid.UUID]int
+	sshSyncSessions map[uuid.UUID]int
 	// builds tracks per-workspace image builds (the wizard's Build step).
 	// Zero value is ready to use.
 	builds buildTracker
@@ -854,6 +861,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.SSHRoleTTL <= 0 {
 		cfg.SSHRoleTTL = defaultSSHRoleTTL
+	}
+	if cfg.SSHMaxSessionsPerRun <= 0 {
+		cfg.SSHMaxSessionsPerRun = defaultSSHSessionsPerRun
 	}
 	if cfg.UISessionTTL <= 0 {
 		cfg.UISessionTTL = defaultUISessionTTL

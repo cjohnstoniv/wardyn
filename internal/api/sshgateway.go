@@ -67,13 +67,17 @@ const (
 	// immediately — before any handshake byte is read or written — so the
 	// bound bites before a goroutine or a NewServerConn call is spent on it.
 	maxSSHConnections = 64
-	// maxSSHSessionsPerRun bounds concurrent SSH channels — "session" (shell/
-	// exec/sftp) AND "direct-tcpip" (-L forwards) both draw from the SAME
-	// per-run counter — a single run may have open across every SSH
-	// connection combined. A resource-exhaustion bound, not a product limit —
-	// raise it if a real workflow needs more concurrent shells/forwards into
-	// one run.
-	maxSSHSessionsPerRun = 4
+	// defaultSSHSessionsPerRun is Config.SSHMaxSessionsPerRun's fallback
+	// (WARDYN_SSH_MAX_SESSIONS_PER_RUN). It bounds concurrent SSH channels —
+	// "session" (shell/exec/sftp) AND "direct-tcpip" (-L forwards) both draw
+	// from the SAME per-run counter — a single run may have open across every
+	// SSH connection combined. A resource-exhaustion bound, not a product
+	// limit.
+	defaultSSHSessionsPerRun = 4
+	// maxSSHSyncSessionsPerRun is the separate per-run cap on `wardyn-sync`
+	// channels (docs/design/0.9/PLAN.md §9.4): a sync never takes a shell's
+	// slot and a shell never takes a sync's.
+	maxSSHSyncSessionsPerRun = 2
 	// sshMaxEnvVars bounds how many "env" requests a single session channel
 	// accepts before dispatch (shell/exec/subsystem) — an unbounded client
 	// could otherwise grow the env slice forever pre-dispatch.
@@ -461,26 +465,30 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 		}
 		switch newCh.ChannelType() {
 		// "session" (shell/exec/sftp) and "direct-tcpip" (-L forwards) share
-		// ONE per-run cap (sshAcquireSession/maxSSHSessionsPerRun) — a single
-		// owner opening unbounded forwards is exactly the same resource-
-		// exhaustion shape as unbounded shells, so both draw from the same
-		// counter rather than needing a second one.
+		// ONE per-run cap (sshAcquireSession/Config.SSHMaxSessionsPerRun) — a
+		// single owner opening unbounded forwards is exactly the same
+		// resource-exhaustion shape as unbounded shells, so both draw from the
+		// same counter rather than needing a second one. A "session" channel
+		// over that cap is still accepted while a sync slot is free (the
+		// channel's purpose is unknown until its first request), and may then
+		// only become a wardyn-sync (sshOpenSlot).
 		case "session":
-			if !s.sshAcquireSession(runID) {
-				s.sshAuditChannelRejected(connCtx, runID, principal, "session")
+			slot := s.sshOpenSlot(runID)
+			if slot == nil {
+				s.sshAuditChannelRejected(connCtx, runID, principal, "session", sshCapReasonChannels, s.cfg.SSHMaxSessionsPerRun)
 				_ = newCh.Reject(ssh.ResourceShortage,
-					fmt.Sprintf("too many concurrent SSH channels for this run (max %d)", maxSSHSessionsPerRun))
+					fmt.Sprintf("too many concurrent SSH channels for this run (max %d)", s.cfg.SSHMaxSessionsPerRun))
 				continue
 			}
 			sshGo(func() {
-				defer s.sshReleaseSession(runID)
-				s.handleSSHSessionChannel(connCtx, runID, principal, newCh)
+				defer slot.release()
+				s.handleSSHSessionChannel(connCtx, runID, principal, newCh, slot)
 			})
 		case "direct-tcpip":
 			if !s.sshAcquireSession(runID) {
-				s.sshAuditChannelRejected(connCtx, runID, principal, "direct-tcpip")
+				s.sshAuditChannelRejected(connCtx, runID, principal, "direct-tcpip", sshCapReasonChannels, s.cfg.SSHMaxSessionsPerRun)
 				_ = newCh.Reject(ssh.ResourceShortage,
-					fmt.Sprintf("too many concurrent SSH channels for this run (max %d)", maxSSHSessionsPerRun))
+					fmt.Sprintf("too many concurrent SSH channels for this run (max %d)", s.cfg.SSHMaxSessionsPerRun))
 				continue
 			}
 			sshGo(func() {
@@ -577,43 +585,107 @@ func (s *Server) sshKeyRevocationRefusal(ctx context.Context, key types.SSHPubli
 // shared across channel TYPES by reading the audit trail rather than inferring
 // it from a client-side error string.
 //
-// channelType distinguishes the two callers, which is the whole point — a
+// channelType distinguishes the callers, which is the whole point — a
 // "session" refusal and a "direct-tcpip" refusal drawing on one counter is the
-// property being recorded.
-func (s *Server) sshAuditChannelRejected(ctx context.Context, runID uuid.UUID, principal, channelType string) {
+// property being recorded. max is the cap that refused.
+func (s *Server) sshAuditChannelRejected(ctx context.Context, runID uuid.UUID, principal, channelType, reason string, limit int) {
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.channel.reject",
 		runID.String(), "failure", mustJSON(map[string]any{
 			"channel_type": channelType,
-			"reason":       "per-run concurrent channel cap",
-			"max":          maxSSHSessionsPerRun,
+			"reason":       reason,
+			"max":          limit,
 		})))
 }
 
-// sshAcquireSession reports whether runID may open one more concurrent SSH
-// channel — "session" (shell/exec/sftp) OR "direct-tcpip" (-L forward), same
-// counter — incrementing its count on success (maxSSHSessionsPerRun).
-// Callers that get true MUST call sshReleaseSession exactly once when that
-// channel's handling ends.
-func (s *Server) sshAcquireSession(runID uuid.UUID) bool {
+const (
+	sshCapReasonChannels = "per-run concurrent channel cap"
+	sshCapReasonSync     = "per-run concurrent sync channel cap"
+)
+
+// sshAcquireCount increments counts[runID] unless it is already at limit.
+// Callers that get true MUST decrement it exactly once (sshReleaseCount).
+func (s *Server) sshAcquireCount(counts *map[uuid.UUID]int, runID uuid.UUID, limit int) bool {
 	s.sshSessionsMu.Lock()
 	defer s.sshSessionsMu.Unlock()
-	if s.sshSessions == nil {
-		s.sshSessions = map[uuid.UUID]int{}
+	if *counts == nil {
+		*counts = map[uuid.UUID]int{}
 	}
-	if s.sshSessions[runID] >= maxSSHSessionsPerRun {
+	if (*counts)[runID] >= limit {
 		return false
 	}
-	s.sshSessions[runID]++
+	(*counts)[runID]++
 	return true
 }
 
-func (s *Server) sshReleaseSession(runID uuid.UUID) {
+func (s *Server) sshReleaseCount(counts map[uuid.UUID]int, runID uuid.UUID) {
 	s.sshSessionsMu.Lock()
 	defer s.sshSessionsMu.Unlock()
-	s.sshSessions[runID]--
-	if s.sshSessions[runID] <= 0 {
-		delete(s.sshSessions, runID)
+	counts[runID]--
+	if counts[runID] <= 0 {
+		delete(counts, runID)
 	}
+}
+
+// sshAcquireSession reports whether runID may open one more concurrent SSH
+// channel of the shared kind — "session" (shell/exec/sftp) OR "direct-tcpip"
+// (-L forward), same counter — bounded by Config.SSHMaxSessionsPerRun. Callers
+// that get true MUST call sshReleaseSession exactly once when that channel's
+// handling ends.
+func (s *Server) sshAcquireSession(runID uuid.UUID) bool {
+	return s.sshAcquireCount(&s.sshSessions, runID, s.cfg.SSHMaxSessionsPerRun)
+}
+
+func (s *Server) sshReleaseSession(runID uuid.UUID) { s.sshReleaseCount(s.sshSessions, runID) }
+
+func (s *Server) sshAcquireSync(runID uuid.UUID) bool {
+	return s.sshAcquireCount(&s.sshSyncSessions, runID, maxSSHSyncSessionsPerRun)
+}
+
+func (s *Server) sshReleaseSync(runID uuid.UUID) { s.sshReleaseCount(s.sshSyncSessions, runID) }
+
+// sshChannelSlot is the per-run budget one "session" channel holds: the shared
+// one (a shell, exec, sftp), or the separate wardyn-sync one. Touched only from
+// the channel's own goroutine, so it needs no lock.
+type sshChannelSlot struct {
+	s     *Server
+	runID uuid.UUID
+	sync  bool
+}
+
+// sshOpenSlot admits a new "session" channel. The shared budget first; when it
+// is full the channel is admitted on a sync slot instead, because nothing says
+// what a session channel is for until its first request — refusing it here
+// would let four idle shells starve every sync. Nil when both are full.
+func (s *Server) sshOpenSlot(runID uuid.UUID) *sshChannelSlot {
+	if s.sshAcquireSession(runID) {
+		return &sshChannelSlot{s: s, runID: runID}
+	}
+	if s.sshAcquireSync(runID) {
+		return &sshChannelSlot{s: s, runID: runID, sync: true}
+	}
+	return nil
+}
+
+// toSync moves the channel onto a sync slot for a wardyn-sync request, freeing
+// its shared one. False (slot unchanged) when the sync cap is full.
+func (sl *sshChannelSlot) toSync() bool {
+	if sl.sync {
+		return true
+	}
+	if !sl.s.sshAcquireSync(sl.runID) {
+		return false
+	}
+	sl.s.sshReleaseSession(sl.runID)
+	sl.sync = true
+	return true
+}
+
+func (sl *sshChannelSlot) release() {
+	if sl.sync {
+		sl.s.sshReleaseSync(sl.runID)
+		return
+	}
+	sl.s.sshReleaseSession(sl.runID)
 }
 
 // sshFreshRun re-fetches run fresh (state may have changed since the SSH
