@@ -13,6 +13,20 @@ import (
 	"time"
 )
 
+func TestRemovedEnvLeftovers(t *testing.T) {
+	got := RemovedEnvLeftovers([]string{
+		"PATH=/bin", "WARDYN_MEMBER_WRITABLE_DENY=/srv/a", "WARDYN_MEMBER_MODE=", "WARDYN_USER_DESKTOP=true",
+		"WARDYN_ALLOW_MEMBER_ENV_SECRET=true",
+	})
+	want := []string{"WARDYN_ALLOW_MEMBER_ENV_SECRET (use WARDYN_ALLOW_USER_ENV_SECRET)", "WARDYN_MEMBER_WRITABLE_DENY (use WARDYN_USER_WRITABLE_DENY)"}
+	if !slices.Equal(got, want) {
+		t.Errorf("RemovedEnvLeftovers = %q, want %q", got, want)
+	}
+	if got := RemovedEnvLeftovers([]string{"WARDYN_USER_WRITABLE_DENY=/srv/a"}); len(got) != 0 {
+		t.Errorf("a current name was listed: %q", got)
+	}
+}
+
 func TestEnvOr(t *testing.T) {
 	t.Setenv("CLIUTIL_TEST_VAR", "")
 	if got := EnvOr("CLIUTIL_TEST_VAR", "def"); got != "def" {

@@ -2593,7 +2593,7 @@ full, under asset #4 (§2).
   - the grant may not overwrite a variable dispatch already set;
   - `requires_approval` is REFUSED rather than silently ignored (there is no mint to gate);
   - and the kind is **admin-only by default** — a member's `env_secret` or `file_secret` grant is dropped even for a ceiling-listed pairing unless the operator sets `WARDYN_ALLOW_USER_ENV_SECRET`.
-  - The older name, `WARDYN_ALLOW_MEMBER_ENV_SECRET`, is an alias that logs a boot warning and is removed in 0.9 (`deprecatedEnvAliases` in [`cmd/wardynd/boot_flags.go`](../cmd/wardynd/boot_flags.go)).
+  - The pre-0.9 name `WARDYN_ALLOW_MEMBER_ENV_SECRET` is no longer read and refuses boot (`refuseRemovedEnv`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)).
 - That drop is a ROLE check plus the switch, never a ceiling check.
   - So it binds every non-operator on every route a run policy arrives by (an inline body, a stored row the member selected, or the deployment default)
     - and regardless of whether a governance profile is assigned to them (`dropAdminOnlyEnvSecretGrants`).

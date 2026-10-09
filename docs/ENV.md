@@ -77,7 +77,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### Removed in 0.9
 
 - 0.9 stops reading six aliases, each now spelled with `USER` in place of `MEMBER`: `WARDYN_MEMBER_MODE` (now `WARDYN_USER_DESKTOP`), `WARDYN_MEMBER_WORKSPACE_ROOTS`, `WARDYN_MEMBER_WORKSPACE_ROOTS_MAP`, `WARDYN_MEMBER_WRITABLE_ROOTS`, `WARDYN_MEMBER_WRITABLE_DENY` and `WARDYN_ALLOW_MEMBER_ENV_SECRET`.
-- A leftover one is silently ignored, and a lost deny list widens the writable set: rename them before upgrading.
+- A leftover one refuses boot, naming its replacement: an ignored deny list would widen the writable set. `wardyn setup status --pre-upgrade` lists them.
 - A `member` role value and a plain `http://` issuer are refused at boot: see [OPERATIONS.md](OPERATIONS.md#upgrades).
 
 ## `wardynd` (control plane)

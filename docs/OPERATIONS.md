@@ -5243,8 +5243,8 @@ Moved, with the sections that followed it here, to [secrets-and-keys.md](operati
 > **Upgrading to 0.9 removes three compatibility behaviours. Check them first.**
 
 - **The `member` role.** `WARDYN_OIDC_ROLE_MAP` entries ending `=member` and `WARDYN_OIDC_DEFAULT_ROLE=member` refuse boot, naming the entry.
-  - Run `wardyn setup status --pre-upgrade` first; it lists each leftover (`--role-map` and `--default-role` override the environment). Remap them to `user` or a user type id.
-- **The `MEMBER` spellings of the `USER` variables** are ignored: see [ENV.md](ENV.md#removed-in-09).
+  - Run `wardyn setup status --pre-upgrade` first; it lists each leftover, variables included (`--role-map` and `--default-role` override the environment). Remap them to `user` or a user type id.
+- **The `MEMBER` spellings of the `USER` variables** refuse boot: see [ENV.md](ENV.md#removed-in-09).
 - **A plain `http://` OIDC issuer** with TLS refuses boot; use `https://`.
 
 - Migrations are **forward-only**.

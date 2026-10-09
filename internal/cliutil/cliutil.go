@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +26,32 @@ var exit = os.Exit
 func envFatal(env, val, want string) {
 	fmt.Fprintf(flag.CommandLine.Output(), "invalid %s=%q: want %s\n", env, val, want)
 	exit(2)
+}
+
+// removedEnv maps each variable 0.9 stopped reading to the one that replaced it. Nothing reads a removed
+// name, so a leftover is a setting silently lost; wardynd refuses boot on one and `wardyn setup status
+// --pre-upgrade` reports it.
+var removedEnv = map[string]string{
+	"WARDYN_MEMBER_MODE":                "WARDYN_USER_DESKTOP",
+	"WARDYN_MEMBER_WORKSPACE_ROOTS":     "WARDYN_USER_WORKSPACE_ROOTS",
+	"WARDYN_MEMBER_WORKSPACE_ROOTS_MAP": "WARDYN_USER_WORKSPACE_ROOTS_MAP",
+	"WARDYN_MEMBER_WRITABLE_ROOTS":      "WARDYN_USER_WRITABLE_ROOTS",
+	"WARDYN_MEMBER_WRITABLE_DENY":       "WARDYN_USER_WRITABLE_DENY",
+	"WARDYN_ALLOW_MEMBER_ENV_SECRET":    "WARDYN_ALLOW_USER_ENV_SECRET",
+}
+
+// RemovedEnvLeftovers lists, sorted, each removed variable environ (os.Environ's shape) still sets to a
+// non-empty value as "NAME (use REPLACEMENT)". Empty counts as unset, as compose forwards unset names.
+func RemovedEnvLeftovers(environ []string) []string {
+	var out []string
+	for _, kv := range environ {
+		name, value, _ := strings.Cut(kv, "=")
+		if repl, ok := removedEnv[name]; ok && value != "" {
+			out = append(out, name+" (use "+repl+")")
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // EnvOr returns the env var if set and non-empty, else def.

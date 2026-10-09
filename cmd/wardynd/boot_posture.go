@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/directory"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	_ "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // register "pg" secret store
@@ -405,6 +406,9 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := refuseRetiredModelEnv(os.Environ()); err != nil {
 		return err
 	}
+	if err := refuseRemovedEnv(os.Environ()); err != nil {
+		return err
+	}
 	if *f.preflightRatePerMin < 0 {
 		return fmt.Errorf("refusing to start: WARDYN_PREFLIGHT_RATE_PER_MIN is %d; want 0 (off) or a positive number", *f.preflightRatePerMin)
 	}
@@ -451,6 +455,17 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 		slog.Warn(w)
 	}
 	return nil
+}
+
+// refuseRemovedEnv refuses boot on a variable 0.9 stopped reading, naming it and its replacement. An
+// ignored WARDYN_MEMBER_WRITABLE_DENY would silently widen the writable set, so every removed name is
+// refused rather than ignored.
+func refuseRemovedEnv(environ []string) error {
+	left := cliutil.RemovedEnvLeftovers(environ)
+	if len(left) == 0 {
+		return nil
+	}
+	return fmt.Errorf("refusing to start: %s: removed in 0.9 and no longer read, so the setting would be silently lost — rename it before starting", strings.Join(left, ", "))
 }
 
 // validateHAPosture is the boot half of high availability, the half that still

@@ -34,3 +34,34 @@ func TestParseDefaultRoleRefusesRemovedMember(t *testing.T) {
 		}
 	}
 }
+
+// TestRefuseRemovedEnv: a leftover removed variable refuses boot, naming it and its replacement. Every
+// one is covered; an empty value (compose's unset) and the current names boot.
+func TestRefuseRemovedEnv(t *testing.T) {
+	for old, repl := range map[string]string{
+		"WARDYN_MEMBER_MODE":                "WARDYN_USER_DESKTOP",
+		"WARDYN_MEMBER_WORKSPACE_ROOTS":     "WARDYN_USER_WORKSPACE_ROOTS",
+		"WARDYN_MEMBER_WORKSPACE_ROOTS_MAP": "WARDYN_USER_WORKSPACE_ROOTS_MAP",
+		"WARDYN_MEMBER_WRITABLE_ROOTS":      "WARDYN_USER_WRITABLE_ROOTS",
+		"WARDYN_MEMBER_WRITABLE_DENY":       "WARDYN_USER_WRITABLE_DENY",
+		"WARDYN_ALLOW_MEMBER_ENV_SECRET":    "WARDYN_ALLOW_USER_ENV_SECRET",
+	} {
+		err := refuseRemovedEnv([]string{"PATH=/bin", old + "=x"})
+		if err == nil || !strings.Contains(err.Error(), old+" (use "+repl+")") || !strings.Contains(err.Error(), "refusing to start") {
+			t.Errorf("%s=x: err = %v, want a refusal naming it and %s", old, err, repl)
+		}
+		if err := refuseRemovedEnv([]string{old + "=", repl + "=x"}); err != nil {
+			t.Errorf("%s empty beside the current name refused: %v", old, err)
+		}
+	}
+}
+
+// TestValidateBootPostureRefusesRemovedEnv: the refusal is wired into boot, ahead of everything that
+// would read the flags.
+func TestValidateBootPostureRefusesRemovedEnv(t *testing.T) {
+	t.Setenv("WARDYN_MEMBER_WRITABLE_DENY", "/srv/a")
+	err := validateBootPosture(&bootFlags{}, tlsPosture{})
+	if err == nil || !strings.Contains(err.Error(), "WARDYN_MEMBER_WRITABLE_DENY (use WARDYN_USER_WRITABLE_DENY)") {
+		t.Fatalf("validateBootPosture err = %v, want the removed-variable refusal", err)
+	}
+}

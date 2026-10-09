@@ -8,8 +8,16 @@ import (
 	"testing"
 )
 
+var removedEnvNames = []string{
+	"WARDYN_MEMBER_MODE", "WARDYN_MEMBER_WORKSPACE_ROOTS", "WARDYN_MEMBER_WORKSPACE_ROOTS_MAP",
+	"WARDYN_MEMBER_WRITABLE_ROOTS", "WARDYN_MEMBER_WRITABLE_DENY", "WARDYN_ALLOW_MEMBER_ENV_SECRET",
+}
+
 func runPreUpgrade(t *testing.T, args ...string) (string, error) {
 	t.Helper()
+	for _, n := range removedEnvNames {
+		t.Setenv(n, "")
+	}
 	root := rootCmd()
 	out := &strings.Builder{}
 	root.SetArgs(append([]string{"setup", "status", "--pre-upgrade"}, args...))
@@ -29,11 +37,11 @@ func TestSetupStatusPreUpgradeListsLeftoverMember(t *testing.T) {
 		t.Fatal("a leftover member role must fail the check")
 	}
 	for _, want := range []string{
-		`3 leftover "member" role(s)`,
+		`3 leftover setting(s)`,
 		`WARDYN_OIDC_ROLE_MAP entry "Wardyn.Member = member"`,
 		`WARDYN_OIDC_ROLE_MAP entry "eng=member"`,
 		"WARDYN_OIDC_DEFAULT_ROLE=member",
-		`remap each to "user"`,
+		`remap a "member" role to "user"`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
@@ -56,5 +64,28 @@ func TestSetupStatusPreUpgradeReadsTheEnvironment(t *testing.T) {
 	t.Setenv("WARDYN_OIDC_DEFAULT_ROLE", "")
 	if _, err := runPreUpgrade(t); err == nil {
 		t.Fatal("the environment's role map was not checked")
+	}
+}
+
+// TestSetupStatusPreUpgradeListsRemovedEnv: a leftover removed variable fails the check, naming it and
+// its replacement; the empty value compose forwards for an unset one does not.
+func TestSetupStatusPreUpgradeListsRemovedEnv(t *testing.T) {
+	root := rootCmd()
+	out := &strings.Builder{}
+	for _, n := range removedEnvNames {
+		t.Setenv(n, "")
+	}
+	t.Setenv("WARDYN_MEMBER_WRITABLE_DENY", "/srv/a")
+	root.SetArgs([]string{"setup", "status", "--pre-upgrade", "--role-map", "a=admin"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err == nil {
+		t.Fatal("a leftover WARDYN_MEMBER_WRITABLE_DENY must fail the check")
+	}
+	if !strings.Contains(out.String(), "WARDYN_MEMBER_WRITABLE_DENY (use WARDYN_USER_WRITABLE_DENY)") {
+		t.Errorf("output lacks the variable and its replacement:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "WARDYN_MEMBER_MODE") {
+		t.Errorf("an empty variable was listed:\n%s", out.String())
 	}
 }

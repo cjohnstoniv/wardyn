@@ -148,7 +148,7 @@ func setupStatusCmd(client clientFn) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the raw setup-status JSON")
-	cmd.Flags().BoolVar(&preUpgrade, "pre-upgrade", false, "check the OIDC role settings for the 0.9 upgrade instead of asking the server: lists every leftover \"member\" role, exits non-zero if any (reads no server)")
+	cmd.Flags().BoolVar(&preUpgrade, "pre-upgrade", false, "check the OIDC role settings for the 0.9 upgrade instead of asking the server: lists every leftover \"member\" role and removed WARDYN_MEMBER_* variable, exits non-zero if any (reads no server)")
 	cmd.Flags().StringVar(&roleMap, "role-map", cliutil.EnvOr("WARDYN_OIDC_ROLE_MAP", ""), "with --pre-upgrade: the WARDYN_OIDC_ROLE_MAP value to check (default: the variable in this environment)")
 	cmd.Flags().StringVar(&defaultRole, "default-role", cliutil.EnvOr("WARDYN_OIDC_DEFAULT_ROLE", ""), "with --pre-upgrade: the WARDYN_OIDC_DEFAULT_ROLE value to check (default: the variable in this environment)")
 	return cmd
@@ -172,20 +172,21 @@ func leftoverMemberRoles(roleMap, defaultRole string) []string {
 }
 
 // preUpgradeMemberCheck is the 0.9 upgrade's pre-flight: 0.9 refuses to boot on a role setting that
-// still says "member", so it lists them while the old server is still running. A server that holds
-// one cannot report it after the upgrade, which is why this reads the settings, not the server.
+// still says "member" and on a removed WARDYN_MEMBER_* variable, so it lists them while the old server
+// is still running. A server that holds one cannot report it after the upgrade, which is why this reads
+// the settings and this environment, not the server.
 func preUpgradeMemberCheck(w io.Writer, roleMap, defaultRole string) error {
-	left := leftoverMemberRoles(roleMap, defaultRole)
+	left := append(leftoverMemberRoles(roleMap, defaultRole), cliutil.RemovedEnvLeftovers(os.Environ())...)
 	if len(left) == 0 {
-		fmt.Fprintln(w, "Wardyn 0.9 pre-upgrade check: no leftover \"member\" role in the role map or default role.")
+		fmt.Fprintln(w, "Wardyn 0.9 pre-upgrade check: no leftover \"member\" role or removed WARDYN_MEMBER_* variable.")
 		return nil
 	}
-	fmt.Fprintf(w, "Wardyn 0.9 pre-upgrade check: %d leftover \"member\" role(s) — 0.9 refuses to boot on them:\n", len(left))
+	fmt.Fprintf(w, "Wardyn 0.9 pre-upgrade check: %d leftover setting(s) — 0.9 refuses to boot on them:\n", len(left))
 	for _, e := range left {
 		fmt.Fprintf(w, "  - %s\n", e)
 	}
-	fmt.Fprintln(w, "  → remap each to \"user\" (the built-in Standard user type) or to a user type id, in your chart/env and in Getting started -> People, then upgrade")
-	return fmt.Errorf("%d leftover \"member\" role(s): remap them before upgrading to 0.9", len(left))
+	fmt.Fprintln(w, "  → remap a \"member\" role to \"user\" (the built-in Standard user type) or a user type id, and rename a variable as shown, in your chart/env and in Getting started -> People, then upgrade")
+	return fmt.Errorf("%d leftover setting(s): fix them before upgrading to 0.9", len(left))
 }
 
 // setupDetectProxyCmd runs the host-proxy detector IN THIS PROCESS and prints the
