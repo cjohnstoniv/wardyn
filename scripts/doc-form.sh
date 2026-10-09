@@ -54,7 +54,10 @@
 # the block ends at the next line that is exactly "---", both included) is
 # metadata, not prose. It is no paragraph block and holds no sentences, so it
 # meets no cap, no summary rule and no share; a skill's long "description:" line
-# is the case. Its words still count in the prose-word budget, which is
+# is the case. It is front matter only if every line between the two "---"
+# lines is blank, starts with whitespace, or starts with a YAML key
+# ("name:", "allowed-tools:"); a free prose line inside makes the whole block
+# ordinary page text. Its words still count in the prose-word budget, which is
 # unchanged. A "---" rule anywhere else in a page is not front matter.
 #
 # Known gap: text inside a code fence is outside every measure (caps, share,
@@ -237,6 +240,7 @@ VERSIONDOT = re.compile(r'(?<=\d)\.(?=\d)')
 
 
 INDENTED = re.compile(r'^\s+\S')
+YAML_KEY = re.compile(r'^[A-Za-z0-9_-]+:')
 
 
 def classify(line, prev_kind):
@@ -517,6 +521,9 @@ def analyze(path):
     front_end = -1
     if lines and lines[0] == '---':
         front_end = next((i for i in range(1, len(lines)) if lines[i] == '---'), -1)
+        if any(l.strip() and not l[0].isspace() and not YAML_KEY.match(l)
+               for l in lines[1:front_end]):
+            front_end = -1
 
     for lineno, raw in enumerate(lines):
         if lineno <= front_end:

@@ -380,4 +380,25 @@ DOC
 printf -- '\n---\nname: scratch\n%s\n---\n' "$LONGLINE"; } > "$TMP/docs/scratch/front.md"
 check_fails "a --- block that does not start on line 1" "word paragraph (max 80)"
 
+# A leading --- block that holds a free prose paragraph is not front matter:
+# the caps apply to it, so a 90-word paragraph there fails.
+scratch frontprose
+{ printf -- '---\nname: scratch\n%s\n---\n' "$(words 90)"; page <<DOC
+- $(words 20)
+DOC
+} > "$TMP/docs/scratch/frontprose.md"
+check_fails "a leading --- block holding a prose paragraph" "word paragraph (max 80)"
+
+# Front-matter words still count in the budget: the page below has 90 words in
+# its front matter, so a budget under that count must fail.
+scratch front
+{ printf -- '---\nname: scratch\n%s\n---\n' "$LONGLINE"; page <<DOC
+- $(words 20)
+DOC
+} > "$TMP/docs/scratch/front.md"
+out="$(gate_says --budget docs/scratch/front.md=50)"
+grep -qF "(budget 50, over by" <<<"$out" || fail "front-matter words must count against the budget: $out"
+if run_gate --budget docs/scratch/front.md=50; then fail "a budget below the front-matter words must exit non-zero"; fi
+echo "ok  front-matter words still count in the prose budget"
+
 echo "doc-form tests: PASS"
