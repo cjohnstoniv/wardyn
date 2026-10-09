@@ -142,7 +142,7 @@ See [`ARCHITECTURE.md`](../../ARCHITECTURE.md) → "Deployment surface".
 - As of 0.7.8 both example policies (`demo.json` and `default.json`) float `min_confinement_class` at **CC1** (hardened runc) — the strongest class every install can enforce
 - And an unspecified run defaults to the STRONGEST class the host actually advertises at or above that floor, not a bare CC2 a plain Docker host (no gVisor/Kata runtime registered) could never enforce.
 - A host with gVisor (or Kata) registered gets CC2 (or CC3) automatically; nothing to switch.
-- The two policies now differ only in their allowed-domains list (`default.json` is wider); switch to it for that:
+- The two policies now differ in two settings: `default.json` has a wider allowed-domains list, and it stops a run after an hour idle (`auto_stop_after_sec: 3600`) where `demo.json` never does (`0`). Switching to it changes both:
 
 ```sh
 WARDYN_DEFAULT_POLICY=/examples/policies/default.json make demo

@@ -1,5 +1,6 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words, so growth fails.
-deploy/compose/README.md=2263 share=35
+# deploy/compose/README.md 2277 adds 14: the demo/default policy switch names the idle auto-stop difference.
+deploy/compose/README.md=2277 share=35
 deploy/images/README.md=4479 share=35
 docs/operations/build-images.md=1205 share=35
 docs/ENVBUILD.md=2068 share=35

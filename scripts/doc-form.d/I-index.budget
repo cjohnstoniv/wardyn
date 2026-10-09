@@ -6,4 +6,5 @@
 README.md=2227 share=35
 # docs/README.md 597 adds 20: the index row for docs/CREDENTIALS.md.
 docs/README.md=597 share=35
-docs/TRY-IT.md=3201 share=35
+# docs/TRY-IT.md 3209 adds 8: the demo/default difference names idle auto-stop.
+docs/TRY-IT.md=3209 share=35
