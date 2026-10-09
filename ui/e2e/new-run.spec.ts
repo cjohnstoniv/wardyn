@@ -725,10 +725,27 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
     // `calc(100vh-5rem)` budget for a reason this test isn't about. Spliced
     // to a real barrier so that banner stays off, same as every other
     // pre-#214 assumption here.
+    // That runner offers Wall (CC2) too: the saved policy below floors the run
+    // at CC2, and a runner without it cannot build the run, so Launch is
+    // rightly held by the automatic preflight's "missing" backend row. The
+    // real backend's runner is none, so its preflight reports that row
+    // missing whatever the policy asks; the row is spliced to what this
+    // runner answers (setupBackendItem, compose_setup.go).
     await page.route("**/api/v1/setup/status*", async (route) => {
       const response = await route.fetch();
       const json = await response.json();
-      json.runner = { ...json.runner, driver: "docker", confinement_classes: ["CC1"] };
+      json.runner = { ...json.runner, driver: "docker", confinement_classes: ["CC1", "CC2"] };
+      await route.fulfill({ response, json });
+    });
+    await page.route("**/api/v1/runs/preflight", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      for (const item of json.setup_items ?? []) {
+        if (item.kind !== "backend") continue;
+        item.status = "satisfied";
+        delete item.detail;
+        delete item.fix;
+      }
       await route.fulfill({ response, json });
     });
 
@@ -749,6 +766,10 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
     await expect(page.getByRole("complementary").getByText("Tool rules", { exact: true })).toBeVisible();
     await goToNewRunPanel(page, "run");
     await page.getByLabel("Title").fill("e2e rail-height");
+    // The automatic preflight's verdict is the rail's last section; measure
+    // with it showing, and with Launch released by it.
+    await expect(rail(page).getByTestId("preflight-result")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Launch run" })).toBeEnabled();
     // Re-derived for the four-panel layout (#1922): Launch is reachable from
     // every panel, with the whole rail showing.
     await expectLaunchReachable(page, 650);
