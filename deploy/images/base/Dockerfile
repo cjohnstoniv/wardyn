@@ -135,6 +135,7 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
         openssh-client \
         openssh-sftp-server \
         socat \
+        rsync \
         corkscrew \
     && rm -rf /var/lib/apt/lists/*
 

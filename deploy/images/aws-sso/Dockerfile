@@ -126,6 +126,7 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
         openssh-client \
         tmux \
         gnupg \
+        rsync \
     && rm -rf /var/lib/apt/lists/*
 
 # Corporate build support (no-ops on OSS): install the optional corp CA into
