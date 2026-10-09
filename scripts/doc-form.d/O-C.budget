@@ -1,2 +1,4 @@
-# Prose-word budget (scripts/doc-form.sh): path=N. N is the prose word count of the shared file at the lane's base, so growth fails.
-docs/OPERATIONS.md=82986
+# Prose-word budget (scripts/doc-form.sh): path=N. N is the measured prose words of the shared file after the
+# merged operations rewrites: the base count (82881) plus 94 (tiers, denials, autonomy) plus 33 (network:
+# cell-expansion headings and summaries, less the joiners turned into full stops), so growth fails.
+docs/OPERATIONS.md=83008
