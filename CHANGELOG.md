@@ -39,6 +39,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Figures in the docs: the README (its opener and its architecture section), the docs index, the Desktop
   topology section, the architecture page's deployment section and the threat model's confinement-class
   section gain illustrations beside the text they explain. No diagram or sentence was removed.
+- `docs/CREDENTIALS.md` explains how each kind of credential reaches a run: which the egress proxy adds
+  to the outbound request, which a policy or a component delivers into the sandbox, and the residual
+  of each, with the code that backs every row.
 - A strict YAML/JSON policy-source parser and comment-preserving edit helpers for the policy
   editors. Ambiguous keys, aliases, tags, directives and unsafe numbers are refused before JSON
   conversion (#1917).
