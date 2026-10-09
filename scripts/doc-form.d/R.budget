@@ -1,5 +1,5 @@
-# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words plus cell-expansion headings and summaries, plus the H2 the summary rule needs: RELEASING.md +13 (1 heading, 1 summary), ROADMAP.md +317 (24 headings, 23 summaries), docs/DEMO-SCRIPT.md +43 (4 headings, 3 summaries, 1 dash), docs/LIVE-TESTS.md +51 (3 headings, 2 summaries).
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words plus cell-expansion headings and summaries, plus the H2 the summary rule needs: RELEASING.md +13 (1 heading, 1 summary), ROADMAP.md +330 (24 headings, 23 summaries, round-2 additions 13), docs/DEMO-SCRIPT.md +43 (4 headings, 3 summaries, 1 dash), docs/LIVE-TESTS.md +51 (3 headings, 2 summaries).
 RELEASING.md=5376 share=35
-ROADMAP.md=5791 share=35
+ROADMAP.md=5804 share=35
 docs/DEMO-SCRIPT.md=6867 share=35
 docs/LIVE-TESTS.md=2518 share=35
