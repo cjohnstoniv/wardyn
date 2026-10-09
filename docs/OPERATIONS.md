@@ -1137,12 +1137,13 @@ erases one person's retained records by explicit scope, in one audited act
 
 | Scope | What it erases |
 |---|---|
-| `credentials` | the person's stored credentials and the key they sit under (the same erase as `DELETE /people/{principal}/credentials`, which erases credentials only and nothing else) |
-| `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
-| `run_tasks` | the task text of the runs the person created |
+| `mask_copies` | the masking manifests of the runs the person created, after their live attaches, SSH shells and relays are fenced |
 | `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
 | `recordings` | their session recordings and `source: "recording"` output rows, with durable per-run fences against later writes; direct stdout and pane snapshots retain their independent `run_outputs` scope |
-| `mask_copies` | the masking manifests of those runs, after their live attaches, SSH shells and relays are fenced |
+| `run_tasks` | the task text of the runs the person created |
+| `components` | the components the person saved, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against |
+| `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
+| `credentials` | the person's stored credentials and the key they sit under (the same erase as `DELETE /people/{principal}/credentials`, which erases credentials only and nothing else) |
 
 The scopes run in the order above whatever order the body lists them: the person's live
 consumers are fenced first, the data they could still reach next, the keys last. Every scope is

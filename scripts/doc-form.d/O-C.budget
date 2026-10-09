@@ -1,4 +1,5 @@
 # Prose-word budget (scripts/doc-form.sh): path=N. N is the measured prose words of the shared file after the
 # merged operations rewrites: the base count (82881) plus 94 (tiers, denials, autonomy) plus 33 (network:
-# cell-expansion headings and summaries, less the joiners turned into full stops), so growth fails.
-docs/OPERATIONS.md=83008
+# cell-expansion headings and summaries, less the joiners turned into full stops) plus 36 (the person-erasure
+# scope table: the `components` row it lacked, and its first row no longer leaning on a later one), so growth fails.
+docs/OPERATIONS.md=83044

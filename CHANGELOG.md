@@ -120,6 +120,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- The person-erasure scope table in `docs/OPERATIONS.md` listed the scopes credentials first, and
+  the text under it says they run "in the order above". They run the other way round: live
+  consumers are fenced first and the keys go last. The table is now in the order the scopes run,
+  and it gains the `components` scope it did not list.
 - `docs/VERIFY.md` said nothing on the page needs an account, a token or a GitHub login, but
   `gh attestation verify` refuses to run until the GitHub CLI is signed in. The page now says so
   beside that command and scopes the claim to the other checks.
