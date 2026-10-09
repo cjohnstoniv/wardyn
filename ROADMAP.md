@@ -235,12 +235,12 @@
 - **The rollout is 0.9:**
   - the org control plane deciding for enrolled laptops (signed policy snapshots for offline use, the org deciding anything that touches org resources),
   - per-run placement between the laptop and the org's cluster and mixing the two, and the disk link.
-- Tracked on the `0.9.0` milestone.
+- Tracked on milestone `0.9.0`.
 
 | Milestone | Scope |
 |---|---|
 | **v0.8** | **Alpha RC.** The follow-through on 0.6/0.7 — the remaining enterprise-deployment enhancements, tools, and pieces — and the **last planned release candidate before the alpha go-live** |
-| **v0.9** | **Hybrid local + remote.** See [below](#v09-scope). |
+| **v0.9** | **Hybrid local + remote.** See [below](#v09-scope); [design](docs/design/0.9/PLAN.md). |
 | **v1.0** | SPIRE identity provider, OpenBao secret store, L3 MCP/tool gateway and the rest of the 1.0 list; see [below](#v10-scope). |
 | **v1.0 (git-token ref confinement)** | **Token-side** branch-namespace confinement for minted git tokens; see [below](#v10-git-token-ref-confinement-scope). |
 
