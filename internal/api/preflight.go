@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -70,6 +71,11 @@ type preflightResponse struct {
 	// deployment with no such row, or one whose only Azure DevOps row is
 	// shared).
 	GitCredential *SCMAccess `json:"git_credential,omitempty"`
+	// Components is what the run is given access to (componentFacts), from the
+	// spec and the gate's answers above — the preview's rows, with the
+	// credential verdicts only this door reads. Absent for a run with no
+	// repository on a Git provider and no component.
+	Components []componentFact `json:"components,omitempty"`
 }
 
 // preflightBurst and preflightLimiterMaxPeople size the per-person preflight
@@ -92,6 +98,21 @@ func (s *Server) refusePreflightRate(w http.ResponseWriter, r *http.Request) boo
 	}
 	writeErrorReason(w, http.StatusTooManyRequests, reasonPreflightRateLimited, "too many preflight checks; slow down")
 	return true
+}
+
+// advertisedConfinement is the classes the runner advertises, for Review's
+// default-class math, best-effort: no runner, or one that cannot answer, is
+// nil — the default then stays at the policy minimum and Review never refuses
+// on it (handlePreflightRun).
+func (s *Server) advertisedConfinement(ctx context.Context) []types.ConfinementClass {
+	if s.cfg.Runner == nil {
+		return nil
+	}
+	caps, err := s.cfg.Runner.Capabilities(ctx)
+	if err != nil {
+		return nil
+	}
+	return caps.ConfinementClasses
 }
 
 // handlePreflightRun is a DRY-RUN of handleCreateRun's resolution + gating: it
@@ -270,14 +291,21 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// exist yet at preflight time (no grants have been minted) — the
 	// workspace + clone-host union below is the lane that can silently
 	// diverge without any grant ever being involved.
-	unionWorkspaceEgress(&spec, wsRefs)
-	for _, ws := range wsRefs {
-		unionAllowedDomains(&spec, workspaceCloneEgress(ws))
-	}
+	unionPreviewWorkspaceEgress(&spec, wsRefs)
 	// Which secrets actually exist (names only) — the SAME map compose builds,
 	// read where launch reads it (TestPreflightMirrorsLaunchGates pins the order).
 	presentSecrets := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
 	_ = s.applyWorkspaceRequirementsFor(ctx, presentSecrets, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
+	if _, refusal := s.unionDirectGitHubEgress(r, req, &spec, ceiling); refusal.write(s, w, r) {
+		return
+	}
+	// The SAME component gate launch runs, in the same place in the order: a
+	// component launch would refuse is refused here, and the floor and the
+	// autonomy grade below read the spec it expanded.
+	comps, refusal := s.applyRunComponents(r, req, &spec, ceiling, wsRefs, true)
+	if refusal.write(s, w, r) {
+		return
+	}
 
 	// Enforced confinement class — the SAME math launch runs, now on the FOLDED
 	// spec (enforcedConfinement, called by resolveEnforcedConfinement in
@@ -297,13 +325,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// minimum, matching this handler's "advisory only, never blocks Review"
 	// contract; the runner-capability REFUSAL stays un-reproduced (doc comment
 	// above), reported by the checklist's backend row instead.
-	var advertised []types.ConfinementClass
-	if s.cfg.Runner != nil {
-		if caps, cerr := s.cfg.Runner.Capabilities(ctx); cerr == nil {
-			advertised = caps.ConfinementClasses
-		}
-	}
-	enforced, err := enforcedConfinement(spec, reqCC, advertised)
+	enforced, err := enforcedConfinement(confinementFloorSpec(spec, comps), reqCC, s.advertisedConfinement(ctx))
 	if err != nil {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return
@@ -333,7 +355,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// launch's egress union, so both are dropped here too.
 	// The frozen Azure DevOps and Bedrock grades are dropped with the rest:
 	// preflight dispatches nothing, so there is no dispatch for them to bind.
-	autonomy, _, scmSite, _, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling, modelCred)
+	autonomy, _, scmSite, _, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling, modelCred, comps)
 	if !ok {
 		return
 	}
@@ -453,5 +475,6 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// and seedAndAdmitWorkspace each gate at launch.
 	runRepos := append([]string{req.Repo, req.DevcontainerRepo}, repoLocatorsOf(spec.WorkspaceRepos)...)
 	resp.GitCredential = s.gitCredentialFactForRepos(ctx, oidcHumanFromContext(ctx), runRepos)
+	resp.Components = componentFacts(req, spec, scmSite, comps, resp.GitCredential)
 	writeJSON(w, http.StatusOK, resp)
 }

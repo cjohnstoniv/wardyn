@@ -68,7 +68,7 @@ const (
 // cannot be computed, so nothing can be said about whether it is in the ceiling.
 func GrantWithin(g types.GrantSpec, ceiling []types.GrantSpec) error {
 	switch g.Kind {
-	case types.GrantAPIKey, types.GrantGitPAT, types.GrantSSHKey, types.GrantEnvSecret,
+	case types.GrantAPIKey, types.GrantGitPAT, types.GrantSSHKey, types.GrantEnvSecret, types.GrantFileSecret,
 		types.GrantGitHubToken, types.GrantCloudSTS:
 	default:
 		return fmt.Errorf("eligible grant %q: invalid scope: unknown grant kind", g.Kind)

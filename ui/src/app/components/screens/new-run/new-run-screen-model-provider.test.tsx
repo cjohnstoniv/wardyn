@@ -31,9 +31,11 @@ vi.mock("react-router-dom", async () => {
   return { ...actual, useNavigate: () => navigateMock };
 });
 const createRunMock = vi.fn();
+vi.mock("../../../lib/api/policy-preview", () => ({ previewRunPolicy: vi.fn().mockResolvedValue({ spec: {}, pending: [], warnings: [], repository_access: [] }) }));
 vi.mock("../../../lib/api/runs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api/runs")>();
   return {
+    ...actual,
     isCredentialRefusal: actual.isCredentialRefusal,
     isGitCredentialRefusal: actual.isGitCredentialRefusal,
     runs: {
@@ -60,7 +62,7 @@ vi.mock("../../../lib/capabilities", async () => {
 // launch.credentialRefused/refusedProvider.
 const railProps: Array<{
   modelProvider?: { selectedId?: string; changeNote: string | null };
-  launch: { problem: string | null; workspaceUnavailable?: boolean };
+  launch: { problem: string | null; issue?: { panel: string } | null; workspaceUnavailable?: boolean };
 }> = [];
 vi.mock("./new-run-rail", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./new-run-rail")>();
@@ -78,6 +80,7 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { baseStatus, MODEL_PROVIDERS, providerStatus } from "../../../lib/test-fixtures";
 import { RAIL_PROVIDER } from "../../wardyn/copy";
 import { setField } from "../../../../test/set-field";
+import { DENIED } from "../../../lib/permissions-copy";
 
 const { bedrock, claude, anthropicKey, gateway } = MODEL_PROVIDERS;
 const user = userEvent.setup({ pointerEventsCheck: 0 });
@@ -85,7 +88,7 @@ const user = userEvent.setup({ pointerEventsCheck: 0 });
 function renderScreen() {
   return render(
     <MemoryRouter>
-      <OperatorProvider operator>
+      <OperatorProvider principal="test-owner" operator>
         <NewRunScreen />
       </OperatorProvider>
     </MemoryRouter>,
@@ -102,7 +105,7 @@ function renderScreenWithWorkspace(workspaceId: string) {
         { pathname: "/runs/new", state: { prefill: { inlinePolicy: false, state: { workspaces: [{ workspaceId }] } } } },
       ]}
     >
-      <OperatorProvider operator>
+      <OperatorProvider principal="test-owner" operator>
         <NewRunScreen />
       </OperatorProvider>
     </MemoryRouter>,
@@ -356,7 +359,11 @@ describe("NewRunScreen — R6 rule (3): a workspace pin silences LAUNCH_HINT", (
     ]);
     renderScreenWithWorkspace("ws1");
     await waitFor(() => expect(screen.getByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toBeInTheDocument());
-    await waitFor(() => expect(railProps.at(-1)?.launch.problem).toBeNull());
+    // The pinned workspace is its own issue (#1922); the pick-a-provider hint
+    // is never the reason named, with the required title given or not.
+    setField(screen.getByLabelText("Title"), "Pinned workspace");
+    await waitFor(() => expect(railProps.at(-1)?.launch.problem).toBe(DENIED.WORKSPACE_NOT_AVAILABLE));
+    expect(railProps.at(-1)?.launch.issue?.panel).toBe("workspace");
     expect(railProps.at(-1)?.modelProvider?.selectedId).toBeUndefined();
     expect(screen.queryByText(RAIL_PROVIDER.LAUNCH_HINT)).toBeNull();
   });

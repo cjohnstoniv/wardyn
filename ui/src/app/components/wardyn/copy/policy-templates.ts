@@ -30,14 +30,22 @@ export const POLICY_TEMPLATE_COPY = {
   DEFAULT_TITLE: "Use the default policy",
   DEFAULT_HINT: "Launch under the policy set for this deployment.",
   DEFAULT_HINT_PROFILE: (name: string) => `Launch under the policy set by your profile, ${name}.`,
+  // The other two modes' cards; the literals moved here unchanged from policy-panel.tsx.
+  SAVED_TITLE: "Reuse a saved policy",
+  SAVED_HINT: "One your operators already wrote and named.",
+  CUSTOM_TITLE: "Custom policy",
+  CUSTOM_HINT: "Start from a template and edit the spec for this run.",
   DEFAULT_PREVIEW: "Default policy, read-only",
   // The attached workspace still mounts into the run, so the note says so.
   DEFAULT_NOTE:
     "This run launches under this policy as it stands. Your attached workspace mounts into it; nothing else on this page is merged.",
-  // The default lane carries one workspace by reference, so a second attached
-  // one holds Launch and Check again rather than being left out of the run.
+  // The default and saved lanes carry one workspace by reference, so a second
+  // attached one holds Launch and Check again rather than being left out of
+  // the run (M-F, approved 2026-10-08).
   DEFAULT_ONE_WORKSPACE:
     "The default policy launches with one workspace. Remove the extra workspace, or choose Custom policy to keep them all.",
+  SAVED_ONE_WORKSPACE:
+    "A saved policy launches with one workspace. Remove the extra workspace, or choose Custom policy to keep them all.",
   DEFAULT_LOADING: "Loading the default policy…",
   DEFAULT_UNAVAILABLE: "Couldn't load the default policy to show here. The run still launches under it.",
 } as const;

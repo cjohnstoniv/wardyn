@@ -195,10 +195,11 @@ const (
 // Phase B changes is that this AccessToken/RefreshToken pair stops being
 // resident too.
 type awsSSOBlob struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token,omitempty"`
-	ClientID     string `json:"client_id,omitempty"`
-	ClientSecret string `json:"client_secret,omitempty"`
+	maskGeneration int64  // captured before reading; never persisted with the credential
+	AccessToken    string `json:"access_token"`
+	RefreshToken   string `json:"refresh_token,omitempty"`
+	ClientID       string `json:"client_id,omitempty"`
+	ClientSecret   string `json:"client_secret,omitempty"`
 	// StartURL + Region identify the SSO session; both are required to rebuild a
 	// usable ~/.aws/config and to derive the cache filename (sha1 of the session
 	// name / start URL).
@@ -314,7 +315,17 @@ func (s *Server) readAWSSSOBlob(ctx context.Context, scope awsSSOScope) (awsSSOB
 			return awsSSOBlob{}, false, nil
 		}
 	}
-	return readHarnessBlob(ctx, st, scope.ssoSecret(), "aws sso credential", awsSSOBlob.valid)
+	var generation int64
+	if scope.rowOwner() != "" {
+		var err error
+		generation, err = s.cfg.MaskRegistry.GlobalGeneration(ctx)
+		if err != nil {
+			return awsSSOBlob{}, false, err
+		}
+	}
+	blob, found, err := readHarnessBlob(ctx, st, scope.ssoSecret(), "aws sso credential", awsSSOBlob.valid)
+	blob.maskGeneration = generation
+	return blob, found, err
 }
 
 // storeAWSSSOBlob persists a captured AWS SSO credential under the reserved

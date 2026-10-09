@@ -25,6 +25,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/jsonstream"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/system"
 	"github.com/moby/moby/api/types/volume"
@@ -123,6 +124,13 @@ type fakeDocker struct {
 	// 0755 directory), and passwd is /etc/passwd's content ("" : absent).
 	etcDir *tar.Header
 	passwd string
+	// runDir is the /run entry CopyFromContainer reports (nil: absent, as in
+	// an image that ships no /run).
+	runDir *tar.Header
+	// imageVolumes is each image's VOLUME declarations: merged into a created
+	// container's Config.Volumes and reported in its Mounts, as the daemon
+	// does when it backs each with an anonymous volume.
+	imageVolumes map[string][]string
 
 	// failpoints
 	failCreateContainer string   // name prefix that should fail on create
@@ -522,6 +530,17 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 		merged.User = u
 		cfg = &merged
 	}
+	if vols := f.imageVolumes[cfg.Image]; len(vols) > 0 {
+		merged := *cfg
+		merged.Volumes = maps.Clone(cfg.Volumes)
+		if merged.Volumes == nil {
+			merged.Volumes = map[string]struct{}{}
+		}
+		for _, v := range vols {
+			merged.Volumes[v] = struct{}{}
+		}
+		cfg = &merged
+	}
 	c := &createdContainer{
 		name:  name,
 		cfg:   cfg,
@@ -595,6 +614,8 @@ func (f *fakeDocker) CopyFromContainer(ctx context.Context, id string, opts clie
 			hdr = f.etcDir
 		}
 		_ = tw.WriteHeader(hdr)
+	case opts.SourcePath == "/run" && f.runDir != nil:
+		_ = tw.WriteHeader(f.runDir)
 	case opts.SourcePath == "/etc/passwd" && f.passwd != "":
 		_ = tw.WriteHeader(&tar.Header{Name: "passwd", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(f.passwd))})
 		_, _ = tw.Write([]byte(f.passwd))
@@ -678,6 +699,19 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 	for _, n := range c.connectedTo {
 		addNet(n)
 	}
+	// Mounts: an anonymous volume per declared volume, then the run's own
+	// mounts, as the daemon reports them.
+	var mounts []container.MountPoint
+	if c.cfg != nil {
+		for _, v := range slices.Sorted(maps.Keys(c.cfg.Volumes)) {
+			mounts = append(mounts, container.MountPoint{Type: mount.TypeVolume, Destination: v})
+		}
+	}
+	if c.host != nil {
+		for _, m := range c.host.Mounts {
+			mounts = append(mounts, container.MountPoint{Type: m.Type, Source: m.Source, Destination: m.Target})
+		}
+	}
 	return client.ContainerInspectResult{Container: container.InspectResponse{
 		// Real Docker reports the name with a leading slash; mirror that so
 		// name-based run-id recovery is exercised faithfully. (v29 inlined the
@@ -687,6 +721,7 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 		State:           c.state,
 		Config:          c.cfg,
 		HostConfig:      c.host,
+		Mounts:          mounts,
 		NetworkSettings: &container.NetworkSettings{Networks: nets},
 	}}, nil
 }

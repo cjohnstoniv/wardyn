@@ -422,213 +422,6 @@ func (b *Broker) MintForGrant(ctx context.Context, caller *identity.Claims, gran
 	}
 }
 
-// mint runs the authoritative single-transaction mint. approvalHint, when
-// non-Nil, narrows the SELECT to that approval id (used after MintForGrant's
-// ensureApproval); when Nil it resolves the approval (or auto-approval) by
-// grant id. caller.SPIFFEID is the audit actor.
-func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, approvalHint uuid.UUID) (Minted, error) {
-	tx, err := b.db.BeginReadCommitted(ctx)
-	if err != nil {
-		return Minted{}, fmt.Errorf("broker: begin tx: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
-		}
-	}()
-
-	row, err := selectGrantApprovalForUpdate(ctx, tx, grantID, approvalHint)
-	if err != nil {
-		return Minted{}, err
-	}
-	if row.grantRunID != caller.RunID {
-		return Minted{}, ErrRunMismatch
-	}
-
-	if row.grantSpec.Kind == types.GrantCloudSTS {
-		b.auditRefusedMint(ctx, tx, caller, grantID, row.approvalID, row.grantSpec.Scope, "denied")
-		return Minted{}, ErrRequiresSPIRE
-	}
-
-	// Single-use guard: a written minted_jti blocks re-mint — UNLESS the human
-	// scoped their decision to the whole run, which is the B2 lease (see
-	// leaseCoversRemint). `leased` rides the rest of this function: it suppresses
-	// the minted_jti burn below (already burnt, and the conditional UPDATE would
-	// return 0 rows and fail the mint closed) and it is stamped on the audit
-	// event, because a lease widens what ONE approval authorizes and the stream
-	// has to say which mints were the human's and which were the lease's.
-	leased := false
-	if row.mintedJTI != "" {
-		if !leaseCoversRemint(row) {
-			return Minted{}, ErrAlreadyMinted
-		}
-		leased = true
-	}
-
-	// Chokepoint self-enforcement: an approval-required grant must carry an
-	// approval row. MintForGrant's routing guarantees this, but re-check it in
-	// the tx so the mint is self-contained for EVERY entry point (a caller
-	// passing a Nil approval hint would otherwise auto-mint an approval-gated
-	// grant that has no approval row). Fail closed.
-	if row.grantSpec.RequiresApproval && !row.hasApproval {
-		b.auditRefusedMint(ctx, tx, caller, grantID, uuid.Nil, row.grantSpec.Scope, "denied")
-		return Minted{}, ErrNotApproved
-	}
-
-	if row.hasApproval {
-		// Anything that is not APPROVED refuses here, so DENIED, EXPIRED and
-		// CANCELLED all land on ErrNotApproved — the mint chokepoint's
-		// fail-closed default needs no per-state arm, and a state it has never
-		// heard of refuses too.
-		if row.approvalState != types.ApprovalApproved {
-			if row.approvalState == types.ApprovalPending {
-				return Minted{}, ErrApprovalPending{ApprovalID: row.approvalID}
-			}
-			return Minted{}, ErrNotApproved
-		}
-		if row.approvalRunID != caller.RunID {
-			return Minted{}, ErrRunMismatch
-		}
-		// No-widening: the approver saw exactly requested_scope; it must
-		// deep-equal the grant spec scope.
-		if !jsonScopeEqual(row.requestedScope, row.grantSpec.Scope) {
-			b.auditRefusedMint(ctx, tx, caller, grantID, row.approvalID, row.grantSpec.Scope, "denied")
-			return Minted{}, ErrScopeMismatch
-		}
-	}
-
-	// Kill-switch: refuse to mint for a run that has already been revoked. The
-	// check runs inside the mint tx so a durably-recorded revocation blocks a
-	// subsequent mint — closing the gap where a mint reaching the broker after
-	// the run was killed still produced a live credential. The sub-RTT concurrent
-	// case (a revoke committing during this tx, after the check) is the published
-	// 1h-minted-token residual, not closed here. See threatmodel §5 #7.
-	if revoked, err := runRevoked(ctx, tx, row.grantRunID); err != nil {
-		return Minted{}, err
-	} else if revoked {
-		b.auditRefusedMint(ctx, tx, caller, grantID, row.approvalID, row.grantSpec.Scope, "denied")
-		return Minted{}, ErrRunRevoked
-	}
-
-	// Mint the kind-specific credential.
-	minted, err := b.mintKind(ctx, caller, row.grantSpec)
-	if err != nil {
-		b.auditRefusedMint(ctx, tx, caller, grantID, row.approvalID, row.grantSpec.Scope, "failure")
-		return Minted{}, err
-	}
-	minted.GrantID = grantID
-	minted.ApprovalID = row.approvalID
-
-	// From here on a REAL credential exists, and it only becomes the
-	// caller's on commit. Every arm below that returns an error instead is a
-	// DISCARD door — the lost single-use race, a failed minted_jti write, a
-	// failed audit insert, a failed commit — and a discarded github_token is a
-	// live ghs_… with contents:write for GitHub's full ~1h that reached NO
-	// committed credential.mint row: no jti, so mintedCredentialsSQL cannot see
-	// it and RevokeRun cannot reach it. Hand it back here.
-	//
-	// ONE defer rather than a call at each door, deliberately: the doors are the
-	// arms of a rollback that the `committed` flag already tracks for the tx, and
-	// a fifth arm added later would silently skip a fourth call site while this
-	// covers it by construction. It runs BEFORE the rollback defer above (LIFO)
-	// and depends on nothing the rollback touches.
-	defer func() {
-		if !committed {
-			b.discardMinted(ctx, minted)
-		}
-	}()
-
-	// Write minted_jti back in the SAME transaction (the provable join), and
-	// require the conditional UPDATE to affect exactly one row. This rows-affected
-	// check is LOAD-BEARING for single-use, not a backstop: the row.mintedJTI fast
-	// path above only catches contenders whose statement snapshot postdates the
-	// winner's commit. A contender that BLOCKS on the FOR UPDATE OF g lock mid-tx
-	// resumes on its ORIGINAL snapshot and reads a stale minted_jti='' from the
-	// joined approval row — Postgres runs EvalPlanQual only for the locked tuple
-	// (g), never re-fetching the non-locked, nullable-side approval — so it passes
-	// the fast path and mints a real token. Only this conditional UPDATE, which
-	// re-checks minted_jti='' against the latest committed row and returns 0 rows,
-	// stops that second credential from being returned. On 0 rows we fail closed;
-	// the deferred Rollback discards the tx, so the minted token above is never
-	// returned and expires at its <=1h TTL. (Proven by a two-session PG16
-	// experiment; see TestPG_ConcurrentMintOnApproval_ExactlyOnce.)
-	//
-	// Skipped under a lease, and that is the lease: the burn already happened on
-	// the first mint, so this conditional UPDATE would match 0 rows and fail a
-	// re-mint the human explicitly authorized. Nothing else is skipped — the
-	// approval state, run ownership, no-widening and kill-switch checks above all
-	// still ran on this transaction, so a revoked run's lease is dead the moment
-	// the revocation commits.
-	if row.hasApproval && !leased {
-		n, err := tx.Exec(ctx,
-			`UPDATE approvals SET minted_jti = $1 WHERE id = $2 AND minted_jti = ''`,
-			minted.JTI, row.approvalID)
-		if err != nil {
-			return Minted{}, fmt.Errorf("broker: write minted_jti: %w", err)
-		}
-		if n != 1 {
-			// A concurrent mint already claimed this approval. The token minted
-			// above is discarded (never returned); audit the loss so the throwaway
-			// mint is visible in the trail rather than silent.
-			b.auditRefusedMint(ctx, tx, caller, grantID, row.approvalID, row.grantSpec.Scope, "denied")
-			return Minted{}, ErrAlreadyMinted
-		}
-	}
-
-	// Write the credential.mint SUCCESS row on the SAME tx as the minted_jti
-	// burn, so the audit event and the single-use burn commit atomically. A
-	// post-commit write on a SEPARATE connection would open a crash window:
-	// minted_jti committed, then a crash before the audit write burns the approval
-	// with NO credential.mint row and nothing delivered — the git helper's retry
-	// then gets 409 already_minted forever. Fail CLOSED: if the durable record
-	// cannot be written, roll the whole mint back rather than hand out an
-	// unrecorded credential.
-	mintEv := mintEvent(caller, grantID, row.approvalID, minted.JTI, row.grantSpec.Scope, "success")
-	mintEv.Data = withSecretScope(mintEv.Data, minted)
-	if leased {
-		// A lease widens what ONE human decision authorizes, so the stream must
-		// say which mints the human made and which the lease did — B2's own
-		// condition for the feature. Stamped on the event rather than raised as a
-		// separate action so an existing credential.mint consumer sees it without
-		// subscribing to anything new.
-		mintEv.Data = withLeaseMarker(mintEv.Data, row.decisionScope)
-	}
-	if err := insertAuditEventTx(ctx, tx, mintEv); err != nil {
-		return Minted{}, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return Minted{}, fmt.Errorf("broker: commit mint tx: %w", err)
-	}
-	committed = true
-
-	// The durable record is committed above (in-tx). Fan the SAME event out to the
-	// SIEM sinks — best-effort, primary store NOT re-written (see the siem field
-	// doc). The Fanout logs any per-child failure itself. WithoutCancel: the
-	// credential is already the caller's, so a client hanging up now must not
-	// cost its SIEM record (SyslogSink.Emit skips on a done ctx). Every sink
-	// enqueues or writes locally, so detaching cannot pin the request.
-	if b.siem != nil {
-		_ = b.siem.Emit(context.WithoutCancel(ctx), mintEv)
-	}
-
-	// Register the minted token — and, for ssh_key, its known_hosts material —
-	// in the mask registry so PTY/asciicast streams can mask verbatim
-	// occurrences of the credential. A nil registry is a no-op; only
-	// value-bearing kinds (github_token, git_pat, ssh_key) set Token — api_key
-	// never does (its value stays proxy-side). KnownHosts is mask-registered too:
-	// see the Minted.KnownHosts doc comment for why a nominally
-	// public field still gets this treatment.
-	// A value that cannot be put on record is not handed out: the mint is
-	// committed and audited, and the caller gets the error instead.
-	if err := b.maskMinted(caller.RunID, minted); err != nil {
-		return Minted{}, err
-	}
-
-	return minted, nil
-}
-
 // maskMinted registers a minted credential's value-bearing fields with the mask
 // registry, committed before it returns. A nil registry is a no-op.
 func (b *Broker) maskMinted(runID uuid.UUID, minted Minted) error {
@@ -700,7 +493,7 @@ func withLeaseMarker(data json.RawMessage, scope types.ApprovalScope) json.RawMe
 // clamped to the contents:write + pull_requests:write ceiling and tagged with
 // the per-run branch namespace. api_key resolves to a proxy InjectionRule
 // (secret value never returned). cloud_sts is refused (caller already checked),
-// and so is env_secret — see its case.
+// and so are env_secret and file_secret — see their case.
 func (b *Broker) mintKind(ctx context.Context, caller *identity.Claims, spec types.GrantSpec) (Minted, error) {
 	ttl := ttlFor(spec)
 	switch spec.Kind {
@@ -723,6 +516,10 @@ func (b *Broker) mintKind(ctx context.Context, caller *identity.Claims, spec typ
 		// clear refusal — not a token, and not a puzzling "unknown kind" for a
 		// kind this binary knows perfectly well.
 		return Minted{}, fmt.Errorf("%w: %q is delivered as a sandbox env var at dispatch, not minted", ErrUnknownGrantKind, spec.Kind)
+	case types.GrantFileSecret:
+		// env_secret's refusal, for the file it is delivered as instead
+		// (api.resolveFileSecretGrants): no mint, no TTL, no JTI.
+		return Minted{}, fmt.Errorf("%w: %q is delivered as a sandbox file at dispatch, not minted", ErrUnknownGrantKind, spec.Kind)
 	default:
 		return Minted{}, fmt.Errorf("%w: %q", ErrUnknownGrantKind, spec.Kind)
 	}

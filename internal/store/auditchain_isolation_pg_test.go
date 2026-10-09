@@ -30,6 +30,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -116,11 +117,8 @@ func TestPG_InsertAuditEventDoesNotForkTheChainAtRepeatableRead(t *testing.T) {
 
 	// The WINNER holds the chain lock in an open transaction. Everything the
 	// loser does after this point happens with the lock already taken.
-	blocker, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire blocker conn: %v", err)
-	}
-	defer blocker.Release()
+	blocker := testutil.PGConn(t, pool)
+	defer func() { _ = blocker.Close(ctx) }()
 	tx, err := blocker.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin blocker tx: %v", err)

@@ -35,7 +35,7 @@ type Capabilities struct {
 	// UserDrives and ManagedFiles are fail-closed: false means the control
 	// plane refuses rather than admit a request the driver would reject.
 	UserDrives   bool `json:"user_drives,omitempty"`
-	ManagedFiles bool `json:"managed_files,omitempty"` // can deliver SandboxSpec.ManagedFiles (root-owned, AGENT CANNOT MODIFY)
+	ManagedFiles bool `json:"managed_files,omitempty"` // can deliver SandboxSpec.ManagedFiles: root-owned ceilings the agent cannot modify, and agent-owned secret files (ManagedFile.AgentOwned)
 	// EphemeralDiskEnforcement names what binds Resources.DiskMiB:
 	// `filesystem` (docker quota), `eviction` (k8s, never refuses the write),
 	// or `none`/empty. Aggregated as the WEAKEST across substrates.
@@ -81,7 +81,8 @@ type SandboxSpec struct {
 	// carried a flag rather than a path.
 	Drive *types.DriveMount
 	// ManagedFiles are operator-authored files the AGENT CANNOT MODIFY —
-	// root-owned, unwritable, present BEFORE the main process runs.
+	// root-owned, unwritable, present BEFORE the main process runs — and,
+	// marked ManagedFile.AgentOwned, secret files only the agent may read.
 	// POLICY-controlled. A driver that doesn't advertise
 	// Capabilities.ManagedFiles MUST refuse rather than start without them.
 	ManagedFiles []ManagedFile

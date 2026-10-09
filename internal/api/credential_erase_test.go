@@ -155,7 +155,9 @@ type sweepSecrets struct {
 	err  error
 }
 
-func (s *sweepSecrets) DeleteExpired(context.Context) ([]secretstore.Expired, error) { return s.gone, s.err }
+func (s *sweepSecrets) DeleteExpired(context.Context) ([]secretstore.Expired, error) {
+	return s.gone, s.err
+}
 
 // wardynd serves with the store wrapped in secretstore.Audited; the sweep must
 // still reach the wrapped store's DeleteExpired through it.

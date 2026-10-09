@@ -35,17 +35,20 @@ type RunOutput struct {
 	Truncated  bool
 	Incomplete bool
 	CaptureGap bool
-	Source     string // "stdout" or "pane_snapshot"
+	Source     string // "stdout", "pane_snapshot" or "recording"
 	MaskScope  string // "run", "globals_only" or ""
 	CapturedAt *time.Time
 	ClaimedAt  time.Time
+	// RecordingErased is independent of found: its durable source fence remains
+	// after the derived row is deleted, without hiding unrelated stdout/panes.
+	RecordingErased bool
 }
 
 // RunOutputStore is the run-output record. Optional like RunWatcherLeaser: the
 // ~30 test doubles that embed Store would route these to a nil interface, so
 // the api layer type-asserts and keeps output in memory only when a store lacks
-// it. Production is always PG. Every method but the sweeper's two checks the
-// run's erasure tombstone in its own transaction and answers ErrRunOutputErased.
+// it. Production is always PG. Capture and read transactions check the general
+// erasure tombstone; erasure and housekeeping remain permitted afterwards.
 type RunOutputStore interface {
 	// InsertPendingRunOutput records that a capture is owed for runID. A row
 	// that already exists is left as it is.
@@ -54,7 +57,7 @@ type RunOutputStore interface {
 	// is being retried, so the sweeper must not resolve it yet.
 	RefreshRunOutputClaim(ctx context.Context, runID uuid.UUID) error
 	// SaveFinalRunOutput writes the run's final row (output, flags and
-	// mask_scope as given), replacing a pending or capture-gap row. The
+	// mask_scope as given), replacing a pending or stdout capture-gap row. The
 	// database stamps captured_at.
 	SaveFinalRunOutput(ctx context.Context, o RunOutput) error
 	// SaveGapRunOutput writes a capture-gap row with no bytes, only over a
@@ -76,6 +79,20 @@ type RunOutputStore interface {
 	// ListStalePendingRunOutputs returns the runs whose pending row was claimed
 	// longer ago than age and which are terminal, oldest first, at most limit.
 	ListStalePendingRunOutputs(ctx context.Context, age time.Duration, limit int) ([]uuid.UUID, error)
+	// QueueRecordingRunOutput records recovery work after a committed upload.
+	// newRecording also invalidates a running claim; false is bounded read repair.
+	QueueRecordingRunOutput(ctx context.Context, runID uuid.UUID, retention, retryAfter time.Duration, newRecording bool) error
+	// ClaimRecordingRunOutput reserves one eligible terminal run; source reads
+	// happen after this transaction releases its connection.
+	ClaimRecordingRunOutput(ctx context.Context, runID uuid.UUID, retention, staleAfter time.Duration) (RecordingOutputClaim, bool, error)
+	// SaveRecordingRunOutput accepts only the current claim/generation and never
+	// replaces final direct stdout or a pane snapshot. It consumes the claim.
+	SaveRecordingRunOutput(ctx context.Context, claim RecordingOutputClaim, o RunOutput, retention time.Duration) (bool, error)
+	// ListPendingRecordingRunOutputs bounds one elected recovery pass.
+	ListPendingRecordingRunOutputs(ctx context.Context, staleAfter time.Duration, limit int) ([]uuid.UUID, error)
+	// EraseRecordingRunOutputs fences future recording-derived rows and deletes
+	// only that source, independently of the currently configured recording store.
+	EraseRecordingRunOutputs(ctx context.Context, runIDs []uuid.UUID) (int, error)
 }
 
 var _ RunOutputStore = PG{}
@@ -131,20 +148,25 @@ func (s PG) RefreshRunOutputClaim(ctx context.Context, runID uuid.UUID) error {
 
 // SaveFinalRunOutput — see RunOutputStore.
 func (s PG) SaveFinalRunOutput(ctx context.Context, o RunOutput) error {
+	if o.Source == "recording" {
+		return errors.New("store: recording output requires a recovery claim")
+	}
 	return s.runOutputTx(ctx, o.RunID, false, func(tx pgx.Tx) error {
 		body := o.Output
 		if body == nil {
 			body = []byte{}
 		}
-		_, err := tx.Exec(ctx, `
+		tag, err := tx.Exec(ctx, `
 			INSERT INTO run_outputs (run_id, output, truncated, incomplete, capture_gap, source, mask_scope, captured_at, claimed_at)
 			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), now(), now())
 			ON CONFLICT (run_id) DO UPDATE SET
 				output = EXCLUDED.output, truncated = EXCLUDED.truncated, incomplete = EXCLUDED.incomplete,
 				capture_gap = EXCLUDED.capture_gap, source = EXCLUDED.source, mask_scope = EXCLUDED.mask_scope,
-				captured_at = EXCLUDED.captured_at, claimed_at = EXCLUDED.claimed_at`,
+				captured_at = EXCLUDED.captured_at, claimed_at = EXCLUDED.claimed_at
+			WHERE run_outputs.captured_at IS NULL
+			   OR (run_outputs.capture_gap AND run_outputs.source = 'stdout')`,
 			o.RunID, body, o.Truncated, o.Incomplete, o.CaptureGap, o.Source, o.MaskScope)
-		if err != nil {
+		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
 		// The live chunks (0129) were the tail's stand-in until this row: they go in the transaction that writes it.
@@ -191,6 +213,11 @@ func (s PG) GetRunOutput(ctx context.Context, runID uuid.UUID) (RunOutput, bool,
 	var o RunOutput
 	found := false
 	err := s.runOutputTx(ctx, runID, true, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM run_output_recording_recovery WHERE run_id=$1 AND erased_at IS NOT NULL
+		)`, runID).Scan(&o.RecordingErased); err != nil {
+			return err
+		}
 		var scope *string
 		err := tx.QueryRow(ctx, `
 			SELECT run_id, output, truncated, incomplete, capture_gap, source, mask_scope, captured_at, claimed_at
@@ -204,6 +231,10 @@ func (s PG) GetRunOutput(ctx context.Context, runID uuid.UUID) (RunOutput, bool,
 		}
 		if scope != nil {
 			o.MaskScope = *scope
+		}
+		if o.RecordingErased && o.Source == "recording" {
+			o = RunOutput{RunID: runID, RecordingErased: true}
+			return nil
 		}
 		found = true
 		return nil
@@ -249,13 +280,18 @@ func (s PG) EraseRunOutputs(ctx context.Context, runIDs []uuid.UUID) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM run_output_chunks WHERE run_id = ANY($1)`, ids); err != nil {
 		return fmt.Errorf("store: erase run outputs: delete chunks: %w", err)
 	}
+	if _, err := tx.Exec(ctx, `UPDATE run_output_recording_recovery
+		SET completed_generation=requested_generation, claim_token=NULL WHERE run_id=ANY($1)`, ids); err != nil {
+		return fmt.Errorf("store: erase run outputs: finish recording work: %w", err)
+	}
 	return tx.Commit(ctx)
 }
 
 // DeleteRunOutputsOlderThan — see RunOutputStore.
 func (s PG) DeleteRunOutputsOlderThan(ctx context.Context, age time.Duration) (int, error) {
+	// Seconds, not age.String(): Go prints sub-millisecond ages in units Postgres intervals do not parse.
 	tag, err := s.Pool.Exec(ctx,
-		`DELETE FROM run_outputs WHERE captured_at IS NOT NULL AND captured_at < now() - $1::interval`, age.String())
+		`DELETE FROM run_outputs WHERE captured_at IS NOT NULL AND captured_at < now() - make_interval(secs => $1)`, age.Seconds())
 	if err != nil {
 		return 0, fmt.Errorf("store: delete old run outputs: %w", err)
 	}
@@ -270,8 +306,8 @@ func (s PG) ListStalePendingRunOutputs(ctx context.Context, age time.Duration, l
 	}
 	rows, err := s.Pool.Query(ctx, `
 		SELECT o.run_id FROM run_outputs o JOIN agent_runs r ON r.id = o.run_id
-		WHERE o.captured_at IS NULL AND o.claimed_at < now() - $1::interval AND r.state <> ALL($2)
-		ORDER BY o.claimed_at LIMIT $3`, age.String(), nonTerminal, limit)
+		WHERE o.captured_at IS NULL AND o.claimed_at < now() - make_interval(secs => $1) AND r.state <> ALL($2)
+		ORDER BY o.claimed_at LIMIT $3`, age.Seconds(), nonTerminal, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: list stale pending run outputs: %w", err)
 	}

@@ -9,7 +9,7 @@
 # library) — so it stays in the default build with no new module deps. Because
 # it shells out to `docker`, the runtime image is NOT distroless: it needs the
 # docker CLI and a shell on PATH. We use alpine + the docker-cli package.
-FROM golang:1.27-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS builder
+FROM golang:1.27.2-alpine@sha256:85dc1069ac644ea3c527b177303a406eb3358192816cd7f9e5848eb658851673 AS builder
 
 WORKDIR /build
 

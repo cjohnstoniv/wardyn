@@ -56,8 +56,10 @@ ARG TARGETARCH
 # sums above (that tarball's sha512 matched the integrity the registry
 # publishes). It happens in the same RUN as the code-server install, so no
 # image layer carries 1.10.0. The lines refuse any bundled version other than
-# 1.10.0: when a code-server bump brings the fixed module, the build fails
-# here, and these two ARGs and the shell-quote lines below are deleted.
+# 1.10.0: a changed bundle requires re-inspecting both the module and the
+# embedded-code tracking below before removing the replacement.
+# The bundled @devcontainers/cli also inlines its own copy; #1904 and the
+# parent README track it separately. Replacing this module does not fix it.
 ARG SHELL_QUOTE_VERSION=1.11.0
 ARG SHELL_QUOTE_SHA256=028be526afacb2bf5c6c008a95d5435b5d205135f68bb48afd0bb947610393f1
 RUN set -eu; \
@@ -66,18 +68,20 @@ RUN set -eu; \
 		arm64) plat=arm64; sum=0edb4b60d9c4744b2dd14b0911e3c2e6dd8c6f3c13bd58bda23ae744e59e7df1;; \
 		*) echo "unsupported arch '${TARGETARCH:-unknown}' for code-server" >&2; exit 1;; \
 	esac; \
+	printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
 	url="https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server-${CODE_SERVER_VERSION}-linux-${plat}.tar.gz"; \
 	curl -fsSL "$url" -o /tmp/code-server.tar.gz; \
-	echo "$sum  /tmp/code-server.tar.gz" | sha256sum -c -; \
+	echo "$sum  /tmp/code-server.tar.gz" | sha256sum --strict -c -; \
 	mkdir -p /usr/local/lib/code-server; \
 	tar -xzf /tmp/code-server.tar.gz -C /usr/local/lib/code-server --strip-components=1; \
 	rm -f /tmp/code-server.tar.gz; \
 	echo "installed code-server ${CODE_SERVER_VERSION} (${plat}), checksum-verified"; \
 	sq=/usr/local/lib/code-server/lib/vscode/node_modules/shell-quote; \
 	grep -q '"version": "1.10.0"' "$sq/package.json" || { \
-		echo "code-server ${CODE_SERVER_VERSION} does not bundle shell-quote 1.10.0 at $sq: delete the shell-quote replacement" >&2; exit 1; }; \
+		echo "code-server ${CODE_SERVER_VERSION} does not bundle shell-quote 1.10.0 at $sq: review the shell-quote replacement and #1904" >&2; exit 1; }; \
+	printf '%s' "$SHELL_QUOTE_SHA256" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
 	curl -fsSL "https://registry.npmjs.org/shell-quote/-/shell-quote-${SHELL_QUOTE_VERSION}.tgz" -o /tmp/shell-quote.tgz; \
-	echo "${SHELL_QUOTE_SHA256}  /tmp/shell-quote.tgz" | sha256sum -c -; \
+	echo "${SHELL_QUOTE_SHA256}  /tmp/shell-quote.tgz" | sha256sum --strict -c -; \
 	rm -rf "$sq"; \
 	mkdir -m 0755 "$sq"; \
 	tar -xzf /tmp/shell-quote.tgz -C "$sq" --strip-components=1 --no-same-owner; \

@@ -1,0 +1,4 @@
+# Prose must not grow beyond the base count plus cell-expansion headings and summaries (itemised in lane-reports/docs/P-worker.md Round 2).
+# docs/POLICIES.md 17827 adds 692 for the 0.8.9 component docs: 56 (three bullets: a run with a shared component secret exports a record, not a reusable policy), 17 (pointer to docs/CREDENTIALS.md), 6+1+27+3 (`file_secret` in the pairing list, the kind row, a table row and `owner_only`), 34 (the `api_key` echo caveat and the `shared` mark), 5 (the switch is `WARDYN_ALLOW_USER_ENV_SECRET` and governs `file_secret`), 547 (the `file_secret` section and the Custom components section); the diff tool counts 696, the gate 692 (link text).
+docs/POLICIES.md=17827 share=12
+examples/policies/README.md=1349 share=5

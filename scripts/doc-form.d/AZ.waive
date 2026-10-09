@@ -1,0 +1,4 @@
+# kind	path	key	words	reason
+sentence	docs/AZURE-DEVOPS.md	439bfd17693b4481584130930fbc04877bf65a10	39	one sentence of 39 words with no clause joiner (a list of what the dialog shows, joined by "and" after a parenthesis); text kept byte-identical (ledger row R0369)
+sentence	docs/AZURE-DEVOPS.md	95fa8952eaaf1da039ced1cff5dffb555117c576	39	one sentence of 39 words with no clause joiner (a condition followed by a comma list of three cases); text kept byte-identical (ledger row R0395)
+sentence	docs/AZURE-DEVOPS.md	0b7467f322fc5ae327c8cfaabadd9bb6a6c30cc8	36	one sentence of 36 words with no clause joiner (a condition with a parenthesised list, then one main clause); text kept byte-identical (ledger row R0743)

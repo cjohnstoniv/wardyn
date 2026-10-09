@@ -201,6 +201,7 @@ func (s *Server) routes() chi.Router {
 			// refuses a launch itself, but the console holds Launch over a refusal this
 			// endpoint gave for the exact same body less than 60 seconds ago.
 			r.Post("/runs/preflight", s.handlePreflightRun)
+			r.Post("/runs/policy-preview", s.handlePolicyPreview)
 			r.Get("/runs", s.handleListRuns)
 			r.Get("/runs/{id}", s.handleGetRun)
 			r.Get("/runs/{id}/events", s.handleRunEvents) // same gate as GET /runs/{id}
@@ -458,6 +459,7 @@ func (s *Server) routes() chi.Router {
 			operatorOnly.Post("/workspaces/{id}/env-as-code/write", s.handleWriteEnvAsCode)
 
 			s.mountSecretRoutes(r, securityOps)
+			s.mountComponentRoutes(r, operatorOnly) // components_routes.go: saved components, the caller's and the organisation's
 
 			// Site config: the operator-wide, admin-authored baseline every run
 			// inherits (upstream proxy secret ref, per-ecosystem artifact-registry

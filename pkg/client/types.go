@@ -125,6 +125,17 @@ type (
 	// image an operator saved (kind registry|custom|byo).
 	BaseImageEntry = types.BaseImageEntry
 
+	// Component is one stored custom component: the hosts it reaches, the
+	// secrets it carries (names, never values) with how each is delivered,
+	// and plain config. ComponentDefinition is that contract; ComponentSecret
+	// and ComponentDelivery are its secret rows. ComponentRef attaches one to
+	// a run, carried in CreateRunRequest.Components.
+	Component           = types.Component
+	ComponentDefinition = types.ComponentDefinition
+	ComponentSecret     = types.ComponentSecret
+	ComponentDelivery   = types.ComponentDelivery
+	ComponentRef        = types.ComponentRef
+
 	// SiteConfig is the operator-wide site config. Returned by GetSiteConfig and
 	// accepted by PutSiteConfig.
 	SiteConfig = types.SiteConfig

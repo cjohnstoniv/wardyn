@@ -315,9 +315,9 @@ func (s *Server) egressProvenanceAllowed(req types.WorkspaceRequirement) bool {
 // that field is only populated for a single-source workspace, so reading it
 // silently dropped the clone host of every non-GitHub repo past the first —
 // and a confined replay would then deny the clone it was launched to prove.
-// GitHub sources contribute nothing here by design (they route through the
-// broker, which is on-segment, not an egress host), which is exactly why the
-// gap stayed invisible.
+// GitHub HTTPS sources contribute nothing here: brokered clones use the
+// on-segment broker; custom direct clones use unionDirectGitHubEgress so their
+// derived hosts still pass the caller's domain bounds.
 func workspaceCloneEgress(ws types.Workspace) []string {
 	var hosts []string
 	seen := map[string]struct{}{}

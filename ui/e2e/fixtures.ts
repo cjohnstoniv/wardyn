@@ -4,6 +4,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import {
   test as base,
@@ -19,7 +20,7 @@ import {
 // The admin token the seeded backend is started with. The app stores it under
 // localStorage["wardyn_admin_token"] and probes /api/v1/runs on mount to decide
 // auth; injecting it before first navigation boots the app already signed in.
-export const ADMIN_TOKEN = process.env.WARDYN_E2E_TOKEN || "wardyn-e2e-token";
+export const ADMIN_TOKEN = process.env.WARDYN_E2E_TOKEN || "";
 // #510-F11 — exported so no OTHER e2e file has to re-type this literal (it
 // mirrors lib/api/core.ts's own private TOKEN_KEY; a rename there that this
 // file's own hand-typed copy missed used to make the two-tabs case in
@@ -27,10 +28,13 @@ export const ADMIN_TOKEN = process.env.WARDYN_E2E_TOKEN || "wardyn-e2e-token";
 // instead of a clear mismatch).
 export const TOKEN_KEY = "wardyn_admin_token";
 
-// Synthetic credentials: e2e-backend.sh stores only their SHA-256 hashes.
-export const MEMBER_TOKEN = `wdn_${"1".repeat(64)}`;
-const SECURITY_ADMIN_TOKEN = `wdn_${"2".repeat(64)}`;
-const SECURITY_ADMIN_2_TOKEN = `wdn_${"3".repeat(64)}`;
+// Rotate with each backend; e2e-backend.sh stores only their SHA-256 hashes.
+function personToken(principal: string): string {
+  return `wdn_${createHash("sha256").update(`${ADMIN_TOKEN}:${principal}`).digest("hex")}`;
+}
+export const MEMBER_TOKEN = personToken("e2e-member");
+const SECURITY_ADMIN_TOKEN = personToken("e2e-security-admin");
+const SECURITY_ADMIN_2_TOKEN = personToken("e2e-security-admin-2");
 export const MEMBER_PRINCIPAL = "e2e-member";
 
 // T-68 — page-health teardown gate. A spec whose page threw an uncaught JS
@@ -66,6 +70,7 @@ function pageHealthAllowed(testFile: string): boolean {
 // `test` from "@playwright/test" instead and manage storage themselves.
 export const test = base.extend({
   page: async ({ page }, use, testInfo) => {
+    if (!ADMIN_TOKEN) throw new Error("WARDYN_E2E_TOKEN is missing; use scripts/run-ui-e2e.sh or read e2e-backend.sh token for this backend");
     await page.addInitScript(
       ([key, tok]) => {
         try {
@@ -191,6 +196,39 @@ export async function navTo(page: Page, label: NavLabel): Promise<void> {
 // #125: a launch that answers 2xx always navigates in the same tick now,
 // warnings or not — there is no longer a held screen to click through, so
 // this is just the click and the wait.
+/** New Run's four panels (#1922). */
+export type NewRunPanel = "run" | "workspace" | "access" | "policy";
+
+const NEW_RUN_PANEL: Record<NewRunPanel, string> = { run: "Run", workspace: "Workspace", access: "Access", policy: "Policy" };
+
+/**
+ * Shows one of New Run's four panels through its panel nav, as a person does.
+ * A control on a panel that is not on screen is hidden, so every spec that
+ * drives New Run reaches its controls through here. Calling it for the panel
+ * already on screen changes nothing.
+ */
+export async function goToNewRunPanel(page: Page, panel: NewRunPanel): Promise<void> {
+  // The button's name may carry an issue count ("Run 1 issue").
+  const step = page
+    .getByRole("navigation", { name: "New run" })
+    .getByRole("button", { name: new RegExp(`^${NEW_RUN_PANEL[panel]}\\b`) });
+  if ((await step.getAttribute("aria-current")) !== "step") await step.click();
+  await expect(step).toHaveAttribute("aria-current", "step");
+}
+
+/**
+ * Opens New Run's custom policy source for editing, as a person does: the
+ * Policy panel, then "Edit policy". The panel opens on its read view, so the
+ * source field is not on screen until then. Returns the field.
+ */
+export async function editNewRunPolicy(page: Page): Promise<Locator> {
+  await goToNewRunPanel(page, "policy");
+  const source = page.getByLabel(/^Spec \((YAML|JSON)\)/);
+  if ((await source.count()) === 0) await page.getByRole("button", { name: "Edit policy" }).click();
+  await expect(source).toBeVisible();
+  return source;
+}
+
 export async function launchRun(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Launch run" }).click();
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/, { timeout: 15_000 });

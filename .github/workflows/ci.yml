@@ -1367,6 +1367,7 @@ jobs:
         env:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
           WARDYN_TEST_PG_SUPERUSER: ${{ matrix.superuser }}
+          WARDYN_TEST_POOL_GUARD: '1'
         run: ${{ matrix.run }}
       - name: Upload PG test reports
         id: upload_pg_test_reports

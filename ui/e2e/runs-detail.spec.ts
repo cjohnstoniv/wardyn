@@ -4,7 +4,7 @@
  */
 
 import { test, expect, ADMIN_TOKEN, gotoConsole, navTo } from "./fixtures";
-import { RUN } from "../src/app/components/wardyn/copy";
+import { RUN, RUN_SIGN_IN } from "../src/app/components/wardyn/copy";
 import { LOGIN_SANDBOX_NOTE } from "../src/app/components/screens/run-detail/login-sandbox-note";
 import { STATES } from "../src/app/components/wardyn/states";
 import type { Page } from "@playwright/test";
@@ -388,6 +388,80 @@ test.describe("Run detail — a login sandbox says what it is", () => {
     await expect(note).not.toContainText("Sign in from Getting Started");
     await expect(note).not.toContainText("closes itself when it is done");
     await expect(note).not.toContainText("already running in this box");
+  });
+
+  // M-F #1908: the waiting sign-in strip against a live page. The daemon runs
+  // `-runner none`, so a login run cannot be RUNNING for real; fixture 6 is
+  // spliced into the caller's own running login run, and the sign-in answers
+  // are the page's only input, so the reads can be counted and changed.
+  test("the waiting sign-in strip: identical answers are silent, a focus return reads at once, a changed code updates, and it leaves when not waiting", async ({
+    page,
+  }) => {
+    const me = await (await page.request.get("/api/v1/me", { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` } })).json();
+    await openRuns(page);
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === "e2e fixture 6") {
+        json.task = "harness login";
+        json.agent = "aws-sso";
+        json.state = "RUNNING";
+        json.created_by = me.principal;
+      }
+      await route.fulfill({ response, json });
+    });
+    let reads = 0;
+    let answer: Record<string, string> = {
+      state: "waiting",
+      user_code: "ABCD-EFGH",
+      verification_url: "https://device.example.com/activate",
+    };
+    await page.route("**/api/v1/runs/*/sign-in", async (route) => {
+      reads += 1;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(answer) });
+    });
+
+    await page.getByText("e2e fixture 6").click();
+    const strip = page.getByTestId("run-sign-in-strip");
+    await expect(strip).toBeVisible({ timeout: 15_000 });
+    await expect(strip).toContainText(RUN_SIGN_IN.TITLE);
+    await expect(strip.getByLabel(RUN_SIGN_IN.CODE_LABEL)).toHaveText("ABCD-EFGH");
+    await expect(strip).toContainText("Opens device.example.com");
+    await expect(strip.getByRole("link", { name: RUN_SIGN_IN.OPEN })).toHaveAttribute("rel", "noopener noreferrer");
+
+    // Window focus reads straight away, and the same answer changes nothing.
+    const before = reads;
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect.poll(() => reads).toBeGreaterThan(before);
+    await expect(strip.getByLabel(RUN_SIGN_IN.CODE_LABEL)).toHaveText("ABCD-EFGH");
+    expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe("A");
+
+    // A new code and link replace the old ones.
+    answer = { state: "waiting", user_code: "WXYZ-1234", verification_url: "https://other.example.com/go" };
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(strip.getByLabel(RUN_SIGN_IN.CODE_LABEL)).toHaveText("WXYZ-1234");
+    await expect(strip).toContainText("Opens other.example.com");
+
+    // Not waiting any more: the strip goes and the closing line stays.
+    answer = { state: "not_waiting" };
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(strip).toHaveCount(0);
+    await expect(page.getByText(RUN_SIGN_IN.NO_LONGER)).toBeVisible();
+  });
+
+  // M-F #1906: a finished run's Overview notice offers its one action as an
+  // information-coloured link, and it still switches to the Recording tab.
+  test("a finished run's Recording notice link is information-coloured and opens the Recording tab", async ({ page }) => {
+    await openRuns(page);
+    await page.getByText("e2e fixture 4").click();
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
+    const link = page.getByRole("button", { name: "Open the Recording tab →" });
+    await expect(link).toBeVisible();
+    await expect(link).toHaveClass(/text-info/);
+    await expect(link).not.toHaveClass(/text-primary/);
+    await link.click();
+    await expect(page.getByRole("tab", { name: "Recording" })).toHaveAttribute("aria-selected", "true");
   });
 
   // U-2 (W6 blind lens): the state gate, with the agent held constant. A login

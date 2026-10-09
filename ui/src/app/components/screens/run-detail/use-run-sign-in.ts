@@ -14,6 +14,7 @@
 import * as React from "react";
 import { runSignIn } from "../../../lib/api/run-sign-in";
 import type { RunSignIn } from "../../../lib/types";
+import { useOperatorResolved, usePrincipal } from "../../wardyn/operator-context";
 
 export const SIGN_IN_POLL_MS = 5000;
 /** How long after the run's start a `not_waiting` answer still keeps the loop going. */
@@ -33,70 +34,102 @@ export interface RunSignInRead {
   retry: () => void;
 }
 
+const EMPTY_READ = { waiting: null, ended: false, failed: false, checking: false };
+
 export function useRunSignIn(runId: string, createdAt: string, enabled: boolean): RunSignInRead {
-  const [waiting, setWaiting] = React.useState<Required<RunSignIn> | null>(null);
-  const [ended, setEnded] = React.useState(false);
-  const [failed, setFailed] = React.useState(false);
-  const [answered, setAnswered] = React.useState(false);
-  const [checking, setChecking] = React.useState(false);
-  const [attempt, setAttempt] = React.useState(0);
-  const seenWaiting = React.useRef(false);
-  const startedMs = Date.parse(createdAt);
+  const principal = usePrincipal();
+  const resolved = useOperatorResolved();
+  const scope = React.useMemo(() => ({ runId, createdAt, principal, enabled, resolved }), [runId, createdAt, principal, enabled, resolved]);
+  const [state, setState] = React.useState<Omit<RunSignInRead, "retry"> & { scope: typeof scope }>({ ...EMPTY_READ, scope });
+  const inFlight = React.useRef(false);
+  const nextRead = React.useRef<(() => void) | null>(null);
+  const retryRef = React.useRef<(() => void) | null>(null);
 
   React.useEffect(() => {
-    if (!enabled) return;
+    setState({ ...EMPTY_READ, scope });
+    if (!scope.enabled || !scope.resolved || !scope.principal) return;
     let cancelled = false;
+    let stopped = false;
+    let seenWaiting = false;
+    let answered = false;
+    let generation = 0;
+    let controller: AbortController | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const tick = async () => {
-      let res: RunSignIn;
-      try {
-        res = await runSignIn.get(runId);
-      } catch {
-        if (!cancelled) setFailed(true);
-        return;
-      }
-      if (cancelled) return;
-      setFailed(false);
-      setAnswered(true);
-      if (res.state === "waiting") {
-        seenWaiting.current = true;
-        // The strip's text changes only with the code or the link: keep the
-        // same object while both are unchanged, so a 5 s read re-renders nothing.
-        setWaiting((prev) =>
-          prev && prev.user_code === res.user_code && prev.verification_url === res.verification_url
-            ? prev
-            : { state: "waiting", user_code: res.user_code ?? "", verification_url: res.verification_url ?? "" },
-        );
-        timer = setTimeout(() => void tick(), SIGN_IN_POLL_MS);
-        return;
-      }
-      setWaiting(null);
-      if (seenWaiting.current) {
-        setEnded(true);
-        return;
-      }
-      if (Date.now() - startedMs > SIGN_IN_GRACE_MS) return;
-      timer = setTimeout(() => void tick(), SIGN_IN_POLL_MS);
+    let checkingTimer: ReturnType<typeof setTimeout> | undefined;
+    const checking = () => {
+      clearTimeout(checkingTimer);
+      if (!answered) checkingTimer = setTimeout(() => setState((s) => ({ ...s, checking: true })), SIGN_IN_CHECKING_MS);
     };
+    const tick = async () => {
+      if (cancelled || stopped) return;
+      if (inFlight.current) {
+        nextRead.current = () => void tick();
+        return;
+      }
+      inFlight.current = true;
+      const started = generation;
+      controller = new AbortController();
+      try {
+        const res = await runSignIn.get(scope.runId, controller.signal);
+        if (cancelled || started !== generation) return;
+        answered = true;
+        clearTimeout(checkingTimer);
+        if (res.state === "waiting") {
+          seenWaiting = true;
+          setState((s) => {
+            // Identical answers keep both the object and the live text unchanged.
+            if (s.waiting && s.waiting.user_code === res.user_code && s.waiting.verification_url === res.verification_url && !s.failed) return s;
+            return { scope, waiting: { state: "waiting", user_code: res.user_code ?? "", verification_url: res.verification_url ?? "" }, ended: false, failed: false, checking: false };
+          });
+        } else {
+          setState({ scope, waiting: null, ended: seenWaiting, failed: false, checking: false });
+          stopped = seenWaiting || Date.now() - Date.parse(scope.createdAt) > SIGN_IN_GRACE_MS;
+        }
+        if (!stopped) timer = setTimeout(() => void tick(), SIGN_IN_POLL_MS);
+      } catch {
+        if (cancelled || started !== generation) return;
+        stopped = true;
+        clearTimeout(checkingTimer);
+        setState((s) => ({ ...s, failed: true, checking: false }));
+      } finally {
+        inFlight.current = false;
+        controller = null;
+        const next = nextRead.current;
+        nextRead.current = null;
+        next?.();
+      }
+    };
+    const refresh = () => {
+      if (stopped) return;
+      generation++;
+      controller?.abort();
+      clearTimeout(timer);
+      void tick();
+    };
+    const visible = () => { if (document.visibilityState === "visible") refresh(); };
+    retryRef.current = () => {
+      stopped = false;
+      setState((s) => ({ ...s, failed: false, checking: false }));
+      checking();
+      refresh();
+    };
+    checking();
     void tick();
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", visible);
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
+      controller?.abort();
+      clearTimeout(timer);
+      clearTimeout(checkingTimer);
+      nextRead.current = null;
+      retryRef.current = null;
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", visible);
     };
-  }, [runId, enabled, startedMs, attempt]);
+  }, [scope]);
 
-  React.useEffect(() => {
-    if (!enabled || answered || failed) {
-      setChecking(false);
-      return;
-    }
-    const t = setTimeout(() => setChecking(true), SIGN_IN_CHECKING_MS);
-    return () => clearTimeout(t);
-  }, [enabled, answered, failed]);
-
-  const retry = React.useCallback(() => {
-    setFailed(false);
-    setAttempt((n) => n + 1);
-  }, []);
-  return { waiting: enabled ? waiting : null, ended: enabled && ended, failed: enabled && failed, checking, retry };
+  const retry = React.useCallback(() => retryRef.current?.(), []);
+  // An effect reset alone exposes the previous person's code for one render.
+  return { ...(state.scope === scope ? state : EMPTY_READ), retry };
 }

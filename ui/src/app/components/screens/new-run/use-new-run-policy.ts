@@ -13,7 +13,7 @@
 // active floor) — that is why this is a hook rather than a pure function like
 // policy-lane.ts's. React state (specText, parsedFloor, policyMode, …) stays
 // owned by NewRunScreen: the hook derives from it and writes back only through
-// its two effects (setParsedFloor, patch, pristineCc).
+// its two effects (setParsedFloor, patch, setPristineCc).
 import * as React from "react";
 import {
   CC_ORDER as ORDERED_CLASSES,
@@ -25,6 +25,7 @@ import {
 import { ccRank as rank } from "./new-run-primitives";
 import { useAdoLaunchDoor } from "./new-run-rail";
 import { parseSpec, toolRulesSummary, unparseableFloorClass, type PolicyMode } from "../../wardyn/policy-panel";
+import type { PolicySourceFormat } from "../../wardyn/policy-document/policy-source";
 import { barrierReasons, combineFloors, governanceRemovedTier } from "./policy-lane";
 import { mergeRunSelections } from "./wizard-spec";
 import type { WizardState } from "./wizard-types";
@@ -34,6 +35,8 @@ export interface UseNewRunPolicyParams {
   patch: (p: Partial<WizardState>) => void;
   policyMode: PolicyMode;
   specText: string;
+  /** The format `specText` is written in: one parse serves the gates, the merge and the editor. */
+  specFormat: PolicySourceFormat;
   parsedFloor: ConfinementClass | undefined;
   setParsedFloor: React.Dispatch<React.SetStateAction<ConfinementClass | undefined>>;
   savedPolicies: { id: string; name: string; spec: RunPolicySpec }[];
@@ -48,7 +51,7 @@ export interface UseNewRunPolicyParams {
    *  to pristineSpec) — the up-clamp effect below moves it with its own write,
    *  as the /setup/status effect does when it re-seeds the class, so a
    *  machine-made clamp never reads as an operator edit. */
-  pristineCc: React.MutableRefObject<ConfinementClass | undefined>;
+  setPristineCc: (cc: ConfinementClass) => void;
 }
 
 export function useNewRunPolicy({
@@ -56,6 +59,7 @@ export function useNewRunPolicy({
   patch,
   policyMode,
   specText,
+  specFormat,
   parsedFloor,
   setParsedFloor,
   savedPolicies,
@@ -66,10 +70,10 @@ export function useNewRunPolicy({
   operator,
   workspaces,
   modelProviders,
-  pristineCc,
+  setPristineCc,
 }: UseNewRunPolicyParams) {
   const cc = state.confinementClass;
-  const parsed = parseSpec(specText);
+  const parsed = React.useMemo(() => parseSpec(specText, specFormat), [specText, specFormat]);
 
   // C5's one real trap (policy-panel.tsx's own doc) — the field is present and
   // this build can't spell it.
@@ -83,11 +87,10 @@ export function useNewRunPolicy({
   // Every successful parse re-reads the floor the document authors; a FAILED
   // parse changes nothing (parsedFloor stays whatever last parsed).
   React.useEffect(() => {
-    const p = parseSpec(specText);
-    if (!p.ok) return;
-    const f = p.spec.min_confinement_class as ConfinementClass;
+    if (!parsed.ok) return;
+    const f = parsed.spec.min_confinement_class as ConfinementClass;
     setParsedFloor(ORDERED_CLASSES.includes(f) ? f : undefined);
-  }, [specText, setParsedFloor]);
+  }, [parsed, setParsedFloor]);
 
   // The ACTIVE floor: a picked saved policy's stored floor, else the last
   // successful parse's. Both paths refuse to launch below it server-side.
@@ -154,18 +157,17 @@ export function useNewRunPolicy({
   React.useEffect(() => {
     if (!effectiveFloor || !ORDERED_CLASSES.includes(effectiveFloor)) return;
     if (rank(effectiveFloor) > rank(cc)) {
-      pristineCc.current = effectiveFloor;
+      setPristineCc(effectiveFloor);
       patch({ confinementClass: effectiveFloor });
     }
-  }, [effectiveFloor, cc, patch, pristineCc]);
+  }, [effectiveFloor, cc, patch, setPristineCc]);
 
   // The post-parse union, computed ONCE: the same value renders the "Added for
   // this run's selections" line and goes on the wire, so the screen cannot show
   // one policy and launch another.
   const merged = React.useMemo(
     () => (parsed.ok ? mergeRunSelections(parsed.spec, state, workspaces, modelProviders) : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- parsed is rebuilt every render; specText is what actually changes
-    [specText, state, workspaces, modelProviders],
+    [parsed, state, workspaces, modelProviders],
   );
   const added = merged?.added;
 

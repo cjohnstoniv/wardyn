@@ -26,6 +26,7 @@ import type {
   RunPolicyView,
   RunResources,
 } from "../types";
+import type { ComponentRef } from "../types/components";
 import {
   asJson,
   ccRank,
@@ -74,7 +75,7 @@ function grantsFromRecords(payload: unknown): CredentialGrant[] {
   });
 }
 
-type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
+export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   interactive?: boolean;
   inline_policy?: RunPolicySpec;
   // Per-run half of the requirements contract: which optional requirements
@@ -95,13 +96,16 @@ type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   drive?: { enabled: boolean; read_only?: boolean };
   // #542/#526 — this run's chosen model provider (CreateRunRequest.ModelProvider).
   model_provider?: string;
+  // The components this run carries (CreateRunRequest.Components, #1914): a
+  // stored one by id or a run-only inline definition. Absent is none.
+  components?: ComponentRef[];
 };
 
 // The ONE projection from wizard input to the POST /runs wire body. createRun
-// and preflightRun both send exactly this — a field added here reaches both, a
-// field missed here reaches neither, and the two verdicts can never drift.
+// preflightRun and policy preview all send this projection.
 // (They used to be two hand-built whitelists; preflight's lagged by five fields.)
-function runWireBody(input: RunWireInput): Record<string, unknown> {
+/** The shared request projection for create, preflight and policy preview. */
+export function runWireBody(input: RunWireInput): Record<string, unknown> {
   const body: Record<string, unknown> = {
     agent: input.agent,
     repo: input.repo,
@@ -153,6 +157,7 @@ function runWireBody(input: RunWireInput): Record<string, unknown> {
   // second answer to that question.
   if (input.drive) body.drive = input.drive;
   if (input.model_provider) body.model_provider = input.model_provider;
+  if (input.components?.length) body.components = input.components;
   return body;
 }
 

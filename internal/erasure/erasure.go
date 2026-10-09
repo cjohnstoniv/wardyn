@@ -35,6 +35,10 @@ const (
 	// Recordings: the person's session recordings. Opt-in: nothing deletes one
 	// unless this scope is asked for.
 	Recordings Scope = "recordings"
+	// Components: the components the person saved, and what the snapshot of
+	// every run they defined one for says about it. The run keeps a content-free
+	// row, because it is what a revived run is checked against.
+	Components Scope = "components"
 	// MaskCopies: the masking manifests of the person's runs, after their live
 	// attaches and relays are fenced.
 	MaskCopies Scope = "mask_copies"
@@ -43,7 +47,7 @@ const (
 // order is the sequence scopes run in whatever order they were asked: live
 // consumers are fenced first, the data they could still reach is erased next,
 // and the keys go last.
-var order = []Scope{MaskCopies, RunOutputs, Recordings, RunTasks, AuditPersonalFields, Credentials}
+var order = []Scope{MaskCopies, RunOutputs, Recordings, RunTasks, Components, AuditPersonalFields, Credentials}
 
 // Scopes lists every scope in the order Orchestrate runs them.
 func Scopes() []Scope { return slices.Clone(order) }

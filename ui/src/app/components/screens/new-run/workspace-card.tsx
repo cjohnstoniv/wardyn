@@ -51,7 +51,7 @@
 // failure) and BEFORE `!drive` (see unavailableReason below for which of the
 // four closed tokens gets which sentence).
 import * as React from "react";
-import { Plus, X } from "lucide-react";
+import { Plus, TriangleAlert, X } from "lucide-react";
 import type { MeCapabilities, SetupModelProvider, Workspace } from "../../../lib/types";
 import type { MeUserDrive } from "../../../lib/api/health";
 import { MEMBER } from "../../../lib/governance-copy";
@@ -65,7 +65,6 @@ import { Checkbox } from "../../ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { makeMono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
-import { SectionCard } from "./new-run-primitives";
 import { hasSourceNotAdmitted, workspaceUnavailableToCaller } from "./wizard-types";
 import type { WizardState } from "./wizard-types";
 
@@ -206,6 +205,22 @@ function DriveBlock({
   );
 }
 
+const UNAVAILABLE_ID = "nr-workspace-unavailable";
+const NOT_ADMITTED_ID = "nr-workspace-not-admitted";
+
+const issueIds = (unavailable: boolean, notAdmitted: boolean) =>
+  [unavailable && UNAVAILABLE_ID, notAdmitted && NOT_ADMITTED_ID].filter(Boolean).join(" ") || undefined;
+
+// Why this selection holds Launch, beside the Select that owns it.
+function IssueLine({ id, children }: { id: string; children: React.ReactNode }) {
+  return (
+    <p id={id} className="mt-2 flex items-start gap-1.5 text-sm text-danger">
+      <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+      {children}
+    </p>
+  );
+}
+
 export function WorkspaceCard({
   state,
   patch,
@@ -216,7 +231,11 @@ export function WorkspaceCard({
   drive,
   driveDeniedBy,
   driveUnavailable,
+  active = true,
 }: {
+  /** The Workspace panel is the one on screen. A blocking issue is printed
+   *  once: beside the Select here, or above Launch from every other panel. */
+  active?: boolean;
   state: WizardState;
   patch: (p: Partial<WizardState>) => void;
   workspaces: Workspace[];
@@ -257,8 +276,21 @@ export function WorkspaceCard({
   const selectedWorkspaceUnavailable =
     !!pickedWorkspace && workspaceUnavailableToCaller(pickedWorkspace, caps, modelProviders, isAgent);
 
+  // The removed chip takes its Remove button with it: keep keyboard focus
+  // beside it — the next chip's button, else the previous one's, else the
+  // Workspace select — rather than dropping it to the document.
+  const extras = React.useRef<HTMLDivElement>(null);
+  const removedAt = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    const at = removedAt.current;
+    if (at === null) return;
+    removedAt.current = null;
+    const buttons = extras.current?.querySelectorAll("button") ?? [];
+    (buttons[at] ?? buttons[at - 1] ?? document.getElementById("nr-workspace"))?.focus();
+  }, [state.workspaces]);
+
   return (
-    <SectionCard title="Workspace">
+    <div>
       <Select
         value={state.workspaces[0]?.workspaceId ?? "__none__"}
         onValueChange={(v) =>
@@ -281,7 +313,12 @@ export function WorkspaceCard({
           })
         }
       >
-        <SelectTrigger id="nr-workspace" aria-label="Workspace">
+        <SelectTrigger
+          id="nr-workspace"
+          aria-label="Workspace"
+          aria-invalid={selectedWorkspaceUnavailable || selectedNotAdmitted || undefined}
+          aria-describedby={active ? issueIds(selectedWorkspaceUnavailable, selectedNotAdmitted) : undefined}
+        >
           <SelectValue placeholder="Ephemeral scratch — no repo" />
         </SelectTrigger>
         <SelectContent>
@@ -303,8 +340,8 @@ export function WorkspaceCard({
           demoted when it changed) — attached, but not the primary, so they get
           no reason line of their own; just a way off. */}
       {state.workspaces.length > 1 && (
-        <div className="mt-2 flex flex-wrap gap-1.5" data-testid="nr-workspace-extras">
-          {state.workspaces.slice(1).map((sel) => {
+        <div ref={extras} className="mt-2 flex flex-wrap gap-1.5" data-testid="nr-workspace-extras">
+          {state.workspaces.slice(1).map((sel, at) => {
             const name = workspaces.find((w) => w.id === sel.workspaceId)?.name ?? sel.workspaceId;
             return (
               <Chip key={sel.workspaceId} tone="neutral">
@@ -312,9 +349,10 @@ export function WorkspaceCard({
                 <button
                   type="button"
                   aria-label={`Remove ${name}`}
-                  onClick={() =>
-                    patch({ workspaces: state.workspaces.filter((s) => s.workspaceId !== sel.workspaceId) })
-                  }
+                  onClick={() => {
+                    removedAt.current = at;
+                    patch({ workspaces: state.workspaces.filter((s) => s.workspaceId !== sel.workspaceId) });
+                  }}
                   className="text-muted-foreground hover:text-foreground"
                 >
                   <X className="size-3" />
@@ -331,16 +369,11 @@ export function WorkspaceCard({
           review F5 (widened by #1267): every arm workspaceUnavailableToCaller
           folds in shows the SAME canon sentence Launch's own disable reads
           (DENIED.WORKSPACE_NOT_AVAILABLE) — one paragraph, never printed
-          twice when more than one arm is true at once. This is also the ONE
-          place the sentence renders for New Run: Launch disables through the
-          rail's own `workspaceUnavailable` boolean, with no text of its own,
-          precisely so it is never shown here AND in the rail together. */}
-      {selectedWorkspaceUnavailable && (
-        <p className="mt-2 text-xs text-muted-foreground">{DENIED.WORKSPACE_NOT_AVAILABLE}</p>
-      )}
-      {selectedNotAdmitted && (
-        <p className="mt-2 text-xs text-muted-foreground">{PROVIDERS.CARD_NOT_ADMITTED}</p>
-      )}
+          twice when more than one arm is true at once. Both lines hold Launch,
+          so both are issues (#1922): error tone and an icon here while this
+          panel is on screen, and the line above Launch from any other. */}
+      {active && selectedWorkspaceUnavailable && <IssueLine id={UNAVAILABLE_ID}>{DENIED.WORKSPACE_NOT_AVAILABLE}</IssueLine>}
+      {active && selectedNotAdmitted && <IssueLine id={NOT_ADMITTED_ID}>{PROVIDERS.CARD_NOT_ADMITTED}</IssueLine>}
       <DriveBlock
         drive={drive}
         deniedBy={driveDeniedBy}
@@ -358,6 +391,6 @@ export function WorkspaceCard({
       >
         <Plus className="size-4" /> Add workspace
       </Button>
-    </SectionCard>
+    </div>
   );
 }

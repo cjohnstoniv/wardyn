@@ -12,42 +12,18 @@ import { CC_ORDER, type ConfinementClass } from "../../../lib/types";
 import { ccRank } from "./new-run-primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { minimalSpec, type PolicyMode } from "../../wardyn/policy-panel";
+import { specToSource } from "../../wardyn/policy-document/policy-source";
 import type { SetupModelProvider } from "../../../lib/types";
 import type { WizardAgent, WizardState } from "./wizard-types";
 
-// The body a fresh Custom policy opens with, and what a cleared saved-policy
-// selection resets to: a valid, editable floor rather than a blank document
+// The body a fresh Custom policy opens with: a valid, editable floor rather than a blank document
 // nobody can start from. Always CC1: there is no persisted operator default
 // left to seed this from (the server now picks the strongest installed class
 // at or above the floor), and CC1 is the one floor every host can build, so
 // the document this opens with is never itself the reason a fresh Custom
-// edit can't launch.
+// edit can't launch. Written as YAML, the format the editor opens in.
 export function defaultSpecText(providers?: readonly SetupModelProvider[]): string {
-  return JSON.stringify({ ...minimalSpec(providers), min_confinement_class: "CC1" }, null, 2);
-}
-
-// A saved-policy body comes back REDACTED for anyone who is NOT security-tier
-// (redactPoliciesForRead, gated server-side on isSecurityOperator — admin OR
-// security_admin, internal/api/http.go — not the narrower isOperator
-// admin-only predicate). Picking one loads that redacted JSON into the
-// textarea; switching lanes to Custom must clear it, or launching inline
-// ships a policy with a dead credential reference nobody authored.
-//
-// The caller must pass `securityOperator && resolved`, NEVER the bare
-// `operator`/`securityOperator` context booleans — both default fail-OPEN
-// (true while /me is unresolved or the fetch failed, operator-context.tsx),
-// which is backwards for a clear that has to fire even when a MEMBER's /me
-// hasn't answered yet. A security_admin's own real body (never redacted) is
-// the other edge this gate must recognise, which is why it is NOT the
-// admin-only `operator` either.
-export function clearedSpecOnCustomSwitch(
-  active: boolean,
-  keepsRealBody: boolean,
-  hadSelection: boolean,
-  providers?: readonly SetupModelProvider[],
-): string | undefined {
-  if (active || keepsRealBody || !hadSelection) return undefined;
-  return defaultSpecText(providers);
+  return specToSource({ ...minimalSpec(providers), min_confinement_class: "CC1" });
 }
 
 // codex-cli has no external tool-approval contract (buildSpec already

@@ -1,0 +1,3 @@
+# kind	path	key	words	reason
+sentence	docs/OPERATIONS.md	d3fca58624deee391ad5aa771b9b76ba632ba478	38	no clause joiner: one subject, two requirements, one consequence; the clause joiner list finds no ";", " — ", ", so ", ", and " or ": " in it
+table	docs/OPERATIONS.md	| Surface | Gate |	PLAN §4.4: byte-stable admin-only tier table read by internal/api/operations_tier_doc_test.go (O-C spec: tier and denial tables byte-stable)

@@ -61,14 +61,10 @@ command -v jq >/dev/null 2>&1 || { echo "run-ui-e2e.sh: jq is required (used to 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-# One daemon everywhere (same rule as setup/up/e2e-backend): export the picked
-# DOCKER_HOST here so the Playwright child processes (approvals.spec.ts shells
-# out to `docker exec wardyn-test-pg`) hit the daemon e2e-backend.sh provisions
-# on — not the default one.
 WARDYN_LOG_TAG="[e2e-ui]"
 . "${REPO_ROOT}/scripts/lib/common.sh"
 . "${REPO_ROOT}/scripts/lib/e2e-quarantine.sh"
-wardyn_pick_docker_host
+. "${REPO_ROOT}/scripts/lib/e2e-network.sh"
 
 # An expired or malformed quarantine entry fails the run before anything boots.
 quarantine_validate ui/e2e/quarantine.txt "$(date -u +%F)" >&2 || exit 1
@@ -76,20 +72,21 @@ quarantine_validate ui/e2e/quarantine.txt "$(date -u +%F)" >&2 || exit 1
 # Two default invocations on one host — two worktrees, two lanes, a developer
 # box and CI at once — used to fight over the same fixed :8088/:8089/:8443 and
 # the same "wardyn_e2e" database name (#210, #469). Auto-pick when the caller
-# has not pinned one; an explicit WARDYN_E2E_ADDR/WARDYN_E2E_UI_ADDR/
-# WARDYN_E2E_INTERNAL_ADDR/WARDYN_E2E_PG_DBNAME is still honored verbatim,
-# exactly as before.
+# has not pinned one. Explicit hosts and database names survive; port-only
+# listener overrides bind to loopback too.
 if [[ -z "${WARDYN_E2E_ADDR:-}" ]]; then
-  WARDYN_E2E_ADDR=":$(pick_free_port)"
+  WARDYN_E2E_ADDR="127.0.0.1:$(pick_free_port)"
 fi
+WARDYN_E2E_ADDR="$(e2e_listen_addr "${WARDYN_E2E_ADDR}")"
 if [[ -z "${WARDYN_E2E_UI_ADDR:-}" ]]; then
   ui_port="$(pick_free_port)"
   # wardynd refuses to boot with UI_ADDR == ADDR (e2e-backend.sh's own
   # comment); pick_free_port's bind-then-close race makes that collision rare
   # but not impossible, so reroll once rather than fail the whole run over it.
-  [[ ":${ui_port}" == "${WARDYN_E2E_ADDR}" ]] && ui_port="$(pick_free_port)"
-  WARDYN_E2E_UI_ADDR=":${ui_port}"
+  [[ "${ui_port}" == "${WARDYN_E2E_ADDR##*:}" ]] && ui_port="$(pick_free_port)"
+  WARDYN_E2E_UI_ADDR="127.0.0.1:${ui_port}"
 fi
+WARDYN_E2E_UI_ADDR="$(e2e_listen_addr "${WARDYN_E2E_UI_ADDR}")"
 if [[ -z "${WARDYN_E2E_INTERNAL_ADDR:-}" ]]; then
   # wardynd's proxy-facing internal TLS listener (-internal-listen) binds
   # unconditionally whenever -control-plane-url is https, which is the
@@ -98,9 +95,10 @@ if [[ -z "${WARDYN_E2E_INTERNAL_ADDR:-}" ]]; then
   # worktree, a second lane below) dies with "address already in use" the
   # moment it tries to boot.
   internal_port="$(pick_free_port)"
-  [[ ":${internal_port}" == "${WARDYN_E2E_ADDR}" || ":${internal_port}" == "${WARDYN_E2E_UI_ADDR}" ]] && internal_port="$(pick_free_port)"
-  WARDYN_E2E_INTERNAL_ADDR=":${internal_port}"
+  [[ "${internal_port}" == "${WARDYN_E2E_ADDR##*:}" || "${internal_port}" == "${WARDYN_E2E_UI_ADDR##*:}" ]] && internal_port="$(pick_free_port)"
+  WARDYN_E2E_INTERNAL_ADDR="127.0.0.1:${internal_port}"
 fi
+WARDYN_E2E_INTERNAL_ADDR="$(e2e_listen_addr "${WARDYN_E2E_INTERNAL_ADDR}")"
 export WARDYN_E2E_ADDR WARDYN_E2E_UI_ADDR WARDYN_E2E_INTERNAL_ADDR
 db_autonamed=""
 if [[ -z "${WARDYN_E2E_PG_DBNAME:-}" ]]; then
@@ -111,8 +109,9 @@ if [[ -z "${WARDYN_E2E_PG_DBNAME:-}" ]]; then
   db_autonamed=1
 fi
 
-PORT="${WARDYN_E2E_ADDR}"; PORT="${PORT#*:}"
 DB="${WARDYN_E2E_PG_DBNAME}"
+# A token read back for Playwright must not become the next up's override.
+TEST_TOKEN="${WARDYN_E2E_TOKEN:-}"
 # Overridable PG host:port (the default may be held by a foreign container on a
 # shared box); the database name stays coupled to WARDYN_E2E_PG_DBNAME. The
 # seed/reset path (e2e-backend.sh) still goes through `docker exec
@@ -121,11 +120,10 @@ DB="${WARDYN_E2E_PG_DBNAME}"
 # would silently serve one database while seeding another, so e2e-backend.sh's
 # cmd_up fails loudly on that mismatch before touching anything.
 PG_HOSTPORT="${WARDYN_E2E_PG_HOSTPORT:-localhost:55432}"
-export WARDYN_E2E_ADDR=":${PORT}"
 export WARDYN_E2E_DSN="postgres://wardyn:wardyn@${PG_HOSTPORT}/${DB}?sslmode=disable"
 export WARDYN_E2E_PG_DBNAME="${DB}"
 export WARDYN_E2E_PG_CONTAINER="${WARDYN_E2E_PG_CONTAINER:-wardyn-test-pg}"
-export WARDYN_E2E_BASE_URL="http://localhost:${PORT}"
+export WARDYN_E2E_BASE_URL="$(e2e_base_url "${WARDYN_E2E_ADDR}")"
 
 # Base-path mode (WARDYN_E2E_BASE_PATH, e.g. /wardyn): e2e-backend.sh serves the
 # backend under that WARDYN_BASE_PATH behind test/basepathproxy, and Playwright
@@ -135,10 +133,11 @@ export WARDYN_E2E_BASE_URL="http://localhost:${PORT}"
 # Unset, nothing below changes.
 if [[ -n "${WARDYN_E2E_BASE_PATH:-}" ]]; then
   if [[ -z "${WARDYN_E2E_PROXY_ADDR:-}" ]]; then
-    WARDYN_E2E_PROXY_ADDR=":$(pick_free_port)"
+    WARDYN_E2E_PROXY_ADDR="127.0.0.1:$(pick_free_port)"
   fi
+  WARDYN_E2E_PROXY_ADDR="$(e2e_listen_addr "${WARDYN_E2E_PROXY_ADDR}")"
   export WARDYN_E2E_PROXY_ADDR
-  export WARDYN_E2E_BASE_URL="http://localhost:${WARDYN_E2E_PROXY_ADDR##*:}${WARDYN_E2E_BASE_PATH}/"
+  export WARDYN_E2E_BASE_URL="$(e2e_base_url "${WARDYN_E2E_PROXY_ADDR}")${WARDYN_E2E_BASE_PATH}/"
   log "base-path mode: backend under ${WARDYN_E2E_BASE_PATH}, browsed through ${WARDYN_E2E_BASE_URL}"
 fi
 
@@ -158,26 +157,6 @@ LIVE_BASE_URL="${WARDYN_E2E_WALK_BASE_URL:-}"
 if [[ -n "${LIVE_BASE_URL}" ]]; then
   export WARDYN_E2E_BASE_URL="${LIVE_BASE_URL}"
   log "LIVE mode: specs run against ${LIVE_BASE_URL} (no hermetic backend, no re-seed)"
-fi
-
-# Build the backend + UI once; subsequent per-spec `up` calls (in every lane)
-# reuse them (each `up` also creates its own ${DB} if it does not exist — see
-# e2e-backend.sh cmd_up).
-# Specs named cockpit-terminal-tmux-* drive a REAL tmux through the production
-# attach endpoint: their backend is the e2etmux build, served with
-# WARDYN_E2E_TMUX=1 (see e2e-backend.sh). Every other spec keeps the none runner.
-needs_tmux_build=0
-if [[ $# -gt 0 ]]; then
-  for a in "$@"; do [[ "${a}" == cockpit-terminal-tmux-* ]] && needs_tmux_build=1; done
-elif compgen -G "ui/e2e/cockpit-terminal-tmux-*.spec.ts" >/dev/null; then
-  needs_tmux_build=1
-fi
-[[ ${needs_tmux_build} -eq 1 ]] && export WARDYN_E2E_TMUX_BUILD=1
-
-if [[ -z "${LIVE_BASE_URL}" ]]; then
-  log "Building backend + UI bundle once"
-  ./scripts/e2e-backend.sh build || { echo "build failed"; exit 1; }
-  export WARDYN_E2E_SKIP_BUILD=1
 fi
 
 # Spec selection: args map to e2e/<arg>.spec.ts; default = all *.spec.ts.
@@ -241,13 +220,47 @@ NUM_LANES="${WARDYN_E2E_LANES:-${default_lanes}}"
 LANE_ADDR=("${WARDYN_E2E_ADDR}")
 LANE_UI_ADDR=("${WARDYN_E2E_UI_ADDR}")
 LANE_INTERNAL_ADDR=("${WARDYN_E2E_INTERNAL_ADDR}")
+LANE_PROXY_ADDR=("${WARDYN_E2E_PROXY_ADDR:-}")
 LANE_DB=("${DB}")
 for ((i = 1; i < NUM_LANES; i++)); do
-  LANE_ADDR+=(":$(pick_free_port)")
-  LANE_UI_ADDR+=(":$(pick_free_port)")
-  LANE_INTERNAL_ADDR+=(":$(pick_free_port)")
+  LANE_ADDR+=("127.0.0.1:$(pick_free_port)")
+  LANE_UI_ADDR+=("127.0.0.1:$(pick_free_port)")
+  LANE_INTERNAL_ADDR+=("127.0.0.1:$(pick_free_port)")
+  [[ -z "${WARDYN_E2E_BASE_PATH:-}" ]] || LANE_PROXY_ADDR+=("127.0.0.1:$(pick_free_port)")
   LANE_DB+=("${DB}_lane${i}")
 done
+
+# A selected tmux spec may be claimed by any lane. Refuse before builds,
+# backend retries or cleanup traps can reset a database for an unsafe request.
+# Inspect the final shard, so a non-tmux-only selection keeps explicit hosts.
+if [[ -z "${LIVE_BASE_URL}" ]]; then
+  needs_tmux_build=0
+  for spec in "${specs[@]}"; do
+    [[ "${spec##*/}" == cockpit-terminal-tmux-*.spec.ts ]] && needs_tmux_build=1
+  done
+  if [[ ${needs_tmux_build} -eq 1 ]]; then
+    export WARDYN_E2E_TMUX_BUILD=1
+    for ((i = 0; i < NUM_LANES; i++)); do
+      e2e_require_loopback "${LANE_ADDR[i]}" "${LANE_UI_ADDR[i]}" "${LANE_INTERNAL_ADDR[i]}" || exit 1
+      if [[ -n "${WARDYN_E2E_BASE_PATH:-}" ]]; then
+        e2e_require_loopback "${LANE_PROXY_ADDR[i]}" || exit 1
+      fi
+    done
+  fi
+fi
+
+# One daemon everywhere (same rule as setup/up/e2e-backend): export the picked
+# DOCKER_HOST here so the Playwright child processes (approvals.spec.ts shells
+# out to `docker exec wardyn-test-pg`) hit the daemon e2e-backend.sh provisions
+# on — not the default one.
+wardyn_pick_docker_host
+
+# Each lane's per-spec up reuses this build and creates its own database.
+if [[ -z "${LIVE_BASE_URL}" ]]; then
+  log "Building backend + UI bundle once"
+  ./scripts/e2e-backend.sh build || { echo "build failed"; exit 1; }
+  export WARDYN_E2E_SKIP_BUILD=1
+fi
 
 # Scratch for this run: one directory per spec, created by the lane that
 # claims it (mkdir is atomic, so two lanes never run the same spec) and
@@ -270,7 +283,13 @@ run_lane() {
   # above (LIVE_BASE_URL); LANE_ADDR[0] there is only the unused, auto-picked
   # port reserved for a hermetic backend that never boots, so overwriting it
   # here sent every walk spec to a random local port nothing listens on.
-  [[ -n "${LIVE_BASE_URL}" ]] || export WARDYN_E2E_BASE_URL="http://localhost:${LANE_ADDR[lane]#*:}"
+  if [[ -z "${LIVE_BASE_URL}" ]]; then
+    export WARDYN_E2E_BASE_URL="$(e2e_base_url "${WARDYN_E2E_ADDR}")"
+    if [[ -n "${WARDYN_E2E_BASE_PATH:-}" ]]; then
+      export WARDYN_E2E_PROXY_ADDR="${LANE_PROXY_ADDR[lane]}"
+      export WARDYN_E2E_BASE_URL="$(e2e_base_url "${WARDYN_E2E_PROXY_ADDR}")${WARDYN_E2E_BASE_PATH}/"
+    fi
+  fi
   if [[ -n "${label}" ]]; then
     log() { printf '\033[1;34m[e2e-ui:%s]\033[0m %s\n' "${label}" "$*"; }
   fi
@@ -304,11 +323,11 @@ run_lane() {
     # genuine spec failure — the run reported "<spec> failed" with nothing to read.
     if [[ -n "${LIVE_BASE_URL}" ]]; then
       : # the external Wardyn owns its own lifecycle; nothing to seed or reset
-    elif ! ./scripts/e2e-backend.sh up >"${up_log}" 2>&1; then
+    elif ! WARDYN_E2E_TOKEN="${TEST_TOKEN}" ./scripts/e2e-backend.sh up >"${up_log}" 2>&1; then
       log "backend up failed for ${base} — retrying once"
       tail -20 "${up_log}" >&2 || true
       ./scripts/e2e-backend.sh down >/dev/null 2>&1 || true
-      if ! ./scripts/e2e-backend.sh up >"${up_log}" 2>&1; then
+      if ! WARDYN_E2E_TOKEN="${TEST_TOKEN}" ./scripts/e2e-backend.sh up >"${up_log}" 2>&1; then
         log "backend up failed for ${base} (twice) — this is the backend, not the spec"
         tail -30 "${up_log}" >&2 || true
         echo "fail 0 0 0" > "${work}/${base}/result"
@@ -318,6 +337,11 @@ run_lane() {
     if [[ -n "${LIVE_BASE_URL}" ]]; then
       log "running ${base} against ${LIVE_BASE_URL}"
     else
+      if ! WARDYN_E2E_TOKEN="$(./scripts/e2e-backend.sh token)"; then
+        echo "fail 0 0 0" > "${work}/${base}/result"
+        continue
+      fi
+      export WARDYN_E2E_TOKEN
       log "running ${base} against a fresh backend"
     fi
     rm -f "${results_json}"

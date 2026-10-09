@@ -455,14 +455,15 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// Optional TLS-MITM of opaque LLM CONNECT tunnels: provision a per-run CA
 	// when ANY consumer needs one — intercept_tls content inspection,
 	// subscription credential injection, artifact-token injection, Bedrock
-	// injection, or the per-person Azure DevOps credential
+	// injection, the per-person Azure DevOps credential
 	// (authorADOEntraInjection, which REFUSES a run that reaches it without
-	// one). The PRIVATE key reaches ONLY the proxy sidecar (ProxyConfig below);
+	// one), or a component's header, which the proxy can set only inside a
+	// connection it terminates. The PRIVATE key reaches ONLY the proxy sidecar (ProxyConfig below);
 	// the sandbox trusts the PUBLIC cert. See provisionDispatchMITMCA for the
 	// trust-store wiring.
 	mitmForInspect := llmInspectMITMEnabled(policy)
 	var mitmCACertPEM, mitmCAKeyPEM string
-	if llm.providerSubscription() || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject || llm.azureInject() || p.PATAPI {
+	if llm.providerSubscription() || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO || adoInject || llm.azureInject() || p.PATAPI || len(p.Components.MITMHosts) > 0 {
 		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
 			return dispatchLLMPlan{}, false
 		}

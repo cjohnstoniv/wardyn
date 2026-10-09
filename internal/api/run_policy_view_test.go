@@ -326,6 +326,44 @@ func TestRunPolicyView_SpecReuse(t *testing.T) {
 	}
 }
 
+// TestRunPolicyView_SharedComponentExportIsARecord pins the reuse boundary for a
+// run launched with an organisation component's shared header secret. The
+// security tier reads that grant as recorded, with `shared: true` in its scope,
+// and every authored door refuses `shared`: the export is a record of the run,
+// not a policy to run again. The component is selected again on the new run.
+func TestRunPolicyView_SharedComponentExportIsARecord(t *testing.T) {
+	srv, st := pvFixture(t, &capStore{})
+	run := st.seedRun(pvOwner, types.RunRunning)
+	spec := pvSecretSpec()
+	spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{
+		Kind: types.GrantAPIKey, TTLSeconds: 3600,
+		Scope: mustJSON(map[string]any{"host": "org-api.example", "secret_name": govCorpSecret, "require_tls": true, "shared": true}),
+	})
+	st.rows(run.ID, pvResolve(spec, true))
+
+	w, resp := pvSecurity(t).get(t, srv, run.ID)
+	if w.Code != http.StatusOK || resp.Spec == nil {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	if n := len(resp.Spec.EligibleGrants); n != 2 || !apiKeyScopeShared(resp.Spec.EligibleGrants[1].Scope) {
+		t.Fatalf("the security tier's export lost the shared mark: %s", w.Body.String())
+	}
+	const want = "shared is set by Wardyn for an org component, never authored"
+	for door, err := range map[string]error{
+		"strict":  validatePolicySpec(*resp.Spec),
+		"lenient": validatePolicySpecLenient(*resp.Spec),
+	} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s validation of the export = %v, want a refusal containing %q", door, err, want)
+		}
+	}
+	// Without the shared grant the same export validates: the mark is the only obstacle.
+	resp.Spec.EligibleGrants = resp.Spec.EligibleGrants[:1]
+	if err := validatePolicySpec(*resp.Spec); err != nil {
+		t.Errorf("the export without the shared grant does not validate: %v", err)
+	}
+}
+
 func TestRunPolicyView_ForeignReaderGetsTheRunsOwn404(t *testing.T) {
 	srv, st := pvFixture(t, &capStore{})
 	run := st.seedRun(pvOwner, types.RunRunning)

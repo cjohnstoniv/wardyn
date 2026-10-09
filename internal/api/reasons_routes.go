@@ -18,6 +18,7 @@ package api
 // distinct revive-refusal cause; a few call sites answer the SAME cause two
 // ways (the runner substrate cannot revive at all) and share one on purpose.
 const (
+	reasonPolicyPreviewRateLimited    = "policy_preview_rate_limited"
 	reasonReviveLocalModeNotOwner     = "local_mode_not_owner"          // local mode mints for the run's own owner; nobody else may revive it — the SAME literal this refusal's own audit row already carried
 	reasonReviveUnsupportedDeployment = "revive_unsupported_deployment" // this deployment's store has no RunReviver, or configures no runner at all
 	// reasonReviveUnsupportedRunner covers three arms that all answer the
@@ -67,7 +68,7 @@ const (
 	reasonOwnerProfileUnreadable = "profile_unreadable" // the owner's captured governance profile could not be read back
 	reasonOwnerProfileGone       = "profile_gone"       // the governance profile captured at launch no longer exists
 	// reasonOwnerCapability* names the launch door persistedLaunchDoors found
-	// closed: the SAME five capability kinds capabilities.go's own cap* consts
+	// closed: the SAME six capability kinds capabilities.go's own cap* consts
 	// enumerate, so the reason names the kind rather than repeating a run's
 	// specific agent/workspace/policy id (never on the wire).
 	reasonOwnerCapabilityAgent             = "capability_agent"
@@ -75,13 +76,15 @@ const (
 	reasonOwnerCapabilityModelProvider     = "capability_model_provider"
 	reasonOwnerCapabilityPolicy            = "capability_policy"
 	reasonOwnerCapabilityWorkspaceProvider = "capability_workspace_provider"
+	reasonOwnerCapabilityComponent         = "capability_component"
 	// reasonOwnerCapabilityUnknown is defensive only: capabilityLostReason's
-	// (run_owner_authority.go) fallback for a capability kind outside the five
+	// (run_owner_authority.go) fallback for a capability kind outside the six
 	// above, which persistedLaunchDoors cannot produce today.
 	reasonOwnerCapabilityUnknown     = "capability_unknown"
 	reasonOwnerModelCredentialErased = "model_credential_erased" // the secret this run's proxy would inject no longer exists
 	reasonOwnerModelProviderDisabled = "model_provider_disabled" // the integration supplying this run's credential, or the run's model provider, was turned off
 	reasonOwnerModelProviderGone     = "model_provider_gone"     // the model provider that authored this run's credential was deleted (or re-created under a new UID)
+	reasonOwnerComponentGone         = "component_gone"          // an organisation's component this run was launched with has since been deleted
 	// reasonOwnerUnverifiable is extendRefusal's own bucket (run_owner_authority.go):
 	// three arms (proxy config unreadable, config does not load, capability
 	// re-check itself failed) that all answer the identical client-facing fact —
@@ -750,6 +753,7 @@ const reasonCredentialInventoryNoMeta = "credential_inventory_no_meta"
 const (
 	reasonRecordingStoreUnavailable = "recording_store_unavailable"
 	reasonRecordingTooLarge         = "recording_too_large"
+	reasonRecordingErased           = "recording_erased"
 	reasonRecordingInvalidPart      = "recording_invalid_part" // {part} is not canonical decimal >= 2 (handleUploadRecordingPart)
 	// reasonRecordingPartLimit is recording.upload's ONLY name for a part
 	// above types.RecordingMaxParts — the wire reason AND the nested
@@ -865,3 +869,36 @@ const (
 // owner's identity is deactivated or was suspended since the caller was admitted (leaver
 // deprovisioning). One sentence, so a suspension reads like a cut session.
 const reasonIdentityDeactivated = "identity_deactivated"
+
+// applyRunComponents' own refusals (components_run.go): the component gate at
+// POST /runs, its Review and the policy preview. Who may attach a component is
+// not here — that is authz's capability_component / capability_feature.
+const (
+	reasonComponentRefInvalid             = "component_ref_invalid"              // components[] is malformed: too many entries, an entry naming both or neither of id and inline, or one component twice
+	reasonComponentStoreUnavailable       = "component_store_unavailable"        // this deployment's store cannot record components
+	reasonComponentDefinitionInvalid      = "component_definition_invalid"       // the component's definition breaks a rule: a host, a delivery, a name Wardyn manages, a model provider's variable
+	reasonComponentSecretNotOwned         = "component_secret_not_owned"         // a secret the component delivers is not one the caller holds in their own namespace
+	reasonComponentSecretMissing          = "component_secret_missing"           // a secret the organisation provides for the component has not been stored
+	reasonComponentHostDenied             = "component_host_denied"              // a host of the component is on a deny list, or is not one the caller's egress_host rows allow
+	reasonComponentHostServesModel        = "component_host_serves_model"        // a host of the component serves a model on this deployment
+	reasonComponentHostCollision          = "component_host_collision"           // a header delivery names a host that already carries a credential on the run
+	reasonComponentResidentDeliveryDenied = "component_resident_delivery_denied" // the organisation turned off env and file delivery (components.deny_resident_delivery)
+)
+
+// reasonCredentialHostCollision: two of a run's credentials are bound to one
+// host, and the proxy carries one per host. The three run doors answer it as a
+// 422 for any run (credentialHostRefusal), and dispatch records it on a failed
+// run's run.create row when the collision only appears there
+// (settleCredentialHosts). component_host_collision is the same rule for a
+// component's own header.
+const reasonCredentialHostCollision = "credential_host_collision"
+
+// The component routes' own reasons (components_routes.go): a person's saved
+// components under /me/components and the organisation's under /components. The
+// definition, shared-secret and store-unavailable refusals they also answer are
+// the gate's, declared above.
+const (
+	reasonComponentCapReached   = "component_cap_reached"   // the person, or the organisation, is at the saved-component limit
+	reasonComponentNameConflict = "component_name_conflict" // another component of this owner already has the name (or, for an org id, the id)
+	reasonComponentNotFound     = "component_not_found"     // no such component of this owner's; another person's and an absent id answer alike
+)

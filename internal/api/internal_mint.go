@@ -119,9 +119,29 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 		Username:   minted.Username,
 		JTI:        minted.JTI,
 		ExpiresAt:  minted.ExpiresAt.UTC().Format(time.RFC3339),
-		Injection:  minted.Injection,
+		Injection:  s.mintedRule(r.Context(), claims, body.GrantID, minted),
 		KnownHosts: minted.KnownHosts,
 	})
+}
+
+// mintedRule is the injection rule a mint answers with. The proxy relays this
+// answer into the sandbox as it is (its mint route passes status and body
+// through), and nothing on that path reads the rule's secret name: the proxy
+// takes its rules from its own config and resolves a value by grant id
+// (handleInternalInjection). So the rule of a `shared` grant, or of a grant
+// whose scope could not be read and may be one, goes out without the name —
+// what an organisation's secret is called is the operator's, here as in the
+// run's audit rows (sharedRefs).
+func (s *Server) mintedRule(ctx context.Context, claims *identity.Claims, grantID uuid.UUID, minted broker.Minted) *egress.InjectionRule {
+	if minted.Injection == nil {
+		return nil
+	}
+	if read, _ := s.injectionReadFor(ctx, claims, grantID, minted); !read.shared && !read.unknown {
+		return minted.Injection
+	}
+	rule := *minted.Injection
+	rule.SecretName = ""
+	return &rule
 }
 
 // brokeredForgeMintKind reports whether grantID is an ssh_key or git_pat grant

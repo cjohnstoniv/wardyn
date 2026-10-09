@@ -40,7 +40,7 @@ func autonomyEgress(spec types.RunPolicySpec) types.AutonomyEgressPosture {
 }
 
 // autonomySecrets: POWERFUL with any write-capable grant, an api_key to a
-// non-baseline host, or a git_pat/ssh_key/env_secret; BASELINE with any grant;
+// non-baseline host, or a git_pat/ssh_key/env_secret/file_secret; BASELINE with any grant;
 // NONE with no grant at all. The three named kinds are ones grantIsWriteCapable
 // deliberately treats as not write-capable (to avoid flooring confinement and
 // blocking SCM clones), but each is still a credential this run could spend
@@ -54,7 +54,7 @@ func autonomySecrets(spec types.RunPolicySpec) types.AutonomySecretsPosture {
 			return types.AutonomySecretsPowerful
 		}
 		switch g.Kind {
-		case types.GrantGitPAT, types.GrantSSHKey, types.GrantEnvSecret:
+		case types.GrantGitPAT, types.GrantSSHKey, types.GrantEnvSecret, types.GrantFileSecret:
 			return types.AutonomySecretsPowerful
 		}
 	}

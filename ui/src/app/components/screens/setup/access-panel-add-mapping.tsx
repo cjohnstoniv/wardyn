@@ -23,7 +23,7 @@ import {
 } from "../../ui/alert-dialog";
 import { Field } from "../../wardyn/form-primitives";
 import { DirectoryCombobox } from "../../wardyn/directory-combobox";
-import { Segmented } from "../permissions";
+import { Segmented } from "../../wardyn/segmented";
 import { classifyWriteError, writeErrorNote, Note, type WriteErrorKind } from "./access-panel";
 
 // Add-mapping form — the FIRST_ROW posture guard runs here, pre-emptively,

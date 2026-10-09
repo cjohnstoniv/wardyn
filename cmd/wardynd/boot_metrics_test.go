@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -49,14 +50,39 @@ func TestValidateMetricsListenConfig(t *testing.T) {
 	}
 }
 
-// TestStartMetricsListener: with an address the handler answers there without
-// a credential and the listener closes with rootCtx; with none, nothing is
-// started and the handler is never reached.
-func TestStartMetricsListener(t *testing.T) {
-	startMetricsListener(context.Background(), "", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+func TestStartMetricsListenerOff(t *testing.T) {
+	if err := startMetricsListener(context.Background(), "", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Error("handler reached with the listener off")
-	}))
+	})); err != nil {
+		t.Fatalf("unset listener: %v", err)
+	}
+}
 
+func TestStartMetricsListenerRefusesBind(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	for _, tc := range []struct{ name, addr string }{
+		{"occupied", ln.Addr().String()},
+		{"missing port", "127.0.0.1"},
+		{"invalid port", "127.0.0.1:65536"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := startMetricsListener(t.Context(), tc.addr, http.NotFoundHandler())
+			if err == nil || !strings.Contains(err.Error(), "metrics listener") || !strings.Contains(err.Error(), tc.addr) {
+				t.Fatalf("bind %q = %v, want synchronous metrics listener error naming the address", tc.addr, err)
+			}
+			var op *net.OpError
+			if !errors.As(err, &op) || op.Op != "listen" {
+				t.Fatalf("bind error lost its net.Listen cause: %v", err)
+			}
+		})
+	}
+}
+
+func TestStartMetricsListener(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -66,35 +92,31 @@ func TestStartMetricsListener(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	startMetricsListener(ctx, addr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	if err := startMetricsListener(ctx, addr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "" {
 			t.Error("scrape carried a credential")
 		}
 		_, _ = io.WriteString(w, "wardyn_store_up 1\n")
-	}))
+	})); err != nil {
+		t.Fatal(err)
+	}
 
 	client := &http.Client{Timeout: time.Second}
-	var body string
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		resp, err := client.Get("http://" + addr + "/metrics")
-		if err == nil {
-			b, _ := io.ReadAll(resp.Body)
-			_ = resp.Body.Close()
-			body = string(b)
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("metrics listener never answered on %s: %v", addr, err)
-		}
-		time.Sleep(20 * time.Millisecond)
+	resp, err := client.Get("http://" + addr + "/metrics")
+	if err != nil {
+		t.Fatalf("metrics listener did not answer on %s: %v", addr, err)
 	}
-	if body != "wardyn_store_up 1\n" {
+	b, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := string(b); body != "wardyn_store_up 1\n" {
 		t.Fatalf("body = %q", body)
 	}
 
 	cancel()
-	deadline = time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for {
 		c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
 		if err != nil {

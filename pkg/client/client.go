@@ -41,6 +41,8 @@
 //   - sessions (/api/v1/sessions):       RevokeSessions
 //   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDeviceEnrolmentTokens, RevokeDeviceEnrolmentToken, ListDevices, RevokeDevice
 //   - people (/api/v1/people):           ListPeople, and ErasePerson (a person's retained records, by scope, 0.8.6); the other writes below stay unwrapped
+//   - components (/api/v1/components):   ListComponents, PutComponent, DeleteComponent (the organisation's, admin) — and, on
+//     /api/v1/me/components, the caller's own: MyComponents, SaveMyComponent, UpdateMyComponent, DeleteMyComponent
 //
 // NOT covered — drive these with the CLI or raw HTTP. This half is a CENSUS of
 // every registered route family the SDK does not wrap, not a list of
@@ -72,7 +74,7 @@
 //   - /api/v1/internal       — the AGENT-facing plane (mint, decisions, groundtruth,
 //     scan-results, token renew). Deliberately unwrapped: it is the sandbox's
 //     surface, not an operator's.
-//   - /api/v1/me             — beyond Me and ssh-keys: capabilities, run-layout, tokens
+//   - /api/v1/me             — beyond Me, ssh-keys and components: capabilities, run-layout, tokens
 //   - /api/v1/auth, /auth/login, /auth/callback — the browser SSO leg, plus the
 //     harness-login device flow. A redirect dance, not an API call.
 //   - /api/v1/scm            — the per-user Azure DevOps sign-in (0.7.10): a

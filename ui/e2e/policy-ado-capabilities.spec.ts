@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, ADMIN_TOKEN, gotoConsole, navTo } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, goToNewRunPanel } from "./fixtures";
 import { ADO_ACCESS } from "../src/app/lib/ado-access-copy";
 import { ADO_ENTRA_EDITOR } from "../src/app/lib/workspace-providers-copy";
 import type { RunPolicySpec } from "../src/app/lib/types";
 import type { Locator, Page } from "@playwright/test";
+import { SPEC_LABEL } from "./policy-source";
 
 // azure_devops_capabilities (#1363): a saved policy as a saved Azure DevOps
 // access profile — the approved mock's "Azure DevOps access" section (Member ·
@@ -76,7 +77,7 @@ test("the Azure DevOps access section locks what the ceiling does not grant, and
   await dialog.getByLabel("Name", { exact: true }).fill(name);
   await capBox(dialog, "Read code").click();
   await capBox(dialog, "Edit branch policies").click();
-  await expect(dialog.getByLabel("Spec (JSON)")).toHaveValue(/"azure_devops_capabilities"/);
+  await expect(dialog.getByLabel(SPEC_LABEL)).toHaveValue(/azure_devops_capabilities:/);
 
   const created = page.waitForResponse((r) => r.url().includes("/api/v1/policies") && r.request().method() === "POST");
   await dialog.getByRole("button", { name: "Create policy" }).click();
@@ -133,12 +134,15 @@ test("New Run summarises the picked saved policy's Azure DevOps access", async (
     await gotoConsole(page);
     await page.getByRole("button", { name: "New run" }).click();
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await goToNewRunPanel(page, "policy");
     await page.getByRole("button", { name: /^Reuse a saved policy/ }).click();
     const summary = page.getByTestId("ado-access-summary");
 
     for (const [name, , line] of policies) {
+      await goToNewRunPanel(page, "policy");
       await page.getByRole("combobox", { name: "Saved policy" }).click();
       await page.getByRole("option", { name }).click();
+      await goToNewRunPanel(page, "access");
       await expect(summary).toHaveText(line);
     }
     await expect(summary.getByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE)).toBeVisible();

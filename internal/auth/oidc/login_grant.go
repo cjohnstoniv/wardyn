@@ -33,6 +33,8 @@ const maxExtraLoginScopes = 32
 // carries no access token (stale within minutes) — the refresh token is
 // the durable half, and only the party that stores it may redeem it.
 type LoginGrant struct {
+	// Generation is the sink's durable erasure snapshot taken before exchange.
+	Generation int64
 	// RefreshToken is the durable half of the grant; empty if the provider
 	// issued none (`offline_access` not asked for, or not granted).
 	RefreshToken string
@@ -49,6 +51,9 @@ type LoginGrant struct {
 // implementation MUST NOT panic or block for long: it runs inside a
 // browser's login redirect, with a human waiting.
 type LoginGrantSink interface {
+	// LoginGrantGeneration snapshots the sink before the exchange establishes
+	// an owner. An error skips capture while the login proceeds.
+	LoginGrantGeneration(ctx context.Context) (int64, error)
 	// LoginScopes returns extra scopes to request, or nil. Called once per
 	// authorization request.
 	LoginScopes(ctx context.Context) []string
@@ -176,18 +181,39 @@ func (a *Authenticator) loginScopeParam(extra []string) string {
 	return strings.Join(append(slices.Clone(a.oauth2.Scopes), extra...), " ")
 }
 
+func (a *Authenticator) loginGrantGeneration(ctx context.Context) (int64, bool) {
+	sink := a.loginGrantSink()
+	if sink == nil {
+		return 0, false
+	}
+	type result struct {
+		generation int64
+		err        error
+	}
+	ready := make(chan result, 1)
+	if !a.boundedSinkCall(ctx, "snapshot the login grant", func(ctx context.Context) {
+		generation, err := sink.LoginGrantGeneration(ctx)
+		ready <- result{generation, err}
+	}) {
+		return 0, false
+	}
+	r := <-ready
+	return r.generation, r.err == nil
+}
+
 // captureLoginGrant hands the exchanged grant to the sink — the one call
 // site, checking every reason to skip: no sink attached, no token, or no
 // refresh token (declined/unsupported `offline_access`). Reports nothing,
 // deliberately: login is already approved, and a downstream credential is
 // not a condition of it.
-func (a *Authenticator) captureLoginGrant(ctx context.Context, subject string, token *oauth2.Token) {
+func (a *Authenticator) captureLoginGrant(ctx context.Context, subject string, token *oauth2.Token, generation int64) {
 	sink := a.loginGrantSink()
 	if sink == nil || token == nil || token.RefreshToken == "" || subject == "" {
 		return
 	}
 	scope, _ := token.Extra("scope").(string)
 	grant := LoginGrant{
+		Generation:   generation,
 		RefreshToken: token.RefreshToken,
 		Scope:        scope,
 		Expiry:       token.Expiry,

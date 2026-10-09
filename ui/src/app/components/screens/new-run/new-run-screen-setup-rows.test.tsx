@@ -22,9 +22,11 @@ vi.mock("../../../lib/api/policies", () => ({
   },
 }));
 const preflightRunMock = vi.fn();
+vi.mock("../../../lib/api/policy-preview", () => ({ previewRunPolicy: vi.fn().mockResolvedValue({ spec: {}, pending: [], warnings: [], repository_access: [] }) }));
 vi.mock("../../../lib/api/runs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api/runs")>();
   return {
+    ...actual,
     isCredentialRefusal: actual.isCredentialRefusal,
     isGitCredentialRefusal: actual.isGitCredentialRefusal,
     runs: {
@@ -48,6 +50,7 @@ import { baseStatus } from "../../../lib/test-fixtures";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { NO_BARRIER, RAIL_SETUP } from "../../wardyn/copy";
 import type { SetupItem } from "../../../lib/types/runs";
+import { goToPanel } from "../../../../test/new-run-panel";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -80,7 +83,7 @@ async function preflighted(items: SetupItem[], classes: Array<"CC1" | "CC2" | "C
   });
   render(
     <MemoryRouter>
-      <OperatorProvider operator>
+      <OperatorProvider principal="test-owner" operator>
         <NewRunScreen />
       </OperatorProvider>
     </MemoryRouter>,
@@ -88,6 +91,7 @@ async function preflighted(items: SetupItem[], classes: Array<"CC1" | "CC2" | "C
   // One change event, not eleven keystrokes: every keystroke re-renders the
   // whole screen, and on a loaded CI runner that alone outran the test timeout.
   fireEvent.change(await screen.findByLabelText("Title"), { target: { value: "Refund flow" } });
+  goToPanel("Policy");
   await user.click(screen.getByRole("button", { name: /^Check again$/ }));
   await screen.findByTestId("preflight-result");
 }

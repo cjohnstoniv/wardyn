@@ -276,9 +276,9 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 //     let U+212A land on an ASCII name the author never typed.
 //
 //   - feature: LOWERCASED (ASCII guard first, as above), then held to the
-//     closed featureValues set. The mint doors ask about exactly those two
-//     strings, so any other value is a row that can never match — a deny that
-//     turns nothing off.
+//     closed featureValues set. The mint doors and componentAttachRefusal ask
+//     about exactly those strings, so any other value is a row that can never
+//     match — a deny that turns nothing off.
 //
 //   - agent and image: STORED VERBATIM, and that is a decision rather than an
 //     omission. An agent id is not held to a closed catalog at the run boundary
@@ -312,7 +312,7 @@ func canonicalGrantValue(capability, value string) (string, error) {
 		if !imageRefPathSafe(v) {
 			return "", fmt.Errorf("value: "+image400DotSegment, fmt.Sprintf("%q", v))
 		}
-	case capWorkspace, capPolicy:
+	case capWorkspace, capPolicy, capComponent:
 		id, err := uuid.Parse(v)
 		if err != nil {
 			return "", fmt.Errorf("value: %q is not a %s id — a %s capability names one by uuid, and the resolver compares it exactly, so a value it cannot read can never match anything", v, capability, capability)

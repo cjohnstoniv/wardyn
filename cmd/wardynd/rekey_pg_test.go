@@ -279,7 +279,7 @@ func TestRotateAgeKeyMode_RefusesWhileTheRekeyLockIsHeld(t *testing.T) {
 		t.Fatalf("write the current key file: %v", err)
 	}
 
-	release, ok, err := db.TryAdvisoryLock(context.Background(), pool, db.SecretRekeyLockKey)
+	_, release, ok, err := db.TryAdvisoryLockDedicated(context.Background(), pool, db.SecretRekeyLockKey)
 	if err != nil || !ok {
 		t.Fatalf("hold the rekey lock: ok=%v err=%v", ok, err)
 	}

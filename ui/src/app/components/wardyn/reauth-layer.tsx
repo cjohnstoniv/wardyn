@@ -37,7 +37,6 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
-import { HttpError, setToken, wfetch } from "../../lib/api/core";
 import { health, type Me } from "../../lib/api/health";
 import { shortTime } from "../../lib/format";
 import { useReauth, type Renewal } from "../../lib/reauth";
@@ -49,12 +48,14 @@ import { PROVIDERS_EXTRA } from "../../lib/workspace-providers-copy";
 import { SIGNIN } from "../../lib/sign-in-copy";
 import { SSO_SIGN_IN, TOKEN_LABEL } from "../screens/sign-in";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
-import { useOperatorResolved, usePrincipal } from "./operator-context";
+import { useOperator, useRequestIdentity, useRole, useSecurityOperator } from "./operator-context";
+import { getAuthGeneration, isSignedOutHold, onAuthChange } from "../../lib/api/core";
 import { appURL } from "../../lib/base-path";
+import { useSessionPoll } from "./use-session-poll";
+import { isSwitching } from "./console-view";
 
 // A function, not a constant: the base path is read when the link is used.
 const ssoLoginURL = () => appURL("/auth/login");
-const POLL_MS = 1500;
 // The fallback link opens a tab this page holds no handle on, so nothing
 // says when it closes — the poll it starts is bounded instead.
 const FALLBACK_POLL_TIMEOUT_MS = 5 * 60 * 1000;
@@ -68,6 +69,14 @@ const FALLBACK_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const LOGIN_REDEEMABLE_MS = (2 * 10 + 1) * 60 * 1000;
 const whileRedeemable = () => Date.now() + LOGIN_REDEEMABLE_MS;
 
+// The expiry banner's "Sign in again", which stands in the slot's place whenever
+// no renewal waits. The banner is eager and this layer is not, so it is found by
+// where it stands and what it says rather than by an id the entry chunk would carry.
+function bannerSignInAgain(): HTMLElement | undefined {
+  const banner = document.getElementById(RENEW_STRIP_SLOT)?.previousElementSibling;
+  return Array.from(banner?.querySelectorAll("button") ?? []).find((b) => b.textContent === REAUTH_RENEW.CTA);
+}
+
 // The sign-in in a new tab, opened from the click so this page holds a handle
 // Cancel can close; null when the browser refuses that as well. Severed like
 // the window (lib/use-session-renew.ts).
@@ -77,14 +86,6 @@ function openSignInTab(): Window | null {
   tab.opener = null;
   tab.location.href = ssoLoginURL();
   return tab;
-}
-
-/** The visible part of a poll: until over() the status line follows it, then
- *  onOver() says how it ended. onLive runs before a live session is acted on. */
-interface Wait {
-  over: () => boolean;
-  onOver: () => void;
-  onLive?: () => void;
 }
 
 // Can THIS role open `path`? Mirrors App.tsx's <Route> tiers: a user's
@@ -103,23 +104,6 @@ export function roleCanReach(path: string, role: string): boolean {
   if (under(OPERATOR_ONLY_PREFIXES)) return role === "admin";
   return true;
 }
-
-type Session = Me | "unauthed" | "unreachable";
-
-// One GET /me answers both "is there a session" and "whose": a 401 is signed
-// out, anything else that is not a body is an outage — never a sign-out.
-async function readSession(): Promise<Session> {
-  try {
-    const res = await wfetch("/me", { method: "GET" });
-    if (res.ok) return (await res.json()) as Me;
-    await res.text().catch(() => "");
-    return "unreachable";
-  } catch (e) {
-    return e instanceof HttpError && e.status === 401 ? "unauthed" : "unreachable";
-  }
-}
-
-type Status = "idle" | "waiting" | "blocked" | "closed" | "unreachable" | "rejected";
 
 // A live /me while a renewal waits. Identity and authority come FIRST, on
 // every answer: someone else's sign-in, or this person's with other authority,
@@ -144,30 +128,30 @@ function renewVerdict(from: Renewal, me: Me, principalResolved: boolean): "other
 
 export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   const reauth = useReauth();
-  const principal = usePrincipal();
+  const { principal, operatorResolved: principalResolved, authGeneration } = useRequestIdentity();
+  const confirmedGeneration = React.useRef(authGeneration);
+  const observedGeneration = React.useSyncExternalStore(onAuthChange, getAuthGeneration);
+  const needsConfirmation = observedGeneration !== authGeneration;
+  const role = useRole(), operator = useOperator(), securityOperator = useSecurityOperator();
   // SF-29: whether `principal` is a settled fact rather than app-shell's
   // still-loading "…" or its own fail-open "unknown" (health.ts's whoami()
   // returns null, so identityResolved/operatorResolved stays false, for both
   // cases — see OperatorResolvedContext's own R4-F110 precedent for this same
   // class of bug). An unsettled principal cannot prove who signs back in is
   // the same person, so it counts as someone else (fail closed, below).
-  const principalResolved = useOperatorResolved();
   const location = useLocation();
   const navigate = useNavigate();
-  const [status, setStatus] = React.useState<Status>("idle");
   // Same person, narrower role: this page is no longer theirs.
-  const [narrowed, setNarrowed] = React.useState<Me | null>(null);
+  const [narrowed, setNarrowed] = React.useState<{ me: Me; generation: number } | null>(null);
   const [token, setTokenValue] = React.useState("");
-  const [busy, setBusy] = React.useState(false);
   // Same defaults and rule as sign-in.tsx: the token form until the daemon
   // says otherwise, SSO only once it says so.
   const [doors, setDoors] = React.useState({ sso: false, token: true });
-  const pollRef = React.useRef<number | null>(null);
   const cancelRef = React.useRef<HTMLButtonElement>(null);
   const { renewal, watch, setWatch } = reauth;
   // Whether a renewal has begun a sign-in at all — a window or a tab that
-  // opened — since this layer mounted, and it stays mounted for as long as one
-  // is watched. A renewal whose window was refused, and nothing else, has
+  // opened — while a renewal or its watch is active. A fresh quiet phase
+  // resets it. A renewal whose window was refused, and nothing else, has
   // nothing that can land.
   const began = React.useRef(false);
   const { copied, copy } = useCopyToClipboard();
@@ -176,7 +160,9 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     if (copied) toast.success(PROVIDERS_EXTRA.CONFLICT_COPIED_TOAST);
   }, [copied]);
 
+  const active = reauth.phase !== "none" || watch !== null;
   React.useEffect(() => {
+    if (!active) return;
     let alive = true;
     void health.health().then((h) => {
       if (!alive || Object.keys(h).length === 0) return;
@@ -185,18 +171,12 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     return () => {
       alive = false;
     };
-  }, []);
-
-  const stopPoll = React.useCallback(() => {
-    if (pollRef.current !== null) window.clearInterval(pollRef.current);
-    pollRef.current = null;
-  }, []);
-  React.useEffect(() => stopPoll, [stopPoll]);
+  }, [active]);
 
   // Both read through a ref: the poll that calls them was started renders ago.
-  // Outside a renewal nobody was signed in, so any live /me is the answer —
-  // except under a watch, whose renewal the person backed out of: the same
-  // person with the same authority changes nothing there, whatever the expiry.
+  // Renewal and quiet-watch answers also compare expiry; ordinary confirmation
+  // checks the current owner and authority in succeed. A watch confirms the
+  // same owner without finishing the renewal they backed out of.
   const watching = watch !== null && reauth.phase === "none";
   const verdict = React.useRef((_me: Me): ReturnType<typeof renewVerdict> => "other");
   verdict.current = (me: Me) => {
@@ -211,6 +191,28 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     setWatch({ ...watch, from: { ...watch.from, principal, role, operator, securityOperator } });
   };
   const succeed = React.useRef((_me: Me) => {});
+  const quiet = !active;
+  const { status, setStatus, busy, startPoll, stopPoll, checkOnce, submitToken: checkToken } = useSessionPoll((me) => {
+    if (reauth.endingSession?.()) return true;
+    if (isSwitching() || (quiet && isSignedOutHold())) return false;
+    if (verdict.current(me) === "waiting") {
+      // A live same-owner read confirms request ownership without claiming that renewal finished.
+      const generation = getAuthGeneration();
+      if (principalResolved && me.principal === principal) {
+        if (confirmedGeneration.current !== generation) {
+          confirmedGeneration.current = generation;
+          onResumed(me);
+        }
+        if (watching && !began.current) {
+          setWatch(null);
+          return true;
+        }
+      }
+      return false;
+    }
+    succeed.current(me);
+    return true;
+  });
   succeed.current = (me: Me) => {
     stopPoll();
     // Owner ruling (Q457-12): someone else signed in. Nothing of the first
@@ -223,9 +225,13 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
       return;
     }
     if (!roleCanReach(location.pathname, me.role)) {
-      setNarrowed(me);
+      setNarrowed({ me, generation: getAuthGeneration() });
       // A renewal or a watch has no dialog up yet, and the dialog is what says so.
       if (reauth.phase !== "dialog") reauth.setPhase("dialog");
+      return;
+    }
+    if (quiet && (me.role !== role || me.operator !== operator || me.security_operator !== securityOperator)) {
+      reauth.reloadAs(location.pathname + location.search);
       return;
     }
     // A save refused in the lapse is said beside that screen's own Save when
@@ -245,49 +251,13 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     reauth.setPhase("none");
   };
 
-  // One poll at a time. With a `wait` it drives the status line until the
-  // wait is over; with `quietUntil` it then carries on — or, with no wait,
-  // starts — in silence until that moment: who answers /me is still measured,
-  // and only the status is left alone. A held page needs no quiet part.
-  const startPoll = React.useCallback(
-    (wait: Wait | null, quietUntil: (() => number) | null, onEnd?: () => void) => {
-      stopPoll();
-      if (wait) setStatus("waiting");
-      let inFlight = false;
-      let quiet = wait ? 0 : (quietUntil?.() ?? 0);
-      const tick = () => {
-        if (inFlight) return;
-        if (quiet && Date.now() > quiet) {
-          stopPoll();
-          onEnd?.();
-          return;
-        }
-        inFlight = true;
-        // Asked BEFORE the read, so a window closed the instant sign-in
-        // finished still gets one last look at the server.
-        const over = !quiet && !!wait?.over();
-        void readSession().then((s) => {
-          inFlight = false;
-          if (pollRef.current !== id) return;
-          if (typeof s === "object" && verdict.current(s) !== "waiting") {
-            wait?.onLive?.();
-            succeed.current(s);
-          } else if (over) {
-            wait?.onOver();
-            if (quietUntil) quiet = quietUntil();
-            else stopPoll();
-          } else if (!quiet) {
-            setStatus(s === "unreachable" ? "unreachable" : "waiting");
-          }
-        });
-      };
-      const id = window.setInterval(tick, POLL_MS);
-      pollRef.current = id;
-      // Nothing to wait for: the first look is now, not a poll from now.
-      if (!wait) tick();
-    },
-    [stopPoll],
-  );
+  React.useEffect(() => {
+    if (!quiet) return;
+    began.current = false;
+    if (!needsConfirmation) return;
+    checkOnce();
+    return stopPoll;
+  }, [quiet, needsConfirmation, checkOnce, stopPoll]);
 
   // A renewal begins with its window already open (or refused): only the wait
   // starts here. However it ends — renewed, someone else, Cancel, a new
@@ -297,20 +267,19 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     const { popup } = renewal;
     if (popup) {
       began.current = true;
-      startPoll({ over: () => popup.closed, onOver: () => setStatus("closed") }, whileRedeemable);
+      startPoll({ over: () => popup.closed, onOver: () => setStatus("closed"), keepPolling: true });
     } else {
       setStatus("blocked");
-      // A window opened earlier, by this renewal or one cancelled before it,
-      // may still finish its sign-in.
-      if (began.current) startPoll(null, whileRedeemable);
+      startPoll(null);
     }
     cancelRef.current?.focus();
     return () => {
       stopPoll();
       popup?.close();
     };
-  }, [renewal, startPoll, stopPoll]);
+  }, [renewal, startPoll, stopPoll, setStatus]);
 
+  // A cancelled blocked popup needs one confirmation read; a started sign-in stays watched.
   // A watch: the renewal was cancelled, the page works, and nothing shows.
   // Paused while the page is held — nothing is written then, and whoever
   // signs in is measured before it carries on — and over at its bound.
@@ -318,7 +287,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     if (!watch || !watching) return;
     startPoll(
       null,
-      () => watch.until,
+      watch.until,
       () => setWatch(null),
     );
     return stopPoll;
@@ -330,13 +299,24 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     setStatus("idle");
     setNarrowed(null);
     setTokenValue("");
-  }, [reauth.phase]);
+  }, [reauth.phase, setStatus]);
+
+  // Cancel takes the strip, and the focus on it, away; the banner that comes
+  // back gets the focus rather than the document. A cancel that lands on the
+  // dialog (a request was refused meanwhile) leaves it to the dialog.
+  const focusBanner = React.useRef(false);
+  React.useEffect(() => {
+    if (renewal || !focusBanner.current) return;
+    focusBanner.current = false;
+    if (reauth.phase === "none") bannerSignInAgain()?.focus();
+  }, [renewal, reauth.phase]);
 
   // Cancel closes the window (the renewal's effect), and that proves nothing:
   // a sign-in it began can still land, so who answers /me is watched from here.
   const cancelRenew = () => {
+    focusBanner.current = true;
     setStatus("idle");
-    if (renewal && began.current) setWatch({ from: renewal, until: whileRedeemable() });
+    if (renewal) setWatch({ from: renewal, until: whileRedeemable() });
     reauth.endRenew();
   };
 
@@ -347,16 +327,14 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
       setStatus("blocked");
       return;
     }
-    startPoll({ over: () => popup.closed, onOver: () => setStatus("closed"), onLive: () => popup.close() }, null);
+    startPoll({ over: () => popup.closed, onOver: () => setStatus("closed"), onLive: () => popup.close() });
   };
 
-  // The link's own tab, which this page holds no handle on. Under a renewal
-  // the page is working, so the poll goes quiet at its bound instead of ending.
+  // A fallback timeout changes the status; a visible renewal keeps reconciling.
   const signInInTab = () => {
     const deadline = Date.now() + FALLBACK_POLL_TIMEOUT_MS;
     startPoll(
-      { over: () => Date.now() > deadline, onOver: () => setStatus("blocked") },
-      renewal ? whileRedeemable : null,
+      { over: () => Date.now() > deadline, onOver: () => setStatus("blocked"), keepPolling: !!renewal },
     );
   };
 
@@ -374,17 +352,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     }
   };
 
-  const submitToken = async () => {
-    stopPoll();
-    setBusy(true);
-    setStatus("idle");
-    setToken(token);
-    const s = await readSession();
-    setBusy(false);
-    if (s === "unauthed") setStatus("rejected");
-    else if (s === "unreachable") setStatus("unreachable");
-    else succeed.current(s);
-  };
+  const submitToken = () => checkToken(token);
 
   const notNow = () => {
     stopPoll();
@@ -394,7 +362,12 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   };
 
   const goToRuns = () => {
-    if (narrowed) carryOn(narrowed);
+    if (narrowed && narrowed.generation !== getAuthGeneration()) {
+      // A delayed acknowledgement cannot confirm a replacement session.
+      reauth.reloadAs("/runs");
+      return;
+    }
+    if (narrowed) carryOn(narrowed.me);
     reauth.clearWriteDropped();
     reauth.setPhase("none");
     void navigate("/runs", { replace: true });
@@ -406,7 +379,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     </Button>
   );
 
-  const note: Partial<Record<Status, [string, string]>> = {
+  const note: Partial<Record<typeof status, [string, string]>> = {
     waiting: [REAUTH_DIALOG.WAITING, "text-muted-foreground"],
     closed: [REAUTH_DIALOG.CLOSED_WITHOUT, "text-warning"],
     unreachable: [REAUTH_DIALOG.UNREACHABLE, "text-warning"],

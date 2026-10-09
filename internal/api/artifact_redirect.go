@@ -204,7 +204,12 @@ func artifactBaseURLs(sc types.SiteConfig) map[string]string {
 // preDomains is the run's PRE-substitution allowlist: injection + TLS-MITM only
 // when the run reaches a public host the redirect fronts (artifactRedirectApplies,
 // as substituteArtifactEgress), so no run gets the token on a host it never named.
-func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, sc types.SiteConfig, preDomains []string) artifactRedirectPlan {
+//
+// laneHosts is the hosts the per-person Azure DevOps lane credentials on this
+// run, nil when it does not resolve. A redirect whose target is one of them is
+// applied without its token (laneCarriesHost): the lane carries that host's
+// credential, and a host carries one.
+func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, sc types.SiteConfig, preDomains, laneHosts []string) artifactRedirectPlan {
 	var plan artifactRedirectPlan
 	if len(sc.EgressRedirects) == 0 {
 		return plan
@@ -263,6 +268,14 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 				run.ID.String(), "warn", mustJSON(map[string]any{
 					"ecosystem": r.Ecosystem, "host": host,
 					"detail": "refused: To names a model-provider or configured gateway host, which would collide with the LLM injection route",
+				})))
+			continue
+		}
+		if laneCarriesHost(laneHosts, host) {
+			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
+				run.ID.String(), "warn", mustJSON(map[string]any{
+					"ecosystem": r.Ecosystem, "host": host,
+					"detail": "the per-person Azure DevOps lane carries this host's credential; redirect applied without token injection",
 				})))
 			continue
 		}

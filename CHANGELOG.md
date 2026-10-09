@@ -8,6 +8,285 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- Migration `0133_recording_erasures` adds durable per-run recording fences. Take a database dump before
+  upgrading; rollback requires restoring that dump. Filesystem deployments must retain the recording
+  root's `.erased` directory and `*.lock` files alongside the recordings.
+- Migration `0134_mask_owner_erasures` retains owner erasure fences independently of masking rows;
+  retain this table with database backups and grant the app role `SELECT, INSERT, UPDATE`.
+- Migration `0135_run_output_recording_recovery` adds durable recovery claims and recording-only
+  output erasure fences, and lets `run_outputs` hold a `recording` source. Take a database dump
+  before upgrading; rollback requires restoring that dump. Split-role installs grant the app role
+  `SELECT, INSERT, UPDATE` on `run_output_recording_recovery`. Keep the table in database backups:
+  its erased rows are the fence, and retention never removes them.
+- Migration `0136_components` adds the `components` table for saved custom components (organisation
+  rows and personal rows); grant the app role `SELECT, INSERT, UPDATE, DELETE` on `components`.
+- Migration `0137_run_components` adds `run_components`, the components each run launched with. Erasing
+  a person clears the content of their rows and keeps a content-free row as the run's authorization
+  record; preserve these rows with backups and grant the app role `SELECT, INSERT, UPDATE`.
+- A run with two credentials bound to one host is now refused (422 `credential_host_collision` at
+  `POST /runs`, its Review and the policy preview): two `api_key` grants for one host in a policy, or a
+  policy credential on a host that a token-bearing redirect, the Azure DevOps lane or a `git_pat` API
+  grant also credentials. Before, the proxy kept whichever rule it was handed last.
+- On a run that uses the per-person Azure DevOps lane, a redirect whose target is an Azure DevOps host
+  (a package feed on `pkgs.dev.azure.com`, for example) is served with the person's own token, not the
+  redirect's: the redirect still applies, without its token. Runs that do not use the lane keep the
+  redirect's token.
+
+### Added
+
+- **Run-level custom components.** A run can carry components that
+  add destinations and credentials: an organisation component an administrator defines and grants
+  (`/api/v1/components`), a person's own saved component (`/api/v1/me/components`), or one written inline in
+  the run body (`components` on create, preflight and preview). A component's secret is added to requests by
+  the egress proxy as a header, or delivered into the sandbox as an environment variable or a file when the
+  deployment allows it (`components.deny_resident_delivery` turns that off). Create, preflight and preview
+  report each component's status; a save answers `requirements[]` naming any stored secret it still needs.
+  New org components are usable by nobody until granted (capability `component`); who may define their own
+  is the `custom_component` feature. A run carrying a self-defined component can be capped by
+  `components.autonomy_cap`. The name of an organisation secret a shared component uses is withheld from
+  callers whose audit reads are narrowed to one run; administrators and security administrators read rows as
+  recorded. Person erasure gains a `components` scope. See [docs/CREDENTIALS.md](docs/CREDENTIALS.md) for
+  what each delivery leaves readable inside the sandbox.
+
+- Figures in the docs: the README (its opener and its architecture section), the docs index, the Desktop
+  topology section, the architecture page's deployment section and the threat model's confinement-class
+  section gain illustrations beside the text they explain. No diagram or sentence was removed.
+- `docs/CREDENTIALS.md` explains how each kind of credential reaches a run: which the egress proxy adds
+  to the outbound request, which a policy or a component delivers into the sandbox, and the residual
+  of each, with the code that backs every row.
+- A strict YAML/JSON policy-source parser and comment-preserving edit helpers for the policy
+  editors. Ambiguous keys, aliases, tags, directives and unsafe numbers are refused before JSON
+  conversion (#1917).
+- `POST /api/v1/runs/policy-preview` returns authorized, clamped and redacted policy facts for incomplete
+  run drafts, with readiness checks marked pending. It reads no credential values, renews nothing and
+  performs no runner or share probe. Its independent per-person limit defaults to 60/minute with a burst of 15,
+  configured by `WARDYN_POLICY_PREVIEW_RATE_PER_MIN`. Repository facts preserve full SSH paths and keep
+  differing Azure DevOps profiles and ceilings in separate groups; see `docs/sdk.md` (#1918).
+- The console shows a policy as one read-only document with Summary, YAML and JSON views: on
+  Policies (the default and each saved policy), in the governance profile editor, on a run's Policy
+  tab and for New Run's default policy. Summary names every setting in plain words under headings
+  and lists repeated values once under one title; a key it does not know still appears, under its
+  raw name. Copy YAML and Copy JSON copy the policy in that format. Viewing never changes a
+  policy (#1921).
+- New Run is four panels — Run, Workspace, Access and Policy — that can be visited in any order, with
+  Launch reachable from every one. Each panel's button counts what is holding Launch on it, and the
+  reason above Launch is a link that shows the right panel and focuses the control to fix. On narrow
+  screens the rail becomes a footer that keeps the verdict and Launch on screen (#1922).
+
+### Changed
+
+- **`wardyn run policy` says when its export is a record, not a reusable policy.** For a run that carries a
+  shared component grant, the header and help now say the exported policy records what the run got and cannot
+  be submitted as an authored policy: authored-policy validation refuses the `shared` mark.
+
+- Policy editors open in YAML (`Spec (YAML)`) in Policies, Governance and New Run. JSON remains an
+  explicit choice (`Spec (JSON)`), and JSON text pasted into the YAML editor is still read. A source
+  that does not parse names its line and column, holds the structured controls, and cannot be
+  saved. Templates, Insert and the rule sections rewrite only the keys they change, so comments
+  elsewhere in the text survive an edit; comments are not stored when a policy is saved or a run
+  launches. Switching YAML to JSON asks first, because it drops them (#1921).
+- A governance profile's ceiling reads first and is edited through "Edit policy". A run's Policy
+  tab Summary draws a row only for what the policy sets, so the "None" and "Standard limit" rows
+  are gone; tool rules are listed one per line and an idle stop reads "Stops after N minutes"
+  (#1921).
+- New Run requires a Title. An untyped title is filled from the first line of the Task or Command
+  and stays editable; a run with neither, such as an interactive terminal session, needs one typed.
+  Run details now open the Run panel (#1922).
+- New Run's Command and Startup command are single-line command inputs, and Task, Command and
+  Startup command each keep their own text, so a prompt typed as a Task is never sent as a command.
+  Multi-line scripts are not supported in these fields (#1922).
+- New Run's model provider picker moved from the rail to the Run panel; the rail keeps a summary.
+  A workspace that is not available, or whose git provider is not enabled, is shown as an error
+  beside the Workspace picker, and the second now holds Launch. The "Per-person AWS sign-in" chip is
+  removed, and the Hold option reads "Hold in Wardyn — tool calls wait for approval, by tool rule"
+  with a link to the policy's tool rules (#1922).
+- New Run's Policy panel opens on the policy this run will get, read-only, as the server previews it
+  for the current draft, with Summary, YAML and JSON views. "Edit policy" opens a custom policy's
+  source and "Done editing" closes it; neither changes the draft. A saved or default policy is
+  read-only there, and "Customize for this run" copies it into a custom one, starting from a safe
+  policy when the reader's copy may have values removed. An edit keeps the last preview on screen,
+  marked out of date, until the next one arrives. A source that does not parse holds its structured
+  controls, sends no check, keeps the last preview marked out of date, and holds Launch with "The
+  policy spec isn't valid YAML or JSON." (was "The policy spec isn't valid JSON."). The source New Run
+  opens with is YAML. New Run's editor no longer shows the safety meter, the Fields list and its
+  Insert buttons, or the host-count chips; Policies keeps them. Under a saved or default policy the
+  Hold option's tool rules link lands on that read-only policy (#1922).
+- The Integrations, Launch presets, Console branding and Managed laptops operations pages are now
+  bullets, tables and alerts, with every repository file they cite linked. No rule, default or limit
+  changed.
+- The Desktop tier page is now bullets, tables and alerts, with every repository file it cites linked.
+  No rule, default or limit changed; long table cells moved to
+  sections of their own.
+- The compose demo README, the agent images README, the build images operations page and the
+  devcontainer build page (ENVBUILD) are now bullets, tables and alerts, with every repository file
+  they cite linked. No rule, default or limit changed.
+- `docs/USERS.md`, `docs/SSH.md` and `docs/UI-SANDBOXES.md` are restructured into short bullets,
+  tables and callouts, with every file reference a link and no sentence over 35 words. The console's
+  quoted strings, defaults, limits, refusals and upgrade steps are unchanged.
+- The Helm chart README and the two SSO runbooks under `deploy/` (`kind/sso`, `azure-entra-sso`) are restructured into bullets, tables and alerts with their file references linked; no value, default or step changes.
+- The operations manual's API-token, portal-delegation, roles and governance-profile, denial-reason,
+  run-policy, second-user and workspace-tier sections are now bullets, nested lists and alerts, with
+  every repository file they cite linked. No rule, default or limit changed.
+- The Go SDK page (`docs/sdk.md`) is restructured into bullets and alerts with every repository file it cites linked, and gains two section headings, "Before you start" and "Quickstart". The `Reason` tables' text and the code fences are unchanged, and no reason, status code, default, limit or refusal changed.
+- The policy reference and the example-policy notes read as bullets, alerts and tables with every file reference a link; no field, default or limit changed.
+- **Threat model: sections 0 to 3, 4 (except 4.1) and 6 to 8 are bullets and split table rows.** Every
+  sentence is kept; the longest table cells move into subsections under their table, and file references
+  are links.
+- Threat model residuals 1 to 40 are bullets, one sentence each, with every repository file they cite
+  linked. Numbers, order and wording are kept; no residual, default or limit changed.
+- Threat model residuals 41 to 63 are bullets, one sentence each, with every repository file they cite linked. Numbers, order and titles are kept and no word is dropped; no residual, default or limit changed.
+- Threat model section 4.1 and the section 5 parts after the residuals (5.1a through console auth token storage) are bullets, one sentence each where a sentence could be split, with every repository file they cite linked; the four long override-table cells move into subsections under their table, the resident-secret table keeps its rows, and no default, limit or refusal changed.
+- The Azure DevOps page (`docs/AZURE-DEVOPS.md`) is restructured into bullets and alerts; its tables, code fences and headings are unchanged, three sentences of 36 to 39 words are kept as written, and no scope, limit, refusal, default or upgrade step changes.
+- The pluggable components page, the image verification page, the export control page, the recording read confinement note and the adoption reports index are now bullets, tables and alerts, with every repository file they cite linked. No rule, default or limit changed; the long cells of the pluggable components tables moved to sections of their own.
+- The release procedure (`RELEASING.md`), the roadmap, the demo recording script and the live-local tests page are now bullets, tables and alerts, with every repository file they cite linked; no step, order, command, gate name, date or measured value changed, and the long table cells moved into short sections under the same page.
+- `docs/OPERATIONS.md`: the Network section ("Network: upstream proxy and egress redirects") is now
+  bullets, tables and callouts, and every file it names is a link. No fact, default, limit or step changed.
+- The repository README, the docs index and the try-it walkthrough are restructured into bullets, tables and callouts with their file references linked; each gains one section heading. No command, default, limit or refusal changed.
+- The CI page, the CI-jobs-as-runs recipe and the `wardyn-ci` skill are now bullets, tables and alerts, with every repository file they cite linked. No rule, default, limit or exit code changed; five long exit-code table cells moved to sections of their own.
+- The environment variable registry (`docs/ENV.md`) is now bullets, tables and alerts, with every repository file it cites linked. No variable, default, limit, flag or refusal changed; the long Notes cells moved to sections of their own under their tables.
+- `docs/OPERATIONS.md`: the multi-user section's access model ("Who decides who gets in", "Who writes the provider policy", "Four-eyes on governance writes" and "Reclaiming a departed person's storage") is now bullets, tables and callouts, every file it names is a link, and its three longest table cells move into subsections under their table. No fact, default, limit or step changed.
+- `docs/OPERATIONS.md`: the "User drives on Docker" and "Capabilities: what one member, or one group,
+  may do" sections are now bullets, nested lists and tables, with every repository file they cite
+  linked; six long table cells moved to sections under their tables. No rule, check, refusal,
+  default or limit changed.
+- `docs/OPERATIONS.md`: the sections "Renamed in 0.8", "Upgrades", "Kubernetes: day-2" and "High availability" are
+  now bullets, nested lists and callouts, and every file they name is a link. No step, order, default, limit or version changed.
+- The architecture overview, the security policy, the provenance statement, the data-flow page and the agent threat model are now bullets, tables and alerts with their file references linked; no disclosure, limit, refusal or contact detail changed, and three table cells stay long.
+- `docs/OPERATIONS.md`: the "State stores" section (run output, backup and restore, the audit log, its hash chain, retention, erasure, leavers and SCIM) and "Approval notifications" are now bullets, nested lists and callouts, and every file they name is a link; two long cells of the SCIM purge table moved to sections under it. No step, order, default, limit or refusal changed.
+- The audit action vocabulary (`docs/AUDIT-ACTIONS.md`) opens with a short summary and a new "Reading this page" section; its prose is bullets, nested lists and alerts, every repository file it cites is a link, and nineteen long `rule_source` meanings moved to sections under their table. No action, field, row, default or refusal changed.
+
+### Fixed
+
+- `docs/USERS.md` said every `tool_call` approval is admin-only whoever owns the run. One is not:
+  a run's owner may decide an Azure DevOps access request raised by their own run, up to the ceiling
+  an administrator set, unless `WARDYN_CAPABILITY_SECOND_HUMAN=1` requires someone else. The guide
+  now names that exception. Authorization is unchanged.
+- `docs/DESKTOP.md` said whoever registers an SSH public key first owns its fingerprint forever
+  and that the only remedy is out of band. The fingerprint is held until the key is deleted, and an
+  admin or `security_admin` can remove a person's keys with `DELETE /people/{principal}/ssh-keys`.
+  The Desktop page and "Reclaiming a squatted fingerprint" in `docs/SSH.md` now say so; verifying
+  the rightful owner is still out of band, and a member still cannot remove someone else's key.
+- `docs/DESKTOP.md` still said a `wardynd` restart mid-run loses the masking state and then
+  records or streams output unmasked, and that failing closed "is not done". Since 0.8.6 the
+  secret values a run receives at dispatch are committed before its sandbox starts (later ones
+  before they are handed out) and reloaded after a restart, and a
+  recording upload or attach that cannot prove that state answers `503`
+  `mask_state_unavailable`, while SSH refuses the shell. Both places on the page now say that,
+  with the two cases in which an operator will meet the refusal.
+- The person-erasure scope table in `docs/OPERATIONS.md` listed the scopes credentials first, and
+  the text under it says they run "in the order above". They run the other way round: live
+  consumers are fenced first and the keys go last. The table is now in the order the scopes run,
+  and it gains the `components` scope it did not list. The audit reference, the CLI help and the
+  SDK page listed the scopes in the old order too, and the last two left out `components`; all
+  three now list the seven scopes in the order they run.
+- `docs/VERIFY.md` said nothing on the page needs an account, a token or a GitHub login, but
+  `gh attestation verify` and `gh release download` refuse to run until the GitHub CLI is signed
+  in. The page now says so beside each command, scopes the claim to the other checks, and gives
+  the plain download address for the release assets.
+- `README.md` said masked casts flow back into the append-only audit log. Session recordings are
+  optional and kept in their own store with their own retention; only decision logs go to the
+  audit log. The README and the architecture page now say so.
+- Recording-on Kubernetes task output is recovered from the run's available recording into a
+  masked tail after the run ends (#1831). A recovered row is always marked `source: "recording"`
+  and `incomplete: true`. A missing, invalid or uncovered recording is stated as a `capture_gap`,
+  never served as a clean empty capture. Erasure wins: a recordings or output erasure, or expired
+  output retention, stops a recovery at its final commit, and the recording's reader permissions
+  cover the derived copy. Durable claims support bounded restart retries; large joined recordings
+  or a backlog that outlives masking coverage may remain unrecoverable. Final stdout and pane
+  snapshots remain intact. The `run.output.finalize` audit row gains a `source` key and records a
+  recovered row as `success`, a recording gap as `failure`. A run's Output tab labels recovered output
+  "From recording" and says its full delivery could not be verified, shows a capture gap as a gap rather
+  than a run that printed nothing, and shows an erased recording as erased. Its capture-gap notice now
+  reads "Some or all of this run's output could not be recovered." for every source, and Retry after a
+  failed read keeps keyboard focus.
+- New Run's default and saved policies carry one workspace by reference. With a second workspace
+  attached, Launch and Check again are held and the Policy card says why once, beside Check again
+  ("A saved policy launches with one workspace. Remove the extra workspace, or choose Custom policy to
+  keep them all.", or the existing default-policy sentence). The shared request builder refuses the same
+  case, so nothing is sent; no workspace is ever removed and the mode never switches by itself. Custom
+  policy keeps all of them. Removing a workspace chip moves focus to the next chip's Remove button, else
+  the previous one, else the Workspace select. Changing policy modes or attachments invalidates prior
+  preflight results (#1901).
+- The "Open the Recording tab →" link in a finished run's terminal notice uses the information colour
+  like the notice's other links, instead of the teal reserved for primary actions. Its words and the
+  tab it opens are unchanged (#1906).
+- Sign-in reconciliation discards session reads superseded by observed auth changes and keeps a visible
+  renewal checking until it succeeds, is cancelled or the session ends. Only a cancelled background watch
+  has the existing quiet deadline. After Cancel or Escape on the renewal strip, focus returns to the
+  banner's "Sign in again" and the Escape does not also leave New Run. Run sign-in codes refresh on
+  focus and visible return, serialize pending reads, update once when the code or link changes without
+  moving focus or re-announcing an identical answer, leave when the sign-in is no longer waiting, and
+  reset when the run or principal changes (#1908).
+- Mask-copy erasure now durably fences in-flight credential reads and renewals,
+  including an owner with no existing masking rows. Delayed AWS and Entra replies
+  cannot restore erased globals; new sign-ins use a fresh generation. Registration
+  also refuses credentials whose masking values cannot be read back after key
+  destruction (#1811).
+- Custom runs derive direct GitHub clone egress on the server after authorization and grant
+  narrowing, with matching policy preview, preflight and launch behavior. Only `github.com`
+  HTTPS/slug sources without a surviving GitHub grant receive the two bounded GitHub hosts;
+  other repository types, saved/default policies and manual domain rules keep their semantics (#1919).
+- The Playwright harness binds its API, UI-sandbox, internal and base-path proxy listeners to loopback
+  by default and refuses non-loopback listeners in real-tmux mode. Each backend startup mints a fresh
+  admin token and derived person credentials, shared with its own Playwright process; explicit test
+  token overrides remain supported. The canonical runner preserves explicit hosts and base-path URLs (#1813).
+- Escape on a New Run form with unsaved changes opens the "Leave without saving?" dialog instead of
+  doing nothing. An untouched form still leaves at once. The Runs button, the page's own links, the
+  sidebar, the view switch and the browser's Back button ask the same way (#1920).
+- A configured metrics listener now refuses daemon startup if its address cannot bind,
+  before background workers or optional gateways start (#1902). Unset remains off.
+- The terminal takeover regression test now waits for completed input writes separately
+  from WebSocket reads, with a deterministic proof that queued input is dropped after
+  eviction (#1907).
+- A `recordings`-scope person erasure now refuses late writers, including an upload that was already
+  streaming and the shared-volume recorder fallback. The upload answers `410` `recording_erased`;
+  later replay opens return no recording. Bare casts, attach sessions and upload parts stay erased
+  across restarts and retention sweeps. A new run ID records normally; already-open readers and
+  independent copies are outside the fence.
+- Release schema checks group rendered objects by discovered Kubernetes scope and namespace,
+  so runner RBAC in a separate namespace passes the same strict server dry-run as the chart's
+  control-plane objects. Failed Helm renders and malformed manifests, including duplicate
+  YAML or JSON mapping keys, stop before discovery or validation. (#1909)
+- Patch preparation refuses duplicate CHANGELOG heading keys after merging and after the
+  release-commit step, including resumed candidates, before checks or publication work. (#1913)
+- **Image download verification (#1905).** The image-pin gate checks every Dockerfile curl download for a same-file checksum before use and refuses ignored failures or unsupported shell forms. Claude native downloads now pin their manifest; alternate versions require an explicit manifest checksum and native channel downloads fail clearly. AWS installer and signature downloads gain per-architecture checksums while retaining GPG verification. Staged installs and npm remain supported. The embedded code-server shell-quote issue remains tracked in #1904.
+- Policy YAML shown and copied in the console now reads back as the policy it was made from in
+  the console, and in `wardyn … --policy-file` for any value the server stores. A string holding
+  a line break or control character, a mapping key YAML would read as another type or trim
+  (`true`, `1`, an empty or padded key), and a string starting with `_` or `+_` are quoted;
+  U+0085, U+2028, U+2029, a byte order mark, DEL, C1 controls, U+FFFE and U+FFFF are written as
+  `\u` escapes; a key over 1024 characters uses the explicit form. Ordinary policies render unchanged. The policy-source parser now refuses, with a line and
+  column, text the CLI's YAML reader would read as a different policy: a bare carriage return, a
+  raw U+0085, U+2028 or U+2029, or a byte order mark after the first byte; a number with a leading
+  zero (`017` is octal 15 there); an unquoted date, `1_000`, `0b1` or `0X1F`, which it reads as a
+  timestamp or number; a `:` straight before `,`, `]` or `}` after an unquoted flow key, or a `?`
+  starting a flow item; anchors; block scalar indentation indicators (`|1`); and an escaped line
+  break inside double quotes. Quoting the value, or CRLF line endings, is accepted. It also
+  refuses an unpaired UTF-16 surrogate, which the server would store as U+FFFD, and, before
+  parsing, source over 1 MiB of UTF-8 or nested more than 64 levels deep, so a pasted
+  pathological document can no longer abort the page on a second parse. Explicit JSON mode
+  refuses text that is not JSON — trailing commas, comments, single quotes, unquoted keys and
+  other YAML-only syntax — while still refusing duplicate keys and unsafe numbers. Structured
+  edits write exactly the requested value, quoting it where needed (#1921).
+- The threat model now covers run components: residual 64 states what bounds a secret a person
+  delivers into their own run, the header echo (on an organisation's `shared` secret, the
+  operator's value), the default-on `custom_component` value and what admins and members can see,
+  and the resident-secret table gains `file_secret` and component delivery rows. It also corrects
+  what it said before: the masking registry is shared through Postgres and fails closed (two places
+  said process-local and fail-open), the member switch is `WARDYN_ALLOW_USER_ENV_SECRET` and covers
+  `file_secret` too, a `github_token` cannot be minted inside a sandbox, and the scan semaphore's
+  source file was misnamed. No behaviour changed.
+
+### Security
+
+- **Go 1.26.9 and `golang.org/x/net` 0.60.0; images built with Go 1.27.2.** The toolchain pin moves from
+  go1.26.6 and `golang.org/x/net` from 0.59.0, and every image builder (`wardynd`, `wardynd-fips`,
+  `wardyn-proxy`, the tetragon ingest and the agent images) moves to the go1.27.2 base image, fixing the
+  standard-library and `x/net` advisories published after 0.8.8 (`net/http`, `net/textproto`, `crypto/tls`,
+  `os`; GO-2026-6603 to GO-2026-6617). `make govulncheck` reports none.
+
 ## [0.8.8] — 2026-10-07
 
 ### Before you upgrade

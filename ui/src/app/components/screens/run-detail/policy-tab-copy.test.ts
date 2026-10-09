@@ -9,6 +9,7 @@
 // drifting. S-36, S-39's values, S-42's labels, S-43, S-44's idle value and S-46
 // are reused from their existing sources and pinned where they live.
 import { describe, it, expect } from "vitest";
+import { POLICY_DOCUMENT } from "../../wardyn/copy/policy-document";
 import { CHANGE_HEADING, IDENTITY_POLICY_VIEW, POLICY_TAB, SUMMARY } from "./policy-tab-copy";
 
 describe("Policy tab copy (S-1..S-48)", () => {
@@ -45,6 +46,13 @@ describe("Policy tab copy (S-1..S-48)", () => {
     expect(CHANGE_HEADING.restart("Sep 29, 2026")).toBe("Blocked when the run was restarted on Sep 29, 2026");
     expect(CHANGE_HEADING.org_disk).toBe("Disk size set from your organization's default");
     expect(CHANGE_HEADING.launch).toBe("Set by Wardyn when the run started");
+  });
+
+  // M-R version 7 amends S-25/S-26: Summary and YAML keep their names and gain a
+  // third view beside them, with its own copy. Nothing here is renamed.
+  it("S-25/S-26 amendment: the JSON view and Copy JSON", () => {
+    expect([POLICY_TAB.viewSummary, POLICY_TAB.viewYaml, POLICY_DOCUMENT.JSON]).toEqual(["Summary", "YAML", "JSON"]);
+    expect([POLICY_TAB.copyYaml, POLICY_DOCUMENT.COPY_JSON]).toEqual(["Copy YAML", "Copy JSON"]);
   });
 
   it("S-24..S-33: chips, switch, states, hidden, scope, redaction note", () => {

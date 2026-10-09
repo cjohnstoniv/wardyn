@@ -16,7 +16,7 @@
 // draws as a strip in the banner's place — and a watch: a renewal the person
 // backed out of, whose sign-in can still complete.
 import * as React from "react";
-import type { Refused } from "./api/core";
+import { notifyAuthChange, type Refused } from "./api/core";
 
 // none: signed in. dialog: signed out, asking. bar: signed out, "Not now".
 // renew: still signed in, signing in again from the expiry banner.
@@ -47,10 +47,12 @@ export interface Reauth {
   /** Signed out mid-page: the dialog, the bar, or a renewal under which a
    *  request was refused. A renewal alone leaves the page working. */
   signedOut: boolean;
+  /** A deliberate logout retires every pending identity confirmation before its next render. */
+  endingSession?: () => boolean;
   /** The renewal in progress, or null. */
   renewal: Renewal | null;
   /** Set while a cancelled renewal's sign-in can still land in this browser:
-   *  the layer stays mounted and keeps measuring whoever answers /me. */
+   *  the layer keeps measuring whoever answers /me until the watch ends. */
   watch: Watch | null;
   /** The owner id (WfetchInit.save) of a Save refused in this lapse — never
    *  re-sent — or null. Only that owner's screen ever shows it. */
@@ -103,7 +105,7 @@ interface State {
 }
 const SIGNED_IN: State = { phase: "none", writeDropped: null, renewal: null, watch: null, refused: false };
 
-export function useReauthController(reloadAs: (path: string) => void): {
+export function useReauthController(reloadAs: (path: string) => void, endingSession?: () => boolean): {
   reauth: Reauth;
   lapse: (refused: Refused) => void;
   reset: () => void;
@@ -139,6 +141,7 @@ export function useReauthController(reloadAs: (path: string) => void): {
   const reauth = React.useMemo<Reauth>(
     () => ({
       phase: state.phase,
+      endingSession,
       writeDropped: state.writeDropped,
       renewal: state.renewal,
       watch: state.watch,
@@ -146,15 +149,20 @@ export function useReauthController(reloadAs: (path: string) => void): {
       setPhase: (phase) =>
         setState((s) => ({ ...s, phase, renewal: null, refused: phase === "none" ? false : s.refused })),
       setWatch,
-      startRenew: (renewal) => setState((s) => ({ ...s, phase: "renew", renewal })),
-      endRenew: () =>
-        setState((s) => (s.phase === "renew" ? { ...s, phase: s.refused ? "dialog" : "none", renewal: null } : s)),
+      startRenew: (renewal) => {
+        notifyAuthChange();
+        setState((s) => ({ ...s, phase: "renew", renewal }));
+      },
+      endRenew: () => {
+        notifyAuthChange();
+        setState((s) => (s.phase === "renew" ? { ...s, phase: s.refused ? "dialog" : "none", renewal: null } : s));
+      },
       reloadAs,
       clearWriteDropped: () => setState((s) => (s.writeDropped ? { ...s, writeDropped: null } : s)),
       writeDroppedClaimed: () => claims.current.has(state.writeDropped ?? ""),
       claimWriteDropped,
     }),
-    [state, reloadAs, setWatch, claimWriteDropped],
+    [state, reloadAs, setWatch, claimWriteDropped, endingSession],
   );
   return { reauth, lapse, reset };
 }

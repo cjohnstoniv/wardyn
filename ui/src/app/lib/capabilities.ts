@@ -126,25 +126,27 @@ export function capabilityAllowed(caps: MeCapabilities | null, kind: CapabilityK
 // A failed fetch stays null, which reads as "not bounded" everywhere above —
 // deliberate: a network blip must not annotate a member's whole console with
 // refusals that aren't happening.
-export function useMyCapabilities(enabled: boolean): MeCapabilities | null {
+export function useMyCapabilities(enabled: boolean, scope = ""): MeCapabilities | null {
   const [caps, setCaps] = React.useState<MeCapabilities | null>(null);
+  const [loadedScope, setLoadedScope] = React.useState(scope);
   React.useEffect(() => {
     if (!enabled) {
       setCaps(null);
       return;
     }
     let live = true;
+    setCaps(null);
     permissions
       .getMyCapabilities()
-      .then((c) => live && setCaps(c))
+      .then((c) => { if (live) { setLoadedScope(scope); setCaps(c); } })
       .catch(() => {
         /* leave null: advisory copy stays silent rather than guessing */
       });
     return () => {
       live = false;
     };
-  }, [enabled]);
-  return caps;
+  }, [enabled, scope]);
+  return enabled && loadedScope === scope ? caps : null;
 }
 
 // Whether ANY kind is being enforced against this caller. The stale-group hint

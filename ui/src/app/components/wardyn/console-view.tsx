@@ -7,6 +7,7 @@ import * as React from "react";
 import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "../ui/button";
 import { health } from "../../lib/api/health";
+import { notifyAuthChange } from "../../lib/api/core";
 import { useRoleResolved } from "./operator-context";
 import { releaseUnloadGuard } from "../../lib/use-unsaved-guard";
 import { appURL } from "../../lib/base-path";
@@ -163,6 +164,8 @@ export async function switchView(to: ConsoleView, target: string, noCredential =
   } catch (e) {
     releaseUnloadGuard(false);
     switching = false;
+    // Headers can invalidate auth before the body settles; deferred confirmations may now resume.
+    notifyAuthChange();
     throw e;
   }
   viewChannel()?.postMessage(to);

@@ -32,6 +32,7 @@
 //      parity test uses; the repo root is found by walking up to go.mod so the
 //      file works from ui/ (vitest's cwd) or anywhere under it.
 
+import { previewRunPolicy } from "./policy-preview";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -88,6 +89,8 @@ const fullInput: WireInput & { workspaces: NonNullable<WireInput["workspaces"]> 
   // The member's drive request (D5): forwarded verbatim by runWireBody — a
   // path never rides here, only {enabled, read_only}.
   drive: { enabled: true, read_only: false },
+  // The components this run carries (#1914): a stored one by id, a run-only inline one.
+  components: [{ id: "33333333-3333-4333-8333-333333333333" }, { inline: { hosts: ["api.example"] }, name: "Tool" }],
 };
 
 // The wire keys runWireBody is expected to emit for fullInput, and the exact
@@ -114,6 +117,7 @@ const expectedWire: Record<string, unknown> = {
   // The member's drive request (D5): forwarded verbatim by runWireBody — a
   // path never rides here, only {enabled, read_only}.
   drive: { enabled: true, read_only: false },
+  components: fullInput.components,
 };
 
 // Go DTO JSON tags the console NEVER sends (CLI-only — cmd/wardyn/commands.go:96-103).
@@ -122,7 +126,13 @@ const expectedWire: Record<string, unknown> = {
 // until the New Run rail's provider picker lands (multi-provider MP-23), which
 // moves it into runWireBody. preset/preset_version are the launcher API's
 // (#1143); the console sends the explicit spec and has no preset UI.
-const UI_NEVER_SENDS = new Set(["devcontainer_repo", "devcontainer_ref", "model_provider", "preset", "preset_version"]);
+const UI_NEVER_SENDS = new Set([
+  "devcontainer_repo",
+  "devcontainer_ref",
+  "model_provider",
+  "preset",
+  "preset_version",
+]);
 
 // ui_apps used to sit on this set as a TS AgentRun key with no Go AgentRun
 // json tag (handleGetRun's anonymous wrapper struct, runs_policy.go:172-175,
@@ -146,13 +156,43 @@ describe("runWireBody — every console-settable DTO field reaches the wire", ()
     });
   }
 
-  it("createRun and preflightRun send byte-identical bodies for the same input", async () => {
+  it("create, preflight and preview send byte-identical bodies for the same input", async () => {
     await runs.createRun(fullInput);
     const a = String(fetchMock.mock.calls[0][1]?.body);
     fetchMock.mockClear();
     await runs.preflightRun(fullInput);
     const b = String(fetchMock.mock.calls[0][1]?.body);
+    await previewRunPolicy(fullInput);
     expect(a).toBe(b);
+    expect(String(fetchMock.mock.calls[1][1]?.body)).toBe(a);
+    expect(String(fetchMock.mock.calls[1][0])).toMatch(/\/runs\/policy-preview$/);
+  });
+
+  it("calls the registered policy-preview route", async () => {
+    const routes = readFileSync(join(repoRoot(), "internal/api/routes.go"), "utf8");
+    const route = /r\.Post\("([^"]+)", s\.handlePolicyPreview\)/.exec(routes)?.[1];
+    expect(route).toBe("/runs/policy-preview");
+    fetchMock.mockImplementation(async (url: RequestInfo | URL) => new Response(JSON.stringify({ spec: fullInput.inline_policy }), {
+      status: String(url) === `/api/v1${route}` ? 200 : 404,
+      headers: { "content-type": "application/json" },
+    }));
+    await expect(previewRunPolicy(fullInput)).resolves.toMatchObject({ spec: fullInput.inline_policy });
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
+  });
+
+  it("preserves Retry-After on a preview refusal for the bounded preview scheduler", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "limited" }), { status: 429, headers: { "Retry-After": "3" } }));
+    await expect(previewRunPolicy(fullInput)).rejects.toMatchObject({ status: 429, message: "limited", retryAfter: "3" });
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "limited" }), { status: 429 }));
+    await expect(previewRunPolicy(fullInput)).rejects.toMatchObject({ status: 429, retryAfter: undefined });
+  });
+
+  it("omits components when the run carries none, however it is spelled", async () => {
+    for (const none of [undefined, []]) {
+      fetchMock.mockClear();
+      await runs.createRun({ ...fullInput, components: none });
+      expect(sentBody()).not.toHaveProperty("components");
+    }
   });
 
   // Per-field omission: an ABSENT choice must be an absent key, never
@@ -361,6 +401,30 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     const tsKeys = tsInterfaceKeys(runsTs, "CreateRunInput");
     expect(tsKeys.filter((k) => !goTags.has(k))).toEqual([]);
   });
+
+  // components[] (#1914): the New Run access rows send it, built from a mirrored
+  // type rather than a guess. The element is the SDK's ComponentRef, an
+  // alias of types.ComponentRef, and its keys are exactly the Go tags.
+  it("CreateRunRequest.components is []ComponentRef, and the TS ComponentRef keys are exactly its Go tags", () => {
+    expect(clientGo).toMatch(/Components\s+\[\]ComponentRef\s+`json:"components,omitempty"`/);
+    const typesGoSrc = readFileSync(join(root, "pkg/client/types.go"), "utf8");
+    expect(typesGoSrc).toMatch(/ComponentRef\s*=\s*types\.ComponentRef/);
+    const refGo = goJSONTags(readFileSync(join(root, "internal/types/component.go"), "utf8"), "ComponentRef");
+    expect(refGo.sort()).toEqual(["id", "inline", "name"]);
+    const componentsTs = readFileSync(join(root, "ui/src/app/lib/types/components.ts"), "utf8");
+    expect(tsInterfaceKeys(componentsTs, "ComponentRef").sort()).toEqual(refGo);
+  });
+
+  it("the console's response types carry the component facts both dry-run doors return", () => {
+    const preflightGo = readFileSync(join(root, "internal/api/preflight.go"), "utf8");
+    const previewGo = readFileSync(join(root, "internal/api/policy_preview_facts.go"), "utf8");
+    for (const src of [preflightGo, previewGo]) expect(src).toMatch(/Components\s+\[\]componentFact\s+`json:"components,omitempty"`/);
+    const previewTs = readFileSync(join(root, "ui/src/app/lib/types/policy-preview.ts"), "utf8");
+    expect(tsInterfaceKeys(runsTs, "PreflightResult")).toContain("components");
+    expect(tsInterfaceKeys(previewTs, "PolicyPreviewResult")).toContain("components");
+    expect(runsTs).toMatch(/components\?: ComponentFact\[\];/);
+    expect(previewTs).toMatch(/components\?: ComponentFact\[\];/);
+  });
 });
 
 // D. F6-F14 — the same "documents the omissions" idiom (proven above for
@@ -429,6 +493,19 @@ describe("source parity — five more flat structs", () => {
     expect(goTags.length).toBeGreaterThanOrEqual(17);
     const tsKeys = tsInterfaceKeys(policyTs, "RunPolicySpec");
     expect(new Set(goTags)).toEqual(new Set(tsKeys));
+  });
+
+  it("SiteConfig.components is the ComponentSettings block, and every Go tag of it is mirrored", () => {
+    expect(siteConfigGo).toMatch(/Components\s+\*ComponentSettings\s+`json:"components,omitempty"`/);
+    expect(siteTs).toMatch(/components\?: ComponentSettings;/);
+    const goTags = goJSONTags(siteConfigGo, "ComponentSettings");
+    expect(goTags.length).toBe(3);
+    expect(new Set(tsInterfaceKeys(siteTs, "ComponentSettings"))).toEqual(new Set(goTags));
+  });
+
+  it("RunPolicySpec.github_capabilities is mirrored beside azure_devops_capabilities", () => {
+    expect(goJSONTags(policyGo, "RunPolicySpec")).toContain("github_capabilities");
+    expect(tsInterfaceKeys(policyTs, "RunPolicySpec")).toEqual(expect.arrayContaining(["azure_devops_capabilities", "github_capabilities"]));
   });
 
   it("every Go AuditEvent tag is mirrored on the TS interface (prev_hash/row_hash closed)", () => {

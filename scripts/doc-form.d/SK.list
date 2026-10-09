@@ -1,0 +1,5 @@
+# Asserted against every cap in scripts/doc-form.sh (strict tier).
+docs/operations/secrets-and-keys.md
+docs/operations/monitoring.md
+docs/operations/run-lifetime.md
+docs/operations/kubernetes-known-gaps.md

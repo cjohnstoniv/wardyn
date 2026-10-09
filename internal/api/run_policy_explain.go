@@ -49,6 +49,7 @@ const (
 	fieldUIApps    = "ui_apps"
 	fieldToolRules = "tool_rules"
 	fieldADOCaps   = "azure_devops_capabilities"
+	fieldGHCaps    = "github_capabilities"
 	fieldMethods   = "allowed_methods"
 	fieldMinCC     = "min_confinement_class"
 	fieldDisk      = "resources.disk_mib"
@@ -58,7 +59,7 @@ var policyFieldOrder = []string{
 	fieldAllowed, fieldDenied, "allow_all_egress", "first_use_approval", "first_use_hold_seconds", "max_holds",
 	fieldMethods, fieldMinCC, fieldGrants, "auto_stop_after_sec", fieldMounts, fieldRepos, fieldUIApps,
 	"resources.cpu_millis", "resources.memory_mib", "resources.pids_limit", fieldDisk,
-	fieldToolRules, "git_push_any_branch", fieldADOCaps,
+	fieldToolRules, "git_push_any_branch", fieldADOCaps, fieldGHCaps,
 }
 
 // The fields the member bound (boundUserSpec and the disk and ui_apps halves)
@@ -67,7 +68,7 @@ var policyFieldOrder = []string{
 var (
 	limitsFields = map[string]bool{
 		fieldAllowed: true, fieldDenied: true, fieldGrants: true, fieldMinCC: true, fieldMounts: true, fieldRepos: true,
-		fieldUIApps: true, fieldADOCaps: true, "resources.cpu_millis": true, "resources.memory_mib": true,
+		fieldUIApps: true, fieldADOCaps: true, fieldGHCaps: true, "resources.cpu_millis": true, "resources.memory_mib": true,
 		"resources.pids_limit": true, fieldDisk: true,
 	}
 	scalarFields = map[string]bool{
@@ -376,6 +377,9 @@ func policyFieldSets(sp types.RunPolicySpec) map[string][]string {
 	}
 	for _, c := range sp.AzureDevOpsCapabilities {
 		m[fieldADOCaps] = append(m[fieldADOCaps], string(c))
+	}
+	for _, c := range sp.GitHubCapabilities {
+		m[fieldGHCaps] = append(m[fieldGHCaps], string(c))
 	}
 	return m
 }

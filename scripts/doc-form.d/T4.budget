@@ -1,0 +1,3 @@
+# Prose-word budget (scripts/doc-form.sh): path=N share=S. The shared file's budget after the merged threat-model
+# rewrites (the itemised count is in T1.budget); share=20 is the threat model's target (docs-overhaul PLAN section 1.3).
+threatmodel/THREAT-MODEL.md=52032 share=20

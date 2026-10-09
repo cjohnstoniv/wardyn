@@ -1,0 +1,6 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words of the new page, so growth fails.
+# Round 2 review fixes: 3249 -> 3542 (+293): renewal and last-good lease +53, non-operator callers +24, file mode per runtime and file
+# delivery refusals +59, ssh_key re-mint +42, model-key row +23, stored-key rows +16, file/ssh_key/sign-in/cloud_sts rows +41,
+# delivered-inside residual +32, "withheld at these doors" +3.
+# 3549 adds 7: the ssh_key bullet names the key file as what is wiped and the grant as what stays.
+docs/CREDENTIALS.md=3549 share=35

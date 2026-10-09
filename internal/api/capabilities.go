@@ -17,15 +17,15 @@ import (
 
 // the closed kind set
 //
-// Nine kinds, and this slice is the ONLY place the set is written down —
+// Ten kinds, and this slice is the ONLY place the set is written down —
 // migration 0042 deliberately puts no CHECK on capability_grants.capability, so
-// a tenth kind is a constant here plus its enforcement call site, with no DDL.
+// an eleventh kind is a constant here plus its enforcement call site, with no DDL.
 // A retired kind's stored rows (0.8 retired "integration") are inert: no door
 // asks about the kind any more, and the write boundary refuses new ones.
 // The console's own list (ui/src/app/lib/permissions-copy.ts CAPABILITY_KINDS)
 // mirrors these ids and must not drift.
 //
-// Eight of the nine NARROW what a member may already do; capImage WIDENS (a
+// Nine of the ten NARROW what a member may already do; capImage WIDENS (a
 // member cannot name a custom image at all today). Both directions resolve
 // through the one resolver below (capBatch.decide) — the difference is the
 // kind's row in capKinds.
@@ -101,10 +101,12 @@ const (
 	// (enforceRunModelProvider).
 	capModelProvider = "model_provider"
 	// capFeature NARROWS: it bounds whether a person may MINT a personal
-	// credential at all. Two values, a closed set (featureValues), plus `*`:
-	// featureSSHKey gates POST /me/ssh-keys and featureAPIToken gates POST
-	// /me/tokens, one check at each mint door (the token door also keeps
-	// member mode's 409; the SSH door stores a capped key instead, #564).
+	// credential at all, or define a component of their own. Three values, a
+	// closed set (featureValues), plus `*`: featureSSHKey gates POST
+	// /me/ssh-keys and featureAPIToken gates POST /me/tokens, one check at each
+	// mint door (the token door also keeps member mode's 409; the SSH door
+	// stores a capped key instead, #564); featureCustomComponent is
+	// componentAttachRefusal's.
 	//
 	// Narrowing, on capAgent's rule: every signed-in person could already add a
 	// key and mint a token, so the unenforced default stays ALLOWED and an
@@ -131,32 +133,59 @@ const (
 	// extension (run_owner_authority.go), so a withdrawn selection also ends the
 	// run's lease.
 	capPolicy = "policy"
+	// capComponent NARROWS: it bounds which ORG component (a components row an
+	// admin wrote, owner '') a person may attach to their own run. Values are
+	// the row's uuid (canonical string), plus `*`. Asked at
+	// componentAttachRefusal; a person-defined component is featureCustomComponent's
+	// question instead, never this kind's.
+	//
+	// Narrowing on capAgent's rule, but the row it names did not exist before
+	// an admin wrote it, so "nobody until granted" is not a default of the
+	// kind: the component's create writes a capability_restrictions row for its
+	// id first, and a restricted value admits only an allow naming it (decide's
+	// steps 3 and 5) — a wildcard allow lists nobody. An id with no restriction
+	// row is allowed while the kind is unenforced, exactly like every other
+	// narrowing kind.
+	//
+	// It gates the CHOICE, never the content: the component's hosts and
+	// secrets are still bounded by the component gate.
+	capComponent = "component"
 )
 
 // The closed value set of capFeature. canonicalGrantValue refuses any other
 // value, so a misspelt row can never sit in the table protecting nothing.
+//
+// featureCustomComponent gates DEFINING a component of one's own — inline on
+// a run, saved, or attached from one's own saved row. Narrowing, so it is ON
+// for everyone until a deny row turns it off: unlike the other values it is a
+// power nobody had before it shipped, and the owner chose on-by-default
+// knowingly — the one value that sets aside "an upgrade with no configuration
+// changes nothing". On a deployment that already ENFORCES capFeature it is
+// off for anyone no allow row (the value itself, or `*`) covers, by decide's
+// step 7.
 const (
-	featureSSHKey   = "ssh_key"
-	featureAPIToken = "api_token"
+	featureSSHKey          = "ssh_key"
+	featureAPIToken        = "api_token"
+	featureCustomComponent = "custom_component"
 )
 
-var featureValues = []string{featureSSHKey, featureAPIToken}
+var featureValues = []string{featureSSHKey, featureAPIToken, featureCustomComponent}
 
 // capabilityKinds is the closed set, in the order the admin surface shows them.
-var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capWorkspaceProvider, capModelProvider, capFeature, capPolicy}
+var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capWorkspaceProvider, capModelProvider, capFeature, capPolicy, capComponent}
 
 // capKindsVersion numbers the kind table, and GET /me/capabilities returns it so
 // a client holding a copy of the set (the console's CAPABILITY_KINDS) can tell
 // its copy is stale. Monotonic: a change to capKinds — a kind added or retired,
 // or a row's direction changed — bumps it by one and it never goes down.
 // TestCapKindsVersionPinsTheTable fails on a table change that forgets to.
-const capKindsVersion = 4
+const capKindsVersion = 5
 
-// validCapabilityKind reports whether kind is one of the nine. The API write
+// validCapabilityKind reports whether kind is one of the ten. The API write
 // boundary uses it in place of the CHECK the schema deliberately does not have.
 func validCapabilityKind(kind string) bool { return slices.Contains(capabilityKinds, kind) }
 
-// capWildcard matches every value of its kind. Spelled the same for all nine so
+// capWildcard matches every value of its kind. Spelled the same for all ten so
 // an admin does not have to learn a per-kind syntax for "all of them".
 const capWildcard = "*"
 
@@ -293,6 +322,7 @@ var capKinds = map[string]capKind{
 	capModelProvider:     {direction: capNarrowing, restrictable: true, gatesAdminPins: true, reason: authz.ReasonCapabilityModelProvider},
 	capFeature:           {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityFeature},
 	capPolicy:            {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityPolicy},
+	capComponent:         {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityComponent},
 }
 
 // the wrappers

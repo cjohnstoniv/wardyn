@@ -9,6 +9,7 @@ import { GIT_PAT_SCOPE, OPERATOR_ONLY_REASON } from "../src/app/components/wardy
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import type { RunPolicySpec } from "../src/app/lib/types";
 import type { Page } from "@playwright/test";
+import { readSpec, SPEC_LABEL } from "./policy-source";
 
 // Run this file's tests SERIALLY. They share one backend and the policy table is
 // global state, so several specs assert on the empty state ("No policies yet")
@@ -54,7 +55,7 @@ async function openCreate(page: Page) {
 async function fillEditor(page: Page, name: string, specJson: string) {
   const dialog = editorDialog(page);
   await dialog.getByLabel("Name", { exact: true }).fill(name);
-  await dialog.getByLabel("Spec (JSON)").fill(specJson);
+  await dialog.getByLabel(SPEC_LABEL).fill(specJson);
 }
 
 const VALID_SPEC = JSON.stringify(
@@ -184,16 +185,19 @@ test("create form requires a name (client-side validation)", async ({ page }) =>
   await expect(editorDialog(page)).toBeHidden();
 });
 
-test("create form rejects malformed JSON spec client-side", async ({ page }) => {
+test("create form rejects a malformed spec client-side", async ({ page }) => {
   const name = uniqueName("badjson");
   await openCreate(page);
-  await fillEditor(page, name, "{ this is not json }");
+  // Not a policy in YAML or JSON (#1921: the editor opens in YAML, and JSON text is YAML too).
+  await fillEditor(page, name, "allowed_domains: [");
   const dialog = editorDialog(page);
-  await dialog.getByRole("button", { name: "Create policy" }).click();
-  // Client-side JSON.parse failure is surfaced in the inline error region; the
-  // dialog stays open and nothing is created.
-  await expect(dialog.getByText(/Spec is not valid JSON/i)).toBeVisible();
-  await expect(dialog).toBeVisible();
+  // The parser's failure and where it is sit beside the field; the source is
+  // kept as typed and Create stays held, so nothing is sent.
+  await expect(dialog.getByText(/^Invalid YAML — /)).toBeVisible();
+  await expect(dialog.getByText(/^Line \d+, column \d+$/)).toBeVisible();
+  await expect(dialog.getByLabel(SPEC_LABEL)).toHaveAttribute("aria-invalid", "true");
+  await expect(dialog.getByLabel(SPEC_LABEL)).toHaveValue("allowed_domains: [");
+  await expect(dialog.getByRole("button", { name: "Create policy" })).toBeDisabled();
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(policyRow(page, name)).toHaveCount(0);
 });
@@ -270,7 +274,8 @@ test("viewing a policy shows its fields: id, min confinement, egress and eligibl
   // "Barrier" and its chip shows the user label "Wall" — the CC2 wire code lives
   // only in the chip tooltip + the raw-JSON escape hatch, never as visible copy.
   await expect(sheet.getByText("Policy ID")).toBeVisible();
-  await expect(sheet.getByText("Barrier")).toBeVisible();
+  // The collapsed policy document below also has a "Barrier" section; the grid's label comes first.
+  await expect(sheet.getByText("Barrier", { exact: true }).first()).toBeVisible();
   await expect(sheet.getByText("Created")).toBeVisible();
   await expect(sheet.getByText("Updated")).toBeVisible();
   await expect(sheet.getByText("Wall").first()).toBeVisible();
@@ -279,6 +284,11 @@ test("viewing a policy shows its fields: id, min confinement, egress and eligibl
   // expand it, then assert it holds the egress allowlist, deny list, the eligible
   // grant, and the min_confinement_class wire field (CC codes are allowed here).
   await sheet.getByText("View raw JSON").click();
+  // It opens on the Summary, in the console's own words; the raw keys are the YAML view's.
+  await expect(sheet.getByRole("button", { name: "Summary", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(sheet.getByText("Allowed hosts", { exact: true })).toBeVisible();
+  await expect(sheet).not.toContainText("allowed_domains");
+  await sheet.getByRole("button", { name: "YAML", exact: true }).click();
   await expect(sheet).toContainText("allowed_domains");
   await expect(sheet).toContainText("api.anthropic.com");
   await expect(sheet).toContainText("denied_domains");
@@ -305,7 +315,7 @@ test("edit round-trip: open editor from the row menu, change the spec, see it re
   await expect(dialog).toBeVisible();
   // The editor prefills the existing name and spec.
   await expect(dialog.getByLabel("Name", { exact: true })).toHaveValue(name);
-  await expect(dialog.getByLabel("Spec (JSON)")).toHaveValue(/min_confinement_class/);
+  await expect(dialog.getByLabel(SPEC_LABEL)).toHaveValue(/min_confinement_class/);
 
   // Bump the confinement floor to CC3 and save.
   const editedSpec = JSON.stringify(
@@ -318,7 +328,7 @@ test("edit round-trip: open editor from the row menu, change the spec, see it re
     null,
     2,
   );
-  await dialog.getByLabel("Spec (JSON)").fill(editedSpec);
+  await dialog.getByLabel(SPEC_LABEL).fill(editedSpec);
   await dialog.getByRole("button", { name: "Save changes" }).click();
   await expect(dialog).toBeHidden();
 
@@ -363,12 +373,12 @@ test("picking a template chip fills the spec, and an edit to it is reflected on 
 
   // "CI baseline" replaces the textarea body wholesale with its template spec.
   await dialog.getByRole("button", { name: "CI baseline" }).click();
-  const specBox = dialog.getByLabel("Spec (JSON)");
-  await expect(specBox).toHaveValue(/"min_confinement_class": "CC1"/);
+  const specBox = dialog.getByLabel(SPEC_LABEL);
+  await expect(specBox).toHaveValue(/min_confinement_class: CC1/);
 
   // Edit a field in the filled-in spec: bump the floor from CC1 to CC2.
   const filled = await specBox.inputValue();
-  await specBox.fill(filled.replace('"CC1"', '"CC2"'));
+  await specBox.fill(filled.replace("min_confinement_class: CC1", "min_confinement_class: CC2"));
   await dialog.getByRole("button", { name: "Create policy" }).click();
   await expect(dialog).toBeHidden();
 
@@ -397,7 +407,7 @@ test("the safety meter moves toward Weakest when allow_all_egress is flipped on"
     null,
     2,
   );
-  await dialog.getByLabel("Spec (JSON)").fill(safe);
+  await dialog.getByLabel(SPEC_LABEL).fill(safe);
   // Grade is async + debounced; toHaveAttribute auto-retries until it lands.
   await expect(meter).toHaveAttribute("data-safety", "Safest");
 
@@ -411,7 +421,7 @@ test("the safety meter moves toward Weakest when allow_all_egress is flipped on"
     null,
     2,
   );
-  await dialog.getByLabel("Spec (JSON)").fill(weak);
+  await dialog.getByLabel(SPEC_LABEL).fill(weak);
   await expect(meter).toHaveAttribute("data-safety", "Weakest");
 
   // Read-only interaction — cancel so the table stays at its clean empty state.
@@ -466,7 +476,9 @@ test("push_rules editor: add a row, an invalid pattern shows its error, fixing i
   await policyRow(page, name).click();
   const sheet = page.getByRole("dialog").filter({ hasText: name });
   await sheet.getByText("View raw JSON").click();
-  // The sheet renders the raw spec YAML-ish (unquoted keys), not literal JSON.
+  // The Summary names the rule in words; the YAML view carries the raw keys.
+  await expect(sheet.getByText("Deny", { exact: true })).toBeVisible();
+  await sheet.getByRole("button", { name: "YAML", exact: true }).click();
   await expect(sheet).toContainText("push_rules");
   await expect(sheet).toContainText("deny_paths");
   await expect(sheet).toContainText(".github/workflows/**");
@@ -633,7 +645,7 @@ test.describe("Policies — stored token narrowing", () => {
     await dialog.getByRole("button", { name: "Read-only", exact: true }).click();
     await dialog.getByRole("checkbox", { name: GIT_PAT_SCOPE.API }).click();
 
-    const spec = JSON.parse(await dialog.getByLabel("Spec (JSON)").inputValue()) as RunPolicySpec;
+    const spec = await readSpec<RunPolicySpec>(dialog.getByLabel(SPEC_LABEL));
     expect(spec.eligible_grants?.[0].scope).toEqual({
       ...PAT,
       forge: "gitlab",

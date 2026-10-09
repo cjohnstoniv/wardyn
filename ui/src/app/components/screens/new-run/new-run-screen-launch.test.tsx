@@ -37,9 +37,11 @@ vi.mock("react-router-dom", async () => {
 });
 const preflightRunMock = vi.fn();
 const createRunMock = vi.fn();
+vi.mock("../../../lib/api/policy-preview", () => ({ previewRunPolicy: vi.fn().mockResolvedValue({ spec: {}, pending: [], warnings: [], repository_access: [] }) }));
 vi.mock("../../../lib/api/runs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api/runs")>();
   return {
+    ...actual,
     isCredentialRefusal: actual.isCredentialRefusal,
     isGitCredentialRefusal: actual.isGitCredentialRefusal,
     runs: {
@@ -67,12 +69,15 @@ vi.mock("./new-run-rail", async (importOriginal) => {
 // The connect popup + poll (#386) — mocked so the launch-door tests below
 // drive the screen's own dialog wiring without a real window.
 const adoConnectMock = vi.fn();
+// One function for every render, as the real hook's cancel is: the door resets
+// itself whenever cancel's identity changes, so a fresh mock per render closed it.
+const adoCancelMock = vi.fn();
 vi.mock("../../../lib/hooks/use-ado-connect", () => ({
   useAdoConnect: () => ({
     connecting: false,
     connect: adoConnectMock,
     connectFallback: adoConnectMock,
-    cancel: vi.fn(),
+    cancel: adoCancelMock,
     blockedUrl: null,
   }),
 }));
@@ -102,6 +107,7 @@ import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { HttpError } from "../../../lib/api/core";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { setField } from "../../../../test/set-field";
+import { editPolicy, goToPanel } from "../../../../test/new-run-panel";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -117,7 +123,7 @@ const user = userEvent.setup({ pointerEventsCheck: 0 });
 function renderScreen(me: Me = baseMe()) {
   return render(
     <MemoryRouter>
-      <OperatorProvider
+      <OperatorProvider principal="test-owner"
         operator
         userDrive={me.user_drive}
         userDriveDeniedByProfile={me.user_drive_denied_by_profile}
@@ -134,7 +140,7 @@ function renderScreen(me: Me = baseMe()) {
 function renderAsMember(me: Me = baseMe()) {
   return render(
     <MemoryRouter>
-      <OperatorProvider
+      <OperatorProvider principal="test-owner"
         operator={false}
         securityOperator={false}
         userDrive={me.user_drive}
@@ -262,6 +268,7 @@ describe("NewRunScreen — Preflight sends the body Launch sends", () => {
     await user.click(await screen.findByLabelText(DM.NR_CHECKBOX));
     setField(screen.getByLabelText("Title"), "Refund flow");
 
+    goToPanel("Policy");
     await user.click(screen.getByRole("button", { name: /^Check again$/ }));
     await waitFor(() => expect(preflightRunMock).toHaveBeenCalled());
 
@@ -286,6 +293,7 @@ describe("NewRunScreen — Preflight sends the body Launch sends", () => {
     await user.click(await screen.findByLabelText(DM.NR_CHECKBOX));
     setField(screen.getByLabelText("Title"), "Refund flow");
 
+    goToPanel("Policy");
     await user.click(screen.getByRole("button", { name: /^Check again$/ }));
     await waitFor(() => expect(preflightRunMock).toHaveBeenCalled());
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
@@ -337,7 +345,7 @@ describe("NewRunScreen — the Agent picker reads the harness roster", () => {
 describe("NewRunScreen — the unparseable barrier-class hint", () => {
   it("renders when the JSON parses but min_confinement_class names no real class", async () => {
     renderScreen();
-    const textarea = await screen.findByLabelText("Spec (JSON)");
+    const textarea = await editPolicy();
     fireEvent.change(textarea, {
       target: { value: JSON.stringify({ min_confinement_class: "vault", allowed_domains: [] }, null, 2) },
     });
@@ -346,7 +354,7 @@ describe("NewRunScreen — the unparseable barrier-class hint", () => {
 
   it("says nothing when the field is simply absent", async () => {
     renderScreen();
-    const textarea = await screen.findByLabelText("Spec (JSON)");
+    const textarea = await editPolicy();
     fireEvent.change(textarea, { target: { value: JSON.stringify({ allowed_domains: [] }, null, 2) } });
     expect(screen.queryByText(/isn't a barrier class/)).not.toBeInTheDocument();
   });
@@ -487,6 +495,7 @@ describe("NewRunScreen — the derived-hold note follows the server's own deriva
     setField(await screen.findByLabelText("Title"), "Refund flow");
     await user.click(await screen.findByRole("radio", { name: /^Autonomous/ }));
     // toolApprovals defaults to "auto" — never touched.
+    goToPanel("Policy");
     await user.click(screen.getByRole("button", { name: /^Check again$/ }));
     expect(await screen.findByText(AUTONOMY_RAIL.DERIVED_HOLD_NOTE)).toBeInTheDocument();
   });
@@ -497,6 +506,7 @@ describe("NewRunScreen — the derived-hold note follows the server's own deriva
     setField(await screen.findByLabelText("Title"), "Refund flow");
     await user.click(await screen.findByRole("radio", { name: /^Autonomous/ }));
     await user.click(screen.getByRole("radio", { name: /^Hold in Wardyn/ }));
+    goToPanel("Policy");
     await user.click(screen.getByRole("button", { name: /^Check again$/ }));
     await screen.findByTestId("preflight-result");
     expect(screen.queryByText(AUTONOMY_RAIL.DERIVED_HOLD_NOTE)).toBeNull();
@@ -507,6 +517,7 @@ describe("NewRunScreen — the derived-hold note follows the server's own deriva
     renderScreen();
     // Interactive is the default (initialWizardState) — left untouched.
     setField(await screen.findByLabelText("Title"), "Refund flow");
+    goToPanel("Policy");
     await user.click(screen.getByRole("button", { name: /^Check again$/ }));
     await screen.findByTestId("preflight-result");
     expect(screen.queryByText(AUTONOMY_RAIL.DERIVED_HOLD_NOTE)).toBeNull();

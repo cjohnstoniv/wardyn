@@ -10,10 +10,13 @@ import type { ConfinementClass, UIApp } from "./runs";
 // (Azure DevOps / GitLab / ...). Unlike api_key (proxy-injected, value never
 // returned) the PAT value reaches git via the credential helper as a password.
 // ssh_key = a resident private key written to disk for git's SSH transport
-// (internal/types/types.go's GrantKind carries all six — this union must not
+// (internal/types/types.go's GrantKind carries all seven — this union must not
 // omit the one lane approvals.tsx already has a dedicated banner for).
 // env_secret = a stored secret injected as a sandbox env var (admin-gated).
-export type GrantKind = "github_token" | "cloud_sts" | "api_key" | "git_pat" | "ssh_key" | "env_secret";
+// file_secret = a stored secret written as a file in the sandbox (admin-gated
+// for a policy author; a person's own secret reaches a run this way through a
+// custom component).
+export type GrantKind = "github_token" | "cloud_sts" | "api_key" | "git_pat" | "ssh_key" | "env_secret" | "file_secret";
 
 export interface GrantSpec {
   kind: GrantKind | (string & {});
@@ -300,6 +303,11 @@ export interface RunPolicySpec {
   // Omitted keeps the row's default. Authored via ADOCapabilitiesSection
   // (policy-ado-capabilities.tsx) beside the raw JSON.
   azure_devops_capabilities?: string[];
+  // azure_devops_capabilities' GitHub twin (mirrors Go's
+  // RunPolicySpec.GitHubCapabilities): this run's GitHub capabilities in place
+  // of the GitHub provider row's default_profile, within its capability_ceiling.
+  // Omitted keeps the row's default. No GitHub lane reads it yet.
+  github_capabilities?: string[];
 }
 
 export interface RunPolicy {

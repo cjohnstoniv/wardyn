@@ -329,6 +329,11 @@ func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Reque
 		writeErrorReason(w, http.StatusBadRequest, reasonAzureCallbackMissingCode, "missing code parameter")
 		return
 	}
+	generation, err := s.cfg.MaskRegistry.GlobalGeneration(ctx)
+	if err != nil {
+		fail(reasonStoreError)
+		return
+	}
 	resp, err := s.postADOEntraToken(ctx, cfg, url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
@@ -344,7 +349,7 @@ func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Reque
 	}
 	now := s.cfg.Now()
 	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
-	if err := s.cfg.MaskRegistry.MergeGlobalUntil(subject, ec.secretName, accessExpiry, []byte(resp.AccessToken), []byte(resp.RefreshToken)); err != nil {
+	if err := s.cfg.MaskRegistry.MergeGlobalUntil(generation, subject, ec.secretName, accessExpiry, []byte(resp.AccessToken), []byte(resp.RefreshToken)); err != nil {
 		slog.ErrorContext(ctx, "wardynd: the Azure sign-in tokens could not be recorded for masking",
 			slog.String("row", ec.rowUID), slog.Any("err", err))
 		fail(reasonStoreError)
@@ -391,7 +396,7 @@ func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Reque
 	}
 	// The Merge above already put both tokens on record; this retires what the
 	// sign-in replaced, and a failure leaves the old values masked longer.
-	if err := s.cfg.MaskRegistry.AddGlobalUntil(subject, ec.secretName, s.cfg.Now(), blob.ExpiresAt, []byte(resp.AccessToken), []byte(resp.RefreshToken)); err != nil {
+	if err := s.cfg.MaskRegistry.AddGlobalUntil(generation, subject, ec.secretName, s.cfg.Now(), blob.ExpiresAt, []byte(resp.AccessToken), []byte(resp.RefreshToken)); err != nil {
 		slog.WarnContext(ctx, "wardynd: the replaced Azure sign-in tokens could not be retired", slog.String("row", ec.rowUID), slog.Any("err", err))
 	}
 	s.auditAzureCapture(ctx, subject, ec, "success", map[string]any{

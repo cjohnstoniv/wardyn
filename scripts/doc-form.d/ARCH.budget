@@ -1,0 +1,10 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words; ARCHITECTURE.md adds 280 words for 11 cell-expansion headings (24) and summaries (256), docs/DATA-FLOW.md adds 48 for 2 headings (6) and summaries (42), threatmodel/AGENT-THREAT-MODEL.md adds 181 for 6 headings (18) and summaries (163).
+# ARCHITECTURE.md 5267 adds 29 words of alt text for the cluster figure in Deployment surface.
+# ARCHITECTURE.md 5278 adds 11: recordings named as optional and kept in their own store, not in the audit log.
+# ARCHITECTURE.md 5309 adds 31: invariant 6 names the successful broker mint, whose audit row rides the mint transaction.
+# ARCHITECTURE.md 5359 adds 50: 18 (invariant 1 links docs/CREDENTIALS.md) and 32 (invariant 6: the application cannot erase an audit row; the one removal is the partition drop).
+ARCHITECTURE.md=5359 share=35
+SECURITY.md=999 share=35
+PROVENANCE.md=798 share=35
+docs/DATA-FLOW.md=1200 share=35
+threatmodel/AGENT-THREAT-MODEL.md=2274 share=35

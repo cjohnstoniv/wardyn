@@ -127,6 +127,7 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	served := s.auditRowsFor(r, scope)
 	// The historical caps differ by shape: a run's whole trail is worth more
 	// rows than the org-wide feed's first screen.
 	limit := auditGlobalDefaultLimit
@@ -154,14 +155,37 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	// The fetch-all fallback MUST apply the same predicate: filtering only on
 	// the pager path would answer a filtered request with unfiltered events.
-	servePage(w, r, page, s.unsealedPage(r.Context(), pageFn), func() ([]types.AuditEvent, error) {
+	servePage(w, r, page, servedPage(served, pageFn), func() ([]types.AuditEvent, error) {
 		if scope == nil {
 			all, err := s.cfg.Store.QueryRecentAuditEvents(r.Context(), 0)
-			return s.unsealed(r.Context(), filter.Keep(all), err)
+			return served(filter.Keep(all), err)
 		}
 		all, err := s.cfg.Store.QueryAuditEvents(r.Context(), *scope, 0)
-		return s.unsealed(r.Context(), filter.Keep(all), err)
+		return served(filter.Keep(all), err)
 	})
+}
+
+// auditRowsFor is how rows leave for this caller, on both feed reads: sealed
+// fields opened, and for anyone auditScope narrowed to a run of their own, no
+// reference to an organisation's shared secret (sharedRefs). The caller it
+// exempts is the one auditScope hands the whole log — the same predicate, so
+// the two cannot drift: the security tier reads every operator row there is,
+// the rows that name the operator's secrets among them.
+func (s *Server) auditRowsFor(r *http.Request, scope *uuid.UUID) func([]types.AuditEvent, error) ([]types.AuditEvent, error) {
+	ctx := r.Context()
+	if s.isSecurityOperator(ctx) {
+		return func(evs []types.AuditEvent, err error) ([]types.AuditEvent, error) { return s.unsealed(ctx, evs, err) }
+	}
+	refs := &sharedRefs{}
+	if scope != nil {
+		refs.grants = func() ([]types.CredentialGrant, error) { return s.cfg.Store.ListGrantsByRun(ctx, *scope) }
+	}
+	return func(evs []types.AuditEvent, err error) ([]types.AuditEvent, error) {
+		if evs, err = s.unsealed(ctx, evs, err); err != nil {
+			return nil, err
+		}
+		return refs.events(evs)
+	}
 }
 
 // unsealed opens the sealed personal fields of evs (WARDYN_AUDIT_SEAL) on their
@@ -198,15 +222,12 @@ func (s *Server) parseAuditFilterFor(w http.ResponseWriter, r *http.Request) (st
 	return f, true
 }
 
-// unsealedPage is pageFn with its rows unsealed; nil stays nil, the store has no pager.
-func (s *Server) unsealedPage(ctx context.Context, pageFn func(store.Page) ([]types.AuditEvent, error)) func(store.Page) ([]types.AuditEvent, error) {
+// servedPage is pageFn with its rows passed through served (auditRowsFor); nil stays nil, the store has no pager.
+func servedPage(served func([]types.AuditEvent, error) ([]types.AuditEvent, error), pageFn func(store.Page) ([]types.AuditEvent, error)) func(store.Page) ([]types.AuditEvent, error) {
 	if pageFn == nil {
 		return nil
 	}
-	return func(p store.Page) ([]types.AuditEvent, error) {
-		evs, err := pageFn(p)
-		return s.unsealed(ctx, evs, err)
-	}
+	return func(p store.Page) ([]types.AuditEvent, error) { return served(pageFn(p)) }
 }
 
 // handleExportAudit streams the audit feed as newline-delimited JSON (one event
@@ -256,6 +277,7 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	served := s.auditRowsFor(r, scope)
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	wrote := false // a byte has reached the response: the 200 is committed
 	offset := 0
@@ -267,8 +289,8 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 			fail("page read", err)
 			return
 		}
-		if page, err = s.unsealed(r.Context(), page, nil); err != nil {
-			fail("unseal", err)
+		if page, err = served(page, nil); err != nil {
+			fail("row view", err)
 			return
 		}
 		for i := range page {

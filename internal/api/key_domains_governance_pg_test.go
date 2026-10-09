@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -187,7 +188,7 @@ func TestPG_KeyDomainAssignment_ConcurrentOverlappingWritesSerialize(t *testing.
 				return n > 0
 			}
 
-			barrier, err := e.pool.Begin(ctx)
+			barrier, err := testutil.PGConn(t, e.pool).Begin(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}

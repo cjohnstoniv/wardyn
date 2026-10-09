@@ -151,6 +151,9 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	} else {
 		saveErr = s.cfg.RecordingStore.SaveCastNamed(r.Context(), claims.RunID.String(), recording.PartSuffix(part), body)
 	}
+	if saveErr == nil {
+		saveErr = s.uploadedRecordingOutput(r.Context(), claims.RunID)
+	}
 
 	// Audit BOTH outcomes, like every sibling recording lane: a full store or
 	// an over-cap upload is exactly how a long session's provenance gets lost,
@@ -164,6 +167,9 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	if saveErr != nil {
 		outcome = "failure"
 		fields["error"] = saveErr.Error()
+		if errors.Is(saveErr, recording.ErrErased) {
+			fields["reason"] = reasonRecordingErased
+		}
 	}
 	var data []byte
 	if len(fields) > 0 {
@@ -190,6 +196,10 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 		var maxErr *http.MaxBytesError
 		if errors.As(saveErr, &maxErr) {
 			writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonRecordingTooLarge, "recording exceeds size limit")
+			return
+		}
+		if errors.Is(saveErr, recording.ErrErased) {
+			writeErrorReason(w, http.StatusGone, reasonRecordingErased, "recordings for this run have been erased")
 			return
 		}
 		writeServerError(w, r, "save recording", saveErr)

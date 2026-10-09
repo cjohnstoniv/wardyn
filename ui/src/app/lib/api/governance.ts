@@ -136,6 +136,11 @@ export interface AutonomyPosture {
   confinement: ConfinementClass;
 }
 
+// What bound_by can name: a rubric row, or the organisation's cap on runs that
+// carry a component the launcher defined (Go componentAutonomyCause,
+// internal/api/runs_autonomy_components.go; wire-parity pins the spelling).
+export type AutonomyBoundKey = AutonomyRubricRowKey | "custom_component";
+
 // types.AutonomyResolution (0.8 #97/#93) — what resolveRunAutonomy decided for
 // one run: the level, the posture that produced it, and every rubric row that
 // bound the result.
@@ -149,7 +154,7 @@ export interface AutonomyPosture {
 export interface AutonomyResolution {
   level: AutonomyLevel;
   posture: AutonomyPosture;
-  bound_by?: AutonomyRubricRowKey[];
+  bound_by?: AutonomyBoundKey[];
 }
 
 // types.CeilingOverlay (0.8.6) — the part of a RunPolicySpec a composed profile narrows. Every member

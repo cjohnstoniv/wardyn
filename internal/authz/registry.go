@@ -30,6 +30,7 @@ const (
 	ReasonCapabilityWorkspace            Reason = "capability_workspace"
 	ReasonCapabilityWorkspaceProvider    Reason = "capability_workspace_provider"
 	ReasonCapabilityModelProvider        Reason = "capability_model_provider"
+	ReasonCapabilityComponent            Reason = "capability_component"
 	ReasonGovernanceProfile              Reason = "governance_profile"
 	ReasonGovernanceOverlayUnsatisfiable Reason = "governance_overlay_unsatisfiable"
 	ReasonGrantPairingNotEligible        Reason = "grant_pairing_not_eligible"
@@ -96,6 +97,12 @@ const (
 	ReasonAuditRetentionInsideWindow   Reason = "audit_retention_inside_window"
 	ReasonAuditRetentionLiveRun        Reason = "audit_retention_live_run"
 	ReasonAuditRetentionDigestMismatch Reason = "audit_retention_digest_mismatch"
+	// ReasonComponentAutonomy: the organisation's autonomy cap on runs that
+	// carry a self-defined component (site config components.autonomy_cap)
+	// alone bound the run's level, and the request asks for more than it
+	// permits. A tie with a governance profile's rubric refuses as
+	// ReasonGovernanceProfile instead.
+	ReasonComponentAutonomy Reason = "component_autonomy"
 )
 
 // Refusal is one reason's registry row.
@@ -128,6 +135,7 @@ var refusals = map[Reason]Refusal{
 	ReasonCapabilityWorkspace:            {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityWorkspaceProvider:    {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityModelProvider:        {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityComponent:            {Effect: EffectDeny, Audit: true},
 	ReasonGovernanceProfile:              {Effect: EffectDeny, Audit: true},
 	ReasonGovernanceOverlayUnsatisfiable: {Effect: EffectDeny, Audit: true},
 	ReasonGrantPairingNotEligible:        {Effect: EffectDeny, Audit: true},
@@ -156,6 +164,7 @@ var refusals = map[Reason]Refusal{
 	ReasonAuditRetentionInsideWindow:     {Effect: EffectConflict, Audit: true},
 	ReasonAuditRetentionLiveRun:          {Effect: EffectConflict, Audit: true},
 	ReasonAuditRetentionDigestMismatch:   {Effect: EffectConflict, Audit: true},
+	ReasonComponentAutonomy:              {Effect: EffectDeny, Audit: true},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,

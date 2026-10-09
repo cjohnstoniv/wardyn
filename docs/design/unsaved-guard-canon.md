@@ -50,7 +50,7 @@ beside its title while they differ:
 - **Providers screen** (`providers-screen.tsx`) — the `PageHeader` title, driven by the combined
   Git/Storage draft (they share one document and one Save) or the Agents tab's own draft.
 - **Git tab**, **Storage tab** — both chip on that same combined Git/Storage dirty fact, via their
-  Segmented tab labels (`permissions.tsx#Segmented`'s new `dirty` option), so an edit made on one tab
+  Segmented tab labels (`wardyn/segmented.tsx#Segmented`'s `dirty` option), so an edit made on one tab
   is still visible from the other.
 - **Agents tab** (`agents-tab.tsx`) — its own separate resource and draft; chips its own Segmented
   label via an `onDirtyChange` callback to the parent screen.
@@ -74,6 +74,10 @@ One shared hook (`ui/src/app/lib/use-unsaved-guard.tsx`) and one shared registry
   `useBlocker` isn't available. In-app navigation is guarded by intercepting the sidebar link's click
   itself (`useGuardedNavClick`, `app-shell.tsx#SidebarNav`) rather than the router — a blocking
   confirm dialog (`UnsavedGuardProvider`), never an inline banner a click could sail past.
+- New Run registers its draft the same way (`new-run/use-new-run-controller.ts`, #1920). Its Escape
+  key and ghost Runs button ask through `useRequestLeave`, and its own links through
+  `useGuardedNavClick`: an untouched form leaves at once, a dirty one gets this dialog. Which panel
+  is on screen is not part of the draft. The draft stops being dirty only when a launch succeeds.
 
 ## 5. Save conflict (412)
 

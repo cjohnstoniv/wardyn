@@ -16,6 +16,7 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -23,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const (
@@ -245,5 +247,198 @@ func TestCreateSandbox_RefusesAnInvalidManagedFile(t *testing.T) {
 		if a.GetVerb() == "create" {
 			t.Errorf("the refusal created a %s; preflight must fail before anything exists", a.GetResource().Resource)
 		}
+	}
+}
+
+// secretSandboxSpec is testSandboxSpec plus a managed-settings ceiling and one
+// delivered secret, as dispatch composes a run carrying both.
+func secretSandboxSpec() runner.SandboxSpec {
+	spec := testSandboxSpec()
+	spec.ManagedFiles = []runner.ManagedFile{
+		{Path: testManagedSettings, Mode: 0o644, Content: []byte(`{"managed":true}`)},
+		{Path: runner.ComponentSecretDir + "/api-token", Mode: runner.ComponentSecretFileMode, AgentOwned: true, Content: []byte("file-secret-value")},
+	}
+	return spec
+}
+
+// What this substrate gives a delivered secret, pinned: the value rides the
+// per-run Secret (never the pod spec), in its OWN read-only volume at the fixed
+// directory projecting only that key, at 0440 with the pod's fsGroup 1000 as
+// the file's group, mounted on the agent pod's main container and copied onto
+// the ephemeral container the agent runs in — and nowhere on the proxy pod.
+// The ceiling beside it keeps its own volume, items and modes.
+func TestCreateSandbox_DeliversASecretFileToTheAgentPodOnly(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.12")
+	installAgentRunningReactor(t, cs)
+
+	spec := secretSandboxSpec()
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	sec, err := cs.CoreV1().Secrets(testNamespace).Get(context.Background(), secretName(spec.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get run secret: %v", err)
+	}
+	if got := string(sec.Data[managedFileDataKey(1)]); got != "file-secret-value" {
+		t.Errorf("secret key %q = %q, want the delivered secret", managedFileDataKey(1), got)
+	}
+	pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod: %v", err)
+	}
+	if strings.Contains(podSpecString(pod), "file-secret-value") {
+		t.Fatal("the secret's value is in the agent pod spec; it must ride the run Secret only")
+	}
+	if pod.Spec.SecurityContext == nil || pod.Spec.SecurityContext.FSGroup == nil || *pod.Spec.SecurityContext.FSGroup != agentFSGroup {
+		t.Fatalf("agent pod SecurityContext = %+v, want fsGroup %d so the agent can read a root-owned projected file", pod.Spec.SecurityContext, agentFSGroup)
+	}
+	main, _ := findContainer(pod.Spec.Containers, mainContainerName)
+	var mount *corev1.VolumeMount
+	for i := range main.VolumeMounts {
+		if main.VolumeMounts[i].MountPath == runner.ComponentSecretDir {
+			mount = &main.VolumeMounts[i]
+		}
+	}
+	if mount == nil || !mount.ReadOnly || mount.SubPath != "" {
+		t.Fatalf("main container mount at %s = %+v, want one read-only, subPath-free mount", runner.ComponentSecretDir, mount)
+	}
+	var vol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == mount.Name {
+			vol = &pod.Spec.Volumes[i]
+		}
+	}
+	if vol == nil || vol.Secret == nil || vol.Secret.SecretName != secretName(spec.RunID) {
+		t.Fatalf("volume %q = %+v, want a projection of the run Secret", mount.Name, vol)
+	}
+	if len(vol.Secret.Items) != 1 {
+		t.Fatalf("the secret volume projects %d items, want only the one secret: %+v", len(vol.Secret.Items), vol.Secret.Items)
+	}
+	it := vol.Secret.Items[0]
+	if it.Key != managedFileDataKey(1) || it.Path != "api-token" || it.Mode == nil || *it.Mode != 0o440 {
+		t.Errorf("secret item = key %q path %q mode %v, want %q api-token 0440", it.Key, it.Path, it.Mode, managedFileDataKey(1))
+	}
+	// The ceiling beside it is untouched: its own volume, its own modes.
+	for _, v := range pod.Spec.Volumes {
+		if v.Secret == nil || v.Name == mount.Name {
+			continue
+		}
+		for _, it := range v.Secret.Items {
+			if it.Key == managedFileDataKey(1) {
+				t.Errorf("volume %q also projects the secret", v.Name)
+			}
+			if it.Path == "managed-settings.json" && (it.Mode == nil || *it.Mode != 0o644) {
+				t.Errorf("the ceiling's mode moved to %v", it.Mode)
+			}
+		}
+	}
+
+	// The proxy is its own pod; nothing of the agent's secret volume reaches it.
+	proxy, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), proxyPodName(spec.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get proxy pod: %v", err)
+	}
+	for _, v := range proxy.Spec.Volumes {
+		if v.Secret == nil {
+			continue
+		}
+		for _, it := range v.Secret.Items {
+			if strings.HasPrefix(it.Key, "managed.") {
+				t.Errorf("the proxy pod projects managed key %q", it.Key)
+			}
+		}
+	}
+	for _, c := range append(proxy.Spec.InitContainers, proxy.Spec.Containers...) {
+		for _, m := range c.VolumeMounts {
+			if m.MountPath == runner.ComponentSecretDir {
+				t.Errorf("proxy container %s mounts %s", c.Name, runner.ComponentSecretDir)
+			}
+		}
+	}
+
+	// The agent runs in the ephemeral container Exec adds: it gets the mount,
+	// as uid 1000 like every container in this pod.
+	if _, err := d.Exec(context.Background(), sb.Ref, []string{"agent-run"}); err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	pod, err = cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("re-get agent pod: %v", err)
+	}
+	if len(pod.Spec.EphemeralContainers) == 0 {
+		t.Fatal("Exec added no ephemeral container")
+	}
+	eph := pod.Spec.EphemeralContainers[0]
+	found := false
+	for _, m := range eph.VolumeMounts {
+		found = found || (m.MountPath == runner.ComponentSecretDir && m.ReadOnly)
+	}
+	if !found {
+		t.Errorf("the ephemeral container has no read-only mount at %s", runner.ComponentSecretDir)
+	}
+	for _, c := range append(pod.Spec.Containers, corev1.Container{Name: eph.Name, SecurityContext: eph.SecurityContext}) {
+		if sc := c.SecurityContext; sc == nil || sc.RunAsUser == nil || *sc.RunAsUser != 1000 {
+			t.Errorf("container %s does not run as uid 1000 (%+v); a second uid in the pod could read the 0440 fsGroup file", c.Name, sc)
+		}
+	}
+}
+
+// podSpecString is the agent pod's spec as the apiserver would serve it to
+// anyone with pods/get.
+func podSpecString(pod *corev1.Pod) string { return pod.Spec.String() }
+
+// A pod with no delivered secret keeps the SecurityContext it always had: the
+// fsGroup is the secret's, not the ceiling's.
+func TestCreateSandbox_NoSecretNoFSGroup(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.12")
+	installAgentRunningReactor(t, cs)
+	sb, err := d.CreateSandbox(context.Background(), managedSandboxSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod: %v", err)
+	}
+	if pod.Spec.SecurityContext != nil {
+		t.Errorf("a pod with no delivered secret got a pod SecurityContext %+v", pod.Spec.SecurityContext)
+	}
+}
+
+// A delivered secret needs the pod's fsGroup and a share must never get one,
+// so the pair is refused before the namespace holds anything; a MANAGED drive
+// asks for the same fsGroup and is fine.
+func TestCreateSandbox_ASecretFileIsRefusedBesideAShareDrive(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	cs.ClearActions()
+	spec := secretSandboxSpec()
+	spec.Drive = testDriveMount()
+	spec.Drive.Backend = types.DriveBackendK8sPVCStatic
+	if _, err := d.CreateSandbox(context.Background(), spec); !errors.Is(err, errAgentSecretBesideShare) {
+		t.Fatalf("err = %v, want errAgentSecretBesideShare", err)
+	}
+	for _, a := range cs.Actions() {
+		if a.GetVerb() == "create" {
+			t.Errorf("the refusal created a %s", a.GetResource().Resource)
+		}
+	}
+
+	if err := agentSecretsAllowDrive(spec.ManagedFiles, testDriveMount()); err != nil {
+		t.Errorf("a managed drive beside a secret = %v, want allowed", err)
+	}
+	if err := agentSecretsAllowDrive(managedSandboxSpec().ManagedFiles, spec.Drive); err != nil {
+		t.Errorf("a share drive beside a ceiling alone = %v, want allowed (today's behaviour)", err)
+	}
+	pod := &corev1.Pod{}
+	applyAgentSecretFSGroup(pod, spec.ManagedFiles)
+	applyDriveToPod(pod, testDriveMount(), "")
+	if agentFSGroup != driveFSGroup {
+		t.Fatalf("agentFSGroup %d != driveFSGroup %d: a pod with a secret and a managed drive would ask for two fsGroups", agentFSGroup, driveFSGroup)
+	}
+	if got := *pod.Spec.SecurityContext.FSGroup; got != agentFSGroup {
+		t.Errorf("fsGroup = %d after a secret and a managed drive, want %d", got, agentFSGroup)
 	}
 }

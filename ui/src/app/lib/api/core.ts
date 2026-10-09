@@ -27,6 +27,25 @@ export interface Refused {
   save?: string;
 }
 let _unauthorized: ((refused: Refused) => void) | null = null;
+let authGeneration = 0;
+const authListeners = new Set<() => void>();
+
+/** Invalidate session reads after an auth event this tab can observe. */
+export function notifyAuthChange(): void {
+  authGeneration++;
+  for (const listener of authListeners) listener();
+}
+
+/** Subscribe to observable auth changes without replacing another consumer. */
+export function onAuthChange(fn: () => void): () => void {
+  authListeners.add(fn);
+  return () => { authListeners.delete(fn); };
+}
+
+/** The generation an identity or request was read under. */
+export function getAuthGeneration(): number {
+  return authGeneration;
+}
 
 // #483: while the console is signed out mid-page — the dialog or the
 // read-only bar — no write leaves this tab. Whoever holds a session by then
@@ -88,18 +107,18 @@ export function getToken(): string | null {
 // restart); default (false) uses sessionStorage. Either way the OTHER store is
 // cleared so the token lives in exactly one place. token=null clears both.
 export function setToken(token: string | null, remember = false): void {
+  const previous = getToken();
   if (!token) {
     ssSet(TOKEN_KEY, null);
     lsSet(TOKEN_KEY, null);
-    return;
-  }
-  if (remember) {
+  } else if (remember) {
     lsSet(TOKEN_KEY, token);
     ssSet(TOKEN_KEY, null);
   } else {
     ssSet(TOKEN_KEY, token);
     lsSet(TOKEN_KEY, null);
   }
+  if (getToken() !== previous) notifyAuthChange();
 }
 
 export function onUnauthorized(fn: (refused: Refused) => void): void {
@@ -135,6 +154,8 @@ export class HttpError extends Error {
    *  (the envelope's `policy`, internal/policyref.Ref). Absent when the body
    *  carries none, which is every refusal that is not a policy decision. */
   policy?: PolicyRef;
+  /** A refusal's Retry-After, set by the one caller that retries on it (previewRunPolicy). */
+  declare retryAfter?: string;
   constructor(
     status: number,
     message: string,
@@ -270,6 +291,7 @@ export async function wfetch(
   headers.set("Accept", headers.get("Accept") ?? "application/json");
 
   let res: Response;
+  const generation = authGeneration;
   try {
     res = await fetch(apiURL(path), {
       ...init,
@@ -289,9 +311,15 @@ export async function wfetch(
       throw new HttpError(TIMEOUT_STATUS, TIMEOUT_MESSAGE);
     }
     throw e;
+  } finally {
+    if (method === "POST" && (endsSession || path === "/me/view")) notifyAuthChange();
   }
 
   if (res.status === 401) {
+    await drainBody(res);
+    // Reconciliation can invalidate /me before its 401 reaches the shell.
+    // A refused write still belongs to its caller, even after an auth change.
+    const stale = path === "/me" && method === "GET" && (generation !== authGeneration || init.signal?.aborted);
     // A REAL 401 means the bearer THIS REQUEST sent was rejected
     // (expired/revoked/foreign admin token) — leaving it stored would replay
     // the same rejected credential on every request from here to sign-in.
@@ -307,11 +335,10 @@ export async function wfetch(
     // the FRESH read would wipe that newer, perfectly valid credential out
     // from under the request that just set it. Only a 401 whose storage
     // STILL holds the exact token it was sent with is the real rejection.
-    if (token && getToken() === token) setToken(null);
-    // The 401 body is thrown over, never handed to a caller — drain it here or
-    // the rejected request stays open on its connection (see drainBody).
-    await drainBody(res);
-    _unauthorized?.(refused);
+    if (!stale) {
+      if (token && getToken() === token) setToken(null);
+      _unauthorized?.(refused);
+    }
     throw new HttpError(401, "Unauthorized");
   }
   if (res.status === 403) _forbidden?.();

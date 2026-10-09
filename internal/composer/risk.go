@@ -66,9 +66,7 @@ var safeBaselineDomains = map[string]bool{
 	"api.anthropic.com":                 true,
 	"api.openai.com":                    true,
 	"generativelanguage.googleapis.com": true,
-	// VCS + package registries, synced with the workspace scanner's marker
-	// table. GitHub goes via the git-broker, never allowed_domains, so these
-	// entries are dead for scoring but kept as a defensive baseline.
+	// VCS + package registries, synced with the workspace scanner's marker table.
 	"github.com":                    true,
 	"api.github.com":                true,
 	"codeload.github.com":           true,
@@ -256,6 +254,10 @@ func gradeGrant(add func(field, value string, lvl RiskLevel, rationale, inv stri
 		add(field, "env_secret", RiskHigh,
 			"Stored secret placed in the sandbox environment for the WHOLE run — no mint, no TTL, no revocation, and anything running as the agent uid can read it from /proc/self/environ. "+
 				"Masked in output, but a value already disclosed to a process cannot be taken back. Prefer api_key (proxy-injected, never resident) whenever the tool can be pointed at a host header instead.", "2")
+	case types.GrantFileSecret:
+		add(field, "file_secret", RiskHigh,
+			"Stored secret placed in a FILE in the sandbox (/run/wardyn/secrets) for the WHOLE run — no mint, no TTL, no revocation, and anything running as the agent user can read it. "+
+				"Masked in output when it appears verbatim, but a value already disclosed to a process cannot be taken back. Prefer api_key (proxy-injected, never resident) whenever the tool can be pointed at a host header instead.", "2")
 	default:
 		add(field, string(g.Kind), RiskMedium, "Unrecognized grant kind; treated as medium.", "")
 	}

@@ -32,9 +32,11 @@ vi.mock("../../../lib/api/policies", () => ({
   },
 }));
 const createRunMock = vi.fn();
+vi.mock("../../../lib/api/policy-preview", () => ({ previewRunPolicy: vi.fn().mockResolvedValue({ spec: {}, pending: [], warnings: [], repository_access: [] }) }));
 vi.mock("../../../lib/api/runs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api/runs")>();
   return {
+    ...actual,
     isCredentialRefusal: actual.isCredentialRefusal,
     isGitCredentialRefusal: actual.isGitCredentialRefusal,
     runs: {
@@ -63,13 +65,14 @@ import { ViewAccessProvider } from "../../wardyn/console-view";
 import { NO_BARRIER, RUN } from "../../wardyn/copy";
 import { TIER_PICKER } from "../../../lib/tier-picker-copy";
 import { setField } from "../../../../test/set-field";
+import { editPolicy, goToPanel } from "../../../../test/new-run-panel";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
 function renderScreen() {
   return render(
     <MemoryRouter>
-      <OperatorProvider operator>
+      <OperatorProvider principal="test-owner" operator>
         <NewRunScreen />
       </OperatorProvider>
     </MemoryRouter>,
@@ -97,7 +100,7 @@ beforeEach(() => {
 describe("NewRunScreen — the barrier floor leaves nothing this run can use (T-9)", () => {
   it("shows the requirement card naming the floor, with no radiogroup at all", async () => {
     renderScreen();
-    const box = await screen.findByLabelText(/Spec \(JSON\)/);
+    const box = await editPolicy();
     fireEvent.change(box, {
       target: {
         value: JSON.stringify({
@@ -141,6 +144,7 @@ describe("NewRunScreen — an untouched Barrier omits confinement_class", () => 
     renderScreen();
     await screen.findByRole("button", { name: /Launch run/ });
     setField(screen.getByLabelText("Title"), "Touched barrier");
+    goToPanel("Policy");
     await user.click(await screen.findByRole("radio", { name: "Wall" }));
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
@@ -162,6 +166,7 @@ describe("NewRunScreen — no runner configured reads as unknown, not confirmed-
     renderScreen();
     await screen.findByRole("button", { name: /Launch run/ });
     for (const name of ["Fence", "Wall", "Vault"]) {
+      goToPanel("Policy");
       expect(screen.getByRole("radio", { name })).not.toBeDisabled();
     }
     expect(screen.queryByText(/isn't installed on this host/)).not.toBeInTheDocument();
@@ -176,7 +181,7 @@ describe("NewRunScreen — no runner configured reads as unknown, not confirmed-
       baseStatus({ runner: { driver: "none", confinement_classes: [] } }),
     );
     renderScreen();
-    const box = await screen.findByLabelText(/Spec \(JSON\)/);
+    const box = await editPolicy();
     fireEvent.change(box, {
       target: {
         value: JSON.stringify({
@@ -202,7 +207,7 @@ describe("NewRunScreen — no runner configured reads as unknown, not confirmed-
 function renderAsMember() {
   return render(
     <MemoryRouter>
-      <OperatorProvider operator={false}>
+      <OperatorProvider principal="test-owner" operator={false}>
         <NewRunScreen />
       </OperatorProvider>
     </MemoryRouter>,
@@ -241,6 +246,7 @@ describe("NewRunScreen — a member's governance ceiling folds into the Barrier 
     mockConfinementClasses = ["CC1", "CC2", "CC3"];
     getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC2" });
     renderScreen(); // operator:true
+    goToPanel("Policy");
     expect(await screen.findByRole("radio", { name: "Fence" })).toBeInTheDocument();
     expect(screen.queryByText(/set by your admin/)).toBeNull();
   });
@@ -295,6 +301,7 @@ describe("NewRunScreen — a member's governance ceiling folds into the Barrier 
     ]);
     renderAsMember();
     // The Custom lane IS clamped for every non-operator.
+    goToPanel("Policy");
     await waitFor(() => {
       expect(screen.getByRole("radio", { name: "Wall" })).toBeInTheDocument();
       expect(screen.queryByRole("radio", { name: "Fence" })).toBeNull();
@@ -358,7 +365,7 @@ describe("NewRunScreen — a cloned run reaches the wire as the run it cloned", 
   function renderClone(state: unknown = { prefill }) {
     return render(
       <MemoryRouter initialEntries={[{ pathname: "/runs/new", state }]}>
-        <OperatorProvider operator>
+        <OperatorProvider principal="test-owner" operator>
           <NewRunScreen />
         </OperatorProvider>
       </MemoryRouter>,
@@ -371,6 +378,7 @@ describe("NewRunScreen — a cloned run reaches the wire as the run it cloned", 
     // Wait for the barrier probe to settle — this is the effect that can
     // overwrite the prefill, so asserting before it lands would pass regardless.
     await screen.findByRole("button", { name: /Launch run/ });
+    goToPanel("Policy");
     await waitFor(() =>
       expect(screen.getByRole("radio", { name: "Vault" })).toHaveAttribute("aria-checked", "true"),
     );
@@ -437,11 +445,12 @@ describe("NewRunScreen — a cloned run reaches the wire as the run it cloned", 
         ]}
       >
         <CaptureNavigate />
-        <OperatorProvider operator>
+        <OperatorProvider principal="test-owner" operator>
           <NewRunScreen />
         </OperatorProvider>
       </MemoryRouter>,
     );
+    goToPanel("Policy");
     await waitFor(() =>
       expect(screen.getByRole("radio", { name: "Wall" })).toHaveAttribute("aria-checked", "true"),
     );
@@ -516,7 +525,7 @@ describe("NewRunScreen — #214: no barrier at all on this host disables Launch"
     mockConfinementClasses = [];
     render(
       <MemoryRouter>
-        <OperatorProvider operator={false}>
+        <OperatorProvider principal="test-owner" operator={false}>
           <NewRunScreen />
         </OperatorProvider>
       </MemoryRouter>,
@@ -534,7 +543,7 @@ describe("NewRunScreen — #214: no barrier at all on this host disables Launch"
     render(
       <MemoryRouter>
         <ViewAccessProvider value="session-user">
-          <OperatorProvider operator={false} userViewSuperAdmin={false}>
+          <OperatorProvider principal="test-owner" operator={false} userViewSuperAdmin={false}>
             <NewRunScreen />
           </OperatorProvider>
         </ViewAccessProvider>
@@ -550,7 +559,7 @@ describe("NewRunScreen — #214: no barrier at all on this host disables Launch"
     render(
       <MemoryRouter>
         <ViewAccessProvider value="session-user">
-          <OperatorProvider operator={false} userViewSuperAdmin>
+          <OperatorProvider principal="test-owner" operator={false} userViewSuperAdmin>
             <NewRunScreen />
           </OperatorProvider>
         </ViewAccessProvider>
@@ -606,7 +615,7 @@ describe("NewRunScreen — #1238 tier picker states", () => {
       baseStatus({ runner: { driver: "k8s", kubernetes: true, confinement_classes: ["CC1", "CC2"] } }),
     );
     renderScreen();
-    fireEvent.change(await screen.findByLabelText(/Spec \(JSON\)/), {
+    fireEvent.change(await editPolicy(), {
       target: {
         value: JSON.stringify({ allowed_domains: [], first_use_approval: "always_deny", min_confinement_class: "CC3" }),
       },
@@ -625,7 +634,8 @@ describe("NewRunScreen — #1238 tier picker states", () => {
     expect(await screen.findByText(RUN.BARRIER_UNKNOWN)).toBeInTheDocument();
     expect(screen.getAllByText("Unverified").length).toBeGreaterThan(0);
     expect(screen.queryByText("Ready")).toBeNull();
-    // Unknown never blocks launch.
+    // Unknown never blocks launch: with the required title given, nothing holds it.
+    setField(screen.getByLabelText("Title"), "Unknown barrier");
     expect(screen.getByRole("button", { name: /Launch run/ })).not.toBeDisabled();
   });
 
@@ -680,12 +690,13 @@ describe("NewRunScreen — #1238 tier picker states", () => {
     getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC2", governance_profile_name: "wall-required" });
     const ui = (resolved: boolean) => (
       <MemoryRouter>
-        <OperatorProvider operator operatorResolved={resolved}>
+        <OperatorProvider principal="test-owner" operator operatorResolved={resolved}>
           <NewRunScreen />
         </OperatorProvider>
       </MemoryRouter>
     );
     const { rerender } = render(ui(false));
+    goToPanel("Policy");
     await waitFor(() => expect(screen.getByRole("radio", { name: "Wall" })).toBeInTheDocument());
     expect(screen.queryByRole("radio", { name: "Fence" })).toBeNull();
     rerender(ui(true));
@@ -700,7 +711,7 @@ describe("NewRunScreen — #1238 tier picker states", () => {
     getDefaultPolicyMock.mockResolvedValue({ min_confinement_class: "CC3", governance_profile_name: "vault-required" });
     const ui = (resolved: boolean) => (
       <MemoryRouter>
-        <OperatorProvider operator operatorResolved={resolved}>
+        <OperatorProvider principal="test-owner" operator operatorResolved={resolved}>
           <NewRunScreen />
         </OperatorProvider>
       </MemoryRouter>
@@ -708,6 +719,7 @@ describe("NewRunScreen — #1238 tier picker states", () => {
     const { rerender } = render(ui(false));
     expect(await screen.findByText(/Your admin requires Vault/)).toBeInTheDocument();
     rerender(ui(true));
+    goToPanel("Policy");
     expect(await screen.findByRole("radio", { name: "Wall" })).toHaveAttribute("aria-checked", "true");
     expect(screen.queryByText("Vault")).toBeNull();
   });

@@ -9,7 +9,7 @@
 // policies/setup/health/runs/workspaces/capabilities regardless of which
 // suite mounts it.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -29,16 +29,20 @@ vi.mock("../../../lib/api/policies", () => ({
   },
 }));
 const createRunMock = vi.fn();
-vi.mock("../../../lib/api/runs", () => ({
+const preflightRunMock = vi.fn();
+vi.mock("../../../lib/api/policy-preview", () => ({ previewRunPolicy: vi.fn().mockResolvedValue({ spec: {}, pending: [], warnings: [], repository_access: [] }) }));
+vi.mock("../../../lib/api/runs", async () => ({
+  ...await vi.importActual<typeof import("../../../lib/api/runs")>("../../../lib/api/runs"),
   runs: {
     createRun: (...a: unknown[]) => createRunMock(...a),
     listRuns: () => Promise.resolve([]),
-    preflightRun: vi.fn(),
+    preflightRun: (...a: unknown[]) => preflightRunMock(...a),
     gradePolicy: () => Promise.resolve({ risk_assessment: [], overall_risk: "low" }),
   },
 }));
+const listWorkspacesMock = vi.fn();
 vi.mock("../../../lib/api/workspaces", () => ({
-  workspaces: { listWorkspaces: () => Promise.resolve([]) },
+  workspaces: { listWorkspaces: () => listWorkspacesMock() },
 }));
 const myCapabilitiesMock = vi.fn();
 vi.mock("../../../lib/capabilities", async () => {
@@ -53,13 +57,14 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { RUN } from "../../wardyn/copy";
 import { PUSH } from "../../wardyn/copy/push";
 import { setField } from "../../../../test/set-field";
+import { goToPanel } from "../../../../test/new-run-panel";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
 function renderScreen() {
   return render(
     <MemoryRouter>
-      <OperatorProvider operator>
+      <OperatorProvider principal="test-owner" operator>
         <NewRunScreen />
       </OperatorProvider>
     </MemoryRouter>,
@@ -69,7 +74,7 @@ function renderScreen() {
 function renderAsMember() {
   return render(
     <MemoryRouter>
-      <OperatorProvider operator={false} securityOperator={false}>
+      <OperatorProvider principal="test-owner" operator={false} securityOperator={false}>
         <NewRunScreen />
       </OperatorProvider>
     </MemoryRouter>,
@@ -78,6 +83,8 @@ function renderAsMember() {
 
 beforeEach(() => {
   createRunMock.mockReset().mockResolvedValue({ id: "run_1" });
+  preflightRunMock.mockReset().mockResolvedValue({ enforced_confinement_class: "CC1", setup_items: [] });
+  listWorkspacesMock.mockReset().mockResolvedValue([]);
   getDefaultPolicyMock.mockReset().mockResolvedValue({ min_confinement_class: "CC1" });
   listPoliciesMock.mockReset().mockResolvedValue([]);
   myCapabilitiesMock.mockReset().mockReturnValue(null);
@@ -89,6 +96,7 @@ beforeEach(() => {
 describe("NewRunScreen — the empty saved-policy picker's New policy door", () => {
   it("an admin gets New policy → /admin/policies", async () => {
     renderScreen();
+    goToPanel("Policy");
     await user.click(await screen.findByRole("button", { name: /Reuse a saved policy/ }));
     expect(await screen.findByText(/No saved policies yet/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "New policy →" })).toHaveAttribute("href", "/admin/policies");
@@ -96,6 +104,7 @@ describe("NewRunScreen — the empty saved-policy picker's New policy door", () 
 
   it("neg: a user sees the empty note with no door", async () => {
     renderAsMember();
+    goToPanel("Policy");
     await user.click(await screen.findByRole("button", { name: /Reuse a saved policy/ }));
     expect(await screen.findByText(/No saved policies yet/)).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "New policy →" })).not.toBeInTheDocument();
@@ -128,11 +137,148 @@ describe("NewRunScreen — the saved-policy lane", { timeout: 20_000 }, () => {
     await user.click(await screen.findByRole("option", { name }));
   }
 
+  it("refuses a saved reference with two attachments and retains both when switching to Custom", async () => {
+    listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
+    listWorkspacesMock.mockResolvedValue([
+      { id: "ws-a", name: "Workspace A", kind: "local_dir", source: "/data/a", status: "scanned" },
+      { id: "ws-b", name: "Workspace B", kind: "local_dir", source: "/data/b", status: "scanned" },
+    ]);
+    render(
+      <MemoryRouter initialEntries={[{
+        pathname: "/runs/new",
+        state: { prefill: { inlinePolicy: false, state: {
+          selectedPolicyId: REDACTED_POLICY.id,
+          workspaces: [{ workspaceId: "ws-a" }, { workspaceId: "ws-b" }],
+        } } },
+      }]}>
+        <OperatorProvider principal="test-owner" operator><NewRunScreen /></OperatorProvider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByTestId("nr-workspace-extras")).toHaveTextContent("Workspace B"));
+    // The required title is given, so the reference refusal is the only thing in the way.
+    setField(screen.getByLabelText("Title"), "Two workspaces");
+    await user.click(screen.getByRole("button", { name: "Launch run" }));
+    goToPanel("Policy");
+    await user.click(screen.getByRole("button", { name: /^Check again$/ }));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1000)); });
+    expect(createRunMock).not.toHaveBeenCalled();
+    expect(preflightRunMock).not.toHaveBeenCalled();
+    goToPanel("Workspace");
+    expect(screen.getByRole("button", { name: "Remove Workspace B" })).toBeInTheDocument();
+    goToPanel("Policy");
+
+    await user.click(screen.getByRole("button", { name: /Custom policy/ }));
+    await user.click(screen.getByRole("button", { name: "Launch run" }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalledOnce());
+    const body = createRunMock.mock.calls[0][0] as { policy_id?: string; inline_policy: { workspace_mounts: { source: string }[] } };
+    expect(body.policy_id).toBeUndefined();
+    expect(body.inline_policy.workspace_mounts.map((mount) => mount.source)).toEqual(["/data/a", "/data/b"]);
+  });
+
+  // M-F F1 — the approved refusal: one sentence beside Check again, Launch and
+  // Check again held and described by it, nothing removed, no mode switch.
+  const SAVED_TWO =
+    "A saved policy launches with one workspace. Remove the extra workspace, or choose Custom policy to keep them all.";
+  const WORKSPACES = [
+    { id: "ws-a", name: "Workspace A", kind: "local_dir", source: "/data/a", status: "scanned" },
+    { id: "ws-b", name: "Workspace B", kind: "local_dir", source: "/data/b", status: "scanned" },
+    { id: "ws-c", name: "Workspace C", kind: "local_dir", source: "/data/c", status: "scanned" },
+  ];
+
+  function renderSavedWith(ids: string[], pick: string | null = REDACTED_POLICY.id) {
+    listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
+    listWorkspacesMock.mockResolvedValue(WORKSPACES);
+    return render(
+      <MemoryRouter initialEntries={[{
+        pathname: "/runs/new",
+        state: { prefill: { inlinePolicy: false, state: { selectedPolicyId: pick ?? undefined, workspaces: ids.map((workspaceId) => ({ workspaceId })) } } },
+      }]}>
+        <OperatorProvider principal="test-owner" operator><NewRunScreen /></OperatorProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("shows the saved sentence once beside Check again, holds both buttons, and removes nothing", async () => {
+    renderSavedWith(["ws-a", "ws-b"]);
+    goToPanel("Policy");
+    const hold = await screen.findByText(SAVED_TWO);
+    expect(screen.getAllByText(SAVED_TWO)).toHaveLength(1);
+    expect(hold).toHaveAttribute("role", "status");
+    expect(screen.getByRole("button", { name: "Launch run" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Check again$/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Launch run" })).toHaveAccessibleDescription(SAVED_TWO);
+    expect(screen.getByRole("button", { name: /^Check again$/ })).toHaveAccessibleDescription(SAVED_TWO);
+    expect(hold.closest("aside")).toBeNull();
+    goToPanel("Workspace");
+    expect(screen.getByRole("button", { name: "Remove Workspace B" })).toBeInTheDocument();
+    goToPanel("Policy");
+    expect(screen.getByRole("button", { name: /Reuse a saved policy/ })).toHaveAttribute("aria-pressed", "true");
+    expect(createRunMock).not.toHaveBeenCalled();
+    expect(preflightRunMock).not.toHaveBeenCalled();
+  });
+
+  it("clears the hold once at most one workspace remains, keeping Saved and the pick", async () => {
+    renderSavedWith(["ws-a", "ws-b", "ws-c"]);
+    await screen.findByText(SAVED_TWO);
+    goToPanel("Workspace");
+    await user.click(screen.getByRole("button", { name: "Remove Workspace B" }));
+    // Two still attached: the hold stays.
+    expect(screen.getByText(SAVED_TWO)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove Workspace C" }));
+    await waitFor(() => expect(screen.queryByText(SAVED_TWO)).toBeNull());
+    goToPanel("Policy");
+    expect(screen.getByRole("button", { name: /Reuse a saved policy/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("combobox", { name: "Saved policy" })).toHaveTextContent(REDACTED_POLICY.name);
+    setField(screen.getByLabelText("Title"), "one left");
+    await user.click(screen.getByRole("button", { name: "Launch run" }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalledOnce());
+    expect(createRunMock.mock.calls[0][0]).toMatchObject({ policy_id: REDACTED_POLICY.id, workspace_id: "ws-a" });
+  });
+
+  it("Custom clears only the hold: no sentence, both chips stay", async () => {
+    renderSavedWith(["ws-a", "ws-b"]);
+    await screen.findByText(SAVED_TWO);
+    goToPanel("Policy");
+    await user.click(screen.getByRole("button", { name: /Custom policy/ }));
+    expect(screen.queryByText(SAVED_TWO)).toBeNull();
+    expect(screen.getByTestId("nr-workspace-extras")).toHaveTextContent("Workspace B");
+    expect(screen.getByRole("button", { name: /Custom policy/ })).toHaveFocus();
+  });
+
+  it("an earlier problem keeps the rail's sentence while the hold stays beside Check again", async () => {
+    renderSavedWith(["ws-a", "ws-b"], null);
+    // With the required title given, the missing pick is the first issue.
+    setField(await screen.findByLabelText("Title"), "Pick one");
+    goToPanel("Policy");
+    await user.click(await screen.findByRole("button", { name: /Reuse a saved policy/ }));
+    expect(await screen.findByText(SAVED_TWO)).toBeInTheDocument();
+    expect(screen.getByText("Pick a saved policy, or write a custom one.")).toBeInTheDocument();
+    expect(screen.getAllByText(SAVED_TWO)).toHaveLength(1);
+  });
+
+  it("a saved policy that is gone keeps its own sentence and the hold", async () => {
+    renderSavedWith(["ws-a", "ws-b"], "pol_ghost");
+    goToPanel("Policy");
+    expect(await screen.findByText(RUN.POLICY_GONE)).toBeInTheDocument();
+    expect(screen.getByText(SAVED_TWO)).toBeInTheDocument();
+    goToPanel("Workspace");
+    expect(screen.getByRole("button", { name: "Remove Workspace B" })).toBeInTheDocument();
+  });
+
+  it("with one or no workspace there is no hold", async () => {
+    renderSavedWith(["ws-a"]);
+    goToPanel("Policy");
+    await screen.findByRole("combobox", { name: "Saved policy" });
+    expect(screen.queryByText(SAVED_TWO)).toBeNull();
+    expect(screen.getByRole("button", { name: /^Check again$/ })).not.toBeDisabled();
+  });
+
   // F2-F1 — a member's redacted body must never reach the wire just because
   // they looked at Custom after picking it.
   it("a member switching a redacted saved policy to Custom never ships the redacted body", async () => {
     listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
     renderAsMember();
+    goToPanel("Policy");
     await pickSavedPolicy(REDACTED_POLICY.name);
     await user.click(screen.getByRole("button", { name: /Custom policy/ }));
     setField(screen.getByLabelText("Title"), "member custom");
@@ -141,54 +287,35 @@ describe("NewRunScreen — the saved-policy lane", { timeout: 20_000 }, () => {
     expect(JSON.stringify(createRunMock.mock.calls[0][0])).not.toContain("<redacted>");
   });
 
-  // R1 — the clear must key on isSecurityOperator (admin or
-  // security_admin, matching the server's redactPoliciesForRead gate), never
-  // the bare `operator`/`securityOperator` context booleans: both default
-  // fail-open (true) while /me is unresolved or the fetch failed
-  // (operator-context.tsx), which is the wrong direction for a clear that must
-  // still fire for a member in that state.
-  it("a member whose /me hasn't resolved yet still gets a redacted body cleared", async () => {
-    // ticket: R1
+  it("an unresolved identity never launches a redacted saved body", async () => {
     listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
-    render(
-      <MemoryRouter>
-        {/* operator/securityOperator both at their fail-open true default —
-            exactly what an unresolved /me looks like — operatorResolved is the
-            only signal this is not a real admin/security_admin answer. */}
-        <OperatorProvider operator operatorResolved={false}>
-          <NewRunScreen />
-        </OperatorProvider>
-      </MemoryRouter>,
-    );
+    render(<MemoryRouter><OperatorProvider principal="test-owner" operator operatorResolved={false}><NewRunScreen /></OperatorProvider></MemoryRouter>);
+    goToPanel("Policy");
     await pickSavedPolicy(REDACTED_POLICY.name);
     await user.click(screen.getByRole("button", { name: /Custom policy/ }));
     setField(screen.getByLabelText("Title"), "unresolved me");
     await user.click(screen.getByRole("button", { name: "Launch run" }));
-    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
-    expect(JSON.stringify(createRunMock.mock.calls[0][0])).not.toContain("<redacted>");
+    expect(listPoliciesMock).toHaveBeenCalledOnce();
+    expect(createRunMock).not.toHaveBeenCalled();
   });
 
-  // R1 neg — a security_admin's saved-policy body is the real one (the server
-  // redacts on isSecurityOperator, which a security_admin passes); the clear
-  // must not fire and throw it away.
-  it("negative control: a resolved security_admin keeps the real body — no clear", async () => {
+  it("a security admin also retains the authored custom draft", async () => {
     // ticket: R1
     listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
     render(
       <MemoryRouter>
-        <OperatorProvider operator={false} securityOperator operatorResolved>
+        <OperatorProvider principal="test-owner" operator={false} securityOperator operatorResolved>
           <NewRunScreen />
         </OperatorProvider>
       </MemoryRouter>,
     );
+    goToPanel("Policy");
     await pickSavedPolicy(REDACTED_POLICY.name);
     await user.click(screen.getByRole("button", { name: /Custom policy/ }));
     setField(screen.getByLabelText("Title"), "security admin");
     await user.click(screen.getByRole("button", { name: "Launch run" }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
-    // Not cleared: whatever the fixture carried (here, the literal string a
-    // member would have seen redacted) reaches the wire byte-for-byte.
-    expect(JSON.stringify(createRunMock.mock.calls[0][0])).toContain("<redacted>");
+    expect(JSON.stringify(createRunMock.mock.calls[0][0])).not.toContain("<redacted>");
   });
 
   // F2-F2 — the reworded rail sentence: the saved lane does not merge nothing,
@@ -196,6 +323,7 @@ describe("NewRunScreen — the saved-policy lane", { timeout: 20_000 }, () => {
   it("the rail names the attached workspace as what still merges, not 'nothing'", async () => {
     listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
     renderScreen();
+    goToPanel("Policy");
     await pickSavedPolicy(REDACTED_POLICY.name);
     expect(await screen.findByText(/Your attached workspace mounts into it/)).toBeInTheDocument();
     expect(screen.queryByText(/nothing on this page is merged into it/)).not.toBeInTheDocument();
@@ -214,11 +342,12 @@ describe("NewRunScreen — the saved-policy lane", { timeout: 20_000 }, () => {
           { pathname: "/runs/new", state: { prefill: { inlinePolicy: false, state: { selectedPolicyId: "pol_ghost" } } } },
         ]}
       >
-        <OperatorProvider operator>
+        <OperatorProvider principal="test-owner" operator>
           <NewRunScreen />
         </OperatorProvider>
       </MemoryRouter>,
     );
+    goToPanel("Policy");
     await screen.findByRole("combobox", { name: "Saved policy" });
     setField(screen.getByLabelText("Title"), "clone gone");
     expect(screen.queryByText(RUN.POLICY_GONE)).not.toBeInTheDocument();
@@ -270,11 +399,13 @@ describe("NewRunScreen — the saved-policy lane", { timeout: 20_000 }, () => {
   it("a batch (unattended) run under a require_review_paths policy shows PUSH.RAIL_UNATTENDED (M30)", async () => {
     listPoliciesMock.mockResolvedValue([PUSH_REVIEW_POLICY]);
     renderScreen();
+    goToPanel("Policy");
     await pickSavedPolicy(PUSH_REVIEW_POLICY.name);
     // Interactive (the wizard's default) never shows the unattended note —
     // the section renders (require_review_paths is set) but the note doesn't.
     expect(await screen.findByText(PUSH.RAIL_TITLE)).toBeInTheDocument();
     expect(screen.queryByText(PUSH.RAIL_UNATTENDED)).not.toBeInTheDocument();
+    goToPanel("Run");
     await user.click(screen.getByRole("radio", { name: /^Autonomous/ }));
     expect(await screen.findByText(PUSH.RAIL_UNATTENDED)).toBeInTheDocument();
   });

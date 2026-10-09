@@ -477,9 +477,13 @@ test("A(rail): the New Run rail states THIS run's credential residency, with no 
   await page.goto("/runs/new");
   await page.getByRole("radio", { name: /^Autonomous/ }).click();
 
-  await expect(page.getByText(RAIL_PROVIDER.STATIC(WALK_PROVIDER_NAME))).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK)).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER)).toBeVisible();
+  // The rail's Credentials summary; the Run panel's picker states the same two
+  // facts beside the provider control (#1922).
+  const rail = page.getByRole("complementary", { name: "What this run can do" });
+  await expect(rail.getByText(RAIL_PROVIDER.STATIC(WALK_PROVIDER_NAME))).toBeVisible({ timeout: 60_000 });
+  await expect(rail.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK)).toBeVisible({ timeout: 60_000 });
+  // The per-person chip that followed the sentence is removed.
+  await expect(page.getByText("Per-person AWS sign-in")).toHaveCount(0);
   // …and Recording states the truth about a stock Helm install rather than
   // promising a capture that cannot happen: the kind quickstart leaves
   // persistence.enabled=false. The Recording row reads /healthz, so it arrives

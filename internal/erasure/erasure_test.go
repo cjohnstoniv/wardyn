@@ -50,7 +50,7 @@ func TestOrchestrateStopsAtTheFirstFailureAndNamesWhatIsLeft(t *testing.T) {
 	if !errors.As(err, &inc) {
 		t.Fatalf("err = %v, want *IncompleteError", err)
 	}
-	if want := []Scope{RunTasks, AuditPersonalFields, Credentials}; !slices.Equal(inc.Remaining, want) {
+	if want := []Scope{RunTasks, Components, AuditPersonalFields, Credentials}; !slices.Equal(inc.Remaining, want) {
 		t.Errorf("remaining = %v, want %v", inc.Remaining, want)
 	}
 	if want := []Scope{MaskCopies, RunOutputs, Recordings}; !slices.Equal(inc.Done, want) || !slices.Equal(rep.Done, want) {
@@ -106,5 +106,20 @@ func TestParseScopes(t *testing.T) {
 		if _, err := ParseScopes(bad); !errors.Is(err, ErrScopeUnknown) {
 			t.Errorf("ParseScopes(%q) = %v, want ErrScopeUnknown", bad, err)
 		}
+	}
+}
+
+func TestComponentsScopeRunsBeforeTheKeys(t *testing.T) {
+	var ran []Scope
+	o := &Orchestrator{Steps: recordingSteps(&ran, nil)}
+	scopes, err := ParseScopes([]string{"credentials", "components", "audit_personal_fields"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.Orchestrate(t.Context(), "alice", scopes); err != nil {
+		t.Fatal(err)
+	}
+	if want := []Scope{Components, AuditPersonalFields, Credentials}; !slices.Equal(ran, want) {
+		t.Fatalf("ran %v, want %v", ran, want)
 	}
 }

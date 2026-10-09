@@ -1,0 +1,4 @@
+# Asserted against every cap in scripts/doc-form.sh (strict tier).
+README.md
+docs/README.md
+docs/TRY-IT.md

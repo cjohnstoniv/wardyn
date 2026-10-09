@@ -214,3 +214,25 @@ export async function decide(
     await expect(rows.filter({ hasText: host })).toHaveCount(0, { timeout: 20_000 });
   }
 }
+
+/** Shows one of New Run's four panels (#1922) the way the viewer would: a
+ *  filmed, silent click on the panel nav. A no-op for the panel on screen. */
+export async function newRunPanel(page: Page, panel: "run" | "workspace" | "access" | "policy"): Promise<void> {
+  const name = { run: "Run", workspace: "Workspace", access: "Access", policy: "Policy" }[panel];
+  const step = page.getByRole("navigation", { name: "New run" }).getByRole("button", { name: new RegExp(`^${name}\\b`) });
+  if ((await step.getAttribute("aria-current")) === "step") return;
+  await act(page, step);
+  await expect(step).toHaveAttribute("aria-current", "step");
+}
+
+/** Opens New Run's custom policy source the way the viewer would (#1922): the
+ *  Policy panel, then a filmed, silent click on "Edit policy". The panel opens
+ *  on its read view, so the source and its templates are not on screen until
+ *  then. A no-op once the editor is open. */
+export async function newRunEditPolicy(page: Page): Promise<void> {
+  await newRunPanel(page, "policy");
+  const editor = page.getByTestId("policy-source-editor");
+  if ((await editor.count()) > 0) return;
+  await act(page, page.getByRole("button", { name: "Edit policy" }));
+  await expect(editor).toBeVisible();
+}

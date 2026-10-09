@@ -40,8 +40,11 @@ type SetupItem struct {
 	// bind-mounted into the sandbox, e.g. the Claude subscription mount), or
 	// "brokered_mint" (a github_token/git_pat grant — the broker mints/resolves
 	// a value and hands it directly to the in-sandbox git-credential helper at
-	// task time, internal.go handleInternalMint). Empty when not applicable
-	// (workspace/egress/backend rows carry no single credential).
+	// task time, internal.go handleInternalMint), "resident_env" (an env_secret
+	// grant — the value is in the sandbox environment for the whole run), or
+	// "resident_file" (a file_secret grant — the value is a file in the sandbox
+	// for the whole run). Empty when not applicable (workspace/egress/backend
+	// rows carry no single credential).
 	Residency string `json:"residency,omitempty"`
 }
 
@@ -154,7 +157,7 @@ func (s *Server) setupLLMAccessItem(agent string, llmAccess *composeLLMAccess, s
 	return it, true
 }
 
-// setupSecretItems walks the FINAL spec's api_key/git_pat grants — the SAME
+// setupSecretItems walks the FINAL spec's stored-secret grants — the SAME
 // scope-decode validateInlineSecretRefs uses (injectionRuleFromScope,
 // inline_policy.go) — against presentSecrets (s.presentSecretNames), so this can
 // never disagree with the H1 422 check that gates create-run. One row per
@@ -183,11 +186,17 @@ func setupSecretItems(spec types.RunPolicySpec, presentSecrets map[string]bool) 
 	for _, g := range spec.EligibleGrants {
 		switch g.Kind {
 		case types.GrantAPIKey:
-			if rule, err := injectionRuleFromScope(g.Scope); err == nil {
-				// api_key: the value is resolved proxy-side (injection.go) and never
-				// reaches the sandbox.
-				add(rule.SecretName, "an api_key grant ("+rule.Host+")", "proxy_injected")
+			rule, err := injectionRuleFromScope(g.Scope)
+			if err != nil {
+				continue
 			}
+			if apiKeyScopeShared(g.Scope) {
+				items = append(items, setupSharedSecretItem(rule.Host, presentSecrets[rule.SecretName]))
+				continue
+			}
+			// api_key: the value is resolved proxy-side (injection.go) and never
+			// reaches the sandbox.
+			add(rule.SecretName, "an api_key grant ("+rule.Host+")", "proxy_injected")
 		case types.GrantGitPAT:
 			if sc, err := types.DecodeGitPATScope(g.Scope); err == nil {
 				// git_pat's residency belongs to the repo_credential row (the grant
@@ -195,9 +204,38 @@ func setupSecretItems(spec types.RunPolicySpec, presentSecrets map[string]bool) 
 				// whether the secret exists, so it carries no residency of its own.
 				add(sc.SecretName, "a git_pat grant ("+sc.Host+")", "")
 			}
+		case types.GrantEnvSecret:
+			if name, secretName, err := envSecretScopeFields(g.Scope); err == nil {
+				add(secretName, "an env_secret grant ("+name+")", "resident_env")
+			}
+		case types.GrantFileSecret:
+			if file, secretName, err := fileSecretScopeFields(g.Scope); err == nil {
+				add(secretName, "a file_secret grant ("+file+")", "resident_file")
+			}
 		}
 	}
 	return items
+}
+
+// setupSharedSecretItem is the row for a `shared` api_key grant: a credential
+// the organisation provides through one of its components. The secret's NAME
+// is the operator's and no member-facing row carries it — not in the id, the
+// label or a fix — so the row is keyed by the host it is presented to, which a
+// person granted the component may see. There is nothing for them to add:
+// only an admin can store it.
+//
+// A shared grant is only ever authored by the component gate, which refuses a
+// run whose operator has not stored the secret before any row is derived, so
+// the status read from the caller's presence map is the operator's answer.
+func setupSharedSecretItem(host string, present bool) SetupItem {
+	status := "missing"
+	if present {
+		status = "satisfied"
+	}
+	return SetupItem{
+		Kind: "secret", ID: "secret:provided:" + host, Label: "Provided by your admin",
+		RequiredBy: "an api_key grant (" + host + ")", Status: status, Residency: "proxy_injected",
+	}
 }
 
 // setupWorkspaceItems maps each referenced workspace (referencedWorkspaces —

@@ -23,7 +23,7 @@ describe("buildSpec — a governed command omits agent when its target already c
   it("omits agent for a command run on an image-backed workspace", () => {
     const ws = makeWorkspace({ id: "ws-1", base_image: { kind: "registry", image: "ubuntu:24.04" } });
     const { run } = buildSpec(
-      { ...initialWizardState(), runType: "command", task: "echo hi", workspaces: [{ workspaceId: "ws-1" }] },
+      { ...initialWizardState(), runType: "command", command: "echo hi", workspaces: [{ workspaceId: "ws-1" }] },
       [ws],
     );
     expect(run.task_mode).toBe("exec");
@@ -31,19 +31,19 @@ describe("buildSpec — a governed command omits agent when its target already c
   });
 
   it("omits agent for a command run naming an explicit BYOI image", () => {
-    const { run } = buildSpec({ ...initialWizardState(), runType: "command", task: "echo hi", image: "ubuntu:24.04" });
+    const { run } = buildSpec({ ...initialWizardState(), runType: "command", command: "echo hi", image: "ubuntu:24.04" });
     expect(run.agent).toBeUndefined();
   });
 
   it("still sends agent for a command run with no image and no image-backed workspace", () => {
-    const { run } = buildSpec({ ...initialWizardState(), runType: "command", task: "echo hi" });
+    const { run } = buildSpec({ ...initialWizardState(), runType: "command", command: "echo hi" });
     expect(run.agent).toBe(initialWizardState().agent);
   });
 
   it("still sends agent for a command run on a workspace with no base image (recommended default)", () => {
     const ws = makeWorkspace({ id: "ws-1", base_image: { kind: "recommended" } });
     const { run } = buildSpec(
-      { ...initialWizardState(), runType: "command", task: "echo hi", workspaces: [{ workspaceId: "ws-1" }] },
+      { ...initialWizardState(), runType: "command", command: "echo hi", workspaces: [{ workspaceId: "ws-1" }] },
       [ws],
     );
     expect(run.agent).toBe(initialWizardState().agent);
@@ -70,7 +70,7 @@ describe("buildSpec — a governed command emits none of the model-access fields
     const state = {
       ...initialWizardState(),
       runType: "command" as const,
-      task: "echo hi",
+      command: "echo hi",
       integrationId: "corp-openai",
       llmSecretName: "my-anthropic-key",
       // Isolate the IMPLIED host this stale llmSecretName would union in —
@@ -83,5 +83,30 @@ describe("buildSpec — a governed command emits none of the model-access fields
     expect((inline_policy.eligible_grants ?? []).some((g) => g.kind === "api_key")).toBe(false);
     expect(inline_policy.allowed_domains ?? []).not.toContain("api.anthropic.com");
     expect(impliedEgressHosts(state)).toEqual([]);
+  });
+});
+
+// #1922: Task, Command and Startup command each hold their own value, and a run
+// sends only the one its shape names. A prompt typed as a Task can never be
+// sent as a command line, whichever way Run type is switched afterwards.
+describe("buildSpec — each run shape sends its own text", () => {
+  const typed = {
+    ...initialWizardState(),
+    task: "Fix the flaky refund test",
+    command: "make test",
+    startupCommand: "npm run dev",
+  };
+
+  it.each([
+    ["an autonomous agent run sends the Task", { runType: "agent", mode: "batch" }, "Fix the flaky refund test"],
+    ["a shell command sends the Command", { runType: "command", mode: "batch" }, "make test"],
+    ["an agent-started interactive run sends the Initial prompt, which is the Task", { runType: "agent", mode: "interactive", interactiveStart: "agent" }, "Fix the flaky refund test"],
+    ["a terminal-started interactive run sends the Startup command", { runType: "agent", mode: "interactive", interactiveStart: "shell" }, "npm run dev"],
+  ] as const)("%s", (_name, shape, sent) => {
+    expect(buildSpec({ ...typed, ...shape }).run.task).toBe(sent);
+  });
+
+  it("a shell command with only a Task typed sends nothing, never the Task", () => {
+    expect(buildSpec({ ...typed, command: "", runType: "command" }).run.task).toBe("");
   });
 });

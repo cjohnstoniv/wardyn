@@ -78,24 +78,7 @@ type runTextField struct {
 // "chars", and a CJK or emoji value well under the limit was refused with a byte
 // count the operator could not reconcile with what they typed.
 func (s *Server) validateRunTextFields(w http.ResponseWriter, req createRunRequest) bool {
-	for _, f := range []runTextField{
-		{name: "title", value: req.Title, max: maxRunTitleLen},
-		{name: "description", value: req.Description, max: maxRunDescriptionLen, multiline: true},
-		{name: "repo", value: req.Repo, max: maxRunRepoLen},
-		{name: "devcontainer_repo", value: req.DevcontainerRepo, max: maxRunRepoLen},
-		{name: "task", value: req.Task, max: maxRunTaskLen, multiline: true},
-		{name: "agent", value: req.Agent, max: maxRunAgentLen},
-	} {
-		if n := utf8.RuneCountInString(f.value); n > f.max {
-			writeErrorReason(w, http.StatusBadRequest, reasonRunFieldTooLong, fmt.Sprintf(runFieldTooLongRefusal, f.name, n, f.max))
-			return false
-		}
-		if !runFieldCharsAllowed(f.value, f.multiline) {
-			writeErrorReason(w, http.StatusBadRequest, reasonRunFieldControlChar, fmt.Sprintf(runFieldControlCharRefusal, f.name))
-			return false
-		}
-	}
-	return true
+	return !s.runTextFieldsRefusal(req).write(s, w, nil)
 }
 
 // runFieldCharsAllowed is controlCharFree (permissions.go — C0, DEL and the C1
@@ -157,4 +140,23 @@ func (s *Server) appendDevcontainerNoBuilderWarning(warnings []string, req creat
 		return append(warnings, devcontainerNoBuilderWarning)
 	}
 	return warnings
+}
+
+func (s *Server) runTextFieldsRefusal(req createRunRequest) *runRefusal {
+	for _, f := range []runTextField{
+		{name: "title", value: req.Title, max: maxRunTitleLen},
+		{name: "description", value: req.Description, max: maxRunDescriptionLen, multiline: true},
+		{name: "repo", value: req.Repo, max: maxRunRepoLen},
+		{name: "devcontainer_repo", value: req.DevcontainerRepo, max: maxRunRepoLen},
+		{name: "task", value: req.Task, max: maxRunTaskLen, multiline: true},
+		{name: "agent", value: req.Agent, max: maxRunAgentLen},
+	} {
+		if n := utf8.RuneCountInString(f.value); n > f.max {
+			return runError(http.StatusBadRequest, reasonRunFieldTooLong, fmt.Sprintf(runFieldTooLongRefusal, f.name, n, f.max))
+		}
+		if !runFieldCharsAllowed(f.value, f.multiline) {
+			return runError(http.StatusBadRequest, reasonRunFieldControlChar, fmt.Sprintf(runFieldControlCharRefusal, f.name))
+		}
+	}
+	return nil
 }

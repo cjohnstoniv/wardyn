@@ -12,7 +12,7 @@ import type { RunPolicySpec } from "../../lib/types";
 import { useDeferredBusy } from "../../lib/use-deferred-busy";
 import { POLICY_TEMPLATE_COPY as C } from "./copy/policy-templates";
 import { Button } from "../ui/button";
-import { YamlBlock } from "./code-block";
+import { PolicyDocumentView } from "./policy-document/policy-document";
 import { SectionLabel } from "./primitives";
 import { STATES } from "./states";
 
@@ -21,8 +21,6 @@ export interface DefaultPolicyView {
   spec?: RunPolicySpec;
   /** GET /policies/default's governance_profile_name; names the mode's card. */
   profileName?: string;
-  /** Why Launch and Check again are held in this mode, when they are. */
-  problem?: string | null;
   onRetry: () => void;
 }
 
@@ -47,14 +45,11 @@ export function DefaultPolicyPreview({ view }: { view: DefaultPolicyView }) {
       )}
       {view.status === "ready" && view.spec && (
         <>
-          <YamlBlock value={view.spec} />
+          {/* Read-only: this lane launches under the default as it stands. A
+              member's read arrives with some values blanked, and says so. */}
+          <PolicyDocumentView spec={view.spec} />
           <p className="text-meta text-muted-foreground">{C.DEFAULT_NOTE}</p>
         </>
-      )}
-      {view.problem && (
-        <p role="status" className="text-meta text-warning">
-          {view.problem}
-        </p>
       )}
     </div>
   );

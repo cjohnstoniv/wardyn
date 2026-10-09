@@ -267,25 +267,30 @@ func TestPreflightMirrorsThePATNarrowingRefusals(t *testing.T) {
 		{"bitbucket api, flag off", false, []types.GrantSpec{bbsAPI}, reasonGitPATAPIForgeDisabled},
 		{"gitlab api", false, []types.GrantSpec{gitlabAPI}, ""},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv, st, _ := govEscapeFixture(t, &capStore{})
-			srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"pat": []byte("v"), "key-github.com": []byte("k")}}
-			srv.cfg.DisableGitPATBroker = tc.brokerOff
-			id := uuid.New()
-			st.policies[id] = types.RunPolicy{ID: id, Name: id.String(), Spec: types.RunPolicySpec{
-				MinConfinementClass: types.CC1, EligibleGrants: tc.grants}}
-			body := `{"agent":"claude-code","task":"t","policy_id":"` + id.String() + `"}`
-			w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
-			if tc.want == "" {
-				if w.Code != http.StatusOK {
-					t.Fatalf("preflight = %d %s, want 200", w.Code, w.Body.String())
+		for _, path := range []string{"/api/v1/runs/preflight", policyPreviewPath} {
+			t.Run(tc.name+path, func(t *testing.T) {
+				srv, st, _ := govEscapeFixture(t, &capStore{})
+				srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"pat": []byte("v"), "key-github.com": []byte("k")}}
+				srv.cfg.DisableGitPATBroker = tc.brokerOff
+				id := uuid.New()
+				st.policies[id] = types.RunPolicy{ID: id, Name: id.String(), Spec: types.RunPolicySpec{
+					MinConfinementClass: types.CC1, EligibleGrants: tc.grants}}
+				body := `{"agent":"claude-code","task":"t","policy_id":"` + id.String() + `"}`
+				if path == policyPreviewPath {
+					forbidPreviewSideEffects(t, srv)
 				}
-				return
-			}
-			if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `"reason":"`+tc.want+`"`) {
-				t.Fatalf("preflight = %d %s, want 422 with reason %s", w.Code, w.Body.String(), tc.want)
-			}
-		})
+				w := do(t, srv, http.MethodPost, path, adminToken, body)
+				if tc.want == "" {
+					if w.Code != http.StatusOK {
+						t.Fatalf("%s = %d %s, want 200", path, w.Code, w.Body.String())
+					}
+					return
+				}
+				if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `"reason":"`+tc.want+`"`) {
+					t.Fatalf("%s = %d %s, want 422 with reason %s", path, w.Code, w.Body.String(), tc.want)
+				}
+			})
+		}
 	}
 }
 

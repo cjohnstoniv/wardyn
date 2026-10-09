@@ -252,7 +252,7 @@ func (s *Server) resolveUserDrive(ctx context.Context, profileMaxDriveMiB int) (
 // driveWithUnusableGroups is step 3: the caller's group identity cannot be
 // evaluated, so resolve on their user subjects and type alone and let
 // selectByTier's one stale rule decide whether that answer is trustworthy
-// (target runs.drive, matching denyUserDrive, the other refusal this seam
+// (target runs.drive, matching userDriveDoorRefusal, the other refusal this seam
 // writes). The drive preview enters here too.
 func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string, userType string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
 	type pick struct {

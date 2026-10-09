@@ -175,7 +175,7 @@ describe("buildSpec — the run mode decides what ships", () => {
       ...initialWizardState(),
       runType: "command",
       mode: "interactive",
-      task: "make test",
+      command: "make test",
     });
     expect(run.interactive).toBe(false);
     expect(run.task_mode).toBe("exec");
@@ -238,7 +238,7 @@ describe("buildSpec — the boot-seed opt-in and tool-approval posture", () => {
       ...initialWizardState(),
       mode: "interactive",
       interactiveStart: "shell",
-      task: "npm ci && npm run dev",
+      startupCommand: "npm ci && npm run dev",
       seedAutoTools: true,
     });
     expect(run.seed_auto_tools).toBeUndefined();
@@ -294,7 +294,7 @@ describe("buildSpec — the boot-seed opt-in and tool-approval posture", () => {
       ...initialWizardState(),
       runType: "command",
       mode: "batch",
-      task: "make test",
+      command: "make test",
       toolApprovals: "hold",
     });
     expect(run.tool_approvals).toBeUndefined();
@@ -481,7 +481,9 @@ describe("runPrefill: the clone carries both sources, and says what it cannot", 
     expect(state.title).toBe("Migration 0062");
     expect(state.description).toBe("ticket 4412");
     expect(state.agent).toBe("codex-cli");
-    expect(state.task).toBe("rerun the migration");
+    // The row holds one text; task_mode says it was typed as a Command (#1922).
+    expect(state.command).toBe("rerun the migration");
+    expect(state.task).toBe("");
     expect(state.confinementClass).toBe("CC3"); // NOT the "CC1" default above
     expect(state.mode).toBe("interactive");
     expect(state.selectedPolicyId).toBe("pol-7");

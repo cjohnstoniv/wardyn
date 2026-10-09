@@ -17,6 +17,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -105,6 +106,8 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 	attributed.Attribution = &policyref.Ref{Source: policyref.SourceProfile, Name: "Team A"}
 	adoCaps := base
 	adoCaps.Policy.AzureDevOpsCapabilities = []adoscope.Capability{adoscope.CapCodeRead}
+	ghCaps := base
+	ghCaps.Policy.GitHubCapabilities = []ghscope.Capability{ghscope.CapCodeRead}
 
 	for _, tc := range []struct {
 		name string
@@ -122,6 +125,7 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 		// before wardynd (docs/UI-SANDBOXES.md, upgrade note).
 		{"a governed run's attribution", attributed, "attribution"},
 		{"azure devops capabilities chosen by the policy", adoCaps, "policy.azure_devops_capabilities"},
+		{"github capabilities chosen by the policy", ghCaps, "policy.github_capabilities"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw, err := runner.BuildProxyConfig(uuid.New(), tc.pc, runner.ProxyListenPort)

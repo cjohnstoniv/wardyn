@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 )
@@ -38,16 +39,16 @@ func validateMetricsListenConfig(metricsListen, listen, internalListen, sshListe
 	return nil
 }
 
-// startMetricsListener serves handler (api.Server.MetricsListenerHandler) on
-// its own plain-HTTP server in its own goroutine, the way
-// startUISandboxGateway serves the UI gateway. A no-op when addr is empty:
-// with WARDYN_METRICS_LISTEN unset nothing listens. Plain HTTP on purpose: the
-// scraper it exists for sends no credential and the body carries none, and
-// who can reach the port is the deployment's NetworkPolicy. A bind failure is
-// logged, not fatal, like the UI gateway's. Shutdown rides rootCtx.
-func startMetricsListener(rootCtx context.Context, addr string, handler http.Handler) {
+// Bind before starting background work so a configured scraper cannot silently
+// lose its listener. Plain HTTP is deliberate: the scraper sends no credential,
+// and reachability is the deployment's NetworkPolicy. Empty remains off.
+func startMetricsListener(rootCtx context.Context, addr string, handler http.Handler) error {
 	if addr == "" {
-		return
+		return nil
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("metrics listener %q: %w", addr, err)
 	}
 	httpSrv := &http.Server{
 		Addr:              addr,
@@ -66,8 +67,9 @@ func startMetricsListener(rootCtx context.Context, addr string, handler http.Han
 	})
 	go goSafe("metrics.listener.serve", func() {
 		slog.Info("wardynd: metrics listener serving GET /metrics without a credential", slog.String("listen", addr))
-		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("wardynd: metrics listener stopped", slog.Any("err", err))
 		}
 	})
+	return nil
 }

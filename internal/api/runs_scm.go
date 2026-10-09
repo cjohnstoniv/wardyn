@@ -374,6 +374,11 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 		// rule — an injection rule is a host/header/format binding and has no
 		// business carrying identity.
 		Snapshot json.RawMessage `json:"snapshot"`
+		// Shared is DECLARED for the same reason and read the same way: from
+		// the grant, by apiKeyScopeShared, never carried onto the rule. Only
+		// the component gate authors it (an org component's operator-provided
+		// secret); validateEligibleGrantMode refuses it in any authored policy.
+		Shared bool `json:"shared"`
 		// PinPath/PinQuery narrow WHICH requests to Host may carry the
 		// credential. Unlike Snapshot they ARE the rule's business — they
 		// describe the request, not the identity — so they are carried through
@@ -409,6 +414,32 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 		Host: sc.Host, Header: sc.Header, SecretName: sc.SecretName, Format: sc.Format,
 		RequireTLS: sc.RequireTLS, PinPath: sc.PinPath, PinQuery: sc.PinQuery, PinRoutes: sc.PinRoutes,
 	}, nil
+}
+
+// apiKeyScopeShared reports whether an api_key grant scope sets `shared`: the
+// one reader of a field injectionRuleFromScope accepts and throws away. A
+// lenient one-field decode, so it answers for any scope shape; an undecodable
+// scope is not shared (the strict decode refuses it on its own).
+func apiKeyScopeShared(scope json.RawMessage) bool {
+	var sc struct {
+		Shared bool `json:"shared"`
+	}
+	return json.Unmarshal(scope, &sc) == nil && sc.Shared
+}
+
+// injectionGrantRead is the namespace the injection sink reads an api_key
+// grant's stored secret from, and whether that read is own-row-only
+// (secretstore.GrantRead). A `shared` grant — an org component's provided
+// secret — reads the OPERATOR's row and only it, whoever owns the run and
+// whatever they hold under the same name; every other grant is
+// grantReadOwner's rule, unchanged. It reads the scope and nothing else, so a
+// shared grant still takes the sink's one value read and the tail after it
+// (format, mask registration, audit, expiry) like every other grant.
+func injectionGrantRead(scope json.RawMessage, subject string, ownerOnly, operatorOwned bool) (owner string, ownRowOnly bool) {
+	if apiKeyScopeShared(scope) {
+		return "", true
+	}
+	return grantReadOwner(subject, ownerOnly, operatorOwned), ownerOnly
 }
 
 // githubScopeRepos decodes a github_token grant scope {"repos":[...]} and returns
@@ -490,6 +521,53 @@ func envSecretScopeFields(scope json.RawMessage) (name, secretName string, err e
 		return "", "", fmt.Errorf("env_secret secret_name %q is not a valid secret name", sc.SecretName)
 	}
 	return sc.Name, sc.SecretName, nil
+}
+
+// fileSecretScopeFields decodes a file_secret grant scope {file, secret_name}.
+// Both are REQUIRED (fail closed). file is the NAME the stored secret_name's
+// value is delivered under at dispatch, in runner.ComponentSecretDir
+// (resolveFileSecretGrants) — a name, never a path, so the grammar has no
+// separator and cannot start with a dot: no traversal, no hidden file, no
+// "." or "..". Strict, unlike envSecretScopeFields: the kind is new, nothing
+// shipped carries another key, and a "path" or "mode" an author expected to
+// be honoured must be refused rather than silently ignored.
+func fileSecretScopeFields(scope json.RawMessage) (file, secretName string, err error) {
+	var sc struct {
+		File       string `json:"file"`
+		SecretName string `json:"secret_name"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(scope))
+	dec.DisallowUnknownFields()
+	if err = dec.Decode(&sc); err != nil {
+		return "", "", err
+	}
+	if sc.File == "" || sc.SecretName == "" {
+		return "", "", errors.New("file_secret scope requires file and secret_name")
+	}
+	if !validFileSecretName(sc.File) {
+		return "", "", fmt.Errorf("file_secret file %q must match [a-z0-9][a-z0-9_.-]{0,62}: a file name, not a path", sc.File)
+	}
+	if !secretNameRE.MatchString(sc.SecretName) {
+		return "", "", fmt.Errorf("file_secret secret_name %q is not a valid secret name", sc.SecretName)
+	}
+	return sc.File, sc.SecretName, nil
+}
+
+// validFileSecretName is the file token grammar, [a-z0-9][a-z0-9_.-]{0,62},
+// hand-rolled for the reason validEnvVarName is.
+func validFileSecretName(s string) bool {
+	if s == "" || len(s) > 63 {
+		return false
+	}
+	for i, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case i > 0 && (c == '_' || c == '.' || c == '-'):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // validEnvVarName reports whether s is a POSIX-portable, upper-case environment

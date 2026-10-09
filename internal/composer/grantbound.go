@@ -26,7 +26,7 @@ import (
 // it onto a DIFFERENT header/format, or DROPPING require_tls onto a cleartext transport the operator
 // refused. Each is exact-match, so a dropped declaration matches nothing.
 type grantPairing struct {
-	host          string // the destination host; for env_secret, the env var NAME
+	host          string // the destination host; for env_secret, the env var NAME; for file_secret, the file name
 	secretRef     string
 	knownHostsRef string // ssh_key only; empty for every other kind
 
@@ -56,7 +56,8 @@ func apiKeyFormat(f string) string {
 // GrantPairing returns the pairing a grant names and whether its kind names a stored secret at all.
 // covered=false is honest for github_token/cloud_sts, which name no stored secret. ok=false means the
 // scope didn't decode into a usable pairing — deliberately not an error return, since fail-closed here
-// means an unreadable scope never MATCHES anything. env_secret puts the env var NAME in the host slot.
+// means an unreadable scope never MATCHES anything. env_secret puts the env var NAME in the host slot,
+// file_secret the file name.
 func GrantPairing(g types.GrantSpec) (host, secretRef, knownHostsRef string, covered, ok bool) {
 	p, covered, ok := grantPairingOf(g)
 	return p.host, p.secretRef, p.knownHostsRef, covered, ok
@@ -68,6 +69,7 @@ func grantPairingOf(g types.GrantSpec) (p grantPairing, covered, ok bool) {
 	var sc struct {
 		Host                string `json:"host"`
 		Name                string `json:"name"`
+		File                string `json:"file"`
 		SecretName          string `json:"secret_name"`
 		KeySecretRef        string `json:"key_secret_ref"`
 		KnownHostsSecretRef string `json:"known_hosts_secret_ref"`
@@ -101,6 +103,11 @@ func grantPairingOf(g types.GrantSpec) (p grantPairing, covered, ok bool) {
 			return grantPairing{}, true, false
 		}
 		return grantPairing{host: sc.Name, secretRef: sc.SecretName}, true, true
+	case types.GrantFileSecret:
+		if json.Unmarshal(g.Scope, &sc) != nil || sc.File == "" || sc.SecretName == "" {
+			return grantPairing{}, true, false
+		}
+		return grantPairing{host: sc.File, secretRef: sc.SecretName}, true, true
 	default:
 		// github_token, cloud_sts, and any kind added later: covered=false means "matched on kind alone",
 		// so a new stored-secret kind stays bounded by its kind's ceiling entry until added above — never

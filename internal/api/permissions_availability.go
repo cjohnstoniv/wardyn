@@ -8,15 +8,15 @@
 package api
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -103,6 +103,20 @@ func (s *Server) handleGetAvailability(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, v)
 }
 
+// writeAvailability writes one value's restriction bit. Lifting a component's is the one case with
+// its own seam, which refuses (ErrNotFound) an id that is no org component, so a deleted component's
+// id stays closed; every other write is the generic one.
+func (s *Server) writeAvailability(r *http.Request, kind, value string, restricted bool) error {
+	if lifter, ok := s.cfg.Store.(store.ComponentRestrictionLifter); ok && kind == capComponent && !restricted {
+		id, err := uuid.Parse(value)
+		if err != nil {
+			return err
+		}
+		return lifter.LiftComponentRestriction(r.Context(), id, principalFromRequest(r))
+	}
+	return s.cfg.Store.SetCapabilityRestriction(r.Context(), kind, value, restricted, principalFromRequest(r))
+}
+
 // handlePutAvailability turns one value's restriction on or off. securityOps:
 // availability is a grant fact, even when the console draws the control inside
 // an admin-only editor. Turning it on with nobody listed is refused (400).
@@ -144,7 +158,11 @@ func (s *Server) handlePutAvailability(w http.ResponseWriter, r *http.Request) {
 	// excepted): the bit was read outside any transaction, so the only effect the write could have is
 	// to undo a restriction approved in between.
 	if *req.Restricted != v.Restricted || !envEnabled(envGovernanceSecondHuman) || isAdminTokenCaller(r) {
-		if err := s.cfg.Store.SetCapabilityRestriction(r.Context(), kind, value, *req.Restricted, principalFromRequest(r)); err != nil {
+		err := s.writeAvailability(r, kind, value, *req.Restricted)
+		if notFoundIf(w, err, "component", reasonComponentNotFound) {
+			return
+		}
+		if err != nil {
 			writeServerError(w, r, "write capability availability", err)
 			return
 		}
@@ -172,19 +190,4 @@ type errUngrantedWorkspaceRepo struct {
 
 func (e *errUngrantedWorkspaceRepo) Error() string {
 	return fmt.Sprintf("workspace %s (repo %q) is not granted to you", e.wsID, e.repo)
-}
-
-// refuseOrErrorCapabilityResolution answers boundUserSpec's (inline_policy.go)
-// narrowUserInlinePolicy error: an ungranted workspace_repos entry (#1259,
-// errUngrantedWorkspaceRepo) refuses with the same named 403 req.workspace_id
-// already gives; anything else is a genuine store failure and 500s exactly as
-// before. Always writes a response — the caller only needs to stop.
-func (s *Server) refuseOrErrorCapabilityResolution(w http.ResponseWriter, r *http.Request, cerr error) {
-	var refused *errUngrantedWorkspaceRepo
-	if errors.As(cerr, &refused) {
-		s.refuse(w, r, authz.Deny(authz.ReasonCapabilityWorkspace, "runs.workspace",
-			"you are not granted workspace "+refused.wsID+" — ask an admin for access, or launch without a workspace"))
-		return
-	}
-	writeServerError(w, r, "resolve capability", cerr)
 }

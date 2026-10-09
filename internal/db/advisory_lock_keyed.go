@@ -46,6 +46,11 @@ const PushPathListLockClass int32 = 0x57505054 // ASCII "WPPT"
 // sits outside LockOrder.
 const RunOutputLockClass int32 = 0x57524F55 // ASCII "WROU"
 
+// RecordingLockClass serializes recording fence checks and commits against
+// erasure, keyed to the run's hashtext. A hash collision only serializes two
+// runs; the durable tombstone always names the complete run identity.
+const RecordingLockClass int32 = 0x57524344 // ASCII "WRCD"
+
 // RunCapLockClass is the classid of the TRANSACTION-scoped two-argument lock
 // store.PG.CreateRunUnderCap takes (second key 0): one capped run insert at a
 // time across replicas, so the count it checks is the cap it enforces.

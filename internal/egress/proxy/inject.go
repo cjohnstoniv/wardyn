@@ -132,7 +132,8 @@ func transientResolveFailure(err error) bool {
 
 // buildInjector mints each injection rule's secret once and formats its header. SECURITY: a rule
 // whose host fails the exact allowlist is rejected — injection must never widen egress or leak a
-// secret to a wildcard/approved host. Any mint failure fails the whole startup closed.
+// secret to a wildcard/approved host — and so is a second rule for a host that already has one.
+// Any mint failure fails the whole startup closed.
 func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Policy, rules []InjectionConfig, client *http.Client) (*injector, error) {
 	inj := &injector{
 		byHost: make(map[string]*injEntry), base: base, token: token, client: client,
@@ -149,6 +150,11 @@ func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Po
 		}
 		if r.GrantID == uuid.Nil {
 			return nil, fmt.Errorf("injection rule for %q missing grant_id", host)
+		}
+		// One rule per host, refused before the second one is resolved: the map is keyed by host, so
+		// a second rule would replace the first and its credential would ride the first's traffic.
+		if _, dup := inj.byHost[host]; dup {
+			return nil, fmt.Errorf("injection rule host %q has more than one rule; a host carries one credential", host)
 		}
 		// No hold at boot: this runs under the proxy's 30s startupCtx, seconds after dispatch refreshed the
 		// credential synchronously, so a 423 here just fails closed like any other error.

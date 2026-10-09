@@ -209,21 +209,11 @@ func (s *Server) writeProviderRefusalAs(w http.ResponseWriter, r *http.Request, 
 //   - any other refusal: the 422 naming the provider the refusal is about;
 //   - none of those: a chosen provider whose liveness check d refused.
 func (s *Server) writeProviderChoiceRefusal(w http.ResponseWriter, r *http.Request, choice runProviderChoice, d providerDenial) {
-	switch {
-	case choice.asMissing:
-		s.writeProviderRefusalAs(w, r, authz.Deny(authz.ReasonCapabilityModelProvider, "runs.model_provider", choice.refusal),
-			choice.providerID, "", choice.refusal, false)
-	case choice.notGranted:
-		den := authz.Deny(authz.ReasonCapabilityModelProvider, "runs.model_provider", choice.refusal)
-		if choice.providerID != "" {
-			den = den.With("provider", choice.providerID)
-		}
-		s.refuse(w, r, den)
-	case choice.refusal != "":
-		s.writeProviderRefusal(w, r, choice.providerID, choice.kind, choice.refusal, false)
-	default:
-		s.writeProviderRefusal(w, r, choice.provider.ID, choice.provider.Kind, d.msg, d.credential)
+	if choice.asMissing || choice.notGranted || choice.refusal != "" {
+		providerChoiceRunRefusal(choice).write(s, w, r)
+		return
 	}
+	s.writeProviderRefusal(w, r, choice.provider.ID, choice.provider.Kind, d.msg, d.credential)
 }
 
 // enforceRunModelProvider is the model-provider choice at BOTH doors, create
@@ -257,57 +247,11 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 	spec types.RunPolicySpec, wsRefs []types.Workspace, renew bool,
 ) (runProviderChoice, bool) {
 	ctx := r.Context()
-	if req.ModelProvider != "" && !modelProviderIDPattern.MatchString(req.ModelProvider) {
-		writeErrorReason(w, http.StatusBadRequest, reasonModelProviderIDInvalid, fmt.Sprintf(mpRunBadID, req.ModelProvider))
+	choice, refusal := s.authorizeRunModelProvider(r, req, wsRefs, false)
+	if refusal.write(s, w, r) {
 		return runProviderChoice{}, false
 	}
-	// createDoorIsModelRun (runs_dispatch_llm_mechanism.go) is the one
-	// predicate for which create requests are model runs (#767 step 2), so no
-	// two doors ask a different question of the same request.
-	_, needsModel := agentLLMProvider(req.Agent)
-	if !needsModel || !createDoorIsModelRun(req) {
-		if req.ModelProvider != "" {
-			writeErrorReason(w, http.StatusBadRequest, reasonModelProviderNotApplicable, mpRunNoModel)
-			return runProviderChoice{}, false
-		}
-		return runProviderChoice{}, true
-	}
-	var sc types.SiteConfig
-	if s.cfg.Store != nil {
-		var err error
-		if sc, err = s.cfg.Store.GetSiteConfig(ctx); err != nil {
-			// The same refusal dispatch makes on the identical read
-			// (resolveProviderLane's mpRunUnreadable, runs_dispatch_provider.go):
-			// both doors refuse an unreadable provider block (#532) rather than
-			// have one 500 with driver text while the other names the cause.
-			slog.ErrorContext(ctx, "api: get site config for model-provider choice", slog.Any("err", err))
-			// Deliberately bare (#656 slice 3): the sentence alone, matching
-			// resolveProviderLane's identical arm — a transient store failure
-			// is no door, and TestProviderJoin_DoorsEveryKind pins both
-			// "provider-unreadable" and "block-unreadable" reason-less.
-			writeError(w, http.StatusServiceUnavailable, mpRunUnreadable)
-			return runProviderChoice{}, false
-		}
-	}
-	if sc.ModelProviders == nil && req.ModelProvider != "" {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonModelProviderNoBlockConfigured, fmt.Sprintf(mpRunNoBlock, req.ModelProvider))
-		return runProviderChoice{}, false
-	}
-	var pin string
-	if len(wsRefs) > 0 && wsRefs[0].LLMCred != nil {
-		pin = wsRefs[0].LLMCred.ProviderRef
-	}
-	choice, err := chooseModelProvider(sc, req.Agent, req.ModelProvider, pin, func(id string) (bool, error) {
-		return s.capSeamAllowed(ctx, capModelProvider, id)
-	})
-	switch {
-	case err != nil:
-		writeServerError(w, r, "resolve capability", err)
-		return runProviderChoice{}, false
-	case choice.asMissing, choice.notGranted, choice.refusal != "":
-		s.writeProviderChoiceRefusal(w, r, choice, providerDenial{})
-		return runProviderChoice{}, false
-	case choice.chosen:
+	if choice.chosen {
 		// Liveness, the check dispatch repeats: the caller's OWN credential for
 		// the provider, never anyone else's (runIdentitySubject is the namespace
 		// dispatch reads for this run). Only create renews, and only a Bedrock
@@ -338,6 +282,10 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		}
 		// A dry check passes an expired AWS session only when it is renewable.
 		choice.renewAtLaunch = !refresh && choice.provider.Kind == types.ModelProviderBedrockSSO && blob.expired(s.cfg.Now())
+	}
+	_, needsModel := agentLLMProvider(req.Agent)
+	if !needsModel || !createDoorIsModelRun(req) {
+		return choice, true
 	}
 	if name, secretName, found := modelEnvSecretGrant(spec); found {
 		s.writeProviderRefusal(w, r, choice.provider.ID, choice.provider.Kind, fmt.Sprintf(mpRunModelEnvSecret, secretName, name), false)

@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { test, expect, gotoConsole, navTo, sql } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, sql } from "./fixtures";
 import { RUN_COCKPIT, UI_APPS_LANE } from "../src/app/components/wardyn/copy";
 import { MODEL_ACCESS_BANNER, MODEL_ACCESS_RUN_DOOR } from "../src/app/components/wardyn/model-access-copy";
 import { AGENTS } from "../src/app/lib/workspace-providers-copy";
@@ -123,7 +123,7 @@ test.describe("Run cockpit — the failure block sizes to its content, not to ha
 // produce a failed kill row or a minted credential.
 test.describe("Run cockpit — a long kill outcome scrolls instead of clipping", () => {
   test("a partial kill with credential lines keeps Open audit trail reachable", async ({ page }) => {
-    const auth = { Authorization: "Bearer wardyn-e2e-token" };
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
     const list = (await (await page.request.get("api/v1/runs?limit=1000", { headers: auth })).json()) as { id: string; task: string }[];
     const id = list.find((r) => r.task === "e2e fixture 7")!.id;
     const at = new Date().toISOString();
