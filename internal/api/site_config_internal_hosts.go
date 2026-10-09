@@ -26,6 +26,9 @@ func validateInternalHosts(hosts []types.InternalHost) error {
 		if !validSiteHost(h.HostSuffix) {
 			return fmt.Errorf("internal_hosts[%d].host_suffix: invalid host %q", i, h.HostSuffix)
 		}
+		if _, err := netip.ParseAddr(strings.ToLower(strings.TrimSpace(h.HostSuffix))); h.Baseline && err == nil {
+			return fmt.Errorf("internal_hosts[%d].baseline: %q is an IP address; baseline names a hostname", i, h.HostSuffix)
+		}
 		for j, c := range h.CIDRs {
 			prefix, err := netip.ParsePrefix(c)
 			liftable := err == nil && slices.ContainsFunc(ipguard.Liftable, func(l netip.Prefix) bool {
@@ -91,4 +94,27 @@ func auditInternalHostSuffixes(hosts []types.InternalHost) []string {
 	}
 	slices.Sort(suffixes)
 	return suffixes
+}
+
+// auditBaselineInternalHosts is the suffixes marked baseline, sorted: they LOWER the egress grade,
+// so a change must be reviewable from the row.
+func auditBaselineInternalHosts(hosts []types.InternalHost) []string {
+	suffixes := []string{}
+	for _, h := range hosts {
+		if h.Baseline {
+			suffixes = append(suffixes, h.HostSuffix)
+		}
+	}
+	slices.Sort(suffixes)
+	return suffixes
+}
+
+// proxyInternalHosts is the declaration as the sidecar reads it: the lift only. Baseline is a grading
+// fact the proxy never reads, and a sidecar image older than wardynd refuses a key it does not know.
+func proxyInternalHosts(hosts []types.InternalHost) []types.InternalHost {
+	out := slices.Clone(hosts)
+	for i := range out {
+		out[i].Baseline = false
+	}
+	return out
 }

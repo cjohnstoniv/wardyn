@@ -214,7 +214,10 @@ var docTierRows = []struct{ route, token string }{
 // rowed in docs/OPERATIONS.md and listed in docTierRows above. It stays
 // declared, empty, as the ratchet's landing spot for the next gap a
 // completeness failure surfaces.
-var docTierUndocumented = map[string]string{}
+var docTierUndocumented = map[string]string{
+	"GET /api/v1/governance/egress-baseline": "0.9 B-P1: the tier-table row and the Egress baseline section are the docs pass's (the OPERATIONS.md prose budget is its to move)",
+	"PUT /api/v1/governance/egress-baseline": "0.9 B-P1: as the GET above",
+}
 
 // TestOperationsTierTableMatchesRouteMatrix pins docs/OPERATIONS.md's "What
 // admin-only still means" table — the section the doc's own intro sends a

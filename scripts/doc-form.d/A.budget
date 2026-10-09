@@ -1,3 +1,4 @@
 # Prose must not grow beyond the base count (38796 at a084eb2b5) plus cell-expansion headings and summaries: 19 headings (19 words) and 19 summary cells (485 words, emit-site citations included); the rest of the page is 38793 (itemised in lane-reports/docs/A-worker.md).
 # docs/AUDIT-ACTIONS.md 39609 adds 312 over 39297 (per row, from the diff): 24 (the grammar exceptions: the four Azure DevOps token rows), 0 ("Ten" becomes "Nineteen"), 32 (`run.create` names `components` and `self_added_reach`), 41 (`run.artifact.redirect` on the Azure DevOps lane), 53 (`run.policy.resolve`), 30 (`credential.mint`) and 29 (`run.injection.drop`): what a run-scoped read leaves out of a shared component grant, 24 (`run.egress.add` kind `component`), 2 (`session.takeover` fields), 34 (`secret.read` for a shared grant), 21 (`approval.decide` fields), 22 (`capability.availability.write` for components).
-docs/AUDIT-ACTIONS.md=39609 share=8
+# docs/AUDIT-ACTIONS.md 39696 adds 87 over 39609 for the egress baseline: the `governance.egress_baseline.write` row and `internal_hosts_baseline` on `site_config.write`.
+docs/AUDIT-ACTIONS.md=39696 share=8

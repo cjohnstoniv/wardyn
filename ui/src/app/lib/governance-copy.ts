@@ -315,6 +315,7 @@ export const CHANGES = {
     user_type_priority: "User type priority",
     role_mapping: "Role mapping",
     key_domain_assignment: "Key domain assignment",
+    egress_baseline: "Egress baseline",
   } as Record<string, string>,
   // By op. An op this console predates shows its raw name.
   OP: {

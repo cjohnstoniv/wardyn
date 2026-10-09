@@ -554,7 +554,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// Operator-declared internal hostnames eligible for the proxy's
 			// private-IP-guard lift (site-config, read once above as siteCfg;
 			// nil on a GetSiteConfig error — fail safe, no lift).
-			InternalHosts:        siteCfg.InternalHosts,
+			InternalHosts:        proxyInternalHosts(siteCfg.InternalHosts),
 			UpstreamProxyNoProxy: siteCfg.UpstreamProxyNoProxy,
 			// Where this run's brokered LLM routes dial: the boot gateway(s) on the
 			// legacy path, the chosen model provider's own address on the provider

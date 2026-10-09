@@ -246,7 +246,7 @@ func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Requ
 // It writes no HTTP so preflight can share it: the returned error's text IS the
 // 422 body both callers send (the wizard test hardcodes that string), and
 // preflight deliberately skips the caller-side gates that follow it.
-func enforcedConfinement(spec types.RunPolicySpec, reqCC types.ConfinementClass, advertised []types.ConfinementClass) (types.ConfinementClass, error) {
+func enforcedConfinement(spec types.RunPolicySpec, reqCC types.ConfinementClass, advertised []types.ConfinementClass, baseline composer.Baseline) (types.ConfinementClass, error) {
 	// Assigned in BOTH branches below — declared without a value so the dead
 	// store staticcheck flags (SA4006) cannot come back: the floor is no longer
 	// the default, it is only the lower bound the default is chosen at or above.
@@ -260,7 +260,7 @@ func enforcedConfinement(spec types.RunPolicySpec, reqCC types.ConfinementClass,
 	} else {
 		enforced = strongestAdvertisedAtOrAbove(advertised, spec.MinConfinementClass)
 	}
-	if composer.RequiredConfinementFloor(spec) == types.CC3 && !confinementGE(enforced, types.CC3) {
+	if composer.RequiredConfinementFloor(spec, baseline) == types.CC3 && !confinementGE(enforced, types.CC3) {
 		enforced = types.CC3
 	}
 	return enforced, nil
@@ -330,7 +330,7 @@ func appendCredentialConfinementAdvisory(warnings []string, spec types.RunPolicy
 // CC2, so a rank check would pass a CC2 demand and fail later with a raw docker
 // error). Writes the HTTP error itself and returns ok=false on any refusal.
 // Extracted verbatim from handleCreateRun.
-func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.ResponseWriter, spec types.RunPolicySpec, reqCC types.ConfinementClass) (types.ConfinementClass, bool) {
+func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.ResponseWriter, spec types.RunPolicySpec, reqCC types.ConfinementClass, baseline composer.Baseline) (types.ConfinementClass, bool) {
 	// Capabilities are read BEFORE the pure math now, not after: the default
 	// branch needs the advertised set to pick the strongest class rather than
 	// just the policy minimum. Still one read, still fail-closed on a Capabilities
@@ -345,7 +345,7 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 		}
 	}
 
-	enforced, err := enforcedConfinement(spec, reqCC, caps.ConfinementClasses)
+	enforced, err := enforcedConfinement(spec, reqCC, caps.ConfinementClasses, baseline)
 	if err != nil {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return "", false

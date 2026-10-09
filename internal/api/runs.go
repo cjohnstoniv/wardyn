@@ -229,7 +229,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Resolve + gate the confinement class (request vs policy floor, the CC3
 	// blast-radius floor now computed on the FOLDED spec, runner capability
 	// membership, cloud_sts grant gating) — invariant 5, fail closed.
-	enforced, ok := s.resolveEnforcedConfinement(ctx, w, confinementFloorSpec(spec, comps), reqCC)
+	baseline, ok := s.baselineOr500(w, r)
+	if !ok {
+		return
+	}
+	enforced, ok := s.resolveEnforcedConfinement(ctx, w, confinementFloorSpec(spec, comps), reqCC, baseline)
 	if !ok {
 		return
 	}

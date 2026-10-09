@@ -36,6 +36,7 @@ injection.pin_routes.path
 injection.require_tls
 injection.secret_name
 internal_hosts
+internal_hosts.baseline
 internal_hosts.cidrs
 internal_hosts.host_suffix
 listen

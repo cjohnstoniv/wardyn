@@ -325,7 +325,11 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// minimum, matching this handler's "advisory only, never blocks Review"
 	// contract; the runner-capability REFUSAL stays un-reproduced (doc comment
 	// above), reported by the checklist's backend row instead.
-	enforced, err := enforcedConfinement(confinementFloorSpec(spec, comps), reqCC, s.advertisedConfinement(ctx))
+	baseline, ok := s.baselineOr500(w, r)
+	if !ok {
+		return
+	}
+	enforced, err := enforcedConfinement(confinementFloorSpec(spec, comps), reqCC, s.advertisedConfinement(ctx), baseline)
 	if err != nil {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return
@@ -400,14 +404,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// The RunInput deriveSetupItems keys off — the scalar create-run fields, with
 	// the ENFORCED class so the backend row probes the class this run will really
 	// run at (post-floor/raise), matching launch.
-	runInput := composer.RunInput{
-		Agent:            req.Agent,
-		Repo:             req.Repo,
-		Task:             req.Task,
-		ConfinementClass: string(enforced),
-		Interactive:      req.Interactive,
-		DevcontainerRepo: req.DevcontainerRepo,
-	}
+	runInput := preflightRunInput(req, enforced, baseline)
 
 	// Deterministic risk grade: the SAME composer.Grade/OverallLevel
 	// call compose.go runs for the AI Run Composer's Review, on the SAME
@@ -477,4 +474,17 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	resp.GitCredential = s.gitCredentialFactForRepos(ctx, oidcHumanFromContext(ctx), runRepos)
 	resp.Components = componentFacts(req, spec, scmSite, comps, resp.GitCredential)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// preflightRunInput is the RunInput deriveSetupItems and the risk grade key off.
+func preflightRunInput(req createRunRequest, enforced types.ConfinementClass, baseline composer.Baseline) composer.RunInput {
+	return composer.RunInput{
+		Agent:            req.Agent,
+		Repo:             req.Repo,
+		Task:             req.Task,
+		ConfinementClass: string(enforced),
+		Interactive:      req.Interactive,
+		DevcontainerRepo: req.DevcontainerRepo,
+		Baseline:         baseline,
+	}
 }

@@ -73,7 +73,11 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	if refusal.write(s, w, r) {
 		return
 	}
-	if _, err := enforcedConfinement(confinementFloorSpec(spec, comps), reqCC, nil); err != nil {
+	baseline, ok := s.baselineOr500(w, r)
+	if !ok {
+		return
+	}
+	if _, err := enforcedConfinement(confinementFloorSpec(spec, comps), reqCC, nil, baseline); err != nil {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return
 	}

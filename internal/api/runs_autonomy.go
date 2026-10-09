@@ -97,7 +97,12 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 		runIdentitySubject(r.Context(), principalFromRequest(r)))
 	grade := adoEntraGradedAs(adoRun, adoOn)
 	bedrock := bedrockCredGradedAs(modelCred)
-	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite, grade, bedrock), enforced)
+	baseline, err := s.egressBaseline(r.Context())
+	if err != nil {
+		writeServerError(w, r, "get site config", err)
+		return types.AutonomyResolution{}, nil, types.SiteConfig{}, adoEntraUngraded(), bedrockCredUngraded(), false
+	}
+	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite, grade, bedrock), enforced, baseline)
 	var level types.AutonomyLevel
 	var boundBy []string
 	if rubric {
