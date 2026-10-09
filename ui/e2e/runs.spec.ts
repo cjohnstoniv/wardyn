@@ -374,10 +374,14 @@ test.describe("#214 — no barrier: the shell banner and the top bar's route", (
   // real driver reporting at least one class.
   test("stays silent when a barrier is available", async ({ page }) => {
     await page.route("**/api/v1/setup/status*", async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
-      json.runner = { ...json.runner, driver: "docker", confinement_classes: ["CC1"] };
-      await route.fulfill({ response, json });
+      try {
+        const response = await route.fetch();
+        const json = await response.json();
+        json.runner = { ...json.runner, driver: "docker", confinement_classes: ["CC1"] };
+        await route.fulfill({ response, json });
+      } catch {
+        // The test ended while the real answer was in flight.
+      }
     });
     await gotoConsole(page);
     await expect(page.getByText(NO_BARRIER.BANNER_TITLE)).toHaveCount(0);

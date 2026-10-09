@@ -23,12 +23,8 @@
 #   runs.spec.ts | Runs page › filters by status | #1234 | @cjohnstoniv | 2026-10-07
 #
 # Entries:
-view-routing.spec.ts | view routing › an admin in the User view is asked before entering the Admin view, never redirected | #1927 | @cjohnstoniv | 2026-10-23
 governance.spec.ts | governance — the security admin's authoring walk › a fresh install: no profiles, and the empty state carries the action that fills it | #1928 | @cjohnstoniv | 2026-10-23
 cockpit-terminal-tmux-flow.spec.ts | 50 MB of output keeps the page responsive and ends on the right screen | #1933 | @cjohnstoniv | 2026-10-23
 runs-cockpit.spec.ts | a run refused for a model credential carries the sign-in, not directions to it › the failure block states the server's sentence and opens the AWS sign-in in place | #1874 | @cjohnstoniv | 2026-10-23
 cockpit-terminal-clipboard.spec.ts | the tmux bytes for a dragged selection become an offer; Copy writes the full text | #1712 | @cjohnstoniv | 2026-10-23
 branding.spec.ts | branding removal controls › Remove logo and Remove branding each confirm, act and toast | #1526 | @cjohnstoniv | 2026-10-23
-runs.spec.ts | #214 — no barrier: the shell banner and the top bar's route › stays silent when a barrier is available | #1523 | @cjohnstoniv | 2026-10-23
-member-getting-started.spec.ts | admin session at /setup and /admin/setup (unmocked — D1: the URL decides) › a plain admin cold page.goto("/admin/setup") still shows the funnel and requests /api/v1/site-config | #1469 | @cjohnstoniv | 2026-10-23
-run-lifetime.spec.ts | Run lifetime — the Ends row (real backend round trip) › a fresh run has no end; 'Set an end…' sets one, and Extend pushes it further out | #1468 | @cjohnstoniv | 2026-10-23
