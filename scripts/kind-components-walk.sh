@@ -97,7 +97,8 @@ put_secret c17-file-secret "${FILE_VALUE}"
 F="/run/wardyn/secrets/${FILE_TOKEN}"
 # shellcheck disable=SC2016 # expanded inside the sandbox
 TASK='a='"${HDR_A}"'; b='"${HDR_B}"'; v="$a$b"; f='"${F}"'
-echo "C17 uid=$(id -u) gid=$(id -g) groups=$(id -G)"
+echo "C17 uid=$(id -u)"
+echo "C17 gid=$(id -g)"
 echo "C17 filestat=$(stat -L -c "%a %u %g" "$f")"
 echo "C17 filesha=$(sha256sum < "$f" | cut -c1-64)"
 echo "C17 filecontrol=$(printf "%s\n" "$(cat "$f")" | grep -rlF -f - /run 2>/dev/null | grep -c .)"
