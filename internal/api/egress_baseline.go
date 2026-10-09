@@ -322,16 +322,47 @@ func applyEgressBaselineChange(s *Server, r *http.Request, q store.Querier, ch t
 	return govApplied{action: egressBaselineWriteName, target: govEgressBaselineKey, data: egressBaselineAuditData(before, body)}, nil
 }
 
-// refuseInlineBaseline reports whether a PUT /site-config body would change the baseline: its egress
-// block against the stored one, or its set of baseline-marked internal hosts against the stored set.
-// cfg has already had unnamed fields carried forward, so a body that is silent passes. A round trip of
-// GET passes; a change belongs to PUT /governance/egress-baseline, whose tier and four-eyes gate this
-// document's writer does not have.
-func refuseInlineBaseline(cfg, existing types.SiteConfig) bool {
-	got := egressBaselineState(cfg)
-	if cfg.Egress == nil {
-		got.BaselineHosts = egressBaselineState(existing).BaselineHosts
+// carryForwardInternalHostMarks restores the stored baseline mark on every submitted internal_hosts
+// entry whose suffix is marked, as the document carries Integrations and Egress forward: a client that
+// cannot name the key (a pre-0.9 CLI, an MDM file written before it existed) must not be refused for
+// its silence. A bool cannot tell an omitted mark from an explicit false, so neither lifts one: lifting
+// is PUT /governance/egress-baseline's, where the change is audited.
+func carryForwardInternalHostMarks(cfg *types.SiteConfig, existing types.SiteConfig) {
+	marked := baselineSet(egressBaselineState(existing).InternalHostSuffixes)
+	cfg.InternalHosts = slices.Clone(cfg.InternalHosts)
+	for i := range cfg.InternalHosts {
+		if marked[normalizeHostName(cfg.InternalHosts[i].HostSuffix)] {
+			cfg.InternalHosts[i].Baseline = true
+		}
 	}
-	want := egressBaselineState(existing)
-	return !slices.Equal(got.BaselineHosts, want.BaselineHosts) || !slices.Equal(got.InternalHostSuffixes, want.InternalHostSuffixes)
+}
+
+// inlineBaselineRefusal is why a PUT /site-config body would change the baseline, or "": its egress
+// block against the stored one, a mark it asserts on a suffix that is not marked (that lowers a grade),
+// or a marked suffix it leaves out (the mark would vanish without its governance.egress_baseline.write
+// row). cfg has already had unnamed fields and stored marks carried forward, so a silent body passes,
+// and so does a round trip of GET. A change belongs to PUT /governance/egress-baseline, whose tier and
+// four-eyes gate this document's writer does not have.
+func inlineBaselineRefusal(cfg, existing types.SiteConfig) string {
+	got, want := egressBaselineState(cfg), egressBaselineState(existing)
+	if cfg.Egress == nil {
+		got.BaselineHosts = want.BaselineHosts
+	}
+	const route = "change it with PUT /governance/egress-baseline, not PUT /site-config"
+	if !slices.Equal(got.BaselineHosts, want.BaselineHosts) {
+		return "egress.baseline_hosts is a governance write: " + route
+	}
+	if added := missingFrom(got.InternalHostSuffixes, want.InternalHostSuffixes); len(added) > 0 {
+		return "a baseline mark on internal host " + strings.Join(added, ", ") + " is a governance write: " + route
+	}
+	if removed := missingFrom(want.InternalHostSuffixes, got.InternalHostSuffixes); len(removed) > 0 {
+		return "internal host " + strings.Join(removed, ", ") + " is marked baseline: lift the mark with PUT /governance/egress-baseline first, then remove it here"
+	}
+	return ""
+}
+
+// missingFrom lists the entries of a that b lacks.
+func missingFrom(a, b []string) []string {
+	in := baselineSet(b)
+	return slices.DeleteFunc(slices.Clone(a), func(s string) bool { return in[s] })
 }

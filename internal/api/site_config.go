@@ -732,9 +732,9 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
 	// The egress baseline lowers grades, so it has a stricter writer than this door: the egress block
 	// and the set of baseline-marked internal hosts must come back as stored, whoever is asking.
-	if refuseInlineBaseline(cfg, existing) {
-		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigEgressViaOwnRoute,
-			"the egress baseline is a governance write: change egress.baseline_hosts or an internal host's baseline mark with PUT /governance/egress-baseline, not PUT /site-config")
+	carryForwardInternalHostMarks(&cfg, existing)
+	if msg := inlineBaselineRefusal(cfg, existing); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigEgressViaOwnRoute, msg)
 		return
 	}
 	cfg.Egress = existing.Egress

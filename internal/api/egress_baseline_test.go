@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -143,33 +144,42 @@ func TestPutSiteConfigNeverChangesTheEgressBaseline(t *testing.T) {
 		}
 	}
 
-	// A body silent about both, and a GET round trip, which names both unchanged, are accepted.
+	// A body silent about both, a GET round trip, and a pre-0.9 client that cannot name the mark
+	// (it decodes GET into a struct without the key, so its PUT omits it) are accepted, and the stored
+	// mark survives every one of them.
 	for _, body := range []string{`{}`,
 		`{"egress":{"baseline_hosts":["llm.corp.example"]}}`,
 		`{"egress":{"baseline_hosts":["llm.corp.example"]},"internal_hosts":[{"host_suffix":"corp.example","baseline":true},{"host_suffix":"other.example"}]}`,
 		`{"internal_hosts":[{"host_suffix":"corp.example","baseline":true},{"host_suffix":"other.example","cidrs":["10.0.0.0/8"]}]}`,
+		`{"internal_hosts":[{"host_suffix":"corp.example"},{"host_suffix":"other.example"}]}`,
+		`{"internal_hosts":[{"host_suffix":"Corp.Example","cidrs":["10.0.0.0/8"]}]}`,
 	} {
 		if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body); w.Code != http.StatusOK {
 			t.Fatalf("PUT %s = %d %s, want 200", body, w.Code, w.Body)
 		}
 		keeps("after PUT " + body)
-	}
-	// A changed or cleared block, an added, dropped or moved mark, and a removed marked entry are
-	// governance writes: refused here, even for the admin token.
-	for _, body := range []string{
-		`{"egress":{"baseline_hosts":["other.corp.example"]}}`,
-		`{"egress":{"baseline_hosts":[]}}`,
-		`{"egress":{"baseline_hosts":["*.x.example"]}}`,
-		`{"internal_hosts":[{"host_suffix":"corp.example","baseline":true},{"host_suffix":"other.example","baseline":true}]}`,
-		`{"internal_hosts":[{"host_suffix":"corp.example"},{"host_suffix":"other.example"}]}`,
-		`{"internal_hosts":[{"host_suffix":"other.example"}]}`,
-		`{"internal_hosts":[]}`,
-	} {
-		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
-		if w.Code != http.StatusBadRequest || errorReason(w) != reasonSiteConfigEgressViaOwnRoute {
-			t.Errorf("PUT %s = %d %s, want 400 %s", body, w.Code, errorReason(w), reasonSiteConfigEgressViaOwnRoute)
+		// The stored mark is on the entry itself, not only in the set: the grade reads the entry.
+		if !fake.cfg.InternalHosts[0].Baseline {
+			t.Fatalf("after PUT %s the marked entry lost its Baseline: %+v", body, fake.cfg.InternalHosts)
 		}
-		keeps("after refused PUT " + body)
+		fake.cfg = stored
+	}
+	// A changed or cleared egress block, a mark asserted on an unmarked suffix, and a marked entry
+	// left out of the body are governance writes: refused here, even for the admin token. The last
+	// names the remedy.
+	for _, tc := range []struct{ body, msg string }{
+		{`{"egress":{"baseline_hosts":["other.corp.example"]}}`, "egress.baseline_hosts"},
+		{`{"egress":{"baseline_hosts":[]}}`, "egress.baseline_hosts"},
+		{`{"egress":{"baseline_hosts":["*.x.example"]}}`, "egress.baseline_hosts"},
+		{`{"internal_hosts":[{"host_suffix":"corp.example","baseline":true},{"host_suffix":"other.example","baseline":true}]}`, "a baseline mark on internal host other.example"},
+		{`{"internal_hosts":[{"host_suffix":"other.example"}]}`, "lift the mark with PUT /governance/egress-baseline first"},
+		{`{"internal_hosts":[]}`, "lift the mark with PUT /governance/egress-baseline first"},
+	} {
+		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, tc.body)
+		if w.Code != http.StatusBadRequest || errorReason(w) != reasonSiteConfigEgressViaOwnRoute || !strings.Contains(w.Body.String(), tc.msg) {
+			t.Errorf("PUT %s = %d %s, want 400 %s naming %q", tc.body, w.Code, w.Body, reasonSiteConfigEgressViaOwnRoute, tc.msg)
+		}
+		keeps("after refused PUT " + tc.body)
 	}
 }
 
