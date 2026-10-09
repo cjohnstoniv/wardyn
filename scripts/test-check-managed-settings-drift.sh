@@ -37,12 +37,14 @@ fake_cli() {
 # document's defaultMode, or $FAKE_MODE (a CLI that ignores the file); a --permission-mode bypassPermissions run
 # reports the bypass mode when $FAKE_BYPASS is set (a CLI ignoring disableBypassPermissionsMode); a
 # --permission-mode manual run reports $FAKE_MANUAL_MODE (default: "default"). A hook run touches the marker
-# unless the file sets allowManagedHooksOnly, or always when $FAKE_HOOK_FIRES is set.
+# unless the file sets allowManagedHooksOnly, or always when $FAKE_HOOK_FIRES is set; it never touches the
+# marker when $FAKE_NO_HOOK is set (a CLI that runs no repository hook at all, control run included).
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/docker" <<'FAKE'
 #!/bin/sh
 for a in "$@"; do case "$a" in *:/etc/claude-code:ro) d="${a%%:*}" ;; *:/marker) m="${a%%:*}" ;; bypassPermissions) by=1 ;; manual) man=1 ;; esac; done
 if [ -n "${m:-}" ]; then
+    [ -z "${FAKE_NO_HOOK:-}" ] || exit 1
     if [ -z "${d:-}" ] || [ -n "${FAKE_HOOK_FIRES:-}" ] || ! grep -q '"allowManagedHooksOnly": true' "$d/managed-settings.json"; then touch "$m/fired"; fi
     exit 1
 fi
@@ -114,13 +116,20 @@ if out="$(FAKE_MANUAL_MODE=acceptEdits probe)"; then fail "a CLI where the manag
 grep -q "managed-settings.json: --permission-mode manual yields 'acceptEdits'" <<<"$out" || fail "a manual-mode override must be named; got: $out"
 echo "ok  a managed mode that beats --permission-mode manual fails"
 
-# 8c. A hook that still fires under allowManagedHooksOnly => fail naming the document.
+# 8c. A CLI whose repository hook never fires => the control run cannot fire either, and the probe must say
+# so. Without this the two rows below pass whatever the harness does: an allowManagedHooksOnly assertion
+# proven by a hook that never runs proves nothing.
+if out="$(FAKE_NO_HOOK=1 probe)"; then fail "a CLI whose repository hook never fires must FAIL the control run"; fi
+grep -q "the hook check would pass vacuously" <<<"$out" || fail "a control run that cannot fire must be named; got: $out"
+echo "ok  a control run that never fires the hook fails"
+
+# 8d. A hook that still fires under allowManagedHooksOnly => fail naming the document.
 if out="$(FAKE_HOOK_FIRES=1 probe)"; then fail "a CLI that runs a repository hook despite allowManagedHooksOnly must FAIL"; fi
 grep -q "the hook check would pass vacuously" <<<"$out" && fail "the control run (no managed file) must fire the hook; got: $out"
 grep -q "L2-locked-managed-settings.json: a repository hook still fired" <<<"$out" || fail "a fired hook must be named; got: $out"
 echo "ok  a repository hook that fires under allowManagedHooksOnly fails"
 
-# 8d. No bypass-launchable document sets allowManagedHooksOnly => fail: the hook check would prove nothing.
+# 8e. No bypass-launchable document sets allowManagedHooksOnly => fail: the hook check would prove nothing.
 cp -r "$TMP/internal/agentpolicy" "$TMP/internal/agentpolicy.bak"
 rm "$TMP/internal/agentpolicy/testdata/L2-locked-managed-settings.json"
 if out="$(probe)"; then fail "no bypass-launchable document with allowManagedHooksOnly must FAIL"; fi
