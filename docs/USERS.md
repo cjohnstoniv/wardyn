@@ -86,7 +86,7 @@ Three things worth naming here, because they read as bugs otherwise:
 - Members have owned their own workspaces since 0.6 — look for the Workspaces
   entry in the console nav.
 - A `local_dir` source must sit under a root your admin configured
-  (`WARDYN_MEMBER_WORKSPACE_ROOTS`, or a per-member map that **replaces** the
+  (`WARDYN_USER_WORKSPACE_ROOTS`, or a per-member map that **replaces** the
   shared list for you) — see [ENV.md](ENV.md).
 - Unset means you may mount no host directory; that is fail-closed by design, not
   a bug.

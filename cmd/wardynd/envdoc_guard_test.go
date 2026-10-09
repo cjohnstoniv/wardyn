@@ -429,7 +429,7 @@ func TestEnvDoc_RowsNameTheirFlag(t *testing.T) {
 // the OLD name for cross-reference (so an operator who remembers it can find
 // where it went) — unlike envDocAllow, these are not test-only and have no
 // reader anywhere, in test Go or otherwise. Keep in sync with docs/ENV.md's
-// "Renamed in 0.8" table.
+// "Renamed in 0.8" table and its "Removed in 0.9" list.
 var envDocRetired = map[string]bool{
 	// #203: folded into WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS's {app,pat} scope.
 	"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS": true,
@@ -444,6 +444,10 @@ var envDocRetired = map[string]bool{
 	"WARDYN_OPENAI_BASE_URL": true, "WARDYN_OPENAI_GATEWAY_HEADER": true, "WARDYN_OPENAI_GATEWAY_FORMAT": true,
 	"WARDYN_BEDROCK_REGION": true, "WARDYN_BEDROCK_MODEL": true, "WARDYN_BEDROCK_BASE_URL": true,
 	"WARDYN_BEDROCK_AWS_PROFILE": true, "WARDYN_BEDROCK_AWS_SSO_REGION": true, "WARDYN_BEDROCK_AWS_DIR": true,
+	// 0.9: the WARDYN_MEMBER_* aliases of the WARDYN_USER_* names, removed. docs/ENV.md's
+	// "Removed in 0.9" list names them so an operator can find where each went.
+	"WARDYN_MEMBER_MODE": true, "WARDYN_MEMBER_WORKSPACE_ROOTS": true, "WARDYN_MEMBER_WORKSPACE_ROOTS_MAP": true,
+	"WARDYN_MEMBER_WRITABLE_ROOTS": true, "WARDYN_MEMBER_WRITABLE_DENY": true, "WARDYN_ALLOW_MEMBER_ENV_SECRET": true,
 }
 
 // TestEnvDoc_ReverseEveryRowHasReader ratchets the other direction: every

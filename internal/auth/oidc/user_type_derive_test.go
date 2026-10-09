@@ -139,14 +139,14 @@ func TestUserTypeValuesNeverReachAnAdminTier(t *testing.T) {
 			t.Errorf("SplitMappingTarget(%q) = (%q, %q), want the user tier on a type", v, role, userType)
 		}
 	}
-	for _, v := range []string{writoidc.RoleAdmin, writoidc.RoleSecurityAdmin, writoidc.RoleUser, writoidc.LegacyRoleMember, "denied"} {
+	for _, v := range []string{writoidc.RoleAdmin, writoidc.RoleSecurityAdmin, writoidc.RoleUser, writoidc.RemovedRoleMember, "denied"} {
 		if !writoidc.UserTypeIDReserved(v) {
 			t.Errorf("UserTypeIDReserved(%q) = false; a type with that id could be read as a tier", v)
 		}
 	}
 	// The retired tier word and the People page's no-role word are never a
 	// type: "member" is resolved where configuration is parsed, never here.
-	for _, v := range []string{writoidc.LegacyRoleMember, "denied"} {
+	for _, v := range []string{writoidc.RemovedRoleMember, "denied"} {
 		if role, userType, ok := writoidc.SplitMappingTarget(v); ok {
 			t.Errorf("SplitMappingTarget(%q) = (%q, %q, true), want not a mapping target", v, role, userType)
 		}
