@@ -109,6 +109,7 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
         tmux \
         openssh-sftp-server \
         socat \
+        rsync \
     && rm -rf /var/lib/apt/lists/*
 
 # Corporate build support (no-ops on OSS): install the optional corp CA into the
