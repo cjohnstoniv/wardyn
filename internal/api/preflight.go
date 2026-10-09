@@ -256,6 +256,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if mpChoice.renewAtLaunch {
 		clampWarnings = append(clampWarnings, fmt.Sprintf(mpBRRenewAtLaunch, mpChoice.provider.ID))
 	}
+	// After renewAtLaunch: Review's warning order, so it stays at the door.
 	if f.adoNarrowed != "" {
 		clampWarnings = append(clampWarnings, f.adoNarrowed)
 	}

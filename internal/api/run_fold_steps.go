@@ -14,7 +14,10 @@ import (
 // returns false once it has answered. A mode test inside a step is either an
 // `if f.mode == foldX` (or !=) branch or a flag argument;
 // TestPreflightMirrorsLaunchGates refuses any other use, so every door
-// difference stays readable to it.
+// difference stays readable to it. A mode test is a top-level statement of the
+// step, never under a data condition. The check a step performs must be a
+// (*Server) method call: the guard compares those by name, so a bare function's
+// check, skipped at one door, is invisible to it.
 
 // stepPolicy resolves the run policy through the one chokepoint: inline_policy,
 // policy_id or the default, member-clamped. Its clamp and capability warnings

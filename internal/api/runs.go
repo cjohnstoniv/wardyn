@@ -175,6 +175,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// resolveRunPolicy's clamp and capability notes ride the 201 and the
 	// run.create row; a member's bounded Azure DevOps list joins them (#1384).
 	policyWarns := f.policyWarns
+	// Appended per door, not in the step: each door's warning order differs.
 	if f.adoNarrowed != "" {
 		policyWarns = append(policyWarns, f.adoNarrowed)
 	}

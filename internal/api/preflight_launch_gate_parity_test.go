@@ -149,7 +149,7 @@ var foldModeNames = map[string]foldMode{"foldCreate": foldCreate, "foldPreflight
 
 func TestPreflightMirrorsLaunchGates(t *testing.T) {
 	fset := token.NewFileSet()
-	g := &gateScan{t: t, fset: fset, steps: runFoldStepDecls(t, fset), consumed: map[*ast.SelectorExpr]bool{}}
+	g := &gateScan{t: t, fset: fset, steps: runFoldStepDecls(t, fset), consumed: map[*ast.SelectorExpr]bool{}, nested: map[token.Pos]bool{}}
 	t.Run("fold", func(t *testing.T) { checkFoldShape(t, fset, g.steps) })
 
 	create := parseHandler(t, fset, "runs.go", "handleCreateRun")
@@ -253,7 +253,7 @@ func checkFoldShape(t *testing.T, fset *token.FileSet, steps []foldStepDecl) {
 	}
 
 	fold := parseHandler(t, fset, "run_fold.go", "foldRunRequest")
-	modeUses, ranges, tableLoop := 0, 0, false
+	modeUses, ranges, returns, tableLoop := 0, 0, 0, false
 	ast.Inspect(fold.Body, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.KeyValueExpr:
@@ -270,6 +270,8 @@ func checkFoldShape(t *testing.T, fset *token.FileSet, steps []foldStepDecl) {
 			}
 		case *ast.BranchStmt:
 			t.Errorf("foldRunRequest has a %s at %s: every step whose doors include the mode must run", n.Tok, fset.Position(n.Pos()))
+		case *ast.ReturnStmt:
+			returns++
 		case *ast.RangeStmt:
 			ranges++
 			id, ok := n.X.(*ast.Ident)
@@ -280,6 +282,11 @@ func checkFoldShape(t *testing.T, fset *token.FileSet, steps []foldStepDecl) {
 	// Two: the runFold field and `step.modes&mode`.
 	if modeUses != 2 || ranges != 1 || !tableLoop {
 		t.Errorf("foldRunRequest must range over runFoldSteps once and read mode only for the field and the door test (mode uses %d, ranges %d)", modeUses, ranges)
+	}
+	// The step's refusal and the success: a data-conditional return in the loop
+	// would skip every later gate at every door.
+	if returns != 2 {
+		t.Errorf("foldRunRequest has %d returns, want exactly 2 (a step answered; every step ran)", returns)
 	}
 
 	names := []string{"foldRunRequest"}
@@ -331,6 +338,8 @@ type gateScan struct {
 	fset     *token.FileSet
 	steps    []foldStepDecl
 	consumed map[*ast.SelectorExpr]bool // every f.mode the mode walk has evaluated
+	step     string                     // the step being walked, for messages
+	nested   map[token.Pos]bool         // mode tests already reported as nested
 }
 
 // foldCall returns the door's one foldRunRequest call and fails unless it is
@@ -391,7 +400,8 @@ func (g *gateScan) addCall(call *ast.CallExpr, mode foldMode, add func(string)) 
 		m := foldCallMode(call)
 		for _, st := range g.steps {
 			if st.modes&m != 0 {
-				g.walkBlock(st.decl.Body.List, m, add)
+				g.step = st.name
+				g.walkBlock(st.decl.Body.List, m, true, add)
 			}
 		}
 	case file != "":
@@ -404,34 +414,43 @@ func (g *gateScan) addCall(call *ast.CallExpr, mode foldMode, add func(string)) 
 }
 
 // walkBlock walks a step body as mode would run it and reports whether the
-// block always returns.
-func (g *gateScan) walkBlock(list []ast.Stmt, mode foldMode, add func(string)) bool {
+// block always returns. top is true while every statement walked so far runs
+// unconditionally apart from mode tests: a mode test anywhere else is under a
+// data condition, whose return the walk cannot see.
+func (g *gateScan) walkBlock(list []ast.Stmt, mode foldMode, top bool, add func(string)) bool {
 	for _, st := range list {
-		if g.walkStmt(st, mode, add) {
+		if g.walkStmt(st, mode, top, add) {
 			return true
 		}
 	}
 	return false
 }
 
-func (g *gateScan) walkStmt(st ast.Stmt, mode foldMode, add func(string)) bool {
+func (g *gateScan) walkStmt(st ast.Stmt, mode foldMode, top bool, add func(string)) bool {
 	switch st := st.(type) {
 	case *ast.IfStmt:
 		g.inspect(st.Init, mode, add)
 		if taken, ok := g.modeTest(st.Cond, mode); ok {
-			if taken {
-				return g.walkBlock(st.Body.List, mode, add)
+			if !top && !g.nested[st.Cond.Pos()] {
+				g.nested[st.Cond.Pos()] = true
+				g.t.Errorf("%s: mode test nested under a data condition at %s; hoist it to the step's top level", g.step, g.fset.Position(st.Cond.Pos()))
 			}
-			return st.Else != nil && g.walkStmt(st.Else, mode, add)
+			if taken {
+				return g.walkBlock(st.Body.List, mode, top, add)
+			}
+			if blk, isBlock := st.Else.(*ast.BlockStmt); isBlock {
+				return g.walkBlock(blk.List, mode, top, add)
+			}
+			return st.Else != nil && g.walkStmt(st.Else, mode, top, add)
 		}
 		g.inspect(st.Cond, mode, add)
-		g.walkBlock(st.Body.List, mode, add)
+		g.walkBlock(st.Body.List, mode, false, add)
 		if st.Else != nil {
-			g.walkStmt(st.Else, mode, add)
+			g.walkStmt(st.Else, mode, false, add)
 		}
 		return false
 	case *ast.BlockStmt:
-		return g.walkBlock(st.List, mode, add)
+		return g.walkBlock(st.List, mode, false, add)
 	case *ast.ReturnStmt:
 		g.inspect(st, mode, add)
 		return true
