@@ -123,6 +123,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   may do" sections are now bullets, nested lists and tables, with every repository file they cite
   linked; six long table cells moved to sections under their tables. No rule, check, refusal,
   default or limit changed.
+- `docs/OPERATIONS.md`: the sections "Renamed in 0.8", "Upgrades", "Kubernetes: day-2" and "High availability" are
+  now bullets, nested lists and callouts, and every file they name is a link. No step, order, default, limit or version changed.
 
 ### Fixed
 
