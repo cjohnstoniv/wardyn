@@ -31,6 +31,7 @@ Rules for every tracked Markdown file. `make lint` checks form and links; `make 
 
 - Prose share = paragraph, quote and over-cap item lines, over non-blank lines.
 - A blockquote is prose. An alert's marker line is exempt from the word count; its body is not.
+- YAML front matter that starts on line 1 (between two lines that are exactly `---`) is metadata: it meets no cap, but its words still count in the prose budget.
 - Aim below the caps: sentences ≤ 25 words, paragraphs ≤ 3 sentences.
 - No summary line under an H2 unless the section exceeds 150 words and its first line is not already a summary.
 - No lead-in or stub lines ("Apply it:", "Result:"). Put the fact in the bullet.

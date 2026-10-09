@@ -360,4 +360,24 @@ printf 'table\tdocs/scratch/tbl.md\t| Other | Meaning |\tPLAN §4.2\n' > "$WAIVE
 waive_fails "a table waiver for a table with no over-cap cell" "no cell of this table is over the cap"
 rm -f "$WAIVE"
 
+# Front matter: a YAML block on line 1 is metadata. An over-cap description:
+# line there passes; the same line as the first paragraph of a body fails.
+LONGLINE="description: $(words 90)"
+scratch front
+{ printf -- '---\nname: scratch\n%s\n---\n' "$LONGLINE"; page <<DOC
+- $(words 20)
+DOC
+} > "$TMP/docs/scratch/front.md"
+run_gate || fail "a page whose over-cap line is in leading front matter must PASS: $(gate_says)"
+echo "ok  an over-cap line in leading front matter passes"
+page > "$TMP/docs/scratch/front.md" <<DOC
+$LONGLINE
+DOC
+check_fails "the same long line as a body paragraph" "word paragraph (max 80)"
+{ page <<DOC
+- $(words 20)
+DOC
+printf -- '\n---\nname: scratch\n%s\n---\n' "$LONGLINE"; } > "$TMP/docs/scratch/front.md"
+check_fails "a --- block that does not start on line 1" "word paragraph (max 80)"
+
 echo "doc-form tests: PASS"

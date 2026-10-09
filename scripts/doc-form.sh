@@ -50,6 +50,13 @@
 # blockquote text still count against the sentence cap — a 39-word sentence
 # hiding in a table cell is exactly the prose creep rule 5 is for.
 #
+# FRONT MATTER: a YAML block that starts on line 1 (line 1 is exactly "---",
+# the block ends at the next line that is exactly "---", both included) is
+# metadata, not prose. It is no paragraph block and holds no sentences, so it
+# meets no cap, no summary rule and no share; a skill's long "description:" line
+# is the case. Its words still count in the prose-word budget, which is
+# unchanged. A "---" rule anywhere else in a page is not front matter.
+#
 # Known gap: text inside a code fence is outside every measure (caps, share,
 # budget). Fenced prose is the one way left to hide words from this gate; the
 # fact ledger (docs-overhaul tools/doc-facts.py) does not count fence text as
@@ -507,7 +514,15 @@ def analyze(path):
             # would manufacture sentences that were never written as one.
             check_sentences(cell)
 
-    for raw in lines:
+    front_end = -1
+    if lines and lines[0] == '---':
+        front_end = next((i for i in range(1, len(lines)) if lines[i] == '---'), -1)
+
+    for lineno, raw in enumerate(lines):
+        if lineno <= front_end:
+            # Front matter: words stay in the budget; nothing else is measured.
+            prose_words += line_prose_words(raw)
+            continue
         # A table is the run of table rows; any other line (blank, fence, text)
         # ends it, and its first row is the header line a table waiver names.
         if not saw_table_row:

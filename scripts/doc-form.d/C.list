@@ -1,4 +1,4 @@
 # Asserted against every cap in scripts/doc-form.sh (strict tier).
-# .claude/skills/wardyn-ci/SKILL.md is not listed: its YAML front matter is one 85-word block, over the 80-word paragraph cap.
 docs/CI.md
 docs/ci-jobs-as-runs.md
+.claude/skills/wardyn-ci/SKILL.md
