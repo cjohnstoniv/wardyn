@@ -607,6 +607,8 @@ clone is decided by grant kind and host, and none can cover another's set:
 
 ## Deployment surface (anti-sprawl constraint)
 
+![In a cluster, internal services take the normal path while each sandbox leaves only through its egress proxy, nothing connects in, and the proxy adds keys to outbound requests.](docs/img/wardyn-remote.webp)
+
 - Exactly TWO stacks: `deploy/compose` (config-validated in CI; exercised
   end-to-end by the nightly full-stack e2e) and ONE blessed Helm chart
   `deploy/helm/wardyn` (`helm lint` + `helm template` render-checked in CI on both
