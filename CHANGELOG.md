@@ -281,9 +281,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
-- **Go 1.26.9 and `golang.org/x/net` 0.60.0.** The toolchain pin moves from go1.26.6 and `golang.org/x/net`
-  from 0.59.0, fixing eleven standard-library and `x/net` advisories published after 0.8.8 (`net/http`,
-  `net/textproto`, `crypto/tls`, `os`; GO-2026-6603 to GO-2026-6617). `make govulncheck` reports none.
+- **Go 1.26.9 and `golang.org/x/net` 0.60.0; images built with Go 1.27.2.** The toolchain pin moves from
+  go1.26.6 and `golang.org/x/net` from 0.59.0, and every image builder (`wardynd`, `wardynd-fips`,
+  `wardyn-proxy`, the tetragon ingest and the agent images) moves to the go1.27.2 base image, fixing the
+  standard-library and `x/net` advisories published after 0.8.8 (`net/http`, `net/textproto`, `crypto/tls`,
+  `os`; GO-2026-6603 to GO-2026-6617). `make govulncheck` reports none.
 
 ## [0.8.8] — 2026-10-07
 

@@ -43,7 +43,7 @@
 # $TARGETARCH below (pure Go, CGO_ENABLED=0) — no QEMU for the compile. Stage 2
 # does need it (apt + the AWS CLI installer run as the target arch; that stage
 # already selects x86_64/aarch64 off its own TARGETARCH).
-FROM --platform=$BUILDPLATFORM golang:1.27@sha256:4013ae0f9e7994f8535c58c811f8f863fbed38b72e0d51e6592156f758d66146 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS builder
 
 WORKDIR /build
 
