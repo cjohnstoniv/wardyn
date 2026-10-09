@@ -24,8 +24,6 @@
 #
 # Entries:
 cockpit-terminal-tmux-wheel.spec.ts | the wheel scrolls tmux history and does not recall bash history | #1795 | @cjohnstoniv | 2026-10-23
-refusal-doors.spec.ts | the failure block opens the run's own provider's door (state 2) › bedrock_sso: the owner's "Sign in to AWS" opens Bedrock (prod)'s door | #1736 | @cjohnstoniv | 2026-10-23
-refusal-doors.spec.ts | the failure block opens the run's own provider's door (state 2) › anthropic_subscription: the owner's "Sign in to Claude" opens Claude subscription's door | #1762 | @cjohnstoniv | 2026-10-23
 substrate-health-banner.spec.ts | the substrate_health band › an admin sees it, with the row's detail, and its action opens the Review step | #1805 | @cjohnstoniv | 2026-10-23
 policy-ado-capabilities.spec.ts | the Azure DevOps access section locks what the ceiling does not grant, and saves what it does | #1786 | @cjohnstoniv | 2026-10-23
 reauth-in-place.spec.ts | signed out mid-page: sign in again in place (#483) › someone else signing in reloads the page fresh as them — the draft is gone | #1735 | @cjohnstoniv | 2026-10-23
@@ -36,10 +34,7 @@ governance.spec.ts | governance — the security admin's authoring walk › a fr
 cockpit-terminal-tmux-flow.spec.ts | 50 MB of output keeps the page responsive and ends on the right screen | #1933 | @cjohnstoniv | 2026-10-23
 runs-cockpit.spec.ts | a run refused for a model credential carries the sign-in, not directions to it › the failure block states the server's sentence and opens the AWS sign-in in place | #1874 | @cjohnstoniv | 2026-10-23
 cockpit-terminal-clipboard.spec.ts | the tmux bytes for a dragged selection become an offer; Copy writes the full text | #1712 | @cjohnstoniv | 2026-10-23
-refusal-doors.spec.ts | the failure block opens the run's own provider's door (state 2) › anthropic_subscription: the owner's "Sign in to Claude" opens Claude subscription's door | #1692 | @cjohnstoniv | 2026-10-23
-refusal-doors.spec.ts | no door for anyone but the owner, or in the Admin view (state 3) › the admin's own run in the Admin view: no door, and Open in user view leads to it | #1691 | @cjohnstoniv | 2026-10-23
 branding.spec.ts | branding removal controls › Remove logo and Remove branding each confirm, act and toast | #1526 | @cjohnstoniv | 2026-10-23
 runs.spec.ts | #214 — no barrier: the shell banner and the top bar's route › stays silent when a barrier is available | #1523 | @cjohnstoniv | 2026-10-23
-refusal-doors.spec.ts | the failure block opens the run's own provider's door (state 2) › anthropic_api_key: the owner's "Add your key" opens Anthropic API key's door | #1470 | @cjohnstoniv | 2026-10-23
 member-getting-started.spec.ts | admin session at /setup and /admin/setup (unmocked — D1: the URL decides) › a plain admin cold page.goto("/admin/setup") still shows the funnel and requests /api/v1/site-config | #1469 | @cjohnstoniv | 2026-10-23
 run-lifetime.spec.ts | Run lifetime — the Ends row (real backend round trip) › a fresh run has no end; 'Set an end…' sets one, and Extend pushes it further out | #1468 | @cjohnstoniv | 2026-10-23
