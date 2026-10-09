@@ -421,6 +421,10 @@ type ComponentStore interface {
 	// organisation's rows are no person's.
 	DeleteComponentsByOwner(ctx context.Context, owner string) (int, error)
 	EraseRunComponentsByOwner(ctx context.Context, owner string) (int, error)
+	// EraseRunComponentsOfRun clears, on run runID only, what EraseRunComponentsByOwner clears:
+	// a create that finds a saved component gone after its snapshot write leaves no content
+	// behind. It returns how many rows it changed and refuses owner "".
+	EraseRunComponentsOfRun(ctx context.Context, runID uuid.UUID, owner string) (int, error)
 }
 
 // Compile-time assertion: PG satisfies ComponentStore.

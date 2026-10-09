@@ -318,7 +318,18 @@ func TestPG_ComponentEraseDuringCreate_ConcurrentCreatesFailClosedOrAreErased(t 
 		if n := e.contentRows(t); n != 0 {
 			t.Errorf("%s: %d run_components rows still carry the erased person's content after the erasure returned", phase, n)
 		}
+		// A create that failed closed left a FAILED run, never a dispatched one.
+		var stray int
+		if err := e.pg.Pool.QueryRow(context.Background(), `SELECT count(*) FROM agent_runs
+			WHERE created_by = $1 AND state <> 'FAILED' AND NOT (id = ANY($2))`, e.owner, ids).Scan(&stray); err != nil {
+			t.Fatal(err)
+		}
+		if stray != 0 {
+			t.Errorf("%s: %d runs that did not answer 201 are not FAILED", phase, stray)
+		}
 	}
+	// failedClosed is a create the fence refused after its snapshot write.
+	failedClosed := func(w *httptest.ResponseRecorder) bool { return w.Code == http.StatusInternalServerError }
 
 	t.Run("erase between the gate and the snapshot write", func(t *testing.T) {
 		id, _ := e.save(t, "Erased Tool", "erased-api.example")
@@ -331,14 +342,20 @@ func TestPG_ComponentEraseDuringCreate_ConcurrentCreatesFailClosedOrAreErased(t 
 		var ew *httptest.ResponseRecorder
 		select {
 		case ew = <-erased:
-			t.Log("the erasure returned while the create was past the gate: nothing fences it")
+			t.Log("the erasure returned while the create was past the gate")
 		case <-time.After(5 * time.Second):
-			t.Log("the erasure waits on the create: it fences")
+			t.Log("the erasure waits on the create")
 		}
+		erasedFirst := ew != nil
 		release()
 		cw := <-created
 		if ew == nil {
 			ew = <-erased
+		}
+		// The erasure finished inside the window, so the create's re-read
+		// after its snapshot write must see it and fail closed.
+		if erasedFirst && !failedClosed(cw) {
+			t.Errorf("create after an erasure inside its window = %d %s, want it failed closed", cw.Code, cw.Body)
 		}
 		check(t, "forced window", []*httptest.ResponseRecorder{cw}, ew)
 	})
@@ -353,8 +370,8 @@ func TestPG_ComponentEraseDuringCreate_ConcurrentCreatesFailClosedOrAreErased(t 
 		}
 		race(fns...)
 		for i, w := range creates {
-			if w.Code != http.StatusCreated && (w.Code != http.StatusForbidden || errorReasonOf(w.Body.String()) != "capability_component") {
-				t.Errorf("create %d = %d %s, want 201, or the refusal an absent id gets", i, w.Code, w.Body)
+			if w.Code != http.StatusCreated && !failedClosed(w) && (w.Code != http.StatusForbidden || errorReasonOf(w.Body.String()) != "capability_component") {
+				t.Errorf("create %d = %d %s, want 201, a create failed closed, or the refusal an absent id gets", i, w.Code, w.Body)
 			}
 		}
 		check(t, "released together", creates, ew)
