@@ -10,6 +10,7 @@ import { MemoryRouter } from "react-router-dom";
 import type { Component, MyComponents } from "../../../lib/types";
 import { setField } from "../../../../test/set-field";
 import { MyComponentsCard } from "./my-components-card";
+import { aheadByHours } from "../../../lib/test-clock";
 
 const row = (id: string, name: string, secrets = 0): Component => ({
   id,
@@ -20,8 +21,8 @@ const row = (id: string, name: string, secrets = 0): Component => ({
     ...(secrets > 0 && { secrets: Array.from({ length: secrets }, (_, i) => ({ secret_name: `k${i}`, delivery: { mode: "header" as const, host: "api.acme.test" } })) }),
   },
   version: 1,
-  created_at: "2026-10-01T00:00:00Z",
-  updated_at: "2026-10-01T00:00:00Z",
+  created_at: aheadByHours(-24),
+  updated_at: aheadByHours(-24),
 });
 const A = row("11111111-1111-1111-1111-111111111111", "Acme", 1);
 const B = row("22222222-2222-2222-2222-222222222222", "Beta");

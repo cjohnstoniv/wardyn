@@ -6,13 +6,14 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Component } from "../../../lib/types";
 import { blankSecret, blankSetting, draftOf, headerHostChoices, newUuid, requestOf } from "./component-editor-model";
+import { aheadByHours } from "../../../lib/test-clock";
 
 const stored: Component = {
   id: "5b1f3c1e-7f0a-4a52-9d57-0c1d2e3f4a5b",
   name: "Payments API",
   version: 3,
-  created_at: "2026-10-08T00:00:00Z",
-  updated_at: "2026-10-08T00:00:00Z",
+  created_at: aheadByHours(-24),
+  updated_at: aheadByHours(-24),
   definition: {
     hosts: ["api.pay.example", "*.pay.example", "other.example:8443"],
     secrets: [

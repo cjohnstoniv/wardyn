@@ -10,6 +10,7 @@ import { MemoryRouter } from "react-router-dom";
 import type { ComponentSaved } from "../../../lib/types";
 import { setField } from "../../../../test/set-field";
 import { CustomComponentDialog, type CustomComponentDialogProps } from "./custom-component-dialog";
+import { aheadByHours } from "../../../lib/test-clock";
 
 // The real components client over a stubbed fetch: the routes, verbs and bodies
 // below are what goes on the wire.
@@ -36,8 +37,8 @@ const SAVED: ComponentSaved = {
   name: "Acme",
   definition: { hosts: ["api.acme.test"] },
   version: 1,
-  created_at: "2026-10-01T00:00:00Z",
-  updated_at: "2026-10-01T00:00:00Z",
+  created_at: aheadByHours(-24),
+  updated_at: aheadByHours(-24),
   requirements: [],
 };
 

@@ -40,6 +40,7 @@ import { HttpError } from "../../../lib/api/core";
 import type { Component } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { ComponentsScreen } from "./components-screen";
+import { aheadByHours } from "../../../lib/test-clock";
 
 const ID1 = "11111111-1111-4111-8111-111111111111";
 const ID2 = "22222222-2222-4222-8222-222222222222";
@@ -50,8 +51,8 @@ const comp = (over: Partial<Component> = {}): Component => ({
   id: ID1,
   name: "Payments API",
   version: 1,
-  created_at: "2026-10-08T00:00:00Z",
-  updated_at: "2026-10-08T00:00:00Z",
+  created_at: aheadByHours(-24),
+  updated_at: aheadByHours(-24),
   definition: {
     hosts: ["api.pay.example", "files.pay.example"],
     secrets: [{ secret_name: "pay-key", delivery: { mode: "header", host: "api.pay.example" } }],
@@ -69,7 +70,7 @@ const avail = (id: string, restricted: boolean, n: number) => ({
     capability: "component",
     value: id,
     effect: "allow",
-    created_at: "2026-10-08T00:00:00Z",
+    created_at: aheadByHours(-24),
   })),
 });
 

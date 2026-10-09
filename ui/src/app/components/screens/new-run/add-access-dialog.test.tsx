@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { ComponentRef, MyComponents } from "../../../lib/types";
 import { AddAccessDialog, MAX_COMPONENT_REFS } from "./add-access-dialog";
+import { aheadByHours } from "../../../lib/test-clock";
 
 const MINE_ID = "11111111-1111-1111-1111-111111111111";
 const ORG_ID = "22222222-2222-2222-2222-222222222222";
@@ -24,8 +25,8 @@ const reply = (over: Partial<MyComponents> = {}): MyComponents => ({
       name: "My Acme",
       definition: { hosts: ["api.acme.test", "cdn.acme.test"] },
       version: 1,
-      created_at: "2026-10-01T00:00:00Z",
-      updated_at: "2026-10-01T00:00:00Z",
+      created_at: aheadByHours(-24),
+      updated_at: aheadByHours(-24),
     },
   ],
   org: [{ id: ORG_ID, name: "Billing API", hosts: ["billing.corp.test"], secrets: [{ delivery: { mode: "header" } }], config_keys: [] }],
