@@ -130,8 +130,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   The Desktop page and "Reclaiming a squatted fingerprint" in `docs/SSH.md` now say so; verifying
   the rightful owner is still out of band, and a member still cannot remove someone else's key.
 - `docs/DESKTOP.md` still said a `wardynd` restart mid-run loses the masking state and then
-  records or streams output unmasked, and that failing closed "is not done". Since 0.8.6 each
-  run's secret values are committed before its sandbox starts and reloaded after a restart, and a
+  records or streams output unmasked, and that failing closed "is not done". Since 0.8.6 the
+  secret values a run receives at dispatch are committed before its sandbox starts (later ones
+  before they are handed out) and reloaded after a restart, and a
   recording upload or attach that cannot prove that state answers `503`
   `mask_state_unavailable`, while SSH refuses the shell. Both places on the page now say that,
   with the two cases in which an operator will meet the refusal.
