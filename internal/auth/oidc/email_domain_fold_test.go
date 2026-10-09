@@ -6,7 +6,7 @@
 //
 // This package makes the same ASCII promise on four surfaces — emailInList
 // (the operator allowlist), deriveRole's lookup loop, ParseRoleMap and
-// CanonicalGroupSubject — and every one of them guards the RAW value before
+// types.CanonicalGroupSubject — and every one of them guards the RAW value before
 // strings.ToLower/EqualFold touches it. The login DOMAIN gate did not: it
 // lowered first and never guarded at all, so strings.ToLower's Unicode case
 // MAPPING (U+212A KELVIN SIGN -> 'k', U+0130 -> 'i') let a domain the operator
@@ -25,7 +25,7 @@ import (
 // TestEmailDomainFoldEscalation is the decision table. The two escalation rows
 // are the finding; the rest are the ordinary posture the guard must not break.
 //
-// Counterfactual: move the printableASCII check after the strings.ToLower in
+// Counterfactual: move the types.PrintableASCII check after the strings.ToLower in
 // emailDomainAllowed (or delete it) and both escalation rows go red.
 func TestEmailDomainFoldEscalation(t *testing.T) {
 	cases := []struct {
@@ -47,8 +47,8 @@ func TestEmailDomainFoldEscalation(t *testing.T) {
 		// A non-ASCII domain that folds onto NOTHING is still refused — the
 		// guard is a property of the value, not of whether a collision exists.
 		{"non-ASCII domain with no allowlist twin", "user@k\u00F6rp.com", []string{"korp.com"}, false},
-		// A control character is not a domain either; printableASCII (not
-		// ASCIIOnly) is the predicate, matching CanonicalGroupSubject.
+		// A control character is not a domain either; PrintableASCII (not
+		// ASCIIOnlySubject) is the predicate, matching CanonicalGroupSubject.
 		{"control character in the domain", "user@korp.com\x00", []string{"korp.com"}, false},
 
 		// Not an escalation — every one of these must keep signing in.

@@ -352,13 +352,13 @@ func (s *Server) accessUnmatchedOutcome(rows []oidc.RoleMapping, userTypes []typ
 // canonicalRoleMapValue trims+lowers value and validates it against EXACTLY
 // the contract mergeRoleMaps enforces on a console row (RoleMapping's own doc
 // comment): non-empty, ASCII (matching is ASCII-only — a non-ASCII value can
-// never match a claim, see oidc.ASCIIOnly), and free of control characters
+// never match a claim, see types.ASCIIOnlySubject), and free of control characters
 // (the same hygiene validateCapabilityGrant applies to its own Value field —
 // an empty/control-char value stored raw would be either a dead key or,
 // worse for whitespace, one that matches ANY empty/whitespace claim).
 //
 // The ASCII guard runs before the fold, mirroring the chart-side twin
-// oidc.ParseRoleMap (its ASCIIOnly refusal precedes its own ToLower) and
+// oidc.ParseRoleMap (its ASCIIOnlySubject refusal precedes its own ToLower) and
 // oidc's deriveRole lookup loop. strings.ToLower folds KELVIN SIGN U+212A to
 // 'k' and U+0130 to 'i', so guarding the LOWERED value accepts a value the
 // operator did not type and stores a DIFFERENT, ASCII one under it — the
@@ -369,7 +369,7 @@ func canonicalRoleMapValue(value string) (string, error) {
 	if raw == "" {
 		return "", fmt.Errorf("value: required")
 	}
-	if !oidc.ASCIIOnly(raw) {
+	if !types.ASCIIOnlySubject(raw) {
 		return "", fmt.Errorf("value: must be ASCII — matching is ASCII-only, a non-ASCII value can never match a claim")
 	}
 	v := strings.ToLower(raw)

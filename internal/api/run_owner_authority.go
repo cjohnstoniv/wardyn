@@ -283,7 +283,7 @@ func (s *Server) capAllowedForSub(ctx context.Context, sub, userType, kind, valu
 	if err != nil {
 		return false, err
 	}
-	sub = canonicalUserSubject(sub)
+	sub = types.CanonicalUserSubject(sub)
 	allow := false
 	for _, g := range grants {
 		if g.Capability != kind {

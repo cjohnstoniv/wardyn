@@ -635,7 +635,7 @@ func (s *Server) revokeAPIToken(w http.ResponseWriter, r *http.Request, principa
 // the email and the login-time GROUP snapshot (migration 0045 + the groups
 // column), and a role-mapping value is a group/App-Role key or — where the org
 // opted in — an email. Both are canonicalized lowercase at their write
-// boundaries (canonicalRoleMapValue, oidc.CanonicalGroupSubject), so groups
+// boundaries (canonicalRoleMapValue, types.CanonicalGroupSubject), so groups
 // compare exactly and the email compares case-insensitively, exactly as
 // IsSessionRevoked's email arm does.
 //
