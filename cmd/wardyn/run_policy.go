@@ -23,7 +23,10 @@ import (
 // S-28, S-30, S-33, S-49, S-50). Change it there first.
 const (
 	runPolicyShort = "Show the policy a run got when it started, as YAML"
-	runPolicyLong  = `Shows where a run's policy came from, what Wardyn changed when the run started, and the policy itself as YAML. If you're an admin, you can reuse the YAML as is with "wardyn run --policy-file", unless the run used an organization component's shared secret: then the YAML is a record of the run, not a policy to reuse, and you select the component again on the new run. Anyone else sees hidden values as <redacted> and fills them in first.`
+	runPolicyLong  = `Shows where a run's policy came from, what Wardyn changed when the run started, and the policy itself as YAML. ` +
+		`If you're an admin, you can reuse the YAML as is with "wardyn run --policy-file", unless the run used an organization component's shared secret: ` +
+		`then the YAML is a record of the run, not a policy to reuse, and you select the component again on the new run. ` +
+		`Anyone else sees hidden values as <redacted> and fills them in first.`
 
 	runPolicyNotYet = "Wardyn records this run's policy when its sandbox is set up. This run hasn't reached that step."
 	runPolicyNever  = "This run stopped before its sandbox was set up, so no policy was applied to it."
