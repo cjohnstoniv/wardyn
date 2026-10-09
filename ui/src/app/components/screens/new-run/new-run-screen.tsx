@@ -170,6 +170,8 @@ export function NewRunScreen() {
               onOpenRow={setOpenRowId}
               secretsPath={operator ? "/admin/secrets" : "/secrets"}
               guardLink={guardLink}
+              refs={state.components}
+              onRefsChange={(components) => patch({ components })}
             />
           </Panel>
 

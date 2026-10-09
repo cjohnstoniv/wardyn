@@ -28,6 +28,7 @@ import { YOUR_ACCOUNT } from "../../wardyn/copy/console-view";
 import { ModelConnectionsCard } from "./model-connections-card";
 import { useConsoleMode } from "../../wardyn/console-view";
 import { AdoConnectionCard } from "./ado-connection";
+import { MyComponentsCard } from "./my-components-card";
 import { SshKeysPane } from "../ssh-keys";
 import { ErrorState, TableSkeleton } from "../../wardyn/states";
 
@@ -61,6 +62,9 @@ export function YourAccountScreen() {
           {/* #386, Q9: a personal connection. Renders nothing with no Azure
               DevOps row configured. */}
           <AdoConnectionCard status={status} onChanged={load} />
+          {/* #1914: components a person saved to reuse; absent when they may
+              not define any and have none. */}
+          <MyComponentsCard secretsPath={adminView ? "/admin/secrets" : "/secrets"} />
           <SshKeysPane heading="h3" />
         </div>
       )}
