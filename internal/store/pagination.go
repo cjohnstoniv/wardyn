@@ -335,7 +335,7 @@ var _ GrantsByRunPager = PG{}
 
 // ListGrantsByRunPage is ListGrantsByRun bounded by p.
 func (s PG) ListGrantsByRunPage(ctx context.Context, runID uuid.UUID, p Page) ([]types.CredentialGrant, error) {
-	q, args := p.appendTo(`SELECT id, run_id, created_at, spec FROM credential_grants WHERE run_id=$1 ORDER BY created_at, id`, []any{runID})
+	q, args := p.appendTo(`SELECT `+grantCols+` FROM credential_grants WHERE run_id=$1 ORDER BY created_at, id`, []any{runID})
 	return collect(ctx, s.Pool, "list", "grants", q, args, scanGrant)
 }
 

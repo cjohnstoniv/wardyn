@@ -217,16 +217,43 @@ func (p *Peer) handle(f Frame) error {
 	case TypeReply:
 		return p.onReply(f)
 	case TypeEvent:
-		var ev Event
-		if err := Unmarshal(f.Payload, &ev); err != nil {
-			return err
-		}
-		if err := ev.Validate(); err != nil {
-			return err
-		}
-		p.dispatchEvent(ev)
+		return p.onEvent(f)
 	case TypeOpen:
 		return p.onOpen(f)
+	case TypeOpenOK, TypeData, TypeWindow, TypeClose, TypeReset:
+		return p.handleStream(f)
+	case TypeAck:
+		seq, err := DecodeAck(f.Payload)
+		if err != nil {
+			return err
+		}
+		p.replay.Ack(seq)
+	case TypePing:
+		go p.send(p.ctx, Frame{Type: TypePong, Payload: f.Payload}) //nolint:errcheck // keepalive; a failed pong is the link going down
+	case TypePong:
+	default:
+		if p.cfg.OnControl != nil {
+			p.cfg.OnControl(f)
+		}
+	}
+	return nil
+}
+
+func (p *Peer) onEvent(f Frame) error {
+	var ev Event
+	if err := Unmarshal(f.Payload, &ev); err != nil {
+		return err
+	}
+	if err := ev.Validate(); err != nil {
+		return err
+	}
+	p.dispatchEvent(ev)
+	return nil
+}
+
+// handleStream serves the frames that act on one byte stream.
+func (p *Peer) handleStream(f Frame) error {
+	switch f.Type {
 	case TypeOpenOK:
 		if s := p.stream(f.Stream); s != nil {
 			select {
@@ -259,19 +286,6 @@ func (p *Peer) handle(f Frame) error {
 			return err
 		}
 		p.onReset(f.Stream, code)
-	case TypeAck:
-		seq, err := DecodeAck(f.Payload)
-		if err != nil {
-			return err
-		}
-		p.replay.Ack(seq)
-	case TypePing:
-		go p.send(p.ctx, Frame{Type: TypePong, Payload: f.Payload}) //nolint:errcheck // keepalive; a failed pong is the link going down
-	case TypePong:
-	default:
-		if p.cfg.OnControl != nil {
-			p.cfg.OnControl(f)
-		}
 	}
 	return nil
 }

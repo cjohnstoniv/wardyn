@@ -565,6 +565,8 @@ func scanPolicy(row pgx.Row) (types.RunPolicy, error) {
 
 // CredentialGrant
 
+const grantCols = `id, run_id, created_at, spec, delivery`
+
 // CreateGrant inserts a credential grant (eligibility record) and returns it.
 func (s PG) CreateGrant(ctx context.Context, g types.CredentialGrant) (types.CredentialGrant, error) {
 	specJSON, err := json.Marshal(g.Spec)
@@ -572,15 +574,15 @@ func (s PG) CreateGrant(ctx context.Context, g types.CredentialGrant) (types.Cre
 		return types.CredentialGrant{}, fmt.Errorf("store: marshal grant spec: %w", err)
 	}
 	const q = `
-		INSERT INTO credential_grants (id, run_id, created_at, spec)
-		VALUES ($1,$2,$3,$4)
-		RETURNING id, run_id, created_at, spec`
-	return scanGrant(s.Pool.QueryRow(ctx, q, g.ID, g.RunID, g.CreatedAt, specJSON))
+		INSERT INTO credential_grants (id, run_id, created_at, spec, delivery)
+		VALUES ($1,$2,$3,$4,$5)
+		RETURNING ` + grantCols
+	return scanGrant(s.Pool.QueryRow(ctx, q, g.ID, g.RunID, g.CreatedAt, specJSON, string(g.Delivery)))
 }
 
 // ListGrantsByRun returns all grants for a run.
 func (s PG) ListGrantsByRun(ctx context.Context, runID uuid.UUID) ([]types.CredentialGrant, error) {
-	const q = `SELECT id, run_id, created_at, spec FROM credential_grants WHERE run_id=$1 ORDER BY created_at, id`
+	const q = `SELECT ` + grantCols + ` FROM credential_grants WHERE run_id=$1 ORDER BY created_at, id`
 	return collect(ctx, s.Pool, "list", "grants", q, []any{runID}, scanGrant)
 }
 
@@ -589,13 +591,15 @@ func scanGrant(row pgx.Row) (types.CredentialGrant, error) {
 	var specRaw []byte
 	// No ErrNoRows mapping: the only callers are CreateGrant (INSERT ...
 	// RETURNING always yields a row) and the ListGrantsByRun iteration.
-	err := row.Scan(&g.ID, &g.RunID, &g.CreatedAt, &specRaw)
+	var delivery string
+	err := row.Scan(&g.ID, &g.RunID, &g.CreatedAt, &specRaw, &delivery)
 	if err != nil {
 		return types.CredentialGrant{}, fmt.Errorf("store: scan grant: %w", err)
 	}
 	if err := json.Unmarshal(specRaw, &g.Spec); err != nil {
 		return types.CredentialGrant{}, fmt.Errorf("store: unmarshal grant spec: %w", err)
 	}
+	g.Delivery = types.GrantDelivery(delivery)
 	return g, nil
 }
 

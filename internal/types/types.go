@@ -217,6 +217,8 @@ type CredentialGrant struct {
 	RunID     uuid.UUID `json:"run_id"`
 	CreatedAt time.Time `json:"created_at"`
 	Spec      GrantSpec `json:"spec"`
+	// Delivery is how the grant reached a local run; empty for a remote run and for one from before 0.9.
+	Delivery GrantDelivery `json:"delivery,omitempty"`
 }
 
 // ResolvedInjection is the wire contract of GET /api/v1/internal/injection/{grantID}: header name
