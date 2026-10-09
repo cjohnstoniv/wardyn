@@ -551,7 +551,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
 >
 > So work done over those paths leaves no session evidence — do not present Remote-SSH as the recommended developer path without saying so.
 >
-> The interactive SSH **shell** *is* recorded through the browser terminal's same masking pipeline, but an unregistered secret can remain in cleartext. There is **no delete-one route**; age-based retention (default: keep forever) is the removal mechanism.
+> The interactive SSH **shell** *is* recorded through the browser terminal's same masking pipeline, but an unregistered secret can remain in cleartext. There is **no delete-one route**. Recordings go by age-based retention (default: keep forever), or all of one person's at once by person erasure with the `recordings` scope ([OPERATIONS.md § Erasing a person](OPERATIONS.md#erasing-a-person)).
 
 - Every SSH **shell** session (`ssh <run-id>@host`, no subsystem/forward) is
   recorded exactly like the browser terminal: same tmux session, same masked

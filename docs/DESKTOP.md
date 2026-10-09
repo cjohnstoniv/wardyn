@@ -125,7 +125,7 @@ Three properties define it:
 - **"The session is still recorded" — the SHELL is; exec and sftp are not.**
   - Turning on `WARDYN_SSH_LISTEN` makes both halves fleet-wide: `ssh` exec output and sftp payloads are **not** recorded and sftp uploads are not byte-counted, while the interactive SSH shell **is** recorded through the browser terminal's same masking pipeline.
   - Only registry-known secrets are masked: an unregistered secret pasted into the terminal can remain in cleartext.
-  - There is **no delete-one route**; the age-based retention sweep is the removal mechanism (default: keep forever).
+  - There is **no delete-one route**. Recordings go by the age-based retention sweep (default: keep forever), or all of one person's at once by person erasure with the `recordings` scope ([OPERATIONS.md § Erasing a person](OPERATIONS.md#erasing-a-person)).
   - See [SSH recording and masking scope](SSH.md#recording).
   - A `wardynd` restart mid-run (an MDM upgrade window, a crash, a laptop waking) no longer loses the masking state. The secret values a run receives at dispatch are committed, sealed, before its sandbox starts, and any minted later before they are handed out; a restart reloads them.
     - An attach that cannot prove that state complete answers `503` `mask_state_unavailable`, and SSH refuses the shell; neither is streamed unmasked.
