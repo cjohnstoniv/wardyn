@@ -30,6 +30,7 @@ Rules for every tracked Markdown file. `make lint` checks form and links; `make 
 | Lines between the H1 and the first H2 | 1–5 | `has_summary` |
 
 - Prose share = paragraph, quote and over-cap item lines, over non-blank lines.
+- A line that is only an image does not count toward the 1–5 lines between the H1 and the first H2.
 - A blockquote is prose. An alert's marker line is exempt from the word count; its body is not.
 - YAML front matter that starts on line 1 (between two lines that are exactly `---`) is metadata: it meets no cap, summary rule or share, but its words still count in the prose budget.
 - Aim below the caps: sentences ≤ 25 words, paragraphs ≤ 3 sentences.

@@ -50,6 +50,11 @@
 # blockquote text still count against the sentence cap — a 39-word sentence
 # hiding in a table cell is exactly the prose creep rule 5 is for.
 #
+# LEAD LINES: the summary between the H1 and the first H2 is capped at five
+# non-blank lines. A line that is only an image (`![alt](target)` and nothing
+# else) is not counted there; its alt words still count as prose, and a line
+# with an image plus text counts as before.
+#
 # FRONT MATTER: a YAML block that starts on line 1 (line 1 is exactly "---",
 # the block ends at the next line that is exactly "---", both included) is
 # metadata, not prose. It is no paragraph block and holds no sentences, so it
@@ -231,6 +236,7 @@ BULLET = re.compile(r'^\s*([-*+]|\d+\.)\s')
 TABLE = re.compile(r'^\s*\|')
 HEADING = re.compile(r'^#')
 ATX_HEADING = re.compile(r'^#{1,6}(\s|$)')
+IMAGE_ONLY = re.compile(r'^!\[[^\]]*\]\([^)]+\)$')
 QUOTE = re.compile(r'^\s*>')
 FENCE = re.compile(r'^\s*```')
 # A GitHub alert's marker line: "> [!NOTE]" and friends. Markup, not prose.
@@ -630,7 +636,7 @@ def analyze(path):
                     seen_h1 = True
                 elif raw.startswith('## ') and seen_h1 and not seen_h2_after_h1:
                     seen_h2_after_h1 = True
-            elif seen_h1 and not seen_h2_after_h1:
+            elif seen_h1 and not seen_h2_after_h1 and not IMAGE_ONLY.match(raw.strip()):
                 lead_lines += 1
         elif seen_h1 and not seen_h2_after_h1:
             lead_lines += 1

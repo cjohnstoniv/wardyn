@@ -15,7 +15,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-DOCS=(README.md ARCHITECTURE.md threatmodel/THREAT-MODEL.md docs/AZURE-DEVOPS.md
+DOCS=(README.md docs/README.md docs/DESKTOP.md ARCHITECTURE.md threatmodel/THREAT-MODEL.md docs/AZURE-DEVOPS.md
       docs/operations/monitoring.md docs/operations/run-lifetime.md
       docs/operations/kubernetes-known-gaps.md docs/operations/secrets-and-keys.md
       RELEASING.md)
