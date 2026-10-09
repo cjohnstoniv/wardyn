@@ -165,7 +165,6 @@ export const CUSTOM_COMPONENT = {
   SAVE: "Save",
   ADD_TO_RUN: "Add to this run",
   CANCEL: "Cancel",
-  SAVING: "Saving",
   /** Printed at the top of a refused form, above the field sentences it names. */
   REFUSED: "This component can't be saved as written. Nothing you typed has been removed.",
   REFUSED_RUN: "This component can't be added as written. Nothing you typed has been removed.",
@@ -176,7 +175,6 @@ export const CUSTOM_COMPONENT = {
   NEEDS_SECRET: (name: string) => `Secret ${name} isn't stored yet.`,
   NEEDS_ADD: "Add it on the Secrets page",
   DONE: "Done",
-  ATTACHED_NOTE: "It is already added to this run.",
 
   /** One sentence per rule the form checks, each naming the field's own value. */
   ERR: {
