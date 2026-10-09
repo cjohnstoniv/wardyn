@@ -665,8 +665,11 @@ test.describe("New run — workspace-card 'not an enabled provider' state", () =
 // Launch reachable here; #125 dropped the post-launch "Open run" hold this
 // used to also pin — a launch now navigates away in the same tick.
 test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F2-F7/F3-F1)", () => {
-  test("Launch stays reachable with every rail section showing at once, and navigates straight to the run with its warnings", async ({ page }) => {
+  test("Launch stays reachable with every rail section showing at once, and navigates straight to the run with its warnings", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1280, height: 650 });
+    // One name per attempt: a retry runs against the backend the failed
+    // attempt already saved this policy to, and the name is unique there.
+    const policyName = `e2e rail-height policy ${testInfo.retry + 1}`;
 
     const baseSpec = {
       allowed_domains: ["api.anthropic.com"],
@@ -684,7 +687,7 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
     const created = await page.request.post("/api/v1/policies", {
       headers: auth,
       data: {
-        name: "e2e rail-height policy",
+        name: policyName,
         spec: {
           ...baseSpec,
           tool_rules: [
@@ -761,7 +764,7 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
     await goToNewRunPanel(page, "policy");
     await page.getByRole("button", { name: /^Reuse a saved policy/ }).click();
     await page.getByRole("combobox", { name: "Saved policy" }).click();
-    await page.getByRole("option", { name: "e2e rail-height policy" }).click();
+    await page.getByRole("option", { name: policyName, exact: true }).click();
     // The rail's own section: the policy document names tool rules too.
     await expect(page.getByRole("complementary").getByText("Tool rules", { exact: true })).toBeVisible();
     await goToNewRunPanel(page, "run");
