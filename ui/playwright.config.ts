@@ -34,7 +34,6 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  repeatEach: Number(process.env.WARDYN_E2E_REPEAT || 1), // TEMP-LANE-G
   workers: process.env.CI ? 2 : undefined,
   reporter: [
     ["list"],
