@@ -15,9 +15,10 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { ChevronDown, TriangleAlert } from "lucide-react";
+import { Button } from "../../ui/button";
 import { cn } from "../../ui/utils";
 import { Chip } from "../../wardyn/primitives";
-import { ACCESS_ROWS as T } from "../../wardyn/copy/components";
+import { ACCESS_ROWS as T, ADD_ACCESS } from "../../wardyn/copy/components";
 import type { AccessRow as Row } from "./access-rows-model";
 
 export interface AccessRowProps {
@@ -28,6 +29,8 @@ export interface AccessRowProps {
   secretsPath: string;
   /** Wraps a link that leaves New Run, so unsaved work is asked about first. */
   guardLink: (to: string) => (e: React.MouseEvent) => void;
+  /** Takes this component off the run; absent for a row the person did not add. */
+  onRemove?: () => void;
 }
 
 function Part({ label, children }: { label: string; children: React.ReactNode }) {
@@ -39,7 +42,7 @@ function Part({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
-export function AccessRow({ row, open, onToggle, secretsPath, guardLink }: AccessRowProps) {
+export function AccessRow({ row, open, onToggle, secretsPath, guardLink, onRemove }: AccessRowProps) {
   const bodyId = `${row.domId}-body`;
   const issueId = `${row.domId}-issue`;
   return (
@@ -142,6 +145,11 @@ export function AccessRow({ row, open, onToggle, secretsPath, guardLink }: Acces
                 ))}
               </ul>
             </Part>
+          )}
+          {onRemove && (
+            <Button type="button" variant="outline" size="sm" aria-label={ADD_ACCESS.REMOVE_NAMED(row.title)} onClick={onRemove}>
+              {ADD_ACCESS.REMOVE}
+            </Button>
           )}
         </div>
       )}
