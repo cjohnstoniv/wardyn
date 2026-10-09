@@ -5995,6 +5995,7 @@ env.WARDYN_OIDC_ISSUER for SSO — [...]
   `--reset-then-reuse-values` instead (Helm ≥ 3.14: starts from the NEW chart's
   defaults and layers only your explicit overrides on top), or better, pass `-f
   your-values.yaml` as above and keep that file the source of truth.
+
 > [!NOTE]
 > (The `| default dict` guards in `templates/networkpolicy.yaml` and
 > `templates/rbac.yaml` are **null**-robustness, not `--reuse-values`
