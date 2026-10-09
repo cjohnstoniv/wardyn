@@ -237,6 +237,7 @@ describe("PolicyTab — changes grouped by cause", () => {
         changes: [
           change({ cause: "workspace", field: "allowed_domains", added: ["registry.npmjs.org"] }),
           change({ cause: "source_control", field: "allowed_domains", added: ["ghes.acme.example:443"] }),
+          change({ cause: "component", field: "allowed_domains", added: ["org-api.acme.example"] }),
           change({ cause: "model_access", field: "allowed_domains", added: ["llm-gateway.acme.example:443"] }),
           change({
             cause: "mirror",
@@ -253,6 +254,7 @@ describe("PolicyTab — changes grouped by cause", () => {
     for (const h of [
       "Added for the workspace",
       "Added so the run can reach its code",
+      "Added for an attached component",
       "Added so the agent can reach its model",
       "Switched to your organization's package mirror",
       "Routed through Wardyn's GitHub connection",

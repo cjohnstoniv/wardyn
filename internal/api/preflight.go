@@ -76,6 +76,9 @@ type preflightResponse struct {
 	// credential verdicts only this door reads. Absent for a run with no
 	// repository on a Git provider and no component.
 	Components []componentFact `json:"components,omitempty"`
+	// Provenance says why each entry of the resolved spec is there; the policy
+	// preview returns the same rows for the same request. Never null.
+	Provenance []provenanceRow `json:"provenance"`
 }
 
 // preflightBurst and preflightLimiterMaxPeople size the per-person preflight
@@ -323,6 +326,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		RiskAssessment:           riskItems,
 		OverallRisk:              overallRisk,
 		Warnings:                 warnings,
+		Provenance:               f.prov,
 	}
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred

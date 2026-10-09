@@ -50,6 +50,7 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response := policyPreviewFacts(req, f.spec, f.source, f.policyWarns, f.scmSite, f.mpChoice, f.comps)
+	response.Provenance = f.prov
 	// After the facts' own warnings, which previewSafeWarnings has already filtered.
 	if f.adoNarrowed != "" {
 		response.Warnings = append(response.Warnings, f.adoNarrowed)

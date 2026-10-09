@@ -29,10 +29,17 @@ func (s *Server) stepPolicy(f *runFold, rec *foldRecorder) bool {
 		// credentials=false: the preview never reads a secret value.
 		var refusal *runRefusal
 		f.spec, f.policyID, f.policyWarns, f.source, refusal = s.resolveRunPolicyFacts(ctx, f.r, f.req, true, false)
-		return !refusal.write(s, f.w, f.r)
+		if refusal.write(s, f.w, f.r) {
+			return false
+		}
+		recordPolicyFold(rec, f.source.Spec, f.spec, policyProvSource(f.source), f.source.Kind == policyKindInline)
+		return true
 	}
 	var ok bool
 	f.spec, f.policyID, f.policyWarns, f.source, ok = s.resolveRunPolicy(ctx, f.w, f.r, f.req, f.mode == foldPreflight)
+	if ok {
+		recordPolicyFold(rec, f.source.Spec, f.spec, policyProvSource(f.source), f.source.Kind == policyKindInline)
+	}
 	return ok
 }
 
@@ -76,6 +83,9 @@ func (s *Server) stepDrive(f *runFold, rec *foldRecorder) bool {
 // requirements fold, the egress unions and image resolution.
 func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	f.wsRefs = s.referencedWorkspaces(f.r.Context(), f.spec)
+	for _, ws := range f.wsRefs {
+		recordWorkspaceSources(rec, f.spec, ws)
+	}
 	return true
 }
 
@@ -85,6 +95,11 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 // The SSH, site-config and ADO lanes need grant wiring that does not exist
 // before the mint and stay create's.
 func (s *Server) stepPreviewEgress(f *runFold, rec *foldRecorder) bool {
+	for _, ws := range f.wsRefs {
+		var contributed types.RunPolicySpec
+		unionPreviewWorkspaceEgress(&contributed, []types.Workspace{ws})
+		recordSpecAdds(rec, types.RunPolicySpec{}, contributed, workspaceProvSource(ws))
+	}
 	unionPreviewWorkspaceEgress(&f.spec, f.wsRefs)
 	return true
 }
@@ -99,7 +114,13 @@ func (s *Server) stepRequirements(f *runFold, rec *foldRecorder) bool {
 	// Caller-scoped secret names, resolved once: the requirement fold and
 	// Review's checklist read the same map.
 	f.present = s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(f.r))
-	f.reqEvents = s.applyWorkspaceRequirementsFor(ctx, f.present, &f.spec, f.req.Agent, f.wsRefs, resolveWorkspaceSelections(*f.req))
+	selections := resolveWorkspaceSelections(*f.req)
+	// One workspace at a time, so each one's additions are its own.
+	for _, ws := range f.wsRefs {
+		before := f.spec.Clone()
+		f.reqEvents = append(f.reqEvents, s.applyWorkspaceRequirementsFor(ctx, f.present, &f.spec, f.req.Agent, []types.Workspace{ws}, selections)...)
+		recordRequirementFold(rec, before, f.spec, ws, selections[ws.ID.String()])
+	}
 	return true
 }
 
@@ -110,7 +131,14 @@ func (s *Server) stepRequirements(f *runFold, rec *foldRecorder) bool {
 func (s *Server) stepGitHubEgress(f *runFold, rec *foldRecorder) bool {
 	var refusal *runRefusal
 	f.directGitHubAdded, refusal = s.unionDirectGitHubEgress(f.r, *f.req, &f.spec, f.ceiling)
-	return !refusal.write(s, f.w, f.r)
+	if refusal.write(s, f.w, f.r) {
+		return false
+	}
+	src := directGitHubSource(*f.req, f.spec, f.wsRefs)
+	for _, h := range f.directGitHubAdded {
+		rec.add(fieldAllowed, h, src, provEffectAdded)
+	}
+	return true
 }
 
 // stepComponents bounds the run's components and expands them onto the spec:
@@ -121,7 +149,11 @@ func (s *Server) stepGitHubEgress(f *runFold, rec *foldRecorder) bool {
 func (s *Server) stepComponents(f *runFold, rec *foldRecorder) bool {
 	var refusal *runRefusal
 	f.comps, refusal = s.applyRunComponents(f.r, *f.req, &f.spec, f.ceiling, f.wsRefs, f.mode != foldPreview)
-	return !refusal.write(s, f.w, f.r)
+	if refusal.write(s, f.w, f.r) {
+		return false
+	}
+	recordComponents(rec, f.comps)
+	return true
 }
 
 // stepConfinement resolves the enforced class on the folded spec (invariant 5,
@@ -168,6 +200,7 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 			return false
 		}
 		f.mpChoice = choice
+		recordProviderHost(rec, choice, f.req.Agent)
 		_, needsModel := agentLLMProvider(f.req.Agent)
 		if needsModel && createDoorIsModelRun(*f.req) {
 			if name, secretName, found := modelEnvSecretGrant(f.spec); found {
@@ -183,6 +216,7 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 	}
 	f.mpChoice = choice
 	f.modelCred = choice.modelCredential()
+	recordProviderHost(rec, choice, f.req.Agent)
 	return true
 }
 
@@ -212,7 +246,7 @@ func (s *Server) stepAutonomy(f *runFold, rec *foldRecorder) bool {
 // said out loud at every door. A list that leaves nothing standing is
 // dispatch's refusal at create, which the dry doors answer before the click.
 func (s *Server) stepADOStanding(f *runFold, rec *foldRecorder) bool {
-	narrowed, none := s.adoStandingAtDoor(f.r, f.spec, f.scmSite, f.ceiling)
+	narrowed, dropped, none := s.adoStandingAtDoor(f.r, f.spec, f.scmSite, f.ceiling)
 	if f.mode != foldCreate {
 		if none {
 			writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonADOCapabilitiesNonePermitted, adoNonePermitted(f.spec.AzureDevOpsCapabilities))
@@ -220,6 +254,7 @@ func (s *Server) stepADOStanding(f *runFold, rec *foldRecorder) bool {
 		}
 	}
 	f.adoNarrowed = narrowed
+	recordADONarrowing(rec, dropped)
 	return true
 }
 
