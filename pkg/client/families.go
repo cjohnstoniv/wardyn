@@ -421,9 +421,9 @@ type ErasePersonResult struct {
 	Detail map[string]any `json:"detail"`
 }
 
-// ErasePerson erases one person's retained records by scope (credentials,
-// audit_personal_fields, run_tasks, run_outputs, recordings, mask_copies) in one
-// audited act. principal is the person's subject (or an email the deployment
+// ErasePerson erases one person's retained records by scope (mask_copies,
+// run_outputs, recordings, run_tasks, components, audit_personal_fields,
+// credentials) in one audited act. principal is the person's subject (or an email the deployment
 // knows them by) and is percent-encoded here. A scope that fails part way is a
 // 500 whose reason is erasure_incomplete: retry with the same scopes. Security
 // tier. POST /api/v1/people/{principal}/erasure.

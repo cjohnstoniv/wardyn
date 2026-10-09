@@ -33,12 +33,13 @@ func personEraseCmd(client clientFn) *cobra.Command {
 
 --scope names what to erase, and may be repeated or comma-separated:
 
-  credentials            their stored credentials and the key they sit under
-  audit_personal_fields  their sealed audit fields (the key is destroyed; the chain still verifies)
-  run_tasks              the task text of the runs they created
+  mask_copies            the masking manifests of their runs, after their live consumers are fenced
   run_outputs            the stored output of those runs
   recordings             their session recordings (nothing deletes one unless you ask)
-  mask_copies            the masking manifests of those runs, after their live consumers are fenced
+  run_tasks              the task text of the runs they created
+  components             the components they saved and the content of each run's snapshot of one they defined; the snapshot row stays
+  audit_personal_fields  their sealed audit fields (the key is destroyed; the chain still verifies)
+  credentials            their stored credentials and the key they sit under
 
 The scopes always run in the order above. The command exits non-zero unless every
 scope finished; a failure names the scopes left, and running it again with the same
@@ -59,7 +60,7 @@ scopes finishes them. You cannot erase yourself except --scope credentials.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "scope to erase (repeatable): credentials, audit_personal_fields, run_tasks, run_outputs, recordings, mask_copies")
+	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "scope to erase (repeatable): mask_copies, run_outputs, recordings, run_tasks, components, audit_personal_fields, credentials")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the result as JSON")
 	return cmd
 }

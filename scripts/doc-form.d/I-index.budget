@@ -1,5 +1,6 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. Base prose: README.md 2123, docs/README.md 516, docs/TRY-IT.md 3201.
+# README.md is 2135 = base 2123 + 12 (the architecture bullet about decision logs and masked casts became two: decision logs to the audit log, and recordings in their own store).
 # docs/README.md is 517 = base 516 + 1 word of the new "Index" heading: its table sat in the lead (H1 to first H2), which the form gate caps at 5 lines.
-README.md=2123 share=35
+README.md=2135 share=35
 docs/README.md=517 share=35
 docs/TRY-IT.md=3201 share=35

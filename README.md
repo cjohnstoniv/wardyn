@@ -204,7 +204,8 @@ flowchart LR
 ```
 
 - A trusted control plane launches each run into an untrusted, gatewayless sandbox whose only path out is the `wardyn-proxy` sidecar, credentials injected there.
-- Decision logs and masked casts flow back into the append-only audit log ([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) §8).
+- Decision logs flow back into the append-only audit log ([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) §8).
+- Masked session recordings are optional and kept in their own store, with their own retention.
 - Wardyn never *adds* power: a run reaches at most what you can, clamped by policy.
 
 ## Honest security posture

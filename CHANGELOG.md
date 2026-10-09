@@ -132,16 +132,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - `docs/DESKTOP.md` still said a `wardynd` restart mid-run loses the masking state and then
   records or streams output unmasked, and that failing closed "is not done". Since 0.8.6 each
   run's secret values are committed before its sandbox starts and reloaded after a restart, and a
-  recording upload, attach or shell that cannot prove that state answers `503`
-  `mask_state_unavailable`. Both places on the page now say that, with the two cases in which an
-  operator will meet the refusal.
+  recording upload or attach that cannot prove that state answers `503`
+  `mask_state_unavailable`, while SSH refuses the shell. Both places on the page now say that,
+  with the two cases in which an operator will meet the refusal.
 - The person-erasure scope table in `docs/OPERATIONS.md` listed the scopes credentials first, and
   the text under it says they run "in the order above". They run the other way round: live
   consumers are fenced first and the keys go last. The table is now in the order the scopes run,
-  and it gains the `components` scope it did not list.
+  and it gains the `components` scope it did not list. The audit reference, the CLI help and the
+  SDK page listed the scopes in the old order too, and the last two left out `components`; all
+  three now list the seven scopes in the order they run.
 - `docs/VERIFY.md` said nothing on the page needs an account, a token or a GitHub login, but
-  `gh attestation verify` refuses to run until the GitHub CLI is signed in. The page now says so
-  beside that command and scopes the claim to the other checks.
+  `gh attestation verify` and `gh release download` refuse to run until the GitHub CLI is signed
+  in. The page now says so beside each command, scopes the claim to the other checks, and gives
+  the plain download address for the release assets.
+- `README.md` said masked casts flow back into the append-only audit log. Session recordings are
+  optional and kept in their own store with their own retention; only decision logs go to the
+  audit log. The README now says so.
 - Recording-on Kubernetes task output is recovered from the run's available recording into a
   masked tail after the run ends (#1831). A recovered row is always marked `source: "recording"`
   and `incomplete: true`. A missing, invalid or uncovered recording is stated as a `capture_gap`,

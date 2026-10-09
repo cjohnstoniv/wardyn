@@ -125,7 +125,7 @@ Three properties define it:
   - Only registry-known secrets are masked: an unregistered secret pasted into the terminal can remain in cleartext.
   - There is **no delete-one route**; the age-based retention sweep is the removal mechanism (default: keep forever).
   - See [SSH recording and masking scope](SSH.md#recording).
-  - A `wardynd` restart mid-run (an MDM upgrade window, a crash, a laptop waking) no longer loses the masking state: each run's secret values are committed, sealed, before its sandbox starts, and are reloaded after a restart.
+  - A `wardynd` restart mid-run (an MDM upgrade window, a crash, a laptop waking) no longer loses the masking state. The secret values a run receives at dispatch are committed, sealed, before its sandbox starts, and any minted later before they are handed out; a restart reloads them.
     - An attach that cannot prove that state complete answers `503` `mask_state_unavailable`, and SSH refuses the shell; neither is streamed unmasked.
     - A run started before 0.8.6 has no such record, so after a restart it is refused at those doors until it ends.
     - See [Output masking, and the paths it does not cover](../threatmodel/THREAT-MODEL.md#41-output-masking-and-the-paths-it-does-not-cover).
@@ -134,7 +134,7 @@ Three more the tier inherits rather than introduces:
 
 - the SSH gateway's admin override is a **bounded-stale 24h role stamp**, never a live check;
 - whoever `POST`s a given SSH public key **first owns that fingerprint until that key is deleted**, and registering a key does not prove holding it;
-  - recovery is operator-side: an admin or `security_admin` removes the registrant's keys with `DELETE /people/{principal}/ssh-keys`, once the rightful owner is verified out of band, which on m′ the developer explicitly is not (see [Reclaiming a squatted fingerprint](SSH.md#reclaiming-a-squatted-fingerprint));
+  - recovery is operator-side — an admin or `security_admin`, which on m′ the developer explicitly is not. Once the rightful owner is verified out of band, they remove the registrant's keys with `DELETE /people/{principal}/ssh-keys` (see [Reclaiming a squatted fingerprint](SSH.md#reclaiming-a-squatted-fingerprint));
 - and compose serves the console and the UI relay on a **shared origin**, a documented residual of this topology.
 
 ### Named gap: the browser lane is not available on this tier
@@ -494,7 +494,7 @@ curl -fsS -X POST -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" \
 
 > [!IMPORTANT]
 > - **A restart mid-run refuses output it cannot mask; it does not record it in cleartext.**
-> - Each run's secret values are committed, sealed, before its sandbox starts, so a `wardynd` restart (an MDM upgrade window, a crash, a laptop waking) reloads them.
+> - The secret values a run receives at dispatch are committed, sealed, before its sandbox starts, and any minted later before they are handed out. A `wardynd` restart (an MDM upgrade window, a crash, a laptop waking) reloads them.
 > - For a run whose masking state cannot be proved complete, a recording upload or attach answers `503` `mask_state_unavailable`, and SSH refuses the shell.
 > - This tier restarts often: a 300s converge timer, an upgrade model that is a daemon restart, and a machine that sleeps.
 > - So expect that refusal, and a gap in the recording, for a run started before 0.8.6 or while Postgres is unreachable.
