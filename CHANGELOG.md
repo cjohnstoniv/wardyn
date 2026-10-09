@@ -36,6 +36,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Run-level custom components (API and Go SDK; no console screens yet).** A run can carry components that
+  add destinations and credentials: an organisation component an administrator defines and grants
+  (`/api/v1/components`), a person's own saved component (`/api/v1/me/components`), or one written inline in
+  the run body (`components` on create, preflight and preview). A component's secret is added to requests by
+  the egress proxy as a header, or delivered into the sandbox as an environment variable or a file when the
+  deployment allows it (`components.deny_resident_delivery` turns that off). Create, preflight and preview
+  report each component's status; a save answers `requirements[]` naming any stored secret it still needs.
+  New org components are usable by nobody until granted (capability `component`); who may define their own
+  is the `custom_component` feature. A run carrying a self-defined component can be capped by
+  `components.autonomy_cap`. The name of an organisation secret a shared component uses is withheld from
+  callers whose audit reads are narrowed to one run; administrators and security administrators read rows as
+  recorded. Person erasure gains a `components` scope. See [docs/CREDENTIALS.md](docs/CREDENTIALS.md) for
+  what each delivery leaves readable inside the sandbox. The console screens for components ship in 0.9.
+
 - Figures in the docs: the README (its opener and its architecture section), the docs index, the Desktop
   topology section, the architecture page's deployment section and the threat model's confinement-class
   section gain illustrations beside the text they explain. No diagram or sentence was removed.
