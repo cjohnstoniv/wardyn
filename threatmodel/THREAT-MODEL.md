@@ -3723,7 +3723,7 @@ injected script whatever the CSP says.
 - Policy may mandate a minimum CC; the control plane refuses to schedule runs on substrates that
   cannot satisfy the policy.
 
-![Three barrier strengths compared: Fence (CC1), Wall (CC2, default) and Vault (CC3, experimental), showing what each isolates; egress and credentials are set by policy, not the barrier.](../docs/img/wardyn-barriers.webp)
+![Three barrier strengths compared, Fence (CC1), Wall (CC2, default) and Vault (CC3, experimental), showing what each isolates, with egress and credentials set by policy, not the barrier.](../docs/img/wardyn-barriers.webp)
 
 ```mermaid
 flowchart TB
