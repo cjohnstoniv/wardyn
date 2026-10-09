@@ -392,6 +392,31 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     const tsKeys = tsInterfaceKeys(runsTs, "CreateRunInput");
     expect(tsKeys.filter((k) => !goTags.has(k))).toEqual([]);
   });
+
+  // components[] (#1914): the one request field the console does not send yet
+  // (UI_NEVER_SENDS) still has a TS shape, so the New Run rows (C14) build it from
+  // a mirrored type rather than a guess. The element is the SDK's ComponentRef, an
+  // alias of types.ComponentRef, and its keys are exactly the Go tags.
+  it("CreateRunRequest.components is []ComponentRef, and the TS ComponentRef keys are exactly its Go tags", () => {
+    expect(clientGo).toMatch(/Components\s+\[\]ComponentRef\s+`json:"components,omitempty"`/);
+    const typesGoSrc = readFileSync(join(root, "pkg/client/types.go"), "utf8");
+    expect(typesGoSrc).toMatch(/ComponentRef\s*=\s*types\.ComponentRef/);
+    const refGo = goJSONTags(readFileSync(join(root, "internal/types/component.go"), "utf8"), "ComponentRef");
+    expect(refGo.sort()).toEqual(["id", "inline", "name"]);
+    const componentsTs = readFileSync(join(root, "ui/src/app/lib/types/components.ts"), "utf8");
+    expect(tsInterfaceKeys(componentsTs, "ComponentRef").sort()).toEqual(refGo);
+  });
+
+  it("the console's response types carry the component facts both dry-run doors return", () => {
+    const preflightGo = readFileSync(join(root, "internal/api/preflight.go"), "utf8");
+    const previewGo = readFileSync(join(root, "internal/api/policy_preview_facts.go"), "utf8");
+    for (const src of [preflightGo, previewGo]) expect(src).toMatch(/Components\s+\[\]componentFact\s+`json:"components,omitempty"`/);
+    const previewTs = readFileSync(join(root, "ui/src/app/lib/types/policy-preview.ts"), "utf8");
+    expect(tsInterfaceKeys(runsTs, "PreflightResult")).toContain("components");
+    expect(tsInterfaceKeys(previewTs, "PolicyPreviewResult")).toContain("components");
+    expect(runsTs).toMatch(/components\?: ComponentFact\[\];/);
+    expect(previewTs).toMatch(/components\?: ComponentFact\[\];/);
+  });
 });
 
 // D. F6-F14 — the same "documents the omissions" idiom (proven above for
@@ -460,6 +485,19 @@ describe("source parity — five more flat structs", () => {
     expect(goTags.length).toBeGreaterThanOrEqual(17);
     const tsKeys = tsInterfaceKeys(policyTs, "RunPolicySpec");
     expect(new Set(goTags)).toEqual(new Set(tsKeys));
+  });
+
+  it("SiteConfig.components is the ComponentSettings block, and every Go tag of it is mirrored", () => {
+    expect(siteConfigGo).toMatch(/Components\s+\*ComponentSettings\s+`json:"components,omitempty"`/);
+    expect(siteTs).toMatch(/components\?: ComponentSettings;/);
+    const goTags = goJSONTags(siteConfigGo, "ComponentSettings");
+    expect(goTags.length).toBe(3);
+    expect(new Set(tsInterfaceKeys(siteTs, "ComponentSettings"))).toEqual(new Set(goTags));
+  });
+
+  it("RunPolicySpec.github_capabilities is mirrored beside azure_devops_capabilities", () => {
+    expect(goJSONTags(policyGo, "RunPolicySpec")).toContain("github_capabilities");
+    expect(tsInterfaceKeys(policyTs, "RunPolicySpec")).toEqual(expect.arrayContaining(["azure_devops_capabilities", "github_capabilities"]));
   });
 
   it("every Go AuditEvent tag is mirrored on the TS interface (prev_hash/row_hash closed)", () => {

@@ -9,6 +9,7 @@
 
 import type { AutonomyLevel, AutonomyResolution, RunLimits } from "../api/governance";
 import type { PolicyRef } from "../api/health";
+import type { ComponentFact } from "./components";
 import type { RunPolicySpec } from "./policy";
 import type { SCMAccess } from "./setup";
 
@@ -710,10 +711,18 @@ export type SetupFixAction = "add_secret" | "scan_workspace" | "none" | (string 
 // from the FINAL spec's own delivery mechanism (compose_setup.go's Residency
 // doc comment): "proxy_injected" (an api_key grant — the value never leaves the
 // wardyn-proxy sidecar), "resident_mount" (a host credential bind-mounted into
-// the sandbox), or "brokered_mint" (a github_token/git_pat grant minted/resolved
-// at task time). Absent when not applicable (workspace/egress/backend rows
-// carry no single credential).
-export type SetupItemResidency = "proxy_injected" | "resident_mount" | "brokered_mint" | (string & {});
+// the sandbox), "brokered_mint" (a github_token/git_pat grant minted/resolved
+// at task time), "resident_env" (an env_secret grant: the value is in the
+// sandbox environment for the whole run) or "resident_file" (a file_secret
+// grant: the value is a file in the sandbox for the whole run). Absent when
+// not applicable (workspace/egress/backend rows carry no single credential).
+export type SetupItemResidency =
+  | "proxy_injected"
+  | "resident_mount"
+  | "brokered_mint"
+  | "resident_env"
+  | "resident_file"
+  | (string & {});
 
 export interface SetupFix {
   action: SetupFixAction;
@@ -784,6 +793,11 @@ export interface PreflightResult {
   // 422s with reason "git_credential" instead. Absent when no Azure DevOps
   // row is configured at all.
   git_credential?: SCMAccess;
+  // What the run is given access to (internal/api's componentFacts): the Git
+  // providers its repositories live on, then its components in request order.
+  // The preview's rows plus the credential verdicts only this door reads.
+  // Absent for a run with no repository on a Git provider and no component.
+  components?: ComponentFact[];
 }
 
 // Where a run's MODEL credential lands (internal/api.modelCredentialResidency).
