@@ -100,6 +100,7 @@ Only the first two rules below remove content. Nothing else is removed or reloca
 - No leading `/`. `./` only for a same-directory target that would otherwise read as a bare word.
 - Code spans, not references: commands, flags, bare file names (`main.go`), directories (`scripts/`), runtime paths (`/etc/wardyn`) and the doc's own path.
 - A link whose text is a backtick span with a directory part that resolves to a tracked path must target that same path.
+- A span that names a tracked directory may link to that directory or to the `README.md` directly inside it, and to no other file.
 - The backticked path is repo-relative; the target adds one `../` per directory level of the writing file. The gate catches a wrong depth.
 
 ### 2.2 Threat-model citations
