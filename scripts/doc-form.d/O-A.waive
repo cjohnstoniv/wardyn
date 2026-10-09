@@ -1,4 +1,4 @@
 # kind	path	key	words	reason
-table	docs/OPERATIONS.md	| Deployment | Database | Age identity and keys | Recordings (file store only) | Drives | Audit spool, `.consumed`, `.quarantine` |	PLAN §4.4: the recovery-set table stays byte-stable (O-A spec); cmd/wardynd/recovery_set_doc_test.go reads it cell by cell
+table	docs/OPERATIONS.md	| Deployment | Database | Age identity and keys | Recordings (file store only) | Drives | Audit spool, `.consumed`, `.quarantine` |	PLAN §4.4: the recovery-set table's cells stay exact (two file-name spans link-wrapped for the must-link rule, identical once links are folded); cmd/wardynd/recovery_set_doc_test.go reads it cell by cell
 sentence	docs/OPERATIONS.md	0bc12b39a1e5c587f45572f79e54ea4ff60e3bff	40	no clause joiner: one refusal with its three conditions (without OIDC on that issuer, without TLS, with a bad token)
 sentence	docs/OPERATIONS.md	b2163606fe8e12879eef33862df05bed0cc6179c	39	no clause joiner: one subject and verb, then where the row is written and the two places it covers
