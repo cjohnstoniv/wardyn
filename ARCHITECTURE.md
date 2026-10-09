@@ -331,6 +331,7 @@ stateDiagram-v2
      - and this one had fallen five rows behind the
        table it pointed at (four printed here against nine there).
    - Read §5.1a.
+   - How each kind of credential reaches a run, and what the sandbox can read afterwards, is in [`docs/CREDENTIALS.md`](docs/CREDENTIALS.md).
    - The
      shapes it covers are grant-delivered credentials with no injection seam, the
      AWS role credentials a person's own `bedrock_sso` run derives in-process,
@@ -403,8 +404,10 @@ stateDiagram-v2
    - Every mint/revoke/approval/policy
      change/egress decision is an event.
    - The Postgres trigger blocks
-     UPDATE/DELETE/TRUNCATE, so a written event can never be altered or erased —
-     append-only is enforced at the datastore, not by app convention.
+     UPDATE/DELETE/TRUNCATE, so a written event can never be altered or erased by
+     the application — append-only is enforced at the datastore, not by app convention.
+   - The one removal is the drop of a whole partition older than the retention
+     window, which is off by default and leaves a chained event and an anchor ([OPERATIONS.md](docs/OPERATIONS.md#audit-retention-the-attested-partition-drop)).
    - NOTE:
      control-plane audit WRITES (identity mint/revoke, approval decide, broker
      revoke, a refused or failed broker mint) are still best-effort — the call

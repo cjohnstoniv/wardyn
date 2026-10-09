@@ -3,7 +3,8 @@
 # docs/README.md is 517 = base 516 + 1 word of the new "Index" heading: its table sat in the lead (H1 to first H2), which the form gate caps at 5 lines.
 # Figures add their alt-text words only: README.md +90 (opener pair 60, run figure 30) -> 2213, +2 for "by default" in the lead bullet -> 2215; docs/README.md +60 (opener pair) -> 577.
 # README.md 2227 adds 12: the architecture bullet about decision logs and masked casts became two.
-README.md=2227 share=35
+# README.md 2253 adds 26: 17 (the lead bullet links docs/CREDENTIALS.md) and 9 (the architecture bullet says the proxy adds most credentials, with a link).
+README.md=2253 share=35
 # docs/README.md 597 adds 20: the index row for docs/CREDENTIALS.md.
 docs/README.md=597 share=35
 # docs/TRY-IT.md 3209 adds 8: the demo/default difference names idle auto-stop.

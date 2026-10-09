@@ -161,7 +161,7 @@ if v.State == client.RunPolicyViewRecorded {
     for _, ch := range v.Changes {
         fmt.Println(ch.Cause, ch.Field, ch.Added, ch.Removed)
     }
-    _ = v.Spec // a client.RunPolicySpec, ready for PolicyRequest.Spec
+    _ = v.Spec // a client.RunPolicySpec; read "Reusing the spec" below before sending it as PolicyRequest.Spec
 }
 ```
 
@@ -176,6 +176,16 @@ if v.State == client.RunPolicyViewRecorded {
 | `stored_policy_now` | for a saved-policy source: `same`, `changed`, `updated` (a run from before the record: edited since, possibly a rename only) or `deleted`, with the policy's current `name` |
 
 The CLI is `wardyn run policy <run-id> [--json]`.
+
+#### Reusing the spec
+
+The spec always strict-decodes as a policy. Whether it passes policy validation depends on the reader and the run.
+
+- At the security admin tier it passes, and `wardyn run --policy-file` runs it again as is.
+- Below that tier it holds `<redacted>` values and fewer secret names, so it is a starting point.
+- A run that used an organisation component's shared secret is a record for every reader. The grant carries `shared: true`, which every authored door refuses, so validation fails.
+- For such a run, start the new run with the component named in `CreateRunRequest.Components` ([Custom components](#custom-components)).
+- The CLI says so in a `#` comment line above the YAML, and in its help.
 
 #### `changes`
 
@@ -300,7 +310,7 @@ From a shell, `wardyn run sign-in <run-id>` prints the same answer.
 - An empty task stays pending; it is never silently made interactive here.
 - An absent model-provider choice is pending; explicit or inherited unavailable choices still refuse without enumerating hidden providers.
 
-A successful response contains `spec` (authorized, clamped, workspace-folded and redacted), `source` (`kind`: `default`, `profile`, `stored` or `inline`; authorized `name` when available; `policy_id` only for stored), `provisional: true`, `redacted`, `warnings`, `pending`, and `repository_access`.
+A successful response contains `spec` (authorized, clamped, workspace-folded and redacted), `source` (`kind`: `default`, `profile`, `stored` or `inline`; authorized `name` when available; `policy_id` only for stored), `provisional: true`, `redacted`, `warnings`, `pending`, and `repository_access`, and `components` when the draft names a component or a repository on a Git provider.
 
 - Preview collections are arrays, never null; omitted versus explicitly empty axes inside the policy retain their policy meaning.
 - In particular, a PAT scope with `repos: []` still permits no repositories; omitted `repos` remains unset.
@@ -333,6 +343,30 @@ A successful response contains `spec` (authorized, clamped, workspace-folded and
 - Credentials, policies, capabilities and connections may change after it answers; create independently re-resolves every gate.
 - Clients should associate results with the request and principal, mark them stale after 60 seconds or relevant auth/config changes, and honor `Retry-After` without replacing a last good preview with an empty result.
 - Never use this read output as editable policy input.
+
+## Custom components
+
+A run can carry components that add destinations and secrets ([POLICIES.md](POLICIES.md#custom-components) defines them; [OPERATIONS.md](OPERATIONS.md#custom-components) is the admin side). The client wraps both stores of them.
+
+| Method | Route | Who |
+|---|---|---|
+| `MyComponents` | `GET /api/v1/me/components` | any signed-in person |
+| `SaveMyComponent` | `POST /api/v1/me/components` | any signed-in person |
+| `UpdateMyComponent` | `PUT /api/v1/me/components/{id}` | the owner |
+| `DeleteMyComponent` | `DELETE /api/v1/me/components/{id}` | the owner |
+| `ListComponents` | `GET /api/v1/components` | admin |
+| `PutComponent` | `PUT /api/v1/components/{id}` | admin |
+| `DeleteComponent` | `DELETE /api/v1/components/{id}` | admin |
+
+- `MyComponents` answers `may_define`, `resident_delivery_allowed`, `autonomy_cap`, `mine` and `org`.
+  - `org` holds only the organisation components the caller is granted, as `OrgComponentView`: hosts, delivery modes and config keys, never a secret name.
+- A save answers `ComponentSaved`: the stored row and `requirements[]`.
+  - Each requirement is `{kind: "secret", name, status: "present"|"missing", fix: "add_secret"}`. The list is advisory and never refuses a save.
+- `PutComponent` creates an organisation component restricted: nobody may attach it until an admin grants its id under `/api/v1/permissions`.
+- A run attaches components in `CreateRunRequest.Components`: `{id}` for a stored one, `{inline, name}` for a definition used by that run alone. At most 8.
+- Preflight and the policy preview answer `components`: one fact per component with `status` (`ready`, `needs_input`, `unavailable` or `unknown`), its `requirements`, hosts and each secret's delivery and `shared` flag.
+  - A fact never carries the name of a secret the organisation provides.
+- Create, preflight and preview refuse with the component reasons in [`Reason`](#reason-branch-on-this-never-on-errors-prose); a run is audited as `run.component.attach` and `run.component.refuse`.
 
 ## Error handling
 
@@ -864,8 +898,10 @@ Beyond `run_id`, the audit query accepts server-side predicates:
   enrolled laptop forwarded, each carrying a top-level `device_id`, or the
   organisation's own).
 
-They compose, and the CLI mirrors all but `origin` on
+They compose. The CLI mirrors all but `origin` and `action` on
 `wardyn audit`, whose per-run trail never holds a forwarded row.
+The Go client's `AuditFilter` has neither: for one action, send `action` over raw HTTP,
+or use `action_prefix` (`--action-prefix`).
 
 - The per-run trail is chronological (ASC) and returns up to 1000 events; a longer
   trail sets `X-Wardyn-Truncated: true`, so page forward with `&limit=&offset=` to

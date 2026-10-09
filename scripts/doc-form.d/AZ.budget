@@ -1,1 +1,2 @@
-docs/AZURE-DEVOPS.md=10612 share=35
+# docs/AZURE-DEVOPS.md 10637 adds 25: the two 'never enters the sandbox' statements now say the sandbox holds an inert placeholder and link docs/CREDENTIALS.md (19 + 9 by the diff tool; the gate counts 25).
+docs/AZURE-DEVOPS.md=10637 share=35

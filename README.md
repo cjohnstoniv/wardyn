@@ -4,6 +4,7 @@
 
 - **The open-source governed-sandbox control plane for any workload — identity, controls, and audit are the product; the sandbox is a pluggable commodity.**
 - Anything you run under your own credentials inherits your full blast radius. Wardyn is the layer in between — per-run identity, credentials minted and revoked per run, one audited path off-host, no resident key by default.
+- [docs/CREDENTIALS.md](docs/CREDENTIALS.md) says how each kind of credential reaches a run, and which ones the sandbox can read.
 - Coding agents are the flagship use.
 
 ![An isometric compound where one outer wall surrounds a datacentre and people's devices, each sandbox sits behind Wardyn's inner wall, and the org control plane links by policy and audit.](docs/img/wardyn-walls.webp)
@@ -208,7 +209,7 @@ flowchart LR
   proxy -->|"allowlisted L7, creds injected"| net(("Internet / APIs"))
 ```
 
-- A trusted control plane launches each run into an untrusted, gatewayless sandbox whose only path out is the `wardyn-proxy` sidecar, credentials injected there.
+- A trusted control plane launches each run into an untrusted, gatewayless sandbox whose only path out is the `wardyn-proxy` sidecar, which adds most credentials there ([which, and which the sandbox can read](docs/CREDENTIALS.md)).
 - Decision logs flow back into the append-only audit log ([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) §8).
 - Masked session recordings are optional and kept in their own store, with their own retention.
 - Wardyn never *adds* power: a run reaches at most what you can, clamped by policy.

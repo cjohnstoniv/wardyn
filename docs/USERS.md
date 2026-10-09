@@ -258,12 +258,25 @@ resolves your drive the same way, in a dry run too:
 - Use them for scripts.
 - Never share the admin token — you don't have it, and you shouldn't need it.
 
+## Custom components
+
+- A component is a set of hosts and secrets you add to one run: an API the agent should reach, with the key it needs.
+- You can attach an organisation component your admin granted you, save one of your own (`POST /me/components`), or write one inline in the run.
+- Defining your own is on unless your admin turned it off for you. A refusal says `Custom components aren't turned on for you. Ask your admin.`
+- An organisation component you are not granted answers `This component isn't available to you. Ask your admin.`, whether or not it exists.
+- A secret a component delivers is your own: store it first with `PUT /secrets/<name>`, signed in as yourself. Saving answers `requirements` naming any you still need.
+- A `header` secret is added by the egress proxy and never placed in the sandbox. An `env` or `file` secret is readable by any code that runs there ([CREDENTIALS.md](CREDENTIALS.md)).
+- Your admin may turn off `env` and `file` delivery, or limit a run that carries a component you defined to a lower autonomy level.
+- A component that names an IP address, a host that serves a model, or a host that already carries a credential on the run is refused.
+- Details for admins: [OPERATIONS.md](OPERATIONS.md#custom-components).
+
 ## Where your runs' audit lives
 
 - `GET /audit?run_id=<your run>` — reachable from the run's Audit tab in the console.
 - Leave off `?run_id=` and you get an empty `200`: a collection
   endpoint's answer when it has nothing scoped to show you, not an error.
 - The action vocabulary is [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
+- If a run used an organisation component's shared secret, the audit rows and the grant list you read for your own run leave out that secret's name. Administrators and security administrators read the rows as recorded.
 - If your laptop is one your organisation enrolled into a remote control plane,
   this same audit trail is also forwarded upward into the organisation's own table.
 - This is automatic, admin-configured, and nothing you do here changes it.
@@ -333,7 +346,7 @@ resolves your drive the same way, in a dry run too:
 **Per-person credentials: `owner_only`.**
 
 - Any stored secret a grant names —
-  an `api_key`, `git_pat`, `ssh_key` or `env_secret` grant — resolves your own row
+  an `api_key`, `git_pat`, `ssh_key`, `env_secret` or `file_secret` grant — resolves your own row
   first and, if you have none, the operator's row of that name.
 - For a credential
   that belongs to one person (a personal access token, a personal API key) that

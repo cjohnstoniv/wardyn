@@ -27,7 +27,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Every parseable read through `internal/cliutil` (bool / duration / int) is **loud** — an unparseable value exits 2 rather than silently reinstating the default.
 - Unset or empty (`docker run -e VAR` / compose `VAR=`) keeps the default quietly.
 - Every boolean `wardynd` and the runner substrates read goes through that one parser (`1`/`true`/`yes`/`on`, `0`/`false`/`no`/`off`, anything else exits 2 at boot).
-- The five `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_MEMBER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`) are also read once at boot so a bad value is refused there.
+- The five `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`) are also read once at boot so a bad value is refused there.
 - Two `wardyn-proxy` parsers are kept on purpose.
 - `WARDYN_LLM_SCAN` is a kill switch that can only disable.
 - It also accepts `disable`/`disabled`/`none` and `enable`/`enabled`, and a garbage value exits 2.
@@ -241,7 +241,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_PRINT_GROUNDTRUTH_TOKEN` | bool | `false` | mint+print a host-sensor token and exit (flag `-print-groundtruth-token`) |
 | `WARDYN_AGENT_IMAGES` | string (JSON) | (unset) | agent-name → OCI image ref map (flag `-agent-images`). The `base` key is what the setup connectivity probe resolves — it needs no coding agent, only `curl` |
 | `WARDYN_ALLOW_AGENT_TELEMETRY` | bool | (unset) | re-enable the agent CLI's own telemetry inside sandboxes. Default-unset SUPPRESSES it. [Details](#wardyn_allow_agent_telemetry) |
-| `WARDYN_ALLOW_USER_ENV_SECRET` | bool | (unset) | let MEMBERS hold `env_secret` grants. Default-unset DROPS a member's `env_secret` grant even when the operator's ceiling lists the exact `(name, secret)` pairing (`dropAdminOnlyEnvSecretGrants`, `inline_policy_bounds.go`). [Details](#wardyn_allow_user_env_secret) |
+| `WARDYN_ALLOW_USER_ENV_SECRET` | bool | (unset) | let MEMBERS hold `env_secret` and `file_secret` grants. Default-unset DROPS a member's `env_secret` or `file_secret` grant even when the operator's ceiling lists the exact pairing (`dropAdminOnlyEnvSecretGrants`, `inline_policy_bounds.go`). [Details](#wardyn_allow_user_env_secret) |
 | `WARDYN_EGRESS_SECOND_HUMAN` | bool | (unset) | four-eyes on egress approvals: the human who DECIDES an `egress_domain` approval must not be the human who created the run (`requireSecondHuman`, `approvals_second_human.go`). **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_egress_second_human) |
 | `WARDYN_CAPABILITY_SECOND_HUMAN` | bool | (unset) | four-eyes on Azure DevOps capability escalations: the human who DECIDES one must not be the human who created the run. **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_capability_second_human) |
 | `WARDYN_GOVERNANCE_SECOND_HUMAN` | bool | (unset) | four-eyes on governance writes: a write by a human to a governance profile, a capability grant or a key-domain assignment is stored as a pending change, and a second, distinct human must approve it. [Details](#wardyn_governance_second_human) |
@@ -1286,12 +1286,13 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_ALLOW_USER_ENV_SECRET`
 
-- Let MEMBERS hold `env_secret` grants.
-- Default-unset DROPS a member's `env_secret` grant even when the operator's ceiling lists the exact `(name, secret)` pairing (`dropAdminOnlyEnvSecretGrants`, `inline_policy_bounds.go`).
+- Let MEMBERS hold `env_secret` and `file_secret` grants: one switch governs both kinds.
+- Default-unset DROPS a member's `env_secret` or `file_secret` grant even when the operator's ceiling lists the exact pairing (`(name, secret)` or `(file, secret)`; `dropAdminOnlyEnvSecretGrants`, `inline_policy_bounds.go`).
+- A component's `env` or `file` delivery is not governed by it: that is a person's own secret, under the `custom_component` feature ([POLICIES.md](POLICIES.md#custom-components)).
 - On EVERY route a run policy arrives by (an inline body, a stored row the member selected, or the deployment default) and whatever the caller's governance assignment.
 - Because the rule is a role check plus this switch rather than a ceiling check.
 - Every other member-reusable kind is bounded after delivery (`api_key` never leaves the broker, `git_pat` reaches git through the helper, `ssh_key` is wiped after the clone).
-- While an `env_secret` is a raw value in the process env for the run's whole life, with no mint, no TTL and nothing to revoke.
+- While an `env_secret` is a raw value in the process env for the run's whole life, and a `file_secret` a file for the same time, each with no mint, no TTL and nothing to revoke.
 - An operator's own runs are unaffected either way — the ceiling authority is never clamped by its own ceiling.
 - Deprecated alias `WARDYN_ALLOW_MEMBER_ENV_SECRET` still works and WARNs at boot through 0.8.x; removed in 0.9.
 - A value that is not a bool exits 2 at boot (`#202`; before that it was silently read as unset).
