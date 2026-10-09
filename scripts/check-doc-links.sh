@@ -55,7 +55,9 @@
 #     path (repo-relative) and the link must point at it. Like the rule above,
 #     it applies only to a span with a '/': link text `install.sh` (a bare file
 #     name) may point at any file, for the same reason `install.sh` alone is
-#     not a reference.
+#     not a reference. A span that names a tracked DIRECTORY (`deploy/helm/wardyn`)
+#     may point at that directory or at the README.md directly inside it; any
+#     other file in the directory still fails.
 #   Skipped: fenced code, headings, spans that resolve to nothing (runtime
 #   paths such as /etc/wardyn).
 set -euo pipefail
@@ -433,7 +435,7 @@ def check_must_link(src, fails):
                 if status == 'ok':
                     p = unquote(tgt.partition('#')[0].split('?', 1)[0])
                     dest = posixpath.normpath(posixpath.join(posixpath.dirname(src), p)) if p else src
-                if dest != want:
+                if dest != want and not (want in dirset and dest == posixpath.join(want, 'README.md')):
                     line = doc.line_of(m.start())
                     fails.append(f'{src}:{line}: link text `{span}` names {want} but the link points at {tgt}')
     for w in re.finditer(r'\S+', text[pos:]):

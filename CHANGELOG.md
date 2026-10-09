@@ -115,6 +115,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The pluggable components page, the image verification page, the export control page, the recording read confinement note and the adoption reports index are now bullets, tables and alerts, with every repository file they cite linked. No rule, default or limit changed; the long cells of the pluggable components tables moved to sections of their own.
 - `docs/OPERATIONS.md`: the Network section ("Network: upstream proxy and egress redirects") is now
   bullets, tables and callouts, and every file it names is a link. No fact, default, limit or step changed.
+- The repository README, the docs index and the try-it walkthrough are restructured into bullets, tables and callouts with their file references linked; each gains one section heading. No command, default, limit or refusal changed.
 
 ### Fixed
 

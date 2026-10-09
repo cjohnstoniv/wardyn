@@ -1,17 +1,18 @@
 # Try Wardyn in 10 minutes
 
-The guided walkthrough. It picks up where the [README quickstart](../README.md)
-stops: `make setup` has finished, the UI is open at <http://localhost:8080>, and
-`wardyn setup status` says what model access is still missing. Easiest first: a
-**governance demo** (no keys), a **real Claude Code run** (bring an Anthropic API
-key), and **record, then replay confined** to onboard your own work.
+- The guided walkthrough.
+- It picks up where the [README quickstart](../README.md) stops: `make setup` has finished, the UI is open at <http://localhost:8080>, and `wardyn setup status` says what model access is still missing.
+- Easiest first: a **governance demo** (no keys), a **real Claude Code run** (bring an Anthropic API key), and **record, then replay confined** to onboard your own work.
 
+## Before you start
+
+> [!NOTE]
 > **If you installed with the one-liner** (`curl … install.sh | sh`) you have no
 > clone — no `Makefile`, no `examples/` tree, and no `demo-admin-token`.
 > Everything below still works; these are the substitutions.
 >
 > - **The admin token.** `demo-admin-token` is the compose dev stack's default
->   (`deploy/compose/docker-compose.yaml`'s
+>   ([`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)'s
 >   `${WARDYN_ADMIN_TOKEN:-demo-admin-token}`), never the installer's — the
 >   installer mints a real one and prints where it lives:
 >   `grep WARDYN_ADMIN_TOKEN ~/.wardyn/.env`.
@@ -24,7 +25,7 @@ key), and **record, then replay confined** to onboard your own work.
 >   | `make compose-down` | `docker compose down` |
 >   | `make reset` | `docker compose down -v && docker compose up -d` — wipes runs, audit and recordings; leaves `.env`, and so the age key |
 >   | `make agent-images-core` | nothing to build: `.env` pins published agent images, pulled on first use |
->   | `make doctor`, `make test-drive` | clone-only (`scripts/up.sh doctor`, `scripts/test-drive.sh`); the console's Getting-started rail runs the same capability probes |
+>   | `make doctor`, `make test-drive` | clone-only (`scripts/up.sh doctor`, [`scripts/test-drive.sh`](../scripts/test-drive.sh)); the console's Getting-started rail runs the same capability probes |
 >
 > - **`--policy-file examples/policies/<name>`** needs a file you do not have.
 >   Fetch it at the release you installed — the version is the first line of
@@ -36,38 +37,30 @@ key), and **record, then replay confined** to onboard your own work.
 >   curl -fsSLO "https://raw.githubusercontent.com/cjohnstoniv/wardyn/${v}/examples/policies/sandbox.yaml"
 >   ```
 
-The Getting-started rail detects this host's real capabilities — which
-confinement tiers exist (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault =
-CC3 Kata microVM), whether an LLM path exists, secret-store durability — then
-walks the rail's steps to your first run. Whatever you configure has to pass a live
-probe before that step unlocks; nothing is ambient, so a run reaches an
-integration only when its workspace requires it by name, and a model only
-through a model provider.
+- The Getting-started rail detects this host's real capabilities
+  - which confinement tiers exist (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault = CC3 Kata microVM),
+  - whether an LLM path exists,
+  - secret-store durability,
+  - then walks the rail's steps to your first run.
+- Whatever you configure has to pass a live probe before that step unlocks.
+- Nothing is ambient, so a run reaches an integration only when its workspace requires it by name, and a model only through a model provider.
 
 ![Getting started — this host's real capabilities: confinement barrier, model access, secret-store durability, each with the exact next command](img/getting-started.png)
 
 A couple of config facts before you customize:
 
-- **Policy defaults are launch-path-specific.** A bare hand-launched `wardynd`
-  loads `examples/policies/default.json` (`min_confinement_class` **CC1** as of
-  0.7.8, no `api_key` grant — an agent run can't reach a model under it);
-  `make setup` / `scripts/up.sh` auto-pick one: containerized picks `demo.json`
-  on a runc-only host, `default.json` when gVisor is registered (the two now
-  differ only in allowed-domains breadth, not confinement), and
-  `claude-llm.json` once a real model path is configured; host mode picks
-  `claude-llm.json`. Either way, an
-  unspecified run now defaults to the STRONGEST class the host's runner
-  actually advertises at or above the policy floor — CC2/CC3 need no policy
-  switch, just the runtime installed. The Getting Started **Review** step
-  warns when your stored credential and the live `WARDYN_DEFAULT_POLICY`
-  disagree — and separately, when the policy's confinement floor (an admin
-  override above CC1, say) names a tier this host's runner can't actually
-  enforce: every run on that policy would otherwise be refused before it
-  launches, with the first symptom an opaque error on the first real attempt.
-- **Secret-store durability.** `make setup` / `scripts/up.sh` mint and persist a
-  `WARDYN_AGE_KEY`; only a hand-launched bare `wardynd` runs on an EPHEMERAL age
-  key (secrets unreadable after restart) — run `wardynd -gen-age-key` to mint a
-  durable one.
+- **Policy defaults are launch-path-specific.**
+  - A bare hand-launched `wardynd` loads [`examples/policies/default.json`](../examples/policies/default.json) (`min_confinement_class` **CC1** as of 0.7.8, no `api_key` grant — an agent run can't reach a model under it);
+  - `make setup` / [`scripts/up.sh`](../scripts/up.sh) auto-pick one:
+    - containerized picks `demo.json` on a runc-only host, `default.json` when gVisor is registered (the two now differ only in allowed-domains breadth, not confinement), and `claude-llm.json` once a real model path is configured;
+    - host mode picks `claude-llm.json`.
+  - Either way, an unspecified run now defaults to the STRONGEST class the host's runner actually advertises at or above the policy floor — CC2/CC3 need no policy switch, just the runtime installed.
+  - The Getting Started **Review** step warns
+    - when your stored credential and the live `WARDYN_DEFAULT_POLICY` disagree,
+    - and separately, when the policy's confinement floor (an admin override above CC1, say) names a tier this host's runner can't actually enforce:
+      - every run on that policy would otherwise be refused before it launches,
+      - with the first symptom an opaque error on the first real attempt.
+- **Secret-store durability.** `make setup` / [`scripts/up.sh`](../scripts/up.sh) mint and persist a `WARDYN_AGE_KEY`; only a hand-launched bare `wardynd` runs on an EPHEMERAL age key (secrets unreadable after restart) — run `wardynd -gen-age-key` to mint a durable one.
 
 ## Level 1 — governance demo (no keys)
 
@@ -76,35 +69,25 @@ make agent-images-core   # build wardyn/agent-base:local + agent-claude-code:loc
 make test-drive          # ARGS defaults to --up, which brings the compose stack up first
 ```
 
-`make test-drive` ([`scripts/test-drive.sh`](../scripts/test-drive.sh)) walks the
-table below against the running stack and prints what each step proved: a
-governed clone and the no-default-route check, an egress deny, the cloud-metadata
-block (a proof the table doesn't cover), a first-use approval (queue → approve →
-retry), the brokered git-credential chain, and the kill cascade with its
-`actor_type=human` audit event. Its one weak step is the recording: it uploads a
-synthetic asciicast and fetches it back, which exercises the endpoint but does not
-prove the recorder captured a live session — check the **Recording** tab after a
-real run for that.
-`ARGS='--section 3'` runs one section, `ARGS='--keep'` leaves its runs alive to
-poke at.
+- `make test-drive` ([`scripts/test-drive.sh`](../scripts/test-drive.sh)) walks the table below against the running stack and prints what each step proved:
+  - a governed clone and the no-default-route check, an egress deny,
+  - the cloud-metadata block (a proof the table doesn't cover),
+  - a first-use approval (queue → approve → retry), the brokered git-credential chain,
+  - and the kill cascade with its `actor_type=human` audit event.
+- Its one weak step is the recording: it uploads a synthetic asciicast and fetches it back, which exercises the endpoint but does not prove the recorder captured a live session.
+- Check the **Recording** tab after a real run for that.
+- `ARGS='--section 3'` runs one section, `ARGS='--keep'` leaves its runs alive to poke at.
 
-The UI is at http://localhost:8080. The demo stack configures no OIDC, so the
-SSO button is disabled and the admin token below is the way in; bring up the
-`sso` compose profile (`docker compose -f deploy/compose/docker-compose.yaml
---profile sso up -d dex`, then set `WARDYN_OIDC_ISSUER=http://localhost:5556`
-and restart `wardynd` — see [deploy/compose/README.md](../deploy/compose/README.md))
-and the role split appears with two real identities already seeded in Dex:
-sign in as `demo@wardyn.local` for **admin**, `member@wardyn.local` for an
-owner-scoped **member** — on a **fresh** stack, `deploy/compose/.env.example`
-already maps them that way (`WARDYN_OIDC_ROLE_MAP`); an existing `.env`
-predating this pair keeps whatever it already had, so add the row by hand if
-you're on one. Point `WARDYN_OIDC_OPERATOR_EMAILS` at your own address
-instead to use your own login as admin — and set `WARDYN_OIDC_EMAIL_DOMAINS`
-to your own domain — compose defaults it to `wardyn.local`, which denies
-every other address. The split, the approval broker and the
-append-only audit log all ship in the Apache-2.0 build with no paid tier; for
-the exact 403 boundary and how to give a second person their own login, see
-[OPERATIONS.md](OPERATIONS.md#second-user-same-host).
+- The UI is at http://localhost:8080. The demo stack configures no OIDC, so the SSO button is disabled and the admin token below is the way in;
+  - bring up the `sso` compose profile (`docker compose -f deploy/compose/docker-compose.yaml
+    --profile sso up -d dex`, then set `WARDYN_OIDC_ISSUER=http://localhost:5556` and restart `wardynd` — see [deploy/compose/README.md](../deploy/compose/README.md)) and the role split appears with two real identities already seeded in Dex:
+    - sign in as `demo@wardyn.local` for **admin**, `member@wardyn.local` for an owner-scoped **member** —
+    - on a **fresh** stack, [`deploy/compose/.env.example`](../deploy/compose/.env.example) already maps them that way (`WARDYN_OIDC_ROLE_MAP`);
+    - an existing `.env` predating this pair keeps whatever it already had, so add the row by hand if you're on one.
+- Point `WARDYN_OIDC_OPERATOR_EMAILS` at your own address instead to use your own login as admin — and set `WARDYN_OIDC_EMAIL_DOMAINS` to your own domain —
+  - compose defaults it to `wardyn.local`, which denies every other address.
+- The split, the approval broker and the append-only audit log all ship in the Apache-2.0 build with no paid tier.
+- For the exact 403 boundary and how to give a second person their own login, see [OPERATIONS.md](OPERATIONS.md#second-user-same-host).
 
 By hand against the same stack:
 
@@ -122,40 +105,25 @@ wardyn run --agent claude-code --interactive --policy-file examples/policies/san
 wardyn run attach <id>
 ```
 
-Prefer clicking? The demos on the User view's Getting Started page
-(<http://localhost:8080/setup?step=sealed-box> — `/demos` redirects there)
-launch throwaway sandboxes with an embedded terminal and live approvals — no
-repo, no workspace. Two sections: **Egress demos** and **Secrets demos**.
-Fifteen of the sixteen need no model at all, only the sandbox barrier itself
-(most of the Secrets ones additionally want a stored secret, which the Admin
-view's setup at `/admin/setup` walks you through adding; a couple gate on a
-GitHub App, or nothing at all). The Egress group includes:
-**the sealed box** (`always_deny` — `curl` fails instantly with a 403), **fail
-then approve** (`deny_with_review` — approve, retry, it succeeds), **held at the
-door** (`wait_for_review` — `curl` *hangs* at the proxy until you approve, then
-the same in-flight command completes), **lines that can't be crossed**
-(allow-all policy, yet `169.254.169.254` and private-IP probes stay denied — no
-policy can grant them), **denied, however you spell it** (allow-all plus one
-`denied_domains` entry — the trailing-dot spelling of the blocked host meets the
-same 403, and the refusal names its reason in `X-Wardyn-Egress` headers),
-**once, or for good** (`deny_with_review` — approve with
-**Once** and the retry succeeds, but the *next* attempt after that raises a
-brand-new approval: the grant covers one connection, not the run), and **record
-a policy** (allow-all policy, then synthesize what it actually touched into a
-least-privilege allowlist you can save and re-run confined). One more egress
-card, **the agent in the box**, appears once you connect a model (Level 2
-below): it runs a real Claude Code agent under the same policy primitives, its
-model injected proxy-side, with `api.anthropic.com` the only host it can reach.
+- Prefer clicking?
+- The demos on the User view's Getting Started page (<http://localhost:8080/setup?step=sealed-box> — `/demos` redirects there) launch throwaway sandboxes with an embedded terminal and live approvals — no repo, no workspace.
+- Two sections: **Egress demos** and **Secrets demos**.
+- Fifteen of the sixteen need no model at all, only the sandbox barrier itself.
+  - Most of the Secrets ones additionally want a stored secret, which the Admin view's setup at `/admin/setup` walks you through adding.
+  - A couple gate on a GitHub App, or nothing at all.
+- The Egress group includes: **the sealed box** (`always_deny` — `curl` fails instantly with a 403), **fail then approve** (`deny_with_review` — approve, retry, it succeeds), **held at the door** (`wait_for_review` —
+- `curl` *hangs* at the proxy until you approve, then the same in-flight command completes), **lines that can't be crossed** (allow-all policy, yet `169.254.169.254` and private-IP probes stay denied — no policy can grant them),
+- **denied, however you spell it** (allow-all plus one `denied_domains` entry — the trailing-dot spelling of the blocked host meets the same 403, and the refusal names its reason in `X-Wardyn-Egress` headers),
+- **once, or for good** (`deny_with_review` — approve with **Once** and the retry succeeds, but the *next* attempt after that raises a brand-new approval: the grant covers one connection, not the run),
+- and **record a policy** (allow-all policy, then synthesize what it actually touched into a least-privilege allowlist you can save and re-run confined).
+- One more egress card, **the agent in the box**, appears once you connect a model (Level 2 below).
+- It runs a real Claude Code agent under the same policy primitives, its model injected proxy-side, with `api.anthropic.com` the only host it can reach.
 
-The **Secrets** group is eight cards covering a stored *value* rather than a
-destination — the write-only store itself, proxy-side header injection, an
-approval-gated single-use mint, and then one card per credential KIND, because
-what a credential's own protocol accepts is what decides how far out of the
-sandbox it can be kept: an `api_key` never enters the box, a `git_pat` enters
-only as a pipe, an `ssh_key` is the documented resident exception, a
-`github_token` is minted proxy-side and refused if the sandbox asks for it, and
-a `cloud_sts` grant is refused at run-create outright without a SPIRE identity
-provider.
+- The **Secrets** group is eight cards covering a stored *value* rather than a destination —
+  - the write-only store itself, proxy-side header injection, an approval-gated single-use mint, and then one card per credential KIND,
+  - because what a credential's own protocol accepts is what decides how far out of the sandbox it can be kept:
+    - an `api_key` never enters the box, a `git_pat` enters only as a pipe, an `ssh_key` is the documented resident exception,
+    - a `github_token` is minted proxy-side and refused if the sandbox asks for it, and a `cloud_sts` grant is refused at run-create outright without a SPIRE identity provider.
 
 <!-- Regenerated with `make screenshots` (docs.spec.ts) for 0.7.4. Freshness is
      flagged per-PR, as an advisory annotation from ci.yml's diagrams job
@@ -174,11 +142,9 @@ What you can verify live, even without keys:
 | Kill switch | `wardyn run kill <id>` → container gone, run token revoked (401), audit `run.kill` |
 | Brokered credentials | `docker exec wardyn-agent-<id> sh -c 'printf "protocol=https\nhost=github.com\n\n" \| wardyn-git-helper get'` → raises a credential approval; approving it hits the fail-closed mint (no GitHub App configured) — the whole chain is visible in audit |
 
-Want a worked scenario per control? [`examples/workspaces/`](../examples/workspaces/)
-is a catalog of six small workspaces — benign, exfil attempt, metadata probe,
-needs-approval, github-push, long-running — each with the exact task text, the
-`wardyn run` command, and its PASS criteria, plus a key-free `probes.sh` you can
-point at any RUNNING sandbox.
+- Want a worked scenario per control?
+- [`examples/workspaces/`](../examples/workspaces/) is a catalog of six small workspaces — benign, exfil attempt, metadata probe, needs-approval, github-push, long-running —
+  - each with the exact task text, the `wardyn run` command, and its PASS criteria, plus a key-free `probes.sh` you can point at any RUNNING sandbox.
 
 ## Level 2 — real Claude Code run (bring your own model credential)
 
@@ -199,147 +165,101 @@ wardyn run --agent claude-code --model-provider anthropic --repo octocat/Hello-W
   --task "Read the repository and write a SUMMARY.md describing it"
 ```
 
-What happens: the run's policy carries an auto-mintable `api_key` grant for
-`api.anthropic.com`; the proxy resolves the key **at startup, into proxy
-memory only** (the sandbox never sees it — check: `docker exec
-wardyn-agent-<id> env | grep ANTHROPIC_API_KEY` prints the literal sentinel
-`wardyn-proxy-injected`, never your key); Claude Code talks to
-`ANTHROPIC_BASE_URL=http://wardyn-proxy:3128/wardyn/llm/anthropic`, where the
-proxy injects `x-api-key` and logs every model call as a `brokered:llm`
-decision in the audit trail (an admin can re-point that brokered dial at
-an internal gateway through the provider's base URL under Settings → Model
-providers, with no sandbox-visible change at all). Watch the session live via Attach (`wardyn run attach
-<id>`, or the console's Live terminal) — the **Recording** tab plays back the
-captured cast only after the fact, it has no live view.
+- What happens: the run's policy carries an auto-mintable `api_key` grant for `api.anthropic.com`;
+  - the proxy resolves the key **at startup, into proxy memory only** (the sandbox never sees it — check: `docker exec
+    wardyn-agent-<id> env | grep ANTHROPIC_API_KEY` prints the literal sentinel `wardyn-proxy-injected`, never your key);
+  - Claude Code talks to `ANTHROPIC_BASE_URL=http://wardyn-proxy:3128/wardyn/llm/anthropic`, where the proxy injects `x-api-key` and logs every model call as a `brokered:llm` decision in the audit trail
+  - (an admin can re-point that brokered dial at an internal gateway through the provider's base URL under Settings → Model providers, with no sandbox-visible change at all).
+- Watch the session live via Attach (`wardyn run attach
+<id>`, or the console's Live terminal) — the **Recording** tab plays back the captured cast only after the fact, it has no live view.
 
-To also enable real GitHub pushes: create a GitHub App (contents+PR write),
-then `wardyn secret set github-app-id` and `wardyn secret set github-app-key`
-(PEM), restart, and approve the credential request the agent raises — the
-minted installation token is 1h, repo-scoped, and permission-clamped to
-`contents:write` + `pull_requests:write`. Branch-namespace confinement
-(`wardyn/<run-id>/*`) is recorded in the token metadata and **enforced on the
-brokered git path by default**: a push to any other ref is refused with 403
-before the token is minted. Nothing to turn on — `agent-run` checks each cloned
-repo out onto `wardyn/<run-id>/work`, so a stock run is already inside its
-namespace; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` on the proxy opts out.
+- To also enable real GitHub pushes: create a GitHub App (contents+PR write), then `wardyn secret set github-app-id` and `wardyn secret set github-app-key` (PEM), restart, and approve the credential request the agent raises —
+  - the minted installation token is 1h, repo-scoped, and permission-clamped to `contents:write` + `pull_requests:write`.
+- Branch-namespace confinement (`wardyn/<run-id>/*`) is recorded in the token metadata and **enforced on the brokered git path by default**: a push to any other ref is refused with 403 before the token is minted.
+- Nothing to turn on — `agent-run` checks each cloned repo out onto `wardyn/<run-id>/work`, so a stock run is already inside its namespace; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` on the proxy opts out.
 
-What that does **not** cover, plainly: the confinement binds the brokered GitHub
-App lane, because that is the only lane the proxy's receive-pack parser can
-read (a `git_pat` push is an opaque CONNECT tunnel and `ssh_key` is not
-smart-HTTP). For an `ssh_key` grant on the SAME forge Wardyn is brokering,
-that gap is closed a different way — the grant can't even be declared
-alongside the `github_token` grant (`400` at policy write), and dispatch
-denies the forge's SSH endpoint and withholds any already-stored grant from
-the sandbox — see `docs/POLICIES.md`. An `ssh_key` for a forge the run holds
-no `github_token` for stays bounded by the operator who supplied it, same as
-`git_pat`. And the installation token itself is repo-scoped but not
-ref-scoped, so a token leaked out of the proxy is unconstrained by anything
-in the token — unless the repo carries a GitHub ruleset. Wardyn can now read
-that ruleset back and gate on it (`WARDYN_GITHUB_REQUIRE_REF_RULESET`,
-opt-in, default off; `docs/POLICIES.md` has the creation recipe) — see
-`threatmodel/THREAT-MODEL.md` asset #4 and [ROADMAP.md](../ROADMAP.md).
+> [!WARNING]
+> - What that does **not** cover, plainly.
+> - The confinement binds the brokered GitHub App lane, because that is the only lane the proxy's receive-pack parser can read (a `git_pat` push is an opaque CONNECT tunnel and `ssh_key` is not smart-HTTP).
+> - For an `ssh_key` grant on the SAME forge Wardyn is brokering, that gap is closed a different way.
+> - The grant can't even be declared alongside the `github_token` grant (`400` at policy write), and dispatch denies the forge's SSH endpoint and withholds any already-stored grant from the sandbox.
+> - See [`docs/POLICIES.md`](POLICIES.md).
+> - An `ssh_key` for a forge the run holds no `github_token` for stays bounded by the operator who supplied it, same as `git_pat`.
+> - And the installation token itself is repo-scoped but not ref-scoped, so a token leaked out of the proxy is unconstrained by anything in the token — unless the repo carries a GitHub ruleset.
+> - Wardyn can now read that ruleset back and gate on it (`WARDYN_GITHUB_REQUIRE_REF_RULESET`, opt-in, default off; [`docs/POLICIES.md`](POLICIES.md) has the creation recipe) — see [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) asset #4 and [ROADMAP.md](../ROADMAP.md).
 
 ### Model auth: model providers
 
-As of 0.8 a run's model credential comes only from its **model provider**: an
-admin adds providers under Settings → Model providers (`PUT
-/api/v1/model-providers`), and each person connects their OWN credential for
-a provider — a key, a Claude sign-in or an AWS sign-in — from Getting started.
-Wardyn never substitutes: a run whose provider cannot credential it is refused
-at create, naming the provider and what to fix, and a run with no provider at
-all launches with only a warning. Upgrading converts the old setup once
-(migration `0100_model_provider_conversion`; see the CHANGELOG).
+- As of 0.8 a run's model credential comes only from its **model provider**:
+  - an admin adds providers under Settings → Model providers (`PUT
+    /api/v1/model-providers`),
+  - and each person connects their OWN credential for a provider — a key, a Claude sign-in or an AWS sign-in — from Getting started.
+- Wardyn never substitutes: a run whose provider cannot credential it is refused at create, naming the provider and what to fix, and a run with no provider at all launches with only a warning.
+- Upgrading converts the old setup once (migration `0100_model_provider_conversion`; see the [CHANGELOG](../CHANGELOG.md)).
 
-The operator-held lanes (a key in the operator's secret store, the managed
-subscription, Bedrock boot configuration) were retired in 0.8.2: `wardyn
-subscription` is gone, `wardyn secret set` refuses the model-credential names,
-and boot refuses the old variables ([ENV.md](ENV.md) lists them). The kinds:
+- The operator-held lanes (a key in the operator's secret store, the managed subscription, Bedrock boot configuration) were retired in 0.8.2: `wardyn
+subscription` is gone, `wardyn secret set` refuses the model-credential names, and boot refuses the old variables ([ENV.md](ENV.md) lists them).
+- The kinds:
 
-- **API key** (`anthropic_api_key`, `openai_api_key`) — each person stores their
-  own key for the provider. The proxy injects `x-api-key` at startup; **never
-  resident**.
-- **Claude subscription** (`anthropic_subscription`) — each person signs in to
-  the provider from Getting started; a short-lived sign-in sandbox runs `claude
-  setup-token` and the captured token is stored age-encrypted in that person's
-  own namespace, injected proxy-side as `Authorization: Bearer`. The sandbox
-  holds only an inert sentinel (`docker exec … env | grep -i key` is empty).
-  It needs the Claude sign-in image pinned in `WARDYN_AGENT_IMAGES`
-  (`make agent-images-core`).
-  > **Security note (honest):** a `claude setup-token` is **long-lived (~1 year)**
-  > and does **not** auto-rotate — it sits age-encrypted at rest in the secret
-  > store, masked from all streams, host-pinned to `api.anthropic.com`, and never
-  > enters the sandbox. Protect `deploy/compose/.env` and the postgres volume, and
-  > revoke the token in the Anthropic console if a host is compromised.
-- **AWS Bedrock** — a provider of kind `bedrock_sso` (each person signs in with
-  AWS; the region, model and base URL live on the provider record) or
-  `bedrock_bearer` (each person stores a Bedrock bearer token, proxy-injected as
-  `Authorization: Bearer` into `bedrock-runtime.*`, **never resident**). The
-  model is a cross-region *inference-profile* id, or the profile's full ARN —
-  `arn:aws:bedrock:<region>:<acct>:inference-profile/<id>` or
-  `…:application-inference-profile/<id>` — not a bare model id. A `bedrock_sso`
-  run holds that person's short-lived role credentials in its own sandbox (see
-  `threatmodel/THREAT-MODEL.md` §5.1a).
+- **API key** (`anthropic_api_key`, `openai_api_key`) — each person stores their own key for the provider.
+  - The proxy injects `x-api-key` at startup; **never resident**.
+- **Claude subscription** (`anthropic_subscription`) — each person signs in to the provider from Getting started;
+  - a short-lived sign-in sandbox runs `claude
+  setup-token` and the captured token is stored age-encrypted in that person's own namespace, injected proxy-side as `Authorization: Bearer`.
+  - The sandbox holds only an inert sentinel (`docker exec … env | grep -i key` is empty).
+  - It needs the Claude sign-in image pinned in `WARDYN_AGENT_IMAGES` (`make agent-images-core`).
+
+> [!WARNING]
+> - **Security note (honest):** a `claude setup-token` is **long-lived (~1 year)** and does **not** auto-rotate — it sits age-encrypted at rest in the secret store, masked from all streams, host-pinned to `api.anthropic.com`, and never enters the sandbox.
+> - Protect `deploy/compose/.env` and the postgres volume, and revoke the token in the Anthropic console if a host is compromised.
+
+- **AWS Bedrock** — a provider of kind `bedrock_sso` (each person signs in with AWS; the region, model and base URL live on the provider record)
+  - or `bedrock_bearer`:
+    - each person stores a Bedrock bearer token, proxy-injected as `Authorization: Bearer` into `bedrock-runtime.*`, **never resident**.
+  - The model is a cross-region *inference-profile* id, or the profile's full ARN — `arn:aws:bedrock:<region>:<acct>:inference-profile/<id>` or `…:application-inference-profile/<id>` — not a bare model id.
+  - A `bedrock_sso` run holds that person's short-lived role credentials in its own sandbox (see [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5.1a).
 
 ## Level 2.5 — record a session, rerun it as a governed profile
 
-The primary way to onboard your own work: in a workspace, **record** a named
-interactive session (with model access), then rerun it governed — the New Run
-dialog's Basics step offers the workspace's recorded sessions as **profiles**;
-picking one fast-tracks you to Review with the recording's observed egress
-already loaded into the allowlist. **Replay confined** launches a fresh CONFINED
-session for a recording you pick — default-deny egress, live approvals surfaced next to
-the attached terminal — so you re-run the same steps under the tightened policy
-and prove the profile works before relying on it. An off-policy host is **held
-at the door**: the connection parks at the proxy while an approval surfaces in
-the live strip next to the terminal (`wait_for_review`), and approving it
-completes that same in-flight request — no retry needed; denying it, or
-letting the hold deadline pass, fails it closed. Approving one there does more
-than release the connection: it durably writes a required `egress:<host>` row
-into the workspace's own requirements contract, so a later confined replay of
-the same workspace does not hold on that host again — see `docs/POLICIES.md`.
+- The primary way to onboard your own work: in a workspace, **record** a named interactive session (with model access), then rerun it governed —
+  - the New Run dialog's Basics step offers the workspace's recorded sessions as **profiles**;
+  - picking one fast-tracks you to Review with the recording's observed egress already loaded into the allowlist.
+- **Replay confined** launches a fresh CONFINED session for a recording you pick — default-deny egress, live approvals surfaced next to the attached terminal —
+  - so you re-run the same steps under the tightened policy and prove the profile works before relying on it.
+- An off-policy host is **held at the door**:
+  - the connection parks at the proxy while an approval surfaces in the live strip next to the terminal (`wait_for_review`),
+  - and approving it completes that same in-flight request — no retry needed;
+  - denying it, or letting the hold deadline pass, fails it closed.
+- Approving one there does more than release the connection:
+  - it durably writes a required `egress:<host>` row into the workspace's own requirements contract, so a later confined replay of the same workspace does not hold on that host again — see [`docs/POLICIES.md`](POLICIES.md).
 
-The confined session's allowlist is **not** the approved set alone. It is:
+- The confined session's allowlist is **not** the approved set alone.
+- It is:
+  - baseline clone/registry hosts
+  - ∪ the workspace profile's detected registry hosts (`EgressDomains`)
+  - ∪ the operator's `ApprovedEgress`
+  - ∪ every required `egress:<host>` row in the workspace's requirements contract (scan-seeded, operator-set, or just durably approved through a hold as described above)
+- so it is much tighter than the open recording, but it is **not minimal**:
 
-    baseline clone/registry hosts ∪ the workspace profile's detected registry
-    hosts (`EgressDomains`) ∪ the operator's `ApprovedEgress` ∪ every required
-    `egress:<host>` row in the workspace's requirements contract (scan-seeded,
-    operator-set, or just durably approved through a hold as described above)
+> [!WARNING]
+> - **HONEST RESIDUAL** — a GitHub clone no longer appears in this allowlist at all.
+> - It is routed through the Wardyn git-broker (repo-scoped, token minted proxy-side), so `github.com` and its bundle are **not** in the confined session's egress.
+> - The residual is the reverse — the baseline is otherwise the workspace profile's detected registries ∪ `ApprovedEgress` ∪ approved requirement rows.
+> - And the replay proves the steps work under that policy without proving it is the smallest one that works.
+> - Content-derived `SuggestedEgress` is deliberately excluded — a build that needs a host (including an un-granted GitHub dependency) surfaces as an observed denial you can promote.
 
-so it is much tighter than the open recording, but it is **not minimal**:
+> [!NOTE]
+> - It's a live re-run under the tighter policy, not a byte-for-byte replay of the captured session.
+> - It is also the ONLY environment proof Wardyn offers: the old import-flow "verify" step — which executed an operator-approved command list to show the environment built — is gone.
+> - Detected build commands are now documentation (AGENTS.md), because nothing verified them.
 
-- **HONEST RESIDUAL** — a GitHub clone no longer appears in this allowlist at
-  all: it is routed through the Wardyn git-broker (repo-scoped, token minted
-  proxy-side), so `github.com` and its bundle are **not** in the confined
-  session's egress. The residual is the reverse — the baseline is otherwise the
-  workspace profile's detected registries ∪ `ApprovedEgress` ∪ approved
-  requirement rows, and the replay proves the steps work under that policy
-  without proving it is the smallest one that works. Content-derived
-  `SuggestedEgress` is deliberately excluded — a build that needs a host
-  (including an un-granted GitHub dependency) surfaces as an observed denial
-  you can promote.
+- **Workspaces from the CLI:** `wardyn workspace create|list|get|delete|scan` manages onboarded workspaces headlessly (`create` is what clears the run-create onboarding gate for `--policy-file` workspace mounts).
+- The committable env-as-code a finalize emits is re-fetchable any time via `GET /api/v1/workspaces/{id}/env-as-code` (same `emitted_files` shape), and a finished session's cast downloads with `wardyn run recording <run-id> [-o file]`.
 
-(It's a live re-run under the tighter policy, not a byte-for-byte replay of the
-captured session. It is also the ONLY environment proof Wardyn offers: the
-old import-flow "verify" step — which executed an operator-approved command
-list to show the environment built — is gone. Detected build commands are now
-documentation (AGENTS.md), because nothing verified them.)
-
-**Workspaces from the CLI:** `wardyn workspace create|list|get|delete|scan`
-manages onboarded workspaces headlessly (`create` is what clears the run-create
-onboarding gate for `--policy-file` workspace mounts). The committable
-env-as-code a finalize emits is re-fetchable any time via
-`GET /api/v1/workspaces/{id}/env-as-code` (same `emitted_files` shape), and a
-finished session's cast downloads with `wardyn run recording <run-id> [-o file]`.
-
-**From the CLI:** `wardyn record task <workspace-id> <task-key>` records a
-single named session — `task-key` is a free-form name you choose ("build &
-test", "agent dev loop", anything), not picked from a derived taxonomy —
-in an OPEN (allow-all egress) sandbox, so you can learn exactly what that
-session actually uses.
-The session idles for `wardyn run attach`; when it ends, the capture lands on the
-workspace, and `wardyn record synthesize <run-id>` previews the least-privilege
-profile (or promote the observed egress from the workspace page's
-recorded-session pane — **Approve N observed hosts**).
+- **From the CLI:** `wardyn record task <workspace-id> <task-key>` records a single named session —
+  - `task-key` is a free-form name you choose ("build & test", "agent dev loop", anything), not picked from a derived taxonomy —
+  - in an OPEN (allow-all egress) sandbox, so you can learn exactly what that session actually uses.
+- The session idles for `wardyn run attach`; when it ends, the capture lands on the workspace, and `wardyn record synthesize <run-id>` previews the least-privilege profile (or promote the observed egress from the workspace page's recorded-session pane — **Approve N observed hosts**).
 
 ## Stop / Reset
 
@@ -350,18 +270,14 @@ make reset               # start over from an empty Runs list: wipes Postgres + 
                          # (confirms first — default No; WARDYN_FORCE_RESET=1 headless)
 ```
 
-`make reset` operates on the **compose** stack: it wipes those volumes and
-brings up a *containerized* wardynd. A live host-mode daemon would collide with
-it on `:8080`, so a still-running one is offered a stop first — interactively,
-a separate y/N prompt (never lumped into the wipe's own confirmation);
-headlessly, only if you *also* set `WARDYN_FORCE_STOP_HOST=1`
-(`WARDYN_FORCE_RESET=1` alone confirms the volume wipe and nothing else, so it
-never silently kills a host-mode daemon it wasn't asked to touch). To reset
-host mode instead, `make stop-host && make setup`. `make doctor` is read-only
-— it creates and changes nothing on this host — so re-run it any time to
-re-check this host's capabilities. (Its one container is a throwaway
-`alpine:3.20 test -S`, run `--pull=never` to check whether your docker socket
-is bind-mountable, and skipped outright when that image isn't already local.)
+- `make reset` operates on the **compose** stack: it wipes those volumes and brings up a *containerized* wardynd.
+- A live host-mode daemon would collide with it on `:8080`, so a still-running one is offered a stop first —
+  - interactively, a separate y/N prompt (never lumped into the wipe's own confirmation);
+  - headlessly, only if you *also* set `WARDYN_FORCE_STOP_HOST=1`
+  - (`WARDYN_FORCE_RESET=1` alone confirms the volume wipe and nothing else, so it never silently kills a host-mode daemon it wasn't asked to touch).
+- To reset host mode instead, `make stop-host && make setup`.
+- `make doctor` is read-only — it creates and changes nothing on this host — so re-run it any time to re-check this host's capabilities.
+- (Its one container is a throwaway `alpine:3.20 test -S`, run `--pull=never` to check whether your docker socket is bind-mountable, and skipped outright when that image isn't already local.)
 
 ### When it goes wrong
 
@@ -374,8 +290,8 @@ is bind-mountable, and skipped outright when that image isn't already local.)
 | Run fails "issue with selected model" | no model access configured, or a stale credential | connect your own credential for the run's model provider (Getting started), then `wardyn setup status` |
 | Port 5432 in use | another Postgres | stop it, or set `WARDYN_PG_PORT` |
 
-Honest limits of this demo deployment (see `threatmodel/`): single host,
-CC1/CC2 only unless a Kata runtime is registered (CC3/Vault is experimental —
-needs /dev/kvm + Kata; not available on Docker Desktop), wardynd holds the host Docker
-socket (daemon-trust tradeoff, loudly documented in the compose file), and
-the model-API channel is a logged-but-open data path by design.
+- Honest limits of this demo deployment (see [`threatmodel/`](../threatmodel/)):
+  - single host,
+  - CC1/CC2 only unless a Kata runtime is registered (CC3/Vault is experimental — needs /dev/kvm + Kata; not available on Docker Desktop),
+  - wardynd holds the host Docker socket (daemon-trust tradeoff, loudly documented in the compose file),
+  - and the model-API channel is a logged-but-open data path by design.
