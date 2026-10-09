@@ -6,6 +6,10 @@
 - Anything you run under your own credentials inherits your full blast radius; Wardyn is the layer in between — per-run identity, credentials minted and revoked per run, one audited path off-host, no resident key.
 - Coding agents are the flagship use.
 
+![Isometric walled compound: one outer wall around a datacentre and people's devices; glowing sandboxes each sit behind Wardyn's inner wall; the org control plane links by policy and audit.](docs/img/wardyn-walls.webp)
+
+![One outer wall around a cloud zone and people's devices; each sandbox, in the cluster or on a laptop, has its own inner wall and egress proxy; nothing connects in.](docs/img/wardyn-places.webp)
+
 ## Before you start
 
 > [!WARNING]
