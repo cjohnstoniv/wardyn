@@ -26,9 +26,7 @@
 cockpit-terminal-tmux-wheel.spec.ts | the wheel scrolls tmux history and does not recall bash history | #1795 | @cjohnstoniv | 2026-10-23
 substrate-health-banner.spec.ts | the substrate_health band › an admin sees it, with the row's detail, and its action opens the Review step | #1805 | @cjohnstoniv | 2026-10-23
 policy-ado-capabilities.spec.ts | the Azure DevOps access section locks what the ceiling does not grant, and saves what it does | #1786 | @cjohnstoniv | 2026-10-23
-reauth-in-place.spec.ts | signed out mid-page: sign in again in place (#483) › someone else signing in reloads the page fresh as them — the draft is gone | #1735 | @cjohnstoniv | 2026-10-23
 runs-landing.spec.ts | Runs landing — page states (design.md §6 L3 row) › search keeps focus and every character while typing one at a time | #1727 | @cjohnstoniv | 2026-10-23
-reauth-in-place.spec.ts | the renewal strip over New run › Escape cancels the renewal, stays on New run, and focus returns to Sign in again | #1926 | @cjohnstoniv | 2026-10-23
 view-routing.spec.ts | view routing › an admin in the User view is asked before entering the Admin view, never redirected | #1927 | @cjohnstoniv | 2026-10-23
 governance.spec.ts | governance — the security admin's authoring walk › a fresh install: no profiles, and the empty state carries the action that fills it | #1928 | @cjohnstoniv | 2026-10-23
 cockpit-terminal-tmux-flow.spec.ts | 50 MB of output keeps the page responsive and ends on the right screen | #1933 | @cjohnstoniv | 2026-10-23
