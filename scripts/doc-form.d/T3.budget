@@ -1,0 +1,5 @@
+# Prose-word budget (scripts/doc-form.sh): path=N. N is the measured prose words of the shared file after the
+# rewrite of threat-model residuals 41-63: the count before it (49251), plus 16 words of restated subjects where
+# a split part would otherwise have no subject or verb ("That is" x5, "it is" x1, "is" x1, "it" x2, "they" x1),
+# less 24 dashes turned into full stops, so growth fails.
+threatmodel/THREAT-MODEL.md=49243
