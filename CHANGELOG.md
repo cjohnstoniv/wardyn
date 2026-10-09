@@ -30,6 +30,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Sync over SSH.** A new `wardyn-sync` SSH subsystem runs the sandbox's own `sftp-server` in a validated
+  start directory (`WARDYN_SYNC_DIR`, under `/home/agent/`), with its own cap of 2 channels per run, and is
+  audited as `ssh.sync.transfer`. The start directory is a start point, not a boundary (#1952).
+- `WARDYN_SSH_MAX_SESSIONS_PER_RUN` sets the per-run SSH channel cap (default 4, unchanged), and
+  `ssh.sftp.transfer` gains `bytes_in`/`bytes_out`; `bytes` keeps its meaning (#1952).
 - **Locked L2.** A governance profile's autonomy rubric accepts `agent_guardrail_locks`. A Claude Code run at
   L2 then launches under managed settings that add `allowManagedHooksOnly` and
   `allowManagedPermissionRulesOnly`, so a repository's own hooks and permission rules cannot answer a tool

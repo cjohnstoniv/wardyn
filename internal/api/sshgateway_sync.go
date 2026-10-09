@@ -1,0 +1,114 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"context"
+	"fmt"
+	"path"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
+	"golang.org/x/crypto/ssh"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+const (
+	// sshSyncSubsystem is the subsystem `wardyn sync` requests: the sandbox's
+	// own sftp-server started in a chosen directory (docs/SSH.md).
+	sshSyncSubsystem = "wardyn-sync"
+	// sshSyncDirEnv and sshSyncDirectionEnv are the only env names honoured,
+	// and only on a channel that then requests sshSyncSubsystem.
+	sshSyncDirEnv       = "WARDYN_SYNC_DIR"
+	sshSyncDirectionEnv = "WARDYN_SYNC_DIRECTION"
+	// sshSyncDirRoot bounds the start directory, and sshSyncDefaultDir is the
+	// workspace the sandbox contract names when none is given.
+	sshSyncDirRoot    = "/home/agent/"
+	sshSyncDefaultDir = "/home/agent/work"
+)
+
+func sshSyncEnvName(name string) bool {
+	return name == sshSyncDirEnv || name == sshSyncDirectionEnv
+}
+
+// sshSyncDir validates the client-offered start directory: absolute, under
+// sshSyncDirRoot, no ".." segment, valid UTF-8 with no control character (C0 or
+// C1), and no '%' (it starts one of sftp-server's -d tokens). Empty is the
+// default. The result is cleaned.
+func sshSyncDir(v string) (string, error) {
+	if v == "" {
+		return sshSyncDefaultDir, nil
+	}
+	if !path.IsAbs(v) || strings.Contains(v, "%") || !utf8.ValidString(v) || strings.ContainsFunc(v, unicode.IsControl) {
+		return "", fmt.Errorf("%s must be an absolute path without control characters or '%%'", sshSyncDirEnv)
+	}
+	for _, seg := range strings.Split(v, "/") {
+		if seg == ".." {
+			return "", fmt.Errorf("%s must not contain a '..' segment", sshSyncDirEnv)
+		}
+	}
+	clean := path.Clean(v)
+	if !strings.HasPrefix(clean, sshSyncDirRoot) {
+		return "", fmt.Errorf("%s must be under %s", sshSyncDirEnv, sshSyncDirRoot)
+	}
+	return clean, nil
+}
+
+// sshSyncDirection is what the client declared for the audit row; anything but
+// push or pull is "unknown". It is the client's word, not something the
+// gateway can observe: it only relays sftp bytes.
+func sshSyncDirection(v string) string {
+	if v == "push" || v == "pull" {
+		return v
+	}
+	return "unknown"
+}
+
+// bridgeSSHSync runs the sandbox's own sftp-server started in the validated
+// directory, and records one ssh.sync.transfer row when the channel ends. The
+// directory is a start point, not a boundary: sftp-server reaches whatever the
+// agent uid can.
+func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel, env map[string]string) {
+	direction := sshSyncDirection(env[sshSyncDirectionEnv])
+	dir, dirErr := sshSyncDir(env[sshSyncDirEnv])
+	// BaseCtx, not ctx: the client may close the channel the moment it sees the
+	// subsystem ack, which cancels ctx; see bridgeSSHExec's trailing-write comment.
+	record := func(outcome string, extra map[string]any) {
+		extra["direction"] = direction
+		if dirErr == nil {
+			extra["dir"] = dir
+		}
+		s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sync.transfer",
+			runID.String(), outcome, mustJSON(extra)))
+	}
+	fail := func(errText, clientMsg string) {
+		record("failure", map[string]any{"error": errText, "bytes_in": 0, "bytes_out": 0})
+		sendChannelError(channel, clientMsg)
+	}
+	if dirErr != nil {
+		fail(dirErr.Error(), "wardyn-sync: "+dirErr.Error())
+		return
+	}
+	run, msg := s.sshFreshRun(ctx, runID, principal)
+	if msg != "" {
+		fail(msg, msg)
+		return
+	}
+	sess, reason, err := s.execSFTPServer(ctx, run, "-d", dir)
+	if err != nil {
+		fail(err.Error(), reason)
+		return
+	}
+	exit, bytesIn, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, true)
+	extra := map[string]any{"bytes_in": bytesIn, "bytes_out": bytesOut}
+	outcome := "success"
+	if exit != 0 {
+		outcome = "failure"
+		extra["error"] = fmt.Sprintf("sftp-server exited %d", exit)
+	}
+	record(outcome, extra)
+}

@@ -431,6 +431,11 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateSSHProxyCommand(*f.sshProxyCommand); err != nil {
 		return err
 	}
+	if f.sshMaxSessionsPerRun != nil {
+		if err := validateSSHMaxSessionsPerRun(*f.sshMaxSessionsPerRun); err != nil {
+			return err
+		}
+	}
 	if err := validateBasePath(*f.basePath, *f.oidcIssuer, *f.oidcRedirectURL, *f.controlURL); err != nil {
 		return err
 	}

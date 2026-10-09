@@ -1248,10 +1248,10 @@ func TestSSHGateway_ShellChannelDrivesFakeSession(t *testing.T) {
 }
 
 // TestSSHGateway_MaxSessionsPerRunEnforced pins the per-run channel cap
-// (maxSSHSessionsPerRun): the run's owner may hold that many concurrent
-// "session" channels open, and the NEXT one is rejected at channel-open time
-// (client.NewSession() itself errors — the cap bites before any shell/exec/
-// subsystem request is even sent).
+// (defaultSSHSessionsPerRun): the run's owner may hold that many concurrent
+// "session" channels open, and the NEXT one is refused: at channel open when
+// the wardyn-sync slots are full too, otherwise at its shell request (see
+// sshSessionRefused).
 func TestSSHGateway_MaxSessionsPerRunEnforced(t *testing.T) {
 	st, run, principal := sshOwnedRunningRun(t)
 	priv, pub := mustSSHKeypair(t)
@@ -1270,7 +1270,7 @@ func TestSSHGateway_MaxSessionsPerRunEnforced(t *testing.T) {
 			_ = s.Close()
 		}
 	}()
-	for i := 0; i < maxSSHSessionsPerRun; i++ {
+	for i := 0; i < defaultSSHSessionsPerRun; i++ {
 		sess, err := client.NewSession()
 		if err != nil {
 			t.Fatalf("session %d: %v", i, err)
@@ -1292,9 +1292,25 @@ func TestSSHGateway_MaxSessionsPerRunEnforced(t *testing.T) {
 		sessions = append(sessions, sess)
 	}
 
-	if _, err := client.NewSession(); err == nil {
-		t.Errorf("session over maxSSHSessionsPerRun=%d succeeded, want rejected", maxSSHSessionsPerRun)
+	if !sshSessionRefused(t, client) {
+		t.Errorf("session over defaultSSHSessionsPerRun=%d succeeded, want rejected", defaultSSHSessionsPerRun)
 	}
+}
+
+// sshSessionRefused reports whether one more shell on client is refused: the
+// channel open (shared cap full, no sync slot) or, because a session channel
+// over the shared cap is admitted for a possible wardyn-sync, its shell request.
+func sshSessionRefused(t *testing.T, client *ssh.Client) bool {
+	t.Helper()
+	sess, err := client.NewSession()
+	if err != nil {
+		return true
+	}
+	defer sess.Close()
+	if _, err := sess.StdinPipe(); err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	return sess.Shell() != nil
 }
 
 // TestSSHGateway_MaxConnectionsEnforced pins the total concurrent-connection
@@ -1449,7 +1465,7 @@ func TestSSHGateway_MixedChannelTypesShareOneCap(t *testing.T) {
 			_ = c.Close()
 		}
 	}()
-	for i := 0; i < maxSSHSessionsPerRun-1; i++ {
+	for i := 0; i < defaultSSHSessionsPerRun-1; i++ {
 		sess, err := client.NewSession()
 		if err != nil {
 			t.Fatalf("session %d: %v", i, err)
@@ -1474,14 +1490,14 @@ func TestSSHGateway_MixedChannelTypesShareOneCap(t *testing.T) {
 	// The cap is now full via N-1 sessions PLUS one forward. Both of the next
 	// two must be refused, whichever type they are.
 	t.Run("a further session is refused", func(t *testing.T) {
-		if _, err := client.NewSession(); err == nil {
-			t.Errorf("a session opened past the shared cap of %d — the forward above did not consume a slot, so the counter is NOT shared across channel types", maxSSHSessionsPerRun)
+		if !sshSessionRefused(t, client) {
+			t.Errorf("a session opened past the shared cap of %d — the forward above did not consume a slot, so the counter is NOT shared across channel types", defaultSSHSessionsPerRun)
 		}
 	})
 	t.Run("a further forward is refused", func(t *testing.T) {
 		if c, err := client.Dial("tcp", "127.0.0.1:9999"); err == nil {
 			_ = c.Close()
-			t.Errorf("a forward opened past the shared cap of %d — the sessions above did not consume slots, so the counter is NOT shared across channel types", maxSSHSessionsPerRun)
+			t.Errorf("a forward opened past the shared cap of %d — the sessions above did not consume slots, so the counter is NOT shared across channel types", defaultSSHSessionsPerRun)
 		}
 	})
 

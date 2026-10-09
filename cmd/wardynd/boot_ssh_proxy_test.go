@@ -4,6 +4,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -32,5 +33,39 @@ func TestValidateSSHProxyCommand(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSSHMaxSessionsPerRunBoot(t *testing.T) {
+	ensureUnset(t, "WARDYN_SSH_MAX_SESSIONS_PER_RUN")
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"wardynd-test"}
+
+	resetFlags(t)
+	if got := *parseBootFlags().sshMaxSessionsPerRun; got != 4 {
+		t.Fatalf("default = %d, want 4 (today's cap, so an upgrade changes nothing)", got)
+	}
+	t.Setenv("WARDYN_SSH_MAX_SESSIONS_PER_RUN", "8")
+	resetFlags(t)
+	if got := *parseBootFlags().sshMaxSessionsPerRun; got != 8 {
+		t.Fatalf("env 8 = %d", got)
+	}
+	for _, ok := range []int{1, 4, 64} {
+		if err := validateSSHMaxSessionsPerRun(ok); err != nil {
+			t.Errorf("%d refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []int{0, -1, 65, 1000} {
+		err := validateSSHMaxSessionsPerRun(bad)
+		if err == nil || !strings.Contains(err.Error(), "WARDYN_SSH_MAX_SESSIONS_PER_RUN") {
+			t.Errorf("%d: error = %v, want one naming WARDYN_SSH_MAX_SESSIONS_PER_RUN", bad, err)
+		}
+	}
+	t.Setenv("WARDYN_SSH_MAX_SESSIONS_PER_RUN", "0")
+	resetFlags(t)
+	if err := validateBootPosture(parseBootFlags(), tlsPosture{}); err == nil ||
+		!strings.Contains(err.Error(), "WARDYN_SSH_MAX_SESSIONS_PER_RUN") {
+		t.Errorf("boot with 0 = %v, want a refusal naming the variable", err)
 	}
 }

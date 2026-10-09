@@ -501,13 +501,14 @@ func run() error {
 		// (buildOptionalFeatures), which is also the sole gate ServeSSHGateway
 		// itself checks below — belt and suspenders, "empty = off" holds either
 		// way this Config is constructed.
-		SSHListenAddr:    *f.sshListen,
-		SSHAdvertiseAddr: *f.sshAdvertise,
-		SSHProxyCommand:  *f.sshProxyCommand,
-		SSHHostKey:       feats.sshHostKey,
-		SSHRoleTTL:       *f.sshRoleTTL,
-		APITokenMaxTTL:   *f.apiTokenMaxTTL,
-		RoleStampTTL:     *f.roleStampTTL,
+		SSHListenAddr:        *f.sshListen,
+		SSHAdvertiseAddr:     *f.sshAdvertise,
+		SSHProxyCommand:      *f.sshProxyCommand,
+		SSHHostKey:           feats.sshHostKey,
+		SSHRoleTTL:           *f.sshRoleTTL,
+		SSHMaxSessionsPerRun: *f.sshMaxSessionsPerRun,
+		APITokenMaxTTL:       *f.apiTokenMaxTTL,
+		RoleStampTTL:         *f.roleStampTTL,
 		// How long a governance change held for a second human waits (the switch itself is read
 		// per request by internal/api).
 		GovernanceChangeTTL: *f.governanceChangeTTL,
