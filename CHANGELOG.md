@@ -120,6 +120,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- `docs/VERIFY.md` said nothing on the page needs an account, a token or a GitHub login, but
+  `gh attestation verify` refuses to run until the GitHub CLI is signed in. The page now says so
+  beside that command and scopes the claim to the other checks.
 - Recording-on Kubernetes task output is recovered from the run's available recording into a
   masked tail after the run ends (#1831). A recovered row is always marked `source: "recording"`
   and `incomplete: true`. A missing, invalid or uncovered recording is stated as a `capture_gap`,

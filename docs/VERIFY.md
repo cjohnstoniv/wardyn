@@ -6,7 +6,7 @@
 > [!IMPORTANT]
 > Wardyn also publishes a *continuous* lane, on different terms — see ["The continuous lane"](#the-continuous-lane) before you verify a `:latest` or `:sha-…` tag with anything on this page.
 
-- Nothing here needs an account, a token, or a GitHub login.
+- Nothing here needs an account, a token, or a GitHub login, except the build-provenance check in [step 3](#3-verify-the-build-provenance).
 
 ## What is published
 
@@ -82,6 +82,7 @@ cosign verify-attestation --type cyclonedx \
 ## 3. Verify the build provenance
 
 - How it was built, in the format GitHub's own tooling reads:
+- `gh attestation verify` fetches the attestation from the GitHub API, so it needs the GitHub CLI signed in (`gh auth login`) or `GH_TOKEN` set.
 
 ```sh
 gh attestation verify "oci://ghcr.io/cjohnstoniv/wardynd:${WARDYN_VERSION}" --repo cjohnstoniv/wardyn

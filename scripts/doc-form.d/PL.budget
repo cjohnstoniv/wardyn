@@ -1,6 +1,6 @@
-# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words; PLUGGABILITY.md adds 172 words for 13 cell-expansion headings (51) and summaries (121), adoption/README.md adds 1 for the H2 the summary rule needs.
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words; PLUGGABILITY.md adds 172 words for 13 cell-expansion headings (51) and summaries (121), adoption/README.md adds 1 for the H2 the summary rule needs. VERIFY.md adds 29 for the stated sign-in prerequisite of the build-provenance check.
 docs/PLUGGABILITY.md=3062 share=35
-docs/VERIFY.md=1456 share=35
+docs/VERIFY.md=1485 share=35
 docs/EXPORT.md=476 share=35
 docs/RECORDING-ROOT-READ.md=524 share=35
 docs/adoption/README.md=241 share=35
