@@ -204,6 +204,57 @@ $duplicates
 Repair CHANGELOG.md so each version and Unreleased appears once, preserve the release notes, commit the repair with \`git commit -s\`, and re-run PHASE=prepare. Keep the merge/release history; do not reset, amend or force-push."
 }
 
+# repair_merged_changelog: after merging MERGE, a version heading the release line
+# already carries can be left a second time, stray, directly under another heading
+# (0.8.6 to 0.8.8). The stray is the occurrence that follows a heading and whose body
+# differs from the release line's body for that version, while the other occurrence
+# matches it: drop its heading line so its notes join the section above. Anything else
+# (no match, both match, a stray after notes, Unreleased) is left for the guard.
+repair_merged_changelog() {
+  local before
+  before="$(git show "origin/$RB:CHANGELOG.md" 2>/dev/null)" || return 0
+  python3 - CHANGELOG.md "$before" <<'PY' || return 0
+import re, sys
+path, base = sys.argv[1], sys.argv[2]
+head = re.compile(r"^## \[([^\]]*)\]")
+def sections(text):
+    out, cur = [], None
+    for i, line in enumerate(text.split("\n")):
+        m = head.match(line)
+        if m:
+            cur = [m.group(1), i, []]; out.append(cur)
+        elif cur is not None:
+            cur[2].append(line)
+    return out
+body = lambda sec: "\n".join(sec[2]).strip()
+want = {k: body([k, 0, b]) for k, _, b in sections(base)}
+lines = open(path).read().split("\n")
+secs = sections("\n".join(lines))
+drop = []
+for n, (k, i, _) in enumerate(secs):
+    same = [s for s in secs if s[0] == k]
+    if k == "Unreleased" or len(same) != 2 or k not in want or n == 0:
+        continue
+    j = i - 1
+    while j >= 0 and not lines[j].strip():
+        j -= 1
+    other = same[1] if same[0] is secs[n] else same[0]
+    if j >= 0 and head.match(lines[j]) and same[0] is secs[n] \
+       and body(secs[n]) != want[k] and body(other) == want[k]:
+        drop.append(i)
+if not drop:
+    sys.exit(1)
+for i in sorted(drop, reverse=True):
+    del lines[i]
+    if i < len(lines) and not lines[i].strip():
+        del lines[i]
+open(path, "w").write("\n".join(lines))
+PY
+  git add CHANGELOG.md
+  git commit -q -s -m "docs(changelog): drop the duplicate version heading the merge left" || die "committing the CHANGELOG repair failed"
+  say "repaired a duplicate CHANGELOG heading left by the merge"
+}
+
 phase_prepare() {
   local sha tree rtip n body state
 
@@ -218,6 +269,7 @@ phase_prepare() {
     fi
   fi
 
+  if [ -n "$MERGE" ] && [ "$DRY_RUN" != 1 ]; then repair_merged_changelog; fi
   check_changelog_headings
   begin "release commit $V"
   if git grep -qF -e "## [$V]" HEAD -- CHANGELOG.md; then finish "skipped (CHANGELOG already has $V)"

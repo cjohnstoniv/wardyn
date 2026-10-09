@@ -20,7 +20,8 @@
 #   J. the wait loop stops on a red run and PRINTS the rerun command, never runs it
 #   K-T. gh auth, release-commit refusal, numeric tag order, a missing draft,
 #      verify failure, an oversized BODY, bad ISSUES / PHASE, the script text
-#   X-Z. duplicate headings after merge/release commit or on resume; repair retains history
+#   X-Z. duplicate headings after merge/release commit or on resume; repair retains history;
+#      X2: a stray heading the merge leaves under another heading is repaired by prepare
 # and, over every push any case made: no --force, no `+` refspec.
 # Daemon-free, network-free.
 set -u
@@ -545,6 +546,16 @@ check "X: repair commit is still an ancestor" g -C "$WK" merge-base --is-ancesto
 check "X: repair preserved release notes" grep -qx -- '- merged notes to preserve' "$WK/CHANGELOG.md"
 check "X: no second merge or release commit" test "$(g -C "$WK" rev-list --count --merges HEAD) $(lines "$FIX/rc.log")" = '1 1'
 check "X: repaired candidate pushed" test "$(g -C "$OR" rev-parse refs/heads/chore/release-0.8.4)" = "$(g -C "$WK" rev-parse HEAD)"
+keep_pushes
+
+mkfix X2
+printf '# Changelog\n\n## [Unreleased]\n\n## [0.8.3] — 2030-01-01\n\n- main unreleased notes\n\n## [0.8.3] — 2030-01-01\n\n- old\n' >"$WK/CHANGELOG.md"
+g -C "$WK" add CHANGELOG.md && g -C "$WK" commit -q -s -m "main leaves a stray heading" && g -C "$WK" push -q origin main
+rp V=0.8.4 PHASE=prepare MERGE=origin/main
+check "X2: the stray heading is repaired and prepare exits zero" test "$RC" = 0
+check "X2: the repair is its own signed-off commit" bash -c "'$REAL_GIT' -C '$WK' log --format=%B | grep -q 'drop the duplicate version heading'"
+check "X2: the real 0.8.3 section keeps its notes" bash -c "grep -c '^## \\[0\\.8\\.3\\]' '$WK/CHANGELOG.md' | grep -qx 1 && grep -qx -- '- old' '$WK/CHANGELOG.md'"
+check "X2: the stray section's notes are kept, under Unreleased" bash -c "awk '/^## \\[/ {s=\$0} /main unreleased notes/ {print s}' '$WK/CHANGELOG.md' | grep -q Unreleased"
 keep_pushes
 
 mkfix Y

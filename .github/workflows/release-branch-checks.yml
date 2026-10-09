@@ -1,0 +1,47 @@
+name: Release branch checks
+
+# ci.yml has no push run on release/** (#1461): release.yml accepts CI by tree.
+# That left a commit pushed straight to a release branch without a DCO or secret
+# check until someone cut a release from it (#1466). These two jobs close that,
+# and nothing else runs here.
+on:
+  push:
+    branches: ['release/**']
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      # The range is what the push introduced, as in ci.yml's dco job: a new ref
+      # or a force-pushed one whose old tip is gone falls back to the tip commit.
+      # ^origin/main: commits already on main passed main's own gate.
+      - name: Check DCO sign-off (Signed-off-by on every pushed commit)
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ -n "$BEFORE" ] && ! echo "$BEFORE" | grep -qE '^0+$' \
+             && git cat-file -e "$BEFORE" 2>/dev/null; then
+            make dco DCO_RANGE="$BEFORE..HEAD ^origin/main" DCO_ALLOW_GITHUB_MERGES=1
+          else
+            make dco DCO_RANGE="-1 HEAD" DCO_ALLOW_GITHUB_MERGES=1
+          fi
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: make gitleaks
+        run: make gitleaks
