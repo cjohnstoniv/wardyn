@@ -61,8 +61,14 @@ test("the wheel scrolls tmux history and does not recall bash history", async ({
   // Leave copy-mode: the prompt line is empty, so nothing was recalled.
   await page.keyboard.press("q");
   await expect.poll(read).toContain("400");
-  const lines = (await read()).split("\n").map((l) => l.trimEnd()).filter(Boolean);
-  expect(lines[lines.length - 1]).toMatch(/\$$/);
+  // The prompt returns after the last number is drawn; wait for it, not for a
+  // single read that can land between the two.
+  await expect
+    .poll(async () => {
+      const lines = (await read()).split("\n").map((l) => l.trimEnd()).filter(Boolean);
+      return lines[lines.length - 1] ?? "";
+    })
+    .toMatch(/\$$/);
 });
 
 test("an attach from a foreign Origin is refused before the upgrade", async ({ page }) => {

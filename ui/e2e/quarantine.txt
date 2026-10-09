@@ -23,10 +23,6 @@
 #   runs.spec.ts | Runs page › filters by status | #1234 | @cjohnstoniv | 2026-10-07
 #
 # Entries:
-cockpit-terminal-tmux-wheel.spec.ts | the wheel scrolls tmux history and does not recall bash history | #1795 | @cjohnstoniv | 2026-10-23
-substrate-health-banner.spec.ts | the substrate_health band › an admin sees it, with the row's detail, and its action opens the Review step | #1805 | @cjohnstoniv | 2026-10-23
-policy-ado-capabilities.spec.ts | the Azure DevOps access section locks what the ceiling does not grant, and saves what it does | #1786 | @cjohnstoniv | 2026-10-23
-runs-landing.spec.ts | Runs landing — page states (design.md §6 L3 row) › search keeps focus and every character while typing one at a time | #1727 | @cjohnstoniv | 2026-10-23
 view-routing.spec.ts | view routing › an admin in the User view is asked before entering the Admin view, never redirected | #1927 | @cjohnstoniv | 2026-10-23
 governance.spec.ts | governance — the security admin's authoring walk › a fresh install: no profiles, and the empty state carries the action that fills it | #1928 | @cjohnstoniv | 2026-10-23
 cockpit-terminal-tmux-flow.spec.ts | 50 MB of output keeps the page responsive and ends on the right screen | #1933 | @cjohnstoniv | 2026-10-23

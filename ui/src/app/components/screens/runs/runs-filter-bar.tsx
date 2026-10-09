@@ -60,6 +60,21 @@ export function RunsFilterBar({
   onSaveView: (name: string) => void;
 }) {
   const [saving, setSaving] = React.useState(false);
+  // The box is typed into a local draft: the URL answers a keystroke a render
+  // late, and a value read back from it drops the characters typed meanwhile.
+  // `pending` holds what this box has sent and the URL has not yet echoed; a q
+  // that is none of those came from elsewhere (a saved view, Clear) and wins.
+  const [draft, setDraft] = React.useState(filters.q);
+  const pending = React.useRef<string[]>([]);
+  React.useEffect(() => {
+    const i = pending.current.indexOf(filters.q);
+    if (i >= 0) {
+      pending.current = pending.current.slice(i + 1);
+      return;
+    }
+    pending.current = [];
+    setDraft(filters.q);
+  }, [filters.q]);
   const [name, setName] = React.useState(RUNS_SAVE_VIEW_DEFAULT_NAME);
   // Indexed by position, not by its own search string — "Default" is itself
   // the empty query string, and a Radix SelectItem's value may never be "".
@@ -77,8 +92,12 @@ export function RunsFilterBar({
         <Input
           aria-label="Search runs"
           placeholder={RUNS_FILTERS.SEARCH_PLACEHOLDER}
-          value={filters.q}
-          onChange={(e) => onChange({ ...filters, q: e.target.value })}
+          value={draft}
+          onChange={(e) => {
+            pending.current.push(e.target.value);
+            setDraft(e.target.value);
+            onChange({ ...filters, q: e.target.value });
+          }}
           className="pl-9"
         />
       </div>
