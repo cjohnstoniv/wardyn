@@ -104,7 +104,9 @@ func TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName(t *testing.T) {
 		// integrations/onboarding_completed_at are carried forward from the
 		// store, effective_scm_hosts is PROJECTED on read and never stored at
 		// all (handleGetSiteConfig; the write clears it).
-		serverOwned := []string{"integrations", "onboarding_completed_at", "effective_scm_hosts", "withheld_scm_hosts"}
+		// egress is refused when changed and carried forward from the store: its writer is
+		// PUT /governance/egress-baseline.
+		serverOwned := []string{"integrations", "onboarding_completed_at", "effective_scm_hosts", "withheld_scm_hosts", "egress"}
 		typ := reflect.TypeOf(types.SiteConfig{})
 		for i := range typ.NumField() {
 			key, _, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")

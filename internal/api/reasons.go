@@ -219,6 +219,11 @@ const (
 	reasonSiteConfigIntegrationsViaOwnRoute = "site_config_integrations_via_own_route" // integrations were named inline instead of through their own endpoints
 	reasonSiteConfigInvalid                 = "site_config_invalid"                    // the submitted config fails one of validateAgentProviders/validateSiteConfig/validateModelProviders/validateDefaultProviders/validateModelProviderImagePrereqs
 	reasonSiteConfigStale                   = "site_config_stale"                      // If-Match does not match the current site-config ETag
+	reasonSiteConfigEgressViaOwnRoute       = "site_config_egress_via_own_route"       // a changed egress block was named inline instead of through PUT /governance/egress-baseline
+
+	// GET/PUT /governance/egress-baseline.
+	reasonEgressBaselineInvalid = "egress_baseline_invalid" // a baseline host is not an exact hostname, or the set is too large
+	reasonEgressBaselineStale   = "egress_baseline_stale"   // If-Match does not match the current baseline ETag
 
 	// POST /site-config/probe-proxy and PUT/DELETE .../egress-redirects.
 	reasonSiteConfigProbeRequestInvalid = "site_config_probe_request_invalid" // the probe body did not decode

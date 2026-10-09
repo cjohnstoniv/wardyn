@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -41,6 +42,10 @@ type runFold struct {
 	req     *createRunRequest
 	ceiling governanceCeiling
 	reqCC   types.ConfinementClass
+	// baseline is the operator's egress baseline, read ONCE per request by stepBaseline: the
+	// confinement floor, the autonomy posture and the door's own grading and facts all read this
+	// value, so one request cannot grade on two sets.
+	baseline composer.Baseline
 
 	spec              types.RunPolicySpec
 	policyID          *uuid.UUID
@@ -77,6 +82,8 @@ type runFoldStep struct {
 // entry here plus its name in TestPreflightMirrorsLaunchGates' pinned list.
 //
 // The ORDER is security-relevant and is the contract; do not sort it:
+//   - The egress baseline is read first and once; the floor, the autonomy
+//     posture and the door's grading read that one value.
 //   - Policy first: the member clamp and grant narrowing run before anything
 //     is granted, and every later step reads the clamped spec.
 //   - Workspace seed after policy, the drive after the seed: seeding can set
@@ -93,6 +100,7 @@ type runFoldStep struct {
 //   - Host capacity, the run cap and the quota fit last, so a refusal leaves
 //     no identity and no run row.
 var runFoldSteps = []runFoldStep{
+	{(*Server).stepBaseline, foldAll},
 	{(*Server).stepPolicy, foldAll},
 	{(*Server).stepSeedWorkspace, foldAll},
 	{(*Server).stepDrive, foldAll},

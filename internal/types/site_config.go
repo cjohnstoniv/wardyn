@@ -77,6 +77,11 @@ type SiteConfig struct {
 	// This only lifts the SSRF builtin; policy still decides reachability.
 	// Admin-only, validated against ipguard.Liftable. Empty => no lift.
 	InternalHosts []InternalHost `json:"internal_hosts,omitempty"`
+	// Egress is the org's egress-grading policy. A POINTER for the same
+	// byte-identical-GET reason as the provider blocks. Written ONLY through
+	// PUT /governance/egress-baseline (a governance write); PUT /site-config
+	// carries an absent or unchanged block forward and refuses a changed one.
+	Egress *SiteEgress `json:"egress,omitempty"`
 	// WorkspaceProviders is the org's workspace-provider POLICY: which git
 	// hosts a run may clone from, with which credential lanes, plus storage
 	// ceilings. A POINTER since a value struct's omitempty is a no-op
@@ -144,6 +149,21 @@ type SiteConfig struct {
 	OnboardingCompletedAt *time.Time `json:"onboarding_completed_at,omitempty"`
 }
 
+// SiteEgress is SiteConfig.Egress.
+type SiteEgress struct {
+	// BaselineHosts are exact hostnames the composer grades as baseline egress,
+	// beside its built-in public set: an allowlist holding only these is not
+	// graded OPEN, and an api_key to one does not raise the CC3 floor.
+	//
+	// SECURITY: this LOWERS the egress grade and the confinement floor, so it is
+	// a governance write — security operators only, held for a second human where
+	// WARDYN_GOVERNANCE_SECOND_HUMAN is on, audited with the before/after sets,
+	// like the InternalHost.Baseline marks it shares one writer with.
+	// Exact lowercase hostnames only: no wildcard, scheme, port or IP. It grades;
+	// it never allows — a host must still pass allowed_domains.
+	BaselineHosts []string `json:"baseline_hosts,omitempty"`
+}
+
 // SiteBranding is SiteConfig.Branding. LogoPath is an absolute path on the
 // wardynd host to an SVG or PNG file; it is read, checked as a console upload
 // is, and stored as the branding logo at every apply. Naming it makes the file
@@ -179,6 +199,12 @@ type InternalHost struct {
 	// fc00::/7, or 100.64.0.0/10 (ipguard.Liftable) — never loopback/
 	// link-local/metadata/multicast/NAT64. Empty lifts the full Liftable set.
 	CIDRs []string `json:"cidrs,omitempty"`
+	// Baseline grades this host and EVERY subdomain as baseline egress, where
+	// SiteEgress.BaselineHosts names exact hosts. Default false, so declaring an
+	// internal host never changes a grade unless the operator says so. Set only
+	// through PUT /governance/egress-baseline (or the boot seed on an empty
+	// document): PUT /site-config refuses a changed set of marks.
+	Baseline bool `json:"baseline,omitempty"`
 }
 
 // ArtifactOverride is one ecosystem's corporate artifact-registry redirect:

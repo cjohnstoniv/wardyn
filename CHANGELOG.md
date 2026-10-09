@@ -34,6 +34,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Operator-declared egress baseline.** `PUT /governance/egress-baseline` (security admin or admin; held
+  for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`) sets exact `baseline_hosts` and which
+  `internal_hosts` entries are baseline. Both extend the built-in public set that the egress grade and the
+  `api_key` CC3 floor key off, so an allowlist of only declared hosts no longer grades OPEN. Nothing is
+  declared by default, so no grade changes on upgrade. Audited as `governance.egress_baseline.write`.
 - **Sync over SSH.** A new `wardyn-sync` SSH subsystem runs the sandbox's own `sftp-server` in a validated
   start directory (`WARDYN_SYNC_DIR`, under `/home/agent/`), with its own cap of 2 channels per run, and is
   audited as `ssh.sync.transfer`. The start directory is a start point, not a boundary (#1952).
@@ -49,6 +54,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- `PUT /site-config` carries the egress baseline and the `internal_hosts` baseline marks forward and refuses a
+  change to either (400 `site_config_egress_via_own_route`); an unchanged round trip, or one from an older
+  client that omits the marks, is accepted.
 - A plain `http://` OIDC issuer (public or internal) on a host that is not loopback, while the
   console has a TLS posture, now refuses boot; it was a warning. `WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=mesh`
   opts the internal issuer out with a boot warning; the public issuer has no opt-out. Loopback and

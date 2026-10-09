@@ -31,6 +31,7 @@ const (
 	GovernanceTargetUserTypePriority       = "user_type_priority"
 	GovernanceTargetRoleMapping            = "role_mapping"
 	GovernanceTargetKeyDomainAssignment    = "key_domain_assignment"
+	GovernanceTargetEgressBaseline         = "egress_baseline"
 )
 
 // GovernanceChange is one governance write held for a second human (migration 0126). Payload is the

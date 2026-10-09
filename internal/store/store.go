@@ -905,8 +905,13 @@ func scanAuditEvent(row pgx.Row) (types.AuditEvent, error) {
 // no config, and "unconfigured" is a valid, common state rather than a
 // failure the caller must special-case.
 func (s PG) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
+	return GetSiteConfigQ(ctx, s.Pool)
+}
+
+// GetSiteConfigQ is GetSiteConfig on q.
+func GetSiteConfigQ(ctx context.Context, q Querier) (types.SiteConfig, error) {
 	var raw []byte
-	err := s.Pool.QueryRow(ctx, `SELECT config FROM site_config WHERE singleton`).Scan(&raw)
+	err := q.QueryRow(ctx, `SELECT config FROM site_config WHERE singleton`).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.SiteConfig{}, nil
 	}
@@ -926,18 +931,24 @@ func (s PG) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 // partial merge; the API validates the full document first) but keeps any key
 // it doesn't, which only a newer wardynd could have written (declaredJSONKeys).
 func (s PG) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (types.SiteConfig, error) {
+	return PutSiteConfigQ(ctx, s.Pool, cfg)
+}
+
+// PutSiteConfigQ is PutSiteConfig on q. A held governance change applies
+// through it inside the decision transaction.
+func PutSiteConfigQ(ctx context.Context, q Querier, cfg types.SiteConfig) (types.SiteConfig, error) {
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		return types.SiteConfig{}, fmt.Errorf("store: marshal site config: %w", err)
 	}
-	const q = `
+	const stmt = `
 		INSERT INTO site_config (singleton, config, updated_at)
 		VALUES (true, $1, now())
 		ON CONFLICT (singleton) DO UPDATE
 			SET config = (site_config.config - $2::text[]) || EXCLUDED.config, updated_at = now()
 		RETURNING config`
 	var out []byte
-	if err := s.Pool.QueryRow(ctx, q, raw, declaredJSONKeys(cfg)).Scan(&out); err != nil {
+	if err := q.QueryRow(ctx, stmt, raw, declaredJSONKeys(cfg)).Scan(&out); err != nil {
 		return types.SiteConfig{}, fmt.Errorf("store: put site config: %w", err)
 	}
 	var saved types.SiteConfig

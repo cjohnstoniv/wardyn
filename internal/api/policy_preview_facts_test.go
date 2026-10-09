@@ -66,7 +66,7 @@ func TestPolicyPreviewRedactionPreservesPATEmptyAxis(t *testing.T) {
 			LLMInspection:   &types.LLMInspectionSpec{WorkspaceSecretValues: []string{"PRIVATE-VALUE"}},
 			WorkspaceMounts: []types.WorkspaceMount{{Source: "/PRIVATE-MOUNT", Target: "/home/agent/work"}}}
 		before := mustJSON(spec)
-		facts := policyPreviewFacts(createRunRequest{}, spec, policySourceRecord{Kind: policyKindInline}, nil, types.SiteConfig{}, runProviderChoice{}, runComponents{})
+		facts := policyPreviewFacts(createRunRequest{}, spec, policySourceRecord{Kind: policyKindInline}, nil, types.SiteConfig{}, runProviderChoice{}, runComponents{}, composer.Baseline{})
 		body := string(mustJSON(facts))
 		if !facts.Redacted || strings.Contains(body, "PRIVATE-") || strings.Contains(body, "workspace_secret_values") || facts.Spec.AllowedDomains == nil {
 			t.Fatalf("redaction: %s", body)

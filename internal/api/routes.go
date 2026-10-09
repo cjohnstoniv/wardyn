@@ -791,6 +791,8 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	// Explain (K4) reads this same table at a NAMED subject rather than the
 	// caller's own: still securityOps, never wider.
 	securityOps.Get("/permissions/explain", s.handleExplainCapabilities)
+	securityOps.Get("/governance/egress-baseline", s.handleGetEgressBaseline)
+	securityOps.Put("/governance/egress-baseline", s.handlePutEgressBaseline)
 }
 
 // adminRoutes registers the two admin-gated maintenance routes — one per tier,

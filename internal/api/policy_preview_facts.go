@@ -58,7 +58,7 @@ type policyPreviewRepository struct {
 }
 
 func policyPreviewFacts(req createRunRequest, spec types.RunPolicySpec, source policySourceRecord,
-	warnings []string, site types.SiteConfig, choice runProviderChoice, comps runComponents) policyPreviewResponse {
+	warnings []string, site types.SiteConfig, choice runProviderChoice, comps runComponents, baseline composer.Baseline) policyPreviewResponse {
 	out := redactSpecForRead(spec, false)
 	if out.LLMInspection != nil {
 		inspection := *out.LLMInspection
@@ -74,7 +74,7 @@ func policyPreviewFacts(req createRunRequest, spec types.RunPolicySpec, source p
 		Provisional: true, Redacted: redacted,
 		Warnings: previewSafeWarnings(warnings), Pending: previewPending(req, choice),
 		RepositoryAccess: previewRepositoryAccess(req, out, site),
-		Components:       componentFacts(req, spec, site, comps, nil),
+		Components:       componentFacts(req, spec, site, comps, nil, baseline),
 	}
 }
 

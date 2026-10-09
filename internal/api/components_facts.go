@@ -98,16 +98,16 @@ const (
 // request order. Pure — everything it says was decided by the caller's gates.
 // scm is Review's git_credential fact; the preview reads no credential and
 // passes nil. Nil when the run has neither, so its body is the one it was.
-func componentFacts(req createRunRequest, spec types.RunPolicySpec, site types.SiteConfig, comps runComponents, scm *SCMAccess) []componentFact {
+func componentFacts(req createRunRequest, spec types.RunPolicySpec, site types.SiteConfig, comps runComponents, scm *SCMAccess, baseline composer.Baseline) []componentFact {
 	facts := gitProviderFacts(req, spec, site, scm)
 	for i, a := range comps.attached {
-		facts = append(facts, a.fact(i, comps))
+		facts = append(facts, a.fact(i, comps, baseline))
 	}
 	return facts
 }
 
 // fact describes one attached component, at position ordinal of the request.
-func (a attachedComponent) fact(ordinal int, comps runComponents) componentFact {
+func (a attachedComponent) fact(ordinal int, comps runComponents, baseline composer.Baseline) componentFact {
 	def := a.snapshot.Definition
 	f := componentFact{
 		Kind: types.ComponentCustom, ID: "inline:" + strconv.Itoa(ordinal), Name: a.snapshot.Name, Version: a.snapshot.Version,
@@ -143,8 +143,8 @@ func (a attachedComponent) fact(ordinal int, comps runComponents) componentFact 
 		f.Status = componentNeedsInput
 	}
 	own := types.RunPolicySpec{EligibleGrants: grants}
-	f.VaultFloor = comps.settings.RequireVaultForCredentials && composer.RequiredConfinementFloor(own) == types.CC3
-	f.HighRisk = slices.ContainsFunc(composer.Grade(composer.RunInput{}, own), func(item composer.RiskItem) bool {
+	f.VaultFloor = comps.settings.RequireVaultForCredentials && composer.RequiredConfinementFloor(own, baseline) == types.CC3
+	f.HighRisk = slices.ContainsFunc(composer.Grade(composer.RunInput{Baseline: baseline}, own), func(item composer.RiskItem) bool {
 		return item.Level == composer.RiskHigh && strings.HasPrefix(item.Field, "eligible_grants[")
 	})
 	return f

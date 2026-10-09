@@ -730,6 +730,14 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// onboarding state — the exact footgun already solved once for Integrations.
 	cfg.OnboardingCompletedAt = existing.OnboardingCompletedAt
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
+	// The egress baseline lowers grades, so it has a stricter writer than this door: the egress block
+	// and the set of baseline-marked internal hosts must come back as stored, whoever is asking.
+	carryForwardInternalHostMarks(&cfg, existing)
+	if msg := inlineBaselineRefusal(cfg, existing); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigEgressViaOwnRoute, msg)
+		return
+	}
+	cfg.Egress = existing.Egress
 	// After the carry-forward: the roster's defaults are checked against the
 	// providers this document will actually hold, whichever side was named; the
 	// sign-in help link against the stored one (signInHelpURLHTTPS).

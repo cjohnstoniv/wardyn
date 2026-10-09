@@ -2,4 +2,6 @@
 # docs/AUDIT-ACTIONS.md 39609 adds 312 over 39297 (per row, from the diff): 24 (the grammar exceptions: the four Azure DevOps token rows), 0 ("Ten" becomes "Nineteen"), 32 (`run.create` names `components` and `self_added_reach`), 41 (`run.artifact.redirect` on the Azure DevOps lane), 53 (`run.policy.resolve`), 30 (`credential.mint`) and 29 (`run.injection.drop`): what a run-scoped read leaves out of a shared component grant, 24 (`run.egress.add` kind `component`), 2 (`session.takeover` fields), 34 (`secret.read` for a shared grant), 21 (`approval.decide` fields), 22 (`capability.availability.write` for components).
 # docs/AUDIT-ACTIONS.md 39655 adds 46 (0.9 SSH lane): the ssh.sync.transfer row, the bytes_in/bytes_out fields on ssh.sftp.transfer, and the sync cap on ssh.channel.reject.
 # docs/AUDIT-ACTIONS.md 39656 adds 1 (0.9 C-H): the verb `claim`, for `runner.claim`.
-docs/AUDIT-ACTIONS.md=39656 share=8
+# docs/AUDIT-ACTIONS.md 39610 adds 85 for the egress baseline: the `governance.egress_baseline.write` row and the propose row's covered-write list (the count after the merge with the SSH lane's rows and another lane's trims).
+# docs/AUDIT-ACTIONS.md 39611 measured after the B-P1 merge (B-P1 egress baseline rows, the SSH rows and the C-H verb).
+docs/AUDIT-ACTIONS.md=39611 share=8

@@ -77,6 +77,12 @@ export interface SiteConfig {
   // reader exists yet (the Network step's rendering ships later); the field
   // mirrors the server shape so a GET/PUT round-trip never drops it.
   internal_hosts?: InternalHost[];
+  // types.SiteConfig.Egress — the operator's egress-grading policy. A GOVERNANCE
+  // write: changed only through PUT /governance/egress-baseline (security tier,
+  // four-eyes covered), never by PUT /site-config, which refuses a changed block.
+  // Stripped from every GET-spread body (SERVER_OWNED_SITE_CONFIG_KEYS) so a save
+  // that never meant to touch it cannot trip that refusal.
+  egress?: SiteEgress;
   // The org's workspace-provider policy — which git hosts a run may clone from
   // and with which credential lanes, plus the storage ceilings. Absent (the
   // default) is legacy open mode. Written through its own
@@ -198,6 +204,7 @@ export const SERVER_OWNED_SITE_CONFIG_KEYS = [
   "agent_providers",
   "model_providers",
   "branding",
+  "egress",
   "effective_scm_hosts",
   "withheld_scm_hosts",
 ] as const satisfies readonly (keyof SiteConfig)[];
@@ -420,4 +427,24 @@ export interface InternalHost {
   // fc00::/7, or 100.64.0.0/10 — validated server-side). Empty means the full
   // liftable set for a matching host.
   cidrs?: string[];
+  // Grades this host (and its subdomains) as baseline egress, like
+  // SiteEgress.baseline_hosts. Absent is false: declaring an internal host
+  // never changes a grade on its own. Changed only through
+  // PUT /governance/egress-baseline; PUT /site-config refuses a changed set.
+  baseline?: boolean;
+}
+
+// types.SiteEgress. baseline_hosts are exact lowercase hostnames the composer
+// grades as baseline egress beside its built-in public set: grading only, never
+// an allow.
+export interface SiteEgress {
+  baseline_hosts?: string[];
+}
+
+// The body of GET/PUT /governance/egress-baseline: the whole declaration, the
+// only writer of both lists. internal_host_suffixes are the host_suffix values of
+// the internal_hosts entries marked baseline; each must name a stored entry.
+export interface EgressBaseline {
+  baseline_hosts: string[];
+  internal_host_suffixes: string[];
 }

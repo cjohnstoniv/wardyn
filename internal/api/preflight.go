@@ -271,6 +271,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		ConfinementClass: string(enforced),
 		Interactive:      req.Interactive,
 		DevcontainerRepo: req.DevcontainerRepo,
+		Baseline:         f.baseline,
 	}
 
 	// Deterministic risk grade: the SAME composer.Grade/OverallLevel
@@ -339,6 +340,6 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// and seedAndAdmitWorkspace each gate at launch.
 	runRepos := append([]string{req.Repo, req.DevcontainerRepo}, repoLocatorsOf(spec.WorkspaceRepos)...)
 	resp.GitCredential = s.gitCredentialFactForRepos(ctx, oidcHumanFromContext(ctx), runRepos)
-	resp.Components = componentFacts(req, spec, f.scmSite, f.comps, resp.GitCredential)
+	resp.Components = componentFacts(req, spec, f.scmSite, f.comps, resp.GitCredential, f.baseline)
 	writeJSON(w, http.StatusOK, resp)
 }

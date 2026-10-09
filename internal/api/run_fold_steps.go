@@ -124,6 +124,15 @@ func (s *Server) stepComponents(f *runFold, rec *foldRecorder) bool {
 	return !refusal.write(s, f.w, f.r)
 }
 
+// stepBaseline reads the operator's egress baseline once, for every step and
+// for the door's own grading and facts. A site config nobody could read is a
+// 500, never an empty baseline: a grade on a guess lowers nothing silently.
+func (s *Server) stepBaseline(f *runFold, rec *foldRecorder) bool {
+	var ok bool
+	f.baseline, ok = s.baselineOr500(f.w, f.r)
+	return ok
+}
+
 // stepConfinement resolves the enforced class on the folded spec (invariant 5,
 // fail closed). Create also gates on runner capability membership and the
 // cloud_sts identity provider (resolveEnforcedConfinement); the dry doors run
@@ -134,7 +143,7 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 	floor := confinementFloorSpec(f.spec, f.comps)
 	if f.mode == foldCreate {
 		var ok bool
-		f.enforced, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, floor, f.reqCC)
+		f.enforced, ok = s.resolveEnforcedConfinement(f.r.Context(), f.w, floor, f.reqCC, f.baseline)
 		return ok
 	}
 	var advertised []types.ConfinementClass
@@ -147,7 +156,7 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 		f.reqCC = reqCC
 		advertised = s.advertisedConfinement(f.r.Context())
 	}
-	enforced, err := enforcedConfinement(floor, f.reqCC, advertised)
+	enforced, err := enforcedConfinement(floor, f.reqCC, advertised, f.baseline)
 	if err != nil {
 		writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return false
@@ -204,7 +213,7 @@ func (s *Server) stepAutonomy(f *runFold, rec *foldRecorder) bool {
 		return true
 	}
 	var ok bool
-	f.autonomy, f.autonomyWarns, f.scmSite, f.adoGrade, f.bedrockGrade, ok = s.resolveRunAutonomy(f.w, f.r, f.req, f.spec, f.wsRefs, f.enforced, f.ceiling, f.modelCred, f.comps)
+	f.autonomy, f.autonomyWarns, f.scmSite, f.adoGrade, f.bedrockGrade, ok = s.resolveRunAutonomy(f.w, f.r, f.req, f.spec, f.wsRefs, f.enforced, f.ceiling, f.modelCred, f.comps, f.baseline)
 	return ok
 }
 
