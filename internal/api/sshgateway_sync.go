@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
@@ -34,14 +36,14 @@ func sshSyncEnvName(name string) bool {
 }
 
 // sshSyncDir validates the client-offered start directory: absolute, under
-// sshSyncDirRoot, no ".." segment, and no byte sftp-server would expand or a
-// terminal would mistake ('%' starts one of its -d tokens). Empty is the
+// sshSyncDirRoot, no ".." segment, valid UTF-8 with no control character (C0 or
+// C1), and no '%' (it starts one of sftp-server's -d tokens). Empty is the
 // default. The result is cleaned.
 func sshSyncDir(v string) (string, error) {
 	if v == "" {
 		return sshSyncDefaultDir, nil
 	}
-	if !path.IsAbs(v) || strings.Contains(v, "%") || strings.ContainsFunc(v, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+	if !path.IsAbs(v) || strings.Contains(v, "%") || !utf8.ValidString(v) || strings.ContainsFunc(v, unicode.IsControl) {
 		return "", fmt.Errorf("%s must be an absolute path without control characters or '%%'", sshSyncDirEnv)
 	}
 	for _, seg := range strings.Split(v, "/") {
@@ -72,40 +74,41 @@ func sshSyncDirection(v string) string {
 // agent uid can.
 func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel, env map[string]string) {
 	direction := sshSyncDirection(env[sshSyncDirectionEnv])
-	dir, err := sshSyncDir(env[sshSyncDirEnv])
-	data := func(extra map[string]any) []byte {
+	dir, dirErr := sshSyncDir(env[sshSyncDirEnv])
+	// BaseCtx, not ctx: the client may close the channel the moment it sees the
+	// subsystem ack, which cancels ctx; see bridgeSSHExec's trailing-write comment.
+	record := func(outcome string, extra map[string]any) {
 		extra["direction"] = direction
-		if err == nil {
+		if dirErr == nil {
 			extra["dir"] = dir
 		}
-		return mustJSON(extra)
+		s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sync.transfer",
+			runID.String(), outcome, mustJSON(extra)))
 	}
-	if err != nil {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sync.transfer",
-			runID.String(), "failure", data(map[string]any{"error": err.Error(), "bytes_in": 0, "bytes_out": 0})))
-		sendChannelError(channel, "wardyn-sync: "+err.Error())
+	fail := func(errText, clientMsg string) {
+		record("failure", map[string]any{"error": errText, "bytes_in": 0, "bytes_out": 0})
+		sendChannelError(channel, clientMsg)
+	}
+	if dirErr != nil {
+		fail(dirErr.Error(), "wardyn-sync: "+dirErr.Error())
 		return
 	}
 	run, msg := s.sshFreshRun(ctx, runID, principal)
 	if msg != "" {
-		sendChannelError(channel, msg)
+		fail(msg, msg)
 		return
 	}
 	sess, reason, err := s.execSFTPServer(ctx, run, "-d", dir)
 	if err != nil {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sync.transfer",
-			runID.String(), "failure", data(map[string]any{"error": err.Error(), "bytes_in": 0, "bytes_out": 0})))
-		sendChannelError(channel, reason)
+		fail(err.Error(), reason)
 		return
 	}
 	exit, bytesIn, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, true)
-	// BaseCtx, not ctx: see bridgeSSHExec's trailing-write comment.
 	extra := map[string]any{"bytes_in": bytesIn, "bytes_out": bytesOut}
 	outcome := "success"
 	if exit != 0 {
 		outcome = "failure"
 		extra["error"] = fmt.Sprintf("sftp-server exited %d", exit)
 	}
-	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sync.transfer",
-		runID.String(), outcome, data(extra)))
+	record(outcome, extra)
 }

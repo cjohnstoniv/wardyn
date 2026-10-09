@@ -382,9 +382,8 @@ scp ./local-file <run-id>@<advertise-host>:/home/agent/  -P <port>
   the subsystem's backing process — no SFTP protocol reimplementation on
   Wardyn's side.
 - See [Image contract](#image-contract-byoi) if this 404s.
-- **`wardyn-sync`** (used by `wardyn sync`) runs the same `sftp-server` with `-d <dir>`.
-  - Send `env` requests first: `WARDYN_SYNC_DIR` (absolute, under `/home/agent/`, no `..`; default `/home/agent/work`) and `WARDYN_SYNC_DIRECTION` (`push` or `pull`).
-  - Both are honoured on this subsystem only; a bad directory launches nothing.
+- **`wardyn-sync`** runs the same `sftp-server` with `-d <dir>`, after `env` requests `WARDYN_SYNC_DIR` (absolute, under `/home/agent/`, no `..`; default `/home/agent/work`) and `WARDYN_SYNC_DIRECTION` (`push` or `pull`), read on this subsystem only.
+  - A refused directory launches nothing; a missing one launches at the sandbox's working directory, so check `RealPath(".")` and use absolute paths.
   - The directory is a start point, not a boundary.
 
 ## 4. `-L` port forwarding
@@ -515,9 +514,8 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   [`WARDYN_SSH_MAX_SESSIONS_PER_RUN`](ENV.md#wardyn_ssh_max_sessions_per_run)
   (default `4`), so an editor holding open a shell, an sftp session and two
   `-L` forwards has used the whole budget.
-- A channel over the cap is refused, not queued.
-- `wardyn-sync` has its own cap of `2` per run, so neither kind starves the other.
-  - A `session` channel over the shared cap takes a sync slot, and there may only become `wardyn-sync`.
+- A fifth channel of any kind is refused, not queued.
+- `wardyn-sync` has its own cap of `2`; a `session` channel over the shared cap may only become one.
 - **Under SSO, register the key as yourself.** Authorization is owner-only
   (above): the run has to be created by the **same principal** that registered
   the key.
@@ -741,11 +739,11 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   `TERM`/`LANG`/`LC_*` from the client's environment into the exec — nothing
   else the client's shell happens to export reaches the sandbox.
 - **Audit actions**:
-  - `ssh.authenticate` (every attempt, including failures).
-  - `session.attach` with `transport:ssh` in its data: the shell path, the same action the browser terminal uses, so both show up together in a run's timeline.
-  - `ssh.exec` (`argv`, `exit`), `ssh.forward` (`port`, `bytes`).
-  - `ssh.sftp.transfer` (`bytes`, `bytes_in`, `bytes_out`), `ssh.sync.transfer` (`dir`, `direction`, `bytes_in`, `bytes_out`).
-  - `direction` is client-declared.
+  - `ssh.authenticate` (every attempt, including failures),
+    `session.attach` with `transport:ssh` in its data (the shell path, same
+    action name the browser terminal uses, so both show up together in a run's
+    timeline), `ssh.exec` (`argv`, `exit`), `ssh.forward` (`port`, `bytes`).
+  - `ssh.sftp.transfer` (`bytes`, `bytes_in`, `bytes_out`), `ssh.sync.transfer` (`dir`, `direction` client-declared, `bytes_in`, `bytes_out`).
   - This is the source of record for these five;
     [`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md) is the vocabulary reference for
     every other audit action in the system and points back here for these.

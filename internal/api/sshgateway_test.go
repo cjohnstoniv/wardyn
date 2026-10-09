@@ -1249,9 +1249,9 @@ func TestSSHGateway_ShellChannelDrivesFakeSession(t *testing.T) {
 
 // TestSSHGateway_MaxSessionsPerRunEnforced pins the per-run channel cap
 // (defaultSSHSessionsPerRun): the run's owner may hold that many concurrent
-// "session" channels open, and the NEXT one is rejected at channel-open time
-// (client.NewSession() itself errors — the cap bites before any shell/exec/
-// subsystem request is even sent).
+// "session" channels open, and the NEXT one is refused: at channel open when
+// the wardyn-sync slots are full too, otherwise at its shell request (see
+// sshSessionRefused).
 func TestSSHGateway_MaxSessionsPerRunEnforced(t *testing.T) {
 	st, run, principal := sshOwnedRunningRun(t)
 	priv, pub := mustSSHKeypair(t)

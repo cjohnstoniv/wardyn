@@ -272,13 +272,15 @@ type sshSessionGate struct {
 	runID      uuid.UUID
 	principal  string
 	slot       *sshChannelSlot
+	channel    ssh.Channel
 	started    bool
 	capAudited bool
 }
 
 // mayDispatch refuses (and replies false to) a second dispatch, and — when
 // shared is set — one a sync-only channel (admitted past the shared cap, see
-// sshOpenSlot) may not make, auditing that cap hit once.
+// sshOpenSlot) may not make: that one is audited once, answered with the cap
+// text and closed, which frees the sync slot it was holding.
 func (g *sshSessionGate) mayDispatch(req *ssh.Request, shared bool) bool {
 	if g.started {
 		_ = req.Reply(false, nil)
@@ -290,6 +292,7 @@ func (g *sshSessionGate) mayDispatch(req *ssh.Request, shared bool) bool {
 			g.s.sshAuditChannelRejected(g.ctx, g.runID, g.principal, "session", sshCapReasonChannels, g.s.cfg.SSHMaxSessionsPerRun)
 		}
 		_ = req.Reply(false, nil)
+		sendChannelError(g.channel, fmt.Sprintf("too many concurrent SSH channels for this run (max %d)", g.s.cfg.SSHMaxSessionsPerRun))
 		return false
 	}
 	return true
@@ -314,7 +317,10 @@ func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, 
 			return nil
 		}
 		if !g.slot.toSync() {
-			s.sshAuditChannelRejected(ctx, runID, principal, "session", sshCapReasonSync, maxSSHSyncSessionsPerRun)
+			if !g.capAudited {
+				g.capAudited = true
+				s.sshAuditChannelRejected(ctx, runID, principal, "session", sshCapReasonSync, maxSSHSyncSessionsPerRun)
+			}
 			_ = req.Reply(false, nil)
 			return nil
 		}
@@ -361,7 +367,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 	// can never reach an exec or shell: only a wardyn-sync dispatch reads them.
 	syncEnv := map[string]string{}
 	var bridgeDone chan struct{}
-	gate := &sshSessionGate{s: s, ctx: chCtx, runID: runID, principal: principal, slot: slot}
+	gate := &sshSessionGate{s: s, ctx: chCtx, runID: runID, principal: principal, slot: slot, channel: channel}
 
 	for req := range reqs {
 		switch req.Type {

@@ -1,6 +1,6 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. docs/USERS.md 3892 = 3859 measured base + 33 (the Azure DevOps approval exception to the admin-only tool_call rule; the old budget, 3867, had 8 words of slack). docs/SSH.md 5312 = 5267 measured base + 27 (the admin delete route in Reclaiming a squatted fingerprint; the old budget had 9 words of slack) + 18 (person erasure named beside retention for recordings).
 # docs/USERS.md 4137 adds 245: 209 (the Custom components section), 36 (a run's audit rows and grant list leave out a shared component secret's name), 1 (`file_secret` beside `env_secret` in the owner_only list); the gate counts 245.
 docs/USERS.md=4137 share=35
-# docs/SSH.md 5402 adds 90 (0.9 SSH lane): the wardyn-sync subsystem and its env, the sync cap, the configurable channel cap and the sync audit action.
-docs/SSH.md=5402 share=35
+# docs/SSH.md 5396 adds 84 (0.9 SSH lane): the wardyn-sync subsystem and its env, the sync cap, the configurable channel cap and the sync audit action.
+docs/SSH.md=5396 share=35
 docs/UI-SANDBOXES.md=5337 share=35

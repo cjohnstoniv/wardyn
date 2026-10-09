@@ -1,4 +1,4 @@
 # Prose must not grow beyond the base count (29985) plus cell-expansion headings (190 headings, 198 words) and their one-sentence summaries (189 cells, 5178 words); the page measures 29899 without them. Itemised in lane-reports/docs/E-worker.md.
 # docs/ENV.md 35321 adds 46: 34 (WARDYN_ALLOW_USER_ENV_SECRET governs `file_secret` too, and a component's delivery is not governed by it), 10 (the `file_secret` residency sentence), 2 (summary row), and the deprecated switch name in the boot-read list becomes the current one (0 words).
-# docs/ENV.md 35435 adds 114 (0.9 SSH lane): the WARDYN_SSH_MAX_SESSIONS_PER_RUN row and details section (60), and one row each for the two SSH env-request names the sync subsystem reads, which the env-doc guard treats as reads (54).
-docs/ENV.md=35435 share=5
+# docs/ENV.md 35393 adds 72 (0.9 SSH lane): the WARDYN_SSH_MAX_SESSIONS_PER_RUN row and details section (48), and one row each for the two SSH env-request names the sync subsystem reads, which the env-doc guard treats as reads (24).
+docs/ENV.md=35393 share=5

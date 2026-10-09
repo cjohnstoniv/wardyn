@@ -4,7 +4,10 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"slices"
 	"strings"
@@ -35,6 +38,7 @@ func TestSSHSyncDir(t *testing.T) {
 		"work", "./work", "/", "/etc", "/home/agent", "/home/agent/", "/home/agentx/work", "/home/other/work",
 		"/home/agent/../../etc", "/home/agent/work/../../..", "/home/agent/work/..", "/home/agent/../agent/work",
 		"/home/agent/work/%d", "/home/agent/w\x00ork", "/home/agent/w\nork", "/home/agent/w\x7fork",
+		"/home/agent/w\u009bork", "/home/agent/w\xffork",
 	} {
 		if got, err := sshSyncDir(in); err == nil {
 			t.Errorf("sshSyncDir(%q) = %q, want refused", in, got)
@@ -51,6 +55,7 @@ func TestSSHSyncDirection(t *testing.T) {
 }
 
 type sshSyncFixture struct {
+	st     *sshMemStore
 	h      *sshTestHarness
 	fr     *sshFakeRunner
 	client *ssh.Client
@@ -72,7 +77,7 @@ func newSSHSyncFixture(t *testing.T, configure ...func(*Config)) *sshSyncFixture
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
-	return &sshSyncFixture{h: h, fr: fr, client: client, run: run}
+	return &sshSyncFixture{st: st, h: h, fr: fr, client: client, run: run}
 }
 
 // refused is sshSessionRefused, then waits for the probe's own slot to be given
@@ -284,7 +289,23 @@ func TestSSHGateway_SyncEnvIgnoredOnOtherChannels(t *testing.T) {
 		if err := sess.Shell(); err != nil {
 			t.Fatalf("shell: %v", err)
 		}
+		if _, env := f.fr.lastCall(); containsPrefix(env, "WARDYN_SYNC_") {
+			t.Errorf("last exec env = %v: the sync names must never reach the sandbox", env)
+		}
+		if got := sshAuditCount(f.h.audit, "ssh.sync.transfer"); got != 0 {
+			t.Errorf("a shell recorded %d ssh.sync.transfer rows", got)
+		}
 	})
+}
+
+func sshAuditCount(audit *sshTestRecorder, action string) int {
+	n := 0
+	for _, e := range audit.snapshot() {
+		if e.Action == action {
+			n++
+		}
+	}
+	return n
 }
 
 func TestSSHGateway_SyncHasItsOwnBudget(t *testing.T) {
@@ -334,13 +355,24 @@ func TestSSHGateway_SyncHasItsOwnBudget(t *testing.T) {
 			}
 			syncEcho(t, in, out, "x")
 		}
-		if _, _, _, err := f.openSync(t, nil); err == nil {
+		sess, _, _, err := f.openSync(t, nil)
+		if err == nil {
 			t.Fatal("a third sync was accepted")
+		}
+		// A client looping on the same channel must not write a row per request.
+		for i := 0; i < 5; i++ {
+			if sess.RequestSubsystem(sshSyncSubsystem) == nil {
+				t.Fatal("a repeated sync request was accepted")
+			}
 		}
 		ev := waitForAudit(t, f.h.audit, f.run.ID, "ssh.channel.reject", "failure")
 		d := sshAuditData(t, ev)
 		if d["reason"] != sshCapReasonSync || d["max"] != float64(maxSSHSyncSessionsPerRun) {
 			t.Errorf("reject row = %s, want the sync cap", ev.Data)
+		}
+		time.Sleep(50 * time.Millisecond)
+		if got := sshAuditCount(f.h.audit, "ssh.channel.reject"); got != 1 {
+			t.Errorf("%d ssh.channel.reject rows for one channel, want 1", got)
 		}
 	})
 
@@ -354,22 +386,102 @@ func TestSSHGateway_SyncHasItsOwnBudget(t *testing.T) {
 		f.holdShell(t)
 	})
 
-	t.Run("a sync-only channel may not become a shell", func(t *testing.T) {
-		f := newSSHSyncFixture(t, func(c *Config) { c.SSHMaxSessionsPerRun = 1 })
-		f.holdShell(t)
-		sess, err := f.client.NewSession()
-		if err != nil {
-			t.Fatalf("admitted on a sync slot: %v", err)
-		}
-		defer sess.Close()
-		if err := sess.Run("true"); err == nil {
-			t.Error("exec ran on a channel admitted only for wardyn-sync")
-		}
-		if err := sess.RequestSubsystem("sftp"); err == nil {
-			t.Error("plain sftp ran on a channel admitted only for wardyn-sync")
+	t.Run("a sync-only channel may not become a shell, exec or sftp, and is told why", func(t *testing.T) {
+		for _, req := range []struct {
+			typ     string
+			payload []byte
+		}{
+			{"shell", nil},
+			{"exec", ssh.Marshal(struct{ Command string }{"true"})},
+			{"subsystem", ssh.Marshal(struct{ Name string }{"sftp"})},
+		} {
+			f := newSSHSyncFixture(t, func(c *Config) { c.SSHMaxSessionsPerRun = 1 })
+			f.holdShell(t)
+			ch, reqs, err := f.client.OpenChannel("session", nil)
+			if err != nil {
+				t.Fatalf("%s: admitted on a sync slot: %v", req.typ, err)
+			}
+			go ssh.DiscardRequests(reqs)
+			ok, err := ch.SendRequest(req.typ, true, req.payload)
+			if err != nil || ok {
+				t.Errorf("%s on a channel admitted only for wardyn-sync: ok=%v err=%v, want refused", req.typ, ok, err)
+			}
+			stderr, _ := io.ReadAll(ch.Stderr())
+			if !strings.Contains(string(stderr), "too many concurrent SSH channels for this run (max 1)") {
+				t.Errorf("%s: stderr = %q, want the cap text", req.typ, stderr)
+			}
+			// The refusal closes the channel, which gives its sync slot back.
+			for i := 0; i < 200 && f.syncHeld() != 0; i++ {
+				time.Sleep(5 * time.Millisecond)
+			}
+			if got := f.syncHeld(); got != 0 {
+				t.Errorf("%s: %d sync slots still held after the refusal", req.typ, got)
+			}
 		}
 	})
 }
+
+func (f *sshSyncFixture) syncHeld() int {
+	f.h.srv.sshSessionsMu.Lock()
+	defer f.h.srv.sshSessionsMu.Unlock()
+	return f.h.srv.sshSyncSessions[f.run.ID]
+}
+
+func TestSSHGateway_SyncFailureRowsAreAlwaysWritten(t *testing.T) {
+	t.Run("the run is not running", func(t *testing.T) {
+		f := newSSHSyncFixture(t)
+		stopped := f.run
+		stopped.State = types.RunStopped
+		f.st.putRun(stopped)
+		sess, in, _, err := f.openSync(t, map[string]string{"WARDYN_SYNC_DIRECTION": "push"})
+		if err != nil {
+			t.Fatalf("subsystem request: %v", err)
+		}
+		_ = in.Close()
+		if sess.Wait() == nil {
+			t.Error("want a nonzero exit")
+		}
+		ev := waitForAudit(t, f.h.audit, f.run.ID, "ssh.sync.transfer", "failure")
+		if ev == nil || !strings.Contains(string(ev.Data), "not RUNNING") {
+			t.Errorf("want a failure row naming the state; events=%s", auditDump(f.h.audit.snapshot(), f.run.ID))
+		}
+	})
+
+	// The client may close the channel as soon as it sees the ack, which cancels
+	// the channel context; the rows must not ride it.
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for name, tc := range map[string]struct {
+		env    map[string]string
+		execFn func(runner.ExecSpec) (*runner.ExecSession, error)
+	}{
+		"bad directory": {env: map[string]string{"WARDYN_SYNC_DIR": "/etc"}},
+		"run lookup":    {execFn: func(runner.ExecSpec) (*runner.ExecSession, error) { return nil, errors.New("no such binary") }},
+	} {
+		t.Run("cancelled channel context: "+name, func(t *testing.T) {
+			f := newSSHSyncFixture(t)
+			if tc.execFn != nil {
+				f.fr.execFn = tc.execFn
+			}
+			f.h.srv.bridgeSSHSync(cancelled, f.run.ID, "alice@example.com", &stubChannel{}, tc.env)
+			if ev := waitForAudit(t, f.h.audit, f.run.ID, "ssh.sync.transfer", "failure"); ev == nil {
+				t.Errorf("failure row lost on a cancelled context; events=%s", auditDump(f.h.audit.snapshot(), f.run.ID))
+			}
+		})
+	}
+}
+
+// stubChannel is the part of ssh.Channel a refusal touches.
+type stubChannel struct {
+	ssh.Channel
+	stderr bytes.Buffer
+}
+
+func (c *stubChannel) Stderr() io.ReadWriter { return &c.stderr }
+func (c *stubChannel) SendRequest(string, bool, []byte) (bool, error) {
+	return true, nil
+}
+func (c *stubChannel) Close() error { return nil }
 
 func TestSSHGateway_ConfiguredChannelCap(t *testing.T) {
 	f := newSSHSyncFixture(t, func(c *Config) { c.SSHMaxSessionsPerRun = 2 })
