@@ -181,7 +181,10 @@ wardyn run --agent claude-code --model-provider anthropic --repo octocat/Hello-W
 
 > [!WARNING]
 > - What that does **not** cover, plainly.
-> - The confinement binds the brokered GitHub App lane, because that is the only lane the proxy's receive-pack parser can read (a `git_pat` push is an opaque CONNECT tunnel and `ssh_key` is not smart-HTTP).
+> - By default the confinement binds the brokered GitHub App lane only.
+> - The token broker reads a `git_pat` push too, and confines it when the `pat` scope of `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS` is on (off by default; [`docs/ENV.md`](ENV.md#wardyn_git_broker_enforce_branch_ns)).
+> - With the token broker off (`WARDYN_GIT_PAT_BROKER=off`), a `git_pat` push is an opaque CONNECT tunnel the proxy cannot read.
+> - An `ssh_key` push is not smart-HTTP, so the proxy cannot read it on any setting.
 > - For an `ssh_key` grant on the SAME forge Wardyn is brokering, that gap is closed a different way.
 > - The grant can't even be declared alongside the `github_token` grant (`400` at policy write), and dispatch denies the forge's SSH endpoint and withholds any already-stored grant from the sandbox.
 > - See [`docs/POLICIES.md`](POLICIES.md).
