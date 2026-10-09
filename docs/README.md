@@ -3,6 +3,10 @@
 - Start at the repo [README](../README.md) — it, the in-product Getting Started wizard — with its built-in demo steps — is the first-run path.
 - Everything here is the next question.
 
+![Isometric walled compound: one outer wall around a datacentre and people's devices; glowing sandboxes each sit behind Wardyn's inner wall; the org control plane links by policy and audit.](img/wardyn-walls.webp)
+
+![One outer wall around a cloud zone and people's devices. Each sandbox, in the cluster or on a laptop, has its own inner wall and egress proxy; nothing connects in.](img/wardyn-places.webp)
+
 ## Index
 
 | If you want to… | Read |

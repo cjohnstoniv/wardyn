@@ -1,3 +1,4 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. Base prose was 6994; the restructured page is 6966.
 # 7047 = 6966 + 27 words of cell-expansion headings + 54 words of their row summaries (ruled by the lead).
-docs/DESKTOP.md=7047 share=35
+# 7077 adds 30 words of alt text for the Topology figure.
+docs/DESKTOP.md=7077 share=35

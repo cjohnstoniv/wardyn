@@ -1,5 +1,5 @@
 # Prose-word budget (scripts/doc-form.sh): path=N. N is the measured prose words of the shared file after the
 # merged threat-model rewrites: the base count (48923) plus 284 (sections 0-3, 4 and 6-8: cell-expansion headings
 # and summary cells) plus 44 (residuals 1-40: residual 14's headings and summaries, restated subjects, less the
-# joiners turned into full stops), so growth fails.
-threatmodel/THREAT-MODEL.md=49251
+# joiners turned into full stops), so growth fails. 49278 adds 27 words of alt text for the section 7 figure.
+threatmodel/THREAT-MODEL.md=49278

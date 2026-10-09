@@ -183,6 +183,8 @@ wardyn setup status   # what's configured + the next command per unmet check
 
 ## Architecture at a glance
 
+![A run from left to right: console, control plane, sandbox behind a barrier, egress proxy, then destinations that are allowed, held or denied; API keys go to the proxy.](docs/img/wardyn-run.webp)
+
 ```mermaid
 flowchart LR
   entry(["Human operator<br/>UI or wardyn CLI"])
