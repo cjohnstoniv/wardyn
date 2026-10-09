@@ -1,7 +1,6 @@
 # kind	path	key	words	reason
-sentence	docs/OPERATIONS.md	TBD	37	R0274: no clause joiner; "unlike …, both of which …" hangs off the main clause
-sentence	docs/OPERATIONS.md	TBD	36	R0327: no clause joiner; one subject list before one verb
-sentence	docs/OPERATIONS.md	TBD	38	R0447: no clause joiner outside the parenthesis inside the subject
-sentence	docs/OPERATIONS.md	TBD	36	R0596: no clause joiner; one subject with a parenthesis before one verb
-sentence	docs/OPERATIONS.md	TBD	39	R0824: no clause joiner ("and always carries" shares the subject); 38 words before the gate counts the linked path
-sentence	docs/OPERATIONS.md	TBD	38	R0883: no clause joiner; two "which" clauses hang off the main clause
+sentence	docs/OPERATIONS.md	3523e578f842c2355fb14e8a41fc3f4861ca2ea5	37	R0274: no clause joiner; "unlike …, both of which …" hangs off the main clause
+sentence	docs/OPERATIONS.md	86b83fd2569223c6cc9f0599bb0800b9b8619edd	36	R0327: no clause joiner; one subject list before one verb
+sentence	docs/OPERATIONS.md	fe9a526ee2b7b691e032255859182c27ac046043	36	R0596: no clause joiner; one subject with a parenthesis before one verb
+sentence	docs/OPERATIONS.md	a639a0d188e864fb1f3d446b24912eb702609ff9	39	R0824: no clause joiner ("and always carries" shares the subject); 38 words before the gate counts the linked path
+sentence	docs/OPERATIONS.md	5ef3e0407026219dbc6193a582249cf638c721d8	38	R0883: no clause joiner; two "which" clauses hang off the main clause

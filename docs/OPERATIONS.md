@@ -4559,11 +4559,11 @@ Three things in a run's audit trail say which hop its connections took and why o
   - The failure rows carry it too.
 - **`builtin:tunnel-failed` is a connection Wardyn allowed, that opened, and then died.**
   - The `egress.allow` row stands (the dial succeeded and the sandbox was told `200 Connection Established`) and one `egress.deny` follows it, never `builtin:dial-failed`, which says the tunnel never opened.
-  - Its `cause` is a fixed sentence beginning `tunnel first bytes:` when the dialled hop answered a TLS hello with something that was not TLS, for example `HTTP 503`.
-    - Or it wrote an HTTP response before the sandbox sent a byte, or reset or closed without answering, or the sandbox closed before any reply.
-    - `tunnel tls handshake:` means the hop's whole answer to the TLS hello was a TLS alert, with its description number when that byte arrived.
-    - `client tls handshake (sandbox to wardyn-proxy):` followed by the error means the sandbox's TLS handshake with the terminating proxy failed after it sent at least one byte.
-    - For example, a client that does not trust the CA the proxy signs with.
+  - Its `cause` is a fixed sentence beginning:
+    - `tunnel first bytes:` when the dialled hop answered a TLS hello with something that was not TLS, for example `HTTP 503`.
+      - Or it wrote an HTTP response before the sandbox sent a byte, or reset or closed without answering, or the sandbox closed before any reply.
+    - `tunnel tls handshake:` when the hop's whole answer to the TLS hello was a TLS alert, with its description number when that byte arrived.
+    - `client tls handshake (sandbox to wardyn-proxy):` followed by the error, when the sandbox's TLS handshake with the terminating proxy failed after it sent at least one byte; for example a client that does not trust the CA the proxy signs with.
   - From the hop the cause carries only a strictly parsed three-digit status code or an alert's description number, never the status line's reason phrase, whichever hop it is.
   - A tunnel the sandbox opened with a TLS hello is no longer handed a first answer from the hop that is not a TLS record.
   - It is refused, nothing is relayed, and the sandbox sees the connection close.
@@ -5032,7 +5032,8 @@ The residuals an operator should plan for:
     - **Sign-in** — the in-sandbox helper verifies the pin against the SSO portal and prints `wardyn: aws sso credential rejected: …` on the login terminal rather than uploading.
       - It never falls back to the first account.
     - **Capture** — the upload is bound to the provider's values AS THEY READ AT LAUNCH (stamped on the run's own `harness.login.start` row), and lands only while the provider is still the one it was launched for.
-      - A blob that disagrees — or, on an unpinned launch, that names an account the provider's model ARN does not live in — is refused with 400 and a `harness.credential.refuse` audit row carrying a `reason` from a fixed vocabulary ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
+      - A blob that disagrees — or, on an unpinned launch, that names an account the provider's model ARN does not live in — is refused with 400.
+      - And with it comes a `harness.credential.refuse` audit row carrying a `reason` from a fixed vocabulary ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
       - Refused, never rewritten.
     - **Run** — `POST /runs` (422) and dispatch (the run goes FAILED, no sandbox, no credential authored) compare the stored session against the provider's CURRENT pin and refuse, naming both pairs, when they disagree.
       - Signing in again replaces the stored session.
