@@ -3,4 +3,6 @@
 # and summary cells) plus 44 (residuals 1-40) less 8 (residuals 41-63: restated subjects, less the joiners turned
 # into full stops) plus 27 (the alt text of the barrier-strengths figure in section 7), so growth fails.
 # 49282 adds 12 (section 4.1: the SSH shell's refusal named beside the 503 the other doors answer).
-threatmodel/THREAT-MODEL.md=49282
+# 49289 adds 7 (section 4.1 and the section 5 parts after the residuals: four cell-expansion headings and
+# 28 words of summary cells, plus 3 restated-subject words, less 28 dashes turned into full stops or lists).
+threatmodel/THREAT-MODEL.md=49289
