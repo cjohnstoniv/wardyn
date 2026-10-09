@@ -60,270 +60,265 @@ copy is permanent.
 | User drives | one object per person, per drive, on a deployment that registered one — a Docker volume or a PVC, both named `wardyn-drive-<drive-slug>-<home>`, or a subdirectory of the share YOU mounted (`host_path` — `<host_root>/<home>`) | each person's own files, written by their own runs at `/home/agent/drive`. Postgres holds the drive rows and the allocations, never the bytes, so `pg_dump` never carried this | that person's work; nothing reconstructs it |
 | Audit fallback | `WARDYN_AUDIT_SPOOL` and its `.consumed` / `.quarantine` sidecars; Compose mounts their directory on `<project>_audit` | pending failed-Postgres writes, their replay cursor, and permanently refused events | audit events absent from the database backup |
 
-`postgres_data`, `registry_data` and `audit` carry no explicit `name:` in
-`deploy/compose/docker-compose.yaml`, so Docker prefixes them with the compose
-project — `compose_postgres_data` by default (the name comes from the
-`deploy/compose` directory; `docker compose config | grep '^name:'`). Only
-`recordings` is explicitly named
-(`${WARDYN_NS:-wardyn}-recordings`), because the docker runner mounts that same
-volume into agent containers BY NAME. Reach for the unprefixed form and `docker
-volume inspect postgres_data` reports no such volume — a volume-level backup that
-ignores that error archives nothing. Back Postgres up with `pg_dump` (below), not
-at the volume layer.
+- `postgres_data`, `registry_data` and `audit` carry no explicit `name:` in
+  [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml), so Docker prefixes them with the compose
+  project — `compose_postgres_data` by default (the name comes from the
+  `deploy/compose` directory; `docker compose config | grep '^name:'`).
+- Only `recordings` is explicitly named (`${WARDYN_NS:-wardyn}-recordings`), because the docker runner mounts that same
+  volume into agent containers BY NAME.
+- Reach for the unprefixed form and `docker
+  volume inspect postgres_data` reports no such volume — a volume-level backup that
+  ignores that error archives nothing.
+- Back Postgres up with `pg_dump` (below), not at the volume layer.
 
-**A user-drive volume is not part of the compose project.** `wardyn-drive-*`
-volumes are created by the runner through the Docker API, not declared in
-`deploy/compose/docker-compose.yaml`, so `docker compose down -v` — and `make
-reset`, which runs it — leaves every one of them in place. That is deliberate: a
-stack teardown must not delete a person's files. It is also why a backup that
-walks the compose volumes misses them entirely; list them with `docker volume ls
---filter label=wardyn.managed=true`.
+> [!IMPORTANT]
+> **A user-drive volume is not part of the compose project.**
 
-The optional audit **file sink** (`WARDYN_AUDIT_SINKS`, [ENV.md](ENV.md)) is a
-forwarding copy for a SIEM. The Compose `audit` volume also holds the **fallback
-spool**, whose pending events are not yet in Postgres, so the volume is not
-disposable derived data. Preserve that recovery state as described below.
-Ground truth (`tetragon_export`) and the rotator's `groundtruth_token` are
-transient — regenerated on start.
+- `wardyn-drive-*` volumes are created by the runner through the Docker API, not declared in
+  [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml), so `docker compose down -v` — and `make
+  reset`, which runs it — leaves every one of them in place.
+- That is deliberate: a stack teardown must not delete a person's files.
+- It is also why a backup that walks the compose volumes misses them entirely; list them with `docker volume ls
+  --filter label=wardyn.managed=true`.
+
+- The optional audit **file sink** (`WARDYN_AUDIT_SINKS`, [ENV.md](ENV.md)) is a forwarding copy for a SIEM.
+- The Compose `audit` volume also holds the **fallback spool**, whose pending events are not yet in Postgres, so the
+  volume is not disposable derived data.
+- Preserve that recovery state as described below.
+- Ground truth (`tetragon_export`) and the rotator's `groundtruth_token` are transient — regenerated on start.
 
 ### Run output
 
-wardynd keeps the last `WARDYN_RUN_OUTPUT_TAIL_BYTES` (default 64 KiB, between
-1 KiB and 1 MiB) of every non-interactive run's combined stdout/stderr, in
-memory while the run lives and in Postgres once it ends, so a caller can read
-the end of a headless run, during it and after a restart, with
-`GET /api/v1/runs/{id}/output?tail=<bytes>` — the run's owner or an admin; anyone
-else gets the same `404` as `GET /runs/{id}`. An interactive run keeps no
-output of its own (its terminal is the recording's), only the pane snapshot
-below when Wardyn stops it gracefully; the managed-harness sign-in run keeps
-nothing at all, because its output is a live credential, and a read of it
-answers `409 run_output_interactive` like any interactive run. A sign-in whose
-browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
-`wardyn run sign-in <run-id>` (below).
+- wardynd keeps the last `WARDYN_RUN_OUTPUT_TAIL_BYTES` (default 64 KiB, between
+  1 KiB and 1 MiB) of every non-interactive run's combined stdout/stderr, in
+  memory while the run lives and in Postgres once it ends.
+  - So a caller can read the end of a headless run, during it and after a restart, with
+    `GET /api/v1/runs/{id}/output?tail=<bytes>` — the run's owner or an admin.
+  - Anyone else gets the same `404` as `GET /runs/{id}`.
+- An interactive run keeps no output of its own (its terminal is the recording's), only the pane snapshot
+  below when Wardyn stops it gracefully.
+- The managed-harness sign-in run keeps nothing at all, because its output is a live credential, and a read of it
+  answers `409 run_output_interactive` like any interactive run.
+- A sign-in whose browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
+  `wardyn run sign-in <run-id>` (below).
 
-- **Recording-on Kubernetes output.** The session recorder writes no task
-  stdout to the container log. With output persistence and recording enabled,
-  terminal noninteractive runs recover the available asciicast output payloads
-  into a masked tail with `source: "recording"`. Numbered parts are joined in
-  order; input events and attach-session casts are excluded. `incomplete` is
-  always true: recorder delivery is best effort and has no verified end marker.
-  Missing, invalid or uncovered recordings yield `capture_gap`. The run's owner
-  or an operator may read these rows, including gaps; a foreign security admin
-  gets the same refusal as if no recording output existed. A stored row remains
-  available under that gate if recording is later disabled.
-- **Recording recovery has a fixed budget.** A successful eligible upload queues
-  recovery durably before its receipt. Terminal finalization and authorized reads
-  can attempt it; the elected leader retries pending work immediately on startup
-  and every minute. Each source read has a ten-second budget, and a leader pass
-  shares ten seconds across a page of at most 200 runs. Decoded output is masked
-  in bounded 512 KiB batches before tail truncation; every batch still refreshes
-  the shared registry. A valid large joined recording can time out on every
-  attempt because each retry reads from the beginning. A timeout keeps the work
-  pending and preserves any earlier final row; it does not certify an empty or
-  complete capture. In a leader pass a read that outlives its budget is that
-  run's outcome alone: it is logged with the run id, and the pass still counts
-  as a success for the `run_output` sweep's health. A recording store that
-  fails, or a database call that does not answer in time, is still the pass's
-  error. An unfinished claim permits takeover after five minutes, and
-  selection favors never-claimed work, then the oldest claim, so one slow cast
-  yields later passes to other runs. This bounds work, not delivery latency or
-  backlog capacity: sustained load can exceed what the leader recovers before
-  `api.RunSecretGrace` removes the run's masking manifest. Lost coverage refuses
-  further source reads and yields a gap unless a better row already exists;
-  expired output retention retires the obligation without recreating output.
-  Keep the original recording when it is needed under its own retention policy;
-  a durable recovery obligation does not guarantee a derived output row.
-- **Persistent output.** Direct stdout lives outside the recording store and
-  works with `WARDYN_RECORDING_STORE=off`. With
-  `WARDYN_RUN_OUTPUT_PERSIST` on (the default) the final tail of each run is
-  written once, masked, to the `run_outputs` table when the run ends, so it
-  **is in Postgres and in its backups** for `WARDYN_RUN_OUTPUT_RETENTION_DAYS`
-  (default `30`; `0` keeps it forever) and any replica serves it, with or
-  without a restart. A sweep every minute on the elected leader deletes rows past
-  the window, and a run whose output was erased (below) answers
-  `404 run_output_erased`. A deployment that turned recordings off so terminals
-  are not kept should decide on these two settings too.
-- **The window is counted from when a row was written.** The sweep deletes a
-  row `WARDYN_RUN_OUTPUT_RETENTION_DAYS` after its `captured_at`. Direct stdout
-  is written as the run is finalized, so for it that is the run's end. A
-  recording-derived row is written when its recovery commits. No recovery
-  commits for a run that ended longer ago than the window, but one that
-  commits inside it is then kept for a full window of its own, so such a row
-  can outlive the run's end by more than the window. For a row that holds
-  output the excess is small in normal operation: recovering bytes needs the
-  run's masking manifest, which the run-secret sweep removes about an hour
-  after the run's last change (`api.RunSecretGrace`, checked every 15
-  minutes). A `capture_gap` row holds no output. It can be written later, by
-  an authorized read anywhere in the window when the run has no row yet, and
-  is then kept for a full window from that read.
+- **Recording-on Kubernetes output.**
+  - The session recorder writes no task stdout to the container log.
+  - With output persistence and recording enabled, terminal noninteractive runs recover the available asciicast output
+    payloads into a masked tail with `source: "recording"`.
+  - Numbered parts are joined in order; input events and attach-session casts are excluded.
+  - `incomplete` is always true: recorder delivery is best effort and has no verified end marker.
+  - Missing, invalid or uncovered recordings yield `capture_gap`.
+  - The run's owner or an operator may read these rows, including gaps; a foreign security admin gets the same
+    refusal as if no recording output existed.
+  - A stored row remains available under that gate if recording is later disabled.
+- **Recording recovery has a fixed budget.**
+  - A successful eligible upload queues recovery durably before its receipt.
+  - Terminal finalization and authorized reads can attempt it; the elected leader retries pending work immediately on
+    startup and every minute.
+  - Each source read has a ten-second budget, and a leader pass shares ten seconds across a page of at most 200 runs.
+  - Decoded output is masked in bounded 512 KiB batches before tail truncation; every batch still refreshes the shared
+    registry.
+  - A valid large joined recording can time out on every attempt because each retry reads from the beginning.
+  - A timeout keeps the work pending and preserves any earlier final row; it does not certify an empty or complete
+    capture.
+  - In a leader pass a read that outlives its budget is that run's outcome alone: it is logged with the run id, and
+    the pass still counts as a success for the `run_output` sweep's health.
+  - A recording store that fails, or a database call that does not answer in time, is still the pass's error.
+  - An unfinished claim permits takeover after five minutes, and selection favors never-claimed work, then the oldest
+    claim, so one slow cast yields later passes to other runs.
+  - This bounds work, not delivery latency or backlog capacity: sustained load can exceed what the leader recovers
+    before `api.RunSecretGrace` removes the run's masking manifest.
+  - Lost coverage refuses further source reads and yields a gap unless a better row already exists; expired output
+    retention retires the obligation without recreating output.
+  - Keep the original recording when it is needed under its own retention policy; a durable recovery obligation does
+    not guarantee a derived output row.
+- **Persistent output.**
+  - Direct stdout lives outside the recording store and works with `WARDYN_RECORDING_STORE=off`.
+  - With `WARDYN_RUN_OUTPUT_PERSIST` on (the default) the final tail of each run is written once, masked, to the
+    `run_outputs` table when the run ends.
+  - So it **is in Postgres and in its backups** for `WARDYN_RUN_OUTPUT_RETENTION_DAYS` (default `30`; `0` keeps it
+    forever) and any replica serves it, with or without a restart.
+  - A sweep every minute on the elected leader deletes rows past the window, and a run whose output was erased (below)
+    answers `404 run_output_erased`.
+  - A deployment that turned recordings off so terminals are not kept should decide on these two settings too.
+- **The window is counted from when a row was written.**
+  - The sweep deletes a row `WARDYN_RUN_OUTPUT_RETENTION_DAYS` after its `captured_at`.
+  - Direct stdout is written as the run is finalized, so for it that is the run's end.
+  - A recording-derived row is written when its recovery commits.
+  - No recovery commits for a run that ended longer ago than the window, but one that commits inside it is then kept
+    for a full window of its own.
+  - So such a row can outlive the run's end by more than the window.
+  - For a row that holds output the excess is small in normal operation.
+  - Recovering bytes needs the run's masking manifest, which the run-secret sweep removes about an hour after the
+    run's last change (`api.RunSecretGrace`, checked every 15 minutes).
+  - A `capture_gap` row holds no output.
+  - It can be written later, by an authorized read anywhere in the window when the run has no row yet, and is then
+    kept for a full window from that read.
 - **Another replica's live tail.** With persistence on, a replica that holds no
   tail for a live run answers the read from `run_output_chunks`, where the
   dispatching replica keeps what its masker has passed (`complete` is false).
-- **One finalisation for every way a run ends.** Completion, failure, a kill,
-  an idle stop, a lease end, a probe reclaim, boot reconciliation and a failed
-  dispatch all end in the same step: wait up to 5 seconds for the runner's copy
-  of the output to reach its end (the process exiting is not the end of its
-  output), release the bytes the masker was holding back as a possible secret
-  prefix, seal the tail, and write the row. A byte that arrives after that is
-  dropped. The row says what it is: `complete` is true only for a final capture,
-  `incomplete` when the wait ran out, a copy failed or a byte was dropped, and
-  `capture_gap` when this process held no tail (for example a run adopted after
-  a restart) and could not read the output back from the substrate. A gap may keep
-  masked partial stdout chunks that had already reached Postgres. A write that fails is retried with
-  capped backoff, the bytes held in memory, and audited as `run.output.finalize`;
-  a clean capture writes no audit row.
-- **A pane snapshot for an interactive run Wardyn stops.** When Wardyn itself
-  stops an interactive run's sandbox into STOPPED (the idle stop, the
-  `WARDYN_RUN_MAX_AGE` stop, or a lease end), it first revokes the run's
-  credentials, then reads the whole scrollback of the run's `wardyn` tmux
-  session as plain text (`tmux capture-pane -p -J -S -`, no escape sequences),
-  keeps the last `WARDYN_RUN_OUTPUT_TAIL_BYTES` of it, masked the way a
-  recording is, and stores it as a `source: "pane_snapshot"` row. It is bounded
-  to 3 seconds: a pane that never finishes, a sandbox with no tmux or no
-  session, or a failed read leaves no row and the stop goes on. Each attempt is
-  audited as `run.output.snapshot` (the outcome and the byte count, never the
-  text). A kill, a failed or reconciled run, and a deployment with persistence
-  off take none. **The pane is text the sandbox controls:** the sandbox runs as
-  the tmux server's user and can make the pane, or `tmux` itself, print
-  anything, so the snapshot shows what the sandbox chose to show. It is stored
-  as bytes and meant to be shown as plain text, never interpreted. A snapshot is
-  a person's last terminal screen, so it is read on the recording's rule: the
-  run's owner or a super admin gets it; a security admin gets
-  `409 run_output_interactive`, the answer for a run with no snapshot, and the
-  refusal is audited.
-- **An interactive run with no snapshot.** It answers
-  `409 run_output_interactive`, and the sentence says what this run kept. With
-  recording on, it points at the run's recording. With recording off
-  (`components.recording` reads `none` on `/healthz`), it says nothing was kept
-  from this session, and for a kill, a failure or a reconcile, that the session
-  did not end through a Wardyn stop. A security admin always gets the
-  recording-on sentence, so it never tells them whether a snapshot exists.
-- **From the CLI.** `wardyn run output <run-id> [--tail N] [--json] [--raw]`
-  reads the same endpoint, so a person without console access can read a run's
-  kept output. Piped, it writes the bytes exactly as returned, with no added
-  newline. On a terminal it prints ESC and other control characters as escapes
-  (such as `\x1b`) unless `--raw` is given, and always for a `pane_snapshot`,
-  because a run controls this text. A one-line note on stderr says when the row
-  is truncated, incomplete, a capture gap, a pane snapshot, or masked against
-  global secrets only; a refusal exits non-zero and names its `run_output_*`
-  reason.
-- **A waiting sign-in.** `GET /api/v1/runs/{id}/sign-in` (and
-  `wardyn run sign-in <run-id>`, which reads it once) answers whether a running
-  AWS sign-in is waiting for its device-code approval, with the verification
-  link and code of its latest attempt. Only the run's owner may read it. One
-  command in the sandbox, bounded to the snapshot's 3 seconds and to 64 KiB,
-  first checks that an `aws sso login` process is running there and only then
-  reads the sign-in pane with the snapshot's capture. It keeps nothing: no pane
-  text or code is logged, stored or audited. `waiting` takes both: a running
-  sign-in process and a current code on the pane. So a retry run by hand in the
-  pane's shell that expired, failed or was interrupted answers `not_waiting`,
-  although nothing on the pane says it ended. So does an attempt followed by its
-  completion or failure line, and a run whose capture is already audited
-  (`harness.credential.capture` on this run). The code is still read from the
-  pane: for the few seconds between a new retry starting and printing its own
-  code, a read can show the code of a hand-run retry that died before it, and
-  the next read corrects it. A read that times out, overflows or fails answers
-  `503 run_sign_in_unreadable`. Closing the sign-in dialog on purpose still
-  kills the run; only a lost tab leaves it waiting.
-- **A restart.** A run that was live across a wardynd restart, or that another
-  replica adopted, has its output read back from the substrate when that is
-  possible and safe, and ends with a `capture_gap` row when it is not. wardynd
-  never re-runs the agent to get it. The two substrates differ:
-  - **Kubernetes** with recordings off keeps the agent container's log for as
-    long as the pod lives, so the new process re-reads it from its first byte
-    into a fresh tail, and a run adopted while still running resumes following
-    it. The run keeps all of its output: before the restart, during the handoff
-    and after. With recordings on the terminal path reads the available recording
-    instead, under the same masking-coverage requirement.
-  - **Docker** keeps a log only for an exec-less agent (a krun microVM), which
-    is re-read the same way. An exec agent's terminal is a hijacked stream that
-    dockerd does not log and that cannot be re-attached after the process that
-    held it died, so the run ends with a `capture_gap` row.
-  - A sandbox that is already gone, and a runner that cannot read output back,
-    also give a `capture_gap` row.
-  - **A run with no complete masking manifest gets a capture gap, and nothing
-    is read.** That is every run with no manifest (a run dispatched before
-    0.8.6, including runs that are alive across the upgrade) and any whose
-    manifest is incomplete: the log holds the secrets the run was dispatched
-    with, and a process that cannot prove its masking registry holds them would
-    persist them verbatim. The check is made before the substrate is touched,
-    by any replica, without the watcher lease. A recovery that loses its
-    coverage part-way ends as a capture gap too, so a recovered row is never
-    masked by the process-wide corpus alone.
-  - **The read is bounded** to 10 seconds, inside the finalisation's own
-    timeout and after the credential revoke cascade, so a sandbox that writes an
-    endless log cannot delay boot or a run's teardown: the row is written
-    `incomplete`, with what was read.
-  - The sweep every minute resolves a terminal run's pending row, once its claim is
-    five minutes old, the same way: by recovery under the same rules, or to a
-    `capture_gap` row.
-  - Recording uploads commit their recovery obligation before a successful
-    receipt. A restarted leader immediately checks a bounded page of terminal
-    work, then retries every minute; an abandoned claim is available after five
-    minutes. Source reads, decoding and masking happen outside output transactions.
-    The final write checks the exact claim and upload generation, erasure fences,
-    masking manifest and output retention deadline. Final stdout and pane rows
-    are preserved. A later committed upload can improve a recording result even
-    when `complete` is already true; that flag describes the capture attempt.
+- **One finalisation for every way a run ends.**
+  - Completion, failure, a kill, an idle stop, a lease end, a probe reclaim, boot reconciliation and a failed dispatch
+    all end in the same step:
+    1. wait up to 5 seconds for the runner's copy of the output to reach its end (the process exiting is not the end
+       of its output),
+    2. release the bytes the masker was holding back as a possible secret prefix, seal the tail, and write the row.
+  - A byte that arrives after that is dropped.
+  - The row says what it is: `complete` is true only for a final capture, `incomplete` when the wait ran out, a copy
+    failed or a byte was dropped.
+  - And `capture_gap` when this process held no tail (for example a run adopted after a restart) and could not read the
+    output back from the substrate.
+  - A gap may keep masked partial stdout chunks that had already reached Postgres.
+  - A write that fails is retried with capped backoff, the bytes held in memory, and audited as `run.output.finalize`;
+    a clean capture writes no audit row.
+- **A pane snapshot for an interactive run Wardyn stops.**
+  - When Wardyn itself stops an interactive run's sandbox into STOPPED (the idle stop, the `WARDYN_RUN_MAX_AGE` stop,
+    or a lease end), it first revokes the run's credentials,
+    - then reads the whole scrollback of the run's `wardyn` tmux session as plain text
+      (`tmux capture-pane -p -J -S -`, no escape sequences),
+    - keeps the last `WARDYN_RUN_OUTPUT_TAIL_BYTES` of it, masked the way a recording is,
+    - and stores it as a `source: "pane_snapshot"` row.
+  - It is bounded to 3 seconds: a pane that never finishes, a sandbox with no tmux or no session, or a failed read
+    leaves no row and the stop goes on.
+  - Each attempt is audited as `run.output.snapshot` (the outcome and the byte count, never the text).
+  - A kill, a failed or reconciled run, and a deployment with persistence off take none.
+  - **The pane is text the sandbox controls:** the sandbox runs as the tmux server's user and can make the pane, or
+    `tmux` itself, print anything, so the snapshot shows what the sandbox chose to show.
+  - It is stored as bytes and meant to be shown as plain text, never interpreted.
+  - A snapshot is a person's last terminal screen, so it is read on the recording's rule: the run's owner or a super
+    admin gets it.
+  - A security admin gets `409 run_output_interactive`, the answer for a run with no snapshot, and the refusal is
+    audited.
+- **An interactive run with no snapshot.**
+  - It answers `409 run_output_interactive`, and the sentence says what this run kept.
+  - With recording on, it points at the run's recording.
+  - With recording off (`components.recording` reads `none` on `/healthz`), it says nothing was kept from this
+    session, and for a kill, a failure or a reconcile, that the session did not end through a Wardyn stop.
+  - A security admin always gets the recording-on sentence, so it never tells them whether a snapshot exists.
+- **From the CLI.**
+  - `wardyn run output <run-id> [--tail N] [--json] [--raw]` reads the same endpoint, so a person without console
+    access can read a run's kept output.
+  - Piped, it writes the bytes exactly as returned, with no added newline.
+  - On a terminal it prints ESC and other control characters as escapes (such as `\x1b`) unless `--raw` is given, and
+    always for a `pane_snapshot`, because a run controls this text.
+  - A one-line note on stderr says when the row is truncated, incomplete, a capture gap, a pane snapshot, or masked
+    against global secrets only; a refusal exits non-zero and names its `run_output_*` reason.
+- **A waiting sign-in.**
+  - `GET /api/v1/runs/{id}/sign-in` (and `wardyn run sign-in <run-id>`, which reads it once) answers whether a running
+    AWS sign-in is waiting for its device-code approval, with the verification link and code of its latest attempt.
+  - Only the run's owner may read it.
+  - One command in the sandbox, bounded to the snapshot's 3 seconds and to 64 KiB, first checks that an
+    `aws sso login` process is running there and only then reads the sign-in pane with the snapshot's capture.
+  - It keeps nothing: no pane text or code is logged, stored or audited.
+  - `waiting` takes both: a running sign-in process and a current code on the pane.
+  - So a retry run by hand in the pane's shell that expired, failed or was interrupted answers `not_waiting`, although
+    nothing on the pane says it ended.
+  - So does an attempt followed by its completion or failure line, and a run whose capture is already audited
+    (`harness.credential.capture` on this run).
+  - The code is still read from the pane.
+  - For the few seconds between a new retry starting and printing its own code, a read can show the code of a hand-run
+    retry that died before it, and the next read corrects it.
+  - A read that times out, overflows or fails answers `503 run_sign_in_unreadable`.
+  - Closing the sign-in dialog on purpose still kills the run; only a lost tab leaves it waiting.
+- **A restart.**
+  - A run that was live across a wardynd restart, or that another replica adopted, has its output read back from the
+    substrate when that is possible and safe.
+  - And it ends with a `capture_gap` row when it is not.
+  - wardynd never re-runs the agent to get it.
+  - The two substrates differ:
+    - **Kubernetes** with recordings off keeps the agent container's log for as long as the pod lives.
+      - So the new process re-reads it from its first byte into a fresh tail, and a run adopted while still running
+        resumes following it.
+      - The run keeps all of its output: before the restart, during the handoff and after.
+      - With recordings on the terminal path reads the available recording instead, under the same masking-coverage
+        requirement.
+    - **Docker** keeps a log only for an exec-less agent (a krun microVM), which is re-read the same way.
+      - An exec agent's terminal is a hijacked stream that dockerd does not log and that cannot be re-attached after
+        the process that held it died, so the run ends with a `capture_gap` row.
+  - A sandbox that is already gone, and a runner that cannot read output back, also give a `capture_gap` row.
+  - **A run with no complete masking manifest gets a capture gap, and nothing is read.**
+    - That is every run with no manifest (a run dispatched before 0.8.6, including runs that are alive across the
+      upgrade) and any whose manifest is incomplete.
+    - The log holds the secrets the run was dispatched with, and a process that cannot prove its masking registry
+      holds them would persist them verbatim.
+    - The check is made before the substrate is touched, by any replica, without the watcher lease.
+    - A recovery that loses its coverage part-way ends as a capture gap too, so a recovered row is never masked by the
+      process-wide corpus alone.
+  - **The read is bounded** to 10 seconds, inside the finalisation's own timeout and after the credential revoke
+    cascade.
+    - So a sandbox that writes an endless log cannot delay boot or a run's teardown: the row is written `incomplete`,
+      with what was read.
+  - The sweep every minute resolves a terminal run's pending row, once its claim is five minutes old, the same way: by
+    recovery under the same rules, or to a `capture_gap` row.
+  - Recording uploads commit their recovery obligation before a successful receipt.
+    - A restarted leader immediately checks a bounded page of terminal work, then retries every minute; an abandoned
+      claim is available after five minutes.
+    - Source reads, decoding and masking happen outside output transactions.
+    - The final write checks the exact claim and upload generation, erasure fences, masking manifest and output
+      retention deadline.
+    - Final stdout and pane rows are preserved.
+    - A later committed upload can improve a recording result even when `complete` is already true; that flag
+      describes the capture attempt.
   - The recording commit and recovery-obligation commit use separate stores.
-    A crash between them leaves a committed recording without a successful
-    receipt or queued recovery. An authorized terminal missing/gap output read
-    repairs that window, with a five-minute cooldown. A failed obligation commit
-    is the same window: the upload answers `500` although the recording is
-    stored, and the recorder does not retry its final upload. The receipt never
-    waits on the runner. When the runner's capabilities cannot be read at upload
-    time, the stored recording is acknowledged and that upload queues nothing;
-    terminal finalization asks the runner again, and the same read repairs an
-    upload that arrived after the run ended. Transient source failures
-    leave durable pending work; no recovery is possible once masking coverage
-    or output retention has expired.
-
-  Runs that finished before the upgrade have no row and read
-  `409 run_output_not_kept`.
-- **Settings.** `WARDYN_EXEC_OUTPUT_TAIL=off` collects nothing and refuses
-  stored rows too (`409 run_output_off`); the sweeper still deletes them.
-  `WARDYN_RUN_OUTPUT_PERSIST=off` keeps the tail in memory only, expired
-  `WARDYN_EXEC_OUTPUT_TAIL_TTL` (default `24h`) after the run's last output,
-  writes nothing to Postgres, and still serves rows stored earlier until the
-  sweeper deletes them. The sweep is the `run_output` row of
-  [monitoring](operations/monitoring.md).
+    - A crash between them leaves a committed recording without a successful receipt or queued recovery.
+    - An authorized terminal missing/gap output read repairs that window, with a five-minute cooldown.
+    - A failed obligation commit is the same window: the upload answers `500` although the recording is stored, and
+      the recorder does not retry its final upload.
+    - The receipt never waits on the runner.
+    - When the runner's capabilities cannot be read at upload time, the stored recording is acknowledged and that
+      upload queues nothing.
+    - Terminal finalization asks the runner again, and the same read repairs an upload that arrived after the run
+      ended.
+    - Transient source failures leave durable pending work; no recovery is possible once masking coverage or output
+      retention has expired.
+  - Runs that finished before the upgrade have no row and read `409 run_output_not_kept`.
+- **Settings.**
+  - `WARDYN_EXEC_OUTPUT_TAIL=off` collects nothing and refuses stored rows too (`409 run_output_off`); the sweeper
+    still deletes them.
+  - `WARDYN_RUN_OUTPUT_PERSIST=off` keeps the tail in memory only, expired `WARDYN_EXEC_OUTPUT_TAIL_TTL` (default
+    `24h`) after the run's last output, writes nothing to Postgres, and still serves rows stored earlier until the
+    sweeper deletes them.
+  - The sweep is the `run_output` row of [monitoring](operations/monitoring.md).
 - **Storage.** About `WARDYN_RUN_OUTPUT_TAIL_BYTES` × (runs per day) × retention
   days at most: 2,000 runs a day at the default size and 30 days is about
   3.7 GiB of table, before indexes.
-- **Retained tail memory.** With persistence on, a tail is held from a run's first
-  output until its row commits, never expired by the TTL, so the retained ring
-  storage is at most
-  (live and kept non-interactive runs) × `WARDYN_RUN_OUTPUT_TAIL_BYTES`: 500
-  runs at 1 MiB is about 500 MiB. With persistence off a tail is held until
-  `WARDYN_EXEC_OUTPUT_TAIL_TTL` after its last output, finished runs included, so
-  the retained ring storage is at most (runs that printed within the TTL) × the
-  tail size: 2,000 runs a day at 1 MiB is about 2 GiB. Size the variable against
-  the mode you run. This is the ring only, not the whole footprint of a capture.
-- **Buffers on top of the ring, per live capture.** Each run being captured also
-  owns a masking queue that holds up to 512 KiB of output the masker has not yet
-  taken, plus the batch being masked, which can be as large again (two buffers
-  alternate, one filling while the other is masked). They are held only while
-  output is arriving and are released when the queue drains, but a run printing
-  faster than the masker keeps up with can hold about 1 MiB in them whatever the
-  tail size is, which at the default 64 KiB tail is many times the ring. With
-  persistence on, a run also queues up to 256 KiB for the database, plus the
-  batch being written, which can be as large again; it grows toward that only
-  while writes to Postgres are failing or slow. Add these
-  to the formula for the number of runs printing at once.
-- **It can hold secrets, like any log.** Values already in Wardyn's masking registry
-  (brokered credentials, `env_secret` grants) are masked as they are written,
-  the same way a recording is. Anything else a command prints — a token it read
-  from a file, a secret a person pasted into the task — is kept verbatim and
-  served to whoever may read the run, and now persisted for the retention
-  window. A harness that prints a token it read from a file therefore keeps that
-  token for the run's readers.
-- **Erasure.** `EraseRunOutputs` deletes a run's rows and writes a tombstone in
-  one transaction (nothing at all if it fails). Every write and read of a run's
-  output checks the tombstone in its own transaction, so no replica recreates or
-  serves an erased run's output, and a replica still holding the run's tail in
-  memory drops and zeroes it the next time it touches the run. Bytes already in
-  a database backup stay there until it ages out. `DELETE /people/{principal}/credentials`
-  erases credentials only and does not call it.
+- **Retained tail memory.**
+  - With persistence on, a tail is held from a run's first output until its row commits, never expired by the TTL.
+  - So the retained ring storage is at most (live and kept non-interactive runs) × `WARDYN_RUN_OUTPUT_TAIL_BYTES`:
+    500 runs at 1 MiB is about 500 MiB.
+  - With persistence off a tail is held until `WARDYN_EXEC_OUTPUT_TAIL_TTL` after its last output, finished runs
+    included.
+  - So the retained ring storage is at most (runs that printed within the TTL) × the tail size: 2,000 runs a day at
+    1 MiB is about 2 GiB.
+  - Size the variable against the mode you run.
+  - This is the ring only, not the whole footprint of a capture.
+- **Buffers on top of the ring, per live capture.**
+  - Each run being captured also owns a masking queue that holds up to 512 KiB of output the masker has not yet
+    taken,
+    - plus the batch being masked, which can be as large again
+    - (two buffers alternate, one filling while the other is masked).
+  - They are held only while output is arriving and are released when the queue drains,
+    - but a run printing faster than the masker keeps up with can hold about 1 MiB in them whatever the tail size is,
+    - which at the default 64 KiB tail is many times the ring.
+  - With persistence on, a run also queues up to 256 KiB for the database, plus the batch being written, which can be
+    as large again.
+  - It grows toward that only while writes to Postgres are failing or slow.
+  - Add these to the formula for the number of runs printing at once.
+- **It can hold secrets, like any log.**
+  - Values already in Wardyn's masking registry (brokered credentials, `env_secret` grants) are masked as they are
+    written, the same way a recording is.
+  - Anything else a command prints — a token it read from a file, a secret a person pasted into the task — is kept
+    verbatim and served to whoever may read the run.
+  - And it is now persisted for the retention window.
+  - A harness that prints a token it read from a file therefore keeps that token for the run's readers.
+- **Erasure.**
+  - `EraseRunOutputs` deletes a run's rows and writes a tombstone in one transaction (nothing at all if it fails).
+  - Every write and read of a run's output checks the tombstone in its own transaction.
+  - So no replica recreates or serves an erased run's output, and a replica still holding the run's tail in memory
+    drops and zeroes it the next time it touches the run.
+  - Bytes already in a database backup stay there until it ages out.
+  - `DELETE /people/{principal}/credentials` erases credentials only and does not call it.
 - **The off switch** is `WARDYN_EXEC_OUTPUT_TAIL=off`. Turning recordings off
   does not turn this off; a deployment that disables recordings so terminals are
   not kept should decide on this one too.
@@ -334,26 +329,32 @@ browser tab was lost is found with `GET /api/v1/runs/{id}/sign-in` or
 
 ### Audit fallback recovery
 
-Keep the spool, `<spool>.consumed`, and `<spool>.quarantine` with the database
-backup as one recovery set. Quiesce work and stop wardynd while taking the
-database dump and copying its durable spool directory, so a drain cannot retire
-events between the two snapshots. Preserve ownership and restrictive file modes.
-The spool holds failed primary writes until replay succeeds; quarantine holds
-rejected events requiring manual triage. Neither is reconstructed from Postgres.
+- Keep the spool, `<spool>.consumed`, and `<spool>.quarantine` with the database
+  backup as one recovery set.
+- Quiesce work and stop wardynd while taking the
+  database dump and copying its durable spool directory, so a drain cannot retire
+  events between the two snapshots.
+- Preserve ownership and restrictive file modes.
+- The spool holds failed primary writes until replay succeeds; quarantine holds
+  rejected events requiring manual triage.
+- Neither is reconstructed from Postgres.
 
-Restore the matching files at `WARDYN_AUDIT_SPOOL` before wardynd starts.
-`NewAuditSpool` resumes from the valid `.consumed` cursor, restores the backlog
-and quarantine counters, and the drain retries pending events. Quarantine is
-not replayed automatically. A missing or mismatched cursor restarts replay from
-the beginning and can duplicate events; replay is at-least-once. The cursor
-identifies spool bytes, **not a database snapshot**: never pair a newer cursor
-with an older database dump, because it can skip events absent from that dump.
-Unmatched recovery sets need manual reconciliation.
+- Restore the matching files at `WARDYN_AUDIT_SPOOL` before wardynd starts.
+- `NewAuditSpool` resumes from the valid `.consumed` cursor, restores the backlog
+  and quarantine counters, and the drain retries pending events.
+- Quarantine is not replayed automatically.
+- A missing or mismatched cursor restarts replay from
+  the beginning and can duplicate events; replay is at-least-once.
 
-On ephemeral storage, preserve pending files **before** deleting the container
-or pod; once its directory is gone there is nothing to restore. If possible,
-recover Postgres and let the backlog drain first, while retaining quarantine.
-Use durable spool storage for repeatable backup/restore.
+> [!WARNING]
+> The cursor identifies spool bytes, **not a database snapshot**: never pair a newer cursor
+> with an older database dump, because it can skip events absent from that dump.
+
+- Unmatched recovery sets need manual reconciliation.
+- On ephemeral storage, preserve pending files **before** deleting the container
+  or pod; once its directory is gone there is nothing to restore.
+- If possible, recover Postgres and let the backlog drain first, while retaining quarantine.
+- Use durable spool storage for repeatable backup/restore.
 
 ### Back them up
 
@@ -471,8 +472,9 @@ docker volume ls --filter label=wardyn.drive=<drive id>
 #    /home/agent/drive holds that person's data rather than an empty directory.
 ```
 
+> [!WARNING]
 > `make reset` runs `compose down -v` after a confirmation prompt
-> (`scripts/up.sh` `cmd_reset`): Postgres, recordings and the audit sink all go,
+> ([`scripts/up.sh`](../scripts/up.sh) `cmd_reset`): Postgres, recordings and the audit sink all go,
 > with no backup counterpart. It leaves `.env` — and so the age key — alone.
 > `make compose-down` stops the stack and keeps the volumes.
 
@@ -486,8 +488,8 @@ commands are the ones in "Back them up" and "Restore them", and in
 
 | Deployment | Database | Age identity and keys | Recordings (file store only) | Drives | Audit spool, `.consumed`, `.quarantine` |
 |---|---|---|---|---|---|
-| **Compose** | The `postgres_data` volume; the dump comes from the `${WARDYN_NS:-wardyn}-postgres` container. | `WARDYN_AGE_KEY` in `deploy/compose/.env`, plus the file `WARDYN_PLATFORM_KEY_FILE` names if you set it. With `WARDYN_KEK=transit` or `azurekv`, the key lives in the external key service (Vault or Azure Key Vault), which you back up separately. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. The default `pg` store is already in the dump. | One Docker volume per person, labelled `wardyn.managed=true`. A `host_path` drive is a share you already back up. | The `audit` volume, `<project>_audit`, mounted at `/data/audit`: `audit-spool.jsonl`, `.consumed` and `.quarantine` (`WARDYN_AUDIT_SPOOL` on the `wardynd` service in `deploy/compose/docker-compose.yaml`). |
-| **Managed desktop** | The `postgres_data` volume of the Compose project `wardyn-desktop` (the `compose` helper in `deploy/desktop/wardyn-desktop.sh`). Stop the converge job first (`wardyn.timer` on Linux, the launchd job on macOS), or it restarts the stack under you. | **Not in the set, deliberately.** `age.key` stays on the device ([DESKTOP.md](DESKTOP.md#why-agekey-never-rides-in-an-mdm-payload)), so a desktop restore recovers runs, audit and drives, but not stored secrets. If you set `WARDYN_PLATFORM_KEY_FILE`, keep that file. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. | One Docker volume per person, as on Compose (a drive volume per person). | `/data/audit/audit-spool.jsonl`, `.consumed` and `.quarantine`, on the project's `audit` volume. |
+| **Compose** | The `postgres_data` volume; the dump comes from the `${WARDYN_NS:-wardyn}-postgres` container. | `WARDYN_AGE_KEY` in `deploy/compose/.env`, plus the file `WARDYN_PLATFORM_KEY_FILE` names if you set it. With `WARDYN_KEK=transit` or `azurekv`, the key lives in the external key service (Vault or Azure Key Vault), which you back up separately. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. The default `pg` store is already in the dump. | One Docker volume per person, labelled `wardyn.managed=true`. A `host_path` drive is a share you already back up. | The `audit` volume, `<project>_audit`, mounted at `/data/audit`: `audit-spool.jsonl`, `.consumed` and `.quarantine` (`WARDYN_AUDIT_SPOOL` on the `wardynd` service in [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)). |
+| **Managed desktop** | The `postgres_data` volume of the Compose project `wardyn-desktop` (the `compose` helper in [`deploy/desktop/wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh)). Stop the converge job first (`wardyn.timer` on Linux, the launchd job on macOS), or it restarts the stack under you. | **Not in the set, deliberately.** `age.key` stays on the device ([DESKTOP.md](DESKTOP.md#why-agekey-never-rides-in-an-mdm-payload)), so a desktop restore recovers runs, audit and drives, but not stored secrets. If you set `WARDYN_PLATFORM_KEY_FILE`, keep that file. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. | One Docker volume per person, as on Compose (a drive volume per person). | `/data/audit/audit-spool.jsonl`, `.consumed` and `.quarantine`, on the project's `audit` volume. |
 | **Helm** | The Postgres you operate (`postgres.dsn`); the chart renders none. Use that Postgres's own backup. | The Secret holding the `age-key` entry (`secrets.ageKeyFromSecret=true`), `secrets.ageKey`, or an operator-owned Secret named by `secrets.ageKeySecretRef`, or the key wired through `env`/`extraEnv`; the `WARDYN_PLATFORM_KEY_FILE` file if set; or the external key service for Vault Transit or Azure Key Vault. `secrets.allowEphemeralAgeKey=true` makes a backup unrecoverable. | The PVC, with `persistence.enabled=true` (store `fs`). With `persistence.enabled=false` the store is `off`; `env.WARDYN_RECORDING_STORE=pg` puts them in the dump. | One PVC per drive: a snapshot per claim ("User drives on Kubernetes"). | `<persistence.mountPath>/audit-spool.jsonl`, `.consumed` and `.quarantine` on the PVC. With the default `persistence.enabled=false` they sit on a `/tmp` emptyDir, so the precondition is: enable persistence, or drain and copy them before scaling to zero. |
 
 **Rules for every row.**
@@ -505,273 +507,273 @@ commands are the ones in "Back them up" and "Restore them", and in
   a restore, a volume you recreate by hand is adopted by name, so the
   `wardyn.drive=<id>` label is the only check that it belongs to the right drive.
   A volume recreated without that label is adopted unchecked, so set the label when you
-  recreate it (`driveVolumeAdoptable`, `internal/runner/docker/driver_volumes.go`).
+  recreate it (`driveVolumeAdoptable`, [`internal/runner/docker/driver_volumes.go`](../internal/runner/docker/driver_volumes.go)).
 - **Hybrid desktop.** A device re-enrols with a fresh enrolment token. Never
   restore a revoked device.
 
-**What is not proven.** The commands in the day-2 section were exercised once
-against a throwaway kind cluster. No shipped tool rehearses a restore (that is
-issue #1514), so none of the above has been validated end to end. Loading a dump
-into a scratch database proves the SQL loads, and nothing more: a row count does
-not show that the key works, and it does not show that the drive bytes are
-intact.
+> [!IMPORTANT]
+> **What is not proven.**
+
+- The commands in the day-2 section were exercised once against a throwaway kind cluster.
+- No shipped tool rehearses a restore (that is issue #1514), so none of the above has been validated end to end.
+- Loading a dump into a scratch database proves the SQL loads, and nothing more: a row count does not show that the
+  key works, and it does not show that the drive bytes are intact.
 
 ### The audit log can't quietly rot
 
-"Append-only" here is enforced by the database, not by convention. A row-level
-Postgres trigger rejects `UPDATE` and `DELETE` on `audit_events`, and a
-statement-level guard (migration `0004`) rejects `TRUNCATE` — all three asserted
-in `TestPG_AuditAppendOnly_TriggerRejects` (`internal/store/store_pg_test.go`),
-so an operator with direct database access cannot rewrite or silently thin the
-trail through Wardyn's own schema.
+- "Append-only" here is enforced by the database, not by convention.
+- A row-level Postgres trigger rejects `UPDATE` and `DELETE` on `audit_events`, and a
+  statement-level guard (migration `0004`) rejects `TRUNCATE`.
+- All three are asserted in `TestPG_AuditAppendOnly_TriggerRejects`
+  ([`internal/store/store_pg_test.go`](../internal/store/store_pg_test.go)), so an operator with direct database access
+  cannot rewrite or silently thin the trail through Wardyn's own schema.
 
-**Those triggers are re-checked on every boot**, because `schema_migrations`
-records a *filename*: once a migration has run, an owner who later `DROP`s or
-`DISABLE`s one of its triggers leaves a database every later start reports as
-fully migrated. `Migrate` now reads `pg_trigger` after the migration loop
-(`ensureAuditTriggers`, `internal/db/db.go`). A missing or disabled **hash-chain**
-trigger is RESTORED — its migrations are idempotent and replayable, and the boot
-log says so at ERROR, because rows written while it was gone are unchained and
-the verify sweep will name them. A missing or disabled **append-only** trigger
-makes `wardynd` REFUSE TO START: restoring it means replaying the initial schema,
-which is a far bigger blast radius than stopping and telling you. Either way the
-process no longer continues silently on a table whose guards are gone.
+- **Those triggers are re-checked on every boot**, because `schema_migrations` records a *filename*.
+  - Once a migration has run, an owner who later `DROP`s or `DISABLE`s one of its triggers leaves a database every
+    later start reports as fully migrated.
+  - `Migrate` now reads `pg_trigger` after the migration loop (`ensureAuditTriggers`,
+    [`internal/db/db.go`](../internal/db/db.go)).
+  - A missing or disabled **hash-chain** trigger is RESTORED.
+  - Its migrations are idempotent and replayable, and the boot log says so at ERROR, because rows written while it was
+    gone are unchained and the verify sweep will name them.
+  - A missing or disabled **append-only** trigger makes `wardynd` REFUSE TO START: restoring it means replaying the
+    initial schema, which is a far bigger blast radius than stopping and telling you.
+  - Either way the process no longer continues silently on a table whose guards are gone.
 
-The same read also asks what ELSE is armed on that table, because the shipped
-guards being present is not the same as nothing standing beside them. A
-**row-level `BEFORE INSERT` trigger Wardyn does not ship** makes `wardynd`
-REFUSE TO START, whatever it is called: such a trigger is handed `NEW` and
-whatever it returns is what Postgres stores, so it can rewrite any field, choose
-`prev_hash`/`row_hash`, or `RETURN NULL` to make the event vanish — and the row
-it leaves behind is internally consistent, so the verify sweep below reports the
-log **clean**. Any other unexpected trigger (`AFTER`, statement-level, or bound
-to another event) cannot alter the stored row, so it is named in the boot log at
-ERROR rather than refused — a deployment may legitimately hang a replication or
-notify trigger off this table.
+- The same read also asks what ELSE is armed on that table, because the shipped guards being present is not the same
+  as nothing standing beside them.
+  - A **row-level `BEFORE INSERT` trigger Wardyn does not ship** makes `wardynd` REFUSE TO START, whatever it is
+    called.
+  - Such a trigger is handed `NEW` and whatever it returns is what Postgres stores, so it can rewrite any field,
+    choose `prev_hash`/`row_hash`, or `RETURN NULL` to make the event vanish.
+  - And the row it leaves behind is internally consistent, so the verify sweep below reports the log **clean**.
+  - Any other unexpected trigger (`AFTER`, statement-level, or bound to another event) cannot alter the stored row, so
+    it is named in the boot log at ERROR rather than refused.
+  - A deployment may legitimately hang a replication or notify trigger off this table.
 
-The boot does more than count triggers. After the catalog check, wardynd
-appends ONE synthetic audit row inside a transaction it always rolls back and
-asserts it came out chained — `row_hash` set, and `prev_hash` equal to the
-head read under the same lock. A chain that demonstrably does not chain
-REFUSES THE START: the trigger can be present, enabled and correctly named and
-still not work (that is the `0057` state `0058` repaired), and a wardynd
-serving over it writes a log the verify sweep reports as broken for as long
-as it runs. A canary that could not be RUN — the chain lock was busy, or the
-statement was cancelled — is reported at ERROR and the boot continues,
-because those are bounded and self-clearing. In the split-role posture the
-canary runs on BOTH pools: the migrator's, at the end of `Migrate`, and the
-app role's, which is the connection every audit row is actually written on.
+- The boot does more than count triggers.
+  - After the catalog check, wardynd appends ONE synthetic audit row inside a transaction it always rolls back and
+    asserts it came out chained — `row_hash` set, and `prev_hash` equal to the head read under the same lock.
+  - A chain that demonstrably does not chain REFUSES THE START:
+    - the trigger can be present, enabled and correctly named and still not work (that is the `0057` state `0058`
+      repaired),
+    - and a wardynd serving over it writes a log the verify sweep reports as broken for as long as it runs.
+  - A canary that could not be RUN — the chain lock was busy, or the statement was cancelled — is reported at ERROR
+    and the boot continues, because those are bounded and self-clearing.
+  - In the split-role posture the canary runs on BOTH pools: the migrator's, at the end of `Migrate`, and the app
+    role's, which is the connection every audit row is actually written on.
 
-A trigger you have hardened with `ALTER TABLE … ENABLE ALWAYS TRIGGER`
-(`tgenabled='A'`, so it fires even under `session_replication_role = replica` —
-the bypass the sweep otherwise only catches after the fact) is left **exactly as
-it is**, and that holds across an upgrade, not just across a restart. The boot
-check counts `'A'` as firing, never re-creates it as plain `'O'`, and never
-refuses over it. `Migrate` reads which triggers are hardened *before* it applies
-anything and re-applies `ENABLE ALWAYS` to any the run reverted. That re-apply
-runs on **every** exit from the migration run, not only a clean one — a
-migration that fails loudly by design (0059's colliding `home_override`,
-0060's out-of-set `api_tokens.role`) and a boot whose own deadline expires
-mid-run both reach it, the latter on a context the boot cannot cancel, because
-by then the trigger-defining files have already committed their
-`CREATE TRIGGER` and the hardening would otherwise be unrecoverable: the next
-boot reads the reverted `'O'` as the shipped state and finds those files
-already recorded applied. Every migration
-that redefines an audit trigger ends in `CREATE TRIGGER`, which always yields
-`'O'`, so without that the 0.7 upgrade would have quietly stripped the hardening
-off a 0.6.x deployment that had installed it. The restore is narrow — a trigger
-you never hardened is never promoted to `'A'` on your behalf — and if it cannot
-be re-applied the boot log says so at ERROR and names the statement to run.
-`'D'` (disabled) and `'R'` (replica-only, which does not fire for ordinary
-writes) are correctly read as not in force.
+- A trigger you have hardened with `ALTER TABLE … ENABLE ALWAYS TRIGGER` (`tgenabled='A'`, so it fires even under
+  `session_replication_role = replica` — the bypass the sweep otherwise only catches after the fact) is left
+  **exactly as it is**.
+  - And that holds across an upgrade, not just across a restart.
+  - The boot check counts `'A'` as firing, never re-creates it as plain `'O'`, and never refuses over it.
+  - `Migrate` reads which triggers are hardened *before* it applies anything and re-applies `ENABLE ALWAYS` to any the
+    run reverted.
+  - That re-apply runs on **every** exit from the migration run, not only a clean one —
+    - a migration that fails loudly by design (0059's colliding `home_override`, 0060's out-of-set
+      `api_tokens.role`) and a boot whose own deadline expires mid-run both reach it,
+    - the latter on a context the boot cannot cancel, because by then the trigger-defining files have already
+      committed their `CREATE TRIGGER` and the hardening would otherwise be unrecoverable:
+    - the next boot reads the reverted `'O'` as the shipped state and finds those files already recorded applied.
+  - Every migration that redefines an audit trigger ends in `CREATE TRIGGER`, which always yields `'O'`, so without
+    that the 0.7 upgrade would have quietly stripped the hardening off a 0.6.x deployment that had installed it.
+  - The restore is narrow.
+  - A trigger you never hardened is never promoted to `'A'` on your behalf — and if it cannot be re-applied the boot
+    log says so at ERROR and names the statement to run.
+  - `'D'` (disabled) and `'R'` (replica-only, which does not fire for ordinary writes) are correctly read as not in
+    force.
 
-Completeness survives an outage too. When a Postgres write fails, the event is
-not dropped: it is fsync'd, one JSON line at a time, to a local append-only spool
-(`WARDYN_AUDIT_SPOOL`, default `./data/audit-spool.jsonl`, empty to disable —
-`internal/api/auditspool.go`), and a background drain replays it into Postgres
-once the store recovers. The spool is per-process by design: the fallback for one
-pod's failed write, each `wardynd` draining its own back on recovery (see
-[High availability](#high-availability)).
+- Completeness survives an outage too.
+  - When a Postgres write fails, the event is not dropped: it is fsync'd, one JSON line at a time, to a local
+    append-only spool (`WARDYN_AUDIT_SPOOL`, default `./data/audit-spool.jsonl`, empty to disable —
+    [`internal/api/auditspool.go`](../internal/api/auditspool.go)).
+  - And a background drain replays it into Postgres once the store recovers.
+  - The spool is per-process by design: the fallback for one pod's failed write, each `wardynd` draining its own back
+    on recovery (see [High availability](#high-availability)).
 
-**What the drain does not restore: the off-box hash series.** The chain hashes
-are filled by the Postgres write itself (`RETURNING`, `store.InsertAuditEvent`),
-so an event whose write failed fans out to the sinks with **no** `prev_hash` or
-`row_hash` on it at all — both fields are `omitempty`, so they are simply absent
-— and the drain replays it through the RAW store recorder, deliberately not
-through the sink fanout (a replay into a still-down store has to be retryable,
-not re-spooled), so it is never streamed a second time. The queryable trail heals
-completely; the SIEM's head-hash series does not. Across an outage window a SIEM
-holds those events unchained, and the rows they become are chained when the drain
-replays them, interleaved with whatever else is being written then — so reconcile
-that window with `GET /audit/chain/verify` and the `wardyn_audit_spool_lines`
-gauge, not with the sink stream.
+> [!IMPORTANT]
+> **What the drain does not restore: the off-box hash series.**
 
-**One line the store will never accept does not wedge the rest.** A rejection
-that cannot resolve — a `CHECK` violation, a payload a column type refuses, a
-hand-edited line, an event shape from another binary version — used to sit at the
-head of the spool and stop every event behind it from ever replaying, with no
-signal but a `wardyn_audit_spool_lines` gauge that stopped falling. After three
-consecutive rejections of the same line the drain now tries the lines *behind*
-it, and **only if the store accepts one** (proving it is up, and that the problem
-is that line) moves the rejected line to `<spool>.quarantine` — fsync'd there
-before it leaves the spool, verbatim, so the file is a valid JSONL spool you can
-move back onto the spool path once the cause is fixed. A store that is simply
-down accepts nothing, so nothing is ever quarantined during an outage. Each move
-logs at ERROR with the event's id and action and increments
-`wardyn_audit_spool_quarantined_total`: alert on it, because a spool that has
-drained back to 0 no longer implies the queryable trail is complete. The counter
-is **re-read from the sidecar at startup**, so it survives a restart the way the
-condition it reports does — a restart in place does not clear the alert while
-the events are still sitting in `<spool>.quarantine`.
+- The chain hashes are filled by the Postgres write itself (`RETURNING`, `store.InsertAuditEvent`), so an event whose
+  write failed fans out to the sinks with **no** `prev_hash` or `row_hash` on it at all —
+  - both fields are `omitempty`, so they are simply absent —
+  - and the drain replays it through the RAW store recorder, deliberately not through the sink fanout (a replay into
+    a still-down store has to be retryable, not re-spooled),
+  - so it is never streamed a second time.
+- The queryable trail heals completely; the SIEM's head-hash series does not.
+- Across an outage window a SIEM holds those events unchained, and the rows they become are chained when the drain
+  replays them, interleaved with whatever else is being written then.
+- So reconcile that window with `GET /audit/chain/verify` and the `wardyn_audit_spool_lines` gauge, not with the sink
+  stream.
 
-**That is as durable as the spool's directory, and no more.** It holds where the
-spool has durable storage: compose's `audit` named volume, or a chart install
-with `persistence.enabled=true`. It does **not** hold on the chart's shipped
-default, where `WARDYN_AUDIT_SPOOL` renders to `/tmp/audit-spool.jsonl` and the
-only `/tmp` volume is an `emptyDir`
-(`deploy/helm/wardyn/templates/deployment.yaml`, which says so itself: "durable
-across a container restart, not a reschedule"). A rolling deploy — which is what
-`helm upgrade` does to a Deployment — or a pod reschedule gives the new Pod a new
-empty directory, so the counter reads 0 again and the permanently-refused events
-it accounted for are gone with it. wardynd says so at every boot rather than
-leaving it to be inferred from a counter that silently reset: it WARNs `the audit
-spool is on ephemeral storage; a redeploy or reschedule discards un-drained
-events AND the quarantine sidecar`, and the remedy is the one that line names —
-point `WARDYN_AUDIT_SPOOL` at durable storage (`persistence.enabled=true` on the
-chart, the `audit` named volume on compose).
+- **One line the store will never accept does not wedge the rest.**
+  - A rejection that cannot resolve — a `CHECK` violation, a payload a column type refuses, a hand-edited line, an
+    event shape from another binary version.
+  - It used to sit at the head of the spool and stop every event behind it from ever replaying, with no signal but a
+    `wardyn_audit_spool_lines` gauge that stopped falling.
+  - After three consecutive rejections of the same line the drain now tries the lines *behind* it,
+    - and **only if the store accepts one** (proving it is up, and that the problem is that line) moves the rejected
+      line to `<spool>.quarantine` —
+    - fsync'd there before it leaves the spool, verbatim, so the file is a valid JSONL spool you can move back onto
+      the spool path once the cause is fixed.
+  - A store that is simply down accepts nothing, so nothing is ever quarantined during an outage.
+  - Each move logs at ERROR with the event's id and action and increments `wardyn_audit_spool_quarantined_total`:
+    alert on it, because a spool that has drained back to 0 no longer implies the queryable trail is complete.
+  - The counter is **re-read from the sidecar at startup**, so it survives a restart the way the condition it reports
+    does.
+  - A restart in place does not clear the alert while the events are still sitting in `<spool>.quarantine`.
 
-**Two limits of that rule, stated.** First, the probe needs a line BEHIND the
-suspect to land, so two or more *adjacent* unacceptable lines still wedge — the
-second rejection in a pass is read as "the store is down", which is the right
-reading for every other cause of two rejections in a row and the price of never
-quarantining during an outage. A run like that is exactly what "an event shape
-from another binary version" produces. It is not silent: the held-back line is
-logged at WARN by event id every tick, which reads differently from the
-drain-deferred line an outage produces, and the spool gauge stays flat. With the
-store demonstrably up and that WARN repeating, triage the spool by hand — move
-the head lines to `<spool>.quarantine` yourself and let the rest drain.
+> [!WARNING]
+> **That is as durable as the spool's directory, and no more.**
 
-Second, one drain pass is deadline-bounded (15s, half the tick). The spool lock
-is held across the store call, so a call that never returns would otherwise stall
-every request whose own audit write falls back to the spool — reachable without
-any Wardyn bug since the chain trigger began taking the serializing lock: an
-external session that inserted into `audit_events` and left its transaction open
-holds it. A pass that times out replays nothing, counts nothing against any line
-(a store that never answered has rejected nothing), and retries on the next tick.
-**The synchronous side is bounded too, at 5 seconds** (`db.AuditChainLockTimeout`).
-Since `0056` the chain trigger takes that lock on *every* insert into
-`audit_events`, so one transaction that inserted an audit row and stayed open
-holds up every audit write in the process — and nothing in Wardyn has to
-misbehave for that: a psql session, a seed script, a paused migration tool will
-do. A request-path audit write that cannot get the lock within 5s **fails, and
-the event goes to the local spool** to be replayed when the lock clears — the
-same degraded path a store outage uses, not a dropped event. The one exception is
-a **credential mint**, whose audit row shares the mint's transaction: there the
-timeout refuses the mint, because a credential that could not be audited is not
-one to issue. The bound is `lock_timeout`, set `LOCAL` on the audit transaction,
-so it fires only while WAITING for the lock — a slow-but-progressing insert is
-never aborted by it — and it is deliberately shorter than the drain's 15s pass,
-so the request path yields before the background drain does.
+- It holds where the spool has durable storage: compose's `audit` named volume, or a chart install with
+  `persistence.enabled=true`.
+- It does **not** hold on the chart's shipped default, where `WARDYN_AUDIT_SPOOL` renders to `/tmp/audit-spool.jsonl`
+  and the only `/tmp` volume is an `emptyDir`
+  ([`deploy/helm/wardyn/templates/deployment.yaml`](../deploy/helm/wardyn/templates/deployment.yaml), which says so
+  itself: "durable across a container restart, not a reschedule").
+- A rolling deploy — which is what `helm upgrade` does to a Deployment — or a pod reschedule gives the new Pod a new
+  empty directory.
+- So the counter reads 0 again and the permanently-refused events it accounted for are gone with it.
+- wardynd says so at every boot rather than leaving it to be inferred from a counter that silently reset.
+- It WARNs `the audit
+  spool is on ephemeral storage; a redeploy or reschedule discards un-drained
+  events AND the quarantine sidecar`, and the remedy is the one that line names —
+  point `WARDYN_AUDIT_SPOOL` at durable storage (`persistence.enabled=true` on the
+  chart, the `audit` named volume on compose).
 
-**Set the two server-side timeouts** on the database Wardyn uses. Wardyn bounds
-its own waits, but the *holder* is the actual problem, and only Postgres can end
-it: `idle_in_transaction_session_timeout` (a few minutes) reaps the stray open
-transaction that causes this, and `statement_timeout` bounds anything else that
-runs away. Neither is set by default (`SHOW idle_in_transaction_session_timeout`
-returns `0` on a stock server), and Wardyn does not set them for you — they are
-cluster policy, and a value that suits your maintenance jobs is not one Wardyn
-can guess.
+- **Two limits of that rule, stated.**
+  - First, the probe needs a line BEHIND the suspect to land, so two or more *adjacent* unacceptable lines still
+    wedge —
+    - the second rejection in a pass is read as "the store is down",
+    - which is the right reading for every other cause of two rejections in a row and the price of never
+      quarantining during an outage.
+  - A run like that is exactly what "an event shape from another binary version" produces.
+  - It is not silent: the held-back line is logged at WARN by event id every tick, which reads differently from the
+    drain-deferred line an outage produces, and the spool gauge stays flat.
+  - With the store demonstrably up and that WARN repeating, triage the spool by hand — move the head lines to
+    `<spool>.quarantine` yourself and let the rest drain.
+  - Second, one drain pass is deadline-bounded (15s, half the tick).
+  - The spool lock is held across the store call, so a call that never returns would otherwise stall every request
+    whose own audit write falls back to the spool.
+  - It is reachable without any Wardyn bug since the chain trigger began taking the serializing lock: an external
+    session that inserted into `audit_events` and left its transaction open holds it.
+  - A pass that times out replays nothing, counts nothing against any line (a store that never answered has rejected
+    nothing), and retries on the next tick.
 
-**Scraping `/metrics` is not one of the things that lock stalls**: the spool
-gauges are served from counters, not from a read of the spool file, so a scrape
-answers in constant time while a pass is stuck on a blocked store. It has to —
-those gauges are how you see the outage, and a scrape that waited on the drain
-lost the whole response, `wardyn_store_up` included, once per tick for as long
-as the condition lasted.
+- **The synchronous side is bounded too, at 5 seconds** (`db.AuditChainLockTimeout`).
+  - Since `0056` the chain trigger takes that lock on *every* insert into `audit_events`, so one transaction that
+    inserted an audit row and stayed open holds up every audit write in the process.
+  - And nothing in Wardyn has to misbehave for that: a psql session, a seed script, a paused migration tool will do.
+  - A request-path audit write that cannot get the lock within 5s **fails, and the event goes to the local spool** to
+    be replayed when the lock clears.
+  - That is the same degraded path a store outage uses, not a dropped event.
+  - The one exception is a **credential mint**, whose audit row shares the mint's transaction: there the timeout
+    refuses the mint, because a credential that could not be audited is not one to issue.
+  - The bound is `lock_timeout`, set `LOCAL` on the audit transaction, so it fires only while WAITING for the lock.
+  - A slow-but-progressing insert is never aborted by it — and it is deliberately shorter than the drain's 15s pass,
+    so the request path yields before the background drain does.
 
-**Recovering a backlog costs what the backlog costs.** A pass replays a bounded
-batch and retires it by advancing a read offset; the file is physically compacted
-only once the replayed prefix is at least as large as what is left, so each
-compaction halves it and a full drain writes at most about twice the backlog
-rather than once per batch. The consequence to know is that mid-drain the spool
-FILE can still hold lines that have already reached the store — `wc -l` on it is
-not the backlog, `wardyn_audit_spool_lines` is — and that an unclean stop
-mid-recovery can replay the not-yet-reclaimed prefix, which the trail records as
-duplicate events with the same `id`. The spool has always been at-least-once for
-this reason (a crash between the store write and the trim); this widens that
-window in exchange for not fsyncing the whole backlog once per batch onto the
-volume the database is recovering on. Duplicates are the benign direction: `seq`
-still identifies every row, and each one verifies.
+> [!IMPORTANT]
+> **Set the two server-side timeouts** on the database Wardyn uses.
+
+- Wardyn bounds its own waits, but the *holder* is the actual problem, and only Postgres can end it.
+- `idle_in_transaction_session_timeout` (a few minutes) reaps the stray open transaction that causes this, and
+  `statement_timeout` bounds anything else that runs away.
+- Neither is set by default (`SHOW idle_in_transaction_session_timeout` returns `0` on a stock server), and Wardyn does
+  not set them for you.
+- They are cluster policy, and a value that suits your maintenance jobs is not one Wardyn can guess.
+
+- **Scraping `/metrics` is not one of the things that lock stalls**.
+  - The spool gauges are served from counters, not from a read of the spool file, so a scrape answers in constant time
+    while a pass is stuck on a blocked store.
+  - It has to — those gauges are how you see the outage, and a scrape that waited on the drain lost the whole
+    response, `wardyn_store_up` included, once per tick for as long as the condition lasted.
+
+- **Recovering a backlog costs what the backlog costs.**
+  - A pass replays a bounded batch and retires it by advancing a read offset;
+    - the file is physically compacted only once the replayed prefix is at least as large as what is left,
+    - so each compaction halves it and a full drain writes at most about twice the backlog rather than once per batch.
+  - The consequence to know is that mid-drain the spool FILE can still hold lines that have already reached the store —
+    - `wc -l` on it is not the backlog, `wardyn_audit_spool_lines` is —
+    - and that an unclean stop mid-recovery can replay the not-yet-reclaimed prefix, which the trail records as
+      duplicate events with the same `id`.
+  - The spool has always been at-least-once for this reason (a crash between the store write and the trim).
+  - This widens that window in exchange for not fsyncing the whole backlog once per batch onto the volume the database
+    is recovering on.
+  - Duplicates are the benign direction: `seq` still identifies every row, and each one verifies.
 
 ### The hash chain — what a rewritten row looks like
 
-The triggers above stop `UPDATE`/`DELETE`/`TRUNCATE` *through Wardyn's schema*,
-and the role split hardens that against the app role. Neither binds a **table
-owner or superuser**, who can `ALTER TABLE … DISABLE TRIGGER` and rewrite a row —
-the residual `0007_audit_least_privilege.sql` states plainly. The role-split check
-that reports this posture at boot (`AuditDDLProtected`) counts FOUR ways to
-bypass, not two: membership in a superuser role, membership in the owner role,
-the **`TRIGGER` privilege** on `audit_events`, and — on PostgreSQL 15 and later,
-where it is GRANTable to a non-superuser — the **`SET` privilege on the
-`session_replication_role` parameter**, which silences every simply-enabled
-trigger for the session without touching DDL at all. All four are
-**membership** tests, not attribute lookups — `GRANT some_admin_role TO app_role`, the ordinary
-managed-Postgres migration shape, leaves `app_role` with `rolsuper = false` while
-it can still `SET ROLE` and `ALTER TABLE … DISABLE TRIGGER`, and the chain is
-followed to any depth whether or not the role `INHERIT`s. Membership in
-`pg_write_all_data` is deliberately **not** counted: it confers
-`INSERT`/`UPDATE`/`DELETE`, but the append-only guard is a trigger rather than a
-privilege and still refuses both — counting it would understate the posture just
-as badly as missing a superuser overstates it. The third is the quiet one — a role granted
-`TRIGGER` cannot drop the shipped guards, but it can add a row-level BEFORE
-INSERT trigger of its own and rewrite the row on the way in, minting records that
-say whatever it likes while every shipped guard is still armed. Name order is
-**not** what makes that work: a trigger sorting *after* `audit_events_chain`
-(same-event row triggers fire in name order) runs last and can overwrite
-`prev_hash`/`row_hash` directly, but one sorting *before* it is easier still —
-it rewrites `NEW` and the shipped chain trigger then hashes the forgery for it.
-Either way the stored row is self-consistent and the verify sweep reports clean,
-which is why the boot check now refuses to start over ANY foreign row-level
-BEFORE INSERT trigger on this table. So a deploy that grants `TRIGGER` back is
-reported as NOT protected.
+- The triggers above stop `UPDATE`/`DELETE`/`TRUNCATE` *through Wardyn's schema*, and the role split hardens that
+  against the app role.
 
-**The fourth leg needs no DDL at all.** `SET session_replication_role =
-'replica'` silences every trigger left at the ordinary `tgenabled='O'` for the
-session, so a role holding nothing but `INSERT` can append a row past all
-three guards above — unchained, unrewritten by the chain trigger — checked
-only on PostgreSQL 15 and later, where `has_parameter_privilege` exists and
-the `SET` privilege on the parameter is itself GRANTable to a non-superuser
-(`AuditDDLBypassRoutes`, `internal/db/db_audit_ddl.go`); on an older server only a superuser can set the
-GUC, so leg one already covers it. It is why `ENABLE ALWAYS`
-(`tgenabled='A'`, which fires regardless of replication role — see "A trigger
-you have hardened…" above) is the documented hardening rather than an edge
-case. Failing any of the four legs is reported at boot as NOT protected, with
-the remediation logged verbatim: `wardynd: WARDYN_PG_MIGRATE_DSN is set but
-the app role (WARDYN_PG_DSN) can still reach past audit_events' append-only
-guard by the route(s) named here — DDL protection is NOT in effect; connect
-wardynd as a distinct role that holds only INSERT/SELECT on audit_events and
-none of these`, followed by a `bypass_routes=[…]` attribute naming which of
-the four fired (`cmd/wardynd/boot_deps.go`'s `connectAndMigrate`).
+> [!WARNING]
+> Neither binds a **table owner or superuser**, who can `ALTER TABLE … DISABLE TRIGGER` and rewrite a row —
+> the residual `0007_audit_least_privilege.sql` states plainly.
 
-**The app role's grant set does not grow to keep the chain working.** `INSERT`
-and `SELECT` on `audit_events` is still the whole of it. The chain trigger
-allocates the row's `seq` itself (so position and chain link are one decision —
-see the serialization paragraph below), which is a privileged operation the
-identity default never was, so the trigger runs `SECURITY DEFINER`
-(`0057_audit_chain_security_definer.sql`): the sequence read happens as the
-*owner*, not as whoever inserted. Nothing is widened for the app role — a trigger
-function cannot be called directly — and a split-role deploy needs no new
-`GRANT`. Because it runs with elevated rights it resolves no name through a
-search_path it does not control: every table and function it touches is
-**schema-qualified to the schema Wardyn was migrated into**, read from the
-catalog when the migration applies, and its pinned `search_path` ends in
-`pg_temp` so the session temporary schema is searched last rather than first
-(`0058_audit_chain_schema_qualified.sql`). That is what keeps the chain working
-on an install whose objects are not in `public`, and what stops a caller
-shadowing `audit_events` with a temp table of their own to choose their row's
-`prev_hash`. Migration
-`0047_audit_hash_chain.sql` does not close that hole; it makes a single use of it
-**visible**. Every row written from `0047` onward carries two hex columns:
+- The role-split check that reports this posture at boot (`AuditDDLProtected`) counts FOUR ways to bypass, not two:
+  - membership in a superuser role,
+  - membership in the owner role,
+  - the **`TRIGGER` privilege** on `audit_events`,
+  - and — on PostgreSQL 15 and later, where it is GRANTable to a non-superuser — the **`SET` privilege on the
+    `session_replication_role` parameter**, which silences every simply-enabled trigger for the session without
+    touching DDL at all.
+- All four are **membership** tests, not attribute lookups.
+- `GRANT some_admin_role TO app_role`, the ordinary managed-Postgres migration shape, leaves `app_role` with
+  `rolsuper = false` while it can still `SET ROLE` and `ALTER TABLE … DISABLE TRIGGER`, and the chain is followed to
+  any depth whether or not the role `INHERIT`s.
+- Membership in `pg_write_all_data` is deliberately **not** counted: it confers `INSERT`/`UPDATE`/`DELETE`, but the
+  append-only guard is a trigger rather than a privilege and still refuses both.
+- Counting it would understate the posture just as badly as missing a superuser overstates it.
+- The third is the quiet one —
+  - a role granted `TRIGGER` cannot drop the shipped guards, but it can add a row-level BEFORE INSERT trigger of its
+    own and rewrite the row on the way in,
+  - minting records that say whatever it likes while every shipped guard is still armed.
+- Name order is **not** what makes that work:
+  - a trigger sorting *after* `audit_events_chain` (same-event row triggers fire in name order) runs last and can
+    overwrite `prev_hash`/`row_hash` directly,
+  - but one sorting *before* it is easier still — it rewrites `NEW` and the shipped chain trigger then hashes the
+    forgery for it.
+- Either way the stored row is self-consistent and the verify sweep reports clean, which is why the boot check now
+  refuses to start over ANY foreign row-level BEFORE INSERT trigger on this table.
+- So a deploy that grants `TRIGGER` back is reported as NOT protected.
+
+- **The fourth leg needs no DDL at all.**
+  - `SET session_replication_role = 'replica'` silences every trigger left at the ordinary `tgenabled='O'` for the
+    session, so a role holding nothing but `INSERT` can append a row past all three guards above — unchained,
+    unrewritten by the chain trigger —
+    - checked only on PostgreSQL 15 and later, where `has_parameter_privilege` exists and the `SET` privilege on the
+      parameter is itself GRANTable to a non-superuser (`AuditDDLBypassRoutes`,
+      [`internal/db/db_audit_ddl.go`](../internal/db/db_audit_ddl.go));
+    - on an older server only a superuser can set the GUC, so leg one already covers it.
+  - It is why `ENABLE ALWAYS` (`tgenabled='A'`, which fires regardless of replication role — see "A trigger you have
+    hardened…" above) is the documented hardening rather than an edge case.
+  - Failing any of the four legs is reported at boot as NOT protected, with the remediation logged verbatim:
+    - `wardynd: WARDYN_PG_MIGRATE_DSN is set but the app role (WARDYN_PG_DSN) can still reach past audit_events'
+      append-only guard by the route(s) named here — DDL protection is NOT in effect; connect wardynd as a distinct
+      role that holds only INSERT/SELECT on audit_events and none of these`, followed by a `bypass_routes=[…]`
+      attribute naming which of the four fired ([`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)'s
+      `connectAndMigrate`).
+
+- **The app role's grant set does not grow to keep the chain working.**
+  - `INSERT` and `SELECT` on `audit_events` is still the whole of it.
+  - The chain trigger allocates the row's `seq` itself (so position and chain link are one decision — see the
+    serialization paragraph below), which is a privileged operation the identity default never was,
+    - so the trigger runs `SECURITY DEFINER` (`0057_audit_chain_security_definer.sql`):
+    - the sequence read happens as the *owner*, not as whoever inserted.
+  - Nothing is widened for the app role — a trigger function cannot be called directly — and a split-role deploy needs
+    no new `GRANT`.
+  - Because it runs with elevated rights it resolves no name through a search_path it does not control:
+    - every table and function it touches is **schema-qualified to the schema Wardyn was migrated into**, read from
+      the catalog when the migration applies,
+    - and its pinned `search_path` ends in `pg_temp` so the session temporary schema is searched last rather than
+      first (`0058_audit_chain_schema_qualified.sql`).
+  - That is what keeps the chain working on an install whose objects are not in `public`, and what stops a caller
+    shadowing `audit_events` with a temp table of their own to choose their row's `prev_hash`.
+  - Migration `0047_audit_hash_chain.sql` does not close that hole; it makes a single use of it **visible**.
+  - Every row written from `0047` onward carries two hex columns:
 
 ```
 row_hash = SHA-256( prev_hash || canonical(id, time, run_id, actor_type,
@@ -779,27 +781,30 @@ row_hash = SHA-256( prev_hash || canonical(id, time, run_id, actor_type,
                                            source_ip, data) )
 ```
 
-`prev_hash` is the previous row's `row_hash`, so the log is a linked list where
-each row commits to everything before it. Both are computed **inside Postgres**,
-in the `audit_events` `BEFORE INSERT` trigger — not by the writer — so no caller
-(the sandbox-facing paths included) can choose them.
+- `prev_hash` is the previous row's `row_hash`, so the log is a linked list where each row commits to everything
+  before it.
+- Both are computed **inside Postgres**, in the `audit_events` `BEFORE INSERT` trigger — not by the writer — so no
+  caller (the sandbox-facing paths included) can choose them.
 
-**What it gives you.** Edit one row and its stored `row_hash` no longer matches
-its contents; delete one and its neighbours' links no longer meet. Either shows up
-as an exact `seq` and a reason.
+- **What it gives you.**
+  - Edit one row and its stored `row_hash` no longer matches its contents; delete one and its neighbours' links no
+    longer meet.
+  - Either shows up as an exact `seq` and a reason.
 
-**What it does not give you.** Tamper-**evidence**, not tamper-proofness. Someone
-who can rewrite one row can usually rewrite every row after it and re-chain the
-lot; a re-chained tail verifies perfectly clean, and truncating the newest rows
-leaves a shorter, valid chain (the high-water mark below catches it, unless it is rewritten too). The defence against both is **off-box**: every
-event **whose Postgres write succeeded** carries its `prev_hash`/`row_hash` onto
-the audit sink stream (`WARDYN_AUDIT_SINKS`), so a SIEM holds head hashes Wardyn
-cannot later disown — that comparison, not the sweep, is the control. The
-qualifier is load-bearing, because the hashes are computed by the write itself:
-an event written while Postgres is down still reaches your sinks, but unchained,
-and the drain does not re-stream it — see "Completeness survives an outage too"
-above. Signed receipts (a key the
-database role cannot reach) are the next rung and are **not built**.
+> [!WARNING]
+> **What it does not give you.** Tamper-**evidence**, not tamper-proofness.
+
+- Someone who can rewrite one row can usually rewrite every row after it and re-chain the lot.
+- A re-chained tail verifies perfectly clean, and truncating the newest rows leaves a shorter, valid chain (the
+  high-water mark below catches it, unless it is rewritten too).
+- The defence against both is **off-box**: every event **whose Postgres write succeeded** carries its
+  `prev_hash`/`row_hash` onto the audit sink stream (`WARDYN_AUDIT_SINKS`), so a SIEM holds head hashes Wardyn
+  cannot later disown.
+- That comparison, not the sweep, is the control.
+- The qualifier is load-bearing, because the hashes are computed by the write itself.
+- An event written while Postgres is down still reaches your sinks, but unchained, and the drain does not re-stream
+  it — see "Completeness survives an outage too" above.
+- Signed receipts (a key the database role cannot reach) are the next rung and are **not built**.
 
 **Verifying.** Operator-invoked, never automatic:
 
@@ -813,46 +818,51 @@ curl -H "authorization: Bearer $WARDYN_ADMIN_TOKEN" \
  "head_seq": 42135, "head_hash": "9f2c…"}
 ```
 
-`wardynd` deliberately does **not** verify at boot — the sweep re-hashes every
-chained row. Run it from cron and alert on `ok: false`: a broken chain answers
-**200** with `ok: false`, `broken_seq` and `reason` (the sweep succeeded; it
-found something), while `5xx` means the sweep could not run. `head_hash` is the
-value to diff against your SIEM's copy.
+- `wardynd` deliberately does **not** verify at boot — the sweep re-hashes every chained row.
+- Run it from cron and alert on `ok: false`: a broken chain answers **200** with `ok: false`, `broken_seq` and
+  `reason` (the sweep succeeded; it found something), while `5xx` means the sweep could not run.
+- `head_hash` is the value to diff against your SIEM's copy.
 
-**One sweep at a time.** The audit log cannot be pruned, so this is the endpoint
-whose cost only ever rises — and a retrying client or an overlapping cron would
-otherwise turn one operator action into several full re-hash passes, each holding
-a database connection. A request that arrives while a sweep is running is
-refused with **429** and a `Retry-After`; it is not queued. Point your cron at a
-single caller and let a 429 mean "the answer you want is already being
-computed". There is deliberately no server-side time limit on a sweep — a fixed
-one would cap how large a log can be verified at all — so the bound is your
-client's: the sweep is walked in pages and stops between them when the caller
-goes away.
+- **One sweep at a time.**
+  - The audit log cannot be pruned, so this is the endpoint whose cost only ever rises.
+  - And a retrying client or an overlapping cron would otherwise turn one operator action into several full re-hash
+    passes, each holding a database connection.
+  - A request that arrives while a sweep is running is refused with **429** and a `Retry-After`; it is not queued.
+  - Point your cron at a single caller and let a 429 mean "the answer you want is already being computed".
+  - There is deliberately no server-side time limit on a sweep.
+  - A fixed one would cap how large a log can be verified at all.
+  - So the bound is your client's: the sweep is walked in pages and stops between them when the caller goes away.
 
-**A break is permanent.** The sweep stops at the first broken row and the log is
-append-only, so every later sweep reports that same `broken_seq` forever — no
-repair, no "acknowledge" cursor. `ok: false` is a one-way latch: treat the first
-occurrence as the incident and preserve the row range, because the alert will not
-clear.
+> [!WARNING]
+> **A break is permanent.**
 
-**After the audit log was partitioned (0.8.6): what verify checks beyond the chain.** The sweep runs in one
-repeatable-read snapshot and still re-hashes every retained row. It starts from the newest attested retention drop
-(a `kind = 'drop'` row in `audit_chain_anchors`): the first retained row's `prev_hash` must equal the tail hash
-that drop recorded, and the result reports that drop's last `seq` as `anchor_seq`. A removal with no anchor still
-breaks the chain, and its `reason` now says `rows removed without an attested retention drop`. Two checks cover
-what a chain cannot say about itself. The newest row must be the one `audit_partition_meta` recorded as the
-high-water mark, so rows removed from the **newest** end (which leave a shorter, valid chain) read as `the log was
-truncated at its tail`. The next append does not clear that: each new row links to the recorded head, not to the
-newest row left in the table (`0130_audit_chain_head_from_meta`), so the chain then breaks at the first row appended
-after the removal. And every partition in the expected manifest must still exist unless a drop anchor names
-it; a range a `split` anchor names must exist or be accounted for by a later drop. Someone who can rewrite the
-table can rewrite the high-water mark and the anchors too: the head hash on your SIEM remains the control that
-catches that.
+- The sweep stops at the first broken row and the log is append-only, so every later sweep reports that same
+  `broken_seq` forever — no repair, no "acknowledge" cursor.
+- `ok: false` is a one-way latch: treat the first occurrence as the incident and preserve the row range, because the
+  alert will not clear.
 
-**Verifying an exported audit partition by hand.** A partition that is fully behind the high-water mark is
-*closed*: nothing can be appended to it, so its digest is fixed. Export it in the raw archive form, fold it
-yourself, and compare with the database and the footer:
+- **After the audit log was partitioned (0.8.6): what verify checks beyond the chain.**
+  - The sweep runs in one repeatable-read snapshot and still re-hashes every retained row.
+  - It starts from the newest attested retention drop (a `kind = 'drop'` row in `audit_chain_anchors`): the first
+    retained row's `prev_hash` must equal the tail hash that drop recorded, and the result reports that drop's last
+    `seq` as `anchor_seq`.
+  - A removal with no anchor still breaks the chain, and its `reason` now says
+    `rows removed without an attested retention drop`.
+  - Two checks cover what a chain cannot say about itself.
+  - The newest row must be the one `audit_partition_meta` recorded as the high-water mark, so rows removed from the
+    **newest** end (which leave a shorter, valid chain) read as `the log was truncated at its tail`.
+  - The next append does not clear that.
+  - Each new row links to the recorded head, not to the newest row left in the table
+    (`0130_audit_chain_head_from_meta`), so the chain then breaks at the first row appended after the removal.
+  - And every partition in the expected manifest must still exist unless a drop anchor names it; a range a `split`
+    anchor names must exist or be accounted for by a later drop.
+  - Someone who can rewrite the table can rewrite the high-water mark and the anchors too: the head hash on your SIEM
+    remains the control that catches that.
+
+- **Verifying an exported audit partition by hand.**
+  - A partition that is fully behind the high-water mark is *closed*: nothing can be appended to it, so its digest is
+    fixed.
+  - Export it in the raw archive form, fold it yourself, and compare with the database and the footer:
 
 ```bash
 wardyn audit export-partition audit_events_p202610 --raw -o p.ndjson   # security_admin; or GET /audit/export?partition=audit_events_p202610&form=raw
@@ -870,88 +880,90 @@ jq -r 'select(.type=="footer") | "footer: " + .digest' p.ndjson
 psql -Atc "SELECT 'db:     ' || audit_partition_digest('audit_events_p202610')"
 ```
 
-All three must match, and the export must end with its `footer` line (a transfer that stops short is aborted, not
-ended cleanly). The fold is over lowercase hex text, in `seq` order: `d_0 = sha256(header)` and
-`d_i = sha256(d_(i-1) || row_hash_i)`, which holds in constant memory however large the partition is. A row from
-before the chain began has no `row_hash`; the archive carries the hash it folds as `fold_hash`. To check each row,
-recompute `row_hash` from the archive's own columns as the formula above gives it: `time_us` is the `time` in
-microseconds since the epoch, and `data` is the jsonb text exactly as stored (not re-encoded), embedded in the
-array as a JSON value. Only a security operator may export a partition; anyone else gets an empty export, and
-`?partition=` with any other filter is refused (`audit_export_partition_filter`). The readable form
-(`form=readable`, the default) gives the same rows in the audit feed's own event shape.
+- All three must match, and the export must end with its `footer` line (a transfer that stops short is aborted, not
+  ended cleanly).
+- The fold is over lowercase hex text, in `seq` order: `d_0 = sha256(header)` and
+  `d_i = sha256(d_(i-1) || row_hash_i)`, which holds in constant memory however large the partition is.
+- A row from before the chain began has no `row_hash`; the archive carries the hash it folds as `fold_hash`.
+- To check each row, recompute `row_hash` from the archive's own columns as the formula above gives it.
+- `time_us` is the `time` in microseconds since the epoch, and `data` is the jsonb text exactly as stored (not
+  re-encoded), embedded in the array as a JSON value.
+- Only a security operator may export a partition; anyone else gets an empty export, and `?partition=` with any other
+  filter is refused (`audit_export_partition_filter`).
+- The readable form (`form=readable`, the default) gives the same rows in the audit feed's own event shape.
 
-**Rows written before the upgrade** keep `NULL` hashes, are reported as `legacy`,
-and are never a failure. There is no backfill, on purpose: hashes computed after
-the fact by the same process that could have altered the rows prove nothing, and
-writing them would mean `UPDATE`-ing the append-only table. The chain starts at
-the first row inserted after the migration.
+- **Rows written before the upgrade** keep `NULL` hashes, are reported as `legacy`, and are never a failure.
+  - There is no backfill, on purpose: hashes computed after the fact by the same process that could have altered the
+    rows prove nothing, and writing them would mean `UPDATE`-ing the append-only table.
+  - The chain starts at the first row inserted after the migration.
 
-**A hashless row is legacy only BELOW the chain.** `legacy` counts the unhashed
-PREFIX. A row with no `row_hash` that sits *after* the chain has started did not
-predate the migration — it was written with the chain trigger dropped, disabled,
-or bypassed — so the sweep reports it as the break, at its own `seq`, instead of
-counting it. Without that rule an actor who dropped the trigger could append rows
-the chain neither covered nor mentioned while `ok` stayed `true`. One blind spot
-remains, stated plainly: `seq` gaps *below* the first chained row (a rolled-back
-insert burns a `seq`) can still hold a hashless forgery that no rule here can
-tell from a legacy row — only your off-box copy can.
+- **A hashless row is legacy only BELOW the chain.**
+  - `legacy` counts the unhashed PREFIX.
+  - A row with no `row_hash` that sits *after* the chain has started did not predate the migration.
+  - It was written with the chain trigger dropped, disabled, or bypassed — so the sweep reports it as the break, at
+    its own `seq`, instead of counting it.
+  - Without that rule an actor who dropped the trigger could append rows the chain neither covered nor mentioned while
+    `ok` stayed `true`.
+  - One blind spot remains, stated plainly.
+  - `seq` gaps *below* the first chained row (a rolled-back insert burns a `seq`) can still hold a hashless forgery
+    that no rule here can tell from a legacy row — only your off-box copy can.
 
-**Writers are serialized, and the link is correct for a writer at `READ
-COMMITTED`.** The chain link and the row's `seq` are allocated together under one
-advisory lock held inside the insert trigger (`0056_audit_chain_serialize.sql`,
-redefined by `0057`), so a direct `INSERT` from `psql`, a seed script or any
-future code path takes its place in line instead of racing a concurrent Wardyn
-write between reading the head and writing its own row. Before that, two writers
-could chain to the same head and the sweep reported a **tamper that never
-happened** — permanently, per the latch above.
+- **Writers are serialized, and the link is correct for a writer at `READ
+  COMMITTED`.**
+  - The chain link and the row's `seq` are allocated together under one advisory lock held inside the insert trigger
+    (`0056_audit_chain_serialize.sql`, redefined by `0057`).
+  - So a direct `INSERT` from `psql`, a seed script or any future code path takes its place in line instead of racing
+    a concurrent Wardyn write between reading the head and writing its own row.
+  - Before that, two writers could chain to the same head and the sweep reported a **tamper that never happened** —
+    permanently, per the latch above.
 
-**What the lock does not decide is which head you read.** The trigger's head
-lookup is an ordinary `SELECT`, running in the CALLER's transaction, so it sees
-what that transaction's snapshot sees. Under `READ COMMITTED` — Postgres's
-default, and the level every in-tree writer PINS on its own transaction rather
-than inheriting — that statement takes a fresh snapshot after the lock is
-acquired, so the head it finds is the row the previous writer just committed
-and the link is right. A writer whose snapshot was fixed
-EARLIER (`REPEATABLE READ` or `SERIALIZABLE`, begun before that commit landed)
-still takes its place in line and still gets a correct `seq` — and still chains
-onto the stale head its snapshot can see. Two rows then carry the same
-`prev_hash`, and the sweep reports *"a row was deleted or reordered"* at the
-second of them, permanently, with nothing having been tampered with. **An
-external writer to `audit_events` must use `READ COMMITTED`.** Nothing in the
-database enforces that: there is no row conflict for Postgres to raise a
-serialization failure over, so a `REPEATABLE READ` insert succeeds quietly.
+- **What the lock does not decide is which head you read.**
+  - The trigger's head lookup is an ordinary `SELECT`, running in the CALLER's transaction, so it sees what that
+    transaction's snapshot sees.
+  - Under `READ COMMITTED` — Postgres's default, and the level every in-tree writer PINS on its own transaction rather
+    than inheriting — that statement takes a fresh snapshot after the lock is acquired.
+  - So the head it finds is the row the previous writer just committed and the link is right.
+  - A writer whose snapshot was fixed EARLIER (`REPEATABLE READ` or `SERIALIZABLE`, begun before that commit landed)
+    still takes its place in line and still gets a correct `seq`.
+  - And it still chains onto the stale head its snapshot can see.
+  - Two rows then carry the same `prev_hash`, and the sweep reports *"a row was deleted or reordered"* at the second
+    of them, permanently, with nothing having been tampered with.
 
-The GUC that decides this is `default_transaction_isolation`, and it is
-`USERSET`: any role can set it per session, per role (`ALTER ROLE ... SET`) or
-per database (`ALTER DATABASE ... SET`) with no superuser involved. Wardyn's
-own writers are unaffected — `store.InsertAuditEvent`, the broker's mint
-transaction and the boot chain canary each pin `READ COMMITTED` on their own
-transaction, and a transaction-level isolation level overrides the GUC — so
-this rule binds writers Wardyn does not know about. wardynd reads the setting
-at boot and, when it is anything but `read committed`, logs at ERROR with the
-statement to run: `ALTER DATABASE <db> SET default_transaction_isolation =
-'read committed'` (or the matching `ALTER ROLE`). It reports rather than
-refuses, and it reads the setting on whichever connection ran the migrations:
-in a split-DSN deployment that is the MIGRATE role, so a clean line there is
-not a promise about the role the serving pool uses.
+> [!WARNING]
+> **An external writer to `audit_events` must use `READ COMMITTED`.**
 
-The costs are honest, and there are two: that isolation rule (and the
-`default_transaction_isolation` default it is read from), and a session that
-holds a transaction open after inserting into `audit_events` blocks every other
-audit append until it commits or rolls back — so do not leave an interactive
-`psql` transaction sitting on that table.
+- Nothing in the database enforces that: there is no row conflict for Postgres to raise a serialization failure over,
+  so a `REPEATABLE READ` insert succeeds quietly.
+- The GUC that decides this is `default_transaction_isolation`, and it is `USERSET`: any role can set it per session,
+  per role (`ALTER ROLE ... SET`) or per database (`ALTER DATABASE ... SET`) with no superuser involved.
+- Wardyn's own writers are unaffected.
+- `store.InsertAuditEvent`, the broker's mint transaction and the boot chain canary each pin `READ COMMITTED` on their
+  own transaction, and a transaction-level isolation level overrides the GUC — so this rule binds writers Wardyn does
+  not know about.
+- wardynd reads the setting at boot and, when it is anything but `read committed`, logs at ERROR with the statement to
+  run: `ALTER DATABASE <db> SET default_transaction_isolation =
+  'read committed'` (or the matching `ALTER ROLE`).
+- It reports rather than refuses, and it reads the setting on whichever connection ran the migrations.
+- In a split-DSN deployment that is the MIGRATE role, so a clean line there is not a promise about the role the serving
+  pool uses.
 
-**The lever is `default_transaction_isolation`, a `user`-context GUC** —
-settable by any role, per role or per database, no superuser involved. wardynd
-checks it on every boot (`reportTransactionIsolation`, `internal/db/db.go`)
-and, when it reads anything other than `read committed`, logs an ERROR naming
-the value and the fix — `ALTER DATABASE <db> SET default_transaction_isolation
-= 'read committed'` (or the matching `ALTER ROLE`) — without refusing to
-start: Wardyn's own writers pin `READ COMMITTED` on their own transaction
-(`store.InsertAuditEvent`'s `Begin`, `internal/store/store.go`; a
-transaction-level isolation level overrides the GUC) and are unaffected
-either way, so this is a posture to report for an EXTERNAL writer this
-package cannot see, not a defect to boot-refuse over (`internal/db/db.go`).
+- The costs are honest, and there are two:
+  - that isolation rule (and the `default_transaction_isolation` default it is read from),
+  - and a session that holds a transaction open after inserting into `audit_events` blocks every other audit append
+    until it commits or rolls back —
+  - so do not leave an interactive `psql` transaction sitting on that table.
+
+- **The lever is `default_transaction_isolation`, a `user`-context GUC** — settable by any role, per role or per
+  database, no superuser involved.
+  - wardynd checks it on every boot (`reportTransactionIsolation`, [`internal/db/db.go`](../internal/db/db.go)) and,
+    when it reads anything other than `read committed`, logs an ERROR naming the value and the fix —
+    - `ALTER DATABASE <db> SET default_transaction_isolation
+      = 'read committed'` (or the matching `ALTER ROLE`) — without refusing to start:
+    - Wardyn's own writers pin `READ COMMITTED` on their own transaction (`store.InsertAuditEvent`'s `Begin`,
+      [`internal/store/store.go`](../internal/store/store.go); a transaction-level isolation level overrides the GUC)
+      and are unaffected either way,
+    - so this is a posture to report for an EXTERNAL writer this package cannot see, not a defect to boot-refuse over
+      ([`internal/db/db.go`](../internal/db/db.go)).
 
 ### Retention, erasure and GDPR — a residual, not a solved problem
 
@@ -961,67 +973,66 @@ Nothing else deletes an audit row: no size cap, no per-row, per-actor or per-run
 choice, but it means **retention is forever by default and there is no erasure
 lever today**. Concretely:
 
-- `Actor` (`internal/types/types.go`'s `AuditEvent`) is personal data — an OIDC
+- `Actor` ([`internal/types/types.go`](../internal/types/types.go)'s `AuditEvent`) is personal data — an OIDC
   `sub` or email, on every human-attributed row, forever.
-- `Data` (`json.RawMessage`) can carry a human-typed value verbatim. The
-  secret-masking registry only redacts values it minted or that were explicitly
-  registered (`internal/secretmask`); a credential a human *pastes* into a
-  recorded terminal or types into a run's task field is stored — and replayable —
-  in the clear, with no per-value redaction path (same gap for recordings).
+- `Data` (`json.RawMessage`) can carry a human-typed value verbatim.
+  - The secret-masking registry only redacts values it minted or that were explicitly registered
+    (`internal/secretmask`).
+  - A credential a human *pastes* into a recorded terminal or types into a run's task field is stored — and
+    replayable — in the clear, with no per-value redaction path (same gap for recordings).
 - There is no `DELETE`/erasure endpoint for a single audit row, a single actor's
   rows, or a single run's rows. Migration `0001_init.sql`'s row-level trigger and
   `0004_audit_truncate_guard.sql`'s statement-level trigger make this true at the
   database layer, so there is no admin-surface workaround either.
-- A held push's complete review-matched path list is kept the same way. Its
-  `push_content` approval names ten paths; migration `0085_push_content_paths`
-  keeps the rest, one row per approval, bounded at 10,000 paths or 1 MiB of
-  path text (`truncated: true` past either), verified against the approval's
-  `paths_total` and `paths_digest` before it is written, and refused UPDATE,
-  DELETE and TRUNCATE by its own triggers. A run keeps at most 32 such lists.
-  The run's audit trail records each as a small chained
-  `approval.push_paths.record` row carrying the list's SHA-256
-  (`stored_list_digest`); `GET /api/v1/audit/export` inlines the stored list
-  into that row as it streams, so the audit log and its SIEM sinks never carry
-  a megabyte row, and an exported list that no longer hashes to the chained
-  digest was altered in the table (AUDIT-ACTIONS.md). `GET
-  /api/v1/approvals/{id}/paths` reads the list back to whoever may see the
-  approval — the run's owner, an admin or a `security_admin` — whatever state
-  the run ended in. The route answers every
-  `push_content` approval: one raised by a previous-release proxy, which sent no
-  list, answers with the ten paths its scope names and `truncated: true` when
-  more matched.
-- **An export that cannot be finished never looks finished.** If
-  `GET /api/v1/audit/export` cannot read the audit store (or a held push's path
-  list) before it has written anything, it answers `503` with a JSON error
-  (`audit_export_read_failed`) and nothing else. If the failure comes after the
-  first rows were sent, the `200` is already committed, so wardynd aborts the
-  response: the connection is cut without a clean end of stream, and a client
-  sees a read error. `curl --fail` exits `18` (partial file) or `56` (receive
-  error); a Go client's body read returns `unexpected EOF`. A complete export
-  ends cleanly and its format is unchanged. Treat any non-clean end as an
-  incomplete export and re-run it. A reverse proxy that buffers whole responses
-  can hide the abort from its own client, so export directly or through a proxy
-  that streams. A member whose ownership of the requested `run_id` cannot be
-  checked gets `503` (`audit_scope_unavailable`), not an empty export; a run
-  that is not theirs or does not exist still answers the same empty `200`.
+- A held push's complete review-matched path list is kept the same way.
+  - Its `push_content` approval names ten paths;
+    - migration `0085_push_content_paths` keeps the rest, one row per approval, bounded at 10,000 paths or 1 MiB of
+      path text (`truncated: true` past either),
+    - verified against the approval's `paths_total` and `paths_digest` before it is written, and refused UPDATE,
+      DELETE and TRUNCATE by its own triggers.
+  - A run keeps at most 32 such lists.
+  - The run's audit trail records each as a small chained `approval.push_paths.record` row carrying the list's
+    SHA-256 (`stored_list_digest`);
+    - `GET /api/v1/audit/export` inlines the stored list into that row as it streams, so the audit log and its SIEM
+      sinks never carry a megabyte row,
+    - and an exported list that no longer hashes to the chained digest was altered in the table
+      ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
+  - `GET /api/v1/approvals/{id}/paths` reads the list back to whoever may see the approval — the run's owner, an
+    admin or a `security_admin` — whatever state the run ended in.
+  - The route answers every `push_content` approval: one raised by a previous-release proxy, which sent no list,
+    answers with the ten paths its scope names and `truncated: true` when more matched.
+- **An export that cannot be finished never looks finished.**
+  - If `GET /api/v1/audit/export` cannot read the audit store (or a held push's path list) before it has written
+    anything, it answers `503` with a JSON error (`audit_export_read_failed`) and nothing else.
+  - If the failure comes after the first rows were sent, the `200` is already committed.
+  - So wardynd aborts the response: the connection is cut without a clean end of stream, and a client sees a read
+    error.
+  - `curl --fail` exits `18` (partial file) or `56` (receive error); a Go client's body read returns
+    `unexpected EOF`.
+  - A complete export ends cleanly and its format is unchanged.
+  - Treat any non-clean end as an incomplete export and re-run it.
+  - A reverse proxy that buffers whole responses can hide the abort from its own client, so export directly or
+    through a proxy that streams.
+  - A member whose ownership of the requested `run_id` cannot be checked gets `503` (`audit_scope_unavailable`), not
+    an empty export; a run that is not theirs or does not exist still answers the same empty `200`.
 
-**This is asymmetric with session recordings**, which have the retention lever
-audit lacks: `WARDYN_RECORDING_RETENTION_DAYS` (`docs/ENV.md:47`) age-deletes
-stored PTY casts, defaulting to keep-forever but operator-settable, and each sweep
-that removes anything emits its own `recording.retention.sweep` audit event. Under
-a "right to erasure" obligation on data an audit row could contain, the honest
-answer is: **you cannot selectively erase it, and the fix that exists for
-recordings does not exist here.** The partition drop (0.8.6) is the retention half of the real
-fix, and it removes whole months, never one person's rows. The crypto-shredding half, which makes one person's
-fields unreadable while the chain still verifies, is [below](#erasing-a-person), for the rows written after
-`WARDYN_AUDIT_SEAL=fields` is on.
+- **This is asymmetric with session recordings**, which have the retention lever audit lacks:
+  `WARDYN_RECORDING_RETENTION_DAYS` ([`docs/ENV.md:47`](ENV.md)) age-deletes stored PTY casts, defaulting to
+  keep-forever but operator-settable, and each sweep that removes anything emits its own `recording.retention.sweep`
+  audit event.
+  - Under a "right to erasure" obligation on data an audit row could contain, the honest answer is: **you cannot
+    selectively erase it, and the fix that exists for recordings does not exist here.**
+  - The partition drop (0.8.6) is the retention half of the real fix, and it removes whole months, never one person's
+    rows.
+  - The crypto-shredding half, which makes one person's fields unreadable while the chain still verifies, is
+    [below](#erasing-a-person), for the rows written after `WARDYN_AUDIT_SEAL=fields` is on.
 
 ### Audit retention: the attested partition drop
 
-Since 0.8.6 the audit log is a monthly-partitioned table, and the oldest closed partition can be removed once it is
-older than a retention window, through one database function that leaves evidence. Retention is **off by default**
-(`WARDYN_AUDIT_RETENTION_DAYS` is `0`, keep forever) and nothing is dropped unless an operator drops it or you turn on
-the unattested autodrop.
+- Since 0.8.6 the audit log is a monthly-partitioned table, and the oldest closed partition can be removed once it is
+  older than a retention window, through one database function that leaves evidence.
+- Retention is **off by default** (`WARDYN_AUDIT_RETENTION_DAYS` is `0`, keep forever) and nothing is dropped unless
+  an operator drops it or you turn on the unattested autodrop.
 
 **The policy.** `WARDYN_AUDIT_RETENTION_DAYS` is recorded at every boot through the database function
 `audit_retention_set_policy`; the app role has no write privilege on the table that holds it. The database decides what
@@ -1029,22 +1040,34 @@ takes effect when, from its own clock:
 
 - an **increase** (a longer window, or any window to `0`, forever) applies at once;
 - a **decrease** (a shorter window, and `0` to any finite value) takes effect **30 days after the boot that first saw
-  it**. The pending value and its date are stored, so a restart never moves the date, and setting the same value at
-  every boot for 29 days leaves it where it was. Restating the current value withdraws a pending decrease.
+  it**.
+  - The pending value and its date are stored, so a restart never moves the date, and setting the same value at
+    every boot for 29 days leaves it where it was.
+  - Restating the current value withdraws a pending decrease.
 - the boot that records a change writes an `audit.retention.set` audit row.
 
 Set the same value on every replica. `GET /audit/retention` (`wardyn audit retention`) shows the effective and the
 pending policy.
 
-**What a drop checks.** `audit_retention_drop(partition, digest, actor)` removes a partition only if it is the oldest
-retained one, is closed (nothing can be appended to it any more), is past the effective window, and holds no row of a
-run that is still live (a `PENDING`, `STARTING`, `RUNNING` or `WAITING_FOR_CONFIRMATION` run: revocation reads its
-`credential.mint` rows, and its provenance is its own audit trail). It then recomputes the partition's digest and
-refuses unless it equals the one you supplied. In one transaction it then writes the chained
-`audit.retention.partition_dropped` event, the `audit_chain_anchors` row (partition, `seq` range, row count, digest, the
-dropped tail's last `row_hash`, who dropped it, and the event's `seq`), takes the partition out of the expected manifest, and detaches and
-drops it. A crash leaves all of it or none. The scan of the partition runs before the chain lock is taken, so audit writers wait only for the drop itself; the detach needs a brief exclusive lock on the audit table and waits at most 5 seconds for it, so a long audit read (or a running chain verify) can make a drop fail with `audit_retention_drop_failed` and nothing changed: retry. `GET /audit/chain/verify` then starts from that anchor and still
-re-hashes every retained row; a partition removed any other way fails verify.
+- **What a drop checks.**
+  - `audit_retention_drop(partition, digest, actor)` removes a partition only if it is the oldest retained one,
+    - is closed (nothing can be appended to it any more),
+    - is past the effective window,
+    - and holds no row of a run that is still live (a `PENDING`, `STARTING`, `RUNNING` or
+      `WAITING_FOR_CONFIRMATION` run: revocation reads its `credential.mint` rows, and its provenance is its own audit
+      trail).
+  - It then recomputes the partition's digest and refuses unless it equals the one you supplied.
+  - In one transaction it then writes the chained `audit.retention.partition_dropped` event,
+    - the `audit_chain_anchors` row (partition, `seq` range, row count, digest, the dropped tail's last `row_hash`, who
+      dropped it, and the event's `seq`),
+    - takes the partition out of the expected manifest, and detaches and drops it.
+  - A crash leaves all of it or none.
+  - The scan of the partition runs before the chain lock is taken, so audit writers wait only for the drop itself;
+    - the detach needs a brief exclusive lock on the audit table and waits at most 5 seconds for it,
+    - so a long audit read (or a running chain verify) can make a drop fail with `audit_retention_drop_failed` and
+      nothing changed: retry.
+  - `GET /audit/chain/verify` then starts from that anchor and still re-hashes every retained row; a partition removed
+    any other way fails verify.
 
 **Runbook: export, check, drop.**
 
@@ -1057,40 +1080,55 @@ wardyn audit retention drop audit_events_p202601 --digest <digest from the foote
 curl -fsS -H "Authorization: Bearer $WARDYN_TOKEN" "$WARDYN_URL/api/v1/audit/chain/verify"   # ok, with anchor_seq at the drop
 ```
 
-`POST /audit/retention/drop` takes `{"partition": "...", "digest": "..."}`. Who may drop: one `security_admin` (or an admin) acting alone, with the 30-day cooldown on decreases as the
-brake. The route is on the security tier, and every refusal is a `409` with its own `reason` and an `authz.denied` row (below):
-`audit_retention_not_oldest`, `audit_retention_not_closed`, `audit_retention_inside_window` (also while retention is
-forever), `audit_retention_live_run`, `audit_retention_digest_mismatch`. An unknown partition is `404`
-(`audit_partition_not_found`). `GET /audit/retention` lists every partition with its row count, state (`closed`, `open`
-or `future`) and whether a drop would take it now; for one it would refuse, `refusal` is the reason it would refuse with.
-The two answers are the same function's, so they cannot disagree. The row counts are exact (a scan of each partition), so
-the status call costs as much as the largest partition.
+- `POST /audit/retention/drop` takes `{"partition": "...", "digest": "..."}`.
+- Who may drop: one `security_admin` (or an admin) acting alone, with the 30-day cooldown on decreases as the brake.
+- The route is on the security tier, and every refusal is a `409` with its own `reason` and an `authz.denied` row
+  (below): `audit_retention_not_oldest`, `audit_retention_not_closed`, `audit_retention_inside_window` (also while
+  retention is forever), `audit_retention_live_run`, `audit_retention_digest_mismatch`.
+- An unknown partition is `404` (`audit_partition_not_found`).
+- `GET /audit/retention` lists every partition with its row count, state (`closed`, `open` or `future`) and whether a
+  drop would take it now; for one it would refuse, `refusal` is the reason it would refuse with.
+- The two answers are the same function's, so they cannot disagree.
+- The row counts are exact (a scan of each partition), so the status call costs as much as the largest partition.
 
-**Pre-0.8.6 history** sits in one legacy partition that ends at the upgrade. It becomes droppable once the upgrade itself is older than
-the window, and it is dropped whole; `wardynd -audit-split-legacy` splits it into ranges that drop one at a time (see "Split the pre-0.8.6 audit history", below). An empty partition drops too and records a row count of `0`; verify anchors on the newest drop that removed rows.
+- **Pre-0.8.6 history** sits in one legacy partition that ends at the upgrade.
+  - It becomes droppable once the upgrade itself is older than the window, and it is dropped whole;
+    `wardynd -audit-split-legacy` splits it into ranges that drop one at a time (see "Split the pre-0.8.6 audit
+    history", below).
+  - An empty partition drops too and records a row count of `0`; verify anchors on the newest drop that removed rows.
 
-**Autodrop (`WARDYN_AUDIT_RETENTION_AUTODROP`, off by default).** With it on, the sweeper leader drops each eligible oldest partition
-itself, as the system actor (`wardynd`), computing the digest in the database. It is **unattested**: nobody checked an
-export first, and the event says `attested: false`. It still writes the chained event and the anchor and verify still
-passes, and it obeys every rule above: nothing inside the window, nothing holding a live run's rows, nothing while the
-flag is off. Turn it on only if your records schedule does not require an exported archive.
+- **Autodrop (`WARDYN_AUDIT_RETENTION_AUTODROP`, off by default).**
+  - With it on, the sweeper leader drops each eligible oldest partition itself, as the system actor (`wardynd`),
+    computing the digest in the database.
+  - It is **unattested**: nobody checked an export first, and the event says `attested: false`.
+  - It still writes the chained event and the anchor and verify still passes, and it obeys every rule above: nothing
+    inside the window, nothing holding a live run's rows, nothing while the flag is off.
+  - Turn it on only if your records schedule does not require an exported archive.
 
-**Keeping months ahead.** `audit_ensure_partitions(12)` runs at every boot, before the listener, and daily on the sweeper
-leader (so with several replicas exactly one runs it). An audit write into a month with no partition fails and waits in
-the spool until one exists, so `wardyn_audit_partitions_ahead` (months past the current one that have a partition) is
-exported on `/metrics`, and `/setup/status` carries an `audit_partitions` warning below 3. A warning that stays means the leader sweeper is not
-running or cannot reach the database.
+- **Keeping months ahead.**
+  - `audit_ensure_partitions(12)` runs at every boot, before the listener, and daily on the sweeper leader (so with
+    several replicas exactly one runs it).
+  - An audit write into a month with no partition fails and waits in the spool until one exists.
+  - So `wardyn_audit_partitions_ahead` (months past the current one that have a partition) is exported on `/metrics`,
+    and `/setup/status` carries an `audit_partitions` warning below 3.
+  - A warning that stays means the leader sweeper is not running or cannot reach the database.
 
-**Privileges.** `audit_retention_drop`, `audit_retention_set_policy` and the two read helpers are owned by the migrator, run as it, and are granted
-to the roles that can `EXECUTE` `audit_append` (a role added later needs the same grant: see the upgrade note), never to `PUBLIC`.
-A role with nothing but `CONNECT` gets `permission denied for function`, and the app role gets `permission denied` on a direct `UPDATE`
-of the policy or an `INSERT` into the anchors. Boot reports any `PUBLIC` `EXECUTE` on them next to the audit-function posture line.
+- **Privileges.**
+  - `audit_retention_drop`, `audit_retention_set_policy` and the two read helpers are owned by the migrator, run as
+    it.
+  - And they are granted to the roles that can `EXECUTE` `audit_append` (a role added later needs the same grant: see
+    the upgrade note), never to `PUBLIC`.
+  - A role with nothing but `CONNECT` gets `permission denied for function`, and the app role gets `permission denied`
+    on a direct `UPDATE` of the policy or an `INSERT` into the anchors.
+  - Boot reports any `PUBLIC` `EXECUTE` on them next to the audit-function posture line.
 
 #### Split the pre-0.8.6 audit history
 
-All the history from before the upgrade sits in one partition, `audit_events_legacy`, so by default none of it can be dropped
-until the upgrade itself is older than the window. `wardynd -audit-split-legacy` splits it into one range per month of the
-rows' own time, each of which ordinary retention drops on its own schedule. It is one-way and offline: **take a dump first.**
+- All the history from before the upgrade sits in one partition, `audit_events_legacy`, so by default none of it can
+  be dropped until the upgrade itself is older than the window.
+- `wardynd -audit-split-legacy` splits it into one range per month of the rows' own time, each of which ordinary
+  retention drops on its own schedule.
+- It is one-way and offline: **take a dump first.**
 
 ```sh
 # 1. Dump the database (pg_dump, or your platform's snapshot). The tool drops the legacy table once its copies are proved.
@@ -1103,31 +1141,41 @@ curl -fsS -H "Authorization: Bearer $WARDYN_TOKEN" "$WARDYN_URL/api/v1/audit/cha
 wardyn audit retention                                              # the legacy ranges, oldest first, with the same eligibility as any partition
 ```
 
-It refuses, exiting `3` and naming the reason, and changes nothing, in these cases: another session holds the single-instance
-lock (it names the holder); any other client is connected to the database, lock or no lock (a replica started with
-`WARDYN_HA` never takes the lock); the connected role does not own the audit tables (`audit_split_not_migrator`:
-the app role cannot attach a partition or write an anchor, and the tool never falls back to another connection); the log is
-not partitioned yet (`audit_split_not_partitioned`: run `-migrate-only` first); there is no legacy partition left
-(`audit_split_no_legacy_partition`: it was already split or dropped) or it is empty; the chain does not verify before the
-split (`audit_split_chain_broken`: fix that first); or a table named for a range already exists. It exits `1` when the split
-fails, and then the log is exactly as it was: the whole split is one transaction. The time bound is `WARDYN_MIGRATE_TIMEOUT`
-(default 5 minutes); raise it for a large log, as the split copies every legacy row once and builds its indexes.
+- It refuses, exiting `3` and naming the reason, and changes nothing, in these cases:
+  - another session holds the single-instance lock (it names the holder); any other client is connected to the
+    database, lock or no lock (a replica started with `WARDYN_HA` never takes the lock);
+  - the connected role does not own the audit tables (`audit_split_not_migrator`: the app role cannot attach a
+    partition or write an anchor, and the tool never falls back to another connection);
+  - the log is not partitioned yet (`audit_split_not_partitioned`: run `-migrate-only` first); there is no legacy
+    partition left (`audit_split_no_legacy_partition`: it was already split or dropped) or it is empty;
+  - the chain does not verify before the split (`audit_split_chain_broken`: fix that first); or a table named for a
+    range already exists.
+- It exits `1` when the split fails, and then the log is exactly as it was: the whole split is one transaction.
+- The time bound is `WARDYN_MIGRATE_TIMEOUT` (default 5 minutes); raise it for a large log, as the split copies every
+  legacy row once and builds its indexes.
 
-**How the ranges are chosen.** A range is not a month of `time`. A spool replay writes an old `time` late, so a month cut by
-`time` would be scattered through the chain and dropping it would remove interior links. Instead the tool walks the rows in
-`seq` order, keeps the running maximum of `time`, and starts a new range where that maximum first crosses into a new UTC
-month. Each row's new `recorded_at` is the running maximum, never later than the instant before the upgrade, so every range
-is an unbroken run of `seq`, the ranges are in order, and each range's largest `recorded_at` is the largest `time` it holds,
-which is what its retention eligibility reads. `row_hash` does not cover `recorded_at`, so no hash changes. The ranges are
-named `audit_events_legacy_<YYYYMM>` and written to the expected partition manifest, with one `kind='split'` anchor each (its
-row count, `seq` range and digest).
+- **How the ranges are chosen.**
+  - A range is not a month of `time`.
+  - A spool replay writes an old `time` late, so a month cut by `time` would be scattered through the chain and
+    dropping it would remove interior links.
+  - Instead the tool walks the rows in `seq` order, keeps the running maximum of `time`, and starts a new range where
+    that maximum first crosses into a new UTC month.
+  - Each row's new `recorded_at` is the running maximum, never later than the instant before the upgrade.
+  - So every range is an unbroken run of `seq`, the ranges are in order, and each range's largest `recorded_at` is the
+    largest `time` it holds, which is what its retention eligibility reads.
+  - `row_hash` does not cover `recorded_at`, so no hash changes.
+  - The ranges are named `audit_events_legacy_<YYYYMM>` and written to the expected partition manifest, with one
+    `kind='split'` anchor each (its row count, `seq` range and digest).
 
-**What it proves before it commits.** For every range, the digest `audit_partition_digest` computes over the copy equals the
-fold over the source rows, and every column but `recorded_at` matches the source row for row; then the legacy table is
-dropped and the chain is verified again inside the same transaction, and it must inspect exactly the rows it inspected
-before (the same checked and legacy counts). Matching digests prove the copy; contiguity in `seq` order is what makes a range
-safe to remove, and the tool checks it as well. Afterwards the oldest range drops through `audit_retention_drop` like any
-partition, and verify then starts from that drop's anchor.
+- **What it proves before it commits.**
+  - For every range, the digest `audit_partition_digest` computes over the copy equals the fold over the source rows,
+    and every column but `recorded_at` matches the source row for row.
+  - Then the legacy table is dropped and the chain is verified again inside the same transaction, and it must inspect
+    exactly the rows it inspected before (the same checked and legacy counts).
+  - Matching digests prove the copy; contiguity in `seq` order is what makes a range safe to remove, and the tool
+    checks it as well.
+  - Afterwards the oldest range drops through `audit_retention_drop` like any partition, and verify then starts from
+    that drop's anchor.
 
 ### Erasing a person
 
@@ -1145,96 +1193,114 @@ erases one person's retained records by explicit scope, in one audited act
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
 | `credentials` | the person's stored credentials and the key they sit under (the same erase as `DELETE /people/{principal}/credentials`, which erases credentials only and nothing else) |
 
-The scopes run in the order above whatever order the body lists them: the person's live
-consumers are fenced first, the data they could still reach next, the keys last. Every scope is
-idempotent. A scope that fails stops the run: the answer is `500` `erasure_incomplete` with `done` and
-`remaining`, the `person.erasure` row records a `failure` naming each scope's outcome, and a retry with the
-same scopes finishes the rest. Erasure is reported complete (`200`, `outcome` success) only when every scope
-asked for finished.
+- The scopes run in the order above whatever order the body lists them: the person's live consumers are fenced first,
+  the data they could still reach next, the keys last.
+- Every scope is idempotent.
+- A scope that fails stops the run: the answer is `500` `erasure_incomplete` with `done` and `remaining`, the
+  `person.erasure` row records a `failure` naming each scope's outcome, and a retry with the same scopes finishes the
+  rest.
+- Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
 
-The `recordings` scope fences each run present in the person's run list, including its bare cast,
-attach sessions and upload parts. An upload still streaming when erasure completes cannot recreate
-one: its final save answers `410` `recording_erased`, audited as a failed `recording.upload`.
-Authentication, masking availability, part limits and upload size limits keep their existing refusal
-priority. Reads after erasure return no recording; a reader already opened before erasure may retain
-bytes, and bytes already handed out cannot be revoked. Streaming uploads may finish into temporary
-files or buffers, which are discarded instead of committed. A new run ID records normally.
+- The `recordings` scope fences each run present in the person's run list, including its bare cast, attach sessions
+  and upload parts.
+- An upload still streaming when erasure completes cannot recreate one: its final save answers `410`
+  `recording_erased`, audited as a failed `recording.upload`.
+- Authentication, masking availability, part limits and upload size limits keep their existing refusal priority.
+- Reads after erasure return no recording; a reader already opened before erasure may retain bytes, and bytes already
+  handed out cannot be revoked.
+- Streaming uploads may finish into temporary files or buffers, which are discarded instead of committed.
+- A new run ID records normally.
 
-Before deleting configured recordings, the adapter installs a durable source-specific
-output fence and removes only recording-derived rows. An already-open recording reader
-therefore cannot recreate those rows. This fence applies even when recording or output
-persistence is currently disabled, survives retention and run deletion, and preserves
-independent stdout/pane output. The reported recording count covers the currently
-configured recording store only: disconnected old backends, exported files and backups
-are independent copies. A failure after the derived fence leaves the recordings scope
-incomplete, so retry it rather than treating every copy as erased.
+- Before deleting configured recordings, the adapter installs a durable source-specific output fence and removes only
+  recording-derived rows.
+- An already-open recording reader therefore cannot recreate those rows.
+- This fence applies even when recording or output persistence is currently disabled, survives retention and run
+  deletion, and preserves independent stdout/pane output.
+- The reported recording count covers the currently configured recording store only: disconnected old backends,
+  exported files and backups are independent copies.
+- A failure after the derived fence leaves the recordings scope incomplete, so retry it rather than treating every
+  copy as erased.
 
-Split migrator/app-role installations grant the app role `SELECT, INSERT, UPDATE`
-on `run_output_recording_recovery` (migration `0135_run_output_recording_recovery`)
-for the source fence and recovery claims. Retain its erased rows with database
-backups; the absence of a run foreign key deliberately preserves the fence after
-run deletion or identifier reuse.
+- Split migrator/app-role installations grant the app role `SELECT, INSERT, UPDATE` on `run_output_recording_recovery`
+  (migration `0135_run_output_recording_recovery`) for the source fence and recovery claims.
+- Retain its erased rows with database backups; the absence of a run foreign key deliberately preserves the fence
+  after run deletion or identifier reuse.
 
-**A limit on how many runs one erasure can cover.** The `run_outputs` and
-`recordings` scopes each take one Postgres advisory lock for every run the person
-created, all in one transaction. Postgres keeps every session's locks in one shared
-table sized from `max_locks_per_transaction` × `max_connections` (64 × 100 by
-default), so a person with more runs than that table can take cannot have either
-scope erased in one call. The order of magnitude is ten thousand runs: on a default
-Postgres 17, 10,000 advisory locks in one transaction succeed and 20,000 fail with
-`out of shared memory` (SQLSTATE 53200). The scope then fails closed and as a whole.
-Its transaction rolls back, so no fence or tombstone is written and no row is
-deleted; the `recordings` scope stops before it deletes any recording; the erasure
-answers `500` `erasure_incomplete`. Nothing is half-erased, and nothing is fenced
-either. A retry fails the same way until `max_locks_per_transaction` is raised,
-which needs a Postgres restart: raise it, then retry the same scopes.
+- **A limit on how many runs one erasure can cover.**
+  - The `run_outputs` and `recordings` scopes each take one Postgres advisory lock for every run the person created,
+    all in one transaction.
+  - Postgres keeps every session's locks in one shared table sized from `max_locks_per_transaction` ×
+    `max_connections` (64 × 100 by default).
+  - So a person with more runs than that table can take cannot have either scope erased in one call.
+  - The order of magnitude is ten thousand runs: on a default Postgres 17, 10,000 advisory locks in one transaction
+    succeed and 20,000 fail with `out of shared memory` (SQLSTATE 53200).
+  - The scope then fails closed and as a whole.
+  - Its transaction rolls back, so no fence or tombstone is written and no row is deleted; the `recordings` scope
+    stops before it deletes any recording; the erasure answers `500` `erasure_incomplete`.
+  - Nothing is half-erased, and nothing is fenced either.
+  - A retry fails the same way until `max_locks_per_transaction` is raised, which needs a Postgres restart: raise it,
+    then retry the same scopes.
 
-The Postgres fence (migration `0133_recording_erasures`) survives retention and replica/process restarts. The filesystem
-store syncs its `.erased/<key>.cast` marker before deleting casts and the shared-volume `.log` fallback;
-`<run>.lock` files retain their identities so waiting writers use the same lock. Keep these
-metadata files with the recording root: retention never deletes them. `wardyn-rec`'s `-out-dir`
-delivery uses the same fence for both original filenames. Its source stream is staged privately;
-the prepared local copy then overwrites in place under the run lock, retaining the destination's
-write authorization, ownership and permissions. New fallback files retain 0666 subject to umask.
-Ordinary `SaveCast` remains an atomic 0600 replacement. Filesystem storage requires local Unix
-advisory-lock and directory-sync support; a lock or sync error refuses the operation. Empty lock
-files are read-only across UIDs, and new marker directories retain the root's write permissions
-and inherited group semantics. Existing root and file permissions are not widened. This does not
-remove the fallback's masking or shared-volume trust limitations. Restoring a backup from before erasure restores that backup's
-recordings and fence state; erasure does not remove independent exports or sandbox-local capture files.
+- The Postgres fence (migration `0133_recording_erasures`) survives retention and replica/process restarts.
+- The filesystem store syncs its `.erased/<key>.cast` marker before deleting casts and the shared-volume `.log`
+  fallback; `<run>.lock` files retain their identities so waiting writers use the same lock.
+- Keep these metadata files with the recording root: retention never deletes them.
+- `wardyn-rec`'s `-out-dir` delivery uses the same fence for both original filenames.
+- Its source stream is staged privately; the prepared local copy then overwrites in place under the run lock,
+  retaining the destination's write authorization, ownership and permissions.
+- New fallback files retain 0666 subject to umask.
+- Ordinary `SaveCast` remains an atomic 0600 replacement.
+- Filesystem storage requires local Unix advisory-lock and directory-sync support; a lock or sync error refuses the
+  operation.
+- Empty lock files are read-only across UIDs, and new marker directories retain the root's write permissions and
+  inherited group semantics.
+- Existing root and file permissions are not widened.
+- This does not remove the fallback's masking or shared-volume trust limitations.
+- Restoring a backup from before erasure restores that backup's recordings and fence state; erasure does not remove
+  independent exports or sandbox-local capture files.
 
-Refusals, all before anything is erased: the operator namespace (`erasure_operator_namespace`), an unknown or
-empty `scopes` (`erasure_scope_unknown`), a principal that does not resolve (`owner_unresolved`,
-`owner_ambiguous`), and the person being the caller for any scope but `credentials`
-(`erasure_self_refused`; the admin token, which is no person, may erase anyone, and is audited as every
-other bypass is).
+- Refusals, all before anything is erased:
+  - the operator namespace (`erasure_operator_namespace`),
+  - an unknown or empty `scopes` (`erasure_scope_unknown`),
+  - a principal that does not resolve (`owner_unresolved`, `owner_ambiguous`),
+  - and the person being the caller for any scope but `credentials` (`erasure_self_refused`; the admin token, which is
+    no person, may erase anyone, and is audited as every other bypass is).
 
-**What this does not reach.** Rows written before `WARDYN_AUDIT_SEAL=fields` was turned on, and before 0.8.6,
-are plaintext: no key covers them. A sealed field is stored as `seal2.<handle>.<ciphertext>`: the handle is a
-random id of the key (migration `0131_principal_key_handles` adds it to `principal_keys`), not derived from the
-person, and the erasure clears it from the key table, so neither the
-row nor any copy of it (spool, SIEM sink, export, federation push) holds anything in the field that names the
-person, in any encoding, and after the erasure nothing maps the handle back to them. A SIEM sink holds ciphertext
-for a sealed field, so after `audit_personal_fields` it holds nothing readable either; its copies of the clear
-`actor`, `target` and `source_ip` columns are outside this scope, except the `actor` of rows written under
-`WARDYN_AUDIT_SEAL=full`, which is a subject id and reads `[erased]` after the erasure. Before turning `full` on, change any SIEM rule keyed on
-`actor`: from that moment it sees `subject:<uuid>` for a person, and the setting applies only to rows written
-after it is on. A backup restores the wrapped key and so the field until the backup expires or
-the wrapping key version is retired. A row waiting in an audit spool under the pending key when the person is
-erased is stored as `[erased]` when the spool drains. A pending row the drain cannot open (sealed under another
-pending key, or malformed) is moved to the quarantine sidecar `<spool>.quarantine` instead, as any line the store
-keeps refusing is: erasure does not reach that file, which stays on the daemon's disk, mode `0600`, still sealed
-under the pending key it was written with, until you remove it. See [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#sealed-fields) for
-which fields are sealed and why the rest stay clear.
+> [!WARNING]
+> **What this does not reach.**
+
+- Rows written before `WARDYN_AUDIT_SEAL=fields` was turned on, and before 0.8.6, are plaintext: no key covers them.
+- A sealed field is stored as `seal2.<handle>.<ciphertext>`: the handle is a random id of the key (migration
+  `0131_principal_key_handles` adds it to `principal_keys`), not derived from the person, and the erasure clears it
+  from the key table,
+  - so neither the row nor any copy of it (spool, SIEM sink, export, federation push) holds anything in the field that
+    names the person, in any encoding,
+  - and after the erasure nothing maps the handle back to them.
+- A SIEM sink holds ciphertext for a sealed field, so after `audit_personal_fields` it holds nothing readable either.
+- Its copies of the clear `actor`, `target` and `source_ip` columns are outside this scope, except the `actor` of rows
+  written under `WARDYN_AUDIT_SEAL=full`, which is a subject id and reads `[erased]` after the erasure.
+- Before turning `full` on, change any SIEM rule keyed on `actor`: from that moment it sees `subject:<uuid>` for a
+  person, and the setting applies only to rows written after it is on.
+- A backup restores the wrapped key and so the field until the backup expires or the wrapping key version is retired.
+- A row waiting in an audit spool under the pending key when the person is erased is stored as `[erased]` when the
+  spool drains.
+- A pending row the drain cannot open (sealed under another pending key, or malformed) is moved to the quarantine
+  sidecar `<spool>.quarantine` instead, as any line the store keeps refusing is.
+- Erasure does not reach that file, which stays on the daemon's disk, mode `0600`, still sealed under the pending key
+  it was written with, until you remove it.
+- See [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#sealed-fields) for which fields are sealed and why the rest stay clear.
 
 ### Leavers and SCIM
 
-An identity provider can tell Wardyn that a person has left. Wardyn runs a SCIM 2.0 endpoint whose only job is to
-**remove access**: it suspends a person (sessions cut, API tokens revoked, SSH keys deleted, every live run killed,
-sign-in refused on every replica) and, later or at once, purges them (stored credentials erased, workspaces
-handed to the operator, user grants deleted). SCIM never grants anything: a user or group created over SCIM is
-stored and gives no access, and roles still come from the sign-in token and the role map. It is off until
-`WARDYN_SCIM_TOKEN` is set, and it mounts only on a single-tenant, commercial-cloud Entra issuer.
+- An identity provider can tell Wardyn that a person has left.
+- Wardyn runs a SCIM 2.0 endpoint whose only job is to **remove access**:
+  - it suspends a person (sessions cut, API tokens revoked, SSH keys deleted, every live run killed, sign-in refused
+    on every replica)
+  - and, later or at once, purges them (stored credentials erased, workspaces handed to the operator, user grants
+    deleted).
+- SCIM never grants anything: a user or group created over SCIM is stored and gives no access, and roles still come
+  from the sign-in token and the role map.
+- It is off until `WARDYN_SCIM_TOKEN` is set, and it mounts only on a single-tenant, commercial-cloud Entra issuer.
 
 | Provisioning event | What Wardyn does |
 |---|---|
@@ -1253,10 +1319,11 @@ stored and gives no access, and roles still come from the sign-in token and the 
    equal to the admin token.
 3. In the identity provider's provisioning job, set the tenant URL to `https://<your host><base path>/scim/v2`
    and the secret token to the bearer.
-4. Map Entra's `objectId` to SCIM `externalId`. Wardyn matches a leaver by that object id first, then by the
-   `entra:<tenant id>:<object id>` person, and uses an email only to widen a removal; without `externalId`
-   a suspension can miss the person. `userName` and `emails` may change (renames are accepted as a projection
-   update and the old values are kept as removal aliases); `externalId` may not change on a bound identity.
+4. Map Entra's `objectId` to SCIM `externalId`.
+   - Wardyn matches a leaver by that object id first, then by the `entra:<tenant id>:<object id>` person, and uses an
+     email only to widen a removal; without `externalId` a suspension can miss the person.
+   - `userName` and `emails` may change (renames are accepted as a projection update and the old values are kept as
+     removal aliases); `externalId` may not change on a bound identity.
 5. Check a test user: suspend them from the provisioning job, then confirm a `scim.user.deactivate` row and a
    `person.deprovision` row in the audit log ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
 
@@ -1265,14 +1332,36 @@ stored and gives no access, and roles still come from the sign-in token and the 
 | Step | What it does |
 |---|---|
 | Suspend | Completed first, if it is not already |
-| Erase | The person's stored credentials and the masking copies of them, through the same erasure entry point as `POST /people/{principal}/erasure`, with the `credentials` and `mask_copies` scopes. Audit fields, run tasks, run outputs and recordings are not part of a purge: records retention usually outlives the leaver window, so erasing them stays a deliberate `POST /people/{principal}/erasure` |
+| Erase | Stored credentials and their masking copies only, through the person-erasure entry point: see [Erase](#erase) |
 | Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, audited as `workspace.reassign`; `keep` leaves them |
-| Grants | The person's user-subject capability grants and governance assignments are deleted by a direct store call, audited in `person.deprovision`, never through the governance apply path. This deletes deny rows, which the governed path would treat as widening; it is safe for the rows keyed by the person's own principals (the sign-in subject and the object-id form) because the identity is a permanent tombstone whose subject can never authenticate again. A row keyed by an email alias is deleted only while no other principal holds that address (another active identity, or a live API token or person row under a different principal: a revoked or expired token, a deactivated person row, and a principal whose identity is deactivated or purged hold nothing); otherwise it stays, because a recycled address's new holder owns it, and `person.deprovision` counts it as `email_rows_kept` |
+| Grants | User-subject grants and governance assignments, deleted by a direct store call; an email-alias row only while no other live principal holds it (a revoked or expired token holds nothing): see [Grants](#grants) |
 | Drives | Listed by name in `person.deprovision`, never reclaimed. Reclaim storage with the steps in "Reclaiming a departed person's storage" |
 
-The identity row stays as a tombstone with `purged_at` set. `PATCH active=true` on it is a 400 `invalidValue`
-(a denied `scim.user.write` row with reason `purged`), and the sign-in gate refuses it. A re-hired person needs a
-new identity, which means a new object id.
+- The identity row stays as a tombstone with `purged_at` set.
+- `PATCH active=true` on it is a 400 `invalidValue` (a denied `scim.user.write` row with reason `purged`), and the
+  sign-in gate refuses it.
+- A re-hired person needs a new identity, which means a new object id.
+
+##### Erase
+
+- The person's stored credentials and the masking copies of them, through the same erasure entry point as
+  `POST /people/{principal}/erasure`, with the `credentials` and `mask_copies` scopes.
+- Audit fields, run tasks, run outputs and recordings are not part of a purge: records retention usually outlives the
+  leaver window, so erasing them stays a deliberate `POST /people/{principal}/erasure`
+
+##### Grants
+
+- The person's user-subject capability grants and governance assignments are deleted by a direct store call, audited
+  in `person.deprovision`, never through the governance apply path.
+- This deletes deny rows, which the governed path would treat as widening.
+- It is safe for the rows keyed by the person's own principals (the sign-in subject and the object-id form) because
+  the identity is a permanent tombstone whose subject can never authenticate again.
+- A row keyed by an email alias is deleted only while no other principal holds that address (another active identity,
+  or a live API token or person row under a different principal:
+  - a revoked or expired token, a deactivated person row, and a principal whose identity is deactivated or purged hold
+    nothing);
+  - otherwise it stays, because a recycled address's new holder owns it, and `person.deprovision` counts it as
+    `email_rows_kept`.
 
 #### Rotating the token
 
@@ -1295,20 +1384,27 @@ lose access now, do not wait for it:
 
 #### What this does not cover
 
-- **A stolen SCIM token is a deprovisioning weapon.** It can suspend everyone, and a `DELETE` erases credentials
-  at once; the purge delay does not apply to `DELETE`. HTTPS only, per-replica rate limiting, an audit row per
-  write and rotation without downtime are the mitigations. Rate limits are per replica, so an HA install's
-  effective limit is the per-replica limit times the replica count.
-- **Email recycling.** For a person a sign-in has bound, an email alias widens the session cutoff only while no
-  other principal holds that address (another active identity, or a live API token or person row under a different
-  principal: only a live holder counts, so a revoked or expired token, a deactivated person row and a principal whose identity is deactivated or purged hold nothing), the same rule a purge uses for grants. While another principal holds it, a suspension and a SCIM
-  group removal write no cutoff or session cut under the address: the person's own credentials are reached through
-  their subject and object-id forms and the identity deactivation, and the other principal's sessions, API tokens
-  and SSH keys keep working. Under an email, a suspension revokes API tokens and deletes SSH keys, and a group
-  removal revokes API tokens, only where the owning principal is one of the leaver's own forms, never another
-  principal's that merely carries the same address. Deactivation never follows an email. A person no sign-in has
-  bound is known only by their emails, so for them every alias is cut and every principal an alias resolves to is
-  swept as theirs.
+- **A stolen SCIM token is a deprovisioning weapon.**
+  - It can suspend everyone, and a `DELETE` erases credentials at once; the purge delay does not apply to `DELETE`.
+  - HTTPS only, per-replica rate limiting, an audit row per write and rotation without downtime are the mitigations.
+  - Rate limits are per replica, so an HA install's effective limit is the per-replica limit times the replica count.
+- **Email recycling.**
+  - For a person a sign-in has bound, an email alias widens the session cutoff only while no other principal holds
+    that address
+    - (another active identity, or a live API token or person row under a different principal:
+    - only a live holder counts, so a revoked or expired token, a deactivated person row and a principal whose
+      identity is deactivated or purged hold nothing),
+    - the same rule a purge uses for grants.
+  - While another principal holds it, a suspension and a SCIM group removal write no cutoff or session cut under the
+    address.
+  - The person's own credentials are reached through their subject and object-id forms and the identity deactivation,
+    and the other principal's sessions, API tokens and SSH keys keep working.
+  - Under an email, a suspension revokes API tokens and deletes SSH keys, and a group removal revokes API tokens,
+    - only where the owning principal is one of the leaver's own forms,
+    - never another principal's that merely carries the same address.
+  - Deactivation never follows an email.
+  - A person no sign-in has bound is known only by their emails, so for them every alias is cut and every principal an
+    alias resolves to is swept as theirs.
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
   again.
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
@@ -1330,16 +1426,19 @@ A pending approval waits in the console until someone opens the Approvals page. 
 `WARDYN_APPROVAL_NOTIFY` set, wardynd also tells a channel you name that one is waiting. Unset or empty
 (the default) means no notification row is written and no worker runs.
 
-**What it guarantees.** Every approval raised while the setting is on gets a durable outbox row in the
-same database transaction that creates the approval, at both places an approval can be created (the API
-raise paths and the broker's credential path). A crash cannot leave an approval with no notification,
-and a raise that loses a dedup race writes nothing. A worker on every replica then delivers each row at
-least once, or records a failure. Approvals already pending when you turn it on get no notification.
-
-**Configuration.** One JSON value, read once at boot; a change needs a restart. The value holds URLs
-and secrets, so deliver it through `WARDYN_APPROVAL_NOTIFY_FILE` from a secret store where you can (see
-[ENV.md](ENV.md)). Wardynd never logs it, and a boot refusal names a channel `id` and the rule it broke,
-never a URL, secret or token.
+- **What it guarantees.**
+  - Every approval raised while the setting is on gets a durable outbox row in the same database transaction that
+    creates the approval, at both places an approval can be created (the API raise paths and the broker's credential
+    path).
+  - A crash cannot leave an approval with no notification, and a raise that loses a dedup race writes nothing.
+  - A worker on every replica then delivers each row at least once, or records a failure.
+  - Approvals already pending when you turn it on get no notification.
+- **Configuration.**
+  - One JSON value, read once at boot; a change needs a restart.
+  - The value holds URLs and secrets, so deliver it through `WARDYN_APPROVAL_NOTIFY_FILE` from a secret store where
+    you can (see [ENV.md](ENV.md)).
+  - Wardynd never logs it, and a boot refusal names a channel `id` and the rule it broke, never a URL, secret or
+    token.
 
 ```json
 {
@@ -1360,9 +1459,9 @@ never a URL, secret or token.
 - `type` must be one this build implements: `webhook`, `teams`, `slack` or `smtp`. Any other value refuses boot.
 - `redact_requester` (optional, per channel, default false) leaves the run owner's principal and email out of that channel's messages, whatever its type.
 - HTTPS is required when `hmac_secret` or `bearer_token` is set or the URL carries userinfo or a query.
-  Plain HTTP with none of those is allowed for a `webhook`. A `teams` or `slack` URL is itself the
-  credential (a Teams workflow signature in the query, a Slack hook path), so it must always be `https://`;
-  boot refuses anything else and the error never shows the URL.
+  - Plain HTTP with none of those is allowed for a `webhook`.
+  - A `teams` or `slack` URL is itself the credential (a Teams workflow signature in the query, a Slack hook path), so
+    it must always be `https://`; boot refuses anything else and the error never shows the URL.
 - `console_url` is optional and must be `https://` with no userinfo, query or fragment.
 
 **The webhook body, `wardyn.approval.v1`.** A `POST` of JSON with `X-Wardyn-Delivery: <delivery_id>`
@@ -1381,39 +1480,49 @@ and, with `hmac_secret` set, `X-Wardyn-Signature`. Only these fields are ever se
 | `recipients[]` | `{role, email}` for each `notify` target of the tier that resolved to an address |
 | `console_url` | `<console_url>/approvals`, when configured |
 
-The request scope (host, tool arguments, push paths), the reason text, the run title and any credential
-are never sent: the sandbox agent writes or influences them, and an approval is decided in the console,
-signed in, not from the message. Every string field is control-stripped, capped at 256 bytes and passed
-through the run's secret masker before encoding.
+- The request scope (host, tool arguments, push paths), the reason text, the run title and any credential are never
+  sent.
+- The sandbox agent writes or influences them, and an approval is decided in the console, signed in, not from the
+  message.
+- Every string field is control-stripped, capped at 256 bytes and passed through the run's secret masker before
+  encoding.
 
-**Teams and Slack messages.** A `teams` channel posts a Teams Workflows message carrying one Adaptive
-Card; a `slack` channel posts a Block Kit incoming-webhook body. Both are built from the same
-allowlisted fields as the webhook body and nothing else, so the request scope, the reason and any
-credential are absent here too. The title is fixed text, `Approval waiting: <kind>` at tier 0 and
-`Approval still waiting (escalation <n>): <kind>` above it, where the kind reads Credential, Network
-access, Tool call, Sign-in needed or Push review. Under it come the run's short id, the profile name, the
-requester (unless `redact_requester`) and the request time in UTC. The only link is a button to
-`<console_url>/approvals`, from config. Requester and profile text is control-stripped, capped at 256
-bytes and masked, then made inert: Slack carries it in `plain_text` objects only, and the Adaptive Card
-escapes `&`, `<`, `>` and every Markdown character. Any 2xx answer is success and the reply body is never
-read (a Teams workflow may answer 202 with none). `hmac_secret` and `bearer_token` are webhook options;
-these two types are not signed.
-
-**SMTP mail.** An `smtp` channel takes `host`, `port`, `from`, an optional static `to` (a list of
-addresses) and optional `username` and `password`, which are set together; it takes no `url`. It sends a
-plain-text message, `Subject: [Wardyn] ` plus the same title as above, with the same allowlisted lines as
-the chat bodies and nothing else. It sends over **verified STARTTLS only**: wardynd refuses a relay that
-does not advertise STARTTLS (`starttls_missing`), verifies the certificate against the system roots plus
-`WARDYN_TRUSTED_CA_FILE` with the server name set to `host` (`tls_verify`), and authenticates only after that, with the mechanism the relay advertises in its AUTH
-list: `PLAIN` when offered, else `LOGIN` (what Exchange Online offers); a relay offering neither (for
-example XOAUTH2 only) is dead as `auth_unsupported`, and nothing is sent. There is no plaintext fallback and no option to skip verification, and
-implicit TLS (port 465) is not supported: use the submission port, usually 587. Recipients are the static
-`to` plus each `notify` target of the tier (see below); every address is re-checked at send time and one
-that is not a single bare mailbox (a display name, a list, a CR, LF, comma, semicolon, angle bracket or
-space, or over 254 bytes) is skipped and never written to a header or the envelope. With no recipient
-left the row is dead as `no_recipient` and the relay is not contacted. The `password` has the same
-custody as a SIEM bearer token: keep the value in `WARDYN_APPROVAL_NOTIFY_FILE`. Boot refuses a CR or LF
-in any smtp field and an address that is not a bare mailbox.
+- **Teams and Slack messages.**
+  - A `teams` channel posts a Teams Workflows message carrying one Adaptive Card; a `slack` channel posts a Block Kit
+    incoming-webhook body.
+  - Both are built from the same allowlisted fields as the webhook body and nothing else, so the request scope, the
+    reason and any credential are absent here too.
+  - The title is fixed text, `Approval waiting: <kind>` at tier 0 and
+    `Approval still waiting (escalation <n>): <kind>` above it, where the kind reads Credential, Network access, Tool
+    call, Sign-in needed or Push review.
+  - Under it come the run's short id, the profile name, the requester (unless `redact_requester`) and the request time
+    in UTC.
+  - The only link is a button to `<console_url>/approvals`, from config.
+  - Requester and profile text is control-stripped, capped at 256 bytes and masked, then made inert: Slack carries it
+    in `plain_text` objects only, and the Adaptive Card escapes `&`, `<`, `>` and every Markdown character.
+  - Any 2xx answer is success and the reply body is never read (a Teams workflow may answer 202 with none).
+  - `hmac_secret` and `bearer_token` are webhook options; these two types are not signed.
+- **SMTP mail.**
+  - An `smtp` channel takes `host`, `port`, `from`, an optional static `to` (a list of addresses) and optional
+    `username` and `password`, which are set together; it takes no `url`.
+  - It sends a plain-text message, `Subject: [Wardyn] ` plus the same title as above, with the same allowlisted lines
+    as the chat bodies and nothing else.
+  - It sends over **verified STARTTLS only**:
+    - wardynd refuses a relay that does not advertise STARTTLS (`starttls_missing`),
+    - verifies the certificate against the system roots plus `WARDYN_TRUSTED_CA_FILE` with the server name set to
+      `host` (`tls_verify`),
+    - and authenticates only after that, with the mechanism the relay advertises in its AUTH list: `PLAIN` when
+      offered, else `LOGIN` (what Exchange Online offers);
+    - a relay offering neither (for example XOAUTH2 only) is dead as `auth_unsupported`, and nothing is sent.
+  - There is no plaintext fallback and no option to skip verification, and implicit TLS (port 465) is not supported:
+    use the submission port, usually 587.
+  - Recipients are the static `to` plus each `notify` target of the tier (see below);
+    - every address is re-checked at send time and one that is not a single bare mailbox (a display name, a list, a
+      CR, LF, comma, semicolon, angle bracket or space, or over 254 bytes)
+    - is skipped and never written to a header or the envelope.
+  - With no recipient left the row is dead as `no_recipient` and the relay is not contacted.
+  - The `password` has the same custody as a SIEM bearer token: keep the value in `WARDYN_APPROVAL_NOTIFY_FILE`.
+  - Boot refuses a CR or LF in any smtp field and an address that is not a bare mailbox.
 
 **Verifying the signature.** `X-Wardyn-Signature: t=<unix seconds>,v1=<hex>`, where `v1` is the
 HMAC-SHA256 of `<t>.<body>` (the timestamp, a dot, the exact bytes received) keyed with `hmac_secret`.
@@ -1439,31 +1548,38 @@ at tier 0. With `routes` set, the first route that matches an approval chooses i
   `push_content`) and `profiles` (governance profile **ids**, never names, so a rename cannot re-route).
   The profile is the run's leaf profile as bound at dispatch. An absent key matches anything; no match
   means no notification.
-- A route has 1 to 5 tiers, and `after` (a duration such as `30m`) is zero or more and strictly
-  ascending. Every tier's rows are written when the approval is raised, due `after` past its request
-  time, and a tier is sent only while the approval is still pending: if it was decided first, the row is
-  cancelled unsent. A config change after a raise does not alter rows already scheduled. Boot logs a
-  warning for a tier whose `after` is at or beyond `WARDYN_APPROVAL_EXPIRY_AFTER`, because the approval
-  expires before that tier can send.
+- A route has 1 to 5 tiers, and `after` (a duration such as `30m`) is zero or more and strictly ascending.
+  - Every tier's rows are written when the approval is raised, due `after` past its request time, and a tier is sent
+    only while the approval is still pending.
+  - If it was decided first, the row is cancelled unsent.
+  - A config change after a raise does not alter rows already scheduled.
+  - Boot logs a warning for a tier whose `after` is at or beyond `WARDYN_APPROVAL_EXPIRY_AFTER`, because the approval
+    expires before that tier can send.
 - `notify` fills `recipients[]` (`{role, email}`) in the body: `run_owner` is the run owner's address,
   `profile_contact` is the leaf profile's contact email after the same re-validation the console applies.
   A target with no address is skipped.
 - A channel with `"redact_requester": true` omits `requester` from its body.
-- Boot refuses a route that names an unknown channel or kind, a profile that is not a uuid, a tier list
-  that is empty, longer than 5 or not strictly ascending, a channel listed twice in one tier, or
-  `notify: run_owner` on a channel with `redact_requester` (the owner is the requester).
+- Boot refuses a route that names an unknown channel or kind,
+  - a profile that is not a uuid,
+  - a tier list that is empty, longer than 5 or not strictly ascending,
+  - a channel listed twice in one tier,
+  - or `notify: run_owner` on a channel with `redact_requester` (the owner is the requester).
 
 **At least once.** A crash between a successful send and recording it resends, so a receiver that cares
 drops duplicates on `delivery_id`. A row that is retried keeps its `delivery_id`.
 
-**Retries and failure.** Network errors, timeouts, HTTP 408, 429 and 5xx retry after 30 s, 1 m, 2 m and
-4 m. A row goes dead on its fifth failure, on any other 4xx or a 3xx (redirects are never followed:
-a redirect would hand the body and signature to a host you did not name), or when still unsent an hour
-after it came due. A dead row writes one `approval.notify.failed` audit row and increments
-`wardyn_approval_notify_failed_total{channel}`; both carry an error class (`http_status:503`, `timeout`,
-`tls_verify`, `dial`, `redirect_refused`, `expired`, and for mail `smtp_reply:<code>`, `starttls_missing`,
-`auth_unsupported`, `no_recipient`), never a URL, a response body or a relay's reply text. Terminal rows older
-than 30 days are deleted, 500 per tick.
+- **Retries and failure.**
+  - Network errors, timeouts, HTTP 408, 429 and 5xx retry after 30 s, 1 m, 2 m and 4 m.
+  - A row goes dead on its fifth failure,
+    - on any other 4xx or a 3xx (redirects are never followed: a redirect would hand the body and signature to a host
+      you did not name),
+    - or when still unsent an hour after it came due.
+  - A dead row writes one `approval.notify.failed` audit row and increments
+    `wardyn_approval_notify_failed_total{channel}`.
+  - Both carry an error class (`http_status:503`, `timeout`, `tls_verify`, `dial`, `redirect_refused`, `expired`, and
+    for mail `smtp_reply:<code>`, `starttls_missing`, `auth_unsupported`, `no_recipient`), never a URL, a response
+    body or a relay's reply text.
+  - Terminal rows older than 30 days are deleted, 500 per tick.
 
 **A per-run budget.** One run may create at most 25 tier-0 outbox rows per hour, so an agent cannot bury
 the one real approval under a flood of chat messages. A raise over the budget still creates its
@@ -1471,24 +1587,27 @@ approval and shows in the console, but enqueues nothing; it increments
 `wardyn_approval_notify_suppressed_total{channel}` and writes one `approval.notify.suppressed` audit row
 per run per hour (per replica).
 
-**In the console.** Every PENDING row on `GET /api/v1/approvals` carries `escalation_tier` and
-`sla_due_at` when its route has tiers: `escalation_tier` is the highest tier whose `after` has passed
-(the first notice is tier 0 and shows nothing), `sla_due_at` is when the next tier is due. Both are read
-from the outbox at response time and never stored, so a decided approval carries neither, and a member
-sees them only on approvals of runs they own. The Approvals cards show them as an "Escalated · level n"
-chip and an "Escalates in" countdown. Settings has a read-only "Approval notifications" card (super
-admins) fed by `GET /api/v1/approval-notify/status` (security tier): per channel its `id`, `type`, the
-destination **host** only (parsed from the URL, never a path, query or userinfo), `last_success_at`, the
-last error class and time, and `failed_last_hour` (rows dead in the last hour). `GET /api/v1/setup/status`
-adds a non-blocking `approval_notify` row, present only when the setting is on: `warn` when any row went
-dead in the last hour, otherwise `ok`.
-
-**Network policy.** On Kubernetes wardynd's NetworkPolicy is default-deny for egress. Add a rule for each
-notification endpoint, and for a corporate proxy if one fronts them, through
-`networkPolicy.egress.extra`, exactly as for SIEM sinks. An `smtp` channel needs a rule for its relay's
-`host` and `port` too; it dials the relay directly, not through a proxy. The delivery client uses the same
-transport as the rest of wardynd, so `WARDYN_TRUSTED_CA_FILE` applies to every channel (and the daemon
-proxy setting to the HTTP ones).
+- **In the console.**
+  - Every PENDING row on `GET /api/v1/approvals` carries `escalation_tier` and `sla_due_at` when its route has tiers:
+    `escalation_tier` is the highest tier whose `after` has passed (the first notice is tier 0 and shows nothing),
+    `sla_due_at` is when the next tier is due.
+  - Both are read from the outbox at response time and never stored, so a decided approval carries neither, and a
+    member sees them only on approvals of runs they own.
+  - The Approvals cards show them as an "Escalated · level n" chip and an "Escalates in" countdown.
+  - Settings has a read-only "Approval notifications" card (super admins) fed by
+    `GET /api/v1/approval-notify/status` (security tier):
+    - per channel its `id`, `type`, the destination **host** only (parsed from the URL, never a path, query or
+      userinfo), `last_success_at`, the last error class and time, and `failed_last_hour` (rows dead in the last hour).
+  - `GET /api/v1/setup/status` adds a non-blocking `approval_notify` row, present only when the setting is on: `warn`
+    when any row went dead in the last hour, otherwise `ok`.
+- **Network policy.**
+  - On Kubernetes wardynd's NetworkPolicy is default-deny for egress.
+  - Add a rule for each notification endpoint, and for a corporate proxy if one fronts them, through
+    `networkPolicy.egress.extra`, exactly as for SIEM sinks.
+  - An `smtp` channel needs a rule for its relay's `host` and `port` too; it dials the relay directly, not through a
+    proxy.
+  - The delivery client uses the same transport as the rest of wardynd, so `WARDYN_TRUSTED_CA_FILE` applies to every
+    channel (and the daemon proxy setting to the HTTP ones).
 
 ## Managed laptops: hybrid enrolment and audit federation
 
