@@ -104,8 +104,7 @@ wardyn run --agent claude-code --task-mode exec \
 - `--image` brings your own base ([docs/ENVBUILD.md](docs/ENVBUILD.md)).
 - To stop everything: `cd ~/.wardyn && docker compose down` (from a clone: `make compose-down`).
 
-- **Want an agent to write the code?**
-- *Then* connect a model — optional, and equally first-class at the CLI or in the UI.
+- **Want an agent to write the code?** Then connect a model — optional, and equally first-class at the CLI or in the UI.
 - An admin adds a model provider under Settings → Model providers; each person then connects their own credential for it (a key, or a Claude or AWS sign-in) from Getting started:
 
 ```sh

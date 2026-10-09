@@ -94,9 +94,9 @@
 ### `auto_stop_after_sec`
 
 - Idle auto-stop.
-- `> 0` = stop after that many seconds of wall-clock idleness plus a fixed 30s activity-debounce slack
-  - (egress-driven clock resets are coalesced to one per 30s, so the slack guarantees an active run is never read as idle;
-  - the `run.autostop` audit event's `threshold_sec` records the effective value, configured + 30);
+- `> 0` = stop after that many seconds of wall-clock idleness plus a fixed 30s activity-debounce slack.
+  - Egress-driven clock resets are coalesced to one per 30s, so the slack guarantees an active run is never read as idle.
+  - The `run.autostop` audit event's `threshold_sec` records the effective value, configured + 30.
 - `0` = never reaped;
 - `< 0` = never reaped, stated explicitly (what an interactive run should set, so the reaper does not stop it the moment it looks idle).
 - Idleness is `updated_at` age — an attach or an egress call resets it.

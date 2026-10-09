@@ -161,7 +161,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the plain download address for the release assets.
 - `README.md` said masked casts flow back into the append-only audit log. Session recordings are
   optional and kept in their own store with their own retention; only decision logs go to the
-  audit log. The README now says so.
+  audit log. The README and the architecture page now say so.
 - Recording-on Kubernetes task output is recovered from the run's available recording into a
   masked tail after the run ends (#1831). A recovered row is always marked `source: "recording"`
   and `incomplete: true`. A missing, invalid or uncovered recording is stated as a `capture_gap`,
