@@ -946,7 +946,7 @@ hiding them would repeat the failure mode we are designed to avoid.
 
 2. **Domain fronting and exfil via dual-use allowlisted domains** are not closed below the optional L2 TLS-intercept+DLP tier: hostname-only filtering (CONNECT/SNI) is domain-frontable.
    - That tier is **shipped**, off by default, opt-in per policy (`intercept_tls`, contract in §5.1a).
-   - But bounded to operator-listed MITM-eligible hosts (`isMITMHost`, [`internal/egress/proxy/mitm.go`](../internal/egress/proxy/mitm.go)).
+   - But it is bounded to operator-listed MITM-eligible hosts (`isMITMHost`, [`internal/egress/proxy/mitm.go`](../internal/egress/proxy/mitm.go)).
    - The full container path is not proven in default CI, with per-workspace ephemeral-CA injection into arbitrary agent images and QUIC/UDP/raw-TCP coverage unconfirmed/unbuilt.
 
 3. **DNS-tunneling through the mandatory permitted resolver** is a residual channel below the TLS-intercept tier.
@@ -1006,7 +1006,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     - **Default posture differs by deployment:** a bare-binary or host-mode `wardynd` defaults `WARDYN_ENVBUILD` off; the compose stack (`make setup`) defaults it ON, so on the flagship install the RECOMMENDED path runs build-time code by default.
     - Wrapping is **not vetting**:
       - **Devcontainer build-time execution is real, and neither tier-confined nor proxied.**
-        - The build container is capped (CapDrop ALL, resource limits) but is neither a Confinement Class nor behind `wardyn-proxy`; on compose it reaches only `WARDYN_ENVBUILD_BUILD_NETWORK` (compose default: the dedicated `${WARDYN_NS:-wardyn}-envbuild` bridge (`WARDYN_ENVBUILD_BUILD_NETWORK` in [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)); bare-binary and host mode default to `none` (`effectiveBuildNetwork`, [`internal/envbuild/builder.go`](../internal/envbuild/builder.go)); never `host` by default — `host` would additionally reach the loopback-published control-plane Postgres and admin API, and stays a warned-against override).
+        - The build container is capped (CapDrop ALL, resource limits) but is neither a Confinement Class nor behind `wardyn-proxy`.
+        - On compose it reaches only `WARDYN_ENVBUILD_BUILD_NETWORK`.
+        - Compose default: the dedicated `${WARDYN_NS:-wardyn}-envbuild` bridge (`WARDYN_ENVBUILD_BUILD_NETWORK` in [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)).
+        - Bare-binary and host mode default to `none` (`effectiveBuildNetwork`, [`internal/envbuild/builder.go`](../internal/envbuild/builder.go)).
+        - Never `host` by default — `host` would additionally reach the loopback-published control-plane Postgres and admin API, and stays a warned-against override.
         - The registry sidecar is multi-homed and unauthenticated (the `registry` service in [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)): a named residual, reachable by the build container on the envbuild bridge.
         - Accepted and structural: the same trust an operator places in any build step run on their behalf.
         - See §1's "Repo-supplied devcontainer/build content", boundary B8, and [`docs/OPERATIONS.md`](../docs/OPERATIONS.md) "A named Anthropic integration bakes the claude-code CLI".
@@ -1044,7 +1048,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - But the run identity's `sub` — the string that selects the SECRET NAMESPACE at broker-mint and proxy-inject time — is taken from the principal wardynd injected, never from the header (`api.runIdentitySubject`).
     - So a local caller cannot mint a named member's stored `git_pat`/`ssh_key` by claiming to be them, which matters on a database that already carries member-owned rows from an SSO-configured era and is later served in local mode.
     - So the §1 insider raises their own ceiling rather than exceeding it.
-    - `PUT` a wide-open policy, or point every run's upstream proxy at a host they control (site-config names a secret ref, and `PUT /secrets/{name}` is in the same group).
+    - They `PUT` a wide-open policy, or point every run's upstream proxy at a host they control (site-config names a secret ref, and `PUT /secrets/{name}` is in the same group).
     - What bounds this is the operator allowlist where it applies, otherwise attribution not prevention.
     - Every such write is audited (`policy.create`/`update`/`delete`, `secret.write`/`secret.delete`, `site_config.write`, `harness.credential.capture`/`disconnected`).
     - Plus optional narrowing to a verified-email domain (`WARDYN_OIDC_EMAIL_DOMAINS`).
@@ -1058,7 +1062,8 @@ hiding them would repeat the failure mode we are designed to avoid.
       - The ceiling was attribution (now including `capability.grant.*` and `capability.enforcement.write`).
     - **v0.7 changes it PARTIALLY, and the partiality is the point.**
       - A second admin tier ships — `security_admin` (§1, boundary B11) — and it is a real separation of duty on one axis: governance authority (approvals of every kind, audit read and chain verify, capability grants and switches, governance profiles, session revocation, workspace egress, stopping any run) is now reachable WITHOUT the super admin's reach into runs, credential material or the host.
-      - A security admin cannot attach to, take over, or mint a ticket for a foreign run; has their SSH keys stamped `member`; cannot sweep sandboxes; cannot update, delete, reassign or bind credential material to a workspace they do not own; and cannot promote anyone — `/access` is `operatorOnly` (asset #8).
+      - A security admin cannot attach to, take over, or mint a ticket for a foreign run; has their SSH keys stamped `member`; cannot sweep sandboxes.
+      - They cannot update, delete, reassign or bind credential material to a workspace they do not own; and cannot promote anyone — `/access` is `operatorOnly` (asset #8).
       - Grant CRUD moved WITH them (`securityOps`), which is safe only because the resolver exempts `isOperator` alone, so no capability kind can widen either admin tier.
     - **What is still NOT separated:** the super admin tier is unbounded and trusted by design — it writes policy, site-config, secrets and the role map, and nothing above it offers more than attribution.
       - There is no per-resource permission model, no custom roles, and no tenant or org column.
@@ -1105,7 +1110,9 @@ hiding them would repeat the failure mode we are designed to avoid.
 - `ownsRunOrAdmin` is `isSecurityOperator`, so a `security_admin` may stop ANY run — deliberately: inspect-or-stop is the whole of that tier's warrant over a foreign run.
 
 15. **SSH gateway's admin override is a bounded-stale stamp, not a live role check.**
-    - Since `0043_ssh_key_role.sql` (v0.6), SSH authorization ([`docs/SSH.md`](../docs/SSH.md)) is `run.created_by == the connecting key's registered principal` OR (since 0.8.5, #1476, only on a run with no personal owner — an operator-owned service or local run) the key's `role` column reads `admin` ([`internal/api/sshgateway.go`](../internal/api/sshgateway.go)'s `sshAuth`; a fresh admin key on a person's run is refused `run_owner_only`) — but `role` is stamped at `POST /me/ssh-keys` time from the registering session's role, and `sshAuth` never consults the CURRENT role live.
+    - Since `0043_ssh_key_role.sql` (v0.6), SSH authorization ([`docs/SSH.md`](../docs/SSH.md)) is `run.created_by == the connecting key's registered principal` OR (since 0.8.5, #1476, only on a run with no personal owner — an operator-owned service or local run) the key's `role` column reads `admin`.
+    - ([`internal/api/sshgateway.go`](../internal/api/sshgateway.go)'s `sshAuth`; a fresh admin key on a person's run is refused `run_owner_only`).
+    - But `role` is stamped at `POST /me/ssh-keys` time from the registering session's role, and `sshAuth` never consults the CURRENT role live.
     - `0046_ssh_key_role_checked_at.sql` narrows the staleness from unbounded to bounded.
     - Every successful OIDC login re-stamps BOTH `role` and `role_checked_at` for that principal's keys (`oidc.Config.OnLogin`, wired in [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go) to `store.RefreshSSHKeyRoles`).
     - And `sshAuth` and `sshCurrentKey` refuse the override once `role_checked_at` exceeds `WARDYN_SSH_ROLE_TTL` (default `24h`) — including when never stamped (`NULL`, infinitely stale, the fail-closed reading for every pre-`0046` row).
@@ -1170,12 +1177,12 @@ hiding them would repeat the failure mode we are designed to avoid.
       - A relayed page's `document.cookie` can set a `Domain=<registrable domain>` cookie, and the browser sends it to the console.
       - The console's cookies (`wardyn_session`, `wardyn_oidc_state`, `wardyn_oidc_nonce`, `wardyn_oidc_pkce`) carry no `__Host-` prefix, so nothing rejects a planted one of the same name.
       - And the console reads it whenever the browser holds no live cookie of that name (signed out, expired, or mid-login).
-      - Login CSRF onto the CONSOLE, reachable from any relayed page — in host mode too, e.g. after an admin opens a user's run.
+      - That is login CSRF onto the CONSOLE, reachable from any relayed page — in host mode too, e.g. after an admin opens a user's run.
       - The candidate fix is the `__Host-` prefix on the console's session and login cookies, which makes the browser refuse any `Domain` attribute; it needs `Secure` and `Path=/`, which collide with plain-http `localhost` and with `WARDYN_BASE_PATH`.
       - Tracked as #1258.
       - Closing the residual itself needs infrastructure Wardyn cannot supply.
       - Set `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` to a per-run host (wildcard DNS + wildcard certificate) and each run gets its own origin, with an enter served on any other host refused outright.
-      - The recommendation for any install with more than one user ([docs/OPERATIONS.md](../docs/OPERATIONS.md#ui-apps-with-more-than-one-user-use-host-mode), "UI apps with more than one user").
+      - That is the recommendation for any install with more than one user ([docs/OPERATIONS.md](../docs/OPERATIONS.md#ui-apps-with-more-than-one-user-use-host-mode), "UI apps with more than one user").
       - Which mode is running is published, not inferred — boot logs the shared-origin mode as a warning and `/healthz` carries `ui_sandbox.host_mode`.
     - **The console's own cookies (#1258).**
       - A relayed page is B1 code, and its `document.cookie` can set `Domain=<registrable domain>` cookies that the browser then sends to the console on any host under that domain.
@@ -1299,7 +1306,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Wardyn's own inspection/masking (the `llm_inspection` guardrail, the per-run MITM CA) sits INSIDE that envelope, not above it.
     - There is no certificate pinning anywhere this trust applies — the bound is scope, not depth.
     - The PEM is operator-set at process boot only (read once, never a `SiteConfig` field an admin API write or a member could reach, never agent-reachable), additive rather than a replacement.
-    - And named in [`docs/OPERATIONS.md`](../docs/OPERATIONS.md) and [`docs/adoption/corp-image-authoring.md`](../docs/adoption/corp-image-authoring.md).
+    - And it is named in [`docs/OPERATIONS.md`](../docs/OPERATIONS.md) and [`docs/adoption/corp-image-authoring.md`](../docs/adoption/corp-image-authoring.md).
     - A BYOI base missing every system CA-bundle path loses public trust for its OpenSSL-shaped clients entirely once this is set (residual #13 sharpened) — a named, accepted ceiling, not a gap.
 
 29. **A person's model credential is disclosed to whatever host an admin nominates as the provider's internal gateway.**
@@ -1307,11 +1314,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The person's own OAuth token is sent to the provider's `base_url` host instead of `api.anthropic.com` (the sink pins the token to that host, and the run's transport MITMs it there).
     - Once configured, the live credential (`buildInjector`'s minted grant) is sent to that host on every model call.
     - Gateway-side retention, logging or forwarding of the plaintext key is outside Wardyn's boundary entirely.
-    - The same trust an operator extends to any corporate proxy they nominate (`upstream_proxy_url`), stated explicitly because a model credential is higher-value than most.
+    - That is the same trust an operator extends to any corporate proxy they nominate (`upstream_proxy_url`), stated explicitly because a model credential is higher-value than most.
     - Bounded on every other axis: validated at provider save (`https://` only, no userinfo, the gateway host must not equal the public provider host, loopback/link-local/metadata/unspecified/multicast/NAT64-embedded literals refused — RFC1918/CGNAT is the expected shape).
     - Only the brokered `/wardyn/llm/*` route (`Proxy.gatewayTarget`) resolves or dials the gateway with the relaxed per-request vet, so there is no rebinding window on THAT path.
     - A sandbox naming the gateway host on an ordinary CONNECT/MITM path is treated like any other.
-    - (`Proxy.egressTarget`/`Proxy.vetHost`: policy plus the unconditional private-IP guard apply unchanged, so a private-address gateway named by HOSTNAME stays unreachable without its own `SiteConfig.InternalHosts` declaration).
+    - `Proxy.egressTarget`/`Proxy.vetHost`: policy plus the unconditional private-IP guard apply unchanged, so a private-address gateway named by HOSTNAME stays unreachable without its own `SiteConfig.InternalHosts` declaration.
     - And `planArtifactRedirect`'s veto keeps an artifact-registry redirect from colliding with the same host.
     - **Literal-IP ceiling:** a gateway configured by IP LITERAL (`https://10.40.1.5/v1`) must be listed by that literal in `allowed_domains`.
     - And an exact literal-IP entry is honoured by `evaluate`'s step 0 (`Policy.AllowsLiteralIP`) BEFORE the private-IP guard.
@@ -1324,7 +1331,8 @@ hiding them would repeat the failure mode we are designed to avoid.
     - And it lets an operator's own monitoring catch an unenforced-but-allowed cluster without an admin token.
 
 31. **Directory autocomplete grants the control plane read of the WHOLE directory, and the daemon dials out to get it.**
-    - `WARDYN_DIRECTORY_PROVIDER=entra` (§I) authenticates `internal/directory`'s connector as an application against Microsoft Graph, which can enumerate every user and group in the tenant — not a scoped slice — and makes wardynd itself reach `login.microsoftonline.com:443` and `graph.microsoft.com:443`, outside the egress sidecar and outside any run policy.
+    - `WARDYN_DIRECTORY_PROVIDER=entra` (§I) authenticates `internal/directory`'s connector as an application against Microsoft Graph, which can enumerate every user and group in the tenant — not a scoped slice.
+    - And it makes wardynd itself reach `login.microsoftonline.com:443` and `graph.microsoft.com:443`, outside the egress sidecar and outside any run policy.
     - Default OFF, consented by a tenant admin in Entra rather than by Wardyn, exposed only on the `securityOps` tier (`handleDirectorySearch`), cached 60s in memory and never persisted, and retracted by unsetting one variable.
     - But while it is on, a compromised control plane reads the org chart.
     - And per-search audit is deliberately ABSENT (one row per keystroke would log every name an admin looked up), so the audit trail records connector failures, not who was searched for.
@@ -1342,12 +1350,15 @@ hiding them would repeat the failure mode we are designed to avoid.
         - `docker compose pull` covers exactly the three DEFAULT-PROFILE services (`wardynd`, `postgres`, `registry`).
         - The proxy sidecar and the three agent images sit behind the `build-only` profile in the compose file and are pulled by wardynd itself at the first run.
         - So four of the seven images this release ships arrive long after the install transcript has scrolled past ([`docs/VERIFY.md`](../docs/VERIFY.md#6-what-the-one-line-installer-checks--and-what-it-leaves-to-you) §6 bullets 2-3).
-      - So on a fresh install the FIRST foreign code to execute on the box is the wardynd image's `-gen-age-key` entrypoint, which `mint_age_key` runs to mint the secret-store key — before `docker compose up -d --no-build`, and before the operator has read the compose file or anything else.
+      - So on a fresh install the FIRST foreign code to execute on the box is the wardynd image's `-gen-age-key` entrypoint, which `mint_age_key` runs to mint the secret-store key.
+      - That is before `docker compose up -d --no-build`, and before the operator has read the compose file or anything else.
       - **From a CLONE the same images also run HOST-NATIVE, outside any container.**
         - [`scripts/up.sh`](../scripts/up.sh)'s pull-first path is the `make setup` equivalent of the above.
         - And its `seed_host_proxy` copies `/host/wardyn` out of the `wardynd` image to `bin/wardyn` and EXECUTES it on the host to detect the operator's proxy settings — a plain host process.
         - So none of §3's confinement applies to it, and the bullet above (a container entrypoint) does not describe it.
-        - Narrowed for 0.7 rather than only documented: that path now runs `cosign verify` + `cosign verify-attestation --type cyclonedx` against the release-workflow identity itself when `cosign` is on PATH, REFUSES an image that fails and falls back to building from source, and names the gap out loud when `cosign` is absent instead of announcing "cosign-signed, SBOM-attested" as it used to.
+        - Narrowed for 0.7 rather than only documented.
+        - That path now runs `cosign verify` + `cosign verify-attestation --type cyclonedx` against the release-workflow identity itself when `cosign` is on PATH, REFUSES an image that fails and falls back to building from source.
+        - And it names the gap out loud when `cosign` is absent instead of announcing "cosign-signed, SBOM-attested" as it used to.
         - `WARDYN_BUILD_LOCAL=1` removes the pull, and with it this residual.
     - Accepted for 0.7 on one honest ground, stated as what it is: `curl … | sh` is a decision to trust this project's release origin for one command, and this installer does not pretend to be more than that.
     - What it fetches stays on disk — `${WARDYN_HOME}/docker-compose.yaml` is short plain YAML, and [`docs/VERIFY.md`](../docs/VERIFY.md#6-what-the-one-line-installer-checks--and-what-it-leaves-to-you) §6 says plainly which checks are the operator's to run against it afterwards.
@@ -1404,7 +1415,9 @@ hiding them would repeat the failure mode we are designed to avoid.
     - It closes nothing beyond that: a drive inherits residual #25's TOCTOU **identically**.
     - The blast radius is bounded two ways.
     - The roots are operator/MDM-set, so the race can only be aimed WITHIN the declared roots.
-    - And containment is **PER DRIVE**, evaluated at CHECK TIME: `runner.UserDriveHomeWithinItsRoot` asserts the symlink-resolved source is a strict subdirectory of THIS drive's own `host_root` — carried onto the mount from the resolved row, and an absent one is a refusal rather than a skip — on top of `UserDriveMountSourceCheck`'s ceiling over the whole root LIST and the base-name rule.
+    - And containment is **PER DRIVE**, evaluated at CHECK TIME.
+    - `runner.UserDriveHomeWithinItsRoot` asserts the symlink-resolved source is a strict subdirectory of THIS drive's own `host_root` — carried onto the mount from the resolved row, and an absent one is a refusal rather than a skip.
+    - That is on top of `UserDriveMountSourceCheck`'s ceiling over the whole root LIST and the base-name rule.
     - So a home in one drive replaced host-side by a link into another drive's root is refused even when both roots are configured.
     - And a deployment may run as many `host_path` drives inside a root as its layout needs.
     - **What is left is the window, not the rule.**
@@ -1510,7 +1523,9 @@ hiding them would repeat the failure mode we are designed to avoid.
       - Closing this needs a signal the IdP does not send; the nearest approximation is warning when a group-subject row stops matching anyone, which is not built.
 
 40. **Workspace-provider admission is URL-PREFIX matching over a clone URL, not a repository ACL.**
-    - 0.7.2's provider policy bounds which repositories a run may clone: every derived clone URL is resolved against the org's `workspace_providers.git` rows (`admitRepoURL`, [`internal/api/workspace_providers.go`](../internal/api/workspace_providers.go)) at **ten doors** — workspace create, update, scan and build; `POST /sources`; run create over the RESOLVED spec; the legacy single `repo` field; `devcontainer_repo`; and the two SERVER-SIDE launchers (record and source-scan) that create runs without passing either request-path gate.
+    - 0.7.2's provider policy bounds which repositories a run may clone.
+    - Every derived clone URL is resolved against the org's `workspace_providers.git` rows (`admitRepoURL`, [`internal/api/workspace_providers.go`](../internal/api/workspace_providers.go)) at **ten doors**.
+    - Workspace create, update, scan and build; `POST /sources`; run create over the RESOLVED spec; the legacy single `repo` field; `devcontainer_repo`; and the two SERVER-SIDE launchers (record and source-scan) that create runs without passing either request-path gate.
     - The census test over `Store.CreateRun`'s callers is what keeps that last pair honest.
     - What the rule actually is: a row's `base_urls` are normalized and matched as PATH PREFIXES on the same host, so `https://github.com/acme` admits every repository under that org and cannot admit a subset of it.
     - Wardyn does not read the forge's own permissions, so admission says "this address is inside an allowed prefix", never "this principal may read this repository".
