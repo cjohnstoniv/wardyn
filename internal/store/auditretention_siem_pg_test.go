@@ -146,3 +146,49 @@ func TestPG_ReauthResolveRowReachesTheSIEM(t *testing.T) {
 		t.Fatalf("a losing resolver sent %+v to the sink", got)
 	}
 }
+
+// An unchanged policy call writes no row, so it must send none, even while other writers append: a row
+// another writer appended between its two reads of the high-water mark is that writer's to send.
+func TestPG_UnchangedPolicyCallsSendNoForeignRowUnderConcurrentAppends(t *testing.T) {
+	c := newRetChain(t)
+	c.window(t, 0)
+	ctx := context.Background()
+	sink := &captureSink{}
+	pg := store.NewPG(c.pool)
+	pg.SIEM = sink
+	if ch, err := pg.SetAuditRetentionPolicy(ctx, 90); err != nil || ch.Outcome != "pending" {
+		t.Fatalf("set 90 = %+v, %v, want pending", ch, err)
+	}
+	sink.take()
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 3 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				ev := types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorSystem, Actor: "appender", Action: "test.race", Outcome: "success"}
+				if err := store.InsertAuditEvent(ctx, c.pool, &ev); err != nil {
+					t.Errorf("append: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	for range 300 {
+		if ch, err := pg.SetAuditRetentionPolicy(ctx, 90); err != nil || ch.Outcome != "unchanged" {
+			t.Fatalf("set 90 again = %+v, %v, want unchanged", ch, err)
+		}
+	}
+	close(stop)
+	wg.Wait()
+	if got := sink.take(); len(got) != 0 {
+		t.Fatalf("unchanged calls sent %d rows to the sink (first %s), want none", len(got), got[0].Action)
+	}
+}

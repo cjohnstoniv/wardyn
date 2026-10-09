@@ -99,6 +99,13 @@ func siemWiringViolations(t *testing.T, src string) []string {
 		return []string{"main.go has no func run()"}
 	}
 	var siemDefined, storeSet, keysArmed, workersGetStore, apiGetsStore, storeDefined bool
+	// store.PG is a value, so every copy of st taken before st.SIEM is set carries a nil sink.
+	var setPos, firstUse token.Pos
+	noteUse := func(p token.Pos) {
+		if firstUse == token.NoPos || p < firstUse {
+			firstUse = p
+		}
+	}
 	ast.Inspect(run, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.AssignStmt:
@@ -117,7 +124,7 @@ func siemWiringViolations(t *testing.T, src string) []string {
 				}
 			case *ast.SelectorExpr:
 				if identName(lhs.X) == "st" && lhs.Sel.Name == "SIEM" && identName(x.Rhs[0]) == "siem" {
-					storeSet = true
+					storeSet, setPos = true, x.Pos()
 				}
 			}
 		case *ast.CallExpr:
@@ -131,14 +138,23 @@ func siemWiringViolations(t *testing.T, src string) []string {
 					}
 				}
 			}
+			for _, a := range x.Args {
+				if identName(a) == "st" {
+					noteUse(a.Pos())
+				}
+			}
 		case *ast.KeyValueExpr:
 			if identName(x.Key) == "Store" && identName(x.Value) == "st" {
 				apiGetsStore = true
+				noteUse(x.Value.Pos())
 			}
 		}
 		return true
 	})
 	var out []string
+	if storeSet && firstUse != token.NoPos && setPos > firstUse {
+		out = append(out, "st.SIEM = siem comes after the first use of st (a copy of st would carry no sink)")
+	}
 	for _, c := range []struct {
 		ok   bool
 		what string
@@ -165,6 +181,23 @@ func TestRunWiresTheSIEMToTheDatabaseWrittenRows(t *testing.T) {
 	if v := siemWiringViolations(t, string(b)); len(v) != 0 {
 		t.Fatalf("SIEM wiring violations:\n%s", strings.Join(v, "\n"))
 	}
+
+	t.Run("st.SIEM set after a copy of st is caught", func(t *testing.T) {
+		const late = `package main
+func run() error {
+	siem := siemSink(fan)
+	st := store.NewPG(pool)
+	_ = api.Config{Store: st}
+	st.SIEM = siem
+	startBackgroundWorkers(a, b, st)
+	armKeyDestroySIEM(secrets, siem)
+	return nil
+}
+`
+		if v := strings.Join(siemWiringViolations(t, late), "\n"); !strings.Contains(v, "after the first use of st") {
+			t.Errorf("violations %q do not name the out-of-order assignment", v)
+		}
+	})
 
 	t.Run("an unwired run() is caught", func(t *testing.T) {
 		const bad = `package main

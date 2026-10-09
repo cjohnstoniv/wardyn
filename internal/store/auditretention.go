@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -94,10 +95,13 @@ func retentionAnnotate(err error, partition string) error {
 
 func (s PG) DropAuditPartition(ctx context.Context, partition, digest, actor string) (AuditRetentionDrop, error) {
 	var d AuditRetentionDrop
-	err := s.withDBAuditRow(ctx, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT dropped_partition, dropped_rows, COALESCE(dropped_seq_lo, 0), COALESCE(dropped_seq_hi, 0), dropped_digest, dropped_event_seq
+	// The drop holds the chain lock only for its last steps (the digest scan is outside it, by design), so
+	// the row to send is the one it names, not whatever the mark reads afterwards.
+	err := s.withDBAuditRow(ctx, func(tx pgx.Tx) (int64, error) {
+		err := tx.QueryRow(ctx, `SELECT dropped_partition, dropped_rows, COALESCE(dropped_seq_lo, 0), COALESCE(dropped_seq_hi, 0), dropped_digest, dropped_event_seq
 			FROM audit_retention_drop($1, $2, $3)`, partition, digest, actor).
 			Scan(&d.Partition, &d.Rows, &d.SeqLo, &d.SeqHi, &d.Digest, &d.EventSeq)
+		return d.EventSeq, err
 	})
 	if err != nil {
 		return AuditRetentionDrop{}, retentionAnnotate(err, partition)
@@ -106,45 +110,57 @@ func (s PG) DropAuditPartition(ctx context.Context, partition, digest, actor str
 }
 
 // withDBAuditRow runs fn, a call to a database function that may write its own audit row through
-// audit_append, in one transaction. When the call advanced the chain's high-water mark, the row it wrote
-// (with its chain hashes) goes to s.SIEM once the transaction commits. The function holds the chain lock
-// until the commit, so the mark it advanced to is its own row. Delivery is best-effort, like every other
-// sink emit: the committed row is the record.
-func (s PG) withDBAuditRow(ctx context.Context, fn func(tx pgx.Tx) error) error {
+// audit_append, in one transaction. fn returns the seq of the row it wrote, 0 for none; once the
+// transaction commits that row (with its chain hashes) goes to s.SIEM. Delivery is best-effort, like every
+// other sink emit: the committed row is the record.
+func (s PG) withDBAuditRow(ctx context.Context, fn func(tx pgx.Tx) (seq int64, err error)) error {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return fmt.Errorf("store: begin audit-writing call: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
-	var before int64
-	if s.SIEM != nil {
-		if before, err = highWaterSeq(ctx, tx); err != nil {
-			return err
-		}
-	}
-	if err := fn(tx); err != nil {
+	seq, err := fn(tx)
+	if err != nil {
 		return err
 	}
 	var ev types.AuditEvent
-	wrote := false
-	if s.SIEM != nil {
-		var after int64
-		if after, err = highWaterSeq(ctx, tx); err != nil {
+	if seq > 0 && s.SIEM != nil {
+		if ev, err = readAuditRowWithHashes(ctx, tx, seq); err != nil {
 			return err
-		}
-		if wrote = after > before; wrote {
-			if ev, err = readAuditRowWithHashes(ctx, tx, after); err != nil {
-				return err
-			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("store: commit audit-writing call: %w", err)
 	}
-	if wrote {
+	if seq > 0 && s.SIEM != nil {
 		_ = s.SIEM.Emit(context.WithoutCancel(ctx), ev)
 	}
 	return nil
+}
+
+// chainAdvancedBy runs call and returns the seq of the row it appended, 0 when the chain did not move.
+// Nothing says up front whether the call writes a row, so it is read off the high-water mark; the chain
+// lock is taken first (the function takes the same one, so this is no longer a hold) so no other writer
+// can move the mark between the two reads and have this call send that writer's row.
+func chainAdvancedBy(ctx context.Context, tx pgx.Tx, call func() error) (int64, error) {
+	if _, err := tx.Exec(ctx, db.AuditChainLockTimeoutSQL()); err != nil {
+		return 0, fmt.Errorf("store: bound audit chain lock wait: %w", err)
+	}
+	if _, err := tx.Exec(ctx, lockAuditChainSQL, db.AuditChainLockKey); err != nil {
+		return 0, fmt.Errorf("store: lock audit chain (waited up to %s): %w", db.AuditChainLockTimeout, err)
+	}
+	before, err := highWaterSeq(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	if err := call(); err != nil {
+		return 0, err
+	}
+	after, err := highWaterSeq(ctx, tx)
+	if err != nil || after <= before {
+		return 0, err
+	}
+	return after, nil
 }
 
 func highWaterSeq(ctx context.Context, tx pgx.Tx) (int64, error) {
@@ -201,10 +217,16 @@ func (s PG) AutodropAuditPartition(ctx context.Context) (AuditRetentionDrop, boo
 
 func (s PG) SetAuditRetentionPolicy(ctx context.Context, days int) (AuditRetentionPolicyChange, error) {
 	var c AuditRetentionPolicyChange
-	err := s.withDBAuditRow(ctx, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT outcome, effective_days, pending_days, pending_effective_at
-			FROM audit_retention_set_policy($1)`, days).
-			Scan(&c.Outcome, &c.EffectiveDays, &c.PendingDays, &c.PendingEffectiveAt)
+	err := s.withDBAuditRow(ctx, func(tx pgx.Tx) (int64, error) {
+		call := func() error {
+			return tx.QueryRow(ctx, `SELECT outcome, effective_days, pending_days, pending_effective_at
+				FROM audit_retention_set_policy($1)`, days).
+				Scan(&c.Outcome, &c.EffectiveDays, &c.PendingDays, &c.PendingEffectiveAt)
+		}
+		if s.SIEM == nil {
+			return 0, call()
+		}
+		return chainAdvancedBy(ctx, tx, call)
 	})
 	if err != nil {
 		return AuditRetentionPolicyChange{}, fmt.Errorf("store: set audit retention policy: %w", err)
