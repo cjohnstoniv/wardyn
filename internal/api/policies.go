@@ -293,7 +293,8 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	// exists depends on whose run selects the policy, so run-create checks it
 	// in that owner's namespace; checking the author's here demanded an
 	// operator row, the fallback a per-person credential must not have (#1123).
-	if _, err := s.secretRefsOf(req.Spec); err != nil {
+	needed, err := s.secretRefsOf(req.Spec)
+	if err != nil {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonPolicySecretRefsInvalid, "secret: "+err.Error())
 		return
 	}
@@ -322,7 +323,7 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		"policy.create", id.String(), "success", mustJSON(map[string]any{
 			"name": created.Name, "min_confinement_class": created.Spec.MinConfinementClass,
 		})))
-	writeJSON(w, http.StatusCreated, created)
+	writeJSON(w, http.StatusCreated, client.PolicySaved{RunPolicy: created, Requirements: s.policyRequirements(r, req.Spec, needed)})
 }
 
 // handleUpdatePolicy validates the spec and replaces an existing policy's name
@@ -341,7 +342,8 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, code, reason, "workspace: "+err.Error())
 		return
 	}
-	if _, err := s.secretRefsOf(req.Spec); err != nil { // shape only, as in create
+	needed, err := s.secretRefsOf(req.Spec) // shape only, as in create
+	if err != nil {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonPolicySecretRefsInvalid, "secret: "+err.Error())
 		return
 	}
@@ -366,7 +368,7 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		"policy.update", id.String(), "success", mustJSON(map[string]any{
 			"name": updated.Name, "min_confinement_class": updated.Spec.MinConfinementClass,
 		})))
-	writeJSON(w, http.StatusOK, updated)
+	writeJSON(w, http.StatusOK, client.PolicySaved{RunPolicy: updated, Requirements: s.policyRequirements(r, req.Spec, needed)})
 }
 
 // handleDeletePolicy removes a policy. Returns 404 when unknown, 204 on success.

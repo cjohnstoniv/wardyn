@@ -163,8 +163,11 @@ func (s *Server) auditComponent(r *http.Request, action string, c types.Componen
 		action, c.ID.String(), "success", mustJSON(componentWriteDatum(c, op))))
 }
 
-func componentSaved(c types.Component) client.ComponentSaved {
-	return client.ComponentSaved{Component: c, Requirements: []client.ComponentRequirement{}}
+// componentSaved is a save door's answer: the stored row and what it still
+// needs (componentSaveRequirements), read after the write so it reports what the
+// saver's namespace holds now.
+func (s *Server) componentSaved(r *http.Request, c types.Component) client.ComponentSaved {
+	return client.ComponentSaved{Component: c, Requirements: s.componentSaveRequirements(r, c)}
 }
 
 // handleSaveMyComponent is POST /me/components: a new component of the caller's
@@ -214,7 +217,7 @@ func (s *Server) handleSaveMyComponent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auditComponent(r, "component.write", created, "create")
-	writeJSON(w, http.StatusCreated, componentSaved(created))
+	writeJSON(w, http.StatusCreated, s.componentSaved(r, created))
 }
 
 // handleUpdateMyComponent is PUT /me/components/{id}: replaces the name and
@@ -277,7 +280,7 @@ func (s *Server) updateComponent(w http.ResponseWriter, r *http.Request, cs stor
 		return
 	}
 	s.auditComponent(r, "component.write", updated, "update")
-	writeJSON(w, http.StatusOK, componentSaved(updated))
+	writeJSON(w, http.StatusOK, s.componentSaved(r, updated))
 }
 
 // handleDeleteMyComponent is DELETE /me/components/{id}. Deleting is never
@@ -400,7 +403,7 @@ func (s *Server) createOrgComponent(w http.ResponseWriter, r *http.Request, cs s
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"capability.availability.write", capComponent, "success", mustJSON(availabilityAuditData(capComponent, created.ID.String(), true))))
 	s.auditComponent(r, "component.write", created, "create")
-	writeJSON(w, http.StatusCreated, componentSaved(created))
+	writeJSON(w, http.StatusCreated, s.componentSaved(r, created))
 }
 
 // handleDeleteComponent is DELETE /components/{id}. The row goes and its id ends
