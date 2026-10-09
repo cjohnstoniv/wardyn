@@ -33,7 +33,7 @@ type runAgentPolicy struct {
 	// hold: the run launches on agent-run's hold lane, which gets a document
 	// whatever its level (agentpolicy.ForAgent, #358).
 	hold bool
-	// locked: the run got the locked L2 document (agentpolicy.LockedL2).
+	// locked: the document ForAgent chose is the locked L2 one (agentpolicy.IsLocked).
 	locked bool
 }
 
@@ -104,7 +104,7 @@ func (s *Server) agentPolicyFor(ctx context.Context, run types.AgentRun, hold, l
 		return runAgentPolicy{}, fmt.Errorf("the runner's capabilities could not be read, so whether it can deliver this run's managed settings (%s) is unknown: %w",
 			agentPolicyBasis(run.AutonomyLevel, hold, locked), err)
 	}
-	p := runAgentPolicy{path: path, bytes: len(content), hold: hold, locked: agentpolicy.LockedL2(run.AutonomyLevel, locked)}
+	p := runAgentPolicy{path: path, bytes: len(content), hold: hold, locked: agentpolicy.IsLocked(content)}
 	var deliverable bool
 	p.withheld, deliverable = managedFilesGap(caps, run.ConfinementClass)
 	if !deliverable {
@@ -199,7 +199,8 @@ func (s *Server) auditAgentPolicy(ctx context.Context, run types.AgentRun, p run
 		"path":  p.path,
 		// The size, not the content: the document is not a secret, but a
 		// governance row that carries a file body invites the next one to.
-		// Enough to tell the three documents apart in a trail.
+		// Enough to tell the documents apart in a trail (L0 and L1 share their
+		// bytes; `level` separates them).
 		"bytes":     p.bytes,
 		"delivered": delivered,
 	}

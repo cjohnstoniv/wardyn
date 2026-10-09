@@ -77,9 +77,10 @@ export interface RunLimits {
 // stay internal; the console renders plain labels (#93), not spelled here yet.
 export type AutonomyLevel = "L0" | "L1" | "L2" | "L3";
 
-// types.AutonomyRubric — nine closed fields, three egress postures, three
-// secret postures, three confinement classes, each absent (caps nothing) or
-// one of the four levels. See internal/types/governance.go for what each
+// types.AutonomyRubric — nine closed level fields (three egress postures, three
+// secret postures, three confinement classes), each absent (caps nothing) or
+// one of the four levels, and one boolean, agent_guardrail_locks, that caps no
+// level. See internal/types/governance.go for what each
 // posture means.
 export interface AutonomyRubric {
   egress_open?: AutonomyLevel;

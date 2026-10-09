@@ -277,3 +277,27 @@ func TestAgentPolicyHoldDoesNotTakeOverLockedL2(t *testing.T) {
 		t.Errorf("hold lane with locked L2 got %q, want the locked document", got)
 	}
 }
+
+// TestIsLockedNamesTheChosenDocument: the audit variant is read off the bytes ForAgent returned, so it
+// cannot disagree with what was delivered.
+func TestIsLockedNamesTheChosenDocument(t *testing.T) {
+	for _, c := range []struct {
+		level        types.AutonomyLevel
+		hold, locked bool
+		want         bool
+	}{
+		{types.AutonomyL2, false, true, true},
+		{types.AutonomyL2, true, true, true},
+		{types.AutonomyL2, false, false, false},
+		{types.AutonomyL2, true, false, false},
+		{types.AutonomyL1, false, true, false},
+		{types.AutonomyL0, true, true, false},
+		{types.AutonomyL3, true, true, false},
+		{"", true, true, false},
+	} {
+		_, content, _ := ForAgent("claude-code", c.level, c.hold, c.locked)
+		if got := IsLocked(content); got != c.want {
+			t.Errorf("IsLocked(ForAgent(%q, hold=%v, locked=%v)) = %v, want %v", c.level, c.hold, c.locked, got, c.want)
+		}
+	}
+}

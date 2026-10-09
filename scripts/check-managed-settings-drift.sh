@@ -20,8 +20,11 @@
 # starts the amd64 CLI in the agent image's base container with each frozen document
 # installed as /etc/claude-code/managed-settings.json, no network and no model, and
 # asserts the permissionMode its init event reports is the document's defaultMode, even
-# under --permission-mode bypassPermissions when the document disables bypass. Neither
-# step needs a credential. Bump the Dockerfile pin and this probe re-runs against the
+# under --permission-mode bypassPermissions when the document disables bypass, and that the
+# hold lane's --permission-mode manual still reports `default` under every document (a launch
+# flag beats a managed defaultMode: acceptEdits, so a hold run is never auto-accepting). A last
+# check proves allowManagedHooksOnly on the bypass-launched document: a repository SessionStart
+# hook fires without the managed file and does not with it. No step needs a credential. Bump the Dockerfile pin and this probe re-runs against the
 # new version.
 #
 # The install runs npm with --ignore-scripts into a temp dir: only the package's files are
@@ -131,6 +134,8 @@ for doc in "$POLICY_DIR"/testdata/*-managed-settings.json; do
     mkdir -p "$dir"; cp "$doc" "$dir/$(basename "$path")"
     got="$(mode_of "$dir")"
     [ "$got" = "$want" ] || die "$(basename "$doc"): Claude Code $pin reports permissionMode '${got:-none}', the managed defaultMode is '$want' — the CLI does not act on the file it reads; stderr: $(head -c 400 "$tmp/stderr")"
+    got="$(mode_of "$dir" --permission-mode manual)"
+    [ "$got" = default ] || die "$(basename "$doc"): --permission-mode manual yields '${got:-none}', not 'default' — the managed defaultMode beats the hold lane's launch flag; stderr: $(head -c 400 "$tmp/stderr")"
     if grep -q '"disableBypassPermissionsMode"' "$doc"; then
         got="$(mode_of "$dir" --permission-mode bypassPermissions)"
         [ "$got" = "$want" ] || die "$(basename "$doc"): --permission-mode bypassPermissions yields '${got:-none}' although the file disables bypass (want '$want') — the bypass lock is not honoured; stderr: $(head -c 400 "$tmp/stderr")"
@@ -138,4 +143,36 @@ for doc in "$POLICY_DIR"/testdata/*-managed-settings.json; do
     behaved=$((behaved + 1))
 done
 [ "$behaved" -gt 0 ] || die "no managed-settings documents under $POLICY_DIR/testdata for the behaviour check"
-echo "ok: Claude Code $pin acts on $behaved managed-settings document(s) (reported mode matches; bypass stays locked where disabled)"
+echo "ok: Claude Code $pin acts on $behaved managed-settings document(s) (reported mode matches; --permission-mode manual stays default; bypass stays locked where disabled)"
+
+# 6. Hooks. A document that carries allowManagedHooksOnly and leaves bypass launchable (the locked L2
+# one) has to keep a repository's own hook from running under --dangerously-skip-permissions. SessionStart
+# fires before any model call, so the check is offline; the run without the managed file must fire the hook
+# or the assertion is vacuous.
+mkdir -p "$tmp/ws/.claude" "$tmp/marker"
+chmod 777 "$tmp/marker"
+cat > "$tmp/ws/.claude/settings.json" <<'JSON'
+{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"touch /marker/fired"}]}]}}
+JSON
+hook_fired() { # [managed settings dir] -> "fired" when the repository hook ran
+    local mount=()
+    [ -z "${1:-}" ] || mount=(-v "$1:/etc/claude-code:ro")
+    rm -f "$tmp/marker/fired"
+    docker run --rm --network none --user node --cap-drop ALL --security-opt no-new-privileges \
+        --read-only --tmpfs /tmp -v "$amd_exe:/usr/local/bin/claude:ro" ${mount[@]+"${mount[@]}"} \
+        -v "$tmp/ws:/ws:ro" -v "$tmp/marker:/marker" -w /ws \
+        -e HOME=/tmp -e CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 "$image" \
+        timeout 60 claude -p hi --dangerously-skip-permissions >/dev/null 2>"$tmp/stderr" || true
+    [ ! -e "$tmp/marker/fired" ] || echo fired
+}
+[ "$(hook_fired)" = fired ] || die "a repository SessionStart hook did not fire without a managed file under --dangerously-skip-permissions — the hook check would pass vacuously; stderr: $(head -c 400 "$tmp/stderr")"
+hooked=0
+for doc in "$POLICY_DIR"/testdata/*-managed-settings.json; do
+    grep -q '"allowManagedHooksOnly": true' "$doc" || continue
+    ! grep -q '"disableBypassPermissionsMode"' "$doc" || continue
+    dir="$tmp/settings-$(basename "$doc" -managed-settings.json)"
+    [ "$(hook_fired "$dir")" != fired ] || die "$(basename "$doc"): a repository hook still fired under --dangerously-skip-permissions although the file sets allowManagedHooksOnly"
+    hooked=$((hooked + 1))
+done
+[ "$hooked" -gt 0 ] || die "no bypass-launchable document under $POLICY_DIR/testdata sets allowManagedHooksOnly — the hook check has nothing to prove"
+echo "ok: Claude Code $pin runs no repository hook under --dangerously-skip-permissions with $hooked managed-settings document(s) that set allowManagedHooksOnly"
