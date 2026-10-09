@@ -2008,7 +2008,9 @@ unprompted would deadlock every single-operator deployment. Both verbs are cover
 — a self-*deny* is refused too. A refusal is a `403` recorded as `authz.denied`
 with `reason: second_human_required`, landing **before** the decision is written,
 so a refused decision leaves the approval `PENDING`. Scoped to `egress_domain`
-only; `credential`/`tool_call` are already admin-only. A run with an empty
+only; `credential` and every other `tool_call` approval are admin-only, and the
+one a run's owner may decide, an Azure DevOps access request, has its own switch,
+`WARDYN_CAPABILITY_SECOND_HUMAN`. A run with an empty
 `created_by` (system-created follow-on runs) has no human creator to be the same
 as, so the rule cannot apply. **Local mode REFUSES the switch** (`503`) rather
 than enforcing it: local mode authenticates nobody, so both the decider and the

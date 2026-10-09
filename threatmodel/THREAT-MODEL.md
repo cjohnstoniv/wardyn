@@ -782,7 +782,8 @@ forms, which no verbatim matcher catches.
   them undecryptable. Every replica masks with that corpus, whichever replica
   served the request and across restarts. The five doors that relay or persist
   sandbox output (the recording upload, live attach, exec relay, SSH shell and live
-  output read) answer `503` `mask_state_unavailable` for a run whose manifest they
+  output read) answer `503` `mask_state_unavailable` (the SSH shell refuses with a
+  channel error and the same `authz.denied` row) for a run whose manifest they
   cannot prove complete, and a consumer that cannot prove its copy current replaces
   a live chunk with the placeholder, answers an upload `503` and refuses an attach.
   A `mask_copies` erase also records a durable owner fence, including when no
