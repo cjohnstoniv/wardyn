@@ -3176,12 +3176,13 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
   - People keyed by object id (`entra:<tenant id>:<object id>`) are unaffected.
   - Adding the person on People by object id does not help: the row stays bound to the old `sub`.
   - Unbind the row so the next sign-in binds it to the new `sub`: `POST /api/v1/admin/identities/{id}/unbind` (admin only; no body).
-  - Find the id with `SELECT id, principal, email_lower FROM principal_identities WHERE issuer = '<issuer>' AND principal NOT LIKE 'entra:%' AND deactivated_at IS NULL;`.
-  - The unbind clears only the row's principal. It keeps `authority_epoch`, `deactivated_at` and the SCIM linkage, and it is refused (`409`, `identity_deactivated`) for a deactivated or purged identity.
-  - It writes an `identity.unbind` audit row naming the principal it released and the admin who did it.
-  - Without the API, `UPDATE principal_identities SET principal = NULL WHERE issuer = '<issuer>' AND principal NOT LIKE 'entra:%'` has the same effect for every such person at once.
-  - **The old `sub`'s runs, tokens, SSH keys, stored credentials and drive stay under the old principal.**
-  - The person signs in as a new principal and does not see them: revoke the old tokens and keys, and expect to re-create stored credentials.
+  - Find the id with `SELECT id, principal, email_lower FROM principal_identities WHERE issuer = '<issuer>' AND object_id <> '' AND principal NOT LIKE 'entra:%' AND deactivated_at IS NULL;`.
+  - Only a row keyed by tenant and object id can be unbound (`409`, `identity_not_rebindable`, otherwise); any other is found by its principal alone and would be orphaned.
+  - A deactivated or purged identity is refused too (`409`, `identity_deactivated`).
+  - The unbind clears only the row's principal. It keeps `authority_epoch`, `deactivated_at` and the SCIM linkage, and it cuts the released `sub`'s sessions.
+  - **The old `sub` must hold nothing first.** After the re-bind a suspension reaches only the new `sub`, so the unbind is refused (`409`, `identity_principal_in_use`, with the counts) while the old `sub` still holds an API token, an SSH key or a run that has not ended. Revoke or end them, then unbind.
+  - Its stored credentials, workspaces and drive stay under the old principal, which the person no longer signs in as: expect to re-create them.
+  - It writes an `identity.unbind` audit row naming the principal it released and the admin who did it. The next sign-in's bind is not audited; it shows as the identity's new principal on People.
 - `POST /people` answers `409` rather than create an ambiguous identity.
   - That happens when the email already names another known subject, when the subject is already known under a different email, when the subject differs from a known one only by case, or when the subject is another person's email.
   - It answers `422` for the reserved subjects `admin-token`, the local-mode operator, `local:…`, `device:…`, `delegate:…` and `subject:…`, in any case — the same set a sign-in is refused for (see "Some subjects never sign in").

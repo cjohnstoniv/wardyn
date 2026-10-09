@@ -365,8 +365,6 @@ func TestDispatch_CredentialHostCollisionCoversEveryAuthor(t *testing.T) {
 		{"a redirect's token on a policy credential's host", []runner.InjectionGrant{componentRule("mirror.corp"), componentRule("mirror.corp")}, nil, true},
 		{"a header on a forge whose API door carries the PAT", []runner.InjectionGrant{componentRule("gitlab.corp")},
 			map[string]proxy.PATGrant{"gitlab.corp": {GrantID: api, API: true}}, true},
-		{"a redirect's token on a forge whose API door carries the PAT (#1823)", []runner.InjectionGrant{componentRule("gitlab.corp")},
-			map[string]proxy.PATGrant{"gitlab.corp": {GrantID: api, API: true}}, true},
 		{"a header on a forge whose PAT stays on the git route", []runner.InjectionGrant{componentRule("gitlab.corp")},
 			map[string]proxy.PATGrant{"gitlab.corp": {GrantID: api}}, false},
 		{"hosts that do not parse are compared as written", []runner.InjectionGrant{componentRule("bad host"), componentRule("BAD HOST")}, nil, true},

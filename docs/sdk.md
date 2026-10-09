@@ -523,6 +523,8 @@ silent gap:
 | `sessions_revoke_param_invalid` | `POST /sessions/revoke`: the body must set exactly one of `sub`/`all`, and `sessions_only` (browser sessions end; API tokens and SSH keys keep working) goes with `sub`, not `all`. |
 | `identity_not_found` | `POST /admin/identities/{id}/unbind` named no identity row. |
 | `identity_not_bound` | `POST /admin/identities/{id}/unbind` found the row with no principal to clear, or bound to another one by the time it was locked. Read it again. |
+| `identity_not_rebindable` | `POST /admin/identities/{id}/unbind` named an identity with no object id (not an Entra person keyed by tenant and object id); unbinding it would orphan it. |
+| `identity_principal_in_use` | `POST /admin/identities/{id}/unbind` found the principal it would release still holding an API token, SSH key or active run. Revoke or end them, then retry. |
 | `identity_deactivated` | A run, API token, SSH key or stored credential was refused because its owner's identity is deactivated, or was suspended after the caller was admitted. Sign in again; if that is refused too, ask the Wardyn admin. |
 | `sso_not_configured` / `access_role_map_value_invalid` / `access_mapping_target_invalid` / `access_email_mapping_disabled` / `access_lockout` / `access_unknown_user_type` / `access_preview_no_session_claims` | `GET/POST /access` (role-mapping admin, operator-only). |
 | `capability_grant_invalid` / `capability_kind_unknown` / `capability_enforcement_stale` / `availability_kind_not_restrictable` / `availability_target_invalid` / `availability_restricted_required` / `availability_only_empty` | `POST /permissions/grants` and the capability-availability routes. |

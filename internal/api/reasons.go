@@ -259,6 +259,8 @@ const (
 	reasonPeopleStoreUnavailable  = "people_store_unavailable"  // pre-created people require the Postgres store backend
 	reasonIdentityNotFound        = "identity_not_found"        // no identity row by that id
 	reasonIdentityNotBound        = "identity_not_bound"        // the identity row has no principal to clear, or another one by the time it was locked
+	reasonIdentityNotRebindable   = "identity_not_rebindable"   // the identity has no object id, so an unbind would orphan it
+	reasonIdentityPrincipalInUse  = "identity_principal_in_use" // the principal an unbind would release still holds an API token, SSH key or active run
 	reasonPersonPrincipalInvalid  = "person_principal_invalid"  // principal is not 1-255 printable characters
 	reasonPersonPrincipalReserved = "person_principal_reserved" // principal is reserved for a non-person identity
 	reasonPersonEmailInvalid      = "person_email_invalid"      // email fails validation

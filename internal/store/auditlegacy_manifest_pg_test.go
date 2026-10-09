@@ -128,6 +128,22 @@ func TestPG_Migration0144_BackfillsAConvertedDatabaseOnce(t *testing.T) {
 	}
 }
 
+// TestPG_Migration0144_ReportsALegacyPartitionRemovedBeforeIt: a database whose legacy partition was removed
+// without an anchor before the upgrade (the AR-02 scenario) is backfilled all the same, so verify reports it
+// missing instead of staying clean for good.
+func TestPG_Migration0144_ReportsALegacyPartitionRemovedBeforeIt(t *testing.T) {
+	pool := hashlessLegacyDatabase(t, false)
+	removeLegacyPartition(t, pool)
+	if st := sweep(t, pool); !st.OK {
+		t.Fatalf("fixture: without the entry the removal verifies clean, got %+v", st)
+	}
+	execMigrationFile(t, pool, legacyManifestMigration)
+	st := sweep(t, pool)
+	if st.OK || !strings.Contains(st.Reason, "audit_events_legacy") {
+		t.Fatalf("verify after the backfill = %+v, want the legacy partition reported missing", st)
+	}
+}
+
 // TestPG_Migration0144_LeavesASplitDatabaseAlone: once the legacy table is gone (split or dropped), a
 // replay of the migration must not resurrect an entry the verifier would then call missing.
 func TestPG_Migration0144_LeavesASplitDatabaseAlone(t *testing.T) {

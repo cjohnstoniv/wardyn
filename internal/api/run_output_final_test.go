@@ -809,8 +809,15 @@ func TestFenceRunOutput_DropsTheQueuedChunks(t *testing.T) {
 	tail.sink.q = q
 	tail.mw.mu.Unlock()
 	q.add([]byte("masked bytes the database has not taken"))
+	q.mu.Lock()
+	held := q.pend
+	q.mu.Unlock()
 
 	f.srv.fenceRunOutput(f.run.ID)
+
+	if strings.Trim(string(held), "\x00") != "" {
+		t.Errorf("the queued bytes were dropped but not zeroed: %q", held)
+	}
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
