@@ -380,6 +380,8 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["internal/api/components_facts.go", "componentSecretFact", "ComponentSecretFact"],
     ["internal/types/site_config.go", "ComponentSettings", "ComponentSettings", "site.ts"],
     ["internal/api/preflight.go", "preflightResponse", "PreflightResult", "runs.ts"],
+    ["internal/api/permissions.go", "meCapabilitiesResponse", "MeCapabilities", "permissions.ts"],
+    ["internal/api/run_revive.go", "adminRestartResult", "AdminRestartResult", "runs.ts"],
   ])("%s %s: full parity with the TS %s mirror", (goFile, goName, tsName, tsFile = "components.ts") => {
     const goTags = goJSONTags(readFileSync(join(root, goFile), "utf8"), goName);
     expect(goTags.length).toBeGreaterThanOrEqual(2); // stale-regex guard

@@ -329,6 +329,8 @@ export interface AdminRestartResult {
   run_id: string;
   ok: boolean;
   error?: string;
+  // The single-run revive's reason for the same refusal.
+  reason?: string;
   lost_again?: boolean;
   denied_added?: string[];
 }

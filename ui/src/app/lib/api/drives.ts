@@ -44,6 +44,9 @@ export interface UserDrive {
   host_root?: string;
   storage_class?: string;
   home_template: HomeTemplate;
+  // types.DriveObjectScheme: which half of a minted object name carries the
+  // drive. Server-owned; on the wire so a GET and a round-tripped PUT agree.
+  object_scheme?: "slug" | "id";
   size_mib?: number;
   writable?: boolean;
   reclaim: DriveReclaim;

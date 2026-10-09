@@ -402,7 +402,7 @@ describe("WorkspaceCard — a selected workspace carries no allow for the caller
     renderCard({
       workspaces: [ws],
       state: { workspaces: [{ workspaceId: ws.id, enabledOptional: [] }] },
-      caps: { grants: [], enforcement: { workspace: true }, session_groups: [], groups_snapshot_stale: false },
+      caps: { grants: [], enforcement: { workspace: true }, session_groups: [], groups_snapshot_stale: false, kinds_version: 1 },
     });
     expect(screen.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeInTheDocument();
   });
@@ -427,6 +427,7 @@ describe("WorkspaceCard — a selected workspace carries no allow for the caller
         enforcement: { workspace: true },
         session_groups: [],
         groups_snapshot_stale: false,
+      kinds_version: 1,
       },
     });
     expect(screen.queryByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeNull();
@@ -563,7 +564,7 @@ describe("WorkspaceCard — reads the server's available_to_you (#1267)", () => 
     renderCard({
       workspaces: [ws],
       state: { workspaces: [{ workspaceId: ws.id, enabledOptional: [] }] },
-      caps: { grants: [], enforcement: { workspace: true }, session_groups: [], groups_snapshot_stale: false },
+      caps: { grants: [], enforcement: { workspace: true }, session_groups: [], groups_snapshot_stale: false, kinds_version: 1 },
     });
     expect(screen.getByText(DENIED.WORKSPACE_NOT_AVAILABLE)).toBeInTheDocument();
   });

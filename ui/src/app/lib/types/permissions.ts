@@ -50,6 +50,8 @@ export interface MeCapabilities {
   enforcement: Record<string, boolean>;
   session_groups: string[];
   groups_snapshot_stale: boolean;
+  // capKindsVersion: bumped when the set of capability kinds changes.
+  kinds_version: number;
 }
 
 // POST /permissions/grants — the natural key plus the effect. Identity
