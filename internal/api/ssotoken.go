@@ -161,6 +161,11 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// would be the only place in the tree that did, which is how a deadlock gets
 	// written. Refuses exactly as the launch's does when the lock cannot be
 	// taken: nothing is stored, and the person signs in again.
+	// The resume of a run a resolved request held takes the run's lock, which must precede the AWS owner
+	// lock taken below (db.LockOrder): it runs after both are released.
+	var resolved []uuid.UUID
+	reqCtx := r.Context()
+	defer func() { s.approvalsClosed(reqCtx, resolved) }()
 	releaseLoginLock, lerr := s.lockLoginSupersede(r.Context(), run.CreatedBy, claims.RunID)
 	if lerr != nil {
 		s.refuseCapture(w, r, claims, http.StatusServiceUnavailable, reasonCaptureSignInBusy, signInBusyRefusal, &scope)
@@ -299,7 +304,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// stored, and an unresolved row is repaired by the idempotent
 	// reconcile-on-read rather than by asking the person to sign in twice.
 	if live, rerr := s.cfg.Store.GetRun(r.Context(), claims.RunID); rerr == nil {
-		s.resolvePendingReauth(r.Context(), scope, claims.Sub, live)
+		resolved = s.resolvePendingReauth(r.Context(), scope, claims.Sub, live)
 	}
 	w.WriteHeader(http.StatusNoContent)
 	s.killSignInRunAfterCapture(r.Context(), claims.RunID, scope.owner)

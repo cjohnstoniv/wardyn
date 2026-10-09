@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -389,7 +390,29 @@ func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver,
 	// A config rendered under 0.8.5 has no brokered_pat_grant_ids, so the set is
 	// recomputed rather than trusted, whatever the stored value says.
 	cfg.BrokeredPATGrantIDs = brokeredPATGrantIDs(grants, !s.cfg.DisableGitPATBroker)
+	// Likewise the narrowing: a run dispatched under 0.8.5 stored its allowlist without repos, access,
+	// forge or api, and its grant row may carry them (0.8.5 ignored them). The revived proxy gets what
+	// dispatch would give it. A grant whose row is gone has no scope to apply and revives as stored.
+	if err := rescopeRevivedPATGrants(cfg.PATGrants, grants); err != nil {
+		return nil, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad,
+			"a git_pat grant's scope could not be read, so what it is narrowed to is unknown: "+err.Error())
+	}
 	return cfg, nil
+}
+
+// rescopeRevivedPATGrants is scopePATGrants over the allowlist entries whose grant row still exists.
+func rescopeRevivedPATGrants(allow map[string]proxy.PATGrant, rows []types.CredentialGrant) error {
+	withRow := map[string]proxy.PATGrant{}
+	for host, g := range allow {
+		if slices.ContainsFunc(rows, func(r types.CredentialGrant) bool { return r.ID == g.GrantID && r.Spec.Kind == types.GrantGitPAT }) {
+			withRow[host] = g
+		}
+	}
+	if err := scopePATGrants(withRow, rows); err != nil {
+		return err
+	}
+	maps.Copy(allow, withRow)
+	return nil
 }
 
 // revivePATNarrowing asks dispatch's narrowing refusals (patNarrowingRefusal)

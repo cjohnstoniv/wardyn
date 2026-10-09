@@ -239,12 +239,14 @@ func (s *legacySplit) verifyBefore() error {
 }
 
 // plan works out every row's new recorded_at in one pass (the running maximum of "time" in seq order,
-// never past the instant before the cutover, so a row stamped in the future is still placeable) and groups
-// the rows into ranges by the UTC month of that value.
+// never past the instant before the cutover or before the high-water mark, so a row stamped in the future
+// is still placeable and the last range's bound is not above the high-water mark, which a log nothing has
+// been appended to since the conversion has still at the cutover's instant) and groups the rows into
+// ranges by the UTC month of that value.
 func (s *legacySplit) plan() error {
 	if err := s.exec("plan the ranges", `CREATE TEMP TABLE audit_split_plan ON COMMIT DROP AS
 		SELECT seq, least(max("time") OVER (ORDER BY seq),
-		                  (SELECT cutover - interval '1 microsecond' FROM `+s.q("audit_partition_meta")+`)) AS rec
+		                  (SELECT least(cutover, hw_recorded_at) - interval '1 microsecond' FROM `+s.q("audit_partition_meta")+`)) AS rec
 		  FROM `+s.q(legacyPartition)); err != nil {
 		return err
 	}
@@ -427,7 +429,8 @@ func (s *legacySplit) proveRange(p *splitPlan) error {
 	return s.one("read the tail of "+p.Name, `SELECT row_hash FROM `+legacy+` WHERE seq = $1`, []any{p.SeqHi}, &p.tail)
 }
 
-// record writes the ranges to the expected partition manifest and a 'split' anchor each.
+// record writes the ranges to the expected partition manifest, in place of the legacy entry 0144 seeded
+// (the legacy table is gone, so a verify that still expected it would alarm), and a 'split' anchor each.
 func (s *legacySplit) record() error {
 	names, los, his := make([]string, len(s.plans)), make([]time.Time, len(s.plans)), make([]time.Time, len(s.plans))
 	for i, p := range s.plans {
@@ -435,13 +438,13 @@ func (s *legacySplit) record() error {
 	}
 	if err := s.exec("update the expected partition manifest", `UPDATE `+s.q("audit_partition_meta")+` SET manifest = (
 			SELECT COALESCE(jsonb_agg(x.e ORDER BY x.e->>'lo'), '[]'::jsonb) FROM (
-				SELECT e FROM jsonb_array_elements(manifest) e
+				SELECT e FROM jsonb_array_elements(manifest) e WHERE e->>'name' <> $4
 				UNION ALL
 				SELECT jsonb_build_object('name', u.n,
 				       'lo', to_char(u.lo AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
 				       'hi', to_char(u.hi AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))
 				  FROM unnest($1::text[], $2::timestamptz[], $3::timestamptz[]) AS u(n, lo, hi)) x(e))`,
-		names, los, his); err != nil {
+		names, los, his, legacyPartition); err != nil {
 		return err
 	}
 	for _, p := range s.plans {

@@ -326,6 +326,15 @@ func (s *Server) stampPresence(ctx context.Context, runID uuid.UUID, actorType t
 		s.pause.thawDone(runID)
 		return false, nil
 	}
+	// The resume holds the run's operation lock like the pause does (pauseRun), so a stale
+	// leader's freeze cannot land between its thaw and its clear. A held lock is a pause, a
+	// resume or a person's thaw in flight: skip, and let the next input retry past its backoff.
+	ctx, unlock, ok := s.tryLockRunOp(ctx, runID)
+	if !ok {
+		s.pause.thawFailed(runID, s.cfg.Now())
+		return false, nil
+	}
+	defer unlock()
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err == nil {
 		err = s.resumeRun(ctx, pauser, run, actorType, principal, reason)
@@ -344,9 +353,9 @@ func (s *Server) stampPresence(ctx context.Context, runID uuid.UUID, actorType t
 //
 // The thaw takes the run's operation lock, as a pause does (pauseRun), so a
 // person's thaw never lands inside a pause's freeze, mark or compensation. Its
-// callers are request doors that hold no other lock; the resolvers that thaw
-// from under a sign-in lock (approvalClosed) cannot take it, since the run lock
-// comes first in db.LockOrder.
+// callers are request doors that hold no other lock. Every other resume takes
+// it too: the sign-in resolvers, which hold a sign-in lock the run lock must
+// precede (db.LockOrder), hand their run ids back and resume after releasing it.
 func (s *Server) thawForExec(ctx context.Context, run types.AgentRun, actorType types.ActorType, principal, reason string) error {
 	ctx, unlock, err := s.lockRunOp(ctx, run.ID)
 	if err != nil {
@@ -417,16 +426,55 @@ func agentActivityDecision(ruleSource string) bool {
 // request closed without one (the expiry sweeper). It resumes an idle pause
 // too: a request raised by traffic in flight when the run froze is still the
 // agent's to answer.
+//
+// It takes the run's operation lock, as every pause and resume does, so it
+// must not be called with a sign-in lock held (db.ErrLockOrder): a resolver
+// under one returns the run id and its caller passes it to approvalsClosed
+// once the lock is released.
 func (s *Server) approvalClosed(ctx context.Context, runID uuid.UUID) {
 	pauser, ok := s.cfg.Store.(store.RunPauser)
 	if !ok {
 		return
 	}
+	// Most runs are not paused: read before taking a lock connection.
+	if run, err := s.cfg.Store.GetRun(ctx, runID); err != nil || run.PausedAt == nil {
+		return
+	}
+	ctx, unlock, err := s.lockRunOp(ctx, runID)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: could not take a run's lock to resume it after its request closed",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
+		return
+	}
+	defer unlock()
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil || run.PausedAt == nil {
 		return
 	}
 	if open, err := pauser.RunHasOpenRequest(ctx, runID); err != nil || open {
+		return
+	}
+	_ = s.resumeRun(ctx, pauser, run, types.ActorSystem, "wardynd", "request_closed")
+}
+
+// approvalsClosed is approvalClosed for the run ids a resolver collected while it held a sign-in lock.
+func (s *Server) approvalsClosed(ctx context.Context, runIDs []uuid.UUID) {
+	for _, id := range runIDs {
+		s.approvalClosed(ctx, id)
+	}
+}
+
+// resumeWaitingRun is the sweep's backstop resume of a waiting pause whose requests have all closed. It
+// takes the run's lock without waiting, as the sweep's pause does, and decides on the row it reads under
+// it: the candidate listing may be older than a pause or resume that has since settled.
+func (s *Server) resumeWaitingRun(ctx context.Context, pauser store.RunPauser, runID uuid.UUID) {
+	ctx, unlock, ok := s.tryLockRunOp(ctx, runID)
+	if !ok {
+		return
+	}
+	defer unlock()
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil || run.PausedAt == nil || run.PausedReason != types.PauseWaiting {
 		return
 	}
 	_ = s.resumeRun(ctx, pauser, run, types.ActorSystem, "wardynd", "request_closed")
@@ -540,7 +588,7 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 			// with no request open, so no open request is the state it paused
 			// in, not a reason to wake.
 			if run.PausedReason == types.PauseWaiting && !c.OpenRequest {
-				_ = s.resumeRun(ctx, pauser, run, types.ActorSystem, "wardynd", "request_closed")
+				s.resumeWaitingRun(ctx, pauser, run.ID)
 			}
 			continue
 		}

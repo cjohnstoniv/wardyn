@@ -81,7 +81,7 @@ func newSplitFixture(t *testing.T) *splitFixture {
 		f.seqs = append(f.seqs, seq)
 	}
 	toggle(`ALTER TABLE audit_events ENABLE TRIGGER audit_events_chain`)
-	for _, name := range []string{"0111_audit_partitioned.sql", "0112_audit_chain_partitioned.sql", "0119_audit_partition_digest.sql", "0123_audit_retention.sql"} {
+	for _, name := range []string{"0111_audit_partitioned.sql", "0112_audit_chain_partitioned.sql", "0119_audit_partition_digest.sql", "0123_audit_retention.sql", "0144_audit_legacy_manifest.sql"} {
 		execMigrationFile(t, pool, name)
 	}
 	for i := 0; i < 3; i++ {

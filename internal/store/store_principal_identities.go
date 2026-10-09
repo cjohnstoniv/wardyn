@@ -165,3 +165,42 @@ func (s PG) IdentitiesByPrincipal(ctx context.Context, principal string) ([]Prin
 	return collect(ctx, s.Pool, "list", "principal identities", `SELECT `+principalIdentityCols+`
 		FROM principal_identities WHERE principal = $1 ORDER BY created_at, id`, []any{principal}, scanPrincipalIdentity)
 }
+
+// IdentityUnbinder is the optional store seam behind POST /admin/identities/{id}/unbind.
+type IdentityUnbinder interface {
+	GetIdentity(ctx context.Context, id uuid.UUID) (PrincipalIdentity, error)
+	// UnbindIdentity clears the principal of identity id, so the next sign-in binds the row afresh.
+	// principal is the one the caller read the row bound to: a row bound to another by the time it
+	// is locked is ErrIdentityRebound. A deactivated or purged row is ErrIdentityDeactivated, a row
+	// with no principal ErrConflict, a missing one ErrNotFound; nothing is written for any of them.
+	// The epoch, the deactivation columns and the SCIM linkage are untouched.
+	UnbindIdentity(ctx context.Context, id uuid.UUID, principal string) error
+}
+
+var _ IdentityUnbinder = PG{}
+
+func (s PG) UnbindIdentity(ctx context.Context, id uuid.UUID, principal string) error {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return fmt.Errorf("store: unbind identity: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	row, err := scanPrincipalIdentity(tx.QueryRow(ctx, `SELECT `+principalIdentityCols+` FROM principal_identities WHERE id = $1 FOR UPDATE`, id))
+	switch {
+	case err != nil:
+		return err
+	case row.DeactivatedAt != nil || row.PurgedAt != nil:
+		return ErrIdentityDeactivated
+	case row.Principal == "":
+		return fmt.Errorf("store: identity is not bound to a principal: %w", ErrConflict)
+	case row.Principal != principal:
+		return ErrIdentityRebound
+	}
+	if _, err = tx.Exec(ctx, `UPDATE principal_identities SET principal = NULL WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("store: unbind identity: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("store: commit identity unbind: %w", err)
+	}
+	return nil
+}

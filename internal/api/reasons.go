@@ -257,6 +257,8 @@ const (
 
 	// /api/v1/people.
 	reasonPeopleStoreUnavailable  = "people_store_unavailable"  // pre-created people require the Postgres store backend
+	reasonIdentityNotFound        = "identity_not_found"        // no identity row by that id
+	reasonIdentityNotBound        = "identity_not_bound"        // the identity row has no principal to clear, or another one by the time it was locked
 	reasonPersonPrincipalInvalid  = "person_principal_invalid"  // principal is not 1-255 printable characters
 	reasonPersonPrincipalReserved = "person_principal_reserved" // principal is reserved for a non-person identity
 	reasonPersonEmailInvalid      = "person_email_invalid"      // email fails validation

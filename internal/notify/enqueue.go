@@ -23,6 +23,13 @@ import (
 // still lists every approval.
 const RunBudget = 25
 
+// BudgetLockSQL takes the run's budget lock, parameter $1 the run id as text, held to the end of the
+// transaction. Both insertion seams run it first, before the approval's INSERT and before any row lock,
+// when notifications are on: under Read Committed two raises that each read RunBudget-1 rows would
+// both enqueue, so the count and the insert are serialised per run. Lock order: this lock, then rows.
+// The broker's mint takes its grant row FOR UPDATE and never this lock, so no cycle can form.
+const BudgetLockSQL = `SELECT pg_advisory_xact_lock(hashtext('approval_notify:' || $1::text))`
+
 // ProfileSQL reads the run's leaf governance profile inside the approval's own transaction, so a
 // concurrent profile change cannot route this approval by stale data.
 const ProfileSQL = `SELECT governance_profile_id FROM agent_runs WHERE id = $1`

@@ -853,6 +853,9 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// listing reads the whole fleet.
 	operatorOnly.Get("/admin/runs/proxy-window", s.handleAdminProxyWindow)
 	operatorOnly.Post("/admin/runs/restart", s.handleAdminRestartRuns)
+	// Entra app re-registration remedy (identity_unbind.go). SUPER: it re-opens a
+	// person's identity row to a different sign-in principal.
+	operatorOnly.Post("/admin/identities/{id}/unbind", s.handleUnbindIdentity)
 }
 
 // mountInternalRoutes is the internal sidecar surface: every route here is
