@@ -42,7 +42,7 @@ type runFold struct {
 	req     *createRunRequest
 	ceiling governanceCeiling
 	reqCC   types.ConfinementClass
-	// baseline is the operator's egress baseline, read ONCE per request before the first step: the
+	// baseline is the operator's egress baseline, read ONCE per request by stepBaseline: the
 	// confinement floor, the autonomy posture and the door's own grading and facts all read this
 	// value, so one request cannot grade on two sets.
 	baseline composer.Baseline
@@ -82,6 +82,8 @@ type runFoldStep struct {
 // entry here plus its name in TestPreflightMirrorsLaunchGates' pinned list.
 //
 // The ORDER is security-relevant and is the contract; do not sort it:
+//   - The egress baseline is read first and once; the floor, the autonomy
+//     posture and the door's grading read that one value.
 //   - Policy first: the member clamp and grant narrowing run before anything
 //     is granted, and every later step reads the clamped spec.
 //   - Workspace seed after policy, the drive after the seed: seeding can set
@@ -98,6 +100,7 @@ type runFoldStep struct {
 //   - Host capacity, the run cap and the quota fit last, so a refusal leaves
 //     no identity and no run row.
 var runFoldSteps = []runFoldStep{
+	{(*Server).stepBaseline, foldAll},
 	{(*Server).stepPolicy, foldAll},
 	{(*Server).stepSeedWorkspace, foldAll},
 	{(*Server).stepDrive, foldAll},
@@ -124,11 +127,7 @@ var runFoldSteps = []runFoldStep{
 func (s *Server) foldRunRequest(w http.ResponseWriter, r *http.Request, mode foldMode,
 	req *createRunRequest, ceiling governanceCeiling, reqCC types.ConfinementClass,
 ) (runFold, bool) {
-	baseline, ok := s.baselineOr500(w, r)
-	if !ok {
-		return runFold{}, false
-	}
-	f := runFold{mode: mode, w: w, r: r, req: req, ceiling: ceiling, reqCC: reqCC, baseline: baseline}
+	f := runFold{mode: mode, w: w, r: r, req: req, ceiling: ceiling, reqCC: reqCC}
 	rec := &foldRecorder{}
 	for _, step := range runFoldSteps {
 		if step.modes&mode != 0 && !step.run(s, &f, rec) {

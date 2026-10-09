@@ -124,6 +124,15 @@ func (s *Server) stepComponents(f *runFold, rec *foldRecorder) bool {
 	return !refusal.write(s, f.w, f.r)
 }
 
+// stepBaseline reads the operator's egress baseline once, for every step and
+// for the door's own grading and facts. A site config nobody could read is a
+// 500, never an empty baseline: a grade on a guess lowers nothing silently.
+func (s *Server) stepBaseline(f *runFold, rec *foldRecorder) bool {
+	var ok bool
+	f.baseline, ok = s.baselineOr500(f.w, f.r)
+	return ok
+}
+
 // stepConfinement resolves the enforced class on the folded spec (invariant 5,
 // fail closed). Create also gates on runner capability membership and the
 // cloud_sts identity provider (resolveEnforcedConfinement); the dry doors run
