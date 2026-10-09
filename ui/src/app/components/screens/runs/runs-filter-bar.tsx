@@ -62,9 +62,9 @@ export function RunsFilterBar({
   const [saving, setSaving] = React.useState(false);
   // The box is typed into a local draft: the URL answers a keystroke a render
   // late, and a value read back from it drops the characters typed meanwhile.
-  // `pending` holds what this box has sent and the URL has not yet echoed; a q
-  // that is none of those came from elsewhere (a saved view, Clear) and wins.
   const [draft, setDraft] = React.useState(filters.q);
+  // What this box has sent and the URL has not echoed; a q that is none of
+  // those came from elsewhere (a saved view, Clear) and wins.
   const pending = React.useRef<string[]>([]);
   React.useEffect(() => {
     const i = pending.current.indexOf(filters.q);
@@ -94,7 +94,11 @@ export function RunsFilterBar({
           placeholder={RUNS_FILTERS.SEARCH_PLACEHOLDER}
           value={draft}
           onChange={(e) => {
-            pending.current.push(e.target.value);
+            // Typing back to the URL's own value is a no-op send: a router
+            // that coalesces it with the keystrokes before it echoes only the
+            // last one, so everything queued behind it can never be matched
+            // and would swallow a later saved view that happens to equal one.
+            pending.current = e.target.value === filters.q ? [] : [...pending.current, e.target.value];
             setDraft(e.target.value);
             onChange({ ...filters, q: e.target.value });
           }}

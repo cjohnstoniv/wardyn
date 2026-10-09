@@ -90,8 +90,13 @@ test.describe("signed out mid-page: sign in again in place (#483)", () => {
       .poll(() =>
         page
           .evaluate(() => (window as unknown as { beforeReauth?: boolean }).beforeReauth ?? false)
-          // The reload destroys the old context mid-evaluate: that is the answer.
-          .catch(() => false),
+          // The reload destroys the old context mid-evaluate: that IS the answer,
+          // and this poll expects false, so a blanket catch would satisfy it with
+          // any error at all. Swallow only that one and let the rest out.
+          .catch((e: unknown) => {
+            if (e instanceof Error && /Execution context was destroyed/.test(e.message)) return false;
+            throw e;
+          }),
       )
       .toBe(false);
     await expect(page).toHaveURL(/\/providers$/);

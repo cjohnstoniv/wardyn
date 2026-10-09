@@ -792,16 +792,19 @@ selftest_check_bins() {
 selftest_report_mitm_ca() {
     echo "--- TLS-MITM CA trust (selftest: report only) ---"
     if [[ -n "${WARDYN_MITM_CA_PEM:-}" ]]; then
-        [[ -f /tmp/wardyn/mitm-ca.pem ]] \
-            && echo "  proxy CA: INSTALLED (/tmp/wardyn/mitm-ca.pem)" \
+        # The same dir install_mitm_ca writes, so the report names where THIS
+        # run's CA really is rather than where the default would put it.
+        local dir="${WARDYN_MITM_CA_DIR:-/tmp/wardyn}"
+        [[ -f "$dir/mitm-ca.pem" ]] \
+            && echo "  proxy CA: INSTALLED ($dir/mitm-ca.pem)" \
             || echo "  proxy CA: DELIVERED but not yet installed (installed at idle/task start)"
-        if [[ -f /tmp/wardyn/ca-bundle.pem ]]; then
+        if [[ -f "$dir/ca-bundle.pem" ]]; then
             local sys_found=0
             for c in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem /etc/pki/tls/certs/ca-bundle.crt; do
                 [[ -f "$c" ]] && sys_found=1 && break
             done
             if [[ $sys_found -eq 1 ]]; then
-                echo "  combined bundle: PRESENT (/tmp/wardyn/ca-bundle.pem = system roots + proxy CA)"
+                echo "  combined bundle: PRESENT ($dir/ca-bundle.pem = system roots + proxy CA)"
             else
                 echo "  combined bundle: PROXY-CA-ONLY (no system CA bundle in image; non-MITM TLS hosts will not verify)"
             fi
