@@ -25,6 +25,4 @@
 # Entries:
 governance.spec.ts | governance — the security admin's authoring walk › a fresh install: no profiles, and the empty state carries the action that fills it | #1928 | @cjohnstoniv | 2026-10-23
 cockpit-terminal-tmux-flow.spec.ts | 50 MB of output keeps the page responsive and ends on the right screen | #1933 | @cjohnstoniv | 2026-10-23
-runs-cockpit.spec.ts | a run refused for a model credential carries the sign-in, not directions to it › the failure block states the server's sentence and opens the AWS sign-in in place | #1874 | @cjohnstoniv | 2026-10-23
 cockpit-terminal-clipboard.spec.ts | the tmux bytes for a dragged selection become an offer; Copy writes the full text | #1712 | @cjohnstoniv | 2026-10-23
-branding.spec.ts | branding removal controls › Remove logo and Remove branding each confirm, act and toast | #1526 | @cjohnstoniv | 2026-10-23
