@@ -171,12 +171,16 @@ if v.State == client.RunPolicyViewRecorded {
 | `source` | `kind` is `stored`, `inline`, `default`, `profile` or `unknown`; a saved policy carries `policy_id` and its `name` at launch, and `deleted` once it is gone; `preset` and `preset_version` when the run came from one |
 | `spec` | the policy the sandbox's proxy enforces, restart denies included; `llm_inspection` secret values are never present |
 | `redacted` | true when the reader is below the security admin tier and mount sources or secret names were hidden (`<redacted>`, or dropped); the spec then strict-decodes as a policy but does not validate |
-| `changes` | never `null`. Each item is a `cause` (`workspace`, `source_control`, `mirror`, `model_access`, `git_broker`, `profile`, `org_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `profile` for `profile`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`. |
-| | Grants read `kind:host` or `kind:repo,repo`, mounts by target, repos `repo@ref`: never a hidden value |
+| `changes` | never `null`; each item says why, where and what changed, and never shows a hidden value; the item fields are listed under the table |
 | `complete` | false for a run from before Wardyn recorded its starting policy: `changes` then lists only what the launch audit rows state |
 | `stored_policy_now` | for a saved-policy source: `same`, `changed`, `updated` (a run from before the record: edited since, possibly a rename only) or `deleted`, with the policy's current `name` |
 
 The CLI is `wardyn run policy <run-id> [--json]`.
+
+#### `changes`
+
+Never `null`. Each item is a `cause` (`workspace`, `source_control`, `mirror`, `model_access`, `git_broker`, `profile`, `org_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `profile` for `profile`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`.
+Grants read `kind:host` or `kind:repo,repo`, mounts by target, repos `repo@ref`: never a hidden value.
 
 ## Following a run's lifecycle
 
@@ -707,7 +711,7 @@ confusing. Upgrade the CLI and any SDK callers before requiring a second approve
 
 ## Renamed in 0.8
 
-Issue #658: the attach route family had three different sub-resource shapes,
+Issue #658: the attach route family had three different sub-resource shapes.
 `POST /runs/{id}/profile` was a noun where every sibling POST is a verb.
 And one concept spelled itself four ways across the wire, Go, audit and the Helm
 chart.
@@ -839,7 +843,7 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
   carries:
   - `escalation_tier` (the highest notification tier already due; absent at tier 0) and
   - `sla_due_at` (RFC 3339, when the next tier is due; absent when none is left),
-  - projected at response
+    projected at response
     time and never stored.
 - `GET /api/v1/approval-notify/status` (security tier) returns
   `{channels: [{id, type, destination_host, last_success_at, last_error, last_error_at,
