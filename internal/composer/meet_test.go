@@ -380,6 +380,18 @@ func TestMeetLimits(t *testing.T) {
 	wantOverlayErr(t, err, ReasonOverlayInvalid, "autonomy_rubric")
 }
 
+func TestMeetGuardrailLocksOnlyTighten(t *testing.T) {
+	locked := Authority{Limits: types.GovernanceLimits{AutonomyRubric: &types.AutonomyRubric{AgentGuardrailLocks: true}}}
+	got := mustApply(t, locked, limitsOverlay(types.LimitsOverlay{AutonomyRubric: &types.AutonomyRubric{EgressOpen: types.AutonomyL1}}))
+	if r := got.Limits.AutonomyRubric; r == nil || !r.AgentGuardrailLocks || r.EgressOpen != types.AutonomyL1 {
+		t.Errorf("rubric = %+v: an overlay that does not mention the lock must keep the base's", r)
+	}
+	got = mustApply(t, Authority{}, limitsOverlay(types.LimitsOverlay{AutonomyRubric: &types.AutonomyRubric{AgentGuardrailLocks: true}}))
+	if r := got.Limits.AutonomyRubric; r == nil || !r.AgentGuardrailLocks {
+		t.Errorf("rubric = %+v: an overlay may turn the lock on", r)
+	}
+}
+
 func TestMeetDefaultsClampWhenTheMaxTightens(t *testing.T) {
 	base := Authority{Limits: types.GovernanceLimits{RunLimits: types.RunLimits{MaxWaitSec: 900, DefaultWaitSec: 900}}}
 	got := mustApply(t, base, limitsOverlay(types.LimitsOverlay{MaxWaitSec: ptr(300)}))

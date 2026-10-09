@@ -35,6 +35,13 @@ func autonomyRubric(level types.AutonomyLevel) *types.AutonomyRubric {
 	}
 }
 
+// lockedL2Rubric is autonomyRubric(L2) with the guardrail-locks term set as given.
+func lockedL2Rubric(locks bool) *types.AutonomyRubric {
+	r := autonomyRubric(types.AutonomyL2)
+	r.AgentGuardrailLocks = locks
+	return r
+}
+
 // autonomyProfile is the assigned profile the table runs under: govProfileSpec's
 // ceiling, and a rubric as the ONLY limit.
 //
@@ -847,6 +854,24 @@ func TestAutonomyWarningsOnTheCreatedRun(t *testing.T) {
 			// the sentence names the hold rather than a level with no file.
 			name:           "a hold run at L3 is told its hold-lane settings are undelivered",
 			level:          types.AutonomyL3,
+			body:           `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"hold"}`,
+			noManagedFiles: true,
+			want:           []string{holdUndelivered},
+			absent:         []string{undelivered, derived, noLane},
+		},
+		{
+			// The locked L2 document already protects the hold lane's gate, so the hold
+			// does not choose it: the sentence names the level, as the dispatch hint does.
+			name:           "a hold run at a locked L2 is told the level's settings are undelivered",
+			rubric:         lockedL2Rubric(true),
+			body:           `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"hold"}`,
+			noManagedFiles: true,
+			want:           []string{"claude-code's " + undelivered + " L2 are not delivered"},
+			absent:         []string{holdUndelivered, derived, noLane},
+		},
+		{
+			name:           "a hold run at an unlocked L2 is told its hold-lane settings are undelivered",
+			rubric:         lockedL2Rubric(false),
 			body:           `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"hold"}`,
 			noManagedFiles: true,
 			want:           []string{holdUndelivered},

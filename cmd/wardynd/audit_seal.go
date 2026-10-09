@@ -130,6 +130,9 @@ type sealingRecorder struct {
 	src    *auditSealSource
 	spool  *api.AuditSpool // where a pending row waits; live mode only
 	replay bool
+	// resealed takes a pending row once it is re-sealed, replay mode only: the row skipped the sinks
+	// while it waited, so this is where they get it. Nil sends it to inner.
+	resealed audit.Recorder
 }
 
 var _ audit.Recorder = sealingRecorder{}
@@ -177,6 +180,9 @@ func (r sealingRecorder) record(ctx context.Context, ev types.AuditEvent) error 
 				return err
 			}
 			return fmt.Errorf("%w: %w", audit.ErrReplayDeferred, err)
+		}
+		if r.resealed != nil {
+			return r.resealed.Record(ctx, ev)
 		}
 	}
 	return r.inner.Record(ctx, ev)

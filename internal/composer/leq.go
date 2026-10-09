@@ -281,7 +281,7 @@ func leqLimits(a, b types.GovernanceLimits) bool {
 	return leqRubric(a.AutonomyRubric, b.AutonomyRubric)
 }
 
-// leqRubric holds when a caps every posture b caps, at the same level or lower.
+// leqRubric holds when a caps every posture b caps, at the same level or lower, and keeps b's guardrail lock.
 func leqRubric(a, b *types.AutonomyRubric) bool {
 	levels := func(r *types.AutonomyRubric) []types.AutonomyLevel {
 		if r == nil {
@@ -292,6 +292,9 @@ func leqRubric(a, b *types.AutonomyRubric) bool {
 			r.SecretsPowerful, r.SecretsBaseline, r.SecretsNone,
 			r.ConfinementCC1, r.ConfinementCC2, r.ConfinementCC3,
 		}
+	}
+	if b != nil && b.AgentGuardrailLocks && (a == nil || !a.AgentGuardrailLocks) {
+		return false
 	}
 	la, lb := levels(a), levels(b)
 	for i := range la {

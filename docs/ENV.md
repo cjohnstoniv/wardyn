@@ -263,6 +263,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SSH_LISTEN` | string | daemon: (unset); **one-line install and desktop envelope: `:2222`** | SSH gateway listen address, e.g. `:2222` (flag `-ssh-listen`). **Empty = off = no listener, no new surface** — the host key is not even generated/persisted unless this is set (`buildOptionalFeatures`, [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)). [Details](#wardyn_ssh_listen) |
 | `WARDYN_SSH_ADVERTISE` | string | (unset) | externally-reachable `host[:port]` for the SSH gateway (flag `-ssh-advertise`); purely advisory copy, the gateway itself binds `WARDYN_SSH_LISTEN`. [Details](#wardyn_ssh_advertise) |
 | `WARDYN_SSH_PROXY_COMMAND` | string | (unset) | an ssh `ProxyCommand` published on `/healthz` as `ssh.proxy_command` (flag `-ssh-proxy-command`), for an estate whose only way in is a TLS-terminating listener on 443. [Details](#wardyn_ssh_proxy_command) |
+| `WARDYN_SSH_MAX_SESSIONS_PER_RUN` | int | `4` | most concurrent SSH channels one run may hold, 1 to 64 (flag `-ssh-max-sessions-per-run`); boot refuses others. [Details](#wardyn_ssh_max_sessions_per_run) |
+| `WARDYN_SYNC_DIR` | path | `/home/agent/work` | not daemon env: an SSH `env` request read only by the `wardyn-sync` subsystem; see [SSH.md](SSH.md) |
+| `WARDYN_SYNC_DIRECTION` | enum | `unknown` | not daemon env: as `WARDYN_SYNC_DIR`; client-declared `push` or `pull`; see [SSH.md](SSH.md) |
 | `WARDYN_SSH_ROLE_TTL` | duration | `24h` | how stale a registered SSH key's admin-override stamp may be before `sshAuth` refuses the override (flag `-ssh-role-ttl`); since 0.8.5 it bounds only runs with no personal owner. [Details](#wardyn_ssh_role_ttl) |
 | `WARDYN_API_TOKEN_MAX_TTL` | duration | (unset: no cap) | longest lifetime a newly minted per-user API token may have (flag `-api-token-max-ttl`); with no cap set, an omitted TTL means the token never expires. [Details](#wardyn_api_token_max_ttl) |
 | `WARDYN_ROLE_STAMP_TTL` | duration | (unset = off) | the oldest an API token's or console session's role stamp may be (flag `-role-stamp-ttl`); an older stamp sends the owner through sign-in again. Unset or `0` changes nothing. [Details](#wardyn_role_stamp_ttl) |
@@ -1454,6 +1457,11 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Boot refuses a value with a control character, a newline or a single quote, or over 512 bytes.
 - Unset, `/healthz` is unchanged.
 - See [SSH.md](SSH.md), "SSH on a 443-only estate".
+
+### `WARDYN_SSH_MAX_SESSIONS_PER_RUN`
+
+- The per-run cap on `session` and `direct-tcpip` channels together (flag `-ssh-max-sessions-per-run`).
+- The ceiling of 64 is the gateway's connection cap. `wardyn-sync` has its own fixed cap of `2` ([SSH.md](SSH.md)).
 
 ### `WARDYN_SSH_ROLE_TTL`
 

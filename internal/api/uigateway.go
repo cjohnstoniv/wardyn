@@ -89,7 +89,7 @@ const (
 	// concurrent socat execs — per run. Browsers open ~6 connections per
 	// origin, so this is that plus headroom; it is a resource-exhaustion bound
 	// (each connection is a live exec in the sandbox), the sibling of
-	// maxSSHSessionsPerRun.
+	// the SSH per-run channel cap.
 	maxUIConnsPerRun = 8
 	// uiIdleConnTimeout closes a pooled relay connection after this long idle,
 	// so a closed browser tab stops holding relay capacity. It closes the exec's

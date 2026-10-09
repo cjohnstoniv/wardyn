@@ -136,7 +136,7 @@ func resolveTLSPosture(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allow
 //     non-terminal by a previous process (crash/restart) so it is not stranded
 //     RUNNING forever with a live sandbox and un-revoked credentials.
 //     Best-effort; a reconciliation error never blocks startup.
-func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, idp identity.Provider, brk *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker) {
+func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, st store.PG, idp identity.Provider, brk *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker) {
 	if leader != nil {
 		go goSafe("sweeper.leader", func() { leader.Run(rootCtx) })
 	}
@@ -151,7 +151,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	})
 	// The audit retention policy and the daily partition sweep (a nil pool is a unit test).
 	if pool != nil {
-		startAuditRetention(rootCtx, f, pool, leader)
+		startAuditRetention(rootCtx, f, st, leader)
 		warnSmallPool(pool.Config().MaxConns)
 	}
 

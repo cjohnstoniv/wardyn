@@ -16,9 +16,9 @@ import (
 )
 
 // resolveRunAutonomy is THE autonomy gate (0.8 #97): one function, called from
-// both doors — handleCreateRun right after resolveEnforcedConfinement, and
-// handlePreflightRun right after enforcedConfinement — so the level Review
-// shows is the level launch enforces, by construction.
+// both doors — stepAutonomy, right after stepConfinement, for create and
+// preflight alike — so the level Review shows is the level launch enforces,
+// by construction.
 //
 // ONE gate rather than two, because the alternative has a name: if Review can
 // say a run is permitted and launch then refuses it, the rubric is decoration.
@@ -82,7 +82,7 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	if !rubric && capLevel == "" {
 		// adoEntraUngraded: nothing capped this run, so dispatch has no grade to
 		// be held to and resolves the lane exactly as it always did.
-		return types.AutonomyResolution{}, s.managedSettingsUndeliveredWarning(r.Context(), req, "", enforced),
+		return types.AutonomyResolution{}, s.managedSettingsUndeliveredWarning(r.Context(), req, "", false, enforced),
 			scmSite, adoEntraUngraded(), bedrockCredUngraded(), true
 	}
 	// THE PER-PERSON AZURE DEVOPS LANE, resolved ONCE here and used twice: the
@@ -120,14 +120,14 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	// doc). The posture still travels, so the audit row and Review record what
 	// was graded even when nothing bound it.
 	if level == "" {
-		return res, s.managedSettingsUndeliveredWarning(r.Context(), req, "", enforced), scmSite, grade, bedrock, true
+		return res, s.managedSettingsUndeliveredWarning(r.Context(), req, "", false, enforced), scmSite, grade, bedrock, true
 	}
 	warnings, ok := s.autonomyLadder(w, r, req, level, autonomyBoundList(boundBy, grade, bedrock), src)
 	// Here rather than in the ladder: whether the managed settings land depends
 	// on the ENFORCED class's substrate, which only this function holds. After
 	// it, because the ladder may derive the hold that brings the file.
 	if ok {
-		warnings = append(warnings, s.managedSettingsUndeliveredWarning(r.Context(), req, level, enforced)...)
+		warnings = append(warnings, s.managedSettingsUndeliveredWarning(r.Context(), req, level, rubric && ceiling.Limits.AutonomyRubric.AgentGuardrailLocks, enforced)...)
 	}
 	return res, warnings, scmSite, grade, bedrock, ok
 }

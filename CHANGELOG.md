@@ -10,6 +10,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- Migration `0138_audit_ensure_partitions_high_water` drops and recreates `audit_ensure_partitions`
+  (the migrator's role must own the schema, as for 0111/0123); forward-only, rollback is the
+  pre-upgrade `pg_dump`. Its EXECUTE grant is re-derived from `audit_append`'s: every role that can
+  execute `audit_append` can execute it and PUBLIC cannot. A role granted only `audit_ensure_partitions`
+  by hand loses it, and a role holding only `audit_append` gains it; repeat any hand grant after upgrading.
 - Run `wardyn setup status --pre-upgrade` with your role settings in the environment (or
   `--role-map` / `--default-role`) and fix everything it lists. It reads only this shell's
   environment: for a chart or Compose deployment, load the env file first (`set -a; . FILE; set +a`)
@@ -25,6 +30,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Sync over SSH.** A new `wardyn-sync` SSH subsystem runs the sandbox's own `sftp-server` in a validated
+  start directory (`WARDYN_SYNC_DIR`, under `/home/agent/`), with its own cap of 2 channels per run, and is
+  audited as `ssh.sync.transfer`. The start directory is a start point, not a boundary (#1952).
+- `WARDYN_SSH_MAX_SESSIONS_PER_RUN` sets the per-run SSH channel cap (default 4, unchanged), and
+  `ssh.sftp.transfer` gains `bytes_in`/`bytes_out`; `bytes` keeps its meaning (#1952).
+- **Locked L2.** A governance profile's autonomy rubric accepts `agent_guardrail_locks`. A Claude Code run at
+  L2 then launches under managed settings that add `allowManagedHooksOnly` and
+  `allowManagedPermissionRulesOnly`, so a repository's own hooks and permission rules cannot answer a tool
+  call, and `run.agent_policy.write` records `variant: l2_locked`. The managed-settings drift probe pins it on
+  the pinned CLI.
 - `wardyn setup status --pre-upgrade [--role-map CSV] [--default-role ROLE]` lists leftover
   `member` entries and removed `WARDYN_MEMBER_*` variables before the upgrade (#623).
 
@@ -46,6 +61,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- Audit rows that waited under a pending subject key reach the SIEM sinks once the spool drain re-seals
+  and stores them, so the sink chain has no gap (#1821).
+- `audit.retention.set`, `audit.retention.partition_dropped`, `principal_key.destroyed` and
+  `credential.reauth.resolve`, which the database writes itself, are sent to the SIEM sinks after they
+  commit (#1822).
+- The audit log no longer stops accepting writes, and boot no longer refuses, after the database clock
+  steps forward: `audit_ensure_partitions` creates partitions up to the chain's high-water mark, so the next
+  boot or daily sweep repairs it without hand-run DDL (#1826).
 - The People list shows a person suspended over SCIM before their first sign-in as deactivated, and
   `?state=deactivated` finds them (#1824).
 - A person's drawer says when their token list could not be read, with Retry, instead of showing
