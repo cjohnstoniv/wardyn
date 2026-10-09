@@ -665,8 +665,11 @@ test.describe("New run — workspace-card 'not an enabled provider' state", () =
 // Launch reachable here; #125 dropped the post-launch "Open run" hold this
 // used to also pin — a launch now navigates away in the same tick.
 test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F2-F7/F3-F1)", () => {
-  test("Launch stays reachable with every rail section showing at once, and navigates straight to the run with its warnings", async ({ page }) => {
+  test("Launch stays reachable with every rail section showing at once, and navigates straight to the run with its warnings", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1280, height: 650 });
+    // One name per attempt: a retry runs against the backend the failed
+    // attempt already saved this policy to, and the name is unique there.
+    const policyName = `e2e rail-height policy ${testInfo.retry + 1}`;
 
     const baseSpec = {
       allowed_domains: ["api.anthropic.com"],
@@ -684,7 +687,7 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
     const created = await page.request.post("/api/v1/policies", {
       headers: auth,
       data: {
-        name: "e2e rail-height policy",
+        name: policyName,
         spec: {
           ...baseSpec,
           tool_rules: [
@@ -725,10 +728,27 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
     // `calc(100vh-5rem)` budget for a reason this test isn't about. Spliced
     // to a real barrier so that banner stays off, same as every other
     // pre-#214 assumption here.
+    // That runner offers Wall (CC2) too: the saved policy below floors the run
+    // at CC2, and a runner without it cannot build the run, so Launch is
+    // rightly held by the automatic preflight's "missing" backend row. The
+    // real backend's runner is none, so its preflight reports that row
+    // missing whatever the policy asks; the row is spliced to what this
+    // runner answers (setupBackendItem, compose_setup.go).
     await page.route("**/api/v1/setup/status*", async (route) => {
       const response = await route.fetch();
       const json = await response.json();
-      json.runner = { ...json.runner, driver: "docker", confinement_classes: ["CC1"] };
+      json.runner = { ...json.runner, driver: "docker", confinement_classes: ["CC1", "CC2"] };
+      await route.fulfill({ response, json });
+    });
+    await page.route("**/api/v1/runs/preflight", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      for (const item of json.setup_items ?? []) {
+        if (item.kind !== "backend") continue;
+        item.status = "satisfied";
+        delete item.detail;
+        delete item.fix;
+      }
       await route.fulfill({ response, json });
     });
 
@@ -744,11 +764,15 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
     await goToNewRunPanel(page, "policy");
     await page.getByRole("button", { name: /^Reuse a saved policy/ }).click();
     await page.getByRole("combobox", { name: "Saved policy" }).click();
-    await page.getByRole("option", { name: "e2e rail-height policy" }).click();
+    await page.getByRole("option", { name: policyName, exact: true }).click();
     // The rail's own section: the policy document names tool rules too.
     await expect(page.getByRole("complementary").getByText("Tool rules", { exact: true })).toBeVisible();
     await goToNewRunPanel(page, "run");
     await page.getByLabel("Title").fill("e2e rail-height");
+    // The automatic preflight's verdict is the rail's last section; measure
+    // with it showing, and with Launch released by it.
+    await expect(rail(page).getByTestId("preflight-result")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Launch run" })).toBeEnabled();
     // Re-derived for the four-panel layout (#1922): Launch is reachable from
     // every panel, with the whole rail showing.
     await expectLaunchReachable(page, 650);

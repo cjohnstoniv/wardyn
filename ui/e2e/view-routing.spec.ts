@@ -48,6 +48,13 @@ function auditRequests(page: Page): string[] {
 }
 
 test.describe("view routing", () => {
+  test.afterEach(async ({ page }) => {
+    // patchJSON's route.fetch() round trip can still be in flight when a test
+    // ends (the switch reloads the console, which reads /me again); without
+    // this it fails as "apiResponse.json: Response has been disposed".
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+
   test("a user who opens an Admin-view page is refused, and nothing behind it is fetched", async ({ page }) => {
     await mockMemberRole(page);
     const audit = auditRequests(page);

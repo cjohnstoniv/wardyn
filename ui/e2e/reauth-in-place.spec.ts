@@ -47,6 +47,13 @@ async function signInInDialog(page: Page): Promise<void> {
   await dialog.getByRole("button", { name: REAUTH_BAR.CTA, exact: true }).click();
 }
 
+// The /me splices below make a real round trip per request, and the layer keeps
+// reading /me while it waits, so a read can still be in flight when a test
+// ends; without this it fails as "apiResponse.json: Response has been disposed".
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
 test.describe("signed out mid-page: sign in again in place (#483)", () => {
   test("the dialog opens over the page, and after signing in the typed draft is still there", async ({ page }) => {
     const { puts } = await saveIntoAnExpiredSession(page);
@@ -215,6 +222,11 @@ test.describe("the renewal strip over New run", () => {
     await gotoConsole(page);
     await page.getByRole("button", { name: "New run" }).click();
     await expect(page).toHaveURL(/\/runs\/new$/);
+    // New Run is its own lazy chunk and focuses Title when it mounts. Wait for
+    // that: mounting after the strip took focus moves focus off Cancel, and
+    // New Run's own Escape handler must already be there for staying put to
+    // prove the strip consumed the key.
+    await expect(page.getByLabel("Title")).toBeFocused();
     await expect(page.getByText(EXPIRING_SOON)).toBeVisible();
 
     await page.getByRole("button", { name: REAUTH_RENEW.CTA }).click();
