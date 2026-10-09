@@ -4,7 +4,7 @@
  */
 
 // Run policies (admin-gated config): list/create/update/delete.
-import type { RunPolicy, RunPolicySpec } from "../types";
+import type { ComponentRequirement, RunPolicy, RunPolicySpec } from "../types";
 import { asJson, errText, HttpError, unwrapList, wfetch, withLimit } from "./core";
 
 // GET /policies/default's body (internal/api/policies.go's
@@ -18,16 +18,11 @@ import { asJson, errText, HttpError, unwrapList, wfetch, withLimit } from "./cor
 // today's screens byte for byte.
 export type DefaultPolicy = RunPolicySpec & { governance_profile_name?: string };
 
-// One thing a saved policy needs before a run can use it (pkg/client's
-// ComponentRequirement): a stored secret its grants name, present or missing in
-// the saver's namespace. "missing" carries fix "add_secret". Advisory — a
-// missing secret never refuses the save.
-export type SaveRequirement = {
-  kind: "secret" | "connection";
-  name?: string;
-  status: "present" | "missing";
-  fix?: "add_secret";
-};
+// One thing a saved policy needs before a run can use it: the same row a
+// component save answers (pkg/client's ComponentRequirement), a stored secret its
+// grants name, present or missing in the saver's namespace. "missing" carries fix
+// "add_secret". Advisory — a missing secret never refuses the save.
+export type SaveRequirement = ComponentRequirement;
 
 // POST /policies and PUT /policies/{id} answer the stored policy plus the list
 // (pkg/client's PolicySaved). A RunPolicy for every existing caller.

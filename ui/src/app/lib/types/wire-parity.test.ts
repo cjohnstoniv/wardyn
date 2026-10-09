@@ -395,6 +395,14 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsInterfaceTopKeys(ts, "ComponentSaved"))).toEqual(new Set(goJSONTags(go, "ComponentSaved")));
   });
 
+  it("PolicySaved (POST /policies, PUT /policies/{id}): RunPolicy plus the component requirement rows", () => {
+    const go = readFileSync(join(root, "pkg/client/policies.go"), "utf8");
+    expect(go).toMatch(/type PolicySaved struct \{\n\ttypes\.RunPolicy\n\tRequirements \[\]ComponentRequirement `json:"requirements"`\n\}/);
+    const ts = readFileSync(join(root, "ui/src/app/lib/api/policies.ts"), "utf8");
+    expect(ts).toMatch(/export type SaveRequirement = ComponentRequirement;/);
+    expect(ts).toMatch(/export type PolicySaved = RunPolicy & \{ requirements: SaveRequirement\[\] \};/);
+  });
+
   it("component closed value sets (delivery modes, fact status, reason, lane, kind) match Go", () => {
     const ts = readFileSync(join(root, "ui/src/app/lib/types/components.ts"), "utf8");
     const typeGo = readFileSync(join(root, "internal/types/component.go"), "utf8");
