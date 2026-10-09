@@ -840,11 +840,9 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
   known end, `held_until` (RFC 3339) — the server-side port of the console's
   former client-side hold rule.
 - With `WARDYN_APPROVAL_NOTIFY` routes set, a PENDING row also
-  carries:
-  - `escalation_tier` (the highest notification tier already due; absent at tier 0) and
-  - `sla_due_at` (RFC 3339, when the next tier is due; absent when none is left),
-    projected at response
-    time and never stored.
+  carries `escalation_tier` (the highest notification tier already due; absent at tier 0) and
+  `sla_due_at` (RFC 3339, when the next tier is due; absent when none is left), projected at response
+  time and never stored.
 - `GET /api/v1/approval-notify/status` (security tier) returns
   `{channels: [{id, type, destination_host, last_success_at, last_error, last_error_at,
   failed_last_hour}]}`, the host only and never a URL.

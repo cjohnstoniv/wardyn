@@ -108,7 +108,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The operations manual's API-token, portal-delegation, roles and governance-profile, denial-reason,
   run-policy, second-user and workspace-tier sections are now bullets, nested lists and alerts, with
   every repository file they cite linked. No rule, default or limit changed.
-- The Go SDK page (`docs/sdk.md`) is restructured into bullets and alerts with every repository file it cites linked, and gains two section headings, "Before you start" and "Quickstart". The text of the `Reason` tables and the code fences is unchanged, and no reason, status code, default, limit or refusal changed.
+- The Go SDK page (`docs/sdk.md`) is restructured into bullets and alerts with every repository file it cites linked, and gains two section headings, "Before you start" and "Quickstart". The `Reason` tables' text and the code fences are unchanged, and no reason, status code, default, limit or refusal changed.
 - The policy reference and the example-policy notes read as bullets, alerts and tables with every file reference a link; no field, default or limit changed.
 - **Threat model: sections 0 to 3, 4 (except 4.1) and 6 to 8 are bullets and split table rows.** Every
   sentence is kept; the longest table cells move into subsections under their table, and file references
