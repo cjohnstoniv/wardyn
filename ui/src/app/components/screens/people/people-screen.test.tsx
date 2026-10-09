@@ -215,6 +215,20 @@ describe("the person drawer", () => {
     expect(within(drawer).queryByText("already-revoked")).toBeNull();
   });
 
+  // #1815: the token read used to swallow its rejection, so the section showed the count with no
+  // names under it — indistinguishable from a person who holds none, with no way back.
+  it("says the token read failed instead of showing an empty list, and Retry refetches", async () => {
+    tokensMock.mockRejectedValueOnce(new HttpError(503, "tokens store down"));
+    const { user, drawer } = await openAna();
+    expect(await within(drawer).findByRole("button", { name: /retry/i })).toBeInTheDocument();
+    expect(within(drawer).getByText("Wardyn isn't answering. Try again.")).toBeInTheDocument();
+    expect(within(drawer).queryByText("ci-bot")).toBeNull();
+    await user.click(within(drawer).getByRole("button", { name: /retry/i }));
+    expect(await within(drawer).findByText("ci-bot")).toBeInTheDocument();
+    expect(within(drawer).queryByRole("button", { name: /retry/i })).toBeNull();
+    await waitFor(() => expect(tokensMock).toHaveBeenCalledTimes(2));
+  });
+
   // The drawer's counts and its disabled buttons come from the person it was handed, so a completed
   // action must hand it the person as the server now has them, on the first page or after Load more.
   it.each([false, true])("refreshes the selected person's key count after Remove all (opened after Load more=%s)", async (secondPage) => {
