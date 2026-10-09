@@ -1,0 +1,2 @@
+# Must-link docs (scripts/check-doc-links.sh): the threat model, whole file, after its last rewrite lane.
+threatmodel/THREAT-MODEL.md
