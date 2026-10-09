@@ -78,7 +78,7 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	if !rubric && capLevel == "" {
 		// adoEntraUngraded: nothing capped this run, so dispatch has no grade to
 		// be held to and resolves the lane exactly as it always did.
-		return types.AutonomyResolution{}, s.managedSettingsUndeliveredWarning(r.Context(), req, "", enforced),
+		return types.AutonomyResolution{}, s.managedSettingsUndeliveredWarning(r.Context(), req, "", false, enforced),
 			scmSite, adoEntraUngraded(), bedrockCredUngraded(), true
 	}
 	// THE PER-PERSON AZURE DEVOPS LANE, resolved ONCE here and used twice: the
@@ -116,14 +116,14 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	// doc). The posture still travels, so the audit row and Review record what
 	// was graded even when nothing bound it.
 	if level == "" {
-		return res, s.managedSettingsUndeliveredWarning(r.Context(), req, "", enforced), scmSite, grade, bedrock, true
+		return res, s.managedSettingsUndeliveredWarning(r.Context(), req, "", false, enforced), scmSite, grade, bedrock, true
 	}
 	warnings, ok := s.autonomyLadder(w, r, req, level, autonomyBoundList(boundBy, grade, bedrock), src)
 	// Here rather than in the ladder: whether the managed settings land depends
 	// on the ENFORCED class's substrate, which only this function holds. After
 	// it, because the ladder may derive the hold that brings the file.
 	if ok {
-		warnings = append(warnings, s.managedSettingsUndeliveredWarning(r.Context(), req, level, enforced)...)
+		warnings = append(warnings, s.managedSettingsUndeliveredWarning(r.Context(), req, level, rubric && ceiling.Limits.AutonomyRubric.AgentGuardrailLocks, enforced)...)
 	}
 	return res, warnings, scmSite, grade, bedrock, ok
 }

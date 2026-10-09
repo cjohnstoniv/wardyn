@@ -91,13 +91,15 @@ export interface AutonomyRubric {
   confinement_cc1?: AutonomyLevel;
   confinement_cc2?: AutonomyLevel;
   confinement_cc3?: AutonomyLevel;
+  // Selects the locked L2 managed-settings document for an L2 run; caps no level and is not a row.
+  agent_guardrail_locks?: boolean;
 }
 
-// One of AutonomyRubric's nine own field names — what internal/composer/
+// One of AutonomyRubric's nine level-capping field names — what internal/composer/
 // autonomy.go's applicableAutonomyCaps names a cap by, and what
 // AutonomyResolution.BoundBy (below) carries. keyof, not a hand-typed union,
 // so the two can never drift apart.
-export type AutonomyRubricRowKey = keyof AutonomyRubric;
+export type AutonomyRubricRowKey = Exclude<keyof AutonomyRubric, "agent_guardrail_locks">;
 
 // applicableAutonomyCaps' own fixed field order (internal/composer/
 // autonomy.go) — egress, then secrets, then confinement — the order
