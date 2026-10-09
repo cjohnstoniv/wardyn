@@ -115,6 +115,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The pluggable components page, the image verification page, the export control page, the recording read confinement note and the adoption reports index are now bullets, tables and alerts, with every repository file they cite linked. No rule, default or limit changed; the long cells of the pluggable components tables moved to sections of their own.
 - `docs/OPERATIONS.md`: the Network section ("Network: upstream proxy and egress redirects") is now
   bullets, tables and callouts, and every file it names is a link. No fact, default, limit or step changed.
+- `docs/OPERATIONS.md`: the "User drives on Docker" and "Capabilities: what one member, or one group,
+  may do" sections are now bullets, nested lists and tables, with every repository file they cite
+  linked; six long table cells moved to sections under their tables. No rule, check, refusal,
+  default or limit changed.
 
 ### Fixed
 
