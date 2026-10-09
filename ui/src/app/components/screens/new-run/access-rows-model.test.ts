@@ -199,3 +199,25 @@ describe("row ids and the issues that hold Launch", () => {
     expect(accessIssues(accessRows([custom({ status: "needs_input" })], [custom({ status: "ready" })]))).toEqual([]);
   });
 });
+
+describe("accessRows — a component the server refused has no fact", () => {
+  const inline = { inline: { hosts: ["api.openai.com"] }, name: "Bad one" };
+  it("adds no row when no read refused anything", () => {
+    expect(accessRows(undefined, undefined, [inline], null)).toEqual([]);
+  });
+  it("builds a blocking Refused row from the ref, carrying the server's sentence", () => {
+    const [row] = accessRows(undefined, undefined, [inline], "serves a model");
+    expect(row).toMatchObject({
+      id: "inline:0", title: "Bad one", status: "refused", blocking: true, hosts: ["api.openai.com"],
+      statusNote: "serves a model", issueText: T.ISSUE_REFUSED("Bad one"),
+    });
+  });
+  it("leaves a ref that has a fact to the fact", () => {
+    const rows = accessRows([custom({ id: "inline:0", name: "Bad one" })], undefined, [inline, { inline: { hosts: ["x.example"] }, name: "Other" }], "no");
+    expect(rows.map((r) => [r.id, r.status])).toEqual([["inline:0", "ready"], ["inline:1", "refused"]]);
+  });
+  it("names a stored ref by its id and gives it no reason line", () => {
+    const [row] = accessRows(undefined, undefined, [{ id: "6f0c1d2e-0000-4000-8000-0000000c0301" }], "denied");
+    expect(row).toMatchObject({ id: "6f0c1d2e-0000-4000-8000-0000000c0301", title: T.TITLE.custom_unnamed, reason: "", blocking: true });
+  });
+});

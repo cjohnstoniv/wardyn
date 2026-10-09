@@ -52,6 +52,8 @@ import { baseStatus } from "../../../lib/test-fixtures";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { ACCESS_ROWS as T } from "../../wardyn/copy/components";
 import type { ComponentFact } from "../../../lib/types/components";
+import { HttpError } from "../../../lib/api/core";
+import { ADD_ACCESS } from "../../wardyn/copy/components";
 import { goToPanel } from "../../../../test/new-run-panel";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
@@ -187,5 +189,57 @@ describe("NewRunScreen — components reach the wire", () => {
     await titled();
     await vi.waitFor(() => expect(previewMock).toHaveBeenCalled());
     expect(previewMock.mock.calls[0][0]).not.toHaveProperty("components");
+  });
+});
+
+describe("NewRunScreen — a component the server refused", () => {
+  const SENTENCE = "api.openai.com serves a model on this deployment, so a component can't reach it.";
+  const bad = [{ inline: { hosts: ["api.openai.com"] }, name: "Bad one" }];
+  // The server refuses every read while the ref is on the body, and answers once it is gone.
+  const refuseWhileCarried = (body: unknown) => (body as { components?: unknown[] }).components?.length
+    ? Promise.reject(new HttpError(422, SENTENCE, "component_host_serves_model"))
+    : null;
+
+  beforeEach(() => {
+    previewMock.mockImplementation((b) => refuseWhileCarried(b) ?? Promise.resolve(previewBody()));
+    preflightMock.mockImplementation((b) => refuseWhileCarried(b) ?? Promise.resolve(preflightBody()));
+  });
+
+  it("keeps a Refused row with the server's sentence and a Remove control, and holds Launch", async () => {
+    renderScreen(bad);
+    await titled();
+    expect(await nav().findByRole("button", { name: "Access 1 issue" })).toBeInTheDocument();
+    expect(launch()).toBeDisabled();
+    goToPanel("Access");
+    const row = screen.getByRole("button", { name: /^Bad one/ });
+    expect(row).toHaveAttribute("aria-invalid", "true");
+    expect(within(row).getByText(T.STATUS.refused)).toBeInTheDocument();
+    expect(screen.getByText(T.ISSUE_REFUSED("Bad one"))).toBeInTheDocument();
+    expect(within(row.closest("li")!).getByText(SENTENCE)).toBeInTheDocument();
+    await user.click(row);
+    expect(screen.getByRole("button", { name: ADD_ACCESS.REMOVE_NAMED("Bad one") })).toBeInTheDocument();
+  });
+
+  it("removing it takes the ref off every body and clears the refusal", async () => {
+    renderScreen(bad);
+    await titled();
+    await nav().findByRole("button", { name: "Access 1 issue" });
+    goToPanel("Access");
+    await user.click(screen.getByRole("button", { name: /^Bad one/ }));
+    await user.click(screen.getByRole("button", { name: ADD_ACCESS.REMOVE_NAMED("Bad one") }));
+    expect(screen.queryByRole("button", { name: /^Bad one/ })).toBeNull();
+    await vi.waitFor(() => expect(previewMock.mock.calls.at(-1)?.[0]).not.toHaveProperty("components"));
+    expect(await nav().findByRole("button", { name: "Access" })).toBeInTheDocument();
+    await vi.waitFor(() => expect(launch()).toBeEnabled());
+  });
+
+  it("builds no refused row from a refusal that is not about components", async () => {
+    previewMock.mockRejectedValue(new HttpError(422, "barrier unavailable", "backend_unavailable"));
+    preflightMock.mockRejectedValue(new HttpError(422, "barrier unavailable", "backend_unavailable"));
+    renderScreen(bad);
+    await titled();
+    goToPanel("Access");
+    await vi.waitFor(() => expect(previewMock).toHaveBeenCalled());
+    expect(screen.queryByText(T.ISSUE_REFUSED("Bad one"))).toBeNull();
   });
 });
