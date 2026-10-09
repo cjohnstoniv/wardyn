@@ -18,6 +18,21 @@ import { asJson, errText, HttpError, unwrapList, wfetch, withLimit } from "./cor
 // today's screens byte for byte.
 export type DefaultPolicy = RunPolicySpec & { governance_profile_name?: string };
 
+// One thing a saved policy needs before a run can use it (pkg/client's
+// ComponentRequirement): a stored secret its grants name, present or missing in
+// the saver's namespace. "missing" carries fix "add_secret". Advisory — a
+// missing secret never refuses the save.
+export type SaveRequirement = {
+  kind: "secret" | "connection";
+  name?: string;
+  status: "present" | "missing";
+  fix?: "add_secret";
+};
+
+// POST /policies and PUT /policies/{id} answer the stored policy plus the list
+// (pkg/client's PolicySaved). A RunPolicy for every existing caller.
+export type PolicySaved = RunPolicy & { requirements: SaveRequirement[] };
+
 export const policies = {
   // GET /api/v1/policies — all run policies (reverse creation order).
   async listPolicies(): Promise<RunPolicy[]> {
@@ -27,21 +42,21 @@ export const policies = {
 
   // POST /api/v1/policies  { name, spec } -> 201 created policy.
   // The server validates the spec; a 400 surfaces as an HttpError.
-  async createPolicy(name: string, spec: RunPolicySpec): Promise<RunPolicy> {
+  async createPolicy(name: string, spec: RunPolicySpec): Promise<PolicySaved> {
     const res = await wfetch("/policies", {
       method: "POST",
       body: JSON.stringify({ name, spec }),
     });
-    return asJson<RunPolicy>(res);
+    return asJson<PolicySaved>(res);
   },
 
   // PUT /api/v1/policies/{id}  { name, spec } -> updated policy.
-  async updatePolicy(id: string, name: string, spec: RunPolicySpec): Promise<RunPolicy> {
+  async updatePolicy(id: string, name: string, spec: RunPolicySpec): Promise<PolicySaved> {
     const res = await wfetch(`/policies/${encodeURIComponent(id)}`, {
       method: "PUT",
       body: JSON.stringify({ name, spec }),
     });
-    return asJson<RunPolicy>(res);
+    return asJson<PolicySaved>(res);
   },
 
   // GET /api/v1/policies/default — THE CALLER'S ceiling: the spec a run created

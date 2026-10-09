@@ -63,11 +63,8 @@ func TestComponents_MemberSavesUpdatesDeletesOwnRow(t *testing.T) {
 		t.Fatalf("save = %d: %s", w.Code, w.Body.String())
 	}
 	saved := decodeSaved(t, w)
-	if saved.Owner != "sub-member" || saved.Version != 1 || saved.Name != "Stripe" || saved.Requirements == nil || len(saved.Requirements) != 0 {
-		t.Fatalf("saved = %+v, want the caller's row at version 1 with an empty requirements list", saved)
-	}
-	if !strings.Contains(w.Body.String(), `"requirements":[]`) {
-		t.Errorf("body = %s, want requirements as [] not null", w.Body.String())
+	if saved.Owner != "sub-member" || saved.Version != 1 || saved.Name != "Stripe" || len(saved.Requirements) != 1 || saved.Requirements[0].Name != "stripe-key" || saved.Requirements[0].Status != "missing" {
+		t.Fatalf("saved = %+v, want the caller's row at version 1 with its one missing secret listed", saved)
 	}
 
 	w = doSSO(t, srv, http.MethodPut, "/api/v1/me/components/"+saved.ID.String(), member, saveComponentBody("Stripe live", stripeDef))
