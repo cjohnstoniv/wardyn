@@ -5,6 +5,7 @@ package runnerwire
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -68,6 +69,7 @@ func (s *Stream) Read(b []byte) (int, error) {
 	}
 	n := copy(b, s.buf)
 	s.buf = s.buf[n:]
+	s.p.held.Add(-int64(n))
 	s.unacked += int64(n)
 	grant := int64(0)
 	if s.unacked >= StreamWindow/4 {
@@ -138,7 +140,7 @@ func (s *Stream) Reset(code uint32) error {
 		return nil
 	}
 	s.p.forget(s.id)
-	return s.p.send(context.Background(), Frame{Type: TypeReset, Stream: s.id, Payload: EncodeReset(code)})
+	return s.p.send(s.p.ctx, Frame{Type: TypeReset, Stream: s.id, Payload: EncodeReset(code)})
 }
 
 // Close aborts the stream only, never the sandbox, the agent or any sidecar.
@@ -153,6 +155,7 @@ func (s *Stream) abort(code uint32) bool {
 		return false
 	}
 	s.reset = &ResetError{Code: code}
+	s.p.held.Add(-int64(len(s.buf)))
 	s.buf = nil
 	s.cond.Broadcast()
 	s.mu.Unlock()
@@ -161,18 +164,26 @@ func (s *Stream) abort(code uint32) bool {
 	return true
 }
 
-func (s *Stream) deliver(b []byte) bool {
+// errStreamOverflow: a peer sent past one stream's window. The stream is reset;
+// the connection survives. Past the connection's window it is ErrBadFrame.
+var errStreamOverflow = errors.New("runnerwire: stream window exceeded")
+
+func (s *Stream) deliver(b []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.reset != nil {
-		return true
+		return nil
 	}
 	if int64(len(s.buf)+len(b)) > StreamWindow {
-		return false
+		return errStreamOverflow
+	}
+	if s.p.held.Add(int64(len(b))) > ConnWindow {
+		s.p.held.Add(-int64(len(b)))
+		return fmt.Errorf("%w: peer sent past the connection window", ErrBadFrame)
 	}
 	s.buf = append(s.buf, b...)
 	s.cond.Broadcast()
-	return true
+	return nil
 }
 
 func (s *Stream) remoteClose() (both bool) {

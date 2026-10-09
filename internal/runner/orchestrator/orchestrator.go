@@ -112,17 +112,27 @@ func (o *Orchestrator) locals() []substrate.Substrate {
 }
 
 // Add registers a substrate (a claimed runner's remote substrate) with the
-// running orchestrator, replacing one of the same name.
+// running orchestrator. One of the same name is replaced, and the refs and
+// capabilities held for the old object are forgotten so they re-resolve to the
+// new one: a ref must not keep routing to a substrate whose link is dead.
 func (o *Orchestrator) Add(s substrate.Substrate) {
+	name := s.Name()
 	o.subsMu.Lock()
-	defer o.subsMu.Unlock()
+	replaced := false
 	for i, have := range o.substrates {
-		if have.Name() == s.Name() {
+		if have.Name() == name {
 			o.substrates[i] = s
-			return
+			replaced = true
+			break
 		}
 	}
-	o.substrates = append(o.substrates, s)
+	if !replaced {
+		o.substrates = append(o.substrates, s)
+	}
+	o.subsMu.Unlock()
+	if replaced {
+		o.purge(name)
+	}
 }
 
 // Remove unregisters the substrate of that name and forgets the refs routed to
@@ -133,6 +143,11 @@ func (o *Orchestrator) Remove(s substrate.Substrate) {
 	o.subsMu.Lock()
 	o.substrates = slices.DeleteFunc(o.substrates, func(have substrate.Substrate) bool { return have.Name() == name })
 	o.subsMu.Unlock()
+	o.purge(name)
+}
+
+// purge drops the in-memory routes and cached capabilities of the named substrate.
+func (o *Orchestrator) purge(name string) {
 	o.mu.Lock()
 	for ref, have := range o.byRef {
 		if have.Name() == name {

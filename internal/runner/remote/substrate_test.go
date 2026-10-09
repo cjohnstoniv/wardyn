@@ -453,3 +453,68 @@ func TestOptionalInterfaceListIsPinned(t *testing.T) {
 }
 
 func asserts[T any](v any) bool { _, ok := v.(T); return ok }
+
+func deliver(t *testing.T, rig *runnertest.Rig, run uuid.UUID, value string) {
+	t.Helper()
+	if err := rig.Sub.DeliverResident(ctxT(t), runnerwire.DeliverResidentArgs{RunID: run, GrantID: uuid.New(), Kind: "file_secret", Value: value, NotAfter: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A file_secret resident value rides ManagedFile.Content, a []byte that marshals as base64:
+// the guard compares leaves, so the encoding hides nothing.
+func TestResidentGuardSeesManagedFileContent(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	run := uuid.New()
+	const secret = "file-secret-value"
+	deliver(t, rig, run, secret)
+	spec := runner.SandboxSpec{RunID: run, Image: "img", ConfinementClass: types.CC1,
+		ManagedFiles: []runner.ManagedFile{{Path: "/etc/x", Content: []byte(secret)}}}
+	before := len(rig.Fake.Created)
+	if _, err := rig.Sub.CreateSandbox(ctxT(t), spec); !errors.Is(err, remote.ErrResidentLeak) {
+		t.Fatalf("a spec carrying the value as file content = %v, want ErrResidentLeak", err)
+	}
+	if len(rig.Fake.Created) != before {
+		t.Fatal("the leaking create reached the runner")
+	}
+	// A value inside a map and one with a trailing newline are caught too.
+	for name, mut := range map[string]func(*runner.SandboxSpec){
+		"map value": func(s *runner.SandboxSpec) { s.Env = map[string]string{"K": secret} },
+		"trailing nl": func(s *runner.SandboxSpec) {
+			s.ManagedFiles = []runner.ManagedFile{{Path: "/x", Content: []byte(secret + "\n")}}
+		},
+		"nested label":   func(s *runner.SandboxSpec) { s.Labels = map[string]string{"a": secret} },
+		"proxy injected": func(s *runner.SandboxSpec) { s.ProxyConfig.RunToken = secret },
+	} {
+		sp := runner.SandboxSpec{RunID: run, Image: "img", ConfinementClass: types.CC1}
+		mut(&sp)
+		if _, err := rig.Sub.CreateSandbox(ctxT(t), sp); !errors.Is(err, remote.ErrResidentLeak) {
+			t.Errorf("%s: %v, want ErrResidentLeak", name, err)
+		}
+	}
+}
+
+// A short value must not refuse an innocent spec: leaves are compared whole, never as substrings.
+func TestResidentGuardHasNoSubstringFalsePositive(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	run := uuid.New()
+	deliver(t, rig, run, "img")
+	spec := runner.SandboxSpec{RunID: run, Image: "registry.example/image:1", ConfinementClass: types.CC1,
+		Labels: map[string]string{"wardyn.img": "imgs"}}
+	if _, err := rig.Sub.CreateSandbox(ctxT(t), spec); err != nil {
+		t.Fatalf("a spec merely containing the short value was refused: %v", err)
+	}
+}
+
+func TestEraseResidentForgetsTheDigests(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	run := uuid.New()
+	deliver(t, rig, run, "gone-after-erase")
+	if err := rig.Sub.EraseResident(ctxT(t), run); err != nil {
+		t.Fatal(err)
+	}
+	spec := runner.SandboxSpec{RunID: run, Image: "gone-after-erase", ConfinementClass: types.CC1}
+	if _, err := rig.Sub.CreateSandbox(ctxT(t), spec); err != nil {
+		t.Fatalf("after erase the guard still holds the value: %v", err)
+	}
+}

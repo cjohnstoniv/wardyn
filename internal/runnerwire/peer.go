@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
@@ -18,6 +19,10 @@ const (
 	ackEvery = 8
 	ackBytes = 64 << 10
 )
+
+// MaxStreams bounds the byte streams a connection holds open, parked ones
+// included: an OPEN past it is refused. A constant, not a knob.
+const MaxStreams = 256
 
 // CallHandler serves one incoming CALL. A ctx cancelled by the caller's RESET
 // means the caller stopped waiting. The result is marshalled into the REPLY; an
@@ -37,6 +42,12 @@ type PeerConfig struct {
 	// OnControl receives the session-level frames the peer does not act on
 	// itself: PENDING, STATE, READY, LEASE, GOAWAY and REVOKED.
 	OnControl func(Frame)
+	// Replay and LastReceived carry a session's sequencing across a reconnect:
+	// the buffer the previous connection used (frames still un-ACKed) and the
+	// last sequenced frame received from the peer. Zero values start a fresh
+	// session at sequence 1.
+	Replay       *ReplayBuffer
+	LastReceived uint64
 }
 
 // Peer multiplexes calls, events and byte streams over one established Conn
@@ -65,6 +76,7 @@ type Peer struct {
 	recvAcks  int
 	recvBytes int
 	connPend  int64
+	held      atomic.Int64 // received bytes not yet read by a stream's reader
 	err       error
 	done      chan struct{}
 }
@@ -72,9 +84,13 @@ type Peer struct {
 // NewPeer builds a peer; Run drives it.
 func NewPeer(conn Conn, cfg PeerConfig) *Peer {
 	ctx, cancel := context.WithCancel(context.Background())
+	replay := cfg.Replay
+	if replay == nil {
+		replay = NewReplayBuffer()
+	}
 	return &Peer{
-		conn: conn, cfg: cfg, ctx: ctx, cancel: cancel,
-		replay: NewReplayBuffer(), connSend: NewConnCredit(), ids: NewIDAllocator(cfg.Org),
+		conn: conn, cfg: cfg, ctx: ctx, cancel: cancel, recvSeq: cfg.LastReceived,
+		replay: replay, connSend: NewConnCredit(), ids: NewIDAllocator(cfg.Org),
 		calls: map[uint32]*pendingCall{}, inCalls: map[uint32]context.CancelFunc{},
 		streams: map[uint32]*Stream{}, parked: map[uint32]*Stream{}, byCall: map[uint32][]uint32{},
 		done: make(chan struct{}),
@@ -199,6 +215,19 @@ func (p *Peer) handle(f Frame) error {
 	}
 	if f.Type.Sequenced() {
 		p.mu.Lock()
+		if f.Seq <= p.recvSeq {
+			// A replay after a lost ACK: the frame already ran. Drop it and say
+			// where we are, so the sender trims its buffer.
+			last := p.recvSeq
+			p.mu.Unlock()
+			go p.send(p.ctx, Frame{Type: TypeAck, Payload: EncodeAck(last)}) //nolint:errcheck // a lost ACK is re-sent on the next replay
+			return nil
+		}
+		if f.Seq != p.recvSeq+1 {
+			last := p.recvSeq
+			p.mu.Unlock()
+			return fmt.Errorf("%w: %s seq %d after %d", ErrBadFrame, f.Type, f.Seq, last)
+		}
 		p.recvSeq = f.Seq
 		p.recvAcks++
 		p.recvBytes += len(f.Payload)
@@ -227,7 +256,9 @@ func (p *Peer) handle(f Frame) error {
 		if err != nil {
 			return err
 		}
-		p.replay.Ack(seq)
+		if err := p.replay.Ack(seq); err != nil {
+			return fmt.Errorf("%w: %v", ErrBadFrame, err)
+		}
 	case TypePing:
 		go p.send(p.ctx, Frame{Type: TypePong, Payload: f.Payload}) //nolint:errcheck // keepalive; a failed pong is the link going down
 	case TypePong:
@@ -263,8 +294,12 @@ func (p *Peer) handleStream(f Frame) error {
 			}
 		}
 	case TypeData:
-		if s := p.stream(f.Stream); s != nil && !s.deliver(f.Payload) {
-			_ = s.Reset(ResetInternal)
+		if s := p.stream(f.Stream); s != nil {
+			if err := s.deliver(f.Payload); errors.Is(err, ErrBadFrame) {
+				return err
+			} else if err != nil {
+				_ = s.Reset(ResetInternal)
+			}
 		}
 	case TypeWindow:
 		n, err := DecodeWindow(f.Payload)
@@ -430,6 +465,13 @@ func (p *Peer) onOpen(f Frame) error {
 	if p.streams[f.Stream] != nil || p.parked[f.Stream] != nil {
 		p.mu.Unlock()
 		return fmt.Errorf("%w: stream %d already open", ErrBadFrame, f.Stream)
+	}
+	// A stream parked for a call that is not in flight would never be claimed,
+	// and the connection holds only MaxStreams: refuse both.
+	if (o.Call != 0 && p.calls[o.Call] == nil) || len(p.streams)+len(p.parked) >= MaxStreams {
+		p.mu.Unlock()
+		go p.send(p.ctx, Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetRefused)}) //nolint:errcheck // a failed RESET is the link going down
+		return nil
 	}
 	s := p.newStream(f.Stream, o.Kind)
 	if o.Call != 0 {

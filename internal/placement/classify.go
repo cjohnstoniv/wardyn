@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // Class is the credential class of a dispatched field (design §6.3).
@@ -118,7 +119,25 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "MITMHosts", Class: ClassOperator, Rule: RuleStrip, Variant: "only hosts of own and runner_resident injections and every via_org destination; operator-only hosts dropped"},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "EligibleGrants", Class: ClassOperator, Rule: RuleStrip, Variant: "grants not delivered own or runner_resident dropped; a via_org grant keeps only its grant_id and host"},
 	{Struct: StructProxyConfig, Field: "Policy", Path: "LLMInspection.WorkspaceSecretNames", Class: ClassOperator, Rule: RuleStrip, Variant: "resolved values stripped; the org-side via_org scan may still use them"},
-	{Struct: StructProxyConfig, Field: "Policy", Class: ClassExempt, Rule: RuleExempt, Variant: "the rest of Policy"},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "AllowedDomains", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "DeniedDomains", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "AllowAllEgress", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "FirstUseApproval", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "FirstUseHoldSeconds", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "MaxHolds", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "AllowedMethods", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "MinConfinementClass", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "AutoStopAfterSec", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "WorkspaceMounts", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "WorkspaceRepos", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "UIApps", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "Resources", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "ToolRules", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "GitPushAnyBranch", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "PushRules", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "AzureDevOpsCapabilities", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "GitHubCapabilities", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructProxyConfig, Field: "Policy", Path: "LLMInspection", Class: ClassExempt, Rule: RuleExempt, Variant: "the rest of LLMInspection; its resolved secret names are the strip row above"},
 	{Struct: StructProxyConfig, Field: "ControlPlaneURL", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "MITMLLM", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "LLMChannelHosts", Class: ClassExempt, Rule: RuleExempt},
@@ -146,12 +165,34 @@ func Entries(structName, field string) []Entry {
 }
 
 // Unclassified lists the exported fields of runner.SandboxSpec and
-// runner.ProxyConfig that the table does not name, as "Struct.Field".
+// runner.ProxyConfig, and the top-level fields of ProxyConfig.Policy, that the
+// table does not name, as "Struct.Field" or "ProxyConfig.Policy.Field".
 func Unclassified() []string {
 	return slices.Concat(
 		unclassifiedIn(StructSandboxSpec, reflect.TypeFor[runner.SandboxSpec]()),
 		unclassifiedIn(StructProxyConfig, reflect.TypeFor[runner.ProxyConfig]()),
+		unclassifiedPaths(StructProxyConfig, "Policy", reflect.TypeFor[types.RunPolicySpec]()),
 	)
+}
+
+// unclassifiedPaths lists the exported fields of t, the type of struct.field,
+// that no row names by Path (a row for "A.B" names A). One level: a field of a
+// field is its row's to describe.
+func unclassifiedPaths(structName, field string, t reflect.Type) []string {
+	var out []string
+	for i := range t.NumField() {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		covered := slices.ContainsFunc(Entries(structName, field), func(e Entry) bool {
+			return e.Path == f.Name || strings.HasPrefix(e.Path, f.Name+".")
+		})
+		if !covered {
+			out = append(out, structName+"."+field+"."+f.Name)
+		}
+	}
+	return out
 }
 
 func unclassifiedIn(name string, t reflect.Type) []string {

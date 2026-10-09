@@ -13,6 +13,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // Handshake payloads.
@@ -117,19 +118,12 @@ type Lease struct {
 	EndsAt         time.Time `json:"ends_at"`
 }
 
-// Pending action kinds, shared with runner_pending_actions.
-const (
-	ActionKill      = "kill"
-	ActionEnd       = "end"
-	ActionStopProxy = "stop_proxy"
-)
-
 // PendingAction is one entry of the PENDING payload, oldest first.
 type PendingAction struct {
-	ID    uuid.UUID `json:"id"`
-	Kind  string    `json:"kind"`
-	RunID uuid.UUID `json:"run_id"`
-	Ref   string    `json:"ref"`
+	ID    uuid.UUID              `json:"id"`
+	Kind  types.RunnerActionKind `json:"kind"`
+	RunID uuid.UUID              `json:"run_id"`
+	Ref   string                 `json:"ref"`
 }
 
 // ActionResult is the `action_result` event's data.

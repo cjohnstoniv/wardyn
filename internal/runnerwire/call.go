@@ -11,9 +11,10 @@ import (
 )
 
 type pendingCall struct {
-	reply   chan Reply
-	notify  chan struct{}
-	onEvent func(Event)
+	abandoned bool // the caller stopped waiting; guarded by Peer.mu
+	reply     chan Reply
+	notify    chan struct{}
+	onEvent   func(Event)
 
 	mu     sync.Mutex
 	events []Event
@@ -77,21 +78,25 @@ func (p *Peer) Call(ctx context.Context, method string, args, result any, opts .
 	id := p.ids.Next()
 	p.calls[id] = pc
 	p.mu.Unlock()
+	// The entry stays until the REPLY removes it (onReply), also for a call
+	// whose caller gave up: the runner still answers, and a REPLY for an id
+	// that is not pending is a protocol error.
 	defer func() {
 		p.mu.Lock()
-		delete(p.calls, id)
-		orphans := p.byCall[id]
-		delete(p.byCall, id)
+		var orphans []uint32
+		if !pc.abandoned {
+			orphans = p.byCall[id]
+			delete(p.byCall, id)
+		}
 		p.mu.Unlock()
 		if err != nil {
-			for _, sid := range orphans {
-				if s, terr := p.TakeStream(sid); terr == nil {
-					_ = s.Reset(ResetCancelled)
-				}
-			}
+			p.resetParked(orphans)
 		}
 	}()
 	if err := p.send(ctx, Frame{Type: TypeCall, Stream: id, Payload: body}); err != nil {
+		p.mu.Lock()
+		delete(p.calls, id)
+		p.mu.Unlock()
 		return err
 	}
 	finish := func(rep Reply) error {
@@ -113,7 +118,10 @@ func (p *Peer) Call(ctx context.Context, method string, args, result any, opts .
 		case rep := <-pc.reply:
 			return finish(rep)
 		case <-ctx.Done():
-			_ = p.send(context.Background(), Frame{Type: TypeReset, Stream: id, Payload: EncodeReset(ResetCancelled)})
+			p.mu.Lock()
+			pc.abandoned = true
+			p.mu.Unlock()
+			_ = p.send(p.ctx, Frame{Type: TypeReset, Stream: id, Payload: EncodeReset(ResetCancelled)})
 			return ctx.Err()
 		case <-p.done:
 			select {
@@ -136,11 +144,29 @@ func (p *Peer) onReply(f Frame) error {
 	}
 	p.mu.Lock()
 	pc := p.calls[f.Stream]
-	p.mu.Unlock()
-	if pc != nil {
-		pc.reply <- rep
+	if pc == nil {
+		p.mu.Unlock()
+		return fmt.Errorf("%w: REPLY for call %d, which is not pending", ErrBadFrame, f.Stream)
 	}
+	delete(p.calls, f.Stream)
+	var orphans []uint32
+	if pc.abandoned {
+		orphans = p.byCall[f.Stream]
+		delete(p.byCall, f.Stream)
+	}
+	p.mu.Unlock()
+	pc.reply <- rep // one slot, and the entry is gone: only the first REPLY gets here
+	p.resetParked(orphans)
 	return nil
+}
+
+// resetParked aborts streams a call opened that nobody will claim.
+func (p *Peer) resetParked(ids []uint32) {
+	for _, sid := range ids {
+		if s, err := p.TakeStream(sid); err == nil {
+			_ = s.Reset(ResetCancelled)
+		}
+	}
 }
 
 func (p *Peer) onCall(f Frame) error {
@@ -186,7 +212,7 @@ func (p *Peer) onCall(f Frame) error {
 		if merr != nil {
 			return
 		}
-		_ = p.send(context.Background(), Frame{Type: TypeReply, Stream: f.Stream, Payload: b})
+		_ = p.send(p.ctx, Frame{Type: TypeReply, Stream: f.Stream, Payload: b})
 	}()
 	return nil
 }

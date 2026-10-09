@@ -39,14 +39,6 @@ const (
 	MethodEraseResident   = "erase_resident"
 )
 
-// Methods is the closed list of CALL methods.
-var Methods = []string{
-	MethodCreateSandbox, MethodExec, MethodWait, MethodAttach, MethodResize, MethodExecStream, MethodExecWait,
-	MethodStatus, MethodAgentStatus, MethodStop, MethodKill, MethodEnd, MethodStopProxy, MethodCanReplace,
-	MethodReplaceProxy, MethodEnsureProxyImg, MethodStart, MethodProbeDrive, MethodRecoverOutput, MethodSweep,
-	MethodDeliverResident, MethodEraseResident,
-}
-
 // CreateSandboxArgs carries the spec minus OnWaiting and ExecOutput (both are
 // json:"-"). SECURITY: it never carries a runner_resident value; the spec holds
 // a placeholder naming the grant, and the value travels only in DeliverResident.

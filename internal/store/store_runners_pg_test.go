@@ -143,14 +143,24 @@ func TestPG_Runners_PostureOnlyForClaimedAndReportsChange(t *testing.T) {
 	}
 }
 
+// claimed registers and claims a runner for the action queue, which takes claimed runners only.
+func claimed(t *testing.T, st store.PG, ctx context.Context, owner string) types.Runner {
+	t.Helper()
+	r, err := st.CreateRunner(ctx, newRunner(owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, err = st.ClaimRunner(ctx, r.ID, owner, r.KeyFingerprint, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
 func TestPG_Runners_RevokeDropsOpenActionsAndIsIdempotent(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	st := store.NewPG(pool)
-	r, err := st.CreateRunner(ctx, newRunner("alice@example.com"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	r := claimed(t, st, ctx, "alice@example.com")
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM runners WHERE id=$1`, r.ID) })
 	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
 	if _, _, err := st.QueueRunnerAction(ctx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: r.ID, RunID: run.ID, Kind: types.RunnerActionKill, Ref: "runner:x/y"}); err != nil {
@@ -166,6 +176,13 @@ func TestPG_Runners_RevokeDropsOpenActionsAndIsIdempotent(t *testing.T) {
 	}
 	if _, err := st.RevokeRunner(ctx, r.ID, now); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a second revoke = %v, want ErrNotFound", err)
+	}
+	// F7: a queue that races the revoke inserts nothing, so it cannot fence the run forever.
+	if _, _, err := st.QueueRunnerAction(ctx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: r.ID, RunID: run.ID, Kind: types.RunnerActionEnd, Ref: "runner:x/y"}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("queueing for a revoked runner = %v, want ErrNotFound", err)
+	}
+	if has, _ := st.RunHasPendingRunnerAction(ctx, run.ID); has {
+		t.Fatal("a revoked runner's late action fences the run")
 	}
 	if _, err := st.ClaimRunner(ctx, r.ID, r.Owner, r.KeyFingerprint, now); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("claiming a revoked runner = %v, want ErrConflict", err)
@@ -210,10 +227,7 @@ func TestPG_RunnerActions_QueueIsIdempotentOrderedAndFences(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	st := store.NewPG(pool)
-	r, err := st.CreateRunner(ctx, newRunner("alice@example.com"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	r := claimed(t, st, ctx, "alice@example.com")
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM runners WHERE id=$1`, r.ID) })
 	run1 := persistRun(t, ctx, pool, newRun(types.RunRunning))
 	run2 := persistRun(t, ctx, pool, newRun(types.RunRunning))
@@ -273,9 +287,15 @@ func TestPG_RunnerActions_RejectUnknownKindAndCascadeWithRun(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
 	st := store.NewPG(pool)
-	r, _ := st.CreateRunner(ctx, newRunner("alice@example.com"))
+	r := claimed(t, st, ctx, "alice@example.com")
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM runners WHERE id=$1`, r.ID) })
 	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	// An unclaimed runner takes no action either.
+	un, _ := st.CreateRunner(ctx, newRunner("bob@example.com"))
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM runners WHERE id=$1`, un.ID) })
+	if _, _, err := st.QueueRunnerAction(ctx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: un.ID, RunID: run.ID, Kind: types.RunnerActionKill, Ref: "x"}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("queueing for an unclaimed runner = %v, want ErrNotFound", err)
+	}
 	if _, _, err := st.QueueRunnerAction(ctx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: r.ID, RunID: run.ID, Kind: "freeze", Ref: "x"}); err == nil {
 		t.Fatal("an action kind outside kill/end/stop_proxy was stored")
 	}

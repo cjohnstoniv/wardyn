@@ -67,9 +67,8 @@ func PostAuthSequence(resumed bool) []Type {
 	return []Type{TypePending, TypeState, TypeReady}
 }
 
-// StreamID helpers. One id space is shared by calls and byte streams: 0 is the
-// control stream, even ids are org-initiated, odd ids runner-initiated.
-type StreamID = uint32
+// One id space is shared by calls and byte streams: 0 is the control stream,
+// even ids are org-initiated, odd ids runner-initiated.
 
 // IDAllocator hands out ids for one side of the connection.
 type IDAllocator struct{ next uint32 }
@@ -83,14 +82,14 @@ func NewIDAllocator(org bool) *IDAllocator {
 }
 
 // Next returns the next id. It is not safe for concurrent use.
-func (a *IDAllocator) Next() StreamID {
+func (a *IDAllocator) Next() uint32 {
 	id := a.next
 	a.next += 2
 	return id
 }
 
 // InitiatedByOrg reports which side owns id; the control stream has no owner.
-func InitiatedByOrg(id StreamID) (org, ok bool) {
+func InitiatedByOrg(id uint32) (org, ok bool) {
 	if id == 0 {
 		return false, false
 	}

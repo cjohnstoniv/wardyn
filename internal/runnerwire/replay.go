@@ -67,12 +67,20 @@ func (b *ReplayBuffer) Assign(f Frame) Frame {
 	return f
 }
 
-// Ack drops every frame up to and including seq (cumulative).
-func (b *ReplayBuffer) Ack(seq uint64) {
+// ErrAckAhead: the peer acknowledged a sequence number never sent. It would make
+// every later Since fail, so it is refused and the session ends.
+var ErrAckAhead = errors.New("runnerwire: ACK ahead of anything sent")
+
+// Ack drops every frame up to and including seq (cumulative). A seq at or
+// before the last ACK is ignored; one ahead of what was sent is ErrAckAhead.
+func (b *ReplayBuffer) Ack(seq uint64) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if seq >= b.next {
+		return ErrAckAhead
+	}
 	if seq <= b.acked {
-		return
+		return nil
 	}
 	b.acked = seq
 	i := 0
@@ -83,6 +91,7 @@ func (b *ReplayBuffer) Ack(seq uint64) {
 	b.frames = append([]Frame(nil), b.frames[i:]...)
 	close(b.changed)
 	b.changed = make(chan struct{})
+	return nil
 }
 
 // Since returns the buffered frames after lastSeq, the peer's last received

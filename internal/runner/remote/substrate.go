@@ -8,12 +8,12 @@
 package remote
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -40,19 +40,12 @@ var (
 	ErrUnsupportedStream = errors.New("remote: unsupported stream")
 )
 
-// Pending action kinds a Substrate queues while its runner is offline.
-const (
-	ActionKill      = runnerwire.ActionKill
-	ActionEnd       = runnerwire.ActionEnd
-	ActionStopProxy = runnerwire.ActionStopProxy
-)
-
 // Options are the seams the runner hub fills.
 type Options struct {
 	// Queue durably records an action to apply when the runner reconnects. With
 	// it set, a teardown issued while offline returns runner.ErrPendingOnRunner
 	// (queued, not failed); without it, runner.ErrRunnerOffline.
-	Queue func(ctx context.Context, kind, ref string) error
+	Queue func(ctx context.Context, kind types.RunnerActionKind, ref string) error
 	// OnEvent receives every runner event except `caps` (kept here) and
 	// `waiting` (delivered to the create that owns it).
 	OnEvent func(runnerwire.Event)
@@ -71,12 +64,12 @@ type Substrate struct {
 	mu       sync.Mutex
 	caps     *runnerwire.Caps
 	outputs  map[uuid.UUID]io.Writer
-	resident map[uuid.UUID][][]byte
+	resident map[uuid.UUID]leafHashes // SHA-256 of what DeliverResident delivered; never the value
 }
 
 // New builds the substrate of runnerID over t.
 func New(runnerID string, t Transport, opts Options) *Substrate {
-	s := &Substrate{id: runnerID, t: t, opts: opts, outputs: map[uuid.UUID]io.Writer{}, resident: map[uuid.UUID][][]byte{}}
+	s := &Substrate{id: runnerID, t: t, opts: opts, outputs: map[uuid.UUID]io.Writer{}, resident: map[uuid.UUID]leafHashes{}}
 	t.SetHandler(s)
 	return s
 }
@@ -188,7 +181,7 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 		return runner.Sandbox{}, err
 	}
 	args := runnerwire.CreateSandboxArgs{Spec: spec, ExecOutput: spec.ExecOutput != nil}
-	if err := s.refuseResident(spec.RunID, args); err != nil {
+	if err := s.refuseResident(spec.RunID, spec); err != nil {
 		return runner.Sandbox{}, err
 	}
 	if spec.ExecOutput != nil {
@@ -232,23 +225,18 @@ func (s *Substrate) checkClass(ctx context.Context, class types.ConfinementClass
 	return fmt.Errorf("remote: %s does not advertise class %q", s.Name(), class)
 }
 
-// refuseResident fails the create when its payload carries a value already
-// delivered for the run as runner_resident.
-func (s *Substrate) refuseResident(runID uuid.UUID, args runnerwire.CreateSandboxArgs) error {
+// refuseResident fails the create when any leaf of the spec (a string, a
+// []byte or a map value, at any depth) is exactly a value already delivered for
+// the run as runner_resident. Only SHA-256 of delivered values is kept.
+func (s *Substrate) refuseResident(runID uuid.UUID, spec runner.SandboxSpec) error {
 	s.mu.Lock()
-	vals := s.resident[runID]
+	hashes := s.resident[runID]
 	s.mu.Unlock()
-	if len(vals) == 0 {
+	if len(hashes) == 0 {
 		return nil
 	}
-	payload, err := json.Marshal(args)
-	if err != nil {
-		return err
-	}
-	for _, v := range vals {
-		if bytes.Contains(payload, v) {
-			return ErrResidentLeak
-		}
+	if walkLeaves(reflect.ValueOf(spec), func(leaf []byte) bool { return hashes.has(leaf) }) {
+		return ErrResidentLeak
 	}
 	return nil
 }
@@ -291,7 +279,7 @@ func (s *Substrate) AgentStatus(ctx context.Context, ref, agentExecID string) (r
 
 // teardown calls a verb that keeps working while the runner is away: offline,
 // it is queued as a pending action and answers runner.ErrPendingOnRunner.
-func (s *Substrate) teardown(ctx context.Context, method, kind, ref string) error {
+func (s *Substrate) teardown(ctx context.Context, method string, kind types.RunnerActionKind, ref string) error {
 	err := s.refCall(ctx, method, ref, nil)
 	if err == nil || !errors.Is(err, runner.ErrRunnerOffline) || s.opts.Queue == nil {
 		return err
@@ -303,19 +291,19 @@ func (s *Substrate) teardown(ctx context.Context, method, kind, ref string) erro
 }
 
 func (s *Substrate) StopSandbox(ctx context.Context, ref string) error {
-	return s.teardown(ctx, runnerwire.MethodStop, ActionEnd, ref)
+	return s.teardown(ctx, runnerwire.MethodStop, types.RunnerActionEnd, ref)
 }
 
 func (s *Substrate) KillSandbox(ctx context.Context, ref string) error {
-	return s.teardown(ctx, runnerwire.MethodKill, ActionKill, ref)
+	return s.teardown(ctx, runnerwire.MethodKill, types.RunnerActionKill, ref)
 }
 
 func (s *Substrate) EndSandbox(ctx context.Context, ref string) error {
-	return s.teardown(ctx, runnerwire.MethodEnd, ActionEnd, ref)
+	return s.teardown(ctx, runnerwire.MethodEnd, types.RunnerActionEnd, ref)
 }
 
 func (s *Substrate) StopProxy(ctx context.Context, ref string) error {
-	return s.teardown(ctx, runnerwire.MethodStopProxy, ActionStopProxy, ref)
+	return s.teardown(ctx, runnerwire.MethodStopProxy, types.RunnerActionStopProxy, ref)
 }
 
 func (s *Substrate) StartSandbox(ctx context.Context, ref string) error {
@@ -405,12 +393,11 @@ func (s *Substrate) DeliverResident(ctx context.Context, a runnerwire.DeliverRes
 		return err
 	}
 	if a.Value != "" {
-		quoted, err := json.Marshal(a.Value)
-		if err != nil {
-			return err
-		}
 		s.mu.Lock()
-		s.resident[a.RunID] = append(s.resident[a.RunID], quoted[1:len(quoted)-1])
+		if s.resident[a.RunID] == nil {
+			s.resident[a.RunID] = leafHashes{}
+		}
+		s.resident[a.RunID].add([]byte(a.Value))
 		s.mu.Unlock()
 	}
 	return nil

@@ -202,12 +202,13 @@ func scanAction(row pgx.Row) (types.RunnerPendingAction, error) {
 	return a, nil
 }
 
-// QueueRunnerAction queues a for a runner, idempotently per (run, kind): when an unapplied one
-// exists it is returned with queued=false instead of a second row.
+// QueueRunnerAction queues a for a claimed runner, idempotently per (run, kind): when an unapplied one
+// exists it is returned with queued=false instead of a second row. A runner that is not claimed (revoked,
+// unclaimed, unknown) takes none, so no row can exist that nothing will ever apply: ErrNotFound.
 func (s PG) QueueRunnerAction(ctx context.Context, a types.RunnerPendingAction) (types.RunnerPendingAction, bool, error) {
 	const ins = `
 		INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref)
-		VALUES ($1,$2,$3,$4,$5)
+		SELECT $1,$2,$3,$4,$5 WHERE EXISTS (SELECT 1 FROM runners WHERE id = $2 AND state = 'claimed')
 		ON CONFLICT (run_id, kind) WHERE applied_at IS NULL DO NOTHING
 		RETURNING ` + actionCols
 	out, err := scanAction(s.Pool.QueryRow(ctx, ins, a.ID, a.RunnerID, a.RunID, string(a.Kind), a.Ref))

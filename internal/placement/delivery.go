@@ -84,25 +84,13 @@ func Writable(class string) bool {
 	return known && !slices.Contains(fixedClasses, class)
 }
 
-// PostureRequirement is what a runner's reported posture must meet for a
-// runner_resident class: only on that mode.
+// PostureRequirement is what a runner's reported posture (types.RunnerPosture,
+// self-reported) must meet for a runner_resident class: only on that mode.
 type PostureRequirement struct {
 	MDMManaged    bool              `json:"mdm_managed,omitempty"`
 	DiskEncrypted bool              `json:"disk_encrypted,omitempty"`
 	OSMin         map[string]string `json:"os_min,omitempty"` // per-OS minimum version
 }
-
-// Posture is a runner's reported device posture. Self-reported: it separates a
-// lost or compromised laptop from a healthy one, and does not constrain a root developer.
-type Posture struct {
-	MDMManaged    bool   `json:"mdm_managed"`
-	DiskEncrypted bool   `json:"disk_encrypted"`
-	OS            string `json:"os"`
-	OSVersion     string `json:"os_version"`
-}
-
-// PostureSourceRunnerAsserted is the only posture source in 0.9.
-const PostureSourceRunnerAsserted = "runner_asserted"
 
 // ClassPolicy is one class's configured mode.
 type ClassPolicy struct {

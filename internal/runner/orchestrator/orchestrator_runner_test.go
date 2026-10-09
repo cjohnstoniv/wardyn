@@ -192,3 +192,27 @@ func TestOrchestrator_AddRemoveConcurrentWithRouting(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// Replacing a runner's substrate (a reconnect builds a new one) must move its refs to the new object.
+func TestOrchestrator_AddReplacesAndReroutesRefs(t *testing.T) {
+	docker := &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}
+	oldSub, fresh := runnerSub("a"), runnerSub("a")
+	o := New(docker)
+	o.Add(oldSub)
+	spec := specFor(types.CC1)
+	spec.RunnerID = "a"
+	sb, err := o.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.Add(fresh)
+	if _, err := o.Status(context.Background(), sb.Ref); err != nil {
+		t.Fatal(err)
+	}
+	if len(fresh.statuses) != 1 || len(oldSub.statuses) != 0 {
+		t.Fatalf("status went to old=%d fresh=%d, want the replacement", len(oldSub.statuses), len(fresh.statuses))
+	}
+	if n := len(o.snapshot()); n != 2 {
+		t.Fatalf("%d substrates after a replace, want 2", n)
+	}
+}

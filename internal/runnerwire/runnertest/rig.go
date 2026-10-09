@@ -12,6 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // Rig is a remote.Substrate wired to a served runner over the in-memory
@@ -35,9 +36,9 @@ func NewRig(tb testing.TB, runnerID string) *Rig {
 	tb.Helper()
 	r := &Rig{RunnerID: runnerID, Fake: NewFake(), Link: &remote.Link{}}
 	r.Sub = remote.New(runnerID, r.Link, remote.Options{
-		Queue: func(_ context.Context, kind, ref string) error {
+		Queue: func(_ context.Context, kind types.RunnerActionKind, ref string) error {
 			r.mu.Lock()
-			r.queued = append(r.queued, kind+" "+ref)
+			r.queued = append(r.queued, string(kind)+" "+ref)
 			r.mu.Unlock()
 			return nil
 		},

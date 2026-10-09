@@ -35,6 +35,20 @@ func TestUnclassifiedCatchesANewField(t *testing.T) {
 	}
 }
 
+// F8: a field added to RunPolicySpec (or one the table lists but the struct dropped) is not auto-exempt.
+func TestUnclassifiedCatchesANewPolicyField(t *testing.T) {
+	type policy struct {
+		AllowedDomains []string
+		NewSecretKnob  string
+		hidden         string
+	}
+	_ = policy{}.hidden
+	got := unclassifiedPaths(StructProxyConfig, "Policy", reflect.TypeFor[policy]())
+	if !slices.Equal(got, []string{"ProxyConfig.Policy.NewSecretKnob"}) {
+		t.Fatalf("unclassifiedPaths = %v, want only the new field", got)
+	}
+}
+
 func TestTableRowsAreWellFormed(t *testing.T) {
 	grantKinds := map[string]bool{"ssh_key": true, "git_pat": true, "cloud_sts": true}
 	types := map[string]reflect.Type{
