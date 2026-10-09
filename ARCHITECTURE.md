@@ -47,7 +47,8 @@ flowchart LR
 ```
 
 - The trusted control plane launches each agent into an untrusted, gatewayless sandbox whose only path out is the `wardyn-proxy` sidecar.
-- Decision logs and masked session casts flow back into the append-only audit log — drawn in [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md) §8, "The three audit streams".
+- Decision logs flow back into the append-only audit log — drawn in [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md) §8, "The three audit streams".
+- Masked session recordings are optional and kept in their own store, with their own retention.
 - The console itself (`wardynd`'s embedded UI) is served under a single CSP (`securityHeaders`, [`internal/api/security_headers.go`](internal/api/security_headers.go)).
 - Its `media-src` allowlists the two hosts a GitHub Release asset download touches — `github.com` and the redirect target it resolves to —
   - for one consumer: the Getting Started demo-episode player, which streams an episode only on an explicit click from the tag-pinned manifest ([`ui/src/app/lib/demo-videos.ts`](ui/src/app/lib/demo-videos.ts), `episodeUrl`/`episodesFor`):

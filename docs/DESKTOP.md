@@ -382,11 +382,14 @@ Five files, all under [`deploy/desktop/`](../deploy/desktop/):
 
 ### `wardyn-desktop.sh`
 
-- What the plist actually runs.
-- Reads the envelope out of `/etc/wardyn`,
-- brings up [`deploy/desktop/docker-compose.yaml`](../deploy/desktop/docker-compose.yaml) (which `include:`s the same [compose stack](../deploy/compose/README.md) every other single-host deployment uses, and exports `WARDYN_MANAGED_DIR=/etc/wardyn` so that stack's own read-only mount gives `WARDYN_DEFAULT_POLICY` sight of the managed policy file),
-- waits for `/healthz` on the published port (`WARDYN_UP_PORT`: process environment including `secret.env`, then `wardyn.env`, then 8080;
-- a value that is not a whole number from 1 to 65535 stops the launcher with a message naming the key), and idempotently applies `site-config.json` if MDM has delivered one.
+What the plist actually runs. In order, it:
+
+1. Reads the envelope out of `/etc/wardyn`.
+2. Brings up [`deploy/desktop/docker-compose.yaml`](../deploy/desktop/docker-compose.yaml), which `include:`s the same [compose stack](../deploy/compose/README.md) every other single-host deployment uses, and exports `WARDYN_MANAGED_DIR=/etc/wardyn` so that stack's own read-only mount gives `WARDYN_DEFAULT_POLICY` sight of the managed policy file.
+3. Waits for `/healthz` on the published port.
+   - The port is `WARDYN_UP_PORT`: process environment including `secret.env`, then `wardyn.env`, then 8080.
+   - A value that is not a whole number from 1 to 65535 stops the launcher with a message naming the key.
+4. Idempotently applies `site-config.json` if MDM has delivered one.
 
 ### What the enrolment mint pulls
 
