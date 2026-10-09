@@ -407,9 +407,12 @@ stateDiagram-v2
      append-only is enforced at the datastore, not by app convention.
    - NOTE:
      control-plane audit WRITES (identity mint/revoke, approval decide, broker
-     mint/revoke) are still best-effort — the call site is fire-and-forget
-     (`_ = rec.Record(...)`, not wrapped in the mint transaction), so a write can
-     still fail.
+     revoke, a refused or failed broker mint) are still best-effort — the call
+     site is fire-and-forget (`_ = rec.Record(...)`), so a write can still fail.
+   - A successful broker mint is the exception.
+     Its `credential.mint` row rides the mint's own transaction with the
+     single-use burn, and the mint is refused if that row cannot be written
+     ([`internal/broker/mint_commit.go`](internal/broker/mint_commit.go)).
    - What changed: the shared recorder chain is now
      `maskingRecorder → spoolingRecorder → auditRec`, and every audit writer
      (API, broker, identity, approvals, sweeper) shares it —
