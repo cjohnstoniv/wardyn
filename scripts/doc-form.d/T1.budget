@@ -5,4 +5,11 @@
 # 49282 adds 12 (section 4.1: the SSH shell's refusal named beside the 503 the other doors answer).
 # 49289 adds 7 (section 4.1 and the section 5 parts after the residuals: four cell-expansion headings and
 # 28 words of summary cells, plus 3 restated-subject words, less 28 dashes turned into full stops or lists).
-threatmodel/THREAT-MODEL.md=49289
+# 52032 adds 2743 (run components, 0.8.9, new and corrected text): residual 64 (1695); section 5.1a: two
+# resident-table rows (148), the env_secret switch name and component delivery (137), the file_secret
+# paragraph (161), the never-resident list (85), the echo paragraph (172), the table's intro bullets (54), the
+# preview's component facts (30), the TLS-MITM scope (39), the scanQueueWait citation (2); section 4.2
+# component literals (45); section 4.3 the custom_component value (40) and its default (38); section 4.1
+# the proxy's own registry (28); residual 2 (22); residual 20 (37); the section 4 table cell (5) and
+# capability-kind count (3); section 8 the registry wording (2).
+threatmodel/THREAT-MODEL.md=52032

@@ -251,6 +251,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   refuses text that is not JSON — trailing commas, comments, single quotes, unquoted keys and
   other YAML-only syntax — while still refusing duplicate keys and unsafe numbers. Structured
   edits write exactly the requested value, quoting it where needed (#1921).
+- The threat model now covers run components: residual 64 states what bounds a secret a person
+  delivers into their own run, the header echo (on an organisation's `shared` secret, the
+  operator's value), the default-on `custom_component` value and what admins and members can see,
+  and the resident-secret table gains `file_secret` and component delivery rows. It also corrects
+  what it said before: the masking registry is shared through Postgres and fails closed (two places
+  said process-local and fail-open), the member switch is `WARDYN_ALLOW_USER_ENV_SECRET` and covers
+  `file_secret` too, a `github_token` cannot be minted inside a sandbox, and the scan semaphore's
+  source file was misnamed. No behaviour changed.
 
 ## [0.8.8] — 2026-10-07
 
