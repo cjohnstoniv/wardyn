@@ -359,7 +359,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// launch's egress union, so both are dropped here too.
 	// The frozen Azure DevOps and Bedrock grades are dropped with the rest:
 	// preflight dispatches nothing, so there is no dispatch for them to bind.
-	autonomy, _, scmSite, _, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling, modelCred, comps)
+	autonomy, _, scmSite, _, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling, modelCred, comps, baseline)
 	if !ok {
 		return
 	}
@@ -472,7 +472,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// and seedAndAdmitWorkspace each gate at launch.
 	runRepos := append([]string{req.Repo, req.DevcontainerRepo}, repoLocatorsOf(spec.WorkspaceRepos)...)
 	resp.GitCredential = s.gitCredentialFactForRepos(ctx, oidcHumanFromContext(ctx), runRepos)
-	resp.Components = componentFacts(req, spec, scmSite, comps, resp.GitCredential)
+	resp.Components = componentFacts(req, spec, scmSite, comps, resp.GitCredential, baseline)
 	writeJSON(w, http.StatusOK, resp)
 }
 

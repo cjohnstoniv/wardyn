@@ -210,10 +210,10 @@ var docTierRows = []struct{ route, token string }{
 // a route here is admitted debt, and a NEW gated route that lands in neither
 // list fails the completeness check below rather than going unnoticed.
 //
-// The map is empty: every gated route the completeness check has surfaced is
-// rowed in docs/OPERATIONS.md and listed in docTierRows above. It stays
-// declared, empty, as the ratchet's landing spot for the next gap a
-// completeness failure surfaces.
+// Every other gated route the completeness check has surfaced is rowed in
+// docs/OPERATIONS.md and listed in docTierRows above. What stays here is
+// admitted debt: today the two egress-baseline routes, pending their
+// OPERATIONS.md row.
 var docTierUndocumented = map[string]string{
 	"GET /api/v1/governance/egress-baseline": "0.9 B-P1: the tier-table row and the Egress baseline section are the docs pass's (the OPERATIONS.md prose budget is its to move)",
 	"PUT /api/v1/governance/egress-baseline": "0.9 B-P1: as the GET above",

@@ -726,18 +726,18 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	ignoredOnboardingMark := cfg.OnboardingCompletedAt != nil &&
 		(existing.OnboardingCompletedAt == nil || !cfg.OnboardingCompletedAt.Equal(*existing.OnboardingCompletedAt))
 	cfg.Integrations = existing.Integrations
-	// The egress baseline lowers grades, so it has a stricter writer than this door.
-	// A round trip of GET carries the stored block; a different one is refused.
-	if refuseInlineEgress(cfg.Egress, existing.Egress) {
-		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigEgressViaOwnRoute,
-			"the egress baseline is a governance write: change it with PUT /governance/egress-baseline, not PUT /site-config")
-		return
-	}
-	cfg.Egress = existing.Egress
 	// Carry forward, or a round-trip PUT by any client erases the install's
 	// onboarding state — the exact footgun already solved once for Integrations.
 	cfg.OnboardingCompletedAt = existing.OnboardingCompletedAt
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
+	// The egress baseline lowers grades, so it has a stricter writer than this door: the egress block
+	// and the set of baseline-marked internal hosts must come back as stored, whoever is asking.
+	if refuseInlineBaseline(cfg, existing) {
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigEgressViaOwnRoute,
+			"the egress baseline is a governance write: change egress.baseline_hosts or an internal host's baseline mark with PUT /governance/egress-baseline, not PUT /site-config")
+		return
+	}
+	cfg.Egress = existing.Egress
 	// After the carry-forward: the roster's defaults are checked against the
 	// providers this document will actually hold, whichever side was named; the
 	// sign-in help link against the stored one (signInHelpURLHTTPS).
@@ -818,10 +818,6 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		// to anyone, so the log can hold what every signed-out reader sees.
 		"sign_in_help_text": saved.SignInHelpText,
 		"sign_in_help_url":  saved.SignInHelpURL,
-	}
-	// Only while one is, or was, marked: a deployment with none writes the row it always wrote.
-	if baselineHosts, was := auditBaselineInternalHosts(saved.InternalHosts), auditBaselineInternalHosts(existing.InternalHosts); len(baselineHosts)+len(was) > 0 {
-		datum["internal_hosts_baseline"] = baselineHosts
 	}
 	auditPolicyHelp(datum, saved.PolicyHelp, present["policy_help"])
 	auditComponentSettings(datum, saved.Components, present["components"])

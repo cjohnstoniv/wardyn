@@ -98,10 +98,10 @@ const (
 // request order. Pure — everything it says was decided by the caller's gates.
 // scm is Review's git_credential fact; the preview reads no credential and
 // passes nil. Nil when the run has neither, so its body is the one it was.
-func componentFacts(req createRunRequest, spec types.RunPolicySpec, site types.SiteConfig, comps runComponents, scm *SCMAccess) []componentFact {
+func componentFacts(req createRunRequest, spec types.RunPolicySpec, site types.SiteConfig, comps runComponents, scm *SCMAccess, baseline composer.Baseline) []componentFact {
 	facts := gitProviderFacts(req, spec, site, scm)
 	for i, a := range comps.attached {
-		facts = append(facts, a.fact(i, comps, egressBaselineOf(site)))
+		facts = append(facts, a.fact(i, comps, baseline))
 	}
 	return facts
 }

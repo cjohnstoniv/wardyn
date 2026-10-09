@@ -429,13 +429,22 @@ export interface InternalHost {
   cidrs?: string[];
   // Grades this host (and its subdomains) as baseline egress, like
   // SiteEgress.baseline_hosts. Absent is false: declaring an internal host
-  // never changes a grade on its own.
+  // never changes a grade on its own. Changed only through
+  // PUT /governance/egress-baseline; PUT /site-config refuses a changed set.
   baseline?: boolean;
 }
 
 // types.SiteEgress. baseline_hosts are exact lowercase hostnames the composer
 // grades as baseline egress beside its built-in public set: grading only, never
-// an allow. Also the body of GET/PUT /governance/egress-baseline.
+// an allow.
 export interface SiteEgress {
   baseline_hosts?: string[];
+}
+
+// The body of GET/PUT /governance/egress-baseline: the whole declaration, the
+// only writer of both lists. internal_host_suffixes are the host_suffix values of
+// the internal_hosts entries marked baseline; each must name a stored entry.
+export interface EgressBaseline {
+  baseline_hosts: string[];
+  internal_host_suffixes: string[];
 }

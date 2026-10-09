@@ -80,7 +80,7 @@ type SiteConfig struct {
 	// Egress is the org's egress-grading policy. A POINTER for the same
 	// byte-identical-GET reason as the provider blocks. Written ONLY through
 	// PUT /governance/egress-baseline (a governance write); PUT /site-config
-	// carries the stored block forward and ignores a submitted one.
+	// carries an absent or unchanged block forward and refuses a changed one.
 	Egress *SiteEgress `json:"egress,omitempty"`
 	// WorkspaceProviders is the org's workspace-provider POLICY: which git
 	// hosts a run may clone from, with which credential lanes, plus storage
@@ -157,7 +157,8 @@ type SiteEgress struct {
 	//
 	// SECURITY: this LOWERS the egress grade and the confinement floor, so it is
 	// a governance write — security operators only, held for a second human where
-	// WARDYN_GOVERNANCE_SECOND_HUMAN is on, audited with the before/after sets.
+	// WARDYN_GOVERNANCE_SECOND_HUMAN is on, audited with the before/after sets,
+	// like the InternalHost.Baseline marks it shares one writer with.
 	// Exact lowercase hostnames only: no wildcard, scheme, port or IP. It grades;
 	// it never allows — a host must still pass allowed_domains.
 	BaselineHosts []string `json:"baseline_hosts,omitempty"`
@@ -198,9 +199,11 @@ type InternalHost struct {
 	// fc00::/7, or 100.64.0.0/10 (ipguard.Liftable) — never loopback/
 	// link-local/metadata/multicast/NAT64. Empty lifts the full Liftable set.
 	CIDRs []string `json:"cidrs,omitempty"`
-	// Baseline grades this host (and its subdomains) as baseline egress, like
-	// SiteEgress.BaselineHosts. Default false, so declaring an internal host
-	// never changes a grade unless the operator says so.
+	// Baseline grades this host and EVERY subdomain as baseline egress, where
+	// SiteEgress.BaselineHosts names exact hosts. Default false, so declaring an
+	// internal host never changes a grade unless the operator says so. Set only
+	// through PUT /governance/egress-baseline (or the boot seed on an empty
+	// document): PUT /site-config refuses a changed set of marks.
 	Baseline bool `json:"baseline,omitempty"`
 }
 
