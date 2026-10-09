@@ -316,8 +316,14 @@ func newHarness(t *testing.T) *harness {
 	approvals := newFakeApprovals()
 	brk := &fakeBroker{}
 	baseCtx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	srv := New(Config{
+	var srv *Server
+	// Cancel, then join the detached launch/teardown work (goBackground), so it
+	// cannot log into a slog default a later test installs (#1315).
+	t.Cleanup(func() {
+		cancel()
+		srv.WaitBackground()
+	})
+	srv = New(Config{
 		BaseCtx:     baseCtx,
 		Identity:    idp,
 		Approvals:   approvals,

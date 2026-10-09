@@ -361,9 +361,9 @@ func TestFinishRunOutput_DrainBarrier(t *testing.T) {
 			t.Fatal("the row was incomplete before any late byte")
 		}
 		writeExecOutput(t, w, "one more\n", "and another\n")
-		waitFor(t, "the row to turn incomplete", func() bool {
+		waitFor(t, "the row to turn incomplete and the late write to be audited", func() bool {
 			r, _ := f.mem.row(f.run.ID)
-			return r.Incomplete
+			return r.Incomplete && len(f.audit.eventsFor(f.run.ID, "run.output.finalize")) >= 1
 		})
 		evs := f.audit.eventsFor(f.run.ID, "run.output.finalize")
 		if len(evs) != 1 || !strings.Contains(string(evs[0].Data), "late_write") {
