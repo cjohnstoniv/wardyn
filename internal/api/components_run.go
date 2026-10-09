@@ -460,7 +460,46 @@ func (s *Server) persistRunComponents(ctx context.Context, runID uuid.UUID, comp
 	for i, a := range comps.attached {
 		rows[i] = a.snapshot
 	}
-	return st.PutRunComponents(ctx, runID, rows)
+	if err := st.PutRunComponents(ctx, runID, rows); err != nil {
+		return err
+	}
+	return fenceErasedComponents(ctx, st, runID, rows)
+}
+
+// fenceErasedComponents closes the window between the gate's read of a
+// person's saved component and the snapshot write: an erasure of their
+// components that ran in it would otherwise return with that content still in
+// this run's rows. It re-reads every saved component the person defined AFTER
+// the rows are committed. The erasure deletes the saved rows before it clears
+// the snapshots (eraseComponentsOf), so either this read sees the delete, or
+// the erasure's clear runs after the rows exist and clears them. On a missing
+// row — erased, or deleted by its owner in the same window — this run's rows
+// for the person are cleared as the erasure would clear them, and the create
+// fails closed. An inline component has no saved row to re-read: its content
+// is the request's own, and a create whose rows land after an erasure is the
+// same as one that started after it.
+func fenceErasedComponents(ctx context.Context, st store.ComponentStore, runID uuid.UUID, rows []types.RunComponent) error {
+	var owner string
+	var ids []uuid.UUID
+	for _, r := range rows {
+		if r.SelfDefined && r.ComponentID != nil && r.Owner != "" {
+			owner, ids = r.Owner, append(ids, *r.ComponentID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	got, err := st.ListComponentsByIDs(ctx, owner, ids)
+	if err == nil && len(got) == len(ids) {
+		return nil
+	}
+	if err == nil {
+		err = errors.New("api: a saved component of the run was erased or deleted while the run was being created")
+	}
+	if _, cerr := st.EraseRunComponentsOfRun(context.WithoutCancel(ctx), runID, owner); cerr != nil {
+		return errors.Join(err, cerr)
+	}
+	return err
 }
 
 // auditEntry describes one attached component for an audit row. A row is

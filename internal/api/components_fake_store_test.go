@@ -178,6 +178,10 @@ func (f *fakeComponentStore) EraseRunComponentsByOwner(context.Context, string) 
 	return 0, nil
 }
 
+func (f *fakeComponentStore) EraseRunComponentsOfRun(context.Context, uuid.UUID, string) (int, error) {
+	return 0, nil
+}
+
 var (
 	_ store.ComponentStore             = (*fakeComponentStore)(nil)
 	_ store.RestrictedComponentCreator = (*fakeComponentStore)(nil)

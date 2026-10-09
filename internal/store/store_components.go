@@ -105,13 +105,21 @@ func (s PG) EraseRunComponentsByOwner(ctx context.Context, owner string) (int, e
 		WHERE owner = $1`, owner)
 }
 
+// EraseRunComponentsOfRun — see ComponentStore. The same clear as
+// EraseRunComponentsByOwner, on one run.
+func (s PG) EraseRunComponentsOfRun(ctx context.Context, runID uuid.UUID, owner string) (int, error) {
+	return s.eraseComponentRowsOf(ctx, `UPDATE run_components
+		SET owner = NULL, name = NULL, version = NULL, definition = NULL, component_id = NULL
+		WHERE owner = $1 AND run_id = $2`, owner, runID)
+}
+
 // eraseComponentRowsOf runs one person's erasure statement. Owner "" is the
 // organisation's rows, which no person's erasure may take.
-func (s PG) eraseComponentRowsOf(ctx context.Context, stmt, owner string) (int, error) {
+func (s PG) eraseComponentRowsOf(ctx context.Context, stmt, owner string, args ...any) (int, error) {
 	if owner == "" {
 		return 0, errors.New("store: erase components by owner: an owner is required")
 	}
-	tag, err := s.Pool.Exec(ctx, stmt, owner)
+	tag, err := s.Pool.Exec(ctx, stmt, append([]any{owner}, args...)...)
 	if err != nil {
 		return 0, fmt.Errorf("store: erase components by owner: %w", err)
 	}
