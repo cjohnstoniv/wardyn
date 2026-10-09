@@ -66,6 +66,7 @@ import {
   me,
   modelAccess,
   openLoginPane,
+  cardSignInAws,
   openModelConnections,
   openLoginPaneAssertingColdPull,
   putProvider,
@@ -291,7 +292,7 @@ test("sso-pin-dispatch: a pin changed after capture warns, refuses the run, and 
   await dexSignIn(page, MEMBER_EMAIL);
   await openModelConnections(page);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
-  await expect(page.getByRole("button", { name: "Sign in to AWS" }).first()).toBeVisible({ timeout: 60_000 });
+  await expect(cardSignInAws(page)).toBeVisible({ timeout: 60_000 });
 
   // The refusal is the provider's own (providerBedrockRefusal, mpBRPinned):
   // the run does not spend the wrong identity, and the sentence names both
