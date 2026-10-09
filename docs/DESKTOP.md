@@ -370,8 +370,8 @@ Five files, all under [`deploy/desktop/`](../deploy/desktop/):
 ### `com.wardyn.daemon.plist`
 
 - The launchd `LaunchDaemon`.
-- Runs `wardyn-desktop.sh up` at load and every 5 minutes after (`StartInterval`) — the same "re-assert, don't assume" posture MDM uses for the files it owns, not a foreground process launchd has to keep alive
-- (`wardynd`'s own container carries `restart: unless-stopped`; this job's only work is making sure the *stack* is up).
+- Runs `wardyn-desktop.sh up` at load and every 5 minutes after (`StartInterval`) — the same "re-assert, don't assume" posture MDM uses for the files it owns, not a foreground process launchd has to keep alive.
+- `wardynd`'s own container carries `restart: unless-stopped`; this job's only work is making sure the *stack* is up.
 
 ### `wardyn.service` + `wardyn.timer`
 
