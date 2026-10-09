@@ -153,7 +153,7 @@ test.describe("Erase someone's data (security admin)", () => {
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByText("Erase someone's data", { exact: true }).first()).toBeVisible();
     // Everything but Recordings is ticked on open; Recordings stays opt-in.
-    for (const label of ["Credentials", "Personal details in audit events", "Run tasks", "Run output", "Copies kept for masking"]) {
+    for (const label of ["Credentials", "Personal details in audit events", "Run tasks", "Run output", "Saved components", "Copies kept for masking"]) {
       await expect(dialog.getByRole("checkbox", { name: new RegExp(`^${label}`) })).toBeChecked();
     }
     await expect(dialog.getByRole("checkbox", { name: /^Recordings/ })).not.toBeChecked();
@@ -167,7 +167,7 @@ test.describe("Erase someone's data (security admin)", () => {
     // The real route answers per scope; the dialog names each one it ran.
     await expect(dialog.getByText(`Erased the chosen data for ${person.email}.`)).toBeVisible();
     await expect(dialog.getByText("Recorded in the Audit log as person.erasure.")).toBeVisible();
-    await expect(dialog.getByText("Erased", { exact: true })).toHaveCount(5);
+    await expect(dialog.getByText("Erased", { exact: true })).toHaveCount(6);
     await expect(dialog.getByText("Recordings")).toHaveCount(0);
     await dialog.getByRole("button", { name: "Close" }).first().click();
 

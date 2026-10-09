@@ -521,17 +521,18 @@ test.describe("governance — the security admin's console (real per-person toke
     await expect(page.getByRole("button", { name: /^Deny$/ }).first()).toBeEnabled();
   });
 
-  test("but NOT the super admin's surfaces: writing a secret is refused, and it says why", async ({ page }) => {
+  test("but NOT the super admin's surfaces: org Secrets is not offered, and /secrets is their own namespace", async ({ page }) => {
     // M-2: org Secrets is super-admin only, so it is not in this tier's
     // Admin-view nav (packet M-A); their own namespace is the User view's.
     await gotoConsole(page, "admin");
     await expect(sidebarLink(page, "Secrets")).toHaveCount(0);
     await navToRoute(page, "/secrets");
 
-    // Purely operator-gated (secrets.tsx:81,115) — the one chokepoint every
-    // secret-write caller routes through.
-    await expect(page.getByRole("button", { name: "Add secret" })).toBeDisabled();
-    await expect(page.getByText(OPERATOR_ONLY_REASON, { exact: true })).toBeVisible();
+    // A person writes their OWN secrets (PUT /secrets/{name} stores under the
+    // caller), so Add is live and no admin-only reason shows; the reserved-name
+    // refusal below is the server's wall.
+    await expect(page.getByRole("button", { name: "Add secret" })).toBeEnabled();
+    await expect(page.getByText(OPERATOR_ONLY_REASON, { exact: true })).toHaveCount(0);
   });
 
   test("real security admin receives a server refusal on secret writes", async ({ page }) => {
