@@ -714,14 +714,17 @@ export type SetupFixAction = "add_secret" | "scan_workspace" | "none" | (string 
 // the sandbox), "brokered_mint" (a github_token/git_pat grant minted/resolved
 // at task time), "resident_env" (an env_secret grant: the value is in the
 // sandbox environment for the whole run) or "resident_file" (a file_secret
-// grant: the value is a file in the sandbox for the whole run). Absent when
-// not applicable (workspace/egress/backend rows carry no single credential).
+// grant: the value is a file in the sandbox for the whole run). "none" is a
+// workspace-integration row that delivers no credential on purpose (the system
+// authenticates outside HTTP). Absent when not applicable (workspace/egress/backend
+// rows carry no single credential).
 export type SetupItemResidency =
   | "proxy_injected"
   | "resident_mount"
   | "brokered_mint"
   | "resident_env"
   | "resident_file"
+  | "none"
   | (string & {});
 
 export interface SetupFix {

@@ -511,4 +511,23 @@ describe("AUTONOMY_BOUND / autonomyBoundSentence — ruling 1 (#96 review)", () 
     const detailClause = s.slice(s.indexOf(": ") + 2, -1);
     expect(detailClause.split("; ")).toHaveLength(3);
   });
+
+  // The organisation's cap on runs that carry a component the launcher defined
+  // names itself in bound_by as "custom_component" (Go componentAutonomyCause;
+  // wire-parity pins the spelling). Its reason text is "your organisation's rule
+  // for runs that use your own custom components".
+  it("custom_component alone renders its own sentence in the same shape", () => {
+    const s = autonomyBoundSentence(["custom_component"]);
+    expect(s).toBe("Bound by this run's custom components: your organisation limits runs that use components you defined.");
+    expect(s).toMatch(/^Bound by this run's /);
+    expect(s.endsWith(".")).toBe(true);
+  });
+
+  it("a tie that includes custom_component names both causes and does not throw", () => {
+    const s = autonomyBoundSentence(["egress_open", "custom_component"]);
+    expect(s).toBe(
+      "Bound by this run's network reach and custom components: it can reach hosts beyond the baseline; " +
+        "your organisation limits runs that use components you defined.",
+    );
+  });
 });

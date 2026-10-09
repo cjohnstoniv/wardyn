@@ -7,7 +7,7 @@
 // organisation's catalog under /components. Imported directly (import { components })
 // by the screens that use it, so no other route carries this module.
 import type { Component, ComponentRequest, ComponentSaved, MyComponents } from "../types";
-import { asJson, errText, HttpError, throwIfPending, wfetch } from "./core";
+import { asJson, errText, HttpError, wfetch } from "./core";
 
 const json = (body: ComponentRequest): RequestInit => ({ body: JSON.stringify(body) });
 
@@ -49,6 +49,5 @@ export const components = {
   async remove(id: string): Promise<void> {
     const res = await wfetch(`/components/${encodeURIComponent(id)}`, { method: "DELETE" });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
-    await throwIfPending(res);
   },
 };

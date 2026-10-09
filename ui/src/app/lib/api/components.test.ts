@@ -36,7 +36,7 @@ describe("components client — routes and verbs", () => {
   ])("%s", async (_n, run, path, method, body) => {
     await run();
     const c = call();
-    expect(c.path).toMatch(new RegExp(`${path}$`));
+    expect(c.path).toBe(`/api/v1${path}`);
     expect(c.method).toBe(method);
     expect(c.body).toBe(body);
   });
@@ -48,7 +48,7 @@ describe("components client — routes and verbs", () => {
     fetchMock.mockImplementation(async () => new Response(null, { status: 204 }));
     await expect(run()).resolves.toBeUndefined();
     const c = call();
-    expect(c.path).toMatch(new RegExp(`${path}$`));
+    expect(c.path).toBe(`/api/v1${path}`);
     expect(c.method).toBe("DELETE");
   });
 

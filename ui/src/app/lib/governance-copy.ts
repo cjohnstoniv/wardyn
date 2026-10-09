@@ -34,6 +34,7 @@ import {
   AUTONOMY_RUBRIC_ROW_KEYS,
   type AutonomyLevel,
   type AutonomyRubric,
+  type AutonomyBoundKey,
   type AutonomyRubricRowKey,
   type RunLimits,
 } from "./api/governance";
@@ -645,7 +646,7 @@ export const AUTONOMY_RAIL = {
 // Per-cause fragments — the single source both AUTONOMY_BOUND's one-cause
 // sentences and autonomyBoundSentence's tied-cause composition read from, so
 // the two can never say something different about the same row.
-const AUTONOMY_BOUND_DETAIL: Record<AutonomyRubricRowKey, { dimension: string; detail: string }> = {
+const AUTONOMY_BOUND_DETAIL: Record<AutonomyBoundKey, { dimension: string; detail: string }> = {
   egress_open: { dimension: "network reach", detail: "it can reach hosts beyond the baseline" },
   egress_reviewed: { dimension: "network reach", detail: "new hosts are approved on first use" },
   egress_sealed: { dimension: "network reach", detail: "baseline hosts only" },
@@ -655,6 +656,9 @@ const AUTONOMY_BOUND_DETAIL: Record<AutonomyRubricRowKey, { dimension: string; d
   confinement_cc1: { dimension: "barrier", detail: "Fence, confinement class CC1" },
   confinement_cc2: { dimension: "barrier", detail: "Wall, confinement class CC2" },
   confinement_cc3: { dimension: "barrier", detail: "Vault, confinement class CC3" },
+  // The org's cap on runs that use a component the launcher defined; the Go
+  // reason names it "your organisation's rule for runs that use your own custom components".
+  custom_component: { dimension: "custom components", detail: "your organisation limits runs that use components you defined" },
 };
 
 // One sentence per cause — frozen, byte for byte, from the mock round's
@@ -691,9 +695,12 @@ function joinDetails(items: string[]): string {
 // combination (nine rows tie in at most 2^3 - 1 = 7 shapes — a table would
 // have to enumerate all of them and would still drift from AUTONOMY_BOUND the
 // day a fragment's wording changes).
-export function autonomyBoundSentence(causes: AutonomyRubricRowKey[]): string {
+export function autonomyBoundSentence(causes: AutonomyBoundKey[]): string {
   if (causes.length === 0) return AUTONOMY_RAIL.NO_CAP;
-  if (causes.length === 1) return AUTONOMY_BOUND[causes[0]];
+  if (causes.length === 1) {
+    const only = AUTONOMY_BOUND_DETAIL[causes[0]];
+    return `Bound by this run's ${only.dimension}: ${only.detail}.`;
+  }
   const dims = causes.map((c) => AUTONOMY_BOUND_DETAIL[c].dimension);
   const details = causes.map((c) => AUTONOMY_BOUND_DETAIL[c].detail);
   return `Bound by this run's ${joinAnd(dims)}: ${joinDetails(details)}.`;
