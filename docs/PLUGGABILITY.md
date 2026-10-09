@@ -143,6 +143,7 @@
 | LLM gateway | none — the route is hard-wired in [`internal/egress/proxy/local_routes.go`](../internal/egress/proxy/local_routes.go) (no swap point) | `direct` (pinned-IP RoundTrip) | LiteLLM / Portkey / Envoy AI GW behind wardyn-proxy | external gateway (planned) | — (nothing to conform to) | no seam yet; external gateway planned |
 | Interactive access lane | none — the browser terminal (`Runner.Attach`), the SSH gateway ([`internal/api/sshgateway.go`](../internal/api/sshgateway.go)) and the UI-sandbox relay ([`internal/api/uigateway.go`](../internal/api/uigateway.go) over `runner.ExecSession`) are three hard-wired lanes, not implementations of one interface | browser terminal; `ssh`/sftp/`-L` and the `ui_apps` relay both off unless their listener env var is set | same (each lane is opt-in per deployment) | Apps ride the **image**, not a seam; see [below](#interactive-access-lane-registered-alternates). | `test/conformance`'s `ExecStreamLoopbackRelay`, the one layer these lanes share; see [below](#interactive-access-lane-conformance). | no seam yet; native lane exploratory |
 | Git provider kinds | none, and deliberately not one — `GitProviderKind` ([`internal/types/workspace_provider.go`](../internal/types/workspace_provider.go)) is a **CLOSED set**: `github` and `azure_devops`, enumerated in `ClosedGitProviderKinds`, with `ClosedGitLanes` (`app`/`pat`/`ssh`) closed beside it | both kinds ship; a row's `base_urls` cover the self-hosted variants (GHES, ADO Server) of the SAME two kinds over HTTPS | same — a new forge FAMILY is a code change, not a configuration one | none, by construction | — (nothing to conform to) | no seam, on purpose; see [below](#git-provider-kinds-seam-status). |
+| Run-level custom components | none, and deliberately not one — `ComponentKind` ([`internal/types/component.go`](../internal/types/component.go)) is a closed vocabulary; the one open kind, `custom`, is data (a `ComponentDefinition`), not code | no component exists until an admin or a person defines one | same — a component names hosts and secrets, and a new delivery mode is a code change | none, by construction | — (nothing to conform to) | no seam, on purpose; see [below](#run-level-custom-components-seam-status). |
 | Content detection | `contentscan.Detector` | builtin (known-secret / regex / entropy / PII) + sidecar | builtin + **LLM Guard / Presidio** sidecar | `DetectorSidecarURL` (shipped) | — | shipped (detector seam) |
 | Audit sinks | `audit.Sink` | none (Postgres recorder always) | OpenTelemetry → SIEM | `file` / `webhook` / `syslog` (shipped) via `WARDYN_AUDIT_SINKS` | — | shipped (non-registry: struct-field JSON parse, [`internal/audit/sinks/config.go`](../internal/audit/sinks/config.go) — not a `/healthz` component) |
 | eBPF ground-truth | host sensor ingest | none (honest-degraded `/healthz`) | **Tetragon** (enforcement) | Falco / Tracee (ingest-compatible) | — | shipped (ingest seam) |
@@ -210,6 +211,14 @@
 - A registry here would let an operator declare a kind Wardyn has no lane, no egress bundle and no claim table for,
   - and a security policy whose vocabulary an operator can extend is a policy whose refusals nobody can enumerate.
 - GitLab/Bitbucket stay reachable for one release through the legacy `scm_hosts` list, and adding either as a kind is a 0.8+ code change.
+
+### Run-level custom components: seam status
+
+- no seam, on purpose.
+- A component is data, not an implementation of an interface: a list of hosts, the secrets to deliver, and plain variables.
+- At launch Wardyn expands it into allowed domains and eligible grants, so it enforces nothing itself ([POLICIES.md](POLICIES.md#custom-components)).
+- The delivery modes are a closed set of three: `header` at the proxy, and `env` or `file` inside the sandbox.
+  - A fourth would need its own enforcement and its own residual, so it is a code change.
 
 ---
 

@@ -15,6 +15,9 @@
 - Reuse is scoped: the document always strict-decodes as a policy, and it passes `validatePolicySpec` for a security or super admin.
 - For them `wardyn run --policy-file p.yaml` runs it again as is, as long as the run's allowlist, with what launch added, still fits the per-policy domain cap.
 - For anyone else, mount sources read `<redacted>` and grant secret names are dropped: it is a starting point, with those values to fill in.
+- A run that used an organisation component's shared secret is the exception for every reader, an admin included.
+  - Its grant carries `shared: true`, which no authored policy may set, so validation refuses the document.
+  - It is a record of the run, not a policy to reuse: select the component on the new run instead ([Custom components](#custom-components)).
 
 ## Authoring surfaces
 
@@ -598,13 +601,16 @@ What the check does and does not settle:
 
 ## `eligible_grants[]` — `GrantSpec`
 
+- How each grant kind reaches a run, and what the sandbox can read afterwards, is in [CREDENTIALS.md](CREDENTIALS.md).
+
 **Which ceiling entry bounds a grant.**
 
 - When a member's run policy is clamped to their ceiling, each proposed grant is bounded by the ceiling entry that names the **same pairing**:
   - the same `(host, secret_name, header, format, require_tls)` for `api_key` (header case-insensitively; an absent `header`/`format` compares as the `Authorization`/`Bearer %s` they resolve to, an absent `require_tls` as `false`),
   - the same `(host, secret_name)` for `git_pat`,
   - the same `(host, key_secret_ref, known_hosts_secret_ref)` for `ssh_key`,
-  - the same `(name, secret_name)` for `env_secret`.
+  - the same `(name, secret_name)` for `env_secret`,
+  - the same `(file, secret_name)` for `file_secret`.
 - `header` and `format` are part of `api_key`'s identity because moving the operator's secret under a header they never authorized is a different grant, not a narrower one.
 - `require_tls` for the mirror of that reason — asking for the same secret on a transport the operator refused is a wider grant, not a narrower one.
 - So a ceiling listing two `ssh_key` grants for two forges holds a run to *its own* forge's `ttl_seconds` and `requires_approval`, and the order the entries appear in never changes the answer.
@@ -613,7 +619,7 @@ What the check does and does not settle:
 
 | Field | Type | Default | What it does |
 |---|---|---|---|
-| `kind` | `string` | — (required) | `github_token`, `cloud_sts`, `api_key`, `git_pat`, `ssh_key`, or `env_secret`. Anything else is rejected. |
+| `kind` | `string` | — (required) | `github_token`, `cloud_sts`, `api_key`, `git_pat`, `ssh_key`, `env_secret`, or `file_secret`. Anything else is rejected. |
 | `scope` | object | — | Kind-specific; see the table below. |
 | `ttl_seconds` | `int` | `3600` | An upper bound Wardyn *requests* for the minted credential's freshness window, honored by no grant kind today; 1h is the default and the maximum, and negative is rejected. See [`ttl_seconds`](#ttl_seconds). |
 | `requires_approval` | `bool` | `false` | Force a human approval before the broker will mint, instead of auto-minting on policy. |
@@ -627,6 +633,7 @@ What the check does and does not settle:
 | `git_pat` | `{"host":"…","secret_name":"…","username":"…","repos":[…],"access":"read","api":false,"forge":"generic"}` | `host` and `secret_name` are required; four optional axes (`repos`, `access`, `api`, `forge`) narrow the **run**, not the PAT. See [`git_pat`](#git_pat). |
 | `ssh_key` | `{"host":"…","key_secret_ref":"…","username":"…","known_hosts_secret_ref":"…"}` | `host` and `key_secret_ref` are required; `host` must be an SSH-over-443 provider Wardyn supports. A **documented exception** to the no-resident-secret rule. See [`ssh_key`](#ssh_key). |
 | `env_secret` | `{"name":"MY_TOKEN","secret_name":"…"}` | Puts the stored secret's **value** into the sandbox environment under `name`; the weakest-bounded kind, admin-only by default. See [`env_secret`](#env_secret). |
+| `file_secret` | `{"file":"token","secret_name":"…"}` | Puts the stored secret's **value** in a file named `file` under `/run/wardyn/secrets`; as weakly bounded as `env_secret`, and admin-only under the same switch. See [`file_secret`](#file_secret). |
 
 ### `ttl_seconds`
 
@@ -639,10 +646,10 @@ What the check does and does not settle:
 
 ### `owner_only`
 
-- For a grant that names a stored secret (`api_key`, `git_pat`, `ssh_key`, `env_secret`): resolve it from the run owner's own row only, never the operator's row of that name.
+- For a grant that names a stored secret (`api_key`, `git_pat`, `ssh_key`, `env_secret`, `file_secret`): resolve it from the run owner's own row only, never the operator's row of that name.
 - Without it a member who has stored no row of their own is served the operator's.
 - Mark every per-person credential (a personal access token, a personal API key) `owner_only`.
-- A launch whose owner has no row is refused at run-create; a row removed after launch is refused at mint (or skipped at dispatch, for `env_secret`).
+- A launch whose owner has no row is refused at run-create; a row removed after launch is refused at mint (or skipped at dispatch, for `env_secret` and `file_secret`).
 - A person stores their own row with `PUT /secrets/<name>` signed in as themselves; an admin's own writes land in the operator namespace, so an admin stores theirs from the user view.
 - A run with no person behind it (the admin token, local mode) can store no row but the operator's, so for it that row is its own and the grant reads it.
 - Refused on `github_token` and `cloud_sts`.
@@ -673,7 +680,8 @@ What the check does and does not settle:
   - so a host the operator wrote down only as `vendor.example:8443` is credentialed on that authored port and nowhere else;
 - Set it for an https-only vendor the proxy has no table for, which is the one case those rules cannot tell apart from a legitimately plaintext internal connector.
 - It is part of the pairing too, so a member cannot keep the operator's blessed `(host, secret, header, format)` and drop the TLS requirement.
-- Proxy-side injection only; the value never enters the sandbox.
+- Proxy-side injection only: Wardyn places no copy in the sandbox, though a host that echoes request headers can return the value ([CREDENTIALS.md](CREDENTIALS.md#residuals)).
+- `shared` in the scope is set by Wardyn for an organisation component's secret and never authored: every policy door refuses it.
 - Referencing a reserved platform secret (`wardyn-signing-key`, `wardyn-session-key`) is refused.
 
 ### `git_pat`
@@ -724,12 +732,59 @@ What the check does and does not settle:
   - reserved secret names are refused, and so is every per-person model-provider credential (`wardyn-provider-*`);
   - and a grant may not overwrite a variable dispatch already set.
 - **The weakest-bounded kind: resident for the whole run, no TTL, and nothing to revoke** — the value is mask-registered but a secret already in a process env cannot be taken back.
-- **Admin-only by default**: a member's `env_secret` grant is dropped even for a ceiling-listed pairing unless the operator sets `WARDYN_ALLOW_MEMBER_ENV_SECRET` —
+- **Admin-only by default**: a member's `env_secret` grant is dropped even for a ceiling-listed pairing unless the operator sets `WARDYN_ALLOW_USER_ENV_SECRET` (the same switch governs `file_secret`) —
   - on every route a run policy arrives by (inline body, selected stored row, deployment default) and whatever governance profile the member is assigned,
   - since the rule is a role check rather than a ceiling check.
 - Prefer `api_key` whenever the tool can be pointed at a host + header instead.
 - See [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5.1a.
 
+### `file_secret`
+
+- Both `file` and `secret_name` are required, and no other key is accepted.
+- `file` is a file name, never a path: `[a-z0-9][a-z0-9_.-]{0,62}`.
+  - Wardyn writes it under `/run/wardyn/secrets`, so no grant can address anywhere else.
+- It follows `env_secret`'s rules: resolved at dispatch, no mint, `requires_approval` refused, reserved secret names refused.
+- A grant the store cannot resolve, or a second grant for a file already delivered, is skipped and the file is absent.
+- A runner that cannot deliver files fails the run instead.
+- **Resident for the whole run, no TTL, nothing to revoke.** The file modes per runner are in [CREDENTIALS.md](CREDENTIALS.md#a-value-the-program-reads-itself).
+- **Admin-only by default**, under the same switch as `env_secret`: `WARDYN_ALLOW_USER_ENV_SECRET`.
+- A person's own secret reaches a run this way, without that switch, through a component's `file` delivery ([Custom components](#custom-components)).
+
+## Custom components
+
+- A component is a named set of destinations and secrets that a run carries beside its policy. It is not a `RunPolicySpec` field.
+- At launch Wardyn expands each component into policy primitives: its hosts join `allowed_domains`, and each secret becomes an `eligible_grants` entry ([`internal/api/components_run.go#componentGrant`](../internal/api/components_run.go)).
+- The run's resolved policy therefore shows the expansion, not the component.
+- Admins set who may use components in [OPERATIONS.md](OPERATIONS.md#custom-components); the clients are in [sdk.md](sdk.md#custom-components).
+
+| Kind | Who writes it | Where it lives |
+|---|---|---|
+| Organisation | an admin, `PUT /components/{id}` | usable only by people granted it |
+| Saved | the person, `POST /me/components` | theirs alone |
+| Inline | the run request, `components[].inline` | that run only, never stored |
+
+- A run names stored components by `components[].id`. It carries at most 8.
+- A definition holds `hosts` (up to 32), `secrets` (up to 8) and plain `config` variables (up to 32 keys).
+- Each secret names one stored secret and one delivery:
+
+| `delivery.mode` | What the secret does | The grant it becomes |
+|---|---|---|
+| `header` | The egress proxy adds it to requests for `delivery.host`; the sandbox holds no copy | `api_key` |
+| `env` | The value is set in the sandbox environment as `delivery.var` for the whole run | `env_secret`, `owner_only` |
+| `file` | The value is a file named `delivery.file` under `/run/wardyn/secrets` | `file_secret`, `owner_only` |
+
+- What each delivery leaves readable inside the sandbox is in [CREDENTIALS.md](CREDENTIALS.md).
+- `header` takes a bare host: no port, no wildcard.
+  - It must be one of the component's `hosts`, listed bare or as `:443`.
+  - The proxy keys a credential by bare host, so the header goes to that host's standard TLS port only.
+- A host carries one credential on a run. A second one is refused as `component_host_collision`, or `credential_host_collision` when two policy credentials meet.
+- A person's component may name DNS hosts only. An IP address in any spelling is refused, and so is a name that ends in a number.
+- An organisation's component keeps an admin's allowlist semantics for such an entry.
+- Only an organisation's component may set `shared` (the operator's secret, header only) or `plain_http`.
+- A person's own secret must sit in their own namespace; Wardyn never falls back to an operator secret of the same name.
+- A component may not name a host that serves a model on this deployment, or a host a deny list blocks.
+- A variable or config key may not be `WARDYN_*`, a name that decides how programs start or reach the network (`PATH`, `HTTPS_PROXY`, …), or start with `LD_`, `GIT_CONFIG_` or `CLAUDE_CODE_` ([`internal/types/component.go#reservedComponentEnvNames`](../internal/types/component.go)).
+- Wardyn does not revoke a delivered secret. Rotate it at its issuer after a suspected leak.
 
 ## `workspace_mounts[]` — `WorkspaceMount`
 

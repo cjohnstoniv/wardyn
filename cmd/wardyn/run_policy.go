@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	yaml "gopkg.in/yaml.v3"
 
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -22,18 +23,23 @@ import (
 // S-28, S-30, S-33, S-49, S-50). Change it there first.
 const (
 	runPolicyShort = "Show the policy a run got when it started, as YAML"
-	runPolicyLong  = `Shows where a run's policy came from, what Wardyn changed when the run started, and the policy itself as YAML. If you're an admin, you can reuse the YAML as is with "wardyn run --policy-file". Anyone else sees hidden values as <redacted> and fills them in first.`
+	runPolicyLong  = `Shows where a run's policy came from, what Wardyn changed when the run started, and the policy itself as YAML. If you're an admin, you can reuse the YAML as is with "wardyn run --policy-file", unless the run used an organization component's shared secret: then the YAML is a record of the run, not a policy to reuse, and you select the component again on the new run. Anyone else sees hidden values as <redacted> and fills them in first.`
 
 	runPolicyNotYet = "Wardyn records this run's policy when its sandbox is set up. This run hasn't reached that step."
 	runPolicyNever  = "This run stopped before its sandbox was set up, so no policy was applied to it."
 	runPolicyOlder  = "This run started before Wardyn recorded each change, so some changes may not be listed."
 	runPolicyHidden = "Values shown as <redacted> are hidden from you. Fill them in before using this as a policy."
+	// runPolicyShared is printed when a grant carries the shared mark Wardyn sets
+	// for an organization component's secret: policy validation refuses that mark.
+	runPolicyShared = "This run used an organization component's shared secret. This is a record of the run, not a policy to reuse: Wardyn refuses a policy that sets shared. Select the component again on the new run."
 	runPolicyHeader = "Changed when the run started"
 )
 
 // runPolicyCmd returns `wardyn run policy <run-id> [--json]`. The header lines
 // are YAML comments, so the output redirected to a file is a policy file: as is
-// for an admin, a starting point for anyone else (runPolicyHidden says so).
+// for an admin, a starting point for anyone else (runPolicyHidden says so). A
+// run with a shared component grant is the exception: runPolicyShared says its
+// output is a record.
 func runPolicyCmd(client clientFn) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
@@ -126,7 +132,24 @@ func runPolicyHeaderLines(v sdk.RunPolicyView, person string) []string {
 	if v.Redacted {
 		lines = append(lines, runPolicyHidden)
 	}
+	if runPolicyHasSharedGrant(v.Spec) {
+		lines = append(lines, runPolicyShared)
+	}
 	return lines
+}
+
+// runPolicyHasSharedGrant reports whether any grant carries "shared": true in its
+// scope, the mark validatePolicySpec refuses in an authored policy.
+func runPolicyHasSharedGrant(spec *types.RunPolicySpec) bool {
+	if spec == nil {
+		return false
+	}
+	return slices.ContainsFunc(spec.EligibleGrants, func(g types.GrantSpec) bool {
+		var sc struct {
+			Shared bool `json:"shared"`
+		}
+		return json.Unmarshal(g.Scope, &sc) == nil && sc.Shared
+	})
 }
 
 func runPolicySourceLine(s sdk.RunPolicySource) string {

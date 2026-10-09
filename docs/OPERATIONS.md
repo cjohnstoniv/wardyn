@@ -824,7 +824,7 @@ curl -H "authorization: Bearer $WARDYN_ADMIN_TOKEN" \
 - `head_hash` is the value to diff against your SIEM's copy.
 
 - **One sweep at a time.**
-  - The audit log cannot be pruned, so this is the endpoint whose cost only ever rises.
+  - The audit log shrinks only by the partition drop, a month at a time and off by default (see [Audit retention](#audit-retention-the-attested-partition-drop)), so this is the endpoint whose cost only rises until a drop.
   - And a retrying client or an overlapping cron would otherwise turn one operator action into several full re-hash
     passes, each holding a database connection.
   - A request that arrives while a sweep is running is refused with **429** and a `Retry-After`; it is not queued.
@@ -1015,9 +1015,11 @@ lever today**. Concretely:
     through a proxy that streams.
   - A member whose ownership of the requested `run_id` cannot be checked gets `503` (`audit_scope_unavailable`), not
     an empty export; a run that is not theirs or does not exist still answers the same empty `200`.
+  - Below the security tier both `GET /audit` and the export leave out the name of an organisation's `shared` component
+    secret; `admin` and `security_admin` receive the rows as recorded ([Custom components](#custom-components)).
 
 - **This is asymmetric with session recordings**, which have the retention lever audit lacks:
-  `WARDYN_RECORDING_RETENTION_DAYS` ([`docs/ENV.md:47`](ENV.md)) age-deletes stored PTY casts, defaulting to
+  `WARDYN_RECORDING_RETENTION_DAYS` ([ENV.md](ENV.md#wardyn_recording_retention_days)) age-deletes stored PTY casts, defaulting to
   keep-forever but operator-settable, and each sweep that removes anything emits its own `recording.retention.sweep`
   audit event.
   - Under a "right to erasure" obligation on data an audit row could contain, the honest answer is: **you cannot
@@ -1189,7 +1191,7 @@ erases one person's retained records by explicit scope, in one audited act
 | `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
 | `recordings` | their session recordings and `source: "recording"` output rows, with durable per-run fences against later writes; direct stdout and pane snapshots retain their independent `run_outputs` scope |
 | `run_tasks` | the task text of the runs the person created |
-| `components` | the components the person saved, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against |
+| `components` | the components the person saved, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
 | `credentials` | the person's stored credentials and the key they sit under (the same erase as `DELETE /people/{principal}/credentials`, which erases credentials only and nothing else) |
 
@@ -1856,6 +1858,10 @@ A signed-in human who matches nothing in a valid map, with no default role set, 
   - no `run_id`, or one they don't own, both return an empty `200` list,
   - so a member's unfiltered audit feed is always empty by design
   - (the console reaches it from a run's Audit tab, whose "open full Audit" link carries `?run_id=`).
+- That run-scoped read, and the run's grant list, leave out the name of an organisation's `shared` component secret:
+  - this holds for every caller below the security tier, whatever action wrote the row, and covers `secret_name`, `key_secret_ref` and `known_hosts_secret_ref`;
+  - `admin` and `security_admin` read the rows as recorded, and `run.policy.resolve` and `credential.mint` are recorded whole;
+  - see [Custom components](#custom-components) and [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 - `GET /setup/status` redacts operator-diagnostic detail (checks, secret names, runner detail) for a member.
 
 **Workspace ownership (0.6, migration `0048`)** and **Secret ownership (0.7, migration `0050`)** are the second and third owned nouns after runs.
@@ -2650,7 +2656,7 @@ so a submount under the share's home could be writable inside the sandbox
 | `agent` | exact `--agent` string | narrows | which agent/harness a member may launch (same seam). Deliberately NOT constrained to the harness catalog, at the gate or at the grant write: `WARDYN_AGENT_IMAGES` custom agents are supported, so a catalog check would make an operator's own entry unwriteable |
 | `workspace_provider` | exact git provider row id | narrows | which git provider row a member's repositories may come from; see [`workspace_provider`](#workspace_provider) below |
 | `model_provider` | exact model provider id | narrows | which model provider a person's run may use; see [`model_provider`](#model_provider) below |
-| `feature` | `ssh_key` or `api_token` | narrows | whether a member may add an SSH key or mint an API token at all; see [`feature`](#feature) below |
+| `feature` | `ssh_key`, `api_token` or `custom_component` | narrows | whether a member may add an SSH key, mint an API token or define a custom component at all; see [`feature`](#feature) below |
 | `policy` | stored policy uuid | narrows | which stored policy a member may select for their own run (`policy_id` on `POST /runs`/preflight, `denyUserRequest`, same seam). |
 | | | | Only the choice: the selected row is still bounded by the member's ceiling, and a run that names no policy is not gated. |
 | | | | Checked before the row is read, so an ungranted id is refused whether or not it exists |
@@ -2685,7 +2691,7 @@ so a submount under the share's home could be writable inside the sandbox
 - **The widening kind reads the same rows the other way.**
 - For `image` (`capGranted`) an unenforced kind is *refused*, not permitted, because 0.5 refused it too.
 - Both directions obey "an upgrade with no configuration changes nothing".
-- So `image` needs *both* the switch on and an exact-ref grant; the other five need only the absence of a deny until you enforce them.
+- So `image` needs *both* the switch on and an exact-ref grant; the other nine need only the absence of a deny until you enforce them (a value an admin restricted, as a new organisation component is, also needs an allow row naming it).
 - That rule is also why `agent` narrows rather than widens:
   - launching an agent is something every member could already do,
   - so a widening kind would refuse every member run on every deployment that has not enforced it — i.e. all of them on upgrade day.
@@ -2858,9 +2864,14 @@ so a submount under the share's home could be writable inside the sandbox
 
 #### `feature`
 
-- whether a member may add an SSH key (`POST /me/ssh-keys`) or mint an API token (`POST /me/tokens`) at all
+- whether a member may add an SSH key (`POST /me/ssh-keys`), mint an API token (`POST /me/tokens`) or define a custom component of their own at all
 - One check at each mint door (the token door keeps its user-view `409`; the SSH door stores a capped key, #564).
 - Mint only: a key or token that already exists keeps working until it is removed or revoked.
+- `custom_component` gates saving a component (`POST`/`PUT /me/components`) and attaching one the person defined, inline or saved, to a run (`componentAttachRefusal`, [`internal/api/components_authz.go`](../internal/api/components_authz.go)).
+  - It is on for everyone from the release that adds it, until a deny row names it. This is the one value that sets aside "an upgrade with no configuration changes nothing".
+  - Where `feature` is already enforced, it is off for anyone no allow row (the value or `*`) covers, so write that row before upgrading.
+  - A refusal carries the reason `capability_feature` with the target `runs.component`.
+  - See [Custom components](#custom-components).
 - Any other value is refused at write time (`400`)
 
 #### `GET /permissions/explain`
@@ -2876,6 +2887,89 @@ so a submount under the share's home could be writable inside the sandbox
   - only rows naming that subject or `all` are read,
   - so a user's group and type rows are not included.
 - The subject is folded the way a grant's subject is, and a user type that doesn't exist is refused (`400`); `kinds` defaults to every kind
+
+### Custom components
+
+- A **component** is a named set of destinations and secrets that a run carries beside its policy.
+- [POLICIES.md](POLICIES.md#custom-components) gives the definition and its rules. This section is what an admin controls and what a launch leaves behind.
+- A component never enforces anything itself. At launch its hosts join the run's allowed domains and each secret becomes a grant, so every later check is the one policy already has.
+
+| Source | Written by | Who may attach it |
+|---|---|---|
+| Organisation | an admin: `GET`/`PUT`/`DELETE /components` | a person granted its id, under the `component` capability |
+| Saved | the person: `/me/components` | its owner, while the `custom_component` feature allows |
+| Inline | the run request: `components[].inline` | the person who wrote it, under the same feature |
+
+- A secret reaches the run in one of three ways:
+  - `header`: the egress proxy adds it to requests for one host, and the sandbox holds no copy;
+  - `env`: a variable in the sandbox environment, for the whole run;
+  - `file`: a file under `/run/wardyn/secrets`, for the whole run.
+- Variable and file delivery put the value where any code in the sandbox can read it. [CREDENTIALS.md](CREDENTIALS.md) states what each leaves readable and what bounds it.
+- A `header` delivery names a bare host with no port, and the header goes to that host's standard TLS port only.
+- The proxy terminates TLS for each such host, because it can add a header only to a request it can read.
+
+**The `components` settings.**
+
+- They are the `components` block of the site configuration (`PUT /site-config`; [`internal/types/site_config.go#ComponentSettings`](../internal/types/site_config.go)).
+- A deployment with no block reads every field at its default, and `PUT` stores an all-default block as none.
+- Each change is audited: `site_config.write` carries `components_require_vault`, `components_deny_resident_delivery` and `components_autonomy_cap`.
+
+| Field | Default | What it does |
+|---|---|---|
+| `require_vault_for_credentials` | `false` | Off, a component's header credential does not raise the run's confinement floor. On, it floors the run to `CC3` as any `api_key` grant to a host outside the coding-agent baseline does, for organisation and person components alike |
+| `deny_resident_delivery` | `false` | On, a run carrying a component with `env` or `file` delivery is refused with `component_resident_delivery_denied`, deployment-wide and for every source. `header` delivery keeps working. Saved components are unchanged |
+| `autonomy_cap` | `""` (no cap) | `L1` holds the run's tool calls; `L0` refuses an unattended run. Applies to a run carrying a component its launcher defined, inline or saved, with or without a governance profile. The cap only tightens, and any other value is a `400` (`site_config_invalid`) on `PUT /site-config` |
+
+- An organisation's component never counts toward `autonomy_cap`.
+- With no cap set, a run with a self-defined component is only marked: `run.create` carries `self_added_reach`.
+- The refusal is `component_autonomy` ([Every denial that isn't a 404](#every-denial-that-isnt-a-404)).
+
+**Who may attach one.**
+
+- The `component` capability narrows which organisation component a person may attach (`value` is its uuid).
+  - A new organisation component is created restricted, in the same transaction as its row. Nobody may attach it until an allow row names its id; a wildcard allow does not list anyone.
+  - Deleting it keeps the restriction, writing it back (audited `capability.availability.write`) if it had been lifted.
+  - Lifting the restriction of an id that is no organisation component is a `404` `component_not_found`.
+  - A held availability change that lifts a component deleted since it was proposed cannot apply. It stays pending until someone rejects it.
+- The `custom_component` value of the `feature` capability gates defining a component of one's own, saved or inline.
+  - It is on for everyone until a deny row names it. Once `feature` is enforced, a person needs an allow row for `custom_component` or `*`.
+  - Deleting one's own saved component is never refused for want of it.
+- A person below the admin tier never reads an organisation component they are not granted. A refused id and an absent one answer with the same bytes.
+
+**Saving.**
+
+- Every save answers `requirements[]`: one row per secret the component names, `present` or `missing`, with the fix `add_secret` for a missing one. It lists names and verdicts only, never a header or config value, and never refuses a save.
+- A person's component is looked up in their own namespace; an organisation's `shared` secret in the operator's.
+- A person holds at most 32 saved components, the organisation 256.
+
+**One credential per host.**
+
+- The proxy keys an injected credential by bare host, so a host carries one credential on a run.
+- A component's header host that already has one is refused `component_host_collision`.
+- For every run, with or without components, two credentials bound to one host are refused `credential_host_collision` at create, Review and the policy preview, and dispatch checks again.
+- On the per-person Azure DevOps lane a redirect for a lane host loses its token instead ([Egress redirects: two tiers](#egress-redirects-two-tiers)); a component header or policy `api_key` on a lane host is refused.
+
+**What a launch leaves behind.**
+
+- `run.create` carries `components`, and `run.component.attach` is written once per component. A refused launch writes `run.component.refuse`. A component that widened egress writes `run.egress.add` with `kind` `component` ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
+- Audit rows never carry a person's component hosts, header name or secret names: they carry the ordinal, shape and counts. An organisation's component keeps its name in the row.
+- The run's resolved policy and grants are the run's own record. A finished run keeps the hosts and secret names it used, as it keeps any other policy host, and so do its `run.env_secret.resolve`, `run.file_secret.resolve` and `secret.read` rows.
+- Migration `0136_components` holds saved components; a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `components`.
+- Migration `0137_run_components` holds each run's snapshot; grant the app role `SELECT, INSERT, UPDATE` on `run_components`, and keep it in backups.
+- A revive, restart or end extension re-checks the owner's doors from that snapshot. An organisation component that was deleted refuses it with `component_gone`; one no longer granted, or a `custom_component` no longer allowed, refuses with the capability reason.
+
+**An organisation's shared secret.**
+
+- A `shared` secret is the operator's credential, read from the operator's namespace and used by a member's run. Only an organisation's component can carry one, and only as a header.
+- Its name is withheld from a caller whose audit reads are narrowed to one run: the run's owner, an API token, an SSH-authenticated caller.
+  - They read the run's audit rows, its grant list, the component view and a policy export without the name.
+  - A refusal relayed into the sandbox does not name it, and the `secret.read` row targets the grant id.
+- `admin` and `security_admin` read rows as recorded: the audit read, the run's policy view and its export.
+- `run.policy.resolve` and `credential.mint` are recorded whole, so the sinks and the partition export carry the name.
+- Not covered: operator secret names that already reached a run's owner on rows unrelated to components, such as `run.artifact.redirect`, and `workspace_mounts[].source` on `run.policy.resolve`.
+- A run launched with a shared secret has a policy export that is a record, not a policy to reuse; see [The policy a run got](#the-policy-a-run-got).
+
+**Erasing a person.** The `components` scope is in [Erasing a person](#erasing-a-person). Wardyn does not revoke a person's secret at its issuer when a component or a person is erased.
 
 ### Per-user API tokens: stop sharing the admin token
 
@@ -3443,7 +3537,7 @@ A deployment that hits BOTH conditions (no role map, no admin list, AND `WARDYN_
 | `capability_agent` | `agent`: a member named an agent they aren't granted (`denyUserRequest`, [`internal/api/runs_create_validate.go`](../internal/api/runs_create_validate.go)) | ⛔ `403` |
 | `capability_workspace_provider` | a member's work would come from a git provider row they aren't granted — the row `admitRepoURL` resolves the repository's derived clone URL to ([`internal/api/workspace_providers.go`](../internal/api/workspace_providers.go)). Six doors: `POST /runs` over the resolved spec's repos and over the legacy `repo` field (target `runs.workspace_provider`), and `POST /workspaces`, `PUT /workspaces/{id}`, `POST /workspaces/{id}/scan` and `POST /workspaces/{id}/build` (target `workspaces.source_provider`). The body names the provider KIND and nothing else — never a base URL, never the row id, because `GET /workspace-providers` is a security-tier door for exactly that reason. Silent on a deployment with no provider rows, and on a repository whose host no row CLAIMS (including one still admitted through the legacy `scm_hosts` list): there is no row for a grant to name | ⛔ `403` |
 | `capability_model_provider` | a member's run would use a model provider they aren't granted — the one they named (`model_provider`), the one the workspace pins, or, when no single granted provider is left, the ones serving the agent (`enforceRunModelProvider`, [`internal/api/run_model_provider.go`](../internal/api/run_model_provider.go); target `runs.model_provider`), and on revive/restart/extend as the owner (the run's recorded provider, [`internal/api/run_owner_authority.go`](../internal/api/run_owner_authority.go)). Review answers the same refusal as create. Since 0.8.2 (#1018) a provider the member NAMED in the request is answered exactly as an id no provider has — the `422` `model_provider_unavailable` "there is no model provider by that name" sentence, whatever the provider's state — because provider ids are guessable; only this row records the true reason. A provider the workspace's pin names, which a workspace read hides from them, is refused `403` with the sentence that names no provider, and the row carries `provider`. The key door (`PUT` and `DELETE /model-providers/{id}/credential`, target `model_provider.credential`; a `DELETE` by a person who still holds a key for the provider is not refused) and the sign-in door (`/model-providers/{id}/sign-in`, target `model_provider.sign_in`) likewise answer the `404` an unknown id gets (`denyProviderAsMissing`, [`internal/api/model_provider_credentials.go`](../internal/api/model_provider_credentials.go)). Only the unnamed case — the one provider serving the agent, or none granted — answers `403`, with the one sentence that names no provider (the row carries `provider` when exactly one serves) | ⛔ `403` when no provider was named; otherwise byte-identical to an unknown id (`422` at create and Review, `404` at the key and sign-in doors) |
-| `capability_feature` | a member tried to add an SSH key (target `me.ssh_keys`) or mint an API token (target `me.tokens`) and that feature is not available to them. Checked before the key or token is validated or stored | ⛔ `403` |
+| `capability_feature` | a member tried to add an SSH key (target `me.ssh_keys`), mint an API token (target `me.tokens`) or define a custom component, saved or inline (target `runs.component`), and that feature is not available to them. Checked before the key or token is validated or stored | ⛔ `403` |
 | `capability_policy` | `policy_id`: a member selected a stored policy they aren't granted (`denyUserRequest`, target `runs.policy`, on `POST /runs` and preflight alike), and on revive/restart/extend as the owner ([`internal/api/run_owner_authority.go`](../internal/api/run_owner_authority.go)) | ⛔ `403` |
 | `capability_component` | a person tried to attach an org component they aren't granted (`componentAttachRefusal`, [`internal/api/components_authz.go`](../internal/api/components_authz.go), target `runs.component`). An org component is usable by nobody until an allow row names its id. The body names nothing about the component — not its name, hosts, secrets or id | ⛔ `403` |
 | `component_autonomy` | the organisation's autonomy cap on runs that carry a component the launcher defined themselves (site config `components.autonomy_cap`, `L1` or `L0`) alone bound the run's autonomy level, at create and Review alike (`resolveRunAutonomy` → `foldComponentCap`, [`internal/api/runs_autonomy_components.go`](../internal/api/runs_autonomy_components.go)). Same rungs and targets as the `governance_profile` autonomy refusals below (`runs.task_mode`, `runs.interactive_start`, `runs.seed_auto_tools`, `runs.interactive`, `runs.agent`). It applies with or without a governance profile; under one the lower level wins, and a tie refuses as `governance_profile` with `custom_component` among its causes. The body's `policy` is the deployment's, not the profile's. With no cap set (the default) nothing is refused | ⛔ `403` |
@@ -3547,6 +3641,7 @@ enforces, not a re-derivation:
 - A portal's delegated token is refused `403` `delegation_scope`: the route is not on the delegation list.
 - Below the security admin tier the policy's mount sources read `<redacted>` and grant secret names are dropped (`redacted: true`), the same rule as reading a policy; `llm_inspection` secret values are never returned.
 - The result is a policy document you can reuse as is only from the security admin tier up; below it, fill in the hidden values first.
+- A run that used an organisation component's shared secret is the exception for everyone: its grant carries `shared: true`, which no authored policy may set, so the document is a record of the run and validation refuses it. Select the component again on the new run.
 
 **What it does not cover:** hosts approved while the run was running (Approvals), credentials the run was handed (Credentials), folders added from a workspace or a drive, and Azure DevOps access that came from the connection's defaults.
 
@@ -4133,6 +4228,7 @@ Delivery per install path:
 - The header and format of that row's `proxy_header` delivery come with it, so a feed authenticating with something other than `Authorization: Bearer` (the bare-secret path's hardcoded shape) finally can.
 - Which secret that is follows the delivery, not the role name: whatever the row calls it, its `proxy_header` secret is the credential this redirect presents.
 - There is no UI control for picking an integration here yet; the seam is usable today via `PUT /site-config` and `wardyn site-config set`.
+- On a run that uses the per-person Azure DevOps lane, a redirect whose `to` is one of that lane's hosts (a package feed on `pkgs.dev.azure.com`, say) is applied without its token: the person's own token serves that host, and the run's audit shows `run.artifact.redirect` with outcome `warn`. Runs that do not use the lane keep the redirect's token.
 
 What you get depends on whether `ecosystem` is set:
 
@@ -4923,7 +5019,7 @@ Naming these is the point of the walk, not a caveat on it:
 - `internal_hosts` is for a private endpoint that is not a provider's configured gateway: "[Bedrock on a private endpoint](#bedrock-on-a-private-endpoint)" above is that case, its dials take the ordinary guard, and they do need the lift.
 - Two invariants carry over unchanged: the `egress_redirects` lane above still points the AGENT'S OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` env, or an equivalent harness setting) at a gateway independently of Wardyn's injection lane.
 - An `egress_redirects` row can never be pointed *at* the gateway or the public provider host to swap an artifact-registry token onto model traffic.
-- `planArtifactRedirect` refuses that redirect outright (audited `run.artifact.redirect`, `warn`) rather than letting `buildInjector`'s last-write-wins host map silently collide the two.
+- `planArtifactRedirect` refuses that redirect outright (audited `run.artifact.redirect`, `warn`) rather than handing the proxy two rules for one host, which `buildInjector` refuses at proxy start (a host carries one credential).
 
 ### Upgrading from `artifact_overrides`
 

@@ -7,7 +7,7 @@
   - and to a self-hosted Azure DevOps Server for the paste-your-own path (see [Azure DevOps Server](#azure-devops-server)).
 - An Azure DevOps row no longer shares one credential. A shared personal access token (PAT) or shared SSH key is refused on these rows, so every clone and every REST call is made as the person who started the run,
   - and Azure DevOps itself names that person in its audit and push history.
-- A sandbox never holds that credential: the proxy adds it on the way out. A run gets only the capabilities an administrator has granted, and anything beyond that is held for a decision rather than silently allowed or silently refused.
+- A sandbox holds an inert placeholder, not that credential: the proxy adds the real one on the way out ([how it reaches a run, and what a host that echoes headers can return](CREDENTIALS.md#residuals)). A run gets only the capabilities an administrator has granted, and anything beyond that is held for a decision rather than silently allowed or silently refused.
 
 ## Choosing how people connect
 
@@ -282,7 +282,7 @@ That has two consequences worth knowing before you hit them:
 
 ## How a run's token lives (`minted_pat`)
 
-- One PAT per run, in the person's name, and it never enters the sandbox.
+- One PAT per run, in the person's name. The sandbox holds an inert placeholder, not the PAT ([how a credential reaches a run](CREDENTIALS.md)).
 - A run can hold more than one live token over its life (renewal and widening add one and leave the older to expire), each no wider than the newest.
 - **At launch**, Wardyn redeems an access token from the person's stored grant and creates a PAT named `Wardyn run <first eight characters of the run id>`.
   - It is scoped to this organisation only,
