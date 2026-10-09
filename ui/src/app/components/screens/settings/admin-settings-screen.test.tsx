@@ -29,8 +29,12 @@ vi.mock("../../../lib/api/setup", () => ({
 }));
 
 const getSiteConfigMock = vi.fn();
+const getSiteConfigSnapshotMock = vi.fn();
 vi.mock("../../../lib/api/health", () => ({
-  health: { getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a) },
+  health: {
+    getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a),
+    getSiteConfigSnapshot: (...a: unknown[]) => getSiteConfigSnapshotMock(...a),
+  },
 }));
 
 const getDrivesMock = vi.fn();
@@ -103,6 +107,7 @@ function renderScreen(operator = true, operatorResolved = true) {
 beforeEach(() => {
   getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
   getSiteConfigMock.mockReset().mockResolvedValue({});
+  getSiteConfigSnapshotMock.mockReset().mockResolvedValue({ siteConfig: {}, etag: null });
   getDrivesMock
     .mockReset()
     .mockResolvedValue({
@@ -127,7 +132,7 @@ beforeEach(() => {
 });
 
 describe("AdminSettingsScreen", () => {
-  it("draws Host, Model providers, Providers, User drives, Admin SSH keys, Approval notifications, SCIM provisioning — in that order", async () => {
+  it("draws Host, Model providers, Providers, Custom components, User drives, Admin SSH keys, Approval notifications, SCIM provisioning — in that order", async () => {
     renderScreen();
     await screen.findByTestId("user-drives-card");
     const html = document.body.innerHTML;
@@ -135,6 +140,7 @@ describe("AdminSettingsScreen", () => {
       "Host",
       MODEL_PROVIDERS.TITLE,
       "Workspace providers",
+      "Custom components",
       "User drives",
       ADMIN_SSH_KEYS.TITLE,
       APPROVAL_NOTIFY.TITLE,
@@ -156,13 +162,16 @@ describe("AdminSettingsScreen", () => {
     const sshCard = (await screen.findByRole("heading", { name: startsWith(ADMIN_SSH_KEYS.TITLE) })).closest("section")!;
     const drivesCard = await screen.findByTestId("user-drives-card");
     const scimCard = await screen.findByTestId("scim-card");
-    // Host, Branding, Model providers (list), Providers, User drives, Admin SSH keys,
-    // Approval notifications, SCIM.
-    expect(card.parentElement?.children).toHaveLength(8);
+    // Host, Branding, Model providers (list), Providers, Custom components, User drives,
+    // Admin SSH keys, Approval notifications, SCIM.
+    expect(card.parentElement?.children).toHaveLength(9);
     expect(card.parentElement?.lastElementChild).toBe(scimCard);
     expect(scimCard.previousElementSibling).toBe(card);
     expect(card.previousElementSibling).toBe(sshCard);
     expect(sshCard.previousElementSibling).toBe(drivesCard);
+    // Custom components sits between the providers and the drives (0.8.9).
+    const componentsCard = await screen.findByTestId("components-settings-card");
+    expect(componentsCard.nextElementSibling).toBe(drivesCard);
   });
 
   // The retired Model provider card is replaced by the Model providers list;
