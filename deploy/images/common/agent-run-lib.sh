@@ -65,9 +65,11 @@ export CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL="${CLAUDE_CODE_DISAB
 # rewrite over a correct file is harmless. Best-effort system-trust install
 # covers remaining clients. The CA PRIVATE key never enters the sandbox; only
 # the proxy holds it. No-op when WARDYN_MITM_CA_PEM is unset.
+# WARDYN_MITM_CA_DIR overrides the directory for tests that run the script on a
+# shared host; no run sets it.
 install_mitm_ca() {
     [[ -n "${WARDYN_MITM_CA_PEM:-}" ]] || return 0
-    local dir="/tmp/wardyn" sys="" c
+    local dir="${WARDYN_MITM_CA_DIR:-/tmp/wardyn}" sys="" c
     mkdir -p "$dir" 2>/dev/null || true
     chmod 1777 "$dir" 2>/dev/null || true
     { printf '%s\n' "$WARDYN_MITM_CA_PEM" > "$dir/mitm-ca.pem" \
