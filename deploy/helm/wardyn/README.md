@@ -147,10 +147,10 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
   --set auth.adminToken.secretRef.name=wardyn-auth
 ```
 
-- (`wardyn-pg` here needs an `age-key` entry alongside `dsn` — see [Database (DSN)](#database-dsn--two-modes) below.
+- `wardyn-pg` here needs an `age-key` entry alongside `dsn` — see [Database (DSN)](#database-dsn--two-modes) below.
 - **The chart refuses to render without this pairing**, because skipping it is not a trade-off:
   - the default age identity is ephemeral, regenerated every boot, so boot 2 cannot decrypt what boot 1 encrypted and the pod crash-loops on its SECOND restart with those rows unrecoverable.
-- `--set secrets.allowEphemeralAgeKey=true` renders it anyway for a throwaway install.)
+- `--set secrets.allowEphemeralAgeKey=true` renders it anyway for a throwaway install.
 
 - The image defaults `WARDYN_DEFAULT_POLICY=/examples/policies/default.json` (baked into `Dockerfile.wardynd` — images older than that fix crash-loop on boot with `open examples/policies/default.json: no such file or directory`; on one of those, add `--set env.WARDYN_DEFAULT_POLICY=/examples/policies/default.json`).
 - To use a different bundled policy, set `env.WARDYN_DEFAULT_POLICY` to any file under `/examples/policies/` (`demo.json`, ...).
