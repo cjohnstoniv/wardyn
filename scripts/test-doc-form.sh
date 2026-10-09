@@ -425,4 +425,15 @@ grep -qF "(budget 50, over by" <<<"$out" || fail "front-matter words must count 
 if run_gate --budget docs/scratch/front.md=50; then fail "a budget below the front-matter words must exit non-zero"; fi
 echo "ok  front-matter words still count in the prose budget"
 
+# Lead lines: an image-only line does not count toward the five-line summary
+# cap; a text line, or an image with text on the line, still does.
+scratch lead
+{ printf '# Scratch\n\n- one\n- two\n- three\n- four\n- five\n\n![alt text one](a.webp)\n\n![alt text two](b.webp)\n\n## Section\n\n- %s\n' "$(words 20)"; } > "$TMP/docs/scratch/lead.md"
+run_gate || fail "5 lead lines plus 2 image-only lines must PASS: $(gate_says)"
+echo "ok  image-only lines do not count toward the five-line lead"
+{ printf '# Scratch\n\n- one\n- two\n- three\n- four\n- five\n- six\n\n![alt text one](a.webp)\n\n## Section\n\n- %s\n' "$(words 20)"; } > "$TMP/docs/scratch/lead.md"
+check_fails "6 text lead lines plus an image line" "no <=5-line summary"
+{ printf '# Scratch\n\n- one\n- two\n- three\n- four\n- five\n\n![alt text one](a.webp) caption\n\n## Section\n\n- %s\n' "$(words 20)"; } > "$TMP/docs/scratch/lead.md"
+check_fails "5 lead lines plus an image line that also has text" "no <=5-line summary"
+
 echo "doc-form tests: PASS"

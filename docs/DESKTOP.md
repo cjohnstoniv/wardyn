@@ -8,6 +8,8 @@
 
 ## Topology
 
+![On an enrolled laptop, everyday work takes the normal path while each sandbox leaves only through its egress proxy, nothing connects in, and the proxy adds keys to outbound requests.](img/wardyn-laptop.webp)
+
 ```
        MDM (Jamf / Intune / …)
                 │  renders + re-asserts 4 files per device

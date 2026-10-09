@@ -30,6 +30,7 @@ Rules for every tracked Markdown file. `make lint` checks form and links; `make 
 | Lines between the H1 and the first H2 | 1–5 | `has_summary` |
 
 - Prose share = paragraph, quote and over-cap item lines, over non-blank lines.
+- A line that is only an image does not count toward the 1–5 lines between the H1 and the first H2.
 - A blockquote is prose. An alert's marker line is exempt from the word count; its body is not.
 - YAML front matter that starts on line 1 (between two lines that are exactly `---`) is metadata: it meets no cap, summary rule or share, but its words still count in the prose budget.
 - Aim below the caps: sentences ≤ 25 words, paragraphs ≤ 3 sentences.
@@ -121,6 +122,7 @@ The citation guard ([`cmd/wardynd/citation_guard_test.go`](../cmd/wardynd/citati
 - Alt text on every image: one sentence on what it shows.
 - Light and dark: `<picture>` with a `prefers-color-scheme: dark` source and two files, because an SVG shown as an image ignores the page's colours.
 - `docs/img/<id>.svg` is the source; a `.webp` render sits beside it only when GitHub cannot render the visual. One row per visual in the [image index](img/README.md).
+- A dark-only `.webp` figure is shown as built and its source is kept outside the repository; review checks its labels and alt text, and the diagram gate checks only that its alt text is present.
 - An SVG shown through `<img>` or `<picture>` loads no external file: fonts, textures and icons are inline (`data:` URIs) or absent.
 - No foreign copyright or metadata line in an SVG. No hostnames, tokens, account or customer data in any visual.
 - No new Mermaid fences. An existing fence stays only until its SVG replacement ships.

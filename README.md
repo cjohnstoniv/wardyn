@@ -3,8 +3,12 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) [![Status: pre-alpha](https://img.shields.io/badge/Status-pre--alpha-orange.svg)](#status) [![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8.svg)](go.mod) [![CI](https://github.com/cjohnstoniv/wardyn/actions/workflows/ci.yml/badge.svg)](https://github.com/cjohnstoniv/wardyn/actions/workflows/ci.yml)
 
 - **The open-source governed-sandbox control plane for any workload — identity, controls, and audit are the product; the sandbox is a pluggable commodity.**
-- Anything you run under your own credentials inherits your full blast radius; Wardyn is the layer in between — per-run identity, credentials minted and revoked per run, one audited path off-host, no resident key.
+- Anything you run under your own credentials inherits your full blast radius. Wardyn is the layer in between — per-run identity, credentials minted and revoked per run, one audited path off-host, no resident key by default.
 - Coding agents are the flagship use.
+
+![An isometric compound where one outer wall surrounds a datacentre and people's devices, each sandbox sits behind Wardyn's inner wall, and the org control plane links by policy and audit.](docs/img/wardyn-walls.webp)
+
+![One outer wall surrounds the cloud zone and people's devices; each sandbox has its own inner wall and proxy, nothing connects in, and the proxy adds keys to outbound requests.](docs/img/wardyn-places.webp)
 
 ## Before you start
 
@@ -182,6 +186,8 @@ wardyn setup status   # what's configured + the next command per unmet check
 [v05]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-05-your-first-policy.mp4
 
 ## Architecture at a glance
+
+![A run from left to right: console, control plane, sandbox behind a barrier, egress proxy, then destinations allowed, held or denied by policy; the proxy adds keys to outbound requests.](docs/img/wardyn-run.webp)
 
 ```mermaid
 flowchart LR

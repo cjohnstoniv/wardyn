@@ -36,6 +36,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- Figures in the docs: the README (its opener and its architecture section), the docs index, the Desktop
+  topology section and the threat model's confinement-class section gain illustrations beside the text they
+  explain. No diagram or sentence was removed.
 - A strict YAML/JSON policy-source parser and comment-preserving edit helpers for the policy
   editors. Ambiguous keys, aliases, tags, directives and unsafe numbers are refused before JSON
   conversion (#1917).
