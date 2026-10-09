@@ -2391,8 +2391,7 @@ exactly these terms.
     - SigV4 because a MITM'd request cannot be re-signed,
     - and the bearer sub-mode because Wardyn has no Bedrock extractor or prompt-bearing channel, so terminating its TLS makes the body readable but never scanned.
   - The blind flag is emitted for the model hosts the proxy RECOGNISES —
-    - the two built-in vendor hosts, any control-plane-configured gateway (a model provider's base URL), and AWS's published Bedrock service labels including their `-fips` and dual-stack `api.aws` forms (`isBedrockHost`,
-      [`internal/egress/proxy/llm_routes.go`](../internal/egress/proxy/llm_routes.go)) —
+    - the two built-in vendor hosts, any control-plane-configured gateway (a model provider's base URL), and AWS's published Bedrock service labels including their `-fips` and dual-stack `api.aws` forms (`isBedrockHost`, [`internal/egress/proxy/llm_classify.go`](../internal/egress/proxy/llm_classify.go)) —
     - once per host, and capped at 64 distinct hosts per run (`maxBlindHosts`);
     - a suppression past that cap is COUNTED on the decision sink's drop counter (surfacing as `egress:dropped-decisions-<n>`) rather than silently omitted,
     - so the blind rows are a lower bound on uninspected model tunnels, never a claim that there were no others.
@@ -2516,8 +2515,7 @@ Claude sign-in's token, each the person's own on their model provider.
 - A single span over `max_scan_bytes` (default **1 MiB**) or a body over **32 MiB**
   is forwarded **unscanned** (`span_oversize` / `body_oversize`). Fails **open** by
   default; `block` + `on_scanner_error=block` fails it **closed**.
-- **Every POST on a brokered LLM route that is not `messages`/`count_tokens` (Anthropic) or `chat/completions` (OpenAI) is recorded `uninspected_channel`** and refused under fail-closed block — the classifiers' default arm, not an enumerated list (`classifyAnthropicLLM`/`classifyOpenAILLM`,
-  [`internal/egress/proxy/llm_routes.go`](../internal/egress/proxy/llm_routes.go)).
+- **Every POST on a brokered LLM route that is not `messages`/`count_tokens` (Anthropic) or `chat/completions` (OpenAI) is recorded `uninspected_channel`** and refused under fail-closed block — the classifiers' default arm, not an enumerated list (`classifyAnthropicLLM`/`classifyOpenAILLM`, [`internal/egress/proxy/llm_classify.go`](../internal/egress/proxy/llm_classify.go)).
   - That covers `POST /v1/messages/batches` (N prompts, different schema), the legacy `/v1/complete` and `/v1/completions`, OpenAI `/v1/responses` and `/v1/embeddings`, **and the vendors' content-upload surface** — Anthropic `POST /v1/files`, OpenAI `POST /v1/files` and the multipart `/v1/audio/{transcriptions,translations}` plus `/v1/audio/speech`.
   - Those upload paths used to fall to a quiet default: forwarded with the brokered credential, unscanned, with no scan block on the decision row and no fail-closed refusal.
     - So the strict operator's one hard control was bypassable by choosing a different suffix.
@@ -2939,8 +2937,7 @@ the sandbox, is still loaded, and the agent runs as the uid that owns it.
 
 ### The unauthenticated metrics listener (opt-in)
 
-- `WARDYN_METRICS_LISTEN` (Helm `metrics.listener.enabled`, off by default) opens a second, plain-HTTP listener that answers `GET /metrics` with **no credential** and `404` to everything else (`api.Server.MetricsListenerHandler`,
-  [`cmd/wardynd/boot_metrics.go`](../cmd/wardynd/boot_metrics.go)).
+- `WARDYN_METRICS_LISTEN` (Helm `metrics.listener.enabled`, off by default) opens a second, plain-HTTP listener that answers `GET /metrics` with **no credential** and `404` to everything else (`api.Server.MetricsListenerHandler`, [`internal/api/metrics_listener.go`](../internal/api/metrics_listener.go)).
 - `/metrics` on the console port keeps its `requireOperator` gate.
 - Boot refuses a metrics address equal to the console, internal, SSH or UI-sandbox listener, so the open route never sits on an address an authenticated route uses.
 
