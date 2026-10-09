@@ -1936,708 +1936,400 @@ hiding them would repeat the failure mode we are designed to avoid.
     - So a deployment that adds GHES and lists only its own base URL stops admitting public-github repositories it admitted the day before.
     - With NO rows every predicate is a no-op and the deployment admits exactly what 0.7.1 admitted.
 
-41. **A provider row's `lanes` bound which credential lane a run may use — never
-    what that credential itself can reach.** Dropping `pat` or `ssh` from a row
-    drops the matching grant's wiring at every grant site (and, for `pat`, the
-    ADO egress bundle that arm would have added with it). It does not narrow the
-    credential: a `git_pat` carries whatever scope the operator issued it with,
-    there is no GitLab or Azure DevOps Server equivalent of a repo-scoped installation token (Azure
-    DevOps Services gets a run-scoped one through `minted_pat`, residual #62), and
-    the default never-resident PAT broker (asset #4, and the `git_pat` row of
-    §5's credential table) makes it NON-RESIDENT, never least-privilege. So a
-    provider row narrowing `base_urls` to `https://dev.azure.com/acme` bounds the
-    URLs a run may *ask* to clone; the PAT behind the `pat` lane still carries
-    the operator's whole scope on that host, and under the
-    `WARDYN_GIT_PAT_BROKER=off` escape hatch the PAT VALUE is resident in the
-    sandbox for the life of the run. Read this residual together with #40: the
-    provider policy is a bound on ADDRESSES, the forge's ACL and the PAT's own
-    scope are the bound on ACCESS, and 0.7.2 adds the first without touching
-    either of the others. **[0.8.2] On an Azure DevOps row the shared `pat` and
-    `ssh` lanes are refused at both write doors and their stored credentials
-    are deleted at first start, so the operator-wide PAT this residual describes
-    no longer exists there; each person's run carries a credential in that
-    person's own name instead, and residual #62 is what replaces it.** The
-    residual is unchanged for GitLab and GitHub PAT rows.
+41. **A provider row's `lanes` bound which credential lane a run may use — never what that credential itself can reach.**
+    - Dropping `pat` or `ssh` from a row drops the matching grant's wiring at every grant site (and, for `pat`, the ADO egress bundle that arm would have added with it).
+    - It does not narrow the credential.
+    - A `git_pat` carries whatever scope the operator issued it with.
+    - There is no GitLab or Azure DevOps Server equivalent of a repo-scoped installation token (Azure DevOps Services gets a run-scoped one through `minted_pat`, residual #62).
+    - And the default never-resident PAT broker (asset #4, and the `git_pat` row of §5's credential table) makes it NON-RESIDENT, never least-privilege.
+    - So a provider row narrowing `base_urls` to `https://dev.azure.com/acme` bounds the URLs a run may *ask* to clone.
+    - The PAT behind the `pat` lane still carries the operator's whole scope on that host.
+    - And under the `WARDYN_GIT_PAT_BROKER=off` escape hatch the PAT VALUE is resident in the sandbox for the life of the run.
+    - Read this residual together with #40.
+    - The provider policy is a bound on ADDRESSES, the forge's ACL and the PAT's own scope are the bound on ACCESS, and 0.7.2 adds the first without touching either of the others.
+    - **[0.8.2] On an Azure DevOps row the shared `pat` and `ssh` lanes are refused at both write doors and their stored credentials are deleted at first start.**
+    - **So the operator-wide PAT this residual describes no longer exists there.**
+    - **Each person's run carries a credential in that person's own name instead.**
+    - **And residual #62 is what replaces it.**
+    - The residual is unchanged for GitLab and GitHub PAT rows.
 
-42. **The private-IP denial memo is per run and bounded at 64 entries, so a name
-    that becomes public mid-run stays refused until the run ends.** 0.7.2 answers
-    an identical repeat of a `builtin:private-ip` refusal straight out of a
-    per-run memo — byte-identical 403, no re-resolve, no second audit row —
-    because that one verdict cannot change its mind inside a run: the
-    `internal_hosts` lift that would lift it is compiled into the sidecar's
-    config at dispatch and read once at startup. Two bounds and their costs.
-    (i) The memo's keys are `host:port` strings the SANDBOX chooses, so it takes
-    a ceiling it cannot be pushed past — `privateIPMemoMax = 64`
-    (`internal/egress/proxy/private_ip_memo.go`), evicting the least-recent
-    entry, which costs nothing but a re-resolve and a fresh row on that host's
-    next attempt. (ii) The memo is per RUN, so a hostname whose address genuinely
-    changes from private to public mid-run keeps being refused for the rest of
-    that run; the remedy is the one the 403 itself gives — declare it under
-    `internal_hosts` — and a NEW run re-resolves from scratch. Nothing else is
-    memoed, deliberately: `builtin:resolve-failed` is a DNS fault that may clear
-    on the next attempt and an approval-pending hold is waiting for a human, so
-    both must keep asking. (iii) The memo is asked BEFORE the approval flow, not
-    after it: a retry against an address no `internal_hosts` entry can ever open
-    used to raise, or re-raise, an egress approval first — spending a human
-    decision on a host that would be denied afterwards regardless, and then
-    denying it with no row. The ordering is the bound: an operator's approval
-    queue is a scarce resource, and a refusal that cannot change its mind must
-    never be able to fill it. The evidence cost is one summary row carrying the
-    repeat count in place of N identical rows, which is the trade this residual
-    buys.
+42. **The private-IP denial memo is per run and bounded at 64 entries, so a name that becomes public mid-run stays refused until the run ends.**
+    - 0.7.2 answers an identical repeat of a `builtin:private-ip` refusal straight out of a per-run memo — byte-identical 403, no re-resolve, no second audit row — because that one verdict cannot change its mind inside a run.
+    - The `internal_hosts` lift that would lift it is compiled into the sidecar's config at dispatch and read once at startup.
+    - Two bounds and their costs.
+    - (i) The memo's keys are `host:port` strings the SANDBOX chooses.
+      - So it takes a ceiling it cannot be pushed past — `privateIPMemoMax = 64` ([`internal/egress/proxy/private_ip_memo.go`](../internal/egress/proxy/private_ip_memo.go)), evicting the least-recent entry, which costs nothing but a re-resolve and a fresh row on that host's next attempt.
+    - (ii) The memo is per RUN, so a hostname whose address genuinely changes from private to public mid-run keeps being refused for the rest of that run.
+      - The remedy is the one the 403 itself gives — declare it under `internal_hosts` — and a NEW run re-resolves from scratch.
+    - Nothing else is memoed, deliberately: `builtin:resolve-failed` is a DNS fault that may clear on the next attempt and an approval-pending hold is waiting for a human, so both must keep asking.
+    - (iii) The memo is asked BEFORE the approval flow, not after it.
+      - A retry against an address no `internal_hosts` entry can ever open used to raise, or re-raise, an egress approval first — spending a human decision on a host that would be denied afterwards regardless, and then denying it with no row.
+      - The ordering is the bound: an operator's approval queue is a scarce resource, and a refusal that cannot change its mind must never be able to fill it.
+    - The evidence cost is one summary row carrying the repeat count in place of N identical rows, which is the trade this residual buys.
 
-43. **Not every post-resolution address refusal can be lifted, and 0.7.2 stops
-    saying otherwise.** Only the private/reserved-range class (RFC1918/ULA/CGNAT)
-    is liftable, and only through `internal_hosts`. Loopback, link-local
-    (including the `169.254.169.254` metadata address), multicast, NAT64- and
-    IPv4-compatible-embedded and the other reserved ranges are refused
-    unconditionally, and until 0.7.2 they were told the liftable story: declare it
-    under `internal_hosts`, then start a new run. The residual that text CREATED
-    was a real one — an operator was instructed into a kill-and-redispatch cycle
-    that cannot succeed, and into widening an SSRF control that would not have
-    helped if it could be widened. The guard class now rides out of address
-    vetting into the denial body, and the never-liftable classes get their own
-    sentence with NO site-config remedy and NO lifetime clause, because there is
-    nothing to change and a new run would change nothing. Both variants keep rule
-    source `builtin:private-ip` and `X-Wardyn-Egress-Retry: never` — both are
-    final, which is the one thing the old text got right — and both bodies are now
-    golden literals, so the next widening of the guard cannot quietly re-merge
-    them. What is NOT bounded: the class names a RANGE FAMILY, not the address, by
-    the same disclosure rule the rest of these bodies follow.
+43. **Not every post-resolution address refusal can be lifted, and 0.7.2 stops saying otherwise.**
+    - Only the private/reserved-range class (RFC1918/ULA/CGNAT) is liftable, and only through `internal_hosts`.
+    - Loopback, link-local (including the `169.254.169.254` metadata address), multicast, NAT64- and IPv4-compatible-embedded and the other reserved ranges are refused unconditionally.
+    - And until 0.7.2 they were told the liftable story: declare it under `internal_hosts`, then start a new run.
+    - The residual that text CREATED was a real one.
+    - An operator was instructed into a kill-and-redispatch cycle that cannot succeed, and into widening an SSRF control that would not have helped if it could be widened.
+    - The guard class now rides out of address vetting into the denial body.
+    - And the never-liftable classes get their own sentence with NO site-config remedy and NO lifetime clause, because there is nothing to change and a new run would change nothing.
+    - Both variants keep rule source `builtin:private-ip` and `X-Wardyn-Egress-Retry: never` — both are final, which is the one thing the old text got right.
+    - And both bodies are now golden literals, so the next widening of the guard cannot quietly re-merge them.
+    - What is NOT bounded: the class names a RANGE FAMILY, not the address, by the same disclosure rule the rest of these bodies follow.
 
-44. **A run's end cancels its pending approvals from all THREE terminal writers,
-    and the cascade is still best-effort.** An approval left `PENDING` by a run
-    that has ended is decidable, and an `always` approve on one replays into the
-    workspace allowlist on behalf of a sandbox that is gone — a widening with no
-    asker, which is what the `CANCELLED` state exists to stop. 0.7.2 audited the
-    writers rather than trusting the claim: `STOPPED` has exactly one writer (the
-    idle reaper), which ran the credential-revoke half of the terminal cascade and
-    none of the approval half — and an idle-stopped run is typically idle
-    *because* its agent is parked on a `wait_for_review` hold, so that was the
-    arm most likely to strand one. Completion, failure/kill and the idle reaper
-    all cascade now, as does a run failed while already `RUNNING` (three dispatch
-    call sites take that arm with the sandbox and the sidecar up), and a
-    source-scanned census freezes the writer set so a fourth reds a test rather
-    than a queue. The residual: the cascade is best-effort by design — a failed
-    `CancelForRun` is logged and audited, never retried — so the decision door
-    carries the same rule as a second bound, answering `409` and CAS-cancelling a
-    terminal run's approval rather than deciding it. Both together mean a stranded
-    row is decided by nobody; neither alone would.
+44. **A run's end cancels its pending approvals from all THREE terminal writers, and the cascade is still best-effort.**
+    - An approval left `PENDING` by a run that has ended is decidable.
+    - And an `always` approve on one replays into the workspace allowlist on behalf of a sandbox that is gone — a widening with no asker, which is what the `CANCELLED` state exists to stop.
+    - 0.7.2 audited the writers rather than trusting the claim.
+    - `STOPPED` has exactly one writer (the idle reaper), which ran the credential-revoke half of the terminal cascade and none of the approval half.
+    - And an idle-stopped run is typically idle *because* its agent is parked on a `wait_for_review` hold, so that was the arm most likely to strand one.
+    - Completion, failure/kill and the idle reaper all cascade now, as does a run failed while already `RUNNING` (three dispatch call sites take that arm with the sandbox and the sidecar up).
+    - And a source-scanned census freezes the writer set so a fourth reds a test rather than a queue.
+    - The residual: the cascade is best-effort by design — a failed `CancelForRun` is logged and audited, never retried.
+    - So the decision door carries the same rule as a second bound, answering `409` and CAS-cancelling a terminal run's approval rather than deciding it.
+    - Both together mean a stranded row is decided by nobody; neither alone would.
 
-45. **A deployment can be told that an arbitrary HTTP server IS AWS IAM Identity
-    Center, and nothing downstream can tell.** `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE`
-    re-points both SSO services — the containerized `aws sso login`, every
-    `bedrock_sso` run's captured-credential exchange, the SSO egress allow-list entries
-    and the dispatch-time `CreateToken` URL — at one operator-named base URL,
-    `http://` included. It exists because the alternative was worse: without it,
-    "a member signs in on Kubernetes and their run gets THEIR OWN credentials"
-    could be tested only against a real AWS tenant, so it was tested nowhere, and
-    an untested credential path is a larger risk than a disclosed hatch. The
-    bounds are real but they are bounds, not a closure: it is refused unless
-    `WARDYN_ALLOW_TEST_ENDPOINTS=true` is ALSO set, it WARNs on every boot naming
-    itself a test hatch, it is boot-time-only (no `SiteConfig` field, so no live
-    API write can reach it), it moves only `AWS_ENDPOINT_URL_SSO`/`_SSO_OIDC` and
-    never the global `AWS_ENDPOINT_URL`, and the value is validated to be a
-    scheme-bearing, credential-free, query-free URL. What stays open is the whole
-    of what it does: an operator who sets both vars has pointed a real SSO login
-    at a server that can record the device flow and hand back credentials of its
-    choosing. Wardyn cannot distinguish that server from AWS — no SSO operation
-    Wardyn uses is signed (all four are `authtype: none`), which is exactly why
-    the fake works. The same acknowledgement unlocks a second thing:
-    a model provider's `bedrock.base_url` may be plain `http://`
-    (`validateModelProviders`, `internal/api/model_providers.go`), so model-plane
-    traffic — and, in bearer mode, the credential riding it — travels in cleartext
-    to whatever that URL names. Treat both as production-forbidden, not
-    production-discouraged. See `internal/api/awssso_endpoint.go`,
-    `internal/api/model_providers.go` and docs/ENV.md.
-46. **A model call can be PARKED for minutes, and a re-auth request outlives the hold that raised
-    it.** When a captured AWS SSO session lapses mid-run, the proxy holds the sandbox's
-    `GetRoleCredentials` request while its owner signs in again, instead of failing it
-    (`internal/egress/proxy/credhold.go`). The hold is bounded — one workflow per approval per run,
-    at most `maxReauthHolds` (8) workflows per run, each bounded by
-    `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` (default 600 s, clamped `[10s, 1800s]`) and by the sandbox
-    SDK's own tolerance, which Wardyn does not control: an SDK with a shorter request timeout than
-    the budget gives up first, and the knob exists to be lowered below it. Three things are
-    deliberately NOT closed. (a) **The parked request is not a paused agent**: the agent's tool call
-    is simply slow, and a client that disconnects loses the turn exactly as it does today — Wardyn
-    never claims a held call will resume, only that the sign-in is what a resume needs. (b) **The
-    approval row outlives the hold on purpose**: when the budget ends, the call fails with a
-    modelled `UnauthorizedException` and a `credential:reauth-timeout` decision row, and the PENDING
-    row stays — the sign-in is still wanted, and the 24 h sweeper or the run's terminal cascade
-    closes it. So a PENDING `credential_reauth` row is evidence a sign-in was asked for, never
-    evidence a request is still parked. (c) **`portal.sso.<region>` is one more host whose plaintext
-    the proxy sees** for the runs that carry this lane — exactly one host, exactly one port, only
-    with a paired injection grant, authored at dispatch from the run's own credential, never from
-    the sandbox. The proxy sees `GetRoleCredentials`/`ListAccountRoles`, never the model call.
-    Contained by `WARDYN_AWS_SSO_PROXY_INJECT=off`, which restores the 0.7.5 behaviour for new
-    dispatches (a run already dispatched keeps the lane it was authored with until it ends).
+45. **A deployment can be told that an arbitrary HTTP server IS AWS IAM Identity Center, and nothing downstream can tell.**
+    - `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` re-points both SSO services — the containerized `aws sso login`, every `bedrock_sso` run's captured-credential exchange, the SSO egress allow-list entries and the dispatch-time `CreateToken` URL — at one operator-named base URL, `http://` included.
+    - It exists because the alternative was worse.
+    - Without it, "a member signs in on Kubernetes and their run gets THEIR OWN credentials" could be tested only against a real AWS tenant, so it was tested nowhere.
+    - And an untested credential path is a larger risk than a disclosed hatch.
+    - The bounds are real but they are bounds, not a closure.
+      - It is refused unless `WARDYN_ALLOW_TEST_ENDPOINTS=true` is ALSO set, it WARNs on every boot naming itself a test hatch.
+      - It is boot-time-only (no `SiteConfig` field, so no live API write can reach it).
+      - It moves only `AWS_ENDPOINT_URL_SSO`/`_SSO_OIDC` and never the global `AWS_ENDPOINT_URL`.
+      - And the value is validated to be a scheme-bearing, credential-free, query-free URL.
+    - What stays open is the whole of what it does.
+    - An operator who sets both vars has pointed a real SSO login at a server that can record the device flow and hand back credentials of its choosing.
+    - Wardyn cannot distinguish that server from AWS — no SSO operation Wardyn uses is signed (all four are `authtype: none`), which is exactly why the fake works.
+    - The same acknowledgement unlocks a second thing.
+    - A model provider's `bedrock.base_url` may be plain `http://` (`validateModelProviders`, [`internal/api/model_providers.go`](../internal/api/model_providers.go)), so model-plane traffic — and, in bearer mode, the credential riding it — travels in cleartext to whatever that URL names.
+    - Treat both as production-forbidden, not production-discouraged.
+    - See [`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go), [`internal/api/model_providers.go`](../internal/api/model_providers.go) and [docs/ENV.md](../docs/ENV.md).
 
-47. **0.7.8: the shipped default policy floor moved CC2 -> CC1, and an unspecified
-    run's confinement class is now live-probed rather than a static policy field.**
-    Before 0.7.8 every default-policy run enforced CC2 unconditionally (or refused
-    to launch at all on a CC1-only host — the trap `examples/policies/default.json`
-    and the k8s chart's B12b-F7 render guard both existed to route around). Now a
-    run naming no `confinement_class` resolves to the STRONGEST class the runner
-    actually advertises at or above the policy floor (`strongestAdvertisedAtOrAbove`,
-    `internal/api/runs_policy.go`), and — the residual — **a person on a host with
-    gVisor or Kata installed may deliberately REQUEST a weaker installed class than
-    the old CC2 floor would have allowed**, down to CC1, provided it still clears
-    the deployment's own floor (unchanged: an explicit request below the policy
-    minimum or an admin-set floor still 422s byte-identically). This is an explicit,
-    per-run choice, never the default — the default always resolves to the
-    strongest advertised class, never merely the floor. The second half: because
-    the advertised set is live-probed (`Runner.Capabilities`) rather than read from
-    a static field, **a runtime that disappears between two runs (a gVisor package
-    removed, a RuntimeClass unregistered) silently LOWERS the default for the next
-    unspecified request rather than refusing it** — the run still launches, just at
-    a weaker class than the previous one got, with no error to notice. This is why
-    `run.create`'s audit row (`docs/AUDIT-ACTIONS.md`) carries `confinement_source`
-    (`requested`/`defaulted`): it is the one place that distinguishes "the caller
-    asked for CC1" from "CC1 is what today's runner had to offer," which an
-    `enforced` value of CC1 alone cannot say on its own.
+46. **A model call can be PARKED for minutes, and a re-auth request outlives the hold that raised it.**
+    - When a captured AWS SSO session lapses mid-run, the proxy holds the sandbox's `GetRoleCredentials` request while its owner signs in again, instead of failing it ([`internal/egress/proxy/credhold.go`](../internal/egress/proxy/credhold.go)).
+    - The hold is bounded — one workflow per approval per run, at most `maxReauthHolds` (8) workflows per run.
+    - Each is bounded by `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` (default 600 s, clamped `[10s, 1800s]`) and by the sandbox SDK's own tolerance, which Wardyn does not control.
+    - An SDK with a shorter request timeout than the budget gives up first, and the knob exists to be lowered below it.
+    - Three things are deliberately NOT closed.
+    - (a) **The parked request is not a paused agent.**
+      - The agent's tool call is simply slow, and a client that disconnects loses the turn exactly as it does today.
+      - Wardyn never claims a held call will resume, only that the sign-in is what a resume needs.
+    - (b) **The approval row outlives the hold on purpose.**
+      - When the budget ends, the call fails with a modelled `UnauthorizedException` and a `credential:reauth-timeout` decision row, and the PENDING row stays.
+      - The sign-in is still wanted, and the 24 h sweeper or the run's terminal cascade closes it.
+      - So a PENDING `credential_reauth` row is evidence a sign-in was asked for, never evidence a request is still parked.
+    - (c) **`portal.sso.<region>` is one more host whose plaintext the proxy sees** for the runs that carry this lane.
+      - That is exactly one host, exactly one port, only with a paired injection grant, authored at dispatch from the run's own credential, never from the sandbox.
+      - The proxy sees `GetRoleCredentials`/`ListAccountRoles`, never the model call.
+    - Contained by `WARDYN_AWS_SSO_PROXY_INJECT=off`, which restores the 0.7.5 behaviour for new dispatches (a run already dispatched keeps the lane it was authored with until it ends).
 
-48. **A database writer can put a stored credential BACK, and the local key sits
-    beside the data (0.7.12, envelope v1).** Envelope v1 binds each row to its own
-    `(owned_by, name)` and makes forgery need the key-encryption key (§4), but
-    three things stay open. (a) **A restored row still opens:** a superseded or
-    deleted row copied back — from WAL, a replica or a backup — into the SAME
-    `(owned_by, name)` passes its binding and unwraps while that key-encryption
-    key lives, so a Replace, a delete and every future erase are reversible by a
-    database writer until the key is rotated past the old wrap
-    (`wardynd -rotate-age-key`). A database writer is already super-admin
-    equivalent (`role_mappings`, asset 8), so this is disclosed, not engineered
-    around. (b) **Under the default, `local` KEK**, whoever holds both the
-    database (or a backup) and `WARDYN_AGE_KEY` reads every value, offline and
-    unlogged; a deleted or erased credential (`DELETE
-    /people/{principal}/credentials`, or the daily expiry sweep) still decrypts
-    from any earlier backup while both exist — the erasure horizon is the
-    deployment's backup retention, not the API call. **A key service that keeps
-    the KEK away from the database has shipped for two providers**: `WARDYN_KEK=
-    transit` moves the wrap to Vault or OpenBao's Transit engine, which narrows
-    this to residual 49(c)'s shape — a Vault-side actor, not a database reader
-    alone — rather than closing it, and `WARDYN_KEK=azurekv` moves it to Azure
-    Key Vault, with what (d) leaves open. AWS KMS key-wrapping remains planned
-    (Azure Key Vault as a plain external secret STORE has also shipped and
-    inherits this residual unchanged, since Wardyn does no at-rest cryptography
-    of its own on a row held there). (c) **Metadata stays in the clear:** who
-    holds which named credential, and since when, is readable to anyone who can
-    read the table. (d) **Under the Key Vault KEK** (`WARDYN_KEK=azurekv`,
-    `azurekv.KEK`), four things stay open. **`keys/sign` is at least as powerful
-    as `keys/unwrap`:** a principal with `sign` on the signing key and write on
-    the database plants a boot key, forges admin sessions with it, and reaches
-    every credential through the console. So every principal with `sign` on the
-    vault is credential-equivalent — the custom role, Key Vault Crypto User and
-    Crypto Officer alike — and the vault dedicated to Wardyn is load-bearing,
-    not hygiene. Crypto Officer is a full-trust role: it can also import a
-    signing-key version whose private key it holds, rotate and disable keys.
-    **By default boot keys and credentials share one Entra identity and one key
-    pair**: a leaked identity token, or the vault's crypto operators, can unwrap
-    both and sign (so forge) both. The platform split
-    (`WARDYN_AZURE_KEK_KEY_PLATFORM`, residual 49(d)) gives the boot keys a pair
-    and an identity of their own.
-    **One key pair per deployment:** the bind names the vault host and both key
-    names but not the install, so two Wardyn databases on the same vault and
-    key names accept each other's rows for the same `(owned_by, name)` — (a)'s
-    restored row, restored from another install. A shared vault is fine; shared
-    key names are not. **RSA and ECDSA are not quantum-resistant:** a database
-    backup taken now could have its data keys unwrapped by a future adversary
-    who can factor the public modulus; the local key and Transit (AES-256) do
-    not have this exposure. (a) holds unchanged: a restored row opens until its
-    wrapping-key version is disabled in Key Vault. (e) **Crypto-erasure
-    (`WARDYN_PRINCIPAL_KEYS=on`, envelope enc_version 3, 0.8.6)** narrows (b) for
-    the rows it covers, and for no others. A person's credential written with it
-    on has its data key under that person's own `cred` principal key, and an erase
-    destroys that key, so the row cannot be read on any replica at its next use,
-    whatever a backup holds of the row. **The scope is exactly the v3 rows:** a v1
-    row, a row written while the setting was off, an external-store pointer (the
-    value lives in the organisation's store), the operator namespace and the boot
-    keys are only deleted, and `credential.erase` reports the two apart
-    (`crypto_erased`, `deleted`). **The backup horizon moves, it does not vanish:** a
-    destroyed `principal_keys` row restored from a backup before the tombstone
-    unwraps while the wrapping key's version lives (the shape of (a)), so shredding
-    is complete only once backups taken before the erase expire or that
-    key-encryption-key version is retired. **Metadata stays in the clear:** who
-    held a credential, and when, is still in the table (c). **A live run keeps
-    what it already holds,** and whatever was sealed for it under the destroyed
-    key (its masking copies) is undecryptable after a restart: the run is
-    uncovered, which fails closed and is disclosed. (f) **Key domains
-    (`WARDYN_KEY_DOMAINS_FILE`, 0.8.6)** narrow what a leaked domain key exposes:
-    a person assigned to a domain has their principal keys wrapped under that
-    domain's key, so a database dump plus one domain's key opens that domain's
-    keys and no other's. **A database writer who rewrites the
-    `key_domain_assignments` rows moves a subject's FUTURE writes into a domain
-    whose key the attacker holds.** They cannot declare a domain (domains come from
-    the deploy file alone), cannot read what was already written, and cannot move
-    an old generation (a reassignment applies to the next one, and nothing is
-    re-wrapped into another domain). The mitigations are four-eyes on the two
-    assignment writes, the audit row each API change writes
-    (`key_domain.assignment.set`, `key_domain.assignment.delete`), and the 30-day
-    `/setup/status` row that reports assignment changes. A write made straight to
-    the table leaves no audit row of its own. **A domain's Vault role separates
-    only a leaked token:** a domain without its own role is reached by the
-    credential role, and the wardynd process holds every domain's access, so a
-    compromised process still exposes everything. **A stale group fact** places a
-    background write (a token refresh) in the domain the person's last verified
-    login chose, until they sign in again.
+47. **0.7.8: the shipped default policy floor moved CC2 -> CC1, and an unspecified run's confinement class is now live-probed rather than a static policy field.**
+    - Before 0.7.8 every default-policy run enforced CC2 unconditionally (or refused to launch at all on a CC1-only host — the trap [`examples/policies/default.json`](../examples/policies/default.json) and the k8s chart's B12b-F7 render guard both existed to route around).
+    - Now a run naming no `confinement_class` resolves to the STRONGEST class the runner actually advertises at or above the policy floor (`strongestAdvertisedAtOrAbove`, [`internal/api/runs_policy.go`](../internal/api/runs_policy.go)).
+    - And — the residual — **a person on a host with gVisor or Kata installed may deliberately REQUEST a weaker installed class than the old CC2 floor would have allowed**, down to CC1, provided it still clears the deployment's own floor (unchanged: an explicit request below the policy minimum or an admin-set floor still 422s byte-identically).
+    - This is an explicit, per-run choice, never the default — the default always resolves to the strongest advertised class, never merely the floor.
+    - The second half: because the advertised set is live-probed (`Runner.Capabilities`) rather than read from a static field, **a runtime that disappears between two runs (a gVisor package removed, a RuntimeClass unregistered) silently LOWERS the default for the next unspecified request rather than refusing it**.
+    - The run still launches, just at a weaker class than the previous one got, with no error to notice.
+    - This is why `run.create`'s audit row ([`docs/AUDIT-ACTIONS.md`](../docs/AUDIT-ACTIONS.md)) carries `confinement_source` (`requested`/`defaulted`).
+    - It is the one place that distinguishes "the caller asked for CC1" from "CC1 is what today's runner had to offer," which an `enforced` value of CC1 alone cannot say on its own.
 
-49. **One age key guards every stored credential AND the daemon's own
-    signing keys: one key, one shared blast radius.** `WARDYN_AGE_KEY` (or
-    `WARDYN_AGE_KEY_FILE`) is the root of all Postgres secret-store encryption
-    (`internal/secretstore/pg`): the age identity rows are encrypted under, or,
-    with envelope encryption, the input the local KEK is HKDF-derived from.
-    Two things are stored under it in the same table. First, every credential
-    kept in the secret store: model API keys, forge tokens, SSH keys, captured
-    AWS SSO sessions. Second, up to four process-global keys that
-    `loadOrCreateSecret` (`cmd/wardynd/boot_keys.go`) mints on first use:
-    - the embedded-identity ES256 signing key (`wardyn-signing-key`), always
-      present, which signs every run-identity token (SVID) and the ground-truth
-      sensor token;
-    - the OIDC session-cookie HMAC key (`wardyn-session-key`), only when an
-      OIDC issuer is configured;
-    - the SSH gateway host key (`wardyn-ssh-host-key`), only when
-      `WARDYN_SSH_LISTEN` is set;
-    - the UI-sandbox relay-cookie HMAC key (`wardyn-ui-session-key`), only when
-      `WARDYN_UI_SANDBOX_LISTEN` is set.
+48. **A database writer can put a stored credential BACK, and the local key sits beside the data (0.7.12, envelope v1).**
+    - Envelope v1 binds each row to its own `(owned_by, name)` and makes forgery need the key-encryption key (§4), but three things stay open.
+    - (a) **A restored row still opens.**
+      - A superseded or deleted row copied back — from WAL, a replica or a backup — into the SAME `(owned_by, name)` passes its binding and unwraps while that key-encryption key lives.
+      - So a Replace, a delete and every future erase are reversible by a database writer until the key is rotated past the old wrap (`wardynd -rotate-age-key`).
+      - A database writer is already super-admin equivalent (`role_mappings`, asset 8), so this is disclosed, not engineered around.
+    - (b) **Under the default, `local` KEK**, whoever holds both the database (or a backup) and `WARDYN_AGE_KEY` reads every value, offline and unlogged.
+      - A deleted or erased credential (`DELETE /people/{principal}/credentials`, or the daily expiry sweep) still decrypts from any earlier backup while both exist.
+      - The erasure horizon is the deployment's backup retention, not the API call.
+      - **A key service that keeps the KEK away from the database has shipped for two providers.**
+        - `WARDYN_KEK= transit` moves the wrap to Vault or OpenBao's Transit engine, which narrows this to residual 49(c)'s shape — a Vault-side actor, not a database reader alone — rather than closing it.
+        - And `WARDYN_KEK=azurekv` moves it to Azure Key Vault, with what (d) leaves open.
+        - AWS KMS key-wrapping remains planned (Azure Key Vault as a plain external secret STORE has also shipped and inherits this residual unchanged, since Wardyn does no at-rest cryptography of its own on a row held there).
+    - (c) **Metadata stays in the clear:** who holds which named credential, and since when, is readable to anyone who can read the table.
+    - (d) **Under the Key Vault KEK** (`WARDYN_KEK=azurekv`, `azurekv.KEK`), four things stay open.
+      - **`keys/sign` is at least as powerful as `keys/unwrap`:** a principal with `sign` on the signing key and write on the database plants a boot key, forges admin sessions with it, and reaches every credential through the console.
+        - So every principal with `sign` on the vault is credential-equivalent — the custom role, Key Vault Crypto User and Crypto Officer alike — and the vault dedicated to Wardyn is load-bearing, not hygiene.
+        - Crypto Officer is a full-trust role: it can also import a signing-key version whose private key it holds, rotate and disable keys.
+      - **By default boot keys and credentials share one Entra identity and one key pair**: a leaked identity token, or the vault's crypto operators, can unwrap both and sign (so forge) both.
+        - The platform split (`WARDYN_AZURE_KEK_KEY_PLATFORM`, residual 49(d)) gives the boot keys a pair and an identity of their own.
+      - **One key pair per deployment.**
+        - The bind names the vault host and both key names but not the install, so two Wardyn databases on the same vault and key names accept each other's rows for the same `(owned_by, name)`.
+        - That is (a)'s restored row, restored from another install.
+        - A shared vault is fine; shared key names are not.
+      - **RSA and ECDSA are not quantum-resistant:** a database backup taken now could have its data keys unwrapped by a future adversary who can factor the public modulus.
+        - The local key and Transit (AES-256) do not have this exposure.
+      - (a) holds unchanged: a restored row opens until its wrapping-key version is disabled in Key Vault.
+    - (e) **Crypto-erasure (`WARDYN_PRINCIPAL_KEYS=on`, envelope enc_version 3, 0.8.6)** narrows (b) for the rows it covers, and for no others.
+      - A person's credential written with it on has its data key under that person's own `cred` principal key.
+      - And an erase destroys that key, so the row cannot be read on any replica at its next use, whatever a backup holds of the row.
+      - **The scope is exactly the v3 rows.**
+        - A v1 row, a row written while the setting was off, an external-store pointer (the value lives in the organisation's store), the operator namespace and the boot keys are only deleted.
+        - And `credential.erase` reports the two apart (`crypto_erased`, `deleted`).
+      - **The backup horizon moves, it does not vanish.**
+        - A destroyed `principal_keys` row restored from a backup before the tombstone unwraps while the wrapping key's version lives (the shape of (a)).
+        - So shredding is complete only once backups taken before the erase expire or that key-encryption-key version is retired.
+      - **Metadata stays in the clear:** who held a credential, and when, is still in the table (c).
+      - **A live run keeps what it already holds,** and whatever was sealed for it under the destroyed key (its masking copies) is undecryptable after a restart.
+        - The run is uncovered, which fails closed and is disclosed.
+    - (f) **Key domains (`WARDYN_KEY_DOMAINS_FILE`, 0.8.6)** narrow what a leaked domain key exposes.
+      - A person assigned to a domain has their principal keys wrapped under that domain's key, so a database dump plus one domain's key opens that domain's keys and no other's.
+      - **A database writer who rewrites the `key_domain_assignments` rows moves a subject's FUTURE writes into a domain whose key the attacker holds.**
+        - They cannot declare a domain (domains come from the deploy file alone), cannot read what was already written.
+        - And they cannot move an old generation (a reassignment applies to the next one, and nothing is re-wrapped into another domain).
+        - The mitigations are four-eyes on the two assignment writes, the audit row each API change writes (`key_domain.assignment.set`, `key_domain.assignment.delete`), and the 30-day `/setup/status` row that reports assignment changes.
+        - A write made straight to the table leaves no audit row of its own.
+      - **A domain's Vault role separates only a leaked token.**
+        - A domain without its own role is reached by the credential role, and the wardynd process holds every domain's access, so a compromised process still exposes everything.
+      - **A stale group fact** places a background write (a token refresh) in the domain the person's last verified login chose, until they sign in again.
 
-    An attacker who holds the age key and a read of that table (the DSN, a
-    backup or a replica) therefore holds all of it at once. That means every
-    stored credential in cleartext and run-identity tokens the broker accepts.
-    Wherever those features are on, it also means a console session forged for
-    any human (admin included), forged UI relay cookies and the SSH gateway's
-    identity. The age key alone, without the ciphertext, decrypts nothing.
+49. **One age key guards every stored credential AND the daemon's own signing keys: one key, one shared blast radius.**
+    - `WARDYN_AGE_KEY` (or `WARDYN_AGE_KEY_FILE`) is the root of all Postgres secret-store encryption (`internal/secretstore/pg`): the age identity rows are encrypted under, or, with envelope encryption, the input the local KEK is HKDF-derived from.
+    - Two things are stored under it in the same table.
+    - First, every credential kept in the secret store: model API keys, forge tokens, SSH keys, captured AWS SSO sessions.
+    - Second, up to four process-global keys that `loadOrCreateSecret` ([`cmd/wardynd/boot_keys.go`](../cmd/wardynd/boot_keys.go)) mints on first use:
+      - the embedded-identity ES256 signing key (`wardyn-signing-key`), always present, which signs every run-identity token (SVID) and the ground-truth sensor token;
+      - the OIDC session-cookie HMAC key (`wardyn-session-key`), only when an OIDC issuer is configured;
+      - the SSH gateway host key (`wardyn-ssh-host-key`), only when `WARDYN_SSH_LISTEN` is set;
+      - the UI-sandbox relay-cookie HMAC key (`wardyn-ui-session-key`), only when `WARDYN_UI_SANDBOX_LISTEN` is set.
+    - An attacker who holds the age key and a read of that table (the DSN, a backup or a replica) therefore holds all of it at once.
+    - That means every stored credential in cleartext and run-identity tokens the broker accepts.
+    - Wherever those features are on, it also means a console session forged for any human (admin included), forged UI relay cookies and the SSH gateway's identity.
+    - The age key alone, without the ciphertext, decrypts nothing.
+    - **Not under the age key:** the admin token, the OIDC and directory client secrets, and the DSN.
+      - These boot secrets are read from env or their `_FILE` twin, and each is its own blast radius (the admin token is full API admin by itself).
+    - `-rotate-age-key` re-encrypts every row, or rewraps every row's data key, under a new identity.
+    - It does not re-key the boot keys: their plaintext survives a rotation, so a compromise that happened before the rotation still covers them.
+    - **What narrows it:** (a) **local mode:** `WARDYN_PLATFORM_KEY_FILE` supplies a second age identity from which alone the boot keys' key-encryption key is derived (`local/platform:` vs `local/cred:` on each row).
+      - Once it is set, no key the age key derives opens a boot key row, so a stolen age key forges nothing.
+      - It is optional, the move onto it is `wardynd -rewrap -rewrap-adopt-boot-keys`, and that move is the one moment the age key vouches for the boot keys.
+      - A pre-envelope boot key found beside the platform key is refused at boot rather than converted under it, so the only adoption is the operator's.
+      - Unset, the residual stands and `/setup/status` shows `platform_split`.
+    - (b) **store mode:** the boot keys live under `platform/` in the organisation's store.
+      - With ONE Vault role that separates audit and filtering only (the one token reaches both), and the recommended second role (`WARDYN_VAULT_ROLE_PLATFORM`) separates the privilege.
+      - Azure Key Vault has no per-name policy, so there the split is tags and audit only.
+      - In store mode the organisation's vault operators hold the boot keys too (design K11), and can forge what this residual lists.
+    - (c) **Transit mode** (`WARDYN_KEK=transit`): the age key protects nothing once `wardynd -rewrap` has moved every row, and boot refuses while it is still set with no row under it.
+      - The residual moves to Vault.
+      - With ONE Transit key and ONE Vault role, that role's token (or Vault's operators) unwraps the boot keys and the credentials alike and can forge what this residual lists.
+      - The split: `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` (chart `secretStore.vault.transitKeyPlatform`) wraps the boot keys under a second Transit key that only `WARDYN_VAULT_ROLE_PLATFORM` reaches, and `WARDYN_VAULT_TRANSIT_KEY` wraps the credentials as the credentials role.
+      - A leaked credentials-side token, with or without the database, then unwraps no boot key, and a serving wardynd opens no boot key that token planted.
+      - It opens a boot key under the platform key alone and refuses one wrapped under the credential key.
+      - The one command that moves a boot key off another key, `wardynd -rewrap`, adopts one only when the operator passes `-rewrap-adopt-boot-keys`, which says that no boot key has been adopted yet.
+      - So adoption is an operator step taken once.
+      - A planted row met without that flag aborts the run by name, and one met beside boot keys already on the platform key is refused even with it (audited as `secret.rewrap` `refused`).
+      - The operator's word is the trust root: an operator who passes the flag over a planted row, say after the attacker deleted the real boot keys, adopts it.
+      - The same holds the other way for a leaked platform token and the credentials.
+      - What the split does not do: the wardynd process holds both tokens, so a compromise of the process still reaches both.
+      - It holds only while the credentials role's Vault policy leaves the platform key out, which Wardyn cannot check.
+      - And the move onto the platform key (`wardynd -rewrap -rewrap-adopt-boot-keys`), like the move off it (`-rewrap-retire-platform-key`), is one more moment at which one key vouches for the boot keys.
+      - What neither setup lets anyone do from the database alone is pass one wrap off as another's.
+      - Each wrap's `associated_data` binds `kek_id`, owner and name, so a wrap moved to another row, or to the other key, does not unwrap.
+    - (d) **Key Vault mode** (`WARDYN_KEK=azurekv`): with ONE key pair and ONE Entra identity, that identity's token (or the vault's crypto operators) wraps, signs and unwraps the boot keys and the credentials alike.
+      - And `sign` plants a boot key (residual 48(d)).
+      - The split mirrors Transit's: `WARDYN_AZURE_KEK_KEY_PLATFORM` and `WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM` (chart `kek.azurekv.keyPlatform` and `kek.azurekv.signingKeyPlatform`) wrap and sign the boot keys under a second pair that only a second Entra identity (`WARDYN_AZURE_CLIENT_ID_PLATFORM`, chart `secretStore.azure.clientIdPlatform`) reaches.
+      - And the first pair wraps the credentials.
+      - A leaked Entra access token for the credential identity, with or without the database, then wraps, signs and unwraps no boot key, and a serving wardynd opens no boot key that token planted.
+      - It opens a boot key under the platform pair alone and refuses one under the credential pair.
+      - Boot refuses a platform wrapping key, signing key or client id that equals its credential counterpart, compared on the normalised identity (lowercase vault host and key name; client ids case-insensitively).
+      - So a spelling that differs only by case does not defeat it.
+      - Adoption and retirement are (c)'s operator steps (`-rewrap-adopt-boot-keys`, `-rewrap-retire-platform-key`), with the same trust root: the operator's word.
+      - What the split does not do: under workload identity both client ids exchange the same projected service-account token.
+      - So it defends against a leaked Entra access token for the credential identity, not against a leaked service-account token or a compromised wardynd process, which reaches both.
+      - It holds only while the platform identity's role assignment is scoped to the platform keys and the credential identity has none on them, which Wardyn cannot check.
+      - And `sign` on the platform signing key plants boot keys, so the platform identity, and any Key Vault role that grants `sign` on those keys, is credential-equivalent.
 
-    **Not under the age key:** the admin token, the OIDC and directory client
-    secrets, and the DSN. These boot secrets are read from env or their
-    `_FILE` twin, and each is its own blast radius (the admin token is full
-    API admin by itself).
+50. **A device's self-reported audit rows are LINK-verified, not COMPLETENESS-verified (issue #103, hybrid enrolment).**
+    - `handleDeviceAuditIngest` ([`internal/api/devices_auth.go`](../internal/api/devices_auth.go)) recomputes each row's hash and refuses a batch that does not extend the device's recorded chain (`chain_mismatch`, 422).
+    - So a row the organisation DID receive cannot be silently altered in transit or reordered.
+    - It cannot see a row the device never sent.
+    - A member with root on their own laptop (topology m′, residual #26) can delete rows from the LOCAL table before the forwarder ever reads them.
+    - And nothing on the wire distinguishes "nothing new happened" from "something happened and was removed."
+    - The one thing that is NOT silent is a purge that leaves the chain non-empty.
+    - A batch whose first new row is a genesis row is accepted (refusing would strand every later row) and recorded as `device.audit.chain_reset`, naming the prior head it broke from ([`docs/AUDIT-ACTIONS.md`](../docs/AUDIT-ACTIONS.md)).
+    - That reset row is the evidence a completeness claim rests on.
+    - An org relying on a device's audit trail for what a developer did on their OWN laptop reads a reset row's absence as continuity, never as proof that nothing was deleted from a tail the organisation had not yet acknowledged (an offline backlog of any length included; residual #52).
 
-    `-rotate-age-key` re-encrypts every row, or rewraps every row's data key,
-    under a new identity. It does not re-key the boot keys: their plaintext
-    survives a rotation, so a compromise that happened before the rotation
-    still covers them.
+51. **A device credential's blast radius is bounded to forging rows about itself, never to a run.**
+    - The `wdd_`-prefixed bearer `deviceAuth` ([`internal/api/devices_auth.go`](../internal/api/devices_auth.go)) resolves to a device identity ONLY, scoped to `/api/v1/devices/{id}/*` — it is never `isOperator` or `isMember`, so it cannot create, read or reach into a run, a workspace or a secret.
+    - On the laptop it is a secret-store row under the reserved name `wardyn-org-device-credential`, encrypted under the age identity (`age.key`) through the same `loadOrCreateSecret` path as `wardyn-signing-key`, and never delivered by MDM ([`cmd/wardynd/boot_hybrid.go`](../cmd/wardynd/boot_hybrid.go)).
+    - That encryption is no boundary against the developer: on m′ the member is root on the laptop (residual #26), can read both `age.key` and the database, and so can always extract their own device's credential.
+    - The residual is the same for every holder — that developer, or an attacker on a laptop compromised while enrolled.
+    - They can push fabricated `success`/`denied` rows attributed to that one device — self-serving audit noise, not a credential-mint or run-launch primitive — until an admin revokes it (`DELETE /api/v1/admin/devices/{id}`), after which every push and heartbeat 401s and no further row is ever accepted from it.
 
-    **What narrows it:** (a) **local mode:** `WARDYN_PLATFORM_KEY_FILE` supplies
-    a second age identity from which alone the boot keys' key-encryption key is
-    derived (`local/platform:` vs `local/cred:` on each row); once it is set, no
-    key the age key derives opens a boot key row, so a stolen age key forges
-    nothing. It is optional, the move onto it is `wardynd -rewrap
-    -rewrap-adopt-boot-keys`, and that move is the one moment the age key
-    vouches for the boot keys. A pre-envelope boot key found beside the platform
-    key is refused at boot rather than converted under it, so the only
-    adoption is the operator's. Unset,
-    the residual stands and `/setup/status` shows `platform_split`. (b) **store
-    mode:** the boot keys live under `platform/` in the organisation's store;
-    with ONE Vault role that separates audit and filtering only (the one token
-    reaches both), and the recommended second role
-    (`WARDYN_VAULT_ROLE_PLATFORM`) separates the privilege. Azure Key Vault has
-    no per-name policy, so there the split is tags and audit only. In store mode
-    the organisation's vault operators hold the boot keys too (design K11), and
-    can forge what this residual lists. (c) **Transit mode**
-    (`WARDYN_KEK=transit`): the age key protects nothing once `wardynd -rewrap`
-    has moved every row, and boot refuses while it is still set with no row
-    under it. The residual moves to Vault. With ONE Transit key and ONE Vault
-    role, that role's token (or Vault's operators) unwraps the boot keys and the
-    credentials alike and can forge what this residual lists. The split:
-    `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` (chart
-    `secretStore.vault.transitKeyPlatform`) wraps the boot keys under a second
-    Transit key that only `WARDYN_VAULT_ROLE_PLATFORM` reaches, and
-    `WARDYN_VAULT_TRANSIT_KEY` wraps the credentials as the credentials role.
-    A leaked credentials-side token, with or without the database, then unwraps
-    no boot key, and a serving wardynd opens no boot key that token planted:
-    it opens a boot key under the platform key alone and refuses one wrapped
-    under the credential key. The one command that moves a boot key off
-    another key, `wardynd -rewrap`, adopts one only when the operator passes
-    `-rewrap-adopt-boot-keys`, which says that no boot key has been adopted
-    yet, so adoption is an operator step taken once. A planted row met without
-    that flag aborts the run by name, and one met beside boot keys already on
-    the platform key is refused even with it (audited as `secret.rewrap`
-    `refused`). The operator's word is the trust root: an operator who passes
-    the flag over a planted row, say after the attacker deleted the real boot
-    keys, adopts it. The same holds the other way for a leaked platform token
-    and the credentials.
-    What the split does not do: the wardynd process holds both tokens, so a
-    compromise of the process still reaches both; it holds only while the
-    credentials role's Vault policy leaves the platform key out, which Wardyn
-    cannot check; and the move onto the platform key (`wardynd -rewrap -rewrap-adopt-boot-keys`), like
-    the move off it (`-rewrap-retire-platform-key`), is one more moment at which
-    one key vouches for the boot keys. What neither setup lets anyone do from the
-    database alone is pass one wrap off as another's: each wrap's
-    `associated_data` binds `kek_id`, owner and name, so a wrap moved to another
-    row, or to the other key, does not unwrap.
-    (d) **Key Vault mode** (`WARDYN_KEK=azurekv`): with ONE key pair and ONE
-    Entra identity, that identity's token (or the vault's crypto operators)
-    wraps, signs and unwraps the boot keys and the credentials alike, and `sign`
-    plants a boot key (residual 48(d)). The split mirrors Transit's:
-    `WARDYN_AZURE_KEK_KEY_PLATFORM` and `WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM`
-    (chart `kek.azurekv.keyPlatform` and `kek.azurekv.signingKeyPlatform`) wrap
-    and sign the boot keys under a second pair that only a second Entra identity
-    (`WARDYN_AZURE_CLIENT_ID_PLATFORM`, chart `secretStore.azure.clientIdPlatform`)
-    reaches, and the first pair wraps the credentials. A leaked Entra access token
-    for the credential identity, with or without the database, then wraps, signs
-    and unwraps no boot key, and a serving wardynd opens no boot key that token
-    planted: it opens a boot key under the platform pair alone and refuses one
-    under the credential pair. Boot refuses a platform wrapping key, signing key
-    or client id that equals its credential counterpart, compared on the
-    normalised identity (lowercase vault host and key name; client ids
-    case-insensitively), so a spelling that differs only by case does not defeat
-    it. Adoption and retirement are (c)'s operator steps
-    (`-rewrap-adopt-boot-keys`, `-rewrap-retire-platform-key`), with the same
-    trust root: the operator's word. What the split does not do: under workload
-    identity both client ids exchange the same projected service-account token, so
-    it defends against a leaked Entra access token for the credential identity,
-    not against a leaked service-account token or a compromised wardynd process,
-    which reaches both; it holds only while the platform identity's role
-    assignment is scoped to the platform keys and the credential identity has none
-    on them, which Wardyn cannot check; and `sign` on the platform signing key
-    plants boot keys, so the platform identity, and any Key Vault role that grants
-    `sign` on those keys, is credential-equivalent.
+52. **One audit chain per writer means any tail of a device's chain not yet acknowledged CAN be re-chained, undetectably — an offline backlog of any length included.**
+    - §4.5's off-box-head rule — a chain break is provable only once an independent witness holds the head hash a later rewrite would have to match — applies per device here exactly as it applies to the organisation's own table.
+    - The ORGANISATION becomes that witness for a row the moment it acknowledges it, and for any row not yet acknowledged there is no witness at all.
+    - That window is open at every moment, not only before the first push.
+    - Once the organisation holds head H, a member with root (m′, the same actor residual #50 names) can delete or re-chain the local rows after H and push rows that link cleanly to H.
+    - Ingest checks each row's link and that seq strictly increases (`invalidFederatedRow`), never that seqs are contiguous.
+    - A laptop kept offline holds its whole backlog in that window for as long as it stays offline — days, not one 15s tick.
+    - This is why direction is load-bearing (design decision D5, [`docs/design/hybrid-0.8.md`](../docs/design/hybrid-0.8.md)).
+    - Evidence flows toward the party the developer cannot edit, and the residual is bounded per row to the time before that row is acknowledged.
+    - An acknowledged row is witnessed.
 
-50. **A device's self-reported audit rows are LINK-verified, not
-    COMPLETENESS-verified (issue #103, hybrid enrolment).** `handleDeviceAuditIngest`
-    (`internal/api/devices_auth.go`) recomputes each row's hash and refuses a
-    batch that does not extend the device's recorded chain (`chain_mismatch`,
-    422) — so a row the organisation DID receive cannot be silently altered in
-    transit or reordered. It cannot see a row the device never sent: a member
-    with root on their own laptop (topology m′, residual #26) can delete rows
-    from the LOCAL table before the forwarder ever reads them, and nothing on
-    the wire distinguishes "nothing new happened" from "something happened and
-    was removed." The one thing that is NOT silent is a purge that leaves the
-    chain non-empty: a batch whose first new row is a genesis row is accepted
-    (refusing would strand every later row) and recorded as
-    `device.audit.chain_reset`, naming the prior head it broke from
-    (`docs/AUDIT-ACTIONS.md`). That reset row is the evidence a completeness
-    claim rests on — an org relying on a device's audit trail for what a
-    developer did on their OWN laptop reads a reset row's absence as
-    continuity, never as proof that nothing was deleted from a tail the
-    organisation had not yet acknowledged (an offline backlog of any length
-    included; residual #52).
+53. **Freeze pauses the agent's processes, not its access — "paused" is an availability lever, not an added confinement boundary.**
+    - `Freezer`'s docker implementation (`FreezeSandbox`/`ThawSandbox` in [`internal/runner/docker/driver_network.go`](../internal/runner/docker/driver_network.go), long-holds RL-6) is `ContainerPause`/`ContainerUnpause` on the AGENT container only: every process in its cgroup gets the freezer-cgroup equivalent of SIGSTOP.
+    - Nothing about its filesystem, network namespace, established connections, or anything already resident in its environment changes.
+    - A frozen agent sits exactly where a running one would, reachable to anyone who already had host or daemon access.
+    - The proxy sidecar is deliberately never frozen (so it keeps renewing its token and answering egress decisions), so a frozen run is not "off the network" either.
+    - Verified only on runc/cgroup v2 today (`runsc`/Kata report unsupported rather than assume an unproven control).
+    - Nothing yet calls Freeze from a real pause-and-resume feature (residual #55 covers reach once something does).
+    - This residual is about the primitive itself, which any future caller inherits unchanged.
 
-51. **A device credential's blast radius is bounded to forging rows about
-    itself, never to a run.** The `wdd_`-prefixed bearer `deviceAuth`
-    (`internal/api/devices_auth.go`) resolves to a device identity ONLY,
-    scoped to `/api/v1/devices/{id}/*` — it is never `isOperator` or
-    `isMember`, so it cannot create, read or reach into a run, a workspace or
-    a secret. On the laptop it is a secret-store row under the reserved name
-    `wardyn-org-device-credential`, encrypted under the age identity
-    (`age.key`) through the same `loadOrCreateSecret` path as
-    `wardyn-signing-key`, and never delivered by MDM
-    (`cmd/wardynd/boot_hybrid.go`). That encryption is no boundary against
-    the developer: on m′ the member is root on the laptop (residual #26), can
-    read both `age.key` and the database, and so can always extract their own
-    device's credential. The residual is the same for every holder — that
-    developer, or an attacker on a laptop compromised while enrolled: they can
-    push fabricated `success`/`denied` rows attributed to that one device —
-    self-serving audit noise, not a credential-mint or run-launch primitive —
-    until an admin revokes it (`DELETE /api/v1/admin/devices/{id}`), after
-    which every push and heartbeat 401s and no further row is ever accepted
-    from it.
+54. **A control-plane outage leaves a window of egress with no durable audit.**
+    - The proxy's token renewer gives up asking for a fresh token after an hour of failures and keeps running "on a dead identity, visibly" (`runTokenRenewerTuned` in [`internal/egress/proxy/renew.go`](../internal/egress/proxy/renew.go)) rather than stopping, deliberately.
+    - So a brief blip never kills a run over one missed heartbeat.
+    - Every egress decision the proxy makes in that window is still evaluated against its last-loaded policy — nothing here widens what the proxy would forward.
+    - But the row that would normally land in wardynd's append-only audit log cannot.
+    - wardynd is the thing that is down.
+    - Once the control plane returns, the lapsed-token sweep marks the run lost as `outage` and stops its proxy (`stopLostSandbox` in [`internal/api/run_lost.go`](../internal/api/run_lost.go)), which closes the window going forward, but nothing backfills what the sandbox reached while it was open.
+    - Bounded to at most the outage's own duration — but for that bounded window, "every decision is audited" is not true.
 
-52. **One audit chain per writer means any tail of a device's chain not yet
-    acknowledged CAN be re-chained, undetectably — an offline backlog of any
-    length included.** §4.5's off-box-head rule — a chain break is provable
-    only once an independent witness holds the head hash a later rewrite would
-    have to match — applies per device here exactly as it applies to the
-    organisation's own table: the ORGANISATION becomes that witness for a row
-    the moment it acknowledges it, and for any row not yet acknowledged there
-    is no witness at all. That window is open at every moment, not only before
-    the first push: once the organisation holds head H, a member with root
-    (m′, the same actor residual #50 names) can delete or re-chain the local
-    rows after H and push rows that link cleanly to H — ingest checks each
-    row's link and that seq strictly increases (`invalidFederatedRow`), never
-    that seqs are contiguous. A laptop kept offline holds its whole backlog in
-    that window for as long as it stays offline — days, not one 15s tick. This
-    is why direction is load-bearing (design decision D5,
-    `docs/design/hybrid-0.8.md`): evidence flows toward the party the developer
-    cannot edit, and the residual is bounded per row to the time before that
-    row is acknowledged: an acknowledged row is witnessed.
+55. **Revive re-asserts the run's OWNER's authority, not the caller's — which means any admin, not a scoped operational role, can act on every run in the deployment.**
+    - Reviving a run, restarting it in bulk, and extending its end are each gated owner-or-super-admin, and the handler re-derives the OWNER's own current governance-profile denies before touching anything (`reviveCeiling` in [`internal/api/run_revive.go`](../internal/api/run_revive.go)).
+    - An admin's click never grants a member's run more than that member already holds.
+    - What is not scoped is REACH.
+    - Keeping a fleet's runs alive — revive, bulk restart, and extending a run's end — is available to every super admin over every user's run.
+    - That is with no separate "operational continuity" capability a deployment could hand to a narrower role.
+    - Tearing a run down early is scoped differently: a security admin already has that axis, on any run in the deployment (`POST /runs/{id}/kill`, gated by `ownsRunOrAdmin` in [`internal/api/helpers.go`](../internal/api/helpers.go), which admits `isSecurityOperator`).
+    - It is keeping a run alive that no narrower role can do.
+    - The action is fully audited with both the actor and the owner as `subject` (`run.revive`, [`docs/AUDIT-ACTIONS.md`](../docs/AUDIT-ACTIONS.md)), so misuse is visible after the fact; nothing today narrows who holds the button in advance.
 
-53. **Freeze pauses the agent's processes, not its access — "paused" is an
-    availability lever, not an added confinement boundary.** `Freezer`'s
-    docker implementation (`FreezeSandbox`/`ThawSandbox` in
-    `internal/runner/docker/driver_network.go`, long-holds RL-6) is
-    `ContainerPause`/`ContainerUnpause` on the AGENT container only: every
-    process in its cgroup gets the freezer-cgroup equivalent of SIGSTOP.
-    Nothing about its filesystem, network namespace, established connections,
-    or anything already resident in its environment changes — a frozen agent
-    sits exactly where a running one would, reachable to anyone who already
-    had host or daemon access. The proxy sidecar is deliberately never frozen
-    (so it keeps renewing its token and answering egress decisions), so a
-    frozen run is not "off the network" either. Verified only on runc/cgroup
-    v2 today (`runsc`/Kata report unsupported rather than assume an unproven
-    control); nothing yet calls Freeze from a real pause-and-resume feature
-    (residual #55 covers reach once something does) — this residual is about
-    the primitive itself, which any future caller inherits unchanged.
-54. **A control-plane outage leaves a window of egress with no durable
-    audit.** The proxy's token renewer gives up asking for a fresh token after
-    an hour of failures and keeps running "on a dead identity, visibly"
-    (`runTokenRenewerTuned` in `internal/egress/proxy/renew.go`) rather than
-    stopping, deliberately, so a brief blip never kills a run over one missed
-    heartbeat. Every egress decision the proxy makes in that window is still
-    evaluated against its last-loaded policy — nothing here widens what the
-    proxy would forward — but the row that would normally land in wardynd's
-    append-only audit log cannot: wardynd is the thing that is down. Once the
-    control plane returns, the lapsed-token sweep marks the run lost as
-    `outage` and stops its proxy (`stopLostSandbox` in
-    `internal/api/run_lost.go`), which closes the window going forward, but
-    nothing backfills what the sandbox reached while it was open. Bounded to
-    at most the outage's own duration — but for that bounded window, "every
-    decision is audited" is not true.
-55. **Revive re-asserts the run's OWNER's authority, not the caller's — which
-    means any admin, not a scoped operational role, can act on every run in
-    the deployment.** Reviving a run, restarting it in bulk, and extending its
-    end are each gated owner-or-super-admin, and the handler re-derives the
-    OWNER's own current governance-profile denies before touching anything
-    (`reviveCeiling` in `internal/api/run_revive.go`) — an admin's click never
-    grants a member's run more than that member already holds. What is not
-    scoped is REACH: keeping a fleet's runs alive — revive, bulk restart, and
-    extending a run's end — is available to every super admin over every
-    user's run, with no separate "operational continuity" capability a
-    deployment could hand to a narrower role. Tearing a run down early is
-    scoped differently: a security admin already has that axis, on any run in
-    the deployment (`POST /runs/{id}/kill`, gated by `ownsRunOrAdmin` in
-    `internal/api/helpers.go`, which admits `isSecurityOperator`) — it is keeping a
-    run alive that no narrower role can do. The action is fully audited
-    with both the actor and the owner as `subject` (`run.revive`,
-    `docs/AUDIT-ACTIONS.md`), so misuse is visible after the fact; nothing
-    today narrows who holds the button in advance.
-56. **A revived or restarted run keeps its ORIGINAL agent image — revive
-    never re-pulls or rebuilds it.** A proxy-only revive (a control-plane
-    outage) touches only the proxy sidecar; a revive after a reboot restarts
-    the SAME, already-created agent container rather than recreating it from
-    the current agent image. A run that started on an image later found to
-    carry a vulnerability, or superseded by a patched build, stays on the old
-    one through any number of revives — the only way off it is to end the run
-    and start a new one. This is a property of what revive is FOR (continuing
-    the same agent process or conversation across an outage or reboot), not
-    an oversight, but it means "the deployment is on the current release"
-    does not extend to a long-kept run's agent container.
-57. **A kept run's writable-layer disk footprint is not reclaimed until its
-    grace expires, and nothing surfaces how much that is.** An ended or lost
-    run is deliberately kept — its agent container stopped, not removed (its
-    proxy is removed, residual 59) — for up to `WARDYN_ENDED_RUN_GRACE`
-    (default 7 days). Every byte
-    that run's agent wrote to its container's own writable layer sits on the
-    host disk for the whole grace window, and nothing on the run's page or in
-    the admin runs list reports it today — an operator sizing host disk for
-    "however many runs are live" can be surprised by however many are merely
-    kept. A fleet of long-running, frequently-ended runs under a generous
-    grace is the case this compounds; surfacing disk used on the run page is
-    a tracked follow-up, not yet shipped.
-58. **Kubernetes cannot keep, revive, restart, or (once it ships) pause a
-    run — each is an optional `Runner` capability the k8s substrate does not
-    implement**, so a k8s run's end and limits still fire on schedule but
-    every other long-holds behavior degrades to an immediate, non-resumable
-    teardown: `SandboxEnder`, `ProxyReviver`, `SandboxStarter` and `Freezer`
-    (all in `internal/runner/runner.go`) each document the same shape — a
-    router in front of a substrate without the interface returns that
-    interface's own `Err*Unsupported` sentinel, and the control plane's
-    fallback for an end is to stop the run outright rather than keep it. This
-    is a substrate gap, not a policy choice: a k8s deployment gets none of
-    "kept for a grace window," "revived after an outage," "resumed after a
-    reboot," or (when it ships) "paused when idle" — every one of those needs
-    a durable, re-attachable unit of storage and identity that a stopped or
-    evicted pod does not provide, which is also why user-drive persistence is
-    the prerequisite direction for closing this rather than a k8s-specific
-    reimplementation of each behavior individually. See
-    [Kubernetes: known gaps](../docs/operations/kubernetes-known-gaps.md).
-59. **A run's rendered proxy config — its run token, per-run MITM CA private
-    key and (when configured) the operator's upstream-proxy credential — is
-    held in two places: the running proxy's memory, and one sealed database
-    row.** Since #1176 no container holds it at rest. On Docker the driver
-    writes the config to the proxy's stdin once at start
-    (`WARDYN_PROXY_CONFIG_STDIN`, `internal/runner/docker/driver_proxy_revive.go`),
-    so neither the container's config nor its environment carries it, and a
-    stopped proxy started again by hand gets none and exits non-zero. When a
-    run is kept (ended, or lost to a reboot or an outage) its proxy is stopped
-    and removed, not kept. A revive rebuilds the proxy from the
-    `run_proxy_configs` row (migration 0093, `internal/api/run_proxy_config.go`):
-    the rendered config sealed with AES-256-GCM under the
-    `wardyn-run-config-key` boot key and bound to its run. That key is kept in
-    the secret store like every boot key, so the secret store's own
-    key-encryption key (local, Vault Transit, or the organisation's store)
-    protects it, and a rewrap or rekey moves it with the rest. The row is
-    deleted when the run goes terminal (the shared terminal tail and the
-    kill), with a purge at boot and on the orphan sweep's cadence as the
-    backstop for a delete that failed. The kept run's token is also refused at
-    every `/internal` door (`authz.denied`, `run_kept`), so a copy of it
-    mints, injects and decides nothing. What remains: an actor with the
-    database AND the secret store's key can open any live or kept run's
-    config, the same actor who can already open every stored credential; an
-    actor with Docker-daemon or host access can still read a RUNNING proxy's
-    memory, the pre-existing process-memory residual. On Kubernetes the config
-    reaches the sidecar through a per-run Secret and an in-memory volume
-    (#688) and a kept run is not kept at all (residual 58), so the Secret's
-    life is the run's; it is not re-created from the row.
-60. **A stored key keeps working for a bounded time after it is revoked,
-    rotated, or refused at the store — up to the injection TTL plus a
-    transient-failure grace, never indefinitely.** A stored API key the proxy
-    injects is re-resolved from the injection sink at most every ten minutes
-    (`storedKeyTTL` in `internal/api/injection.go`) — a MODEL-PROVIDER stored
-    key instead re-resolves every fifteen minutes (`providerKeyRecheck` in
-    `internal/api/injection_provider_key.go`) — an approval-gated grant is the
-    exception in either case: minted once, static for the
-    run — rather than held for the run's whole life, so a key removed,
-    replaced or refused there stops being injected within that window — this
-    is the "revocation" half of CS-4's memory/revocation/failure hygiene, not
-    literal in-process zeroing (nothing in the secret store or the broker
-    scrubs a plaintext buffer after use; the actual controls are the TTL
-    above, `internal/nodump`'s no-core-dump/no-same-uid-ptrace hardening on
-    both `wardynd` and `wardyn-proxy`, and a definitive-vs-transient failure
-    split that drops an injected header at once on anything but a bare
-    transient store error). That split is also where the bound sits: a
-    TRANSIENT failure (the store did not answer) keeps serving the
-    last-known-good header for a further fifteen minutes before it, too, is
-    dropped — so the worst case between a revocation and the proxy actually
-    stopping is the TTL plus that grace: about twenty-five minutes for most
-    stored keys, about thirty for a model-provider key's fifteen-minute TTL —
-    not the ten minutes alone, and a store outage that outlasts the grace
-    fails CLOSED (no header) rather than open.
+56. **A revived or restarted run keeps its ORIGINAL agent image — revive never re-pulls or rebuilds it.**
+    - A proxy-only revive (a control-plane outage) touches only the proxy sidecar; a revive after a reboot restarts the SAME, already-created agent container rather than recreating it from the current agent image.
+    - A run that started on an image later found to carry a vulnerability, or superseded by a patched build, stays on the old one through any number of revives.
+    - The only way off it is to end the run and start a new one.
+    - This is a property of what revive is FOR (continuing the same agent process or conversation across an outage or reboot), not an oversight, but it means "the deployment is on the current release" does not extend to a long-kept run's agent container.
 
-61. **A registered portal acts for anyone in its group whose live
-    identity-provider token it holds, for up to ten minutes per exchange
-    (#1142).** The portal's own credential (`wdp_`) plus the person's token
-    buys a delegated token (`wdg_`); a stolen portal credential alone mints
-    nothing, but the portal already sees its signed-in people's tokens, so a
-    compromised portal reaches every such person in its registered group —
-    at user reach only, on the delegation allow-list only (`delegationAllowed`
-    in `internal/api/delegation.go`; every other route is 403
-    `delegation_scope`), and recorded as `data.via` on every row. Bounds:
-    revoking the portal, or `POST /sessions/revoke` for the person, ends its
-    outstanding tokens on their next request (the lookup joins the portal's
-    `revoked_at`; the person's cutoff is `IsSessionRevoked`); a disable made
-    ONLY at the identity provider is seen at the next exchange, so it lags by
-    at most the ten-minute token lifetime (`delegatedTokenTTL`), not the
-    subject token's own. A UI-app session a portal opens through an attach
-    ticket is a credential derived from the grant and is bounded by it (0.8.5,
-    #1475): redemption and every 30-second re-check resolve the grant by id, so
-    revoking the portal or the grant expiring ends it, and the session cookie is
-    capped at the grant's expiry (about ten minutes). The exception is a stream
-    already open — a terminal WebSocket or a relayed socket — which keeps working
-    until it closes or the run ends. A portal registered under the wrong
-    identity-provider client id acts for whoever that client's tokens name,
-    which is why only a super admin registers one and why it may never be
-    Wardyn's own client id.
+57. **A kept run's writable-layer disk footprint is not reclaimed until its grace expires, and nothing surfaces how much that is.**
+    - An ended or lost run is deliberately kept — its agent container stopped, not removed (its proxy is removed, residual 59) — for up to `WARDYN_ENDED_RUN_GRACE` (default 7 days).
+    - Every byte that run's agent wrote to its container's own writable layer sits on the host disk for the whole grace window.
+    - And nothing on the run's page or in the admin runs list reports it today.
+    - An operator sizing host disk for "however many runs are live" can be surprised by however many are merely kept.
+    - A fleet of long-running, frequently-ended runs under a generous grace is the case this compounds; surfacing disk used on the run page is a tracked follow-up, not yet shipped.
 
-62. **Azure DevOps per-run tokens put a token-CREATING credential in the store,
-    and what bounds it is a secret, a policy and a revocation — not a scope
-    (#1428) [0.8.2].** On an Azure DevOps row in `minted_pat` mode (the mode the
-    console recommends and starts a new row on; a stored row with no
-    `token_mode` still reads as `bearer`) Wardyn holds each connected person's
-    Entra refresh token, obtained with only `vso.pats` and `vso.pats_manage` on
-    Wardyn's own sign-in app, and uses it to create one organisation-scoped PAT
-    per run in that person's name, scoped to the run's capabilities, at most
-    `pat_max_hours` long (default 8, at most 168). The PAT is kept sealed under the
-    run owner's key in Postgres (`ado_run_pat_state`, so every replica serves it and an
-    erasure deletes it; destroying the key leaves it undecryptable), crosses the pinned hop to the run's proxy, and is injected there as
-    Basic; it is mask-registered in its raw, base64 and header forms and never
-    enters the sandbox. Renewal and widening create a newer PAT and leave the
-    older to its own expiry; pause and every end path revoke them all, and a
-    sweep at boot and every five minutes revokes what a crash left. The token
-    APIs are a denied area in the request classifier (`deniedAreas` in
-    `internal/adoscope/classify.go`), refused to every sandbox whatever
-    credential rides, and a `bearer` row refuses to inject a token whose grant
-    names `vso.pats`, `vso.pats_manage`, `vso.tokens`, `vso.tokenadministration`
-    or `user_impersonation`, so no token able to create PATs ever rides a
-    sandbox's traffic. What this does NOT do, stated as residuals:
-    - **Breadth.** A token that may create PATs can create one naming ANY
-      `vso.*` scope the person holds. Wardyn's own create refuses scopes
-      outside the row's ceiling, and that binds Wardyn, not an attacker holding
-      the credential. A compromised wardynd store PLUS the sign-in app's client
-      secret yields one token-creating credential per connected person, each
-      bounded only by that person's own permissions and the organisation's
-      lifespan policy (a year if it is off), until revoked. The bounds are the
-      client secret (a `minted_pat` row must name the console's own app and that
-      app must hold a secret: refused when the row is saved, left unusable with
-      a logged error at boot, and refused again at the redemption), the tenant's
-      "Enforce maximum PAT lifespan" policy (which the admin-triggered
-      organisation-settings check verifies by creating and revoking up to two
-      canary PATs in the admin's name), and the refresh token's revocability.
-      This is the same breadth as the `bearer` lane (one credential per
-      connected person) with far less depth than the shared PAT it replaces
-      (one broad account, a year, no secret needed).
-    - **Connecting is signing in.** After admin consent, every console sign-in
-      captures a refresh token able to create tokens, including for people who
-      never launch on Azure DevOps. Capturing only for people who may launch on
-      the row is a follow-up. Disconnecting removes it until the person's next
-      sign-in captures it again; offboarding removes it.
-    - **A run can hold several live PATs until each one's `validTo`.** The
-      proxy keeps one header per Azure DevOps host and wardynd cannot reach it,
-      so a token a host may still hold is never revoked early: renewal and
-      widening leave the older PAT in place. Each is no wider than the newest,
-      and all are revoked on pause, at the end, on drift, when the person
-      disconnects and when they are offboarded.
-    - **"Restrict full-scoped PAT creation" does not bound custom scopes.** It
-      requires new PATs to name "a specific, custom-defined set of scopes",
-      and that set may name every scope, so the policy is not a bound on a
-      stolen minting credential and Wardyn does not treat it as one.
-    - **One secret guards sign-in AND token creation.** The client secret in
-      `WARDYN_OIDC_CLIENT_SECRET` is also what `WARDYN_DIRECTORY_CLIENT_SECRET`
-      defaults to, so it is a busier secret than a dedicated token app's would
-      be. Entra's sign-in logs do not separate a minting redemption from a
-      sign-in, since it is the same app. Rotate it and hold it in a secret
-      manager; a separate token app is the escape hatch and is not built.
-    - **The `bearer` refusal depends on Entra reporting the granted scopes.**
-      The check reads the token response's optional `scope` field, so an empty
-      one is refused (`scope_unknown`) rather than trusted, and one naming a
-      token permission is refused (`mint_scopes`); both are audited as
-      `ado_bearer.refused_mint_scopes`. A tenant that stops reporting scopes
-      turns every `bearer` run into a refusal, never into a bearer that may
-      create PATs.
-    - **A PAT can outlive a failed revoke by at most `pat_max_hours`.** Rows
-      are written before first use and swept at boot and every five minutes,
-      but with a dead refresh token Wardyn cannot revoke; the PAT expires on
-      its own, `ado_pat.revoke.failed` records it, and a Project Collection
-      Administrator can revoke it through the Token Administration API, which
-      can take up to an hour. Revocation does not guarantee that a connection
-      already open ends.
-    - **The widened scope outlives a one-time approval.** Widening creates a
-      new PAT with the union of the scopes, so a one-time approval widens the
-      run's token for the rest of the run, never past the row's ceiling. The
-      approval card says so.
-    - **A pasted PAT (`own_pat`, and every Azure DevOps Server row) cannot be
-      revoked by Wardyn.** Only the person can, in Azure DevOps. It is sealed,
-      readable by its owner alone, identity-checked as the person's own (the
-      sign-in email against the account's sign-in name or mail; Active
-      Directory does not enforce mail uniqueness, so on Server two accounts can
-      share one), and capped at 90 days on Services (30 on Server); its blast
-      radius is whatever scopes the person gave it. On Server it reaches git
-      only, as `code_read` and `code_write`, the push confined to the run's own
-      branch unless its policy allows any branch.
-    - **The upgrade's deletion of the shared credentials is irreversible.**
-      The first start after migration `0103` deletes `git-pat-<host>`,
-      `ssh-key-<host>` and `known-hosts-<host>` for every Azure DevOps host, in
-      the operator's namespace and in every person's namespace, because a
-      person's own copy is read before the operator's. It runs once, and a
-      host a GitHub or other non-Azure DevOps row also names is skipped and
-      logged rather than risk another forge's credential. Typed secrets are
-      write-only, so nothing can be exported first; the sweep is audited per
-      namespace as `ado_shared_credential.retire`.
+58. **Kubernetes cannot keep, revive, restart, or (once it ships) pause a run — each is an optional `Runner` capability the k8s substrate does not implement.**
+    - So a k8s run's end and limits still fire on schedule but every other long-holds behavior degrades to an immediate, non-resumable teardown.
+    - `SandboxEnder`, `ProxyReviver`, `SandboxStarter` and `Freezer` (all in [`internal/runner/runner.go`](../internal/runner/runner.go)) each document the same shape — a router in front of a substrate without the interface returns that interface's own `Err*Unsupported` sentinel.
+    - And the control plane's fallback for an end is to stop the run outright rather than keep it.
+    - This is a substrate gap, not a policy choice: a k8s deployment gets none of "kept for a grace window," "revived after an outage," "resumed after a reboot," or (when it ships) "paused when idle."
+    - Every one of those needs a durable, re-attachable unit of storage and identity that a stopped or evicted pod does not provide, which is also why user-drive persistence is the prerequisite direction for closing this rather than a k8s-specific reimplementation of each behavior individually.
+    - See [Kubernetes: known gaps](../docs/operations/kubernetes-known-gaps.md).
 
-    Offboarding a person revokes their live PATs before their stored grant is
-    deleted. None of the audit rows for this lane carries a token value.
+59. **A run's rendered proxy config — its run token, per-run MITM CA private key and (when configured) the operator's upstream-proxy credential — is held in two places: the running proxy's memory, and one sealed database row.**
+    - Since #1176 no container holds it at rest.
+    - On Docker the driver writes the config to the proxy's stdin once at start (`WARDYN_PROXY_CONFIG_STDIN`, [`internal/runner/docker/driver_proxy_revive.go`](../internal/runner/docker/driver_proxy_revive.go)), so neither the container's config nor its environment carries it.
+    - And a stopped proxy started again by hand gets none and exits non-zero.
+    - When a run is kept (ended, or lost to a reboot or an outage) its proxy is stopped and removed, not kept.
+    - A revive rebuilds the proxy from the `run_proxy_configs` row (migration 0093, [`internal/api/run_proxy_config.go`](../internal/api/run_proxy_config.go)): the rendered config sealed with AES-256-GCM under the `wardyn-run-config-key` boot key and bound to its run.
+    - That key is kept in the secret store like every boot key, so the secret store's own key-encryption key (local, Vault Transit, or the organisation's store) protects it.
+    - And a rewrap or rekey moves it with the rest.
+    - The row is deleted when the run goes terminal (the shared terminal tail and the kill), with a purge at boot and on the orphan sweep's cadence as the backstop for a delete that failed.
+    - The kept run's token is also refused at every `/internal` door (`authz.denied`, `run_kept`), so a copy of it mints, injects and decides nothing.
+    - What remains: an actor with the database AND the secret store's key can open any live or kept run's config, the same actor who can already open every stored credential.
+    - An actor with Docker-daemon or host access can still read a RUNNING proxy's memory, the pre-existing process-memory residual.
+    - On Kubernetes the config reaches the sidecar through a per-run Secret and an in-memory volume (#688) and a kept run is not kept at all (residual 58), so the Secret's life is the run's.
+    - It is not re-created from the row.
 
-63. **A narrowed `git_pat` grant narrows the run, not the PAT, and three things stay
-    outside it (0.8.6).** With the PAT broker on, a `git_pat` grant's `repos` and
-    `access: read` bind at the broker route: a request for a repository outside
-    `repos`, and both doors of a push under `access: read`, are refused before the
-    push rules and before any mint, so a refusal spends nothing. The credential is
-    exactly as broad as its issuer made it everywhere outside Wardyn. The residuals:
-    - **Direct egress by name.** A run whose policy also allows the forge host
-      directly can reach it without the PAT, with whatever credential the sandbox
-      holds of its own. That is the standing "by name" caveat of every broker lane
-      (see `docs/POLICIES.md`), not a new one.
-    - **Branches and content are separate.** `repos` narrows which repositories, not
-      which branches. Branch confinement stays `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`'s
-      `pat` scope (off by default for this lane) and content stays `push_rules`.
-    - **Path tables can lag a forge.** A request form a forge's table does not list is
-      refused; a forge that later serves a new alias of an existing path is outside the
-      table until someone adds it. The failure is a refusal, not a pass. `generic` and
-      the named forges all compare the path exactly (no case-folding, no `.git`
-      stripping), because the compared string is the string the proxy forwards.
-    A narrowing the broker cannot enforce is refused at launch rather than carried as a
-    fiction: the broker off, a same-forge `ssh_key` (a second push path), and an Azure
-    DevOps or GitHub-brokered host (another lane serves it) each fail the run with a
-    named reason.
+60. **A stored key keeps working for a bounded time after it is revoked, rotated, or refused at the store — up to the injection TTL plus a transient-failure grace, never indefinitely.**
+    - A stored API key the proxy injects is re-resolved from the injection sink at most every ten minutes (`storedKeyTTL` in [`internal/api/injection.go`](../internal/api/injection.go)) — a MODEL-PROVIDER stored key instead re-resolves every fifteen minutes (`providerKeyRecheck` in [`internal/api/injection_provider_key.go`](../internal/api/injection_provider_key.go)) — an approval-gated grant is the exception in either case: minted once, static for the run — rather than held for the run's whole life, so a key removed, replaced or refused there stops being injected within that window.
+    - This is the "revocation" half of CS-4's memory/revocation/failure hygiene, not literal in-process zeroing (nothing in the secret store or the broker scrubs a plaintext buffer after use; the actual controls are the TTL above, `internal/nodump`'s no-core-dump/no-same-uid-ptrace hardening on both `wardynd` and `wardyn-proxy`, and a definitive-vs-transient failure split that drops an injected header at once on anything but a bare transient store error).
+    - That split is also where the bound sits.
+    - A TRANSIENT failure (the store did not answer) keeps serving the last-known-good header for a further fifteen minutes before it, too, is dropped.
+    - So the worst case between a revocation and the proxy actually stopping is the TTL plus that grace.
+    - That is about twenty-five minutes for most stored keys, about thirty for a model-provider key's fifteen-minute TTL — not the ten minutes alone.
+    - And a store outage that outlasts the grace fails CLOSED (no header) rather than open.
+
+61. **A registered portal acts for anyone in its group whose live identity-provider token it holds, for up to ten minutes per exchange (#1142).**
+    - The portal's own credential (`wdp_`) plus the person's token buys a delegated token (`wdg_`).
+    - A stolen portal credential alone mints nothing, but the portal already sees its signed-in people's tokens, so a compromised portal reaches every such person in its registered group.
+    - That is at user reach only, on the delegation allow-list only (`delegationAllowed` in [`internal/api/delegation.go`](../internal/api/delegation.go); every other route is 403 `delegation_scope`), and recorded as `data.via` on every row.
+    - Bounds: revoking the portal, or `POST /sessions/revoke` for the person, ends its outstanding tokens on their next request (the lookup joins the portal's `revoked_at`; the person's cutoff is `IsSessionRevoked`).
+    - A disable made ONLY at the identity provider is seen at the next exchange, so it lags by at most the ten-minute token lifetime (`delegatedTokenTTL`), not the subject token's own.
+    - A UI-app session a portal opens through an attach ticket is a credential derived from the grant and is bounded by it (0.8.5, #1475).
+    - Redemption and every 30-second re-check resolve the grant by id, so revoking the portal or the grant expiring ends it.
+    - And the session cookie is capped at the grant's expiry (about ten minutes).
+    - The exception is a stream already open — a terminal WebSocket or a relayed socket — which keeps working until it closes or the run ends.
+    - A portal registered under the wrong identity-provider client id acts for whoever that client's tokens name, which is why only a super admin registers one and why it may never be Wardyn's own client id.
+
+62. **Azure DevOps per-run tokens put a token-CREATING credential in the store, and what bounds it is a secret, a policy and a revocation — not a scope (#1428) [0.8.2].**
+    - On an Azure DevOps row in `minted_pat` mode (the mode the console recommends and starts a new row on; a stored row with no `token_mode` still reads as `bearer`) Wardyn holds each connected person's Entra refresh token, obtained with only `vso.pats` and `vso.pats_manage` on Wardyn's own sign-in app.
+    - And it uses it to create one organisation-scoped PAT per run in that person's name, scoped to the run's capabilities, at most `pat_max_hours` long (default 8, at most 168).
+    - The PAT is kept sealed under the run owner's key in Postgres (`ado_run_pat_state`, so every replica serves it and an erasure deletes it; destroying the key leaves it undecryptable).
+    - It crosses the pinned hop to the run's proxy, and is injected there as Basic.
+    - It is mask-registered in its raw, base64 and header forms and never enters the sandbox.
+    - Renewal and widening create a newer PAT and leave the older to its own expiry.
+    - Pause and every end path revoke them all, and a sweep at boot and every five minutes revokes what a crash left.
+    - The token APIs are a denied area in the request classifier (`deniedAreas` in [`internal/adoscope/classify.go`](../internal/adoscope/classify.go)), refused to every sandbox whatever credential rides.
+    - And a `bearer` row refuses to inject a token whose grant names `vso.pats`, `vso.pats_manage`, `vso.tokens`, `vso.tokenadministration` or `user_impersonation`.
+    - So no token able to create PATs ever rides a sandbox's traffic.
+    - What this does NOT do, stated as residuals:
+      - **Breadth.**
+        - A token that may create PATs can create one naming ANY `vso.*` scope the person holds.
+        - Wardyn's own create refuses scopes outside the row's ceiling, and that binds Wardyn, not an attacker holding the credential.
+        - A compromised wardynd store PLUS the sign-in app's client secret yields one token-creating credential per connected person, each bounded only by that person's own permissions and the organisation's lifespan policy (a year if it is off), until revoked.
+        - The bounds are the client secret (a `minted_pat` row must name the console's own app and that app must hold a secret: refused when the row is saved, left unusable with a logged error at boot, and refused again at the redemption), the tenant's "Enforce maximum PAT lifespan" policy (which the admin-triggered organisation-settings check verifies by creating and revoking up to two canary PATs in the admin's name), and the refresh token's revocability.
+        - This is the same breadth as the `bearer` lane (one credential per connected person) with far less depth than the shared PAT it replaces (one broad account, a year, no secret needed).
+      - **Connecting is signing in.**
+        - After admin consent, every console sign-in captures a refresh token able to create tokens, including for people who never launch on Azure DevOps.
+        - Capturing only for people who may launch on the row is a follow-up.
+        - Disconnecting removes it until the person's next sign-in captures it again; offboarding removes it.
+      - **A run can hold several live PATs until each one's `validTo`.**
+        - The proxy keeps one header per Azure DevOps host and wardynd cannot reach it, so a token a host may still hold is never revoked early: renewal and widening leave the older PAT in place.
+        - Each is no wider than the newest, and all are revoked on pause, at the end, on drift, when the person disconnects and when they are offboarded.
+      - **"Restrict full-scoped PAT creation" does not bound custom scopes.**
+        - It requires new PATs to name "a specific, custom-defined set of scopes", and that set may name every scope.
+        - So the policy is not a bound on a stolen minting credential and Wardyn does not treat it as one.
+      - **One secret guards sign-in AND token creation.**
+        - The client secret in `WARDYN_OIDC_CLIENT_SECRET` is also what `WARDYN_DIRECTORY_CLIENT_SECRET` defaults to, so it is a busier secret than a dedicated token app's would be.
+        - Entra's sign-in logs do not separate a minting redemption from a sign-in, since it is the same app.
+        - Rotate it and hold it in a secret manager; a separate token app is the escape hatch and is not built.
+      - **The `bearer` refusal depends on Entra reporting the granted scopes.**
+        - The check reads the token response's optional `scope` field, so an empty one is refused (`scope_unknown`) rather than trusted, and one naming a token permission is refused (`mint_scopes`); both are audited as `ado_bearer.refused_mint_scopes`.
+        - A tenant that stops reporting scopes turns every `bearer` run into a refusal, never into a bearer that may create PATs.
+      - **A PAT can outlive a failed revoke by at most `pat_max_hours`.**
+        - Rows are written before first use and swept at boot and every five minutes, but with a dead refresh token Wardyn cannot revoke.
+        - The PAT expires on its own, `ado_pat.revoke.failed` records it, and a Project Collection Administrator can revoke it through the Token Administration API, which can take up to an hour.
+        - Revocation does not guarantee that a connection already open ends.
+      - **The widened scope outlives a one-time approval.**
+        - Widening creates a new PAT with the union of the scopes, so a one-time approval widens the run's token for the rest of the run, never past the row's ceiling.
+        - The approval card says so.
+      - **A pasted PAT (`own_pat`, and every Azure DevOps Server row) cannot be revoked by Wardyn.**
+        - Only the person can, in Azure DevOps.
+        - It is sealed, readable by its owner alone, identity-checked as the person's own.
+          - (The sign-in email against the account's sign-in name or mail; Active Directory does not enforce mail uniqueness, so on Server two accounts can share one).
+        - And it is capped at 90 days on Services (30 on Server).
+        - Its blast radius is whatever scopes the person gave it.
+        - On Server it reaches git only, as `code_read` and `code_write`, the push confined to the run's own branch unless its policy allows any branch.
+      - **The upgrade's deletion of the shared credentials is irreversible.**
+        - The first start after migration `0103` deletes `git-pat-<host>`, `ssh-key-<host>` and `known-hosts-<host>` for every Azure DevOps host, in the operator's namespace and in every person's namespace, because a person's own copy is read before the operator's.
+        - It runs once, and a host a GitHub or other non-Azure DevOps row also names is skipped and logged rather than risk another forge's credential.
+        - Typed secrets are write-only, so nothing can be exported first; the sweep is audited per namespace as `ado_shared_credential.retire`.
+    - Offboarding a person revokes their live PATs before their stored grant is deleted.
+    - None of the audit rows for this lane carries a token value.
+
+63. **A narrowed `git_pat` grant narrows the run, not the PAT, and three things stay outside it (0.8.6).**
+    - With the PAT broker on, a `git_pat` grant's `repos` and `access: read` bind at the broker route.
+    - A request for a repository outside `repos`, and both doors of a push under `access: read`, are refused before the push rules and before any mint, so a refusal spends nothing.
+    - The credential is exactly as broad as its issuer made it everywhere outside Wardyn.
+    - The residuals:
+      - **Direct egress by name.**
+        - A run whose policy also allows the forge host directly can reach it without the PAT, with whatever credential the sandbox holds of its own.
+        - That is the standing "by name" caveat of every broker lane (see [`docs/POLICIES.md`](../docs/POLICIES.md)), not a new one.
+      - **Branches and content are separate.**
+        - `repos` narrows which repositories, not which branches.
+        - Branch confinement stays `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`'s `pat` scope (off by default for this lane) and content stays `push_rules`.
+      - **Path tables can lag a forge.**
+        - A request form a forge's table does not list is refused; a forge that later serves a new alias of an existing path is outside the table until someone adds it.
+        - The failure is a refusal, not a pass.
+        - `generic` and the named forges all compare the path exactly (no case-folding, no `.git` stripping), because the compared string is the string the proxy forwards.
+    - A narrowing the broker cannot enforce is refused at launch rather than carried as a fiction.
+    - The broker off, a same-forge `ssh_key` (a second push path), and an Azure DevOps or GitHub-brokered host (another lane serves it) each fail the run with a named reason.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
