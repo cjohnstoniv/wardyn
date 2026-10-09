@@ -72,14 +72,15 @@ test.describe("Settings and Your account fit 1280x744 collapsed (#1200 compact c
     await waitForSettledSummaries(page, [
       /^Model providers \S/,
       /^Workspace providers \S/,
+      /^Custom components \S/,
       /^User drives \S/,
       /^Admin SSH keys \d+ admin key/,
       /^SCIM provisioning\s*\S/,
       /^Approval notifications \S/,
     ]);
 
-    // Collapsed by default: none of the eight cards' bodies are in the DOM.
-    for (const title of ["Host", "Branding", "Model providers", "Workspace providers", "User drives", "Admin SSH keys", "SCIM provisioning", "Approval notifications"]) {
+    // Collapsed by default: none of the nine cards' bodies are in the DOM.
+    for (const title of ["Host", "Branding", "Model providers", "Workspace providers", "Custom components", "User drives", "Admin SSH keys", "SCIM provisioning", "Approval notifications"]) {
       const toggle = page.getByRole("button", { name: new RegExp(`^${title}( |$)`) });
       await expect(toggle).toHaveAttribute("aria-expanded", "false");
     }

@@ -310,7 +310,7 @@ export function AdminSettingsScreen() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[900px] px-6 py-8">
+    <div className="mx-auto w-full max-w-[900px] px-6 pt-8 pb-4">
       <PageHeader
         title="Settings"
         description="This host, what runs your agents, and how Wardyn reaches your code."
@@ -318,9 +318,9 @@ export function AdminSettingsScreen() {
       {state === "loading" && <TableSkeleton />}
       {state === "error" && <ErrorState onRetry={load} />}
       {state === "ready" && status && (
-        // space-y-2, not -4: seven collapsed cards plus this page's own
-        // header must fit 744px (the approved mock's §4).
-        <div className="space-y-2">
+        // space-y-1 and pb-4, not -2 and py-8: nine collapsed cards plus this
+        // page's own header must fit 744px (the approved mock's §4, #1200).
+        <div className="space-y-1">
           <HostCard
             status={status}
             siteConfig={configFailed ? "error" : siteConfig}
