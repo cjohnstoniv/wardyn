@@ -122,6 +122,7 @@ The citation guard ([`cmd/wardynd/citation_guard_test.go`](../cmd/wardynd/citati
 - Alt text on every image: one sentence on what it shows.
 - Light and dark: `<picture>` with a `prefers-color-scheme: dark` source and two files, because an SVG shown as an image ignores the page's colours.
 - `docs/img/<id>.svg` is the source; a `.webp` render sits beside it only when GitHub cannot render the visual. One row per visual in the [image index](img/README.md).
+- A dark-only `.webp` figure is shown as built and its source is kept outside the repository; review checks its labels and alt text, and the diagram gate checks only that its alt text is present.
 - An SVG shown through `<img>` or `<picture>` loads no external file: fonts, textures and icons are inline (`data:` URIs) or absent.
 - No foreign copyright or metadata line in an SVG. No hostnames, tokens, account or customer data in any visual.
 - No new Mermaid fences. An existing fence stays only until its SVG replacement ships.

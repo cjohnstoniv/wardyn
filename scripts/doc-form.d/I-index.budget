@@ -1,6 +1,6 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. Base prose: README.md 2123, docs/README.md 516, docs/TRY-IT.md 3201.
 # docs/README.md is 517 = base 516 + 1 word of the new "Index" heading: its table sat in the lead (H1 to first H2), which the form gate caps at 5 lines.
-# Figures add their alt-text words only: README.md +90 (opener pair 60, run figure 30) -> 2213, docs/README.md +60 (opener pair) -> 577.
-README.md=2213 share=35
+# Figures add their alt-text words only: README.md +90 (opener pair 60, run figure 30) -> 2213, +2 for "by default" in the lead bullet -> 2215; docs/README.md +60 (opener pair) -> 577.
+README.md=2215 share=35
 docs/README.md=577 share=35
 docs/TRY-IT.md=3201 share=35
