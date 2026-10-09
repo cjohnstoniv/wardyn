@@ -76,8 +76,19 @@ async function openTerminal(page: Page) {
   // below is the last word.
   await page.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 100)));
   await layoutSettled(pane);
-  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-  expect(await focusInXterm(page)).toBe(false);
+  // Blur until it holds for a beat: a late load-time refocus (the attach-mode
+  // frame, the settle timer) under CI load must not be mistaken for the
+  // behaviour under test.
+  await expect
+    .poll(
+      async () => {
+        await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+        await page.waitForTimeout(150);
+        return focusInXterm(page);
+      },
+      { intervals: [0] },
+    )
+    .toBe(false);
   return pane;
 }
 

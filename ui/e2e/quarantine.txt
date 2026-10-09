@@ -23,10 +23,6 @@
 #   runs.spec.ts | Runs page › filters by status | #1234 | @cjohnstoniv | 2026-10-07
 #
 # Entries:
-cockpit-terminal-focus.spec.ts | Run cockpit terminal focus › focus is in the terminal after Fullscreen | #1804 | @cjohnstoniv | 2026-10-23
-cockpit-terminal-focus.spec.ts | Run cockpit terminal focus › a click on the wrapper padding focuses the terminal | #1788 | @cjohnstoniv | 2026-10-23
-cockpit-terminal-focus.spec.ts | Run cockpit terminal focus › focus is in the terminal after Redraw | #1758 | @cjohnstoniv | 2026-10-23
-cockpit-terminal-focus.spec.ts | Run cockpit terminal focus › a click in the strip below the last row focuses the terminal | #1757 | @cjohnstoniv | 2026-10-23
 cockpit-terminal-tmux-wheel.spec.ts | the wheel scrolls tmux history and does not recall bash history | #1795 | @cjohnstoniv | 2026-10-23
 refusal-doors.spec.ts | the failure block opens the run's own provider's door (state 2) › bedrock_sso: the owner's "Sign in to AWS" opens Bedrock (prod)'s door | #1736 | @cjohnstoniv | 2026-10-23
 refusal-doors.spec.ts | the failure block opens the run's own provider's door (state 2) › anthropic_subscription: the owner's "Sign in to Claude" opens Claude subscription's door | #1762 | @cjohnstoniv | 2026-10-23
