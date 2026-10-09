@@ -62,6 +62,7 @@ const SCOPE_LABELS = [
   "Personal details in audit events",
   "Run tasks",
   "Run output",
+  "Saved components",
   "Copies kept for masking",
   "Recordings",
 ];
@@ -124,7 +125,7 @@ describe("Erase someone's data (M4)", () => {
   it("opens with everything ticked except Recordings, and the disclosure lines", async () => {
     const dialog = await openDialog();
     expect(within(dialog).getByText("Erase someone's data", { selector: "h2" })).toBeInTheDocument();
-    for (const label of SCOPE_LABELS.slice(0, 5)) expect(scopeBox(dialog, label)).toBeChecked();
+    for (const label of SCOPE_LABELS.slice(0, 6)) expect(scopeBox(dialog, label)).toBeChecked();
     expect(scopeBox(dialog, "Recordings")).not.toBeChecked();
     expect(within(dialog).getByText(ERASE_DATA.SEALING_NOTE)).toBeInTheDocument();
     expect(within(dialog).getByText("The events themselves stay, and the log still verifies.")).toBeInTheDocument();
@@ -138,7 +139,7 @@ describe("Erase someone's data (M4)", () => {
     await userEvent.type(within(dialog).getByLabelText(ERASE.FIELD), "ana@example.com");
     expect(confirm).toBeEnabled();
     expect(within(dialog).queryByLabelText(/type .* to confirm/i)).toBeNull();
-    for (const label of SCOPE_LABELS.slice(0, 5)) await userEvent.click(scopeBox(dialog, label));
+    for (const label of SCOPE_LABELS.slice(0, 6)) await userEvent.click(scopeBox(dialog, label));
     expect(confirm).toBeDisabled();
   });
 
@@ -152,12 +153,31 @@ describe("Erase someone's data (M4)", () => {
       "audit_personal_fields",
       "run_tasks",
       "run_outputs",
+      "components",
       "mask_copies",
     ]);
     expect(await within(dialog).findByText("Erased the chosen data for ana@example.com.")).toBeInTheDocument();
     expect(within(dialog).getByText("Recorded in the Audit log as person.erasure.")).toBeInTheDocument();
-    expect(within(dialog).getAllByText("Erased")).toHaveLength(5);
+    expect(within(dialog).getAllByText("Erased")).toHaveLength(6);
     expect(within(dialog).queryByText("Recordings")).toBeNull();
+  });
+
+  it("Saved components is ticked on open, says what goes and what stays, and the request carries it", async () => {
+    erasePersonMock.mockResolvedValue({ person: "sub-ana", scopes: [], outcome: {} });
+    const dialog = await openDialog();
+    expect(scopeBox(dialog, "Saved components")).toBeChecked();
+    expect(
+      within(dialog).getByText(
+        "The components they saved, and what each run recorded about the ones they defined. Each run keeps a row with its content removed.",
+      ),
+    ).toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText(ERASE.FIELD), "ana@example.com");
+    for (const label of SCOPE_LABELS.filter((l) => l !== "Saved components")) {
+      if (scopeBox(dialog, label).getAttribute("aria-checked") === "true") await userEvent.click(scopeBox(dialog, label));
+    }
+    await userEvent.click(within(dialog).getByRole("button", { name: "Erase data" }));
+    expect(erasePersonMock).toHaveBeenCalledWith("ana@example.com", ["components"]);
+    expect(await within(dialog).findByText("Saved components")).toBeInTheDocument();
   });
 
   it("with recordings: ticking it sends the scope and lists it in the result", async () => {
@@ -168,7 +188,7 @@ describe("Erase someone's data (M4)", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Erase data" }));
     expect(await within(dialog).findByText("Recordings")).toBeInTheDocument();
     expect(erasePersonMock.mock.calls[0][1]).toContain("recordings");
-    expect(within(dialog).getAllByText("Erased")).toHaveLength(6);
+    expect(within(dialog).getAllByText("Erased")).toHaveLength(7);
   });
 
   it("a partial run: finished scopes read Erased, the rest Not finished, and the retry sentence shows", async () => {
