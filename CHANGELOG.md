@@ -120,6 +120,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- `docs/DESKTOP.md` still said a `wardynd` restart mid-run loses the masking state and then
+  records or streams output unmasked, and that failing closed "is not done". Since 0.8.6 each
+  run's secret values are committed before its sandbox starts and reloaded after a restart, and a
+  recording upload, attach or shell that cannot prove that state answers `503`
+  `mask_state_unavailable`. Both places on the page now say that, with the two cases in which an
+  operator will meet the refusal.
 - The person-erasure scope table in `docs/OPERATIONS.md` listed the scopes credentials first, and
   the text under it says they run "in the order above". They run the other way round: live
   consumers are fenced first and the keys go last. The table is now in the order the scopes run,

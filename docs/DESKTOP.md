@@ -125,9 +125,10 @@ Three properties define it:
   - Only registry-known secrets are masked: an unregistered secret pasted into the terminal can remain in cleartext.
   - There is **no delete-one route**; the age-based retention sweep is the removal mechanism (default: keep forever).
   - See [SSH recording and masking scope](SSH.md#recording).
-  - A `wardynd` restart mid-run (an MDM upgrade window, a crash, a laptop waking) wipes the in-memory masking snapshot,
-    - after which the stream passes through **unmasked** with a `success` audit event,
-    - because nothing in that path can tell "no secrets for this run" from "not my run".
+  - A `wardynd` restart mid-run (an MDM upgrade window, a crash, a laptop waking) no longer loses the masking state: each run's secret values are committed, sealed, before its sandbox starts, and are reloaded after a restart.
+    - A shell or attach that cannot prove that state complete is refused (`503` `mask_state_unavailable`); it is not streamed unmasked.
+    - A run started before 0.8.6 has no such record, so after a restart it is refused at those doors until it ends.
+    - See [Output masking, and the paths it does not cover](../threatmodel/THREAT-MODEL.md#41-output-masking-and-the-paths-it-does-not-cover).
 
 Three more the tier inherits rather than introduces:
 
@@ -490,13 +491,13 @@ curl -fsS -X POST -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" \
   - A second boot pass was rejected on evidence: wiring it there makes the existing reconciler tear the same sandbox down **twice**, which its own test asserts against.
   - MDM can schedule the route like the support bundle.
 
-> [!WARNING]
-> - **A restart mid-run can write live credentials into the recording, in cleartext, with a `success` audit event.**
-> - A single `wardynd` restart — an MDM upgrade window, a crash, a laptop waking — wipes the in-memory secret-masking snapshot.
-> - The masking writer then **passes the stream through unmasked**, because nothing in that path can distinguish *"no secrets for this run"* from *"not my run"*.
-> - This tier maximises the trigger: a 300s converge timer, an upgrade model that is a daemon restart, and a machine that sleeps.
-> - Weigh it against the recorded-evidence claim above before selling recordings as tamper-evident.
-> - Fixing it means failing closed on an empty snapshot for a non-terminal run, and is not done.
+> [!IMPORTANT]
+> - **A restart mid-run refuses output it cannot mask; it does not record it in cleartext.**
+> - Each run's secret values are committed, sealed, before its sandbox starts, so a `wardynd` restart (an MDM upgrade window, a crash, a laptop waking) reloads them.
+> - A recording upload, attach or shell for a run whose masking state cannot be proved complete answers `503` `mask_state_unavailable`.
+> - This tier restarts often: a 300s converge timer, an upgrade model that is a daemon restart, and a machine that sleeps.
+> - So expect that refusal, and a gap in the recording, for a run started before 0.8.6 or while Postgres is unreachable.
+> - See [Output masking, and the paths it does not cover](../threatmodel/THREAT-MODEL.md#41-output-masking-and-the-paths-it-does-not-cover) for the paths that were never masked.
 
 ## The laptop is sometimes offline
 
