@@ -1,0 +1,2 @@
+# Prose must not grow beyond the base count (29985) plus cell-expansion headings (190 headings, 198 words) and their one-sentence summaries (189 cells, 5168 words); the page measures 29899 without them. Itemised in lane-reports/docs/E-worker.md.
+docs/ENV.md=35265 share=5
