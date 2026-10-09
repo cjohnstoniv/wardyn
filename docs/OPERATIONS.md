@@ -1527,8 +1527,8 @@ A few things that don't fit the grid:
 - **Boot posture is chart-only.**
   - `validateOperatorPosture` ([`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)) refuses to boot OIDC at all unless `WARDYN_OIDC_OPERATOR_EMAILS` is set or `WARDYN_OIDC_ROLE_MAP` is non-empty (override: `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST`)
   - **console rows do not count toward this floor**: they live in the database, read once per login, never at boot, so the chart alone has to justify running OIDC on this install.
-- **The two console writes that can flip everyone's default outcome** — adding the first console row while the chart map is empty, or deleting the last one — are refused (400) without `acknowledge_access_change=true`,
-  - and only when the write would actually change what an unmatched, non-allowlisted human gets
+- **The two console writes that can flip everyone's default outcome** — adding the first console row while the chart map is empty, or deleting the last one — are refused (400) without `acknowledge_access_change=true`.
+  - That holds only when the write would actually change what an unmatched, non-allowlisted human gets
   - (computed from `HasOperatorEmails()`/`DefaultRole()` on each side of the write, never a raw row count — a shadowed row contributes to neither side).
 - **The lockout guard** refuses a write that would leave the ACTING admin no longer admin, checked against their own last-sign-in session snapshot
   - never a live re-check, since a role is a stamped cookie, not a query.
@@ -1575,8 +1575,8 @@ A few things that don't fit the grid:
 
 Both are validated at **boot**, not at first use:
 
-- a malformed entry (invalid role value, non-ASCII key — matching is ASCII-only, so it could never match — duplicate key, or non-blank input with no valid entry at all)
-- or an invalid `WARDYN_OIDC_DEFAULT_ROLE` fails wardynd's boot outright, naming the var (`buildOptionalFeatures`, [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go))
+- a malformed entry (invalid role value, non-ASCII key — matching is ASCII-only, so it could never match — duplicate key, or non-blank input with no valid entry at all) or an invalid `WARDYN_OIDC_DEFAULT_ROLE`
+- either fails wardynd's boot outright, naming the var (`buildOptionalFeatures`, [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go))
 - never a silent fallback that lets a typo reach a session cookie later.
 
 A signed-in human who matches nothing in a valid map, with no default role set, is denied at login instead ("no Wardyn role assigned").
@@ -1699,7 +1699,7 @@ A signed-in human who matches nothing in a valid map, with no default role set, 
 | **Route** | `GET`/`PUT /workspace-providers`, `GET`/`PUT /agent-providers` — both verbs admin-only, for the reason the tier table above gives: a base URL names corporate topology and an `sso_start_url` names the org's IdP | `PUT /site-config`, admin-only, a **full-document replace** of everything except integrations |
 | **Writes what** | exactly one block, replaced whole; `{}` is the clear form | the whole document, provider blocks included when the body NAMES them |
 | **A block the body does NOT name** | n/a — the route IS the block | **carried forward**, not cleared (`carryForwardUnnamedSiteConfigFields`, [`internal/api/site_config.go`](../internal/api/site_config.go)). Without this, every 5-minute converge on a laptop whose MDM file predates 0.7.2 would silently delete the org's provider policy |
-| **Clearing a block** | `{}` | `{}`; see [below](#clearing-a-block) |
+| **Clearing a block** | `{}` | `{}` on both doors; an explicit `null` clears over raw HTTP but not through `wardyn site-config set`; see [below](#clearing-a-block) |
 | **Audit row** | `workspace_provider.write` / `agent_provider.write` — the block's own shape, including `base_urls` in the clear (a provider address is topology, not a credential) and never the `sso_start_url` | `site_config.write`, whose datum carries `git_providers`, `storage_configured`, `agent_providers` and — when the body named `workspace_providers` — `sources_no_longer_admitted`, so an MDM-applied narrowing is reviewable with nobody watching a console |
 | **Narrowing is never silent** | the `PUT` response counts the already-onboarded repo sources and library sources the new block refuses; the console renders it on the save toast | the same count, on the response and in `site_config.write` |
 
@@ -2194,9 +2194,9 @@ wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes
 #### 409 refusal
 
 - A run still holds the object, a reclaim is already in flight (a claim already `Terminating`), or the object answering to that name is **not this drive's**
-- (the driver re-checks the `wardyn.drive` / `wardyn.home` / `wardyn.subject` labels before issuing any delete,
+- The driver re-checks the `wardyn.drive` / `wardyn.home` / `wardyn.subject` labels before issuing any delete,
 - and on Kubernetes binds the delete to the claim it checked: a claim deleted and re-created under the same name in between is refused, never deleted
-- Docker's volume remove takes no such precondition).
+- Docker's volume remove takes no such precondition.
 
 ### User drives on Docker
 

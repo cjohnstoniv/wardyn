@@ -1,5 +1,6 @@
 # Prose-word budget (scripts/doc-form.sh): path=N. N is the measured prose words of the whole shared file after the
-# multi-user access-model rewrite: 83008 at the branch point, plus 7. The growth is the three cell-expansion headings
-# (6 + 3 + 2 = 11 words) and the three one-line summaries left in their table rows (6 + 2 + 22 = 30 words), less
-# 33 lone-dash words not carried where a sentence is split and 1 word from the other changes, so nothing else grew.
-docs/OPERATIONS.md=83015
+# multi-user access-model rewrite: 83008 at the branch point, plus 25. The growth is the three cell-expansion headings
+# (6 + 3 + 2 = 11 words) and the three one-line summaries left in their table rows (6 + 18 + 22 = 46 words), less
+# 33 lone-dash words not carried where a sentence is split, plus 1 net word from the other changes ("That holds"
+# and "either" in two re-splits, less one word elsewhere), so nothing else grew.
+docs/OPERATIONS.md=83033
