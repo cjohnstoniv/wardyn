@@ -249,12 +249,16 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// policy_help, else absent. Read after getRunAuthorized, so a hidden run
 		// never reaches it.
 		Policy *policyref.Ref `json:"policy,omitempty"`
+		// Sync lists the wardyn-sync sessions open now (sync.open), from the
+		// gateway's live per-run sync budget; always present, empty when none.
+		Sync runSyncView `json:"sync"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
 		CreatedViaName: s.runCreatedViaName(r.Context(), run),
 		KeptUntil:      s.endedRunKeptUntil(run),
 		Policy:         s.runPolicyRef(r.Context(), run),
+		Sync:           s.runSyncOpenView(run.ID),
 	})
 }
 

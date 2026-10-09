@@ -339,6 +339,16 @@ export interface AdminRestartResponse {
   results: AdminRestartResult[];
 }
 
+// sync (GET /runs/{id} only) lists the wardyn-sync sessions open now, from the
+// gateway's live per-run sync budget; ended ones are the ssh.sync.transfer rows.
+export interface RunSyncOpen {
+  dir: string;
+  opened_at: string;
+}
+export interface RunSync {
+  open: RunSyncOpen[];
+}
+
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that
 // endpoint sends (handleGetRun's anonymous wrapper struct, runs_policy.go) —
 // the READ-ONLY denormalization of the run's EFFECTIVE policy ui_apps. The run
@@ -381,6 +391,8 @@ export interface RunDetail extends AgentRun {
   // The policy the run was launched under and how to ask for a change to it
   // (GET /runs/{id}, internal/policyref.Ref). Absent when none applies.
   policy?: PolicyRef;
+  // Wardyn-sync sessions open now (GET /runs/{id} only); see RunSync.
+  sync?: RunSync;
 }
 
 // GET /api/v1/runs/{id}/policy — the policy a run actually got (the run page's

@@ -731,6 +731,9 @@ type Server struct {
 	sshSessionsMu   sync.Mutex
 	sshSessions     map[uuid.UUID]int
 	sshSyncSessions map[uuid.UUID]int
+	// sshSyncOpen is the directory and open time of each live wardyn-sync
+	// channel, for GET /runs/{id}'s sync.open. Guarded by sshSessionsMu.
+	sshSyncOpen map[uuid.UUID][]*runSyncOpen
 	// builds tracks per-workspace image builds (the wizard's Build step).
 	// Zero value is ready to use.
 	builds buildTracker

@@ -384,7 +384,31 @@ scp ./local-file <run-id>@<advertise-host>:/home/agent/  -P <port>
 - See [Image contract](#image-contract-byoi) if this 404s.
 - **`wardyn-sync`** runs the same `sftp-server` with `-d <dir>`, after `env` requests `WARDYN_SYNC_DIR` (absolute, under `/home/agent/`, no `..`; default `/home/agent/work`) and `WARDYN_SYNC_DIRECTION` (`push` or `pull`), read on this subsystem only.
   - A refused directory launches nothing; a missing one launches at the sandbox's working directory, so check `RealPath(".")` and use absolute paths.
-  - The directory is a start point, not a boundary.
+
+### Sync a directory (`wardyn sync`)
+
+```sh
+wardyn ssh-key ensure                      # once
+wardyn sync <run-id> ./project [--remote-dir /home/agent/work] [--watch] [--pull] [--json]
+```
+
+Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
+
+- Laptop to sandbox; `--pull` is per run and is the audit row's `direction`.
+- Never deletes; refuses symlinks both ways; a pulled file never gets an exec bit.
+- Never syncs `.git/`, `.envrc`, `.direnv/`, `.vscode/tasks.json`, `.vscode/launch.json`, `.idea/runConfigurations/`, `.idea/workspace.xml`.
+- A file changed on both sides since the last sync is not pulled: the laptop's copy wins and the path is listed.
+- Paths differing only by case are refused. State lives in `~/.local/state/wardyn/sync/<run-id>.json`.
+- The directory is a start point, not a boundary; the CLI aborts unless `RealPath(".")` is the directory it asked for.
+
+`rsync` works too, over `wardyn run ssh --config`'s `Host` block; add `--chmod=F644,D755` to pull:
+
+```sh
+rsync -rt --no-perms --no-links --exclude='.git/' --exclude='.envrc' --exclude='.direnv/' \
+  --exclude='.vscode/tasks.json' --exclude='.vscode/launch.json' \
+  --exclude='.idea/runConfigurations/' --exclude='.idea/workspace.xml' \
+  ./project/ wardyn-<short-id>:/home/agent/work/
+```
 
 ## 4. `-L` port forwarding
 
