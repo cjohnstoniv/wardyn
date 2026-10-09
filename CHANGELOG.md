@@ -115,6 +115,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The pluggable components page, the image verification page, the export control page, the recording read confinement note and the adoption reports index are now bullets, tables and alerts, with every repository file they cite linked. No rule, default or limit changed; the long cells of the pluggable components tables moved to sections of their own.
 - `docs/OPERATIONS.md`: the Network section ("Network: upstream proxy and egress redirects") is now
   bullets, tables and callouts, and every file it names is a link. No fact, default, limit or step changed.
+- `docs/OPERATIONS.md`: the sections "Renamed in 0.8", "Upgrades", "Kubernetes: day-2" and "High availability" are
+  now bullets, nested lists and callouts, and every file they name is a link. No step, order, default, limit or version changed.
 
 ### Fixed
 
