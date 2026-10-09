@@ -8,7 +8,7 @@
 
 ## Topology
 
-![On an enrolled laptop, everyday work takes the normal path while each sandbox leaves only through its egress proxy, nothing connects in, and keys added by the proxy stay outside.](img/wardyn-laptop.webp)
+![On an enrolled laptop, everyday work takes the normal path while each sandbox leaves only through its egress proxy, nothing connects in, and the proxy adds keys to outbound requests.](img/wardyn-laptop.webp)
 
 ```
        MDM (Jamf / Intune / …)

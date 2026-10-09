@@ -8,7 +8,7 @@
 
 ![An isometric compound where one outer wall surrounds a datacentre and people's devices, each sandbox sits behind Wardyn's inner wall, and the org control plane links by policy and audit.](docs/img/wardyn-walls.webp)
 
-![One outer wall surrounds the cloud zone and people's devices; each sandbox has its own inner wall and proxy, nothing connects in, and keys added by the proxy never enter.](docs/img/wardyn-places.webp)
+![One outer wall surrounds the cloud zone and people's devices; each sandbox has its own inner wall and proxy, nothing connects in, and the proxy adds keys to outbound requests.](docs/img/wardyn-places.webp)
 
 ## Before you start
 
@@ -187,7 +187,7 @@ wardyn setup status   # what's configured + the next command per unmet check
 
 ## Architecture at a glance
 
-![A run from left to right: console, control plane, sandbox behind a barrier, egress proxy, then destinations allowed, held or denied by policy; keys added by the proxy stay outside.](docs/img/wardyn-run.webp)
+![A run from left to right: console, control plane, sandbox behind a barrier, egress proxy, then destinations allowed, held or denied by policy; the proxy adds keys to outbound requests.](docs/img/wardyn-run.webp)
 
 ```mermaid
 flowchart LR
