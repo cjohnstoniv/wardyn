@@ -66,7 +66,7 @@ func TestCeilingReassert_WithholdsTheResidentBedrockLane(t *testing.T) {
 	var injections []runner.InjectionGrant
 	mitm := []string{"bedrock-runtime.us-east-1.amazonaws.com:443"}
 
-	srv.reassertCeilingDenies(context.Background(), run, policy, &injections, c, &p, sandboxEnv, &llm, &mitm)
+	srv.reassertCeilingDenies(context.Background(), run, policy, &injections, c, &p, sandboxEnv, &llm, &mitm, nil)
 
 	for _, k := range written {
 		if _, still := sandboxEnv[k]; still {
@@ -104,7 +104,7 @@ func TestCeilingReassert_NoProfileLeavesBedrockAlone(t *testing.T) {
 	p := dispatchParams{}
 	mitm := []string{"bedrock-runtime.us-east-1.amazonaws.com:443"}
 	srv.reassertCeilingDenies(context.Background(), run, policy, &injections, dispatchCeiling{resolved: true},
-		&p, sandboxEnv, &llm, &mitm)
+		&p, sandboxEnv, &llm, &mitm, nil)
 
 	if len(sandboxEnv) != len(before) {
 		t.Fatalf("sandbox env changed: %v -> %v", before, sandboxEnv)

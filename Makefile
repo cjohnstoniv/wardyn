@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check release-patch ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check release-patch ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -37,12 +37,16 @@ GOPROXY      ?=
 # Native-binary agent installs (opt-in; npm stays the default). Behind a proxy
 # where public npm is blocked, install the native CLI instead:
 #   make agent-images-core CLAUDE_INSTALL=native            # checksum-verified download
-#   make agent-images-core CLAUDE_INSTALL=native CLAUDE_CODE_VERSION=2.1.215
+#   make agent-images-core CLAUDE_INSTALL=native CLAUDE_CODE_VERSION=<version> CLAUDE_MANIFEST_SHA256=<sha256>
 #   scripts/stage-agent-binary.sh codex-cli && make agent-images-core CODEX_INSTALL=native
 CLAUDE_INSTALL      ?=
 CODEX_INSTALL       ?=
 CLAUDE_CODE_VERSION ?=
+CLAUDE_MANIFEST_SHA256 ?=
 AWS_CLI_INSTALL     ?=
+AWS_CLI_VERSION     ?=
+AWS_CLI_SHA256      ?=
+AWS_CLI_SIG_SHA256  ?=
 # vscode/novnc default FROM agent-base (deploy/images/{vscode,novnc}/Dockerfile);
 # a developer checkout that wants `claude` in the vscode terminal overrides this
 # to the vendor base, e.g.
@@ -65,7 +69,11 @@ DOCKER_BUILD_ARGS = \
 	$(call _build_arg,CLAUDE_INSTALL,$(CLAUDE_INSTALL)) \
 	$(call _build_arg,CODEX_INSTALL,$(CODEX_INSTALL)) \
 	$(call _build_arg,CLAUDE_CODE_VERSION,$(CLAUDE_CODE_VERSION)) \
+	$(call _build_arg,CLAUDE_MANIFEST_SHA256,$(CLAUDE_MANIFEST_SHA256)) \
 	$(call _build_arg,AWS_CLI_INSTALL,$(AWS_CLI_INSTALL)) \
+	$(call _build_arg,AWS_CLI_VERSION,$(AWS_CLI_VERSION)) \
+	$(call _build_arg,AWS_CLI_SHA256,$(AWS_CLI_SHA256)) \
+	$(call _build_arg,AWS_CLI_SIG_SHA256,$(AWS_CLI_SIG_SHA256)) \
 	$(call _build_arg,BASE_IMAGE,$(BASE_IMAGE))
 
 # Self-describing help: the description lives on the target line as a `##`
@@ -187,8 +195,8 @@ test-race: cover-check ## Alias: race coverage now rides along inside the test-r
 # convert_pg_test.go's TestPG_ConvertV0_IsSingleWriter converts in a goroutine.
 test-race-pg: ## Race-detector pass over the Postgres-gated concurrency proofs (needs WARDYN_TEST_PG)
 	@echo "Running the Postgres-gated concurrency proofs under the race detector (requires WARDYN_TEST_PG)..."
-	go test -race -p 1 -count=1 -run 'TestPG_' ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
-	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)|TestPG_CreateWait_' ./internal/api/...
+	go test -race -p 1 -count=1 -run 'TestPG_' ./internal/maskstore/... ./internal/secretmask/... ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
+	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)|TestPG_CreateWait_|TestPG_MaskErasure|TestRecordingOutputPG_' ./internal/api/...
 	go test -race -p 1 -count=1 -run 'TestPG_AuditPartition_.*Contiguous' ./internal/db/...
 
 test-docker: ## Run all Go tests with -tags docker
@@ -566,6 +574,9 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	./scripts/check-file-size.sh
 	@echo "Running doc-form gate (scripts/doc-form.sh)..."
 	./scripts/doc-form.sh
+	@echo "Running doc-link gate (scripts/check-doc-links.sh)..."
+	./scripts/check-doc-links.sh --selftest
+	./scripts/check-doc-links.sh
 	@echo "Running fixture-date gate (scripts/check-fixture-dates.sh)..."
 	./scripts/check-fixture-dates.sh
 	@echo "Running image-pin gate (scripts/check-image-pins.sh)..."
@@ -588,6 +599,10 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	@echo "Running console ESLint (react-hooks + no-floating-promises, ui/eslint.config.js)..."
 	cd ui && pnpm install --frozen-lockfile && pnpm lint
 
+doc-links: ## Resolve every relative Markdown link and heading anchor in tracked docs (also part of `make lint`)
+	./scripts/check-doc-links.sh --selftest
+	./scripts/check-doc-links.sh
+
 # The shell half of the test suite: each of these pins a fixed regression in
 # scripts/ that no Go test can see (up.sh's reset warnings, the compose
 # namespace/port derivation, up-policy's parsing). Daemon-free by selection —
@@ -606,6 +621,9 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-compose-ns-registry-port.sh
 	./scripts/test-dco.sh
 	./scripts/test-desktop-profile.sh
+	./scripts/test-doc-form.sh
+	./scripts/test-doc-links.sh
+	./scripts/test-e2e-harness.sh
 	./scripts/test-e2e-lane-kill-tree.sh
 	./scripts/test-e2e-live-base-url.sh
 	./scripts/test-e2e-quarantine.sh
@@ -613,6 +631,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-fixture-dates.sh
 	./scripts/test-gpl-source-offer.sh
 	./scripts/test-green-by-tree.sh
+	./scripts/test-helm-schema.sh
 	./scripts/test-image-pins.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
@@ -1372,6 +1391,8 @@ helm-install-test: ## kind: postgres + helm install the loaded image + prove /he
 	fi; \
 	echo "/healthz OK (200) via kubectl port-forward -> Service -> Pod"
 	@echo "==> server-side dry-run of the optional objects (Ingress + default-policy ConfigMap): helm-lint is grep-over-render, this is the one lane that hands them to a real API server's schema validation"
+	@manifest=$$(mktemp) || exit 1; \
+	trap 'rm -f "$$manifest"' EXIT; \
 	helm template $(HELM_TEST_RELEASE) ./deploy/helm/wardyn \
 		--namespace $(HELM_TEST_NAMESPACE) \
 		--set image.repository=$(HELM_TEST_IMAGE_REPO) \
@@ -1380,8 +1401,8 @@ helm-install-test: ## kind: postgres + helm install the loaded image + prove /he
 		--set auth.adminToken.value=dry-run-only \
 		--set ingress.enabled=true --set 'ingress.hosts[0].host=wardyn.example.test' \
 		--set-file defaultPolicy=examples/policies/demo.json \
-		$(HELM_TEST_SET) \
-		| kubectl -n $(HELM_TEST_NAMESPACE) apply --dry-run=server -f - >/dev/null
+		$(HELM_TEST_SET) >"$$manifest" || exit $$?; \
+	./scripts/check-helm-schema.sh "$$manifest" "$(HELM_TEST_NAMESPACE)"
 	@echo "==> teardown"
 	helm uninstall $(HELM_TEST_RELEASE) --namespace $(HELM_TEST_NAMESPACE)
 	kubectl delete namespace $(HELM_TEST_NAMESPACE) --wait=false

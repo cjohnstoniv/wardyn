@@ -196,6 +196,14 @@ nightly_state() {
 }
 
 # ── prepare ──────────────────────────────────────────────────────────────────
+check_changelog_headings() {
+  local duplicates
+  duplicates=$(sed -n 's/^## \[\([^]]*\)\].*/\1/p' CHANGELOG.md | LC_ALL=C sort | uniq -d)
+  [ -z "$duplicates" ] || die "duplicate CHANGELOG.md heading keys:
+$duplicates
+Repair CHANGELOG.md so each version and Unreleased appears once, preserve the release notes, commit the repair with \`git commit -s\`, and re-run PHASE=prepare. Keep the merge/release history; do not reset, amend or force-push."
+}
+
 phase_prepare() {
   local sha tree rtip n body state
 
@@ -210,6 +218,7 @@ phase_prepare() {
     fi
   fi
 
+  check_changelog_headings
   begin "release commit $V"
   if git grep -qF -e "## [$V]" HEAD -- CHANGELOG.md; then finish "skipped (CHANGELOG already has $V)"
   else
@@ -226,6 +235,7 @@ phase_prepare() {
       finish ok
     fi
   fi
+  check_changelog_headings
 
   sha="$(git rev-parse HEAD)"
   rtip="$(remote_tip "$CAND")"

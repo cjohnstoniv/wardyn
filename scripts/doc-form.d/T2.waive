@@ -1,0 +1,2 @@
+# kind	path	key	words	reason
+sentence	threatmodel/THREAT-MODEL.md	76ecd813bbf937b069e72a2c8b7744e8e0b6ac85	37	residual 14, "So a local caller cannot mint a named member's stored ..." (R0579): one clause plus a "which" clause, no clause joiner

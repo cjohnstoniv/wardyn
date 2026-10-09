@@ -52,8 +52,12 @@ type pgTestRevocations struct {
 // cutoffRevoked is the cutoff check. cuts says the browser-session cuts count too, as in the production
 // adapter: for IsSessionRevoked and for a credential that carries an epoch, not for a token or a key.
 func (r *pgTestRevocations) cutoffRevoked(ctx context.Context, sub, email string, issuedAt time.Time, cuts bool) (bool, error) {
+	return r.cutoffRevokedQ(ctx, r.pool, sub, email, issuedAt, cuts)
+}
+
+func (r *pgTestRevocations) cutoffRevokedQ(ctx context.Context, q store.Querier, sub, email string, issuedAt time.Time, cuts bool) (bool, error) {
 	var cutoff sql.NullTime
-	err := r.pool.QueryRow(ctx, `SELECT MAX(revoked_at) FROM (
+	err := q.QueryRow(ctx, `SELECT MAX(revoked_at) FROM (
 			SELECT sub, revoked_at FROM oidc_session_revocations
 			UNION ALL SELECT sub, cut_at FROM oidc_session_cuts WHERE $3::boolean) r
 		WHERE sub = $1 OR lower(sub) = lower($2) OR sub = ''`, sub, email, cuts).Scan(&cutoff)
@@ -78,14 +82,18 @@ func (r *pgTestRevocations) IsSessionRevoked(ctx context.Context, sub, email str
 }
 
 func (r *pgTestRevocations) SessionStatus(ctx context.Context, sub, email string, issuedAt time.Time, epoch int64) (oidc.SessionStatus, error) {
-	blocked, err := r.st.IdentityBlocked(ctx, sub, epoch)
+	return r.SessionStatusQ(ctx, r.pool, sub, email, issuedAt, epoch)
+}
+
+func (r *pgTestRevocations) SessionStatusQ(ctx context.Context, q store.Querier, sub, email string, issuedAt time.Time, epoch int64) (oidc.SessionStatus, error) {
+	blocked, err := store.IdentityBlockedQ(ctx, q, sub, epoch)
 	if err != nil {
 		return oidc.SessionLive, err
 	}
 	if blocked {
 		return oidc.SessionDeactivated, nil
 	}
-	revoked, err := r.cutoffRevoked(ctx, sub, email, issuedAt, epoch >= 0)
+	revoked, err := r.cutoffRevokedQ(ctx, q, sub, email, issuedAt, epoch >= 0)
 	if revoked {
 		return oidc.SessionRevoked, err
 	}

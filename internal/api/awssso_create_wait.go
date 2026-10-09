@@ -24,6 +24,8 @@ package api
 // availability. A holder still persisting after the budget (the persist has its
 // own 30 s, awsSSOPersistBudget) can still mark the pair spent after the run
 // exists; that needs a failed persist, so it is rare.
+// A holder that releases its lock without changing the row is invisible to
+// this metadata-only watch; an unchanged row still waits out the budget.
 
 import (
 	"context"
@@ -40,6 +42,24 @@ var awsSSOCreateWaitBudget = 2*awsSSORefreshTimeout + awsSSORefreshRetryDelay + 
 
 // awsSSOCreateWaitTick is the pause between two polls, and each poll's deadline.
 var awsSSOCreateWaitTick = 250 * time.Millisecond
+
+type awsSSORenewalBaselineKey struct{ scope awsSSOScope }
+
+type awsSSORenewalBaseline struct {
+	rev     string
+	guarded bool
+	err     error
+}
+
+// The baseline must precede the door's value read: a rotation between that
+// read and the first poll must not become the revision we wait for changes to.
+// Keep it request-local and scoped to the exact credential the door reads.
+func (s *Server) readAWSSORenewalBaseline(ctx context.Context, scope awsSSOScope) awsSSORenewalBaseline {
+	rctx, cancel := context.WithTimeout(ctx, awsSSOCreateWaitTick)
+	defer cancel()
+	rev, guarded, err := s.awsSSORevision(rctx, scope)
+	return awsSSORenewalBaseline{rev, guarded, err}
+}
 
 // renewalInFlight is refreshAWSSSOBlob's answer when another flight holds the
 // owner lock and the token in hand can still carry a run. Create has no later
@@ -66,13 +86,14 @@ func (s *Server) renewalInFlight(ctx context.Context, scope awsSSOScope, blob aw
 func (s *Server) awaitAWSSSORenewalInFlight(ctx context.Context, scope awsSSOScope, blob awsSSOBlob) (awsSSOBlob, string) {
 	slog.InfoContext(ctx, "wardynd: a renewal of this AWS SSO credential is already in flight; waiting for its result",
 		slog.String("credential_source", awsSSOCredentialSourceLabel(scope)))
-	w := awsSSORenewalWatch{s: s, scope: scope, blob: blob, fingerprint: awsSSOTokenFingerprint(blob.RefreshToken)}
+	baseline, _ := ctx.Value(awsSSORenewalBaselineKey{scope}).(awsSSORenewalBaseline)
+	w := awsSSORenewalWatch{s: s, scope: scope, blob: blob, fingerprint: awsSSOTokenFingerprint(blob.RefreshToken), baseline: baseline}
 	stop := time.Now().Add(awsSSOCreateWaitBudget)
 	tick := time.NewTicker(awsSSOCreateWaitTick)
 	defer tick.Stop()
-	for n := 0; ; n++ {
+	for {
 		pctx, cancel := context.WithTimeout(ctx, awsSSOCreateWaitTick)
-		next, failure, done, err := w.poll(pctx, n == 0)
+		next, failure, done, err := w.poll(pctx)
 		cancel()
 		if err != nil {
 			slog.WarnContext(ctx, "wardynd: stopped waiting for the AWS SSO renewal in flight; serving the still-valid token", slog.Any("err", err))
@@ -98,11 +119,10 @@ type awsSSORenewalWatch struct {
 	scope       awsSSOScope
 	blob        awsSSOBlob
 	fingerprint string
-	baseRev     string
+	baseline    awsSSORenewalBaseline
 }
 
-// poll is one look at the store. first takes the baseline revision.
-func (w *awsSSORenewalWatch) poll(ctx context.Context, first bool) (awsSSOBlob, string, bool, error) {
+func (w *awsSSORenewalWatch) poll(ctx context.Context) (awsSSOBlob, string, bool, error) {
 	spent, err := w.s.awsSSOTokenSpentNow(ctx, w.fingerprint)
 	if err != nil {
 		return w.blob, "", false, err
@@ -110,12 +130,12 @@ func (w *awsSSORenewalWatch) poll(ctx context.Context, first bool) (awsSSOBlob, 
 	if spent {
 		return w.blob, awsSSORefreshSpentSentence, true, nil
 	}
+	if w.baseline.err != nil || !w.baseline.guarded {
+		return w.blob, "", true, w.baseline.err
+	}
 	rev, guarded, err := w.s.awsSSORevision(ctx, w.scope)
 	if err != nil {
 		return w.blob, "", false, err
-	}
-	if first {
-		w.baseRev = rev
 	}
 	switch {
 	case !guarded:
@@ -125,7 +145,7 @@ func (w *awsSSORenewalWatch) poll(ctx context.Context, first bool) (awsSSOBlob, 
 		return w.blob, "", true, nil
 	case rev == "":
 		return w.blob, awsSSORefreshSpentSentence, true, nil
-	case rev == w.baseRev:
+	case rev == w.baseline.rev:
 		return w.blob, "", false, nil
 	}
 	cur, found, err := w.s.readAWSSSOBlob(ctx, w.scope)
@@ -135,6 +155,7 @@ func (w *awsSSORenewalWatch) poll(ctx context.Context, first bool) (awsSSOBlob, 
 	case !found:
 		return w.blob, awsSSORefreshSpentSentence, true, nil
 	case cur.servableFor(w.s.cfg.Now(), awsSSORefreshServeFloor):
+		cur.maskGeneration = w.blob.maskGeneration
 		return cur, "", true, nil
 	}
 	return w.blob, "", true, nil

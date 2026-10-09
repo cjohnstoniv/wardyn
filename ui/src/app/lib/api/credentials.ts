@@ -69,6 +69,7 @@ export type ErasureScope =
   | "audit_personal_fields"
   | "run_tasks"
   | "run_outputs"
+  | "components"
   | "mask_copies"
   | "recordings";
 
@@ -77,6 +78,8 @@ export interface PersonErasureResult {
   person: string;
   scopes: ErasureScope[];
   outcome: Record<string, string>;
+  /** What each finished scope reported, keyed by scope. */
+  detail: Record<string, unknown>;
 }
 
 /** The 500 `erasure_incomplete`: what finished and what is left, so a retry names the same scopes. */

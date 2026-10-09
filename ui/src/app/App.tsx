@@ -98,6 +98,13 @@ const ProvidersScreen = React.lazy(() =>
     default: m.ProvidersScreen,
   })),
 );
+// The org's custom components (0.8.9): the catalog and who may use each. Super admin only, no nav item:
+// reached from the Settings card.
+const ComponentsScreen = React.lazy(() =>
+  import("./components/screens/components/components-screen").then((m) => ({
+    default: m.ComponentsScreen,
+  })),
+);
 const PermissionsScreen = React.lazy(() =>
   import("./components/screens/permissions").then((m) => ({
     default: m.PermissionsScreen,
@@ -374,7 +381,8 @@ export default function App() {
   // tree unmounts first (dropping every draft and its beforeunload guard)
   // and the document then loads fresh as them.
   const [reloadTo, setReloadTo] = React.useState<string | null>(null);
-  const { reauth, lapse, reset: resetReauth } = useReauthController(setReloadTo);
+  const endingSession = React.useCallback(() => signingOutRef.current, []);
+  const { reauth, lapse, reset: resetReauth } = useReauthController(setReloadTo, endingSession);
   // Not the phase: a renewal from the expiry banner leaves the page working.
   const lapsed = reauth.signedOut;
   // H1: onUnauthorized fires for EVERY 401, including the cold mount probe
@@ -449,7 +457,7 @@ export default function App() {
   }, [lapse]);
   // …and released only when the lapse ends: the same person resumed, or the
   // console was signed out and reset.
-  React.useEffect(() => setSignedOutHold(lapsed), [lapsed]);
+  React.useEffect(() => setSignedOutHold(lapsed), [lapsed, auth]);
   React.useEffect(() => {
     if (reloadTo !== null) window.location.assign(appURL(safeReturnPath(reloadTo)));
   }, [reloadTo]);
@@ -646,6 +654,7 @@ export default function App() {
                 // passes it, core.ts WfetchInit.endsSession) and drops with
                 // resetReauth below, once the logout has settled.
                 signingOutRef.current = true;
+                setSignedOutHold(true);
                 if (!(await health.logout())) {
                   toast.error(SHELL.SIGN_OUT_FAILED_TITLE, {
                     description: SHELL.SIGN_OUT_FAILED_BODY,
@@ -718,6 +727,7 @@ export default function App() {
             <Route path="/admin/settings" element={suspend(<AdminSettingsScreen />)} />
             <Route path="/admin/providers" element={suspend(<ProvidersScreen />)} />
             <Route path="/admin/drives" element={suspend(<DrivesScreen />)} />
+            <Route path="/admin/components" element={suspend(<ComponentsScreen />)} />
             <Route path="/admin/*" element={<Navigate to="/admin/runs" replace />} />
             <Route path="/account" element={suspend(<YourAccountScreen />)} />
             <Route path="/runs" element={<RunsScreen />} />

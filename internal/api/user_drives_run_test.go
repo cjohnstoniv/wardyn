@@ -198,7 +198,7 @@ func TestSeedRequestDriveDoorIs403WithAudit(t *testing.T) {
 }
 
 // TestSeedRequestDriveOperatorSkipsTheDoor pins the exemption named in
-// denyUserDrive: the DOOR does not apply to an operator, and RESOLUTION still
+// userDriveDoorRefusal: the DOOR does not apply to an operator, and RESOLUTION still
 // runs for them. An operator whose drive resolves gets it — drives are
 // per-principal, not per-tier.
 func TestSeedRequestDriveOperatorSkipsTheDoor(t *testing.T) {
@@ -987,7 +987,7 @@ func TestSeedRequestDriveTruncatedGroupsIs403(t *testing.T) {
 }
 
 // TestSeedRequestDriveDoorPrecedesTheResolver pins the ORDER inside
-// seedRequestDrive, and the SCOPING of denyUserDrive — two properties the
+// seedRequestDrive, and the SCOPING of userDriveDoorRefusal — two properties the
 // door's own test cannot state, because it runs on a store that answers.
 //
 // The order is load-bearing in the direction that produces the RIGHT sentence.
@@ -1232,7 +1232,7 @@ func TestMeUserDrive(t *testing.T) {
 	})
 
 	t.Run("an operator is never reported as denied", func(t *testing.T) {
-		// The door keys on isOperator exactly as denyUserDrive does, so a
+		// The door keys on isOperator exactly as userDriveDoorRefusal does, so a
 		// profile that happens to carry DenyUserDrive never renders a closed
 		// door for a caller it does not bind.
 		cs := &capStore{

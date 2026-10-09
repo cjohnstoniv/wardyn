@@ -47,6 +47,8 @@ type createRunLaunch struct {
 	ephemeralDirs []string
 	runToken      string
 	created       types.AgentRun
+	// comps is the component gate's decision; dispatch takes its own half of it.
+	comps runComponents
 }
 
 // DRAFT (M2 canon pending) — the run's failure_hint when the detached launch
@@ -122,6 +124,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			// roots immediately before ContainerCreate (userMountPosture,
 			// workspace_refs.go).
 			UserMounts: s.userMountPosture(l.wsRefs),
+			Components: l.comps.dispatch(),
 		})
 	}
 }

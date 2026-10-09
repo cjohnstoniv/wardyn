@@ -79,6 +79,33 @@ describe("UI bundle is route-code-split", () => {
     const heavyInEntry = entryModules.filter((m) => /@xterm\/|asciinema-player/.test(m));
     expect(heavyInEntry, `heavy terminal deps leaked into the entry chunk: ${heavyInEntry.join(", ")}`).toEqual([]);
 
+    // The policy source parser belongs to the editors (Policies, Governance,
+    // New Run), all lazy routes. Static chunk imports load eagerly too;
+    // extracting a shared chunk must not let a parser dependency bypass this
+    // guard.
+    const eagerChunks = new Set([entry!.fileName]);
+    for (const fileName of eagerChunks) {
+      for (const imported of chunks.find((chunk) => chunk.fileName === fileName)?.imports ?? []) eagerChunks.add(imported);
+    }
+    const yamlInEntry = chunks
+      .filter((chunk) => eagerChunks.has(chunk.fileName))
+      .flatMap((chunk) => Object.keys(chunk.modules))
+      .filter((module) => /node_modules\/yaml\//.test(module));
+    expect(yamlInEntry, `YAML parser leaked into the entry chunk: ${yamlInEntry.join(", ")}`).toEqual([]);
+    // ...and it does ship, in a chunk the entry does not load: an editor that
+    // stopped importing it (or a regex that stopped matching) cannot pass this.
+    const yamlLazy = chunks
+      .filter((chunk) => !eagerChunks.has(chunk.fileName))
+      .flatMap((chunk) => Object.keys(chunk.modules))
+      .filter((module) => /node_modules\/yaml\//.test(module));
+    expect(yamlLazy.length, "the YAML parser is in no lazy chunk").toBeGreaterThan(0);
+    // The policy document's own modules, its copy and the YAML display emitter ride lazy chunks too.
+    const policyDocumentEager = chunks
+      .filter((chunk) => eagerChunks.has(chunk.fileName))
+      .flatMap((chunk) => Object.keys(chunk.modules))
+      .filter((module) => /wardyn\/(policy-document\/|copy\/policy-document|segmented|policy-panel|yaml-block)/.test(module));
+    expect(policyDocumentEager, `policy document modules leaked into the entry chunk: ${policyDocumentEager.join(", ")}`).toEqual([]);
+
     // 3. ...and they are present SOMEWHERE, so a build that simply dropped them
     //    (or a regex that stopped matching) can't make this test vacuously pass.
     const heavyAnywhere = chunks

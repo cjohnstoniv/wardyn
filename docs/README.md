@@ -1,7 +1,13 @@
 # Wardyn docs
 
-Start at the repo [README](../README.md) — it, the in-product Getting Started
-wizard — with its built-in demo steps — is the first-run path. Everything here is the next question.
+- Start at the repo [README](../README.md) — it, the in-product Getting Started wizard — with its built-in demo steps — is the first-run path.
+- Everything here is the next question.
+
+![An isometric compound where one outer wall surrounds a datacentre and people's devices, each sandbox sits behind Wardyn's inner wall, and the org control plane links by policy and audit.](img/wardyn-walls.webp)
+
+![One outer wall surrounds the cloud zone and people's devices; each sandbox has its own inner wall and proxy, nothing connects in, and the proxy adds keys to outbound requests.](img/wardyn-places.webp)
+
+## Index
 
 | If you want to… | Read |
 |---|---|
@@ -9,6 +15,7 @@ wizard — with its built-in demo steps — is the first-run path. Everything he
 | Use a Wardyn someone else operates (you are a member, not the admin) | [USERS.md](USERS.md) |
 | Configure a deployment (every `WARDYN_*` variable, defaults, which binary reads it) | [ENV.md](ENV.md) |
 | Author a run policy (every `RunPolicySpec` field, defaults, legal values) | [POLICIES.md](POLICIES.md) + [examples/policies/](../examples/policies/) |
+| See where a credential is while a run works (added at the proxy, or delivered inside), and each residual | [CREDENTIALS.md](CREDENTIALS.md) |
 | Run a governed sandbox from a pipeline, headless | [CI.md](CI.md) + [ci/](ci/) |
 | Run each CI job as a confined one-shot run on a control plane you operate (governance profile, pinned image, runner token, `--wait`, audit) | [ci-jobs-as-runs.md](ci-jobs-as-runs.md) |
 | SSH / sftp / port-forward / VS Code Remote-SSH / scripted access for another tool into a run | [SSH.md](SSH.md) |
@@ -26,6 +33,7 @@ wizard — with its built-in demo steps — is the first-run path. Everything he
 | See which exported functions have no test (`make test-gaps`) | [TEST-GAPS.md](TEST-GAPS.md) |
 | Run the live tests against real Entra/ADO/Bedrock | [LIVE-TESTS.md](LIVE-TESTS.md) |
 | Swap a component (identity, secret store, recording, substrate) | [PLUGGABILITY.md](PLUGGABILITY.md) |
+| Write or edit a doc (form, size caps, links, visuals, the headings code quotes) | [STYLE.md](STYLE.md) |
 | Design or review a console screen (color budget, type rungs, elevation, status glyphs) | [design/CONSOLE-RULES.md](design/CONSOLE-RULES.md) |
 | Understand the design, or contribute | [../ARCHITECTURE.md](../ARCHITECTURE.md), [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | Plan a change — issues, branches, pull requests, what "done" means | [../CONTRIBUTING.md](../CONTRIBUTING.md#branching-issues-and-pull-requests) |
@@ -42,7 +50,5 @@ wizard — with its built-in demo steps — is the first-run path. Everything he
 
 ## Field reports
 
-[adoption/](adoption/) is different in kind: point-in-time field reports from real
-deployments, kept verbatim (including the gaps still open). They are evidence, not
-guides — a report describes one host on one date and is never updated to match the
-current release.
+- [adoption/](adoption/) is different in kind: point-in-time field reports from real deployments, kept verbatim (including the gaps still open).
+- They are evidence, not guides — a report describes one host on one date and is never updated to match the current release.

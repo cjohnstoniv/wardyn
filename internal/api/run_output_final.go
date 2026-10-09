@@ -262,7 +262,10 @@ func (s *Server) prepareRunOutput(ctx context.Context, runID uuid.UUID, graceful
 		if graceful {
 			s.snapshotRunPane(ctx, st, run)
 		}
-	case runIsUnrecordable(run), hasTail, s.execOutputUncaptured(ctx):
+	case runIsUnrecordable(run), hasTail:
+	case s.recordingOutputEnabled(ctx, run):
+		s.finalizeRecordingOutput(ctx, st, run)
+	case s.execOutputUncaptured(ctx):
 	default:
 		s.recoverRunOutput(ctx, st, run, "no_tail")
 	}
@@ -585,6 +588,9 @@ func (s *Server) SweepRunOutputs(ctx context.Context) error {
 			s.resolveStalePending(ctx, st, id)
 		}
 	}
+	if err := s.sweepRecordingOutputs(ctx, st); err != nil && firstErr == nil {
+		firstErr = err
+	}
 	return firstErr
 }
 
@@ -595,6 +601,10 @@ func (s *Server) resolveStalePending(ctx context.Context, st store.RunOutputStor
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil || run.Interactive || runIsUnrecordable(run) {
 		s.writeGapRow(ctx, st, runID, "stale_pending")
+		return
+	}
+	if s.recordingOutputEnabled(ctx, run) {
+		s.finalizeRecordingOutput(ctx, st, run)
 		return
 	}
 	s.recoverRunOutput(ctx, st, run, "stale_pending")

@@ -267,13 +267,26 @@ func TestPG_PersonErasure_ReachesEveryCopyOnEveryReplica(t *testing.T) {
 	}
 
 	// Recordings only when asked, and only that person's.
-	if w := erase(b, alice, "recordings"); w.Code != http.StatusOK {
+	w = erase(b, alice, "recordings")
+	if w.Code != http.StatusOK {
 		t.Fatalf("recordings erasure = %d %s", w.Code, w.Body)
+	}
+	var erased struct {
+		Detail map[string]struct {
+			RunsFenced int `json:"runs_fenced"`
+		} `json:"detail"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &erased); err != nil || erased.Detail["recordings"].RunsFenced != len(aliceRuns) {
+		t.Fatalf("recording fence count = %s, %v", w.Body, err)
+	}
+	newRun := l.personRun(alice, "after the recordings erase")
+	if err := b.srv.cfg.RecordingStore.SaveCast(ctx, newRun.ID.String(), strings.NewReader("new run")); err != nil {
+		t.Fatalf("new run of erased person could not record: %v", err)
 	}
 	for _, r := range aliceRuns {
 		for _, key := range []string{r.ID.String(), r.ID.String() + "~sess"} {
-			if _, err := a.srv.cfg.RecordingStore.OpenCast(ctx, key); !errors.Is(err, recording.ErrNotFound) {
-				t.Errorf("recording %s after the recordings scope: %v, want not found", key, err)
+			if _, err := a.srv.cfg.RecordingStore.OpenCast(ctx, key); !errors.Is(err, recording.ErrErased) {
+				t.Errorf("recording %s after the recordings scope: %v, want erased", key, err)
 			}
 		}
 	}

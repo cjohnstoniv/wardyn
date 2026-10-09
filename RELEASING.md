@@ -1,127 +1,106 @@
 # Releasing Wardyn
 
-Wardyn is **pre-alpha** and does **not** follow semantic versioning yet — interfaces
-are not stable, so a minor bump may still carry breaking changes (see the CHANGELOG
-header). Releases are cut by the maintainer; no workflow cuts a tag or a Release
-for you (`release.yml` only reacts to a tag you push). A patch is cut with one
-command the maintainer runs, `make release-patch` (see "The patch command" under
-Steps), which pushes the candidate branch, fast-forwards `release/X.Y`, pushes the
-tag and publishes the Release itself. Anything else, and every
-minor, follows the manual steps. This document is that process, written down.
+- Wardyn is **pre-alpha** and does **not** follow semantic versioning yet — interfaces are not stable, so a minor bump may still carry breaking changes (see the CHANGELOG header).
+- Releases are cut by the maintainer; no workflow cuts a tag or a Release for you (`release.yml` only reacts to a tag you push).
+- A patch is cut with one command the maintainer runs, `make release-patch` (see ["The patch command"](#the-patch-command) under Steps), which pushes the candidate branch, fast-forwards `release/X.Y`, pushes the tag and publishes the Release itself.
+- Anything else, and every minor, follows the manual steps.
+- This document is that process, written down.
 
 ## Prerequisites
 
-- You are the maintainer (see [MAINTAINERS.md](MAINTAINERS.md)); releases push tags to
-  `origin`, so only someone with push rights cuts them.
-- The full CI gate is green on the commit you intend to tag. The gate is the
-  `.github/workflows/ci.yml` job list: `changes`, `go`
-  (a matrix job: `lint`, `unit`, `docker`, `k8s`), `build`, `diagrams`, `ui`, `ui-e2e`
-  (a matrix job: `1/2`, `2/2`),
-  `helm`, `helm-install-test`, `compose`, `conformance`, `conformance-k8s`,
-  `envbuild-integration`, `test-pg-shard` (a matrix job: `api`, `store`, `race`),
-  `test-pg`, `gates`
-  (a matrix job: `govulncheck`, `staticcheck`, `licenses`,
-  `license-headers`, `gitleaks`), `dco`, `main-red`, `notify-flaky`,
-  the eight image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`,
-  `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`,
-  `trivy-agent-vscode`, `trivy-agent-novnc`, each reporting as `trivy (<image>)`),
-  and **`notices`** — the copyleft / unreviewed-dependency gate, which
-  was missing from this list entirely. `sbom-stub` used to be named here and is
-  **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*), so a
-  maintainer following this list literally was waiting on a phantom job while
-  skipping the one that catches a GPL regression. Two more publish
-  workflows are not part of this job list at all (see "Container images"
-  below): `publish-image` (`.github/workflows/publish-image.yml`, after CI
-  passes on a push to `main`) and `release` (`.github/workflows/release.yml`,
-  triggered by step 5's tag push itself, so it cannot be a prerequisite of
-  tagging).
-- **Before tagging, dispatch `nightly.yml` on the candidate branch and wait for
-  it to complete.** `gh workflow run nightly.yml --ref release/X.Y` (or `main`,
-  if that is the commit). Evidence is keyed by the tag's **tree**, not its
-  commit: any commit with the identical tree counts, so a nightly dispatched on
-  the candidate branch still counts after a merge gives `release/X.Y` a
-  different sha. The tree must be identical. A nightly on an ancestor, which has
-  a different tree, does not count, and neither does a run from a fork. Only a
-  `workflow_dispatch` nightly counts: a scheduled run never qualifies a tree,
-  because it skips the staging jobs and GitHub may report its skipped
-  `multi-arch build` matrix as one row named `multi-arch build (${{ matrix.name }})`
-  with conclusion `skipped`. The multi-arch build is part of this same nightly
-  run: it is `nightly.yml`'s `buildx-smoke` (checks named `multi-arch build (…)`),
-  not a `ci.yml` job, so a pull request never runs it, and it is the only build
-  of the arm64 half before `release.yml` publishes it. A scheduled nightly that
-  lands later shadows nothing; it is ignored.
-- `release.yml`'s own `preflight-green` job (T-06, #666) checks the two bullets
-  above again, automatically, on the tag commit itself, the moment step 5
-  pushes the tag, by running `scripts/green-by-tree.sh` on the tag's sha. You can
-  run the same command first (`GITHUB_REPOSITORY=owner/name
-  WATCHED="<the watched= line in release.yml>" scripts/green-by-tree.sh <sha>`);
-  it exits 0 and prints the tree, the CI run and the nightly it accepted. It
-  needs both: a `ci.yml` run that tested the tag's tree, found through the
-  `ci-full-tree-<tree>` artifact that run uploads, in this repository, finished
-  with `success`, whose head commit has that tree (a pull request's run counts
-  only when its merge left the tree equal to its head, and otherwise fails
-  closed), with every required status check green in it; plus the newest
-  dispatched `nightly.yml` run on that tree (cancelled runs skipped) with every
-  watched job green. A newer red nightly is not rescued by an older green one:
-  re-dispatching the nightly is the deliberate recovery. `ci.yml` no longer
-  runs on pushes to `release/**`: a release branch fast-forwards to a tree its
-  own pull request tested, and that run is the evidence. If no run qualifies,
-  `preflight-green` fails loudly naming what is missing. When the only CI run on
-  the tree is a release PR whose merge tree differs from its head, rebase the PR
-  head onto the base tip so the merge adds nothing, or push the commit to a
-  `feature/**` branch so `ci.yml` runs on it directly. It never falls back to
-  an older or unrelated run. It is belt-and-suspenders, not a replacement for
-  reading CI yourself first — a red preflight fails every downstream release
-  job, so catching it before pushing the tag is still cheaper than a failed
-  release run.
-- **Nightly coverage is not a reliable signal until it has run green for 7
-  consecutive nights.** `preflight-green` only proves the latest nightly on
-  the tag's tree was green, not that the lane it ran is stable — a lane that
-  just started passing after weeks red (see `docs/CI.md`'s nightly section)
-  can still be one flake away from red again. Until a lane has 7 consecutive
-  green nightlies, a 0.8 issue whose DONE WHEN cites "nightly coverage" for
-  that lane needs its own separately-run proof too, not just a green
-  `preflight-green`.
+- You are the maintainer (see [MAINTAINERS.md](MAINTAINERS.md)); releases push tags to `origin`, so only someone with push rights cuts them.
+- The full CI gate is green on the commit you intend to tag.
+  - The gate is the [`.github/workflows/ci.yml` job list:](.github/workflows/ci.yml) `changes`, `go` (a matrix job: `lint`, `unit`, `docker`, `k8s`), `build`, `diagrams`, `ui`, `ui-e2e` (a matrix job: `1/2`, `2/2`),
+  - `helm`, `helm-install-test`, `compose`, `conformance`, `conformance-k8s`, `envbuild-integration`, `test-pg-shard` (a matrix job: `api`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `main-red`, `notify-flaky`,
+  - the eight image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`, `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`, `trivy-agent-vscode`, `trivy-agent-novnc`, each reporting as `trivy (<image>)`),
+  - and **`notices`** — the copyleft / unreviewed-dependency gate, which was missing from this list entirely.
+  - `sbom-stub` used to be named here and is **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*),
+    - so a maintainer following this list literally was waiting on a phantom job while skipping the one that catches a GPL regression.
+  - Two more publish workflows are not part of this job list at all (see ["Container images"](#container-images) below):
+    - `publish-image` ([`.github/workflows/publish-image.yml`](.github/workflows/publish-image.yml), after CI passes on a push to `main`)
+    - and `release` ([`.github/workflows/release.yml`](.github/workflows/release.yml), triggered by step 5's tag push itself, so it cannot be a prerequisite of tagging).
+- **Before tagging, dispatch `nightly.yml` on the candidate branch and wait for it to complete.**
+  - `gh workflow run nightly.yml --ref release/X.Y` (or `main`, if that is the commit).
+  - Evidence is keyed by the tag's **tree**, not its commit: any commit with the identical tree counts, so a nightly dispatched on the candidate branch still counts after a merge gives `release/X.Y` a different sha.
+  - The tree must be identical.
+  - A nightly on an ancestor, which has a different tree, does not count, and neither does a run from a fork.
+  - Only a `workflow_dispatch` nightly counts: a scheduled run never qualifies a tree, because it skips the staging jobs and GitHub may report its skipped `multi-arch build` matrix as one row named `multi-arch build (${{ matrix.name }})` with conclusion `skipped`.
+  - The multi-arch build is part of this same nightly run:
+    - it is `nightly.yml`'s `buildx-smoke` (checks named `multi-arch build (…)`), not a `ci.yml` job, so a pull request never runs it,
+    - and it is the only build of the arm64 half before `release.yml` publishes it.
+  - A scheduled nightly that lands later shadows nothing; it is ignored.
+- `release.yml`'s own `preflight-green` job (T-06, #666) checks the two bullets above again, automatically, on the tag commit itself, the moment step 5 pushes the tag, by running [`scripts/green-by-tree.sh`](scripts/green-by-tree.sh) on the tag's sha.
+  - You can run the same command first (`GITHUB_REPOSITORY=owner/name
+    WATCHED="<the watched= line in release.yml>" scripts/green-by-tree.sh <sha>`); it exits 0 and prints the tree, the CI run and the nightly it accepted.
+  - It needs both: a `ci.yml` run that tested the tag's tree, found through the `ci-full-tree-<tree>` artifact that run uploads, in this repository, finished with `success`,
+    - whose head commit has that tree (a pull request's run counts only when its merge left the tree equal to its head, and otherwise fails closed),
+    - with every required status check green in it;
+    - plus the newest dispatched `nightly.yml` run on that tree (cancelled runs skipped) with every watched job green.
+  - A newer red nightly is not rescued by an older green one: re-dispatching the nightly is the deliberate recovery.
+  - `ci.yml` no longer runs on pushes to `release/**`: a release branch fast-forwards to a tree its own pull request tested, and that run is the evidence.
+  - If no run qualifies, `preflight-green` fails loudly naming what is missing.
+  - When the only CI run on the tree is a release PR whose merge tree differs from its head,
+    - rebase the PR head onto the base tip so the merge adds nothing,
+    - or push the commit to a `feature/**` branch so `ci.yml` runs on it directly.
+  - It never falls back to an older or unrelated run.
+  - It is belt-and-suspenders, not a replacement for reading CI yourself first —
+    - a red preflight fails every downstream release job, so catching it before pushing the tag is still cheaper than a failed release run.
+- **Nightly coverage is not a reliable signal until it has run green for 7 consecutive nights.**
+  - `preflight-green` only proves the latest nightly on the tag's tree was green, not that the lane it ran is stable —
+    - a lane that just started passing after weeks red (see [`docs/CI.md`](docs/CI.md)'s nightly section) can still be one flake away from red again.
+  - Until a lane has 7 consecutive green nightlies, a 0.8 issue whose DONE WHEN cites "nightly coverage" for that lane needs its own separately-run proof too, not just a green `preflight-green`.
 
-Run the local gate first:
+- Run the local gate first:
 
 ```bash
 WARDYN_TEST_PG=postgres://... make release-check   # runs `make ci`, plus the Postgres
                                                    # lane and the `## [Unreleased]` check
 ```
 
-The live-service jobs are outside `make release-check`: `conformance`
-(`make test-conformance-docker`), `conformance-k8s`
-(`make test-conformance-k8s`, needs a kind/Calico cluster and the test images
-from that CI job), `envbuild-integration` (`make test-envbuild-integration`),
-`helm-install-test` (`make helm-install-test`, also needs a local `kind`
-cluster; the same job then boots the desktop compose envelope), the
-Playwright `ui-e2e` job, the `trivy (<image>)` jobs (docker builds) and nightly's `buildx-smoke`.
-Their checks can run locally with the required services; follow
-`.github/workflows/ci.yml` for image builds, cluster setup, and environment
-variables. Run the Playwright lane with `scripts/run-ui-e2e.sh`. Without
-`WARDYN_TEST_PG` the Postgres suite prints a loud SKIPPED line.
+- The live-service jobs are outside `make release-check`:
+  - `conformance` (`make test-conformance-docker`), `conformance-k8s` (`make test-conformance-k8s`, needs a kind/Calico cluster and the test images from that CI job),
+  - `envbuild-integration` (`make test-envbuild-integration`), `helm-install-test` (`make helm-install-test`, also needs a local `kind` cluster; the same job then boots the desktop compose envelope),
+  - the Playwright `ui-e2e` job, the `trivy (<image>)` jobs (docker builds) and nightly's `buildx-smoke`.
+- Their checks can run locally with the required services; follow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) for image builds, cluster setup, and environment variables.
+- Run the Playwright lane with [`scripts/run-ui-e2e.sh`](scripts/run-ui-e2e.sh).
+- Without `WARDYN_TEST_PG` the Postgres suite prints a loud SKIPPED line.
 
-Before tagging, run `scripts/stress-proxy-cgroup.sh` (needs docker). It sends
-the egress proxy's worst inspection load through it under the sidecar's 256
-MiB memory cap and fails on a refused request or an OOM kill.
+- For a server-side schema check of a rendered chart, use Mike Farah yq v4, jq, and kubectl with the intended context.
+- Render to a protected file first so a failed Helm command cannot be hidden by a pipeline:
 
-Screenshot freshness is advisory and CI-only. On a pull request, `ci.yml`'s
-`diagrams` job compares the PR diff and adds a warning annotation when the
-console (anything under `ui/src/app` or `ui/src/styles`) changed and `docs/img`
-did not. It never fails a check, because many console changes rightly leave
-both shots alone; a local commit-timestamp test could not tell the difference,
-and could not be cleared once `make screenshots` re-renders the PNGs
-byte-identically. Re-shoot with `make screenshots` when a shot shows the change.
+```bash
+(
+  manifest=$(mktemp) || exit 1
+  trap 'rm -f "$manifest"' EXIT
+  helm template wardyn ./deploy/helm/wardyn --namespace wardyn \
+    -f deploy/helm/wardyn/ci/all-on-values.yaml >"$manifest" || exit $?
+  ./scripts/check-helm-schema.sh "$manifest" wardyn kind-wardyn
+)
+```
 
-`release-check` pushes nothing and tags nothing. A green local run means "no local
-reason not to tag", not "CI is green" — check the actual CI run on the commit
-before step 3.
+- Replace `kind-wardyn` with the test cluster's context and use the candidate's values.
+- The helper discovers each kind's scope, applies strict server dry-runs per namespace (including runner RBAC in `wardyn-runs`), and checks cluster-scoped objects separately.
+- Omitted object namespaces use the release namespace; explicit namespaces and cluster-scoped objects are preserved.
+- Required namespaces and custom-resource APIs must already exist.
+- Omitting the helper's third argument uses kubectl's current context.
+- `make helm-install-test` uses this same helper.
+
+- Before tagging, run [`scripts/stress-proxy-cgroup.sh`](scripts/stress-proxy-cgroup.sh) (needs docker).
+- It sends the egress proxy's worst inspection load through it under the sidecar's 256 MiB memory cap and fails on a refused request or an OOM kill.
+
+- Screenshot freshness is advisory and CI-only.
+- On a pull request, `ci.yml`'s `diagrams` job compares the PR diff and adds a warning annotation when the console (anything under `ui/src/app` or `ui/src/styles`) changed and `docs/img` did not.
+- It never fails a check, because many console changes rightly leave both shots alone;
+  - a local commit-timestamp test could not tell the difference, and could not be cleared once `make screenshots` re-renders the PNGs byte-identically.
+- Re-shoot with `make screenshots` when a shot shows the change.
+
+- `release-check` pushes nothing and tags nothing.
+- A green local run means "no local reason not to tag", not "CI is green" — check the actual CI run on the commit before step 3.
 
 ## How a release is prepared
 
-A release is a milestone that closed. The steps below do not change; this is
-how the work reaches them.
+- A release is a milestone that closed.
+- The steps below do not change; this is how the work reaches them.
 
 ```mermaid
 flowchart LR
@@ -143,17 +122,19 @@ flowchart LR
    keeps today's behaviour.
 3. **Release PR.** When the milestone's release-gating issues are closed, one
    PR carries steps 1 and 1b below — the CHANGELOG rename, the version strings,
-   the ROADMAP row, `docs/TEST-GAPS.md` — and nothing else.
+   the ROADMAP row, [`docs/TEST-GAPS.md`](docs/TEST-GAPS.md) — and nothing else.
 4. **Release branch and tag.** Steps 3 to 5 below run on the merged release
    commit: `release/X.Y` is cut from it for a new minor, or fast-forwarded to it
    for a patch, and the tag goes on that branch.
 5. **Point releases.** `make release-patch V=X.Y.Z` is the patch path (see
-   "The patch command" under Steps): it makes the candidate, opens the release
+   ["The patch command"](#the-patch-command) under Steps): it makes the candidate, opens the release
    PR, waits for CI and the nightly on the candidate's tree, then publishes and
-   verifies. Steps 1 to 6 below are the fallback when it cannot be used. A fix
-   is a PR to `main`, cherry-picked onto `release/X.Y`. The branch never takes
-   a feature. Once `main` carries the next minor, fast-forwarding `release/X.Y`
-   would ship all of it, so a patch takes this path instead:
+   verifies.
+   - Steps 1 to 6 below are the fallback when it cannot be used.
+   - A fix is a PR to `main`, cherry-picked onto `release/X.Y`.
+   - The branch never takes a feature.
+   - Once `main` carries the next minor, fast-forwarding `release/X.Y` would ship all of it, so a patch takes this path instead:
+
    1. Each fix is an issue labelled `backport/X.Y`, fixed by a PR into `main`.
    2. One backport PR into `release/X.Y` cherry-picks those merge commits with
       `git cherry-pick -x -m 1 <merge>`, so each commit names its source.
@@ -172,16 +153,13 @@ flowchart LR
      git diff --quiet vX.Y.(Z-1) release/X.Y -- internal/db/migrations ui/src go.mod go.sum
    ```
 
-   A non-zero exit stops the tag. `git diff --quiet` on a path that does not
-   exist exits 0, so the `git cat-file -e` chain first proves each pathspec is
-   real on `release/X.Y`; no release helper runs this check, so you run it. A
-   `.sql` change under `internal/db/migrations` is a hard stop, as in the 0.7
-   guard below.
+   - A non-zero exit stops the tag.
+   - `git diff --quiet` on a path that does not exist exits 0, so the `git cat-file -e` chain first proves each pathspec is real on `release/X.Y`; no release helper runs this check, so you run it.
+   - A `.sql` change under `internal/db/migrations` is a hard stop, as in the 0.7 guard below.
 
-**Evidence is certified against a SHA.** A walk, a conformance run or a gate
-proves the commit it ran on. Any commit after it — a fix, a rebase, the release
-commit itself — re-opens every gate that commit could affect, and the release
-record names the SHA each piece of evidence was produced on.
+- **Evidence is certified against a SHA.**
+  - A walk, a conformance run or a gate proves the commit it ran on.
+  - Any commit after it — a fix, a rebase, the release commit itself — re-opens every gate that commit could affect, and the release record names the SHA each piece of evidence was produced on.
 
 ## Steps
 
@@ -192,8 +170,8 @@ make release-patch V=0.8.4 MERGE=origin/main ISSUES="1461 1470" HIGHLIGHTS="..."
 make release-patch V=0.8.4 DRY_RUN=1 BRANCH=<a branch whose tree CI tested> HIGHLIGHTS="..."
 ```
 
-It takes a patch from "fixes ready" to "published and verified", and prints a
-table of the seconds each step took. Inputs, all optional but `V`:
+- It takes a patch from "fixes ready" to "published and verified", and prints a table of the seconds each step took.
+- Inputs, all optional but `V`:
 
 | Input | Meaning |
 |---|---|
@@ -212,196 +190,178 @@ crash or a usage limit resumes with the same command:
 
 1. **prepare.** Branch, `MERGE`, `scripts/release-commit.sh --apply`, three local
    checks that must each pass (`make dco DCO_RANGE="HEAD ^origin/main
-   ^origin/release/X.Y"`, the version tests, `scripts/test-claims-match-code.sh`),
-   push, a PR into `release/X.Y` titled `release: V`, and `nightly.yml`
-   dispatched on the branch unless a dispatched nightly on the same tree is
-   already queued, running or green.
-2. **wait.** Every 60 seconds, `scripts/green-by-tree.sh` on the head with
-   `NEED_STAGING=1`. Exit 0 starts the clock, **T0**. Exit 2 stops. Exit 1 keeps
-   waiting while a `ci.yml` or `nightly.yml` run on the head is queued or running;
-   otherwise it stops and prints each red job with
-   `gh run rerun <id> --failed` as the next command. It never reruns anything.
+   ^origin/release/X.Y"`, the version tests, [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh)),
+   push, a PR into `release/X.Y` titled `release: V`,
+   - and `nightly.yml` dispatched on the branch unless a dispatched nightly on the same tree is already queued, running or green.
+   - After the merge and again after the release-commit step, duplicate CHANGELOG heading keys (including `Unreleased`, regardless of dates) stop prepare before checks, pushes, PRs or nightly dispatch.
+   - This also applies when resuming an already released or pushed candidate.
+   - Commit a repair preserving the notes and history, then rerun prepare; no reset, amend or force-push is needed.
+2. **wait.** Every 60 seconds, [`scripts/green-by-tree.sh`](scripts/green-by-tree.sh) on the head with
+   `NEED_STAGING=1`.
+   - Exit 0 starts the clock, **T0**.
+   - Exit 2 stops.
+   - Exit 1 keeps waiting while a `ci.yml` or `nightly.yml` run on the head is queued or running; otherwise it stops and prints each red job with `gh run rerun <id> --failed` as the next command.
+   - It never reruns anything.
 3. **publish.** `green-by-tree.sh` again (it must exit 0), a warning when other
    runs are queued, then `git push origin <sha>:refs/heads/release/X.Y` (never
-   forced: a rejected push means `release/X.Y` moved, so it stops), the annotated
-   tag `vX.Y.Z` and its push (by full ref; a local `vX.Y.Z` that points anywhere
-   but the commit just verified is refused by name), `gh run watch` on `release.yml`'s run for the tag,
-   `gh release edit vX.Y.Z --draft=false --prerelease` on the draft that
-   `release-assets` made, and `scripts/verify-release.sh`, which must end
-   `fails=0`. The forward-port commands are printed, never run. If `gh release
-   edit` finds no draft, the command prints the releases listing and stops.
+   forced: a rejected push means `release/X.Y` moved, so it stops),
+   - the annotated tag `vX.Y.Z` and its push (by full ref; a local `vX.Y.Z` that points anywhere but the commit just verified is refused by name),
+   - `gh run watch` on `release.yml`'s run for the tag, `gh release edit vX.Y.Z --draft=false --prerelease` on the draft that `release-assets` made, and [`scripts/verify-release.sh`](scripts/verify-release.sh), which must end `fails=0`.
+   - The forward-port commands are printed, never run.
+   - If `gh release edit` finds no draft, the command prints the releases listing and stops.
 
-A final `X.Y.Z` fast-forwards `release/X.Y`. A real `X.Y.Z-rc.N` never does: it is
-tagged and published as a pre-release from the candidate branch, and the next
-final's `--from` is the newest tag `release/X.Y` itself contains.
+- A final `X.Y.Z` fast-forwards `release/X.Y`.
+- A real `X.Y.Z-rc.N` never does: it is tagged and published as a pre-release from the candidate branch, and the next final's `--from` is the newest tag `release/X.Y` itself contains.
 
-A dispatched nightly older than 24 hours counts as absent, because `release.yml`'s
-promote preflight refuses staging older than that. prepare dispatches a fresh one,
-wait does not accept the old one, and publish checks again before it pushes
-`release/X.Y` and before it pushes the tag, so a cut resumed the next day stops
-instead of going red in `release.yml` after the push.
+- A dispatched nightly older than 24 hours counts as absent, because `release.yml`'s promote preflight refuses staging older than that.
+- prepare dispatches a fresh one, wait does not accept the old one,
+  - and publish checks again before it pushes `release/X.Y` and before it pushes the tag, so a cut resumed the next day stops instead of going red in `release.yml` after the push.
 
-The clock: the design starts it from a green candidate. With the release commit
-already on `BRANCH` (it rides in the batch's last round), prepare skips the
-release commit and the batch's own green CI and nightly are T0. The table's
-"from T0" total is this invocation's: a resumed run reports only the steps it
-did, and starts its clock at its own first green.
+- The clock: the design starts it from a green candidate.
+- With the release commit already on `BRANCH` (it rides in the batch's last round), prepare skips the release commit and the batch's own green CI and nightly are T0.
+- The table's "from T0" total is this invocation's: a resumed run reports only the steps it did, and starts its clock at its own first green.
 
 **What it enforces, so nobody has to remember it** (each of these cost a 0.8.2 or
 0.8.3 cut time):
 
 | Gotcha | Where it is handled |
 |---|---|
-| The release PR's `dco` failed on GitHub's own merge commits that merging main brings in | `ci.yml`'s PR range is `$BASE..$PR_HEAD ^origin/main`; the command's local range is `HEAD ^origin/main ^origin/release/X.Y`. Never `DCO_ALLOW_GITHUB_MERGES=1` on a release (it leaks into `scripts/test-dco.sh` case 6). |
+| The release PR's `dco` failed on GitHub's own merge commits that merging main brings in | `ci.yml`'s PR range is `$BASE..$PR_HEAD ^origin/main`; the command's local range is `HEAD ^origin/main ^origin/release/X.Y`. Never `DCO_ALLOW_GITHUB_MERGES=1` on a release (it leaks into [`scripts/test-dco.sh`](scripts/test-dco.sh) case 6). |
 | `release-commit.sh` refused a pin that was already bumped | A pin already at the new version counts as OK. |
 | `--expect-tip` took only an 8-character sha | Any unique prefix of 7 to 40 hex characters works. |
 | The preflight needed a nightly on the exact sha | Evidence is keyed by tree (`green-by-tree.sh`). |
 | ROADMAP Highlights were filled in by hand | `HIGHLIGHTS=`; the command refuses when the row is missing and none was given. |
 | A sha with both PR and push runs was ambiguous | `green-by-tree.sh` judges each run. |
-| A promote that would sign a release under another tag's identity | There is no override flag. A promote is dispatched on the tag ref (`release.yml`'s promote job runs on `github.ref_name`), so its signature carries that tag's identity, which is the exact one `scripts/verify-release.sh` and `docs/VERIFY.md` check. Dispatching it from another ref makes verification fail, correctly. |
+| A promote that would sign a release under another tag's identity | There is no override flag; see [below](#a-promote-under-another-tags-identity). |
 | A repeated cut | `release-commit.sh` exits 4 when `## [V]` is already in the CHANGELOG, so a second `--apply` cannot duplicate the section. The command never calls it again: it sees `## [V]` and skips. |
 
-**Rehearsal.** `DRY_RUN=1` makes no release commit, no PR, no push to `release/*`,
-no tag and no Release. The nightly dispatch and the wait phase run as usual, and
-publish becomes `gh workflow run release.yml --ref <branch> -f path=promote -f
-dry_run=true`, watched, then the same table. The local checks are skipped, and
-`release-commit.sh --dry-run` runs only as a warning: it refuses a missing
-ROADMAP Shipped row without `--highlights`, so pass `HIGHLIGHTS=` to rehearse
-cleanly. A rehearsal is not read-only: it still pushes the candidate branch (creating
-`chore/release-V` on origin when `BRANCH` is unset, carrying the merge commit when
-`MERGE` is set), dispatches `nightly.yml`, which pushes public staging images, and
-dispatches the promote dry run of `release.yml`. It pushes nothing to `release/*`
-or `refs/tags/*`. `BRANCH` need not contain `origin/release/X.Y` in a rehearsal (the command
-warns), but the branch's tree must be one that CI tested, or the wait phase has
-nothing to find. The promote path needs the `path` input on `release.yml`, which a branch gets
-by containing R7.
+- **Rehearsal.** `DRY_RUN=1` makes no release commit, no PR, no push to `release/*`, no tag and no Release.
+  - The nightly dispatch and the wait phase run as usual, and publish becomes `gh workflow run release.yml --ref <branch> -f path=promote -f
+    dry_run=true`, watched, then the same table.
+  - The local checks are skipped, and `release-commit.sh --dry-run` runs only as a warning: it refuses a missing ROADMAP Shipped row without `--highlights`, so pass `HIGHLIGHTS=` to rehearse cleanly.
+  - A rehearsal is not read-only:
+    - it still pushes the candidate branch (creating `chore/release-V` on origin when `BRANCH` is unset, carrying the merge commit when `MERGE` is set), dispatches `nightly.yml`, which pushes public staging images, and dispatches the promote dry run of `release.yml`.
+  - It pushes nothing to `release/*` or `refs/tags/*`.
+  - `BRANCH` need not contain `origin/release/X.Y` in a rehearsal (the command warns), but the branch's tree must be one that CI tested, or the wait phase has nothing to find.
+  - The promote path needs the `path` input on `release.yml`, which a branch gets by containing R7.
 
-**Recovery.** Every recovery is the same command again, or a rerun it printed.
-- A red nightly: `green-by-tree.sh` takes the **newest dispatched** nightly on the
-  tree, so a newer red is not hidden by an older green. Rerun the failed jobs
-  with the printed `gh run rerun <id> --failed`, or dispatch a fresh one
-  (`gh workflow run nightly.yml --ref <branch>`; `make release-patch` does it
-  when the newest finished run is not green). A rerun does not refresh image
-  age: staging is judged by the run's creation time, so a nightly created more
-  than 24 hours ago needs a fresh dispatch, never a rerun. Re-dispatching is the
-  deliberate recovery.
-- A red `release.yml` run: rerun its failed jobs, then run the command again.
-- The tag, the branch push and the published Release are each skipped once they
-  exist. A tag that exists at some other commit is refused.
+- **Recovery.** Every recovery is the same command again, or a rerun it printed.
+  - A red nightly: `green-by-tree.sh` takes the **newest dispatched** nightly on the tree, so a newer red is not hidden by an older green.
+    - Rerun the failed jobs with the printed `gh run rerun <id> --failed`, or dispatch a fresh one (`gh workflow run nightly.yml --ref <branch>`; `make release-patch` does it when the newest finished run is not green).
+    - A rerun does not refresh image age: staging is judged by the run's creation time, so a nightly created more than 24 hours ago needs a fresh dispatch, never a rerun.
+    - Re-dispatching is the deliberate recovery.
+  - A red `release.yml` run: rerun its failed jobs, then run the command again.
+  - The tag, the branch push and the published Release are each skipped once they exist.
+  - A tag that exists at some other commit is refused.
 
-When the command cannot be used, the manual steps below are the fallback.
+- When the command cannot be used, the manual steps below are the fallback.
 
-For a patch release, choose `X.Y.Z` **before** updating version strings: refresh
-tags with `git fetch origin --tags`, then inspect
-`git tag -l "vX.Y.*" --sort=-v:refname` and select the next unused patch number
-in that minor line. Tags are repository-wide, not branch-local. Coordinate one
-release owner at a time: reading tags does not reserve the next number against
-another maintainer. Use the chosen version throughout this checklist.
+- For a patch release, choose `X.Y.Z` **before** updating version strings: refresh tags with `git fetch origin --tags`, then inspect `git tag -l "vX.Y.*" --sort=-v:refname` and select the next unused patch number in that minor line.
+- Tags are repository-wide, not branch-local.
+- Coordinate one release owner at a time: reading tags does not reserve the next number against another maintainer.
+- Use the chosen version throughout this checklist.
 
 1. **Update the CHANGELOG.** Rename the working `## [Unreleased]` heading (or add the
    section) to `## [X.Y.Z] — YYYY-MM-DD` in [CHANGELOG.md](CHANGELOG.md), following the
    [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format already in use
-   (`### Added` / `### Changed` / `### Fixed`). Keep entries user-facing and specific.
-   **Also bump `threatmodel/THREAT-MODEL.md`'s currency line** (`**Version:** v2
-   (tracks the shipped codebase; last reviewed at vX.Y.Z)`) to the version you're
-   cutting — this has drifted from the shipped version before, twice.
-
-   **Then put a fresh, empty `## [Unreleased]` heading back above the new section.**
-   `make release-check` hard-fails if `CHANGELOG.md` has no `## [Unreleased]`
-   (`grep -q "## \[Unreleased\]" CHANGELOG.md || exit 1`), so renaming it away and
-   not restoring it leaves the gate red for the *next* release — which is a
-   confusing failure to debug from the tag commit backwards. Restore it in the same
-   commit as the rename.
-1b. **Bump the shipped version strings** to `X.Y.Z`, in the same commit as the
-   CHANGELOG rename: `internal/version/version.go` (`const Version`),
-   `deploy/helm/wardyn/Chart.yaml` (both `version:` AND `appVersion:` — the
-   chart-publish job now REFUSES to push if `version:` does not equal the tag,
-   since `helm install --version` would otherwise resolve to a different chart
-   than the release being cut), and
-   `ui/package.json` (`"version"`), **the pinned `install.sh` release-asset
-   URL in `README.md` and in `install.sh`'s own header comment** — those two
-   point at the cosign-signed copy rather than tip-of-`main`, so a missed bump
-   hands new users the previous release's installer — and **the pinned wardyn
-   checkout in `docs/ci/github-actions.yml` (`ref:`) and
-   `docs/ci/azure-pipelines.yml` (`--branch`)**, which exist so a pasted
-   pipeline does not execute tip-of-default-branch shell in a secret-bearing
-   job (docs/CI.md "Pin the wardyn checkout"). **`docs/DESKTOP.md`'s real-hardware
-   smoke recipe** also pins both image tags by hand (`WARDYN_WARDYND_IMAGE`,
-   `WARDYN_PROXY_IMAGE` — the desktop tier's MDM config has no `$WARDYN_VERSION`
-   to interpolate; a past review found this stale for a whole release cycle).
-   `scripts/test-claims-match-code.sh` fails if either pin drifts from
-   `internal/version/version.go`.
-   `scripts/test-install-sh.sh` asserts the two agree with each other, but it
-   cannot know the tag you are cutting. `cmd/wardyn/version_test.go`'s
-   `TestVersionMatchesChangelog`/`TestShippedVersionStringsAgree` enforce that
-   all these agree with the CHANGELOG's newest section — but only catch a
-   missed bump if `make release-check` runs AFTER this commit; the
-   Prerequisites run above only sees the previous release's already-consistent
-   versions and passes either way. **Re-run `make release-check` after this
-   commit** before tagging.
-
-   **Also add a `ROADMAP.md` Shipped row for the release you are cutting**
-   (a past review found the Shipped table stuck on "Built, awaiting release" for
-   three released versions in a row) — a new row in the `## Shipped` table,
-   its Status cell reading "**Shipped (pre-alpha)** — `vX.Y.Z`, <date> (see
-   [CHANGELOG.md](CHANGELOG.md))", pointing at the CHANGELOG's now-dated entry
-   instead of `[Unreleased]`. ROADMAP.md carries no per-version narrative to
-   flip any more — CHANGELOG.md is the only per-release detail.
-
-   **Also regenerate `docs/TEST-GAPS.md`: `make test-gaps`** (needs the union
-   coverage profile `make ci`/`cover-check` already produced this run) —
-   a past review found the generator gained a Kubernetes-gated bucket with
-   nothing that regenerates the checked-in, `DO NOT EDIT BY HAND` doc itself;
-   `make test-gaps` is a standalone target, not in `make ci`.
-
-   **Also snapshot the proxy config key set:** generate the previous-release key set AT THE TAG
-   (check out the tag, run the golden with `WARDYN_UPDATE_GOLDEN=1 go test ./internal/egress/proxy/
-   -run TestConfigKeySet`) rather than copying `current.txt` — a patch release is cut from
-   `release/X.Y`, whose tree can differ from whatever `current.txt` reads on the branch you are
-   releasing from. Save the generated file as
-   `internal/egress/proxy/testdata/config-keys/vX.Y.Z.txt` and set `previousProxyTag` in
-   `internal/api/proxy_config_skew_test.go` to `vX.Y.Z`, removing the older file. Operators pin the
-   proxy image apart from wardynd, and that test loads every config dispatch writes against the last
-   release's key set. When a fail-closed case's key (e.g. `policy.push_rules`) reaches the previous
-   release, update or drop that case in `internal/api/proxy_config_skew_test.go`.
-
-   **`docs/VERIFY.md` is deliberately NOT on that list.** Every command in it is
-   parameterised on `$WARDYN_VERSION`, which its own step 0 resolves, so it needs
-   no bump — and hard-coding this release's number into one of those commands is
-   how it silently starts verifying the wrong artifacts.
-   `scripts/test-claims-match-code.sh` fails if any `ghcr.io` / `helm` /
-   `gh release` line in that file names a literal version.
+   (`### Added` / `### Changed` / `### Fixed`).
+   - Keep entries user-facing and specific.
+   - **Also bump [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md)'s currency line** (`**Version:** v2
+     (tracks the shipped codebase; last reviewed at vX.Y.Z)`) to the version you're
+     cutting — this has drifted from the shipped version before, twice.
+   - **Then put a fresh, empty `## [Unreleased]` heading back above the new section.**
+     - `make release-check` hard-fails if `CHANGELOG.md` has no `## [Unreleased]` (`grep -q "## \[Unreleased\]" CHANGELOG.md || exit 1`), so renaming it away and not restoring it leaves the gate red for the *next* release —
+       - which is a confusing failure to debug from the tag commit backwards.
+     - Restore it in the same commit as the rename.
+   - 1b. **Bump the shipped version strings** to `X.Y.Z`, in the same commit as the CHANGELOG rename: [`internal/version/version.go`](internal/version/version.go) (`const Version`), [`deploy/helm/wardyn/Chart.yaml`](deploy/helm/wardyn/Chart.yaml) (both `version:` AND `appVersion:` —
+     - the chart-publish job now REFUSES to push if `version:` does not equal the tag, since `helm install --version` would otherwise resolve to a different chart than the release being cut), and [`ui/package.json`](ui/package.json) (`"version"`),
+     - **the pinned `install.sh` release-asset URL in `README.md` and in `install.sh`'s own header comment** — those two point at the cosign-signed copy rather than tip-of-`main`,
+     - so a missed bump hands new users the previous release's installer — and **the pinned wardyn checkout in [`docs/ci/github-actions.yml`](docs/ci/github-actions.yml) (`ref:`) and [`docs/ci/azure-pipelines.yml`](docs/ci/azure-pipelines.yml) (`--branch`)**,
+     - which exist so a pasted pipeline does not execute tip-of-default-branch shell in a secret-bearing job ([docs/CI.md](docs/CI.md) "Pin the wardyn checkout").
+   - **[`docs/DESKTOP.md`](docs/DESKTOP.md)'s real-hardware smoke recipe** also pins both image tags by hand (`WARDYN_WARDYND_IMAGE`, `WARDYN_PROXY_IMAGE` — the desktop tier's MDM config has no `$WARDYN_VERSION`
+     to interpolate; a past review found this stale for a whole release cycle).
+   - [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh) fails if either pin drifts from
+     [`internal/version/version.go`](internal/version/version.go).
+   - [`scripts/test-install-sh.sh`](scripts/test-install-sh.sh) asserts the two agree with each other, but it
+     cannot know the tag you are cutting.
+   - [`cmd/wardyn/version_test.go`](cmd/wardyn/version_test.go)'s `TestVersionMatchesChangelog`/`TestShippedVersionStringsAgree` enforce that
+     all these agree with the CHANGELOG's newest section — but only catch a
+     missed bump if `make release-check` runs AFTER this commit;
+     - the Prerequisites run above only sees the previous release's already-consistent
+       versions and passes either way.
+   - **Re-run `make release-check` after this commit** before tagging.
+   - **Also add a `ROADMAP.md` Shipped row for the release you are cutting**
+     (a past review found the Shipped table stuck on "Built, awaiting release" for
+     three released versions in a row) —
+     - a new row in the `## Shipped` table,
+       its Status cell reading "**Shipped (pre-alpha)** — `vX.Y.Z`, <date> (see
+       [CHANGELOG.md](CHANGELOG.md))",
+     - pointing at the CHANGELOG's now-dated entry
+       instead of `[Unreleased]`.
+   - ROADMAP.md carries no per-version narrative to flip any more — CHANGELOG.md is the only per-release detail.
+   - **Also regenerate [`docs/TEST-GAPS.md`](docs/TEST-GAPS.md): `make test-gaps`** (needs the union
+     coverage profile `make ci`/`cover-check` already produced this run) —
+     - a past review found the generator gained a Kubernetes-gated bucket with
+       nothing that regenerates the checked-in, `DO NOT EDIT BY HAND` doc itself;
+       `make test-gaps` is a standalone target, not in `make ci`.
+   - **Also snapshot the proxy config key set:** generate the previous-release key set AT THE TAG
+     (check out the tag, run the golden with `WARDYN_UPDATE_GOLDEN=1 go test ./internal/egress/proxy/
+     -run TestConfigKeySet`) rather than copying `current.txt` —
+     - a patch release is cut from
+       `release/X.Y`, whose tree can differ from whatever `current.txt` reads on the branch you are
+       releasing from.
+   - Save the generated file as
+     `internal/egress/proxy/testdata/config-keys/vX.Y.Z.txt` and set `previousProxyTag` in
+     [`internal/api/proxy_config_skew_test.go`](internal/api/proxy_config_skew_test.go) to `vX.Y.Z`, removing the older file.
+   - Operators pin the
+     proxy image apart from wardynd, and that test loads every config dispatch writes against the last
+     release's key set.
+   - When a fail-closed case's key (e.g. `policy.push_rules`) reaches the previous
+     release, update or drop that case in [`internal/api/proxy_config_skew_test.go`](internal/api/proxy_config_skew_test.go).
+   - **[`docs/VERIFY.md`](docs/VERIFY.md) is deliberately NOT on that list.**
+   - Every command in it is
+     parameterised on `$WARDYN_VERSION`, which its own step 0 resolves, so it needs
+     no bump —
+     - and hard-coding this release's number into one of those commands is
+       how it silently starts verifying the wrong artifacts.
+   - [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh) fails if any `ghcr.io` / `helm` /
+     `gh release` line in that file names a literal version.
 2. **Commit** the CHANGELOG and version-string bumps together, DCO-signed:
    `git commit -s -m "release: X.Y.Z"`.
 3. **Cut (or reuse) the release branch.** Starting with 0.5, every minor
    release lives on a `release/X.Y` branch cut from the release commit:
-   `git checkout -b release/X.Y`. The branch is where that minor's patch
-   releases come from — fixes land on `main` (or the feature branch) first and
-   are cherry-picked onto `release/X.Y`; the branch never takes new features.
-
-   **Exception, by maintainer decision (2026-09-12):** 0.7.2 carried the
-   Workspace Providers feature onto `release/0.7` — `feat/v0.7.2` merges to
-   `main` and `release/0.7` fast-forwards onto it, which IS the branch taking a
-   feature; no wording makes it not so, so it is recorded here as a dated
-   exception rather than as a rule change, and in the
-   [CHANGELOG.md](CHANGELOG.md) section for 0.7.2 (`[Unreleased]` until step 1 of
-   this checklist renames it). The rule above stands for every later line.
-
-   **Exception, by maintainer decision (2026-09-22):** 0.7.10 is developed on
-   `feature/0.7.10`, cut from `release/0.7`, and merged into `release/0.7` by
-   one release pull request, rather than landing on `main` first and being
-   cherry-picked — `main` carries a large amount of unrelated in-flight work,
-   so writing the change against `main` first and cherry-picking it onto
-   `release/0.7` would mean authoring it twice, against two different code
-   bases. It is forward-ported to `main` after that pull request merges. The
-   exception covers this patch line only; the rule above stands for every
-   later line.
-
-   The cut runs one guard before tagging: `git diff --quiet v0.7.9
-   release/0.7 -- internal/db/migrations go.mod go.sum` must be clean, and
-   any `ui/src` change is limited to the file list named in the release pull
-   request. `release/0.7` carries no branch protection, so that release pull
-   request is reviewed before merge rather than gated by required checks.
+   `git checkout -b release/X.Y`.
+   - The branch is where that minor's patch
+     releases come from — fixes land on `main` (or the feature branch) first and
+     are cherry-picked onto `release/X.Y`; the branch never takes new features.
+   - **Exception, by maintainer decision (2026-09-12):** 0.7.2 carried the
+     Workspace Providers feature onto `release/0.7` —
+     - `feat/v0.7.2` merges to
+       `main` and `release/0.7` fast-forwards onto it, which IS the branch taking a
+       feature;
+     - no wording makes it not so, so it is recorded here as a dated
+       exception rather than as a rule change,
+     - and in the
+       [CHANGELOG.md](CHANGELOG.md) section for 0.7.2 (`[Unreleased]` until step 1 of
+       this checklist renames it).
+   - The rule above stands for every later line.
+   - **Exception, by maintainer decision (2026-09-22):** 0.7.10 is developed on
+     `feature/0.7.10`, cut from `release/0.7`, and merged into `release/0.7` by
+     one release pull request, rather than landing on `main` first and being
+     cherry-picked —
+     - `main` carries a large amount of unrelated in-flight work,
+       so writing the change against `main` first and cherry-picking it onto
+       `release/0.7` would mean authoring it twice, against two different code
+       bases.
+   - It is forward-ported to `main` after that pull request merges.
+   - The exception covers this patch line only; the rule above stands for every
+     later line.
+   - The cut runs one guard before tagging: `git diff --quiet v0.7.9
+     release/0.7 -- internal/db/migrations go.mod go.sum` must be clean, and
+     any `ui/src` change is limited to the file list named in the release pull
+     request.
+   - `release/0.7` carries no branch protection, so that release pull
+     request is reviewed before merge rather than gated by required checks.
 4. **Tag the prepared release commit** on `release/X.Y`: `git tag vX.Y.Z`.
    Use the same `X.Y.Z` committed in step 2; do not recompute a patch number
    here. The version and CHANGELOG updates must already be committed, with
@@ -409,32 +369,38 @@ another maintainer. Use the chosen version throughout this checklist.
 5. **Push** the branch and the tag:
    `git push origin release/X.Y && git push origin vX.Y.Z`
    (and `git push origin main` if step 2's commit landed there).
-   Pushing the tag is what triggers `release.yml`, which now does more than build
-   and sign: per published digest it attests a CycloneDX SBOM scanned from the
-   **pushed image** (not the source tree, which sees no OS packages) and a build
-   provenance statement, then a `release-assets` job uploads those SBOMs,
-   `THIRD-PARTY-NOTICES.md`, `LICENSE`, `NOTICE`, `install.sh`, the four
-   `wardyn-<os>-<arch>` CLI binaries and a cosign-signed `SHA256SUMS`
-   to the Release — creating a draft Release first if you have not cut one yet —
-   and **fails if any of them did not land**. So the supply-chain assets are no
-   longer yours to remember; the demo videos in step 7 still are.
+   - Pushing the tag is what triggers `release.yml`, which now does more than build
+     and sign:
+     - per published digest it attests a CycloneDX SBOM scanned from the
+       **pushed image** (not the source tree, which sees no OS packages) and a build
+       provenance statement,
+     - then a `release-assets` job uploads those SBOMs,
+       `THIRD-PARTY-NOTICES.md`, `LICENSE`, `NOTICE`, `install.sh`, the four
+       `wardyn-<os>-<arch>` CLI binaries and a cosign-signed `SHA256SUMS`
+       to the Release —
+     - creating a draft Release first if you have not cut one yet —
+     - and **fails if any of them did not land**.
+   - So the supply-chain assets are no longer yours to remember; the demo videos in step 7 still are.
 
-   If that job is red, the Release is missing assets `docs/VERIFY.md` tells
+   If that job is red, the Release is missing assets [`docs/VERIFY.md`](docs/VERIFY.md) tells
    consumers to check. Treat it as a failed release, not a cosmetic warning.
 
 6. **Create the GitHub Release** for the tag, pasting that version's CHANGELOG section
    as the body. **Mark it a pre-release** (`gh release create --prerelease`) — Wardyn is
    pre-alpha.
 7. **Publish the demo videos as release assets** (after step 6 — upload needs the
-   Release to exist). Release assets live outside git history, so clones stay small.
-   Stage the shipping take per episode — the newest `PASS` row per id in
-   the takes ledger's attempt log, never `ls -t` (failed takes share the
-   folder) — under stable, timestamp-free names, then upload. The ledger is
-   OPERATOR-LOCAL and untracked (`/local/` is gitignored): it lives at
-   `local/TAKES-LEDGER.md` on the machine that recorded the takes, or wherever
-   `WARDYN_TAKES_LEDGER` points (`scripts/take-chain.sh:39` honors it). A fresh
-   clone has neither the ledger nor the footage, so run this on the recording
-   host:
+   Release to exist).
+   - Release assets live outside git history, so clones stay small.
+   - Stage the shipping take per episode — the newest `PASS` row per id in
+     the takes ledger's attempt log, never `ls -t` (failed takes share the
+     folder) — under stable, timestamp-free names, then upload.
+   - The ledger is
+     OPERATOR-LOCAL and untracked (`/local/` is gitignored): it lives at
+     `local/TAKES-LEDGER.md` on the machine that recorded the takes, or wherever
+     `WARDYN_TAKES_LEDGER` points ([`scripts/take-chain.sh:39`](scripts/take-chain.sh) honors it).
+   - A fresh
+     clone has neither the ledger nor the footage, so run this on the recording
+     host:
 
    ```sh
    TAG=vX.Y.Z; SRC=/path/to/recorded/takes; STAGE=$(mktemp -d)
@@ -447,44 +413,46 @@ another maintainer. Use the chosen version throughout this checklist.
    gh release upload "$TAG" "$STAGE"/*.mp4 --clobber
    ```
 
-   Docs link the **pinned tag** —
-   `https://github.com/cjohnstoniv/wardyn/releases/download/vX.Y.Z/<name>.mp4`.
-   (`releases/latest/download/` resolves only to non-prerelease releases; every
-   Wardyn release is a pre-release, so `latest` 404s.) A later release that
-   re-records an episode re-uploads under the same stable name and bumps the tag
-   in **both** `README.md` and `ui/src/app/lib/demo-videos.ts` — one `sed`
-   across both files, never just README: `cmd/wardynd/demo_videos_guard_test.go`
-   fails the build the moment the two disagree.
-
-   Also re-check the live redirect once per release, not just the tag:
+   - Docs link the **pinned tag** —
+     `https://github.com/cjohnstoniv/wardyn/releases/download/vX.Y.Z/<name>.mp4`.
+   - (`releases/latest/download/` resolves only to non-prerelease releases; every
+     Wardyn release is a pre-release, so `latest` 404s.)
+   - A later release that
+     re-records an episode re-uploads under the same stable name and bumps the tag
+     in **both** `README.md` and [`ui/src/app/lib/demo-videos.ts`](ui/src/app/lib/demo-videos.ts) — one `sed`
+     across both files, never just README:
+     - [`cmd/wardynd/demo_videos_guard_test.go`](cmd/wardynd/demo_videos_guard_test.go)
+       fails the build the moment the two disagree.
+   - Also re-check the live redirect once per release, not just the tag:
 
    ```sh
    curl -sI "https://github.com/cjohnstoniv/wardyn/releases/download/$TAG/<name>.mp4" | grep -i '^location'
    ```
 
-   The `Location` host it prints must already be one of the two hosts
-   `internal/api/security_headers.go`'s `media-src` CSP directive allows
-   (`release-assets.githubusercontent.com` today) — GitHub has moved this host
-   before, and a silent mismatch means the player fails to load with no console
-   error a viewer would notice.
+   - The `Location` host it prints must already be one of the two hosts
+     [`internal/api/security_headers.go`](internal/api/security_headers.go)'s `media-src` CSP directive allows
+     (`release-assets.githubusercontent.com` today) —
+     - GitHub has moved this host
+       before, and a silent mismatch means the player fails to load with no console
+       error a viewer would notice.
+
+#### A promote under another tag's identity
+
+- There is no override flag.
+- A promote is dispatched on the tag ref (`release.yml`'s promote job runs on `github.ref_name`), so its signature carries that tag's identity, which is the exact one [`scripts/verify-release.sh`](scripts/verify-release.sh) and [`docs/VERIFY.md`](docs/VERIFY.md) check.
+- Dispatching it from another ref makes verification fail, correctly.
 
 ## Repo settings (GitHub-side)
 
-**Branch protection on `main` is enabled.** A push is gated on the CI merge-gate
-status checks and normally requires a pull request. `enforce_admins` is **off**, so
-the maintainer cutting a release pushes the tag commit to `main` directly (step 5)
-while contributors go through PRs — this is why `CONTRIBUTING.md`'s check list is a
-real server-side merge block for contributors, and the maintainer's release push
-bypasses the PR requirement. Apply (or re-apply) the protection with the command
-below. A required context must be **exactly** a `.github/workflows/ci.yml` job id
-**that reports on a pull request** — re-check both halves whenever the merge gate
-changes:
+- **Branch protection on `main` is enabled.**
+  - A push is gated on the CI merge-gate status checks and normally requires a pull request.
+  - `enforce_admins` is **off**, so the maintainer cutting a release pushes the tag commit to `main` directly (step 5) while contributors go through PRs —
+    - this is why `CONTRIBUTING.md`'s check list is a real server-side merge block for contributors, and the maintainer's release push bypasses the PR requirement.
+  - Apply (or re-apply) the protection with the command below.
+  - A required context must be **exactly** a [`.github/workflows/ci.yml`](.github/workflows/ci.yml) job id **that reports on a pull request** — re-check both halves whenever the merge gate changes:
 
-Change the **contexts only** — `PATCH .../protection/required_status_checks` leaves
-the review, admin and force-push settings alone. A full `PUT .../protection` rewrites
-every field, so any key you omit is silently reset (the earlier version of this
-document shipped a `PUT` body that would have flipped `strict` to false and dropped
-`require_code_owner_reviews`):
+- Change the **contexts only** — `PATCH .../protection/required_status_checks` leaves the review, admin and force-push settings alone.
+- A full `PUT .../protection` rewrites every field, so any key you omit is silently reset (the earlier version of this document shipped a `PUT` body that would have flipped `strict` to false and dropped `require_code_owner_reviews`):
 
 ```sh
 gh api -X PATCH repos/cjohnstoniv/wardyn/branches/main/protection/required_status_checks \
@@ -507,107 +475,89 @@ gh api -X PATCH repos/cjohnstoniv/wardyn/branches/main/protection/required_statu
 JSON
 ```
 
-The first 24 contexts are the ones `main` requires today, read back on 2026-10-06
-with the command below. The last, **`trivy (wardynd-fips)`, is not required
-today**: its job runs and reports on every pull request, but a red
-`trivy (wardynd-fips)` does not block a merge until the owner runs this PATCH. Run
-as written, the command drops nothing that is required now and adds that one
-context. The PATCH replaces the whole list, so read the live list back first: a
-context that is live and missing from this body would be dropped.
+- The first 24 contexts are the ones `main` requires today, read back on 2026-10-06 with the command below.
+- The last, **`trivy (wardynd-fips)`, is not required today**: its job runs and reports on every pull request, but a red `trivy (wardynd-fips)` does not block a merge until the owner runs this PATCH.
+- Run as written, the command drops nothing that is required now and adds that one context.
+- The PATCH replaces the whole list, so read the live list back first: a context that is live and missing from this body would be dropped.
 
-Every context in the list reports on every pull request, as skipped when the
-change cannot affect it (docs/CI.md, "Incremental CI"), so each is an eligible
-context. `notices` is the copyleft / unreviewed-dependency gate, and the `trivy`
-checks are the only CVE scan of the eight images a release publishes. Each image
-has its own `trivy-<image>` job reporting as `trivy (<image>)` — adding an image to
-`.github/workflows/ci.yml` means adding its job, adding its context here **and**
-re-running the PATCH, or that image merges unscanned.
-`scripts/test-claims-match-code.sh` (C6) fails if this list and those jobs drift
-apart.
+- Every context in the list reports on every pull request, as skipped when the change cannot affect it ([docs/CI.md](docs/CI.md), "Incremental CI"), so each is an eligible context.
+- `notices` is the copyleft / unreviewed-dependency gate, and the `trivy` checks are the only CVE scan of the eight images a release publishes.
+- Each image has its own `trivy-<image>` job reporting as `trivy (<image>)` — adding an image to [`.github/workflows/ci.yml`](.github/workflows/ci.yml) means adding its job, adding its context here **and** re-running the PATCH, or that image merges unscanned.
+- [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh) (C6) fails if this list and those jobs drift
+  apart.
 
-For `trivy (wardynd-fips)` the PATCH has to be re-run by the owner (never by an
-agent) before that context is required, and after the FIRST real tag that builds
-it the owner confirms `ghcr.io/cjohnstoniv/wardynd-fips` is a PUBLIC package (a
-newly-created GHCR package can default to private, which silently breaks every
-documented pull). `ghcr.io/cjohnstoniv/staging/wardynd-fips` may stay private:
-only the workflow reads it.
+- For `trivy (wardynd-fips)` the PATCH has to be re-run by the owner (never by an agent) before that context is required,
+  - and after the FIRST real tag that builds it the owner confirms `ghcr.io/cjohnstoniv/wardynd-fips` is a PUBLIC package (a newly-created GHCR package can default to private, which silently breaks every documented pull).
+- `ghcr.io/cjohnstoniv/staging/wardynd-fips` may stay private: only the workflow reads it.
 
-`trivy (agent-vscode)` and `trivy (agent-novnc)` (#141, `agent-vscode`/`agent-novnc`
-joining the publish matrix) are required today. Two owner steps belong with
-#141, both after the FIRST real tag that runs `images-ui-sandbox`: confirm
-`ghcr.io/cjohnstoniv/agent-vscode` and `ghcr.io/cjohnstoniv/agent-novnc` are
-PUBLIC packages (a newly-created GHCR package can default to private, which
-silently breaks every documented pull), and re-check this section's PATCH
-body still matches `ci.yml`'s actual `trivy` jobs at that point.
+- `trivy (agent-vscode)` and `trivy (agent-novnc)` (#141, `agent-vscode`/`agent-novnc` joining the publish matrix) are required today.
+- Two owner steps belong with #141, both after the FIRST real tag that runs `images-ui-sandbox`:
+  - confirm `ghcr.io/cjohnstoniv/agent-vscode` and `ghcr.io/cjohnstoniv/agent-novnc` are PUBLIC packages (a newly-created GHCR package can default to private, which silently breaks every documented pull),
+  - and re-check this section's PATCH body still matches `ci.yml`'s actual `trivy` jobs at that point.
 
-Read it back with
-`gh api repos/cjohnstoniv/wardyn/branches/main/protection --jq .required_status_checks.contexts`.
-A matrix job reports one context per cell as `<job-id> (<matrix-value>)`, which is why
-the five supply-chain gates are `gates (...)` rather than bare names.
+- Read it back with `gh api repos/cjohnstoniv/wardyn/branches/main/protection --jq .required_status_checks.contexts`.
+- A matrix job reports one context per cell as `<job-id> (<matrix-value>)`, which is why the five supply-chain gates are `gates (...)` rather than bare names.
 
-A job conditional on `push`, a schedule, or a path filter must **not** be a required
-context: GitHub does not treat a never-reported required context as passing, so
-the PR sits at "Expected — waiting for status to be reported" and cannot be
-merged. Every `nightly.yml` job is such a job, `buildx-smoke` (the multi-arch
-build) included. `ci.yml`'s change classifier (#932) is not such a filter: a
-required job whose work a change cannot affect is skipped by a job-level `if:`
-and reports as skipped, which branch protection accepts, and it runs whenever the
-classification is missing. The one required matrix job, `gates`, never skips that
-way: a skipped matrix reports a single check with its name unexpanded, never the
-per-cell contexts (docs/CI.md, "Incremental CI"). A job's check name is its `name:` when it sets one, otherwise
-its job id, so renaming either is the same protection change as deleting the
-job.
+- A job conditional on `push`, a schedule, or a path filter must **not** be a required context:
+  - GitHub does not treat a never-reported required context as passing, so the PR sits at "Expected — waiting for status to be reported" and cannot be merged.
+- Every `nightly.yml` job is such a job, `buildx-smoke` (the multi-arch build) included.
+- `ci.yml`'s change classifier (#932) is not such a filter:
+  - a required job whose work a change cannot affect is skipped by a job-level `if:` and reports as skipped, which branch protection accepts, and it runs whenever the classification is missing.
+- The one required matrix job, `gates`, never skips that way: a skipped matrix reports a single check with its name unexpanded, never the per-cell contexts ([docs/CI.md](docs/CI.md), "Incremental CI").
+- A job's check name is its `name:` when it sets one, otherwise its job id, so renaming either is the same protection change as deleting the job.
 
 ## Container images
 
-Two workflows publish images, on two different triggers — neither overlaps
-the other:
-
+- Two workflows publish images, on two different triggers — neither overlaps the other:
 - **Continuous (every push to `main` that passes CI).**
-  `.github/workflows/publish-image.yml` builds and pushes `wardynd` only, to
-  `ghcr.io/cjohnstoniv/wardynd` (`:latest`, `:sha-<commit>`). **Signed
-  (keyless, by digest) but not SBOM- or provenance-attested**, and under the
-  `publish-image.yml@refs/heads/main` certificate identity — not the exact
-  `release.yml@refs/tags/vX.Y.Z` one every command in `docs/VERIFY.md` pins, so
-  that page's recipes structurally cannot verify these tags. See
-  [docs/VERIFY.md](docs/VERIFY.md) "The continuous lane" for the regexp that
-  can. The compose stack still always builds from source (see
-  [docs/CI.md](docs/CI.md)).
-- **Release (every `vX.Y.Z` tag).** `.github/workflows/release.yml` builds and
-  pushes all EIGHT images a release ships —
-  `ghcr.io/cjohnstoniv/wardynd` (built with both runner substrates,
-  `GO_BUILD_TAGS=docker,k8s`), `ghcr.io/cjohnstoniv/wardynd-fips` (the same
-  recipe built with `GOFIPS140` pinned to a frozen Go Cryptographic Module
-  snapshot; the job reads that pin back out of the pushed digest with
-  `scripts/check-fips-image.sh` before it signs it), `ghcr.io/cjohnstoniv/wardyn-proxy`,
-  `ghcr.io/cjohnstoniv/agent-base`, `ghcr.io/cjohnstoniv/agent-codex-cli`,
-  `ghcr.io/cjohnstoniv/agent-aws-sso`, `ghcr.io/cjohnstoniv/agent-vscode`,
-  `ghcr.io/cjohnstoniv/agent-novnc` (the last two built from the `agent-base`
-  ref this same run pushed — see `release.yml`'s `images-ui-sandbox` job)
-  — each tagged with the bare semver (e.g. `0.6.0`, matching `Chart.yaml`'s
-  `appVersion`) and **cosign-signed (keyless)** by digest. Step 5's tag push
-  is what triggers it. It also attests a per-digest CycloneDX SBOM and build
-  provenance, publishes the Helm chart to `oci://ghcr.io/cjohnstoniv/charts`,
-  and uploads the SBOMs, notices, `install.sh`, the four `wardyn-<os>-<arch>`
-  CLI binaries and a cosign-signed `SHA256SUMS` to the Release
-  — failing if any asset did not land (the required set is the `for want in …`
-  list in `release.yml`'s "Assert every required asset actually landed").
-  The supply-chain artifacts are no longer yours to remember; the demo videos
-  in step 7 still are.
-  Each is a **multi-arch index** covering `linux/amd64` and `linux/arm64`
-  (arm64 laptops are the desktop tier's ordinary hardware — see
-  [docs/DESKTOP.md](docs/DESKTOP.md)). Images are **not** digest-pinned
-  anywhere they're *consumed* (the chart's `image.tag` still floats on the
-  mutable semver tag) — only the cosign signature is by digest; pinning every
-  consumer to a digest is separate, unstarted work.
-
-  **On the first multi-arch tag, verify the INDEX digest by hand.** cosign
-  signs whatever digest `docker/build-push-action` reports, and with a
-  two-platform `platforms:` list that is the *index* digest, not a per-arch
-  manifest — so there is exactly ONE signature per image and the per-arch
-  children are **not** individually signed. That is the normal multi-arch
-  posture, but it is a change from the single-arch shape earlier releases had,
-  so prove it once rather than assuming it:
+  - [`.github/workflows/publish-image.yml`](.github/workflows/publish-image.yml) builds and pushes `wardynd` only, to `ghcr.io/cjohnstoniv/wardynd` (`:latest`, `:sha-<commit>`).
+  - **Signed (keyless, by digest) but not SBOM- or provenance-attested**, and under the `publish-image.yml@refs/heads/main` certificate identity — not the exact `release.yml@refs/tags/vX.Y.Z` one every command in [`docs/VERIFY.md`](docs/VERIFY.md) pins, so that page's recipes structurally cannot verify these tags.
+  - See [docs/VERIFY.md](docs/VERIFY.md) "The continuous lane" for the regexp that can.
+  - The compose stack still always builds from source (see [docs/CI.md](docs/CI.md)).
+- **Release (every `vX.Y.Z` tag).**
+  - [`.github/workflows/release.yml`](.github/workflows/release.yml) builds and
+    pushes all EIGHT images a release ships —
+    - `ghcr.io/cjohnstoniv/wardynd` (built with both runner substrates,
+      `GO_BUILD_TAGS=docker,k8s`),
+    - `ghcr.io/cjohnstoniv/wardynd-fips` (the same
+      recipe built with `GOFIPS140` pinned to a frozen Go Cryptographic Module
+      snapshot; the job reads that pin back out of the pushed digest with
+      [`scripts/check-fips-image.sh`](scripts/check-fips-image.sh) before it signs it),
+    - `ghcr.io/cjohnstoniv/wardyn-proxy`,
+      `ghcr.io/cjohnstoniv/agent-base`, `ghcr.io/cjohnstoniv/agent-codex-cli`,
+      `ghcr.io/cjohnstoniv/agent-aws-sso`, `ghcr.io/cjohnstoniv/agent-vscode`,
+      `ghcr.io/cjohnstoniv/agent-novnc` (the last two built from the `agent-base`
+      ref this same run pushed — see `release.yml`'s `images-ui-sandbox` job)
+      —
+    - each tagged with the bare semver (e.g. `0.6.0`, matching `Chart.yaml`'s
+      `appVersion`) and **cosign-signed (keyless)** by digest.
+  - Step 5's tag push
+    is what triggers it.
+  - It also attests a per-digest CycloneDX SBOM and build
+    provenance, publishes the Helm chart to `oci://ghcr.io/cjohnstoniv/charts`,
+    - and uploads the SBOMs, notices, `install.sh`, the four `wardyn-<os>-<arch>`
+      CLI binaries and a cosign-signed `SHA256SUMS` to the Release —
+    - failing if any asset did not land (the required set is the `for want in …`
+      list in `release.yml`'s "Assert every required asset actually landed").
+  - The supply-chain artifacts are no longer yours to remember; the demo videos
+    in step 7 still are.
+  - Each is a **multi-arch index** covering `linux/amd64` and `linux/arm64`
+    (arm64 laptops are the desktop tier's ordinary hardware — see
+    [docs/DESKTOP.md](docs/DESKTOP.md)).
+  - Images are **not** digest-pinned
+    anywhere they're *consumed* (the chart's `image.tag` still floats on the
+    mutable semver tag) — only the cosign signature is by digest; pinning every
+    consumer to a digest is separate, unstarted work.
+  - **On the first multi-arch tag, verify the INDEX digest by hand.**
+    - cosign
+      signs whatever digest `docker/build-push-action` reports, and with a
+      two-platform `platforms:` list that is the *index* digest, not a per-arch
+      manifest —
+      - so there is exactly ONE signature per image and the per-arch
+        children are **not** individually signed.
+    - That is the normal multi-arch
+      posture, but it is a change from the single-arch shape earlier releases had,
+      so prove it once rather than assuming it:
 
   ```sh
   TAG=0.6.0   # the bare semver just pushed, no leading v
@@ -627,6 +577,6 @@ the other:
   done
   ```
 
-  A `cosign verify` against a per-arch *child* digest is **expected to fail** —
-  that is the index-signing model, not a broken release. Consumers verify the
-  index ref.
+  - A `cosign verify` against a per-arch *child* digest is **expected to fail** —
+    that is the index-signing model, not a broken release.
+  - Consumers verify the index ref.

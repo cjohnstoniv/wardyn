@@ -103,10 +103,11 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
     typeValue(GOV.FIELD_NAME, "Team A");
     await pickBase("Baseline");
 
-    // The overlay lead replaces the JSON editor, and the inherited value is the base's effective one.
+    // The overlay lead replaces the policy document and its editor, and the inherited value is the base's effective one.
     expect(screen.getByText(GOV.OVERLAY_LEAD)).toBeInTheDocument();
     expect(screen.getAllByText(GOV.OVERLAY_INHERITED("*.corp, git.x")).length).toBeGreaterThan(0);
-    expect(screen.queryByLabelText("Spec (JSON)")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit policy" })).toBeNull();
+    expect(screen.queryByLabelText(/^Spec \(/)).toBeNull();
 
     // Saved untouched: an overlay object with NO keys, and no overlay_limits.
     await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));

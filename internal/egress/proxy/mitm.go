@@ -162,7 +162,7 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 // isMITMHost reports whether host is an upstream the proxy will TLS-MITM.
 //
 // TRUST BOUNDARY (read before widening): TLS-MITM lets the proxy read plaintext and swap the
-// credential header. Permitted for exactly three reasons:
+// credential header. Permitted for exactly four reasons:
 //  1. built-in LLM hosts (Anthropic/OpenAI) — subscription-OAuth / content-inspection. Bedrock is
 //     excluded: its client-side SigV4 auth would be invalidated by terminate-and-reforward.
 //  2. operator-configured corp artifact hosts (p.mitmHosts, compiled at dispatch from site-config
@@ -172,12 +172,20 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 //     Rides p.mitmHosts with #2, bounded the same way, so the SSO token is set as
 //     x-amz-sso_bearer_token instead of written into the sandbox. Bedrock's data plane stays excluded
 //     per #1.
+//  4. a header host of a component attached to the run, authored at DISPATCH from the component gate's
+//     decision (never sandbox/agent, and never a request body taken verbatim): the run's OWNER attached
+//     the component under a permission an admin can withdraw, and chose the host. Rides p.mitmHosts
+//     as "host:443" — the host's standard TLS port and no other — paired with the injection rule for
+//     the secret the component delivers there: the owner's own, or one the organisation provides.
 //
 // #2/#3's surface is bounded on every axis: admin-authored only (never sandbox/agent/request); exact
 // hostname, never wildcard/suffix; exact port when the entry names one (mitmPorts), so a non-443
 // mirror can't be dialed at the wrong port via hostname match alone; paired with an injection rule for
 // the operator's own token; CA key stays in proxy memory. Cost: for those hosts the proxy sees
 // plaintext, same as for LLM hosts — the operator trusts their own proxy with their own registry.
+// #4 is bounded the same way except for who chose the host: an admin for an organisation's component,
+// the run's owner for one they defined. A model's host is never one (the gate refuses it), so #4
+// cannot reach #1's traffic.
 func (p *Proxy) isMITMHost(host string) bool {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
 	if h == anthropicHost || h == openaiHost {

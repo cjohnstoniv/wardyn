@@ -115,6 +115,12 @@ type SiteConfig struct {
 	// blocks; nil is "the site config says nothing about branding". Name and
 	// colours stay with the Branding card (PUT /branding/settings).
 	Branding *SiteBranding `json:"branding,omitempty"`
+	// Components is the org's custom-component POLICY. A POINTER for the same
+	// byte-identical-GET reason as the provider blocks. Nil — never set, or a
+	// document stored before the block existed — is the owner-decided default:
+	// no autonomy cap, env-var and file delivery allowed, no CC3 floor for
+	// component credentials.
+	Components *ComponentSettings `json:"components,omitempty"`
 	// EffectiveScmHosts is READ-ONLY, SERVER-OWNED: ScmHosts minus hosts a
 	// provider row claims, union enabled providers' hosts. A real field
 	// (not a wrapper key) so a get|set round trip still decodes under
@@ -145,6 +151,23 @@ type SiteConfig struct {
 // it out of the document (and applying) removes the logo it delivered.
 type SiteBranding struct {
 	LogoPath string `json:"logo_path,omitempty"`
+}
+
+// ComponentSettings is SiteConfig.Components. Every field's zero value is the
+// owner-decided default, so an absent block and an all-zero one mean the same
+// thing (PUT /site-config stores the latter as the former).
+type ComponentSettings struct {
+	// RequireVaultForCredentials restores the CC3 confinement floor for a
+	// component's header credential to a non-baseline host, org and person rows
+	// alike. False (default) lifts the floor for component-authored grants only.
+	RequireVaultForCredentials bool `json:"require_vault_for_credentials,omitempty"`
+	// DenyResidentDelivery refuses env-var and file delivery DEPLOYMENT-WIDE,
+	// for org and person rows alike; header delivery keeps working.
+	DenyResidentDelivery bool `json:"deny_resident_delivery,omitempty"`
+	// AutonomyCap caps a run carrying a SELF-DEFINED component, with or without
+	// a governance profile: "" no cap (default), "L1" holds tool calls, "L0"
+	// refuses unattended runs. No other value is accepted: the cap only tightens.
+	AutonomyCap AutonomyLevel `json:"autonomy_cap,omitempty"`
 }
 
 // InternalHost is one SiteConfig.InternalHosts entry — see that field's doc.

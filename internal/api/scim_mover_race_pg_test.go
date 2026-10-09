@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/test/entrafake"
 )
 
@@ -86,7 +87,7 @@ func TestSCIMGroupRemovalSweeperWaitsForAnAddInFlight(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	add, err := e.pool.Begin(ctx)
+	add, err := testutil.PGConn(t, e.pool).Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

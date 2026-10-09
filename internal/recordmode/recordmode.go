@@ -395,6 +395,14 @@ func Synthesize(obs Observations, runGrants []types.CredentialGrant, run types.A
 			warnings = append(warnings, fmt.Sprintf("minted grant %s injects a subscription OAuth sentinel; omitted from eligible_grants (a stored profile must not carry a live subscription credential)", id))
 			continue
 		}
+		// A `shared` grant is an organisation component's: the component gate
+		// sets the mark and the policy validator refuses it when authored, so a
+		// profile carrying one could be neither saved nor launched. The
+		// component is what a later run attaches to get the grant again.
+		if grantIsShared(gs) {
+			warnings = append(warnings, fmt.Sprintf("minted grant %s was added by an organisation's component; omitted from eligible_grants (attach the component at launch to use it again)", id))
+			continue
+		}
 		spec.EligibleGrants = append(spec.EligibleGrants, gs)
 		if gs.Kind == types.GrantGitHubToken {
 			warnings = append(warnings, fmt.Sprintf("eligible grant %s (github_token) carries scope permissions %s; confirm they intersect the least-privilege need", id, githubPermSummary(gs.Scope)))
@@ -497,6 +505,15 @@ func sortedUUIDs(set map[uuid.UUID]bool) []uuid.UUID {
 	return slices.SortedFunc(maps.Keys(set), func(a, b uuid.UUID) int {
 		return strings.Compare(a.String(), b.String())
 	})
+}
+
+// grantIsShared reports whether a grant's scope carries the `shared` mark the
+// component gate sets for an organisation's provided secret.
+func grantIsShared(gs types.GrantSpec) bool {
+	var scope struct {
+		Shared bool `json:"shared"`
+	}
+	return json.Unmarshal(gs.Scope, &scope) == nil && scope.Shared
 }
 
 // grantNamesOAuthSentinel reports whether an api_key grant's scope names one of the SENTINEL secret

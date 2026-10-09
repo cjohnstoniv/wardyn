@@ -23,9 +23,8 @@ import type {
   SetupProviderAccess,
   Workspace,
 } from "../../../lib/types";
-import { RAIL_SETUP } from "../../wardyn/copy";
 import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
-import { launchGates } from "./new-run-launch-gates";
+import { launchGates, preflightHolds, withPreflightIssues, type LaunchIssue, type NewRunPanelId } from "./new-run-launch-gates";
 import type { PolicyMode } from "../../wardyn/policy-panel";
 import type { WizardState } from "./wizard-types";
 import { RunRail } from "./new-run-rail";
@@ -33,6 +32,10 @@ import type { ProviderGate } from "./model-provider-lane";
 import type { PolicyRef } from "../../../lib/api/health";
 
 export interface NewRunLaunchPanelProps {
+  /** The panel on screen, and how an issue shows its own (RunRail's props). */
+  panel?: NewRunPanelId;
+  onIssue?: (issue: LaunchIssue) => void;
+  guardLink?: React.ComponentProps<typeof RunRail>["guardLink"];
   governanceProfile: string | undefined;
   /** GET /me's governance_contact, for the remedy beside the profile line. */
   governanceContact?: PolicyRef;
@@ -70,6 +73,7 @@ export interface NewRunLaunchPanelProps {
   refusedProvider: string | undefined;
   /** The request Launch would send right now — see RunRailProps.launch.body. */
   launchBody: string | null;
+  draftRevision?: number;
   /** Re-runs preflight on the current body: what a preflight-origin sign-in does. */
   onPreflight: () => Promise<void>;
   preflightRefusal: { body: string; provider: string } | null;
@@ -84,7 +88,9 @@ export interface NewRunLaunchPanelProps {
    *  both derived HERE from the raw inputs below, since neither is read
    *  anywhere else on the screen. */
   mode: WizardState["mode"];
+  /** The text this run shape sends: the Task, the Command or the Startup command. */
   task: string;
+  title: string;
   policyMode: PolicyMode;
   specParsedOk: boolean;
   selectedPolicyId: string | undefined;
@@ -108,6 +114,8 @@ export interface NewRunLaunchPanelProps {
   preflightError: string | null;
   preflightErrorSeq: number;
   preflightResult: PreflightResult | null;
+  /** The Access rows that hold Launch (access-rows-model.ts's accessIssues). */
+  accessIssues?: LaunchIssue[];
 
   agentRow: SetupHarnessTool | undefined;
 
@@ -126,6 +134,9 @@ export interface NewRunLaunchPanelProps {
 }
 
 export function NewRunLaunchPanel({
+  panel,
+  onIssue,
+  guardLink,
   governanceProfile,
   governanceContact,
   savedPolicy,
@@ -148,12 +159,14 @@ export function NewRunLaunchPanel({
   credentialRefused,
   refusedProvider,
   launchBody,
+  draftRevision,
   onPreflight,
   preflightRefusal,
   noBarrier,
   runnerUnknown,
   mode,
   task,
+  title,
   policyMode,
   specParsedOk,
   selectedPolicyId,
@@ -172,6 +185,7 @@ export function NewRunLaunchPanel({
   preflightError,
   preflightErrorSeq,
   preflightResult,
+  accessIssues,
   agentRow,
   isAgent,
   providerCandidates,
@@ -198,15 +212,14 @@ export function NewRunLaunchPanel({
 
   const showHoldNote = !isInteractive && isAgent && agent === "claude-code" && toolApprovals !== "hold";
 
-  // The screen's ONE validation rule lives in launchGates, the same pure
+  // The form's own reasons Launch is held live in launchGates, the same pure
   // derivation the screen reads to decide whether an automatic preflight may
-  // fire. `workspaceUnavailable` is NOT a `problem` clause: it disables Launch
-  // through the rail's own prop, so the sentence renders once, on the workspace
-  // picker's own advisory line (review F5).
+  // fire and what the panel nav counts.
   const gates = launchGates({
     isAgent,
     mode,
     task,
+    title,
     policyMode,
     specParsedOk,
     selectedPolicyId,
@@ -224,35 +237,29 @@ export function NewRunLaunchPanel({
     agentName,
   });
   const workspaceUnavailable = gates.workspaceUnavailable;
-  // f-f4: preflight's `backend` row says this runner cannot enforce the run's
-  // barrier; Launch would 422 on it, so the rail says so first. Only a FRESH
-  // verdict for the CURRENT body counts (use-launch's preflightFresh), and only
-  // `missing`: an `unverified` row never blocks. Not when `noBarrier`: a host
-  // with no barrier at all has its own host-wide line in the rail. Not when
-  // `runnerUnknown` either: with no runner configured Launch is not refused,
-  // so neither is it blocked here.
-  const backendMissing =
-    !noBarrier &&
-    !runnerUnknown &&
-    preflightFresh &&
-    !!preflightResult?.setup_items?.some((i) => i.kind === "backend" && i.status === "missing");
-  // f-f5: mirrors the server's runNeedsModelWarning. An unattended agent run
-  // with no reachable model waits. Interactive bodies are exempt. The verdict
-  // is the current body's own fresh preflight `llm_access` row.
-  const modelBlocked =
-    isAgent &&
-    !isInteractive &&
-    preflightFresh &&
-    !!preflightResult?.setup_items?.some((i) => i.kind === "llm_access" && i.status === "missing");
-  const problem = backendMissing
-    ? RAIL_SETUP.BACKEND_BLOCK
-    : (gates.problem ?? (modelBlocked ? RAIL_MODEL_ACCESS.UNATTENDED_BLOCK(agentName) : null));
+  // Preflight's own two holds for this body join them: the first issue is
+  // the one the rail names, and it is what disables Launch.
+  const holds = preflightHolds({
+    isAgent,
+    isInteractive,
+    agentName,
+    noBarrier,
+    runnerUnknown,
+    preflightFresh,
+    setupItems: preflightResult?.setup_items,
+  });
+  const modelBlocked = holds.modelBlocked;
+  const issue = withPreflightIssues(gates.issues, holds, agentName, accessIssues)[0] ?? null;
+  const problem = issue?.text ?? null;
   // The Connect link belongs to the unattended-block sentence only; an
   // earlier arm that wins while modelBlocked is true keeps its own sentence.
   const modelBlockShown = modelBlocked && problem === RAIL_MODEL_ACCESS.UNATTENDED_BLOCK(agentName);
 
   return (
     <RunRail
+      panel={panel}
+      onIssue={onIssue}
+      guardLink={guardLink}
       governanceProfile={governanceProfile}
       governanceContact={governanceContact}
       savedPolicy={savedPolicy}
@@ -272,11 +279,13 @@ export function NewRunLaunchPanel({
         spinning: launchSpinning,
         inFlight: launching,
         problem,
+        issue,
         // noBarrier follows workspaceUnavailable's rule (#1328 review F4 — ONE
         // source of truth: the rail's own disabled check already folds
         // `noBarrier` in, so `disabled` never duplicates it): the rail states
         // ITS OWN reason beside Launch, so `problem` never also carries it.
         workspaceUnavailable,
+        referenceHold: gates.referenceWorkspaceBlocked,
         noBarrier,
         error,
         errorSeq,
@@ -284,6 +293,7 @@ export function NewRunLaunchPanel({
         credentialRefused,
         refusedProvider,
         body: launchBody,
+        draftRevision,
       }}
       preflight={
         preflightIsCurrent

@@ -68,8 +68,9 @@ import { act, beat, caption, centerInFrame, chapter, ffwdEnd, ffwdStart, PACE, s
 // importing it is what registers this file's beforeAll/afterAll, and each beat
 // reads the page out of stage() rather than closing over a module-level `let`.
 import { stage } from "./stage";
-import { clearWorkspace, decide } from "./funnel";
+import { clearWorkspace, decide, newRunEditPolicy, newRunPanel } from "./funnel";
 import { sweepStaleState } from "./sweep";
+import { readSpec, SPEC_LABEL } from "../policy-source";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -286,6 +287,7 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // it appears afterwards — including in the verifier.
   const titleBox = page.getByLabel("Title");
   await spotlight(page, titleBox);
+  await newRunPanel(page, "run");
   await titleBox.fill(RUN_TITLE);
   await caption(page, "Give it a name.");
   await beat(page, BEAT_SHORT);
@@ -374,6 +376,7 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // getByRole("combobox", {name}) can never match it. Filtering on the
   // placeholder text is the honest workaround until the control gets a label —
   // an unnamed combobox is a real a11y gap, not just a test inconvenience.
+  await newRunPanel(page, "workspace");
   await act(page, page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" }), "Attach the workspace.");
   await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE_NAME, "i") }).first());
   await caption(page, "Same workspace as before — real code, writable because we granted it.");
@@ -388,6 +391,7 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // construction, the same default the old "Confined" radio asserted. The
   // click below is still for the camera, same as the old one: it re-asserts
   // the Minimal chip rather than changing anything.
+  await newRunEditPolicy(page);
   await act(page, page.getByRole("button", { name: "Minimal" }), "Confined — the network starts closed.");
   await caption(page, "We'll give it the one destination it needs and let everything else ask.");
   await beat(page, PACE.read + 400);
@@ -403,9 +407,9 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // fill rather than a hardcoded literal so the floor (min_confinement_class)
   // stays whatever is actually on screen — same pattern policies.spec.ts's
   // fillEditor uses for this textarea.
-  const specBox = page.getByLabel("Spec (JSON)");
+  const specBox = page.getByLabel(SPEC_LABEL);
   const heldSpec = JSON.stringify(
-    { ...JSON.parse(await specBox.inputValue()), first_use_approval: "wait_for_review" },
+    { ...(await readSpec(specBox)), first_use_approval: "wait_for_review" },
     null,
     2,
   );
@@ -432,7 +436,10 @@ test("V08 beats 1-6 — name it, aim it, fence it", async () => {
   // connected. This run launches; its first model call fails.") would sit in
   // frame for the whole beat and make a liar of the next line — and of the
   // entire run, which would launch and fail its first model call.
-  await expect(page.getByText("1 domain allowed")).toBeVisible({ timeout: 20_000 });
+  // The read view lists what the run will be allowed to reach: the one host.
+  await expect(
+    page.getByTestId("policy-document").getByText("api.anthropic.com", { exact: true }).first(),
+  ).toBeVisible({ timeout: 20_000 });
   await expect(
     page.getByText(/No model provider is connected/),
     "no model provider is connected — V01's model step did not stick, and this run cannot do its task",

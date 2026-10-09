@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, mockMemberRole, navToRoute, sidebarLink } from "./fixtures";
+import { test, expect, gotoConsole, mockMemberRole, navToRoute, sidebarLink, goToNewRunPanel } from "./fixtures";
 import { GOVERNANCE as GOV, MEMBER } from "../src/app/lib/governance-copy";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import type { Page } from "@playwright/test";
@@ -137,6 +137,8 @@ test.describe("governance — the member's own picker obeys the floor (T-9)", ()
     await navToRoute(page, "/runs/new");
 
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    // The barrier leads the Policy panel (#1922).
+    await goToNewRunPanel(page, "policy");
     await expect(page.getByText("Vault · set by your admin")).toBeVisible();
     // No control at all — not Fence/Wall disabled, not present. (The
     // authored-policy spec's OWN floor chip, unrelated to this governance
@@ -156,6 +158,7 @@ test.describe("governance — the member's own picker obeys the floor (T-9)", ()
     await navToRoute(page, "/runs/new");
 
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await goToNewRunPanel(page, "policy");
     // Review P2-6: the governance-sourced wording, not the generic one —
     // this member's floor IS the governance ceiling's doing.
     await expect(
@@ -174,6 +177,7 @@ test.describe("governance — the member's own picker obeys the floor (T-9)", ()
     await navToRoute(page, "/runs/new");
 
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await goToNewRunPanel(page, "policy");
     await expect(page.getByRole("radio", { name: "Fence" })).toBeVisible();
     await expect(page.getByRole("radio", { name: "Wall" })).toBeVisible();
     await expect(page.getByRole("radio", { name: "Vault" })).toHaveCount(0);

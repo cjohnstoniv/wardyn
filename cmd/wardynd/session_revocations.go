@@ -13,6 +13,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 var (
@@ -89,7 +90,7 @@ func (r *pgSessionRevocations) appNow() time.Time {
 // (folding at write time) cannot work, since the writer does not know whether
 // the caller named a sub or an email.
 func (r *pgSessionRevocations) IsSessionRevoked(ctx context.Context, sub, email string, issuedAt time.Time) (bool, error) {
-	st, err := r.sessionStatus(ctx, sub, email, issuedAt, false, 0, true)
+	st, err := r.sessionStatus(ctx, r.pool, sub, email, issuedAt, false, 0, true)
 	return st == oidc.SessionRevoked, err
 }
 
@@ -98,10 +99,15 @@ func (r *pgSessionRevocations) IsSessionRevoked(ctx context.Context, sub, email 
 // deactivated or purged, or, for epoch >= 0, when its authority epoch is past the one the
 // credential was admitted under. The cutoff answer is IsSessionRevoked's, unchanged.
 func (r *pgSessionRevocations) SessionStatus(ctx context.Context, sub, email string, issuedAt time.Time, epoch int64) (oidc.SessionStatus, error) {
-	return r.sessionStatus(ctx, sub, email, issuedAt, true, epoch, epoch >= 0)
+	return r.SessionStatusQ(ctx, r.pool, sub, email, issuedAt, epoch)
 }
 
-func (r *pgSessionRevocations) sessionStatus(ctx context.Context, sub, email string, issuedAt time.Time, identity bool, epoch int64, cuts bool) (oidc.SessionStatus, error) {
+// SessionStatusQ checks the owner on the governance decision's transaction.
+func (r *pgSessionRevocations) SessionStatusQ(ctx context.Context, q store.Querier, sub, email string, issuedAt time.Time, epoch int64) (oidc.SessionStatus, error) {
+	return r.sessionStatus(ctx, q, sub, email, issuedAt, true, epoch, epoch >= 0)
+}
+
+func (r *pgSessionRevocations) sessionStatus(ctx context.Context, querier store.Querier, sub, email string, issuedAt time.Time, identity bool, epoch int64, cuts bool) (oidc.SessionStatus, error) {
 	// Asked on both clocks, and either answer of "revoked" wins.
 	//
 	// revoked_at is stamped by POSTGRES. issuedAt is stamped by WARDYND — and by
@@ -141,7 +147,7 @@ func (r *pgSessionRevocations) sessionStatus(ctx context.Context, sub, email str
 	var byDBClock sql.NullBool
 	var blocked bool
 	age := db.AppClockAgeMicros(issuedAt, r.appNow())
-	if err := r.pool.QueryRow(ctx, q, sub, email, globalRevokeSub, age, identity, epoch, cuts).Scan(&cutoff, &byDBClock, &blocked); err != nil {
+	if err := querier.QueryRow(ctx, q, sub, email, globalRevokeSub, age, identity, epoch, cuts).Scan(&cutoff, &byDBClock, &blocked); err != nil {
 		return oidc.SessionLive, fmt.Errorf("wardynd: is-session-revoked query: %w", err)
 	}
 	if blocked {

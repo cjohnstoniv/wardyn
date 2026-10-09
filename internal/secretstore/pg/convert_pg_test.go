@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 )
 
 // seedV0 writes a row the way every wardynd before envelope v1 did: an age
@@ -258,7 +259,7 @@ func TestPG_ConvertV0_IsSingleWriter(t *testing.T) {
 	for _, f := range v0Fixture {
 		seedV0(t, pool, id, f.owner, f.name, f.value)
 	}
-	holder, err := pool.Begin(ctx)
+	holder, err := testutil.PGConn(t, pool).Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

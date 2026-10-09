@@ -38,9 +38,11 @@ vi.mock("react-router-dom", async () => {
 });
 const preflightRunMock = vi.fn();
 const createRunMock = vi.fn();
+vi.mock("../../../lib/api/policy-preview", () => ({ previewRunPolicy: vi.fn().mockResolvedValue({ spec: {}, pending: [], warnings: [], repository_access: [] }) }));
 vi.mock("../../../lib/api/runs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api/runs")>();
   return {
+    ...actual,
     isCredentialRefusal: actual.isCredentialRefusal,
     isGitCredentialRefusal: actual.isGitCredentialRefusal,
     runs: {
@@ -76,6 +78,10 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { setField } from "../../../../test/set-field";
+import { editPolicy, goToPanel } from "../../../../test/new-run-panel";
+import { UnsavedGuardProvider } from "../../../lib/use-unsaved-guard";
+import { UNSAVED } from "../../../lib/unsaved-copy";
+import { NEW_RUN_FLOW } from "../../wardyn/copy/new-run-flow";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -87,16 +93,20 @@ const user = userEvent.setup({ pointerEventsCheck: 0 });
 //
 // `operator` stays TRUE — the context's own fail-open default, which this suite
 // has always run on. It gates useMyCapabilities, not the drive.
+// Under the shell's own unsaved guard, as the app mounts it: a dirty draft
+// asks before it leaves.
 function renderScreen(me: Me = baseMe()) {
   return render(
     <MemoryRouter>
-      <OperatorProvider
-        operator
-        userDrive={me.user_drive}
-        userDriveDeniedByProfile={me.user_drive_denied_by_profile}
-      >
-        <NewRunScreen />
-      </OperatorProvider>
+      <UnsavedGuardProvider>
+        <OperatorProvider principal="test-owner"
+          operator
+          userDrive={me.user_drive}
+          userDriveDeniedByProfile={me.user_drive_denied_by_profile}
+        >
+          <NewRunScreen />
+        </OperatorProvider>
+      </UnsavedGuardProvider>
     </MemoryRouter>,
   );
 }
@@ -220,7 +230,7 @@ describe("NewRunScreen — the additions line counts the union, not the sum", ()
   // fresh screen has nothing to announce.
   it("says nothing when the JSON already carries every implied host", async () => {
     renderScreen();
-    await screen.findByLabelText(/Spec \(JSON\)/);
+    await editPolicy();
     expect(screen.queryByTestId("run-spec-additions")).not.toBeInTheDocument();
   });
 
@@ -231,7 +241,7 @@ describe("NewRunScreen — the additions line counts the union, not the sum", ()
   // which knows nothing about a grant the operator typed.
   it("pins a hand-written api_key grant's host, allow-all included", async () => {
     renderScreen();
-    const box = await screen.findByLabelText(/Spec \(JSON\)/);
+    const box = await editPolicy();
     await user.clear(box);
     fireEvent.change(box, {
       target: {
@@ -316,15 +326,19 @@ describe("NewRunScreen — the form matches the run mode", () => {
 // Before this, the screen had NO client-side validation at all: an empty form
 // launched, and the server's answer arrived after the fact.
 describe("NewRunScreen — Launch says what it is waiting for", () => {
-  // #1197 L2: the server never required a title (runs_create_validate.go's
-  // own doc comment) — only this screen did. Now it doesn't either: Launch is
-  // enabled by default (interactive mode needs no task), and a title is never
-  // the thing blocking it.
-  it("does not require a title", async () => {
+  // #1922: the title is required. A fresh form (interactive, no prompt) has
+  // nothing to derive one from, so Launch waits for it and says so once, as a
+  // link to the field.
+  it("requires a title", async () => {
     renderScreen();
     const launch = await screen.findByRole("button", { name: /Launch run/ });
+    expect(launch).toBeDisabled();
+    expect(screen.getByRole("button", { name: NEW_RUN_FLOW.TITLE_REQUIRED })).toBeInTheDocument();
+    expect(screen.getAllByText(NEW_RUN_FLOW.TITLE_REQUIRED)).toHaveLength(1);
+
+    setField(screen.getByLabelText("Title"), "Refund flow");
     expect(launch).toBeEnabled();
-    expect(screen.queryByText("Give this run a title.")).not.toBeInTheDocument();
+    expect(screen.queryByText(NEW_RUN_FLOW.TITLE_REQUIRED)).not.toBeInTheDocument();
   });
 
   it("still waits for the task on an autonomous run", async () => {
@@ -364,6 +378,7 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
     );
     renderScreen();
 
+    goToPanel("Workspace");
     await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
     await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
 
@@ -390,9 +405,11 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
     );
     renderScreen();
 
+    goToPanel("Workspace");
     await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
     await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
 
+    setField(screen.getByLabelText("Title"), "Trading desk");
     const launch = screen.getByRole("button", { name: /Launch run/ });
     await waitFor(() => expect(launch).toBeEnabled());
     expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
@@ -421,11 +438,14 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
     );
     renderScreen();
 
+    goToPanel("Workspace");
     await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
     await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
+    goToPanel("Run");
     await user.click(screen.getByRole("radio", { name: "Shell command" }));
     setField(screen.getByLabelText("Command"), "make test");
 
+    setField(screen.getByLabelText("Title"), "Trading desk");
     const launch = screen.getByRole("button", { name: /Launch run/ });
     await waitFor(() => expect(launch).toBeEnabled());
     expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
@@ -453,9 +473,11 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
     getSetupStatusMock.mockResolvedValue(baseStatus());
     renderScreen();
 
+    goToPanel("Workspace");
     await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
     await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
 
+    setField(screen.getByLabelText("Title"), "Trading desk");
     const launch = screen.getByRole("button", { name: /Launch run/ });
     await waitFor(() => expect(launch).toBeEnabled());
     expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
@@ -477,6 +499,7 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
     getSetupStatusMock.mockResolvedValue(baseStatus({ model_providers: [] }));
     renderScreen();
 
+    goToPanel("Workspace");
     await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
     await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
 
@@ -505,6 +528,7 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
     ]);
     renderScreen();
 
+    goToPanel("Workspace");
     await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
     await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
 
@@ -528,9 +552,11 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
     ]);
     renderScreen();
 
+    goToPanel("Workspace");
     await user.click(await screen.findByRole("combobox", { name: "Workspace" }));
     await user.click(await screen.findByRole("option", { name: /trading-desk/ }));
 
+    setField(screen.getByLabelText("Title"), "Trading desk");
     const launch = screen.getByRole("button", { name: /Launch run/ });
     await waitFor(() => expect(launch).toBeEnabled());
     expect(screen.queryByText("This workspace isn't available to you.")).toBeNull();
@@ -546,7 +572,8 @@ describe("NewRunScreen — Launch says what it is waiting for", () => {
   // `useMyCapabilities(true)` breaks.
   it("passes useMyCapabilities the operator's own exemption (enabled=false for an operator)", async () => {
     renderScreen();
-    await waitFor(() => expect(myCapabilitiesMock).toHaveBeenCalledWith(false));
+    // The second argument scopes the read to the draft's identity revision.
+    await waitFor(() => expect(myCapabilitiesMock).toHaveBeenCalledWith(false, expect.any(String)));
   });
 });
 
@@ -629,6 +656,7 @@ describe("NewRunScreen — Preflight", { timeout: 20_000 }, () => {
       warnings: ["Egress narrowed to api.anthropic.com by member policy."],
     });
     await readyScreen();
+    goToPanel("Policy");
     fireEvent.click(checkAgain());
 
     const result = await screen.findByTestId("preflight-result");
@@ -645,6 +673,7 @@ describe("NewRunScreen — Preflight", { timeout: 20_000 }, () => {
       warnings: [],
     });
     await readyScreen();
+    goToPanel("Policy");
     fireEvent.click(checkAgain());
 
     const result = await screen.findByTestId("preflight-result");
@@ -656,6 +685,7 @@ describe("NewRunScreen — Preflight", { timeout: 20_000 }, () => {
   it("renders the server's field-path error verbatim on a 4xx", async () => {
     preflightRunMock.mockRejectedValue(new Error('workspaces[0]: unknown secret "prod-db"'));
     await readyScreen();
+    goToPanel("Policy");
     fireEvent.click(checkAgain());
 
     await waitFor(() => expect(screen.getByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument());
@@ -666,6 +696,7 @@ describe("NewRunScreen — Preflight", { timeout: 20_000 }, () => {
   it("an error with no message falls back to a sentence that doesn't repeat the spoken prefix", async () => {
     preflightRunMock.mockRejectedValue(new Error(""));
     await readyScreen();
+    goToPanel("Policy");
     fireEvent.click(checkAgain());
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/^Preflight failed No reason was given\.$/));
@@ -679,6 +710,7 @@ describe("NewRunScreen — Preflight", { timeout: 20_000 }, () => {
       }),
     );
     await readyScreen();
+    goToPanel("Policy");
     fireEvent.click(checkAgain());
 
     expect(checkAgain()).toBeDisabled();
@@ -699,6 +731,7 @@ describe("NewRunScreen — Preflight", { timeout: 20_000 }, () => {
       warnings: [],
     });
     await readyScreen();
+    goToPanel("Policy");
     fireEvent.click(checkAgain());
     expect(await screen.findByTestId("preflight-result")).toBeInTheDocument();
 
@@ -711,6 +744,7 @@ describe("NewRunScreen — Preflight", { timeout: 20_000 }, () => {
   it("drops a preflight ERROR on the same edit — it graded a body that no longer exists", async () => {
     preflightRunMock.mockRejectedValue(new Error('workspaces[0]: unknown secret "prod-db"'));
     await readyScreen();
+    goToPanel("Policy");
     fireEvent.click(checkAgain());
     await waitFor(() => expect(screen.getByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument());
 
@@ -755,7 +789,7 @@ describe("NewRunScreen — the keyboard contract", () => {
     expect(createRunMock).not.toHaveBeenCalled();
   });
 
-  it("Esc backs out of an untouched form, and leaves a dirty one alone", async () => {
+  it("Esc backs out of an untouched form, and asks before leaving a dirty one", async () => {
     renderScreen();
     await screen.findByLabelText("Title");
 
@@ -765,9 +799,41 @@ describe("NewRunScreen — the keyboard contract", () => {
     navigateMock.mockReset();
     setField(screen.getByLabelText("Title"), "Refund flow");
     fireEvent.keyDown(window, { key: "Escape" });
-    // Leaving is still one click on the ghost "Runs" button — it just does not
-    // happen by accident with unsaved work on screen.
+    // The shared unsaved dialog, in its own words (#1920): nothing leaves yet.
+    const dialog = await screen.findByRole("alertdialog", { name: UNSAVED.TITLE });
+    expect(dialog).toHaveTextContent(UNSAVED.BODY);
     expect(navigateMock).not.toHaveBeenCalled();
+
+    // Keep editing keeps everything.
+    await user.click(screen.getByRole("button", { name: UNSAVED.STAY }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Title")).toHaveValue("Refund flow");
+
+    // Discard changes performs the leave that was asked for.
+    fireEvent.keyDown(window, { key: "Escape" });
+    await user.click(await screen.findByRole("button", { name: UNSAVED.DISCARD }));
+    expect(navigateMock).toHaveBeenCalledWith("/runs");
+  });
+
+  it("the ghost Runs button leaves through the same guard", async () => {
+    renderScreen();
+    setField(await screen.findByLabelText("Title"), "Refund flow");
+    await user.click(screen.getByRole("button", { name: "Runs" }));
+    expect(await screen.findByRole("alertdialog", { name: UNSAVED.TITLE })).toBeInTheDocument();
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  // Which panel is on screen is a view, not part of the draft.
+  it("moving between panels does not make the form dirty", async () => {
+    renderScreen();
+    await screen.findByLabelText("Title");
+    goToPanel("Policy");
+    goToPanel("Workspace");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(navigateMock).toHaveBeenCalledWith("/runs");
   });
 
   // Radix's DismissableLayer preventDefaults Escape on document CAPTURE and then
@@ -796,7 +862,7 @@ describe("NewRunScreen — the keyboard contract", () => {
   // away without a word.
   it("counts an edited policy body as dirty on its own", async () => {
     renderScreen();
-    const spec = (await screen.findByLabelText("Spec (JSON)")) as HTMLTextAreaElement;
+    const spec = await editPolicy();
 
     fireEvent.change(spec, {
       target: { value: '{"min_confinement_class": "CC1", "auto_stop_after_sec": 7200}' },
@@ -804,19 +870,24 @@ describe("NewRunScreen — the keyboard contract", () => {
     expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("");
 
     fireEvent.keyDown(window, { key: "Escape" });
+    expect(await screen.findByRole("alertdialog", { name: UNSAVED.TITLE })).toBeInTheDocument();
     expect(navigateMock).not.toHaveBeenCalled();
   });
 });
 
-// #1197 L2: Title dropped its required-field error state along with the
-// requirement itself — leaving it empty, then blurring, is no longer wrong.
-describe("NewRunScreen — Title has no error state", () => {
-  it("never marks aria-invalid, even empty and blurred", async () => {
+// #1922: Title is required again. While it is empty it is the field in error,
+// described by the one line that says so; a typed title clears both.
+describe("NewRunScreen — Title is a required field", () => {
+  it("is marked required and invalid while empty, and points at the line above Launch", async () => {
     renderScreen();
     const title = await screen.findByLabelText("Title");
-    expect(title).not.toHaveAttribute("aria-invalid");
+    expect(title).toBeRequired();
+    expect(title).toHaveAttribute("aria-invalid", "true");
+    const line = screen.getByText(NEW_RUN_FLOW.TITLE_REQUIRED).closest("p");
+    expect(title.getAttribute("aria-describedby")).toBe(line?.id);
 
-    fireEvent.blur(title);
+    setField(title, "Refund flow");
     expect(title).not.toHaveAttribute("aria-invalid");
+    expect(title).not.toHaveAttribute("aria-describedby");
   });
 });

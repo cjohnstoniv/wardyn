@@ -35,7 +35,7 @@ func TestPG_MaskRegistry_SyncedFollowsTheListenerAndTheConnection(t *testing.T) 
 	// A commit A made a moment ago does not fail the check: Synced reads the
 	// table itself before comparing, so it is "within one sync", not racing the
 	// notification.
-	if err := writer.reg.AddGlobal(regAlice, "fresh", time.Now(), []byte("a-value-committed-just-now")); err != nil {
+	if err := writer.reg.AddGlobal(0, regAlice, "fresh", time.Now(), []byte("a-value-committed-just-now")); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.st.Synced(ctx); err != nil {

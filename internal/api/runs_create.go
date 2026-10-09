@@ -82,12 +82,12 @@ const composerWorkspaceTarget = "/home/agent/work"
 // run→workspace linkage the scan/verify/record uploads authorize on, so a user
 // run must never claim it.
 //
-// seededImageOwner is the ownership half of denyUserSeededImage's fix: the
+// seededImageOwner is the ownership half of seededImageRefusal's fix: the
 // OwnedBy of the workspace whose base_image just set req.Image, and "" in
 // every other case — including a member-owned workspace that set no image and an
 // operator-owned one that did. The callers' capability re-check keys on exactly
 // that emptiness, so returning the owner unconditionally would turn an
-// ownership-scoped guard into the unconditional variant denyUserSeededImage
+// ownership-scoped guard into the unconditional variant seededImageRefusal
 // exists to prevent — a catastrophic regression.
 // #656 M1: five distinct causes used to share one reason (reasonWorkspaceSeedFailed);
 // each return below now names its own, since a caller who gets one back cannot
@@ -181,7 +181,7 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 // gate: every onboarded workspace the spec's mount sources and repos resolve to must be one
 // the caller may launch against (mayLaunchWorkspace).
 //
-// The workspace_id door is authorized by getWorkspaceLaunchable before any
+// The workspace_id door is authorized by workspaceLaunchSelection before any
 // source is folded, but a source can also reach the spec WITHOUT naming an id —
 // a hand-authored inline or stored policy naming the host path directly. That
 // second door landed in the same room: validateWorkspaceSources admits the
@@ -663,6 +663,9 @@ func (s *Server) applySSHLaneWarnings(ctx context.Context, req createRunRequest,
 //   - ADO SCM lane: a git_pat grant for an Azure DevOps host needs
 //     dev.azure.com + *.visualstudio.com reachable (see adoEgressDomains) —
 //     nothing else adds these for ADO. Mirrors the SSH lane.
+//   - Components: nothing is unioned here — the component gate did, before
+//     the run was graded (applyRunComponents) — but each one's addition is
+//     audited here with the rest, under kind `component`.
 //
 // wsRefs is the run's referenced onboarded workspaces, resolved by the caller
 // (it also feeds the workspace cred binding + image resolution). legacyRepo is
@@ -672,14 +675,22 @@ func (s *Server) applySSHLaneWarnings(ctx context.Context, req createRunRequest,
 // hosts dispatched here are the hosts that were graded. Extracted verbatim
 // from handleCreateRun.
 func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, gw grantWiring, wsRefs []types.Workspace, legacyRepo string,
-	scmSite types.SiteConfig,
+	scmSite types.SiteConfig, directGitHubAdded []string, comps runComponents,
 ) {
-	// One action for every lane that widens the allowlist; `kind` names the lane.
+	// Direct GitHub candidates were bounded before grading; audit them only now
+	// that a run exists, alongside the dispatch-only additions.
 	auditAdded := func(kind string, added []string) {
 		if len(added) > 0 {
 			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.egress.add",
 				runID.String(), "success", mustJSON(map[string]any{"kind": kind, "added_domains": added})))
 		}
+	}
+	auditAdded("github_direct", directGitHubAdded)
+	// A component's hosts were bounded and unioned by the gate, before grading,
+	// like the direct GitHub candidates; the rows name what each one added.
+	for _, data := range comps.egressAudit() {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.egress.add",
+			runID.String(), "success", mustJSON(data)))
 	}
 	auditAdded("workspace", unionWorkspaceEgress(spec, wsRefs))
 	// Repo clone host(s) each referenced workspace needs: a
@@ -687,8 +698,8 @@ func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *type
 	// ordinary egress host, and nothing else in this union adds it — so a real run
 	// of a workspace whose only access is anonymous read got NO clone host and the
 	// clone was proxy-denied, even though the confined Verify (which unions
-	// workspaceCloneEgress via confinedEgressDomains) proved it. GitHub sources add
-	// nothing here by design (they route through the on-segment broker). This makes
+	// workspaceCloneEgress via confinedEgressDomains) proved it. Direct GitHub
+	// candidates were bounded before grading; brokered clones need no host. This makes
 	// promoteSkipHosts' "wired into every scan/verify for free" comment true for a
 	// real run too.
 	var cloneAdded []string

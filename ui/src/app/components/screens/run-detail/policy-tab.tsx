@@ -12,7 +12,6 @@
 import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { runs } from "../../../lib/api/runs";
-import { asFirstUseMode } from "../../../lib/types";
 import type {
   ConfinementClass,
   RunDetail,
@@ -21,20 +20,21 @@ import type {
   RunPolicySpec,
   RunPolicyView,
 } from "../../../lib/types";
-import { adoCapName } from "../../../lib/ado-access-copy";
-import { readPATScope } from "../../../lib/git-pat-scope";
-import { CAPABILITY, GIT_PAT_SCOPE, POLICY_UI_APPS } from "../../wardyn/copy";
+import { CAPABILITY } from "../../wardyn/copy";
 import { CC_META } from "../../wardyn/cc-meta";
-import { CopyButton } from "../../wardyn/copy-button";
-import { toYaml, YamlBlock } from "../../wardyn/code-block";
 import { usePrincipal } from "../../wardyn/operator-context";
-import { lifecycleSummary, toolRulesSummary } from "../../wardyn/policy-panel";
+import { PolicyDocument, type PolicyView } from "../../wardyn/policy-document/policy-document";
+import { lifecycleSummary } from "../../wardyn/policy-document/policy-facts";
+import {
+  cpuText,
+  firstUseText,
+  mibText,
+  type PolicyChangeMarks,
+  type PolicyMark,
+} from "../../wardyn/policy-document/policy-summary";
 import { Chip } from "../../wardyn/primitives";
 import { ErrorState } from "../../wardyn/states";
-import { cn } from "../../ui/utils";
 import { CHANGE_HEADING, POLICY_TAB, SUMMARY, type PlainCause } from "./policy-tab-copy";
-
-const REDACTED = "<redacted>";
 
 type Load = { status: "loading" } | { status: "error" } | { status: "ready"; view: RunPolicyView };
 
@@ -42,7 +42,7 @@ export function PolicyTab({ run }: { run: RunDetail }) {
   const principal = usePrincipal();
   const [load, setLoad] = React.useState<Load>({ status: "loading" });
   const [attempt, setAttempt] = React.useState(0);
-  const [mode, setMode] = React.useState<"summary" | "yaml">("summary");
+  const [mode, setMode] = React.useState<PolicyView>("summary");
 
   React.useEffect(() => {
     let alive = true;
@@ -132,14 +132,14 @@ function RecordedPolicy({
   spec: NonNullable<RunPolicyView["spec"]>;
   run: RunDetail;
   ownRun: boolean;
-  mode: "summary" | "yaml";
-  onMode: (m: "summary" | "yaml") => void;
+  mode: PolicyView;
+  onMode: (m: PolicyView) => void;
 }) {
   const now = view.stored_policy_now;
   const banner =
     now?.state === "changed" ? POLICY_TAB.changedSince : now?.state === "updated" ? POLICY_TAB.updatedSince : null;
   const groups = groupChanges(view.changes, ownRun, run.created_by, spec.first_use_hold_seconds);
-  const yaml = React.useMemo(() => toYaml(spec), [spec]);
+  const marks = React.useMemo(() => changeMarks(view.changes), [view.changes]);
   return (
     <>
       {banner && (
@@ -177,40 +177,19 @@ function RecordedPolicy({
       ))}
       {!view.complete && <p className="mt-3 text-body text-muted-foreground">{POLICY_TAB.incomplete}</p>}
 
-      <div className="mt-5 flex flex-wrap items-center gap-2.5">
-        <div className="inline-flex overflow-hidden rounded-lg border border-border">
-          {(["summary", "yaml"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              aria-pressed={mode === m}
-              onClick={() => onMode(m)}
-              className={cn(
-                "px-3 py-1 text-xs",
-                mode === m ? "bg-muted font-semibold text-foreground" : "bg-card text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {m === "summary" ? POLICY_TAB.viewSummary : POLICY_TAB.viewYaml}
-            </button>
-          ))}
-        </div>
-        <CopyButton
-          text={yaml}
-          label={POLICY_TAB.copyYaml}
-          className="ml-auto gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium hover:bg-muted"
-        >
-          {POLICY_TAB.copyYaml}
-        </CopyButton>
-      </div>
-
-      {mode === "summary" ? (
-        <PolicySummary spec={spec} run={run} marks={changeMarks(view.changes)} />
-      ) : (
-        <div className="mt-2.5">
-          {view.redacted && <p className="mb-2 text-xs text-muted-foreground">{POLICY_TAB.redacted}</p>}
-          <YamlBlock value={spec} />
-        </div>
-      )}
+      {/* The shared read-only document. This run's own facts ride with it: the
+          barrier it actually used, what launch added or removed, and whether
+          this reader was shown everything. */}
+      <PolicyDocument
+        className="mt-5"
+        spec={spec}
+        view={mode}
+        onViewChange={onMode}
+        redacted={view.redacted}
+        marks={marks}
+        facts={{ usedClass: run.confinement_class }}
+        headingLevel={4}
+      />
       <p className="mt-4 max-w-[92ch] border-t border-dashed border-border pt-2.5 text-xs text-muted-foreground">
         {POLICY_TAB.scope}
       </p>
@@ -220,10 +199,9 @@ function RecordedPolicy({
 
 /* ---------- changes ---------- */
 
-type Mark = "added" | "removed";
-type Group = { key: string; heading: string; detail: string[]; entries: { text: string; mark?: Mark }[] };
+type Group = { key: string; heading: string; detail: string[]; entries: { text: string; mark?: PolicyMark }[] };
 
-function MarkChip({ mark }: { mark: Mark }) {
+function MarkChip({ mark }: { mark: PolicyMark }) {
   return mark === "added" ? (
     <Chip tone="info">{POLICY_TAB.chipAdded}</Chip>
   ) : (
@@ -295,248 +273,27 @@ function entryText(field: string, text: string, holdSeconds?: number): string {
       return cpuText(n);
     case "resources.memory_mib":
     case "resources.disk_mib":
-      return mib(n);
+      return mibText(n);
     default:
       return text;
   }
 }
 
-// Which spec entries a change names, so the Summary can flag them.
-function changeMarks(changes: RunPolicyChange[]): (field: string, entry: string) => Mark | undefined {
-  const marks = new Map<string, Mark>();
+// Which spec entries a change names, so the Summary can flag them, and which
+// host-list entries it took out (those are no longer in the spec to flag).
+function changeMarks(changes: RunPolicyChange[]): PolicyChangeMarks {
+  const marks = new Map<string, PolicyMark>();
+  const removed = new Map<string, string[]>();
   for (const c of changes) {
-    for (const e of c.removed ?? []) marks.set(`${c.field}\0${e}`, "removed");
+    for (const e of c.removed ?? []) {
+      marks.set(`${c.field}\0${e}`, "removed");
+      // A restart's removal happened later, so "Removed at start" would be false for it.
+      if (c.cause !== "restart") removed.set(c.field, [...new Set([...(removed.get(c.field) ?? []), e])]);
+    }
     for (const e of c.added ?? []) marks.set(`${c.field}\0${e}`, "added");
   }
-  return (field, entry) => marks.get(`${field}\0${entry}`);
-}
-
-/* ---------- summary ---------- */
-
-type Marks = ReturnType<typeof changeMarks>;
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="min-w-0 rounded-lg border border-border px-3 py-2.5">
-      <h4 className="mb-1.5 text-body font-semibold">{title}</h4>
-      <dl className="grid grid-cols-1 gap-x-3 gap-y-1 text-xs sm:grid-cols-[minmax(110px,max-content)_minmax(0,1fr)]">
-        {children}
-      </dl>
-    </section>
-  );
-}
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <>
-      <dt className="mt-1 text-muted-foreground sm:mt-0">{label}</dt>
-      <dd className="min-w-0">{children}</dd>
-    </>
-  );
-}
-
-function Item({ children, mark }: { children: React.ReactNode; mark?: Mark }) {
-  return (
-    <div className="flex flex-wrap items-center gap-1.5 [&+&]:mt-0.5">
-      {children}
-      {mark && <MarkChip mark={mark} />}
-    </div>
-  );
-}
-
-const Mono = ({ children }: { children: React.ReactNode }) => <span className="break-all font-mono">{children}</span>;
-
-function List({ items, field, marks }: { items: string[]; field: string; marks: Marks }) {
-  if (items.length === 0) return <>{SUMMARY.none}</>;
-  return (
-    <>
-      {items.map((h) => (
-        <Item key={h} mark={marks(field, h)}>
-          <Mono>{h}</Mono>
-        </Item>
-      ))}
-    </>
-  );
-}
-
-function firstUseText(approval: unknown, holdSeconds: number | undefined): string {
-  const mode = asFirstUseMode(approval);
-  if (mode === "wait_for_review") return SUMMARY.held(holdSeconds || 30);
-  return mode === "deny_with_review" ? SUMMARY.refusedThenApproval : SUMMARY.refused;
-}
-
-function grantScope(scope: Record<string, unknown> | undefined): string {
-  if (Array.isArray(scope?.repos)) return (scope.repos as unknown[]).map(String).join(", ");
-  return typeof scope?.host === "string" ? scope.host : "";
-}
-
-// What the run's git access token is narrowed to (packet M7, S4): chips for
-// Read-only and Forge API, then the repositories or the everything line. The
-// honesty sentence rides the chips' tooltip.
-function PATNarrowing({ scope }: { scope: Record<string, unknown> | undefined }) {
-  const s = readPATScope(scope);
-  return (
-    <>
-      {(s.access === "read" || s.api) && (
-        <Item>
-          {s.access === "read" && (
-            <span title={GIT_PAT_SCOPE.HONESTY_TOKEN}>
-              <Chip tone="neutral">{SUMMARY.readOnly}</Chip>
-            </span>
-          )}
-          {s.api && (
-            <span title={GIT_PAT_SCOPE.HONESTY_TOKEN}>
-              <Chip tone="neutral">{GIT_PAT_SCOPE.RUN_API}</Chip>
-            </span>
-          )}
-        </Item>
-      )}
-      <Item>
-        {s.repos === undefined ? (
-          GIT_PAT_SCOPE.RUN_REPOS_ALL
-        ) : s.repos.length === 0 ? (
-          GIT_PAT_SCOPE.REPOS_NONE
-        ) : (
-          <Mono>{s.repos.join(", ")}</Mono>
-        )}
-      </Item>
-    </>
-  );
-}
-
-function cpuText(millis?: number): string {
-  return millis ? SUMMARY.cpuValue(String(Number((millis / 1000).toFixed(2)))) : SUMMARY.standardLimit;
-}
-
-const mib = (n?: number) => (n ? SUMMARY.mibValue(n) : SUMMARY.standardLimit);
-
-function PolicySummary({ spec, run, marks }: { spec: NonNullable<RunPolicyView["spec"]>; run: RunDetail; marks: Marks }) {
-  const mounts = spec.workspace_mounts ?? [];
-  const repos = spec.workspace_repos ?? [];
-  const grants = spec.eligible_grants ?? [];
-  const apps = spec.ui_apps ?? [];
-  const deny = spec.push_rules?.deny_paths ?? [];
-  const hold = spec.push_rules?.require_review_paths ?? [];
-  const rules = toolRulesSummary(spec);
-  const res = spec.resources;
-  const ado = spec.azure_devops_capabilities ?? [];
-  return (
-    <div className="mt-3 grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))]">
-      <Section title={SUMMARY.network}>
-        <Row label={SUMMARY.allowedHosts}>
-          {spec.allow_all_egress ? CAPABILITY.allowAllEgress : <List items={spec.allowed_domains ?? []} field="allowed_domains" marks={marks} />}
-        </Row>
-        <Row label={SUMMARY.blockedHosts}>
-          <List items={spec.denied_domains ?? []} field="denied_domains" marks={marks} />
-        </Row>
-        <Row label={SUMMARY.otherHost}>{firstUseText(spec.first_use_approval, spec.first_use_hold_seconds)}</Row>
-        <Row label={SUMMARY.requestTypes}>
-          {spec.allowed_methods?.length ? spec.allowed_methods.join(", ") : SUMMARY.allMethods}
-        </Row>
-      </Section>
-
-      <Section title={SUMMARY.barrier}>
-        <Row label={SUMMARY.minimum}>{CC_META[spec.min_confinement_class]?.label ?? spec.min_confinement_class}</Row>
-        <Row label={SUMMARY.used}>{CC_META[run.confinement_class]?.label ?? run.confinement_class}</Row>
-      </Section>
-
-      <Section title={SUMMARY.credentials}>
-        {grants.length === 0 ? (
-          <Row label={SUMMARY.credentials}>{SUMMARY.none}</Row>
-        ) : (
-          grants.map((g, i) => (
-            <Row key={i} label={SUMMARY.grantKinds[g.kind] ?? g.kind}>
-              <Item>
-                {/* A git_pat's scope.repos narrows it; the row keeps naming the host. */}
-                <Mono>{g.kind === "git_pat" ? readPATScope(g.scope).host : grantScope(g.scope)}</Mono>
-                {g.requires_approval && <Chip tone="warning">{SUMMARY.needsApproval}</Chip>}
-              </Item>
-              {g.kind === "git_pat" && <PATNarrowing scope={g.scope} />}
-            </Row>
-          ))
-        )}
-      </Section>
-
-      <Section title={SUMMARY.files}>
-        <Row label={SUMMARY.folders}>
-          {mounts.length === 0
-            ? SUMMARY.none
-            : mounts.map((m) => (
-                <Item key={m.target} mark={marks("workspace_mounts", m.target)}>
-                  {m.source && m.source !== REDACTED ? (
-                    <Mono>{m.source}</Mono>
-                  ) : (
-                    <span
-                      title={POLICY_TAB.hiddenTip}
-                      className="cursor-help rounded bg-muted px-1.5 text-meta text-muted-foreground"
-                    >
-                      {POLICY_TAB.hidden}
-                    </span>
-                  )}
-                  <span aria-hidden>→</span>
-                  <Mono>{m.target}</Mono>
-                  {m.read_only !== false && <Chip tone="neutral">{SUMMARY.readOnly}</Chip>}
-                </Item>
-              ))}
-        </Row>
-        <Row label={SUMMARY.repos}>
-          {repos.length === 0
-            ? SUMMARY.none
-            : repos.map((r) => (
-                <Item key={`${r.repo}${r.target}`} mark={marks("workspace_repos", r.ref ? `${r.repo}@${r.ref}` : r.repo)}>
-                  <Mono>{`${r.repo}${r.ref ? ` at ${r.ref}` : ""}${r.target ? ` → ${r.target}` : ""}`}</Mono>
-                </Item>
-              ))}
-        </Row>
-      </Section>
-
-      <Section title={SUMMARY.tools}>
-        <Row label={SUMMARY.toolRules}>{rules ?? SUMMARY.none}</Row>
-        <Row label={SUMMARY.pushes}>{spec.git_push_any_branch ? SUMMARY.anyBranch : SUMMARY.ownBranch}</Row>
-        <Row label={SUMMARY.pushDeny}>
-          <List items={deny} field="push_rules" marks={marks} />
-        </Row>
-        <Row label={SUMMARY.pushHold}>
-          <List items={hold} field="push_rules" marks={marks} />
-        </Row>
-      </Section>
-
-      <Section title={SUMMARY.apps}>
-        <Row label={POLICY_UI_APPS.label}>
-          {apps.length === 0
-            ? POLICY_UI_APPS.none
-            : apps.map((a) => (
-                <Item key={a.name} mark={marks("ui_apps", a.name)}>
-                  <Mono>{POLICY_UI_APPS.value(a.name, a.port, a.path || "/")}</Mono>
-                </Item>
-              ))}
-        </Row>
-      </Section>
-
-      <Section title={SUMMARY.limits}>
-        <Row label={SUMMARY.cpu}>{cpuText(res?.cpu_millis)}</Row>
-        <Row label={SUMMARY.memory}>{mib(res?.memory_mib)}</Row>
-        <Row label={SUMMARY.processes}>{res?.pids_limit ? String(res.pids_limit) : SUMMARY.standardLimit}</Row>
-        <Row label={SUMMARY.disk}>{mib(res?.disk_mib)}</Row>
-        <Row label={SUMMARY.idle}>{lifecycleSummary(spec)}</Row>
-      </Section>
-
-      <Section title={SUMMARY.traffic}>
-        <Row label={SUMMARY.traffic}>
-          {spec.llm_inspection?.mode && spec.llm_inspection.mode !== "off" ? SUMMARY.on : SUMMARY.off}
-        </Row>
-      </Section>
-
-      {ado.length > 0 && (
-        <section className="min-w-0 rounded-lg border border-border px-3 py-2.5">
-          <h4 className="mb-1.5 text-body font-semibold">{SUMMARY.ado}</h4>
-          <ul className="space-y-0.5 text-xs">
-            {ado.map((c) => (
-              <li key={c}>{adoCapName(c)}</li>
-            ))}
-          </ul>
-        </section>
-      )}
-    </div>
-  );
+  return {
+    of: (field, entry) => marks.get(`${field}\0${entry}`),
+    removed: (field) => removed.get(field) ?? [],
+  };
 }

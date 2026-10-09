@@ -20,6 +20,7 @@ import { GOVERNANCE as GOV, LIMITS_CHIP, PEOPLE, PERM, PREVIEW, RUBRIC } from ".
 import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
 import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import type { Page } from "@playwright/test";
+import { SPEC_LABEL } from "./policy-source";
 
 // ---------------------------------------------------------------------------
 // Governance profiles e2e (0.7) — lane: governance, port 8288, db wardyn_e2e.
@@ -191,7 +192,10 @@ test.describe("governance — the security admin's authoring walk", () => {
     await page.locator("#governance-profile-name").fill(NAME);
     // The SHIPPED spec editor (PolicyPanel instance="policies"), reached the
     // same way policies.spec.ts reaches it — there is no second spec editor.
-    await editor.getByLabel("Spec (JSON)").fill(JSON.stringify(YOLO_CEILING, null, 2));
+    // The ceiling reads first (#1921); "Edit policy" opens its source.
+    await editor.getByRole("button", { name: "Edit policy", exact: true }).click();
+    await expect(editor.getByLabel(SPEC_LABEL)).toBeFocused();
+    await editor.getByLabel(SPEC_LABEL).fill(JSON.stringify(YOLO_CEILING, null, 2));
 
     // The two launch modes a ceiling cannot reach, denied here instead.
     await editor.getByRole("switch", { name: GOV.LIMIT_EXEC_LABEL }).click();
@@ -272,7 +276,8 @@ test.describe("governance — the security admin's authoring walk", () => {
     await expect(editor).toBeVisible();
     await expect(editor.getByRole("heading", { name: GOV.EDITOR_TITLE_EDIT(NAME) })).toBeVisible();
     // It opened on the SAVED ceiling, not a fresh starter.
-    await expect(editor.getByLabel("Spec (JSON)")).toHaveValue(/artifactory\.corp\.example\.com/);
+    await expect(editor.getByTestId("policy-document")).toContainText("artifactory.corp.example.com");
+    await expect(editor.getByLabel(SPEC_LABEL)).toHaveCount(0);
     await expect(editor.getByRole("switch", { name: GOV.LIMIT_EXEC_LABEL })).toHaveAttribute("aria-checked", "true");
 
     // The collapse: a disabled summary row where the add form was — the form is
@@ -423,7 +428,8 @@ test.describe("governance — a ceiling that would MINT credential eligibility i
     await page.getByRole("button", { name: GOV.NEW_CTA, exact: true }).click();
     const editor = page.getByTestId("governance-profile-editor");
     await page.locator("#governance-profile-name").fill("wider-than-the-deployment");
-    await editor.getByLabel("Spec (JSON)").fill(JSON.stringify(OVERWIDE_CEILING, null, 2));
+    await editor.getByRole("button", { name: "Edit policy", exact: true }).click();
+    await editor.getByLabel(SPEC_LABEL).fill(JSON.stringify(OVERWIDE_CEILING, null, 2));
     await page.getByRole("button", { name: GOV.SAVE, exact: true }).click();
 
     // The heading is the console's; the body is the SERVER's own prose, which
@@ -515,17 +521,18 @@ test.describe("governance — the security admin's console (real per-person toke
     await expect(page.getByRole("button", { name: /^Deny$/ }).first()).toBeEnabled();
   });
 
-  test("but NOT the super admin's surfaces: writing a secret is refused, and it says why", async ({ page }) => {
+  test("but NOT the super admin's surfaces: org Secrets is not offered, and /secrets is their own namespace", async ({ page }) => {
     // M-2: org Secrets is super-admin only, so it is not in this tier's
     // Admin-view nav (packet M-A); their own namespace is the User view's.
     await gotoConsole(page, "admin");
     await expect(sidebarLink(page, "Secrets")).toHaveCount(0);
     await navToRoute(page, "/secrets");
 
-    // Purely operator-gated (secrets.tsx:81,115) — the one chokepoint every
-    // secret-write caller routes through.
-    await expect(page.getByRole("button", { name: "Add secret" })).toBeDisabled();
-    await expect(page.getByText(OPERATOR_ONLY_REASON, { exact: true })).toBeVisible();
+    // A person writes their OWN secrets (PUT /secrets/{name} stores under the
+    // caller), so Add is live and no admin-only reason shows; the reserved-name
+    // refusal below is the server's wall.
+    await expect(page.getByRole("button", { name: "Add secret" })).toBeEnabled();
+    await expect(page.getByText(OPERATOR_ONLY_REASON, { exact: true })).toHaveCount(0);
   });
 
   test("real security admin receives a server refusal on secret writes", async ({ page }) => {
@@ -697,7 +704,8 @@ test.describe("governance — a profile that narrows a base", () => {
     await page.getByRole("button", { name: GOV.NEW_CTA, exact: true }).click();
     let editor = page.getByTestId("governance-profile-editor");
     await page.locator("#governance-profile-name").fill(BASE_NAME);
-    await editor.getByLabel("Spec (JSON)").fill(
+    await editor.getByRole("button", { name: "Edit policy", exact: true }).click();
+    await editor.getByLabel(SPEC_LABEL).fill(
       JSON.stringify({
         allowed_domains: ["a.example.com", "b.example.com"],
         first_use_approval: "deny_with_review",

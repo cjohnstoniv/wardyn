@@ -91,24 +91,26 @@ func (s *PGStore) SaveCast(ctx context.Context, runID string, r io.Reader) error
 	}
 	// Read fully (bounded), not streamed: pgx sends a bytea parameter as a
 	// single []byte, so a too-large cast is rejected before any INSERT.
-	data, err := readCapped(r, maxCastBytes)
+	data, err := readCapped(contextReader{ctx, r}, maxCastBytes)
 	if err != nil {
 		return fmt.Errorf("recording: read cast %q: %w", runID, err)
 	}
 	if len(data) > maxCastBytes {
 		return fmt.Errorf("recording: cast %q exceeds %d byte limit", runID, maxCastBytes)
 	}
-	_, err = s.pool.Exec(ctx, `
+	return s.runTx(ctx, runID, false, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
 		INSERT INTO recordings (cast_key, payload)
 		VALUES ($1, $2)
 		ON CONFLICT (cast_key) DO UPDATE
 			SET payload = EXCLUDED.payload, updated_at = now()`,
-		runID, data,
-	)
-	if err != nil {
-		return fmt.Errorf("recording: save cast %q: %w", runID, err)
-	}
-	return nil
+			runID, data,
+		)
+		if err != nil {
+			return fmt.Errorf("recording: save cast %q: %w", runID, err)
+		}
+		return nil
+	})
 }
 
 // OpenCast returns a ReadCloser over the stored bytes for key (either a bare
@@ -118,9 +120,11 @@ func (s *PGStore) OpenCast(ctx context.Context, key string) (io.ReadCloser, erro
 		return nil, err
 	}
 	var payload []byte
-	err := s.pool.QueryRow(ctx,
-		`SELECT payload FROM recordings WHERE cast_key = $1`, key,
-	).Scan(&payload)
+	err := s.runTx(ctx, key, false, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT payload FROM recordings WHERE cast_key = $1`, key,
+		).Scan(&payload)
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -139,12 +143,14 @@ func (s *PGStore) StatAndTail(ctx context.Context, key string, tailBytes int64) 
 	}
 	var size int64
 	var tail []byte
-	err := s.pool.QueryRow(ctx, `
+	err := s.runTx(ctx, key, false, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
 		SELECT octet_length(payload),
 		       substring(payload from greatest(octet_length(payload) - $2::int + 1, 1)::int for $2::int)
 		FROM recordings WHERE cast_key = $1`,
-		key, tailBytes,
-	).Scan(&size, &tail)
+			key, tailBytes,
+		).Scan(&size, &tail)
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil, ErrNotFound
 	}
@@ -176,18 +182,27 @@ func (s *PGStore) Sweep(olderThan time.Duration) (int, error) {
 
 var _ RunDeleter = (*PGStore)(nil)
 
-// DeleteRun removes the run's bare cast and every "<runID>~<suffix>" composite,
-// returning how many rows went. Absent casts are not an error.
-func (s *PGStore) DeleteRun(ctx context.Context, runID string) (int, error) {
-	if err := validKey(runID); err != nil {
+// DeleteRun durably fences the run and removes its bare and suffixed casts in
+// one transaction. Absent casts are not an error.
+func (s *PGStore) DeleteRun(ctx context.Context, key string) (int, error) {
+	if err := validKey(key); err != nil {
 		return 0, err
 	}
-	tag, err := s.pool.Exec(ctx,
-		`DELETE FROM recordings WHERE cast_key = $1 OR starts_with(cast_key, $1 || $2)`, runID, castSep)
+	var removed int
+	err := s.runTx(ctx, key, true, func(tx pgx.Tx) error {
+		run := key
+		if _, err := tx.Exec(ctx, `INSERT INTO recording_erasures (run_id) VALUES ($1) ON CONFLICT DO NOTHING`, run); err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx,
+			`DELETE FROM recordings WHERE cast_key = $1 OR starts_with(cast_key, $1 || $2)`, run, castSep)
+		removed = int(tag.RowsAffected())
+		return err
+	})
 	if err != nil {
-		return 0, fmt.Errorf("recording: delete run %q: %w", runID, err)
+		return 0, fmt.Errorf("recording: delete run %q: %w", key, err)
 	}
-	return int(tag.RowsAffected()), nil
+	return removed, nil
 }
 
 func init() {

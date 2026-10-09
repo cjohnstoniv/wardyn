@@ -24,7 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { CC_META } from "../../wardyn/cc-meta";
 import { Chip } from "../../wardyn/primitives";
 import { Switch } from "../../wardyn/form-primitives";
-import { Segmented } from "../permissions";
+import { Segmented } from "../../wardyn/segmented";
 import { limitChips } from "./limit-chips";
 
 // ---- the base graph -------------------------------------------------------

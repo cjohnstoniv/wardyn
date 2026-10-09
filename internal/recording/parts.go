@@ -42,7 +42,7 @@ func OpenJoined(ctx context.Context, s Store, runID string) (io.ReadCloser, erro
 		return nil, err
 	}
 	br := bufio.NewReader(rc)
-	header, err := br.ReadBytes('\n')
+	header, err := joinedHeader(br)
 	if err != nil && !errors.Is(err, io.EOF) {
 		_ = rc.Close()
 		return nil, err
@@ -105,13 +105,29 @@ func (j *joinedCast) openNext() (bool, error) {
 		return false, err
 	}
 	br := bufio.NewReader(rc)
-	if h, err := br.ReadBytes('\n'); err != nil || !bytes.Equal(h, j.header) {
+	if h, err := joinedHeader(br); err != nil || !bytes.Equal(h, j.header) {
 		_ = rc.Close()
 		return false, nil
 	}
 	j.next++
 	j.cur, j.r = rc, br
 	return true, nil
+}
+
+func joinedHeader(br *bufio.Reader) ([]byte, error) {
+	var header []byte
+	for {
+		part, err := br.ReadSlice('\n')
+		// FS recordings can bypass HTTP's part cap; do not allocate an
+		// unbounded header before the output decoder gets to enforce its cap.
+		if len(header)+len(part) > maxCastBytes {
+			return nil, ErrInvalidCast
+		}
+		header = append(header, part...)
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return header, err
+		}
+	}
 }
 
 func (j *joinedCast) Close() error {

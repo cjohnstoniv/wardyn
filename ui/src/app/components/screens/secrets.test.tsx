@@ -21,9 +21,11 @@ vi.mock("sonner", () => ({
 const listSecretsMock = vi.fn();
 const deleteSecretMock = vi.fn();
 const setSecretMock = vi.fn();
+const listSecretsMineMock = vi.fn();
 vi.mock("../../lib/api/secrets", () => ({
   secrets: {
     listSecrets: () => listSecretsMock(),
+    listSecretsMine: () => listSecretsMineMock(),
     deleteSecret: (...a: unknown[]) => deleteSecretMock(...a),
     setSecret: (...a: unknown[]) => setSecretMock(...a),
   },
@@ -385,14 +387,17 @@ describe("SecretsScreen — the PAT broker sentence in the page header", () => {
   });
 });
 
-// Role-aware console: a viewer reads Secrets but can't write. Every entry
-// point (screen + the shared AddSecretDialog) must disable, name the reason,
-// and never let a viewer actually reach setSecret/deleteSecret — the server
-// would 403 it anyway, but the point is the console never lets it get there.
-describe("SecretsScreen / AddSecretDialog — role-aware (viewer vs operator)", () => {
+// A member writes and deletes their OWN secrets (the API stores under the
+// caller and cannot reach another person's row), so the console offers exactly
+// that: their rows, with Add, Rotate and Delete, and the admin's paired names
+// beside them without actions. The shared dialog still refuses a non-operator
+// anywhere that does not say it writes the caller's own row.
+describe("SecretsScreen / AddSecretDialog — a member's own secrets", () => {
   beforeEach(() => {
     listSecretsMock.mockReset().mockResolvedValue(["anthropic-api-key"]);
+    listSecretsMineMock.mockReset().mockResolvedValue({ names: ["team-key", "my-key"], mine: ["my-key"] });
     setSecretMock.mockReset().mockResolvedValue(undefined);
+    deleteSecretMock.mockReset().mockResolvedValue(undefined);
   });
 
   it("operator (today's default, no provider needed): Add secret is enabled with no reason shown", async () => {
@@ -401,41 +406,75 @@ describe("SecretsScreen / AddSecretDialog — role-aware (viewer vs operator)", 
     const addBtn = screen.getByRole("button", { name: /add secret/i });
     expect(addBtn).not.toBeDisabled();
     expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
+    expect(listSecretsMineMock).not.toHaveBeenCalled();
   });
 
-  it("viewer: Add secret is disabled and names the reason", async () => {
+  it("member: reads their own rows, Add secret is enabled and no admin-only reason shows", async () => {
     render(
       <OperatorProvider operator={false}>
         <SecretsScreen />
       </OperatorProvider>,
     );
-    await screen.findByText("anthropic-api-key");
-    expect(screen.getByRole("button", { name: /add secret/i })).toBeDisabled();
-    expect(screen.getByText(/requires the admin role/i)).toBeInTheDocument();
+    await screen.findByText("my-key");
+    expect(listSecretsMineMock).toHaveBeenCalled();
+    expect(listSecretsMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /add secret/i })).toBeEnabled();
+    expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
   });
 
-  it("viewer: the row's Rotate and Delete actions are disabled, each naming the reason", async () => {
+  it("member: Rotate and Delete act on their own row only; the admin's name has no actions", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     render(
       <OperatorProvider operator={false}>
         <SecretsScreen />
       </OperatorProvider>,
     );
-    const menuBtn = await screen.findByRole("button", { name: /secret actions/i });
-    await user.click(menuBtn);
+    await screen.findByText("my-key");
+    // Two names are listed; only the member's own has a menu.
+    expect(screen.getByText("team-key")).toBeInTheDocument();
+    expect(screen.getByText("Provided by your admin")).toBeInTheDocument();
+    const menus = screen.getAllByRole("button", { name: /secret actions/i });
+    expect(menus).toHaveLength(1);
 
+    await user.click(menus[0]);
     const rotate = await screen.findByRole("menuitem", { name: /rotate/i });
     const del = screen.getByRole("menuitem", { name: /delete/i });
-    expect(rotate).toHaveAttribute("data-disabled");
-    expect(del).toHaveAttribute("data-disabled");
-    // Radix marks disabled items aria-disabled but keeps them in the a11y tree
-    // (unlike a bare `disabled` attribute) — the reason is real content, not a
-    // hover-only title, so it's there either way.
-    expect(within(rotate).getByText(/requires the admin role/i)).toBeInTheDocument();
-    expect(within(del).getByText(/requires the admin role/i)).toBeInTheDocument();
+    expect(rotate).not.toHaveAttribute("data-disabled");
+    expect(del).not.toHaveAttribute("data-disabled");
+
+    await user.click(del);
+    await user.click(await screen.findByRole("button", { name: /delete secret/i }));
+    await waitFor(() => expect(deleteSecretMock).toHaveBeenCalledWith("my-key"));
   });
 
-  it("viewer: AddSecretDialog's own Save stays disabled even with a valid name+value (defense in depth for every other embedding)", () => {
+  it("member: Add secret stores the value under the name they typed", async () => {
+    render(
+      <OperatorProvider operator={false}>
+        <SecretsScreen />
+      </OperatorProvider>,
+    );
+    await screen.findByText("my-key");
+    fireEvent.click(screen.getByRole("button", { name: /add secret/i }));
+    fireEvent.change(await screen.findByLabelText(/^name/i), { target: { value: "acme-key" } });
+    fireEvent.change(screen.getByLabelText(/^value$/i), { target: { value: "sk-new-value" } });
+    fireEvent.click(screen.getByRole("button", { name: /save secret/i }));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("acme-key", "sk-new-value"));
+  });
+
+  it("member: the empty page says what a member can do, not that an admin must", async () => {
+    listSecretsMineMock.mockResolvedValue({ names: [], mine: [] });
+    render(
+      <OperatorProvider operator={false}>
+        <SecretsScreen />
+      </OperatorProvider>,
+    );
+    await screen.findByText(/no secrets yet/i);
+    expect(screen.getByText(/stored under your name/i)).toBeInTheDocument();
+    expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add your first secret/i })).toBeEnabled();
+  });
+
+  it("another embedding of the dialog (no ownRows) still refuses a non-operator", () => {
     render(
       <OperatorProvider operator={false}>
         <AddSecretDialog open onOpenChange={() => {}} />

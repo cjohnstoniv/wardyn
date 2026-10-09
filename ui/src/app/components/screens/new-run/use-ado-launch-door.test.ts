@@ -21,7 +21,7 @@ const toastSuccessMock = vi.fn();
 vi.mock("sonner", () => ({ toast: { success: (...a: unknown[]) => toastSuccessMock(...a) } }));
 
 import { useAdoLaunchDoor } from "./use-ado-launch-door";
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, notifyAuthChange } from "../../../lib/api/core";
 
 describe("useAdoLaunchDoor + useAdoConnect", () => {
   // ticket: F1
@@ -189,4 +189,15 @@ describe("useAdoLaunchDoor + useAdoConnect", () => {
     act(() => result.current.notifyLaunchError(new HttpError(500, "boom")));
     expect(result.current.refusal).toBeNull();
   });
+});
+
+
+it("retires an ADO refusal and open door on an observed auth change", () => {
+  const { result } = renderHook(() => useAdoLaunchDoor());
+  act(() => result.current.notifyLaunchError(new HttpError(422, "connect", "git_credential", "https://dev.azure.com/team")));
+  expect(result.current.dialog.open).toBe(true);
+  act(() => notifyAuthChange());
+  expect(result.current.dialog.open).toBe(false);
+  expect(result.current.dialog.org).toBe("");
+  expect(result.current.refusal).toBeNull();
 });

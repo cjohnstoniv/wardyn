@@ -23,6 +23,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -173,10 +174,7 @@ func TestPG_Devices_RefusedBatchReplayDoesNotStarveOrgAuditWriters(t *testing.T)
 	}
 	batch[499].RowHash = "deadbeef"
 
-	holder, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	holder := testutil.PGConn(t, pool)
 	if _, err := holder.Exec(ctx, `SELECT pg_advisory_lock($1)`, db.AuditChainLockKey); err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +182,7 @@ func TestPG_Devices_RefusedBatchReplayDoesNotStarveOrgAuditWriters(t *testing.T)
 	_, err = st.IngestDeviceAudit(ctx, d.ID, testPeer, batch)
 	single := time.Since(start)
 	_, _ = holder.Exec(ctx, `SELECT pg_advisory_unlock($1)`, db.AuditChainLockKey)
-	holder.Release()
+	_ = holder.Close(ctx)
 	t.Logf("one 500-row x 16 KiB batch, refused on row 500, chain lock held elsewhere: %s (err=%v)", single, err)
 	if !errors.Is(err, store.ErrConflict) || single >= db.AuditChainLockTimeout {
 		t.Fatalf("refused batch: err=%v after %s — want ErrConflict without waiting on the chain lock", err, single)

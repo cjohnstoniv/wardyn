@@ -87,7 +87,7 @@ describe("provider-aware policy templates", () => {
     expect(seedAllowedDomains()).toEqual(["api.anthropic.com"]);
     expect(initialWizardState("CC1", undefined, [BEDROCK]).allowedDomains).toEqual([BEDROCK.host]);
     const st = { ...initialWizardState("CC1", undefined, [BEDROCK]), llmSecretName: "k" };
-    expect(impliedEgressHosts(st, [], [BEDROCK]).map((h) => h.host)).toEqual([BEDROCK.host]);
+    expect(impliedEgressHosts(st, [BEDROCK]).map((h) => h.host)).toEqual([BEDROCK.host]);
     expect(buildSpec(st, [], [BEDROCK]).inline_policy.allowed_domains).not.toContain("api.anthropic.com");
   });
 

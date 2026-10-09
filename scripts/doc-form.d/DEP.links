@@ -1,0 +1,5 @@
+# The must-link rule in scripts/check-doc-links.sh applies to these docs.
+deploy/compose/README.md
+deploy/images/README.md
+docs/operations/build-images.md
+docs/ENVBUILD.md

@@ -6,7 +6,6 @@ package api
 import (
 	"errors"
 	"fmt"
-	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -100,17 +99,6 @@ func validatePATNarrowedDuplicates(grants []types.GrantSpec) error {
 		prior = append(prior, hostGrant{sc.Host, i, sc.Narrowed()})
 	}
 	return nil
-}
-
-// refusePATNarrowedDuplicates is validatePATNarrowedDuplicates at create: a 422
-// written here, for the spec a run is about to be built from, which for a stored
-// policy no write-time check has necessarily seen.
-func refusePATNarrowedDuplicates(w http.ResponseWriter, prefix string, spec types.RunPolicySpec) bool {
-	if err := validatePATNarrowedDuplicates(spec.EligibleGrants); err != nil {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonInlinePolicyInvalid, prefix+err.Error())
-		return true
-	}
-	return false
 }
 
 // errPATNarrowingSSHConflict marks the policy-write refusal of a narrowed

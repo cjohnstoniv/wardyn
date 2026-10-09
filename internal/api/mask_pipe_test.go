@@ -72,7 +72,7 @@ func (b *readBackend) Fresh(_ context.Context, _ time.Time) error {
 }
 
 func (b *readBackend) PutRun(uuid.UUID, []byte) error { return nil }
-func (b *readBackend) PutGlobal(string, string, []secretmask.GlobalPut, bool, time.Time) error {
+func (b *readBackend) PutGlobal(int64, string, string, []secretmask.GlobalPut, bool, time.Time) error {
 	return nil
 }
 func (b *readBackend) EvictGlobal(string, string, time.Time) error                 { return nil }
@@ -266,3 +266,5 @@ func TestMaskPipe_AFullPipeStopsTheProducer(t *testing.T) {
 		t.Fatalf("the masker forwarded %d bytes, want %d", got, want)
 	}
 }
+
+func (b *readBackend) GlobalGeneration(context.Context) (int64, error) { return 0, nil }

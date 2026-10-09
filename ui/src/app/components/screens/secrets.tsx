@@ -38,11 +38,12 @@ import {
 } from "../ui/dialog";
 import { Field } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
-import { Chip, OperatorOnlyHint } from "../wardyn/primitives";
+import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 import { CAPABILITY, OPERATOR_ONLY_REASON } from "../wardyn/copy";
+import { OWN_SECRETS } from "../wardyn/copy/components";
 import { WRITE_ONLY } from "../wardyn/copy/door";
 import { useOperator } from "../wardyn/operator-context";
 
@@ -79,7 +80,11 @@ export function SecretsScreen() {
   // member holds — say so, or a short list reads as "there are only two
   // secrets here" rather than "you were shown two of them".
   const caps = useMyCapabilities(!operator);
+  // Every name shown, and the ones that are the caller's own (the only rows a
+  // person may rotate or delete: a write or delete lands in their own namespace).
+  // An administrator's list is their own namespace, so the two are one.
   const [names, setNames] = React.useState<string[]>([]);
+  const [mine, setMine] = React.useState<string[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [query, setQuery] = React.useState("");
   const [addOpen, setAddOpen] = React.useState(false);
@@ -101,17 +106,21 @@ export function SecretsScreen() {
 
   const load = React.useCallback(() => {
     setStatus("loading");
-    secretsApi
-      .listSecrets()
-      .then((n) => {
-        setNames(n);
+    (operator
+      ? secretsApi.listSecrets().then((n) => ({ names: n, mine: n }))
+      : secretsApi.listSecretsMine())
+      .then((r) => {
+        setNames(r.names);
+        setMine(r.mine);
         setStatus("ready");
       })
       .catch(() => setStatus("error"));
-  }, []);
+  }, [operator]);
   React.useEffect(load, [load]);
 
-  const filtered = names.filter((n) => !query || n.toLowerCase().includes(query.toLowerCase()));
+  const ownSet = new Set(mine);
+  const shown = [...mine, ...names.filter((n) => !ownSet.has(n))];
+  const filtered = shown.filter((n) => !query || n.toLowerCase().includes(query.toLowerCase()));
 
   return (
     <div className="mx-auto max-w-[1400px] px-6 py-6">
@@ -126,8 +135,7 @@ export function SecretsScreen() {
         }`}
         actions={
           <>
-            {!operator && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
-            <Button onClick={() => setAddOpen(true)} disabled={!operator}>
+            <Button onClick={() => setAddOpen(true)}>
               <Plus className="size-4" /> Add secret
             </Button>
           </>
@@ -138,7 +146,7 @@ export function SecretsScreen() {
         <p className="mb-4 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">{DENIED.SECRETS_NARROWED}</p>
       )}
 
-      {status === "ready" && names.length > 0 && (
+      {status === "ready" && shown.length > 0 && (
         <div className="mb-4 flex items-center gap-3">
           <Input
             placeholder="Search secrets by name…"
@@ -147,7 +155,7 @@ export function SecretsScreen() {
             className="max-w-sm"
           />
           <span className="ml-auto text-sm text-muted-foreground">
-            {filtered.length} of {names.length} secret{names.length === 1 ? "" : "s"}
+            {filtered.length} of {shown.length} secret{shown.length === 1 ? "" : "s"}
           </span>
           <Button variant="outline" size="icon" onClick={load} aria-label="Refresh">
             <RotateCw className="size-4" />
@@ -160,20 +168,20 @@ export function SecretsScreen() {
           <TableSkeleton rows={5} cols={2} />
         ) : status === "error" ? (
           <ErrorState onRetry={load} />
-        ) : names.length === 0 ? (
+        ) : shown.length === 0 ? (
           <EmptyState
             icon={KeyRound}
             title="No secrets yet."
             description={
               operator
                 ? "Add an API key or access token so runs can reference it by name — the value is stored write-only and is never returned, not even to you."
-                : `Add an API key or access token so runs can reference it by name. ${OPERATOR_ONLY_REASON}`
+                : OWN_SECRETS.EMPTY
             }
             action={
               // This screen stores any credential, not just LLM keys — match
               // the header button's "Add secret" copy instead of narrowing a
               // first-time operator's mental model.
-              <Button onClick={() => setAddOpen(true)} disabled={!operator}>
+              <Button onClick={() => setAddOpen(true)}>
                 <Plus className="size-4" /> Add your first secret
               </Button>
             }
@@ -211,13 +219,20 @@ export function SecretsScreen() {
                             Standing
                           </Chip>
                         )}
-                        <Chip tone="cyan" className="gap-1" title={WRITE_ONLY.TOOLTIP}>
-                          <Lock className="size-3" /> {WRITE_ONLY.CHIP}
-                        </Chip>
+                        {ownSet.has(name) ? (
+                          <Chip tone="cyan" className="gap-1" title={WRITE_ONLY.TOOLTIP}>
+                            <Lock className="size-3" /> {WRITE_ONLY.CHIP}
+                          </Chip>
+                        ) : (
+                          <Chip tone="neutral" title={OWN_SECRETS.FROM_ADMIN_TITLE}>
+                            {OWN_SECRETS.FROM_ADMIN}
+                          </Chip>
+                        )}
                       </span>
                     </div>
                   </TableCell>
                   <TableCell onClick={(e) => e.stopPropagation()}>
+                    {ownSet.has(name) && (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button variant="ghost" size="icon" className="size-8" aria-label="Secret actions">
@@ -225,20 +240,15 @@ export function SecretsScreen() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => setRotateName(name)} disabled={!operator}>
+                        <DropdownMenuItem onClick={() => setRotateName(name)}>
                           <RotateCw className="size-4" /> Rotate
-                          {!operator && <OperatorOnlyHint />}
                         </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => setToDelete(name)}
-                          disabled={!operator}
-                          className="text-danger focus:text-danger"
-                        >
+                        <DropdownMenuItem onClick={() => setToDelete(name)} className="text-danger focus:text-danger">
                           <Trash2 className="size-4" /> Delete
-                          {!operator && <OperatorOnlyHint />}
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
@@ -251,7 +261,8 @@ export function SecretsScreen() {
         open={addOpen}
         onOpenChange={setAddOpen}
         onSaved={load}
-        existingNames={names}
+        existingNames={mine}
+        ownRows
         patBrokerEnabled={patBrokerEnabled}
       />
 
@@ -262,7 +273,8 @@ export function SecretsScreen() {
           setRotateName(null);
           load();
         }}
-        existingNames={names}
+        existingNames={mine}
+        ownRows
         initialName={rotateName ?? ""}
         patBrokerEnabled={patBrokerEnabled}
       />
@@ -270,6 +282,8 @@ export function SecretsScreen() {
       <DeleteConfirmDialog
         name={toDelete}
         entity="secret"
+        // Only the caller's own rows have a menu, and a delete lands in their own namespace.
+        allowed
         description="Runs that reference this secret by name will no longer be able to resolve it. This cannot be undone."
         onOpenChange={(o) => !o && setToDelete(null)}
         onDelete={() => secretsApi.deleteSecret(toDelete!)}
@@ -313,6 +327,7 @@ export function AddSecretDialog({
   host,
   lane,
   patBrokerEnabled = true,
+  ownRows = false,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -344,12 +359,17 @@ export function AddSecretDialog({
   // whose secret is never a git_pat) gets the 0.7.10 default (on), the same
   // fallback every other unwired surface takes.
   patBrokerEnabled?: boolean;
+  // The caller writes into the signed-in person's OWN namespace (PUT
+  // /secrets/{name} stores under the caller, never another person), which any
+  // signed-in person may do. Only the Secrets screen says so; every other
+  // embedding keeps the operator gate below.
+  ownRows?: boolean;
 }) {
   // This dialog is reused everywhere a secret gets written (this screen, the
   // SCM Provider step, the New Run wizard, the setup funnel) — gating its own
   // Save is the one chokepoint that covers all of them, so none of those
   // callers need their own copy of this check.
-  const operator = useOperator();
+  const mayWrite = useOperator() || ownRows;
   const [name, setName] = React.useState(initialName);
   const [value, setValue] = React.useState("");
   // Masked at entry, revealed only on request: a write-only store should not
@@ -529,7 +549,7 @@ export function AddSecretDialog({
               {error}
             </div>
           )}
-          {!operator && (
+          {!mayWrite && (
             <p id="add-secret-operator-reason" className="text-xs font-medium text-warning">
               {OPERATOR_ONLY_REASON}
             </p>
@@ -542,9 +562,9 @@ export function AddSecretDialog({
           </Button>
           <Button
             onClick={save}
-            disabled={!operator || saving || !name.trim() || !value}
+            disabled={!mayWrite || saving || !name.trim() || !value}
             aria-describedby={
-              [error ? "add-secret-error" : undefined, !operator ? "add-secret-operator-reason" : undefined]
+              [error ? "add-secret-error" : undefined, !mayWrite ? "add-secret-operator-reason" : undefined]
                 .filter(Boolean)
                 .join(" ") || undefined
             }

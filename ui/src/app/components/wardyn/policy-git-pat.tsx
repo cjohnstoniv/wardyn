@@ -20,7 +20,7 @@ import { gitPATGrants, patAxisError, readPATScope, type PATAxis } from "../../li
 import { Checkbox } from "../ui/checkbox";
 import { Textarea } from "../ui/textarea";
 import { cn } from "../ui/utils";
-import { Segmented } from "../screens/permissions";
+import { Segmented } from "./segmented";
 import { SUMMARY } from "../screens/run-detail/policy-tab-copy";
 import { GIT_PAT_SCOPE as C } from "./copy/git-pat";
 import { SectionLabel } from "./primitives";

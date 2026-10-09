@@ -92,7 +92,7 @@ FROM ${UI_STAGE} AS ui
 # Stage 2: build the Go binaries. Runs on the BUILDER's arch and CROSS-COMPILES
 # to $TARGETARCH below — every binary here is pure Go (CGO_ENABLED=0), so a
 # linux/arm64 image needs no QEMU for the compile, only Go's own GOARCH.
-FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine@sha256:85dc1069ac644ea3c527b177303a406eb3358192816cd7f9e5848eb658851673 AS builder
 
 WORKDIR /build
 

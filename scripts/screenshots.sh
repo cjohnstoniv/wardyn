@@ -16,11 +16,8 @@ WARDYN_LOG_TAG="[screenshots]"
 . "${REPO_ROOT}/scripts/lib/common.sh"
 wardyn_pick_docker_host
 
-export WARDYN_E2E_ADDR=":8098"
-# Its own UI-sandbox listener too: e2e-backend.sh defaults that to :8089 and
-# `down` fuser -k's it, so sharing it with a concurrent e2e backend means one
-# instance's teardown kills the other's wardynd.
-export WARDYN_E2E_UI_ADDR=":8099"
+export WARDYN_E2E_ADDR="127.0.0.1:8098"
+export WARDYN_E2E_UI_ADDR="127.0.0.1:8099"
 export WARDYN_E2E_PG_DBNAME="wardyn_shots"
 # Overridable PG host:port (same convention as run-ui-e2e.sh); the DB name
 # stays pinned to wardyn_shots — the spec self-gates on it.
@@ -47,6 +44,8 @@ log "Building backend + UI bundle"
 ./scripts/e2e-backend.sh build || { echo "build failed"; exit 1; }
 export WARDYN_E2E_SKIP_BUILD=1
 ./scripts/e2e-backend.sh up || { echo "backend up failed"; exit 1; }
+WARDYN_E2E_TOKEN="$(./scripts/e2e-backend.sh token)" || exit 1
+export WARDYN_E2E_TOKEN
 
 log "Capturing docs/img screenshots"
 cd ui && pnpm exec playwright test --project=screenshots --workers=1

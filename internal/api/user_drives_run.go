@@ -74,7 +74,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -103,7 +102,7 @@ var driveRefusalReasons = []string{
 //
 // It exists because five of the six arms recorded nothing. A refused drive was
 // a 422 to the member and silence everywhere else: no audit row (the profile
-// DOOR has one, denyUserDrive's authz.denied, and it is the only arm that
+// DOOR has one, userDriveDoorRefusal's authz.denied, and it is the only arm that
 // did), no log line, no metric, and no request log either — routes.go wires
 // RequestID and Recoverer and no logger. So the failure mode the runbook itself
 // predicts — "Wardyn does not mkdir on a share, a missing home is a 422 at run
@@ -147,53 +146,19 @@ func (s *Server) refuseDrive(w http.ResponseWriter, status int, reason, member s
 // case, and a provable no-op: no store read, no ceiling read, nothing.
 func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 	req createRunRequest, ceiling governanceCeiling) (*types.DriveMount, bool) {
-	if req.Drive == nil || !req.Drive.Enabled {
-		return nil, true
-	}
-	// The org switch first, and the order is the argument: storage.user_drive's
-	// `disabled` and a profile's DenyUserDrive answer two different questions, and
-	// only the second one is about this member. With drives off deployment-wide
-	// nobody was DENIED — there is nothing here to mount — so it is a 422 in the
-	// REFUSED_BACKEND family and never the door's 403 with its authz.denied row.
-	provider, perr := s.userDriveProvider(r.Context())
-	if perr != nil {
-		writeServerError(w, r, "get site config", perr)
-		return nil, false
-	}
-	if provider.Disabled {
-		s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalDrivesDisabled,
-			fmt.Sprintf(driveRefusedBackendMsg, driveDisabledMsg))
-		return nil, false
-	}
-	if s.denyUserDrive(w, r, ceiling) {
-		return nil, false
-	}
-	// The SAME resolver /me and the admin preview run. A store failure is an
-	// ERROR here and not "no drive" — writeDriveError's 500 arm — because
-	// mounting nothing where an admin allocated something loses a member's work
-	// silently, while a 500 tells them to try again.
-	resolved, err := s.resolveUserDrive(r.Context(), ceiling.Limits.MaxDriveSizeMiB)
-	if err != nil {
-		writeDriveError(w, r, err)
+	resolved, refusal := s.authorizeRequestDrive(r, req, ceiling)
+	if refusal.write(s, w, r) {
 		return nil, false
 	}
 	if resolved == nil {
-		s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalNoAllocation,
-			"no user drive is allocated to you — ask an admin for an allocation")
-		return nil, false
-	}
-	if resolved.Paused {
-		s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalPaused,
-			"your allocation is paused by an admin",
-			slog.String("drive", resolved.Drive.Name))
-		return nil, false
+		return nil, true
 	}
 	return s.driveMountFor(r.Context(), w, req, *resolved)
 }
 
 // driveDoorProfile names the governance profile whose DenyUserDrive DOOR is
 // shut for this caller, or "" when the door is open. ONE predicate, read by
-// the enforcement path (denyUserDrive's 403) and the display path
+// the enforcement path (userDriveDoorRefusal's 403) and the display path
 // (userDriveDeniedByProfile, the /me field) alike: this is an authz rule, and
 // two spellings of one authz rule is one place a widening can hide.
 //
@@ -245,20 +210,6 @@ func driveDoorShut(ceiling governanceCeiling) (string, bool) {
 // bytes are the canon's bytes; the console renders `drive` as mono itself.
 func driveDeniedByProfileMsg(profile string) string {
 	return fmt.Sprintf("mounting a user drive is not allowed by your governance profile %q. Launch without drive.", profile)
-}
-
-// denyUserDrive is the DOOR at the enforcement site: 403 with an authz.denied
-// row, target `runs.drive`, reason `governance_profile` — the refuse
-// shape the two other profile refusals take, and no new value in the closed
-// reason enum.
-func (s *Server) denyUserDrive(w http.ResponseWriter, r *http.Request, ceiling governanceCeiling) bool {
-	profile, shut := s.driveDoorProfile(r.Context(), ceiling)
-	if !shut {
-		return false
-	}
-	// The mock round's frozen member copy, reproduced byte-exact: the console
-	// never rewords a server refusal, so this line is where that string ships.
-	return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.drive", driveDeniedByProfileMsg(profile)).WithPolicy(s.ceilingPolicy(r.Context(), ceiling)))
 }
 
 // driveIsMountableHere is the pair of refusals that are about the DEPLOYMENT
@@ -413,16 +364,12 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req c
 	if !s.driveIsMountableHere(ctx, w, resolved) {
 		return nil, false
 	}
-	readOnly := !resolved.Writable
-	if req.Drive.ReadOnly != nil {
-		if !*req.Drive.ReadOnly && readOnly {
-			s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalReadOnly,
-				"your allocation is read-only; read_only:false cannot widen it",
-				slog.String("drive", resolved.Drive.Name))
-			return nil, false
-		}
-		readOnly = readOnly || *req.Drive.ReadOnly
+	if refusal := driveReadOnlyRefusal(req, resolved); refusal != nil {
+		refusal.drive.write(s, w)
+		return nil, false
 	}
+	readOnly := !resolved.Writable || (req.Drive.ReadOnly != nil && *req.Drive.ReadOnly)
+
 	return &types.DriveMount{
 		// The row's id, carried so a driver's labels and an offboarding sweep
 		// can group by the DRIVE. ObjectName cannot answer that: it is

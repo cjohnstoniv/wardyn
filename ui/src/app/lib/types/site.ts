@@ -118,6 +118,10 @@ export interface SiteConfig {
   // GET-spread body (SERVER_OWNED_SITE_CONFIG_KEYS) so a Network-step save never
   // re-applies — or fails on — a file it did not mean to touch.
   branding?: SiteBranding;
+  // types.SiteConfig.Components — the org's custom-component policy. Absent is
+  // the owner-decided default (no autonomy cap, env-var/file delivery allowed,
+  // no CC3 floor for component credentials). No console surface writes it yet.
+  components?: ComponentSettings;
   // RESPONSE-ONLY, never-PUT: the git hosts this deployment actually admits —
   // scm_hosts MINUS every host a provider row claims, UNION every enabled row's
   // hosts (internal/api/workspace_providers.go's effectiveScmHosts). ONE
@@ -154,6 +158,14 @@ export interface WithheldScmHost {
 export interface SiteBranding {
   // Absolute path, as wardynd sees it, to an SVG or PNG (at most 512 KB).
   logo_path?: string;
+}
+
+// types.ComponentSettings (SiteConfig.components). The server refuses any other
+// autonomy_cap value.
+export interface ComponentSettings {
+  require_vault_for_credentials?: boolean;
+  deny_resident_delivery?: boolean;
+  autonomy_cap?: "" | "L1" | "L0";
 }
 
 // policyref.Contact — who owns a policy and how a person it refuses asks for a

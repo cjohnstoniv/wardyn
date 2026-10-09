@@ -1,0 +1,5 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words, so growth fails.
+# docs/CI.md: base 6759 + 66 (headings and row summaries of five cell expansions in the exit-code table; the 124 summary carries four more words).
+docs/CI.md=6825 share=35
+docs/ci-jobs-as-runs.md=2091 share=35
+.claude/skills/wardyn-ci/SKILL.md=684 share=35

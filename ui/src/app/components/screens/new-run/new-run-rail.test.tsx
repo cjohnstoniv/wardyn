@@ -118,15 +118,16 @@ describe("New run rail — the two facts it used to assert (Appendix A finding 1
     }
   }
 
-  // Whose AWS sign-in sits in the sandbox: the person's own, stated with the
-  // sentence; a proxy lane carries no chip.
-  it("a sandbox verdict carries the per-person chip; a proxy verdict does not", async () => {
+  // #1922: the "Per-person AWS sign-in" chip is removed. A sandbox verdict is
+  // its sentence alone, as a proxy verdict always was.
+  it("a sandbox verdict is stated by its sentence, with no chip under it", async () => {
     const { unmount } = renderRail({ agentRow: harnessRow(), preflightResult: preflightWith(credentialArms[1].cred) });
-    expect(await screen.findByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER)).toBeInTheDocument();
+    expect(await screen.findByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK)).toBeInTheDocument();
+    expect(screen.queryByText("Per-person AWS sign-in")).toBeNull();
     unmount();
     renderRail({ agentRow: harnessRow(), preflightResult: preflightWith(credentialArms[0].cred) });
     expect(await screen.findByText(RAIL_CREDENTIAL.PROXY)).toBeInTheDocument();
-    expect(screen.queryByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER)).toBeNull();
+    expect(screen.queryByText("Per-person AWS sign-in")).toBeNull();
   });
 
   it("shows the approved check-state lines", () => {
@@ -146,7 +147,6 @@ describe("New run rail — the two facts it used to assert (Appendix A finding 1
     expect(await screen.findByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH)).toBeInTheDocument();
     expect(screen.getByText(RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT)).toBeInTheDocument();
     expect(screen.queryByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK)).toBeNull();
-    expect(screen.queryByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER)).toBeNull();
   });
 
   // The negative control: nothing resolved — the state every user is in

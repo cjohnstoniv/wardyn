@@ -1,27 +1,29 @@
 # Wardyn
 
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Status: pre-alpha](https://img.shields.io/badge/Status-pre--alpha-orange.svg)](#status)
-[![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8.svg)](go.mod)
-[![CI](https://github.com/cjohnstoniv/wardyn/actions/workflows/ci.yml/badge.svg)](https://github.com/cjohnstoniv/wardyn/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) [![Status: pre-alpha](https://img.shields.io/badge/Status-pre--alpha-orange.svg)](#status) [![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8.svg)](go.mod) [![CI](https://github.com/cjohnstoniv/wardyn/actions/workflows/ci.yml/badge.svg)](https://github.com/cjohnstoniv/wardyn/actions/workflows/ci.yml)
 
-**The open-source governed-sandbox control plane for any workload — identity,
-controls, and audit are the product; the sandbox is a pluggable commodity.**
-Anything you run under your own credentials inherits your full blast radius;
-Wardyn is the layer in between — per-run identity, credentials minted and
-revoked per run, one audited path off-host, no resident key. Coding agents are
-the flagship use.
+- **The open-source governed-sandbox control plane for any workload — identity, controls, and audit are the product; the sandbox is a pluggable commodity.**
+- Anything you run under your own credentials inherits your full blast radius. Wardyn is the layer in between — per-run identity, credentials minted and revoked per run, one audited path off-host, no resident key by default.
+- [docs/CREDENTIALS.md](docs/CREDENTIALS.md) says how each kind of credential reaches a run, and which ones the sandbox can read.
+- Coding agents are the flagship use.
 
-> **Status: pre-alpha.** Interfaces are not stable. Do not run production
-> workloads. "Wardyn" is a working name — trademark clearance (USPTO full-text +
-> org / domain / package handles) is still pending, so the name and the personal
-> `github.com/cjohnstoniv/wardyn` module path may change before a 1.0.
+![An isometric compound where one outer wall surrounds a datacentre and people's devices, each sandbox sits behind Wardyn's inner wall, and the org control plane links by policy and audit.](docs/img/wardyn-walls.webp)
+
+![One outer wall surrounds the cloud zone and people's devices; each sandbox has its own inner wall and proxy, nothing connects in, and the proxy adds keys to outbound requests.](docs/img/wardyn-places.webp)
+
+## Before you start
+
+> [!WARNING]
+> - **Status: pre-alpha.** Interfaces are not stable.
+> - Do not run production workloads.
+> - "Wardyn" is a working name — trademark clearance (USPTO full-text + org / domain / package handles) is still pending, so the name and the personal `github.com/cjohnstoniv/wardyn` module path may change before a 1.0.
 
 ![Wardyn detecting this host's confinement capabilities](docs/img/getting-started.png)
 
 ## Install
 
-Pick by **who runs this box**. Everything here pulls cosign-signed, SBOM-attested images — [`docs/VERIFY.md`](docs/VERIFY.md) checks that — no clone needed.
+- Pick by **who runs this box**.
+- Everything here pulls cosign-signed, SBOM-attested images — [`docs/VERIFY.md`](docs/VERIFY.md) checks that — no clone needed.
 
 ### Single-user — you are the operator
 
@@ -31,13 +33,13 @@ Pick by **who runs this box**. Everything here pulls cosign-signed, SBOM-atteste
 curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.8.8/install.sh | sh
 ```
 
-Cosign-signed, not tip-of-`main` — only the script is pinned; it installs the newest release (`WARDYN_VERSION` overrides). Installs into `~/.wardyn`, prints the console URL (<http://127.0.0.1:8080>) — sign in by pasting the minted admin token (`WARDYN_HOME`, `WARDYN_PORT` override).
-**A managed laptop, one daemon per developer** — desktop profile a′: [`docs/DESKTOP.md`](docs/DESKTOP.md).
+- Cosign-signed, not tip-of-`main` — only the script is pinned; it installs the newest release (`WARDYN_VERSION` overrides).
+- Installs into `~/.wardyn`, prints the console URL (<http://127.0.0.1:8080>) — sign in by pasting the minted admin token (`WARDYN_HOME`, `WARDYN_PORT` override).
+- **A managed laptop, one daemon per developer** — desktop profile a′: [`docs/DESKTOP.md`](docs/DESKTOP.md).
 
 ### Multi-user — an admin sets the ceiling, members run inside it
 
-Each human gets an SSO identity and an **admin** or **member** role ([`docs/OPERATIONS.md`](docs/OPERATIONS.md#multi-user-who-can-change-what)).
-
+- Each human gets an SSO identity and an **admin** or **member** role ([`docs/OPERATIONS.md`](docs/OPERATIONS.md#multi-user-who-can-change-what)).
 - **A shared host** — compose `--profile sso` + `WARDYN_OIDC_ROLE_MAP`: [OPERATIONS.md §"Second user, same host"](docs/OPERATIONS.md#second-user-same-host).
 - **Kubernetes** — a published OCI chart (the command after this list); `.claude/skills/wardyn-k8s-setup/` carries an agent-readable recipe for the same path.
 - **Managed laptops under org governance** — desktop profile m′: [`docs/DESKTOP.md`](docs/DESKTOP.md#the-member-mode-profile-topology-m).
@@ -63,28 +65,25 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
   --set secrets.ageKeyFromSecret=true
 ```
 
-This installs the control plane only — to run agents on the cluster, follow the
-`k8s.enabled=true` recipe in [the chart README](deploy/helm/wardyn/README.md)
-(it also needs `serviceAccount.automount`, `k8s.proxyImage` and
-`k8s.runsNamespace`, or the chart refuses to render), and its SSO block for
-roles.
+- This installs the control plane only.
+- To run agents on the cluster, follow the `k8s.enabled=true` recipe in [the chart README](deploy/helm/wardyn/README.md) (it also needs `serviceAccount.automount`, `k8s.proxyImage` and `k8s.runsNamespace`, or the chart refuses to render), and its SSO block for roles.
 
-A persistent Postgres DSN needs an age identity riding in the SAME Secret
-(above) or the chart refuses to render — without one, wardynd generates a
-fresh identity every boot and cannot decrypt what the previous boot
-encrypted. Full role map, substrate and values table:
-[`deploy/helm/wardyn/README.md`](deploy/helm/wardyn/README.md).
+> [!IMPORTANT]
+> - A persistent Postgres DSN needs an age identity riding in the SAME Secret (above) or the chart refuses to render.
+> - Without one, wardynd generates a fresh identity every boot and cannot decrypt what the previous boot encrypted.
+
+- Full role map, substrate and values table: [`deploy/helm/wardyn/README.md`](deploy/helm/wardyn/README.md).
 
 ### Joining a Wardyn someone else runs
 
-Install nothing — sign in with SSO and read **[`docs/USERS.md`](docs/USERS.md)**: what a member can do, your first run, and what to ask your admin for.
+- Install nothing — sign in with SSO and read **[`docs/USERS.md`](docs/USERS.md)**: what a member can do, your first run, and what to ask your admin for.
 
-**Building from source is a contributor path** — see [`CONTRIBUTING.md`](CONTRIBUTING.md). Clone, then `make setup`
-(a failed image pull falls back to building from this checkout; `WARDYN_BUILD_LOCAL=1` forces it).
+- **Building from source is a contributor path** — see [`CONTRIBUTING.md`](CONTRIBUTING.md).
+- Clone, then `make setup` (a failed image pull falls back to building from this checkout; `WARDYN_BUILD_LOCAL=1` forces it).
 
-**That is the whole setup.** The barrier is the only requirement — no model, no
-API key, no agent. Put the sandbox rules in a small **YAML** (or JSON) policy and
-hand it to one `wardyn run` — interactive or unattended:
+- **That is the whole setup.**
+- The barrier is the only requirement — no model, no API key, no agent.
+- Put the sandbox rules in a small **YAML** (or JSON) policy and hand it to one `wardyn run` — interactive or unattended:
 
 ```sh
 cat > sandbox.yaml <<'YAML'
@@ -99,38 +98,29 @@ wardyn run --agent claude-code --task-mode exec \
   --policy-file sandbox.yaml --wait
 ```
 
-That runs a plain shell command in a governed sandbox: `--task-mode exec` means
-no agent and no model are involved at all. (`--agent` still names which sandbox
-image to launch — it is an image label, not a statement that an AI runs your
-task.) The policy is written out here because the one-line install ships no
-repo — from a clone, the same four keys with their comments are
-[`examples/policies/sandbox.yaml`](examples/policies/sandbox.yaml).
-`wardyn policy render -f <file>` checks either. `--image` brings your own base
-([docs/ENVBUILD.md](docs/ENVBUILD.md)). To stop everything:
-`cd ~/.wardyn && docker compose down` (from a clone: `make compose-down`).
+- That runs a plain shell command in a governed sandbox: `--task-mode exec` means no agent and no model are involved at all.
+- (`--agent` still names which sandbox image to launch — it is an image label, not a statement that an AI runs your task.)
+- The policy is written out here because the one-line install ships no repo — from a clone, the same four keys with their comments are [`examples/policies/sandbox.yaml`](examples/policies/sandbox.yaml).
+- `wardyn policy render -f <file>` checks either.
+- `--image` brings your own base ([docs/ENVBUILD.md](docs/ENVBUILD.md)).
+- To stop everything: `cd ~/.wardyn && docker compose down` (from a clone: `make compose-down`).
 
-**Want an agent to write the code?** *Then* connect a model — optional, and
-equally first-class at the CLI or in the UI. An admin adds a model provider
-under Settings → Model providers; each person then connects their own
-credential for it (a key, or a Claude or AWS sign-in) from Getting started:
+- **Want an agent to write the code?** Then connect a model — optional, and equally first-class at the CLI or in the UI.
+- An admin adds a model provider under Settings → Model providers; each person then connects their own credential for it (a key, or a Claude or AWS sign-in) from Getting started:
 
 ```sh
 wardyn setup status   # what's configured + the next command per unmet check
 ```
 
-Skipping this is a supported end state, not an unfinished setup: `setup status`
-reports model access as **optional** and never as a gap to clear. Most of the
-built-in demos need no model either — see
-[TRY-IT.md](docs/TRY-IT.md)'s "governance demo (no keys)".
+- Skipping this is a supported end state, not an unfinished setup: `setup status` reports model access as **optional** and never as a gap to clear.
+- Most of the built-in demos need no model either — see [TRY-IT.md](docs/TRY-IT.md)'s "governance demo (no keys)".
 
 ### Requirements
 
-- **Docker** + `compose` v2 (Postgres rides in the compose file). Fence/CC1
-  needs nothing more; Wall/CC2 adds gVisor's `runsc`, Vault/CC3 `/dev/kvm` +
-  Kata — `wardyn setup wall|vault` prints the steps for your host.
+- **Docker** + `compose` v2 (Postgres rides in the compose file).
+  - Fence/CC1 needs nothing more; Wall/CC2 adds gVisor's `runsc`, Vault/CC3 `/dev/kvm` + Kata — `wardyn setup wall|vault` prints the steps for your host.
 - **Go 1.26+**, **Node 22 + pnpm 9** — only to build from source.
-- `go install …/cmd/wardyn@latest` gives the **CLI** only; `wardynd` needs
-  `-tags docker` + a built `ui/dist` — use `make setup` or the image.
+- `go install …/cmd/wardyn@latest` gives the **CLI** only; `wardynd` needs `-tags docker` + a built `ui/dist` — use `make setup` or the image.
 
 ## What you get
 
@@ -146,21 +136,16 @@ built-in demos need no model either — see
 | Audit + attach | Three audit streams. The audit log itself is append-only — a Postgres trigger refuses `UPDATE`, `DELETE` and `TRUNCATE` on it. PTY replay is a separate store (upserted per cast, retention-swept), each upload audited. Attach live from browser or SSH | [SSH.md](docs/SSH.md) |
 | UI sandbox gateway | Relay a declared loopback port (editor, dev server) to a browser over its own origin — a per-run origin is the documented production default | [UI-SANDBOXES.md](docs/UI-SANDBOXES.md) |
 
-Everything else — env and policy reference, deployment, sample workspaces — is
-indexed in [docs/](docs/README.md).
+- Everything else — env and policy reference, deployment, sample workspaces — is indexed in [docs/](docs/README.md).
 
 ## Watch it work
 
-Six narrated walkthroughs are published, about 41 minutes end to end;
-the rest of the series is being re-recorded on 0.7 and lands in the same release as
-each episode passes (those rows read *coming soon*). Every one drives
-the real console against real sandboxes — the policies are live, the refusals
-are real, and the audit rows on screen were written by the run you are watching.
-Start with **03a** if you only watch one; it is the boundary itself.
-
-The series uses a coding agent as its worked example, because that is the case
-most people arrive for. The mechanics on screen — the egress boundary, the
-credential brokering, the audit trail — are the same for any sandboxed workload.
+- Six narrated walkthroughs are published, about 41 minutes end to end.
+- The rest of the series is being re-recorded on 0.7 and lands in the same release as each episode passes (those rows read *coming soon*).
+- Every one drives the real console against real sandboxes — the policies are live, the refusals are real, and the audit rows on screen were written by the run you are watching.
+- Start with **03a** if you only watch one; it is the boundary itself.
+- The series uses a coding agent as its worked example, because that is the case most people arrive for.
+- The mechanics on screen — the egress boundary, the credential brokering, the audit trail — are the same for any sandboxed workload.
 
 | Episode | What it shows | Length |
 |---|---|---|
@@ -188,13 +173,10 @@ credential brokering, the audit trail — are the same for any sandboxed workloa
 | 12b — Admin operations | Backup, upgrade, rotation and monitoring, day-2 on a running deployment | coming soon |
 | 13 — Your terminal, our cluster | `wardyn run ssh` into a Kubernetes-hosted run, from an ordinary terminal | coming soon |
 
-They ship as [release assets](https://github.com/cjohnstoniv/wardyn/releases/tag/v0.7.0),
-not in the repo, so a clone stays small. Each link pins the release that first
-shipped (or last re-recorded) that episode — a later release does **not**
-automatically re-publish an untouched episode under its own tag; only a
-re-recorded episode moves, to whichever release ships next. An episode without
-a link has not been recorded yet; it ships in whichever release its take passes
-under.
+- They ship as [release assets](https://github.com/cjohnstoniv/wardyn/releases/tag/v0.7.0), not in the repo, so a clone stays small.
+- Each link pins the release that first shipped (or last re-recorded) that episode.
+- A later release does **not** automatically re-publish an untouched episode under its own tag; only a re-recorded episode moves, to whichever release ships next.
+- An episode without a link has not been recorded yet; it ships in whichever release its take passes under.
 
 [v01]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-01-why-govern-agents.mp4
 [v02]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-02-set-up-the-host.mp4
@@ -204,6 +186,8 @@ under.
 [v05]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-05-your-first-policy.mp4
 
 ## Architecture at a glance
+
+![A run from left to right: console, control plane, sandbox behind a barrier, egress proxy, then destinations allowed, held or denied by policy; the proxy adds keys to outbound requests.](docs/img/wardyn-run.webp)
 
 ```mermaid
 flowchart LR
@@ -225,70 +209,46 @@ flowchart LR
   proxy -->|"allowlisted L7, creds injected"| net(("Internet / APIs"))
 ```
 
-A trusted control plane launches each run into an untrusted, gatewayless sandbox
-whose only path out is the `wardyn-proxy` sidecar, credentials injected there.
-Decision logs and masked casts flow back into the append-only audit log
-([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) §8). Wardyn never *adds* power:
-a run reaches at most what you can, clamped by policy.
+- A trusted control plane launches each run into an untrusted, gatewayless sandbox whose only path out is the `wardyn-proxy` sidecar, which adds most credentials there ([which, and which the sandbox can read](docs/CREDENTIALS.md)).
+- Decision logs flow back into the append-only audit log ([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md) §8).
+- Masked session recordings are optional and kept in their own store, with their own retention.
+- Wardyn never *adds* power: a run reaches at most what you can, clamped by policy.
 
 ## Honest security posture
 
-What Wardyn does **not** defend against is published in full
-([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md)). Notable residuals:
-
-- **The model-API channel is an unavoidable data-exit path.** Prompts and tool
-  calls are logged; nothing stops an agent encoding data into a permitted
-  prompt.
-- **Domain fronting and DNS-tunnel exfil** need TLS interception, which ships
-  only for operator-listed hosts (off by default) — most non-LLM egress stays
-  opaque.
-- **CC1/Fence shares the host kernel**, and the 1-hour minted-token window
-  before revocation is minimized by TTL, never eliminated.
-- **The UI sandbox gateway defaults to a shared browser origin** across runs,
-  separated only by a path-scoped cookie, unless the operator sets a per-run
-  origin template — the documented production default
-  ([UI-SANDBOXES.md](docs/UI-SANDBOXES.md#4-deployment)).
+- What Wardyn does **not** defend against is published in full ([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md)).
+- Notable residuals:
+  - **The model-API channel is an unavoidable data-exit path.**
+    - Prompts and tool calls are logged; nothing stops an agent encoding data into a permitted prompt.
+  - **Domain fronting and DNS-tunnel exfil** need TLS interception, which ships only for operator-listed hosts (off by default) — most non-LLM egress stays opaque.
+  - **CC1/Fence shares the host kernel**, and the 1-hour minted-token window before revocation is minimized by TTL, never eliminated.
+  - **The UI sandbox gateway defaults to a shared browser origin** across runs, separated only by a path-scoped cookie, unless the operator sets a per-run origin template — the documented production default ([UI-SANDBOXES.md](docs/UI-SANDBOXES.md#4-deployment)).
 
 ## Status
 
-Wardyn is **pre-alpha**. The current release is the one the install line above
-pins — the same version `internal/version`'s `Version` and the chart's
-`appVersion` carry — and [CHANGELOG.md](CHANGELOG.md) is what each release
-added. Two deployment lanes, both running real sandboxes, not one inverted into
-the other:
-
-- **`deploy/compose`** — the local 10-minute trial. The only lane that runs on
-  a laptop without a real cluster, and the only one with recorded demos
-  (the Getting Started demo steps).
+- Wardyn is **pre-alpha**.
+- The current release is the one the install line above pins — the same version `internal/version`'s `Version` and the chart's `appVersion` carry — and [CHANGELOG.md](CHANGELOG.md) is what each release added.
+- Two deployment lanes, both running real sandboxes, not one inverted into the other:
+- **`deploy/compose`** — the local 10-minute trial.
+  - The only lane that runs on a laptop without a real cluster, and the only one with recorded demos (the Getting Started demo steps).
 - **Kubernetes**: `helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn
-  --version <release>` (needs the admin-token/Postgres-DSN/age-identity Secrets
-  in the recipe above the fold) — the chart is published as a signed OCI
-  artifact, so no clone and no `helm repo add`. See
-  **[`deploy/helm/wardyn`](deploy/helm/wardyn/README.md)** — the deployment
-  story: `make kind-quickstart` for a one-command real-cluster install, or a
-  production Helm install onto your own Kubernetes. Not yet at Compose parity
-  (see the chart README's "Known gaps").
+  --version <release>` (needs the admin-token/Postgres-DSN/age-identity Secrets in the recipe above the fold) — the chart is published as a signed OCI artifact, so no clone and no `helm repo add`.
+  - See **[`deploy/helm/wardyn`](deploy/helm/wardyn/README.md)** — the deployment story: `make kind-quickstart` for a one-command real-cluster install, or a production Helm install onto your own Kubernetes.
+  - Not yet at Compose parity (see the chart README's "Known gaps").
 
-Still unbuilt: SPIRE, OpenBao, an MCP gateway, arbitrary-domain TLS
-interception, OTLP/OCSF sinks, SAML team SSO, SCIM provisioning of joiners (SCIM only removes
-leavers today; see [OPERATIONS.md](docs/OPERATIONS.md#leavers-and-scim)), Compose's own
-L1 default-deny — see [ROADMAP.md](ROADMAP.md) and [CHANGELOG.md](CHANGELOG.md).
+- Still unbuilt: SPIRE, OpenBao, an MCP gateway, arbitrary-domain TLS interception, OTLP/OCSF sinks, SAML team SSO, SCIM provisioning of joiners (SCIM only removes leavers today; see [OPERATIONS.md](docs/OPERATIONS.md#leavers-and-scim)), Compose's own L1 default-deny — see [ROADMAP.md](ROADMAP.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## License and governance
 
-**Apache-2.0, and free for anyone to use for any purpose, commercial use
-included — at any scale, with no fee, no seat limit, no registration and no
-telemetry.** There is no paid edition and no hosted backend: every control above
-is in this repo and runs on your infrastructure, or it doesn't run. There is also no CLA, which means no single party — including the
-maintainer — can relicense this project's accumulated work later.
+- **Apache-2.0, and free for anyone to use for any purpose, commercial use included — at any scale, with no fee, no seat limit, no registration and no telemetry.**
+- There is no paid edition and no hosted backend: every control above is in this repo and runs on your infrastructure, or it doesn't run.
+- There is also no CLA, which means no single party — including the maintainer — can relicense this project's accumulated work later.
 
-[`LICENSING.md`](LICENSING.md) is the one page to hand your legal team: the grant,
-what the artifacts contain, redistribution obligations, patents, warranty, and the
-disclosed risks. [`TRADEMARKS.md`](TRADEMARKS.md) covers what you may call things,
-which Apache-2.0 §6 deliberately does not.
+- [`LICENSING.md`](LICENSING.md) is the one page to hand your legal team: the grant, what the artifacts contain, redistribution obligations, patents, warranty, and the disclosed risks.
+- [`TRADEMARKS.md`](TRADEMARKS.md) covers what you may call things, which Apache-2.0 §6 deliberately does not.
 
-Every published image is cosign-signed with an attested SBOM and build
-provenance — [`docs/VERIFY.md`](docs/VERIFY.md) shows how to check that yourself.
+- Every published image is cosign-signed with an attested SBOM and build provenance — [`docs/VERIFY.md`](docs/VERIFY.md) shows how to check that yourself.
 
-Contributor sign-off via DCO (`Signed-off-by`). CNCF Sandbox is the governance
-target, not a status. Contributions welcome — see `CONTRIBUTING.md`.
+- Contributor sign-off via DCO (`Signed-off-by`).
+- CNCF Sandbox is the governance target, not a status.
+- Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md).

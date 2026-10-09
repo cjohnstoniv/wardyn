@@ -126,6 +126,10 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 		}
 		return awsSSOBlob{}, providerDenial{}, nil
 	}
+	var baseline awsSSORenewalBaseline
+	if refresh && createRenewal(ctx) {
+		baseline = s.readAWSSORenewalBaseline(ctx, scope)
+	}
 	blob, found, err := s.readAWSSSOBlob(ctx, scope)
 	if err != nil {
 		return awsSSOBlob{}, providerDenial{}, err
@@ -142,8 +146,9 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 		return refuse(connectDenial(p.ID, mpBRPortal))
 	}
 	if refresh {
+		rctx := context.WithValue(ctx, awsSSORenewalBaselineKey{scope}, baseline)
 		var failure string
-		if blob, failure = s.refreshAWSSSOBlob(ctx, scope, blob); failure != "" {
+		if blob, failure = s.refreshAWSSSOBlob(rctx, scope, blob); failure != "" {
 			switch failure {
 			case awsSSORefreshSpentSentence:
 				return refuse(connectDenial(p.ID, mpBRNotSignedIn))

@@ -191,4 +191,62 @@ describe("LoginSandboxNote — the waiting sign-in strip", () => {
     expect(getMock).not.toHaveBeenCalled();
     expect(screen.queryByTestId("run-sign-in-strip")).not.toBeInTheDocument();
   });
+  // M-F F-D5: a repeated identical answer is silent. Five more reads change
+  // nothing in the strip, so a screen reader hears nothing and focus stays put.
+  it("identical answers leave the strip untouched and never take focus", async () => {
+    getMock.mockResolvedValue(answerOf("a waiting attempt"));
+    view(mine());
+    await tick(0);
+    const strip = screen.getByTestId("run-sign-in-strip");
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    outside.focus();
+    const seen: MutationRecord[] = [];
+    const observer = new MutationObserver((r) => seen.push(...r));
+    observer.observe(strip, { subtree: true, childList: true, characterData: true, attributes: true });
+    await tick(25_000);
+    seen.push(...observer.takeRecords());
+    observer.disconnect();
+    expect(getMock).toHaveBeenCalledTimes(6);
+    expect(seen).toHaveLength(0);
+    expect(screen.getByTestId("run-sign-in-strip")).toBe(strip);
+    expect(outside).toHaveFocus();
+    outside.remove();
+  });
+
+  it("a changed code and link update once, on the next answer, without moving focus", async () => {
+    getMock.mockResolvedValueOnce(answerOf("a waiting attempt")).mockResolvedValue(answerOf("two consecutive attempts"));
+    view(mine());
+    await tick(0);
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    outside.focus();
+    await tick(5000);
+    expect(screen.getByLabelText(RUN_SIGN_IN.CODE_LABEL)).toHaveTextContent("WXYZ-1234");
+    expect(screen.getByTestId("run-sign-in-strip")).toHaveTextContent("Opens device.sso.us-east-1.amazonaws.com");
+    expect(outside).toHaveFocus();
+    outside.remove();
+  });
+
+  it("returning to the window reads at once instead of waiting out the interval", async () => {
+    getMock.mockResolvedValue(answerOf("a waiting attempt"));
+    view(mine());
+    await tick(0);
+    expect(getMock).toHaveBeenCalledTimes(1);
+    await tick(1000);
+    act(() => void window.dispatchEvent(new Event("focus")));
+    await tick(0);
+    expect(getMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("the strip is removed the moment the answer is not waiting, and the closing line says so", async () => {
+    getMock.mockResolvedValueOnce(answerOf("a waiting attempt")).mockResolvedValue(answerOf("a completed attempt"));
+    view(mine());
+    await tick(0);
+    expect(screen.getByTestId("run-sign-in-strip")).toBeInTheDocument();
+    act(() => void window.dispatchEvent(new Event("focus")));
+    await tick(0);
+    expect(screen.queryByTestId("run-sign-in-strip")).not.toBeInTheDocument();
+    expect(screen.getByText(RUN_SIGN_IN.NO_LONGER)).toBeInTheDocument();
+  });
 });

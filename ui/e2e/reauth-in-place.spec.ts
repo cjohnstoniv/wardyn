@@ -47,6 +47,13 @@ async function signInInDialog(page: Page): Promise<void> {
   await dialog.getByRole("button", { name: REAUTH_BAR.CTA, exact: true }).click();
 }
 
+// The /me splices below make a real round trip per request, and the layer keeps
+// reading /me while it waits, so a read can still be in flight when a test
+// ends; without this it fails as "apiResponse.json: Response has been disposed".
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
 test.describe("signed out mid-page: sign in again in place (#483)", () => {
   test("the dialog opens over the page, and after signing in the typed draft is still there", async ({ page }) => {
     const { puts } = await saveIntoAnExpiredSession(page);
@@ -183,6 +190,8 @@ test.describe("the expiry banner: sign in again in place", () => {
     await page.getByRole("button", { name: REAUTH_RENEW.CANCEL }).click();
     await expect(page.getByText(EXPIRING_SOON)).toBeVisible();
     await expect(page.getByText(REAUTH_DIALOG.WAITING)).toHaveCount(0);
+    // The strip's Cancel went with it: focus is on the banner's own button.
+    await expect(page.getByRole("button", { name: REAUTH_RENEW.CTA })).toBeFocused();
     await expect.poll(() => popup.isClosed()).toBe(true);
     // /me is still read, and the same person answering it changes nothing.
     await page.waitForResponse((r) => isMe(r.url()));
@@ -196,5 +205,39 @@ test.describe("the expiry banner: sign in again in place", () => {
     await expect(page).toHaveURL(/\/providers$/);
     await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
     await expect(page.getByTestId("provider-row-github")).toHaveCount(0);
+  });
+});
+
+// The renewal strip above New Run: Escape inside it only cancels the renewal.
+// New Run's own Escape leaves for /runs when the form is untouched, which it
+// is here, so staying put proves the strip consumed the key.
+test.describe("the renewal strip over New run", () => {
+  test("Escape cancels the renewal, stays on New run, and focus returns to Sign in again", async ({ page }) => {
+    // One fixed expiry: a moving one would read as a renewal on the next /me.
+    const expiresAt = inMinutes(2);
+    await page.route("**/api/v1/me", async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, json: { ...(await response.json()), session_expires_at: expiresAt } });
+    });
+    await gotoConsole(page);
+    await page.getByRole("button", { name: "New run" }).click();
+    await expect(page).toHaveURL(/\/runs\/new$/);
+    // New Run is its own lazy chunk and focuses Title when it mounts. Wait for
+    // that: mounting after the strip took focus moves focus off Cancel, and
+    // New Run's own Escape handler must already be there for staying put to
+    // prove the strip consumed the key.
+    await expect(page.getByLabel("Title")).toBeFocused();
+    await expect(page.getByText(EXPIRING_SOON)).toBeVisible();
+
+    await page.getByRole("button", { name: REAUTH_RENEW.CTA }).click();
+    await expect(page.getByText(REAUTH_DIALOG.WAITING)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("button", { name: REAUTH_RENEW.CANCEL })).toBeFocused();
+
+    await page.keyboard.press("Escape");
+    await expect(page.getByText(REAUTH_DIALOG.WAITING)).toHaveCount(0);
+    await expect(page.getByText(EXPIRING_SOON)).toBeVisible();
+    await expect(page.getByRole("button", { name: REAUTH_RENEW.CTA })).toBeFocused();
+    await expect(page).toHaveURL(/\/runs\/new$/);
+    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
   });
 });

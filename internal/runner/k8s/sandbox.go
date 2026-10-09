@@ -97,6 +97,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err := runner.ValidateManagedFiles(spec.ManagedFiles); err != nil {
 		return runner.Sandbox{}, fmt.Errorf("k8s: %w", err)
 	}
+	if err := agentSecretsAllowDrive(spec.ManagedFiles, spec.Drive); err != nil {
+		return runner.Sandbox{}, fmt.Errorf("k8s: %w", err)
+	}
 	runtimeClassName, runtimeHandler, err := d.resolveRuntimeClassName(ctx, spec.ConfinementClass)
 	if err != nil {
 		return runner.Sandbox{}, err
@@ -358,6 +361,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// any container starts, so there's no window where the agent runs without them.
 	managedVols, managedMounts := managedFileVolumes(spec.RunID, spec.ManagedFiles)
 	addMainContainerVolumes(agentPod, managedVols, managedMounts)
+	applyAgentSecretFSGroup(agentPod, spec.ManagedFiles)
 	// The drive, only when the pod has one, so a drive-less pod keeps its nil
 	// pod-level SecurityContext unchanged.
 	if spec.Drive != nil {

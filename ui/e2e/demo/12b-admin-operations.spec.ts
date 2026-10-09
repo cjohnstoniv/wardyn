@@ -38,6 +38,8 @@
 import { test, expect } from "@playwright/test";
 import { act, beat, caption, chapter, PACE, spotlight } from "./overlay";
 import { stage } from "./stage";
+import { SPEC_LABEL } from "../policy-source";
+import { newRunEditPolicy, newRunPanel } from "./funnel";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -112,12 +114,14 @@ test("V12b act 2 — a member's run asks for the outside world", async () => {
   await caption(page, "A member launches a run of their own: a terminal, nothing mounted, Minimal policy.");
   await beat(page, PACE.read);
   await page.getByRole("combobox", { name: "Title" }).fill("reach for the outside world");
+  await newRunPanel(page, "run");
   await act(page, page.getByRole("radio", { name: /^Terminal/ }), "No agent needed — a shell is enough to meet the boundary.");
+  await newRunEditPolicy(page);
   await act(page, page.getByRole("button", { name: "Minimal" }), "A member's own run — a terminal, nothing mounted, the Minimal policy.");
   // Minimal ships a CC2 floor; this demo cluster's one barrier is the Fence.
   // The one-line edit is itself the lesson: the floor is the member's to
   // RAISE, never to sneak under the admin's ceiling.
-  const spec = page.getByRole("textbox", { name: "Spec (JSON)" });
+  const spec = page.getByLabel(SPEC_LABEL);
   await spec.fill(JSON.stringify({
     allowed_domains: ["api.anthropic.com"],
     first_use_approval: "deny_with_review",

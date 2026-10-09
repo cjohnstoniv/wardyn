@@ -30,6 +30,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 )
 
 // pgPool connects to the live Postgres named by WARDYN_TEST_PG and runs Migrate()
@@ -216,11 +218,8 @@ func TestMigrateAdvisoryLockSerializesBoots(t *testing.T) {
 	pool := pgPool(t) // fully migrated; a lone Migrate() here is a clean no-op
 	ctx := context.Background()
 
-	holder, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire holder conn: %v", err)
-	}
-	defer holder.Release()
+	holder := testutil.PGConn(t, pool)
+	defer func() { _ = holder.Close(ctx) }()
 	if _, err := holder.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrateAdvisoryLockKey); err != nil {
 		t.Fatalf("hold migration advisory lock: %v", err)
 	}

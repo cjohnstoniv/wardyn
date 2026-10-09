@@ -49,7 +49,7 @@
 # --platform=$BUILDPLATFORM: runs on the BUILDER's arch and cross-compiles to
 # $TARGETARCH below. Every binary here is pure Go (CGO_ENABLED=0), so this stage
 # never needs QEMU. Stage 2 does (apt + npm run as the target arch).
-FROM --platform=$BUILDPLATFORM golang:1.27@sha256:4013ae0f9e7994f8535c58c811f8f863fbed38b72e0d51e6592156f758d66146 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS builder
 
 WORKDIR /build
 

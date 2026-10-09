@@ -128,6 +128,11 @@ const (
 	// different case entirely — still admin-only to mutate — and is pinned by
 	// workspace_owner_test.go rather than by this matrix.
 	entityWorkspace routeEntity = "workspace"
+	// entityComponent is a PERSON'S saved component (components.owner = the
+	// caller's subject). There is no admin bypass on these (tierOwnerOnly): an
+	// admin's own saved components are theirs like anyone's, and another
+	// person's are nobody's to read or write through /me/components.
+	entityComponent routeEntity = "component"
 )
 
 // ownerTier names WHICH ADMIN TIER an owner-scoped route's admin bypass belongs
@@ -220,6 +225,13 @@ var routeMatrix = map[string]classifiedRoute{
 	// admin (SUPER only: a security_admin is refused here too)
 	"GET /metrics":                           {class: classAdmin},
 	"POST /api/v1/setup/onboarding-complete": {class: classAdmin},
+	// The organisation's components: admin-authored content that reaches hosts and
+	// carries the operator's credential. Who may ATTACH one is the permission kind
+	// `component`, per row, not this tier.
+	"GET /api/v1/components":         {class: classAdmin},
+	"PUT /api/v1/components/{id}":    {class: classAdmin},
+	"DELETE /api/v1/components/{id}": {class: classAdmin},
+
 	// The stored-policy WRITES stay SUPER even though /governance's profile
 	// authoring is classSecurity (§B, decided): a stored run_policy is
 	// selectable CONTENT, so a SEC write path here would re-open the credential
@@ -622,10 +634,21 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/me/view":                     {class: classMember},
 	"POST /api/v1/policies/grade":              {class: classMember},
 	"POST /api/v1/runs":                        {class: classMember},
+	"POST /api/v1/runs/policy-preview":         {class: classMember},
 	"POST /api/v1/runs/preflight":              {class: classMember},
 	"DELETE /api/v1/me/ssh-keys/{fingerprint}": {class: classMember},
+	// Saved components (components_routes.go). The list and the create are
+	// member routes scoped to the caller's own subject at the store; the two
+	// by-id routes are owner-only, and below.
+	"GET /api/v1/me/components":  {class: classMember},
+	"POST /api/v1/me/components": {class: classMember},
 
 	// owner-or-admin
+	// A person's saved component: the byte-identical 404 for every other caller,
+	// the super admin included — a component is that person's own content.
+	"PUT /api/v1/me/components/{id}":    {class: classOwner, entity: entityComponent, ownerTier: tierOwnerOnly},
+	"DELETE /api/v1/me/components/{id}": {class: classOwner, entity: entityComponent, ownerTier: tierOwnerOnly},
+
 	// The workspace CRUD/scan/build tier (0048): a member acts on the workspaces
 	// THEY own, a foreign owned one is the byte-identical 404, and an admin
 	// reaches every one. The 403 an operator-owned row still returns to a member
@@ -1145,6 +1168,8 @@ func TestAuthzMatrix(t *testing.T) {
 					ownedID, foreignID = seedApproval(memberSub), seedApproval(otherSub)
 				case entityWorkspace:
 					ownedID, foreignID = seedWorkspace(memberSub), seedWorkspace(otherSub)
+				case entityComponent:
+					ownedID, foreignID = ast.seedComponent(memberSub), ast.seedComponent(otherSub)
 				default:
 					t.Fatalf("classOwner route %q has no entity set", key)
 				}
@@ -1357,6 +1382,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 					foreignID = aap.seed(seedRun())
 				case entityWorkspace:
 					foreignID = seedWorkspace()
+				case entityComponent:
+					foreignID = ast.seedComponent(foreignSub)
 				default:
 					t.Fatalf("classOwner route %q has no entity set", key)
 				}
@@ -1410,9 +1437,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// /runs/{id}/resume; 26 since #1144 added GET /runs/{id}/events; 27
 		// since #1232 added GET /runs/{id}/output; 28 since #1425 added GET
 		// /runs/{id}/policy; 29 since #1428 added GET /runs/{id}/ado-tokens; 30
-		// since #1891 added GET /runs/{id}/sign-in.
-		if probed != 30 {
-			t.Errorf("probed %d classOwner routes, want 30 — a route that left classOwner takes its tier "+
+		// since #1891 added GET /runs/{id}/sign-in; 32 since 0.8.9 added PUT and
+		// DELETE /me/components/{id}.
+		if probed != 32 {
+			t.Errorf("probed %d classOwner routes, want 32 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
@@ -1513,8 +1541,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// writes they decide (= 55 SEC).
 	// 0.8.6 notify-e4's GET /approval-notify/status is the security tier's own read (= 56 SEC).
 	// 0.8.6 scim-a7's read-only SCIM status sits beside the person erasure (= 57 SEC).
-	if sec != 57 || super != 49 {
-		t.Errorf("tier split = %d security / %d admin, want 57 / 49 (the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect)", sec, super)
+	// 0.8.9's organisation components add GET /components and PUT and DELETE
+	// /components/{id} on the SUPER tier (= 52 SUPER).
+	if sec != 57 || super != 52 {
+		t.Errorf("tier split = %d security / %d admin, want 57 / 52 (the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes, MINUS #548's retired paste and disconnect)", sec, super)
 	}
 }
 
@@ -1607,6 +1637,9 @@ type authzStore struct {
 	// The portal capability (store.DelegateStore), for the same reason
 	// (delegation_test.go).
 	*fakeDelegateStore
+	// The component capability (store.ComponentStore), so the by-id component
+	// routes have rows to own (components_fake_store_test.go).
+	fakeComponentStore
 }
 
 func newAuthzStore() *authzStore {

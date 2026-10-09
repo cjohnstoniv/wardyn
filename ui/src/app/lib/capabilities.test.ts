@@ -31,7 +31,7 @@ function g(over: Partial<CapabilityGrant>): CapabilityGrant {
 }
 
 function caps(over: Partial<MeCapabilities> = {}): MeCapabilities {
-  return { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false, ...over };
+  return { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false, kinds_version: 1, ...over };
 }
 
 describe("capabilityValueMatches", () => {

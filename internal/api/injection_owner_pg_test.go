@@ -156,8 +156,16 @@ func TestInvariant1_PGBacked_MemberOwnRowWinsOverOperator(t *testing.T) {
 			SecretName: "artifactory-token", Format: "Bearer %s",
 		},
 	}
+	// The grant the broker mints for is one of the run's own rows: the sink
+	// reads its scope back through the run's grant list and refuses one the
+	// list does not hold.
+	g, err := h.srv.cfg.Store.CreateGrant(ctx, types.CredentialGrant{ID: uuid.New(), RunID: created.ID,
+		Spec: apiKeyGrantSpec("artifactory.corp.example", "artifactory-token")})
+	if err != nil {
+		t.Fatalf("seed the run's grant: %v", err)
+	}
 	token := mintRunTokenAs(t, h, created.ID, "alice")
-	rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
+	rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+g.ID.String(), token, "")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("resolve injection: %d, want 200: %s", rr.Code, rr.Body.String())
 	}

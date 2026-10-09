@@ -13,7 +13,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { toast } from "sonner";
 import App from "./App";
-import { SESSION_ENDED_REASON, wfetch } from "./lib/api/core";
+import { SESSION_ENDED_REASON, setToken, wfetch } from "./lib/api/core";
 import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_EXTRA } from "./lib/reauth-copy";
 import { PROVIDERS_EXTRA } from "./lib/workspace-providers-copy";
 import { SHELL } from "./components/wardyn/copy";
@@ -241,6 +241,20 @@ describe("App — a session that ends mid-page (#483)", () => {
     await screen.findByText("at /runs");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("a role-change acknowledgement cannot confirm a token change that happened after its identity read", async () => {
+    await lapseMidPage("/admin/providers");
+    daemon.me = { ...ME, role: "user", operator: false, security_operator: false };
+    await signInWithToken();
+    const dialog = screen.getByRole("dialog");
+    await within(dialog).findByText(REAUTH_DIALOG.ROLE_CHANGED_BODY);
+    daemon.me = { ...daemon.me, principal: "someone-else" };
+    act(() => setToken("another-current-token"));
+    await user.click(within(dialog).getByRole("button", { name: REAUTH_EXTRA.GO_TO_RUNS }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    expect(screen.queryByLabelText("Note")).toBeNull();
+    expect(count("PUT /api/v1/stub-save")).toBe(1);
   });
 
   it("the same person signing back in: the shell takes the whole /me the dialog read", async () => {

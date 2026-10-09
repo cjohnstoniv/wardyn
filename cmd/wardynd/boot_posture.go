@@ -408,6 +408,9 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if *f.preflightRatePerMin < 0 {
 		return fmt.Errorf("refusing to start: WARDYN_PREFLIGHT_RATE_PER_MIN is %d; want 0 (off) or a positive number", *f.preflightRatePerMin)
 	}
+	if f.policyPreviewRatePerMin != nil && *f.policyPreviewRatePerMin < 0 {
+		return fmt.Errorf("refusing to start: WARDYN_POLICY_PREVIEW_RATE_PER_MIN is %d; want 0 (off) or a positive number", *f.policyPreviewRatePerMin)
+	}
 	if _, err := auditSealMode(f); err != nil {
 		return err
 	}
@@ -645,6 +648,12 @@ func parseMountCeilings(f *bootFlags) (runner.UserMountPolicy, []string, error) 
 func warnGovernAdminRunsUnbound(governAdminRuns, oidcConfigured bool) {
 	if governAdminRuns && !oidcConfigured {
 		slog.Warn("wardynd: WARDYN_GOVERN_ADMIN_RUNS is set but OIDC is not configured, so the switch binds nobody — every launch is the admin token or local mode, which stays ungoverned and carries governance_exempt on run.create. Configure SSO to govern admin runs, or unset it.")
+	}
+}
+
+func warnPublicAPIDisabled(adminToken string, localMode bool) {
+	if adminToken == "" && !localMode {
+		slog.Warn("wardynd: admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
 	}
 }
 

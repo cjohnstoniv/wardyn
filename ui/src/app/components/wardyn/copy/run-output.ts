@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Run-detail Output tab (mock packet M8): every string the panel shows.
+// Run-detail Output tab (mock packets M8 and M-O): every string the panel shows.
 import { clockTime } from "../../../lib/format";
 
 export const RUN_OUTPUT = {
@@ -11,6 +11,7 @@ export const RUN_OUTPUT = {
   eyebrow: "Output",
   sourceStdout: "Command output",
   sourcePane: "Last screen of this session",
+  sourceRecording: "From recording",
   live: "live · refreshing",
   final: "final",
   capturedAt: (t: string) => `Captured ${clockTime(t)}`,
@@ -19,8 +20,11 @@ export const RUN_OUTPUT = {
   emptyFinal: "This run printed nothing.",
   globalsOnly:
     "Part of this capture was masked without this run's own secrets, so a secret given to this run may appear unmasked.",
-  captureGap:
-    "Some of this run's output is missing: the server capturing it restarted, and the rest couldn't be recovered.",
+  // Names no cause: the wire's gap flag carries none.
+  captureGap: "Some or all of this run's output could not be recovered.",
+  // A recording row says this in place of `incomplete`: final means capture
+  // stopped updating, never that everything the run printed arrived.
+  recordingRecovered: "Recovered from the available recording. Full output delivery could not be verified.",
   incomplete: "This capture may be missing its last lines.",
   truncated: "Showing the end only — earlier output wasn't kept.",
   paneCaption:

@@ -5,18 +5,27 @@ Import `github.com/cjohnstoniv/wardyn/pkg/client` (one non-stdlib dependency,
 through `client.*` (e.g. `client.AgentRun`, `client.ApprovalPending`), so you
 never import `internal/types`.
 
+## Before you start
+
 > **Redirects.** The default client (`client.New`, or a `Client` with no `HTTPClient`) never
-> follows a redirect: a 3xx comes back as an `*APIError`, so a write that an ingress or a
+> follows a redirect.
+> A 3xx comes back as an `*APIError`, so a write that an ingress or a
 > mistyped base URL redirects fails instead of being replayed (body and bearer included) at
-> the `Location`. If you set `Client.HTTPClient`, its redirect policy is yours; set
+> the `Location`.
+> If you set `Client.HTTPClient`, its redirect policy is yours; set
 > `CheckRedirect` to a func that returns `http.ErrUseLastResponse` unless you mean to follow them.
 
-> **Coverage and pagination.** `pkg/client` is a curated SDK over the route families
-> external tooling automates, not a 1:1 mirror of wardynd. The exact list of what it
-> wraps and what it does not — and the `ListOpts` / `X-Wardyn-Truncated` pagination
-> contract — is the package doc on `pkg/client` itself, where your IDE shows it at the
-> call site; `TestClientCoversRouteFamilies` pins what it wraps against the real methods, and
-> `TestSDKCensusNamesEveryRouteFamily` (internal/api) pins that the not-covered half names every route family the router mounts.
+> **Coverage and pagination.**
+> - `pkg/client` is a curated SDK over the route families
+>   external tooling automates, not a 1:1 mirror of wardynd.
+> - The exact list of what it
+>   wraps and what it does not — and the `ListOpts` / `X-Wardyn-Truncated` pagination
+>   contract — is the package doc on `pkg/client` itself, where your IDE shows it at the
+>   call site.
+> - `TestClientCoversRouteFamilies` pins what it wraps against the real methods, and
+>   `TestSDKCensusNamesEveryRouteFamily` (internal/api) pins that the not-covered half names every route family the router mounts.
+
+## Quickstart
 
 ```go
 package main
@@ -152,7 +161,7 @@ if v.State == client.RunPolicyViewRecorded {
     for _, ch := range v.Changes {
         fmt.Println(ch.Cause, ch.Field, ch.Added, ch.Removed)
     }
-    _ = v.Spec // a client.RunPolicySpec, ready for PolicyRequest.Spec
+    _ = v.Spec // a client.RunPolicySpec; read "Reusing the spec" below before sending it as PolicyRequest.Spec
 }
 ```
 
@@ -162,11 +171,26 @@ if v.State == client.RunPolicyViewRecorded {
 | `source` | `kind` is `stored`, `inline`, `default`, `profile` or `unknown`; a saved policy carries `policy_id` and its `name` at launch, and `deleted` once it is gone; `preset` and `preset_version` when the run came from one |
 | `spec` | the policy the sandbox's proxy enforces, restart denies included; `llm_inspection` secret values are never present |
 | `redacted` | true when the reader is below the security admin tier and mount sources or secret names were hidden (`<redacted>`, or dropped); the spec then strict-decodes as a policy but does not validate |
-| `changes` | never `null`; each item is a `cause` (`workspace`, `source_control`, `mirror`, `model_access`, `git_broker`, `profile`, `org_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `profile` for `profile`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`. Grants read `kind:host` or `kind:repo,repo`, mounts by target, repos `repo@ref`: never a hidden value |
+| `changes` | never `null`; each item says why, where and what changed, and never shows a hidden value; the item fields are listed under the table |
 | `complete` | false for a run from before Wardyn recorded its starting policy: `changes` then lists only what the launch audit rows state |
 | `stored_policy_now` | for a saved-policy source: `same`, `changed`, `updated` (a run from before the record: edited since, possibly a rename only) or `deleted`, with the policy's current `name` |
 
 The CLI is `wardyn run policy <run-id> [--json]`.
+
+#### Reusing the spec
+
+The spec always strict-decodes as a policy. Whether it passes policy validation depends on the reader and the run.
+
+- At the security admin tier it passes, and `wardyn run --policy-file` runs it again as is.
+- Below that tier it holds `<redacted>` values and fewer secret names, so it is a starting point.
+- A run that used an organisation component's shared secret is a record for every reader. The grant carries `shared: true`, which every authored door refuses, so validation fails.
+- For such a run, start the new run with the component named in `CreateRunRequest.Components` ([Custom components](#custom-components)).
+- The CLI says so in a `#` comment line above the YAML, and in its help.
+
+#### `changes`
+
+Never `null`. Each item is a `cause` (`workspace`, `source_control`, `mirror`, `model_access`, `git_broker`, `profile`, `org_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `profile` for `profile`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`.
+Grants read `kind:host` or `kind:repo,repo`, mounts by target, repos `repo@ref`: never a hidden value.
 
 ## Following a run's lifecycle
 
@@ -196,14 +220,17 @@ log or secret content:
 | `failed` | the run failed | `reason`: `not_started`, `start_failed` or `run_failed` (the phase it failed in) |
 | `ended` | always last; the stream then closes | `state`: the terminal run state |
 
-Each event's `id` is monotonic per run; reconnect with `Last-Event-ID` (the SDK
-does) to resume without gaps. The server sends a `: keepalive` comment every
-15s, ends the stream at the next keepalive once the caller's session is revoked,
-and closes a held stream after 5 minutes so the reconnect re-authenticates.
-The feed is kept in wardynd's memory: resume works within the daemon's
-lifetime. After a restart a live run's stream carries only what happens next,
-and a run that had already ended answers `ended` alone. The repository clone
-happens inside the sandbox after `ready`, so it is not a separate event.
+- Each event's `id` is monotonic per run; reconnect with `Last-Event-ID` (the SDK
+  does) to resume without gaps.
+- The server sends a `: keepalive` comment every
+  15s, ends the stream at the next keepalive once the caller's session is revoked,
+  and closes a held stream after 5 minutes so the reconnect re-authenticates.
+- The feed is kept in wardynd's memory: resume works within the daemon's
+  lifetime.
+- After a restart a live run's stream carries only what happens next,
+  and a run that had already ended answers `ended` alone.
+- The repository clone
+  happens inside the sandbox after `ready`, so it is not a separate event.
 
 ## Reading a run's output
 
@@ -216,30 +243,52 @@ out, err := c.RunOutput(ctx, created.ID, 0)
 fmt.Println(out.Output, out.Truncated, out.Complete, out.Source)
 ```
 
-`truncated` says the output does not start at the run's first byte; `complete`
-says the capture is final; a run that has just finished is not `complete` until
-its last bytes are in, so read once more if the end matters. `source` is
-`stdout` for a run's own output and `pane_snapshot` for an interactive run's
-last screen, which is plain text. `incomplete` says bytes may be missing;
-`capture_gap` says none could be captured, so `output` is empty. `mask_scope` is
-`run` when the capture was masked against the run's complete manifest and
-`globals_only` when it was not (empty when the deployment keeps none).
-`captured_at` is when the final row was written, nil while the run is live. The
-same `404` as `GET /runs/{id}` answers anyone who may not read the run; the
-other refusals carry a `run_output_*` reason (below), `run_output_erased`
-among them (the run's output was erased, `404`).
+- `truncated` says the output does not start at the run's first byte.
+- `complete`
+  says the capture attempt is final.
+  A later recording upload may improve a
+  finalized recording result.
+- `source` is `stdout` for direct command output,
+  `pane_snapshot` for an interactive run's last screen, or `recording` for recovered
+  asciicast output.
+  The latter two retain the recording's owner-or-operator privacy
+  gate, even after recording is disabled.
+- `incomplete` says bytes may be missing
+  and is always true for recording recovery.
+- `capture_gap` says capture or recovery
+  was lost.
+  Previously persisted masked stdout chunks may remain.
+- `mask_scope` is
+  `run` when the capture was masked against the run's complete manifest and
+  `globals_only` when it was not (empty when the deployment keeps none).
+- `captured_at` is when the final row was written, nil while the run is live.
+- The
+  same `404` as `GET /runs/{id}` answers anyone who may not read the run.
+  The
+  other refusals carry a `run_output_*` reason (below), `run_output_erased`
+  among them (the run's output was erased, `404`).
+- An authorized recording reader
+  gets `410 recording_erased` when its derived output scope was erased and no
+  independent output remains.
 
 From a shell, `wardyn run output <run-id>` prints the same bytes (below).
 
 ## Finding a waiting sign-in
 
 `GET /api/v1/runs/{id}/sign-in` finds an AWS sign-in that is waiting for its
-device-code approval after the browser tab that started it was lost. It reads
-the sign-in sandbox's terminal once and answers `{"state":"waiting",
-"verification_url":"https://…","user_code":"ABCD-EFGH"}` for the latest
-attempt while an `aws sso login` process is still running in the sandbox, or
-`{"state":"not_waiting"}` when no such process is left, that attempt has
-finished or failed, the run captured its sign-in, or the run is not running. Only the run's owner may
+device-code approval after the browser tab that started it was lost.
+
+It reads
+the sign-in sandbox's terminal once and answers:
+
+- `{"state":"waiting",
+  "verification_url":"https://…","user_code":"ABCD-EFGH"}` for the latest
+  attempt while an `aws sso login` process is still running in the sandbox,
+- or
+  `{"state":"not_waiting"}` when no such process is left, that attempt has
+  finished or failed, the run captured its sign-in, or the run is not running.
+
+Only the run's owner may
 read it: a super admin on a person's run gets `403 run_owner_only`, because
 approving the page binds the approver's cloud identity to the owner's session.
 `RunSignIn` reads it:
@@ -252,6 +301,72 @@ if err == nil && s.State == client.SignInWaiting {
 ```
 
 From a shell, `wardyn run sign-in <run-id>` prints the same answer.
+
+## Policy preview
+
+`POST /api/v1/runs/policy-preview` accepts the same `CreateRunRequest` JSON as create and preflight, with the same member authentication and cookie CSRF checks.
+
+- It resolves an incomplete draft without launching it.
+- An empty task stays pending; it is never silently made interactive here.
+- An absent model-provider choice is pending; explicit or inherited unavailable choices still refuse without enumerating hidden providers.
+
+A successful response contains `spec` (authorized, clamped, workspace-folded and redacted), `source` (`kind`: `default`, `profile`, `stored` or `inline`; authorized `name` when available; `policy_id` only for stored), `provisional: true`, `redacted`, `warnings`, `pending`, and `repository_access`, and `components` when the draft names a component or a repository on a Git provider.
+
+- Preview collections are arrays, never null; omitted versus explicitly empty axes inside the policy retain their policy meaning.
+- In particular, a PAT scope with `repos: []` still permits no repositories; omitted `repos` remains unset.
+- The existing ADO policy choice uses the provider default for both empty and absent lists.
+- Repository groups carry `kind` (`github`, `azure_devops`, `other`), normalized `repos`, and the already disclosable ADO `org`, `default_profile` and `capability_ceiling` when applicable.
+- They carry no row IDs, configured URL lists or credential-existence facts.
+- Mount host paths and grant secret references are redacted for every preview reader.
+- Warnings contain only count/structural messages and authorized ADO narrowing text; unsafe clamp messages are omitted.
+
+- Repository locators retain their transport, meaningful port and full escaped path, with URL userinfo, query strings and fragments omitted.
+- Supported SSH aliases and scp forms use a normalized `ssh://` locator; the SSH-over-443 port is implicit.
+- A group shares all of its displayed facts: ADO profiles and ceilings are sorted capability sets, and differing sets produce separate groups even when the displayed `org` is identical.
+
+`pending` names unresolved launch work: `task`, `model_provider_selection`, `credential_liveness`, `autonomy`, `tool_approvals`, `runner_confinement`, `drive_readiness`, `dispatch_egress`.
+
+- The drive entry appears only for an enabled selection.
+- Preview authorizes drive allocation, profile, org switch, pause and read-only narrowing without checking the runner or share.
+- Workspace overrides for unattached workspaces remain inert, as at create; effective attached sources are authorized before facts.
+
+- Preview rejects the same malformed inputs and authorization failures through existing error envelopes and reasons.
+- It reads no credential values, renews or mints nothing, persists no run or grant, dispatches nothing, and performs no runner, share, capacity or quota probe.
+- After the shared authentication and CSRF middleware, the handler may emit only existing dry-run `authz.denied` and `workspace.provider.admit` events, coalesced with identical preflight denials.
+- Authentication failures retain their existing middleware audit behavior.
+- Its deterministic egress includes authorized workspace declarations and clone hosts; site-config/SSH/PAT/ADO dispatch unions remain pending.
+- Custom inline runs with an authorized `github.com` HTTPS/slug clone and no surviving `github_token` also derive `github.com` and `*.githubusercontent.com`, narrowed through the caller's ceiling and personal domain capabilities before union.
+- Preflight and create use the same rule; only create audits its additions as `run.egress.add` with `kind: github_direct`.
+- Saved/default policy and authored manual-domain semantics are unchanged.
+
+- The response is provisional even for its exact request body.
+- Credentials, policies, capabilities and connections may change after it answers; create independently re-resolves every gate.
+- Clients should associate results with the request and principal, mark them stale after 60 seconds or relevant auth/config changes, and honor `Retry-After` without replacing a last good preview with an empty result.
+- Never use this read output as editable policy input.
+
+## Custom components
+
+A run can carry components that add destinations and secrets ([POLICIES.md](POLICIES.md#custom-components) defines them; [OPERATIONS.md](OPERATIONS.md#custom-components) is the admin side). The client wraps both stores of them.
+
+| Method | Route | Who |
+|---|---|---|
+| `MyComponents` | `GET /api/v1/me/components` | any signed-in person |
+| `SaveMyComponent` | `POST /api/v1/me/components` | any signed-in person |
+| `UpdateMyComponent` | `PUT /api/v1/me/components/{id}` | the owner |
+| `DeleteMyComponent` | `DELETE /api/v1/me/components/{id}` | the owner |
+| `ListComponents` | `GET /api/v1/components` | admin |
+| `PutComponent` | `PUT /api/v1/components/{id}` | admin |
+| `DeleteComponent` | `DELETE /api/v1/components/{id}` | admin |
+
+- `MyComponents` answers `may_define`, `resident_delivery_allowed`, `autonomy_cap`, `mine` and `org`.
+  - `org` holds only the organisation components the caller is granted, as `OrgComponentView`: hosts, delivery modes and config keys, never a secret name.
+- A save answers `ComponentSaved`: the stored row and `requirements[]`.
+  - Each requirement is `{kind: "secret", name, status: "present"|"missing", fix: "add_secret"}`. The list is advisory and never refuses a save.
+- `PutComponent` creates an organisation component restricted: nobody may attach it until an admin grants its id under `/api/v1/permissions`.
+- A run attaches components in `CreateRunRequest.Components`: `{id}` for a stored one, `{inline, name}` for a definition used by that run alone. At most 8.
+- Preflight and the policy preview answer `components`: one fact per component with `status` (`ready`, `needs_input`, `unavailable` or `unknown`), its `requirements`, hosts and each secret's delivery and `shared` flag.
+  - A fact never carries the name of a secret the organisation provides.
+- Create, preflight and preview refuse with the component reasons in [`Reason`](#reason-branch-on-this-never-on-errors-prose); a run is audited as `run.component.attach` and `run.component.refuse`.
 
 ## Error handling
 
@@ -280,39 +395,58 @@ if errors.As(err, &apiErr) && apiErr.Reason == "scope_changed" {
 ```
 
 **Coverage is uniform (#204, #656): every non-2xx body this API writes
-carries `reason`, or is one of a small, reviewed, named exception.** The
-sweep ran lane by lane — the three credential-injection resolve arms behind
+carries `reason`, or is one of a small, reviewed, named exception.**
+
+The sweep ran lane by lane — the three credential-injection resolve arms behind
 `GET /api/v1/internal/injection/{grantID}` (Azure DevOps, AWS SSO, Bedrock
-bearer) first, then #656 slice 1 (`GET/POST /approvals` including its
-`/paths` route, the internal sidecar's push-content raise route, `POST /runs`
-and `POST /runs/preflight`, `GET /runs`, run kill, workspace delete and the
-workspace create/update/admission/env-as-code/providers routes), slice 2
-(`/site-config`, `/governance`, `/secrets`, `/people`, `/access`,
-`/permissions`, `/admin/delegates`, `/setup/*`, `/sessions/revoke`,
-`/ssh-keys`, the user-drive doors), and slice 3 (every remaining `run_*.go`
-per-run action, the UI gateway, device federation, and the rest of the route
-surface) — but a route reached today answers exactly like one reached at the
-start. Run revive and the admin bulk restart send `revive_unsupported` for a
-run whose substrate cannot replace its proxy, alongside slice 3's other
-per-run reasons. Two repo-wide guards keep it that way:
-`TestEveryWriteErrorCallCarriesAReasonOrIsReviewed` fails the build on any new
-bare `writeError`/`http.Error` call outside its small, evidence-backed
-allowlist, and `TestNoAdHocErrorBodyOrReasonLiteral` catches a direct
-`writeJSON(errorBody{...})` construction with no `Reason`, or a hand-typed
-string literal passed to `writeErrorReason` instead of a named constant.
-Three refusals are DELIBERATELY still bare, each with its own pinning test proving the
-absence is intentional (a transient model-provider store failure that is no
-door, an unanswered AWS Bedrock SSO renewal that is not a refusal class, and
-the drive-mount resolver's own runner-unavailable/caller-cancelled arms) — see
-`internal/api/reason_coverage_guard_test.go`'s own allowlist for exactly
-which three and why. Every OTHER reason is drawn from one of two sources: the
-closed set in `internal/api/reasons.go` and `reasons_routes.go` (a reason two
-routes share — the dispatch-time-snapshot family below, the hold-chain
-terminal/exhausted pair — always means the same thing regardless of which one
-sent it), or `internal/authz/registry.go`'s own registry, which `s.refuse`
-writes directly for every Deny/Unprocessable/Conflict-effect authorization
-refusal (its two Hidden-effect reasons are never themselves a wire value — see
-the authz section below). `TestReasonDocsMatchReasonsGo` checks both sources
+bearer) first, then:
+
+- #656 slice 1 (`GET/POST /approvals` including its
+  `/paths` route, the internal sidecar's push-content raise route, `POST /runs`
+  and `POST /runs/preflight`, `GET /runs`, run kill, workspace delete and the
+  workspace create/update/admission/env-as-code/providers routes),
+- slice 2
+  (`/site-config`, `/governance`, `/secrets`, `/people`, `/access`,
+  `/permissions`, `/admin/delegates`, `/setup/*`, `/sessions/revoke`,
+  `/ssh-keys`, the user-drive doors),
+- and slice 3 (every remaining `run_*.go`
+  per-run action, the UI gateway, device federation, and the rest of the route
+  surface).
+
+But a route reached today answers exactly like one reached at the
+start.
+
+- Run revive and the admin bulk restart send `revive_unsupported` for a
+  run whose substrate cannot replace its proxy, alongside slice 3's other
+  per-run reasons.
+- Two repo-wide guards keep it that way:
+  - `TestEveryWriteErrorCallCarriesAReasonOrIsReviewed` fails the build on any new
+    bare `writeError`/`http.Error` call outside its small, evidence-backed
+    allowlist,
+  - and `TestNoAdHocErrorBodyOrReasonLiteral` catches a direct
+    `writeJSON(errorBody{...})` construction with no `Reason`, or a hand-typed
+    string literal passed to `writeErrorReason` instead of a named constant.
+- Three refusals are DELIBERATELY still bare, each with its own pinning test proving the
+  absence is intentional:
+  - a transient model-provider store failure that is no
+    door,
+  - an unanswered AWS Bedrock SSO renewal that is not a refusal class,
+  - and the drive-mount resolver's own runner-unavailable/caller-cancelled arms.
+
+  See [`internal/api/reason_coverage_guard_test.go`](../internal/api/reason_coverage_guard_test.go)'s own allowlist for exactly
+  which three and why.
+- Every OTHER reason is drawn from one of two sources:
+  - the
+    closed set in [`internal/api/reasons.go`](../internal/api/reasons.go) and `reasons_routes.go` (a reason two
+    routes share — the dispatch-time-snapshot family below, the hold-chain
+    terminal/exhausted pair — always means the same thing regardless of which one
+    sent it),
+  - or [`internal/authz/registry.go`](../internal/authz/registry.go)'s own registry, which `s.refuse`
+    writes directly for every Deny/Unprocessable/Conflict-effect authorization
+    refusal (its two Hidden-effect reasons are never themselves a wire value — see
+    the authz section below).
+
+`TestReasonDocsMatchReasonsGo` checks both sources
 against this whole table, so a value missing here is a red build, not a
 silent gap:
 
@@ -342,7 +476,7 @@ silent gap:
 | `signin_closed` / `signin_holds_exhausted` | The hold chain has gone terminal (cancelled, expired, denied) or hit its per-run cap — see `injection_ado_signin.go`'s sign-in hold and `injection_awssso.go`'s re-auth hold, the same shape under two names. |
 | `raise_failed` | The approval store itself errored while raising a capability, consent, sign-in or re-auth hold. Azure DevOps, AWS SSO. |
 | `preset_unknown` / `preset_field_not_per_launch` / `preset_version_changed` / `preset_version_without_preset` | A `POST /runs` naming a launch preset: no such preset (or not open to the caller's user type, `422`), a field other than `title`/`task` beside `preset` (`400`), a pinned `preset_version` that is no longer current (`409`), or `preset_version` without `preset` (`400`). See OPERATIONS.md's launch presets section. |
-| `not_captured` / `dead_credential` / `consent_required` / `interaction_required` / `unavailable` | `ADOEntraFailure`'s own closed enum (`internal/api/ado_entra_store.go`), carried through unchanged when the redemption classifies a renewal failure. Azure DevOps. |
+| `not_captured` / `dead_credential` / `consent_required` / `interaction_required` / `unavailable` | `ADOEntraFailure`'s own closed enum ([`internal/api/ado_entra_store.go`](../internal/api/ado_entra_store.go)), carried through unchanged when the redemption classifies a renewal failure. Azure DevOps. |
 | `invalid_approval_state` / `invalid_run_id_param` / `invalid_view_param` / `invalid_owner_param` / `invalid_status_param` / `status_needs_exclusive` / `status_needs_requires_view` / `invalid_ended_within_param` / `invalid_include_killed_param` / `runs_search_query_too_long` / `invalid_limit_param` / `invalid_offset_param` | A `GET /approvals` or `GET /runs` query parameter is malformed or conflicts with another one. `invalid_view_param` is the same reason on both routes (the same shape); `invalid_limit_param`/`invalid_offset_param` are `parseListPage`'s, shared by every paginated list route in `internal/api` (`GET /audit`, `/policies`, `/secrets`, `/user-drives`, `/api-tokens`, `/permissions/grants`, `/setup/integrations`, `/ssh-keys`, `/runs/policy-history`, …). |
 | `listing_unscoped_backend` | The store backend cannot scope this listing to the caller's own runs — the SAME missing capability on `GET /approvals`, `GET /runs` and `GET /runs/policy-history`. |
 | `approval_not_found` | The named approval does not exist, or the caller may not see it — `POST /approvals/{id}/{approve,deny}` and every other approval-lookup route, INCLUDING `GET /approvals/{id}/paths`: a foreign approval and a missing one answer byte-identically there, reason and body both, so the reason itself is not an existence oracle. |
@@ -363,14 +497,14 @@ silent gap:
 | `workspace_providers_invalid` | The operator-only `PUT /api/v1/workspace-providers` (deployment-wide, not a per-workspace route): the submitted block fails validation. Its stale-`If-Match` arm shares `site_config_stale` below — the identical ETag cause, on the same underlying site-config document. |
 | `workspace_request_invalid` / `workspace_ssh_sources_not_ready` / `workspace_sources_not_allowed` | `POST/PUT /workspaces`: the request body fails validation, an SSH-remote source names a secret not yet stored, or the caller's own `local_dir` sources fail the member-safe mount gate. |
 | `workspace_delete_active_run` | `DELETE /workspaces/{id}`: the workspace is in use by a still-active run. |
-| `groups_snapshot_stale` | `PUT/POST /governance/*` and the user-drive resolver: the caller's group-membership snapshot is missing or was truncated at sign-in, so a group-keyed governance profile cannot be resolved. The SAME value as authz's own registered reason (`internal/authz/registry.go`) — a literal in `reasons.go` (the docs⟷reasons.go guard only reads literals), tied to authz's constant by a documented `TestNoAdHocAuthz` exception rather than a reference or a second copy invented for this package. |
+| `groups_snapshot_stale` | `PUT/POST /governance/*` and the user-drive resolver: the caller's group-membership snapshot is missing or was truncated at sign-in, so a group-keyed governance profile cannot be resolved. The SAME value as authz's own registered reason ([`internal/authz/registry.go`](../internal/authz/registry.go)) — a literal in `reasons.go` (the docs⟷reasons.go guard only reads literals), tied to authz's constant by a documented `TestNoAdHocAuthz` exception rather than a reference or a second copy invented for this package. |
 | `site_config_request_invalid` / `site_config_artifact_override_invalid` / `site_config_integrations_via_own_route` / `site_config_invalid` / `site_config_stale` | `PUT /site-config`: the body did not decode, a legacy artifact-override field fails validation, integrations were named inline instead of through their own endpoints, the submitted config fails one of the agent/model-provider/default-provider validators, or `If-Match` is stale. `site_config_stale` is shared by every `PUT` that checks `If-Match` against this same document's ETag: `PUT /agent-providers`, `PUT /model-providers` and `PUT /workspace-providers` all answer it too, one reason for one cause regardless of which sub-block the write targeted. |
 | `site_config_probe_request_invalid` / `site_config_probe_url_invalid` / `egress_redirect_from_required` / `egress_redirect_not_found` | `POST /site-config/probe-proxy` and the egress-redirect edit routes. |
 | `governance_profile_request_invalid` / `governance_ceiling_invalid` / `governance_profile_name_conflict` / `governance_profile_in_use` / `governance_assignment_invalid` / `governance_preview_claims_invalid` | `PUT/POST /governance/profiles` and `/governance/assignments`, and the preview routes — `governance_preview_claims_invalid` is shared with the user-drive naming preview (`user_drives_preview.go`), which feeds the same `normalizeGovernancePreviewClaims` validator. `governance_profile_in_use` is a `409` when a profile is still assigned or still the base of another profile (the body names those profiles). A composed profile read by an SDK that predates composition shows `ceiling: {}` and `limits: {}` and ignores `effective`; a `PUT` from it omits the composition fields, which are kept, so it cannot flatten the profile. |
 | `governance_overlay_invalid` | `PUT/POST /governance/profiles` (400): a composed profile's `overlay` or `overlay_limits` does not decode, names something its base does not permit (a domain outside the base, a method the base excludes, `allow_all_egress` on a base without it, a looser bound, a grant the base does not hold), would mean "everything" by being empty (`allowed_methods: []`), names a base that does not exist, or sits beside a non-empty `ceiling` or `limits` (a composed profile states its policy only in the overlay). |
 | `governance_profile_cycle` | `PUT/POST /governance/profiles` (409): the write would make a profile, through its base, its own base. |
 | `governance_profile_depth` | `PUT/POST /governance/profiles` (409): the write would put a profile, or one built on it, more than three profiles deep. |
-| `governance_overlay_unsatisfiable` | `PUT/POST /governance/profiles` (409): a base change would leave a profile built on it with a policy nothing satisfies (the body names that profile). The SAME value as authz's own registered launch refusal (`internal/authz/registry.go`, `403` on create, preflight and every live door), a literal in `reasons.go` for the same reason `groups_snapshot_stale` is. |
+| `governance_overlay_unsatisfiable` | `PUT/POST /governance/profiles` (409): a base change would leave a profile built on it with a policy nothing satisfies (the body names that profile). The SAME value as authz's own registered launch refusal ([`internal/authz/registry.go`](../internal/authz/registry.go), `403` on create, preflight and every live door), a literal in `reasons.go` for the same reason `groups_snapshot_stale` is. |
 | `governance_second_human_local_mode` | `WARDYN_GOVERNANCE_SECOND_HUMAN` cannot be enforced in local mode (`503`): nobody is authenticated there, so the proposer and the approver are both client-supplied. Every covered governance write (profile, assignment, grant, enforcement, availability, user-type priority, role mapping) and every `/governance/changes` approve or reject answers it. |
 | `governance_change_pending` | A covered write (`/governance/profiles`, `/governance/assignments`, `/permissions/grants`, `/permissions/enforcement`, `/permissions/availability`, `PUT /user-types/{id}`, `/access/mappings`) with `WARDYN_GOVERNANCE_SECOND_HUMAN` on (409): a live change already waits for approval at this target; the message names it. Approve or reject that one first, or let it expire. |
 | `governance_change_stale` | `POST /governance/changes/{id}/approve` (409): the target (or, for an assignment, the profile it points at) or the deployment default changed since the change was proposed, so approving would apply something other than what the reviewer saw. Nothing was applied and the change is now `stale`; propose it again. |
@@ -392,6 +526,7 @@ silent gap:
 | `capability_grant_invalid` / `capability_kind_unknown` / `capability_enforcement_stale` / `availability_kind_not_restrictable` / `availability_target_invalid` / `availability_restricted_required` / `availability_only_empty` | `POST /permissions/grants` and the capability-availability routes. |
 | `delegation_store_unavailable` / `delegate_name_invalid` / `delegate_client_id_invalid` / `delegate_client_id_is_portal` / `delegate_group_invalid` | `POST /admin/delegates` (operator-only portal delegate registration). |
 | `integration_invalid` / `integration_not_found` / `setup_onboarding_store_unavailable` | `PUT/DELETE /setup/integrations/{id}` and `POST /setup/onboarding-complete` (operator-only). |
+| `component_cap_reached` / `component_name_conflict` / `component_not_found` | `POST/PUT/DELETE /me/components[/{id}]` and `PUT/DELETE /components/{id}`: the owner already holds the maximum number of saved components (32 per person, 256 for the organisation), another component of the same owner already has the name (compared without case), or no such component of the caller's exists (another person's row and an absent id answer alike). These routes also answer `component_definition_invalid` (the definition fails the shared validator or names a secret Wardyn manages), `component_secret_missing` (an organisation component shares a secret the operator has not stored) and `component_store_unavailable`, documented with the run gate below. |
 | `ssh_key_invalid` / `ssh_key_requires_human` / `ssh_key_cap_reached` / `ssh_key_revoked_session` / `ssh_key_registration_refused` / `ssh_key_fingerprint_invalid_encoding` | `POST/DELETE /me/ssh-keys` (self-service). `ssh_key_registration_refused` is DELIBERATELY generic (THREAT-MODEL.md): it never confirms whether the key is already registered, or by whom — a distinguishable reason here would be the same key-squatting reconnaissance oracle the shared sentence already refuses to open. |
 | `ssh_key_admin_principal_invalid_encoding` / `ssh_key_admin_principal_required` | `DELETE /people/{principal}/ssh-keys` (security-tier). |
 | `user_drive_request_invalid` / `user_drive_allocated_conflict` / `user_drive_slug_conflict` / `user_drive_home_namespace_conflict` / `user_drive_name_conflict` / `user_drive_still_allocated` / `user_drive_grant_invalid` / `user_drive_grant_conflict` | `POST/PUT/DELETE /user-drives` and its allocation-grant sub-route (operator-only). |
@@ -400,8 +535,8 @@ silent gap:
 | `user_drive_reclaim_invalid` / `user_drive_reclaim_subject_ambiguous` / `user_drive_not_reclaimable` / `user_drive_reclaim_unsupported` / `user_drive_reclaim_conflict` | `POST /user-drives/{id}/reclaim` (operator-only). |
 | `user_drive_reclaim_failed` / `user_drive_reclaim_no_directory_name` | The reclaim object resolver's own two causes: a store read failure, or the allocation resolving to no directory name at all. |
 | `user_drive_preview_no_claims` / `user_drive_denied_by_profile` | The user-drive naming and bind-failure preview routes (operator-only, mirrors the launch-time resolver's own verdict so an admin reads the SAME sentence a member would). |
-| `no_allocation` / `paused` / `runner_cannot_mount` / `backend_elsewhere` / `ceiling_moved` / `home_missing` / `home_unreadable` / `share_unreachable` / `read_only` / `drives_disabled` | `POST /runs`' drive-mount resolution (`seedRequestDrive`, `refuseDrive`) — the SAME closed set (declared in `internal/api/reasons.go`, moved there from beside `refuseDrive` so this guard can see it) already used for the `wardyn_drive_refusals_total` metric and the WARN log line, now also on the wire. Two arms of `driveBindFailure` stay bare on purpose: the runner-unavailable case (a 503 about the deployment, not a class) and the CALLER-cancelled probe (`silent`), which must not be counted OR named as a real refusal either way. |
-| `user_type_unknown` / `unmountable` | The user-drive resolver's own closed enum (`internal/api/user_drives_resolve.go`) members that reach `writeDriveError`'s wire body. Two siblings in that same enum, `unavailable` and `governance_unavailable`, never leave `GET /me`'s own field — no route sends them via `writeErrorReason` — so they are deliberately UNDOCUMENTED here rather than given a row that claims a wire presence they don't have; `unavailable` would also collide with `ADOEntraFailure`'s own reason of the same name above. |
+| `no_allocation` / `paused` / `runner_cannot_mount` / `backend_elsewhere` / `ceiling_moved` / `home_missing` / `home_unreadable` / `share_unreachable` / `read_only` / `drives_disabled` | `POST /runs`' drive-mount resolution (`seedRequestDrive`, `refuseDrive`) — the SAME closed set (declared in [`internal/api/reasons.go`](../internal/api/reasons.go), moved there from beside `refuseDrive` so this guard can see it) already used for the `wardyn_drive_refusals_total` metric and the WARN log line, now also on the wire. Two arms of `driveBindFailure` stay bare on purpose: the runner-unavailable case (a 503 about the deployment, not a class) and the CALLER-cancelled probe (`silent`), which must not be counted OR named as a real refusal either way. |
+| `user_type_unknown` / `unmountable` | The user-drive resolver's own closed enum ([`internal/api/user_drives_resolve.go`](../internal/api/user_drives_resolve.go)) members that reach `writeDriveError`'s wire body. Two siblings in that same enum, `unavailable` and `governance_unavailable`, never leave `GET /me`'s own field — no route sends them via `writeErrorReason` — so they are deliberately UNDOCUMENTED here rather than given a row that claims a wire presence they don't have; `unavailable` would also collide with `ADOEntraFailure`'s own reason of the same name above. |
 
 #656 slice 3 converts the remaining route families — `run_*.go`'s per-run
 actions, the UI gateway, device federation, and every other lane still
@@ -412,21 +547,23 @@ sending `error` alone — completing the sweep this issue tracks:
 | `local_mode_not_owner` / `revive_unsupported_deployment` / `revive_unsupported_runner` / `revive_bulk_cannot_start_agent` / `revive_already_in_progress` / `revive_mint_identity_failed` / `revive_encode_config_failed` / `revive_pull_image_failed` / `revive_claim_failed` / `revive_run_changed` / `revive_proxy_kept_current` / `revive_proxy_replace_failed_lost` / `revive_agent_start_failed_lost` / `revive_recovery_unresolved` / `revive_substrate_unreadable` / `revive_config_not_stored` / `revive_config_unreadable` / `revive_config_does_not_load` / `revive_not_running` / `revive_ended_files_gone` / `revive_past_end` / `revive_ended_task_run` / `revive_reboot_agent_stopped` / `revive_ended_agent_stopped` / `revive_unknown_lost_reason` / `revive_agent_status_unreadable` / `revive_config_run_mismatch` / `revive_ceiling_denies_git_broker` / `revive_owner_authority_unreadable` / `revive_admin_restart_count_invalid` / `revive_proxy_window_store_unavailable` | `POST /runs/{id}/revive` and the admin bulk restart (`run_revive.go`): one reason per distinct revive-refusal cause. `local_mode_not_owner` is the same literal the refusal's own audit row already carried; `revive_unsupported_runner` covers three arms that all answer the identical "this runner cannot replace a proxy" fact. `revive_recovery_unresolved` (`503`) is a revive that failed after its claim and then could not write the run's lost mark: the run is not recorded as lost (a bulk restart's `lost_again` is `false`), its proxy is stopped and its broker credentials revoked, and a later sweep recovers it. The `_lost` reasons above say the run was put back to lost: the lost mark was written, or the run was left alone because another writer had already moved it, or it was torn down because it cannot be kept; only when the write itself fails is the answer `revive_recovery_unresolved`. |
 | `revive_live_too_soon` | `POST /runs/{id}/revive` and the admin bulk restart (`run_revive.go`), `429`: the run is live and this `wardynd` process started replacing its proxy less than a minute ago (a revive that left the proxy untouched, `revive_proxy_kept_current`, does not count). The bound is per process, so each replica allows one a minute. A revive of a lost run is never bounded. |
 | `run_capacity_store_unavailable` | `GET /admin/runs/capacity`, `501`: the configured store cannot report fleet capacity. The Postgres store always can; only a test double or an alternative store lacks it. |
-| `profile_unreadable` / `profile_gone` / `capability_agent` / `capability_workspace` / `capability_model_provider` / `capability_policy` / `capability_workspace_provider` / `capability_unknown` / `model_credential_erased` / `model_provider_disabled` / `model_provider_gone` / `owner_unverifiable` | `ownerRefusal`'s own reason values (`run_owner_authority.go`): the shared re-check a revive and a run-end-extension both run over the owner's launch-door capabilities, governance profile, model provider and model credential. `model_provider_disabled` covers both an integration that supplies the run's credential and the run's own model provider being turned off; `model_provider_gone` is that provider deleted (or re-created under the same id). The `capability_*` values name the SAME five capability kinds `capabilities.go` enumerates; `capability_unknown` is a defensive fallback outside that closed set. `owner_unverifiable` is `extendRefusal`'s own bucket for three arms that all answer "the owner's authority could not be confirmed right now". |
+| `profile_unreadable` / `profile_gone` / `capability_agent` / `capability_workspace` / `capability_model_provider` / `capability_policy` / `capability_workspace_provider` / `capability_component` / `capability_unknown` / `model_credential_erased` / `model_provider_disabled` / `model_provider_gone` / `component_gone` / `owner_unverifiable` | `ownerRefusal`'s own reason values (`run_owner_authority.go`): the shared re-check a revive and a run-end-extension both run over the owner's launch-door capabilities, governance profile, model provider and model credential. `model_provider_disabled` covers both an integration that supplies the run's credential and the run's own model provider being turned off; `model_provider_gone` is that provider deleted (or re-created under the same id); `component_gone` is an organisation's component the run was launched with, deleted since (409, for the owner and for an admin). The `capability_*` values name the SAME six capability kinds `capabilities.go` enumerates; `capability_unknown` is a defensive fallback outside that closed set. `owner_unverifiable` is `extendRefusal`'s own bucket for three arms that all answer "the owner's authority could not be confirmed right now". |
 | `run_end_wait_neither_field` / `run_wait_budget_not_a_number` / `run_end_wait_already_finished` / `run_end_wait_files_gone` / `run_end_wait_store_unavailable` / `run_limits_gate_denied` / `run_end_no_end_not_allowed` / `run_end_must_be_future` / `run_wait_budget_too_small` / `run_end_wait_changed` | `PATCH /runs/{id}`'s end-time and wait-budget door (`run_end_wait.go`). `run_limits_gate_denied` is shared across all four fields the `user_changes_limits` gate can block — the same gate regardless of which field triggered it. |
 | `workspace_not_found` / `user_drive_not_found` / `user_drive_allocation_not_found` / `ssh_key_not_found` / `preset_not_found` / `policy_not_found` / `capability_grant_not_found` / `run_not_found` / `governance_assignment_not_found` / `governance_profile_not_found` / `enrolment_token_not_found` / `device_not_found` / `delegate_not_found` / `api_token_not_found` / `role_mapping_not_found` | `notFoundIf`'s (`helpers.go`) per-resource-kind 404s, one for each of its ~27 call sites across the package. `run_not_found` is the same literal `auditRenewDenied` already wrote for a renewal on a run that no longer exists; `preset_not_found` is the admin preset-management route's own 404, distinct from `preset_unknown` (a run naming an unknown preset at launch); `governance_profile_not_found` is `governance.go`'s own by-id GET/PUT/DELETE, distinct from `profile_gone` above (a run's already-captured profile going missing later). |
 | `invalid_id_param` / `missing_run_claims` / `run_id_mismatch` / `workspace_store_unavailable` / `scan_upload_run_not_found` / `scan_upload_not_governed` / `scan_upload_wrong_task` / `workspace_requirements_invalid` / `workspace_approved_egress_invalid` / `workspace_approved_egress_dead_host` / `workspace_denied_egress_invalid` / `workspace_llm_cred_invalid` / `request_body_too_large` / `request_body_unreadable` | `helpers.go`'s own shared foundational refusals, reused by dozens of call sites across the package since the cause is identical regardless of which handler hit it: a `{param}` path segment that fails to parse as a UUID, the internal run token's claims failing to read, a scan upload's own 3-arm refusal (`scanresult.go`'s sole caller), `scopedWorkspaceWrite`'s 4 validators (one cause bucket per route; `workspace_approved_egress_dead_host` is its own reason because the remedy differs — use the already-routed door, not fix a malformed domain), and `readCappedBody`'s too-large/unreadable split. |
 | `ado_capability_unknown` | `PUT/POST /api/v1/policies`, `POST /runs`' `inline_policy`, and a launch preset's `inline_policy` (`/api/v1/admin/presets`): the spec's `azure_devops_capabilities` names something the Azure DevOps capability catalogue cannot grant. Its own reason rather than the door's `policy_request_invalid` / `inline_policy_invalid` bucket. |
-| `ado_capabilities_none_permitted` | `POST /runs/preflight`: a member's `azure_devops_capabilities` leaves nothing standing on the per-person Azure DevOps lane (none of it is in the provider row's default profile or their governance profile's list). Review's mirror of the same-named refusal launch gives at dispatch. |
-| `git_pat_narrowing_needs_broker` | `POST /runs/preflight`, the failure of a launched run, and `409` from `POST /runs/{id}/revive` and the admin restart of a run launched while the broker was on: a `git_pat` grant sets `repos`, `access` or `api` while the PAT broker is off (`WARDYN_GIT_PAT_BROKER`). Only the broker enforces the narrowing; with it off the PAT is resident in the sandbox and nothing narrows it, so the run is refused. |
-| `git_pat_narrowing_ssh_conflict` | `PUT/POST /api/v1/policies`, `POST /runs`' `inline_policy`, a launch preset's `inline_policy` and `POST /runs/preflight`, and the failure of a launched run: a `git_pat` grant sets `repos`, `access` or `api` and the same policy or run holds an `ssh_key` for the same forge (`github.com` and `ssh.github.com` are one forge). SSH is a second push path the broker cannot see, so the narrowing would not bind. |
-| `git_pat_narrowing_unsupported_host` | `POST /runs/preflight`, and the failure of a launched run: a `git_pat` grant sets `repos`, `access`, `api` or `forge` for a host another lane serves and that lane does not read those fields: an Azure DevOps host or one the run's Azure DevOps gate covers, or the host of a forge the run is GitHub-brokered for (its PAT is withheld). |
-| `git_pat_api_forge_disabled` | `POST /runs/preflight`, and the failure of a launched run: a `git_pat` grant sets `api` for `bitbucket_server` while `WARDYN_GIT_PAT_API_BITBUCKET_SERVER` is off on this deployment. Policy and governance writes refuse the same grant with `400`. |
+| `ado_capabilities_none_permitted` | `POST /runs/preflight` and `POST /runs/policy-preview`: a member's `azure_devops_capabilities` leaves nothing standing on the per-person Azure DevOps lane (none of it is in the provider row's default profile or their governance profile's list). Review's mirror of the same-named refusal launch gives at dispatch. |
+| `git_pat_narrowing_needs_broker` | `POST /runs/preflight` and `POST /runs/policy-preview`, the failure of a launched run, and `409` from `POST /runs/{id}/revive` and the admin restart of a run launched while the broker was on: a `git_pat` grant sets `repos`, `access` or `api` while the PAT broker is off (`WARDYN_GIT_PAT_BROKER`). Only the broker enforces the narrowing; with it off the PAT is resident in the sandbox and nothing narrows it, so the run is refused. |
+| `git_pat_narrowing_ssh_conflict` | `PUT/POST /api/v1/policies`, `POST /runs`' `inline_policy`, a launch preset's `inline_policy` and `POST /runs/preflight` and `POST /runs/policy-preview`, and the failure of a launched run: a `git_pat` grant sets `repos`, `access` or `api` and the same policy or run holds an `ssh_key` for the same forge (`github.com` and `ssh.github.com` are one forge). SSH is a second push path the broker cannot see, so the narrowing would not bind. |
+| `git_pat_narrowing_unsupported_host` | `POST /runs/preflight` and `POST /runs/policy-preview`, and the failure of a launched run: a `git_pat` grant sets `repos`, `access`, `api` or `forge` for a host another lane serves and that lane does not read those fields: an Azure DevOps host or one the run's Azure DevOps gate covers, or the host of a forge the run is GitHub-brokered for (its PAT is withheld). |
+| `git_pat_api_forge_disabled` | `POST /runs/preflight` and `POST /runs/policy-preview`, and the failure of a launched run: a `git_pat` grant sets `api` for `bitbucket_server` while `WARDYN_GIT_PAT_API_BITBUCKET_SERVER` is off on this deployment. Policy and governance writes refuse the same grant with `400`. |
 | `policy_request_invalid` / `policy_secret_refs_invalid` / `policy_name_conflict` | `PUT/POST/DELETE /api/v1/policies`: the create/update body fails `decodePolicyRequest`, a secret reference in the spec fails shape validation, or a policy by that name already exists. |
-| `model_provider_id_invalid` / `model_provider_not_applicable` / `model_provider_no_block_configured` | `POST /runs`' model-provider choice (`run_model_provider.go`), the three field-validation arms outside `writeProviderRefusal` (which always carries its own reason, either the credential-refusal's audit reason or the generic `model_provider_unavailable`): `model_provider` is not a plain provider id, was set on a run that calls no model, or was named but this deployment has no model providers. `integration_id` is refused earlier, unconditionally (`integration_id_retired`), before this door is reached. |
+| `model_provider_id_invalid` / `model_provider_not_applicable` / `model_provider_no_block_configured` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` model-provider authorization (`run_provider_authorization.go`), the three field-validation arms outside `writeProviderRefusal` (which always carries its own reason, either the credential-refusal's audit reason or the generic `model_provider_unavailable`): `model_provider` is not a plain provider id, was set on a run that calls no model, or was named but this deployment has no model providers. `integration_id` is refused earlier, unconditionally (`integration_id_retired`), before this door is reached. |
+| `component_ref_invalid` / `component_store_unavailable` / `component_definition_invalid` / `component_secret_not_owned` / `component_secret_missing` / `component_host_denied` / `component_host_serves_model` / `component_host_collision` / `component_resident_delivery_denied` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` component gate (`components_run.go`), over the request's `components[]`: the list is malformed (400); this store cannot record components (501); or one component breaks a rule (422) — its definition, a secret that is not the caller's own, a secret the organisation provides and has not stored (the preview alone does not refuse this one), a host that is blocked, that serves a model or that already carries a credential on the run, or env/file delivery the organisation turned off. Who may attach a component is the authorization reasons `capability_component` and `capability_feature`. |
+| `credential_host_collision` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview`, for any run (422, `credentialHostRefusal` in `runs_dispatch_components.go`): two of the run's credentials are bound to one host, and a host carries only one — two `api_key` grants, or an `api_key` grant on a host that a token-bearing redirect, the Azure DevOps lane or a `git_pat` API grant also credentials. The body names no host. Also the `reason` on a failed run's `run.create` row when the collision only appears at dispatch; that row carries the `grant_ids` involved and never the host. `component_host_collision` is the same rule for a component's own header. |
 | `run_title_store_unavailable` | `PATCH /runs/{id}/title` (`run_title.go`): this store cannot rename a run. |
 | `run_inspect_no_runner` / `run_inspect_terminal` / `run_inspect_no_sandbox` / `run_inspect_paused` / `run_inspect_exec_stream_unsupported` / `run_resources_read_failed` / `run_files_no_exec_session` | `GET /runs/{id}/resources` and `GET /runs/{id}/files` (`run_resources.go`, `run_files.go`): the two widgets read the identical run-state facts and share a reason per cause rather than each inventing its own synonym. |
-| `run_output_tail_invalid` / `run_output_interactive` / `run_output_not_captured` / `run_output_off` / `run_output_not_kept` / `run_output_expired` / `run_output_erased` | `GET /runs/{id}/output` (`run_output.go`): `?tail=` is not a positive number of bytes (`400`); the run is interactive and has no pane snapshot to serve (`409`): with recording off the sentence says nothing was kept from this session, and with recording on it points at the recording; the runner cannot capture a run's output, which on Kubernetes is the case in this release, and the run's recording has it (`409`); this deployment keeps none, or refuses stored rows (`WARDYN_EXEC_OUTPUT_TAIL=off`, `409`); no output is kept for the run — one that finished before output was persisted, or one still being captured, which a read a moment later serves (`409`); a sign-in run is interactive and answers `run_output_interactive`; the in-memory tail outlived `WARDYN_EXEC_OUTPUT_TAIL_TTL`, or the run ended longer ago than `WARDYN_RUN_OUTPUT_RETENTION_DAYS` and its row was deleted (`410`); the run's output was erased (`404`). |
+| `run_output_tail_invalid` / `run_output_interactive` / `run_output_not_captured` / `run_output_off` / `run_output_not_kept` / `run_output_expired` / `run_output_erased` | `GET /runs/{id}/output` (`run_output.go`): `?tail=` is not a positive number of bytes (`400`); the run is interactive and has no pane snapshot to serve (`409`): with recording off the sentence says nothing was kept from this session, and with recording on it points at the recording; the runner exposes no direct stdout and no authorized recording-derived output is available (`409`); this deployment keeps none, or refuses stored rows (`WARDYN_EXEC_OUTPUT_TAIL=off`, `409`); no output is kept for the run — one that finished before output was persisted, or one still being captured, which a read a moment later serves (`409`); a sign-in run is interactive and answers `run_output_interactive`; the in-memory tail outlived `WARDYN_EXEC_OUTPUT_TAIL_TTL`, or the run ended longer ago than `WARDYN_RUN_OUTPUT_RETENTION_DAYS` and its row was deleted (`410`); the run's output was erased (`404`). |
 | `run_sign_in_not_aws` / `run_sign_in_unreadable` | `GET /runs/{id}/sign-in` (`run_sign_in.go`): the run is not an AWS sign-in run (`409`); the sign-in pane, or the capture's audit row, could not be read in time — a read a moment later may answer (`503`). |
 | `run_resume_not_running` / `run_resume_failed` | `POST /runs/{id}/resume` (`run_pause.go`): the run is not in a resumable state, or thawing it for exec failed. |
 | `internal_decision_log_invalid` / `groundtruth_batch_invalid` / `groundtruth_batch_too_large` / `groundtruth_action_not_kernel` / `groundtruth_write_failed` / `internal_approval_request_invalid` / `unsupported_internal_approval_kind` / `missing_requested_scope` / `reserved_scope_key` / `internal_approval_count_unavailable` / `internal_approval_cap_reached` / `broker_not_configured` / `mint_grant_id_required` / `brokered_forge_single_lane` / `brokered_forge_single_lane_unverifiable` / `grant_run_mismatch` / `grant_not_found` / `grant_requires_spire` / `run_renew_store_unavailable` / `run_renew_read_failed` / `run_renew_stamp_failed` / `internal_liveness_read_failed` | `POST /internal/*` (`internal.go`, `internal_live_run.go`): the sidecar/proxy surface, not the member-facing API. Most values are already the exact strings each route's own audit row wrote before #656 slice 3 put them on the wire too; `internal_liveness_read_failed` is the shared `/internal/*` liveness gate every sidecar door runs through. |
@@ -448,7 +585,7 @@ sending `error` alone — completing the sweep this issue tracks:
 | `lock_unavailable` | Any write door that serializes on a cross-replica lock (a site-configuration or capability-enforcement write, a credential erase, a sign-in capture, a revive of one run, the audit chain verification), `503` with `Retry-After`: the lock is held elsewhere past its wait, the process's lock connections are all in use, or the database could not be asked. Nothing was done and the request is safe to retry; a lock is never skipped. |
 | `audit_invalid_run_id` / `audit_export_store_unavailable` / `audit_export_read_failed` / `audit_scope_unavailable` / `audit_chain_verify_store_unavailable` / `audit_chain_verify_busy` / `audit_chain_sweep_failed` / `audit_invalid_timestamp_param` / `audit_invalid_actor_type` / `audit_invalid_origin` / `audit_invalid_export_form` / `audit_partition_not_found` / `audit_partition_open` / `audit_retention_store_unavailable` / `audit_retention_read_failed` / `audit_retention_body_invalid` / `audit_retention_drop_failed` | `/api/v1/admin/audit` (`audit.go`, `audit_partition_export.go`, `audit_retention.go`): the security tier's audit-log query, export, chain-verification and retention doors. `audit_invalid_export_form`, `audit_partition_not_found` and `audit_partition_open` are `GET /audit/export?partition=`'s: a `form` that is neither `readable` nor `raw`, a name that is not a partition of the audit log, and a partition that can still receive rows (it has no digest yet). `audit_retention_store_unavailable` (`501`), `audit_retention_read_failed` (`500`, the status could not be read), `audit_retention_body_invalid` (`400`, `POST /audit/retention/drop` needs `{"partition", "digest"}`) and `audit_retention_drop_failed` (`500`, nothing was dropped; `503` under `WARDYN_AUDIT_SEAL=full` while the caller's audit subject cannot be had) are `GET /audit/retention`'s and `POST /audit/retention/drop`'s; an unknown partition on the drop is `404` `audit_partition_not_found`. |
 | `source_not_found` / `source_scan_already_running` / `source_scan_unsupported_kind` / `source_scan_failed` / `source_scan_no_runner` | `POST /api/v1/sources/{id}/scan` and the admin bulk scan (`source_scan.go`). `source_scan_failed` is `scanLocalDirSource`'s own bucket for whatever detail the scan itself failed on. |
-| `inline_policy_xor` / `policy_id_not_found` / `inline_policy_invalid` | `POST /runs` and `POST /runs/preflight`'s policy resolution (`inline_policy.go`): `policy_id` and `inline_policy` were both set, the named policy does not exist, or (`inline_policy_invalid`, the whole resolution chain's bucket — grant filtering, domain-count cap, spec/secret-ref validation) the policy fails validation. |
+| `inline_policy_xor` / `policy_id_not_found` / `inline_policy_invalid` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` policy resolution (`run_policy_resolution.go`): `policy_id` and `inline_policy` were both set, the named policy does not exist, or (`inline_policy_invalid`, the whole resolution chain's bucket — grant filtering, domain-count cap, spec/secret-ref validation) the policy fails validation. |
 | `ui_layout_invalid_preset` / `ui_layout_too_many_widgets` / `ui_layout_unknown_widget` / `ui_layout_invalid_geometry` / `ui_layout_persistence_unavailable` | `GET/PUT /api/v1/ui-layout` (`ui_layout.go`): the console's own saved-layout door. |
 | `ado_sign_in_unconfigured` / `ado_sign_in_foreign_app` / `ado_sign_in_no_session` / `ado_sign_in_scope_invalid` / `ado_sign_in_prompt_invalid` | `/scm/azure-devops/signin` and its callback (`ado_entra.go`): the console's own Azure DevOps per-person sign-in doors, distinct from `ADOEntraFailure`'s own enum above. `DELETE /scm/azure-devops/connection` (`ado_pat_console.go`) answers `ado_sign_in_no_session` for a caller with no sign-in subject and `ado_sign_in_unconfigured` (404) when there is no per-person row the caller may use. `ado_sign_in_prompt_invalid` is `?prompt=` set to anything other than empty or `select_account`. |
 | `azure_sign_in_unconfigured` / `azure_sign_in_unknown_row` / `azure_sign_in_no_session` / `azure_callback_cookies_invalid` / `azure_callback_missing_code` | `GET /model-providers-entra/signin?uid=` and the callback it shares with the Azure DevOps sign-in (`azure_foundry_entra.go`): the per-row Azure Foundry capture. No console Entra sign-in is configured (404); the `uid` is not an `azure_foundry` provider (404); the caller has no session subject (403); the one-time nonce or verifier cookie is missing, or the stamped row is malformed (400); the authority redirected back with no code (400). A refusal the person can act on is a redirect to `/?azure_signin_error=<code>` with the Azure DevOps callback's codes plus `row_changed`. |
@@ -459,14 +596,15 @@ sending `error` alone — completing the sweep this issue tracks:
 | `branding_not_branded` / `branding_store_unavailable` / `branding_body_unreadable` | `/api/v1/admin/branding` (`branding.go`). |
 | `org_revoked` / `internal_error` | `writeServerError`'s own classified/unclassified split (`writeservererror.go`): the one 5xx chokepoint every otherwise-unclassified server-side failure in this package routes through. `internal_error` is deliberately the single generic fallback — never the driver text the error carries (that stays in the log line, not the wire), just enough for a caller to tell "server-side, not yours" from a specific classified cause. |
 | `namespace_quota_exceeded` | `POST /api/v1/runs` and `POST /api/v1/runs/preflight` (`run_fit.go`): the runs namespace's `ResourceQuota` objects cannot hold this run (both its pods, requests and limits, honouring quota scopes), `422` before the identity mint, so no run row and no sandbox. The message names the quota and the numbers. Not audited, like `run_quota`. The quota is read as it stands and nothing is reserved, so a concurrent run can still take the room; the quota's own admission stays the authority. Kubernetes only |
-| `preflight_rate_limited` | `POST /api/v1/runs/preflight` (`preflight.go`): the person already made `WARDYN_PREFLIGHT_RATE_PER_MIN` checks this minute (burst 5), answered `429` before any gate runs. Not audited, like `run_quota`. The limit is per wardynd replica and never applies to the admin token or to `POST /runs`; `scripts/ci-run.sh` already treats a failed preflight as a warning. |
+| `preflight_rate_limited` | `POST /api/v1/runs/preflight` (`preflight.go`): the person already made `WARDYN_PREFLIGHT_RATE_PER_MIN` checks this minute (burst 5), answered `429` before any gate runs. Not audited, like `run_quota`. The limit is per wardynd replica and never applies to the admin token or to `POST /runs`; [`scripts/ci-run.sh`](../scripts/ci-run.sh) already treats a failed preflight as a warning. |
+| `policy_preview_rate_limited` | `POST /api/v1/runs/policy-preview`: this person's independent draft-preview bucket is exhausted (`WARDYN_POLICY_PREVIEW_RATE_PER_MIN`, default 60/minute, burst 15); `429` with `Retry-After` seconds, before gates and without audit. Per replica; admin token exempt. |
 | `directory_search_query_too_short` / `directory_search_unknown_type` / `directory_search_rate_limited` / `directory_search_failed` | `GET /api/v1/directory/search` (`directory_search.go`). |
 | `base_image_write_invalid` / `base_image_in_use` / `base_image_not_found` | `/api/v1/base-images` (`base_images.go`). `base_image_write_invalid` is `validateBaseImageWrite`'s own bucket. |
 | `credential_erase_principal_required` / `credential_erase_operator_namespace` / `credential_erase_signin_config_unreadable` | `DELETE /people/{principal}/credentials` (`credential_erase.go`). `credential_erase_signin_config_unreadable` (503): the Azure DevOps sign-in configuration could not be read, so the erase could not take the sign-in's lock and erased nothing; try again. |
-| `erasure_scope_unknown` / `erasure_self_refused` / `erasure_operator_namespace` / `erasure_incomplete` | `POST /people/{principal}/erasure` (`person_erasure.go`, security tier). `erasure_scope_unknown` (400): `scopes` is not a non-empty list of `credentials`, `audit_personal_fields`, `run_tasks`, `run_outputs`, `recordings` and `mask_copies`; nothing was erased. `erasure_operator_namespace` (400): the principal names the operator namespace, which is no person's; nothing was erased. `erasure_self_refused` (403): the person named is the caller and a scope other than `credentials` was asked for; nothing was erased (the admin token, which is no person, is never refused). `erasure_incomplete` (500): a scope failed part way; the body's `done` and `remaining` name the scopes, and a retry with the same scopes finishes the rest. The principal also refuses `owner_unresolved` / `owner_ambiguous` (422) as the credential erase does. |
+| `erasure_scope_unknown` / `erasure_self_refused` / `erasure_operator_namespace` / `erasure_incomplete` | `POST /people/{principal}/erasure` (`person_erasure.go`, security tier). `erasure_scope_unknown` (400): `scopes` is not a non-empty list of `mask_copies`, `run_outputs`, `recordings`, `run_tasks`, `components`, `audit_personal_fields` and `credentials`; nothing was erased. `erasure_operator_namespace` (400): the principal names the operator namespace, which is no person's; nothing was erased. `erasure_self_refused` (403): the person named is the caller and a scope other than `credentials` was asked for; nothing was erased (the admin token, which is no person, is never refused). `erasure_incomplete` (500): a scope failed part way; the body's `done` and `remaining` name the scopes, and a retry with the same scopes finishes the rest. The principal also refuses `owner_unresolved` / `owner_ambiguous` (422) as the credential erase does. |
 | `explain_principal_invalid` | `GET /permissions/explain` (`capabilities_explain.go`). |
 | `credential_inventory_no_meta` | `GET /admin/credentials/inventory` (`credential_inventory.go`). |
-| `recording_store_unavailable` / `recording_too_large` / `recording_invalid_part` / `part_limit` | `PUT /internal/recordings/{runID}` and `.../parts/{part}` (`recording.go`). `recording_invalid_part` is `{part}` failing to parse as canonical decimal >= 2; `part_limit` is the ONE name for a part above the limit, both on the wire and in the refusal's own `recording.upload` audit row's nested `reason` detail field. |
+| `recording_store_unavailable` / `recording_too_large` / `recording_invalid_part` / `recording_erased` / `part_limit` | `PUT /internal/recordings/{runID}` and `.../parts/{part}` (`recording.go`). `recording_erased` is a durable per-run erasure fence (`410`), including an upload already streaming when the erase completed; authentication, masking and size refusals retain precedence. `recording_invalid_part` is `{part}` failing to parse as canonical decimal >= 2; `part_limit` is the ONE name for a part above the limit, both on the wire and in the refusal's own `recording.upload` audit row's nested `reason` detail field. |
 | `ado_decision_scope_invalid` / `ado_access_above_ceiling` | The Azure DevOps escalation's decision rule (`injection_ado_capability.go`). |
 | `reserved_principal` | The same value as `authFailedReservedPrincipal` (`oidc.DenialReservedPrincipal`): a reserved identity (the admin token, the local-mode operator, a device, a portal delegate, a person's audit subject `subject:<id>`) attempted to authenticate as a human principal — the SSO callback, a session cookie, a `wdn_` token, and a portal's token exchange all refuse it. |
 | `scan_facts_invalid` / `scan_upload_superseded` | `/internal/scan-results/{runID}` (`scanresult.go`). |
@@ -474,16 +612,23 @@ sending `error` alone — completing the sweep this issue tracks:
 | `synthesized_profile_invalid` | The AI Run Composer's profile synthesis (`profile.go`, `POST /runs/{id}/profile`): the synthesized policy spec fails validation after clamping to the operator ceiling. |
 
 #656's FINAL review round found a second source of wire reasons this table had
-never covered: `internal/authz/registry.go`'s own closed registry, which
-`s.refuse` (`refusal.go`) now writes onto the wire for every Deny/
-Unprocessable/Conflict-effect reason (a Hidden-effect reason — `not_owner`,
-`attach_ticket_foreign_run` — is deliberately never itself a wire value; a
-door refusing one sends its Hidden twin's reason instead, via `.AsIf(...)`, so
-those two names never appear here). Several registry values are already rows
+never covered:
+
+- [`internal/authz/registry.go`](../internal/authz/registry.go)'s own closed registry, which
+  `s.refuse` (`refusal.go`) now writes onto the wire for every Deny/
+  Unprocessable/Conflict-effect reason.
+- A Hidden-effect reason — `not_owner`,
+  `attach_ticket_foreign_run` — is deliberately never itself a wire value.
+- A
+  door refusing one sends its Hidden twin's reason instead, via `.AsIf(...)`, so
+  those two names never appear here.
+
+Several registry values are already rows
 above under a *different* refusal that deliberately shares the same string
 (`capability_agent`, `capability_workspace`, `capability_workspace_provider`,
 `capability_policy`, `capability_model_provider`, `groups_snapshot_stale`,
-`run_not_found`, `user_type_unknown`); the rest reach the wire only through
+`run_not_found`, `user_type_unknown`).
+The rest reach the wire only through
 `s.refuse` itself and are new to this table:
 
 | Reason | Meaning |
@@ -499,11 +644,12 @@ above under a *different* refusal that deliberately shares the same string
 | `capability_egress_host` / `capability_feature` / `capability_secret` | The capability-grant gates outside the five launch-door kinds already covered above: an egress host, a feature flag, or a secret the caller's capability grants do not cover. |
 | `delegation_scope` | A portal's delegated token asked for a route outside its own delegation allow-list (#1142). |
 | `event_stream_cap` | The caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (#1407); close one and retry. Answered `422` and not audited, like `run_quota`. |
+| `component_autonomy` | The organisation's autonomy cap on runs that use the caller's own custom components closes the door, with or without a governance profile; the body's `policy` names the deployment. |
 | `governance_profile` | The caller's resolved governance profile itself closes the door (distinct from `groups_snapshot_stale`, which is the profile being unresolvable at all). |
 | `mask_state_unavailable` | The server cannot prove a run's masking corpus complete, so a door that relays or persists the run's output (recording upload, live attach, SSH shell, live output read) refuses with `503` instead of passing bytes through. A run dispatched before 0.8.6 stays refused after a server restart until it ends; any other run clears when the server can read its manifest again. Since the shared masking registry an injection or capture route also answers it when a value could not be committed to the registry: the value is not handed out. |
 | `governance_overlay_unsatisfiable` | The caller's governance profile, or the run's own, is composed and nothing satisfies it together with the profile or deployment default it builds on, so the launch and every live door refuse (`403`) rather than widen. The sentence names the person's own profile and never a base. |
 | `grant_pairing_not_eligible` | The named capability grant is not eligible to pair with the request it was offered against. |
-| `model_provider_unavailable` | `POST /runs`' model-provider choice, and the record door's (`POST /workspaces/{id}/record`) (`writeProviderRefusal`, `run_model_provider.go`): the generic bucket for a non-credential refusal (provider off, not serving this agent, none chosen, no such provider) — the credential-shaped refusal instead sends `model_credential` (below), which the console's sign-in door recognizes. |
+| `model_provider_unavailable` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` model-provider authorization, and the record door's (`POST /workspaces/{id}/record`) (`writeProviderRefusal`, `run_model_provider.go`): the generic bucket for a non-credential refusal (provider off, not serving this agent, none chosen, no such provider) — the credential-shaped refusal instead sends `model_credential` (below), which the console's sign-in door recognizes. |
 | `recording_governed` | `POST /workspaces/{id}/record` by an admin whose runs are governed (`WARDYN_GOVERN_ADMIN_RUNS`): `403`, audited at target `workspaces.record`. The body names the remedy, `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` set to `recording`. The admin token and local mode are never refused. |
 | `run_kept` | The run is kept (ended or lost); its agent is stopped and nothing may act on it as if it were live. |
 | `run_owner_only` | Interactive entry (attach-ticket mint or consume, the cookie attach lane, a UI app, take-over) to a run whose owner is a person, asked by a super admin who is not that person (#1476): `403`, with `error` "only the person who started this run can open it interactively". Unlike `not_owner` it is not hidden — the admin can already see the run. A run with no personal owner (operator-owned) stays enterable; kill, approve, policy, grants, revoke, audit, revive and resume are unchanged. |
@@ -513,9 +659,9 @@ above under a *different* refusal that deliberately shares the same string
 | `run_quota` | The acting principal's governance profile run-count or concurrency limit is at its cap. Not audited on its own (`Audit: false` in the registry): a caller who IS authorized and simply hit a limit should not look like an attacker in the audit trail. |
 | `run_terminal` | The run has already reached a terminal state; the requested action no longer applies. |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN`'s own gate (and `WARDYN_CAPABILITY_SECOND_HUMAN`'s, for an Azure DevOps capability escalation): the deciding principal is the same one who raised the approval. |
-| `user_view_type_deleted` | An admin viewing through a user type that has since been deleted. `admin_view` (below) is the launch-door row this same cause answers with on `POST /runs`/`/runs/preflight`. |
+| `user_view_type_deleted` | An admin viewing through a user type that has since been deleted. `admin_view` (below) is the launch-door row this same cause answers with on `POST /runs`/`/runs/preflight`/`/runs/policy-preview`. |
 | `admin_view` | An admin in the user view launched a run after the type the view looks through was deleted — the launch-door twin of `user_view_type_deleted` just above; the underlying cause is audited under that reason, this one is not audited on its own. |
-| `user_view_preview` | With `WARDYN_GOVERN_ADMIN_RUNS` on, an admin whose user view looks through a type other than their own sent a write; the view is a read-only preview, so `POST /runs`, `POST /runs/preflight` and every other non-read request answer `409` (sign-out, `POST /me/view` and `POST /policies/grade` still pass). Audited as `authz.denied`. |
+| `user_view_preview` | With `WARDYN_GOVERN_ADMIN_RUNS` on, an admin whose user view looks through a type other than their own sent a write; the view is a read-only preview, so `POST /runs`, `POST /runs/preflight` and `POST /runs/policy-preview` and every other non-read request answer `409` (sign-out, `POST /me/view` and `POST /policies/grade` still pass). Audited as `authz.denied`. |
 
 The UI-sandbox relay session's own re-check (`uigateway_session.go`, the
 `ui.authorize`/`denied` audit row) refuses a still-open connection with one of
@@ -546,7 +692,7 @@ refuses a cross-origin state-changing request with the same reason its
 | `cross_origin_refused` | A state-changing request's `Origin`/`Referer` does not match this deployment's own origin (or, in local mode, is not loopback). |
 
 Two more pre-existing values, unrelated to each other, round out the set the
-console depends on for its own sign-in/connect doors (`ui/src/app/lib/api/runs.ts`):
+console depends on for its own sign-in/connect doors ([`ui/src/app/lib/api/runs.ts`](../ui/src/app/lib/api/runs.ts)):
 
 | Reason | Meaning |
 |---|---|
@@ -567,10 +713,13 @@ applied until a different approver approves it. The SDK never reads that body as
   and a `*client.PendingApprovalError`, so a caller written before 0.8.6 fails loudly instead of
   carrying on.
 - `ApplyGovernanceResult` returns the same outcome as data: the document, the `Pending` changes,
-  the `Deferred` writes and `PruneSkipped`. An assignment that names a profile whose write is
-  pending is deferred, never sent; so is a composed profile whose base profile's write is pending
-  (a `Deferred` entry with `Base` set), and so, in turn, are its own children and their
-  assignments. Prune does not run after a pending write.
+  the `Deferred` writes and `PruneSkipped`.
+  - An assignment that names a profile whose write is
+    pending is deferred, never sent.
+  - So is a composed profile whose base profile's write is pending
+    (a `Deferred` entry with `Base` set), and so, in turn, are its own children and their
+    assignments.
+  - Prune does not run after a pending write.
 - `ListGovernanceChanges(ctx, state)`, `GetGovernanceChange`, `ApproveGovernanceChange` and
   `RejectGovernanceChange(ctx, id, reason)` read and decide the stored changes
   (`/api/v1/governance/changes`).
@@ -596,13 +745,16 @@ confusing. Upgrade the CLI and any SDK callers before requiring a second approve
 
 ## Renamed in 0.8
 
-Issue #658: the attach route family had three different sub-resource shapes,
-`POST /runs/{id}/profile` was a noun where every sibling POST is a verb, and
-one concept spelled itself four ways across the wire, Go, audit and the Helm
-chart. Each HTTP route below keeps its OLD path mounted as a chi alias for one
-minor (this doc's release plus one); the SDK and CLI already call the NEW
-path. The chart key is a clean break, no alias — see
-`deploy/helm/wardyn/README.md`'s "User drives" section.
+Issue #658: the attach route family had three different sub-resource shapes.
+`POST /runs/{id}/profile` was a noun where every sibling POST is a verb.
+And one concept spelled itself four ways across the wire, Go, audit and the Helm
+chart.
+
+- Each HTTP route below keeps its OLD path mounted as a chi alias for one
+  minor (this doc's release plus one); the SDK and CLI already call the NEW
+  path.
+- The chart key is a clean break, no alias — see
+  [`deploy/helm/wardyn/README.md`](../deploy/helm/wardyn/README.md)'s "User drives" section.
 
 | Old | New | Kind |
 |---|---|---|
@@ -639,20 +791,26 @@ capability enum, so no client code changes.
 c.Principal = "alice@example.com"
 ```
 
-It is honored **only when wardynd runs in local (no-auth) mode** — it simulates
-different principals on one trusted dev machine. Under admin-token auth the
-header is ignored and the action is recorded as `actor_type=system`, principal
-`admin-token`; under OIDC the verified `sub` wins. Use OIDC for real per-human
-attribution — a shared dev server on an admin token is exactly where this header
-stops working.
+- It is honored **only when wardynd runs in local (no-auth) mode** — it simulates
+  different principals on one trusted dev machine.
+- Under admin-token auth the
+  header is ignored and the action is recorded as `actor_type=system`, principal
+  `admin-token`; under OIDC the verified `sub` wins.
+- Use OIDC for real per-human
+  attribution — a shared dev server on an admin token is exactly where this header
+  stops working.
 
-The override is **attribution only**. It names the run's `created_by`, the
-identity's sponsor claim and the audit actor; it does **not** choose which
-secret namespace the run resolves credentials from. That namespace comes from
-the principal wardynd injected in local mode, so naming another principal in
-this header cannot make a run mint that principal's stored `git_pat` or
-`ssh_key` — which matters on a database that already carries member-owned
-secret rows from an SSO-configured era and is later served in local mode.
+The override is **attribution only**.
+
+- It names the run's `created_by`, the
+  identity's sponsor claim and the audit actor; it does **not** choose which
+  secret namespace the run resolves credentials from.
+- That namespace comes from
+  the principal wardynd injected in local mode, so naming another principal in
+  this header cannot make a run mint that principal's stored `git_pat` or
+  `ssh_key`.
+  - Which matters on a database that already carries member-owned
+    secret rows from an SSO-configured era and is later served in local mode.
 
 ## Raw HTTP (curl)
 
@@ -686,56 +844,78 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
 ```
 
 `GET /api/v1/runs` accepts an opt-in, server-side scoping/filtering surface beyond
-`&limit=&offset=` (#1197 L1a): `view` (`user`/`admin`; absent leaves the endpoint's
-behaviour exactly as above), `owner` (`me`/`all`; `view=user` forces `me` for
-every caller, admin tokens included), repeatable `status`
-(`active`/`ended`/`failed`/`killed`/`needs`), `ended_within` (`24h`/`7d`/`30d`/`all`),
-`include_killed=1` (a KILLED run older than 24h is hidden by default), `workspace`
-(exact match on the run's repo/workspace-path label) and `q` (a case-insensitive
-substring search over title/task/repo/created_by). With any of them present the
-response is ordered live runs first, then ended runs by end time, and two headers
-— `X-Wardyn-Hidden-Older`, `X-Wardyn-Hidden-Killed` — report how many rows the
-`ended_within` window and the killed-run default hid. `GET /api/v1/approvals`
-accepts the same opt-in `?view=user`, scoping the queue to the caller's own runs'
-approvals for every caller.
+`&limit=&offset=` (#1197 L1a):
 
-`view=user`/`view=admin` on `GET /api/v1/runs` also projects `attention:
-{kind, by, pending}` onto each LIVE run (#1197) — what it is waiting on
-(`approval`/`reauth`/`ado_consent`/`lost`) and who, in the caller's own view,
-can clear it (`you`/`owner`/`admin`); `status=needs` (requires `view=`) narrows
-the list to runs where `attention.by=="you"`. Every PENDING row on
-`GET /api/v1/approvals` now also carries `held` (bool) and, for a hold with a
-known end, `held_until` (RFC 3339) — the server-side port of the console's
-former client-side hold rule. With `WARDYN_APPROVAL_NOTIFY` routes set, a PENDING row also
-carries `escalation_tier` (the highest notification tier already due; absent at tier 0) and
-`sla_due_at` (RFC 3339, when the next tier is due; absent when none is left), projected at response
-time and never stored. `GET /api/v1/approval-notify/status` (security tier) returns
-`{channels: [{id, type, destination_host, last_success_at, last_error, last_error_at,
-failed_last_hour}]}`, the host only and never a URL. `GET /api/v1/me/attention?view=user|admin`
-returns `{needs_you, pending_approvals}`: `needs_you` is the count of live
-runs in that view's own default scope whose `attention.by=="you"`;
-`pending_approvals` is the same scoped PENDING count `GET /approvals` gives
-today. Absent `?view=`, it defaults to `user`; `view=admin` from a
-non-security-operator is coerced to `user`.
+- `view` (`user`/`admin`; absent leaves the endpoint's
+  behaviour exactly as above), `owner` (`me`/`all`; `view=user` forces `me` for
+  every caller, admin tokens included),
+- repeatable `status`
+  (`active`/`ended`/`failed`/`killed`/`needs`), `ended_within` (`24h`/`7d`/`30d`/`all`),
+- `include_killed=1` (a KILLED run older than 24h is hidden by default), `workspace`
+  (exact match on the run's repo/workspace-path label) and `q` (a case-insensitive
+  substring search over title/task/repo/created_by).
+
+- With any of them present the
+  response is ordered live runs first, then ended runs by end time, and two headers
+  — `X-Wardyn-Hidden-Older`, `X-Wardyn-Hidden-Killed` — report how many rows the
+  `ended_within` window and the killed-run default hid.
+- `GET /api/v1/approvals`
+  accepts the same opt-in `?view=user`, scoping the queue to the caller's own runs'
+  approvals for every caller.
+
+- `view=user`/`view=admin` on `GET /api/v1/runs` also projects `attention:
+  {kind, by, pending}` onto each LIVE run (#1197) — what it is waiting on
+  (`approval`/`reauth`/`ado_consent`/`lost`) and who, in the caller's own view,
+  can clear it (`you`/`owner`/`admin`).
+- `status=needs` (requires `view=`) narrows
+  the list to runs where `attention.by=="you"`.
+- Every PENDING row on
+  `GET /api/v1/approvals` now also carries `held` (bool) and, for a hold with a
+  known end, `held_until` (RFC 3339) — the server-side port of the console's
+  former client-side hold rule.
+- With `WARDYN_APPROVAL_NOTIFY` routes set, a PENDING row also
+  carries `escalation_tier` (the highest notification tier already due; absent at tier 0) and
+  `sla_due_at` (RFC 3339, when the next tier is due; absent when none is left), projected at response
+  time and never stored.
+- `GET /api/v1/approval-notify/status` (security tier) returns
+  `{channels: [{id, type, destination_host, last_success_at, last_error, last_error_at,
+  failed_last_hour}]}`, the host only and never a URL.
+- `GET /api/v1/me/attention?view=user|admin`
+  returns `{needs_you, pending_approvals}`: `needs_you` is the count of live
+  runs in that view's own default scope whose `attention.by=="you"`;
+  `pending_approvals` is the same scoped PENDING count `GET /approvals` gives
+  today.
+- Absent `?view=`, it defaults to `user`; `view=admin` from a
+  non-security-operator is coerced to `user`.
 
 Beyond `run_id`, the audit query accepts server-side predicates:
-`since`/`until` (RFC 3339), `action` (exact), `action_prefix` (e.g. `egress.`),
-`actor` (exact), `actor_type` (`human|agent|system`), `outcome`
-(`success|denied|failure`), and `origin` (`device|organisation`: the rows an
-enrolled laptop forwarded, each carrying a top-level `device_id`, or the
-organisation's own) — they compose, and the CLI mirrors all but `origin` on
-`wardyn audit`, whose per-run trail never holds a forwarded row.
 
-The per-run trail is chronological (ASC) and returns up to 1000 events; a longer
-trail sets `X-Wardyn-Truncated: true`, so page forward with `&limit=&offset=` to
-reach the terminal `run.complete`. `wardyn audit <run-id> --limit=N --offset=N`
-mirrors this on the CLI, and prints a `warning: audit trail truncated ...`
-line on stderr (never stdout, so `--json` stays a plain array) naming the next
-`--offset` — silence means the page you got is the whole trail. The Go client's
-`AuditEventsPage` returns the same signal as a `truncated bool` instead of a
-header a caller has to remember to check; `scripts/ci-run.sh` loops it so a CI
-run's `audit.json` artifact is never a silently-truncated prefix. Everything
-else here is one method on the Go client above, or one `wardyn` CLI command.
+- `since`/`until` (RFC 3339), `action` (exact), `action_prefix` (e.g. `egress.`),
+  `actor` (exact),
+- `actor_type` (`human|agent|system`), `outcome`
+  (`success|denied|failure`),
+- and `origin` (`device|organisation`: the rows an
+  enrolled laptop forwarded, each carrying a top-level `device_id`, or the
+  organisation's own).
+
+They compose. The CLI mirrors all but `origin` and `action` on
+`wardyn audit`, whose per-run trail never holds a forwarded row.
+The Go client's `AuditFilter` has neither: for one action, send `action` over raw HTTP,
+or use `action_prefix` (`--action-prefix`).
+
+- The per-run trail is chronological (ASC) and returns up to 1000 events; a longer
+  trail sets `X-Wardyn-Truncated: true`, so page forward with `&limit=&offset=` to
+  reach the terminal `run.complete`.
+- `wardyn audit <run-id> --limit=N --offset=N`
+  mirrors this on the CLI, and prints a `warning: audit trail truncated ...`
+  line on stderr (never stdout, so `--json` stays a plain array) naming the next
+  `--offset` — silence means the page you got is the whole trail.
+- The Go client's
+  `AuditEventsPage` returns the same signal as a `truncated bool` instead of a
+  header a caller has to remember to check; [`scripts/ci-run.sh`](../scripts/ci-run.sh) loops it so a CI
+  run's `audit.json` artifact is never a silently-truncated prefix.
+- Everything
+  else here is one method on the Go client above, or one `wardyn` CLI command.
 
 ### Composed profile graphs
 
@@ -754,8 +934,12 @@ on another, and a repeat apply is a no-op.
 - **Pending approval.** A child whose base has a pending write is deferred, not sent; apply again
   once the base is approved.
 - **Older clients.** A client built before 0.8.6 drops `base_profile_id`, `overlay` and
-  `overlay_limits`. A composed profile it would create is refused with a `400` (`invalid ceiling:
-  min_confinement_class is required`), because the exported row carries an empty ceiling and no
-  overlay. One it updates keeps the composition the server stored, since an absent member keeps the
-  stored value. It also writes in document order, so a child listed before its base fails. Upgrade
-  before applying a composed document.
+  `overlay_limits`.
+  - A composed profile it would create is refused with a `400` (`invalid ceiling:
+    min_confinement_class is required`), because the exported row carries an empty ceiling and no
+    overlay.
+  - One it updates keeps the composition the server stored, since an absent member keeps the
+    stored value.
+  - It also writes in document order, so a child listed before its base fails.
+  - Upgrade
+    before applying a composed document.

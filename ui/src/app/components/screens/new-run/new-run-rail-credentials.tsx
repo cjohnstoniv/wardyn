@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The New Run rail's Credentials section: where the model credential lands
-// (CredentialFacts) and, with a provider block, which provider the run uses
-// (ModelProviderSection, #542). Split out of new-run-rail.tsx by seam when
+// New Run's model-credential facts: where the credential lands
+// (CredentialFacts), the rail's summary of the provider the run uses
+// (ProviderSummary) and the Run panel's picker for it (ModelProviderSection,
+// #542). Split out of new-run-rail.tsx by seam when
 // #542 took that file past the 1000-line gate. Like the rail, it takes props
 // and renders; it owns no screen state.
 
@@ -13,7 +14,6 @@ import * as React from "react";
 import type { ModelCredential, SetupModelProvider, SetupProviderAccess } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
-import { Chip } from "../../wardyn/primitives";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { RAIL_CREDENTIAL, RAIL_PROVIDER } from "../../wardyn/copy";
 import { CONNECTIONS } from "../../wardyn/copy/door";
@@ -34,12 +34,7 @@ import {
 // and says so: there is no rung that guesses.
 export function CredentialFacts({ cred, preflightRun }: { cred?: ModelCredential; /** Whether a current preflight verdict is on screen. */ preflightRun: boolean }) {
   if (cred) {
-    return (
-      <>
-        <CredentialLine>{credentialSentence(cred)}</CredentialLine>
-        {cred.residency === "sandbox" && <AWSSignInChip />}
-      </>
-    );
+    return <CredentialLine>{credentialSentence(cred)}</CredentialLine>;
   }
   return (
     <>
@@ -55,16 +50,6 @@ export function CredentialFacts({ cred, preflightRun }: { cred?: ModelCredential
 
 function CredentialLine({ children }: { children: React.ReactNode }) {
   return <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground first:mt-0">{children}</p>;
-}
-
-// Whose AWS sign-in is resident — the person's own; since 0.8 every provider
-// credential is (D3 — no shared credential exists to contrast it with).
-function AWSSignInChip() {
-  return (
-    <div className="mt-1.5">
-      <Chip tone="neutral">{RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER}</Chip>
-    </div>
-  );
 }
 
 // credentialSentence maps a resolved grade to the one sentence true of it.
@@ -83,19 +68,13 @@ function credentialSentence(cred: ModelCredential): string {
 // #542 — the residency line for a CHOSEN provider (R1, R4), read off its kind
 // alone rather than a preflight verdict: with a provider block, every kind's
 // residency is known before launch (model-provider-lane.ts's
-// providerResidency; packet C's own R4 grouping). The chip stays because
-// every provider credential in 0.8 is per person (D3 — no shared credential
-// exists to contrast it with).
+// providerResidency; packet C's own R4 grouping).
 function ProviderResidencyLine({ provider }: { provider: SetupModelProvider }) {
-  if (providerResidency(provider.kind) === "sandbox") {
-    return (
-      <>
-        <CredentialLine>{RAIL_CREDENTIAL.SANDBOX_BEDROCK}</CredentialLine>
-        <AWSSignInChip />
-      </>
-    );
-  }
-  return <CredentialLine>{RAIL_CREDENTIAL.PROXY}</CredentialLine>;
+  return (
+    <CredentialLine>
+      {providerResidency(provider.kind) === "sandbox" ? RAIL_CREDENTIAL.SANDBOX_BEDROCK : RAIL_CREDENTIAL.PROXY}
+    </CredentialLine>
+  );
 }
 
 // R3 — the selected candidate isn't connected yet: Launch stays enabled (a
@@ -108,6 +87,26 @@ function ProviderResidencyLine({ provider }: { provider: SetupModelProvider }) {
 // providerAccessMechanism) is not "connected" but is also not a person who
 // could ever sign in or add a key, so it renders nothing rather than a door
 // that can never work (#542 review finding F3).
+// What a not-connected provider of each kind says, and the door that connects it.
+function notConnected(provider: SetupModelProvider, access: SetupProviderAccess[] | undefined): { sentence: string; cta: string } | null {
+  const state = accessStateFor(access, provider.id);
+  if (providerConnected(state) || state === "not_applicable") return null;
+  const name = provider.name ?? provider.id;
+  switch (provider.kind) {
+    case "bedrock_sso":
+      return { sentence: RAIL_PROVIDER.NOT_SIGNED_IN(name), cta: AGENTS.SIGN_IN_AWS };
+    case "custom_endpoint":
+      return { sentence: RAIL_PROVIDER.NO_TOKEN(name), cta: CONNECTIONS.ADD_TOKEN };
+    case "anthropic_api_key":
+    case "openai_api_key":
+      return { sentence: RAIL_PROVIDER.NO_KEY(name), cta: CONNECTIONS.ADD_KEY };
+    case "anthropic_subscription":
+      return { sentence: RAIL_PROVIDER.NOT_SIGNED_IN_CLAUDE(name), cta: CONNECTIONS.SIGN_IN_CLAUDE };
+    default:
+      return null;
+  }
+}
+
 function ProviderNotConnectedLine({
   provider,
   access,
@@ -117,50 +116,38 @@ function ProviderNotConnectedLine({
   access: SetupProviderAccess[] | undefined;
   onSignIn: () => void;
 }) {
-  const state = accessStateFor(access, provider.id);
-  if (providerConnected(state) || state === "not_applicable") return null;
-  const name = provider.name ?? provider.id;
-  if (provider.kind === "bedrock_sso") {
-    return (
-      <div className="mt-1.5">
-        <p className="text-xs text-warning">{RAIL_PROVIDER.NOT_SIGNED_IN(name)}</p>
-        <Button type="button" variant="outline" size="sm" className="mt-1.5" onClick={onSignIn}>
-          {AGENTS.SIGN_IN_AWS}
-        </Button>
-      </div>
-    );
-  }
-  if (provider.kind === "custom_endpoint") {
-    return (
-      <div className="mt-1.5">
-        <p className="text-xs text-warning">{RAIL_PROVIDER.NO_TOKEN(name)}</p>
-        <Button type="button" variant="outline" size="sm" className="mt-1.5" onClick={onSignIn}>
-          {CONNECTIONS.ADD_TOKEN}
-        </Button>
-      </div>
-    );
-  }
-  if (provider.kind === "anthropic_api_key" || provider.kind === "openai_api_key") {
-    return (
-      <div className="mt-1.5">
-        <p className="text-xs text-warning">{RAIL_PROVIDER.NO_KEY(name)}</p>
-        <Button type="button" variant="outline" size="sm" className="mt-1.5" onClick={onSignIn}>
-          {CONNECTIONS.ADD_KEY}
-        </Button>
-      </div>
-    );
-  }
-  if (provider.kind === "anthropic_subscription") {
-    return (
-      <div className="mt-1.5">
-        <p className="text-xs text-warning">{RAIL_PROVIDER.NOT_SIGNED_IN_CLAUDE(name)}</p>
-        <Button type="button" variant="outline" size="sm" className="mt-1.5" onClick={onSignIn}>
-          {CONNECTIONS.SIGN_IN_CLAUDE}
-        </Button>
-      </div>
-    );
-  }
-  return null;
+  const nc = notConnected(provider, access);
+  if (!nc) return null;
+  return (
+    <div className="mt-1.5">
+      <p className="text-xs text-warning">{nc.sentence}</p>
+      <Button type="button" variant="outline" size="sm" className="mt-1.5" onClick={onSignIn}>
+        {nc.cta}
+      </Button>
+    </div>
+  );
+}
+
+/** The provider the rail names for this run: the picked one, or the only
+ *  candidate when there is no question to ask (R1). */
+export function summaryProvider(m: { candidates: SetupModelProvider[]; selectedId: string | undefined; gate?: ProviderGate }): SetupModelProvider | undefined {
+  if (!m.gate && m.candidates.length === 1) return m.candidates[0];
+  return m.candidates.find((p) => p.id === m.selectedId);
+}
+
+// The rail's half of the provider facts, now that the picker sits on the Run
+// panel: which provider, where its credential lands, and whether this person
+// has connected it. It states; the Run panel asks and opens the door. A
+// not-connected provider never holds Launch — the launch door asks then.
+export function ProviderSummary({ provider, access }: { provider: SetupModelProvider; access: SetupProviderAccess[] | undefined }) {
+  const nc = notConnected(provider, access);
+  return (
+    <>
+      <p className="text-body font-medium text-foreground">{RAIL_PROVIDER.STATIC(provider.name ?? provider.id)}</p>
+      <ProviderResidencyLine provider={provider} />
+      {nc && <p className="mt-1.5 text-xs text-warning">{nc.sentence}</p>}
+    </>
+  );
 }
 
 // #542 — the Credentials section's provider half: R1 (one candidate, no

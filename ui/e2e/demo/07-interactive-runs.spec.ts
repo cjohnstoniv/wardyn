@@ -84,11 +84,12 @@ import {
   spotlight,
   typeInTerminal,
 } from "./overlay";
-import { decide } from "./funnel";
+import { decide, newRunEditPolicy, newRunPanel } from "./funnel";
 import { sweepStaleState } from "./sweep";
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll.
 import { stage } from "./stage";
 import { termText } from "../terminal-text";
+import { SPEC_LABEL } from "../policy-source";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -226,6 +227,7 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   await beat(page, BEAT_SHORT + 400);
 
   const title = page.getByLabel("Title");
+  await newRunPanel(page, "run");
   await title.fill(RUN_TITLE);
 
   // Agent task this time — and Interactive, which is the video.
@@ -268,6 +270,7 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   // deny_with_review) — confined by construction, the same default the old
   // "Confined" radio asserted. Clicking the Minimal chip re-asserts it for
   // the camera in one click.
+  await newRunEditPolicy(page);
   await act(page, page.getByRole("button", { name: "Minimal" }), "Minimal — confined.");
   await caption(page, "And the network is still default-deny — nothing out unless we list it.");
   await beat(page, PACE.read);
@@ -277,9 +280,9 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   // deleted "Just the model provider" Network preset radio. The Minimal chip
   // clicked above already scopes allowed_domains to exactly
   // api.anthropic.com, so there is no second click left to attach this line
-  // to — re-spotlighting the panel's Spec (JSON) textarea is the closest
+  // to — re-spotlighting the panel's policy source textarea is the closest
   // honest on-screen event.
-  await spotlight(page, page.getByLabel("Spec (JSON)"));
+  await spotlight(page, page.getByLabel(SPEC_LABEL));
   await caption(page, "Add api.anthropic.com.");
   await beat(page, BEAT_SHORT);
   await caption(page, "That's the entire network contract for this run.");

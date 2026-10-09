@@ -571,7 +571,7 @@ func applyAssignmentChange(s *Server, r *http.Request, q store.Querier, ch types
 	if err := validateGovernanceAssignment(&a); err != nil {
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonGovernanceAssignmentInvalid, "invalid assignment: %v", err)
 	}
-	if err := s.checkUserTypeSubject(ctx, a.SubjectType, a.Subject); err != nil {
+	if err := s.checkUserTypeSubject(ctx, q, a.SubjectType, a.Subject); err != nil {
 		return govApplied{}, err
 	}
 	st, err := readAssignmentState(ctx, q, subjectType, subject, a.ProfileID, true)
@@ -594,11 +594,11 @@ func applyAssignmentChange(s *Server, r *http.Request, q store.Querier, ch types
 }
 
 // checkUserTypeSubject is userTypeSubjectExists for a replayed write: the refusal as an error.
-func (s *Server) checkUserTypeSubject(ctx context.Context, subjectType types.CapabilitySubjectType, subject string) error {
+func (s *Server) checkUserTypeSubject(ctx context.Context, q store.Querier, subjectType types.CapabilitySubjectType, subject string) error {
 	if subjectType != types.CapabilitySubjectUserType || subject == types.UserTypeStandard {
 		return nil
 	}
-	_, err := s.cfg.Store.GetUserType(ctx, subject)
+	_, err := store.GetUserTypeQ(ctx, q, subject, true)
 	if errors.Is(err, store.ErrNotFound) {
 		return writeRefusal(http.StatusBadRequest, reasonAccessUnknownUserType, "%s", accessUnknownUserType(subject))
 	}

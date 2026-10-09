@@ -247,7 +247,7 @@ func TestW4CovWritersThatNeedNoPoolRefuseOrNoOp(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	puts := []secretmask.GlobalPut{{Value: []byte("a-credential-value")}}
 
-	if err := s.PutGlobal("", "cred", puts, false, now); err != nil {
+	if err := s.PutGlobal(0, "", "cred", puts, false, now); err != nil {
 		t.Errorf("the operator namespace is process-local: PutGlobal = %v", err)
 	}
 	if err := s.EvictGlobal("", "cred", now); err != nil {
@@ -273,7 +273,7 @@ func TestW4CovPutGlobalFailsClosedOnItsKey(t *testing.T) {
 		keys := w4CovNewKeys()
 		injected := errors.New("key service down")
 		keys.errs["alice"] = injected
-		err := New(nil, keys, secretmask.NewRegistry()).PutGlobal("alice", "cred", puts, false, now)
+		err := New(nil, keys, secretmask.NewRegistry()).PutGlobal(0, "alice", "cred", puts, false, now)
 		if !errors.Is(err, injected) {
 			t.Fatalf("PutGlobal = %v, want the injected key error wrapped", err)
 		}
@@ -285,7 +285,7 @@ func TestW4CovPutGlobalFailsClosedOnItsKey(t *testing.T) {
 	t.Run("the key cannot seal", func(t *testing.T) {
 		keys := w4CovNewKeys()
 		keys.keys[w4CovKeyID{"alice", 1}] = []byte("too-short")
-		err := New(nil, keys, secretmask.NewRegistry()).PutGlobal("alice", "cred", puts, false, now)
+		err := New(nil, keys, secretmask.NewRegistry()).PutGlobal(0, "alice", "cred", puts, false, now)
 		if err == nil || !strings.Contains(err.Error(), "maskstore: seal a value") {
 			t.Fatalf("PutGlobal with a bad key = %v, want the seal failure", err)
 		}

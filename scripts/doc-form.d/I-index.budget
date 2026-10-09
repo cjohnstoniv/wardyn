@@ -1,0 +1,13 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. Base prose: README.md 2123, docs/README.md 516, docs/TRY-IT.md 3201.
+# README.md is 2135 = base 2123 + 12 (the architecture bullet about decision logs and masked casts became two: decision logs to the audit log, and recordings in their own store).
+# docs/README.md is 517 = base 516 + 1 word of the new "Index" heading: its table sat in the lead (H1 to first H2), which the form gate caps at 5 lines.
+# Figures add their alt-text words only: README.md +90 (opener pair 60, run figure 30) -> 2213, +2 for "by default" in the lead bullet -> 2215; docs/README.md +60 (opener pair) -> 577.
+# README.md 2227 adds 12: the architecture bullet about decision logs and masked casts became two.
+# README.md 2253 adds 26: 17 (the lead bullet links docs/CREDENTIALS.md) and 9 (the architecture bullet says the proxy adds most credentials, with a link).
+README.md=2253 share=35
+# docs/README.md 597 adds 20: the index row for docs/CREDENTIALS.md.
+docs/README.md=597 share=35
+# docs/TRY-IT.md 3209 adds 8: the demo/default difference names idle auto-stop.
+# docs/TRY-IT.md 3243 adds 34: the branch-confinement warning names what the token broker reads and when it confines.
+# docs/TRY-IT.md 3254 adds 11: the default policy's model access goes through a model provider, not an authored grant.
+docs/TRY-IT.md=3254 share=35

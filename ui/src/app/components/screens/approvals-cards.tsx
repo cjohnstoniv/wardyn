@@ -22,7 +22,7 @@ import { relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { ApprovalKindChip, ApprovalStateBadge, Chip } from "../wardyn/primitives";
 import { RunContextRow } from "../wardyn/run-context-row";
-import { JsonBlock } from "../wardyn/code-block";
+import { JsonBlock } from "../wardyn/yaml-block";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "../wardyn/push-content-card";
 import { REAUTH_ROW, reauthAudience } from "../wardyn/model-access-copy";

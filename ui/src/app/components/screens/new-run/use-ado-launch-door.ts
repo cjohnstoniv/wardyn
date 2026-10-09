@@ -22,10 +22,11 @@
 import * as React from "react";
 import { toast } from "sonner";
 import { ADO } from "../../../lib/ado-entra-copy";
-import { HttpError } from "../../../lib/api/core";
+import { getAuthGeneration, HttpError, onAuthChange } from "../../../lib/api/core";
 import { isGitCredentialRefusal } from "../../../lib/api/runs";
 import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
 import { adoPatRefusalReason } from "../../../lib/api/ado-pat";
+import { usePrincipal } from "../../wardyn/operator-context";
 import { patRefusalNote, type PatRefusalNote } from "../../../lib/ado-pat-display";
 
 export function useAdoLaunchDoor(): {
@@ -51,6 +52,9 @@ export function useAdoLaunchDoor(): {
     onCancel: () => void;
   };
 } {
+  const principal = usePrincipal();
+  const owner = React.useRef(principal);
+  owner.current = principal;
   const [open, setOpen] = React.useState(false);
   const [org, setOrg] = React.useState("");
   const [refusal, setRefusal] = React.useState<PatRefusalNote | null>(null);
@@ -59,9 +63,15 @@ export function useAdoLaunchDoor(): {
   // navigated away while the popup was open must not see a stray "Connected"
   // toast land on whatever page they are on now.
   const mountedRef = React.useRef(true);
-  React.useEffect(() => () => {
-    mountedRef.current = false;
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
   }, []);
+  React.useEffect(() => {
+    const clear = () => { cancel(); setOpen(false); setRefusal(null); setOrg(""); };
+    clear();
+    return onAuthChange(clear);
+  }, [principal, cancel]);
 
   // Connect confirmed: run the popup + poll (or connectFallback()'s bounded
   // one, off the fallback link), close the dialog either way, and — only on
@@ -81,6 +91,13 @@ export function useAdoLaunchDoor(): {
     }
   };
 
+  const connectOwned = (connectNow: () => Promise<boolean | null>) => {
+    const auth = getAuthGeneration();
+    void connectNow().then((connected) => {
+      if (owner.current === principal && auth === getAuthGeneration()) void settle(connected);
+    });
+  };
+
   return {
     refusal,
     notifyLaunchError: (e) => {
@@ -94,8 +111,8 @@ export function useAdoLaunchDoor(): {
       connecting,
       org,
       blockedUrl,
-      onConfirm: () => void connect().then(settle),
-      onFallbackClick: () => void connectFallback().then(settle),
+      onConfirm: () => connectOwned(connect),
+      onFallbackClick: () => connectOwned(connectFallback),
       // Cancel does not just close the dialog (regression finding 2) — it
       // stops the in-flight poll too. Without cancel(), the fallback link's
       // bounded poll ran on for the full FALLBACK_POLL_TIMEOUT_MS after

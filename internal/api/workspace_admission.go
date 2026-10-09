@@ -125,27 +125,7 @@ func admissionRefusalStatus(operator bool) int {
 // derived clone URL is computed inside, once, so no call site can compare a
 // bare <org>/<name> against a base URL and miss.
 func (s *Server) admitRepoSources(w http.ResponseWriter, r *http.Request, repos ...string) bool {
-	repos = presentRepos(repos)
-	if len(repos) == 0 || s.cfg.Store == nil {
-		return false
-	}
-	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
-	if err != nil {
-		writeServerError(w, r, "get site config", err)
-		return true
-	}
-	if !providersConfigured(sc) {
-		return false // legacy open mode — byte-identical to 0.7.1
-	}
-	operator := s.runUngoverned(r.Context())
-	for _, repo := range repos {
-		if msg := admissionRefusal(sc, repo, operator); msg != "" {
-			writeErrorReason(w, admissionRefusalStatus(operator), reasonWorkspaceRepoNotAdmitted, msg)
-			return true
-		}
-	}
-	s.auditLegacyHostAdmissions(r.Context(), sc, repos)
-	return false
+	return s.repoAdmissionRefusal(r, repos...).write(s, w, r)
 }
 
 // admitLauncherRepo is admitRepoSources for a SERVER-SIDE launcher, which holds

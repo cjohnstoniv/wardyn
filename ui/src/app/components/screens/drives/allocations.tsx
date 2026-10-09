@@ -70,12 +70,12 @@ import { EmptyState, TruncatedNote } from "../../wardyn/states";
 import {
   SUBJECTS,
   SUBJECT_LABEL,
-  Segmented,
   UserTypeSubjectSelect,
   subjectText,
   SubjectName,
   type PickableSubjectType,
 } from "../permissions";
+import { Segmented } from "../../wardyn/segmented";
 import { Note, enforcementGloss, modeText, modeTone, question, sizeText } from "./display";
 
 // PREVIEW_RESULT's {tier}, frozen in §7.3's table rather than in prose.

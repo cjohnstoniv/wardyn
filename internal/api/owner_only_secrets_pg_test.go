@@ -401,7 +401,15 @@ func TestOwnerOnlyInjectionSink_NeverServesTheOperatorRow(t *testing.T) {
 			Injection: &egress.InjectionRule{Host: "api.vendor.example", Header: "x-api-key", SecretName: "vendor-key", Format: "%s"},
 			OwnerOnly: ownerOnly,
 		}
-		return do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), recordedRunToken(t, h, runs[who], subs[who]), "")
+		// One of the run's own grant rows: the sink refuses a grant the run's
+		// list does not hold.
+		spec := apiKeyGrantSpec("api.vendor.example", "vendor-key")
+		spec.OwnerOnly = ownerOnly
+		g, err := h.srv.cfg.Store.CreateGrant(context.Background(), types.CredentialGrant{ID: uuid.New(), RunID: runs[who], Spec: spec})
+		if err != nil {
+			t.Fatalf("seed the run's grant: %v", err)
+		}
+		return do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+g.ID.String(), recordedRunToken(t, h, runs[who], subs[who]), "")
 	}
 	served := func(w *httptest.ResponseRecorder) string {
 		t.Helper()

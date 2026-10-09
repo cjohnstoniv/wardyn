@@ -63,12 +63,12 @@ import { EmptyState } from "../../wardyn/states";
 import {
   SUBJECTS,
   SUBJECT_LABEL,
-  Segmented,
   UserTypeSubjectSelect,
   subjectText,
   SubjectName,
   type PickableSubjectType,
 } from "../permissions";
+import { Segmented } from "../../wardyn/segmented";
 import { Note, question } from "./display";
 import { SubmittedNote } from "./submitted-note";
 

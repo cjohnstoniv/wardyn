@@ -331,7 +331,7 @@ describe("ProfileEditor — the autonomy rubric round-trips", () => {
 });
 
 // #1200 §3a — "Allowed barriers": one radio over the SAME min_confinement_class
-// field the JSON spec authors, so the two controls can never disagree.
+// field the policy source authors, so the two controls can never disagree.
 describe("ProfileEditor — Allowed barriers (T-7)", () => {
   beforeEach(() => {
     getSetupStatusMock.mockReset();
@@ -352,7 +352,7 @@ describe("ProfileEditor — Allowed barriers (T-7)", () => {
     expect(screen.getByRole("button", { name: "Wall", pressed: true })).toBeInTheDocument();
   });
 
-  it("picking Vault writes CC3 into the same spec the JSON textarea shows, and saves it", async () => {
+  it("picking Vault writes CC3 into the same source the editor shows, and saves it", async () => {
     updateProfileMock.mockResolvedValue({ profile: GREENFIELD, warnings: [] });
     renderEditor();
 
@@ -361,9 +361,12 @@ describe("ProfileEditor — Allowed barriers (T-7)", () => {
     expect(
       screen.getByText("Only Vault is allowed under this profile — every run is forced onto it."),
     ).toBeInTheDocument();
-    // The JSON textarea (PolicyPanel) reflects the same write.
-    expect((screen.getByLabelText("Spec (JSON)") as HTMLTextAreaElement).value).toContain(
-      '"min_confinement_class": "CC3"',
+    // The read view says so in the console's words, and the source (YAML, behind
+    // "Edit policy") carries the same write.
+    expect(screen.getByText("Minimum").nextElementSibling).toHaveTextContent("Vault");
+    await userEvent.click(screen.getByRole("button", { name: "Edit policy" }));
+    expect((screen.getByLabelText(/^Spec \(YAML\)/) as HTMLTextAreaElement).value).toContain(
+      "min_confinement_class: CC3",
     );
 
     await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
@@ -373,12 +376,42 @@ describe("ProfileEditor — Allowed barriers (T-7)", () => {
     );
   });
 
-  it("disables the control while the JSON is unparseable, rather than silently no-oping a click", async () => {
+  it("disables the control while the source is unparseable, rather than silently no-oping a click", async () => {
     renderEditor();
     await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalled());
-    const textarea = screen.getByLabelText("Spec (JSON)");
+    await userEvent.click(screen.getByRole("button", { name: "Edit policy" }));
+    const textarea = screen.getByLabelText(/^Spec \(YAML\)/);
     fireEvent.change(textarea, { target: { value: "{ not json" } });
     expect(screen.getByRole("button", { name: "Vault" })).toBeDisabled();
+  });
+
+  // #1921: the ceiling reads first; editing is a step, and an invalid source is never saved.
+  it("opens the ceiling as a read view, edits it as YAML, and returns to the button that opened it", async () => {
+    renderEditor();
+    expect(screen.getByRole("button", { name: "Summary", pressed: true })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /^Spec/ })).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit policy" }));
+    const textarea = screen.getByLabelText(/^Spec \(YAML\)/);
+    await waitFor(() => expect(textarea).toHaveFocus());
+    expect(screen.getByText("Editing")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Done editing" }));
+    expect(screen.queryByLabelText(/^Spec \(YAML\)/)).toBeNull();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Edit policy" })).toHaveFocus());
+  });
+
+  it("holds Save while the ceiling does not parse, and sends nothing", async () => {
+    updateProfileMock.mockReset();
+    renderEditor();
+    await userEvent.click(screen.getByRole("button", { name: "Edit policy" }));
+    fireEvent.change(screen.getByLabelText(/^Spec \(YAML\)/), { target: { value: "a: [" } });
+    expect(screen.getByRole("button", { name: GOV.SAVE })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Done editing" }));
+    // Out of the editor the read view still says the source is not valid.
+    expect(screen.getByText("The policy spec isn't valid YAML or JSON.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: GOV.SAVE })).toBeDisabled();
+    expect(updateProfileMock).not.toHaveBeenCalled();
   });
 });
 

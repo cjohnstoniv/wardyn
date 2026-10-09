@@ -165,6 +165,7 @@ export const permissions = {
       enforcement: body.enforcement ?? {},
       session_groups: unwrapList<string>(body.session_groups),
       groups_snapshot_stale: !!body.groups_snapshot_stale,
+      kinds_version: body.kinds_version ?? 0,
     };
   },
 

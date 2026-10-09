@@ -58,3 +58,26 @@ func TestPreflightRateBoot(t *testing.T) {
 		t.Fatalf("negative rate error = %v, want one naming WARDYN_PREFLIGHT_RATE_PER_MIN", err)
 	}
 }
+
+func TestPolicyPreviewRateBoot(t *testing.T) {
+	ensureUnset(t, "WARDYN_POLICY_PREVIEW_RATE_PER_MIN")
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"wardynd-test"}
+
+	resetFlags(t)
+	if got := *parseBootFlags().policyPreviewRatePerMin; got != 60 {
+		t.Fatalf("default = %d, want 60", got)
+	}
+	t.Setenv("WARDYN_POLICY_PREVIEW_RATE_PER_MIN", "0")
+	resetFlags(t)
+	if got := *parseBootFlags().policyPreviewRatePerMin; got != 0 {
+		t.Fatalf("env 0 = %d, want 0 (off)", got)
+	}
+
+	neg := -1
+	err := validateBootPosture(&bootFlags{preflightRatePerMin: new(int), policyPreviewRatePerMin: &neg}, tlsPosture{})
+	if err == nil || !strings.Contains(err.Error(), "WARDYN_POLICY_PREVIEW_RATE_PER_MIN") {
+		t.Fatalf("negative rate error = %v, want one naming WARDYN_POLICY_PREVIEW_RATE_PER_MIN", err)
+	}
+}

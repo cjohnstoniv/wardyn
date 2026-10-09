@@ -45,24 +45,23 @@ func readRepo(t *testing.T, rel string) string {
 var mdHeading = regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
 
 // headingSlug renders a markdown heading the way GitHub anchors it: lower-cased,
-// everything but letters, digits, spaces and hyphens dropped, spaces to hyphens.
-// So `## ` + "`wardynd` (control plane)" anchors as wardynd-control-plane, and a
-// citation to it is a link a reader can actually follow.
+// everything but letters, digits, spaces, hyphens and underscores dropped, each
+// space to a hyphen. Nothing is collapsed or trimmed, so " — " anchors as "--"
+// and `push_rules` keeps its underscore, exactly as GitHub's slugger does. So
+// `## ` + "`wardynd` (control plane)" anchors as wardynd-control-plane, and a
+// citation to it is a link a reader can actually follow. ASCII letters only: a
+// heading with non-ASCII letters would differ from GitHub's anchor.
 func headingSlug(text string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(strings.TrimSpace(text)) {
 		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
 			b.WriteRune(r)
-		case r == ' ' || r == '_':
+		case r == ' ':
 			b.WriteRune('-')
 		}
 	}
-	out := b.String()
-	for strings.Contains(out, "--") {
-		out = strings.ReplaceAll(out, "--", "-")
-	}
-	return strings.Trim(out, "-")
+	return b.String()
 }
 
 // citedSymbolBodies returns, for one cited file, the source text a citation into

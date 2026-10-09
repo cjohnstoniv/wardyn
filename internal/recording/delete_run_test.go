@@ -5,6 +5,8 @@ package recording_test
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -35,8 +37,8 @@ func deleteRunContract(t *testing.T, s recording.Store) {
 		t.Fatalf("DeleteRun = %d, %v, want the 3 casts of the run", n, err)
 	}
 	for _, key := range []string{run, recording.CastKey(run, "sess"), recording.CastKey(run, recording.PartSuffix(1))} {
-		if _, err := s.OpenCast(ctx, key); !errors.Is(err, recording.ErrNotFound) {
-			t.Errorf("cast %s after DeleteRun: %v, want not found", key, err)
+		if _, err := s.OpenCast(ctx, key); !errors.Is(err, recording.ErrErased) {
+			t.Errorf("cast %s after DeleteRun: %v, want erased", key, err)
 		}
 	}
 	for _, key := range []string{other, recording.CastKey(other, "sess"), longer} {
@@ -61,4 +63,24 @@ func TestFSStoreDeleteRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	deleteRunContract(t, s)
+}
+
+func TestHandler_ErasedRecordingRemainsHidden(t *testing.T) {
+	s, err := recording.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteRun(t.Context(), "run"); err != nil {
+		t.Fatal(err)
+	}
+	for _, authorized := range []bool{false, true} {
+		for _, key := range []string{"run", "run~attach", "run~part-2"} {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/run/recording/"+key, nil)
+			newTestRouterWithAuth(s, func(*http.Request, string) bool { return authorized }).ServeHTTP(w, req)
+			if w.Code != http.StatusNotFound || w.Body.String() != "recording not found\n" {
+				t.Fatalf("erased replay response = %d %s", w.Code, w.Body)
+			}
+		}
+	}
 }

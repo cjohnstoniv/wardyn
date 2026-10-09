@@ -374,3 +374,58 @@ func NewPG(pool *pgxpool.Pool) PG { return PG{Pool: pool} }
 
 // Compile-time assertion: PG satisfies Store.
 var _ Store = PG{}
+
+// ComponentStore persists custom components (migration 0136_components) and the snapshot of the
+// ones a run launched with (migration 0137_run_components); bodies in store_components.go.
+// Optional like RunLayoutStore, so the doubles that implement Store need not grow: callers
+// type-assert. A caller that finds it absent must REFUSE a request that names a component,
+// never drop the component and carry on.
+//
+// Owner "" is the organisation's rows; any other owner is one person's principal. Every read and
+// write of a component is scoped to an owner, so another person's row answers exactly as an absent one.
+type ComponentStore interface {
+	// CreateComponent inserts c at version 1 under the id the CALLER chose, and never replaces a
+	// row: ErrConflict when the id exists or the owner already has a component of that name. The
+	// caller choosing the id is what lets it record who may use an org component before the row
+	// exists, so no reader can find the row first. Timestamps are the database's.
+	CreateComponent(ctx context.Context, c types.Component) (types.Component, error)
+	// UpdateComponent replaces the name and definition of the row with c's id AND owner and moves
+	// its version by one. ErrNotFound when that owner has no such row; ErrConflict on a name the
+	// owner already uses.
+	UpdateComponent(ctx context.Context, c types.Component) (types.Component, error)
+	// DeleteComponent removes owner's row and returns it, or ErrNotFound. Snapshots of it on
+	// runs already launched are kept.
+	DeleteComponent(ctx context.Context, id uuid.UUID, owner string) (types.Component, error)
+	GetComponent(ctx context.Context, id uuid.UUID, owner string) (types.Component, error)
+	// ListComponents returns owner's rows by name.
+	ListComponents(ctx context.Context, owner string) ([]types.Component, error)
+	// ListComponentsByIDs returns the rows among ids that are the organisation's or owner's own.
+	// An id it does not return is absent or another person's; the two are not told apart.
+	ListComponentsByIDs(ctx context.Context, owner string, ids []uuid.UUID) ([]types.Component, error)
+	CountComponents(ctx context.Context, owner string) (int, error)
+	// PutRunComponents writes run runID's snapshot, once, in one transaction; each row's position
+	// in comps is its ordinal, and its RunID, Ordinal and Erased fields are not read. ErrNotFound
+	// when the run does not exist; ErrConflict when it already has a snapshot, which is never
+	// replaced — its rows are the run's authorization record. An empty comps is refused: a run
+	// launched without components writes no snapshot, so the caller does not call this.
+	PutRunComponents(ctx context.Context, runID uuid.UUID, comps []types.RunComponent) error
+	// ListRunComponents returns a run's snapshot in request order, erased rows included (Erased,
+	// with only SelfDefined left beside the key); empty for a run launched without components.
+	// It is what revive re-checks: an org row (SelfDefined false) needs its ComponentID's grant,
+	// any SelfDefined row the custom-component feature.
+	ListRunComponents(ctx context.Context, runID uuid.UUID) ([]types.RunComponent, error)
+	// DeleteComponentsByOwner and EraseRunComponentsByOwner are a person's erasure. The first
+	// deletes the components they saved. The second clears the descriptive content of the
+	// snapshot rows of what they defined, across every run, and KEEPS each row as that run's
+	// authorization tombstone. Each returns how many rows it changed and refuses owner "" — the
+	// organisation's rows are no person's.
+	DeleteComponentsByOwner(ctx context.Context, owner string) (int, error)
+	EraseRunComponentsByOwner(ctx context.Context, owner string) (int, error)
+	// EraseRunComponentsOfRun clears, on run runID only, what EraseRunComponentsByOwner clears:
+	// a create that finds a saved component gone after its snapshot write leaves no content
+	// behind. It returns how many rows it changed and refuses owner "".
+	EraseRunComponentsOfRun(ctx context.Context, runID uuid.UUID, owner string) (int, error)
+}
+
+// Compile-time assertion: PG satisfies ComponentStore.
+var _ ComponentStore = PG{}

@@ -500,7 +500,7 @@ func unionCeilingDenies(policy *types.RunPolicySpec, deny []string) []string {
 // required argument whose zero value dispatchRun refuses (see dispatchCeiling).
 func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	policy *types.RunPolicySpec, injections *[]runner.InjectionGrant, c dispatchCeiling,
-	p *dispatchParams, sandboxEnv map[string]string, llm *llmTransport, mitmHosts *[]string,
+	p *dispatchParams, sandboxEnv map[string]string, llm *llmTransport, mitmHosts, componentMITMHosts *[]string,
 ) {
 	// THE ENFORCEMENT half is gated on the deny list, because with nothing to
 	// deny there is nothing to union, no injection to drop and no lane to
@@ -525,6 +525,14 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 		droppedLane = s.dropBrokeredLanes(c, p, sandboxEnv)
 		droppedLane = append(droppedLane, narrowCeilingBedrockLane(c, llm, mitmHosts, sandboxEnv)...)
 		slices.Sort(droppedLane)
+		// A component's header host the ceiling denies loses its interception
+		// entry with its injection rule (dropped above, and listed there): the
+		// proxy terminates that host's TLS only to set the header.
+		if componentMITMHosts != nil {
+			*componentMITMHosts = slices.DeleteFunc(slices.Clone(*componentMITMHosts), func(entry string) bool {
+				return ceilingDenies(c.deny, componentMITMHost(entry))
+			})
+		}
 
 		if len(droppedInjection) > 0 || len(droppedLane) > 0 {
 			slog.WarnContext(ctx, "wardynd: governance ceiling — withholding credential lanes for hosts this principal's profile denies",

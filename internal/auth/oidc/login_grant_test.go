@@ -189,3 +189,5 @@ func TestLoginScopeSanitization(t *testing.T) {
 		}
 	})
 }
+
+func (s *stubSink) LoginGrantGeneration(context.Context) (int64, error) { return 0, nil }

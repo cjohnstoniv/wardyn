@@ -4,7 +4,7 @@
  */
 
 import { test, expect, type Page } from "@playwright/test";
-import { MEMBER_TOKEN, MEMBER_PRINCIPAL, consoleAPI } from "./fixtures";
+import { ADMIN_TOKEN, MEMBER_TOKEN, MEMBER_PRINCIPAL, consoleAPI } from "./fixtures";
 import { SHELL } from "../src/app/components/wardyn/copy";
 import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
 import { SIGNIN } from "../src/app/lib/sign-in-copy";
@@ -27,7 +27,7 @@ import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_EXTRA } from "../src/app/lib/reauth-c
 // and shows an error; a 200 calls onSignIn() and lands in the console.
 
 const TOKEN_KEY = "wardyn_admin_token";
-const GOOD_TOKEN = process.env.WARDYN_E2E_TOKEN || "wardyn-e2e-token";
+const GOOD_TOKEN = ADMIN_TOKEN;
 
 // Clear the stored token BEFORE the app's first script runs so every test
 // starts from a clean, unauthenticated slate regardless of prior state.

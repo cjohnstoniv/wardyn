@@ -213,8 +213,13 @@ func (s PG) IdentityRefused(ctx context.Context, issuer, tenantID, objectID, pri
 // epoch (epoch < 0: only a deactivation refuses). It is the read the cookie, API-token and SSH-key
 // lanes make at authentication, as one statement.
 func (s PG) IdentityBlocked(ctx context.Context, principal string, epoch int64) (bool, error) {
+	return IdentityBlockedQ(ctx, s.Pool, principal, epoch)
+}
+
+// IdentityBlockedQ checks identity admission on q, including an existing transaction.
+func IdentityBlockedQ(ctx context.Context, q Querier, principal string, epoch int64) (bool, error) {
 	var blocked bool
-	err := s.Pool.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM principal_identities
 			 WHERE principal = $1

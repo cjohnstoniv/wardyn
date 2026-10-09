@@ -20,6 +20,14 @@ type PolicyRequest struct {
 	Spec types.RunPolicySpec `json:"spec"`
 }
 
+// PolicySaved is what POST /api/v1/policies and PUT /api/v1/policies/{id}
+// answer: the stored policy and the stored secrets its grants name, each present
+// or missing in the saver's namespace. The list is advisory, never a refusal.
+type PolicySaved struct {
+	types.RunPolicy
+	Requirements []ComponentRequirement `json:"requirements"`
+}
+
 // ListPoliciesPage is ListPolicies plus the server's X-Wardyn-Truncated signal:
 // truncated=true means a further page exists.
 func (c *Client) ListPoliciesPage(ctx context.Context, opts ...ListOpts) (policies []types.RunPolicy, truncated bool, err error) {

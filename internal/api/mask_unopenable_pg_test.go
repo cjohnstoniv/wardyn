@@ -28,7 +28,7 @@ func TestPG_RecordingUploadRefusedAfterCredentialOnlyErase(t *testing.T) {
 			a := l.replica()
 			run := l.run()
 			a.dispatch(t, run) // a complete, empty manifest
-			if err := a.reg.AddGlobal(maskOwner, "erased-credential", time.Now(), []byte("global-credential-copy-XYZ789")); err != nil {
+			if err := a.reg.AddGlobal(0, maskOwner, "erased-credential", time.Now(), []byte("global-credential-copy-XYZ789")); err != nil {
 				t.Fatal(err)
 			}
 			var later types.AgentRun
