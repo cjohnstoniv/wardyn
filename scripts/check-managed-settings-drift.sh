@@ -162,7 +162,7 @@ hook_fired() { # [managed settings dir] -> "fired" when the repository hook ran
         --read-only --tmpfs /tmp -v "$amd_exe:/usr/local/bin/claude:ro" ${mount[@]+"${mount[@]}"} \
         -v "$tmp/ws:/ws:ro" -v "$tmp/marker:/marker" -w /ws \
         -e HOME=/tmp -e CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 "$image" \
-        timeout 60 claude -p hi --dangerously-skip-permissions >/dev/null 2>"$tmp/stderr" || true
+        timeout 60 claude --print hi --dangerously-skip-permissions >/dev/null 2>"$tmp/stderr" || true
     [ ! -e "$tmp/marker/fired" ] || echo fired
 }
 [ "$(hook_fired)" = fired ] || die "a repository SessionStart hook did not fire without a managed file under --dangerously-skip-permissions — the hook check would pass vacuously; stderr: $(head -c 400 "$tmp/stderr")"
