@@ -1,9 +1,10 @@
 # The demo recording
 
-The Wardyn demo video is a script, not a performance. `make record-demo` wipes
-the stack, brings it up on camera, drives the console through the whole story,
-and writes an mp4. After a UI change you re-run it — you do not re-choreograph
-it.
+- The Wardyn demo video is a script, not a performance.
+- `make record-demo` wipes the stack, brings it up on camera, drives the console through the whole story, and writes an mp4.
+- After a UI change you re-run it — you do not re-choreograph it.
+
+## Overview
 
 ```sh
 make record-demo                          # the works
@@ -28,21 +29,16 @@ make record-demo ARGS="--video 11 --terminal-script scripts/demo-beats/11-ci-and
 
 ## The series harness
 
-The story is not one video, it is 23 catalogued episodes
-(`ui/src/app/lib/demo-videos.ts`'s `EPISODES`) — 14 core-numbered, plus
-lettered optional sub-episodes that hang off the episode they extend: 02b/02c,
-03b–03d, 04b–04d, 12b. Same rig throughout — same driver, same overlay, same
-narration, same verifier — with one spec per video. **13 (your terminal, our
-cluster)** has no spec at all: it is terminal-only and shot against a
-Kubernetes cluster rather than the compose stack (see "The terminal lane"
-below).
+- The story is not one video, it is 23 catalogued episodes ([`ui/src/app/lib/demo-videos.ts`](../ui/src/app/lib/demo-videos.ts)'s `EPISODES`) — 14 core-numbered, plus lettered optional sub-episodes that hang off the episode they extend: 02b/02c, 03b–03d, 04b–04d, 12b.
+- Same rig throughout — same driver, same overlay, same narration, same verifier — with one spec per video.
+- **13 (your terminal, our cluster)** has no spec at all: it is terminal-only and shot against a Kubernetes cluster rather than the compose stack (see "The terminal lane" below).
 
 ```sh
 scripts/record-demo.sh --video 03a   # records ui/e2e/demo/03a-*.spec.ts, and only that
 scripts/record-demo.sh               # no --video: the end-to-end walkthrough, unchanged
 ```
 
-`--video <nn>` does four things and nothing else:
+- `--video <nn>` does four things and nothing else:
 
 | | |
 |---|---|
@@ -51,45 +47,32 @@ scripts/record-demo.sh               # no --video: the end-to-end walkthrough, u
 | **Decides the reset** | see below |
 | **Exports `WARDYN_DEMO_VIDEO`** | which is how `verify-demo-take.sh` knows which take it is looking at |
 
-`<nn>` is two digits with an optional letter. A split episode's parts letter from `a` (03a is the core "what it stops"; 03b–03d are its optional detours); an appendix to an intact episode letters from `b` (a planned `02b`, `12b`). A lettered take sorts beside its number, and the grader gets one arm per lettered id.
-
-With no `--video` nothing is filtered at all: the `demo` project's own
-`testMatch` decides, exactly as it did before the series existed.
-
-Shooting from a fresh worktree? `local/bootstrap-worktree.sh <path>` (untracked, in `local/`) links `ui/node_modules`, `./wardyn` and `./wardynd` from the primary checkout and copies the gitignored `local/` demo files across — the harness needs all four and git tracks none of them.
-
-The shared code the series specs sit on is [`stage.ts`](../ui/e2e/demo/stage.ts)
-(the browser, the recorded context, the one page — importing it registers a
-spec's `beforeAll`/`afterAll`, and each test reads its page out of `stage()`)
-and [`funnel.ts`](../ui/e2e/demo/funnel.ts) (`advance()`, `clearWorkspace()`,
-`decide()`). Both were lifted out of `walkthrough.spec.ts` unchanged. **A spec
-that imports `stage.ts` keeps its own `test.skip(!process.env.WARDYN_DEMO, …)`
-guard** — without it, a bare `pnpm exec playwright test --project=demo` points a
-headless browser at a developer's live stack and starts clicking Launch.
+- `<nn>` is two digits with an optional letter.
+- A split episode's parts letter from `a` (03a is the core "what it stops"; 03b–03d are its optional detours); an appendix to an intact episode letters from `b` (a planned `02b`, `12b`).
+- A lettered take sorts beside its number, and the grader gets one arm per lettered id.
+- With no `--video` nothing is filtered at all: the `demo` project's own `testMatch` decides, exactly as it did before the series existed.
+- Shooting from a fresh worktree?
+- `local/bootstrap-worktree.sh <path>` (untracked, in `local/`) links `ui/node_modules`, `./wardyn` and `./wardynd` from the primary checkout and copies the gitignored `local/` demo files across — the harness needs all four and git tracks none of them.
+- The shared code the series specs sit on is [`stage.ts`](../ui/e2e/demo/stage.ts) (the browser, the recorded context, the one page —
+  - importing it registers a spec's `beforeAll`/`afterAll`, and each test reads its page out of `stage()`) and [`funnel.ts`](../ui/e2e/demo/funnel.ts) (`advance()`, `clearWorkspace()`, `decide()`).
+- Both were lifted out of `walkthrough.spec.ts` unchanged.
+- **A spec that imports `stage.ts` keeps its own `test.skip(!process.env.WARDYN_DEMO, …)` guard** — without it, a bare `pnpm exec playwright test --project=demo` points a headless browser at a developer's live stack and starts clicking Launch.
 
 ### The clean slate belongs to video 02
 
-`reset-all` runs for **video 02 and the no-flag walkthrough only** (videos 01 and
-02b are stackless — a slides deck each, they never touch the stack, not even
-under `--reset`). Every other `--video` implies
-`--no-reset`; `--reset` overrides that, `--no-reset` opts 02 out.
-
-This is not a speed optimisation. The series is shot in an order where each
-video opens on state an earlier one left behind — a workspace that was
-onboarded, a run that was launched, a host that was permanently granted
-(**DA14/SV20**). After video 02's reset, *every* later take
-runs with `--no-reset`: a wipe between them does not merely cost minutes of dead
-air, it films a story whose first half never happened — and the take stays green
-the whole time, which is exactly why the rule lives in the script rather than
-with whoever is holding the clapperboard.
+- `reset-all` runs for **video 02 and the no-flag walkthrough only** (videos 01 and 02b are stackless — a slides deck each, they never touch the stack, not even under `--reset`).
+- Every other `--video` implies `--no-reset`; `--reset` overrides that, `--no-reset` opts 02 out.
+- This is not a speed optimisation.
+- The series is shot in an order where each video opens on state an earlier one left behind —
+  - a workspace that was onboarded, a run that was launched, a host that was permanently granted (**DA14/SV20**).
+- After video 02's reset, *every* later take runs with `--no-reset`:
+  - a wipe between them does not merely cost minutes of dead air, it films a story whose first half never happened —
+  - and the take stays green the whole time, which is exactly why the rule lives in the script rather than with whoever is holding the clapperboard.
 
 ### The SSH videos need the gateway on before `make setup`
 
-`WARDYN_SSH_LISTEN` empty is the product default and means *off*: no listener,
-and the host key is not even generated (`buildOptionalFeatures`,
-`cmd/wardynd/boot_deps.go`). A take that films the SSH pane therefore has to
-bring the stack up with it set, in the shell that runs the recorder — the
-script's `make setup` inherits the environment:
+- `WARDYN_SSH_LISTEN` empty is the product default and means *off*: no listener, and the host key is not even generated (`buildOptionalFeatures`, [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)).
+- A take that films the SSH pane therefore has to bring the stack up with it set, in the shell that runs the recorder — the script's `make setup` inherits the environment:
 
 ```sh
 export WARDYN_SSH_LISTEN=:2222
@@ -97,20 +80,15 @@ export WARDYN_SSH_ADVERTISE=127.0.0.1:2222   # advisory copy: it is what the pan
 scripts/record-demo.sh --video 12
 ```
 
-Then **preflight the fingerprint before rolling**, not on camera:
+- Then **preflight the fingerprint before rolling**, not on camera:
 
 ```sh
 curl -s localhost:8080/healthz | jq .ssh   # expect enabled: true, plus host_key_fingerprint
 ```
 
-`enabled: false` means the variable never reached wardynd (or the image predates
-the gateway) — fix that before the take, because the run-detail card simply does
-not render and there is nothing to film.
-
-The host key is minted and persisted on first boot with the gateway on, so
-**video 02's `reset-all` mints a new one**. Any `known_hosts` entry from an
-earlier stack then makes the client refuse with the full REMOTE HOST
-IDENTIFICATION HAS CHANGED banner — mid-take, in a governance demo, on camera:
+- `enabled: false` means the variable never reached wardynd (or the image predates the gateway) — fix that before the take, because the run-detail card simply does not render and there is nothing to film.
+- The host key is minted and persisted on first boot with the gateway on, so **video 02's `reset-all` mints a new one**.
+- Any `known_hosts` entry from an earlier stack then makes the client refuse with the full REMOTE HOST IDENTIFICATION HAS CHANGED banner — mid-take, in a governance demo, on camera:
 
 ```sh
 ssh-keygen -R '[127.0.0.1]:2222'
@@ -118,47 +96,38 @@ ssh-keygen -R '[127.0.0.1]:2222'
 
 ### The verifier dispatches on the video
 
-`verify-demo-take.sh` reads `WARDYN_DEMO_VIDEO` and picks its checks from it.
-Unset means the legacy walkthrough, which films act 5 — so it gets act 5's
-checks, byte for byte what this script always ran, and that is also
-`--video 08` (the autonomous episode inherits the walkthrough's beats). Most
-episodes carry their own check functions; the remaining stubs
-(`video-specific checks TBD by spec`) ship their assertions with the spec
-that films them, because a check written before the beat exists is a guess,
-and a guess that passes is worse than no check.
-
-What every take gets regardless is the **shared** half — a narration timeline
-with cues and zero overlaps, and an mp4 that is 1920×1080 and actually carries
-an audio stream. That alone catches a take that recorded nothing, recorded
-silently, or recorded at the wrong size.
+- `verify-demo-take.sh` reads `WARDYN_DEMO_VIDEO` and picks its checks from it.
+- Unset means the legacy walkthrough, which films act 5 — so it gets act 5's checks, byte for byte what this script always ran, and that is also `--video 08` (the autonomous episode inherits the walkthrough's beats).
+- Most episodes carry their own check functions;
+  - the remaining stubs (`video-specific checks TBD by spec`) ship their assertions with the spec that films them,
+  - because a check written before the beat exists is a guess, and a guess that passes is worse than no check.
+- What every take gets regardless is the **shared** half — a narration timeline with cues and zero overlaps, and an mp4 that is 1920×1080 and actually carries an audio stream.
+- That alone catches a take that recorded nothing, recorded silently, or recorded at the wrong size.
 
 ### The terminal lane: `--terminal-script`
 
-Three videos of the series have no page to film. **V11 (CI & headless)** is a
-policy file, a long env-prefixed `scripts/ci-run.sh` invocation, its exit code
-and its artifacts; **V12 (audit & attach)** is three terminals each holding
-`ssh <run-uuid>@127.0.0.1 -p 2222` with a different key; **V13 (your terminal,
-our cluster)** is `kubectl`, `wardyn run ssh` and one `ssh` session against a
-Kubernetes sandbox. Playwright cannot drive any of them.
+- Three videos of the series have no page to film.
+- **V11 (CI & headless)** is a policy file, a long env-prefixed [`scripts/ci-run.sh`](../scripts/ci-run.sh) invocation, its exit code and its artifacts;
+  - **V12 (audit & attach)** is three terminals each holding `ssh <run-uuid>@127.0.0.1 -p 2222` with a different key;
+  - **V13 (your terminal, our cluster)** is `kubectl`, `wardyn run ssh` and one `ssh` session against a Kubernetes sandbox.
+- Playwright cannot drive any of them.
 
 ```sh
 scripts/record-demo.sh --video 11 --terminal-script scripts/demo-beats/11-ci-and-headless.sh
 ```
 
-runs that beat script under the **same** gdigrab capture Act 0 uses — same
-`FIFO`, same `stop_capture`, one ffmpeg — and the script gets its presentation
-from [`scripts/demo-typist.sh`](../scripts/demo-typist.sh), which is the
-terminal's answer to `overlay.ts`:
+- runs that beat script under the **same** gdigrab capture Act 0 uses —
+  - same `FIFO`, same `stop_capture`, one ffmpeg — and the script gets its presentation from [`scripts/demo-typist.sh`](../scripts/demo-typist.sh), which is the terminal's answer to `overlay.ts`:
 
 | Verb | The browser lane's equivalent |
 |---|---|
 | `narration_zero` / `narration_end` | `narrationZero()` / `narrationEnd()` — opens and closes the clock |
 | `say "<line>"` | `caption()` — prints the line, speaks it through the same Kokoro server, and **holds the terminal until the clip has finished** (+300ms), so speech never runs over the next command |
-| `type_cmd "<command>"` | `typeInTerminal()` — echoes the command at 45ms/char, runs it, shows its real output. The status is returned *and* left in `TYPIST_RC`, and `$?` is restored before the command runs so a beat of `echo $?` reports the pipeline's code and not the keystroke loop's |
+| `type_cmd "<command>"` | `typeInTerminal()` — echoes the command and runs it; see [below](#the-type_cmd-verb) |
 | `beat <ms>` | `beat()` — a pause, for pacing only |
 | `chapter "<title>" "<sub>"` | `chapter()` — cleared screen, title held ~2.6s, cleared again |
 
-A beat script is an ordinary bash script that sources the typist:
+- A beat script is an ordinary bash script that sources the typist:
 
 ```sh
 . "$(dirname "${BASH_SOURCE[0]}")/../demo-typist.sh"
@@ -170,38 +139,27 @@ type_cmd 'echo $?'
 narration_end
 ```
 
-**A video may be terminal-only, browser-only, or both.** With `--terminal-script`
-and no `ui/e2e/demo/<nn>-*.spec.ts`, the beats *are* the video and the driver
-never starts — the slug then comes off the script's filename, so the take still
-lands as `wardyn-<nn>-<slug>-<stamp>.mp4` and sorts with its siblings. With both,
-the terminal segment is filmed first and joined onto the front of `console.webm`
-by the same concat `--with-terminal` has always used (so the joined file keeps
-that lane's `…-full.mp4` name, and `…-full-narrated.mp4` once it speaks).
+- **A video may be terminal-only, browser-only, or both.**
+- With `--terminal-script` and no `ui/e2e/demo/<nn>-*.spec.ts`, the beats *are* the video and the driver never starts — the slug then comes off the script's filename, so the take still lands as `wardyn-<nn>-<slug>-<stamp>.mp4` and sorts with its siblings.
+- With both, the terminal segment is filmed first and joined onto the front of `console.webm` by the same concat `--with-terminal` has always used (so the joined file keeps that lane's `…-full.mp4` name, and `…-full-narrated.mp4` once it speaks).
+- Narration crosses the seam.
+- The typist writes its own `ui/test-results/demo-video/narration-terminal.json` —
+  - narrator.ts rewrites `narration.json` wholesale after every cue, so a shared file would lose every terminal cue the moment the driver spoke —
+  - and `record-demo.sh` merges the two, shifting the **browser** cues by the terminal segment's measured duration, then muxes the merged timeline flat.
+- The terminal cues need no shift because `start_capture` exports `WARDYN_DEMO_CAPTURE_ZERO` and `narration_zero` times from the start of the *picture*, not from the moment the beat script happened to run.
+- Two things to know before rolling:
+  - **The capture region is live for the whole beat script, not just Act 0.**
+    - Same warning as `--with-terminal`, for longer: WSLg cannot raise or z-order windows from Linux, so whatever sits in that rectangle is what gets filmed, and you cannot tell until you watch it.
+    - It has eaten two takes.
+    - Without `--with-terminal` the camera starts *after* `make setup`, so the video opens on the beats rather than on two minutes of bring-up — but the corner still has to be clear from that point on.
+  - **Warm the voice first.**
+    - `narrate-prewarm.sh` only reads `ui/e2e/demo/*.ts`, so a beat script's lines are not pre-rendered and the first take of a new line pauses ~1.5s while Kokoro renders it.
+    - Clips are cached by content hash, so a `--no-record` dry run of the beat script (or simply the previous take) makes the real one warm.
 
-Narration crosses the seam. The typist writes its own
-`ui/test-results/demo-video/narration-terminal.json` — narrator.ts rewrites
-`narration.json` wholesale after every cue, so a shared file would lose every
-terminal cue the moment the driver spoke — and `record-demo.sh` merges the two,
-shifting the **browser** cues by the terminal segment's measured duration, then
-muxes the merged timeline flat. The terminal cues need no shift because
-`start_capture` exports `WARDYN_DEMO_CAPTURE_ZERO` and `narration_zero` times
-from the start of the *picture*, not from the moment the beat script happened to
-run.
+#### The type_cmd verb
 
-Two things to know before rolling:
-
-- **The capture region is live for the whole beat script, not just Act 0.** Same
-  warning as `--with-terminal`, for longer: WSLg cannot raise or z-order windows
-  from Linux, so whatever sits in that rectangle is what gets filmed, and you
-  cannot tell until you watch it. It has eaten two takes. Without
-  `--with-terminal` the camera starts *after* `make setup`, so the video opens on
-  the beats rather than on two minutes of bring-up — but the corner still has to
-  be clear from that point on.
-- **Warm the voice first.** `narrate-prewarm.sh` only reads `ui/e2e/demo/*.ts`,
-  so a beat script's lines are not pre-rendered and the first take of a new line
-  pauses ~1.5s while Kokoro renders it. Clips are cached by content hash, so a
-  `--no-record` dry run of the beat script (or simply the previous take) makes
-  the real one warm.
+- `typeInTerminal()` — echoes the command at 45ms/char, runs it, shows its real output.
+- The status is returned *and* left in `TYPIST_RC`, and `$?` is restored before the command runs so a beat of `echo $?` reports the pipeline's code and not the keystroke loop's
 
 ### V13 is shot against a cluster, not the compose stack
 
@@ -213,9 +171,9 @@ Two things to know before rolling:
 | **Auth** | the install's own admin token, read from `Secret wardyn-auth` and **exported, never typed** — `wardyn audit` takes it from `WARDYN_ADMIN_TOKEN`. Never film a `--help`: cobra renders that flag's default, and the default *is* the token |
 | **Key** | the operator's own `~/.ssh/id_ed25519.pub`, registered silently (201, or 409 on a retake). Key management is V12's subject, not this one's |
 | **Verifier** | `WARDYN_DEMO_VIDEO=13` → three audit checks: the `ssh.exec` row for `hostname`, the one carrying `exit 37`, and every `ssh.authenticate` success attributed to the run's owner |
-| **Knobs** | four, all with a default that is what the table above describes — set one only when your cluster is not the quickstart's. `WARDYN_V13_CONTEXT` (default `kind-wardyn-quickstart`) and `WARDYN_V13_NAMESPACE` (default `wardyn`) name the kube context and namespace both the beat script and the verifier read the admin token from; `WARDYN_V13_DIR` (default `/tmp/wardyn-v13`) is where preflight writes its log; `WARDYN_V13_PUBKEY` (default `~/.ssh/id_ed25519.pub`) is the key beat 3 registers and authenticates with. `WARDYN_URL` (default `http://127.0.0.1:8080`) and `WARDYN_DEMO_RUN_ID` are the shared knobs, not V13's own |
+| **Knobs** | four, all with a default that is what the table above describes; see [below](#v13-knobs) |
 
-Staging, once, before rolling — `preflight` checks every item and films nothing:
+- Staging, once, before rolling — `preflight` checks every item and films nothing:
 
 ```sh
 make kind-quickstart                                  # if the cluster is not up
@@ -234,53 +192,52 @@ scripts/record-demo.sh --video 13 \
   --terminal-script scripts/demo-beats/13-terminal-to-the-cluster.sh
 ```
 
-The beat script never launches, kills or reconfigures a run — it picks the
-newest `RUNNING` one (or `WARDYN_DEMO_RUN_ID`) and stops with that `curl` in the
-error if there is none. A **retake wants a fresh run**: the audit trail is
-append-only, so the previous take's rows are still on the old one and beat 5
-would film them.
+- The beat script never launches, kills or reconfigures a run — it picks the newest `RUNNING` one (or `WARDYN_DEMO_RUN_ID`) and stops with that `curl` in the error if there is none.
+- A **retake wants a fresh run**: the audit trail is append-only, so the previous take's rows are still on the old one and beat 5 would film them.
+
+#### V13 knobs
+
+- four, all with a default that is what the table above describes — set one only when your cluster is not the quickstart's.
+- `WARDYN_V13_CONTEXT` (default `kind-wardyn-quickstart`) and `WARDYN_V13_NAMESPACE` (default `wardyn`) name the kube context and namespace both the beat script and the verifier read the admin token from;
+- `WARDYN_V13_DIR` (default `/tmp/wardyn-v13`) is where preflight writes its log;
+- `WARDYN_V13_PUBKEY` (default `~/.ssh/id_ed25519.pub`) is the key beat 3 registers and authenticates with.
+- `WARDYN_URL` (default `http://127.0.0.1:8080`) and `WARDYN_DEMO_RUN_ID` are the shared knobs, not V13's own
 
 ### Re-take at the 0.6 release cut (historical)
 
-This table is the 0.6 cut's ledger, kept as a record of what that cut owed —
-its episode numbering, its "twelve episodes plus `V13`" framing and its
-per-episode re-take calls are all as of 0.6 and are **not** current. The
-current catalog is the 23 episodes named above (`ui/src/app/lib/demo-videos.ts`);
-a later cut scopes its own re-take from that manifest, not from this table.
-
-Recording is a **release-cut act**, not a branch act — nothing here is re-shot
-on `prep/v0.6`. What 0.6 changed about what the series *claims*, so the cut
-knows exactly what it owes:
-
-Numbers below are the **twelve-episode** series `main` renumbered to (`01
-why-govern-agents` … `12 audit-and-attach`), plus 0.6's new `V13`. The old
-0.5 numbering the campaign was shot in maps: old 01 → **V02**, 02 → **V04**,
-03 → **V05**, 04 → **V06**, 05 → **V07**, 06 → **V09**, 07 → **V10**, 08
-stays **V08**, 09 → **V11**, 10 → **V12**.
+- This table is the 0.6 cut's ledger, kept as a record of what that cut owed —
+  - its episode numbering, its "twelve episodes plus `V13`" framing and its per-episode re-take calls are all as of 0.6 and are **not** current.
+- The current catalog is the 23 episodes named above ([`ui/src/app/lib/demo-videos.ts`](../ui/src/app/lib/demo-videos.ts)); a later cut scopes its own re-take from that manifest, not from this table.
+- Recording is a **release-cut act**, not a branch act — nothing here is re-shot on `prep/v0.6`.
+- What 0.6 changed about what the series *claims*, so the cut knows exactly what it owes:
+- Numbers below are the **twelve-episode** series `main` renumbered to (`01 why-govern-agents` … `12 audit-and-attach`), plus 0.6's new `V13`.
+- The old 0.5 numbering the campaign was shot in maps:
+  - old 01 → **V02**, 02 → **V04**, 03 → **V05**, 04 → **V06**, 05 → **V07**, 06 → **V09**,
+  - 07 → **V10**, 08 stays **V08**, 09 → **V11**, 10 → **V12**.
 
 | Video | What 0.6 changed | Re-take at the cut? |
 |---|---|---|
-| **V13** — your terminal, our cluster | **New.** Terminal-only ([`scripts/demo-beats/13-terminal-to-the-cluster.sh`](../scripts/demo-beats/13-terminal-to-the-cluster.sh)), shot against the `make kind-quickstart` cluster | **Yes.** One take was shot and graded during the campaign, but nothing is published to the demos surface (Getting Started, since `10a2e144`) and neither the take nor its verify report is on this branch — the cut re-shoots it |
-| **V02–V12** (every episode with a browser lane) | No spec and no caption changed, but the **console did**: `Permissions` is a new sidebar entry, so every take on file films a sidebar the shipped console no longer has. This is *every* spec except `01-why-govern-agents` — V11 and V12 are terminal-**first**, not terminal-only, and their browser halves (`${CI_STACK}/runs`, `/audit`, `/runs/:id`) render the same shell | **Yes — restaging only.** The narration is still true; the chrome is stale |
-| **V01** — why govern agents | Nothing. It films `ui/e2e/demo/assets/primer.html`, a local deck, and never loads the console | No |
+| **V13** — your terminal, our cluster | **New.** Terminal-only ([`scripts/demo-beats/13-terminal-to-the-cluster.sh`](../scripts/demo-beats/13-terminal-to-the-cluster.sh)), shot against the `make kind-quickstart` cluster | **Yes.** One take was shot and graded during the campaign, but nothing is published to the demos surface (Getting Started, since `10a2e144`) and neither the take nor its verify report is on this branch. The cut re-shoots it |
+| **V02–V12** (every episode with a browser lane) | No spec and no caption changed, but the **console did**; see [below](#v02v12-changes) | **Yes — restaging only.** The narration is still true; the chrome is stale |
+| **V01** — why govern agents | Nothing. It films [`ui/e2e/demo/assets/primer.html`](../ui/e2e/demo/assets/primer.html), a local deck, and never loads the console | No |
 | **V09** — record a run (old 06) | Source comments only. The frozen-counter note the spec carried is retired (0.6 fixed the correlation index), but **no caption, no on-screen string and no beat changed** | Only as part of the V02–V12 restaging above |
 | **V12** — audit & attach (old 10) | Untouched in content. Its one ground-truth line — "dark here, because that sensor is opt-in" — stays true: the counter fix does not make the `groundtruth` compose profile any less opt-in | Restaging only, for its browser half's sidebar |
 | **V11** — CI & headless (old 09) | Untouched in content | Restaging only, for its browser half's sidebar |
 
-**What can be checked on this branch is V13's wiring, and it holds**:
-`verify-demo-take.sh` gained `check_video_13` and the `13)` dispatch arm, the
-beat script and the verifier agree byte-for-byte on the handoff path
-(`${WARDYN_DEMO_WORK_DIR:-…/demo-video-13}/v13-run-id.txt`), and the verifier's
-three audit assertions — `ssh.exec` for argv `hostname` at exit 0, an
-`ssh.exec` row carrying exit 37, and every `ssh.authenticate` success attributed to the
-run's owner — are exactly the beats the script films.
+- **What can be checked on this branch is V13's wiring, and it holds**: `verify-demo-take.sh` gained `check_video_13` and the `13)` dispatch arm,
+  - the beat script and the verifier agree byte-for-byte on the handoff path (`${WARDYN_DEMO_WORK_DIR:-…/demo-video-13}/v13-run-id.txt`),
+  - and the verifier's three audit assertions —
+  - `ssh.exec` for argv `hostname` at exit 0, an `ssh.exec` row carrying exit 37, and every `ssh.authenticate` success attributed to the run's owner —
+  - are exactly the beats the script films.
+- `check_video_13` has been exercised end to end once: the campaign's live lane recorded a take against its `kind-quickstart` cluster and graded it with the verifier's report.
+- That is why this row says "re-shoot", not "first take".
+- But there is no dry-run mode — the check reads a live cluster's audit trail — and that cluster, the take, and the report are all gone.
+- So the cut re-creates the cluster and re-shoots, and until it does, the series has no V13 to publish.
 
-`check_video_13` has been exercised end to end once: the campaign's live lane
-recorded a take against its `kind-quickstart` cluster and graded it with the
-verifier's report. That is why this row says "re-shoot", not "first take". But
-there is no dry-run mode — the check reads a live cluster's audit trail — and
-that cluster, the take, and the report are all gone. So the cut re-creates the
-cluster and re-shoots, and until it does, the series has no V13 to publish.
+#### V02–V12 changes
+
+- No spec and no caption changed, but the **console did**: `Permissions` is a new sidebar entry, so every take on file films a sidebar the shipped console no longer has.
+- This is *every* spec except `01-why-govern-agents` — V11 and V12 are terminal-**first**, not terminal-only, and their browser halves (`${CI_STACK}/runs`, `/audit`, `/runs/:id`) render the same shell
 
 ## Before the first take
 
@@ -289,30 +246,20 @@ winget.exe install Gyan.FFmpeg              # capture. From WSL it needs the .ex
 claude setup-token > ~/.wardyn-demo-token   # model access, read from the file, never printed
 ```
 
-winget's Gyan.FFmpeg is a zip package: it appends to the **Windows** PATH, and a
-WSL shell only inherits that at startup — so a freshly installed `ffmpeg.exe`
-stays invisible in the shell you installed it from. `record-demo.sh` resolves it
-directly (PATH, then the WinGet `Packages` directory) so you do not have to open
-a new shell; `WARDYN_DEMO_FFMPEG=/path/to/ffmpeg.exe` overrides. Preflight also
-checks the build actually has `gdigrab` and `libx264`, because a stripped ffmpeg
-would otherwise fail mid-take.
-
-Then, once, by hand: **put the terminal in the top-left 1920×1080 of the
-screen** — not maximized. That rectangle is filmed only during Act 0
-(`make setup`); once the driver starts, the browser records itself and you can
-use the machine normally.
-
-During Act 0 that corner *is* the frame. `record-demo.sh` captures
-`WARDYN_DEMO_CAPTURE=1920x1080+0+0` rather than the whole desktop, for two
-measured reasons: this machine's desktop is 5120×1440, which would produce a
-3.5:1 video nobody can share, and gdigrab cannot keep up with that pixel rate —
-a full-desktop grab measured **16 fps of a requested 30**, where the cropped
-region holds **27**. `WARDYN_DEMO_CAPTURE=full` grabs everything;
-`WARDYN_DEMO_FRAMERATE` overrides the rate.
-
-Anything inside that rectangle is in the Act 0 segment — other windows,
-notifications, wallpaper. Clear it before rolling. After Act 0 it stops
-mattering: see "The video is captured from TWO sources" below.
+- winget's Gyan.FFmpeg is a zip package: it appends to the **Windows** PATH, and a WSL shell only inherits that at startup — so a freshly installed `ffmpeg.exe` stays invisible in the shell you installed it from.
+- `record-demo.sh` resolves it directly (PATH, then the WinGet `Packages` directory) so you do not have to open a new shell; `WARDYN_DEMO_FFMPEG=/path/to/ffmpeg.exe` overrides.
+- Preflight also checks the build actually has `gdigrab` and `libx264`, because a stripped ffmpeg would otherwise fail mid-take.
+- Then, once, by hand: **put the terminal in the top-left 1920×1080 of the screen** — not maximized.
+- That rectangle is filmed only during Act 0 (`make setup`); once the driver starts, the browser records itself and you can use the machine normally.
+- During Act 0 that corner *is* the frame.
+- `record-demo.sh` captures `WARDYN_DEMO_CAPTURE=1920x1080+0+0` rather than the whole desktop, for two measured reasons:
+  - this machine's desktop is 5120×1440, which would produce a 3.5:1 video nobody can share,
+  - and gdigrab cannot keep up with that pixel rate —
+  - a full-desktop grab measured **16 fps of a requested 30**, where the cropped region holds **27**.
+- `WARDYN_DEMO_CAPTURE=full` grabs everything; `WARDYN_DEMO_FRAMERATE` overrides the rate.
+- Anything inside that rectangle is in the Act 0 segment — other windows, notifications, wallpaper.
+- Clear it before rolling.
+- After Act 0 it stops mattering: see "The video is captured from TWO sources" below.
 
 ## The video is captured from TWO sources, on purpose
 
@@ -322,71 +269,48 @@ mattering: see "The video is captured from TWO sources" below.
 | Act 0 — `make setup` in the terminal | ffmpeg `gdigrab`, screen region | **opt-in**, `--with-terminal` → joined as `…-full.mp4` |
 | Host-shell beats (V11, V12, V13) | the same ffmpeg `gdigrab` | **opt-in**, `--terminal-script <path>` → joined the same way |
 
-**Two sources means two picture clocks, and each lane's cues must be stamped on
-its own.** The console lane's timeline is built from Chromium's frame-swap
-stamps (CLOCK_MONOTONIC), so `narrator.ts` stamps its cues with `nowMs()`
-(`performance.now()`, the same monotonic clock) — never `Date.now()`. The
-terminal lane is a Windows ffmpeg grabbing the desktop against the Windows wall
-clock, so `demo-typist.sh` times its cues from `WARDYN_DEMO_CAPTURE_ZERO`
-(`date +%s%3N`, realtime) — and that one is right as it stands. Crossing them is
-not a rounding error: under WSL2 monotonic and realtime run **3% apart** (this
-box: 90.00s monotonic per 86.95s realtime, because WSL2 keeps slewing realtime
-back to the Windows host), and take 10 on 2026-08-24 shipped with the caption
-bubble 6.4s behind its own narration by the end. A second, smaller rate
-mismatch survives the clock fix (Playwright's screencast timebase vs the cue
-clock, load-dependent — the first post-fix rehearsal measured −1.95%), so the
-pipeline now CORRECTS rather than merely gates: `scripts/demo-drift.py` fits
-the per-take rate/offset (`--emit-fit`), `scripts/narrate-mux.py --drift-fit`
-lays every cue on the picture's own clock, and `verify-demo-take.sh` fails a
-take whose fit was unreliable or whose mux skipped the correction.
-
-**The terminal segment is off by default and that is deliberate.** It is the
-only part of the pipeline that films your screen, and on this host that cannot
-be made safe (below). It has ruined two takes — one recorded six minutes of a
-browser game, one a fantasy football draft — while every act passed and the
-script reported success. The console segment cannot be corrupted that way, so
-the default output is always the real thing.
-
-The split exists because a screen grab of the browser is **not reliable on this
-host**. WSLg presents the browser as a RAIL window, which means:
-
-- `--window-position` is a request the compositor may ignore (the driver now
-  moves the window with CDP `Browser.setWindowBounds`, which actually works, and
-  fails loudly if the window still lands outside the frame);
-- the window cannot be reliably raised from Linux, and **X stacking order is not
-  the Windows compositor's z-order**, so occlusion cannot even be *detected*
-  from this side;
-- gdigrab's `-i title=…` window capture cannot find WSLg windows at all
-  (`I/O error` for every exact title) — verified, so it is not an option.
-
-Net effect: a desktop grab films whatever is on top of that screen corner, and
-you cannot tell until you watch it. Playwright's capture comes from inside the
-page, so neither occlusion nor window position can corrupt it — with the default
-(console only) you can use the machine normally while a take runs. Only
-`--with-terminal` asks you to leave a corner alone, and only for the ~2 minutes
-of `make setup`.
-
-The `DEMO_CDP` lane cannot record this way (the browser is not ours to
-configure), so it falls back to the desktop grab and inherits the occlusion risk.
+- **Two sources means two picture clocks, and each lane's cues must be stamped on its own.**
+- The console lane's timeline is built from Chromium's frame-swap stamps (CLOCK_MONOTONIC), so `narrator.ts` stamps its cues with `nowMs()` (`performance.now()`, the same monotonic clock) — never `Date.now()`.
+- The terminal lane is a Windows ffmpeg grabbing the desktop against the Windows wall clock, so `demo-typist.sh` times its cues from `WARDYN_DEMO_CAPTURE_ZERO` (`date +%s%3N`, realtime) — and that one is right as it stands.
+- Crossing them is not a rounding error:
+  - under WSL2 monotonic and realtime run **3% apart** (this box: 90.00s monotonic per 86.95s realtime, because WSL2 keeps slewing realtime back to the Windows host),
+  - and take 10 on 2026-08-24 shipped with the caption bubble 6.4s behind its own narration by the end.
+- A second, smaller rate mismatch survives the clock fix (Playwright's screencast timebase vs the cue clock, load-dependent — the first post-fix rehearsal measured −1.95%),
+  - so the pipeline now CORRECTS rather than merely gates:
+  - [`scripts/demo-drift.py`](../scripts/demo-drift.py) fits the per-take rate/offset (`--emit-fit`), `scripts/narrate-mux.py --drift-fit` lays every cue on the picture's own clock,
+  - and `verify-demo-take.sh` fails a take whose fit was unreliable or whose mux skipped the correction.
+- **The terminal segment is off by default and that is deliberate.**
+- It is the only part of the pipeline that films your screen, and on this host that cannot be made safe (below).
+- It has ruined two takes — one recorded six minutes of a browser game, one a fantasy football draft — while every act passed and the script reported success.
+- The console segment cannot be corrupted that way, so the default output is always the real thing.
+- The split exists because a screen grab of the browser is **not reliable on this host**.
+- WSLg presents the browser as a RAIL window, which means:
+  - `--window-position` is a request the compositor may ignore (the driver now
+    moves the window with CDP `Browser.setWindowBounds`, which actually works, and
+    fails loudly if the window still lands outside the frame);
+  - the window cannot be reliably raised from Linux, and **X stacking order is not
+    the Windows compositor's z-order**, so occlusion cannot even be *detected*
+    from this side;
+  - gdigrab's `-i title=…` window capture cannot find WSLg windows at all
+    (`I/O error` for every exact title) — verified, so it is not an option.
+- Net effect: a desktop grab films whatever is on top of that screen corner, and you cannot tell until you watch it.
+- Playwright's capture comes from inside the page, so neither occlusion nor window position can corrupt it — with the default (console only) you can use the machine normally while a take runs.
+- Only `--with-terminal` asks you to leave a corner alone, and only for the ~2 minutes of `make setup`.
+- The `DEMO_CDP` lane cannot record this way (the browser is not ours to configure), so it falls back to the desktop grab and inherits the occlusion risk.
 
 ### Framing: the window must be sized to viewport PLUS chrome
 
-The recording is the page, at a fixed 1920x1080 canvas. If the page renders any
-smaller, Playwright pads it - and that resampling is what makes small text look
-soft. Setting the window to 1920x1080 while the viewport is also 1920x1080 does
-exactly that: the tab strip and address bar eat ~90px, the page comes out
-1920x985, and it lands upscaled-and-letterboxed in the file. Measured with
-`ffmpeg -vf cropdetect`, that was `crop=1920:985`; sizing the window to the
-viewport plus its own measured chrome (`outerHeight - innerHeight`) gives
-`crop=1920:1064` - 1:1, no resampling, crisp text.
-
-If a take ever looks soft or letterboxed, check it the same way:
+- The recording is the page, at a fixed 1920x1080 canvas.
+- If the page renders any smaller, Playwright pads it - and that resampling is what makes small text look soft.
+- Setting the window to 1920x1080 while the viewport is also 1920x1080 does exactly that: the tab strip and address bar eat ~90px, the page comes out 1920x985, and it lands upscaled-and-letterboxed in the file.
+- Measured with `ffmpeg -vf cropdetect`, that was `crop=1920:985`; sizing the window to the viewport plus its own measured chrome (`outerHeight - innerHeight`) gives `crop=1920:1064` - 1:1, no resampling, crisp text.
+- If a take ever looks soft or letterboxed, check it the same way:
 
 ```sh
 ffmpeg -ss 6 -i console.webm -vf cropdetect=24:2:0 -frames:v 20 -f null -
 ```
 
-Anything materially below 1080 tall means the page is not filling the canvas.
+- Anything materially below 1080 tall means the page is not filling the canvas.
 
 ## Why it is built this way
 
@@ -411,19 +335,18 @@ Anything materially below 1080 tall means the page is not filling the canvas.
 
 ## Narration — the captions are spoken
 
-Every caption and chapter card the driver renders is also read aloud, so the
-video explains what it is doing without a human recording a voice-over. On by
-default; `make record-demo ARGS=--silent` turns it off (captions still render).
+- Every caption and chapter card the driver renders is also read aloud, so the video explains what it is doing without a human recording a voice-over.
+- On by default; `make record-demo ARGS=--silent` turns it off (captions still render).
 
 | Piece | Role |
 |---|---|
-| `scripts/narrate-server.py` | Long-lived TTS server. **Kokoro-82M** (Apache-2.0, offline) with the installed **piper** as automatic fallback. One JSON line in, one clip out. |
-| `ui/e2e/demo/narrator.ts` | Spawns it, records a `{file, tMs, durMs}` timeline to `ui/test-results/demo-video/narration.json`. |
-| `ui/e2e/demo/overlay.ts` | `caption()`/`chapter()` speak their own text; `beat()`/`act()` hold for `max(nominal beat, audio + 300ms)`. |
-| `scripts/demo-typist.sh` | The terminal lane's half of the same thing — its own coprocess, the same cue shape, `narration-terminal.json`, merged in by the recorder. |
-| `scripts/narrate-mux.py` | Lays the timeline onto the finished mp4, video stream-copied. |
+| [`scripts/narrate-server.py`](../scripts/narrate-server.py) | Long-lived TTS server. **Kokoro-82M** (Apache-2.0, offline) with the installed **piper** as automatic fallback. One JSON line in, one clip out. |
+| [`ui/e2e/demo/narrator.ts`](../ui/e2e/demo/narrator.ts) | Spawns it, records a `{file, tMs, durMs}` timeline to `ui/test-results/demo-video/narration.json`. |
+| [`ui/e2e/demo/overlay.ts`](../ui/e2e/demo/overlay.ts) | `caption()`/`chapter()` speak their own text; `beat()`/`act()` hold for `max(nominal beat, audio + 300ms)`. |
+| [`scripts/demo-typist.sh`](../scripts/demo-typist.sh) | The terminal lane's half of the same thing — its own coprocess, the same cue shape, `narration-terminal.json`, merged in by the recorder. |
+| [`scripts/narrate-mux.py`](../scripts/narrate-mux.py) | Lays the timeline onto the finished mp4, video stream-copied. |
 
-One-time setup (already done on this machine, in `~/.cache/wardyn-narrate/`):
+- One-time setup (already done on this machine, in `~/.cache/wardyn-narrate/`):
 
 ```sh
 python3 -m venv ~/.cache/wardyn-narrate/venv
@@ -439,13 +362,12 @@ python3 -m venv ~/.cache/wardyn-narrate/venv
   point is "re-run it after a UI change" must not have a third party able to
   switch it off. Kokoro is Apache-2.0, offline, and needs no network at render
   time — which also suits a project about egress control.
-- **Clips are keyed by `sha1(engine|voice|text)`, not by a caption id.** The
-  obvious design is a `narration.ts` of stable keys, and it is wrong here: this
-  repo already has two hand-synced caption duplicates that have **drifted**
-  (`FUNNEL_DEMOS` vs `demo-catalog.ts`, `TASK.md` vs `DEMO_TASK`), and a keyed
-  module would be a third — where a caption edited without its key silently
-  narrates the *old* line. Hashing the text means a copy change re-renders
-  exactly that clip, and no list has to be kept in sync with anything.
+- **Clips are keyed by `sha1(engine|voice|text)`, not by a caption id.**
+  - The obvious design is a `narration.ts` of stable keys, and it is wrong here:
+    - this repo already has two hand-synced caption duplicates that have **drifted** (`FUNNEL_DEMOS` vs `demo-catalog.ts`, `TASK.md` vs `DEMO_TASK`),
+    - and a keyed module would be a third —
+    - where a caption edited without its key silently narrates the *old* line.
+  - Hashing the text means a copy change re-renders exactly that clip, and no list has to be kept in sync with anything.
 - **`walkthrough.spec.ts` is not touched at all.** Narration hangs entirely off
   `overlay.ts`, so captions added to any act are spoken automatically.
 - **The mux runs last, on the mp4.** The raw recording is VP8 and cannot be
@@ -457,64 +379,55 @@ python3 -m venv ~/.cache/wardyn-narrate/venv
 
 ### Checking a narrated take
 
-The timeline is a plain JSON file — read it rather than scrubbing the video:
+- The timeline is a plain JSON file — read it rather than scrubbing the video:
 
 ```sh
 python3 -c "import json;d=json.load(open('ui/test-results/demo-video/narration.json'));
 print(sum(1 for i,c in enumerate(d['cues']) if i and c['tMs']<d['cues'][i-1]['tMs']+d['cues'][i-1]['durMs']),'overlaps')"
 ```
 
-Any overlap means a line was cut off on screen. `narrate-mux.py` warns about the
-same thing. To confirm the audio really landed where the timeline claims, probe
-a speech window and a gap — speech reads around −23 dB, silence −91 dB:
+- Any overlap means a line was cut off on screen.
+- `narrate-mux.py` warns about the same thing.
+- To confirm the audio really landed where the timeline claims, probe a speech window and a gap — speech reads around −23 dB, silence −91 dB:
 
 ```sh
 ffmpeg -ss 8 -t 2 -i narrated.mp4 -af volumedetect -f null -   # expect ~-23 dB
 ffmpeg -ss 12.6 -t 1 -i narrated.mp4 -af volumedetect -f null - # expect -91 dB
 ```
 
-Both of those read the *timeline*. To check the **picture** against it — the
-defect neither one can see — measure where each caption actually changed:
+- Both of those read the *timeline*.
+- To check the **picture** against it — the defect neither one can see — measure where each caption actually changed:
 
 ```sh
 scripts/demo-drift.py --video ui/test-results/demo-video-10/console.webm \
                       --timeline ui/test-results/demo-video-10/narration.json
 ```
 
-Takes ~2s. `rate 1.0000` is a take in sync; anything past ±1% exits 1 and the
-narration slides that fraction of elapsed time late (take 10 measured 1.0320 —
-6.4s by the end). Run it on the RAW `console.webm` with the pre-ffwd
-`narration.json`: `demo-ffwd.py` re-times cues and picture together, so a
-fast-forwarded pair hides nothing but proves nothing either. `--strip <t>` dumps
-a filmstrip PNG around a picture time to confirm a row by eye.
-`verify-demo-take.sh` runs the same check on every take.
+- Takes ~2s.
+- `rate 1.0000` is a take in sync; anything past ±1% exits 1 and the narration slides that fraction of elapsed time late (take 10 measured 1.0320 — 6.4s by the end).
+- Run it on the RAW `console.webm` with the pre-ffwd `narration.json`: `demo-ffwd.py` re-times cues and picture together, so a fast-forwarded pair hides nothing but proves nothing either.
+- `--strip <t>` dumps a filmstrip PNG around a picture time to confirm a row by eye.
+- `verify-demo-take.sh` runs the same check on every take.
 
 ## When there is no model quota: `WARDYN_DEMO_SHELL_ACT5=1`
 
-Act 5 normally launches a real Claude Code agent. If the subscription is out of
-quota the agent prints `You've hit your weekly limit` and exits 1 — it does no
-work, never reaches `example.com`, and the held-approval beat never happens. The
-take still completes and still produces a video, and `verify-demo-take.sh`
-correctly fails it.
+- Act 5 normally launches a real Claude Code agent.
+- If the subscription is out of quota the agent prints `You've hit your weekly limit` and exits 1 — it does no work, never reaches `example.com`, and the held-approval beat never happens.
+- The take still completes and still produces a video, and `verify-demo-take.sh` correctly fails it.
 
 ```sh
 WARDYN_DEMO_SHELL_ACT5=1 make record-demo
 ```
 
-records Act 5 as a **Shell command** run instead: the same workspace, the same
-two hosts, the same `NOTES.md`, and every governance beat intact — the host held
-at the proxy, the decision scoped to `always`, the workspace receipt, and the
-proof run that never has to ask. What it does not show is a coding agent writing
-code.
-
-This is honest rather than degraded: Wardyn's claim is that it governs **any**
-workload — *"a coding agent is the flagship use, not the only one"* — and the
-narration says so out loud in that variant rather than implying an agent.
-
-Drop the flag once quota is back and the agent version records again with no
-code change.
-
-**Check quota before a long take**, or you find out 25 minutes in:
+- records Act 5 as a **Shell command** run instead:
+  - the same workspace, the same two hosts, the same `NOTES.md`, and every governance beat intact —
+  - the host held at the proxy, the decision scoped to `always`, the workspace receipt, and the proof run that never has to ask.
+- What it does not show is a coding agent writing code.
+- This is honest rather than degraded:
+  - Wardyn's claim is that it governs **any** workload — *"a coding agent is the flagship use, not the only one"* —
+  - and the narration says so out loud in that variant rather than implying an agent.
+- Drop the flag once quota is back and the agent version records again with no code change.
+- **Check quota before a long take**, or you find out 25 minutes in:
 
 ```sh
 wardyn run --agent claude-code --task-mode exec --task 'echo ok' \
@@ -523,8 +436,8 @@ wardyn run --agent claude-code --task-mode exec --task 'echo ok' \
 
 ## Beat sheet
 
-Every literal string the driver targets is listed here. A copy change in the app
-breaks the driver loudly, and this table is where you look to fix it.
+- Every literal string the driver targets is listed here.
+- A copy change in the app breaks the driver loudly, and this table is where you look to fix it.
 
 ### Act 0 — cold start (terminal)
 
@@ -534,17 +447,11 @@ breaks the driver loudly, and this table is where you look to fix it.
 | Bring it up | `WARDYN_SETUP_MODE=container WARDYN_DEMO_ROOT=/srv/wardyn-demo WARDYN_WORKSPACES_ROOT=/srv/wardyn-demo WARDYN_UP_NO_BROWSER=1 make setup` |
 | Model | an admin adds the Claude provider (Settings → Model providers) and the demo person connects their own credential from Getting started — visible steps, invisible token |
 
-The workspace is rebuilt from the fixture every take (a previous recording left
-the agent's `slugify()` in it) and `git init`ed, so the run's Files surface has a
-real diff.
-
-**The demo root is ON CAMERA.** The console prints a workspace's source path in
-the Workspaces table, the workspace detail header and every run header, so
-whatever `WARDYN_DEMO_ROOT` points at is published in the take. Record under a
-root that carries no operator identity — `/srv/wardyn-demo`, not `~/wardyn-demo`,
-whose `$HOME` spells your username on screen. `WARDYN_DEMO_ROOT` is the single
-root every episode and `scripts/verify-demo-take.sh` fall back to, so setting it
-once covers the whole series.
+- The workspace is rebuilt from the fixture every take (a previous recording left the agent's `slugify()` in it) and `git init`ed, so the run's Files surface has a real diff.
+- **The demo root is ON CAMERA.**
+- The console prints a workspace's source path in the Workspaces table, the workspace detail header and every run header, so whatever `WARDYN_DEMO_ROOT` points at is published in the take.
+- Record under a root that carries no operator identity — `/srv/wardyn-demo`, not `~/wardyn-demo`, whose `$HOME` spells your username on screen.
+- `WARDYN_DEMO_ROOT` is the single root every episode and [`scripts/verify-demo-take.sh`](../scripts/verify-demo-take.sh) fall back to, so setting it once covers the whole series.
 
 ### Act 1 — first light
 
@@ -554,8 +461,7 @@ once covers the whole series.
 | `button` | **Get started — a few minutes** |
 | then | `Step 1 of …` |
 
-A fresh install lands here on its own: no runs and no dismissed tour means
-`firstRunLanding()` (`setup-gate.ts`) redirects `/` → `/setup`.
+- A fresh install lands here on its own: no runs and no dismissed tour means `firstRunLanding()` (`setup-gate.ts`) redirects `/` → `/setup`.
 
 ### Act 2 — essentials (funnel steps 1–4)
 
@@ -566,10 +472,11 @@ A fresh install lands here on its own: no runs and no dismissed tour means
 | 3 | **Network** | Mandatory gate. **Test connectivity** must pass before Next unlocks — a blocked step *replaces* Next with its own action button, which `advance()` handles generically |
 | 4 | **Secrets** | Shows the model credential connected in Act 0 |
 
-Footer buttons: `Next: <step>` and, on the last step, **Finish setup**.
+- Footer buttons: `Next: <step>` and, on the last step, **Finish setup**.
 
 ### Act 3 — the guardrails (five of the eight Egress demos; the Secrets demos phase that follows is not on camera)
 
+> [!NOTE]
 > **M-6 (#637):** the demos moved out of this admin funnel to the User
 > view's own Getting Started (`member-getting-started.tsx`) — `demo-card-<id>`
 > lives there now, not on this funnel walk. This beat sheet describes where
@@ -577,10 +484,8 @@ Footer buttons: `Next: <step>` and, on the last step, **Finish setup**.
 > surface (admin-member-modes-design.md §6 item 4), not where the product
 > renders these demos today.
 
-Each step's start button is `demo-start-<id>` (**Start demo**), its audit panel
-`demo-audit-panel`, and it ends with **End demo**. Approvals render as
-`live-approval-row` with **Approve** / **Deny** — always decided BY HOST, never
-by position (see below).
+- Each step's start button is `demo-start-<id>` (**Start demo**), its audit panel `demo-audit-panel`, and it ends with **End demo**.
+- Approvals render as `live-approval-row` with **Approve** / **Deny** — always decided BY HOST, never by position (see below).
 
 | Step | Typed into the terminal | What must happen on camera |
 |---|---|---|
@@ -592,176 +497,119 @@ by position (see below).
 
 ### Act 4 — code and workspaces (Code and workspaces phase, renamed from "Your work" in M-6)
 
-**Providers** → which git hosts a run may clone, and the storage ceilings it
-works inside; add or confirm the rows a run will need before onboarding a
-workspace against them. Then **Onboard a workspace** → **Add workspace**
-dialog: source **Local directory**, **Path on this host**, **Name**, the
-**Advanced** disclosure (mount path, write permission), submit **Add
-workspace**. Then **Review readiness** → **Finish setup** → lands on Runs.
+- **Providers** → which git hosts a run may clone, and the storage ceilings it works inside; add or confirm the rows a run will need before onboarding a workspace against them.
+- Then **Onboard a workspace** → **Add workspace** dialog: source **Local directory**, **Path on this host**, **Name**, the **Advanced** disclosure (mount path, write permission), submit **Add workspace**.
+- Then **Review readiness** → **Finish setup** → lands on Runs.
 
 ### Act 5 — a real run
 
-**New run** → `/runs/new`. **Title** (required — Launch is disabled without one),
-run type **Agent task**, **Autonomous**, **Task**
-textarea, workspace combobox, confinement **Confined**, then **Edit hosts…** →
-dialog **Network for this run**: allow the `api.anthropic.com` chip, pick **Hold
-it for approval**, **Save hosts**. Then **Launch run**.
+- **New run** → `/runs/new`.
+- **Title** (required — Launch is disabled without one), run type **Agent task**, **Autonomous**, **Task** textarea, workspace combobox, confinement **Confined**, then **Edit hosts…** → dialog **Network for this run**:
+  - allow the `api.anthropic.com` chip, pick **Hold it for approval**, **Save hosts**.
+- Then **Launch run**.
 
+> [!IMPORTANT]
 > **Order matters:** **Autonomous** is clicked BEFORE the Task box is filled. An
 > interactive run has no Task field at all (the server ignores task for one), so
 > the textarea does not exist until the mode changes.
 
+> [!IMPORTANT]
 > **Load-bearing:** a model provider's credential is injected only toward hosts
 > the resolved policy allows, so the policy must allow `api.anthropic.com`.
 > Ticking that chip is not decoration — drop it and the run has no model at all.
 
-Mid-run the held `example.com` request surfaces in `LiveApprovals` under the
-output that caused it; the driver approves it **with Always**, not a plain
-Approve (the split button's caret → **Always**), and the metadata probe shows up
-as a denial no approval could have rescued. The task text lives in
-`ui/e2e/demo/task.ts` (`DEMO_TASK`), with the reasoning in
-`examples/workspaces/demo-node/TASK.md`.
-
-**The `always` beat's second half, once the run finishes:** Workspaces →
-the onboarded workspace → the **Allowed hosts** card, spotlighting
-`example.com` now on the permanent list. Then a SECOND, much smaller run
-against the same workspace — **New run** → **Title** (`PROOF_RUN_TITLE`) →
-**Terminal — a shell in the workspace dir** (interactive stays the wizard's
-default; only "Start with" changes) → the same workspace → **Launch run**,
-with Confinement and Network left untouched entirely. In the attached
-terminal, `curl -sSI https://example.com` succeeds immediately — no hold, no
-approval row, just the `live-approvals-idle` hint — because the workspace's
-own permanent grant folds into the run automatically. The driver then
-navigates back to the main run's URL (captured before this detour) so Act 6
-recaps that run's audit trail and recording, not the proof run's.
+- Mid-run the held `example.com` request surfaces in `LiveApprovals` under the output that caused it;
+  - the driver approves it **with Always**, not a plain Approve (the split button's caret → **Always**), and the metadata probe shows up as a denial no approval could have rescued.
+- The task text lives in [`ui/e2e/demo/task.ts`](../ui/e2e/demo/task.ts) (`DEMO_TASK`), with the reasoning in [`examples/workspaces/demo-node/TASK.md`](../examples/workspaces/demo-node/TASK.md).
+- **The `always` beat's second half, once the run finishes:** Workspaces → the onboarded workspace → the **Allowed hosts** card, spotlighting `example.com` now on the permanent list.
+- Then a SECOND, much smaller run against the same workspace —
+  - **New run** → **Title** (`PROOF_RUN_TITLE`) → **Terminal — a shell in the workspace dir** (interactive stays the wizard's default; only "Start with" changes) → the same workspace → **Launch run**,
+  - with Confinement and Network left untouched entirely.
+- In the attached terminal, `curl -sSI https://example.com` succeeds immediately — no hold, no approval row, just the `live-approvals-idle` hint — because the workspace's own permanent grant folds into the run automatically.
+- The driver then navigates back to the main run's URL (captured before this detour) so Act 6 recaps that run's audit trail and recording, not the proof run's.
 
 ### Act 6 — the receipts
 
-Tabs (role `tab`): **Audit**, then **Recording**. Closes on the caption
-*"Sandboxed. Governed. Self-hosted. Free."*
+- Tabs (role `tab`): **Audit**, then **Recording**.
+- Closes on the caption *"Sandboxed. Governed. Self-hosted. Free."*
 
 ## Funnel behaviours the driver has to model
 
-Found by actually running it. Each of these silently breaks a driver that
-assumes the obvious thing:
-
-- **One step can need more than one Next.** The Network gate answers
-  the first Next by swapping its **Host proxy** tab for **Egress redirection**
-  and *staying on step 2*. So `advance()` presses Next until the "Step N of M"
-  counter changes, rather than pressing once — which also covers the
-  blocked-step case where the gate's own action button replaces Next entirely.
-- **The connectivity probe launches a real run.** "Test connectivity" proves the
-  path from inside a sandbox, so `has_runs` flips true during Act 2 — the run
-  dispatches the published `agent-base` image (a plain curl task, no coding
-  agent needed) at the strongest confinement class the runner advertises, not
-  the operator's configured floor. That
-  matters because `firstRunLanding()` only redirects `/` → `/setup` while
-  `has_runs` is false: the second time you run the driver against the same
-  stack, `/` lands on Runs. Act 1 falls through to `/setup` rather than
-  requiring a full reset just to iterate.
-- **`demo-card-<id>` lives on the funnel's `DemoDetail` now.** The `/demos`
-  catalog and its `DemoCard` grid are gone (Getting Started is the one demos
-  surface); each demo step wraps in `demo-card-<id>`, so card-scoped locators
-  work on the funnel path too. `demo-start-<id>` *is* inside
-  `DemoRunControls` and works on both.
-- **"Lines that can't be crossed" logs its two headline denials as `egress.deny`
-  rows with `rule_source=builtin:private-ip`** — the sandboxes carry the lowercase
-  `http_proxy` too now, so a plain-http probe to `169.254.169.254` (or, if typed,
-  `192.168.1.1` — episode 03a types only the metadata one) reaches the proxy and is refused by the built-in private-address
-  rule, beneath the policy (`allow_all_egress` cannot open them). `https://example.com`
-  leaves via CONNECT and logs `egress.allow`. An earlier build had no proxy in the
-  plain-http path and the probes died at the network layer with no row at all —
-  `scripts/lib/verify-demo-take-03.sh` accepts either shape and fails only on an
-  *allow* of a link-local/private address or a *policy*-sourced decision. The demo
-  card's overview (`demo-catalog.ts`) now describes this shape too — the audited
-  floor refusal, with the literal-address allowlist entry named as the sole
-  exception — fixed in the 0.6 final pass.
-- **Look-alike cards can carry different roles.** The Add-workspace dialog's
-  source/image cards are `OptionCard` (`form-primitives.tsx`) — an
-  `aria-pressed` `<button>`. (New Run's old Confinement and Network radio
-  cards are GONE — `new-run-screen.tsx`; the policy surface is the PolicyPanel
-  now — so a driver hunting their `role="radio"` finds nothing.) Assuming one
-  surface's role from another breaks the driver in
-  whichever direction you guessed. Read the a11y snapshot Playwright writes to
-  `test-results/<test>/error-context.md` on failure; it lists every role and
-  name on the page and settles it in seconds.
-- **New Run's Workspace select has NO accessible name.** The Agent select beside
-  it is labelled ("Agent") because it goes through `Field`/`Label htmlFor`; the
-  Workspace `<SelectTrigger>` never got the same treatment, so its a11y node is
-  a bare `combobox` whose only text is a nested `generic` holding the
-  placeholder. `getByRole("combobox", { name: … })` therefore cannot match it,
-  and the driver filters on visible text instead. **This is a real
-  accessibility defect, not a test inconvenience** — a screen-reader user
-  tabbing onto it hears "combobox" and nothing about what it selects. Worth an
-  `aria-label` on the trigger.
+- Found by actually running it.
+- Each of these silently breaks a driver that assumes the obvious thing:
+- **One step can need more than one Next.**
+  - The Network gate answers the first Next by swapping its **Host proxy** tab for **Egress redirection** and *staying on step 2*.
+  - So `advance()` presses Next until the "Step N of M" counter changes, rather than pressing once — which also covers the blocked-step case where the gate's own action button replaces Next entirely.
+- **The connectivity probe launches a real run.**
+  - "Test connectivity" proves the path from inside a sandbox, so `has_runs` flips true during Act 2 —
+  - the run dispatches the published `agent-base` image (a plain curl task, no coding agent needed) at the strongest confinement class the runner advertises, not the operator's configured floor.
+  - That matters because `firstRunLanding()` only redirects `/` → `/setup` while `has_runs` is false: the second time you run the driver against the same stack, `/` lands on Runs.
+  - Act 1 falls through to `/setup` rather than requiring a full reset just to iterate.
+- **`demo-card-<id>` lives on the funnel's `DemoDetail` now.**
+  - The `/demos` catalog and its `DemoCard` grid are gone (Getting Started is the one demos surface); each demo step wraps in `demo-card-<id>`, so card-scoped locators work on the funnel path too.
+  - `demo-start-<id>` *is* inside `DemoRunControls` and works on both.
+- **"Lines that can't be crossed" logs its two headline denials as `egress.deny` rows with `rule_source=builtin:private-ip`** —
+  - the sandboxes carry the lowercase `http_proxy` too now, so a plain-http probe to `169.254.169.254` (or, if typed, `192.168.1.1` — episode 03a types only the metadata one)
+  - reaches the proxy and is refused by the built-in private-address rule, beneath the policy (`allow_all_egress` cannot open them).
+  - `https://example.com` leaves via CONNECT and logs `egress.allow`.
+  - An earlier build had no proxy in the plain-http path and the probes died at the network layer with no row at all —
+    - [`scripts/lib/verify-demo-take-03.sh`](../scripts/lib/verify-demo-take-03.sh) accepts either shape and fails only on an *allow* of a link-local/private address or a *policy*-sourced decision.
+  - The demo card's overview (`demo-catalog.ts`) now describes this shape too — the audited floor refusal, with the literal-address allowlist entry named as the sole exception — fixed in the 0.6 final pass.
+- **Look-alike cards can carry different roles.**
+  - The Add-workspace dialog's source/image cards are `OptionCard` (`form-primitives.tsx`) — an `aria-pressed` `<button>`.
+  - (New Run's old Confinement and Network radio cards are GONE — `new-run-screen.tsx`; the policy surface is the PolicyPanel now — so a driver hunting their `role="radio"` finds nothing.)
+  - Assuming one surface's role from another breaks the driver in whichever direction you guessed.
+  - Read the a11y snapshot Playwright writes to `test-results/<test>/error-context.md` on failure; it lists every role and name on the page and settles it in seconds.
+- **New Run's Workspace select has NO accessible name.**
+  - The Agent select beside it is labelled ("Agent") because it goes through `Field`/`Label htmlFor`;
+    - the Workspace `<SelectTrigger>` never got the same treatment, so its a11y node is a bare `combobox` whose only text is a nested `generic` holding the placeholder.
+  - `getByRole("combobox", { name: … })` therefore cannot match it, and the driver filters on visible text instead.
+  - **This is a real accessibility defect, not a test inconvenience** — a screen-reader user tabbing onto it hears "combobox" and nothing about what it selects.
+  - Worth an `aria-label` on the trigger.
 - **The `demo` Playwright project must not spread `devices["Desktop Chrome"]`.**
-  The preset carries `deviceScaleFactor`, which Playwright refuses to combine
-  with the `viewport: null` this project needs to let the real window size the
-  frame (`"deviceScaleFactor" option is not supported with null "viewport"`).
+  - The preset carries `deviceScaleFactor`, which Playwright refuses to combine with the `viewport: null` this project needs to let the real window size the frame (`"deviceScaleFactor" option is not supported with null "viewport"`).
 
 ## Act 5 specifics, all learned the hard way
 
-- **Run mode defaults to `interactive`** (`initialWizardState()`, wizard-types.ts),
-  which launches an IDLE sandbox waiting for a human to type. The agent never
-  executes the task, so nothing reaches for `example.com` and the held approval
-  never appears — the run just sits there. Act 5 selects **Autonomous** explicitly.
-  This is STRUCTURAL as well as semantic: the Task field only exists in autonomous
-  mode, so filling it before the **Autonomous** click targets nothing. An interactive
-  run instead offers **Start with** (the agent CLI, or a bare terminal).
-- **Every run needs a title** (`DEMO_TITLE`, `ui/e2e/demo/task.ts`). Launch stays
-  disabled and reads *"Give this run a title."* until one is typed, and the title
-  — not the task — is the run's headline on the board and in the run-detail
-  command bar, so it is on camera for the rest of the film.
-- **"Allow writes to this directory" must be ticked**, or the mount is read-only
-  and the agent's edits never reach the host: the run reports success over a
-  workspace with an empty `git diff`. (Ticking it was not enough on its own —
-  see the `resolvedMountReadOnly` fix below.)
-- **Always decide approvals BY HOST, never "the first row".** A real Claude Code
-  run reaches for its telemetry endpoint,
-  `http-intake.logs.us5.datadoghq.com`, and under a review-gated policy that
-  surfaces as a pending approval — often *before* the one the act is about.
-  Taking `.first()` meant the driver approved a telemetry host on camera while
-  `example.com` sat undecided. Every `decide()` call names its host.
+- **Run mode defaults to `interactive`** (`initialWizardState()`, wizard-types.ts), which launches an IDLE sandbox waiting for a human to type.
+  - The agent never executes the task, so nothing reaches for `example.com` and the held approval never appears — the run just sits there.
+  - Act 5 selects **Autonomous** explicitly.
+  - This is STRUCTURAL as well as semantic: the Task field only exists in autonomous mode, so filling it before the **Autonomous** click targets nothing.
+  - An interactive run instead offers **Start with** (the agent CLI, or a bare terminal).
+- **Every run needs a title** (`DEMO_TITLE`, [`ui/e2e/demo/task.ts`](../ui/e2e/demo/task.ts)).
+  - Launch stays disabled and reads *"Give this run a title."* until one is typed,
+  - and the title — not the task — is the run's headline on the board and in the run-detail command bar, so it is on camera for the rest of the film.
+- **"Allow writes to this directory" must be ticked**, or the mount is read-only and the agent's edits never reach the host: the run reports success over a workspace with an empty `git diff`.
+  - (Ticking it was not enough on its own — see the `resolvedMountReadOnly` fix below.)
+- **Always decide approvals BY HOST, never "the first row".**
+  - A real Claude Code run reaches for its telemetry endpoint, `http-intake.logs.us5.datadoghq.com`, and under a review-gated policy that surfaces as a pending approval — often *before* the one the act is about.
+  - Taking `.first()` meant the driver approved a telemetry host on camera while `example.com` sat undecided.
+  - Every `decide()` call names its host.
 - **The ceiling does NOT clamp this demo — the request is genuinely HELD.**
-  `internal/api/inline_policy.go` applies `composer.Clamp` only when
-  `!s.isOperator(...)`, and BOTH local mode and the admin token count as
-  operator — so a demo run's `wait_for_review` survives verbatim. Act 5's
-  `example.com` is held open at the proxy and the on-camera approval completes
-  that same in-flight request. Two consequences worth pinning: the UI renders
-  "Sandbox is waiting" with a WAITING badge (narration must agree), and an
-  approved hold logs **only `egress.allow`** — asserting `egress.hold`
-  would fail a correct take. `DEMO_TASK`'s retry instruction stays as
-  belt-and-braces for a missed 30s window, not as the primary mechanic.
-- `new-run-screen.tsx` never loaded the workspace list. `useWorkspaceList` does
-  not fetch on mount (each caller does its own load — `setup-screen.tsx` does);
-  New Run's only call was the Add-workspace dialog's `onCreated`. The Workspace
-  select therefore offered nothing but "Ephemeral scratch", so a workspace
-  onboarded anywhere else could not be attached to a run at all.
-- `wizard-types.ts`'s `resolvedMountReadOnly` ignored `sources[].writable`. It
-  granted write only from a `write:<path>` requirement row, which nothing
-  creates — making the dialog's "Allow writes to this directory" checkbox a
-  no-op for every UI-launched run. `internal/api/workspace_run.go` had always
-  honoured `src.Writable`; the client mirror now agrees.
+  - [`internal/api/inline_policy.go`](../internal/api/inline_policy.go) applies `composer.Clamp` only when `!s.isOperator(...)`, and BOTH local mode and the admin token count as operator — so a demo run's `wait_for_review` survives verbatim.
+  - Act 5's `example.com` is held open at the proxy and the on-camera approval completes that same in-flight request.
+  - Two consequences worth pinning: the UI renders "Sandbox is waiting" with a WAITING badge (narration must agree), and an approved hold logs **only `egress.allow`** — asserting `egress.hold` would fail a correct take.
+  - `DEMO_TASK`'s retry instruction stays as belt-and-braces for a missed 30s window, not as the primary mechanic.
+- `new-run-screen.tsx` never loaded the workspace list.
+  - `useWorkspaceList` does not fetch on mount (each caller does its own load — `setup-screen.tsx` does); New Run's only call was the Add-workspace dialog's `onCreated`.
+  - The Workspace select therefore offered nothing but "Ephemeral scratch", so a workspace onboarded anywhere else could not be attached to a run at all.
+- `wizard-types.ts`'s `resolvedMountReadOnly` ignored `sources[].writable`.
+  - It granted write only from a `write:<path>` requirement row, which nothing creates — making the dialog's "Allow writes to this directory" checkbox a no-op for every UI-launched run.
+  - [`internal/api/workspace_run.go`](../internal/api/workspace_run.go) had always honoured `src.Writable`; the client mirror now agrees.
 
 ## Constraints worth knowing before a manual re-shoot
 
-- **`wait_for_review` holds for 30 seconds by default** (`defaultHoldTimeout`,
-  `internal/egress/proxy/approvals.go`; a policy may override it with
-  `first_use_hold_seconds` — the demo policies set none, so it is 30s here).
-  The driver approves in about two seconds. A human re-shooting by hand has
-  half a minute, then it falls back to a 403 and needs a retry.
-- **Step 2 of the task uses `curl --max-time 90` on purpose** — it has to outlast
-  that hold so the *same* request completes on approval.
-- **The agent is not deterministic.** The driver waits on observable state
-  (an approval row appears, the run reaches a terminal state), never on a clock.
-  If a take looks wrong, look at what the agent actually did before assuming the
-  driver broke.
-- **`make setup` has no documented duration** and varies with what Docker has
-  cached. Don't narrate a number; the script timestamps each phase so an editor
-  can cut the build.
-- **The five funnel demos need a real runner.** They start actual sandboxes, so
-  the driver runs against the compose stack on `:8080`, never the hermetic
-  `-runner none` e2e backend (which renders every Start disabled).
+- **`wait_for_review` holds for 30 seconds by default** (`defaultHoldTimeout`, [`internal/egress/proxy/approvals.go`](../internal/egress/proxy/approvals.go); a policy may override it with `first_use_hold_seconds` — the demo policies set none, so it is 30s here).
+  - The driver approves in about two seconds.
+  - A human re-shooting by hand has half a minute, then it falls back to a 403 and needs a retry.
+- **Step 2 of the task uses `curl --max-time 90` on purpose** — it has to outlast that hold so the *same* request completes on approval.
+- **The agent is not deterministic.**
+  - The driver waits on observable state (an approval row appears, the run reaches a terminal state), never on a clock.
+  - If a take looks wrong, look at what the agent actually did before assuming the driver broke.
+- **`make setup` has no documented duration** and varies with what Docker has cached.
+  - Don't narrate a number; the script timestamps each phase so an editor can cut the build.
+- **The five funnel demos need a real runner.**
+  - They start actual sandboxes, so the driver runs against the compose stack on `:8080`, never the hermetic `-runner none` e2e backend (which renders every Start disabled).
 
 ## Checking a take — one command
 
@@ -769,22 +617,18 @@ assumes the obvious thing:
 scripts/verify-demo-take.sh /mnt/c/Users/<you>/Videos/wardyn-demo-<ts>.mp4
 ```
 
-It checks the take against the **audit trail and the filesystem**, not the exit
-code, and exits non-zero if any of it fails. The list below is the walkthrough's
-— i.e. the autonomous episode's (video 08), and the default when
-`WARDYN_DEMO_VIDEO` is unset; the last two entries are shared by every video
-(see "The series harness" above):
-
-- the act-5 run exists and `api.anthropic.com` was allowed (the model path worked)
-- `example.com` went `egress.hold` → `approval.decide` → `egress.allow`
-  (held, decided on camera, and the retry actually landed), with its decision scope printed
-- **no telemetry host was approved** — the `.first()` trap that once approved
-  Claude Code's Datadog endpoint while the intended host sat pending
-- **nothing unexpected is in `approved_egress`** — with decision scopes, that
-  same slip would now write a permanent grant, on camera, in a governance demo
-- the workspace has a real diff: `slugify()` in `src/slug.js`, plus `NOTES.md`
-- the narration timeline is complete with **zero overlapping lines**
-- the video is 1920x1080 and actually carries an audio track
+- It checks the take against the **audit trail and the filesystem**, not the exit code, and exits non-zero if any of it fails.
+- The list below is the walkthrough's — i.e. the autonomous episode's (video 08), and the default when `WARDYN_DEMO_VIDEO` is unset; the last two entries are shared by every video (see "The series harness" above):
+  - the act-5 run exists and `api.anthropic.com` was allowed (the model path worked)
+  - `example.com` went `egress.hold` → `approval.decide` → `egress.allow`
+    (held, decided on camera, and the retry actually landed), with its decision scope printed
+  - **no telemetry host was approved** — the `.first()` trap that once approved
+    Claude Code's Datadog endpoint while the intended host sat pending
+  - **nothing unexpected is in `approved_egress`** — with decision scopes, that
+    same slip would now write a permanent grant, on camera, in a governance demo
+  - the workspace has a real diff: `slugify()` in `src/slug.js`, plus `NOTES.md`
+  - the narration timeline is complete with **zero overlapping lines**
+  - the video is 1920x1080 and actually carries an audio track
 
 ## Before publishing a take
 
@@ -795,11 +639,11 @@ code, and exits non-zero if any of it fails. The list below is the walkthrough's
    `wardyn audit <id> --json` should carry `egress.allow` for
    `api.anthropic.com`, and `approval.decide outcome=approved
    decision_scope=always` → `egress.allow` for `example.com` on the Act 5 run.
-   The `169.254.169.254` probe logs `egress.deny` with `rule_source=builtin:private-ip`
-   (the sandbox carries the lowercase `http_proxy` now, so plain http reaches the
-   proxy); an older build logged nothing because the probe died at the network layer.
-   Either way it must never be *allowed* — `scripts/lib/verify-demo-take-03.sh`
-   encodes exactly that.
+   - The `169.254.169.254` probe logs `egress.deny` with `rule_source=builtin:private-ip`
+     (the sandbox carries the lowercase `http_proxy` now, so plain http reaches the
+     proxy); an older build logged nothing because the probe died at the network layer.
+   - Either way it must never be *allowed* — [`scripts/lib/verify-demo-take-03.sh`](../scripts/lib/verify-demo-take-03.sh)
+     encodes exactly that.
 3. Confirm the two new scope beats, the same way — exit 0 is the least
    reliable signal here too:
    - On the Act 3 once-or-for-good run's audit, a SECOND `egress.hold` for

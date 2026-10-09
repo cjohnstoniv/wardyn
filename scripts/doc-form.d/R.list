@@ -1,0 +1,5 @@
+# Asserted against every cap in scripts/doc-form.sh (strict tier).
+RELEASING.md
+ROADMAP.md
+docs/DEMO-SCRIPT.md
+docs/LIVE-TESTS.md
