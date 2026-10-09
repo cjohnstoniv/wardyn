@@ -135,6 +135,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   now bullets, nested lists and callouts, and every file they name is a link. No step, order, default, limit or version changed.
 - The architecture overview, the security policy, the provenance statement, the data-flow page and the agent threat model are now bullets, tables and alerts with their file references linked; no disclosure, limit, refusal or contact detail changed, and three table cells stay long.
 - `docs/OPERATIONS.md`: the "State stores" section (run output, backup and restore, the audit log, its hash chain, retention, erasure, leavers and SCIM) and "Approval notifications" are now bullets, nested lists and callouts, and every file they name is a link; two long cells of the SCIM purge table moved to sections under it. No step, order, default, limit or refusal changed.
+- The audit action vocabulary (`docs/AUDIT-ACTIONS.md`) opens with a short summary and a new "Reading this page" section; its prose is bullets, nested lists and alerts, every repository file it cites is a link, and nineteen long `rule_source` meanings moved to sections under their table. No action, field, row, default or refusal changed.
 
 ### Fixed
 

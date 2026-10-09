@@ -1,0 +1,2 @@
+# Prose must not grow beyond the base count (38796 at a084eb2b5) plus cell-expansion headings and summaries: 19 headings (19 words) and 19 summary cells (485 words, emit-site citations included); the rest of the page is 38793 (itemised in lane-reports/docs/A-worker.md).
+docs/AUDIT-ACTIONS.md=39297 share=8
