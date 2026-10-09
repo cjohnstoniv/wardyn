@@ -26,6 +26,7 @@ import type {
   RunPolicyView,
   RunResources,
 } from "../types";
+import type { ComponentRef } from "../types/components";
 import {
   asJson,
   ccRank,
@@ -95,6 +96,9 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   drive?: { enabled: boolean; read_only?: boolean };
   // #542/#526 — this run's chosen model provider (CreateRunRequest.ModelProvider).
   model_provider?: string;
+  // The components this run carries (CreateRunRequest.Components, #1914): a
+  // stored one by id or a run-only inline definition. Absent is none.
+  components?: ComponentRef[];
 };
 
 // The ONE projection from wizard input to the POST /runs wire body. createRun
@@ -153,6 +157,7 @@ export function runWireBody(input: RunWireInput): Record<string, unknown> {
   // second answer to that question.
   if (input.drive) body.drive = input.drive;
   if (input.model_provider) body.model_provider = input.model_provider;
+  if (input.components?.length) body.components = input.components;
   return body;
 }
 

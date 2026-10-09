@@ -28,7 +28,9 @@ export function buildRunInput({
   if (policyMode === "saved" && !state.selectedPolicyId) return null;
 
   const { run: built } = buildSpec(state, workspaces, modelProviders);
-  const run = ccTouched ? built : { ...built, confinement_class: undefined };
+  const sized = ccTouched ? built : { ...built, confinement_class: undefined };
+  // Same body on all three doors; none when the run carries none.
+  const run = state.components.length ? { ...sized, components: state.components } : sized;
   // A saved ID may survive a mode switch; only the active mode chooses the policy.
   if (policyMode === "custom") return merged ? { ...run, inline_policy: merged.spec } : null;
 

@@ -114,6 +114,8 @@ export interface NewRunLaunchPanelProps {
   preflightError: string | null;
   preflightErrorSeq: number;
   preflightResult: PreflightResult | null;
+  /** The Access rows that hold Launch (access-rows-model.ts's accessIssues). */
+  accessIssues?: LaunchIssue[];
 
   agentRow: SetupHarnessTool | undefined;
 
@@ -183,6 +185,7 @@ export function NewRunLaunchPanel({
   preflightError,
   preflightErrorSeq,
   preflightResult,
+  accessIssues,
   agentRow,
   isAgent,
   providerCandidates,
@@ -246,7 +249,7 @@ export function NewRunLaunchPanel({
     setupItems: preflightResult?.setup_items,
   });
   const modelBlocked = holds.modelBlocked;
-  const issue = withPreflightIssues(gates.issues, holds, agentName)[0] ?? null;
+  const issue = withPreflightIssues(gates.issues, holds, agentName, accessIssues)[0] ?? null;
   const problem = issue?.text ?? null;
   // The Connect link belongs to the unattended-block sentence only; an
   // earlier arm that wins while modelBlocked is true keeps its own sentence.
