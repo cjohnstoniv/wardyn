@@ -60,6 +60,10 @@ type FamilyProps = {
   onlyHint?: string;
   note?: string;
   adminsOnly?: boolean;
+  /** The org component family: a resource that starts restricted with nobody listed. `note` is
+   *  drawn while that holds; `addFirst` answers a click on "Only these" with nobody listed
+   *  without sending the PUT the server would refuse. */
+  nobodyYet?: { note: string; addFirst: string };
 };
 
 type AvailabilityControlProps = FamilyProps & { kind: string; value: string };
@@ -183,9 +187,13 @@ function Control({ kind, value, ...family }: AvailabilityControlProps) {
         listError={listError}
         // `view` only ever reflects a call that landed, so a refused PUT leaves
         // the choice where the server has it.
-        onRestrictedChange={(restricted) =>
-          void run("choice", async () => setView(await api.putAvailability(kind, value, restricted)))
-        }
+        onRestrictedChange={(restricted) => {
+          if (restricted && grants.length === 0 && family.nobodyYet) {
+            setChoiceError(family.nobodyYet.addFirst);
+            return;
+          }
+          void run("choice", async () => setView(await api.putAvailability(kind, value, restricted)));
+        }}
         onAdd={(subject_type, subject) =>
           run("add", async () => {
             await api.upsertGrant({ subject_type, subject, capability: kind, value, effect: "allow" });
@@ -255,6 +263,7 @@ function AvailabilityFields({
   onlyHint,
   note,
   adminsOnly,
+  nobodyYet,
 }: FamilyProps & {
   restricted: boolean;
   audiences: Audience[];
@@ -319,6 +328,11 @@ function AvailabilityFields({
       </RadioGroup>
       {adminsOnly && <p className="text-meta text-muted-foreground">{AVAILABILITY.IMAGE_HINT}</p>}
       {choiceError && <p className="text-xs leading-snug text-danger">{choiceError}</p>}
+      {nobodyYet && restricted && audiences.length === 0 && (
+        <p className="text-meta text-muted-foreground" data-testid="availability-nobody">
+          {nobodyYet.note}
+        </p>
+      )}
 
       {audiences.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
