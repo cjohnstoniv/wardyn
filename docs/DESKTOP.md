@@ -126,7 +126,7 @@ Three properties define it:
   - There is **no delete-one route**; the age-based retention sweep is the removal mechanism (default: keep forever).
   - See [SSH recording and masking scope](SSH.md#recording).
   - A `wardynd` restart mid-run (an MDM upgrade window, a crash, a laptop waking) no longer loses the masking state: each run's secret values are committed, sealed, before its sandbox starts, and are reloaded after a restart.
-    - A shell or attach that cannot prove that state complete is refused (`503` `mask_state_unavailable`); it is not streamed unmasked.
+    - An attach that cannot prove that state complete answers `503` `mask_state_unavailable`, and SSH refuses the shell; neither is streamed unmasked.
     - A run started before 0.8.6 has no such record, so after a restart it is refused at those doors until it ends.
     - See [Output masking, and the paths it does not cover](../threatmodel/THREAT-MODEL.md#41-output-masking-and-the-paths-it-does-not-cover).
 
@@ -495,7 +495,7 @@ curl -fsS -X POST -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" \
 > [!IMPORTANT]
 > - **A restart mid-run refuses output it cannot mask; it does not record it in cleartext.**
 > - Each run's secret values are committed, sealed, before its sandbox starts, so a `wardynd` restart (an MDM upgrade window, a crash, a laptop waking) reloads them.
-> - A recording upload, attach or shell for a run whose masking state cannot be proved complete answers `503` `mask_state_unavailable`.
+> - For a run whose masking state cannot be proved complete, a recording upload or attach answers `503` `mask_state_unavailable`, and SSH refuses the shell.
 > - This tier restarts often: a 300s converge timer, an upgrade model that is a daemon restart, and a machine that sleeps.
 > - So expect that refusal, and a gap in the recording, for a run started before 0.8.6 or while Postgres is unreachable.
 > - See [Output masking, and the paths it does not cover](../threatmodel/THREAT-MODEL.md#41-output-masking-and-the-paths-it-does-not-cover) for the paths that were never masked.
