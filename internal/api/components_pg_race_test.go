@@ -25,6 +25,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -142,7 +143,9 @@ func (e compRace) runsOf(t *testing.T) int {
 }
 
 // holdSnapshots stops every run_components insert until the returned release
-// runs: a statement trigger takes snapshotLockKey, which this connection holds.
+// runs: a statement trigger takes snapshotLockKey, which a session of the
+// test's own holds (not a pool connection, which the pool guard would read as
+// the test goroutine's nested acquire).
 func (e compRace) holdSnapshots(t *testing.T) (release func()) {
 	t.Helper()
 	ctx := context.Background()
@@ -154,10 +157,7 @@ func (e compRace) holdSnapshots(t *testing.T) (release func()) {
 			t.Fatal(err)
 		}
 	}
-	conn, err := e.pg.Pool.Acquire(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	conn := testutil.PGConn(t, e.pg.Pool)
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, snapshotLockKey); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func (e compRace) holdSnapshots(t *testing.T) (release func()) {
 	release = func() {
 		once.Do(func() {
 			_, _ = conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, snapshotLockKey)
-			conn.Release()
+			_ = conn.Close(ctx)
 			_, _ = e.pg.Pool.Exec(ctx, `DROP TRIGGER c17_hold_snapshot ON run_components`)
 		})
 	}
