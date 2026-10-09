@@ -77,6 +77,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **`wardyn run policy` says when its export is a record, not a reusable policy.** For a run that carries a
+  shared component grant, the header and help now say the exported policy records what the run got and cannot
+  be submitted as an authored policy: authored-policy validation refuses the `shared` mark.
+
 - Policy editors open in YAML (`Spec (YAML)`) in Policies, Governance and New Run. JSON remains an
   explicit choice (`Spec (JSON)`), and JSON text pasted into the YAML editor is still read. A source
   that does not parse names its line and column, holds the structured controls, and cannot be
