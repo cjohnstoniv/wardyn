@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -359,6 +360,10 @@ type PG struct {
 	// difference of two readings, carrying no skew) that a statement then
 	// subtracts from the database's own now(). See db.AppClockAgeSQL.
 	Now func() time.Time
+
+	// SIEM, when set, receives the audit rows the database writes itself (the retention policy change and
+	// the partition drop), which no recorder chain sees. Nil sends them nowhere.
+	SIEM audit.Sink
 }
 
 // now reads the app clock. BOTH readings that make an age must come from here.

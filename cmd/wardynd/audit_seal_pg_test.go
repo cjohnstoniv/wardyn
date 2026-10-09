@@ -87,7 +87,7 @@ func newSealRigMode(t *testing.T, mode audit.SealMode) *sealRig {
 	dir := t.TempDir()
 	rg := &sealRig{t: t, pool: pool, pg: store.NewPG(pool), spoolPath: filepath.Join(dir, "spool.jsonl"), sinkPath: filepath.Join(dir, "sink.jsonl")}
 
-	keysA := newKeys()
+	keysA, keysB := newKeys(), newKeys()
 	rg.flaky = &flakyKeys{SealKeys: subjectSealKeys{keysA}}
 	sealer := newAuditSealer(rg.flaky, pool, pending, mode == audit.SealFull)
 	src := newAuditSealSource(mode)
@@ -101,6 +101,10 @@ func newSealRigMode(t *testing.T, mode audit.SealMode) *sealRig {
 		t.Cleanup(func() { _ = f.Close() })
 	}
 	rg.rec, rg.spool, rg.drain = rec, spool, drain
+	// As run() wires them: the rows the database writes itself reach the same sinks.
+	rg.pg.SIEM = siemSink(f)
+	keysA.WithSIEM(siemSink(f))
+	keysB.WithSIEM(siemSink(f))
 
 	serve := func(keys *subjectkey.Manager, unseal *audit.Sealer) http.Handler {
 		return api.New(api.Config{
@@ -108,7 +112,6 @@ func newSealRigMode(t *testing.T, mode audit.SealMode) *sealRig {
 			AuditUnsealer: unseal, SubjectKeys: keys, BaseCtx: t.Context(),
 		}).Handler()
 	}
-	keysB := newKeys()
 	rg.a = serve(keysA, sealer)
 	rg.b = serve(keysB, newAuditSealer(subjectSealKeys{keysB}, pool, pending, mode == audit.SealFull))
 	return rg
@@ -171,6 +174,31 @@ func (rg *sealRig) stored() string {
 func readFileOrEmpty(path string) string {
 	b, _ := os.ReadFile(path)
 	return string(b)
+}
+
+// sinkMissesStoredHashes lists the stored rows of action whose row hash the sink never received.
+func (rg *sealRig) sinkMissesStoredHashes(action string) []string {
+	rg.t.Helper()
+	rows, err := rg.pool.Query(rg.t.Context(), `SELECT row_hash FROM audit_events WHERE action=$1`, action)
+	if err != nil {
+		rg.t.Fatal(err)
+	}
+	defer rows.Close()
+	sink := readFileOrEmpty(rg.sinkPath)
+	var missing []string
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			rg.t.Fatal(err)
+		}
+		if !strings.Contains(sink, h) {
+			missing = append(missing, h)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rg.t.Fatal(err)
+	}
+	return missing
 }
 
 func (rg *sealRig) noPlaintext(where string, words ...string) {
@@ -240,6 +268,10 @@ func TestPG_AuditSeal_FieldsAreCiphertextEverywhereAndErasureShredsThem(t *testi
 		t.Errorf("principal_key.destroyed target = %q, %v, want alice", target, err)
 	}
 	rg.noPlaintext("", "alice typed", "bob typed")
+	// The destroy row is written by the database past the chain: the sinks still get it, hash and all.
+	if missing := rg.sinkMissesStoredHashes("principal_key.destroyed"); len(missing) != 0 || !strings.Contains(readFileOrEmpty(rg.sinkPath), `"principal_key.destroyed"`) {
+		t.Errorf("the sink never received principal_key.destroyed (missing hashes %v)", missing)
+	}
 }
 
 func TestPG_AuditSeal_AColdKeyWaitsInTheSpoolThenTheDrainReseals(t *testing.T) {
@@ -290,6 +322,12 @@ func TestPG_AuditSeal_AColdKeyWaitsInTheSpoolThenTheDrainReseals(t *testing.T) {
 	if got := rg.stored(); strings.Contains(got, "pending_subject") || strings.Contains(got, "seal2p.") || strings.Contains(got, "typed") {
 		t.Fatalf("the store holds a pending or plaintext field: %s", got)
 	}
+	// The rows that waited under the pending key never touched the sinks; the drain sends them once the
+	// store has them, so the sink holds every stored hash and the chain it sees has no gap.
+	if missing := rg.sinkMissesStoredHashes("approval.decide"); len(missing) != 0 {
+		t.Errorf("the sink never received the stored hashes %v", missing)
+	}
+	rg.noPlaintext("the sink", "typed")
 	got := rg.reasons(rg.a)
 	if got["carol"] != "carol typed while down" {
 		t.Errorf("carol's re-sealed row reads %q, want it opened", got["carol"])

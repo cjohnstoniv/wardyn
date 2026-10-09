@@ -22,6 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -277,6 +278,22 @@ func buildAuditFanout(ctx context.Context, cfgJSON string) (*sinks.Fanout, error
 	return sinks.NewFanout(children...), nil
 }
 
+// siemSink is fan as an audit.Sink, nil when no sink is configured (a nil *Fanout in the interface would
+// panic on Emit).
+func siemSink(fan *sinks.Fanout) audit.Sink {
+	if fan == nil {
+		return nil
+	}
+	return fan
+}
+
+// armKeyDestroySIEM has the secret store's subject keys send principal_key.destroyed to siem.
+func armKeyDestroySIEM(secrets secretstore.Store, siem audit.Sink) {
+	if m := subjectKeysOf(secrets); m != nil && siem != nil {
+		m.WithSIEM(siem)
+	}
+}
+
 // sinkDropsReporter adapts a Fanout to the api.Config.AuditSinkDrops callback
 // (D2). Returns nil when no fanout is configured so the metric is omitted rather
 // than reporting an empty map on every scrape.
@@ -319,6 +336,30 @@ func (f fanoutRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
 		}
 	}
 	return err
+}
+
+// landedRecorder writes an event to the store and emits it to the sink fanout only once the store took it,
+// with the chain hashes the database computed. The spool drain uses it for a row that never reached the
+// sinks while it waited under the pending key; a failed write emits nothing, so the drain's retry cannot
+// send it twice.
+type landedRecorder struct {
+	primary store.Recorder
+	fanout  *sinks.Fanout
+}
+
+var _ audit.Recorder = landedRecorder{}
+
+func (l landedRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
+	if err := store.InsertAuditEvent(ctx, l.primary.Pool, &ev); err != nil {
+		return err
+	}
+	if ferr := l.fanout.Emit(context.WithoutCancel(ctx), ev); ferr != nil {
+		slog.ErrorContext(ctx, "wardynd: audit fanout emit failed",
+			slog.String("action", ev.Action),
+			slog.Any("err", ferr),
+		)
+	}
+	return nil
 }
 
 // Masking recorder

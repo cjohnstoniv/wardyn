@@ -33,6 +33,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
@@ -78,6 +79,15 @@ type Manager struct {
 	pool  *pgxpool.Pool
 	keks  Resolver
 	cache *cache
+	siem  audit.Sink // receives principal_key.destroyed after it commits; nil sends it nowhere
+}
+
+// WithSIEM sets the sink a destroy's audit row is sent to once it commits, as the broker does for
+// credential.mint: the row is written in the destroy's own transaction, past every recorder chain.
+// Call it before the Manager is used.
+func (m *Manager) WithSIEM(sink audit.Sink) *Manager {
+	m.siem = sink
+	return m
 }
 
 // New returns a Manager over pool whose keys are wrapped as keks resolves.
@@ -363,6 +373,7 @@ func (m *Manager) Destroy(ctx context.Context, owner, purpose string) ([]int, er
 		return nil, unavailable("destroy", err)
 	}
 	slices.Sort(gens)
+	var destroyed *types.AuditEvent
 	if len(gens) > 0 {
 		data, _ := json.Marshal(map[string]any{"owner": owner, "purpose": purpose, "generations": gens})
 		ev := types.AuditEvent{
@@ -372,9 +383,13 @@ func (m *Manager) Destroy(ctx context.Context, owner, purpose string) ([]int, er
 		if err := store.InsertAuditEventTx(ctx, tx, &ev); err != nil {
 			return nil, err
 		}
+		destroyed = &ev
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, unavailable("commit destroy", err)
+	}
+	if destroyed != nil && m.siem != nil {
+		_ = m.siem.Emit(context.WithoutCancel(ctx), *destroyed)
 	}
 	m.cache.evictSubject(owner, purpose)
 	return gens, nil

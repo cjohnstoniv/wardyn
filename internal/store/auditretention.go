@@ -94,13 +94,65 @@ func retentionAnnotate(err error, partition string) error {
 
 func (s PG) DropAuditPartition(ctx context.Context, partition, digest, actor string) (AuditRetentionDrop, error) {
 	var d AuditRetentionDrop
-	err := s.Pool.QueryRow(ctx, `SELECT dropped_partition, dropped_rows, COALESCE(dropped_seq_lo, 0), COALESCE(dropped_seq_hi, 0), dropped_digest, dropped_event_seq
-		FROM audit_retention_drop($1, $2, $3)`, partition, digest, actor).
-		Scan(&d.Partition, &d.Rows, &d.SeqLo, &d.SeqHi, &d.Digest, &d.EventSeq)
+	err := s.withDBAuditRow(ctx, func(tx pgx.Tx) (bool, error) {
+		err := tx.QueryRow(ctx, `SELECT dropped_partition, dropped_rows, COALESCE(dropped_seq_lo, 0), COALESCE(dropped_seq_hi, 0), dropped_digest, dropped_event_seq
+			FROM audit_retention_drop($1, $2, $3)`, partition, digest, actor).
+			Scan(&d.Partition, &d.Rows, &d.SeqLo, &d.SeqHi, &d.Digest, &d.EventSeq)
+		return err == nil, err
+	})
 	if err != nil {
 		return AuditRetentionDrop{}, retentionAnnotate(err, partition)
 	}
 	return d, nil
+}
+
+// withDBAuditRow runs fn, a call to a database function that may write its own audit row through
+// audit_append, in one transaction. fn reports whether it did; once the transaction commits, that row (with
+// its chain hashes) goes to s.SIEM. The function holds the chain lock until the commit, so the high-water
+// mark read before it commits is its own row. Delivery is best-effort, like every other sink emit: the
+// committed row is the record.
+func (s PG) withDBAuditRow(ctx context.Context, fn func(tx pgx.Tx) (wrote bool, err error)) error {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return fmt.Errorf("store: begin audit-writing call: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
+	wrote, err := fn(tx)
+	if err != nil {
+		return err
+	}
+	var ev types.AuditEvent
+	wrote = wrote && s.SIEM != nil
+	if wrote {
+		if ev, err = readHighWaterAuditRow(ctx, tx); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("store: commit audit-writing call: %w", err)
+	}
+	if wrote {
+		_ = s.SIEM.Emit(context.WithoutCancel(ctx), ev)
+	}
+	return nil
+}
+
+// readHighWaterAuditRow reads the newest audit row, hashes included.
+func readHighWaterAuditRow(ctx context.Context, tx pgx.Tx) (types.AuditEvent, error) {
+	var ev types.AuditEvent
+	var actorType string
+	var data []byte
+	err := tx.QueryRow(ctx, `SELECT `+auditCols+`, COALESCE(prev_hash,''), COALESCE(row_hash,'')
+		FROM audit_events WHERE seq = (SELECT hw_seq FROM audit_partition_meta)`).
+		Scan(&ev.ID, &ev.Time, &ev.RunID, &actorType, &ev.Actor, &ev.Action, &ev.Target, &ev.Outcome, &ev.SourceIP, &data, &ev.PrevHash, &ev.RowHash)
+	if err != nil {
+		return types.AuditEvent{}, fmt.Errorf("store: read the audit row this call wrote: %w", err)
+	}
+	ev.ActorType = types.ActorType(actorType)
+	if len(data) > 0 {
+		ev.Data = data
+	}
+	return ev, nil
 }
 
 func (s PG) AutodropAuditPartition(ctx context.Context) (AuditRetentionDrop, bool, error) {
@@ -131,9 +183,13 @@ func (s PG) AutodropAuditPartition(ctx context.Context) (AuditRetentionDrop, boo
 
 func (s PG) SetAuditRetentionPolicy(ctx context.Context, days int) (AuditRetentionPolicyChange, error) {
 	var c AuditRetentionPolicyChange
-	err := s.Pool.QueryRow(ctx, `SELECT outcome, effective_days, pending_days, pending_effective_at
-		FROM audit_retention_set_policy($1)`, days).
-		Scan(&c.Outcome, &c.EffectiveDays, &c.PendingDays, &c.PendingEffectiveAt)
+	err := s.withDBAuditRow(ctx, func(tx pgx.Tx) (bool, error) {
+		err := tx.QueryRow(ctx, `SELECT outcome, effective_days, pending_days, pending_effective_at
+			FROM audit_retention_set_policy($1)`, days).
+			Scan(&c.Outcome, &c.EffectiveDays, &c.PendingDays, &c.PendingEffectiveAt)
+		// The function writes its row for every outcome but "unchanged".
+		return err == nil && c.Outcome != "unchanged", err
+	})
 	if err != nil {
 		return AuditRetentionPolicyChange{}, fmt.Errorf("store: set audit retention policy: %w", err)
 	}
