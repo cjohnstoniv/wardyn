@@ -39,6 +39,7 @@
 | **v0.8.6** | Audit retention, multi-replica HA, key custody, SCIM leaver deprovisioning and more; see [below](#v086-highlights). | **Shipped (pre-alpha)** — `v0.8.6`, 2026-10-04 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.8.7** | Tunnel-failure diagnostics for egress (a row and a first-answer guard when an acknowledged connection dies), dedicated connections for the lifetime database locks, a conditional governance note, and pull-request CI scoped to the change | **Shipped (pre-alpha)** — `v0.8.7`, 2026-10-06 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.8.8** | Patch: an adopter's 0.8.7 field report; see [below](#v088-highlights). | **Shipped (pre-alpha)** — `v0.8.8`, 2026-10-07 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.8.9** | Run-level custom components (granted, saved and inline), their secrets added at the proxy or, where allowed, delivered as a variable or file. Also a four-panel New Run, person erasure, restructured docs and Go 1.26.9 | **Shipped (pre-alpha)** — `v0.8.9`, 2026-10-09 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Shipped detail
 
@@ -234,12 +235,12 @@
 - **The rollout is 0.9:**
   - the org control plane deciding for enrolled laptops (signed policy snapshots for offline use, the org deciding anything that touches org resources),
   - per-run placement between the laptop and the org's cluster and mixing the two, and the disk link.
-- Tracked on the `0.9.0` milestone.
+- Tracked on milestone `0.9.0`.
 
 | Milestone | Scope |
 |---|---|
 | **v0.8** | **Alpha RC.** The follow-through on 0.6/0.7 — the remaining enterprise-deployment enhancements, tools, and pieces — and the **last planned release candidate before the alpha go-live** |
-| **v0.9** | **Hybrid local + remote.** See [below](#v09-scope). |
+| **v0.9** | **Hybrid local + remote.** See [below](#v09-scope); [design](docs/design/0.9/PLAN.md). |
 | **v1.0** | SPIRE identity provider, OpenBao secret store, L3 MCP/tool gateway and the rest of the 1.0 list; see [below](#v10-scope). |
 | **v1.0 (git-token ref confinement)** | **Token-side** branch-namespace confinement for minted git tokens; see [below](#v10-git-token-ref-confinement-scope). |
 

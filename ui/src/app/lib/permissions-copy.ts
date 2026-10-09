@@ -340,7 +340,7 @@ export const DENIED = {
 };
 
 // M3 — member local_dir onboarding (AddWorkspaceDialog), root-constrained per
-// WARDYN_MEMBER_WORKSPACE_ROOTS/_MAP (member-role-desktop.md). Presentational
+// WARDYN_USER_WORKSPACE_ROOTS/_MAP (member-role-desktop.md). Presentational
 // only: enforcement is ValidateUserMountSource at bind time, same
 // non-authoritative-hint relationship DENIED above has to server-side
 // requireOperator.

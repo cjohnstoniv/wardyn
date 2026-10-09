@@ -181,6 +181,9 @@ func (l AutonomyLevel) Rank() int {
 // (internal/composer/autonomy.go, #97); an all-unset rubric caps nothing,
 // like a nil rubric.
 //
+// It also carries one boolean, AgentGuardrailLocks, that caps no level: it selects the locked L2
+// managed-settings document and is not part of the nine-field fold.
+//
 // A closed struct with `omitempty` on every field, not a map — same
 // doctrine as GovernanceLimits: small, complete, validated by the Go type
 // (Validate), no DB CHECK needed.
@@ -203,6 +206,10 @@ type AutonomyRubric struct {
 	ConfinementCC1 AutonomyLevel `json:"confinement_cc1,omitempty"`
 	ConfinementCC2 AutonomyLevel `json:"confinement_cc2,omitempty"`
 	ConfinementCC3 AutonomyLevel `json:"confinement_cc3,omitempty"`
+	// AgentGuardrailLocks selects the locked L2 managed-settings document for a run that resolves to L2:
+	// repository hooks and permission rules cannot override the agent-side guardrails. It caps no level
+	// and changes nothing at any other rung.
+	AgentGuardrailLocks bool `json:"agent_guardrail_locks,omitempty"`
 }
 
 // Validate reports the first field carrying an undefined AutonomyLevel,

@@ -8,8 +8,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
@@ -28,8 +26,7 @@ const maxAutodropsPerSweep = 120
 // every replica may call it with the same value. A policy that could not be recorded is logged and the
 // stored one stands, which can only keep more history, never less. The sweep runs on the sweeper leader
 // only, so with several replicas exactly one creates the months and drops the partitions.
-func startAuditRetention(rootCtx context.Context, f *bootFlags, pool *pgxpool.Pool, leader *db.SweeperLeader) {
-	rs := store.NewPG(pool)
+func startAuditRetention(rootCtx context.Context, f *bootFlags, rs store.PG, leader *db.SweeperLeader) {
 	recordAuditRetentionPolicy(rootCtx, rs, *f.auditRetentionDays)
 	autodrop := *f.auditRetentionAutodrop
 	if autodrop {

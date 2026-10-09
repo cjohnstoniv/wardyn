@@ -382,6 +382,9 @@ scp ./local-file <run-id>@<advertise-host>:/home/agent/  -P <port>
   the subsystem's backing process — no SFTP protocol reimplementation on
   Wardyn's side.
 - See [Image contract](#image-contract-byoi) if this 404s.
+- **`wardyn-sync`** runs the same `sftp-server` with `-d <dir>`, after `env` requests `WARDYN_SYNC_DIR` (absolute, under `/home/agent/`, no `..`; default `/home/agent/work`) and `WARDYN_SYNC_DIRECTION` (`push` or `pull`), read on this subsystem only.
+  - A refused directory launches nothing; a missing one launches at the sandbox's working directory, so check `RealPath(".")` and use absolute paths.
+  - The directory is a start point, not a boundary.
 
 ## 4. `-L` port forwarding
 
@@ -507,11 +510,12 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   - the git-broker's default confinement refuses that push with no way to tell the external tool why.
 - `git_push_any_branch: true` is the per-run opt-out (see [docs/POLICIES.md](POLICIES.md)'s `git_push_any_branch` row).
 - **Channel budget.** `session` (shell/exec/sftp) and `direct-tcpip` (`-L`
-  forwards) draw from the **same** per-run cap —
-  [`maxSSHSessionsPerRun`](../internal/api/sshgateway.go) (`4`, today) — so an
-  editor holding open a shell, an sftp session and two `-L` forwards has used
-  the whole budget.
+  forwards) draw from the **same** per-run cap,
+  [`WARDYN_SSH_MAX_SESSIONS_PER_RUN`](ENV.md#wardyn_ssh_max_sessions_per_run)
+  (default `4`), so an editor holding open a shell, an sftp session and two
+  `-L` forwards has used the whole budget.
 - A fifth channel of any kind is refused, not queued.
+- `wardyn-sync` has its own cap of `2`; a `session` channel over the shared cap may only become one.
 - **Under SSO, register the key as yourself.** Authorization is owner-only
   (above): the run has to be created by the **same principal** that registered
   the key.
@@ -547,7 +551,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
 ## Recording
 
 > [!WARNING]
-> **Recording ceiling, and 0.7 makes it fleet-wide.** The desktop envelope now ships `WARDYN_SSH_LISTEN` ON, so every managed laptop runs this gateway. Two halves, in opposite directions: `ssh` **exec** output and **sftp** payloads are **not recorded** (and sftp uploads are not byte-counted).
+> **Recording ceiling, and 0.7 makes it fleet-wide.** The desktop envelope now ships `WARDYN_SSH_LISTEN` ON, so every managed laptop runs this gateway. Two halves, in opposite directions: `ssh` **exec** output and **sftp** payloads are **not recorded** (sftp and sync bytes are counted, not content).
 >
 > So work done over those paths leaves no session evidence — do not present Remote-SSH as the recommended developer path without saying so.
 >
@@ -738,9 +742,9 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   - `ssh.authenticate` (every attempt, including failures),
     `session.attach` with `transport:ssh` in its data (the shell path, same
     action name the browser terminal uses, so both show up together in a run's
-    timeline), `ssh.exec` (`argv`, `exit`), `ssh.sftp.transfer` (`bytes` transferred),
-    `ssh.forward` (`port`, `bytes`).
-  - This is the source of record for these four;
+    timeline), `ssh.exec` (`argv`, `exit`), `ssh.forward` (`port`, `bytes`).
+  - `ssh.sftp.transfer` (`bytes`, `bytes_in`, `bytes_out`), `ssh.sync.transfer` (`dir`, `direction` client-declared, `bytes_in`, `bytes_out`).
+  - This is the source of record for these five;
     [`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md) is the vocabulary reference for
     every other audit action in the system and points back here for these.
 

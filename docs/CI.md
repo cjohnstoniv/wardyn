@@ -285,7 +285,7 @@ Everything above is about running Wardyn in *your* pipeline. This section is the
 
 - `pull_request:` carries no `branches:` filter — that field matches the PR's *base*, and the 0.8 working practice stacks lanes on `<kind>/<issue#>-<slug>` branches (#90), not on `main`, so a filtered trigger gave a stacked PR no checks at all.
 - `push:` stays narrow to `main`, `master` and `feature/**`, since every other commit already gets a run from its own PR.
-- It has no `release/**`: `release.yml` accepts CI by tree (#1461), so a release branch's fast-forward needs no push run of its own.
+- It has no `release/**`: `release.yml` accepts CI by tree (#1461), and [`release-branch-checks.yml`](../.github/workflows/release-branch-checks.yml) runs only DCO and gitleaks there (#1466).
 - The push-gate DCO exemption for GitHub-made merges needs gpg and GitHub's web-flow key id `B5690EEEBB952194`; if GitHub rotates that key, update the id in the Makefile's `dco` recipe.
 
 **Before and after #211**, measured from the GitHub Actions API:

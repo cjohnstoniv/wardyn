@@ -61,6 +61,7 @@ type agentPolicyDatum struct {
 	Bytes     int    `json:"bytes"`
 	Delivered bool   `json:"delivered"`
 	Reason    string `json:"reason"`
+	Variant   string `json:"variant"`
 	// ToolApprovals is "hold" on a hold-lane run.
 	ToolApprovals string `json:"tool_approvals"`
 }
@@ -90,10 +91,16 @@ func agentPolicyDispatchTask(t *testing.T, fr *fakeRunner, agent string, level t
 // of dispatchParams (Interactive, ToolApprovals) taken from p.
 func agentPolicyDispatchParams(t *testing.T, fr *fakeRunner, agent string, level types.AutonomyLevel, task string, p dispatchParams) (runner.SandboxSpec, *agentPolicyDatum, *dispatchTestStore) {
 	t.Helper()
+	return agentPolicyDispatchCeiling(t, fr, agent, level, task, p, governanceCeiling{})
+}
+
+// agentPolicyDispatchCeiling is agentPolicyDispatchParams under the given resolved ceiling.
+func agentPolicyDispatchCeiling(t *testing.T, fr *fakeRunner, agent string, level types.AutonomyLevel, task string, p dispatchParams, c governanceCeiling) (runner.SandboxSpec, *agentPolicyDatum, *dispatchTestStore) {
+	t.Helper()
 	srv, st, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	run.Agent, run.AutonomyLevel = agent, level
 	run.Task = task
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(c, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Interactive: p.Interactive, ToolApprovals: p.ToolApprovals, TaskMode: p.TaskMode,
 	})
@@ -371,5 +378,48 @@ func TestAgentPolicyDispatchHoldRunUnknownCapabilitiesFailsClosed(t *testing.T) 
 	}
 	if !strings.Contains(st.failureHint, "(tool approvals on hold)") {
 		t.Errorf("failure hint = %q, want it to name the hold as the file's basis", st.failureHint)
+	}
+}
+
+// TestAgentPolicyDispatchLockedL2 is agent_guardrail_locks through the real dispatch: an L2 run under a
+// profile whose rubric carries the term gets the locked document and a row saying which variant; the same
+// run without the term, or a hold-lane one, is unchanged except that the hold lane keeps the locked file
+// rather than swapping to L1's.
+func TestAgentPolicyDispatchLockedL2(t *testing.T) {
+	lockedGolden, err := os.ReadFile("../agentpolicy/testdata/L2-locked-managed-settings.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plainGolden, err := os.ReadFile("../agentpolicy/testdata/L2-managed-settings.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := func(locks bool) governanceCeiling {
+		return governanceCeiling{
+			Profile: &ResolvedProfile{Name: "locked"},
+			Limits:  types.GovernanceLimits{AutonomyRubric: &types.AutonomyRubric{EgressOpen: types.AutonomyL2, AgentGuardrailLocks: locks}},
+		}
+	}
+	for name, c := range map[string]struct {
+		ceiling governanceCeiling
+		p       dispatchParams
+		want    []byte
+		variant string
+	}{
+		"locked":           {profile(true), dispatchParams{}, lockedGolden, "l2_locked"},
+		"locked on hold":   {profile(true), dispatchParams{ToolApprovals: "hold"}, lockedGolden, "l2_locked"},
+		"term off":         {profile(false), dispatchParams{}, plainGolden, ""},
+		"no profile":       {governanceCeiling{}, dispatchParams{}, plainGolden, ""},
+		"term, no profile": {governanceCeiling{Limits: profile(true).Limits}, dispatchParams{}, plainGolden, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			spec, data, _ := agentPolicyDispatchCeiling(t, &fakeRunner{}, "claude-code", types.AutonomyL2, "", c.p, c.ceiling)
+			if len(spec.ManagedFiles) != 1 || !bytes.Equal(spec.ManagedFiles[0].Content, c.want) {
+				t.Fatalf("spec.ManagedFiles = %+v, want the one document %s", spec.ManagedFiles, c.want)
+			}
+			if data == nil || data.Variant != c.variant {
+				t.Errorf("row = %+v, want variant %q", data, c.variant)
+			}
+		})
 	}
 }

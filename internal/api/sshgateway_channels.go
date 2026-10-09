@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,10 +24,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
-
-// sftpServerPath is the sandbox binary the sftp subsystem execs — the
-// documented BYOI image contract (docs/SSH.md).
-const sftpServerPath = "/usr/lib/openssh/sftp-server"
 
 // sshDisplaceGrace is how long a displaced SSH client gets to accept the
 // take-over reason on its stderr before the pump is cancelled anyway (see the
@@ -198,10 +195,11 @@ func drainExecStderr(channel ssh.Channel, sess *runner.ExecSession) {
 // for the interactive shell path.
 //
 // Returns the exit code (1 when Wait is absent or errors — clampExitCode's
-// same fold) and the total bytes copied Stdout->channel: what ssh.sftp.transfer's and
-// ssh.forward's "bytes" audit field means — the direction that matters for a
-// download/forward is what came OUT of the sandbox.
-func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel, sess *runner.ExecSession, sendExit bool) (exitCode int, bytesOut int64) {
+// same fold) and the bytes copied each way: bytesOut is Stdout->channel, what
+// ssh.sftp.transfer's and ssh.forward's "bytes" audit field means — the
+// direction that matters for a download/forward is what came OUT of the
+// sandbox — and bytesIn is channel->Stdin, what the sandbox received.
+func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel, sess *runner.ExecSession, sendExit bool) (exitCode int, bytesIn, bytesOut int64) {
 	defer channel.Close()
 	drainExecStderr(channel, sess)
 
@@ -223,11 +221,14 @@ func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, prin
 	_ = s.cfg.Store.TouchRun(keepCtx, runID)
 	go s.attachKeepalive(keepCtx, runID)
 
+	var in atomic.Int64
 	if sess.Stdin != nil {
 		go func() {
 			// Bytes a person sends are presence (run_pause.go).
-			in := presenceReader{r: channel, mark: func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") }}
-			_, _ = io.Copy(sess.Stdin, in)
+			src := presenceReader{r: channel, mark: func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") }}
+			// Counted as written to the sandbox, off this goroutine: it may still
+			// be mid-copy when Stdout ends, so the total is read atomically.
+			_, _ = io.Copy(countingWriter{w: sess.Stdin, n: &in}, src)
 			_ = sess.Stdin.Close() // half-close only: Stdout/Stderr may still be flowing
 		}()
 	}
@@ -248,7 +249,86 @@ func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, prin
 	if sess.Close != nil {
 		_ = sess.Close()
 	}
-	return exitCode, bytesOut
+	return exitCode, in.Load(), bytesOut
+}
+
+// countingWriter adds each successful write's size to n.
+type countingWriter struct {
+	w io.Writer
+	n *atomic.Int64
+}
+
+func (c countingWriter) Write(p []byte) (int, error) {
+	k, err := c.w.Write(p)
+	c.n.Add(int64(k))
+	return k, err
+}
+
+// sshSessionGate is one "session" channel's dispatch state: whether a
+// shell/exec/subsystem already started, and the budget slot it holds.
+type sshSessionGate struct {
+	s          *Server
+	ctx        context.Context
+	runID      uuid.UUID
+	principal  string
+	slot       *sshChannelSlot
+	channel    ssh.Channel
+	started    bool
+	capAudited bool
+}
+
+// mayDispatch refuses (and replies false to) a second dispatch, and — when
+// shared is set — one a sync-only channel (admitted past the shared cap, see
+// sshOpenSlot) may not make: that one is audited once, answered with the cap
+// text and closed, which frees the sync slot it was holding.
+func (g *sshSessionGate) mayDispatch(req *ssh.Request, shared bool) bool {
+	if g.started {
+		_ = req.Reply(false, nil)
+		return false
+	}
+	if shared && g.slot.sync {
+		if !g.capAudited {
+			g.capAudited = true
+			g.s.sshAuditChannelRejected(g.ctx, g.runID, g.principal, "session", sshCapReasonChannels, g.s.cfg.SSHMaxSessionsPerRun)
+		}
+		_ = req.Reply(false, nil)
+		sendChannelError(g.channel, fmt.Sprintf("too many concurrent SSH channels for this run (max %d)", g.s.cfg.SSHMaxSessionsPerRun))
+		return false
+	}
+	return true
+}
+
+// subsystemBridge validates a subsystem request and returns the bridge to run,
+// or nil after replying false. wardyn-sync moves the channel onto a sync slot.
+func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, syncEnv map[string]string) func() {
+	s, ctx, runID, principal := g.s, g.ctx, g.runID, g.principal
+	var m sshSubsystemMsg
+	if err := ssh.Unmarshal(req.Payload, &m); err != nil {
+		_ = req.Reply(false, nil)
+		return nil
+	}
+	switch m.Subsystem {
+	case "sftp":
+		if g.mayDispatch(req, true) {
+			return func() { s.bridgeSSHSFTP(ctx, runID, principal, channel) }
+		}
+	case sshSyncSubsystem:
+		if !g.mayDispatch(req, false) {
+			return nil
+		}
+		if !g.slot.toSync() {
+			if !g.capAudited {
+				g.capAudited = true
+				s.sshAuditChannelRejected(ctx, runID, principal, "session", sshCapReasonSync, maxSSHSyncSessionsPerRun)
+			}
+			_ = req.Reply(false, nil)
+			return nil
+		}
+		return func() { s.bridgeSSHSync(ctx, runID, principal, channel, syncEnv) }
+	default:
+		_ = req.Reply(false, nil)
+	}
+	return nil
 }
 
 // handleSSHSessionChannel owns ONE "session" channel for its whole lifetime:
@@ -258,7 +338,7 @@ func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, prin
 // mirroring a real sshd's one-exec-per-channel rule — to its own bridge
 // goroutine while continuing to serve window-change concurrently (a live PTY
 // resize must keep working after the shell starts).
-func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, principal string, newCh ssh.NewChannel) {
+func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, principal string, newCh ssh.NewChannel, slot *sshChannelSlot) {
 	channel, reqs, err := newCh.Accept()
 	if err != nil {
 		return
@@ -278,18 +358,21 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 	defer channel.Close()
 
 	var cols, rows uint16
-	started := false
 	// "Latest wins": window-change events coalesce onto a 1-slot buffered
 	// channel so a burst of resizes never blocks this request loop — only the
 	// most recent size matters anyway.
 	resizeCh := make(chan sshWindowChangeMsg, 1)
 	var env []string
+	// syncEnv holds the wardyn-sync-only env names. Kept apart from env so they
+	// can never reach an exec or shell: only a wardyn-sync dispatch reads them.
+	syncEnv := map[string]string{}
 	var bridgeDone chan struct{}
+	gate := &sshSessionGate{s: s, ctx: chCtx, runID: runID, principal: principal, slot: slot, channel: channel}
 
 	for req := range reqs {
 		switch req.Type {
 		case "pty-req":
-			if started {
+			if gate.started {
 				_ = req.Reply(false, nil)
 				continue
 			}
@@ -307,8 +390,13 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			// again) and len(env) < sshMaxEnvVars (an unbounded client could
 			// otherwise grow this slice forever pre-dispatch).
 			var m sshEnvMsg
-			if !started && len(env) < sshMaxEnvVars && ssh.Unmarshal(req.Payload, &m) == nil && sshEnvAllowed(m.Name) {
-				env = append(env, m.Name+"="+m.Value)
+			if !gate.started && ssh.Unmarshal(req.Payload, &m) == nil {
+				switch {
+				case sshSyncEnvName(m.Name):
+					syncEnv[m.Name] = m.Value
+				case len(env) < sshMaxEnvVars && sshEnvAllowed(m.Name):
+					env = append(env, m.Name+"="+m.Value)
+				}
 			}
 			_ = req.Reply(true, nil)
 
@@ -332,11 +420,10 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			}
 
 		case "shell":
-			if started {
-				_ = req.Reply(false, nil)
+			if !gate.mayDispatch(req, true) {
 				continue
 			}
-			started = true
+			gate.started = true
 			_ = req.Reply(true, nil)
 			bridgeDone = make(chan struct{})
 			sshGo(func() {
@@ -345,8 +432,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			})
 
 		case "exec":
-			if started {
-				_ = req.Reply(false, nil)
+			if !gate.mayDispatch(req, true) {
 				continue
 			}
 			var m sshExecReqMsg
@@ -354,7 +440,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 				_ = req.Reply(false, nil)
 				continue
 			}
-			started = true
+			gate.started = true
 			_ = req.Reply(true, nil)
 			bridgeDone = make(chan struct{})
 			command := m.Command
@@ -364,21 +450,16 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			})
 
 		case "subsystem":
-			if started {
-				_ = req.Reply(false, nil)
+			bridge := gate.subsystemBridge(req, channel, syncEnv)
+			if bridge == nil {
 				continue
 			}
-			var m sshSubsystemMsg
-			if err := ssh.Unmarshal(req.Payload, &m); err != nil || m.Subsystem != "sftp" {
-				_ = req.Reply(false, nil)
-				continue
-			}
-			started = true
+			gate.started = true
 			_ = req.Reply(true, nil)
 			bridgeDone = make(chan struct{})
 			sshGo(func() {
 				defer close(bridgeDone)
-				s.bridgeSSHSFTP(chCtx, runID, principal, channel)
+				bridge()
 			})
 
 		default:
@@ -774,7 +855,7 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 		sendChannelError(channel, sshExecStreamErrorMessage(err))
 		return
 	}
-	exit, _ := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, true)
+	exit, _, _ := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, true)
 	// Every trailing write in this file that follows
 	// sshBridgeExecSession (here, bridgeSSHSFTP, handleSSHDirectTCPIP) must
 	// run on s.cfg.BaseCtx, never ctx — handleSSHConn's connCtx, cancelled the
@@ -792,36 +873,6 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 	// connection it is reporting the end of.
 	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",
 		runID.String(), "success", mustJSON(map[string]any{"argv": command, "exit": exit})))
-}
-
-// bridgeSSHSFTP runs the sandbox's own sftp-server as the subsystem's backing
-// process — no SFTP protocol reimplementation. A BYOI image without the
-// binary surfaces as a clean channel error naming the image contract (never
-// a hang): ErrExecStreamUnsupported maps to the shared honest message every
-// primitive here uses, and any other ExecStream launch failure names the
-// missing path directly.
-func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel) {
-	run, msg := s.sshFreshRun(ctx, runID, principal)
-	if msg != "" {
-		sendChannelError(channel, msg)
-		return
-	}
-	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{Argv: []string{sftpServerPath, "-e"}})
-	if err != nil {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp.transfer",
-			runID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
-		reason := sshExecStreamErrorMessage(err)
-		if !errors.Is(err, runner.ErrExecStreamUnsupported) {
-			reason = "sftp unavailable: the sandbox image has no " + sftpServerPath + " (" + err.Error() + ")"
-		}
-		sendChannelError(channel, reason)
-		return
-	}
-	_, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, true)
-	// BaseCtx, not ctx — see bridgeSSHExec's identical trailing-write FINDING
-	// comment above (same shape, same connection-teardown race, same fix).
-	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp.transfer",
-		runID.String(), "success", mustJSON(map[string]any{"bytes": bytesOut})))
 }
 
 // handleSSHDirectTCPIP implements `-L` local forwarding: ExecStream of `socat
@@ -874,7 +925,7 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 	defer channel.Close()
 	go ssh.DiscardRequests(reqs)
 
-	_, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, false)
+	_, _, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, false)
 	// BaseCtx, not ctx — see bridgeSSHExec's identical trailing-write FINDING
 	// comment (same shape, same connection-teardown race, same fix). THIS is
 	// the exact call the live e2e's -L forward step caught losing its

@@ -33,6 +33,8 @@ type runAgentPolicy struct {
 	// hold: the run launches on agent-run's hold lane, which gets a document
 	// whatever its level (agentpolicy.ForAgent, #358).
 	hold bool
+	// locked: the document ForAgent chose is the locked L2 one (agentpolicy.IsLocked).
+	locked bool
 }
 
 // holdLane is whether a run launches agent-run's hold lane: the one predicate
@@ -59,8 +61,8 @@ func (p dispatchParams) holdLane() bool {
 // agentPolicyBasis names what a run's managed settings were generated from,
 // for a failure hint or a 201 warning: the hold lane when it, not the level,
 // chose the document.
-func agentPolicyBasis(level types.AutonomyLevel, hold bool) string {
-	if hold && agentpolicy.HoldTakesOver(level) {
+func agentPolicyBasis(level types.AutonomyLevel, hold, locked bool) string {
+	if hold && agentpolicy.HoldTakesOver(level, locked) {
 		return "tool approvals on hold"
 	}
 	return "autonomy level " + string(level)
@@ -89,17 +91,20 @@ func agentPolicyBasis(level types.AutonomyLevel, hold bool) string {
 // operator looks for it. Handing such a runner the file anyway would be worse
 // than withholding it — a driver that cannot make it root-owned would place a
 // ceiling the agent can rewrite, reported as delivered.
-func (s *Server) agentPolicyFor(ctx context.Context, run types.AgentRun, hold bool) (runAgentPolicy, error) {
-	path, content, ok := agentpolicy.ForAgent(run.Agent, run.AutonomyLevel, hold)
+//
+// locked is the governance rubric's agent_guardrail_locks term, frozen on the
+// dispatch ceiling.
+func (s *Server) agentPolicyFor(ctx context.Context, run types.AgentRun, hold, locked bool) (runAgentPolicy, error) {
+	path, content, ok := agentpolicy.ForAgent(run.Agent, run.AutonomyLevel, hold, locked)
 	if !ok {
 		return runAgentPolicy{}, nil
 	}
 	caps, err := s.cfg.Runner.Capabilities(ctx)
 	if err != nil {
 		return runAgentPolicy{}, fmt.Errorf("the runner's capabilities could not be read, so whether it can deliver this run's managed settings (%s) is unknown: %w",
-			agentPolicyBasis(run.AutonomyLevel, hold), err)
+			agentPolicyBasis(run.AutonomyLevel, hold, locked), err)
 	}
-	p := runAgentPolicy{path: path, bytes: len(content), hold: hold}
+	p := runAgentPolicy{path: path, bytes: len(content), hold: hold, locked: agentpolicy.IsLocked(content)}
 	var deliverable bool
 	p.withheld, deliverable = managedFilesGap(caps, run.ConfinementClass)
 	if !deliverable {
@@ -148,9 +153,9 @@ func managedFilesGap(caps runner.Capabilities, class types.ConfinementClass) (re
 // req is read once the gate may have derived its hold, and through
 // requestIsInteractive: preflight never runs the no-task coercion, so the raw
 // field would disagree with the launch about which lane a task-less run takes.
-func (s *Server) managedSettingsUndeliveredWarning(ctx context.Context, req *createRunRequest, level types.AutonomyLevel, class types.ConfinementClass) []string {
+func (s *Server) managedSettingsUndeliveredWarning(ctx context.Context, req *createRunRequest, level types.AutonomyLevel, locked bool, class types.ConfinementClass) []string {
 	hold := holdLane(requestIsInteractive(*req), req.ToolApprovals, req.TaskMode)
-	if _, _, ok := agentpolicy.ForAgent(req.Agent, level, hold); !ok || s.cfg.Runner == nil || req.TaskMode == "exec" {
+	if _, _, ok := agentpolicy.ForAgent(req.Agent, level, hold, locked); !ok || s.cfg.Runner == nil || req.TaskMode == "exec" {
 		return nil
 	}
 	caps, err := s.cfg.Runner.Capabilities(ctx)
@@ -163,7 +168,7 @@ func (s *Server) managedSettingsUndeliveredWarning(ctx context.Context, req *cre
 	}
 	return []string{fmt.Sprintf(
 		"%s's managed settings for %s are not delivered: %s, so this run's agent runs under its launch flags alone and a repository's own settings can let it run tools without asking",
-		autonomyAgentLabel(req.Agent), agentPolicyBasis(level, hold), reason)}
+		autonomyAgentLabel(req.Agent), agentPolicyBasis(level, hold, locked), reason)}
 }
 
 // auditAgentPolicy records run.agent_policy.write once the agent's container exists,
@@ -194,9 +199,13 @@ func (s *Server) auditAgentPolicy(ctx context.Context, run types.AgentRun, p run
 		"path":  p.path,
 		// The size, not the content: the document is not a secret, but a
 		// governance row that carries a file body invites the next one to.
-		// Enough to tell the three documents apart in a trail.
+		// Enough to tell the documents apart in a trail (L0 and L1 share their
+		// bytes; `level` separates them).
 		"bytes":     p.bytes,
 		"delivered": delivered,
+	}
+	if p.locked {
+		data["variant"] = "l2_locked"
 	}
 	if p.hold {
 		// On every hold-lane run: what says why a run with no level, or an

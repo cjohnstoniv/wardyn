@@ -159,6 +159,8 @@ ds-bundle/
 # 0.8/ ships for the same reason: the 0.8 issues and ROADMAP.md's v0.8 row both
 # link to the design document, so it has to be in the repo they link from.
 !/docs/design/0.8/
+# 0.9/ ships for the same reason: the 0.9.0 issues and ROADMAP.md's v0.9 row link to it.
+!/docs/design/0.9/
 # unsaved-guard-canon.md is the same shape as hybrid-0.8.md: a published canon
 # doc for a shipped feature (#460), not a mock round with its own mock/ dir.
 !/docs/design/unsaved-guard-canon.md

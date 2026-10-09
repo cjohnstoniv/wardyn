@@ -10,6 +10,74 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- Migration `0138_audit_ensure_partitions_high_water` drops and recreates `audit_ensure_partitions`
+  (the migrator's role must own the schema, as for 0111/0123); forward-only, rollback is the
+  pre-upgrade `pg_dump`. Its EXECUTE grant is re-derived from `audit_append`'s: every role that can
+  execute `audit_append` can execute it and PUBLIC cannot. A role granted only `audit_ensure_partitions`
+  by hand loses it, and a role holding only `audit_append` gains it; repeat any hand grant after upgrading.
+- Run `wardyn setup status --pre-upgrade` with your role settings in the environment (or
+  `--role-map` / `--default-role`) and fix everything it lists. It reads only this shell's
+  environment: for a chart or Compose deployment, load the env file first (`set -a; . FILE; set +a`)
+  or check your values. It exits 0 when clean and 1 while anything remains (#623).
+- Remap every `=member` entry (and a `member` default role) to `user` or a user type id, in the
+  chart or env and under Getting started → People. 0.9 refuses to boot on one, before migrating (#623).
+- Rename the six `WARDYN_MEMBER_*` variables to their `WARDYN_USER_*` names
+  (`WARDYN_ALLOW_MEMBER_ENV_SECRET` to `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_MEMBER_MODE` to
+  `WARDYN_USER_DESKTOP`); 0.9 refuses to boot while any is set (#623).
+- Serve your OIDC issuers over `https://`. An in-cluster internal issuer behind a service mesh may
+  set `WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=mesh` (#1970).
+- Repoint any dashboard or SIEM rule on `auth.member_mode` to `auth.user_view.set` (#623).
+
+### Added
+
+- **Sync over SSH.** A new `wardyn-sync` SSH subsystem runs the sandbox's own `sftp-server` in a validated
+  start directory (`WARDYN_SYNC_DIR`, under `/home/agent/`), with its own cap of 2 channels per run, and is
+  audited as `ssh.sync.transfer`. The start directory is a start point, not a boundary (#1952).
+- `WARDYN_SSH_MAX_SESSIONS_PER_RUN` sets the per-run SSH channel cap (default 4, unchanged), and
+  `ssh.sftp.transfer` gains `bytes_in`/`bytes_out`; `bytes` keeps its meaning (#1952).
+- **Locked L2.** A governance profile's autonomy rubric accepts `agent_guardrail_locks`. A Claude Code run at
+  L2 then launches under managed settings that add `allowManagedHooksOnly` and
+  `allowManagedPermissionRulesOnly`, so a repository's own hooks and permission rules cannot answer a tool
+  call, and `run.agent_policy.write` records `variant: l2_locked`. The managed-settings drift probe pins it on
+  the pinned CLI.
+- `wardyn setup status --pre-upgrade [--role-map CSV] [--default-role ROLE]` lists leftover
+  `member` entries and removed `WARDYN_MEMBER_*` variables before the upgrade (#623).
+
+### Changed
+
+- A plain `http://` OIDC issuer (public or internal) on a host that is not loopback, while the
+  console has a TLS posture, now refuses boot; it was a warning. `WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=mesh`
+  opts the internal issuer out with a boot warning; the public issuer has no opt-out. Loopback and
+  the Compose demo are unaffected (#1970).
+
+### Removed
+
+- The `member` role value: `WARDYN_OIDC_ROLE_MAP` entries ending `=member` and
+  `WARDYN_OIDC_DEFAULT_ROLE=member` refuse boot with `invalid role "member"`, naming the entry (#623).
+- The `auth.member_mode` audit action, dual-emitted beside `auth.user_view.set` since 0.8 (#623).
+- The `WARDYN_MEMBER_MODE`, `WARDYN_MEMBER_WORKSPACE_ROOTS`, `WARDYN_MEMBER_WORKSPACE_ROOTS_MAP`,
+  `WARDYN_MEMBER_WRITABLE_ROOTS`, `WARDYN_MEMBER_WRITABLE_DENY` and `WARDYN_ALLOW_MEMBER_ENV_SECRET`
+  aliases. Boot refuses while one is set, naming its `WARDYN_USER_*` replacement (#623).
+
+### Fixed
+
+- Audit rows that waited under a pending subject key reach the SIEM sinks once the spool drain re-seals
+  and stores them, so the sink chain has no gap (#1821).
+- `audit.retention.set`, `audit.retention.partition_dropped`, `principal_key.destroyed` and
+  `credential.reauth.resolve`, which the database writes itself, are sent to the SIEM sinks after they
+  commit (#1822).
+- The audit log no longer stops accepting writes, and boot no longer refuses, after the database clock
+  steps forward: `audit_ensure_partitions` creates partitions up to the chain's high-water mark, so the next
+  boot or daily sweep repairs it without hand-run DDL (#1826).
+- The People list shows a person suspended over SCIM before their first sign-in as deactivated, and
+  `?state=deactivated` finds them (#1824).
+- A person's drawer says when their token list could not be read, with Retry, instead of showing
+  an empty list (#1815).
+
+## [0.8.9] — 2026-10-09
+
+### Before you upgrade
+
 - Migration `0133_recording_erasures` adds durable per-run recording fences. Take a database dump before
   upgrading; rollback requires restoring that dump. Filesystem deployments must retain the recording
   root's `.erased` directory and `*.lock` files alongside the recordings.

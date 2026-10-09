@@ -310,6 +310,10 @@ func run() error {
 	if fan != nil {
 		brk = brk.WithSIEM(fan)
 	}
+	// The rows the database writes itself (a key destroy here, the retention rows below) go to the
+	// same sinks after their commit.
+	siem := siemSink(fan)
+	armKeyDestroySIEM(secrets, siem)
 
 	// Approval FSM service (adapter over internal/approval + internal/store).
 	// FIX #5: wired with maskedRec (masked + SIEM fanout), matching idp/broker —
@@ -375,6 +379,7 @@ func run() error {
 	// and before the server that serves its status; orgFederation is nil when
 	// WARDYN_ORG_URL is unset.
 	st := store.NewPG(pool)
+	st.SIEM = siem
 	orgFederation, err := checkPostureAndBootHybrid(bootCtx, rootCtx, f, lm.enabled, feats.authn != nil, bootKeys, st, maskedRec)
 	if err != nil {
 		return err
@@ -496,13 +501,14 @@ func run() error {
 		// (buildOptionalFeatures), which is also the sole gate ServeSSHGateway
 		// itself checks below — belt and suspenders, "empty = off" holds either
 		// way this Config is constructed.
-		SSHListenAddr:    *f.sshListen,
-		SSHAdvertiseAddr: *f.sshAdvertise,
-		SSHProxyCommand:  *f.sshProxyCommand,
-		SSHHostKey:       feats.sshHostKey,
-		SSHRoleTTL:       *f.sshRoleTTL,
-		APITokenMaxTTL:   *f.apiTokenMaxTTL,
-		RoleStampTTL:     *f.roleStampTTL,
+		SSHListenAddr:        *f.sshListen,
+		SSHAdvertiseAddr:     *f.sshAdvertise,
+		SSHProxyCommand:      *f.sshProxyCommand,
+		SSHHostKey:           feats.sshHostKey,
+		SSHRoleTTL:           *f.sshRoleTTL,
+		SSHMaxSessionsPerRun: *f.sshMaxSessionsPerRun,
+		APITokenMaxTTL:       *f.apiTokenMaxTTL,
+		RoleStampTTL:         *f.roleStampTTL,
 		// How long a governance change held for a second human waits (the switch itself is read
 		// per request by internal/api).
 		GovernanceChangeTTL: *f.governanceChangeTTL,
@@ -546,7 +552,7 @@ func run() error {
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
-	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore, leader, ticks)
+	startBackgroundWorkers(rootCtx, f, srv, run, pool, st, idp, brk, maskedRec, feats.recStore, leader, ticks)
 
 	// SSH gateway accept loop (own goroutine, like the periodic workers above,
 	// and extracted the same way — see startSSHGateway's own doc comment).

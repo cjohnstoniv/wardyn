@@ -325,6 +325,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
   const clientGo = ["client.go", "runs_create.go"].map((f) => readFileSync(join(root, "pkg/client", f), "utf8")).join("\n");
   const typesGo = readFileSync(join(root, "internal/types/types.go"), "utf8");
   const runsTs = readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8");
+  const runCreateTs = readFileSync(join(root, "ui/src/app/lib/types/run-create.ts"), "utf8");
 
   it("every CreateRunRequest json tag is forwarded by runWireBody or on the UI-never-sends list", async () => {
     const goTags = goJSONTags(clientGo, "CreateRunRequest");
@@ -398,7 +399,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
 
   it("CreateRunInput (the wizard-facing type) declares no key the Go DTO lacks", () => {
     const goTags = new Set(goJSONTags(clientGo, "CreateRunRequest"));
-    const tsKeys = tsInterfaceKeys(runsTs, "CreateRunInput");
+    const tsKeys = tsInterfaceKeys(runCreateTs, "CreateRunInput");
     expect(tsKeys.filter((k) => !goTags.has(k))).toEqual([]);
   });
 
@@ -542,9 +543,9 @@ describe("source parity — autonomy wire types (#510-F8)", () => {
   const governanceGo = readFileSync(join(root, "internal/types/governance.go"), "utf8");
   const governanceTs = readFileSync(join(root, "ui/src/app/lib/api/governance.ts"), "utf8");
 
-  it("AutonomyRubric: full parity — the nine closed fields", () => {
+  it("AutonomyRubric: full parity — the nine level caps and the guardrail lock", () => {
     const goTags = goJSONTags(governanceGo, "AutonomyRubric");
-    expect(goTags.length).toBe(9);
+    expect(goTags.length).toBe(10);
     const tsKeys = tsInterfaceKeys(governanceTs, "AutonomyRubric");
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
