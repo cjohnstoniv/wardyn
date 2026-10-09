@@ -1,0 +1,6 @@
+# The must-link rule in scripts/check-doc-links.sh applies to these docs.
+ARCHITECTURE.md
+SECURITY.md
+PROVENANCE.md
+docs/DATA-FLOW.md
+threatmodel/AGENT-THREAT-MODEL.md

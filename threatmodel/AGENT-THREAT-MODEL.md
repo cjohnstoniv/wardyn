@@ -1,19 +1,9 @@
 # A threat model for agent systems
 
-**Portable on purpose.** This is about the class of system — a model-driven agent
-executing tools on someone's behalf — not about Wardyn: the categories, terms and
-ownership lines are meant to be usable by a team running something else. Every row
-still carries a **Wardyn coverage verdict**, because a taxonomy with no verdict is
-a whitepaper. The taxonomy travels; the verdict column is the honest local answer.
-
-**Read this for** shared vocabulary and the category set.
-**Read [THREAT-MODEL.md](THREAT-MODEL.md) for** the threat model of the Wardyn
-implementation: its assets, trust boundaries, and the dated residual risks in §5. That
-document is deliberately Wardyn-shaped and does not travel.
-
-**The anti-overclaim rule applies here too.** A verdict this document asserts that
-the code does not support is a bug, not prose licence — report it under
-[SECURITY.md](../SECURITY.md).
+- **Portable on purpose.** This is about the class of system — a model-driven agent executing tools on someone's behalf —
+  - not about Wardyn: the categories, terms and ownership lines are meant to be usable by a team running something else. Every row still carries a **Wardyn coverage verdict**, because a taxonomy with no verdict is a whitepaper. The taxonomy travels; the verdict column is the honest local answer.
+- **Read this for** shared vocabulary and the category set. **Read [THREAT-MODEL.md](THREAT-MODEL.md) for** the threat model of the Wardyn implementation: its assets, trust boundaries, and the dated residual risks in §5. That document is deliberately Wardyn-shaped and does not travel.
+- **The anti-overclaim rule applies here too.** A verdict this document asserts that the code does not support is a bug, not prose licence — report it under [SECURITY.md](../SECURITY.md).
 
 ---
 
@@ -52,39 +42,92 @@ this space is an axis substitution.
 
 ## 2. Threat categories
 
-Verdicts are exactly three values. `partial` must name the bypass class;
-`not addressed` must say by-design or by-omission. There is no fourth value,
-because a fourth value is where hedging goes.
-
-Verdict column: 🟢 mitigated · 🟡 partial · ⛔ not addressed — the icon prefixes
-the word, never replaces it.
+- Verdicts are exactly three values.
+- `partial` must name the bypass class; `not addressed` must say by-design or by-omission.
+- There is no fourth value, because a fourth value is where hedging goes.
+- Verdict column: 🟢 mitigated · 🟡 partial · ⛔ not addressed — the icon prefixes
+  the word, never replaces it.
 
 | # | Category | What it is | Wardyn verdict |
 |---|---|---|---|
 | 1 | **Prompt injection / instruction hijack** | untrusted content redirects the agent's goals | ⛔ **not addressed, by design.** Nothing inspects inbound prompts. This is treated as an assumed precondition — the platform contains the *consequences* rather than preventing the hijack. Outbound content scanning exists (`internal/contentscan`) and is a different control |
 | 2 | **Tool / capability misuse** | the agent invokes a legitimate tool for an illegitimate end | 🟡 **partial.** Tool calls can route to a human approval that fails closed (`cmd/wardyn-toolgate`). Bypass class: the gate is **in-sandbox and cooperative** — an agent that does not call it is not gated; it covers one harness; and that harness auto-approves its own read-only-safe command class without consulting it. The out-of-band layer that would be a boundary is not built |
-| 3 | **Credential exfiltration** | the agent obtains a secret and moves it out | 🟢 **mitigated, with a published exception list.** Credentials are minted per-run, TTL-capped and injected proxy-side, so the sandbox holds a placeholder. The exceptions — where a credential IS resident — are enumerated in THREAT-MODEL.md §5.1a rather than restated here, because a second copy of that list is how it drifts |
-| 4 | **Data exfiltration via the model channel** | data leaves inside a legitimate model request | ⛔ **not addressed as prevention; instrumented.** An agent can encode, split across turns, or encrypt around any scanner. What exists is inspection with **honestly reported coverage** — an uninspectable channel is marked uninspectable rather than counted as clean. Do not describe this as DLP |
+| 3 | **Credential exfiltration** | the agent obtains a secret and moves it out | 🟢 **mitigated, with a published exception list.** The sandbox holds a placeholder, and the exceptions are enumerated in [THREAT-MODEL.md](THREAT-MODEL.md) §5.1a; see [below](#category-3-verdict). |
+| 4 | **Data exfiltration via the model channel** | data leaves inside a legitimate model request | ⛔ **not addressed as prevention; instrumented.** An agent can encode, split across turns, or encrypt around any scanner; do not describe this as DLP, see [below](#category-4-verdict). |
 | 5 | **Data exfiltration via other egress** | data leaves over an ordinary network call | 🟡 **mitigated for unlisted destinations; partial for allowlisted ones.** Default-deny plus first-use approval. Bypass class: a permitted destination that is also attacker-reachable (dual-use hosts, DNS through the permitted resolver) |
 | 6 | **Model-traffic interception** | someone reads the model channel — including the platform itself | 🟡 **partial, by design, both directions.** TLS interception of the model channel is opt-in per run and its CA key stays in proxy memory. Teams need a neutral name for "we MITM our own agents" or each invents one |
 | 7 | **Sandbox escape** | code leaves the isolation boundary | 🟢 **mitigated to the declared class, honestly bounded.** Each confinement class documents what it does **not** stop, and a demanded class that cannot be enforced fails closed rather than silently downgrading |
-| 8 | **Lateral movement** | one run reaches another, or the host | 🟢 **mitigated, with a published exception list.** Per-run networks with no default route; on Kubernetes a default-deny NetworkPolicy verified by a boot-time canary that refuses to start if it does not hold. The two operator overrides that boot the canary past a failure it would otherwise refuse to start on are enumerated in THREAT-MODEL.md §5's "Operator overrides that boot past a fail-closed gate" rather than restated here, because a second copy of that list is how it drifts |
+| 8 | **Lateral movement** | one run reaches another, or the host | 🟢 **mitigated, with a published exception list.** Per-run networks with no default route; on Kubernetes a default-deny NetworkPolicy verified by a boot-time canary; see [below](#category-8-verdict). |
 | 9a | **Supply chain — the platform's own artifacts** | you pull a tampered platform image | 🟢 **mitigated.** Keyless signing, SBOMs scanned from the image rather than the source tree, build provenance |
 | 9b | **Supply chain — content executing inside a run** | a malicious package's install script runs | 🟡 **partial** — bypass class: any code that executes inside the sandbox. Nothing scans it, so it collapses into category 1 and is answered by containment, not prevention |
 | 9c | **Supply chain — the image the sandbox is built from** | a hostile base image | 🟡 **partial — the weakest of the three.** A base carrying build-time triggers is refused, but wrapping is not vetting: base content is unscanned, and build steps run on the host **before any confinement class exists** |
 | 10 | **Privilege escalation within the platform** | a member gains operator powers | 🟡 **partial.** A capability-grant model exists with deny-beats-allow precedence — but **every enforcement switch ships off**, so an upgraded deployment enforces nothing until an admin turns kinds on |
 | 11 | **Attribution evasion** | an action cannot be traced to a human sponsor | 🟡 **partial.** The run token carries both the human and the agent; audit events record a single actor field, so sponsor and agent are not separable per event |
 | 12 | **Audit tampering** | the record is altered after the fact | 🟡 **partial, deliberately graded.** Append-only enforcement plus a hash chain — which is tamper-**evidence**, not tamper-proofness, and only if a head hash is retained off-box. Session recordings are writable by the run that produces them |
-| 13 | **Approval fatigue** | the human approves everything because there are too many prompts | ⛔ **not addressed, by omission.** The platform leans heavily on human approvals and has no rate limit, no batching guard, no anomaly signal on approval volume, and no separation of duty. This is the failure mode every approval-based control shares, and no code fixes it |
-| 14 | **Resource abuse / denial of wallet** | the agent burns money rather than data | 🟡 **partial, and the enforced set differs BY SUBSTRATE.** Docker: CPU, memory and PIDs are requested and the run fails closed BEFORE start if the daemon reports it discarded one (`verifyCapsEnforced`; `WARDYN_ALLOW_UNENFORCEABLE_CAPS=1` downgrades that to a warning; environment builds apply the same check but never honour the override) — a DISK cap degrades to uncapped-with-a-warning on a storage driver that cannot take a size quota, by design. Kubernetes: CPU, memory and — since 0.7.2 — DISK. A run's `disk_mib` is now requested as the agent container's `resources.limits[ephemeral-storage]` (with a small fixed 256Mi request, so scheduling is unchanged apart from a node genuinely short on allocatable ephemeral storage newly rejecting the pod), and the kubelet bounds the writable layer the clone, `$HOME` and every ephemeral workspace target live on. It is `eviction`, not a quota: the kubelet measures periodically and KILLS the pod, so the agent never sees `ENOSPC`, in-flight work is lost, and a burst between two measurements can overshoot — and a deployment with no `storage.ephemeral.default_disk_mib` still leaves node-level eviction as the only bound on a run that asked for nothing. A **pid** cap is still **never requested at all** on Kubernetes — there is no per-container equivalent in the Pod API, so the substrate logs "requested but not enforced" and creates the pod anyway, and there is nothing for a fail-closed check to catch (set the node-level kubelet `podPidsLimit` as a cluster-wide backstop). Lifetime: an optional IDLE auto-stop (`auto_stop_after_sec`, measured against `updated_at`, which an active agent keeps resetting), and the shipped default policy sets it to `3600` (from 0.8.6), and a policy value `<= 0` is never reaped (`docs/POLICIES.md`); the reaper skips every such run (the kind quickstart's default policy and the Helm chart's all-on values ship `0` too; the CI example policies set `3600`). Since 0.8.6 there is also an optional absolute cap, `WARDYN_RUN_MAX_AGE` (off by default): the reaper stops a RUNNING run older than it however busy it is, audits `run.max_age.expire`, and on Kubernetes the cap also sets `activeDeadlineSeconds` on the run's pods. With it unset a busy run has no wall-clock bound. **There is no token-spend or model-call budget anywhere** — an agent holding a valid model credential can exhaust it |
+| 13 | **Approval fatigue** | the human approves everything because there are too many prompts | ⛔ **not addressed, by omission.** The platform has no rate limit, no batching guard, no anomaly signal on approval volume, and no separation of duty; see [below](#category-13-verdict). |
+| 14 | **Resource abuse / denial of wallet** | the agent burns money rather than data | 🟡 **partial, and the enforced set differs BY SUBSTRATE.** `WARDYN_RUN_MAX_AGE` is off by default, and there is no token-spend or model-call budget anywhere; see [below](#category-14-verdict). |
 
-**Deliberately excluded**, so the absence reads as a decision: model-weight theft
-(no models are hosted), training-data poisoning (not a runtime-containment
-concern), and agent-to-agent collusion (no multi-agent construct exists — though
-nested-sandbox degradation is where it would first appear).
+- **Deliberately excluded**, so the absence reads as a decision:
+  - model-weight theft (no models are hosted),
+  - training-data poisoning (not a runtime-containment concern),
+  - and agent-to-agent collusion (no multi-agent construct exists — though
+    nested-sandbox degradation is where it would first appear).
 
 **No mapping to STRIDE or ATLAS.** A mapping table is attractive to reviewers and
 would claim coverage of a framework nothing here is tested against.
+
+#### Category 3 verdict
+
+- 🟢 **mitigated, with a published exception list.**
+- Credentials are minted per-run, TTL-capped and injected proxy-side, so the sandbox holds a placeholder.
+- The exceptions — where a credential IS resident — are enumerated in [THREAT-MODEL.md](THREAT-MODEL.md) §5.1a rather than restated here, because a second copy of that list is how it drifts
+
+#### Category 4 verdict
+
+- ⛔ **not addressed as prevention; instrumented.**
+- An agent can encode, split across turns, or encrypt around any scanner.
+- What exists is inspection with **honestly reported coverage** — an uninspectable channel is marked uninspectable rather than counted as clean.
+- Do not describe this as DLP
+
+#### Category 8 verdict
+
+- 🟢 **mitigated, with a published exception list.**
+- Per-run networks with no default route; on Kubernetes a default-deny NetworkPolicy verified by a boot-time canary that refuses to start if it does not hold.
+- The two operator overrides that boot the canary past a failure it would otherwise refuse to start on are enumerated in [THREAT-MODEL.md](THREAT-MODEL.md) §5's "Operator overrides that boot past a fail-closed gate"
+  - rather than restated here,
+  - because a second copy of that list is how it drifts
+
+#### Category 13 verdict
+
+- ⛔ **not addressed, by omission.**
+- The platform leans heavily on human approvals and has no rate limit, no batching guard, no anomaly signal on approval volume, and no separation of duty.
+- This is the failure mode every approval-based control shares, and no code fixes it
+
+#### Category 14 verdict
+
+- 🟡 **partial, and the enforced set differs BY SUBSTRATE.**
+- Docker: CPU, memory and PIDs are requested and the run fails closed BEFORE start if the daemon reports it discarded one (`verifyCapsEnforced`;
+  - `WARDYN_ALLOW_UNENFORCEABLE_CAPS=1` downgrades that to a warning;
+  - environment builds apply the same check but never honour the override) —
+- a DISK cap degrades to uncapped-with-a-warning on a storage driver that cannot take a size quota, by design.
+- Kubernetes: CPU, memory and — since 0.7.2 — DISK.
+- A run's `disk_mib` is now requested as the agent container's `resources.limits[ephemeral-storage]` (with a small fixed 256Mi request,
+  - so scheduling is unchanged apart from a node genuinely short on allocatable ephemeral storage newly rejecting the pod),
+  - and the kubelet bounds the writable layer the clone, `$HOME` and every ephemeral workspace target live on.
+- It is `eviction`, not a quota:
+  - the kubelet measures periodically and KILLS the pod, so the agent never sees `ENOSPC`, in-flight work is lost, and a burst between two measurements can overshoot —
+  - and a deployment with no `storage.ephemeral.default_disk_mib` still leaves node-level eviction as the only bound on a run that asked for nothing.
+- A **pid** cap is still **never requested at all** on Kubernetes —
+  - there is no per-container equivalent in the Pod API, so the substrate logs "requested but not enforced" and creates the pod anyway,
+  - and there is nothing for a fail-closed check to catch (set the node-level kubelet `podPidsLimit` as a cluster-wide backstop).
+- Lifetime: an optional IDLE auto-stop (`auto_stop_after_sec`, measured against `updated_at`, which an active agent keeps resetting),
+  - and the shipped default policy sets it to `3600` (from 0.8.6),
+  - and a policy value `<= 0` is never reaped ([`docs/POLICIES.md`](../docs/POLICIES.md));
+  - the reaper skips every such run (the kind quickstart's default policy and the Helm chart's all-on values ship `0` too; the CI example policies set `3600`).
+- Since 0.8.6 there is also an optional absolute cap, `WARDYN_RUN_MAX_AGE` (off by default):
+  - the reaper stops a RUNNING run older than it however busy it is, audits `run.max_age.expire`, and on Kubernetes the cap also sets `activeDeadlineSeconds` on the run's pods.
+- With it unset a busy run has no wall-clock bound.
+- **There is no token-spend or model-call budget anywhere** — an agent holding a valid model credential can exhaust it
 
 ---
 
@@ -112,13 +155,11 @@ control. Four owners; the assignments that surprise people are the point.
 
 ## 4. Using this alongside the implementation model
 
-**Reviewing:** pick a category, read the verdict, follow it into
-[THREAT-MODEL.md](THREAT-MODEL.md), then into the code.
-
-**Reporting:** a category with no verdict, or a verdict the code does not support,
-is a bug under [SECURITY.md](../SECURITY.md)'s overclaim clause — not a
-documentation nit.
-
-**On the shape of this document:** it carries more `not addressed` and `partial`
-verdicts than `mitigated` ones. That asymmetry is deliberate, and is the reason to
-trust the `mitigated` rows.
+- **Reviewing:** pick a category, read the verdict, follow it into
+  [THREAT-MODEL.md](THREAT-MODEL.md), then into the code.
+- **Reporting:** a category with no verdict, or a verdict the code does not support,
+  is a bug under [SECURITY.md](../SECURITY.md)'s overclaim clause — not a
+  documentation nit.
+- **On the shape of this document:** it carries more `not addressed` and `partial`
+  verdicts than `mitigated` ones. That asymmetry is deliberate, and is the reason to
+  trust the `mitigated` rows.
