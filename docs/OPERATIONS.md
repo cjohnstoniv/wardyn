@@ -2811,10 +2811,8 @@ so a submount under the share's home could be writable inside the sandbox
 - See "[Upgrades](#upgrades)" below.
 
 - **A DENY is never allowed to evaporate with the snapshot.**
-- A group that fell off the 2048-byte cut —
-- or one your directory names with a character the snapshot cannot carry,
-- or a pre-0.7 API token whose completeness was never recorded —
-- has none of its group rows in the scan.
+- A group that fell off the 2048-byte cut — or one your directory names with a character the snapshot cannot carry, or a pre-0.7 API token whose completeness was never recorded —
+  - has none of its group rows in the scan.
 - For an ALLOW that costs the caller access, which is the safe direction.
 - For a DENY it would hand back exactly what the row forbade,
   - so the resolver (`capScan`, [`internal/api/capabilities.go`](../internal/api/capabilities.go)) checks whether **any** group-subject deny row of that kind could cover the value, and refuses when one could —
@@ -2928,7 +2926,7 @@ so a submount under the share's home could be writable inside the sandbox
 - It bounds the PROVIDER, not the repository: admission is URL-prefix matching, not a repo ACL.
 - Inert on a deployment with no provider rows,
   - and on a repository whose host no row CLAIMS
-  - (a row that claims the host and refuses anyway — disabled, or a base path that did not match — still keys the check)
+    - (a row that claims the host and refuses anyway — disabled, or a base path that did not match — still keys the check)
 
 #### `model_provider`
 
