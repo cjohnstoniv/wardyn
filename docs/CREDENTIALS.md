@@ -98,7 +98,7 @@ Two modes place a Git credential inside the sandbox:
 - **`ssh_key`.** The SSH client authenticates inside the sandbox and reads the key from a file. Git's credential helper covers HTTP only, so the proxy has no request to add a credential to ([`internal/broker/broker_mint_kinds.go#Broker.mintSSHKey`](../internal/broker/broker_mint_kinds.go)).
 - The run's start script writes that key at mode `0400`, clones, then wipes it ([`deploy/images/claude-code/agent-run#wipe_ssh_grants`](../deploy/images/claude-code/agent-run)).
 - The grant id stays in `WARDYN_SSH_GRANTS` for the whole run, and the proxy's mint route refuses only brokered GitHub and token-broker grants ([`internal/egress/proxy/local_routes.go#Proxy.handleBrokerMint`](../internal/egress/proxy/local_routes.go)).
-- So a grant that is not approval-gated is wiped after the clone, and re-mintable until the run ends ([`internal/broker/mint_prepare.go#Broker.checkedMintRow`](../internal/broker/mint_prepare.go)).
+- So for a grant that is not approval-gated, the key file is wiped after the clone and the grant is re-mintable until the run ends ([`internal/broker/mint_prepare.go#Broker.checkedMintRow`](../internal/broker/mint_prepare.go)).
 - **`git_pat` with `WARDYN_GIT_PAT_BROKER=off`.** The helper inside the sandbox obtains the token and prints it to Git ([`cmd/wardyn-git-helper/main.go`](../cmd/wardyn-git-helper/main.go)).
 - For a forge the run holds a `github_token` grant for, a co-declared `ssh_key` or `git_pat` grant is refused when the policy is written and withheld at dispatch ([`internal/api/policy.go#validateGrantLaneExclusivity`](../internal/api/policy.go), [`internal/api/runs_dispatch_gitbroker.go#dropBrokeredGrants`](../internal/api/runs_dispatch_gitbroker.go)).
 
