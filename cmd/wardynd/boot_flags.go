@@ -180,12 +180,14 @@ type bootFlags struct {
 	auditRetentionDays     *int
 	auditRetentionAutodrop *bool
 
-	oidcIssuer       *string
-	oidcInternalIss  *string
-	oidcClientID     *string
-	oidcClientSecret *string
-	oidcRedirectURL  *string
-	oidcEmailDomains *string
+	oidcIssuer      *string
+	oidcInternalIss *string
+	// oidcInternalIssPlain is the one opt-out of the plaintext internal issuer refusal: "mesh".
+	oidcInternalIssPlain *string
+	oidcClientID         *string
+	oidcClientSecret     *string
+	oidcRedirectURL      *string
+	oidcEmailDomains     *string
 	// oidcRequireEmailVerified feeds oidc.Config.RequireEmailVerified
 	// (WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED, default false): the email_verified
 	// gate without a domain allowlist.
@@ -459,12 +461,13 @@ func parseBootFlags() *bootFlags {
 		auditRetentionDays:     flagIntEnv("audit-retention-days", "WARDYN_AUDIT_RETENTION_DAYS", 0, "audit retention window in days (default 0, keep forever); the oldest closed monthly partition older than it can then be dropped, attested and digest-checked. A decrease takes effect 30 days after the boot that first saw it; an increase at once"),
 		auditRetentionAutodrop: flagBool("audit-retention-autodrop", "WARDYN_AUDIT_RETENTION_AUTODROP", false, "let the leader sweeper drop eligible oldest audit partitions itself, as the system actor (default false). UNATTESTED: no operator checked an export first"),
 
-		oidcIssuer:       flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL, browser-facing, matches the id_token iss; enables human SSO when set"),
-		oidcInternalIss:  flagEnv("oidc-internal-issuer", "WARDYN_OIDC_INTERNAL_ISSUER", "", "OIDC issuer URL reachable from wardynd for server-side calls, e.g. http://dex:5556; defaults to the public issuer"),
-		oidcClientID:     flagEnv("oidc-client-id", "WARDYN_OIDC_CLIENT_ID", "", "OIDC client id"),
-		oidcClientSecret: flagEnv("oidc-client-secret", "WARDYN_OIDC_CLIENT_SECRET", "", "OIDC client secret"),
-		oidcRedirectURL:  flagEnv("oidc-redirect-url", "WARDYN_OIDC_REDIRECT_URL", "", "OIDC redirect URL (<base>/auth/callback)"),
-		oidcEmailDomains: flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains; requires email_verified=true when set. Empty (default) applies no domain or email_verified check unless -oidc-require-email-verified is set"), oidcExtraScopes: flagEnv("oidc-extra-scopes", "WARDYN_OIDC_EXTRA_SCOPES", "", `comma-separated scopes appended to the fixed "openid profile email" authorization request, e.g. "groups". Validated at boot against the provider's discovery scopes_supported; an unadvertised scope refuses boot by name. Empty (default) leaves the request unchanged`),
+		oidcIssuer:           flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL, browser-facing, matches the id_token iss; enables human SSO when set"),
+		oidcInternalIss:      flagEnv("oidc-internal-issuer", "WARDYN_OIDC_INTERNAL_ISSUER", "", "OIDC issuer URL reachable from wardynd for server-side calls, e.g. http://dex:5556; defaults to the public issuer"),
+		oidcInternalIssPlain: flagEnv("oidc-internal-issuer-plaintext", "WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT", "", `set to "mesh" to allow a plain http:// internal issuer on a non-loopback host while the console has a TLS posture, when a service mesh encrypts that traffic; boot warns. The public issuer has no opt-out`),
+		oidcClientID:         flagEnv("oidc-client-id", "WARDYN_OIDC_CLIENT_ID", "", "OIDC client id"),
+		oidcClientSecret:     flagEnv("oidc-client-secret", "WARDYN_OIDC_CLIENT_SECRET", "", "OIDC client secret"),
+		oidcRedirectURL:      flagEnv("oidc-redirect-url", "WARDYN_OIDC_REDIRECT_URL", "", "OIDC redirect URL (<base>/auth/callback)"),
+		oidcEmailDomains:     flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains; requires email_verified=true when set. Empty (default) applies no domain or email_verified check unless -oidc-require-email-verified is set"), oidcExtraScopes: flagEnv("oidc-extra-scopes", "WARDYN_OIDC_EXTRA_SCOPES", "", `comma-separated scopes appended to the fixed "openid profile email" authorization request, e.g. "groups". Validated at boot against the provider's discovery scopes_supported; an unadvertised scope refuses boot by name. Empty (default) leaves the request unchanged`),
 		oidcRequireEmailVerified: flagBool("oidc-require-email-verified", "WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED", false, "refuse a sign-in whose id_token has no email_verified claim or has email_verified=false, without needing -oidc-email-domains; an absent claim counts as unverified, so an IdP that never sends it (Entra) locks every human out (default false)"),
 		oidcOperatorEmails:       flagEnv("oidc-operator-emails", "WARDYN_OIDC_OPERATOR_EMAILS", "", "comma-separated operator (admin) emails; a signed-in human not listed is a standard user. Empty with OIDC configured is refused at boot unless -allow-oidc-no-operator-list is set"),
 		// Refused by default (validateOperatorPosture) when OIDC SSO is configured

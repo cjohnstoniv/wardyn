@@ -77,8 +77,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### Removed in 0.9
 
 - 0.9 stops reading six aliases, each now spelled with `USER` in place of `MEMBER`: `WARDYN_MEMBER_MODE` (now `WARDYN_USER_DESKTOP`), `WARDYN_MEMBER_WORKSPACE_ROOTS`, `WARDYN_MEMBER_WORKSPACE_ROOTS_MAP`, `WARDYN_MEMBER_WRITABLE_ROOTS`, `WARDYN_MEMBER_WRITABLE_DENY` and `WARDYN_ALLOW_MEMBER_ENV_SECRET`.
-- A leftover one refuses boot, naming its replacement: an ignored deny list would widen the writable set. `wardyn setup status --pre-upgrade` lists them.
-- A `member` role value and a plain `http://` issuer are refused at boot: see [OPERATIONS.md](OPERATIONS.md#upgrades).
+- A leftover one refuses boot, naming its replacement.
+- So do a `member` role and a plain `http://` issuer: see [OPERATIONS.md](OPERATIONS.md#upgrades).
 
 ## `wardynd` (control plane)
 
@@ -204,8 +204,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_TLS_KEY` 🔒 | string | (unset) | TLS private key PEM path (flag `-tls-key`). Read once at boot; each read refuses a group- or world-writable file. [Details](#wardyn_tls_key) |
 | `WARDYN_TLS_TERMINATED` | bool | `false` | TLS terminates upstream; mark cookies Secure and give the console's `__Host-` names (flag `-tls-terminated`) |
 | `WARDYN_LISTEN_ALLOW_PLAINTEXT` | bool | `false` | Override: allow boot on a specific non-loopback bind serving plain HTTP with no TLS posture configured, normally refused (`refusePlaintextListen`, [`cmd/wardynd/main.go`](../cmd/wardynd/main.go)) (flag `-allow-plaintext-listen`). [Details](#wardyn_listen_allow_plaintext) |
-| `WARDYN_OIDC_ISSUER` | string | (unset) | OIDC public issuer URL; enables human SSO (flag `-oidc-issuer`). An `http://` issuer on a non-loopback host is a **boot refusal** since 0.9 (a warning before) — see `WARDYN_OIDC_INTERNAL_ISSUER` for when it fires |
+| `WARDYN_OIDC_ISSUER` | string | (unset) | OIDC public issuer URL; enables human SSO (flag `-oidc-issuer`). A non-loopback `http://` issuer is a **boot refusal** since 0.9 when the console has a TLS posture; no opt-out (see `WARDYN_OIDC_INTERNAL_ISSUER`) |
 | `WARDYN_OIDC_INTERNAL_ISSUER` | string | (unset) | Server-reachable OIDC issuer (flag `-oidc-internal-issuer`). An `http://` URL whose host is not loopback is a **boot refusal** once OIDC is configured and the console has a TLS posture (`plaintextIssuerRefusal`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)); a warning through 0.8.x. [Details](#wardyn_oidc_internal_issuer) |
+| `WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT` | string | (unset) | `mesh` lets a plain `http://` internal issuer boot, with a warning, when a service mesh encrypts it (flag `-oidc-internal-issuer-plaintext`); any other value refuses boot. [Details](#wardyn_oidc_internal_issuer) |
 | `WARDYN_OIDC_CLIENT_ID` | string | (unset) | OIDC client id (flag `-oidc-client-id`). An Azure DevOps row in `minted_pat` mode must name this client, and the issuer's tenant, as its own ([docs/AZURE-DEVOPS.md](AZURE-DEVOPS.md)) |
 | `WARDYN_OIDC_CLIENT_SECRET` 🔒 | string | (unset) | OIDC client secret (flag `-oidc-client-secret`). **Optional**: leaving this unset registers a **public client**. **Required for Azure DevOps per-run tokens:** a `minted_pat` Azure DevOps row is refused when the console has no secret. [Details](#wardyn_oidc_client_secret) |
 | `WARDYN_OIDC_REDIRECT_URL` | string | (unset) | OIDC redirect URL, the URL the **browser** is sent back to; the compose stack defaults it to `http://localhost:${WARDYN_UP_PORT:-8080}/auth/callback` (flag `-oidc-redirect-url`). [Details](#wardyn_oidc_redirect_url) |
@@ -973,8 +974,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_OIDC_INTERNAL_ISSUER`
 
 - Server-reachable OIDC issuer (flag `-oidc-internal-issuer`).
-- Like `WARDYN_OIDC_ISSUER`, an `http://` URL whose host is not loopback is a **boot refusal** (a warning through 0.8.x) once OIDC is configured (`WARDYN_OIDC_ISSUER` set) and the console has a TLS posture
-- TLS served directly or `WARDYN_TLS_TERMINATED`: discovery, keys and the token exchange would cross the network unencrypted.
+- A non-loopback `http://` URL is a **boot refusal** (a warning through 0.8.x) once `WARDYN_OIDC_ISSUER` is set and the console has a TLS posture (TLS served directly, or `WARDYN_TLS_TERMINATED`).
+- `WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=mesh` opts out for a service mesh that encrypts the hop, with a boot warning; any other value refuses boot. The public issuer has none.
 - The Compose demo's plaintext console and its bundled `http://dex:5556` are exempt (`plaintextIssuerRefusal`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)).
 
 ### `WARDYN_OIDC_CLIENT_SECRET`

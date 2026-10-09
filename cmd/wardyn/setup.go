@@ -174,11 +174,12 @@ func leftoverMemberRoles(roleMap, defaultRole string) []string {
 // preUpgradeMemberCheck is the 0.9 upgrade's pre-flight: 0.9 refuses to boot on a role setting that
 // still says "member" and on a removed WARDYN_MEMBER_* variable, so it lists them while the old server
 // is still running. A server that holds one cannot report it after the upgrade, which is why this reads
-// the settings and this environment, not the server.
+// the settings and this shell's environment, not the server or the deployment's own env file.
 func preUpgradeMemberCheck(w io.Writer, roleMap, defaultRole string) error {
 	left := append(leftoverMemberRoles(roleMap, defaultRole), cliutil.RemovedEnvLeftovers(os.Environ())...)
 	if len(left) == 0 {
-		fmt.Fprintln(w, "Wardyn 0.9 pre-upgrade check: no leftover \"member\" role or removed WARDYN_MEMBER_* variable.")
+		fmt.Fprintln(w, "Wardyn 0.9 pre-upgrade check: no leftover \"member\" role or removed WARDYN_MEMBER_* variable in this shell's environment or the settings given.")
+		fmt.Fprintln(w, "  A chart or compose deployment keeps its settings elsewhere: load its env file first (set -a; . FILE; set +a), or check its values.")
 		return nil
 	}
 	fmt.Fprintf(w, "Wardyn 0.9 pre-upgrade check: %d leftover setting(s) — 0.9 refuses to boot on them:\n", len(left))

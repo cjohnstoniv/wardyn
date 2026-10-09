@@ -57,6 +57,11 @@ func TestSetupStatusPreUpgradePassesACleanConfig(t *testing.T) {
 	if err != nil || !strings.Contains(out, "no leftover") {
 		t.Fatalf("clean config: err = %v, out = %s", err, out)
 	}
+	for _, want := range []string{"this shell's environment", "set -a; . FILE; set +a"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("a clean result must say what it did not read; output lacks %q:\n%s", want, out)
+		}
+	}
 }
 
 func TestSetupStatusPreUpgradeReadsTheEnvironment(t *testing.T) {

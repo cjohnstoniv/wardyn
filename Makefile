@@ -1444,6 +1444,16 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	@# that collides with the imported stack only fails when Compose RESOLVES it —
 	@# which no daemon-free gate did before, so it broke in CI first (0.6.1).
 	docker compose --env-file deploy/desktop/wardyn.env.example -f deploy/desktop/docker-compose.yaml config >/dev/null
+	@# A removed WARDYN_MEMBER_* name left in an m' envelope must still reach wardynd, whose boot
+	@# refusal (refuseRemovedEnv) is the only thing that stops a dropped deny list from widening
+	@# the writable set; compose forwards only the names its environment: list spells out.
+	@envf=$$(mktemp); \
+	sed -E -e 's/^WARDYN_USER_DESKTOP=/WARDYN_MEMBER_MODE=/' -e 's/^WARDYN_USER_(WORKSPACE_ROOTS|WORKSPACE_ROOTS_MAP|WRITABLE_ROOTS|WRITABLE_DENY)=/WARDYN_MEMBER_\1=/' deploy/desktop/wardyn.env.m-prime.example > "$$envf"; \
+	grep -q '^WARDYN_MEMBER_WRITABLE_DENY=/' "$$envf" || { rm -f "$$envf"; echo "compose: the m-prime envelope no longer sets WARDYN_USER_WRITABLE_DENY, so the leftover-name check below proves nothing"; exit 1; }; \
+	out=$$(env -u WARDYN_USER_DESKTOP -u WARDYN_USER_WORKSPACE_ROOTS -u WARDYN_USER_WORKSPACE_ROOTS_MAP -u WARDYN_USER_WRITABLE_ROOTS -u WARDYN_USER_WRITABLE_DENY docker compose --env-file "$$envf" -f deploy/desktop/docker-compose.yaml config 2>&1); rm -f "$$envf"; \
+	for k in WARDYN_MEMBER_MODE WARDYN_MEMBER_WORKSPACE_ROOTS WARDYN_MEMBER_WRITABLE_ROOTS WARDYN_MEMBER_WRITABLE_DENY; do \
+		echo "$$out" | grep -qE "^ *$$k: .+" || { echo "compose: a leftover $$k in an envelope does not reach wardynd, so its boot refusal never sees it"; exit 1; }; \
+	done
 	@# R5 F022: the SSO callback must FOLLOW the published port and honour an
 	@# explicit override, or `WARDYN_UP_PORT=8090 --profile sso` sends the browser
 	@# to a port nothing serves and the documented WARDYN_OIDC_REDIRECT_URL is inert.

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/directory"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -445,7 +446,17 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateOIDCSessionTTL(*f.oidcSessionTTL); err != nil {
 		return err
 	}
-	if err := plaintextIssuerRefusal(*f.oidcIssuer, *f.oidcInternalIss, posture); err != nil {
+	if *f.oidcIssuer != "" {
+		// The same parse buildOptionalFeatures repeats after migrations: an operator who skipped
+		// `wardyn setup status --pre-upgrade` must be refused before the database is migrated.
+		if _, err := oidc.ParseRoleMap(flagValue(f.oidcRoleMap)); err != nil {
+			return fmt.Errorf("parse WARDYN_OIDC_ROLE_MAP: %w", err)
+		}
+		if _, err := parseDefaultRole(flagValue(f.oidcDefaultRole)); err != nil {
+			return err
+		}
+	}
+	if err := plaintextIssuerRefusal(*f.oidcIssuer, *f.oidcInternalIss, flagValue(f.oidcInternalIssPlain), posture); err != nil {
 		return err
 	}
 	if _, err := scimConfig(f, posture); err != nil {
@@ -455,6 +466,14 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 		slog.Warn(w)
 	}
 	return nil
+}
+
+// flagValue is *p, or "" for a flag a caller did not declare.
+func flagValue(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // refuseRemovedEnv refuses boot on a variable 0.9 stopped reading, naming it and its replacement. An
@@ -532,38 +551,69 @@ func validateOIDCSessionTTL(ttl time.Duration) error {
 // so loudly about, returned rather than logged so a test can pin each one.
 func bootPostureWarnings(f *bootFlags, posture tlsPosture) []string {
 	var out []string
+	if w := plaintextInternalMeshWarning(*f.oidcIssuer, *f.oidcInternalIss, flagValue(f.oidcInternalIssPlain), posture); w != "" {
+		out = append(out, w)
+	}
 	if w := uiGatewaySharesConsoleHostWarning(*f.uiListen, *f.uiAdvertise, *f.uiOriginTemplate, *f.oidcRedirectURL, posture); w != "" {
 		out = append(out, w)
 	}
 	return out
 }
 
-// plaintextIssuerRefusal refuses each OIDC issuer URL that is http:// on a host
-// that is not loopback (#156; a warning through 0.8.x, a refusal since 0.9).
-// The Compose demo is exempt: it serves the console without TLS (no secure
-// cookies) and reaches its bundled Dex at http://dex:5556. Any deployment with
-// a TLS posture is not the demo, and its discovery document, JWKS and token
-// exchange would cross the network in the clear — or, for the public issuer,
-// send the browser's sign-in there. An in-cluster IdP behind a mesh serves
-// https:// through it; there is no override.
-func plaintextIssuerRefusal(issuer, internalIssuer string, posture tlsPosture) error {
-	if !posture.secureCookies || strings.TrimSpace(issuer) == "" {
-		return nil // OIDC is configured by the public issuer; an internal one alone is dead config
+// internalIssuerMeshOptOut is the one accepted value of WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT.
+const internalIssuerMeshOptOut = "mesh"
+
+// plaintextIssuerURL reports whether raw is an http:// URL on a host that is not loopback.
+func plaintextIssuerURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	return err == nil && strings.EqualFold(u.Scheme, "http") && !urlHostIsLoopback(u.Hostname())
+}
+
+// plaintextIssuerGate is the posture the plaintext-issuer rule applies under: OIDC is configured by the
+// public issuer (an internal one alone is dead config) and the console has secure cookies. The Compose
+// demo serves the console without TLS and reaches its bundled Dex at http://dex:5556, so it is exempt.
+func plaintextIssuerGate(issuer string, posture tlsPosture) bool {
+	return posture.secureCookies && strings.TrimSpace(issuer) != ""
+}
+
+// plaintextIssuerRefusal refuses each OIDC issuer URL that is http:// on a host that is not loopback
+// (#156; a warning through 0.8.x, a refusal since 0.9, #1970). Under a TLS posture its discovery
+// document, JWKS and token exchange would cross the network in the clear — or, for the public issuer,
+// send the browser's sign-in there. The public issuer has no opt-out. The internal issuer has one:
+// optOut "mesh" says a service mesh encrypts that hop, and boot warns instead (see
+// plaintextInternalMeshWarning). Any other non-empty optOut is refused, naming the accepted value.
+func plaintextIssuerRefusal(issuer, internalIssuer, optOut string, posture tlsPosture) error {
+	if optOut != "" && optOut != internalIssuerMeshOptOut {
+		return fmt.Errorf("refusing to start: WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT is %q; the only accepted value is %q", optOut, internalIssuerMeshOptOut)
+	}
+	if !plaintextIssuerGate(issuer, posture) {
+		return nil
 	}
 	var bad []string
-	for _, c := range []struct{ env, raw string }{
-		{"WARDYN_OIDC_ISSUER", issuer}, {"WARDYN_OIDC_INTERNAL_ISSUER", internalIssuer},
-	} {
-		if u, err := url.Parse(strings.TrimSpace(c.raw)); err == nil && strings.EqualFold(u.Scheme, "http") && !urlHostIsLoopback(u.Hostname()) {
-			bad = append(bad, fmt.Sprintf("%s %q", c.env, c.raw))
-		}
+	if plaintextIssuerURL(issuer) {
+		bad = append(bad, fmt.Sprintf("WARDYN_OIDC_ISSUER %q", issuer))
+	}
+	if optOut == "" && plaintextIssuerURL(internalIssuer) {
+		bad = append(bad, fmt.Sprintf("WARDYN_OIDC_INTERNAL_ISSUER %q", internalIssuer))
 	}
 	if len(bad) == 0 {
 		return nil
 	}
 	return fmt.Errorf("refusing to start: %s is plain http:// on a host that is not loopback while the console is served over TLS — "+
 		"sign-in discovery, keys and the token exchange would cross the network unencrypted; use an https:// issuer "+
-		"(plain http:// is for the Compose demo's bundled Dex only; a 0.8.x warning became this refusal in 0.9)", strings.Join(bad, " and "))
+		"(plain http:// is for the Compose demo's bundled Dex only; a 0.8.x warning became this refusal in 0.9). "+
+		"A service mesh that encrypts the INTERNAL issuer's traffic may set WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=%s; the public issuer has no opt-out",
+		strings.Join(bad, " and "), internalIssuerMeshOptOut)
+}
+
+// plaintextInternalMeshWarning is the boot posture warning while the mesh opt-out is carrying a plain
+// http:// internal issuer, "" when it is not.
+func plaintextInternalMeshWarning(issuer, internalIssuer, optOut string, posture tlsPosture) string {
+	if optOut != internalIssuerMeshOptOut || !plaintextIssuerGate(issuer, posture) || !plaintextIssuerURL(internalIssuer) {
+		return ""
+	}
+	return fmt.Sprintf("wardynd: WARDYN_OIDC_INTERNAL_ISSUER %q is plain http:// and WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=%s says traffic is encrypted by a service mesh; "+
+		"wardynd cannot verify that, so a mesh that does not encrypt this hop leaves sign-in discovery, keys and the token exchange in the clear", internalIssuer, internalIssuerMeshOptOut)
 }
 
 // urlHostIsLoopback reports whether a URL's hostname is "localhost" or a

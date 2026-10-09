@@ -293,6 +293,14 @@ services:
       WARDYN_USER_WORKSPACE_ROOTS_MAP: "${WARDYN_USER_WORKSPACE_ROOTS_MAP:-}"
       WARDYN_USER_WRITABLE_ROOTS: "${WARDYN_USER_WRITABLE_ROOTS:-}"
       WARDYN_USER_WRITABLE_DENY: "${WARDYN_USER_WRITABLE_DENY:-}"
+      # Removed in 0.9 and read by nothing but wardynd's boot refusal (refuseRemovedEnv):
+      # forwarded, empty by default, only so a leftover in .env or an MDM envelope
+      # reaches wardynd and stops the boot instead of being dropped here.
+      WARDYN_MEMBER_MODE: "${WARDYN_MEMBER_MODE:-}"
+      WARDYN_MEMBER_WORKSPACE_ROOTS: "${WARDYN_MEMBER_WORKSPACE_ROOTS:-}"
+      WARDYN_MEMBER_WORKSPACE_ROOTS_MAP: "${WARDYN_MEMBER_WORKSPACE_ROOTS_MAP:-}"
+      WARDYN_MEMBER_WRITABLE_ROOTS: "${WARDYN_MEMBER_WRITABLE_ROOTS:-}"
+      WARDYN_MEMBER_WRITABLE_DENY: "${WARDYN_MEMBER_WRITABLE_DENY:-}"
       # HYBRID BOOT (issue #100): the org control-plane settings. Unset (the
       # defaults) is no hybrid posture at all — see docs/ENV.md and
       # validateHybridPosture (cmd/wardynd/boot_posture.go).
