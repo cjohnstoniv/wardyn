@@ -1,6 +1,6 @@
-# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words; ARCHITECTURE.md adds 218 words for 9 cell-expansion headings (20) and summaries (198), docs/DATA-FLOW.md adds 48 for 2 headings (6) and summaries (42), threatmodel/AGENT-THREAT-MODEL.md adds 140 for 5 headings (15) and summaries (125).
-ARCHITECTURE.md=5176 share=35
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words; ARCHITECTURE.md adds 280 words for 11 cell-expansion headings (24) and summaries (256), docs/DATA-FLOW.md adds 48 for 2 headings (6) and summaries (42), threatmodel/AGENT-THREAT-MODEL.md adds 181 for 6 headings (18) and summaries (163).
+ARCHITECTURE.md=5238 share=35
 SECURITY.md=999 share=35
 PROVENANCE.md=798 share=35
 docs/DATA-FLOW.md=1200 share=35
-threatmodel/AGENT-THREAT-MODEL.md=2233 share=35
+threatmodel/AGENT-THREAT-MODEL.md=2274 share=35

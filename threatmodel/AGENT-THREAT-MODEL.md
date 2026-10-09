@@ -51,13 +51,13 @@ this space is an axis substitution.
 | # | Category | What it is | Wardyn verdict |
 |---|---|---|---|
 | 1 | **Prompt injection / instruction hijack** | untrusted content redirects the agent's goals | ⛔ **not addressed, by design.** Nothing inspects inbound prompts. This is treated as an assumed precondition — the platform contains the *consequences* rather than preventing the hijack. Outbound content scanning exists (`internal/contentscan`) and is a different control |
-| 2 | **Tool / capability misuse** | the agent invokes a legitimate tool for an illegitimate end | 🟡 **partial.** Tool calls can route to a human approval that fails closed (`cmd/wardyn-toolgate`). Bypass class: the gate is **in-sandbox and cooperative** — an agent that does not call it is not gated; it covers one harness; and that harness auto-approves its own read-only-safe command class without consulting it. The out-of-band layer that would be a boundary is not built |
+| 2 | **Tool / capability misuse** | the agent invokes a legitimate tool for an illegitimate end | 🟡 **partial.** The gate is **in-sandbox and cooperative** — an agent that does not call it is not gated — and the out-of-band layer that would be a boundary is not built; see [below](#category-2-verdict). |
 | 3 | **Credential exfiltration** | the agent obtains a secret and moves it out | 🟢 **mitigated, with a published exception list.** The sandbox holds a placeholder, and the exceptions are enumerated in [THREAT-MODEL.md](THREAT-MODEL.md) §5.1a; see [below](#category-3-verdict). |
 | 4 | **Data exfiltration via the model channel** | data leaves inside a legitimate model request | ⛔ **not addressed as prevention; instrumented.** An agent can encode, split across turns, or encrypt around any scanner; do not describe this as DLP, see [below](#category-4-verdict). |
 | 5 | **Data exfiltration via other egress** | data leaves over an ordinary network call | 🟡 **mitigated for unlisted destinations; partial for allowlisted ones.** Default-deny plus first-use approval. Bypass class: a permitted destination that is also attacker-reachable (dual-use hosts, DNS through the permitted resolver) |
 | 6 | **Model-traffic interception** | someone reads the model channel — including the platform itself | 🟡 **partial, by design, both directions.** TLS interception of the model channel is opt-in per run and its CA key stays in proxy memory. Teams need a neutral name for "we MITM our own agents" or each invents one |
 | 7 | **Sandbox escape** | code leaves the isolation boundary | 🟢 **mitigated to the declared class, honestly bounded.** Each confinement class documents what it does **not** stop, and a demanded class that cannot be enforced fails closed rather than silently downgrading |
-| 8 | **Lateral movement** | one run reaches another, or the host | 🟢 **mitigated, with a published exception list.** Per-run networks with no default route; on Kubernetes a default-deny NetworkPolicy verified by a boot-time canary; see [below](#category-8-verdict). |
+| 8 | **Lateral movement** | one run reaches another, or the host | 🟢 **mitigated, with a published exception list.** Per-run networks with no default route; on Kubernetes a default-deny NetworkPolicy verified by a boot-time canary, with two operator overrides; see [below](#category-8-verdict). |
 | 9a | **Supply chain — the platform's own artifacts** | you pull a tampered platform image | 🟢 **mitigated.** Keyless signing, SBOMs scanned from the image rather than the source tree, build provenance |
 | 9b | **Supply chain — content executing inside a run** | a malicious package's install script runs | 🟡 **partial** — bypass class: any code that executes inside the sandbox. Nothing scans it, so it collapses into category 1 and is answered by containment, not prevention |
 | 9c | **Supply chain — the image the sandbox is built from** | a hostile base image | 🟡 **partial — the weakest of the three.** A base carrying build-time triggers is refused, but wrapping is not vetting: base content is unscanned, and build steps run on the host **before any confinement class exists** |
@@ -75,6 +75,16 @@ this space is an axis substitution.
 
 **No mapping to STRIDE or ATLAS.** A mapping table is attractive to reviewers and
 would claim coverage of a framework nothing here is tested against.
+
+#### Category 2 verdict
+
+- 🟡 **partial.**
+- Tool calls can route to a human approval that fails closed (`cmd/wardyn-toolgate`).
+- Bypass class: the gate is **in-sandbox and cooperative** —
+  - an agent that does not call it is not gated;
+  - it covers one harness;
+  - and that harness auto-approves its own read-only-safe command class without consulting it.
+- The out-of-band layer that would be a boundary is not built
 
 #### Category 3 verdict
 

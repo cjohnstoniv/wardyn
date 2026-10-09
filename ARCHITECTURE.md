@@ -13,7 +13,7 @@
 | Binary | Role |
 |---|---|
 | `wardynd` | Control plane: REST API, embedded web UI (served by the same process from a built `ui/dist` — `WARDYN_UI_DIR` — not compiled in via `go:embed`), policy engine, approval FSM, token broker, audit ingest. Postgres is the ONLY required dependency. |
-| `wardyn-runner` *(dev-only)* | Data plane. The driver that ships is the **library** `internal/runner/docker`, compiled into `wardynd` (blank import, `-tags docker`) **[shipped]**; the `k8s/` driver (`internal/runner/k8s`, `-tags k8s`) is **[shipped — alpha/experimental]**, conformance-gated on **both** the Docker and Kubernetes targets (see the "Parity rule" below), but not yet at Docker parity (`local_dir` mounts, BYOI/devcontainer builds, a per-pod PIDs limit, and a ground-truth correlator are the open gaps — see [ROADMAP.md](ROADMAP.md)). `cmd/wardyn-runner` is only a standalone harness for manual/conformance testing — no Dockerfile, Makefile target, script or CI job builds it. |
+| `wardyn-runner` *(dev-only)* | Data plane; the Docker driver ships as the library `internal/runner/docker` compiled into `wardynd` **[shipped]**, and the `k8s/` driver is **[shipped — alpha/experimental]** and not yet at Docker parity; see [below](#wardyn-runner-role). |
 | `wardyn-proxy` | Per-workspace L2 egress sidecar: default-deny domain allowlist, method rules, first-use approval, decision logs, proxy-side credential injection; see [below](#wardyn-proxy-role). |
 | `wardyn-rec` | Per-workspace PTY session recorder (execs `asciinema`; GPL subprocess, never linked). |
 | `wardyn-tetragon-ingest` | Host-scoped eBPF/Tetragon ground-truth ingest sidecar: tails Tetragon's JSON export, correlates each `kernel.*` event to a run via the `wardyn.run-id` container label, and POSTs to `POST /api/v1/internal/groundtruth`. Opt-in (`groundtruth` profile). |
@@ -58,6 +58,14 @@ flowchart LR
   - `script-src 'self' 'wasm-unsafe-eval'` (the recording replay player's WASM VT core; WASM compilation only, never JS `eval`)
   - and `font-src 'self' data:`.
 - The threat model prices all of them against the admin token's at-rest posture — [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md) § "Console auth token storage", which quotes the served header in full.
+
+### `wardyn-runner`: role
+
+- Data plane.
+- The driver that ships is the **library** `internal/runner/docker`, compiled into `wardynd` (blank import, `-tags docker`) **[shipped]**;
+  - the `k8s/` driver (`internal/runner/k8s`, `-tags k8s`) is **[shipped — alpha/experimental]**, conformance-gated on **both** the Docker and Kubernetes targets (see the "Parity rule" below),
+  - but not yet at Docker parity (`local_dir` mounts, BYOI/devcontainer builds, a per-pod PIDs limit, and a ground-truth correlator are the open gaps — see [ROADMAP.md](ROADMAP.md)).
+- `cmd/wardyn-runner` is only a standalone harness for manual/conformance testing — no Dockerfile, Makefile target, script or CI job builds it.
 
 ### `wardyn-proxy`: role
 
@@ -343,8 +351,8 @@ stateDiagram-v2
      lands in env/disk/args; it reaches `git` stdout-only via `wardyn-git-helper`.
      The helper's per-run caller-auth gate value is a separate, low-value
      authentication nonce, deliberately a 0400 agent-owned file + descendant-scoped
-     env, that gates — and is not — the credential;
-     - see `cmd/wardyn-git-helper`.)*
+     env, that gates — and is not — the credential;*
+     - *see `cmd/wardyn-git-helper`.)*
 2. **Approval mints the credential.**
    - `CredentialGrant` = eligible;
      the mint happens only in the SAME Postgres transaction that verifies
@@ -480,8 +488,8 @@ clone is decided by grant kind and host, and none can cover another's set:
 
 | Grant / transport | Mechanism | Where the credential lives |
 |---|---|---|
-| `github_token`, granted repo, HTTPS | **proxy git broker** — `git`'s `url.<broker>.insteadOf` rewrites the remote to `http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>` ([`internal/egress/proxy/git_broker.go`](internal/egress/proxy/git_broker.go)) | proxy memory only; dispatch subtracts + denies the broker-managed GitHub hosts for any run with git grants (`confineGitBrokerEgress`), so an un-brokered GitHub URL has no route **by name** — these are name-keyed denies, so under `allow_all_egress` a raw-IP CONNECT is a different key and is not bound by them (bounded in practice because no GitHub credential reaches a brokered sandbox). The repo is the unit of trust. Pushes are confined to `refs/heads/wardyn/<run-id>/*` by default — `agent-run` checks the clone out onto `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts a proxy out |
-| `git_pat` (GitLab, or a GitHub PAT on a forge the run is NOT brokered for), HTTPS | **proxy PAT broker** (`WARDYN_GIT_PAT_BROKER=on`, the default since 0.7) — the proxy terminates the request, mints server-side and sets Basic auth on the OUTBOUND leg; see [below](#git_pat-mechanism). | proxy memory only on the default; helper stdout → `git` under `off`, where the PAT is resident for the run (§5.1a); **not available for the SAME forge as a `github_token` grant**; see [below](#git_pat-credential). |
+| `github_token`, granted repo, HTTPS | **proxy git broker** — `git`'s `url.<broker>.insteadOf` rewrites the remote to `http://wardyn-proxy:3128/wardyn/gh/<org>/<repo>` ([`internal/egress/proxy/git_broker.go`](internal/egress/proxy/git_broker.go)) | proxy memory only; an un-brokered GitHub URL has no route **by name**, and `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts a proxy out of the push-branch confinement; see [below](#github_token-credential). |
+| `git_pat` (GitLab, or a GitHub PAT on a forge the run is NOT brokered for), HTTPS | **proxy PAT broker** (`WARDYN_GIT_PAT_BROKER=on`, the default since 0.7) — the proxy terminates the request, mints server-side and sets Basic auth on the OUTBOUND leg; see [below](#git_pat-mechanism). | proxy memory only on the default; helper stdout → `git` under `off`, where the PAT is resident for the run (§5.1a); not least-privilege either way; **not available for the SAME forge as a `github_token` grant**; see [below](#git_pat-credential). |
 | `ssh_key`, any host | **neither** — `agent-run` writes a 0400 key for the clone and shreds it after | resident file, wiped post-clone (documented exception, invariant 1); **not available at all for the SAME forge as a `github_token` grant**; see [below](#ssh_key-credential). |
 
 - **Azure DevOps is not a fourth grant kind.**
@@ -538,6 +546,14 @@ clone is decided by grant kind and host, and none can cover another's set:
       brokered run a second push path the receive-pack parser cannot read — see
       [docs/POLICIES.md](docs/POLICIES.md) "The `ssh_key` and `git_pat` lanes are
       closed too".)
+
+### `github_token`: credential
+
+- proxy memory only; dispatch subtracts + denies the broker-managed GitHub hosts for any run with git grants (`confineGitBrokerEgress`), so an un-brokered GitHub URL has no route **by name** —
+  - these are name-keyed denies, so under `allow_all_egress` a raw-IP CONNECT is a different key and is not bound by them
+  - (bounded in practice because no GitHub credential reaches a brokered sandbox).
+- The repo is the unit of trust.
+- Pushes are confined to `refs/heads/wardyn/<run-id>/*` by default — `agent-run` checks the clone out onto `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts a proxy out
 
 ### `git_pat`: mechanism
 
