@@ -325,6 +325,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
   const clientGo = ["client.go", "runs_create.go"].map((f) => readFileSync(join(root, "pkg/client", f), "utf8")).join("\n");
   const typesGo = readFileSync(join(root, "internal/types/types.go"), "utf8");
   const runsTs = readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8");
+  const runCreateTs = readFileSync(join(root, "ui/src/app/lib/types/run-create.ts"), "utf8");
 
   it("every CreateRunRequest json tag is forwarded by runWireBody or on the UI-never-sends list", async () => {
     const goTags = goJSONTags(clientGo, "CreateRunRequest");
@@ -398,7 +399,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
 
   it("CreateRunInput (the wizard-facing type) declares no key the Go DTO lacks", () => {
     const goTags = new Set(goJSONTags(clientGo, "CreateRunRequest"));
-    const tsKeys = tsInterfaceKeys(runsTs, "CreateRunInput");
+    const tsKeys = tsInterfaceKeys(runCreateTs, "CreateRunInput");
     expect(tsKeys.filter((k) => !goTags.has(k))).toEqual([]);
   });
 

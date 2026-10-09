@@ -1,14 +1,14 @@
 # 0.8.9 mock review packets
 
-The three written packets are reviewable. **Their design prototypes are not created or verified, and owner approval is pending.** Component synchronization of the console design-system project and the driveable prototypes remain outstanding. No console rendering is authorized by these documents alone.
+The three written packets are reviewable. Design prototypes now exist and the owner approved all three (2026-10-08): M-F at prototype version `1791421176-82e4`, M-O at `1791419190-5f01`, and M-R at Version 7 (`1791427781-730a`), which is what shipped in 0.8.9. Each approval covers only its own packet and only what that version shows. M-O's refused-viewer server answer stayed open at approval. For M-R, the Access rows are approved as direction only (their rules are superseded by the owner's 2026-10-07 component decisions), and any backend component design is not approved.
 
 | Packet | Independent scope | Status |
 |---|---|---|
-| [M-F](M-F.md) | #1901 saved/default extra-workspace refusal; #1906 terminal link token; #1908 sign-in reconciliation | Written packet reviewed; prototype pending; owner-unapproved |
-| [M-R](M-R.md) | Four New Run panels, full rail, shared PolicyDocument, YAML-default editing, existing Access controls and strict-parser diagnostic states | Parser-diagnostic and field-semantics amendment awaits written review; prototype pending; owner-unapproved |
-| [M-O](M-O.md) | #1831 honest recording-recovered output, explicit HTTP-200 gaps and genuine refusal precedence | Written correction reviewed; prototype pending; owner-unapproved |
+| [M-F](M-F.md) | #1901 saved/default extra-workspace refusal; #1906 terminal link token; #1908 sign-in reconciliation | Owner-approved 2026-10-08 at prototype version `1791421176-82e4` |
+| [M-R](M-R.md) | Four New Run panels, full rail, shared PolicyDocument, YAML-default editing, existing Access controls and strict-parser diagnostic states | Owner-approved 2026-10-08 at prototype Version 7 (`1791427781-730a`); shipped in 0.8.9 |
+| [M-O](M-O.md) | #1831 honest recording-recovered output, explicit HTTP-200 gaps and genuine refusal precedence | Owner-approved 2026-10-08 at prototype version `1791419190-5f01`; refused-viewer answer open |
 
-Each packet has the established five parts: what it unblocks, surfaces, exact strings and homes, states with keyboard/screen-reader behavior, and decisions. Approve them independently only after the real prototype URL/revision and design-system verification are recorded. Nonvisual work proceeds meanwhile.
+Each packet has the established five parts: what it unblocks, surfaces, exact strings and homes, states with keyboard/screen-reader behavior, and decisions. Each was approved independently against its recorded prototype revision.
 
 Supporting documents:
 
@@ -17,9 +17,9 @@ Supporting documents:
 
 The source baseline is `7b08fd722ca4dcfd9d2d59e6f1cb8ecab54d8dcf`. No source or rendering file was changed for these packets.
 
-The prototype must be built on the console design-system project through the process in `docs/design/SYNC.md`: sync and grade the current components, create driveable state/focus prototypes, then record the owner's decision. A Markdown packet or a local cached anchor is not remote verification.
+The prototypes were built on the console design-system project through the process in `docs/design/SYNC.md`: sync and grade the current components, create driveable state/focus prototypes, then record the owner's decision. A Markdown packet or a local cached anchor is not remote verification.
 
-Browser, visual, assistive-technology and prototype walkthroughs have not run because no prototype exists; they remain part of the visual gate, not skipped passing checks.
+Browser, visual and assistive-technology walkthroughs of the shipped console remain part of the visual gate; the prototype approvals do not replace them.
 
 M-O's correction closed the capture-gap case with the empty `stdout` frame, the partial recording frame, exact Copy/focus behavior and a proposed cause-neutral `captureGap` sentence. This covers written proposals only and does not approve the proposed copy.
 

@@ -10,6 +10,51 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- Run `wardyn setup status --pre-upgrade` with your role settings in the environment (or
+  `--role-map` / `--default-role`) and fix everything it lists. It reads only this shell's
+  environment: for a chart or Compose deployment, load the env file first (`set -a; . FILE; set +a`)
+  or check your values. It exits 0 when clean and 1 while anything remains (#623).
+- Remap every `=member` entry (and a `member` default role) to `user` or a user type id, in the
+  chart or env and under Getting started → People. 0.9 refuses to boot on one, before migrating (#623).
+- Rename the six `WARDYN_MEMBER_*` variables to their `WARDYN_USER_*` names
+  (`WARDYN_ALLOW_MEMBER_ENV_SECRET` to `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_MEMBER_MODE` to
+  `WARDYN_USER_DESKTOP`); 0.9 refuses to boot while any is set (#623).
+- Serve your OIDC issuers over `https://`. An in-cluster internal issuer behind a service mesh may
+  set `WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=mesh` (#1970).
+- Repoint any dashboard or SIEM rule on `auth.member_mode` to `auth.user_view.set` (#623).
+
+### Added
+
+- `wardyn setup status --pre-upgrade [--role-map CSV] [--default-role ROLE]` lists leftover
+  `member` entries and removed `WARDYN_MEMBER_*` variables before the upgrade (#623).
+
+### Changed
+
+- A plain `http://` OIDC issuer (public or internal) on a host that is not loopback, while the
+  console has a TLS posture, now refuses boot; it was a warning. `WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=mesh`
+  opts the internal issuer out with a boot warning; the public issuer has no opt-out. Loopback and
+  the Compose demo are unaffected (#1970).
+
+### Removed
+
+- The `member` role value: `WARDYN_OIDC_ROLE_MAP` entries ending `=member` and
+  `WARDYN_OIDC_DEFAULT_ROLE=member` refuse boot with `invalid role "member"`, naming the entry (#623).
+- The `auth.member_mode` audit action, dual-emitted beside `auth.user_view.set` since 0.8 (#623).
+- The `WARDYN_MEMBER_MODE`, `WARDYN_MEMBER_WORKSPACE_ROOTS`, `WARDYN_MEMBER_WORKSPACE_ROOTS_MAP`,
+  `WARDYN_MEMBER_WRITABLE_ROOTS`, `WARDYN_MEMBER_WRITABLE_DENY` and `WARDYN_ALLOW_MEMBER_ENV_SECRET`
+  aliases. Boot refuses while one is set, naming its `WARDYN_USER_*` replacement (#623).
+
+### Fixed
+
+- The People list shows a person suspended over SCIM before their first sign-in as deactivated, and
+  `?state=deactivated` finds them (#1824).
+- A person's drawer says when their token list could not be read, with Retry, instead of showing
+  an empty list (#1815).
+
+## [0.8.9] — 2026-10-09
+
+### Before you upgrade
+
 - Migration `0133_recording_erasures` adds durable per-run recording fences. Take a database dump before
   upgrading; rollback requires restoring that dump. Filesystem deployments must retain the recording
   root's `.erased` directory and `*.lock` files alongside the recordings.

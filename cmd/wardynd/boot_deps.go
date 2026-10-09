@@ -768,17 +768,12 @@ func validDefaultRole(role string) bool {
 	return oidc.ValidMappingTarget(role) && role != oidc.RoleSecurityAdmin
 }
 
-// parseDefaultRole validates WARDYN_OIDC_DEFAULT_ROLE, accepting the pre-0.8
-// "member" as the user tier with the boot WARN until 0.9.
+// parseDefaultRole validates WARDYN_OIDC_DEFAULT_ROLE.
 func parseDefaultRole(raw string) (string, error) {
 	role := strings.TrimSpace(raw)
-	if role == oidc.LegacyRoleMember {
-		slog.Warn(oidc.LegacyRoleMemberWarning("WARDYN_OIDC_DEFAULT_ROLE", ""))
-		role = oidc.RoleUser
-	}
 	if role != "" && !validDefaultRole(role) {
-		return "", fmt.Errorf("invalid WARDYN_OIDC_DEFAULT_ROLE %q: want %q, %q or a user type id (%q is a MAPPED tier only — name the App Role, group or email that should hold it in WARDYN_OIDC_ROLE_MAP; it is refused as a fallthrough default)",
-			role, oidc.RoleAdmin, oidc.RoleUser, oidc.RoleSecurityAdmin)
+		return "", fmt.Errorf("invalid WARDYN_OIDC_DEFAULT_ROLE %q: want %q, %q or a user type id (%q is a MAPPED tier only — name the App Role, group or email that should hold it in WARDYN_OIDC_ROLE_MAP; it is refused as a fallthrough default)%s",
+			role, oidc.RoleAdmin, oidc.RoleUser, oidc.RoleSecurityAdmin, oidc.RemovedRoleHint(role))
 	}
 	return role, nil
 }

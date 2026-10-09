@@ -10,7 +10,7 @@ import (
 )
 
 // TestKillOrderDocs_MatchC002CASFirst: threatmodel/THREAT-MODEL.md and
-// pkg/client/client.go's KillRun doc comment must state the CAS-first kill
+// pkg/client/client_runs.go's KillRun doc comment must state the CAS-first kill
 // order for the explicit-kill path (handleKillRun/runs_lifecycle.go, see "Win
 // the terminal transition first"), not sandbox teardown before the state CAS
 // — with teardown first, a kill that lost a race to a concurrent
@@ -36,18 +36,18 @@ func TestKillOrderDocs_MatchC002CASFirst(t *testing.T) {
 		t.Error(`threatmodel/THREAT-MODEL.md still describes the explicit-kill path as "teardown-first" — that's the pre-C002 order`)
 	}
 
-	client, err := os.ReadFile("../../pkg/client/client.go")
+	client, err := os.ReadFile("../../pkg/client/client_runs.go")
 	if err != nil {
-		t.Fatalf("read pkg/client/client.go: %v", err)
+		t.Fatalf("read pkg/client/client_runs.go: %v", err)
 	}
 	killRunDoc := regexp.MustCompile(`(?s)// KillRun initiates[^\n]*(\n//[^\n]*)*`).FindString(string(client))
 	if killRunDoc == "" {
-		t.Fatal("pkg/client/client.go: could not find KillRun's doc comment — update this guard's anchor if it moved")
+		t.Fatal("pkg/client/client_runs.go: could not find KillRun's doc comment — update this guard's anchor if it moved")
 	}
 	if regexp.MustCompile(`(?i)^// KillRun initiates the kill sequence for a run: sandbox teardown,`).MatchString(killRunDoc) {
-		t.Errorf("pkg/client/client.go's KillRun doc comment still leads with sandbox teardown (pre-C002 order): %q", killRunDoc)
+		t.Errorf("pkg/client/client_runs.go's KillRun doc comment still leads with sandbox teardown (pre-C002 order): %q", killRunDoc)
 	}
 	if !regexp.MustCompile(`(?i)state transition|compare-and-swap|CAS|KILLED state`).MatchString(killRunDoc) {
-		t.Errorf("pkg/client/client.go's KillRun doc comment doesn't mention the CAS-first order: %q", killRunDoc)
+		t.Errorf("pkg/client/client_runs.go's KillRun doc comment doesn't mention the CAS-first order: %q", killRunDoc)
 	}
 }

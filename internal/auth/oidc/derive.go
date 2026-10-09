@@ -10,9 +10,7 @@ package oidc
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"slices"
-	"strconv"
 	"strings"
 	"unicode"
 
@@ -35,20 +33,18 @@ const (
 	RoleUser          = "user"
 )
 
-// LegacyRoleMember is the pre-0.8 name of RoleUser, still accepted (with a boot WARN) as the user
-// tier on the built-in "standard" type. Never stored, never a session role.
-// ponytail: removed in 0.9.
-const LegacyRoleMember = "member"
+// RemovedRoleMember is the pre-0.8 name of RoleUser. 0.8 accepted it as the user tier on the built-in
+// "standard" type; 0.9 treats it as any other unknown role value. It stays a reserved word so it can
+// never parse as a user type id, and it is the one value RemovedRoleHint explains.
+const RemovedRoleMember = "member"
 
-// LegacyRoleMemberWarning is the boot WARN for one aliased "member" value. variable names the
-// setting; entry is the role-map pair as written, or "" for WARDYN_OIDC_DEFAULT_ROLE.
-func LegacyRoleMemberWarning(variable, entry string) string {
-	subject, fix := variable+"=member", "change it in your chart"
-	if entry != "" {
-		subject, fix = "Entry "+strconv.Quote(entry), "remap it in Getting started -> People, or in your chart"
+// RemovedRoleHint is the sentence appended to a bad-role error when v is RemovedRoleMember, "" for any
+// other value.
+func RemovedRoleHint(v string) string {
+	if v != RemovedRoleMember {
+		return ""
 	}
-	return variable + `: "member" is no longer a role. ` + subject +
-		` maps to the built-in user type "standard" (Standard user) until you ` + fix + `. The alias is removed in 0.9.`
+	return ` ("` + RemovedRoleMember + `" was removed in 0.9: use "` + RoleUser + `", or the id of a user type, in its place)`
 }
 
 // Roles is the closed set of recognized role values, in rank order, pinned against the DDL parity
@@ -102,12 +98,8 @@ func ParseRoleMap(csv string) (map[string]string, error) {
 		if !cut || k == "" {
 			return nil, fmt.Errorf("malformed entry %q: want value=role", pair)
 		}
-		if v == LegacyRoleMember {
-			slog.Warn(LegacyRoleMemberWarning("WARDYN_OIDC_ROLE_MAP", k+"="+v))
-			v = RoleUser
-		}
 		if !ValidMappingTarget(v) {
-			return nil, fmt.Errorf("entry %q: invalid role %q (want %q, %q, %q or a user type id)", pair, v, RoleAdmin, RoleSecurityAdmin, RoleUser)
+			return nil, fmt.Errorf("entry %q: invalid role %q (want %q, %q, %q or a user type id)%s", pair, v, RoleAdmin, RoleSecurityAdmin, RoleUser, RemovedRoleHint(v))
 		}
 		// A non-ASCII key can never match; under DEFAULT_ROLE=admin that would silently grant the
 		// default instead of the lesser role the operator meant to name.
