@@ -253,6 +253,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   other YAML-only syntax — while still refusing duplicate keys and unsafe numbers. Structured
   edits write exactly the requested value, quoting it where needed (#1921).
 
+### Security
+
+- **Go 1.26.9 and `golang.org/x/net` 0.60.0.** The toolchain pin moves from go1.26.6 and `golang.org/x/net`
+  from 0.59.0, fixing eleven standard-library and `x/net` advisories published after 0.8.8 (`net/http`,
+  `net/textproto`, `crypto/tls`, `os`; GO-2026-6603 to GO-2026-6617). `make govulncheck` reports none.
+
 ## [0.8.8] — 2026-10-07
 
 ### Before you upgrade
