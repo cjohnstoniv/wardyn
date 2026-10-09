@@ -1,2 +1,2 @@
 # Prose must not grow beyond the base count (11806) plus cell-expansion summaries: R0030 (the `changes` cell of the run-policy view table) leaves a 25-word summary in the cell and moves in full to the "#### `changes`" subsection (heading counts 0, summary 25 words).
-docs/sdk.md=11831 share=20
+docs/sdk.md=11831 share=21
