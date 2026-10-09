@@ -12,6 +12,7 @@
 // the governance contract is the tested part; this is about when the operator
 // SEES it, not what it is. Every panel stays mounted: moving between them
 // changes what is on screen, never the draft.
+import * as React from "react";
 import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import type { Workspace } from "../../../lib/types";
@@ -24,6 +25,7 @@ import { NewRunLaunchPanel } from "./new-run-launch-panel";
 import { Panel, PanelNav, useNewRunPanels } from "./panel-nav";
 import { PolicyPanelBody } from "./policy-panel-body";
 import { RunPanel } from "./run-panel";
+import { useFocusIssue } from "./use-focus-issue";
 import { useNewRunController } from "./use-new-run-controller";
 import { runPromptText } from "./wizard-types";
 import { WorkspaceCard } from "./workspace-card";
@@ -48,8 +50,12 @@ export function NewRunScreen() {
     providerCandidates, providerAccess, onModelProviderChange, providerChangeNote,
     providerGateState, addWsOpen, reloadWorkspaces,
     setPolicyEditing, setPolicyView,
+    accessRows, accessIssues, operator,
   } = c;
   const { panel, go, reveal } = useNewRunPanels();
+  // One Access row is open at a time; an issue's link opens its row first.
+  const [openRowId, setOpenRowId] = React.useState<string | undefined>(undefined);
+  const focusIssue = useFocusIssue(reveal, setOpenRowId);
   // The issue the line above Launch names; a control it belongs to points its
   // description there.
   const shown = launching ? null : shownIssue(issues, panel);
@@ -159,6 +165,11 @@ export function NewRunScreen() {
               adoRefusal={policy.adoDoor.refusal}
               adoConnecting={policy.adoDoor.dialog.connecting}
               onAdoConnect={policy.adoDoor.dialog.onConfirm}
+              rows={accessRows}
+              openRowId={openRowId}
+              onOpenRow={setOpenRowId}
+              secretsPath={operator ? "/admin/secrets" : "/secrets"}
+              guardLink={guardLink}
             />
           </Panel>
 
@@ -175,7 +186,7 @@ export function NewRunScreen() {
           onIssue={(issue) => {
             // The source is on screen only while editing: its issue opens the editor first.
             if (issue.focus === ISSUE_TARGET.POLICY_SOURCE) setPolicyEditing(true);
-            reveal(issue);
+            focusIssue(issue);
           }}
           guardLink={guardLink}
           governanceProfile={governanceProfile}
@@ -226,6 +237,7 @@ export function NewRunScreen() {
           preflightError={preflightError}
           preflightErrorSeq={preflightErrorSeq}
           preflightResult={preflightResult}
+          accessIssues={accessIssues}
           agentRow={isAgent ? harnesses?.find((h) => h.id === state.agent) : undefined}
           isAgent={isAgent}
           providerCandidates={providerCandidates}

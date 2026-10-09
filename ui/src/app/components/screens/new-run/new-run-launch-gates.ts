@@ -212,15 +212,19 @@ export function preflightHolds(i: PreflightHoldInputs): { backendMissing: boolea
 }
 
 /** Every reason Launch is held, first one first: the barrier this host cannot
- *  build outranks the form's own issues, and the model block speaks last. */
+ *  build outranks the form's own issues, then the Access rows that hold it
+ *  (access-rows-model.ts, read off the same two checks), and the model block
+ *  speaks last. */
 export function withPreflightIssues(
   local: LaunchIssue[],
   holds: { backendMissing: boolean; modelBlocked: boolean },
   agentName: string,
+  accessIssues: LaunchIssue[] = [],
 ): LaunchIssue[] {
   return [
     ...(holds.backendMissing ? [{ panel: "policy" as const, focus: ISSUE_TARGET.BARRIER, text: RAIL_SETUP.BACKEND_BLOCK }] : []),
     ...local,
+    ...accessIssues,
     ...(holds.modelBlocked
       ? [{ panel: "run" as const, focus: ISSUE_TARGET.RUN_MODE, text: RAIL_MODEL_ACCESS.UNATTENDED_BLOCK(agentName) }]
       : []),

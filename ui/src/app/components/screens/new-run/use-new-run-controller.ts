@@ -39,6 +39,7 @@ import {
 } from "./wizard-types";
 import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import { useLaunch } from "./use-launch";
+import { accessIssues, accessRows } from "./access-rows-model";
 import { launchGates, preflightHolds, withPreflightIssues } from "./new-run-launch-gates";
 import { useGuardedNavClick, useRequestLeave, useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { providerCandidates as candidatesForAgent, providerGate } from "./model-provider-lane";
@@ -457,6 +458,13 @@ export function useNewRunController() {
   // Every reason Launch is held, the form's own and preflight's, in the order
   // the line above Launch names them. The launch panel derives the same list
   // from the same inputs; the panel nav counts it.
+  // The Access rows come from the same two reads as the rest of the preflight
+  // verdict: the policy preview's facts, overlaid by this body's own preflight.
+  const rows = React.useMemo(
+    () => accessRows(preview.result?.components, preflightResult?.components),
+    [preview.result, preflightResult],
+  );
+  const rowIssues = React.useMemo(() => accessIssues(rows), [rows]);
   const issues = withPreflightIssues(
     gates.issues,
     preflightHolds({
@@ -469,6 +477,7 @@ export function useNewRunController() {
       setupItems: preflightResult?.setup_items,
     }),
     agentName,
+    rowIssues,
   );
 
   // Rulebook §8: Esc backs out quietly, with no prompt for an untouched form,
@@ -529,5 +538,6 @@ export function useNewRunController() {
     preflightNotChecked, preflightError, preflightErrorSeq, preflightResult,
     providerCandidates, providerAccess, onModelProviderChange, providerChangeNote,
     providerGateState, addWsOpen, reloadWorkspaces,
+    accessRows: rows, accessIssues: rowIssues,
   };
 }

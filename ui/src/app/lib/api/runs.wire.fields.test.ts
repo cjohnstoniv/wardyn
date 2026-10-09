@@ -89,6 +89,8 @@ const fullInput: WireInput & { workspaces: NonNullable<WireInput["workspaces"]> 
   // The member's drive request (D5): forwarded verbatim by runWireBody — a
   // path never rides here, only {enabled, read_only}.
   drive: { enabled: true, read_only: false },
+  // The components this run carries (#1914): a stored one by id, a run-only inline one.
+  components: [{ id: "33333333-3333-4333-8333-333333333333" }, { inline: { hosts: ["api.example"] }, name: "Tool" }],
 };
 
 // The wire keys runWireBody is expected to emit for fullInput, and the exact
@@ -115,6 +117,7 @@ const expectedWire: Record<string, unknown> = {
   // The member's drive request (D5): forwarded verbatim by runWireBody — a
   // path never rides here, only {enabled, read_only}.
   drive: { enabled: true, read_only: false },
+  components: fullInput.components,
 };
 
 // Go DTO JSON tags the console NEVER sends (CLI-only — cmd/wardyn/commands.go:96-103).
@@ -123,9 +126,7 @@ const expectedWire: Record<string, unknown> = {
 // until the New Run rail's provider picker lands (multi-provider MP-23), which
 // moves it into runWireBody. preset/preset_version are the launcher API's
 // (#1143); the console sends the explicit spec and has no preset UI.
-// components: run components (#1914); the New Run access rows (C14) will send it.
 const UI_NEVER_SENDS = new Set([
-  "components",
   "devcontainer_repo",
   "devcontainer_ref",
   "model_provider",
@@ -184,6 +185,14 @@ describe("runWireBody — every console-settable DTO field reaches the wire", ()
     await expect(previewRunPolicy(fullInput)).rejects.toMatchObject({ status: 429, message: "limited", retryAfter: "3" });
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "limited" }), { status: 429 }));
     await expect(previewRunPolicy(fullInput)).rejects.toMatchObject({ status: 429, retryAfter: undefined });
+  });
+
+  it("omits components when the run carries none, however it is spelled", async () => {
+    for (const none of [undefined, []]) {
+      fetchMock.mockClear();
+      await runs.createRun({ ...fullInput, components: none });
+      expect(sentBody()).not.toHaveProperty("components");
+    }
   });
 
   // Per-field omission: an ABSENT choice must be an absent key, never
@@ -393,9 +402,8 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     expect(tsKeys.filter((k) => !goTags.has(k))).toEqual([]);
   });
 
-  // components[] (#1914): the one request field the console does not send yet
-  // (UI_NEVER_SENDS) still has a TS shape, so the New Run rows (C14) build it from
-  // a mirrored type rather than a guess. The element is the SDK's ComponentRef, an
+  // components[] (#1914): the New Run access rows send it, built from a mirrored
+  // type rather than a guess. The element is the SDK's ComponentRef, an
   // alias of types.ComponentRef, and its keys are exactly the Go tags.
   it("CreateRunRequest.components is []ComponentRef, and the TS ComponentRef keys are exactly its Go tags", () => {
     expect(clientGo).toMatch(/Components\s+\[\]ComponentRef\s+`json:"components,omitempty"`/);

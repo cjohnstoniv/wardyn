@@ -28,6 +28,7 @@ import type {
   SetupModelProvider,
   WorkspaceSelection,
 } from "../../../lib/types";
+import type { ComponentRef } from "../../../lib/types/components";
 import { templateProviders } from "../../wardyn/policy-template-providers";
 // review U-01: the ONE place both clone doors (run header, Runs-list kebab)
 // turn a run's audit trail into a prefill or a refusal — see cloneFromAudit
@@ -178,6 +179,10 @@ export interface WizardState {
   // always chooses exactly the provider the rail showed, never whatever the
   // server's own default resolution would have picked instead.
   modelProviderId?: string;
+  // The components this run carries (CreateRunRequest.Components, #1914): a
+  // stored one by id or a run-only inline definition. The Access rows read what
+  // the server makes of them; empty sends nothing, byte for byte as before.
+  components: ComponentRef[];
 
   // --- Step 3: egress ---
   allowedDomains: string[]; // selected preset + custom domains
@@ -458,6 +463,7 @@ function freshWizardState(defaultCc: ConfinementClass, providers?: readonly Setu
     githubRequiresApproval: true,
     githubTtlMinutes: 60,
     llmSecretName: "",
+    components: [],
     gitPatEnabled: false,
     gitPatHost: "",
     gitPatSecretName: "",
@@ -560,6 +566,8 @@ export type CreateRunInputWithComposition = CreateRunInput & {
   // ModelProvider 1:1). Absent under no provider block, same wire default as
   // every install before providers existed.
   model_provider?: string;
+  // The components this run carries — pkg/client.CreateRunRequest.Components 1:1.
+  components?: ComponentRef[];
 };
 
 // buildSpec (the state -> canonical wire-contract composer) and

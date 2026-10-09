@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { runWireBody } from "../../../lib/api/runs";
 import { makeWorkspace } from "../../../../test/factories";
 import { buildRunInput, type RunInputParams } from "./build-run-input";
 import { initialWizardState } from "./wizard-types";
@@ -98,5 +99,26 @@ describe("buildRunInput — custom policy", () => {
 
   it("never substitutes a saved reference or a composed fallback for an invalid document", () => {
     expect(buildRunInput(input({ policyMode: "custom", merged: null }))).toBeNull();
+  });
+});
+
+describe("buildRunInput — components", () => {
+  const ref = [{ id: "6f0c1d2e-0000-4000-8000-0000000c0301" }, { inline: { hosts: ["api.example"] }, name: "Tool" }];
+
+  it.each(["default", "saved", "custom"] as const)("%s mode carries the run's components", (policyMode) => {
+    const state = initialWizardState("CC2", { selectedPolicyId: "saved-id", components: ref });
+    expect(buildRunInput(input({ policyMode, state }))?.components).toEqual(ref);
+  });
+
+  it("sends no components key when the run carries none", () => {
+    for (const policyMode of ["default", "saved", "custom"] as const) {
+      expect(buildRunInput(input({ policyMode }))).not.toHaveProperty("components");
+    }
+  });
+
+  it("reaches the wire body all three doors send", () => {
+    const state = initialWizardState("CC2", { selectedPolicyId: "saved-id", components: ref });
+    const body = runWireBody(buildRunInput(input({ state }))!);
+    expect(body.components).toEqual(ref);
   });
 });
