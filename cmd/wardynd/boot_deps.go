@@ -216,7 +216,9 @@ func warnAllowUnknownMigrations(allow bool) {
 // NOT the returned masking/spooling chain — or a replay that hit a still-down
 // store would re-spool (and re-enter the spool lock) instead of retrying later.
 // That recorder is wrapped in sealingRecorder's replay mode, which re-seals the
-// rows that waited under the pending key before the store sees them.
+// rows that waited under the pending key before the store sees them, and sends
+// each of those rows to the sinks once the store has it (it never reached them
+// while it waited).
 // serveChain is what only the serving boot adds to the chain; the maintenance
 // modes (rewrap, rekey, migrate_secrets) pass none.
 type serveChain struct {
@@ -231,12 +233,14 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 	sinks.Source = strings.TrimSpace(source)
 	storeRec := store.Recorder{Pool: pool}
 	var auditRec audit.Recorder = storeRec
+	var resealed audit.Recorder // nil without sinks: the drain's store write is all there is
 	fan, ferr := buildAuditFanout(rootCtx, sinksJSON)
 	if ferr != nil {
 		return nil, nil, nil, nil, ferr
 	}
 	if fan != nil {
 		auditRec = fanoutRecorder{primary: storeRec, fanout: fan}
+		resealed = landedRecorder{primary: storeRec, fanout: fan}
 		slog.Info("wardynd: audit fanout enabled")
 	}
 	var auditFallback *api.AuditSpool
@@ -269,7 +273,7 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 		coalescer.Inner = masked
 		head = coalescer
 	}
-	return audit.DelegationRecorder{Inner: audit.DryRunRecorder{Inner: head}}, fan, auditFallback, sealingRecorder{inner: storeRec, src: seal, replay: true}, nil
+	return audit.DelegationRecorder{Inner: audit.DryRunRecorder{Inner: head}}, fan, auditFallback, sealingRecorder{inner: storeRec, src: seal, replay: true, resealed: resealed}, nil
 }
 
 // substrateDeps is the registration Deps every substrate constructor receives,

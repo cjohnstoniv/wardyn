@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 // fakeSweepImageBuilder implements api.ImageBuilder and the optional
@@ -58,7 +59,7 @@ func TestStartBackgroundWorkers_ReconcilesBootIndependentOfRunner(t *testing.T) 
 	}
 	t.Setenv("WARDYN_GROUNDTRUTH_TOKEN_FILE", "")
 
-	startBackgroundWorkers(context.Background(), f, srv, nil /* run */, nil, nil, nil, nil, nil, nil, nil)
+	startBackgroundWorkers(context.Background(), f, srv, nil /* run */, nil, store.PG{}, nil, nil, nil, nil, nil, nil)
 
 	if fb.swept != 1 {
 		t.Errorf("SweepOrphanedBuilds called %d times, want 1 — startBackgroundWorkers with a nil runner must still run ReconcileOnBoot's runner-independent envbuild orphan sweep", fb.swept)

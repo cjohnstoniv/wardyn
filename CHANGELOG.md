@@ -10,6 +10,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- Migration `0138_audit_ensure_partitions_high_water` drops and recreates `audit_ensure_partitions`
+  (the migrator's role must own the schema, as for 0111/0123); forward-only, rollback is the
+  pre-upgrade `pg_dump`. Its EXECUTE grant is re-derived from `audit_append`'s: every role that can
+  execute `audit_append` can execute it and PUBLIC cannot. A role granted only `audit_ensure_partitions`
+  by hand loses it, and a role holding only `audit_append` gains it; repeat any hand grant after upgrading.
 - Run `wardyn setup status --pre-upgrade` with your role settings in the environment (or
   `--role-map` / `--default-role`) and fix everything it lists. It reads only this shell's
   environment: for a chart or Compose deployment, load the env file first (`set -a; . FILE; set +a`)
@@ -51,6 +56,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- Audit rows that waited under a pending subject key reach the SIEM sinks once the spool drain re-seals
+  and stores them, so the sink chain has no gap (#1821).
+- `audit.retention.set`, `audit.retention.partition_dropped`, `principal_key.destroyed` and
+  `credential.reauth.resolve`, which the database writes itself, are sent to the SIEM sinks after they
+  commit (#1822).
+- The audit log no longer stops accepting writes, and boot no longer refuses, after the database clock
+  steps forward: `audit_ensure_partitions` creates partitions up to the chain's high-water mark, so the next
+  boot or daily sweep repairs it without hand-run DDL (#1826).
 - The People list shows a person suspended over SCIM before their first sign-in as deactivated, and
   `?state=deactivated` finds them (#1824).
 - A person's drawer says when their token list could not be read, with Retry, instead of showing
