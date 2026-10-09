@@ -1,5 +1,6 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. Base prose: README.md 2123, docs/README.md 516, docs/TRY-IT.md 3201.
 # docs/README.md is 517 = base 516 + 1 word of the new "Index" heading: its table sat in the lead (H1 to first H2), which the form gate caps at 5 lines.
+# docs/README.md is 537 = 517 + 20 words of the index row for docs/CREDENTIALS.md.
 README.md=2123 share=35
-docs/README.md=517 share=35
+docs/README.md=537 share=35
 docs/TRY-IT.md=3201 share=35

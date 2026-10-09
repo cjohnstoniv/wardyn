@@ -36,6 +36,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- `docs/CREDENTIALS.md` explains how each kind of credential reaches a run: which the egress proxy adds
+  to the outbound request, which a policy or a component delivers into the sandbox, and the residual
+  of each, with the code that backs every row.
 - A strict YAML/JSON policy-source parser and comment-preserving edit helpers for the policy
   editors. Ambiguous keys, aliases, tags, directives and unsafe numbers are refused before JSON
   conversion (#1917).
