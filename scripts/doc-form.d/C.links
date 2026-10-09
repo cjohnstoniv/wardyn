@@ -1,0 +1,4 @@
+# The must-link rule in scripts/check-doc-links.sh applies to these docs.
+docs/CI.md
+docs/ci-jobs-as-runs.md
+.claude/skills/wardyn-ci/SKILL.md
