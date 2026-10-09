@@ -8,4 +8,5 @@ README.md=2227 share=35
 docs/README.md=597 share=35
 # docs/TRY-IT.md 3209 adds 8: the demo/default difference names idle auto-stop.
 # docs/TRY-IT.md 3243 adds 34: the branch-confinement warning names what the token broker reads and when it confines.
-docs/TRY-IT.md=3243 share=35
+# docs/TRY-IT.md 3254 adds 11: the default policy's model access goes through a model provider, not an authored grant.
+docs/TRY-IT.md=3254 share=35

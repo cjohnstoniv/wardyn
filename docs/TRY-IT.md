@@ -50,7 +50,7 @@
 A couple of config facts before you customize:
 
 - **Policy defaults are launch-path-specific.**
-  - A bare hand-launched `wardynd` loads [`examples/policies/default.json`](../examples/policies/default.json) (`min_confinement_class` **CC1** as of 0.7.8, no `api_key` grant — an agent run can't reach a model under it);
+  - A bare hand-launched `wardynd` loads [`examples/policies/default.json`](../examples/policies/default.json) (`min_confinement_class` **CC1** as of 0.7.8, no authored `api_key` grant — an agent run reaches a model only through a configured model provider and the person's own credential for it);
   - `make setup` / [`scripts/up.sh`](../scripts/up.sh) auto-pick one:
     - containerized picks `demo.json` on a runc-only host, `default.json` when gVisor is registered, and `claude-llm.json` once a real model path is configured;
     - `demo.json` and `default.json` differ not in confinement but in allowed-domains breadth and idle auto-stop (one hour in `default.json`, off in `demo.json`);
