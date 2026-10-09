@@ -1,0 +1,2 @@
+# The must-link rule in scripts/check-doc-links.sh applies to this doc.
+docs/sdk.md
