@@ -6,7 +6,7 @@
 > [!IMPORTANT]
 > Wardyn also publishes a *continuous* lane, on different terms — see ["The continuous lane"](#the-continuous-lane) before you verify a `:latest` or `:sha-…` tag with anything on this page.
 
-- Nothing here needs an account, a token, or a GitHub login.
+- Nothing here needs an account, a token, or a GitHub login, except the two `gh` commands: the build-provenance check in [step 3](#3-verify-the-build-provenance) and the asset download in [step 5](#5-verify-the-release-assets).
 
 ## What is published
 
@@ -82,6 +82,7 @@ cosign verify-attestation --type cyclonedx \
 ## 3. Verify the build provenance
 
 - How it was built, in the format GitHub's own tooling reads:
+- `gh attestation verify` is a GitHub CLI command, so it needs the CLI signed in (`gh auth login`) or `GH_TOKEN` set; by default it fetches the attestation from the GitHub API.
 
 ```sh
 gh attestation verify "oci://ghcr.io/cjohnstoniv/wardynd:${WARDYN_VERSION}" --repo cjohnstoniv/wardyn
@@ -117,7 +118,8 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "${WARDYN_
 
 ## 5. Verify the release assets
 
-- Each release carries the per-image SBOMs, `THIRD-PARTY-NOTICES.md`, `LICENSE`, `NOTICE`, `install.sh`, the four `wardyn-<os>-<arch>` CLI binaries, and a signed `SHA256SUMS` — `release.yml`'s `release-assets` job fails the release unless every one of them landed:
+- Each release carries the per-image SBOMs, `THIRD-PARTY-NOTICES.md`, `LICENSE`, `NOTICE`, `install.sh`, the four `wardyn-<os>-<arch>` CLI binaries, and a signed `SHA256SUMS` — `release.yml`'s `release-assets` job fails the release unless every one of them landed.
+- `gh release download` is a GitHub CLI command too, so it needs the same sign-in; the assets are also plain downloads at `https://github.com/cjohnstoniv/wardyn/releases/download/v${WARDYN_VERSION}/<asset>`.
 
 ```sh
 gh release download "v${WARDYN_VERSION}" --repo cjohnstoniv/wardyn

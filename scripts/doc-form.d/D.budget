@@ -1,4 +1,5 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. Base prose was 6994; the restructured page is 6966.
 # 7047 = 6966 + 27 words of cell-expansion headings + 54 words of their row summaries (ruled by the lead).
 # 7077 adds 30 words of alt text for the Topology figure.
-docs/DESKTOP.md=7077 share=35
+# 7184 adds 107: the restart and masking contract (47+5, then 11 and 12 for the values minted after dispatch at the two places that say it) and the SSH fingerprint remediation (30, then 2 for the antecedent fix).
+docs/DESKTOP.md=7184 share=35

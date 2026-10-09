@@ -74,8 +74,8 @@ curl -sf -X POST "$WARDYN_URL/api/v1/me/ssh-keys" \
 - That means it is also, by construction, possible for someone else to register a public key you also hold before you do (e.g. a key whose public half you've posted somewhere, like a GitHub profile).
 - After which your own `POST` 409s indefinitely.
 - The API never confirms who holds it, so there is no self-service resolution.
-- An operator can free the slot at the database directly, once the rightful
-  owner is verified out-of-band:
+- Once the rightful owner is verified out-of-band, an admin or `security_admin` can free the slot with `DELETE /people/{principal}/ssh-keys`, which removes every key that person registered and is audited as `ssh_key.delete`.
+- To remove one fingerprint only, an operator can delete it at the database directly:
 
 ```sql
 DELETE FROM ssh_public_keys WHERE fingerprint = 'SHA256:...';

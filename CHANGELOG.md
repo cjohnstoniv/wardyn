@@ -133,6 +133,35 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- `docs/USERS.md` said every `tool_call` approval is admin-only whoever owns the run. One is not:
+  a run's owner may decide an Azure DevOps access request raised by their own run, up to the ceiling
+  an administrator set, unless `WARDYN_CAPABILITY_SECOND_HUMAN=1` requires someone else. The guide
+  now names that exception. Authorization is unchanged.
+- `docs/DESKTOP.md` said whoever registers an SSH public key first owns its fingerprint forever
+  and that the only remedy is out of band. The fingerprint is held until the key is deleted, and an
+  admin or `security_admin` can remove a person's keys with `DELETE /people/{principal}/ssh-keys`.
+  The Desktop page and "Reclaiming a squatted fingerprint" in `docs/SSH.md` now say so; verifying
+  the rightful owner is still out of band, and a member still cannot remove someone else's key.
+- `docs/DESKTOP.md` still said a `wardynd` restart mid-run loses the masking state and then
+  records or streams output unmasked, and that failing closed "is not done". Since 0.8.6 the
+  secret values a run receives at dispatch are committed before its sandbox starts (later ones
+  before they are handed out) and reloaded after a restart, and a
+  recording upload or attach that cannot prove that state answers `503`
+  `mask_state_unavailable`, while SSH refuses the shell. Both places on the page now say that,
+  with the two cases in which an operator will meet the refusal.
+- The person-erasure scope table in `docs/OPERATIONS.md` listed the scopes credentials first, and
+  the text under it says they run "in the order above". They run the other way round: live
+  consumers are fenced first and the keys go last. The table is now in the order the scopes run,
+  and it gains the `components` scope it did not list. The audit reference, the CLI help and the
+  SDK page listed the scopes in the old order too, and the last two left out `components`; all
+  three now list the seven scopes in the order they run.
+- `docs/VERIFY.md` said nothing on the page needs an account, a token or a GitHub login, but
+  `gh attestation verify` and `gh release download` refuse to run until the GitHub CLI is signed
+  in. The page now says so beside each command, scopes the claim to the other checks, and gives
+  the plain download address for the release assets.
+- `README.md` said masked casts flow back into the append-only audit log. Session recordings are
+  optional and kept in their own store with their own retention; only decision logs go to the
+  audit log. The README now says so.
 - Recording-on Kubernetes task output is recovered from the run's available recording into a
   masked tail after the run ends (#1831). A recovered row is always marked `source: "recording"`
   and `incomplete: true`. A missing, invalid or uncovered recording is stated as a `capture_gap`,

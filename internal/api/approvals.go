@@ -563,9 +563,10 @@ func decodeDecisionRequest(w http.ResponseWriter, r *http.Request) (decisionRequ
 // it reports whether BOTH ap and run were read (member path) or NEITHER
 // (operator path), and the scope-gated loads downstream pay for what they need.
 //
-// Member: may decide only an egress_domain approval raised by a run THEY own.
-// credential and tool_call
-// approvals stay admin-only REGARDLESS of ownership: the shipped default policy
+// Member: may decide only an egress_domain approval raised by a run THEY own,
+// and the one tool_call named below (an Azure DevOps escalation on their own
+// run). Every other credential and tool_call
+// approval stays admin-only REGARDLESS of ownership: the shipped default policy
 // requires approval on github_token, so letting a member self-approve their OWN
 // run's credential request would self-mint a real token, and self-approving a
 // tool_call re-opens exactly the allowance the clamp is

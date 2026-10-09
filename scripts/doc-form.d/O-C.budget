@@ -3,4 +3,6 @@
 # (multi-user access model) plus 77 (user drives on Docker, capabilities) less 18 (renamed settings, upgrades,
 # Kubernetes day-2, high availability). The growth is cell-expansion headings and their summary cells, less the
 # joiners turned into full stops, so growth fails.
-docs/OPERATIONS.md=83092
+# 83150 adds 58: 36 for the person-erasure scope table (the `components` row it lacked, and a first row that no longer
+# leans on a later one) and 22 for the second-human bullet (the Azure DevOps access request a run's owner may decide).
+docs/OPERATIONS.md=83150

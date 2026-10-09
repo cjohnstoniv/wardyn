@@ -1,3 +1,4 @@
-docs/USERS.md=3867 share=35
-docs/SSH.md=5276 share=35
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. docs/USERS.md 3892 = 3859 measured base + 33 (the Azure DevOps approval exception to the admin-only tool_call rule; the old budget, 3867, had 8 words of slack). docs/SSH.md 5294 = 5267 measured base + 27 (the admin delete route in Reclaiming a squatted fingerprint; the old budget had 9 words of slack).
+docs/USERS.md=3892 share=35
+docs/SSH.md=5294 share=35
 docs/UI-SANDBOXES.md=5337 share=35
