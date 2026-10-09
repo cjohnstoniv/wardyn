@@ -120,6 +120,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- `docs/USERS.md` said every `tool_call` approval is admin-only whoever owns the run. One is not:
+  a run's owner may decide an Azure DevOps access request raised by their own run, up to the ceiling
+  an administrator set, unless `WARDYN_CAPABILITY_SECOND_HUMAN=1` requires someone else. The guide
+  now names that exception. Authorization is unchanged.
 - `docs/DESKTOP.md` said whoever registers an SSH public key first owns its fingerprint forever
   and that the only remedy is out of band. The fingerprint is held until the key is deleted, and an
   admin or `security_admin` can remove a person's keys with `DELETE /people/{principal}/ssh-keys`.
