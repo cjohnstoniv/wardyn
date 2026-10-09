@@ -97,6 +97,9 @@ type dispatchCeiling struct {
 	// half of a member's bound, the row's default_profile, is known only at
 	// dispatch, and the other half is this principal's ceiling.
 	adoStanding adoStandingBound
+	// agentGuardrailLocks is the rubric's agent_guardrail_locks term, which
+	// selects the locked L2 managed-settings document (agentPolicyFor).
+	agentGuardrailLocks bool
 }
 
 // ceilingForDispatch is the ONE translation from a resolved ceiling into the
@@ -129,6 +132,7 @@ func ceilingForDispatch(c governanceCeiling, ado adoEntraGrade, bedrock bedrockC
 		resolved: true, deny: c.Spec.DeniedDomains, profile: c.Profile.Name,
 		maxEphemeralDiskMiB: c.Limits.MaxEphemeralDiskMiB, maxCPUMillis: c.Limits.MaxCPUMillis,
 		maxMemoryMiB: c.Limits.MaxMemoryMiB, adoEntra: ado, bedrock: bedrock, adoStanding: standing,
+		agentGuardrailLocks: c.Limits.AutonomyRubric != nil && c.Limits.AutonomyRubric.AgentGuardrailLocks,
 	}
 }
 

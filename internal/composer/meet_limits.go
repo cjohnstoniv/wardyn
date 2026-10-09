@@ -123,8 +123,8 @@ func clampDefault(def, resMax int) int {
 	return def
 }
 
-// meetRubric takes the lower autonomy level per field; a field set on one side
-// only takes that side, and a rubric that caps nothing stays nil.
+// meetRubric takes the lower autonomy level per field and ORs the guardrail lock; a field set on one
+// side only takes that side, and a rubric that caps nothing stays nil.
 func (m *meeter) meetRubric(o *types.AutonomyRubric) {
 	l := &m.out.Limits
 	var b types.AutonomyRubric
@@ -154,6 +154,7 @@ func (m *meeter) meetRubric(o *types.AutonomyRubric) {
 			m.widen("autonomy_rubric."+f.name, "%s allows a higher level than the base's %s", f.ov, *f.base)
 		}
 	}
+	b.AgentGuardrailLocks = b.AgentGuardrailLocks || o.AgentGuardrailLocks
 	if b == (types.AutonomyRubric{}) {
 		l.AutonomyRubric = nil
 		return

@@ -77,9 +77,10 @@ export interface RunLimits {
 // stay internal; the console renders plain labels (#93), not spelled here yet.
 export type AutonomyLevel = "L0" | "L1" | "L2" | "L3";
 
-// types.AutonomyRubric — nine closed fields, three egress postures, three
-// secret postures, three confinement classes, each absent (caps nothing) or
-// one of the four levels. See internal/types/governance.go for what each
+// types.AutonomyRubric — nine closed level fields (three egress postures, three
+// secret postures, three confinement classes), each absent (caps nothing) or
+// one of the four levels, and one boolean, agent_guardrail_locks, that caps no
+// level. See internal/types/governance.go for what each
 // posture means.
 export interface AutonomyRubric {
   egress_open?: AutonomyLevel;
@@ -91,13 +92,15 @@ export interface AutonomyRubric {
   confinement_cc1?: AutonomyLevel;
   confinement_cc2?: AutonomyLevel;
   confinement_cc3?: AutonomyLevel;
+  // Selects the locked L2 managed-settings document for an L2 run; caps no level and is not a row.
+  agent_guardrail_locks?: boolean;
 }
 
-// One of AutonomyRubric's nine own field names — what internal/composer/
+// One of AutonomyRubric's nine level-capping field names — what internal/composer/
 // autonomy.go's applicableAutonomyCaps names a cap by, and what
 // AutonomyResolution.BoundBy (below) carries. keyof, not a hand-typed union,
 // so the two can never drift apart.
-export type AutonomyRubricRowKey = keyof AutonomyRubric;
+export type AutonomyRubricRowKey = Exclude<keyof AutonomyRubric, "agent_guardrail_locks">;
 
 // applicableAutonomyCaps' own fixed field order (internal/composer/
 // autonomy.go) — egress, then secrets, then confinement — the order

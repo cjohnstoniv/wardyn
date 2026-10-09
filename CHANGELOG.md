@@ -25,6 +25,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Locked L2.** A governance profile's autonomy rubric accepts `agent_guardrail_locks`. A Claude Code run at
+  L2 then launches under managed settings that add `allowManagedHooksOnly` and
+  `allowManagedPermissionRulesOnly`, so a repository's own hooks and permission rules cannot answer a tool
+  call, and `run.agent_policy.write` records `variant: l2_locked`. The managed-settings drift probe pins it on
+  the pinned CLI.
 - `wardyn setup status --pre-upgrade [--role-map CSV] [--default-role ROLE]` lists leftover
   `member` entries and removed `WARDYN_MEMBER_*` variables before the upgrade (#623).
 

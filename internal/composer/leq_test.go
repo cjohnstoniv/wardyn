@@ -368,6 +368,11 @@ func TestLeqIsFalseForEveryWidening(t *testing.T) {
 		{name: "a raised rubric cap", wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) {
 			l.AutonomyRubric = &types.AutonomyRubric{EgressOpen: types.AutonomyL3}
 		}},
+		{name: "a lifted guardrail lock", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) {
+			l.AutonomyRubric = &types.AutonomyRubric{AgentGuardrailLocks: true}
+		}, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) {
+			l.AutonomyRubric = &types.AutonomyRubric{EgressOpen: types.AutonomyL1}
+		}},
 		{name: "a removed rubric cap", wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.AutonomyRubric = nil }},
 		{name: "a longer run lifetime", wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.MaxEndAheadSec = 86400 }},
 		{name: "no run lifetime bound", wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.MaxEndAheadSec = 0 }},

@@ -543,9 +543,9 @@ describe("source parity — autonomy wire types (#510-F8)", () => {
   const governanceGo = readFileSync(join(root, "internal/types/governance.go"), "utf8");
   const governanceTs = readFileSync(join(root, "ui/src/app/lib/api/governance.ts"), "utf8");
 
-  it("AutonomyRubric: full parity — the nine closed fields", () => {
+  it("AutonomyRubric: full parity — the nine level caps and the guardrail lock", () => {
     const goTags = goJSONTags(governanceGo, "AutonomyRubric");
-    expect(goTags.length).toBe(9);
+    expect(goTags.length).toBe(10);
     const tsKeys = tsInterfaceKeys(governanceTs, "AutonomyRubric");
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
