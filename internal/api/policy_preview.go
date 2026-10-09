@@ -45,66 +45,14 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	if refusal.write(s, w, r) {
 		return
 	}
-	ctx := r.Context()
-	spec, _, warnings, source, refusal := s.resolveRunPolicyFacts(ctx, r, &req, true, false)
-	if refusal.write(s, w, r) {
+	f, ok := s.foldRunRequest(w, r, foldPreview, &req, ceiling, reqCC)
+	if !ok {
 		return
 	}
-	if _, refusal = s.seedAuthorizedWorkspace(ctx, r, &spec, &req); refusal.write(s, w, r) {
-		return
-	}
-	drive, refusal := s.authorizeRequestDrive(r, req, ceiling)
-	if refusal.write(s, w, r) {
-		return
-	}
-	if drive != nil && driveReadOnlyRefusal(req, *drive).write(s, w, r) {
-		return
-	}
-	wsRefs := s.referencedWorkspaces(ctx, spec)
-	unionPreviewWorkspaceEgress(&spec, wsRefs)
-	present := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
-	_ = s.applyWorkspaceRequirementsFor(ctx, present, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
-	if _, refusal = s.unionDirectGitHubEgress(r, req, &spec, ceiling); refusal.write(s, w, r) {
-		return
-	}
-	// false: the preview reports a secret that is not stored yet rather than
-	// refusing it; every other bound is launch's.
-	comps, refusal := s.applyRunComponents(r, req, &spec, ceiling, wsRefs, false)
-	if refusal.write(s, w, r) {
-		return
-	}
-	if _, err := enforcedConfinement(confinementFloorSpec(spec, comps), reqCC, nil); err != nil {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
-		return
-	}
-	choice, refusal := s.authorizeRunModelProvider(r, req, wsRefs, true)
-	if refusal.write(s, w, r) {
-		return
-	}
-	_, needsModel := agentLLMProvider(req.Agent)
-	if needsModel && createDoorIsModelRun(req) {
-		if name, secretName, found := modelEnvSecretGrant(spec); found {
-			s.writeProviderRefusal(w, r, choice.provider.ID, choice.provider.Kind, fmt.Sprintf(mpRunModelEnvSecret, secretName, name), false)
-			return
-		}
-	}
-	site, err := s.scmLaneSiteConfig(ctx, spec, req.Repo)
-	if err != nil {
-		writeServerError(w, r, "get site config", err)
-		return
-	}
-	narrowed, none := s.adoStandingAtDoor(r, spec, site, ceiling)
-	if none {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonADOCapabilitiesNonePermitted, adoNonePermitted(spec.AzureDevOpsCapabilities))
-		return
-	}
-	if reason, detail := s.patNarrowingAtDoor(r, spec, site); reason != "" {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reason, detail)
-		return
-	}
-	response := policyPreviewFacts(req, spec, source, warnings, site, choice, comps)
-	if narrowed != "" {
-		response.Warnings = append(response.Warnings, narrowed)
+	response := policyPreviewFacts(req, f.spec, f.source, f.policyWarns, f.scmSite, f.mpChoice, f.comps)
+	// After the facts' own warnings, which previewSafeWarnings has already filtered.
+	if f.adoNarrowed != "" {
+		response.Warnings = append(response.Warnings, f.adoNarrowed)
 	}
 	writeJSON(w, http.StatusOK, response)
 }

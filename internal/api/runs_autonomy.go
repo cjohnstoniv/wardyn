@@ -16,9 +16,9 @@ import (
 )
 
 // resolveRunAutonomy is THE autonomy gate (0.8 #97): one function, called from
-// both doors — handleCreateRun right after resolveEnforcedConfinement, and
-// handlePreflightRun right after enforcedConfinement — so the level Review
-// shows is the level launch enforces, by construction.
+// both doors — stepAutonomy, right after stepConfinement, for create and
+// preflight alike — so the level Review shows is the level launch enforces,
+// by construction.
 //
 // ONE gate rather than two, because the alternative has a name: if Review can
 // say a run is permitted and launch then refuses it, the rubric is decoration.
