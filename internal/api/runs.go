@@ -152,8 +152,6 @@ func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, worksp
 // mints the run identity, and (if a runner is wired) dispatches the sandbox.
 // Without a runner the run stays PENDING with a clear status message (headless
 // API-only operation is allowed for v0).
-//
-//nolint:funlen // Deliberate: one linear gate sequence whose ORDER is the contract (TestPreflightMirrorsLaunchGates reads it and its registered wrappers), so extracted gates remain visible to that guard. Each gate already lives in its own function; low branching, passes gocyclo/gocognit, just long.
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if s.refuseAdminViewLaunch(w, r) {
@@ -164,140 +162,27 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve the policy: inline_policy (validated here), explicit policy_id, or
-	// the configured default. resolveRunPolicy writes its own HTTP error and
-	// returns ok=false when it has already responded (XOR violation, invalid
-	// inline spec, missing/reserved inline secret ref, …) so we just stop.
-	// Its clamp/capability warnings ride the 201 (see policyWarns below): a
-	// member whose egress host, secret grant or workspace repo was narrowed
-	// away has to hear about it from the thing they actually called.
-	spec, policyID, policyWarns, policySource, ok := s.resolveRunPolicy(ctx, w, r, &req, false)
+	// Every gate between the decoded request and the mint is the shared fold's
+	// (runFoldSteps), the same sequence Review and the policy preview run. It
+	// writes its own refusal and stops on false, before any identity or row.
+	f, ok := s.foldRunRequest(w, r, foldCreate, &req, ceiling, reqCC)
 	if !ok {
 		return
 	}
-	// Fold the named workspace onto the resolved spec, then re-run every check
-	// that seeding can invalidate. Writes its own error and stops on false.
-	ephemeralDirs, ok := s.seedAndAdmitWorkspace(ctx, w, r, &spec, &req, true) // true: launch, #386's gate applies
-	if !ok {
-		return
-	}
-
-	// Resolve the run's USER DRIVE, AFTER the onboarding gate above: the drive
-	// is per-principal and never appears in the spec, so it deliberately does
-	// not pass through validateWorkspaceSources — but it must not be able to
-	// answer BEFORE the un-bypassable gate either. Writes its own 403/422 and
-	// stops on false. nil for the overwhelming majority of runs (no `drive`
-	// flag), which is a provable no-op: no store read at all.
-	driveMount, ok := s.seedRequestDrive(w, r, req, ceiling)
-	if !ok {
-		return
-	}
-
-	// Fold each referenced workspace's requirements contract into the spec
-	// BEFORE the confinement floor + risk grade read it. The deterministic CC3
-	// blast-radius floor is computed from spec.EligibleGrants, so a workspace's
-	// integration:<id> requirement — a third-party/production api_key grant —
-	// must be present when the floor is computed, or invariant 5's "powerful
-	// credentials run in the strongest sandbox" is silently bypassed. wsRefs is
-	// derived from the seeded spec's mounts/repos, which nothing below mutates, so
-	// it is equally valid here and is reused for the egress union + image
-	// resolution. The fold is the AUDIT-FREE half (applyWorkspaceRequirements
-	// returns its events) — the audit is recorded once the run id is minted, below.
-	wsRefs := s.referencedWorkspaces(ctx, spec)
-	// Caller-scoped secret namespace, resolved once: the presence map and the
-	// requirement fold read the SAME one. Shared with the warning below.
-	present := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
-	reqEvents := s.applyWorkspaceRequirementsFor(ctx, present, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
-	directGitHubAdded, refusal := s.unionDirectGitHubEgress(r, req, &spec, ceiling)
-	if refusal.write(s, w, r) {
-		return
-	}
-	// The run's components, bounded and expanded onto the spec here: after the
-	// folds above, so a host an admin already credentialed is seen; before the
-	// floor, the model-provider choice and the autonomy grade below, which read
-	// what a component adds. See applyRunComponents.
-	comps, refusal := s.applyRunComponents(r, req, &spec, ceiling, wsRefs, true)
-	if refusal.write(s, w, r) {
-		return
+	// mpChoice is this run's only source for ModelProviderID and the run.create
+	// snapshot (#527), with a zero provider when none serves this agent.
+	spec, wsRefs, comps, enforced, mpChoice, autonomy := f.spec, f.wsRefs, f.comps, f.enforced, f.mpChoice, f.autonomy
+	// resolveRunPolicy's clamp and capability notes ride the 201 and the
+	// run.create row; a member's bounded Azure DevOps list joins them (#1384).
+	policyWarns := f.policyWarns
+	if f.adoNarrowed != "" {
+		policyWarns = append(policyWarns, f.adoNarrowed)
 	}
 
 	// The primary host workspace directory this run will operate in (if any), used
 	// below to DISCOURAGE — warn, never block — sharing a directory with another
 	// active run.
 	workspacePath := primaryWorkspacePath(spec)
-
-	// Resolve + gate the confinement class (request vs policy floor, the CC3
-	// blast-radius floor now computed on the FOLDED spec, runner capability
-	// membership, cloud_sts grant gating) — invariant 5, fail closed.
-	enforced, ok := s.resolveEnforcedConfinement(ctx, w, confinementFloorSpec(spec, comps), reqCC)
-	if !ok {
-		return
-	}
-
-	// The model-provider choice: the run's provider decides its lane, and one
-	// whose credential its owner does not hold is refused here rather than at
-	// dispatch. mpChoice is this run's ONLY source for ModelProviderID below and
-	// for the run.create audit snapshot (#527) — mpChoice.chosen is false, with
-	// a zero mpChoice.provider, when no provider serves this agent, so
-	// ModelProviderID freezes "" there.
-	//
-	// Ahead of the autonomy gate because that gate grades THIS resolution: the
-	// Bedrock model credential is handed to the run at dispatch, and a secrets
-	// axis graded without it froze the level a rung too high (#504).
-	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs, true)
-	if !ok {
-		return
-	}
-	// The chosen provider's arm, or nothing, credentials the run; a Bedrock
-	// provider's run is graded with its owner's Bedrock credential.
-	modelCred := mpChoice.modelCredential()
-
-	// Posture-gated autonomy, resolved ONCE and enforced at both doors
-	// (handlePreflightRun calls the SAME gate). Sited after the enforced class
-	// because that class is the posture's third axis, after the model-credential
-	// gate because its resolution is graded on the secrets axis — and before the
-	// mint, so a refusal leaves no run row, and before
-	// createRunAuditData and the dispatchParams literal below, which both read
-	// the req.ToolApprovals this gate may derive to `hold`. Writes its own 403
-	// and stops on false; its warnings join the 201 list further down.
-	// scmSite is the one site-config snapshot the gate graded the SCM-host lane
-	// from; unionRunEgress below dispatches from the same value.
-	// adoGrade is what the gate RESOLVED about the per-person Azure DevOps lane;
-	// it rides to dispatch on the ceiling so the credential dispatch authors can
-	// only be the one this level was graded against (adoEntraGrade).
-	// bedrockGrade is the same freeze for the Amazon Bedrock model credential
-	// the gate graded from modelCred (bedrockCredGrade).
-	autonomy, autonomyWarns, scmSite, adoGrade, bedrockGrade, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling, modelCred, comps)
-	if !ok {
-		return
-	}
-	// A member's bounded Azure DevOps list is said out loud on the 201 and the
-	// run.create row (#1384); the none-permitted refusal is dispatch's, which
-	// preflight mirrors (adoStandingAtDoor).
-	if narrowed, _ := s.adoStandingAtDoor(r, spec, scmSite, ceiling); narrowed != "" {
-		policyWarns = append(policyWarns, narrowed)
-	}
-
-	// Host capacity, the last refusal and before the mint, the same siting as
-	// the autonomy gate: a refusal leaves no identity and no run row.
-	if writeHostCapacityRefusal(w, r, s.admitHostCapacity(r.Context(), principalFromRequest(r), "runs", true)) {
-		return
-	}
-
-	// The deployment run cap, refused before the mint for the same reason: no
-	// identity.mint row and no live token for a run that gets no row.
-	// CreateRunUnderCap (createRun) still decides a race at the cap.
-	if s.refuseRunCapFull(w, r) {
-		return
-	}
-
-	// The runs namespace's ResourceQuota, refused before the mint for the same reason: a run
-	// the quota cannot hold leaves no identity, no run row and no sandbox. The advisories
-	// join the 201's warnings. The quota's own admission stays the authority on a race.
-	fitWarnings, refused := s.refuseRunFit(w, r, s.runFitSpec(ctx, spec, ceiling))
-	if refused {
-		return
-	}
 
 	createdByType, createdBy := actorFromRequest(r)
 	runID := uuid.New()
@@ -324,7 +209,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		Task:             req.Task,
 		Title:            strings.TrimSpace(req.Title),
 		Description:      strings.TrimSpace(req.Description),
-		PolicyID:         policyID,
+		PolicyID:         f.policyID,
 		ConfinementClass: enforced,
 		State:            types.RunPending,
 		SPIFFEID:         id.SPIFFEID,
@@ -396,15 +281,15 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// The autonomy gate's own sentences (a derived hold; an agent with no
 	// agent-side tool-approval lane), raised before the run id existed and
 	// carried here — this is the only channel that reaches the caller.
-	warnings = append(warnings, autonomyWarns...)
+	warnings = append(warnings, f.autonomyWarns...)
 	// The two things provider admission ADMITTED rather than refused; see
 	// repoSourceWarnings.
 	warnings = append(warnings, s.repoSourceWarnings(ctx, runID, spec, req)...)
-	warnings = append(warnings, fitWarnings...)
+	warnings = append(warnings, f.fitWarnings...)
 
 	// The requirements fold that ran ABOVE the confinement floor, audited now
 	// that the run id exists. See recordCreateFolds.
-	s.recordCreateFolds(ctx, runID, reqEvents)
+	s.recordCreateFolds(ctx, runID, f.reqEvents)
 
 	// Persist the eligibility records + derive the non-secret sandbox wiring
 	// (github/git_pat/ssh grant ids, api_key proxy injections, SCM egress) —
@@ -429,15 +314,15 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	gw.augmentGitBrokerGrants(req.Repo, spec.WorkspaceRepos)
 
 	// credentialConfinementAdvisory (#150): a run whose model credential just
-	// graded as the captured-AWS-SSO lane (modelCred.Kind, above) but
+	// graded as the captured-AWS-SSO lane (f.modelCred.Kind, stepModelProvider) but
 	// whose enforced confinement is weaker than CC3 gets that said on every
 	// surface a person or an incident review reads — the 201, and (below) the
 	// audit row's closed-vocabulary credential_confinement field. WARN, never
 	// refuse: RequiredConfinementFloor above is untouched, on purpose.
-	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, modelCred.Kind)
+	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, f.modelCred.Kind)
 
-	createData := createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
-	createData["policy_source"] = policySource
+	createData := createRunAuditData(req, f.policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
+	createData["policy_source"] = f.source
 	comps.stampRunCreate(createData)
 	s.markGovernanceExempt(ctx, createData)
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
@@ -450,7 +335,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
 	// ADO SCM lanes) — never the LLM; see unionRunEgress.
-	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo, scmSite, directGitHubAdded, comps)
+	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo, f.scmSite, f.directGitHubAdded, comps)
 
 	// …and say so when one of those operator-approved workspace hosts is walled
 	// off by the caller's own governance profile. The union above still happened
@@ -481,8 +366,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+runID.String())
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
 	launch := createRunLaunch{
-		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, adoGrade, bedrockGrade), gw: gw,
-		wsRefs: wsRefs, driveMount: driveMount, ephemeralDirs: ephemeralDirs,
+		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
+		wsRefs: wsRefs, driveMount: f.driveMount, ephemeralDirs: f.ephemeralDirs,
 		runToken: id.Token, created: created, comps: comps,
 	}
 	launchCtx := context.WithoutCancel(ctx)
@@ -502,12 +387,12 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // LAST because it is the single chokepoint on the RESOLVED spec, which is what
 // makes it un-bypassable by a hand-authored stored policy.
 //
-// gate is #386's launch door (review finding F5): LAUNCH (runs.go's own
-// caller) passes true, so gitCredentialRefusal runs here TOO — over
+// gate is #386's launch door (review finding F5): LAUNCH (stepSeedWorkspace
+// for foldCreate) passes true, so gitCredentialRefusal runs here TOO — over
 // spec.WorkspaceRepos, the resolved set a workspace_id, a SECOND workspace,
 // a non-first repo, a stored policy or a hand-authored inline policy all
 // fold into, which requestRepoProviderRefusals' two free-text fields alone
-// never see. Review (preflight.go) passes false: see that gate's own doc
+// never see. Review (foldPreflight) passes false: see that gate's own doc
 // comment.
 func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWriter, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest, gate bool) ([]string, bool) {
 	dirs, refusal := s.seedAuthorizedWorkspace(ctx, r, spec, req)
