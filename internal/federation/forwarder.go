@@ -186,7 +186,7 @@ func (f *Forwarder) step(ctx context.Context) (time.Duration, bool) {
 	}
 	f.update(func(s *Status) { s.HeadSeq = head })
 
-	more, err := f.cursor.Step(ctx)
+	more, err := f.advance(ctx)
 	acked := f.cursor.Pos().Seq
 	if err != nil {
 		f.update(func(s *Status) { s.AckedSeq = acked })
@@ -203,6 +203,16 @@ func (f *Forwarder) step(ctx context.Context) (time.Duration, bool) {
 		return 0, false
 	}
 	return f.interval, false
+}
+
+// advance steps the cursor; a halted forwarder with nothing acknowledged only
+// heart-beats, reading no rows.
+func (f *Forwarder) advance(ctx context.Context) (bool, error) {
+	if f.halted && f.cursor.Pos().Seq == 0 {
+		_, err := f.client.Heartbeat(ctx, f.cred)
+		return false, err
+	}
+	return f.cursor.Step(ctx)
 }
 
 // auditSource adapts Store to ackcursor.Source.

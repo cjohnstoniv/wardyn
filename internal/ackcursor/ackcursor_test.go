@@ -40,13 +40,24 @@ func (s *fakeSink) Deliver(_ context.Context, rows []row) (int64, error) {
 	return s.ack(rows), nil
 }
 
-type memStore struct{ pos Pos }
+type memStore struct {
+	pos    Pos
+	getErr error
+	setErr error
+}
 
-func (m *memStore) Get(context.Context) (Pos, error) { return m.pos, nil }
+func (m *memStore) Get(context.Context) (Pos, error) { return m.pos, m.getErr }
 func (m *memStore) Set(_ context.Context, p Pos) error {
+	if m.setErr != nil {
+		return m.setErr
+	}
 	m.pos = p
 	return nil
 }
+
+type errSource struct{ err error }
+
+func (s errSource) After(context.Context, int64, int) ([]row, error) { return nil, s.err }
 
 func chain(n int) []row {
 	var rs []row
@@ -171,4 +182,48 @@ func TestSinkNeverMovesCursorPastRowsRead(t *testing.T) {
 	if st.pos.Seq != 2 {
 		t.Fatalf("seq = %d, want 2", st.pos.Seq)
 	}
+}
+
+func TestResetIsDurableEvenWhenSinkFails(t *testing.T) {
+	st := &memStore{pos: Pos{2, "hc"}}
+	sink := &fakeSink{fail: errors.New("down")}
+	c := newCursor(&fakeSource{[]row{{1, "ha"}}}, sink, st, 10)
+	_ = c.Load(context.Background())
+	if _, err := c.Step(context.Background()); err == nil {
+		t.Fatal("want the sink error")
+	}
+	if st.pos != (Pos{}) || c.Pos() != (Pos{}) {
+		t.Fatalf("stored %v, pos %v, want both reset", st.pos, c.Pos())
+	}
+}
+
+func TestErrorsLeavePositionUnchanged(t *testing.T) {
+	boom := errors.New("boom")
+	start := Pos{1, "hb"}
+	ctx := context.Background()
+
+	t.Run("load", func(t *testing.T) {
+		c := newCursor(&fakeSource{}, &fakeSink{ack: ackAll}, &memStore{pos: start, getErr: boom}, 10)
+		if err := c.Load(ctx); !errors.Is(err, boom) || c.Pos() != (Pos{}) {
+			t.Fatalf("Load err = %v pos = %v", err, c.Pos())
+		}
+	})
+	t.Run("source", func(t *testing.T) {
+		st := &memStore{pos: start}
+		c := newCursor(&fakeSource{}, &fakeSink{ack: ackAll}, st, 10)
+		c.Source = errSource{boom}
+		_ = c.Load(ctx)
+		if _, err := c.Step(ctx); !errors.Is(err, boom) || c.Pos() != start || st.pos != start {
+			t.Fatalf("err = %v pos = %v stored = %v", err, c.Pos(), st.pos)
+		}
+	})
+	t.Run("store set", func(t *testing.T) {
+		st := &memStore{pos: start}
+		c := newCursor(&fakeSource{chain(3)}, &fakeSink{ack: ackAll}, st, 10)
+		_ = c.Load(ctx)
+		st.setErr = boom
+		if _, err := c.Step(ctx); !errors.Is(err, boom) || c.Pos() != start || st.pos != start {
+			t.Fatalf("err = %v pos = %v stored = %v", err, c.Pos(), st.pos)
+		}
+	})
 }
