@@ -483,3 +483,30 @@ func TestClientRefusesReadyWithoutFinalPage(t *testing.T) {
 		t.Fatal("incomplete inventory admitted dispatch")
 	}
 }
+
+// A READY earlier session must not make the next fresh, incomplete one resumable.
+func TestHubInventoryEarlierReadyCannotResumeIncompleteFreshSession(t *testing.T) {
+	eachTransport(t, func(t *testing.T, realWire bool) {
+		f := newInventoryFixture(t, realWire)
+		a, _, _ := f.open(t, nil)
+		writeFrames(t, f.ctx, a, 0, stateFrame(t, inventoryPages(orderedRuns(1))[0]), runnerwire.Frame{Type: runnerwire.TypeReady})
+		waitOnline(t, f.ctx, f.link)
+		_ = a.Close()
+		awaitValue(t, f.ctx, f.hubDone)
+
+		b, okB, seqB := f.open(t, nil)
+		writeFrames(t, f.ctx, b, 0, stateFrame(t, inventoryPages(orderedRuns(runnerwire.StatePageRows + 1))[0]))
+		_ = b.Close()
+		awaitValue(t, f.ctx, f.hubDone)
+
+		c := f.dial()
+		t.Cleanup(func() { _ = c.Close() })
+		okC, err := runnerwire.AuthenticateOrg(f.ctx, c, f.row.ID.String(), f.orgURL, f.key, &runnerwire.Resume{SessionID: okB.SessionID, LastSeq: seqB})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if okC.Resumed || f.link.Online() {
+			t.Fatalf("incomplete fresh session resumed on an earlier READY: resumed=%v online=%v", okC.Resumed, f.link.Online())
+		}
+	})
+}
