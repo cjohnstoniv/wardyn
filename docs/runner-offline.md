@@ -32,3 +32,19 @@ mount. Admission captures a fresh connection epoch; reconnect invalidates it.
 Only a new admitted decision from the current epoch may send an unbuffered
 activity signal. Historical spool replay and retained old markers cannot renew
 the idle clock, mint credentials, or revive a run.
+
+Reconnect STATE cannot restore credentials or lifecycle state. The org rejects
+stale execution assertions and missing live sandboxes before READY. A fresh
+connection drop alone has no teardown effect; database token lapse enters the
+existing kept-loss path, including for headless local runs. Missing or omitted
+already-kept sandboxes do not create a permanent reconnect loop, while pending
+containment actions continue to block admission independently.
+
+A kept outage sandbox whose proxy remains up requires a durable stop-proxy action
+before the next STATE/READY. Only that action's first exact successful result can
+record late containment, in the same transaction as its acknowledgment. The
+proof binds the owner, runner, reference, lost timestamp and issued execution
+generation; a pre-execution sandbox instead requires that no execution has yet
+been issued. The queued proof stays immutable, and another incarnation remains
+fenced until settlement. The audit records organisation arrival time and labels
+the runner's observed time as asserted evidence. It never restores credentials.

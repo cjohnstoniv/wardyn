@@ -62,7 +62,7 @@ func (s PG) RecordRunnerContainmentTx(ctx context.Context, tx pgx.Tx, proof Runn
 	if err != nil {
 		return err
 	}
-	if action.RunnerID != proof.RunnerID || action.RunID != proof.RunID || action.Kind != types.RunnerActionStopProxy || action.Ref != proof.Ref || action.AppliedAt == nil || action.Outcome != "success" || action.ObservedAt == nil || !action.ObservedAt.Equal(proof.ObservedAt) {
+	if !runnerContainmentActionMatches(action, proof) {
 		return ErrRunnerExecutionRefused
 	}
 	var arrival time.Time
@@ -75,4 +75,11 @@ func (s PG) RecordRunnerContainmentTx(ctx context.Context, tx pgx.Tx, proof Runn
 		return err
 	}
 	return InsertAuditEventTx(ctx, tx, &ev)
+}
+
+func runnerContainmentActionMatches(action types.RunnerPendingAction, proof RunnerContainmentProof) bool {
+	return action.RunnerID == proof.RunnerID && action.RunID == proof.RunID &&
+		action.Kind == types.RunnerActionStopProxy && action.Ref == proof.Ref &&
+		action.AppliedAt != nil && action.Outcome == "success" &&
+		action.ObservedAt != nil && action.ObservedAt.Equal(proof.ObservedAt)
 }
