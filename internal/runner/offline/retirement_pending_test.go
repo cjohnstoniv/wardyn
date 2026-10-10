@@ -37,8 +37,8 @@ func TestMissingOutputRetirementDefersWithoutStrandingPending(t *testing.T) {
 		return nil
 	}})
 	peer := runnerwire.NewPeer(runConn, runnerwire.PeerConfig{})
-	org.Start(ctx)
-	peer.Start(ctx)
+	org.Start(ctx, 0)
+	peer.Start(ctx, 0)
 	defer org.Close()
 	defer peer.Close()
 	m.Offline(ctx)
