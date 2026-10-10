@@ -87,25 +87,10 @@ func (f *fakeKMS) fail(op string, status int, code string) {
 	f.faults[op] = kmsFault{status, code}
 }
 
-func (f *fakeKMS) clearFaults() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	clear(f.faults)
-}
-
 func (f *fakeKMS) callCount(op string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls[op]
-}
-
-func (f *fakeKMS) lastContext() map[string]string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.contexts) == 0 {
-		return nil
-	}
-	return f.contexts[len(f.contexts)-1]
 }
 
 func (f *fakeKMS) allContexts() []map[string]string {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"filippo.io/age"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -97,12 +98,32 @@ func TestKEK_PGSealReadAndMovedWrap(t *testing.T) {
 			}
 		}
 	}
+	if got := s.KeyService(); got != "AWS KMS in us-east-1" || s.KeyServiceStaticKey() {
+		t.Fatalf("KeyService = %q, KeyServiceStaticKey = %v; want AWS KMS in us-east-1 under role credentials", got, s.KeyServiceStaticKey())
+	}
 	readAll(s, "after the writes")
 	readAll(kekStore(t, pool, newTestKEK(t, f)), "on a restarted wardynd")
 
 	var kekID string
 	if err := pool.QueryRow(ctx, `SELECT kek_id FROM secrets WHERE owned_by='alice@example.com' AND name='pat'`).Scan(&kekID); err != nil || kekID != k.ID() {
 		t.Fatalf("kek_id = (%q, %v); want %q", kekID, err, k.ID())
+	}
+	// Under a long-lived access key the store says so, but only while the KEK wraps writes.
+	useCreds(t, longLivedKeyID, "")
+	static, err := NewKEK(ctx, Config{KeyARN: f.arn, Endpoint: f.srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := kekStore(t, pool, static); !st.KeyServiceStaticKey() {
+		t.Fatal("KeyServiceStaticKey = false under a long-lived access key")
+	}
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readOnly, err := secretstore.New("pg", secretstore.Deps{Pool: pool, KEK: static, AgeIdentity: id})
+	if err != nil || readOnly.(*secretstorepg.Store).KeyServiceStaticKey() {
+		t.Fatalf("a read-only AWS KMS KEK reports a key service in use: (%v, %v)", readOnly, err)
 	}
 	d := secretstore.Deps{Pool: pool, KEK: k, KEKWrites: true}
 	if res, err := secretstorepg.RewrapKeys(ctx, d); err != nil || res.Rewrapped != 0 || res.KeyService != k.ID() {
@@ -113,7 +134,7 @@ func TestKEK_PGSealReadAndMovedWrap(t *testing.T) {
 		FROM secrets AS a WHERE a.owned_by='' AND a.name='github-app-key' AND b.owned_by='alice@example.com' AND b.name='pat'`); err != nil {
 		t.Fatal(err)
 	}
-	_, err := s.For("alice@example.com").Get(ctx, "pat")
+	_, err = s.For("alice@example.com").Get(ctx, "pat")
 	if err == nil || errors.Is(err, secretstore.ErrUnavailable) || errors.Is(err, secretstore.ErrNotFound) || !errors.Is(err, kek.ErrRefused) {
 		t.Fatalf("Get of a row carrying another row's wrap = %v; want a definitive kek.ErrRefused", err)
 	}

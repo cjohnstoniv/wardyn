@@ -486,17 +486,18 @@ func run() error {
 		// "no", or a misspelling) leaves the broker ON.
 		DisableGitPATBroker: strings.EqualFold(strings.TrimSpace(*f.gitPATBroker), "off"),
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
-		AgeKeyDurable:         secretsDurable(*f.ageKey, secrets),
-		SecretStoreExternal:   storesExternally(secrets),
-		SecretKeyService:      keyService(secrets),
-		KEKRequired:           *f.vault.kekRequired,
-		PlatformKeySeparate:   platformKeySeparate(f, keyService(secrets) != ""),
-		LocalLoopback:         lm.loopback,
-		LocalTrustForwarder:   *f.localTrustFwd,
-		OIDCRoleMapConfigured: strings.TrimSpace(*f.oidcRoleMap) != "",
-		OIDCRedirectURL:       *f.oidcRedirectURL,
-		OIDCSecureCookies:     posture.secureCookies,
-		BasePath:              *f.basePath,
+		AgeKeyDurable:             secretsDurable(*f.ageKey, secrets),
+		SecretStoreExternal:       storesExternally(secrets),
+		SecretKeyService:          keyService(secrets),
+		SecretKeyServiceStaticKey: keyServiceStaticKey(secrets),
+		KEKRequired:               *f.vault.kekRequired,
+		PlatformKeySeparate:       platformKeySeparate(f, keyService(secrets) != ""),
+		LocalLoopback:             lm.loopback,
+		LocalTrustForwarder:       *f.localTrustFwd,
+		OIDCRoleMapConfigured:     strings.TrimSpace(*f.oidcRoleMap) != "",
+		OIDCRedirectURL:           *f.oidcRedirectURL,
+		OIDCSecureCookies:         posture.secureCookies,
+		BasePath:                  *f.basePath,
 		// SSH gateway (C2/C3): SSHHostKey is nil unless -ssh-listen is set
 		// (buildOptionalFeatures), which is also the sole gate ServeSSHGateway
 		// itself checks below — belt and suspenders, "empty = off" holds either

@@ -213,6 +213,7 @@ var decryptSites = map[string]string{
 	"internal/secretstore/pg/external.go|Store.openExternal|External.Get":          "a store-mode Get reads the value from the organisation's store, after the pointer row is checked",
 	"internal/secretstore/vaultkv/transit.go|Transit.selfTest|KEK.Unwrap":          "the Transit boot self-test unwraps a random probe data key it just wrapped, never a stored one",
 	"internal/secretstore/azurekv/kek.go|KEK.selfTest|KEK.Unwrap":                  "the Key Vault KEK boot self-test unwraps a random probe data key it just wrapped, never a stored one",
+	"internal/secretstore/awskms/kek.go|KEK.selfTest|KEK.Unwrap":                   "the AWS KMS KEK boot self-test unwraps a random probe data key it just wrapped, never a stored one",
 	"internal/secretstore/subjectkey/subjectkey.go|Manager.fill|KEK.Unwrap":        "a use opens a per-subject key, bound to its owner, purpose, version and domain; it is the key that seals a person's rows, never a stored credential value",
 	"internal/secretstore/subjectkey/rewrap.go|Rewrap|KEK.Unwrap":                  "-rewrap and -rotate-age-key move a per-subject key's wrap onto the current KEK; no sealed value is opened",
 	"internal/api/run_proxy_config.go|Server.loadRunProxyConfig|kek.Open":          "a revive or an extend opens its run's stored proxy config (#1176), bound to the run, to rebuild the proxy it hands the config to",

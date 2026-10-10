@@ -206,10 +206,10 @@ func (k *KEK) Wrap(ctx context.Context, dek []byte, bind map[string]string) ([]b
 		return nil, k.serviceErr(err)
 	}
 	if aws.ToString(out.KeyId) != k.arn {
-		return nil, k.answerErr(fmt.Errorf("Encrypt answered for key %q, not the configured key", aws.ToString(out.KeyId)))
+		return nil, k.answerErr(fmt.Errorf("KMS Encrypt answered for key %q, not the configured key", aws.ToString(out.KeyId)))
 	}
 	if n := len(out.CiphertextBlob); n == 0 || n > maxBlob {
-		return nil, k.answerErr(fmt.Errorf("Encrypt answered a %d-byte ciphertext", n))
+		return nil, k.answerErr(fmt.Errorf("KMS Encrypt answered a %d-byte ciphertext", n))
 	}
 	return kek.Encode(wrapLabel, string(out.CiphertextBlob)), nil
 }
@@ -239,10 +239,10 @@ func (k *KEK) Unwrap(ctx context.Context, wrapped []byte, bind map[string]string
 		return nil, k.serviceErr(err)
 	}
 	if aws.ToString(out.KeyId) != k.arn {
-		return nil, k.answerErr(fmt.Errorf("Decrypt answered for key %q, not the configured key", aws.ToString(out.KeyId)))
+		return nil, k.answerErr(fmt.Errorf("KMS Decrypt answered for key %q, not the configured key", aws.ToString(out.KeyId)))
 	}
 	if len(out.Plaintext) != kek.DEKSize {
-		return nil, k.answerErr(fmt.Errorf("Decrypt did not answer a %d-byte data key", kek.DEKSize))
+		return nil, k.answerErr(fmt.Errorf("KMS Decrypt did not answer a %d-byte data key", kek.DEKSize))
 	}
 	return out.Plaintext, nil
 }
