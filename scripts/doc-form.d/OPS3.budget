@@ -1,0 +1,42 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. The multi-user split (#1519) moved the
+# People, governance, capabilities and API-token material out of docs/OPERATIONS.md into twelve task
+# pages under docs/operations/; each is budgeted at its measured size, and OPERATIONS.md's budget is
+# reduced to its size after the move. Text moved verbatim, so a page's count is what left the shared
+# file less its stub lines.
+#
+# docs/operations/who-gets-in.md=1444 is the "Multi-user: who can change what" preamble, "Who decides
+# who gets in: chart vs console vs IdP" and "Wins a collision: chart / env", less the "What admin-only
+# still means" block (below) and the page lead.
+# docs/operations/admin-only-writes.md=2864 is "**What admin-only still means**" through the ratchet
+# paragraph — the `| Surface | Gate |` tier table operations_tier_doc_test.go reads cell by cell.
+# docs/operations/three-roles.md=4010 is "Three roles, and who sets the walls", "When everyone is an
+# admin, and what a refused person is told" and "UI apps with more than one user: use host mode".
+# docs/operations/provider-policy.md=1274 is "Who writes the provider policy: console vs CLI/MDM" and
+# its "Clearing a block" sub-block.
+# docs/operations/ownership-and-offboarding.md=2367 is the ownership-scoping half of the old section:
+# run/workspace/secret ownership, drive offboarding, the credential erase and the ordered offboarding.
+# docs/operations/governance-writes.md=2717 is the second-human switches, the four-eyes rules and the
+# four-eyes walkthrough.
+# docs/operations/member-runs.md=1035 is the credential and egress decision scopes, the member policy
+# clamp and the first-run prompts.
+# docs/operations/user-drives.md=4795 is "Reclaiming a departed person's storage", "User drives on
+# Docker" and their sub-blocks.
+# docs/operations/capabilities.md=3859 is "Capabilities: what one member, or one group, may do" and its
+# four kind sub-blocks.
+# docs/operations/custom-components.md=1177 is "Custom components".
+# docs/operations/api-tokens.md=3982 is "Per-user API tokens", "Tokens for a person who never signs in"
+# and "Delegated run management (portals)".
+# docs/operations/denials.md=4633 is "Every denial that isn't a 404" — the `| reason |` table
+# authz_denied_doc_test.go and docs_r3_guard_test.go read.
+docs/operations/who-gets-in.md=1444 share=35
+docs/operations/admin-only-writes.md=2864 share=35
+docs/operations/three-roles.md=4010 share=35
+docs/operations/provider-policy.md=1274 share=35
+docs/operations/ownership-and-offboarding.md=2367 share=35
+docs/operations/governance-writes.md=2717 share=35
+docs/operations/member-runs.md=1035 share=35
+docs/operations/user-drives.md=4795 share=35
+docs/operations/capabilities.md=3859 share=35
+docs/operations/custom-components.md=1177 share=35
+docs/operations/api-tokens.md=3982 share=35
+docs/operations/denials.md=4633 share=35

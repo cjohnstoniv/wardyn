@@ -193,7 +193,7 @@ Three more the tier inherits rather than introduces:
 - A run resolves its own owner's row and falls back to the operator's, never to another member's.
 - The model-credential names — `anthropic-api-key`, `openai-api-key`, `bedrock-api-key` and the three AWS SigV4 names (`aws-access-key-id`, `aws-secret-access-key`, `aws-session-token`) — are refused for everyone, the operator included, with a `403 secret_name_reserved` that names Settings → Model providers.
 - A member's model credential lives on a model provider, connected by that person for themselves (`PUT /api/v1/model-providers/{id}/credential`), never in a secret they name.
-- See [OPERATIONS.md § Multi-user](OPERATIONS.md#multi-user-who-can-change-what).
+- See [who-gets-in.md § Multi-user](operations/who-gets-in.md#multi-user-who-can-change-what).
 
 **Mounting their own project directory.**
 

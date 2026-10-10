@@ -20,7 +20,7 @@
 ## Before you start
 
 1. **A control plane with sign-in, and a CI principal that is not an admin.**
-   - A profile binds a signed-in principal below `admin`; the admin token and local mode are exempt from every ceiling ([OPERATIONS.md](OPERATIONS.md#three-roles-and-who-sets-the-walls)).
+   - A profile binds a signed-in principal below `admin`; the admin token and local mode are exempt from every ceiling ([three-roles.md](operations/three-roles.md#three-roles-and-who-sets-the-walls)).
    - Give CI a dedicated person (role `user`) and mint that person's own `wdn_` token, as [CI.md](CI.md#cis-identity) describes.
    - Export it as `WARDYN_TOKEN` on the launcher.
    - `CI_USER` below is that person's email or sign-in subject.

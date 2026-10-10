@@ -346,7 +346,7 @@ A successful response contains `spec` (authorized, clamped, workspace-folded and
 
 ## Custom components
 
-A run can carry components that add destinations and secrets ([POLICIES.md](POLICIES.md#custom-components) defines them; [OPERATIONS.md](OPERATIONS.md#custom-components) is the admin side). The client wraps both stores of them.
+A run can carry components that add destinations and secrets ([POLICIES.md](POLICIES.md#custom-components) defines them; [custom-components.md](operations/custom-components.md) is the admin side). The client wraps both stores of them.
 
 | Method | Route | Who |
 |---|---|---|
