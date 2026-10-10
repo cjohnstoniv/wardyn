@@ -409,6 +409,27 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.queryByText("run.subscription.inject")).not.toBeInTheDocument();
   });
 
+  // The two dispatch-time resolve rows every run writes — the effective policy
+  // and the corporate upstream proxy — rendered as raw dotted names, which is
+  // the exact sentence an operator reads when asking "what did this run
+  // actually run under".
+  it("renders prose for the dispatch-time policy and upstream-proxy resolve rows", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "e1", action: "run.policy.resolve", target: "run-1", data: { allowed_domains: ["example.test"] } }),
+      ev({ id: "e2", action: "run.upstream_proxy.resolve", target: "run-1", data: { in_effect: true } }),
+      ev({ id: "e3", action: "run.upstream_proxy.resolve", target: "run-2", outcome: "failure", data: { in_effect: false, reason: "unresolvable" } }),
+    ]);
+    renderScreen();
+
+    expect(await screen.findByText(/Resolved the policy this run was given/)).toBeInTheDocument();
+    // A failure row reads the same sentence as a success one: the outcome
+    // chip carries the difference, and a proxy that did not resolve left the
+    // run on direct egress rather than refusing it.
+    expect(screen.getAllByText(/Resolved the corporate proxy for the run's egress/)).toHaveLength(2);
+    expect(screen.queryByText("run.policy.resolve")).not.toBeInTheDocument();
+    expect(screen.queryByText("run.upstream_proxy.resolve")).not.toBeInTheDocument();
+  });
+
   // run.subscription.inject is a credential event (the subscription
   // credential being injected proxy-side) wearing a run.* prefix — without an
   // explicit override it falls into the run.*/session.*/policy.* lifecycle
