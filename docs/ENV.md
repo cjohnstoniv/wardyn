@@ -1922,7 +1922,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The brokered `<proxy>/wardyn/llm/openai` route plus the path the final upstream needs
 - (`/v1` for the public OpenAI host or a gateway whose base URL has an empty path, nothing extra when the gateway carries its own prefix; `codexBaseURL`, [`internal/api/runs_dispatch_provider.go`](../internal/api/runs_dispatch_provider.go)).
 - Set by dispatch for every non-subscription codex run, next to `CODEX_API_KEY=wardyn-proxy-injected`, the inert sentinel.
-- codex 0.149.1 reads neither `OPENAI_BASE_URL` nor `OPENAI_API_KEY` (still set, for an older codex in an operator image)
+- Only the pinned codex (0.149.1) is supported. It reads neither `OPENAI_BASE_URL` nor `OPENAI_API_KEY`; dispatch still sets both, inert, and they are deprecated and will be removed in a later release. An older codex in an operator image is not supported.
 - So the codex image's `prepare_codex_config` ([`deploy/images/codex-cli/agent-run`](../deploy/images/codex-cli/agent-run)) writes this into `config.toml` as a top-level `openai_base_url` and runs `codex login --with-api-key` with the sentinel for the interactive tool.
 - Each is written only when its variable is non-empty.
 - The proxy replaces the sentinel on the wire; no real key is in the sandbox.
