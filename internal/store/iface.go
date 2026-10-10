@@ -357,8 +357,7 @@ type PG struct {
 	// Now is THE APP CLOCK, letting a test run one that disagrees with the
 	// database's. Nil means time.Now. Every stamp this store writes belongs on
 	// the DATABASE's clock; the app clock only measures an ELAPSED TIME (a
-	// difference of two readings, carrying no skew) that a statement then
-	// subtracts from the database's own now(). See db.AppClockAgeSQL.
+	// difference of two readings, carrying no skew) measured after a successful DB-clock read. See db.CaptureAppClock.
 	Now func() time.Time
 
 	// SIEM, when set, receives the audit rows this store writes in its own transaction (the retention

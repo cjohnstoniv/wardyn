@@ -42,51 +42,35 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 	if err != nil {
 		return types.APIToken{}, err
 	}
-	// created_at is written on the database's clock, back-dated by the request's
-	// own age, rather than binding t.CreatedAt straight through: the row's
-	// timestamp must not come from wardynd's clock while what it's compared
-	// against (oidc_session_revocations.revoked_at) comes from Postgres.
-	// SECURITY: with wardynd ahead of the database, a token minted BEFORE a
-	// revoke could carry a created_at AFTER the cutoff and survive it —
-	// "revoke every session for this human" would silently not.
-	//
-	// The age, not now(): the API stamps t.CreatedAt at request ADMISSION,
-	// before reading the body, so a caller holding a mint open across
-	// POST /sessions/revoke can't land a created_at after the cutoff; now()-age
-	// keeps that while measuring skew-free on the app's own clock.
-	//
-	// A ZERO CreatedAt means no admission time to preserve, so it becomes the
-	// database's now(). Fail closed is NOT the answer here — an age of two
-	// millennia would mint a token already revoked by any cutoff on record.
-	age := int64(0)
-	if !t.CreatedAt.IsZero() {
-		age = db.AppClockAgeMicros(t.CreatedAt, time.Now())
-	}
-	// expires_at rides the same clock: the lifetime (ExpiresAt - CreatedAt, two
-	// readings of the app clock) is added to the created_at the database stamps,
-	// so wardynd's skew against Postgres never shortens or lengthens a token.
-	// NULL (no ExpiresAt) is a token that never expires.
-	var lifetime *int64
-	if t.ExpiresAt != nil {
-		from := t.CreatedAt
-		if from.IsZero() {
-			from = time.Now()
-		}
-		us := t.ExpiresAt.Sub(from).Microseconds()
-		lifetime = &us
-	}
-	// q is built, not const: the created_at expression (db.AppClockAgeSQL) is
-	// shared with the session-revocation read and a const can't call it.
-	q := `
+	// Freeze the admission timestamp on the DB clock inside the guard. Later
+	// pool/row waits cannot move a mint admitted before a revoke past its cutoff.
+	const q = `
 		INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, expires_at, minted_by, identity_stamped_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,` + db.AppClockAgeSQL("$10") + `,
-		        CASE WHEN $11::bigint IS NULL THEN NULL ELSE ` + db.AppClockAgeSQL("$10") + ` + $11::bigint * interval '1 microsecond' END,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+		        CASE WHEN $11::bigint IS NULL THEN NULL ELSE $10::timestamptz + $11::bigint * interval '1 microsecond' END,
 		        NULLIF($12, ''), now())
 		RETURNING ` + apiTokenCols
 	var out types.APIToken
 	err = s.guarded(ctx, func(qr queryRower) (e error) {
+		anchor, e := db.CaptureAppClock(ctx, qr, s.now)
+		if e != nil {
+			return e
+		}
+		createdAt := anchor.DatabaseAt
+		if !t.CreatedAt.IsZero() {
+			createdAt = anchor.Translate(t.CreatedAt)
+		}
+		var lifetime *int64
+		if t.ExpiresAt != nil {
+			from := t.CreatedAt
+			if from.IsZero() {
+				from = anchor.AppAt
+			}
+			us := t.ExpiresAt.Sub(from).Microseconds()
+			lifetime = &us
+		}
 		out, e = scanAPIToken(qr.QueryRow(ctx, q,
-			t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), age, lifetime, t.MintedBy))
+			t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), createdAt, lifetime, t.MintedBy))
 		return e
 	})
 	if err != nil {

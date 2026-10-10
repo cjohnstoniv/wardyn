@@ -86,7 +86,7 @@ func (s PG) Ping(ctx context.Context) error {
 // column, in order (TestCreateRunBindsEveryInsertColumn).
 var createRunSQL = `
 		INSERT INTO agent_runs (` + runInsertCols + `)
-		VALUES ($1,$2,` + db.AppClockAgeSQL("$3") + `,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39)
 		RETURNING ` + runCols
 
 // CreateRun inserts a new run and returns the persisted row.
@@ -97,6 +97,15 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 	}
 	var out types.AgentRun
 	err = s.guarded(ctx, func(q queryRower) (e error) {
+		anchor, e := db.CaptureAppClock(ctx, q, s.now)
+		if e != nil {
+			return e
+		}
+		if r.UpdatedAt.IsZero() {
+			args[2] = anchor.DatabaseAt
+		} else {
+			args[2] = anchor.Translate(r.UpdatedAt)
+		}
 		out, e = scanRun(q.QueryRow(ctx, createRunSQL, args...))
 		return e
 	})
@@ -136,6 +145,15 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 	}
 	if active >= limit {
 		return types.AgentRun{}, ErrRunCapReached
+	}
+	anchor, err := db.CaptureAppClock(ctx, tx, s.now)
+	if err != nil {
+		return types.AgentRun{}, err
+	}
+	if r.UpdatedAt.IsZero() {
+		args[2] = anchor.DatabaseAt
+	} else {
+		args[2] = anchor.Translate(r.UpdatedAt)
 	}
 	created, err := scanRun(tx.QueryRow(ctx, createRunSQL, args...))
 	if err != nil {
@@ -186,19 +204,12 @@ func (s PG) CountNonTerminalRuns(ctx context.Context) (int, error) {
 }
 
 func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
-	// updated_at is stamped on the DATABASE's clock like every other writer,
-	// back-dated by the row's own age so an app-clock write here can't skew the
-	// idle reaper's DB-clock idleness measurement (30s TouchDebounce margin).
-	updatedAge := int64(0)
-	if !r.UpdatedAt.IsZero() {
-		updatedAge = db.AppClockAgeMicros(r.UpdatedAt, s.now())
-	}
 	limitsJSON, err := json.Marshal(r.RunLimits)
 	if err != nil {
 		return nil, fmt.Errorf("store: marshal run limits: %w", err)
 	}
 	return []any{
-		r.ID, r.CreatedAt, updatedAge, r.CreatedBy, r.Agent, r.Repo, r.Task,
+		r.ID, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.Agent, r.Repo, r.Task,
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
 		r.SPIFFEID, r.RunnerTarget, r.SandboxRef, r.Interactive, r.WorkspacePath, r.WorkspaceID, r.SourceID, r.Image, r.AutoStopAfterSec,
 		r.AgentExecID, r.Title, r.Description, r.WorkspaceIDs, string(r.AutonomyLevel),
@@ -702,22 +713,20 @@ func (s PG) CountApprovalsForRun(ctx context.Context, runID uuid.UUID) (int, err
 // separate from RETURNING: updating only RETURNING would echo an un-updated row
 // back as a green result over a silent no-op.
 func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
-	// decided_at is stamped on the DATABASE's clock (db.AppClockAgeSQL): it's
-	// later compared against workspaces.egress_edited_at by the boot heal's
-	// newer-action guard, and a daemon-clock stamp running ahead of the DB could
-	// make a reverted `always` approval look newer than the revert and get
-	// fail-OPEN re-applied at the next restart (migration 0055 exists to prevent
-	// this). q is built, not const, since only a func can call the shared age
-	// expression.
+	// The boot-heal newer-action guard compares this with a DB-stamped revert.
+	// Freeze the decision before the UPDATE can wait on its row lock.
 	decidedAt := s.now()
-	age := db.AppClockAgeMicros(decidedAt, s.now())
-	q := `
+	anchor, err := db.CaptureAppClock(ctx, s.Pool, s.now)
+	if err != nil {
+		return types.ApprovalRequest{}, err
+	}
+	const q = `
 		UPDATE approvals
-		SET state=$1, decided_at=` + db.AppClockAgeSQL("$2") + `, decided_by=$3, reason=$4, decision_scope=$5, decision_expires_at=$6
+		SET state=$1, decided_at=$2, decided_by=$3, reason=$4, decision_scope=$5, decision_expires_at=$6
 		WHERE id=$7 AND state='PENDING'
 		RETURNING ` + approvalCols
 	a, err := scanApproval(s.Pool.QueryRow(ctx, q,
-		string(decision.State), age, decision.DecidedBy, decision.Reason,
+		string(decision.State), anchor.Translate(decidedAt), decision.DecidedBy, decision.Reason,
 		string(decision.Scope), decision.ExpiresAt, id,
 	))
 	if errors.Is(err, ErrNotFound) {
