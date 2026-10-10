@@ -43,19 +43,12 @@ func (s PG) AcceptRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exi
 		return false, err
 	}
 	payload, hash := runnerExitHash(exit)
-	var oldHash string
-	var acceptedAt *time.Time
-	err = tx.QueryRow(ctx, `SELECT payload_hash,accepted_at FROM runner_execution_exits WHERE run_id=$1 AND generation=$2`, runID, exit.Generation).Scan(&oldHash, &acceptedAt)
-	if err == nil {
-		if oldHash != hash {
-			return false, ErrRunnerExecutionRefused
-		}
-		if acceptedAt != nil {
-			return false, tx.Commit(ctx)
-		}
-	}
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	accepted, err := runnerExitAccepted(ctx, tx, runID, exit.Generation, hash)
+	if err != nil {
 		return false, err
+	}
+	if accepted {
+		return false, tx.Commit(ctx)
 	}
 	current, err := readRunnerExecution(ctx, tx, runID)
 	if err != nil {
@@ -98,6 +91,22 @@ func (s PG) AcceptRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exi
 		_ = s.SIEM.Emit(context.WithoutCancel(ctx), ev)
 	}
 	return true, nil
+}
+
+func runnerExitAccepted(ctx context.Context, tx pgx.Tx, runID, generation uuid.UUID, hash string) (bool, error) {
+	var oldHash string
+	var acceptedAt *time.Time
+	err := tx.QueryRow(ctx, `SELECT payload_hash,accepted_at FROM runner_execution_exits WHERE run_id=$1 AND generation=$2`, runID, generation).Scan(&oldHash, &acceptedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if oldHash != hash {
+		return false, ErrRunnerExecutionRefused
+	}
+	return acceptedAt != nil, nil
 }
 
 func runnerExitHash(exit runnerwire.AgentExit) ([]byte, string) {
