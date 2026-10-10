@@ -5,6 +5,7 @@ package api
 
 import (
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -90,50 +91,70 @@ func abbreviateFingerprint(fp string) (string, bool) {
 	return fp[:fingerprintHead] + "…" + fp[len(fp)-fingerprintTail:], true
 }
 
-// runnerViews lists rows through keep, never null, with each runner's run count.
-func (s *Server) runnerViews(w http.ResponseWriter, r *http.Request, rs store.RunnerInventoryStore, rows []types.Runner, admin bool, keep func(types.Runner) bool) ([]types.RunnerView, bool) {
-	runs, err := rs.CountActiveRunsByRunner(r.Context())
+// runnerViews is rows as views, each with its count of runs.
+func (s *Server) runnerViews(w http.ResponseWriter, r *http.Request, rs store.RunnerInventoryStore, rows []types.Runner, admin bool) ([]types.RunnerView, bool) {
+	ids := make([]uuid.UUID, len(rows))
+	for i, row := range rows {
+		ids[i] = row.ID
+	}
+	runs, err := rs.CountActiveRunsByRunner(r.Context(), ids)
 	if err != nil {
 		writeServerError(w, r, "count runs by runner", err)
 		return nil, false
 	}
-	now := s.cfg.Now().UTC()
-	out := make([]types.RunnerView, 0, len(rows))
-	for _, row := range rows {
-		if !runnerLapsed(row, now) && keep(row) {
-			out = append(out, s.runnerView(row, runs[row.ID], admin))
+	out := make([]types.RunnerView, len(rows))
+	emails := map[string]string{}
+	for i, row := range rows {
+		out[i] = s.runnerView(row, runs[row.ID], admin)
+		if admin || row.MintedBy == "" || row.MintedBy == row.Owner {
+			continue
 		}
+		email, seen := emails[row.MintedBy]
+		if !seen {
+			// A name is a courtesy: a failed lookup leaves the opaque subject, never fails the read.
+			email, _ = s.principalEmail(r.Context(), row.MintedBy)
+			emails[row.MintedBy] = email
+		}
+		out[i].MintedByEmail = email
 	}
 	return out, true
 }
 
-// handleListRunners is GET /api/v1/runners?state=active|revoked|all (default active): every
-// person's runners, the owner named. Active is unclaimed and claimed.
+// handleListRunners is GET /api/v1/runners?state=active|revoked|all&limit=&offset= (default active):
+// every person's runners, the owner named, newest first. Active is unclaimed and claimed.
 func (s *Server) handleListRunners(w http.ResponseWriter, r *http.Request) {
 	rs, ok := s.runnerInventoryStore(w)
 	if !ok {
 		return
 	}
-	var keep func(types.Runner) bool
-	switch r.URL.Query().Get("state") {
-	case "", "active":
-		keep = func(row types.Runner) bool { return row.State != types.RunnerRevoked }
-	case "revoked":
-		keep = func(row types.Runner) bool { return row.State == types.RunnerRevoked }
-	case "all":
-		keep = func(types.Runner) bool { return true }
+	filter := types.RunnerFilter(r.URL.Query().Get("state"))
+	switch filter {
+	case "":
+		filter = types.RunnerFilterActive
+	case types.RunnerFilterActive, types.RunnerFilterRevoked, types.RunnerFilterAll:
 	default:
 		writeErrorReason(w, http.StatusBadRequest, reasonRunnerFilterInvalid, "state must be active, revoked or all")
 		return
 	}
-	rows, err := rs.ListRunners(r.Context())
+	page, ok := parseListPage(w, r, defaultListLimit)
+	if !ok {
+		return
+	}
+	rows, truncated, err := pagedItems(page, func(p store.Page) ([]types.Runner, error) {
+		return rs.ListRunnersPage(r.Context(), filter, s.cfg.Now().UTC(), p)
+	}, nil)
 	if err != nil {
 		writeServerError(w, r, "list runners", err)
 		return
 	}
-	if views, ok := s.runnerViews(w, r, rs, rows, true, keep); ok {
-		writeJSON(w, http.StatusOK, views)
+	views, ok := s.runnerViews(w, r, rs, rows, true)
+	if !ok {
+		return
 	}
+	if truncated {
+		w.Header().Set("X-Wardyn-Truncated", "true")
+	}
+	writeJSON(w, http.StatusOK, views)
 }
 
 // handleGetRunner is GET /api/v1/runners/{id}, revoked included.
@@ -146,7 +167,7 @@ func (s *Server) handleListMyRunners(w http.ResponseWriter, r *http.Request) {
 	if !s.requireRunnersEnabled(w, r) {
 		return
 	}
-	owner, ok := s.runnerSessionOwner(w, r)
+	owner, ok := s.runnerOwnerForRead(w, r)
 	if !ok {
 		return
 	}
@@ -159,8 +180,11 @@ func (s *Server) handleListMyRunners(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "list my runners", err)
 		return
 	}
-	keep := func(row types.Runner) bool { return row.Owner == owner && row.State != types.RunnerRevoked }
-	if views, ok := s.runnerViews(w, r, rs, rows, false, keep); ok {
+	now := s.cfg.Now().UTC()
+	rows = slices.DeleteFunc(rows, func(row types.Runner) bool {
+		return row.Owner != owner || row.State == types.RunnerRevoked || runnerLapsed(row, now)
+	})
+	if views, ok := s.runnerViews(w, r, rs, rows, false); ok {
 		writeJSON(w, http.StatusOK, views)
 	}
 }
@@ -171,7 +195,7 @@ func (s *Server) handleGetMyRunner(w http.ResponseWriter, r *http.Request) {
 	if !s.requireRunnersEnabled(w, r) {
 		return
 	}
-	owner, ok := s.runnerSessionOwner(w, r)
+	owner, ok := s.runnerOwnerForRead(w, r)
 	if !ok {
 		return
 	}
@@ -199,21 +223,14 @@ func (s *Server) getRunnerView(w http.ResponseWriter, r *http.Request, owner str
 		writeServerError(w, r, "read runner", err)
 		return
 	}
-	runs, err := rs.CountActiveRunsByRunner(r.Context())
-	if err != nil {
-		writeServerError(w, r, "count runs by runner", err)
+	views, ok := s.runnerViews(w, r, rs, []types.Runner{row}, admin)
+	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, s.runnerView(row, runs[row.ID], admin))
+	writeJSON(w, http.StatusOK, views[0])
 }
 
-// runnerSessionOwner is the person whose own runners a /me route shows: the signed-in human, never an
-// administrative or delegated credential, which owns no runner.
-func (s *Server) runnerSessionOwner(w http.ResponseWriter, r *http.Request) (string, bool) {
-	owner := oidcHumanFromContext(r.Context())
-	if owner == "" || neverOperator(r.Context()) {
-		writeErrorReason(w, http.StatusForbidden, reasonRunnerSessionRequired, "sign in under your own account to see your runners")
-		return "", false
-	}
-	return owner, true
+// runnerOwnerForRead is the person whose own runners a /me read shows.
+func (s *Server) runnerOwnerForRead(w http.ResponseWriter, r *http.Request) (string, bool) {
+	return s.runnerSessionOwner(w, r, reasonRunnerSessionRequired, "sign in under your own account to see your runners")
 }

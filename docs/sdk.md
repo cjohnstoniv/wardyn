@@ -460,6 +460,7 @@ silent gap:
 | `runner_not_found` / `runner_token_not_found` | No such runner or unused token for this caller; another person's runner answers as an absent id. |
 | `runner_filter_invalid` | `state` is not `active`, `revoked` or `all`. |
 | `runner_session_required` | `/me/runners` needs the person's own session; administrative and delegated credentials own no runner. |
+| `runners_enabled_required` | `PUT /runners/settings` needs `enabled`: true or false. |
 | `runners_org_url_invalid` | Runners cannot be turned on until the organisation and control-plane URLs are HTTPS. |
 | `site_config_runners_via_own_route` | Change `runners.enabled` with `PUT /runners/settings`. |
 | `runner_token_invalid` | Registration token is unknown, expired, consumed, or bound to another org. |

@@ -42,7 +42,9 @@
 //     /api/v1/me is NOT wrapped: see below.
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
-//   - runners (/api/v1/runners, /api/v1/me/runners): MintRunnerToken, RegisterRunner, ClaimRunner, ListRunners, GetRunner, ListMyRunners, ListRunnerTokens, RevokeRunnerToken, GetRunnerSettings, SetRunnersEnabled
+//   - runners (/api/v1/runners, /api/v1/me/runners): MintRunnerToken, RegisterRunner, ClaimRunner,
+//     ListRunners, ListRunnersPage, GetRunner, ListMyRunners, GetMyRunner, ListRunnerTokens,
+//     ListRunnerTokensPage, RevokeRunnerToken, GetRunnerSettings, SetRunnersEnabled
 //   - runner pools (/api/v1/runner-pools, /api/v1/runner-pool-defaults; /api/v1/me/runner-pools, /api/v1/me/runner-pool-defaults):
 //     ListRunnerPools, GetRunnerPool, CreateRunnerPool, UpdateRunnerPool, DeleteRunnerPool, AddMyRunnerToPool,
 //     RemoveMyRunnerFromPool, GetOrgRunnerPoolDefaults, SetOrgRunnerPoolDefaults, GetMyRunnerPoolDefaults,

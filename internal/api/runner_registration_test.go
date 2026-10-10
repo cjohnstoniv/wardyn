@@ -33,6 +33,7 @@ type runnerRegistrationFake struct {
 	tokens    map[string]types.RunnerRegistrationToken
 	rows      map[uuid.UUID]types.Runner
 	runs      map[uuid.UUID]int
+	emails    map[string]string
 }
 
 func newRunnerRegistrationServer(t *testing.T) (*Server, *runnerRegistrationFake, *harness) {

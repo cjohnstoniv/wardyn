@@ -30,6 +30,7 @@ export interface RunnerView {
   state: RunnerState;
   owner?: string;
   minted_by?: string;
+  minted_by_email?: string;
   online: boolean;
   key_fingerprint: string;
   key_fingerprint_abbreviated: boolean;
@@ -63,3 +64,12 @@ export interface RunnerSettingsRequest {
 
 /** `GET /runners?state=`; the default is active. */
 export type RunnerFilter = "active" | "revoked" | "all";
+
+/** The refusals the runners management routes add to the shared reason set (internal/api/reasons_routes.go). */
+export type RunnerManagementReason =
+  | "runner_not_found"
+  | "runner_token_not_found"
+  | "runner_filter_invalid"
+  | "runner_session_required"
+  | "runners_org_url_invalid"
+  | "runners_enabled_required";

@@ -915,11 +915,12 @@ const (
 
 // The runners management routes (runner_inventory.go).
 const (
-	reasonRunnerNotFound        = "runner_not_found"
-	reasonRunnerTokenNotFound   = "runner_token_not_found"
-	reasonRunnerFilterInvalid   = "runner_filter_invalid"
-	reasonRunnerSessionRequired = "runner_session_required"
-	reasonRunnersOrgURLInvalid  = "runners_org_url_invalid"
+	reasonRunnerNotFound         = "runner_not_found"
+	reasonRunnerTokenNotFound    = "runner_token_not_found"
+	reasonRunnerFilterInvalid    = "runner_filter_invalid"
+	reasonRunnerSessionRequired  = "runner_session_required"
+	reasonRunnersOrgURLInvalid   = "runners_org_url_invalid"
+	reasonRunnersEnabledRequired = "runners_enabled_required"
 )
 
 // Runner route admission fails closed on absent or unreadable configuration.

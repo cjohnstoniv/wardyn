@@ -132,7 +132,15 @@ type Config struct {
 	RunnerOrgURL string
 	// RunnerOnline reports whether a claimed runner holds a live authenticated session with this
 	// process. Nil reads every runner as offline: online is never shown without that evidence.
+	//
+	// ponytail: process-local. Under WARDYN_HA a replica that does not hold a runner's session
+	// answers offline for a runner attached to another; the upgrade is a shared presence read.
 	RunnerOnline func(id uuid.UUID) bool
+	// RunnersDisabled runs after runners are switched off (a true→false change), once the write and
+	// its audit row are done and the site-config lock is released. The runner hub ends every runner
+	// session here; nil does nothing, so until it is wired, off stops new registrations, claims and
+	// connections and live sessions end when their runner reconnects.
+	RunnersDisabled func(ctx context.Context)
 	// AdminToken gates the public API (constant-time bearer compare). Empty
 	// disables the public API entirely (fail closed) except /healthz.
 	AdminToken string

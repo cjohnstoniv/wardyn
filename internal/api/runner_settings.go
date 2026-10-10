@@ -60,7 +60,7 @@ func (s *Server) handlePutRunnerSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if req.Enabled == nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "enabled is required")
+		writeErrorReason(w, http.StatusBadRequest, reasonRunnersEnabledRequired, "enabled is required: send {\"enabled\": true} or {\"enabled\": false}")
 		return
 	}
 	if *req.Enabled {
@@ -69,23 +69,36 @@ func (s *Server) handlePutRunnerSettings(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	before, ok := s.storeRunnersEnabled(w, r, *req.Enabled)
 	if !ok {
 		return
+	}
+	if before && !*req.Enabled && s.cfg.RunnersDisabled != nil {
+		s.cfg.RunnersDisabled(r.Context())
+	}
+	writeJSON(w, http.StatusOK, types.RunnerSettings{Enabled: *req.Enabled})
+}
+
+// storeRunnersEnabled writes the switch under the site-config lock and audits it, returning the
+// value it replaced. The lock is released before it returns, so nothing the caller does next holds it.
+func (s *Server) storeRunnersEnabled(w http.ResponseWriter, r *http.Request, enabled bool) (before, ok bool) {
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		return false, false
 	}
 	defer unlock()
 	cfg, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
 		writeServerError(w, r, "get site config", err)
-		return
+		return false, false
 	}
-	before := runnersEnabled(cfg)
-	cfg.Runners = &types.RunnerSettings{Enabled: *req.Enabled}
+	before = runnersEnabled(cfg)
+	cfg.Runners = &types.RunnerSettings{Enabled: enabled}
 	if _, err := s.cfg.Store.PutSiteConfig(r.Context(), cfg); err != nil {
 		writeServerError(w, r, "put site config", err)
-		return
+		return false, false
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		placement.ActionRunnersEnabledSet, "runners.enabled", "success", mustJSON(map[string]any{"before": before, "after": *req.Enabled})))
-	writeJSON(w, http.StatusOK, *cfg.Runners)
+		placement.ActionRunnersEnabledSet, "runners.enabled", "success", mustJSON(map[string]any{"before": before, "after": enabled})))
+	return before, true
 }

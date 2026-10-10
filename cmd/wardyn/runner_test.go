@@ -81,8 +81,8 @@ func TestRunnerListAndTokensCommands(t *testing.T) {
 
 	tokens := []types.RunnerRegistrationToken{{ID: id, Owner: "dan@example.com", MintedBy: "admin", CreatedAt: seen, ExpiresAt: seen.Add(72 * time.Hour)}}
 	tsrv := newCmdServer(t, http.StatusOK, tokens)
-	out, err = execCmdCapture(t, "runner", "tokens", "list", "--url", tsrv.URL, "--token", "t")
-	if err != nil || tsrv.last().path != "/api/v1/runners/tokens" || !strings.Contains(out, "dan@example.com") {
+	out, err = execCmdCapture(t, "runner", "tokens", "list", "--owner", "dan@example.com", "--limit", "5", "--url", tsrv.URL, "--token", "t")
+	if err != nil || tsrv.last().path != "/api/v1/runners/tokens" || tsrv.last().query != "owner=dan%40example.com&limit=5" || !strings.Contains(out, "dan@example.com") {
 		t.Fatalf("tokens list: %v\n%s", err, out)
 	}
 	rsrv := newCmdServer(t, http.StatusNoContent, nil)

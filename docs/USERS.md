@@ -397,6 +397,9 @@ resolves your drive the same way, in a dry run too:
 - Once that runs you keep nothing recoverable through Wardyn, though a database backup
   your organisation took beforehand is a separate question its own retention
   answers, not something erasing your namespace reaches into.
+- A registered runner keeps your sign-in name, and the name of whoever made its registration token,
+  for as long as the runner row exists. Erasing your records does not remove them today; revoking
+  the runner stops it.
 - Wardyn never
   revokes anything upstream on your behalf: your own AWS, Anthropic or Azure
   DevOps sign-in stays valid at the provider until you — or your admin, there,

@@ -58,10 +58,20 @@ describe("runners management wire", () => {
     expect(new Set([...m[1].matchAll(/"([a-z]+)"/g)].map((x) => x[1]))).toEqual(new Set(go));
   });
 
-  it("the state filter is what the handler accepts", () => {
-    const src = read("internal/api/runner_inventory.go");
-    const m = /export type RunnerFilter =([^;]+);/.exec(ts);
+  it("RunnerManagementReason is the Go reason block", () => {
+    const block = /The runners management routes \(runner_inventory\.go\)\.\nconst \(([\s\S]*?)\n\)/.exec(read("internal/api/reasons_routes.go"));
+    if (!block) throw new Error("runners management reason block not found");
+    const go = [...block[1].matchAll(/= "([a-z_]+)"/g)].map((m) => m[1]);
+    const m = /export type RunnerManagementReason =([^;]+);/.exec(stripComments(ts));
+    if (!m) throw new Error("type RunnerManagementReason not found");
+    expect(new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]))).toEqual(new Set(go));
+    expect(go.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("the state filter is the Go constants", () => {
+    const go = [...read("internal/types/runner_inventory.go").matchAll(/RunnerFilter\w+\s+RunnerFilter = "([a-z]+)"/g)].map((m) => m[1]);
+    const m = /export type RunnerFilter =([^;]+);/.exec(stripComments(ts));
     if (!m) throw new Error("type RunnerFilter not found");
-    for (const f of [...m[1].matchAll(/"([a-z]+)"/g)].map((x) => x[1])) expect(src).toContain(`"${f}"`);
+    expect(new Set([...m[1].matchAll(/"([a-z]+)"/g)].map((x) => x[1]))).toEqual(new Set(go));
   });
 });

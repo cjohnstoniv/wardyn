@@ -4,8 +4,11 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -74,5 +77,42 @@ func TestRunnerAdmissionNoStore(t *testing.T) {
 	w := httptest.NewRecorder()
 	if srv.requireRunnersEnabled(w, httptest.NewRequest(http.MethodGet, "/runners/test", nil)) || w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("missing store status=%d", w.Code)
+	}
+}
+
+// A captured baseline (get with runners ON, applied after a reset) and a managed file re-applied on
+// every boot both go through the SDK, which must not send a runners block the server would refuse.
+func TestSiteConfigSDKRoundTripSurvivesRunnersSwitch(t *testing.T) {
+	fake := &fakeSiteConfigStore{cfg: types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true}, UpstreamProxyURL: "http://proxy.corp:3128"}}
+	srv, _ := newSiteConfigHarness(t, fake)
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
+	t.Cleanup(ts.Close)
+	c := client.New(ts.URL, adminToken)
+
+	var baseline types.SiteConfig
+	w := do(t, srv, http.MethodGet, "/api/v1/site-config", adminToken, "")
+	if err := json.Unmarshal(w.Body.Bytes(), &baseline); err != nil || baseline.Runners == nil || !baseline.Runners.Enabled {
+		t.Fatalf("GET must carry runners ON for this test to mean anything: %v %s", err, w.Body.String())
+	}
+
+	// reset: the stored runners block is gone (or turned off), the captured baseline still says ON
+	for name, stored := range map[string]*types.RunnerSettings{"after reset": nil, "turned off since": {}} {
+		fake.cfg = types.SiteConfig{Runners: stored}
+		if _, err := c.PutSiteConfigResult(context.Background(), baseline); err != nil {
+			t.Fatalf("%s: applying the captured baseline failed: %v", name, err)
+		}
+		if runnersEnabled(fake.cfg) {
+			t.Fatalf("%s: applying a baseline turned runners on", name)
+		}
+		if fake.cfg.UpstreamProxyURL != "http://proxy.corp:3128" {
+			t.Fatalf("%s: the rest of the baseline was not applied", name)
+		}
+	}
+
+	// the managed desktop file, re-applied on every boot, names a value other than the stored one
+	fake.cfg = types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true}}
+	managed := types.SiteConfig{Runners: &types.RunnerSettings{Enabled: false}, UpstreamProxyURL: "http://proxy.corp:3128"}
+	if _, err := c.PutSiteConfigResult(context.Background(), managed); err != nil || !runnersEnabled(fake.cfg) {
+		t.Fatalf("a managed re-apply failed or moved the switch: %v enabled=%v", err, runnersEnabled(fake.cfg))
 	}
 }

@@ -31,7 +31,7 @@ func TestRunnerInventoryMethodsHitTheirRoutes(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/api/v1/runners/settings":
 			_, _ = w.Write([]byte(`{"enabled":true}`))
-		case r.URL.Path == "/api/v1/runners/"+id.String():
+		case r.URL.Path == "/api/v1/runners/"+id.String(), r.URL.Path == "/api/v1/me/runners/"+id.String():
 			_, _ = w.Write([]byte(`{"id":"` + id.String() + `","state":"claimed","online":true,"runs_active":2}`))
 		default:
 			_, _ = w.Write([]byte(`[]`))
@@ -54,7 +54,13 @@ func TestRunnerInventoryMethodsHitTheirRoutes(t *testing.T) {
 	if _, err := c.ListMyRunners(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.ListRunnerTokens(ctx); err != nil {
+	if mine, err := c.GetMyRunner(ctx, id); err != nil || mine.ID != id {
+		t.Fatalf("GetMyRunner = %+v, %v", mine, err)
+	}
+	if _, truncated, err := c.ListRunnersPage(ctx, client.RunnerFilterAll, client.ListOpts{Limit: 2, Offset: 4}); err != nil || truncated {
+		t.Fatalf("ListRunnersPage = %v, %v", truncated, err)
+	}
+	if _, err := c.ListRunnerTokens(ctx, "alice"); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.RevokeRunnerToken(ctx, id); err != nil {
@@ -68,7 +74,7 @@ func TestRunnerInventoryMethodsHitTheirRoutes(t *testing.T) {
 	}
 	want := []string{
 		"GET /api/v1/runners?state=revoked", "GET /api/v1/runners", "GET /api/v1/runners/" + id.String(),
-		"GET /api/v1/me/runners", "GET /api/v1/runners/tokens", "DELETE /api/v1/runners/tokens/" + id.String(),
+		"GET /api/v1/me/runners", "GET /api/v1/me/runners/" + id.String(), "GET /api/v1/runners?state=all&limit=2&offset=4", "GET /api/v1/runners/tokens?owner=alice", "DELETE /api/v1/runners/tokens/" + id.String(),
 		"GET /api/v1/runners/settings", "PUT /api/v1/runners/settings",
 	}
 	if len(got) != len(want) {

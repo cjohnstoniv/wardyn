@@ -25,21 +25,21 @@ Migration `0142_runner_registration` adds hashed single-use registration tokens 
 | `runners.enabled` true | Identity and route authorization checks still apply. |
 | Generic `PUT /site-config` | Retains stored runner settings; cannot enable or disable runners. |
 
-An administrator turns runners on at **Admin → Runners**, or with `PUT /api/v1/runners/settings {"enabled": true}`; only a super admin can, and each change is audited as `runners.enabled.set`. Turning on is refused until `WARDYN_RUNNER_ORG_URL` (and the control-plane URL) is HTTPS; `http` is accepted only for localhost. Turning off is never refused. `PUT /site-config` names `runners` only to echo the stored value: a different one is refused with `site_config_runners_via_own_route`.
+An administrator turns runners on at **Admin → Runners**, or with `PUT /api/v1/runners/settings {"enabled": true}`; only a super admin can, and each change is audited as `runners.enabled.set`. Turning on is refused until `WARDYN_RUNNER_ORG_URL` (and the control-plane URL) is HTTPS; `http` is accepted only for localhost. Turning off is never refused. Off stops new registrations, claims and stream connections; a runner that is already connected stays connected until it reconnects. Ending sessions on the switch (`Config.RunnersDisabled`) and re-reading it at run placement belong to the runner hub's wiring and are not in place yet. `PUT /site-config` names `runners` only to echo the stored value: a different one is refused with `site_config_runners_via_own_route`.
 
 ## Runner inventory and unused tokens
 
 | Route | Who | Answers |
 |---|---|---|
-| `GET /api/v1/runners?state=active\|revoked\|all` | admin or `security_admin` | Every person's runners, owner named; default `active` (unclaimed and claimed). `online` is the live session, and `runs_active` counts non-terminal runs on the runner. |
+| `GET /api/v1/runners?state=active\|revoked\|all&limit=&offset=` | admin or `security_admin` | Every person's runners, owner named; default `active` (unclaimed and claimed). `online` is the live session, and `runs_active` counts non-terminal runs on the runner. |
 | `GET /api/v1/runners/{id}` | admin or `security_admin` | One runner, revoked included. |
 | `GET /api/v1/me/runners`, `GET /api/v1/me/runners/{id}` | the owner | The caller's own runners only; another person's runner and an absent id answer alike. An unclaimed runner's fingerprint is abbreviated here, so it cannot be copied from the console into the claim. |
-| `GET /api/v1/runners/tokens` | admin or `security_admin` | Unused, unexpired registration tokens. No token value is ever returned. |
+| `GET /api/v1/runners/tokens?owner=&limit=&offset=` | admin or `security_admin` | Unused, unexpired registration tokens, optionally one person's. No token value is ever returned. |
 | `DELETE /api/v1/runners/tokens/{id}` | admin or `security_admin` | The token stops being redeemable at once; audited as `runner.token.revoke`. Minting stays admin only. |
 | `GET /api/v1/runners/settings` | admin or `security_admin` | `{"enabled": bool}`, readable while the runner routes refuse. |
 
-An unclaimed runner older than 24 hours is not listed, whether or not the sweeper has deleted it yet. The runner views report what a runner said about itself as reported, never as verified.
+Both lists are paged and set `X-Wardyn-Truncated` when more exist. An unclaimed runner older than 24 hours is not listed, and the periodic sweep deletes it, freeing its key to register again. On a person's own list `minted_by_email` names the minter when someone else minted the token and an email is held. The runner views report what a runner said about itself as reported, never as verified.
 
-`wardyn runner list` (`--all` for every person's runners) and `wardyn runner tokens list|revoke` use these routes.
+`wardyn runner list` (`--all` for every person's runners) and `wardyn runner tokens list [--owner]|revoke` use these routes.
 
 Migration `0191_runner_minted_by` records on each runner who minted the registration token it redeemed, so the owner's list can tell a token they made from one an administrator made for them.

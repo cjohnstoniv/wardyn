@@ -7,22 +7,34 @@ import (
 	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// handleListRunnerTokens is GET /api/v1/runners/tokens: the registration tokens still redeemable,
-// newest first, so a token minted by mistake can be found and revoked. Never a token value: only its
-// hash is stored, and the wire type serializes neither. Not gated on runners being on, so a token left
-// outstanding when runners were turned off stays visible.
+// handleListRunnerTokens is GET /api/v1/runners/tokens?owner=&limit=&offset=: the registration tokens
+// still redeemable, newest first, so a token minted by mistake can be found and revoked, and one
+// person's can be told apart from the rest. Never a token value: only its hash is stored, and the wire
+// type serializes neither. Not gated on runners being on, so a token left outstanding when runners
+// were turned off stays visible.
 func (s *Server) handleListRunnerTokens(w http.ResponseWriter, r *http.Request) {
 	rs, ok := s.runnerInventoryStore(w)
 	if !ok {
 		return
 	}
-	tokens, err := rs.ListUnusedRunnerRegistrationTokens(r.Context(), s.cfg.Now().UTC())
+	page, ok := parseListPage(w, r, defaultListLimit)
+	if !ok {
+		return
+	}
+	owner := r.URL.Query().Get("owner")
+	tokens, truncated, err := pagedItems(page, func(p store.Page) ([]types.RunnerRegistrationToken, error) {
+		return rs.ListUnusedRunnerRegistrationTokensPage(r.Context(), s.cfg.Now().UTC(), owner, p)
+	}, nil)
 	if err != nil {
 		writeServerError(w, r, "list runner registration tokens", err)
 		return
+	}
+	if truncated {
+		w.Header().Set("X-Wardyn-Truncated", "true")
 	}
 	if tokens == nil {
 		tokens = []types.RunnerRegistrationToken{}
@@ -52,6 +64,6 @@ func (s *Server) handleRevokeRunnerToken(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		placement.ActionRunnerTokenRevoke, t.ID.String(), "success", mustJSON(map[string]any{"owner": t.Owner, "minted_by": t.MintedBy})))
+		placement.ActionRunnerTokenRevoke, t.ID.String(), "success", mustJSON(map[string]any{"owner": t.Owner, "minted_by": t.MintedBy, "expires_at": t.ExpiresAt})))
 	w.WriteHeader(http.StatusNoContent)
 }

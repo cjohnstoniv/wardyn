@@ -5,15 +5,20 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -27,7 +32,32 @@ func (f *runnerRegistrationFake) ListRunners(context.Context) ([]types.Runner, e
 	for _, row := range f.rows {
 		out = append(out, row)
 	}
+	slices.SortFunc(out, func(a, b types.Runner) int { return b.CreatedAt.Compare(a.CreatedAt) })
 	return out, nil
+}
+
+func (f *runnerRegistrationFake) ListRunnersPage(ctx context.Context, filter types.RunnerFilter, now time.Time, p store.Page) ([]types.Runner, error) {
+	all, _ := f.ListRunners(ctx)
+	var out []types.Runner
+	for _, row := range all {
+		if runnerLapsed(row, now) || (filter == types.RunnerFilterActive && row.State == types.RunnerRevoked) ||
+			(filter == types.RunnerFilterRevoked && row.State != types.RunnerRevoked) {
+			continue
+		}
+		out = append(out, row)
+	}
+	return fakePage(out, p), nil
+}
+
+func fakePage[T any](rows []T, p store.Page) []T {
+	if p.Offset >= len(rows) {
+		return nil
+	}
+	rows = rows[p.Offset:]
+	if p.Limit > 0 && len(rows) > p.Limit {
+		rows = rows[:p.Limit]
+	}
+	return rows
 }
 
 func (f *runnerRegistrationFake) ListRunnersByOwner(_ context.Context, owner string) ([]types.Runner, error) {
@@ -41,16 +71,30 @@ func (f *runnerRegistrationFake) ListRunnersByOwner(_ context.Context, owner str
 	return out, nil
 }
 
-func (f *runnerRegistrationFake) ListUnusedRunnerRegistrationTokens(_ context.Context, now time.Time) ([]types.RunnerRegistrationToken, error) {
+func (f *runnerRegistrationFake) ListUnusedRunnerRegistrationTokensPage(_ context.Context, now time.Time, owner string, p store.Page) ([]types.RunnerRegistrationToken, error) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
-	out := []types.RunnerRegistrationToken{}
+	var out []types.RunnerRegistrationToken
 	for _, tok := range f.tokens {
-		if tok.ConsumedAt == nil && tok.ExpiresAt.After(now) {
+		if tok.ConsumedAt == nil && tok.ExpiresAt.After(now) && (owner == "" || tok.Owner == owner) {
 			out = append(out, tok)
 		}
 	}
-	return out, nil
+	slices.SortFunc(out, func(a, b types.RunnerRegistrationToken) int { return b.CreatedAt.Compare(a.CreatedAt) })
+	return fakePage(out, p), nil
+}
+
+func (f *runnerRegistrationFake) ExpireUnclaimedRunners(_ context.Context, createdBefore time.Time) (int, error) {
+	f.lock.Lock()
+	defer f.lock.Unlock()
+	n := 0
+	for id, row := range f.rows {
+		if row.State == types.RunnerUnclaimed && row.CreatedAt.Before(createdBefore) {
+			delete(f.rows, id)
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (f *runnerRegistrationFake) RevokeRunnerRegistrationToken(_ context.Context, id uuid.UUID, now time.Time) (types.RunnerRegistrationToken, error) {
@@ -66,8 +110,14 @@ func (f *runnerRegistrationFake) RevokeRunnerRegistrationToken(_ context.Context
 	return types.RunnerRegistrationToken{}, store.ErrNotFound
 }
 
-func (f *runnerRegistrationFake) CountActiveRunsByRunner(context.Context) (map[uuid.UUID]int, error) {
-	return f.runs, nil
+func (f *runnerRegistrationFake) CountActiveRunsByRunner(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]int, error) {
+	out := map[uuid.UUID]int{}
+	for _, id := range ids {
+		if n := f.runs[id]; n > 0 {
+			out[id] = n
+		}
+	}
+	return out, nil
 }
 
 // PutSiteConfig persists, unlike the matrix double it embeds, so a test reads back what a door wrote.
@@ -78,6 +128,13 @@ func (f *runnerRegistrationFake) PutSiteConfig(_ context.Context, cfg types.Site
 	return cfg, nil
 }
 
+func (f *runnerRegistrationFake) ListAPITokensByPrincipal(_ context.Context, principal string) ([]types.APIToken, error) {
+	if email := f.emails[principal]; email != "" {
+		return []types.APIToken{{Principal: principal, Email: email}}, nil
+	}
+	return nil, nil
+}
+
 func (f *runnerRegistrationFake) runnersEnabled() bool {
 	cfg, _ := f.authzStore.GetSiteConfig(context.Background())
 	return runnersEnabled(cfg)
@@ -85,7 +142,8 @@ func (f *runnerRegistrationFake) runnersEnabled() bool {
 
 func (f *runnerRegistrationFake) addRunner(srv *Server, owner, name string, state types.RunnerState, age time.Duration) types.Runner {
 	id := uuid.New()
-	row := types.Runner{ID: id, Owner: owner, Name: name, State: state, KeyFingerprint: strings.Repeat("ab", 32), PublicKey: make([]byte, 32),
+	sha := sha256.Sum256(id[:])
+	row := types.Runner{ID: id, Owner: owner, Name: name, State: state, KeyFingerprint: hex.EncodeToString(sha[:]), PublicKey: make([]byte, 32),
 		CreatedAt: time.Now().UTC().Add(-age), OrgURLSHA256: federation.OrgURLSHA256(srv.cfg.RunnerOrgURL), MintedBy: "admin"}
 	f.lock.Lock()
 	f.rows[id] = row
@@ -139,8 +197,16 @@ func TestMeRunnersShowOnlyTheCallersOwn(t *testing.T) {
 	if got[mine.ID].Owner != "" || got[mine.ID].KeyFingerprintAbbreviated || got[mine.ID].KeyFingerprint != mine.KeyFingerprint {
 		t.Fatalf("a claimed runner on its owner's list must show the whole fingerprint and no owner: %+v", got[mine.ID])
 	}
-	if v := got[waiting.ID]; !v.KeyFingerprintAbbreviated || len(v.KeyFingerprint) >= len(waiting.KeyFingerprint) || v.ClaimExpiresAt == nil || v.MintedBy != "admin" {
-		t.Fatalf("a waiting runner must show an abbreviated fingerprint, its expiry and who minted: %+v", v)
+	fp := waiting.KeyFingerprint
+	if v := got[waiting.ID]; !v.KeyFingerprintAbbreviated || v.KeyFingerprint != fp[:8]+"…"+fp[len(fp)-4:] || v.ClaimExpiresAt == nil || v.MintedBy != "admin" {
+		t.Fatalf("a waiting runner must show its first 8 and last 4 characters, its expiry and who minted: %+v", v)
+	}
+	if strings.Contains(w.Body.String(), fp) || strings.Contains(w.Body.String(), fp[:20]) {
+		t.Fatal("the whole fingerprint of an unclaimed runner is in the person's own list")
+	}
+	detail := doSSO(t, srv, http.MethodGet, "/api/v1/me/runners/"+waiting.ID.String(), alice, "")
+	if detail.Code != http.StatusOK || strings.Contains(detail.Body.String(), fp[:20]) {
+		t.Fatalf("detail of an unclaimed runner on /me: %d, and it must not carry the whole fingerprint", detail.Code)
 	}
 
 	absent := doSSO(t, srv, http.MethodGet, "/api/v1/me/runners/"+uuid.NewString(), alice, "")
@@ -257,7 +323,7 @@ func TestRunnerTokensSecurityAdminRevokesButCannotMint(t *testing.T) {
 		t.Fatalf("revoke: %d %s", w.Code, w.Body.String())
 	}
 	ev := lastAuditEvent(t, h.audit.snapshot(), "runner.token.revoke")
-	if ev.Target != tokenID.String() || strings.Contains(string(ev.Data), raw) {
+	if ev.Target != tokenID.String() || strings.Contains(string(ev.Data), raw) || !strings.Contains(string(ev.Data), `"expires_at"`) {
 		t.Fatalf("revoke audit: %+v", ev)
 	}
 	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/runners/tokens/"+tokenID.String(), sec, ""); w.Code != http.StatusNotFound {
@@ -353,12 +419,190 @@ func TestRunnerPresenceAuditRows(t *testing.T) {
 	srv, _, h := newRunnerRegistrationServer(t)
 	id := uuid.New()
 	seen := time.Now().UTC()
-	srv.RecordRunnerConnected(context.Background(), id, "0.9.0")
+	srv.RecordRunnerConnected(context.Background(), id, "0.9.0", true)
 	srv.RecordRunnerDisconnected(context.Background(), id, &seen)
 	for _, action := range []string{"runner.connect", "runner.disconnect"} {
 		ev := lastAuditEvent(t, h.audit.snapshot(), action)
 		if ev.ActorType != types.ActorSystem || ev.Actor != "runner:"+id.String() || ev.Target != id.String() {
 			t.Fatalf("%s: %+v", action, ev)
 		}
+	}
+	if data := lastAuditEvent(t, h.audit.snapshot(), "runner.connect").Data; !strings.Contains(string(data), `"resumed":true`) || !strings.Contains(string(data), `"version":"0.9.0"`) {
+		t.Fatalf("runner.connect data = %s, want version and resumed (PLAN §12.2)", data)
+	}
+}
+
+// Every credential that acts for someone other than a signed-in person is refused on the /me reads,
+// with the reason that names the missing session.
+func TestMeRunnersRefuseNonPersonCredentials(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	row := f.addRunner(srv, "alice", "laptop", types.RunnerClaimed, time.Hour)
+	for name, with := range map[string]func(context.Context) context.Context{
+		"device": func(c context.Context) context.Context {
+			return context.WithValue(c, deviceCtxKey{}, types.Device{ID: uuid.New()})
+		},
+		"delegated": func(c context.Context) context.Context { return audit.WithDelegation(c, types.DelegationVia{}) },
+		"scim":      func(c context.Context) context.Context { return withSCIMCaller(c, "slot") },
+	} {
+		for _, path := range []string{"/me/runners", "/me/runners/" + row.ID.String()} {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			ctx := with(withOIDCHuman(req.Context(), "alice"))
+			w := httptest.NewRecorder()
+			chi := chiRouteCtx(ctx, row.ID.String())
+			if strings.HasSuffix(path, "/runners") {
+				srv.handleListMyRunners(w, req.WithContext(chi))
+			} else {
+				srv.handleGetMyRunner(w, req.WithContext(chi))
+			}
+			if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), reasonRunnerSessionRequired) {
+				t.Errorf("%s on %s = %d %s", name, path, w.Code, w.Body.String())
+			}
+		}
+	}
+}
+
+func chiRouteCtx(ctx context.Context, id string) context.Context {
+	rc := chi.NewRouteContext()
+	rc.URLParams.Add("id", id)
+	return context.WithValue(ctx, chi.RouteCtxKey, rc)
+}
+
+func TestRunnersAndTokensListPage(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	for i := range 5 {
+		f.addRunner(srv, "alice", "r"+string(rune('a'+i)), types.RunnerClaimed, time.Duration(i+1)*time.Hour)
+	}
+	now := time.Now().UTC()
+	org := federation.OrgURLSHA256(srv.cfg.RunnerOrgURL)
+	for i, owner := range []string{"alice", "alice", "bob"} {
+		f.tokens[newBearer("wdr_")] = types.RunnerRegistrationToken{ID: uuid.New(), Owner: owner, MintedBy: "admin", CreatedAt: now.Add(-time.Duration(i) * time.Minute), ExpiresAt: now.Add(time.Hour), OrgURLSHA256: org}
+	}
+	sec := memberModeSSOSession(t, "sam", "sam@example.com", oidc.RoleSecurityAdmin, false)
+
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/runners?limit=2", sec, "")
+	if got := runnerViewsOf(t, w); len(got) != 2 || w.Header().Get("X-Wardyn-Truncated") != "true" {
+		t.Fatalf("limit=2: %d rows, truncated=%q", len(got), w.Header().Get("X-Wardyn-Truncated"))
+	}
+	w = doSSO(t, srv, http.MethodGet, "/api/v1/runners?limit=2&offset=4", sec, "")
+	if got := runnerViewsOf(t, w); len(got) != 1 || w.Header().Get("X-Wardyn-Truncated") != "" {
+		t.Fatalf("last page: %d rows, truncated=%q", len(got), w.Header().Get("X-Wardyn-Truncated"))
+	}
+	if w := doSSO(t, srv, http.MethodGet, "/api/v1/runners?limit=-1", sec, ""); w.Code != http.StatusBadRequest {
+		t.Fatalf("bad limit: %d", w.Code)
+	}
+
+	count := func(query string) (int, string) {
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/runners/tokens"+query, sec, "")
+		var out []types.RunnerRegistrationToken
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || w.Code != http.StatusOK {
+			t.Fatalf("tokens%s: %d %s", query, w.Code, w.Body.String())
+		}
+		return len(out), w.Header().Get("X-Wardyn-Truncated")
+	}
+	if n, _ := count(""); n != 3 {
+		t.Fatalf("all tokens = %d", n)
+	}
+	if n, _ := count("?owner=alice"); n != 2 {
+		t.Fatalf("owner filter = %d, want 2", n)
+	}
+	if n, tr := count("?limit=1"); n != 1 || tr != "true" {
+		t.Fatalf("token page = %d truncated=%q", n, tr)
+	}
+	if n, _ := count("?owner=nobody"); n != 0 {
+		t.Fatalf("unknown owner = %d", n)
+	}
+}
+
+func TestRunnersSwitchOffCallsTheHookExactlyOnTheTransition(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	srv.cfg.ControlPlaneURL = "https://wardynd.internal:8443"
+	var calls int
+	srv.cfg.RunnersDisabled = func(context.Context) { calls++ }
+	admin := memberModeSSOSession(t, "carol", "carol@example.com", oidc.RoleAdmin, false)
+	put := func(body string) int {
+		return doSSO(t, srv, http.MethodPut, "/api/v1/runners/settings", admin, body).Code
+	}
+	f.siteCfg.Runners = &types.RunnerSettings{Enabled: false}
+	for _, step := range []struct {
+		body  string
+		code  int
+		calls int
+	}{
+		{`{"enabled":false}`, 200, 0}, // off while off
+		{`{"enabled":true}`, 200, 0},  // on
+		{`{"enabled":true}`, 200, 0},  // on while on
+		{`{"enabled":false}`, 200, 1}, // the transition
+		{`{"enabled":false}`, 200, 1}, // off while off again
+		{`{}`, 400, 1},                // refused
+		{`{"enabled":true}`, 200, 1},  // on again
+		{`{"enabled":false}`, 200, 2}, // every transition fires, not just the first
+	} {
+		if code := put(step.body); code != step.code || calls != step.calls {
+			t.Fatalf("PUT %s: code %d calls %d, want %d and %d", step.body, code, calls, step.code, step.calls)
+		}
+	}
+	srv.cfg.RunnersDisabled = nil
+	f.siteCfg.Runners = &types.RunnerSettings{Enabled: true}
+	if put(`{"enabled":false}`) != 200 {
+		t.Fatal("a nil hook broke turning off")
+	}
+}
+
+func TestRunnersSwitchWithoutEnabledNamesItsOwnReason(t *testing.T) {
+	srv, _, _ := newRunnerRegistrationServer(t)
+	admin := memberModeSSOSession(t, "carol", "carol@example.com", oidc.RoleAdmin, false)
+	w := doSSO(t, srv, http.MethodPut, "/api/v1/runners/settings", admin, `{}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), reasonRunnersEnabledRequired) {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestWatcherTickExpiresLapsedUnclaimedRunners(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	lapsed := f.addRunner(srv, "alice", "old", types.RunnerUnclaimed, 25*time.Hour)
+	live := f.addRunner(srv, "alice", "new", types.RunnerUnclaimed, time.Hour)
+	claimed := f.addRunner(srv, "alice", "kept", types.RunnerClaimed, 48*time.Hour)
+	recent := time.Now()
+	if err := srv.runWatcherTick(context.Background(), &recent); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if _, ok := f.rows[lapsed.ID]; ok {
+		t.Fatal("the periodic sweep left a lapsed unclaimed runner")
+	}
+	if _, ok := f.rows[live.ID]; !ok {
+		t.Fatal("the sweep deleted a runner still inside its wait")
+	}
+	if _, ok := f.rows[claimed.ID]; !ok {
+		t.Fatal("the sweep deleted a claimed runner")
+	}
+}
+
+func TestMeRunnersNameTheMinterByEmailWhenSomeoneElseMinted(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	f.emails = map[string]string{"admin-sub": "admin@example.com"}
+	byAdmin := f.addRunner(srv, "alice", "from-admin", types.RunnerUnclaimed, time.Hour)
+	byAdminRow := f.rows[byAdmin.ID]
+	byAdminRow.MintedBy = "admin-sub"
+	f.rows[byAdmin.ID] = byAdminRow
+	own := f.addRunner(srv, "alice", "own", types.RunnerUnclaimed, time.Hour)
+	ownRow := f.rows[own.ID]
+	ownRow.MintedBy = "alice"
+	f.rows[own.ID] = ownRow
+	unknown := f.addRunner(srv, "alice", "who", types.RunnerUnclaimed, time.Hour) // minter "admin": no email held
+
+	alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
+	got := viewIDs(runnerViewsOf(t, doSSO(t, srv, http.MethodGet, "/api/v1/me/runners", alice, "")))
+	if v := got[byAdmin.ID]; v.MintedBy != "admin-sub" || v.MintedByEmail != "admin@example.com" {
+		t.Fatalf("a token an admin made must name the admin: %+v", v)
+	}
+	if v := got[own.ID]; v.MintedByEmail != "" {
+		t.Fatalf("a token the owner made needs no name: %+v", v)
+	}
+	if v := got[unknown.ID]; v.MintedBy != "admin" || v.MintedByEmail != "" {
+		t.Fatalf("with no email held the subject stays and the read still succeeds: %+v", v)
+	}
+	sec := memberModeSSOSession(t, "sam", "sam@example.com", oidc.RoleSecurityAdmin, false)
+	if v := viewIDs(runnerViewsOf(t, doSSO(t, srv, http.MethodGet, "/api/v1/runners", sec, "")))[byAdmin.ID]; v.MintedByEmail != "" {
+		t.Fatal("the admin view needs no minter email")
 	}
 }

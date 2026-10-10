@@ -9,6 +9,15 @@ import (
 	"github.com/google/uuid"
 )
 
+// RunnerFilter is the state filter of the administrators' runner list; an empty one is active.
+type RunnerFilter string
+
+const (
+	RunnerFilterActive  RunnerFilter = "active"
+	RunnerFilterRevoked RunnerFilter = "revoked"
+	RunnerFilterAll     RunnerFilter = "all"
+)
+
 // RunnerUnclaimedTTL is how long an unclaimed runner waits for its owner.
 const RunnerUnclaimedTTL = 24 * time.Hour
 
@@ -20,8 +29,11 @@ type RunnerView struct {
 	State RunnerState `json:"state"`
 	// Owner is set on the administrators' routes only; the caller's own list omits it.
 	Owner string `json:"owner,omitempty"`
-	// MintedBy names who minted the registration token this runner redeemed.
-	MintedBy string `json:"minted_by,omitempty"`
+	// MintedBy names who minted the registration token this runner redeemed. MintedByEmail is that
+	// person's email where Wardyn holds one, set on a person's own routes when someone else minted it,
+	// so the console can say who without printing an opaque sign-in subject.
+	MintedBy      string `json:"minted_by,omitempty"`
+	MintedByEmail string `json:"minted_by_email,omitempty"`
 	// Online is the hub's live view of a claimed runner and false for any other.
 	Online bool `json:"online"`
 	// KeyFingerprint is abbreviated for an unclaimed runner on its owner's own routes, so it cannot

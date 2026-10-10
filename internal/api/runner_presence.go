@@ -13,11 +13,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// RecordRunnerConnected writes runner.connect for the first authenticated session after the runner
-// was offline. The runner hub's Connected callback calls it; a resumed session writes nothing.
-func (s *Server) RecordRunnerConnected(ctx context.Context, id uuid.UUID, version string) {
+// RecordRunnerConnected writes runner.connect for a runner's authenticated session. resumed is true
+// for a session that resumed an earlier one; the runner hub calls it for the first authenticated
+// session after the runner was offline, so the hub's wiring decides whether a resume writes a row.
+func (s *Server) RecordRunnerConnected(ctx context.Context, id uuid.UUID, version string, resumed bool) {
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "runner:"+id.String(),
-		placement.ActionRunnerConnect, id.String(), "success", mustJSON(map[string]any{"version": version})))
+		placement.ActionRunnerConnect, id.String(), "success", mustJSON(map[string]any{"version": version, "resumed": resumed})))
 }
 
 // RecordRunnerDisconnected writes runner.disconnect for a session that ended and was not resumed

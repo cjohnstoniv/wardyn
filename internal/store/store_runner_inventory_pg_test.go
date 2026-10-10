@@ -99,7 +99,9 @@ func TestPG_RunnerTokenListIsOnlyUnusedUnexpired(t *testing.T) {
 	_, revoked := mintToken(t, st, "dan", now.Add(-time.Minute), now.Add(time.Hour))
 	for _, tok := range []types.RunnerRegistrationToken{live, used, expired, revoked} {
 		id := tok.ID
-		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM runner_registration_tokens WHERE id=$1`, id) })
+		t.Cleanup(func() {
+			_, _ = pool.Exec(context.Background(), `DELETE FROM runner_registration_tokens WHERE id=$1`, id)
+		})
 	}
 	if _, ok, err := st.ConsumeRunnerRegistrationToken(ctx, usedRaw, "org", now); err != nil || !ok {
 		t.Fatalf("consume: %v %v", ok, err)
@@ -107,7 +109,7 @@ func TestPG_RunnerTokenListIsOnlyUnusedUnexpired(t *testing.T) {
 	if _, err := st.RevokeRunnerRegistrationToken(ctx, revoked.ID, now); err != nil {
 		t.Fatal(err)
 	}
-	got, err := st.ListUnusedRunnerRegistrationTokens(ctx, now)
+	got, err := st.ListUnusedRunnerRegistrationTokensPage(ctx, now, "", store.Page{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,11 +153,119 @@ func TestPG_RunnerMintedByAndActiveRunCounts(t *testing.T) {
 		id := run.ID
 		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id=$1`, id) })
 	}
-	counts, err := st.CountActiveRunsByRunner(ctx)
+	counts, err := st.CountActiveRunsByRunner(ctx, []uuid.UUID{r.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if counts[r.ID] != 2 {
 		t.Fatalf("active runs = %d, want 2 (running and waiting, not completed)", counts[r.ID])
+	}
+}
+
+func TestPG_RunnerTokenListPagesAndFiltersByOwner(t *testing.T) {
+	pool := runsPGPool(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	owner := "paged-" + uuid.NewString()
+	var ids []uuid.UUID
+	for i := range 3 {
+		_, tok := mintToken(t, st, owner, now.Add(-time.Duration(i)*time.Minute), now.Add(time.Hour))
+		ids = append(ids, tok.ID)
+		id := tok.ID
+		t.Cleanup(func() {
+			_, _ = pool.Exec(context.Background(), `DELETE FROM runner_registration_tokens WHERE id=$1`, id)
+		})
+	}
+	_, other := mintToken(t, st, "other-"+uuid.NewString(), now, now.Add(time.Hour))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM runner_registration_tokens WHERE id=$1`, other.ID)
+	})
+
+	first, err := st.ListUnusedRunnerRegistrationTokensPage(ctx, now, owner, store.Page{Limit: 2})
+	if err != nil || len(first) != 2 || first[0].ID != ids[0] || first[1].ID != ids[1] {
+		t.Fatalf("first page = %v, %v; want the two newest of the owner's", first, err)
+	}
+	rest, err := st.ListUnusedRunnerRegistrationTokensPage(ctx, now, owner, store.Page{Limit: 2, Offset: 2})
+	if err != nil || len(rest) != 1 || rest[0].ID != ids[2] {
+		t.Fatalf("second page = %v, %v", rest, err)
+	}
+}
+
+func TestPG_RunnerListPageFiltersStateAndHidesLapsed(t *testing.T) {
+	pool := runsPGPool(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	mk := func(state types.RunnerState, age time.Duration) types.Runner {
+		r, err := st.CreateRunner(ctx, newRunner("list@example.com"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := r.ID
+		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM runners WHERE id=$1`, id) })
+		if _, err := pool.Exec(ctx, `UPDATE runners SET state=$2, created_at=$3 WHERE id=$1`, id, string(state), now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	waiting, claimed := mk(types.RunnerUnclaimed, time.Hour), mk(types.RunnerClaimed, 48*time.Hour)
+	revoked, lapsed := mk(types.RunnerRevoked, time.Hour), mk(types.RunnerUnclaimed, 25*time.Hour)
+	has := func(filter types.RunnerFilter) map[uuid.UUID]bool {
+		rows, err := st.ListRunnersPage(ctx, filter, now, store.Page{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[uuid.UUID]bool{}
+		for _, r := range rows {
+			out[r.ID] = true
+		}
+		return out
+	}
+	if a := has(types.RunnerFilterActive); !a[waiting.ID] || !a[claimed.ID] || a[revoked.ID] || a[lapsed.ID] {
+		t.Fatalf("active = %v", a)
+	}
+	if a := has(types.RunnerFilterRevoked); a[waiting.ID] || a[claimed.ID] || !a[revoked.ID] || a[lapsed.ID] {
+		t.Fatalf("revoked = %v", a)
+	}
+	if a := has(types.RunnerFilterAll); !a[waiting.ID] || !a[claimed.ID] || !a[revoked.ID] || a[lapsed.ID] {
+		t.Fatalf("all = %v", a)
+	}
+	if rows, err := st.ListRunnersPage(ctx, types.RunnerFilterAll, now, store.Page{Limit: 1}); err != nil || len(rows) != 1 {
+		t.Fatalf("a limit of 1 returned %d rows: %v", len(rows), err)
+	}
+	if _, err := st.ListRunnersPage(ctx, "bogus", now, store.Page{}); err == nil {
+		t.Fatal("an unknown filter listed")
+	}
+}
+
+func TestPG_LapsedUnclaimedRunnerIsDeletedAndItsKeyRegistersAgain(t *testing.T) {
+	pool := runsPGPool(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	old := newRunner("alice@example.com")
+	if _, err := st.CreateRunner(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM runners WHERE key_fingerprint=$1`, old.KeyFingerprint)
+	})
+	if _, err := pool.Exec(ctx, `UPDATE runners SET created_at=$2 WHERE id=$1`, old.ID, now.Add(-25*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	again := old
+	again.ID = uuid.New()
+	if _, err := st.CreateRunner(ctx, again); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("before the sweep the lapsed row pins its key: %v", err)
+	}
+	if n, err := st.ExpireUnclaimedRunners(ctx, now.Add(-types.RunnerUnclaimedTTL)); err != nil || n < 1 {
+		t.Fatalf("expire = %d, %v", n, err)
+	}
+	if _, err := st.GetRunner(ctx, old.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the lapsed row survived the sweep: %v", err)
+	}
+	if _, err := st.CreateRunner(ctx, again); err != nil {
+		t.Fatalf("the key could not register again after the sweep: %v", err)
 	}
 }
