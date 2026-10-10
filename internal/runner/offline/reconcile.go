@@ -149,6 +149,10 @@ func (m *Manager) State(ctx context.Context) ([]runnerwire.RunState, error) {
 	}
 	ids := m.runIDs()
 	m.mu.Unlock()
+	return m.stateRows(ctx, ids)
+}
+
+func (m *Manager) stateRows(ctx context.Context, ids []uuid.UUID) ([]runnerwire.RunState, error) {
 	out := make([]runnerwire.RunState, 0, len(ids))
 	for _, id := range ids {
 		m.mu.Lock()
