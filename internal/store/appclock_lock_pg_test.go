@@ -5,16 +5,30 @@ package store_test
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"sync"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type approvalClockTrace struct{ bound chan time.Time }
+
+func (tr approvalClockTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "UPDATE approvals") && len(data.Args) > 1 {
+		if at, ok := data.Args[1].(time.Time); ok {
+			tr.bound <- at
+		}
+	}
+	return ctx
+}
+
+func (approvalClockTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 // A decision waits on its real approval row; the clock anchor and reauth audit
 // transaction must preserve the decision time rather than the eventual unlock.
@@ -25,10 +39,18 @@ func TestPG_AppClockDecisionPreservesTimeAcrossRowLock(t *testing.T) {
 			name = "reauth"
 		}
 		t.Run(name, func(t *testing.T) {
-			pool := runsPGPoolIsolated(t)
-			st := store.NewPG(pool)
+			backing := runsPGPoolIsolated(t)
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
+			bound := make(chan time.Time, 1)
+			cfg := backing.Config().Copy()
+			cfg.ConnConfig.Tracer = approvalClockTrace{bound}
+			pool, err := pgxpool.NewWithConfig(ctx, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pool.Close()
+			st := store.NewPG(pool)
 			runID := seedReauthRun(t, st)
 			ap, err := st.CreateApproval(ctx, types.ApprovalRequest{ID: uuid.New(), RunID: runID, Kind: types.ApprovalCredentialReauth, State: types.ApprovalPending, RequestedAt: time.Now().UTC(), RequestedScope: json.RawMessage(`{"owner":"clock"}`)})
 			if err != nil {
@@ -49,9 +71,7 @@ func TestPG_AppClockDecisionPreservesTimeAcrossRowLock(t *testing.T) {
 			}
 			origin := time.Now()
 			start := origin.UTC().Add(time.Minute)
-			sampled := make(chan struct{})
-			var once sync.Once
-			st.Now = func() time.Time { once.Do(func() { close(sampled) }); return start.Add(time.Since(origin)) }
+			st.Now = func() time.Time { return start.Add(time.Since(origin)) }
 			decision := types.ApprovalDecision{State: types.ApprovalApproved, DecidedBy: "clock", Reason: "clock"}
 			type response struct {
 				approval types.ApprovalRequest
@@ -68,17 +88,18 @@ func TestPG_AppClockDecisionPreservesTimeAcrossRowLock(t *testing.T) {
 				}
 				result <- response{got, err}
 			}()
+			var admitted time.Time
 			select {
-			case <-sampled:
+			case admitted = <-bound:
 			case <-ctx.Done():
 				t.Fatal(ctx.Err())
 			}
-			var updateStarted sql.NullTime
 			for {
-				if err := pool.QueryRow(ctx, `SELECT min(query_start) FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))`, lockerPID).Scan(&updateStarted); err != nil {
+				var waiting bool
+				if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))`, lockerPID).Scan(&waiting); err != nil {
 					t.Fatal(err)
 				}
-				if updateStarted.Valid {
+				if waiting {
 					break
 				}
 				select {
@@ -87,10 +108,6 @@ func TestPG_AppClockDecisionPreservesTimeAcrossRowLock(t *testing.T) {
 				case <-time.After(time.Millisecond):
 				}
 			}
-			// Use the UPDATE's own admission clock, frozen before its row wait.
-			// A fresh wall-clock sample while blocked can step backward and cannot
-			// establish that the eventual timestamp moved forward during the wait.
-			cutoff := updateStarted.Time
 			if err := locker.Commit(ctx); err != nil {
 				t.Fatal(err)
 			}
@@ -103,8 +120,10 @@ func TestPG_AppClockDecisionPreservesTimeAcrossRowLock(t *testing.T) {
 			if got.err != nil {
 				t.Fatal(got.err)
 			}
-			if got.approval.DecidedAt == nil || got.approval.DecidedAt.After(cutoff) {
-				t.Fatalf("lock wait advanced decision: %+v cutoff=%s", got.approval, cutoff)
+			// Compare the actual bound instant, not two wall-clock readings that
+			// can step backward between admission and the observed row lock.
+			if got.approval.DecidedAt == nil || !got.approval.DecidedAt.Equal(admitted.Truncate(time.Microsecond)) {
+				t.Fatalf("lock wait changed bound decision: %+v bound=%s", got.approval, admitted)
 			}
 			if reauth {
 				var count int
