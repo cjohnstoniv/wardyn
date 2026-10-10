@@ -10,6 +10,8 @@ Replay uses the runner's proof-of-possession stream, including after a run token
 
 Migration `0143_runner_spool_cursors` adds metadata-only receipts with run and runner erasure cascades. Audit retention does not remove receipts, and runner erasure does not erase audit history. A changed spool identity, sequence gap or conflicting record hash is refused.
 
+Migration `0145_runner_inventories` stores an authenticated session's original run candidates and bounded STATE page observations. Page progress and observations commit together. Only a complete inventory can identify an omitted, unchanged original run; interrupted pages and newly created runs cannot imply loss. These internal records neither acknowledge audit history nor authorize execution. A fresh session replaces the preceding inventory records.
+
 Historical replay for a killed run records audit history only. It cannot revive the run, renew credentials, update the activity clock or grant authority. Audit events use the organisation arrival time; the runner's timestamp appears as `observed_at` with `spooled: true` and `evidence_source: runner_asserted`.
 
 Org execution identity is stored separately in `runner_executions`; immutable

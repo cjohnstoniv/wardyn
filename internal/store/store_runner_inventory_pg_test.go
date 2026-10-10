@@ -65,7 +65,7 @@ func TestPG_RunnerInventoryOver1000AndAtomicPages(t *testing.T) {
 }
 
 func TestPG_RunnerInventoryFinalOmissionUsesOriginalVersion(t *testing.T) {
-	for _, scenario := range []string{"unchanged", "updated", "new-after-snapshot"} {
+	for _, scenario := range []string{"unchanged", "updated", "new-generation", "new-after-snapshot"} {
 		t.Run(scenario, func(t *testing.T) {
 			pool, st, rn, _, _ := spoolPGFixture(t)
 			ctx := t.Context()
@@ -85,6 +85,10 @@ func TestPG_RunnerInventoryFinalOmissionUsesOriginalVersion(t *testing.T) {
 			}
 			if scenario == "updated" {
 				if _, err := pool.Exec(ctx, `UPDATE agent_runs SET token_renewed_at=clock_timestamp() WHERE id=$1`, omitted.ID); err != nil {
+					t.Fatal(err)
+				}
+			} else if scenario == "new-generation" {
+				if _, err := st.BeginRunnerExecution(ctx, rn.ID, omitted.ID, uuid.Nil, uuid.New(), runnerwire.MethodExec); err != nil {
 					t.Fatal(err)
 				}
 			} else if scenario == "new-after-snapshot" {
@@ -135,8 +139,8 @@ func TestPG_RunnerInventorySessionAndPageRollback(t *testing.T) {
 	if err := st.BeginRunnerInventory(ctx, rn.ID, nextSession); err != nil {
 		t.Fatal(err)
 	}
-	final := runnerwire.StatePage{InventoryID: page.InventoryID, After: ids[0], Final: true}
-	if _, err := st.IntakeRunnerStatePage(ctx, rn.ID, session, final); !errors.Is(err, store.ErrRunnerExecutionRefused) {
+	// The stale session also cannot submit a structurally valid first page.
+	if _, err := st.IntakeRunnerStatePage(ctx, rn.ID, session, page); !errors.Is(err, store.ErrRunnerExecutionRefused) {
 		t.Fatalf("old session admitted: %v", err)
 	}
 	// The replacement cannot inherit seen rows from the interrupted session.
