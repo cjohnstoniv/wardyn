@@ -23,7 +23,7 @@ import (
 // pool, and the age identity pre-envelope rows open under (nil with none). It never converts a row:
 // that is what newSecretStore does, and the target is read-only. A deployment with no key at all
 // refuses here rather than mint an ephemeral one that would fail every row for the wrong reason.
-func rehearseKeyStore(ctx context.Context, f *bootFlags) (*secretstorepg.Store, age.Identity, error) {
+func rehearseKeyStore(ctx context.Context, f *bootFlags) (*secretstorepg.Store, *age.X25519Identity, error) {
 	platform, err := readPlatformKey(*f.platformKeyFile, *f.ageKey)
 	if err != nil {
 		return nil, nil, err
@@ -43,9 +43,6 @@ func rehearseKeyStore(ctx context.Context, f *bootFlags) (*secretstorepg.Store, 
 	ps, ok := s.(*secretstorepg.Store)
 	if !ok {
 		return nil, nil, fmt.Errorf("secret store %q has no rows to open", s.Name())
-	}
-	if id == nil {
-		return ps, nil, nil
 	}
 	return ps, id, nil
 }
@@ -75,9 +72,13 @@ func keyClassOf(c secretstorepg.CheckedRow) string {
 
 // keyUse opens every row over the target backend. A row that does not open is a result; only a
 // failure to read the tables is an error.
-func (s *rehearseSession) keyUse(ctx context.Context, store *secretstorepg.Store, legacy age.Identity) (keyUseResult, error) {
+func (s *rehearseSession) keyUse(ctx context.Context, store *secretstorepg.Store, legacy *age.X25519Identity) (keyUseResult, error) {
 	res := keyUseResult{Classes: map[string]int{}, Counts: map[string]int{}}
-	err := store.CheckRows(secretstore.WithPurpose(ctx, secretstore.PurposeRehearse), s.conn(), legacy, func(c secretstorepg.CheckedRow) {
+	var opener age.Identity // a nil *X25519Identity in the interface would read as a key
+	if legacy != nil {
+		opener = legacy
+	}
+	err := store.CheckRows(secretstore.WithPurpose(ctx, secretstore.PurposeRehearse), s.conn(), opener, func(c secretstorepg.CheckedRow) {
 		class := keyClassOf(c)
 		res.Classes[class]++
 		res.Counts[strings.ReplaceAll(string(c.Outcome), " ", "_")]++
