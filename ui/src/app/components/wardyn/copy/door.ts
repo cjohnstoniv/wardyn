@@ -22,17 +22,19 @@ export const BANNER = {
 
 // The Your-model-connections strings the strip and the doors share (packet MP-D).
 export const CONNECTIONS = {
+  COULD_NOT_CHECK: "Could not check",
+  RECHECK: "Re-check",
+  REVIEW_RECONNECT: "Review and reconnect",
+  NEVER_CONNECTED: (host: string) => `No connection is stored for this provider. Destination: ${host}.`,
+  DESTINATION_CHANGED: (host: string) =>
+    `Your connection was removed because an admin changed this provider’s destination. Review ${host}, then connect again.`,
+  KIND_CHANGED: (host: string) =>
+    `Your connection was removed because an admin changed this provider’s connection method. Review ${host}, then connect again.`,
+  STORE_UNREADABLE: "Could not check your connection. Your credential may still be stored. Wait a moment, then re-check.",
   C6_LINE: (name: string) => `Your AWS sign-in for ${name} no longer works.`,
   SIGN_IN_CLAUDE: "Sign in to Claude",
   ADD_KEY: "Add your key",
   ADD_TOKEN: "Add your token",
-  // §5.4's own page (packet MP-D, states C3-C10) — the page every person,
-  // admins included, connects their own credential from. Not wired here: C9b
-  // (a token removed by an admin's address change) and C11 (the admin-token
-  // caller, which never mounts this page — model-access-context.tsx's own
-  // comment). SetupProviderAccess carries no signal distinguishing "removed"
-  // from "never stored", so C9b's own sentence is left unwired rather than
-  // invented — see #541's report.
   TITLE: "Your model connections",
   LEDE: "Connect the model providers your admin set up. Your runs use your own sign-in or key.",
   FOR: (harnesses: string) => `For ${harnesses}`,

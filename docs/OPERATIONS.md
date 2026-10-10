@@ -5004,6 +5004,17 @@ Naming these is the point of the walk, not a caveat on it:
 
 ### Internal model gateway
 
+<!-- Provider connection causes: itemised retention and disclosure rules; no additional prose budget. -->
+- Changing a provider’s address, header scheme or kind removes each person’s credential; nothing silently follows the new destination.
+- Affected people see the reason and new destination host in Your model connections and launch recovery, then review it before connecting again.
+- The owner-scoped change record contains only owner, provider ID and UID, reason, time and the already-disclosed destination host.
+  - It contains no secret, encrypted copy, hash or secret-store reference.
+  - Reconnecting clears it in the credential-write transaction; deleting the provider removes it.
+  - Recreating the same provider ID with a new UID inherits neither credentials nor connection history.
+- “Could not check” means the credential store could not be read: wait, then re-check; the credential may still exist.
+- Older clients retain the neutral unavailable wording because cause fields are optional.
+- Migration `0190_provider_connection_changes` creates an empty history table; pre-upgrade removals have no recorded cause.
+
 - Point a provider's model calls at an internal endpoint instead of `api.anthropic.com`/`api.openai.com`.
 - An Anthropic or OpenAI provider's `base_url` (Settings → Model providers) re-points the proxy's own brokered `/wardyn/llm/anthropic` / `/wardyn/llm/openai` route at the gateway, and a `custom_endpoint` provider is addressed by its `base_url` alone.
 

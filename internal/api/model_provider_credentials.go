@@ -328,7 +328,7 @@ func (s *Server) purgeProviderCredentials(ctx context.Context, before, after *ty
 	if err != nil {
 		return 0, fmt.Errorf("purge model provider credentials: %w", err)
 	}
-	n, err := s.cfg.Secrets.DeleteEverywhere(ctx, names)
+	n, err := s.cfg.Secrets.DeleteEverywhere(secretstore.WithProviderInvalidations(ctx, s.providerInvalidations(before, after)), names)
 	if err != nil {
 		return 0, fmt.Errorf("purge model provider credentials: %w", err)
 	}

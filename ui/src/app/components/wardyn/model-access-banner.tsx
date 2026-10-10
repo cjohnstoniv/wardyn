@@ -234,6 +234,8 @@ export function ModelAccessBanner() {
         // /setup/status's credential_storage (design F-3) — the key door's
         // store-mode notice line and remove-confirm retention line key off it.
         credentialStorage={status?.credential_storage}
+        access={status?.provider_access}
+        onRecheck={door.refresh}
         focusSeq={door.focusSeq}
         onCancel={door.closeDoor}
         onDone={(message) => {

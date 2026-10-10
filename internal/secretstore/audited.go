@@ -332,3 +332,12 @@ func RecordRead(ctx context.Context, rec audit.Recorder, p Purpose, owner string
 		audit.LogWriteFailure(ctx, ev, rerr)
 	}
 }
+
+// ProviderChange forwards owner-scoped history without reading a secret.
+func (a *audited) ProviderChange(ctx context.Context, uid string) (ProviderChange, bool, error) {
+	m, ok := a.inner.(ProviderChangeStore)
+	if !ok {
+		return ProviderChange{}, false, ErrNoMetadata
+	}
+	return m.ProviderChange(ctx, uid)
+}

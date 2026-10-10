@@ -128,7 +128,10 @@ export function ModelConnectionsCard({ status, onChanged }: { status: SetupStatu
                 key={row.provider.id}
                 row={row}
                 copy={copy}
-                onOpen={(providerId) => door.openDoor({ for: { provider: providerId }, onClosed: onChanged })}
+                onOpen={(providerId) => {
+                  if (row.access.state === "not_configured" && row.access.cause === "store_unreadable") { void door.refresh(); onChanged(); }
+                  else door.openDoor({ for: { provider: providerId }, onClosed: onChanged });
+                }}
               />
             ))}
           </div>

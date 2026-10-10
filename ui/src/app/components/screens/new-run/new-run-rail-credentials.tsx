@@ -10,6 +10,8 @@
 // #542 took that file past the 1000-line gate. Like the rail, it takes props
 // and renders; it owns no screen state.
 
+import { modelConnectionCause } from "../../../lib/model-connection-cause";
+import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import * as React from "react";
 import type { ModelCredential, SetupModelProvider, SetupProviderAccess } from "../../../lib/types";
 import { Button } from "../../ui/button";
@@ -92,19 +94,23 @@ function notConnected(provider: SetupModelProvider, access: SetupProviderAccess[
   const state = accessStateFor(access, provider.id);
   if (providerConnected(state) || state === "not_applicable") return null;
   const name = provider.name ?? provider.id;
+  let sentence: string;
+  let cta: string;
   switch (provider.kind) {
     case "bedrock_sso":
-      return { sentence: RAIL_PROVIDER.NOT_SIGNED_IN(name), cta: AGENTS.SIGN_IN_AWS };
+      sentence = RAIL_PROVIDER.NOT_SIGNED_IN(name); cta = AGENTS.SIGN_IN_AWS; break;
     case "custom_endpoint":
-      return { sentence: RAIL_PROVIDER.NO_TOKEN(name), cta: CONNECTIONS.ADD_TOKEN };
+      sentence = RAIL_PROVIDER.NO_TOKEN(name); cta = CONNECTIONS.ADD_TOKEN; break;
     case "anthropic_api_key":
     case "openai_api_key":
-      return { sentence: RAIL_PROVIDER.NO_KEY(name), cta: CONNECTIONS.ADD_KEY };
+      sentence = RAIL_PROVIDER.NO_KEY(name); cta = CONNECTIONS.ADD_KEY; break;
     case "anthropic_subscription":
-      return { sentence: RAIL_PROVIDER.NOT_SIGNED_IN_CLAUDE(name), cta: CONNECTIONS.SIGN_IN_CLAUDE };
+      sentence = RAIL_PROVIDER.NOT_SIGNED_IN_CLAUDE(name); cta = CONNECTIONS.SIGN_IN_CLAUDE; break;
     default:
       return null;
   }
+  const cause = modelConnectionCause(provider, access?.find((a) => a.provider === provider.id));
+  return { sentence: cause?.line ?? sentence, cta: cause?.button ?? cta };
 }
 
 function ProviderNotConnectedLine({
@@ -116,12 +122,17 @@ function ProviderNotConnectedLine({
   access: SetupProviderAccess[] | undefined;
   onSignIn: () => void;
 }) {
+  const door = useModelAccessDoor();
   const nc = notConnected(provider, access);
   if (!nc) return null;
   return (
     <div className="mt-1.5">
       <p className="text-xs text-warning">{nc.sentence}</p>
-      <Button type="button" variant="outline" size="sm" className="mt-1.5" onClick={onSignIn}>
+      <Button type="button" variant="outline" size="sm" className="mt-1.5" onClick={() => {
+        const current = access?.find((a) => a.provider === provider.id);
+        if (current?.state === "not_configured" && current.cause === "store_unreadable") void door.refresh();
+        else onSignIn();
+      }}>
         {nc.cta}
       </Button>
     </div>

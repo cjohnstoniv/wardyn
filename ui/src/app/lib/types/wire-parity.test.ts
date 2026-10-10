@@ -569,3 +569,17 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   });
 
 });
+
+
+describe("SetupProviderAccess cause fields", () => {
+  it("keeps the Go and TypeScript optional wire fields in parity", () => {
+    const root = repoRoot();
+    const go = readFileSync(join(root, "internal/api/provider_access.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/setup.ts"), "utf8");
+    expect(tsInterfaceTopKeys(ts, "SetupProviderAccess").sort()).toEqual(goJSONTags(go, "SetupProviderAccess").sort());
+    for (const key of ["cause", "changed_at", "new_destination"]) {
+      expect(go).toContain(`json:"${key},omitempty"`);
+      expect(tsInterfaceBody(ts, "SetupProviderAccess")).toContain(`${key}?:`);
+    }
+  });
+});
