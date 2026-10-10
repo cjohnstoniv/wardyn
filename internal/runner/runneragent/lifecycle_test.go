@@ -101,12 +101,13 @@ func TestDispatcherRefGuardAndDurableExecIdentity(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	allowed, bound := false, false
+	generation := uuid.New()
 	d, err := New(Config{RunnerID: id, Substrate: cancelAfterExec{fake, cancel},
 		BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
 		Created:      func(context.Context, runner.SandboxSpec, string) error { return nil },
 		CreateFailed: func(context.Context, runner.SandboxSpec) error { return nil },
-		BeforeRefCall: func(_ context.Context, method, ref string) error {
-			if method != runnerwire.MethodExec || ref != sb.Ref {
+		BeforeRefCall: func(_ context.Context, method, ref string, gotGeneration uuid.UUID) error {
+			if method != runnerwire.MethodExec || ref != sb.Ref || gotGeneration != generation {
 				t.Fatal("wrong mutation guard identity")
 			}
 			if !allowed {
@@ -114,8 +115,8 @@ func TestDispatcherRefGuardAndDurableExecIdentity(t *testing.T) {
 			}
 			return nil
 		},
-		AfterRefCall: func(persist context.Context, method, ref, execID string) error {
-			if persist.Err() != nil || ctx.Err() == nil || method != runnerwire.MethodExec || ref != sb.Ref || execID == "" {
+		AfterRefCall: func(persist context.Context, method, ref, execID string, gotGeneration uuid.UUID) error {
+			if persist.Err() != nil || ctx.Err() == nil || method != runnerwire.MethodExec || ref != sb.Ref || execID == "" || gotGeneration != generation {
 				t.Fatal("lost successful exec identity after wire cancellation")
 			}
 			if _, ok := persist.Deadline(); !ok {
@@ -132,7 +133,7 @@ func TestDispatcherRefGuardAndDurableExecIdentity(t *testing.T) {
 	defer b.Close()
 	peer := runnerwire.NewPeer(a, runnerwire.PeerConfig{})
 	defer peer.Close()
-	data, _ := runnerwire.Marshal(runnerwire.ExecArgs{Ref: placement.RunnerRefPrefix(id) + sb.Ref, Argv: []string{"agent"}})
+	data, _ := runnerwire.Marshal(runnerwire.ExecArgs{ExecutionGeneration: generation, Ref: placement.RunnerRefPrefix(id) + sb.Ref, Argv: []string{"agent"}})
 	if _, err := d.Call(ctx, peer, 2, runnerwire.MethodExec, data); err == nil || fake.Called("exec", sb.Ref) || bound {
 		t.Fatal("agent started before lease guard")
 	}

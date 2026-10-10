@@ -36,11 +36,12 @@ type Config struct {
 	// provisioning. It must retain output and retry proxy containment locally.
 	CreateFailed func(context.Context, runner.SandboxSpec) error
 	// BeforeRefCall enforces offline/lease policy before a state-changing call.
-	BeforeRefCall func(context.Context, string, string) error
-	// AfterRefCall persists successful state changes. The final argument is
-	// the agent exec id for MethodExec, empty otherwise. Persistence failures
-	// must contain the proxy before returning their error.
-	AfterRefCall func(context.Context, string, string, string) error
+	// The generation is the explicit Exec/Start CALL identity, zero otherwise.
+	BeforeRefCall func(context.Context, string, string, uuid.UUID) error
+	// AfterRefCall persists successful state changes with the same generation.
+	// The exec id is populated for MethodExec, empty otherwise. Persistence
+	// failures must contain the proxy before returning their error.
+	AfterRefCall func(context.Context, string, string, string, uuid.UUID) error
 	// Streams serves attach/exec/resize/wait/output, with ref validation of its own.
 	Streams      func(context.Context, *runnerwire.Peer, uint32, string, json.RawMessage) (any, error)
 	Output       func(uuid.UUID) (io.Writer, error)
@@ -198,8 +199,12 @@ func (d *Dispatcher) refCall(ctx context.Context, method string, args json.RawMe
 		return nil, err
 	}
 	changing := changesRef(method)
+	generation, err := executionGeneration(method, args)
+	if err != nil {
+		return nil, err
+	}
 	if changing {
-		if err := d.cfg.BeforeRefCall(ctx, method, ref); err != nil {
+		if err := d.cfg.BeforeRefCall(ctx, method, ref, generation); err != nil {
 			return nil, err
 		}
 	}
@@ -213,10 +218,25 @@ func (d *Dispatcher) refCall(ctx context.Context, method string, args json.RawMe
 	}
 	persist, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	if err := d.cfg.AfterRefCall(persist, method, ref, execID); err != nil {
+	if err := d.cfg.AfterRefCall(persist, method, ref, execID, generation); err != nil {
 		return nil, err
 	}
 	return result, nil
+}
+
+func executionGeneration(method string, args json.RawMessage) (uuid.UUID, error) {
+	switch method {
+	case runnerwire.MethodExec:
+		var a runnerwire.ExecArgs
+		err := runnerwire.Unmarshal(args, &a)
+		return a.ExecutionGeneration, err
+	case runnerwire.MethodStart:
+		var a runnerwire.RefArgs
+		err := runnerwire.Unmarshal(args, &a)
+		return a.ExecutionGeneration, err
+	default:
+		return uuid.Nil, nil
+	}
 }
 
 func changesRef(method string) bool {
