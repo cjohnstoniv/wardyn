@@ -71,7 +71,7 @@ func (s PG) BeginRunnerExecution(ctx context.Context, runnerID, runID, previous,
 		}
 		return current, tx.Commit(ctx)
 	}
-	if current.Generation != previous {
+	if current.Generation != previous || (current.Generation != uuid.Nil && current.ExecID == "") {
 		return out, ErrRunnerExecutionRefused
 	}
 	var incomplete bool
