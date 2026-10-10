@@ -40,6 +40,7 @@ function tsKeys(src: string, iface: string): string[] {
 const ts = read("ui/src/app/lib/types/runner-pools.ts");
 const typesGo = read("internal/types/runner_pool.go");
 const clientGo = read("pkg/client/runner_pools.go");
+const limitsGo = read("internal/types/runner_pool_limits.go");
 
 describe("runner pool carriers", () => {
   it.each([
@@ -49,6 +50,15 @@ describe("runner pool carriers", () => {
     [typesGo, "ResolvedRunnerPool", "ResolvedRunnerPool"],
     [typesGo, "RunnerPoolSubject", "RunnerPoolSubject"],
     [typesGo, "RunnerPoolUsePolicy", "RunnerPoolUsePolicy"],
+    [limitsGo, "RunnerPoolAmount", "RunnerPoolAmount"],
+    [limitsGo, "RunnerPoolDuration", "RunnerPoolDuration"],
+    [limitsGo, "RunnerPoolBackgroundLimits", "RunnerPoolBackgroundLimits"],
+    [limitsGo, "RunnerPoolInteractiveLimits", "RunnerPoolInteractiveLimits"],
+    [limitsGo, "RunnerPoolLimits", "RunnerPoolLimits"],
+    [limitsGo, "LimitAmount", "LimitAmount"],
+    [limitsGo, "EffectiveLimit", "EffectiveLimit"],
+    [limitsGo, "ConcurrencyBound", "ConcurrencyBound"],
+    [limitsGo, "EffectiveRunLimits", "EffectiveRunLimits"],
     [clientGo, "RunnerPoolChoice", "RunnerPoolChoice"],
     [clientGo, "RunnerPoolList", "RunnerPoolList"],
     [clientGo, "CreateRunnerPoolRequest", "CreateRunnerPoolRequest"],
@@ -90,5 +100,9 @@ describe("runner pool carriers", () => {
     expect(union("RunnerPoolAvailability").size).toBe(3);
     expect(union("RunnerPoolSwitch")).toEqual(consts(clientGo, '\\bRunnerPoolSwitch\\w+\\s+RunnerPoolSwitch = "([a-z_]+)"'));
     expect(union("RunnerPoolSwitch")).toEqual(new Set(["active", "disabled"]));
+    expect(union("RunnerPoolRunType")).toEqual(consts(limitsGo, '\\bRunnerPoolRun\\w+\\s+RunnerPoolRunType = "([a-z_]+)"'));
+    expect(union("LimitSource")).toEqual(consts(limitsGo, '\\bLimitSource\\w+\\s+LimitSource = "([a-z_]+)"'));
+    expect(union("RunEndReason")).toEqual(consts(limitsGo, '\\bRunEnd\\w+\\s+RunEndReason = "([a-z_]+)"'));
+    expect(union("LimitSource").size).toBe(4);
   });
 });

@@ -11,5 +11,8 @@
   { "key": "NO_OWN_RUNNER", "args": ["Team laptops"], "text": "None of your own runners in Team laptops can run this right now." },
   { "key": "MEMBER_MISMATCH", "args": ["desk-1", "Team laptops"], "text": "desk-1 is not one of your runners in Team laptops." },
   { "key": "HOSTING_MISMATCH", "args": ["Team laptops", "Self-Hosted"], "text": "Team laptops is a Self-Hosted pool, so it can't be used with this runner choice." },
-  { "key": "UNAVAILABLE_SERVER", "args": [], "text": "This server does not manage runner pools yet." }
+  { "key": "UNAVAILABLE_SERVER", "args": [], "text": "This server does not manage runner pools yet." },
+  { "key": "RUN_TYPE_NOT_ALLOWED", "args": ["Build farm", "interactive"], "text": "Build farm doesn't take interactive environments. Choose another pool or run type." },
+  { "key": "BARRIER_NOT_ALLOWED", "args": ["Team laptops", "CC3", "CC1", "CC2"], "text": "Team laptops doesn't allow the Vault barrier. It allows Fence and Wall." },
+  { "key": "AT_CAPACITY", "args": ["Build farm", "4"], "text": "Build farm is already running its limit of 4. Try again when one finishes." }
 ]

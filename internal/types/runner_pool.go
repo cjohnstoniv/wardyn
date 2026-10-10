@@ -80,9 +80,12 @@ type RunnerPool struct {
 	// Revision starts at 1 and increases by one on every change to the pool, its
 	// membership or its use policy. A run records the revision it was admitted
 	// against, and a writer that names a stale revision is refused.
-	Revision  int64     `json:"revision"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Revision int64 `json:"revision"`
+	// Limits are the pool's own limits per run type. Absent, the pool adds no
+	// bound of its own (a pool migrated from before limits existed).
+	Limits    *RunnerPoolLimits `json:"limits,omitempty"`
+	CreatedAt time.Time         `json:"created_at"`
+	UpdatedAt time.Time         `json:"updated_at"`
 }
 
 // RunnerPoolNameMax is the longest pool name, in characters.

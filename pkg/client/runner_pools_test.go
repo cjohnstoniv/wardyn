@@ -9,11 +9,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -116,5 +118,63 @@ func TestRunnerPoolMethodsHitTheirRoutes(t *testing.T) {
 		if gotMethod != tc.method || gotPath != tc.path {
 			t.Errorf("sent %s %s, want %s %s", gotMethod, gotPath, tc.method, tc.path)
 		}
+	}
+}
+
+func poolLimits() *client.RunnerPoolLimits {
+	return &client.RunnerPoolLimits{
+		Background: &client.RunnerPoolBackgroundLimits{
+			CPUMillis: client.RunnerPoolAmount{Default: 1000, Cap: 2000},
+			MemoryMiB: client.RunnerPoolAmount{Default: 1024, Cap: 2048},
+			Lifetime:  client.RunnerPoolDuration{Unlimited: true},
+		},
+		Barriers: []types.ConfinementClass{types.CC2},
+	}
+}
+
+func TestPoolRequestsValidateTheirLimits(t *testing.T) {
+	name := "Build farm"
+	bad := poolLimits()
+	bad.Barriers = nil
+	for _, tc := range []struct {
+		name string
+		err  error
+		ok   bool
+	}{
+		{"create without limits", client.CreateRunnerPoolRequest{Name: name, HostingType: client.RunnerPoolRemoteProvided}.Validate(), true},
+		{"create with limits", client.CreateRunnerPoolRequest{Name: name, HostingType: client.RunnerPoolSelfHosted, Limits: poolLimits()}.Validate(), true},
+		{"create with bad limits", client.CreateRunnerPoolRequest{Name: name, HostingType: client.RunnerPoolSelfHosted, Limits: bad}.Validate(), false},
+		{"create with a bad hosting type", client.CreateRunnerPoolRequest{Name: name, HostingType: "cloud"}.Validate(), false},
+		{"create with a bad name", client.CreateRunnerPoolRequest{Name: " x", HostingType: client.RunnerPoolSelfHosted}.Validate(), false},
+		{"update only the limits", client.UpdateRunnerPoolRequest{Revision: 2, Limits: poolLimits()}.Validate(), true},
+		{"update with bad limits", client.UpdateRunnerPoolRequest{Revision: 2, Limits: bad}.Validate(), false},
+		{"update with a good name and bad limits", client.UpdateRunnerPoolRequest{Revision: 2, Name: &name, Limits: bad}.Validate(), false},
+	} {
+		if (tc.err == nil) != tc.ok {
+			t.Errorf("%s: err = %v, want ok=%v", tc.name, tc.err, tc.ok)
+		}
+	}
+}
+
+func TestPoolChoiceCarriesLimitsAndProvenance(t *testing.T) {
+	raw, err := json.Marshal(client.RunnerPoolChoice{Name: "P", Barriers: []types.ConfinementClass{types.CC1}, Limits: []client.EffectiveRunLimits{{
+		RunType:   client.RunnerPoolRunBackground,
+		CPUMillis: client.EffectiveLimit{Default: client.LimitAmount{Value: 2000}, Cap: client.LimitAmount{Value: 4000}, DefaultSource: client.LimitSourcePool, CapSource: client.LimitSourceGovernance},
+		Lifetime:  client.EffectiveLimit{Default: client.LimitAmount{Unlimited: true}, Cap: client.LimitAmount{Unlimited: true}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"barriers":["CC1"]`, `"run_type":"background"`, `"cap_source":"governance"`, `"lifetime_sec":{"default":{"value":0,"unlimited":true}`, `"lifetime_span_sec"`, `"lifetime_lease_sec"`, `"no_end_allowed":false`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("wire %s lacks %s", raw, want)
+		}
+	}
+	if strings.Contains(string(raw), "idle_sec") {
+		t.Errorf("a Background entry carries no idle: %s", raw)
+	}
+	plain, _ := json.Marshal(client.RunnerPoolChoice{Name: "P"})
+	if strings.Contains(string(plain), "limits") || strings.Contains(string(plain), "barriers") {
+		t.Errorf("a pool with no limits sends none: %s", plain)
 	}
 }

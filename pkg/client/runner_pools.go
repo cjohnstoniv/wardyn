@@ -30,6 +30,19 @@ type (
 	ResolvedRunnerPool  = types.ResolvedRunnerPool
 	RunnerPoolSubject   = types.RunnerPoolSubject
 	RunnerPoolUsePolicy = types.RunnerPoolUsePolicy
+	// The pool's own limits and what a run of each type effectively gets.
+	RunnerPoolLimits            = types.RunnerPoolLimits
+	RunnerPoolBackgroundLimits  = types.RunnerPoolBackgroundLimits
+	RunnerPoolInteractiveLimits = types.RunnerPoolInteractiveLimits
+	RunnerPoolAmount            = types.RunnerPoolAmount
+	RunnerPoolDuration          = types.RunnerPoolDuration
+	RunnerPoolRunType           = types.RunnerPoolRunType
+	EffectiveRunLimits          = types.EffectiveRunLimits
+	EffectiveLimit              = types.EffectiveLimit
+	LimitAmount                 = types.LimitAmount
+	LimitSource                 = types.LimitSource
+	ConcurrencyBound            = types.ConcurrencyBound
+	RunEndReason                = types.RunEndReason
 	// RunnerPoolReason is a pool selection refusal reason; it matches APIError.Reason.
 	RunnerPoolReason = runnerpool.Reason
 )
@@ -46,6 +59,17 @@ const (
 	RunnerPoolSelectedExplicit = types.RunnerPoolSelectedExplicit
 	RunnerPoolSelectedPersonal = types.RunnerPoolSelectedPersonal
 	RunnerPoolSelectedOrg      = types.RunnerPoolSelectedOrg
+
+	RunnerPoolRunBackground  = types.RunnerPoolRunBackground
+	RunnerPoolRunInteractive = types.RunnerPoolRunInteractive
+
+	LimitSourcePool           = types.LimitSourcePool
+	LimitSourceGovernance     = types.LimitSourceGovernance
+	LimitSourceDeployment     = types.LimitSourceDeployment
+	LimitSourceRunnerCapacity = types.LimitSourceRunnerCapacity
+
+	// RunEndMaxLifetimeReached is the reason a run is KILLED at its maximum lifetime.
+	RunEndMaxLifetimeReached = types.RunEndMaxLifetimeReached
 )
 
 // Whether a permitted pool can take a run right now.
@@ -59,12 +83,20 @@ const (
 // list show it. Only pools the caller may use appear; an inaccessible pool's
 // name, members and counts are never sent. Reason says why a pool that is not
 // available is not, in the pool refusal vocabulary.
+//
+// Limits has one entry per run type the pool allows, each the effective
+// defaults and caps for this caller with the source that bound every value
+// (runnerpool.Effective); a run type absent from it is one the pool refuses.
+// Barriers are the confinement classes the pool allows. Both are absent for a
+// pool that adds no limits of its own.
 type RunnerPoolChoice struct {
-	ID           uuid.UUID         `json:"id"`
-	Name         string            `json:"name"`
-	HostingType  RunnerPoolHosting `json:"hosting_type"`
-	Availability string            `json:"availability"`
-	Reason       RunnerPoolReason  `json:"reason,omitempty"`
+	ID           uuid.UUID                `json:"id"`
+	Name         string                   `json:"name"`
+	HostingType  RunnerPoolHosting        `json:"hosting_type"`
+	Availability string                   `json:"availability"`
+	Reason       RunnerPoolReason         `json:"reason,omitempty"`
+	Limits       []EffectiveRunLimits     `json:"limits,omitempty"`
+	Barriers     []types.ConfinementClass `json:"barriers,omitempty"`
 }
 
 // RunnerPoolList is the caller's permitted pool catalogue.
@@ -72,10 +104,28 @@ type RunnerPoolList struct {
 	Pools []RunnerPoolChoice `json:"pools"`
 }
 
-// CreateRunnerPoolRequest names a new pool. The hosting type is fixed for its life.
+// CreateRunnerPoolRequest names a new pool. The hosting type is fixed for its
+// life. Limits are validated (RunnerPoolLimits.Validate); a pool created without
+// them adds no bound of its own.
 type CreateRunnerPoolRequest struct {
 	Name        string            `json:"name"`
 	HostingType RunnerPoolHosting `json:"hosting_type"`
+	Limits      *RunnerPoolLimits `json:"limits,omitempty"`
+}
+
+// Validate refuses a bad name, a hosting type outside the two and limits a pool
+// cannot keep.
+func (r CreateRunnerPoolRequest) Validate() error {
+	if !r.HostingType.Valid() {
+		return errors.New("hosting_type is remote_provided or self_hosted")
+	}
+	if err := types.ValidateRunnerPoolName(r.Name); err != nil {
+		return err
+	}
+	if r.Limits != nil {
+		return r.Limits.Validate()
+	}
+	return nil
 }
 
 // RunnerPoolSwitch is the state an update may put a pool in: active or disabled.
@@ -87,28 +137,36 @@ const (
 	RunnerPoolSwitchDisabled RunnerPoolSwitch = "disabled"
 )
 
-// UpdateRunnerPoolRequest renames or switches off/on one pool. Revision is the
-// revision the caller read: a stale one is refused with runner_pool_stale.
+// UpdateRunnerPoolRequest renames, switches off/on or re-limits one pool.
+// Revision is the revision the caller read: a stale one is refused with
+// runner_pool_stale. Limits replace the pool's limits as a whole.
 type UpdateRunnerPoolRequest struct {
 	Revision int64             `json:"revision"`
 	Name     *string           `json:"name,omitempty"`
 	State    *RunnerPoolSwitch `json:"state,omitempty"`
+	Limits   *RunnerPoolLimits `json:"limits,omitempty"`
 }
 
 // Validate refuses an update that changes nothing, a revision that was never
-// read, a bad name, and any state but active or disabled (never deleted).
+// read, a bad name, limits a pool cannot keep, and any state but active or
+// disabled (never deleted).
 func (r UpdateRunnerPoolRequest) Validate() error {
 	switch {
 	case r.Revision < 1:
 		return errors.New("revision is the revision you read")
-	case r.Name == nil && r.State == nil:
-		return errors.New("change the name or the state")
+	case r.Name == nil && r.State == nil && r.Limits == nil:
+		return errors.New("change the name, the state or the limits")
 	case r.State != nil && *r.State != RunnerPoolSwitchActive && *r.State != RunnerPoolSwitchDisabled:
 		return errors.New("state is active or disabled; delete a pool with DELETE")
-	case r.Name != nil:
-		return types.ValidateRunnerPoolName(*r.Name)
 	}
-	return nil
+	var nameErr, limitsErr error
+	if r.Name != nil {
+		nameErr = types.ValidateRunnerPoolName(*r.Name)
+	}
+	if r.Limits != nil {
+		limitsErr = r.Limits.Validate()
+	}
+	return errors.Join(nameErr, limitsErr)
 }
 
 // ListRunnerPools lists the pools the caller may use.

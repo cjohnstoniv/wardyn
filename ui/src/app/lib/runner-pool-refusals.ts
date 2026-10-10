@@ -21,12 +21,26 @@ export const RUNNER_POOL_REASONS = [
   "runner_pool_no_eligible_member",
   "runner_pool_member_mismatch",
   "runner_pools_unavailable",
+  "runner_pool_run_type_not_allowed",
+  "runner_pool_barrier_not_allowed",
+  "runner_pool_at_capacity",
 ] as const;
 
 export type RunnerPoolReason = (typeof RUNNER_POOL_REASONS)[number];
 
 /** The console's name for a hosting type (runnerpool.HostingLabel). */
 export const HOSTING_LABEL = { remote_provided: "Remote Provided", self_hosted: "Self-Hosted" } as const;
+
+/** How a sentence names runs of a type (types.RunnerPoolRunType.Plural). */
+export const RUN_TYPE_PLURAL = { background: "background tasks", interactive: "interactive environments" } as const;
+
+/** The console's name for a barrier (types.BarrierLabel). */
+export const BARRIER_LABEL = { CC1: "Fence", CC2: "Wall", CC3: "Vault" } as const;
+
+/** Why the platform ended a run (types.RunEndReason), with the sentence the run detail and the audit view say. */
+export const RUN_END_REASON_SENTENCE = {
+  max_lifetime_reached: "This run reached its maximum lifetime and was ended.",
+} as const;
 
 /** The sentences, byte for byte what internal/runnerpool/reasons.go says. */
 export const RUNNER_POOL_REFUSAL = {
@@ -43,6 +57,14 @@ export const RUNNER_POOL_REFUSAL = {
   MEMBER_MISMATCH: (runner: string, name: string) => `${runner} is not one of your runners in ${name}.`,
   HOSTING_MISMATCH: (name: string, label: string) => `${name} is a ${label} pool, so it can't be used with this runner choice.`,
   UNAVAILABLE_SERVER: () => "This server does not manage runner pools yet.",
+  RUN_TYPE_NOT_ALLOWED: (name: string, runType: keyof typeof RUN_TYPE_PLURAL) =>
+    `${name} doesn't take ${RUN_TYPE_PLURAL[runType]}. Choose another pool or run type.`,
+  BARRIER_NOT_ALLOWED: (name: string, asked: keyof typeof BARRIER_LABEL, allowed: (keyof typeof BARRIER_LABEL)[]) => {
+    const labels = allowed.map((c) => BARRIER_LABEL[c]);
+    const list = labels.length > 1 ? `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}` : labels.join("");
+    return `${name} doesn't allow the ${BARRIER_LABEL[asked]} barrier. It allows ${list}.`;
+  },
+  AT_CAPACITY: (name: string, max: number) => `${name} is already running its limit of ${max}. Try again when one finishes.`,
 } as const;
 
 /** The reason each sentence belongs to; the console matches on these, never on the text. */
@@ -60,6 +82,9 @@ export const RUNNER_POOL_REFUSAL_REASON: Record<keyof typeof RUNNER_POOL_REFUSAL
   MEMBER_MISMATCH: "runner_pool_member_mismatch",
   HOSTING_MISMATCH: "runner_pool_member_mismatch",
   UNAVAILABLE_SERVER: "runner_pools_unavailable",
+  RUN_TYPE_NOT_ALLOWED: "runner_pool_run_type_not_allowed",
+  BARRIER_NOT_ALLOWED: "runner_pool_barrier_not_allowed",
+  AT_CAPACITY: "runner_pool_at_capacity",
 };
 
 /** Every sentence function by key, for the parity test. */
@@ -77,4 +102,8 @@ export const RUNNER_POOL_REFUSAL_BY_KEY: Record<keyof typeof RUNNER_POOL_REFUSAL
   MEMBER_MISMATCH: (...a) => RUNNER_POOL_REFUSAL.MEMBER_MISMATCH(a[0], a[1]),
   HOSTING_MISMATCH: (...a) => RUNNER_POOL_REFUSAL.HOSTING_MISMATCH(a[0], a[1]),
   UNAVAILABLE_SERVER: () => RUNNER_POOL_REFUSAL.UNAVAILABLE_SERVER(),
+  RUN_TYPE_NOT_ALLOWED: (...a) => RUNNER_POOL_REFUSAL.RUN_TYPE_NOT_ALLOWED(a[0], a[1] as keyof typeof RUN_TYPE_PLURAL),
+  BARRIER_NOT_ALLOWED: (...a) =>
+    RUNNER_POOL_REFUSAL.BARRIER_NOT_ALLOWED(a[0], a[1] as keyof typeof BARRIER_LABEL, a.slice(2) as (keyof typeof BARRIER_LABEL)[]),
+  AT_CAPACITY: (...a) => RUNNER_POOL_REFUSAL.AT_CAPACITY(a[0], Number(a[1])),
 };

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -41,6 +42,15 @@ func TestRefusalSentencesMatchGolden(t *testing.T) {
 		"MEMBER_MISMATCH":              func(a []string) string { return MemberMismatchMsg(a[0], a[1]) },
 		"HOSTING_MISMATCH":             func(a []string) string { return HostingMismatchMsg(a[0], a[1]) },
 		"UNAVAILABLE_SERVER":           func([]string) string { return UnavailableServerMsg() },
+		"RUN_TYPE_NOT_ALLOWED":         func(a []string) string { return RunTypeNotAllowedMsg(a[0], types.RunnerPoolRunType(a[1])) },
+		"BARRIER_NOT_ALLOWED": func(a []string) string {
+			var allowed []types.ConfinementClass
+			for _, c := range a[2:] {
+				allowed = append(allowed, types.ConfinementClass(c))
+			}
+			return BarrierNotAllowedMsg(a[0], types.ConfinementClass(a[1]), allowed)
+		},
+		"AT_CAPACITY": func(a []string) string { n, _ := strconv.Atoi(a[1]); return AtCapacityMsg(a[0], n) },
 	}
 	var golden []struct {
 		Key  string   `json:"key"`
@@ -208,6 +218,9 @@ func TestEveryReasonHasItsOwnSentence(t *testing.T) {
 		ReasonNoEligibleMember:   {{Reason: ReasonNoEligibleMember, Name: "P"}, {Reason: ReasonNoEligibleMember, Name: "P", Hosting: types.RunnerPoolSelfHosted}},
 		ReasonMemberMismatch:     {{Reason: ReasonMemberMismatch, Name: "P", Hosting: types.RunnerPoolSelfHosted}, {Reason: ReasonMemberMismatch, Name: "P", Runner: "desk-1"}},
 		ReasonPoolsUnavailable:   {{Reason: ReasonPoolsUnavailable}},
+		ReasonRunTypeNotAllowed:  {{Reason: ReasonRunTypeNotAllowed, Name: "P", RunType: types.RunnerPoolRunBackground}},
+		ReasonBarrierNotAllowed:  {{Reason: ReasonBarrierNotAllowed, Name: "P", Barrier: types.CC1, Allowed: []types.ConfinementClass{types.CC3}}},
+		ReasonAtCapacity:         {{Reason: ReasonAtCapacity, Name: "P", Max: 2}},
 	}
 	for _, reason := range Reasons() {
 		if reason == ReasonInvalid {

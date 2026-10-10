@@ -11,6 +11,7 @@ import (
 	"cmp"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -30,6 +31,11 @@ const (
 	ReasonNoEligibleMember   Reason = "runner_pool_no_eligible_member"
 	ReasonMemberMismatch     Reason = "runner_pool_member_mismatch"
 	ReasonPoolsUnavailable   Reason = "runner_pools_unavailable"
+	// The pool's own limits refuse a request that names a pool: a run type or a
+	// barrier the pool does not allow, and a pool already running its cap.
+	ReasonRunTypeNotAllowed Reason = "runner_pool_run_type_not_allowed"
+	ReasonBarrierNotAllowed Reason = "runner_pool_barrier_not_allowed"
+	ReasonAtCapacity        Reason = "runner_pool_at_capacity"
 )
 
 var reasonStatus = map[Reason]int{
@@ -42,6 +48,9 @@ var reasonStatus = map[Reason]int{
 	ReasonNoEligibleMember:   http.StatusUnprocessableEntity,
 	ReasonMemberMismatch:     http.StatusUnprocessableEntity,
 	ReasonPoolsUnavailable:   http.StatusNotImplemented,
+	ReasonRunTypeNotAllowed:  http.StatusUnprocessableEntity,
+	ReasonBarrierNotAllowed:  http.StatusUnprocessableEntity,
+	ReasonAtCapacity:         http.StatusUnprocessableEntity,
 }
 
 // Status is the HTTP status the reason answers with; 0 for a reason outside the set.
@@ -117,6 +126,27 @@ func MemberMismatchMsg(runner, name string) string {
 
 func HostingMismatchMsg(name, label string) string {
 	return fmt.Sprintf("%s is a %s pool, so it can't be used with this runner choice.", name, label)
+}
+
+func RunTypeNotAllowedMsg(name string, t types.RunnerPoolRunType) string {
+	return fmt.Sprintf("%s doesn't take %s. Choose another pool or run type.", name, t.Plural())
+}
+
+// BarrierNotAllowedMsg names the barrier asked for and the ones the pool allows.
+func BarrierNotAllowedMsg(name string, asked types.ConfinementClass, allowed []types.ConfinementClass) string {
+	labels := make([]string, len(allowed))
+	for i, c := range allowed {
+		labels[i] = types.BarrierLabel(c)
+	}
+	list := strings.Join(labels, ", ")
+	if n := len(labels); n > 1 {
+		list = strings.Join(labels[:n-1], ", ") + " and " + labels[n-1]
+	}
+	return fmt.Sprintf("%s doesn't allow the %s barrier. It allows %s.", name, types.BarrierLabel(asked), list)
+}
+
+func AtCapacityMsg(name string, max int) string {
+	return fmt.Sprintf("%s is already running its limit of %d. Try again when one finishes.", name, max)
 }
 
 func UnavailableServerMsg() string { return "This server does not manage runner pools yet." }
