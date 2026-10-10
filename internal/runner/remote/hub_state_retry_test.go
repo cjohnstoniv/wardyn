@@ -53,7 +53,8 @@ func testHubStateRetry(t *testing.T, realWire bool) {
 					}
 					return nil, nil
 				},
-				State: func(context.Context, []runnerwire.RunState) error {
+				BeginInventory: func(context.Context, string) error { return nil },
+				StatePage: func(context.Context, string, runnerwire.StatePage) error {
 					if states.Add(1) == 1 {
 						// H3 persists the real queue before returning this refusal.
 						queued.Store(true)
@@ -113,7 +114,7 @@ func testHubStateRetry(t *testing.T, realWire bool) {
 	if err != nil || initial.Type != runnerwire.TypePending {
 		t.Fatal("missing initial PENDING", err)
 	}
-	if err := first.WriteFrame(ctx, runnerwire.Frame{Type: runnerwire.TypeState, Seq: 1, Payload: []byte("[]")}); err != nil {
+	if err := first.WriteFrame(ctx, runnerwire.Frame{Type: runnerwire.TypeState, Seq: 1, Payload: emptyStatePage(t)}); err != nil {
 		t.Fatal(err)
 	}
 	// READY can already be queued locally when the org refuses STATE.
@@ -137,7 +138,7 @@ func testHubStateRetry(t *testing.T, realWire bool) {
 	}
 	result, _ := runnerwire.Marshal(runnerwire.ActionResult{ID: action.ID, Outcome: "applied"})
 	event, _ := runnerwire.Marshal(runnerwire.Event{Kind: runnerwire.EventActionResult, Data: result})
-	for _, next := range []runnerwire.Frame{{Type: runnerwire.TypeEvent, Seq: 1, Payload: event}, {Type: runnerwire.TypeState, Seq: 2, Payload: []byte("[]")}, {Type: runnerwire.TypeReady, Seq: 3}} {
+	for _, next := range []runnerwire.Frame{{Type: runnerwire.TypeEvent, Seq: 1, Payload: event}, {Type: runnerwire.TypeState, Seq: 2, Payload: emptyStatePage(t)}, {Type: runnerwire.TypeReady, Seq: 3}} {
 		if err := second.WriteFrame(ctx, next); err != nil {
 			t.Fatal(err)
 		}

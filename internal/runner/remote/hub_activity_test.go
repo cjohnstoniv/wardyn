@@ -131,7 +131,7 @@ func TestCurrentActivityControlCannotBeHistoricalEvent(t *testing.T) {
 	calls := 0
 	a := Admission{Event: func(context.Context, runnerwire.Event) error { return nil }, Activity: func(context.Context, uuid.UUID) error { calls++; return nil }}
 	cfg := runnerwire.PeerConfig{}
-	configureAdmission(t.Context(), &cfg, true, nil, a, s, func() *runnerwire.Peer { return peer })
+	configureAdmission(t.Context(), &cfg, true, nil, a, s, "", func() *runnerwire.Peer { return peer })
 	h.configureActivity(t.Context(), &cfg, row, a, s, func() *runnerwire.Peer { return peer })
 	for _, kind := range []string{runnerwire.EventSpool, runnerwire.EventAgentExit} {
 		if err := cfg.OnEventChecked(runnerwire.Event{Kind: kind}); err != nil {

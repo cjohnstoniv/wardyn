@@ -169,9 +169,10 @@ func remoteDockerRunner(t *testing.T, local substrate.Substrate, realWire bool) 
 		Lookup: func(context.Context, uuid.UUID) (types.Runner, error) { return row, nil },
 		Admit: func(context.Context, types.Runner) (remote.Admission, error) {
 			return remote.Admission{Substrate: sub, Link: link,
-				Pending: func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
-				State:   func(context.Context, []runnerwire.RunState) error { return nil },
-				Event:   func(context.Context, runnerwire.Event) error { return nil },
+				Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
+				BeginInventory: func(context.Context, string) error { return nil },
+				StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil },
+				Event:          func(context.Context, runnerwire.Event) error { return nil },
 			}, nil
 		},
 	})
@@ -188,7 +189,9 @@ func remoteDockerRunner(t *testing.T, local substrate.Substrate, realWire bool) 
 			}
 			return nil
 		},
-		State: func(context.Context) ([]runnerwire.RunState, error) { return nil, nil },
+		StatePages: func(_ context.Context, send func(runnerwire.StatePage) error) error {
+			return send(runnerwire.StatePage{InventoryID: uuid.New(), Final: true})
+		},
 		Replay: func(ctx context.Context, peer *runnerwire.Peer) error {
 			cs, err := local.Classes(ctx)
 			if err != nil {

@@ -71,7 +71,7 @@ func connectWireManager(t *testing.T, dir string, sub substrate.Substrate, ref f
 	row.OrgURLSHA256 = federation.OrgURLSHA256(orgURL)
 	remoteSub := remote.New(row.ID.String(), f.link, remote.Options{})
 	hub = remote.NewHub(ctx, remote.HubConfig{OrgURL: orgURL, Lookup: func(context.Context, uuid.UUID) (types.Runner, error) { return row, nil }, Admit: func(context.Context, types.Runner) (remote.Admission, error) {
-		return remote.Admission{Substrate: remoteSub, Link: f.link, Pending: func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil }, State: func(context.Context, []runnerwire.RunState) error { return nil }, Event: func(context.Context, runnerwire.Event) error { return nil }, Activity: func(_ context.Context, id uuid.UUID) error { f.activity <- id; return nil }}, nil
+		return remote.Admission{Substrate: remoteSub, Link: f.link, Pending: func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil }, BeginInventory: func(context.Context, string) error { return nil }, StatePage: func(context.Context, string, runnerwire.StatePage) error { return nil }, Event: func(context.Context, runnerwire.Event) error { return nil }, Activity: func(_ context.Context, id uuid.UUID) error { f.activity <- id; return nil }}, nil
 	}})
 	t.Cleanup(hub.Close)
 	online := make(chan *runnerwire.Peer, 1)
@@ -84,7 +84,7 @@ func connectWireManager(t *testing.T, dir string, sub substrate.Substrate, ref f
 			f.orgTime = h.ServerTime
 			return m.Clock(h, received)
 		},
-		Pending: m.Pending, State: m.State, Replay: m.Replay, BeforeReady: m.BeforeReady, Lease: m.Lease, Revoked: m.Revoked, Offline: m.Offline,
+		Pending: m.Pending, StatePages: m.StatePages, Replay: m.Replay, BeforeReady: m.BeforeReady, Lease: m.Lease, Revoked: m.Revoked, Offline: m.Offline,
 		Online: func(p *runnerwire.Peer, _ bool) { m.Online(p); online <- p },
 	}
 	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: orgURL, RunnerID: row.ID.String(), PrivateKey: key, Hooks: hooks, Dial: func(ctx context.Context) (runnerwire.Conn, error) {

@@ -19,13 +19,22 @@ import (
 )
 
 // Admission is supplied by the org's durable routing/reconciliation layer.
-// Pending, State and Event are required: missing durable reconciliation must
-// not silently admit a runner. Substrate and Link must be the same pair.
+// Pending, BeginInventory, StatePage and Event are required: missing durable
+// reconciliation must not silently admit a runner. Substrate and Link must be
+// the same pair.
 type Admission struct {
 	Substrate *Substrate
 	Link      *Link
 	Pending   func(context.Context) ([]runnerwire.PendingAction, error)
-	State     func(context.Context, []runnerwire.RunState) error
+	// BeginInventory captures the org's candidate set for a fresh session
+	// before AUTH_OK and PENDING, fencing every earlier session's inventory.
+	// It runs under the runner's session slot; a resumed session skips it.
+	BeginInventory func(ctx context.Context, sessionID string) error
+	// StatePage durably accepts one bounded, already-ordered page of that
+	// session's inventory. It runs on the peer read loop, so it must neither
+	// call this runner nor wait on a lock held across a call to it. An error
+	// refuses READY and forces a fresh session; the Hub keeps only a cursor.
+	StatePage func(ctx context.Context, sessionID string, page runnerwire.StatePage) error
 	Event     func(context.Context, runnerwire.Event) error
 	// Activity checks current run ownership/lifecycle in its database transaction.
 	// Nil refuses live activity; historical EVENT ingestion never calls it.
@@ -114,7 +123,7 @@ func (h *Hub) Serve(ctx context.Context, conn runnerwire.Conn, id uuid.UUID) err
 		return err
 	}
 	if a.Substrate == nil || a.Link == nil || a.Substrate.RunnerID() != auth.RunnerID || a.Substrate.t != a.Link ||
-		a.Pending == nil || a.State == nil || a.Event == nil {
+		a.Pending == nil || a.BeginInventory == nil || a.StatePage == nil || a.Event == nil {
 		return errors.New("runner hub admission is incomplete or bound to another runner")
 	}
 	a.Substrate.mu.Lock()
@@ -201,18 +210,9 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 	}
 	var pending []runnerwire.PendingAction
 	if !resumed {
-		pending, err = a.Pending(ctx)
-		if err != nil {
+		if pending, err = h.fresh(ctx, s, a, id); err != nil {
 			return nil, err
 		}
-		if s.connected && h.cfg.Disconnected != nil {
-			if err := h.cfg.Disconnected(ctx, id); err != nil {
-				return nil, err
-			}
-			s.connected = false
-		}
-		s.id = uuid.NewString()
-		s.ready.Store(false)
 	}
 	ok := runnerwire.AuthOK{SessionID: s.id, Resumed: resumed, PingInterval: runnerwire.PingInterval, LastSeq: cfg.LastReceived}
 	if err := runnerwire.WriteControl(ctx, conn, runnerwire.TypeAuthOK, ok); err != nil {
@@ -222,7 +222,7 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 		s.timer.Stop()
 	}
 	var peer *runnerwire.Peer
-	configureAdmission(ctx, &cfg, resumed, pending, a, s, func() *runnerwire.Peer { return peer })
+	configureAdmission(ctx, &cfg, resumed, pending, a, s, s.id, func() *runnerwire.Peer { return peer })
 	h.configureActivity(ctx, &cfg, row, a, s, func() *runnerwire.Peer { return peer })
 	peer = a.Link.AttachSession(conn, cfg)
 	s.peer, s.link, s.ended = peer, a.Link, time.Time{}
@@ -268,9 +268,33 @@ func (h *Hub) resume(ctx context.Context, s *hubSession, request *runnerwire.Res
 	return cfg, err == nil, err
 }
 
-func configureAdmission(ctx context.Context, cfg *runnerwire.PeerConfig, resumed bool, actions []runnerwire.PendingAction, a Admission, session *hubSession, peer func() *runnerwire.Peer) {
+// fresh replaces the session identity before any durable call, so a refused
+// inventory or PENDING read leaves nothing resumable.
+func (h *Hub) fresh(ctx context.Context, s *hubSession, a Admission, id uuid.UUID) ([]runnerwire.PendingAction, error) {
+	s.id = uuid.NewString()
+	s.ready.Store(false)
+	if err := a.BeginInventory(ctx, s.id); err != nil {
+		return nil, err
+	}
+	pending, err := a.Pending(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s.connected && h.cfg.Disconnected != nil {
+		if err := h.cfg.Disconnected(ctx, id); err != nil {
+			return nil, err
+		}
+		s.connected = false
+	}
+	return pending, nil
+}
+
+// configureAdmission binds sessionID by value: a superseded peer's late page
+// must reach the store under its own, already fenced, inventory.
+func configureAdmission(ctx context.Context, cfg *runnerwire.PeerConfig, resumed bool, actions []runnerwire.PendingAction, a Admission, session *hubSession, sessionID string, peer func() *runnerwire.Peer) {
 	state := resumed
 	ready := resumed
+	var inventory runnerwire.StateInventory
 	pending := make(map[uuid.UUID]bool, len(actions))
 	for _, action := range actions {
 		pending[action.ID] = true
@@ -281,14 +305,18 @@ func configureAdmission(ctx context.Context, cfg *runnerwire.PeerConfig, resumed
 			if state || ready || len(pending) != 0 {
 				return fmt.Errorf("%w: unexpected STATE", runnerwire.ErrBadFrame)
 			}
-			var runs []runnerwire.RunState
-			if err := runnerwire.Unmarshal(f.Payload, &runs); err != nil {
+			var page runnerwire.StatePage
+			if err := runnerwire.Unmarshal(f.Payload, &page); err != nil {
 				return err
 			}
-			if err := a.State(ctx, runs); err != nil {
+			next, err := inventory.Next(page)
+			if err != nil {
 				return err
 			}
-			state = true
+			if err := a.StatePage(ctx, sessionID, page); err != nil {
+				return err
+			}
+			inventory, state = next, next.Complete
 		case runnerwire.TypeReady:
 			if !state || ready || len(f.Payload) != 0 {
 				return fmt.Errorf("%w: unexpected READY", runnerwire.ErrBadFrame)
