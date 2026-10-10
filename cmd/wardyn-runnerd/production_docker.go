@@ -89,7 +89,10 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 			}
 			return manager.Replay(ctx, peer)
 		},
-		Online: func(peer *runnerwire.Peer, _ bool) { streams.Online(peer) }, StreamOffline: streams.Offline,
+		Online: func(peer *runnerwire.Peer, _ bool) {
+			manager.Online(peer)
+			streams.Online(peer)
+		}, StreamOffline: streams.Offline,
 	}
 	return runnerRuntime{hooks: hooks, run: manager.Run, close: manager.Close}, nil
 }
