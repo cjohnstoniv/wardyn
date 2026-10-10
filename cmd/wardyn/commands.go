@@ -146,8 +146,8 @@ func runCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if err := where.apply(&body); err != nil {
-			return err
-		}
+				return err
+			}
 			// --policy-file supplies a JSON RunPolicySpec applied inline. It is
 			// mutually exclusive with --policy; the server enforces that XOR — we
 			// only surface a clear parse error client-side.
