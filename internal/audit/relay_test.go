@@ -13,7 +13,7 @@ import (
 func TestRelayStampPreservesViaAndOverridesPayloadRelay(t *testing.T) {
 	id := uuid.New()
 	ctx := WithRelay(t.Context(), id)
-	for _, raw := range []string{``, `null`, `{"relay":"forged","via":"upstream-proxy","observed_at":"then"}`, `[1]`, `"text"`} {
+	for _, raw := range []string{``, `null`, ` null `, `{"relay":"forged","via":"upstream-proxy","observed_at":"then"}`, `[1]`, `"text"`} {
 		got := StampRelay(ctx, json.RawMessage(raw))
 		var data map[string]json.RawMessage
 		if err := json.Unmarshal(got, &data); err != nil {
