@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
@@ -39,7 +41,7 @@ func TestLocalResolvedInjectionRequiresExactScopePinsAndStoredOwnerOnly(t *testi
 	spec := runner.SandboxSpec{ProxyConfig: runner.ProxyConfig{Injection: []runner.InjectionGrant{{GrantID: g.ID, Rule: rule}}}}
 	classify := func(t *testing.T, spec runner.SandboxSpec, wantRefusal bool) {
 		t.Helper()
-		p, err := f.srv.localResolvedPlan(context.Background(), run, dispatchCeiling{}, types.SiteConfig{}, spec, nil, llmTransport{}, adoEntraRun{})
+		p, err := f.srv.localResolvedPlan(context.Background(), run, false, types.SiteConfig{}, spec, nil, llmTransport{}, adoEntraRun{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -98,5 +100,48 @@ func TestLocalAllModelProviderKindsHaveOwnClassification(t *testing.T) {
 	}
 	if _, known := f.srv.localProviderIntent(r, capSub, types.ModelProvider{Kind: "future"}); known {
 		t.Fatal("unimplemented provider kind accepted")
+	}
+}
+
+type localClassifyStore struct {
+	*dispatchTestStore
+	store.ComponentStore
+	comps []types.RunComponent
+}
+
+func (s localClassifyStore) ListRunComponents(context.Context, uuid.UUID) ([]types.RunComponent, error) {
+	return s.comps, nil
+}
+
+// P3 at dispatch: the limit rides the resolved ceiling, the refusal is
+// audited by reason alone and the run's hint names no personal component.
+func TestLocalDispatchP3RidesTheCeilingAndNamesNoPersonalComponent(t *testing.T) {
+	const personal = "Private Personal Tool"
+	for _, allowed := range []bool{false, true} {
+		c := ceilingForDispatch(governanceCeiling{Profile: &ResolvedProfile{Name: "p"}, Limits: types.GovernanceLimits{LocalSelfDefinedComponents: allowed}}, adoEntraUngraded(), bedrockCredUngraded())
+		if c.localSelfDefinedComponents != allowed {
+			t.Fatalf("ceiling carried %v for %v", c.localSelfDefinedComponents, allowed)
+		}
+	}
+	srv, st, audit, run := dispatchTeardownFixture(t, &fakeRunner{}, types.RunStarting)
+	run.Placement = types.PlacementLocal
+	st.run = run
+	srv.cfg.Store = localClassifyStore{dispatchTestStore: st, comps: []types.RunComponent{{Name: personal, SelfDefined: true}}}
+	ceiling := ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded())
+	spec := runner.SandboxSpec{RunID: run.ID}
+	if srv.classifyLocalDispatch(context.Background(), run, ceiling, types.SiteConfig{}, &spec, nil, llmTransport{}, adoEntraRun{}, false) {
+		t.Fatal("a self-defined component passed P3 by default")
+	}
+	ev := findAudit(audit.events, run.ID, "run.dispatch", "failure")
+	if ev == nil || !strings.Contains(string(ev.Data), string(placement.ReasonPlacementComponentSelfDefine)) {
+		t.Fatalf("no canonical refusal: %s", auditDump(audit.events, run.ID))
+	}
+	for _, e := range audit.events {
+		if strings.Contains(string(e.Data), personal) {
+			t.Fatalf("personal component name reached append-only %s", e.Action)
+		}
+	}
+	if st.failureHint == "" || strings.Contains(st.failureHint, personal) {
+		t.Fatalf("failure hint %q", st.failureHint)
 	}
 }

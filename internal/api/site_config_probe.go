@@ -504,8 +504,7 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 	}
 
 	s.dispatchRun(launchCtx, created, dc, dispatchParams{
-		TrustedOutput: true,
-		RunToken:      token,
+		TrustedOutput: true, RunToken: token,
 		// "base": the probe runs a plain curl, never a coding agent -- base is
 		// the image Wardyn actually publishes for exec-only tasks. "claude-code"
 		// here pulled an image the project ships as a devcontainer harness, not

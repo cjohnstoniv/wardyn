@@ -25,7 +25,7 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 	if run.Placement != types.PlacementLocal {
 		return true
 	}
-	p, err := s.localResolvedPlan(ctx, run, ceiling, sc, *spec, orgConfigKeys, llm, ado)
+	p, err := s.localResolvedPlan(ctx, run, ceiling.localSelfDefinedComponents, sc, *spec, orgConfigKeys, llm, ado)
 	if err != nil {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "local dispatch provenance could not be read")
 		return false
@@ -33,8 +33,13 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 	p.TrustedOutput = p.TrustedOutput || trustedOutput
 	stripped, ref := placement.LocalEligibility(p)
 	if ref != nil {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch", run.ID.String(), "failure", mustJSON(map[string]any{"reason": ref.Reason, "field": ref.Field})))
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, ref.Error())
+		// A personal component name stays out of the append-only record and the failure hint.
+		data, hint := map[string]any{"reason": ref.Reason}, "This run was not launched on your own runner: "+ref.Detail
+		if ref.Reason != placement.ReasonPlacementComponentSelfDefine {
+			data["field"], hint = ref.Field, "This run was not launched on your own runner: "+ref.Field+": "+ref.Detail
+		}
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch", run.ID.String(), "failure", mustJSON(data)))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, hint)
 		return false
 	}
 	*spec = stripped
@@ -47,7 +52,7 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 	return true
 }
 
-func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling, sc types.SiteConfig,
+func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, selfDefinedAllowed bool, sc types.SiteConfig,
 	spec runner.SandboxSpec, orgConfigKeys []string, llm llmTransport, ado adoEntraRun,
 ) (placement.LocalPlan, error) {
 	if fields := localDispatchUnclassified(); len(fields) != 0 {
@@ -62,17 +67,8 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, ceil
 		return placement.LocalPlan{}, err
 	}
 	p := placement.LocalPlan{Spec: spec, Origins: map[string]placement.CredentialOrigin{}, OrgConfigKeys: orgConfigKeys,
-		UpstreamProxySecretRef: sc.UpstreamProxySecretRef, LocalSelfDefinedComponents: ceiling.localSelfDefinedComponents,
-		TrustedOutput: localTrustedOutputRun(run),
-	}
-	for _, c := range comps {
-		if c.SelfDefined {
-			name := c.Name
-			if name == "" {
-				name = "components[" + strconv.Itoa(c.Ordinal) + "]"
-			}
-			p.SelfDefinedComponents = append(p.SelfDefinedComponents, name)
-		}
+		UpstreamProxySecretRef: sc.UpstreamProxySecretRef, LocalSelfDefinedComponents: selfDefinedAllowed,
+		TrustedOutput: localTrustedOutputRun(run), SelfDefinedComponents: selfDefinedSnapshotNames(comps),
 	}
 	owner := runIdentitySubject(ctx, run.CreatedBy)
 	byID := map[uuid.UUID]types.CredentialGrant{}
@@ -82,8 +78,32 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, ceil
 		}
 		byID[g.ID] = g
 	}
-	// The policy copy carries the persisted OwnerOnly value, never a request's
-	// unstamped version. Every match is to the exact kind+scope of this run.
+	s.localPolicyGrantOrigins(ctx, owner, rows, &p)
+	s.localProxyGrantOrigins(ctx, owner, byID, &p)
+	s.localResidentOrigins(ctx, owner, rows, llm, &p)
+	s.localIdentityOrigins(ctx, owner, ado, llm, &p)
+	return p, nil
+}
+
+func selfDefinedSnapshotNames(comps []types.RunComponent) []string {
+	var names []string
+	for _, c := range comps {
+		if !c.SelfDefined {
+			continue
+		}
+		name := c.Name
+		if name == "" {
+			name = "components[" + strconv.Itoa(c.Ordinal) + "]"
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
+// localPolicyGrantOrigins stamps the policy copy with the persisted OwnerOnly
+// value, never a request's unstamped version. Every match is to the exact
+// kind+scope of this run.
+func (s *Server) localPolicyGrantOrigins(ctx context.Context, owner string, rows []types.CredentialGrant, p *placement.LocalPlan) {
 	p.Spec.ProxyConfig.Policy = p.Spec.ProxyConfig.Policy.Clone()
 	for i, g := range p.Spec.ProxyConfig.Policy.EligibleGrants {
 		for _, row := range rows {
@@ -100,51 +120,48 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, ceil
 			break
 		}
 	}
+}
+
+// localProxyGrantOrigins binds each actual proxy route to the stored grant
+// that produced it; a route whose grant is missing or differs keeps no
+// provenance and so refuses.
+func (s *Server) localProxyGrantOrigins(ctx context.Context, owner string, byID map[uuid.UUID]types.CredentialGrant, p *placement.LocalPlan) {
+	spec := p.Spec
+	stamp := func(path string, row types.CredentialGrant) {
+		origin, ref := s.localGrantOrigin(ctx, owner, row.Spec)
+		if ref != nil {
+			return
+		}
+		origin.OwnerOnly = row.Spec.OwnerOnly
+		p.Origins[path] = origin
+	}
 	for i, in := range spec.ProxyConfig.Injection {
 		row, found := byID[in.GrantID]
 		if !found || row.Spec.Kind != types.GrantAPIKey {
 			continue
 		}
-		rule, e := injectionRuleFromScope(row.Spec.Scope)
-		if e != nil || !reflect.DeepEqual(rule, in.Rule) {
-			continue
+		if rule, e := injectionRuleFromScope(row.Spec.Scope); e == nil && reflect.DeepEqual(rule, in.Rule) {
+			stamp(placementCredentialIndex("ProxyConfig.Injection", i), row)
 		}
-		origin, ref := s.localGrantOrigin(ctx, owner, row.Spec)
-		if ref != nil {
-			continue
-		}
-		origin.OwnerOnly = row.Spec.OwnerOnly
-		p.Origins[placementCredentialIndex("ProxyConfig.Injection", i)] = origin
 	}
 	for host, pat := range spec.ProxyConfig.PATGrants {
 		row, found := byID[pat.GrantID]
 		if !found || row.Spec.Kind != types.GrantGitPAT {
 			continue
 		}
-		scope, e := types.DecodeGitPATScope(row.Spec.Scope)
-		if e != nil || !hostEqual(scope.Host, host) {
-			continue
+		if scope, e := types.DecodeGitPATScope(row.Spec.Scope); e == nil && hostEqual(scope.Host, host) {
+			stamp("ProxyConfig.PATGrants["+host+"]", row)
 		}
-		origin, ref := s.localGrantOrigin(ctx, owner, row.Spec)
-		if ref != nil {
-			continue
-		}
-		origin.OwnerOnly = row.Spec.OwnerOnly
-		p.Origins["ProxyConfig.PATGrants["+host+"]"] = origin
 	}
 	for i, id := range spec.ProxyConfig.BrokeredPATGrantIDs {
-		row, found := byID[id]
-		if !found || row.Spec.Kind != types.GrantGitPAT {
-			continue
+		if row, found := byID[id]; found && row.Spec.Kind == types.GrantGitPAT {
+			stamp(placementCredentialIndex("ProxyConfig.BrokeredPATGrantIDs", i), row)
 		}
-		origin, ref := s.localGrantOrigin(ctx, owner, row.Spec)
-		if ref != nil {
-			continue
-		}
-		origin.OwnerOnly = row.Spec.OwnerOnly
-		p.Origins[placementCredentialIndex("ProxyConfig.BrokeredPATGrantIDs", i)] = origin
 	}
-	s.localResidentOrigins(ctx, owner, rows, llm, &p)
+}
+
+func (s *Server) localIdentityOrigins(ctx context.Context, owner string, ado adoEntraRun, llm llmTransport, p *placement.LocalPlan) {
+	spec := p.Spec
 	if spec.ProxyConfig.ADOGrant != nil {
 		origin := placement.CredentialOrigin{Class: placement.ClassBrokered, Delivery: placement.ClassADOMintedPAT}
 		if ado.tokenMode == types.ADOTokenModeOwnPAT && ado.owner == owner && adoEntraValidRowID(ado.rowID) {
@@ -161,7 +178,6 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, ceil
 			}
 		}
 	}
-	return p, nil
 }
 
 func placementCredentialIndex(path string, i int) string { return path + "[" + strconv.Itoa(i) + "]" }

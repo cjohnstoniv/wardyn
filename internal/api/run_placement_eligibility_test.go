@@ -137,3 +137,27 @@ func TestLocalP3ComponentNameIsResponseOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestLocalP3ProfileLimitLiftsOnlyItsOwnRefusal(t *testing.T) {
+	f := newComponentFixture(t)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(utCtx("user", "", nil))
+	req := createRunRequest{Placement: placement.Local}
+	self := runComponents{attached: []attachedComponent{{snapshot: types.RunComponent{Name: "mine", SelfDefined: true}}}}
+	org := runComponents{attached: []attachedComponent{{snapshot: types.RunComponent{Name: "org tool"}}}}
+	for _, tc := range []struct {
+		name    string
+		allowed bool
+		comps   runComponents
+		reason  placement.Reason
+	}{
+		{"self-defined, default deny", false, self, placement.ReasonPlacementComponentSelfDefine},
+		{"self-defined, profile allows", true, self, placement.ReasonPlacementUnavailable},
+		{"org component never needs the limit", false, org, placement.ReasonPlacementUnavailable},
+	} {
+		ceiling := governanceCeiling{Limits: types.GovernanceLimits{LocalSelfDefinedComponents: tc.allowed}}
+		ref := f.srv.localPlacementRefusal(r, req, types.RunPolicySpec{}, ceiling, tc.comps, nil, nil)
+		if ref == nil || ref.body.Reason != string(tc.reason) {
+			t.Fatalf("%s: %+v", tc.name, ref)
+		}
+	}
+}

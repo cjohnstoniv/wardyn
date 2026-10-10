@@ -59,12 +59,13 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.ProviderHarness]():     strings.Fields("Harness Model FastModel Path AuthHeader AuthFormat"),
 	reflect.TypeFor[types.RunnerSettings]():      strings.Fields("Enabled"),
 	reflect.TypeFor[types.SiteBranding]():        strings.Fields("LogoPath"),
-	reflect.TypeFor[types.SiteConfig]():          strings.Fields("Runners UpstreamProxySecretRef UpstreamProxyURL UpstreamProxyNoProxy ArtifactOverrides EgressRedirects ScmHosts Integrations InternalHosts Egress WorkspaceProviders AgentProviders ModelProviders SignInHelpText SignInHelpURL PolicyHelp Branding Components EffectiveScmHosts WithheldScmHosts OnboardingCompletedAt"),
-	reflect.TypeFor[types.SiteEgress]():          strings.Fields("BaselineHosts"),
-	reflect.TypeFor[types.StorageProviders]():    strings.Fields("Ephemeral UserDrive"),
-	reflect.TypeFor[types.UserDriveProvider]():   strings.Fields("Disabled MaxSizeMiB"),
-	reflect.TypeFor[types.WithheldScmHost]():     strings.Fields("Host ProviderID ProviderKind"),
-	reflect.TypeFor[types.WorkspaceProviders]():  strings.Fields("Git Storage GitPatBrokerEnabled"),
+	reflect.TypeFor[types.SiteConfig](): strings.Fields("Runners UpstreamProxySecretRef UpstreamProxyURL UpstreamProxyNoProxy ArtifactOverrides EgressRedirects ScmHosts Integrations InternalHosts Egress " +
+		"WorkspaceProviders AgentProviders ModelProviders SignInHelpText SignInHelpURL PolicyHelp Branding Components EffectiveScmHosts WithheldScmHosts OnboardingCompletedAt"),
+	reflect.TypeFor[types.SiteEgress]():         strings.Fields("BaselineHosts"),
+	reflect.TypeFor[types.StorageProviders]():   strings.Fields("Ephemeral UserDrive"),
+	reflect.TypeFor[types.UserDriveProvider]():  strings.Fields("Disabled MaxSizeMiB"),
+	reflect.TypeFor[types.WithheldScmHost]():    strings.Fields("Host ProviderID ProviderKind"),
+	reflect.TypeFor[types.WorkspaceProviders](): strings.Fields("Git Storage GitPatBrokerEnabled"),
 }
 
 func localDispatchUnclassified() []string {
