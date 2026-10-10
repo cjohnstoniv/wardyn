@@ -43,9 +43,12 @@ func (m *Manager) BeforeRefCall(ctx context.Context, method, ref string, generat
 		}
 		return errors.New("runner reference has no durable binding")
 	}
+	if r.ContainmentOnly && method != runnerwire.MethodKill && method != runnerwire.MethodStopProxy {
+		return errors.New("containment-only identity refuses this operation")
+	}
 	switch method {
 	case runnerwire.MethodExec, runnerwire.MethodStart, runnerwire.MethodReplaceProxy:
-		if !m.online || m.state.Revoked || r.FailedCreation || r.MutationFailure != nil || m.expired(id) {
+		if !m.online || m.state.Revoked || r.FailedCreation || r.ContainmentOnly || r.MutationFailure != nil || m.expired(id) {
 			return runner.ErrRunnerOffline
 		}
 	}

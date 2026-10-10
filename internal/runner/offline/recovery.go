@@ -37,7 +37,7 @@ func (m *Manager) recoverMutation(a runnerwire.PendingAction, r localRun) (runne
 	if err := m.ensureDurable(); err != nil {
 		return runnerwire.ActionResult{}, err
 	}
-	if a.Recovery == nil || r.MutationFailure == nil || *a.Recovery != *r.MutationFailure || !r.MutationFailure.Contained || r.ProxyStoppedAt == nil || r.FailedCreation {
+	if a.Recovery == nil || r.MutationFailure == nil || *a.Recovery != *r.MutationFailure || !r.MutationFailure.Contained || r.ProxyStoppedAt == nil || r.FailedCreation || r.ContainmentOnly {
 		return runnerwire.ActionResult{}, errors.New("mutation recovery proof does not match contained failure")
 	}
 	if r.Generation != a.Recovery.Generation {

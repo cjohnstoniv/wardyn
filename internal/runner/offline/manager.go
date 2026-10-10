@@ -205,6 +205,9 @@ func (m *Manager) Lease(ctx context.Context, l runnerwire.Lease) error {
 	if l.RunID == uuid.Nil {
 		return errors.New("runner lease lacks run identity")
 	}
+	if m.state.Runs[l.RunID].ContainmentOnly {
+		return errors.New("containment-only identity cannot receive a lease")
+	}
 	tokenLeft, err := m.clock.TokenRemaining(l.TokenRenewedAt)
 	if err != nil {
 		return err
@@ -289,7 +292,7 @@ func (m *Manager) Created(ctx context.Context, spec runner.SandboxSpec, localRef
 		return err
 	}
 	r, ok := m.state.Runs[spec.RunID]
-	if !ok || localRef == "" || r.FailedCreation || (r.Ref != "" && r.Ref != localRef) {
+	if !ok || localRef == "" || r.FailedCreation || r.ContainmentOnly || (r.Ref != "" && r.Ref != localRef) {
 		return errors.New("runner creation has no matching durable intent")
 	}
 	r.Ref = localRef

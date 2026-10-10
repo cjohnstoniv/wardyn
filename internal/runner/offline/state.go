@@ -17,6 +17,7 @@ import (
 )
 
 type localRun struct {
+	ContainmentOnly bool                         `json:"containment_only,omitempty"`
 	Generation      uuid.UUID                    `json:"generation,omitempty"`
 	Executions      map[uuid.UUID]string         `json:"executions,omitempty"`
 	MutationFailure *types.RunnerMutationFailure `json:"mutation_failure,omitempty"`

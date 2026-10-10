@@ -46,19 +46,35 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	if m.state.Revoked {
 		return runnerwire.ActionResult{}, runnerwire.ErrRevoked
 	}
+	if err := m.ensureDurable(); err != nil {
+		return runnerwire.ActionResult{}, err
+	}
 	if old, ok := m.state.Actions[a.ID]; ok {
 		if !samePendingAction(old.Action, a) {
 			return runnerwire.ActionResult{}, errors.New("pending action identity changed")
 		}
-		return old.Result, m.save()
+		if old.Result.Outcome != "" {
+			return old.Result, m.save()
+		}
 	}
 	if a.ID == uuid.Nil {
 		return runnerwire.ActionResult{}, errors.New("pending action has no identity")
 	}
 	r, ok := m.state.Runs[a.RunID]
 	local, belongs := strings.CutPrefix(a.Ref, placement.RunnerRefPrefix(m.runnerID.String()))
+	if !ok && belongs && local != "" && local == m.expectedRef(a.RunID) {
+		var err error
+		r, err = m.containmentIdentity(a, local)
+		if err != nil {
+			return runnerwire.ActionResult{}, err
+		}
+		ok = true
+	}
 	if !ok || !belongs || local == "" || r.Ref != local {
 		return runnerwire.ActionResult{}, errors.New("pending action does not match a local run")
+	}
+	if r.ContainmentOnly && !missingIdentityAction(a) {
+		return runnerwire.ActionResult{}, errors.New("containment-only identity refuses this action")
 	}
 	if a.Kind == types.RunnerActionRecoverMutation {
 		return m.recoverMutation(a, r)
@@ -141,7 +157,7 @@ func (m *Manager) State(ctx context.Context) ([]runnerwire.RunState, error) {
 			return nil, err
 		}
 		r := m.state.Runs[id]
-		row := runnerwire.RunState{RunID: id, MutationFailure: r.MutationFailure, ProxyStoppedAt: r.ProxyStoppedAt, Execution: durableExecutionResult(r)}
+		row := runnerwire.RunState{RunID: id, ContainmentOnly: r.ContainmentOnly, MutationFailure: r.MutationFailure, ProxyStoppedAt: r.ProxyStoppedAt, Execution: durableExecutionResult(r)}
 		m.mu.Unlock()
 		if r.Ref != "" {
 			st, err := m.sub.Status(ctx, r.Ref)

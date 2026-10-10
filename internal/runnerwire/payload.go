@@ -142,6 +142,7 @@ type ActionResult struct {
 
 // RunState is one run's entry in the STATE payload; all runner_asserted.
 type RunState struct {
+	ContainmentOnly bool                         `json:"containment_only,omitempty"`
 	MutationFailure *types.RunnerMutationFailure `json:"mutation_failure,omitempty"`
 	Execution       *ExecutionResult             `json:"execution,omitempty"`
 	RunID           uuid.UUID                    `json:"run_id"`
