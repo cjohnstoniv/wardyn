@@ -452,6 +452,7 @@ silent gap:
 
 | Reason | Meaning |
 |---|---|
+| `runners_disabled` / `runners_config_unavailable` | Runner routes require enabled, readable site configuration. |
 | `missing_scope_snapshot` | The grant names the credential sentinel but carries no dispatch-time snapshot (a hand-authored grant). Azure DevOps, AWS SSO; and every grant naming `bedrock-api-key`, which is no longer a model credential. |
 | `owner_not_caller` | The grant's snapshot owner is not the run token's own subject. Azure DevOps. |
 | `roster_unreadable` | The site configuration could not be read; nothing is resolved from a failed read. Azure DevOps, AWS SSO. |
