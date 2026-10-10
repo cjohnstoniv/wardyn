@@ -5600,6 +5600,9 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0127` (`0127_deprovision_jobs`) adds `people.deactivated_at` (`0090`'s table), beside its new `deprovision_jobs` table.
 - `0130` (`0130_audit_chain_head_from_meta`) is a later `CREATE OR REPLACE` of `0047`'s chain function, which
   links each new row to the recorded head.
+- `0139` (`0139_runner_delivery`) adds `credential_grants.delivery` (`0001`'s table), beside its new `runners` table.
+- `0141` (`0141_run_placement`) adds the placement columns on `agent_runs` (`placement`, `placement_filled`, `runner_id`,
+  `evidence_source`).
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
