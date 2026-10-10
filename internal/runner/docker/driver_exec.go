@@ -416,6 +416,12 @@ type engineClient struct {
 func newEngineClient(cli *client.Client) engineClient {
 	return engineClient{Client: cli, raw: &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return cli.Dialer()(ctx) },
+		// The SDK's own default transport sets this for the reason IT names
+		// (moby/moby#45539): a long-lived process holds a socket per idle
+		// connection without it. wardynd is long-lived and polls execs on
+		// every tick. That transport is unexported, so the value is carried
+		// over by hand.
+		IdleConnTimeout: 30 * time.Second,
 	}}}
 }
 
@@ -438,12 +444,27 @@ func (c engineClient) ExecInspectRaw(ctx context.Context, execID string) (execIn
 	if v := c.ClientVersion(); v != "" {
 		p = "/v" + strings.TrimPrefix(v, "v") + p
 	}
-	if u, perr := client.ParseHostURL(c.DaemonHost()); perr == nil {
-		p = path.Join(u.Path, p)
+	// The daemon's OWN address and base path, parsed the way the SDK parses
+	// them when it builds a request. A host that does not parse is refused
+	// rather than quietly losing its base path — client.New refuses the same
+	// host, so this is the belt to that braces.
+	u, perr := client.ParseHostURL(c.DaemonHost())
+	if perr != nil {
+		return execInspect{}, fmt.Errorf("docker: exec inspect: daemon host %q: %w", c.DaemonHost(), perr)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker"+p, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path.Join(u.Path, p), nil)
 	if err != nil {
 		return execInspect{}, fmt.Errorf("docker: exec inspect: %w", err)
+	}
+	// buildRequest's tail, minus the scheme. addr and the socket-transport
+	// Host override are reachable from the host string; the scheme is not:
+	// the raw transport's only dialer is the client's, which returns an
+	// ALREADY-TLS conn for a TLS daemon, so an https scheme here would make
+	// http.Transport wrap that conn in a second TLS layer.
+	req.URL.Scheme = "http"
+	req.URL.Host = u.Host
+	if u.Scheme == "unix" || u.Scheme == "npipe" {
+		req.Host = client.DummyHost
 	}
 	resp, err := c.raw.Do(req)
 	if err != nil {

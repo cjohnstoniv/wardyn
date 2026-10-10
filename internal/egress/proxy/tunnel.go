@@ -25,8 +25,9 @@ const (
 	// ruleSourceTunnelFailed marks a CONNECT tunnel that was acknowledged and
 	// then died before it carried an answer. The dial succeeded, so the allow
 	// row stands and this deny follows it; "builtin:dial-failed" would say the
-	// tunnel never opened.
-	ruleSourceTunnelFailed = "builtin:tunnel-failed"
+	// tunnel never opened. The wire value is egress.RuleSourceTunnelFailed, the
+	// one every consumer classifies against (egress.IsNetworkFault).
+	ruleSourceTunnelFailed = egress.RuleSourceTunnelFailed
 )
 
 // resolveBypassedCause is the Cause on a builtin:resolve-failed row when an

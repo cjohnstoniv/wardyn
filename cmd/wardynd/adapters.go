@@ -596,14 +596,20 @@ func terminalSandboxSweepTickLock(pool *pgxpool.Pool) func(context.Context) (fun
 // (S2): a Postgres try-advisory-lock acquired ONCE (not per-tick, unlike
 // reapTickLock above) so at most one replica runs the mint/write loop in the
 // steady state while every other replica parks on a backoff. Held for the
-// process lifetime, so on a connection of its own rather than a pooled one. NOT a fencing
-// primitive — a lost session can transiently leave two leaders; see
-// runGroundtruthTokenRotatorLeader (gt_rotator.go). Unlike reapTickLock this
-// surfaces err separately from a plain not-acquired so the caller can log
-// standby state (lock genuinely held elsewhere) distinctly from an
-// unreachable database.
+// process lifetime, so on a connection of its own rather than a pooled one —
+// and only probed from the pool first (db.AdvisoryLockHeld), so a standby
+// retrying every groundtruthRotatorLockBackoff does not dial a session it is
+// about to close again. NOT a fencing primitive — a lost session can transiently
+// leave two leaders; see runGroundtruthTokenRotatorLeader (gt_rotator.go).
+// Unlike reapTickLock this surfaces err separately from a plain not-acquired so
+// the caller can log standby state (lock genuinely held elsewhere) distinctly
+// from an unreachable database; a probe that fails falls through to the
+// dedicated try, which reports the real fault.
 func groundtruthRotatorLock(pool *pgxpool.Pool) func(context.Context) (func(), bool, error) {
 	return func(ctx context.Context) (func(), bool, error) {
+		if held, err := db.AdvisoryLockHeld(ctx, pool, db.GroundTruthRotatorLockKey); err == nil && held {
+			return nil, false, nil // held elsewhere, and no session was dialled to find out
+		}
 		_, release, ok, err := db.TryAdvisoryLockDedicated(ctx, pool, db.GroundTruthRotatorLockKey)
 		return release, ok, err
 	}

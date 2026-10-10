@@ -91,6 +91,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- HA followers check the sweeper and rotator lifetime locks with a read-only `pg_locks` query on the pool before
+  opening a dedicated session, instead of dialling a new session every 15 and 30 seconds.
+- CI and the nightly log in to Docker Hub (read-only) when the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository
+  secrets are set, including the PostgreSQL service containers; without them, pulls stay anonymous.
 - `WARDYN_ORG_URL` (org enrolment of a full daemon) logs a deprecation warning at boot; enrolment is removed in 1.0.
   Use a client-mode runner. DESKTOP.md gains a tier table and the managed-laptops page is rewritten for client-mode
   runners.
@@ -121,6 +125,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- Record Mode no longer counts a network fault (`builtin:dial-failed`, `builtin:tunnel-failed`) as a policy denial,
+  so a lost connection no longer fails a clean replay, raises an open-recording anomaly or adds an unreached host to
+  the generated allowlist.
+- The egress proxy forwards bytes a client pipelined behind its CONNECT headers to the tunnel instead of dropping
+  them; every policy check still runs before the tunnel opens.
+- The exec-inspect read that decides whether an agent exited addresses the configured Docker daemon instead of a
+  placeholder host, and refuses an unparsable daemon address.
 - UI e2e: a later step in the same job no longer empties `flaky.tsv`, so a shard's flaky tests reach the flaky-test
   notifier; `make test-e2e-ui` starts each local run with an empty file.
 - The audit screen describes `run.policy.resolve` and `run.upstream_proxy.resolve` in words instead of raw action names.
