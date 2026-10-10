@@ -53,7 +53,7 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 	}
 	dispatcher, err := runneragent.New(runneragent.Config{
 		RunnerID: identity.RunnerID.String(), Substrate: sub,
-		BeforeCreate: manager.BeforeCreate, Created: manager.Created,
+		BeforeCreate: manager.BeforeCreate, Created: manager.Created, CreateFailed: manager.CreateFailed,
 		BeforeRefCall: manager.BeforeRefCall, AfterRefCall: manager.AfterRefCall,
 		Streams: streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
 	})

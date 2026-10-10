@@ -137,6 +137,7 @@ func remoteDockerRunner(t *testing.T, local substrate.Substrate, realWire bool) 
 	dispatch, err := runneragent.New(runneragent.Config{RunnerID: row.ID.String(), Substrate: local,
 		BeforeCreate:  func(context.Context, runner.SandboxSpec) error { return nil },
 		Created:       func(context.Context, runner.SandboxSpec, string) error { return nil },
+		CreateFailed:  func(context.Context, runner.SandboxSpec) error { return nil },
 		BeforeRefCall: func(context.Context, string, string) error { return nil },
 		AfterRefCall:  func(context.Context, string, string, string) error { return nil },
 		Streams:       streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,

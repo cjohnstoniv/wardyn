@@ -40,7 +40,7 @@ func TestDispatcherForgetsOutputOnlyAfterConfirmedRollback(t *testing.T) {
 					sub.killErr = errors.New("sandbox cleanup failed")
 				}
 				id, run := uuid.NewString(), uuid.New()
-				forgotten := 0
+				forgotten, contained := 0, 0
 				d, err := newTestDispatcher(Config{
 					RunnerID: id, Substrate: sub,
 					BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
@@ -50,7 +50,8 @@ func TestDispatcherForgetsOutputOnlyAfterConfirmedRollback(t *testing.T) {
 						}
 						return nil
 					},
-					Output: func(uuid.UUID) (io.Writer, error) { return io.Discard, nil },
+					CreateFailed: func(context.Context, runner.SandboxSpec) error { contained++; return nil },
+					Output:       func(uuid.UUID) (io.Writer, error) { return io.Discard, nil },
 					BindOutput: func(uuid.UUID, string) error {
 						if stage != "bind" {
 							t.Fatal("bound output after lifecycle persistence failed")
@@ -74,7 +75,7 @@ func TestDispatcherForgetsOutputOnlyAfterConfirmedRollback(t *testing.T) {
 				defer peer.Close()
 				data, _ := runnerwire.Marshal(runnerwire.CreateSandboxArgs{Spec: runner.SandboxSpec{RunID: run, RunnerID: id}, ExecOutput: true})
 				_, err = d.Call(context.Background(), peer, 2, runnerwire.MethodCreateSandbox, data)
-				if !errors.Is(err, failure) || !sub.killed {
+				if !errors.Is(err, failure) || !sub.killed || contained != 1 {
 					t.Fatalf("lost original error or rollback attempt: %v", err)
 				}
 				if sub.killErr != nil && !errors.Is(err, sub.killErr) {
