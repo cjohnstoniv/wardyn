@@ -30,7 +30,7 @@ func (s PG) AcceptRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exi
 		return false, err
 	}
 	defer unlock()
-	tx, err := s.Pool.Begin(ctx)
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return false, err
 	}
@@ -145,7 +145,7 @@ func (s PG) runnerExitTail(ctx context.Context, runnerID, runID, generation uuid
 	var run types.AgentRun
 	var exit runnerwire.AgentExit
 	var complete bool
-	tx, err := s.Pool.Begin(ctx)
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return run, exit, false, err
 	}
