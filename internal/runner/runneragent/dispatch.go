@@ -136,7 +136,9 @@ func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint3
 	}
 	sandbox, err := d.cfg.Substrate.CreateSandbox(ctx, a.Spec)
 	if err != nil {
-		return nil, d.forgetNewOutput(a, err)
+		// A substrate may lose its create response or fail best-effort rollback.
+		// Without a known ref and confirmed cleanup, retain the output history.
+		return nil, err
 	}
 	// Once provisioning succeeds, link cancellation alone must not prevent
 	// durable local state from keeping the existing sandbox enforceable.
@@ -144,30 +146,29 @@ func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint3
 	err = d.cfg.Created(persist, a.Spec, sandbox.Ref)
 	cancel()
 	if err != nil {
-		return nil, d.forgetNewOutput(a, d.rollbackCreate(ctx, sandbox.Ref, err))
+		return nil, d.rollbackCreate(ctx, a, sandbox.Ref, err)
 	}
 	if a.ExecOutput {
 		if err := d.cfg.BindOutput(a.Spec.RunID, sandbox.Ref); err != nil {
-			return nil, d.forgetNewOutput(a, d.rollbackCreate(ctx, sandbox.Ref, err))
+			return nil, d.rollbackCreate(ctx, a, sandbox.Ref, err)
 		}
 	}
 	sandbox.Ref = placement.RunnerRefPrefix(d.cfg.RunnerID) + sandbox.Ref
 	return runnerwire.CreateSandboxResult{Sandbox: sandbox}, nil
 }
 
-func (d *Dispatcher) forgetNewOutput(a runnerwire.CreateSandboxArgs, err error) error {
-	// The durable create-once guard proved this attempt new before Output.
+func (d *Dispatcher) rollbackCreate(ctx context.Context, a runnerwire.CreateSandboxArgs, ref string, err error) error {
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if cleanupErr := d.cfg.Substrate.KillSandbox(cleanup, ref); cleanupErr != nil {
+		return errors.Join(err, cleanupErr)
+	}
+	// Only confirmed cleanup of this durably new attempt permits deletion.
 	// Its lifecycle intent remains durable, so an ambiguous retry refuses.
 	if a.ExecOutput {
 		return errors.Join(err, d.cfg.ForgetOutput(a.Spec.RunID))
 	}
 	return err
-}
-
-func (d *Dispatcher) rollbackCreate(ctx context.Context, ref string, err error) error {
-	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancel()
-	return errors.Join(err, d.cfg.Substrate.KillSandbox(cleanup, ref))
 }
 
 type refArgs struct {
