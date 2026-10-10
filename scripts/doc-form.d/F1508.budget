@@ -1,2 +1,3 @@
 # Prose-word budget (scripts/doc-form.sh): path=N share=S. #1508 design, measured at authoring.
-docs/design/0.9/invitations-service-identities.md=3889 share=35
+# 3889 -> 4085: the owner amended D11 (governed sponsor attach, section 4.9, slice C4); the rulings table replaces the open decisions.
+docs/design/0.9/invitations-service-identities.md=4085 share=35

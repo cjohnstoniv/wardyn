@@ -1,6 +1,6 @@
 # 0.9 owner-redeemed invitations and service identities (#1508)
 
-Status: **Draft for owner approval.** Build slices start only after [Owner decisions](#11-owner-decisions) are answered; the design assumes each recommended option.
+Status: **Owner rulings recorded 2026-10-10** ([§11](#11-owner-rulings-2026-10-10)); the build slices wait only on review.
 A person gets their own credential through an invitation only they can claim. Automation runs as a named, sponsored service identity, never as a person.
 Admin-minted tokens from 0.8.5 get a visible path to one of the two, and nothing that works today stops working.
 
@@ -17,9 +17,9 @@ Admin-minted tokens from 0.8.5 get a visible path to one of the two, and nothing
 
 | Brief item | This design | Why |
 |---|---|---|
-| Invitation reuses the hashed single-use token shape | No secret: the target's own session is the only authority ([OD-1](#11-owner-decisions)) | A claim needs the target signed in anyway, so a code adds a thing to steal and protects nothing |
+| Invitation reuses the hashed single-use token shape | No secret: the target's own session is the only authority ([D1](#11-owner-rulings-2026-10-10)) | A claim needs the target signed in anyway, so a code adds a thing to steal and protects nothing |
 | Redeem route | `POST /me/invitations/{id}/claim`, audit `invitation.claim` | `claim` is already on the closed verb list ([Grammar](../../AUDIT-ACTIONS.md#grammar)); `redeem` would extend it |
-| C1–C3 core, M1–M3 mechanical | Adds U1, a console slice | A claim needs a browser session: the CLI has no sign-in, and an API token may not mint |
+| C1–C3 core, M1–M3 mechanical | Adds C4 for the amended D11, and U1, a console slice | A claim needs a browser session: the CLI has no sign-in, and an API token may not mint |
 | Migration per slice | One file, `0196_invitations_service_identities.sql`, owned by C1 | The lead gave one number; C2 and C3 build on C1's tables |
 | Delegation, if needed | No new mechanism ([§5](#5-owner-authorised-delegation)) | The portal lane already records both parties and revokes without ending sessions |
 
@@ -53,7 +53,7 @@ Table `person_invitations`, in migration 0196. No secret column.
 | `id` | UUID; appears in the console link |
 | `target` | The principal a claim must be signed in as, exactly |
 | `created_by`, `created_at` | The admin, and when |
-| `expires_at` | Default `72h` after create, at most `14d` ([OD-2](#11-owner-decisions)) |
+| `expires_at` | Default `72h` after create, at most `14d` ([D2](#11-owner-rulings-2026-10-10)) |
 | `token_name` | The name the claimed token gets unless the claimer gives one |
 | `token_ttl_seconds` | Upper bound on the claimed token's lifetime; `NULL` is the deployment rule; `WARDYN_API_TOKEN_MAX_TTL` still caps it |
 | `replaces_token_id` | An admin-minted token this invitation retires when claimed ([§6.2](#62-admin-minted-tokens)) |
@@ -94,7 +94,7 @@ Table `person_invitations`, in migration 0196. No secret column.
 9. Answer `201` with the token, plaintext once, to the claimer only.
 
 - The token's principal, role, type and groups come from the claimer's session, never from the invitation.
-- `MintedBy` stays empty: the owner minted it. A claim does not grant the `api_token` feature ([OD-3](#11-owner-decisions)).
+- `MintedBy` stays empty: the owner minted it. A claim does not grant the `api_token` feature ([D3](#11-owner-rulings-2026-10-10)).
 
 ### 3.4 Who gets what
 
@@ -160,9 +160,9 @@ Table `service_identities`, in migration 0196.
 | `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/events`, `GET /runs/{id}/output` | Read its own runs |
 | `PATCH /runs/{id}`, `POST /runs/{id}/kill` | Manage its own runs |
 | `GET /me`, `GET /setup/status` | Who am I; `ci-run.sh` reads `provider_access` |
-| `PUT`, `DELETE /model-providers/{id}/credential` | Its own model key, in its own namespace ([OD-13](#11-owner-decisions)) |
+| `PUT`, `DELETE /model-providers/{id}/credential` | Its own model key, in its own namespace ([D13](#11-owner-rulings-2026-10-10)) |
 
-- Everything else answers `403` `service_scope`, including any route added later ([OD-9](#11-owner-decisions)).
+- Everything else answers `403` `service_scope`, including any route added later ([D9](#11-owner-rulings-2026-10-10)).
 - Absent on purpose: attach, approvals, secrets, tokens, SSH keys, invitations, runner claims, every admin route.
 
 ### 4.5 Grants, ceiling and credentials
@@ -179,32 +179,64 @@ Table `service_identities`, in migration 0196.
 |---|---|---|
 | Create (security tier) | Identity exists with no token; inert until the sponsor mints one | `POST /service-identities` |
 | Sponsor mints | `201` with plaintext once, to the sponsor; row `service_identity.token.create` | `POST /me/service-identities/{name}/tokens` |
-| Sponsor change | Every live token of the identity is revoked in the same transaction ([OD-7](#11-owner-decisions)) | `PATCH /service-identities/{name}` |
+| Sponsor change | Every live token of the identity is revoked in the same transaction ([D7](#11-owner-rulings-2026-10-10)) | `PATCH /service-identities/{name}` |
 | Sponsor's full session revoke | Tokens minted before the cutoff stop at once; the sweep also marks them revoked | `revokePersonCredentials` |
-| Sponsor suspended by SCIM | State `sponsor_inactive`; tokens refused; live runs continue ([OD-6](#11-owner-decisions)) | `CheckSession` deactivated arm |
+| Sponsor suspended by SCIM | State `sponsor_inactive`; tokens refused; live runs continue ([D6](#11-owner-rulings-2026-10-10)) | `CheckSession` deactivated arm |
 | Sponsor's session-only cut | No effect, as for the sponsor's own tokens | epoch `-1` |
 | Admin suspend or retire | Tokens refused; retire also revokes them; live runs continue until killed | `PATCH`, `DELETE /service-identities/{name}` |
 
-- Only the current sponsor mints, from a signed-in session that is not a token, a portal or member mode ([OD-4](#11-owner-decisions)).
+- Only the current sponsor mints, from a signed-in session that is not a token, a portal or member mode ([D4](#11-owner-rulings-2026-10-10)).
 - Because a sponsor change revokes, every live token was minted by the current sponsor, so checking the sponsor alone is exact.
-- Service tokens require an expiry: default and maximum `90d`, or the deployment cap if lower ([OD-5](#11-owner-decisions)).
+- Service tokens require an expiry: default and maximum `90d`, or the deployment cap if lower ([D5](#11-owner-rulings-2026-10-10)).
 
 ### 4.7 Runs
 
 - `CreatedBy` is `service:<name>`; `OperatorOwned` is false; `MintRunIdentity` gets the sponsor as `sponsor`.
 - Dispatch and revive re-mint read the sponsor from the identity row, not `run.CreatedBy`.
 - The console shows the service as owner and the sponsor beside it.
-- The sponsor may read and kill the service's runs, never attach ([OD-11](#11-owner-decisions)); admins keep today's reach.
+- The sponsor may read and kill the service's runs, and attach only when governed in ([§4.9](#49-sponsor-reach-over-the-services-runs)). Admins keep today's reach.
 
 ### 4.8 Audit actor
 
-- New `actor_type` value `service`, with `actor` `service:<name>` and `data.sponsor` on every row ([OD-8](#11-owner-decisions)).
+- New `actor_type` value `service`, with `actor` `service:<name>` and `data.sponsor` on every row ([D8](#11-owner-rulings-2026-10-10)).
 - Migration 0196 widens the check on `audit_events` and `audit_events_legacy`. C1 measures the validation cost on a seeded partition set.
 - Sealing is unchanged: `Sealer.sealsActor` seals human actors only, and a service name is not personal data.
 
+### 4.9 Sponsor reach over the service's runs
+
+[D11](#11-owner-rulings-2026-10-10) splits the sponsor's reach in two: read and kill always, attach only when an admin turns it on.
+
+| Act | Sponsor may | Seam |
+|---|---|---|
+| Read (`GET /runs`, `/runs/{id}`, events, output) | Always, while they are the current sponsor | `ownsRunOrAdmin` gains a sponsor arm |
+| Kill | Always, while they are the current sponsor | the same arm, on `POST /runs/{id}/kill` |
+| Attach: terminal, UI app, SSH | Only with the `service_attach` feature, and only through the run's own `deny_interactive` and `deny_ui_apps` doors | `mayEnterRun` gains a sponsor arm |
+
+The carrier is the existing capability kind `capFeature`, with one new value in its closed set `featureValues`:
+
+- `service_attach`: "may enter the runs of service identities I sponsor". It is checked by `capAllowed`, the one grant resolver, at the sponsor arm.
+- Default off: migration 0196 writes a `capability_restrictions` row for (`feature`, `service_attach`). A restricted value admits only an allow naming it, so a `*` allow grants nobody, whether or not `feature` is enforced.
+- Admins turn it on per person, group or user type with an ordinary grant: `POST /permissions/grants`, kind `feature`, value `service_attach`.
+- That write is security tier, audited `capability.grant.create`, and held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`. A deny row for a user type blocks it as for any value.
+- Opening it to every sponsor is a deliberate `PUT /permissions/availability/feature/service_attach` back to Everyone, audited `capability.availability.write`.
+- A super admin sponsor passes as on every capability (`capBatch.decide` step 1), unless `WARDYN_GOVERN_ADMIN_RUNS` governs their runs. A security admin is governed like a member.
+
+How an entry is checked:
+
+1. The ticket mint (`handleAttachTicket`) and the SSH gateway ask the sponsor arm with the caller's session: current sponsor, identity active, `service_attach` allowed.
+2. Ticket consume and the UI session's 30-second re-check ask only the structural part: still the current sponsor, identity active. A sponsor change or suspend ends the next re-check.
+3. A withdrawn grant refuses the next ticket. An open terminal stream keeps working until it closes, as a withdrawn `feature` value never re-checks what exists.
+4. A refusal is the foreign-run `404` a member gets today, with an `authz.denied` row of reason `capability_feature`.
+
+The record always names the sponsor:
+
+- The ticket is minted by the sponsor's own session or token, so `session.attach`, `ui.open` and `ssh.authenticate` rows carry `actor_type` `human` and the sponsor as actor.
+- Those rows add `service_identity` and `entry` `sponsor`, and the run's own audit trail shows them.
+- A service token never reaches an attach route ([§4.4](#44-reach)), so the service is never the actor of an entry.
+
 ## 5. Owner-authorised delegation
 
-- No new mechanism in 0.9 ([OD-12](#11-owner-decisions)).
+- No new mechanism in 0.9 ([D12](#11-owner-rulings-2026-10-10)).
 - Acting for a present person is the portal lane: the person is the actor and `data.via` names portal and grant. Revoking the portal leaves the person's sessions alone.
 - Unattended work is a service identity acting as itself, so no grant lets anything act as an absent person.
 - The missing proof is one test, `TestDelegation_PortalRevokeKeepsThePersonSignedIn` ([§8](#8-acceptance-to-tests)).
@@ -235,7 +267,7 @@ Each row of `?minted_for_others=true` gains `disposition`, derived at read. Revo
 
 - Invite the owner: `POST /people/{token.principal}/invitations` with `replaces_token_id`. The owner is the token's principal, never `minted_by`.
 - Move to a service identity: `POST /tokens/{id}/move {"service_identity":"<name>"}` (security tier, `token.update`). An admin names the sponsor when creating the identity; nothing defaults it.
-- The old token is revoked by `DELETE /tokens/{id}` once the job uses the new one. Nothing revokes it automatically ([OD-14](#11-owner-decisions)).
+- The old token is revoked by `DELETE /tokens/{id}` once the job uses the new one. Nothing revokes it automatically ([D14](#11-owner-rulings-2026-10-10)).
 - Service principals never appear in this inventory, in `GET /people`, or in `knownPrincipals` email pairing.
 
 ### 6.3 What keeps working
@@ -271,7 +303,7 @@ Every route joins `TestAuthzMatrix` in [`internal/api/authz_test.go`](../../../i
 
 - Go: `types.Invitation`, `types.ServiceIdentity`, `types.ActorService`; the request bodies are the SDK's types, aliased as `mintEnrolmentTokenRequest` is.
 - `pkg/client`: one method per route; `APIToken` gains `disposition`.
-- CLI ([OD-15](#11-owner-decisions)): `wardyn person invite <principal>`, `wardyn person invitations`, `wardyn invitation revoke <id>`, `wardyn service-identity create|list|get|update|retire`, `wardyn service-identity token create|list|revoke`, `wardyn token move <id> <name>`. No CLI claim: it needs a browser session.
+- CLI ([D15](#11-owner-rulings-2026-10-10)): `wardyn person invite <principal>`, `wardyn person invitations`, `wardyn invitation revoke <id>`, `wardyn service-identity create|list|get|update|retire`, `wardyn service-identity token create|list|revoke`, `wardyn token move <id> <name>`. No CLI claim: it needs a browser session.
 - Console (U1, after a mock round under [CONSOLE-RULES.md](../CONSOLE-RULES.md)): a pending-invitation card on Account with the existing show-once dialog, and a `disposition` column on Admin > Credentials.
 
 ### 7.3 Reasons
@@ -292,6 +324,7 @@ Every route joins `TestAuthzMatrix` in [`internal/api/authz_test.go`](../../../i
 | `service_identity.update` | admin; `service:<name>` | `sponsor_from`, `sponsor_to`, `state`, `tokens_revoked` |
 | `service_identity.retire` | admin; `service:<name>` | `tokens_revoked` |
 | `service_identity.token.create` | the sponsor; token id | `service_identity`, `expires_at` |
+| `session.attach`, `ui.open`, `ssh.authenticate` | the sponsor, `human`; as today | adds `service_identity`, `entry` `sponsor` on a sponsor entry |
 
 Every row a service's own request writes has `actor_type` `service` and `data.sponsor`. `auth.fail` gains reasons `service_identity_inactive` and `service_sponsor_inactive`.
 
@@ -310,12 +343,14 @@ Every row a service's own request writes has `actor_type` `service` and `data.sp
 
 `TestNoRouteReturnsAnotherPersonsCredential` walks the `TestAuthzMatrix` route table as super admin, security admin and member. It presents every bearer-shaped string in a `2xx` body to `GET /me` and requires the caller or a `service:` principal.
 
+Sponsor reach, all C4: `TestServiceIdentity_SponsorReadsAndKills`, `TestServiceIdentity_SponsorAttachIsOffByDefault`, `TestServiceIdentity_SponsorAttachFollowsTheGrant` (person, group, user-type deny, `*` allow), `TestServiceIdentity_SponsorAttachRecordsTheSponsor`, `TestServiceIdentity_SponsorEntryEndsWithSponsorship`.
+
 Service-specific negatives, all C2: `TestServiceIdentity_NeverOperatorNeverSecondHuman`, `TestServiceIdentity_AllowListRouteWalk`, `TestServiceIdentity_PrefixReservedAtEveryDoor`, `TestServiceIdentity_SponsorInactiveRefusesItsTokens`, `TestServiceIdentity_SponsorChangeRevokesTokens`, `TestServiceIdentity_RateLimitedLikeAPerson`, `TestServiceIdentity_HiddenFromPeopleAndMintedInventory`.
 
 ## 9. Residuals and threat-model delta
 
 > [!WARNING]
-> **The sponsor holds the service's reach.** Whoever holds a service token acts with the service's grants and ceiling, which may be wider than the sponsor's own. Rows name the service and sponsor, not the hand on the token ([OD-10](#11-owner-decisions)).
+> **The sponsor holds the service's reach.** Whoever holds a service token acts with the service's grants and ceiling, which may be wider than the sponsor's own. Rows name the service and sponsor, not the hand on the token ([D10](#11-owner-rulings-2026-10-10)). A sponsor granted `service_attach` also enters the service's sandbox and its connections.
 
 > [!WARNING]
 > **A sponsor disabled only at the identity provider is not seen.** Without SCIM or a session revoke, Wardyn sees no deactivation. The service's tokens work until expiry, at most `90d`, and its live runs continue in every case.
@@ -337,11 +372,12 @@ The docs lane places these as new numbered residuals. [`ARCHITECTURE.md`](../../
 |---|---|---|---|
 | C1 | core, Sonnet high | Migration 0196; invitation store and routes; the shared mint core; claim; mint-site pin | owner decisions |
 | C2 | core, Sonnet high | Service identity store, routes and auth branch; `ActorService`; allow-list; sponsor checks; run sponsor; actor-type call-site review | C1 |
+| C4 | core, Sonnet high | Sponsor read and kill; the `service_attach` feature value and its 0196 restriction row; the sponsor arm of `mayEnterRun` at every entry door ([§4.9](#49-sponsor-reach-over-the-services-runs)) | C2 |
 | C3 | core, Sonnet high | Dispositions; `POST /tokens/{id}/move`; sponsored-token sweep in `revokePersonCredentials`; directory exclusions | C1, C2 |
 | U1 | Sonnet, console | Mock round, then the Account claim card and the disposition column | C1, C3 |
-| M1 | free or Haiku | `pkg/client` methods, CLI verbs, TS mirror, wire-parity tests | C1–C3 |
-| M2 | free or Haiku | `TestNoRouteReturnsAnotherPersonsCredential`, `TestDelegation_PortalRevokeKeepsThePersonSignedIn`, the caller-by-route probe table from §3.4 and §4.4 | C1–C3 |
-| M3 | free or Haiku | [api-tokens.md](../../operations/api-tokens.md), [CI.md](../../CI.md), [AUDIT-ACTIONS.md](../../AUDIT-ACTIONS.md), [sdk.md](../../sdk.md) rows; §9 text in REPORT | C1–C3 |
+| M1 | free or Haiku | `pkg/client` methods, CLI verbs, TS mirror (the `service_attach` feature label included), wire-parity tests | C1–C4 |
+| M2 | free or Haiku | `TestNoRouteReturnsAnotherPersonsCredential`, `TestDelegation_PortalRevokeKeepsThePersonSignedIn`, the caller-by-route probe table from §3.4, §4.4 and §4.9 | C1–C4 |
+| M3 | free or Haiku | [api-tokens.md](../../operations/api-tokens.md), [CI.md](../../CI.md), [AUDIT-ACTIONS.md](../../AUDIT-ACTIONS.md), [sdk.md](../../sdk.md) rows; §9 text in REPORT | C1–C4 |
 
 Every slice: each named test fails with its fix reverted and passes restored; the full tree with Postgres, lint, staticcheck, file size and lane preflight exit `0`.
 
@@ -354,46 +390,35 @@ Every slice: each named test fails with its fix reverted and passes restored; th
 | C1 | The three C1 tests of [§8](#8-acceptance-to-tests) pass, each with a revert mutation; the mint-site pin names exactly two mint-core callers and no `MintedBy` write |
 | C2 | `TestServiceIdentity_RunsUnderItsOwnPrincipal` and the seven negatives pass; `TestAuthzMatrix` covers every new route |
 | C2 | The report lists every comparison against `types.ActorSystem` or `types.ActorHuman` with its verdict for `service` |
+| C4 | `TestServiceIdentity_SponsorReadsAndKills` and the four attach tests pass, each with a revert mutation; with no grant row a sponsor's ticket mint answers `404` |
+| C4 | Every `mayEnterRun` call site reaches the sponsor arm; the report lists them; an attach row names the sponsor as `human` actor with `service_identity` |
 | C3 | `TestMintedTokenDispositions` drives a seeded admin-minted token to each of the six dispositions by its route |
 | C3 | A sponsor's full session revoke shows their sponsored tokens revoked in `GET /tokens`; `GET /people` and `knownPrincipals` hold no `service:` principal |
 | U1 | Mock approved; the claim shows the token once; a Playwright spec for the claim and the disposition column passes |
 | M1 | `TestNewSpellingsAreReachable` covers every new verb; each client method has a request-shape test; TS types match the Go JSON |
-| M2 | The probe table runs every route against target, other person, admin, super admin, admin token, `wdn_`, `wdg_`, service, expired and claimed; every cell matches |
+| M2 | The probe table runs every route against target, other person, sponsor with and without `service_attach`, admin, super admin, admin token, `wdn_`, `wdg_`, service, expired and claimed; every cell matches |
 | M3 | `make lint` exits `0`; guarded docs keep every citation; the report carries CHANGELOG lines and the §9 text |
 
-## 11. Owner decisions
+## 11. Owner rulings (2026-10-10)
 
-1. **Does an invitation carry a secret?** A: no, the target's session is the only authority. B: a hashed single-use code in the link, plus the session.
-   Recommendation: **A**. B adds a credential to steal and protects nothing a session does not.
-2. **Invitation lifetime.** A: default `72h`, maximum `14d`. B: default `7d`, maximum `30d`. C: fixed `72h`, like device enrolment.
-   Recommendation: **A**.
-3. **Does a claim grant the `api_token` feature?** A: no, a claim obeys the self-mint's capability check. B: yes, for that one token.
-   Recommendation: **A**. An admin who wants the feature grants it.
-4. **Who mints a service identity's tokens?** A: the sponsor only, from a signed-in session. B: the sponsor or the security tier. C: the security tier only.
-   Recommendation: **A**. The person accountable is the person holding the plaintext.
-5. **Service token lifetime.** A: expiry required, default and maximum `90d`, or the deployment cap if lower. B: the person-token rules. C: expiry required, maximum `30d`.
-   Recommendation: **A**.
-6. **The sponsor is suspended or deactivated.** A: tokens refused at once, live runs continue. B: A, and kill the service's live runs. C: nothing until an admin acts.
-   Recommendation: **A**. Killing CI mid-job on an HR event surprises; an admin can still kill.
-7. **The sponsor changes.** A: revoke every live token. B: tokens survive.
-   Recommendation: **A**. The old sponsor may still hold a plaintext.
-8. **Audit actor form.** A: new `actor_type` `service`, widening the audit check in 0196. B: `actor_type` `system` and actor `service:<name>`, as devices are.
-   Recommendation: **A**, unless C1 measures the check rewrite as too slow for large audit tables; then **B**.
-9. **A service identity's reach.** A: the allow-list of [§4.4](#44-reach), member reach, never an operator. B: every member route.
-   Recommendation: **A**. A route added later stays closed until listed.
-10. **Is the service's ceiling bounded by its sponsor's?** A: no, it is assigned like any user subject, and the gap is a residual. B: resolve the intersection with the sponsor's ceiling.
-    Recommendation: **A** for 0.9. B changes reach whenever the sponsor's groups change.
-11. **The sponsor's reach over the service's runs.** A: none beyond today. B: read and kill, never attach. C: read, kill and attach.
-    Recommendation: **B**. The sponsor holds the token, so B adds no reach.
-12. **A new owner-authorised delegation grant in 0.9?** A: no, portal delegation and service identities cover the issue. B: a per-person grant letting a service act for an absent person.
-    Recommendation: **A**.
-13. **How a service identity gets its model credential.** A: its own token stores it in its own namespace. B: the sponsor stores it through a new route. C: the operator namespace only.
-    Recommendation: **A**. It matches today's CI provisioning.
-14. **Admin-minted tokens after 0.9.** A: no automatic revoke; dispositions and a boot warning with the `needs_decision` count; refusal decided for 1.0. B: refuse them at the 0.9 upgrade. C: refuse them a fixed time after upgrade.
-    Recommendation: **A**. Each token moves only when a person acts.
-15. **Names.** A: CLI and routes as in [§7](#7-wire), audit verb `claim`, console noun "Service identities". B: `redeem` added to the closed verb list, and "Automation accounts".
-    Recommendation: **A**.
-16. **Console in 0.9.** A: the claim card and disposition column after a mock round; service identities by API and CLI only. B: A plus a service-identity page. C: none, leaving invitations unclaimable.
-    Recommendation: **A**.
-17. **Who creates, suspends and retires service identities.** A: the security tier, as `POST /people`. B: super admin only, as portal registration.
-    Recommendation: **A**. An identity reaches nothing beyond member reach under governance.
+The owner accepted every recommendation except D11, which is amended. The design above already follows each ruling.
+
+| # | Ruling |
+|---|---|
+| D1 | No secret code; the target's signed-in session claims |
+| D2 | Invitation lifetime: default `72h`, maximum `14d` |
+| D3 | Claiming never grants the `api_token` feature |
+| D4 | Only the sponsor mints service tokens |
+| D5 | Service-token expiry required: at most `90d`, or the deployment cap if lower |
+| D6 | Sponsor suspended or deactivated: service tokens refused at once; live runs continue |
+| D7 | A sponsor change revokes every token of the identity |
+| D8 | New `service` audit actor type. Fallback to `system` with actor `service:<name>` only if C1 measures the constraint migration as too slow |
+| D9 | Fixed route allow-list; never an operator |
+| D10 | The service's ceiling is not bounded by the sponsor's; a published residual |
+| D11 | **Amended.** The sponsor may read and kill the service's runs. Attach is optional and governed: off by default, enabled per person or group ([§4.9](#49-sponsor-reach-over-the-services-runs)) |
+| D12 | No new delegation grant in 0.9 |
+| D13 | The service stores its own model credential in its own namespace |
+| D14 | Admin-minted tokens kept with a visible state; refusal decided for 1.0 |
+| D15 | Names as in [§7](#7-wire); audit verb `claim`; console noun "Service identities" |
+| D16 | Console: the claim card and the token-state column after a mock round; service identities by API and CLI only in 0.9 |
+| D17 | Create, suspend and retire on the security tier, as `POST /people` |
