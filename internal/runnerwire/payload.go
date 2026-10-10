@@ -126,11 +126,12 @@ type Lease struct {
 
 // PendingAction is one entry of the PENDING payload, oldest first.
 type PendingAction struct {
-	Recovery *types.RunnerMutationFailure `json:"recovery,omitempty"`
-	ID       uuid.UUID                    `json:"id"`
-	Kind     types.RunnerActionKind       `json:"kind"`
-	RunID    uuid.UUID                    `json:"run_id"`
-	Ref      string                       `json:"ref"`
+	Quarantine *types.RunnerQuarantine      `json:"quarantine,omitempty"`
+	Recovery   *types.RunnerMutationFailure `json:"recovery,omitempty"`
+	ID         uuid.UUID                    `json:"id"`
+	Kind       types.RunnerActionKind       `json:"kind"`
+	RunID      uuid.UUID                    `json:"run_id"`
+	Ref        string                       `json:"ref"`
 }
 
 // ActionResult is the `action_result` event's data.

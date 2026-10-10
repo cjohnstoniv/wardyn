@@ -17,6 +17,7 @@ import (
 )
 
 type localRun struct {
+	Quarantine      *types.RunnerQuarantine      `json:"quarantine,omitempty"`
 	ContainmentOnly bool                         `json:"containment_only,omitempty"`
 	Generation      uuid.UUID                    `json:"generation,omitempty"`
 	Executions      map[uuid.UUID]string         `json:"executions,omitempty"`

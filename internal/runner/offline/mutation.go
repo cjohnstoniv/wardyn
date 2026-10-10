@@ -61,6 +61,11 @@ func (m *Manager) MutationFinished(ctx context.Context, method, ref string, runI
 	}()
 	var err error
 	id, r, known := m.findRef(ref)
+	var late error
+	if known && r.Quarantine != nil {
+		late = errors.New("mutation completed after run quarantine")
+		cause = errors.Join(cause, late)
+	}
 	if cause != nil && known {
 		if method == runnerwire.MethodCreateSandbox {
 			r.FailedCreation = true
@@ -75,7 +80,7 @@ func (m *Manager) MutationFinished(ctx context.Context, method, ref string, runI
 		return nil
 	}
 	if known {
-		return errors.Join(err, m.CheckLapses(ctx))
+		return errors.Join(late, err, m.CheckLapses(ctx))
 	}
 	return m.stopper.StopProxy(ctx, ref)
 }

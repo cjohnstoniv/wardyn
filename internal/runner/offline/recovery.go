@@ -24,6 +24,9 @@ func samePendingAction(a, b runnerwire.PendingAction) bool {
 	if a.ID != b.ID || a.Kind != b.Kind || a.RunID != b.RunID || a.Ref != b.Ref {
 		return false
 	}
+	if (a.Quarantine == nil) != (b.Quarantine == nil) || (a.Quarantine != nil && *a.Quarantine != *b.Quarantine) {
+		return false
+	}
 	if a.Recovery == nil || b.Recovery == nil {
 		return a.Recovery == nil && b.Recovery == nil
 	}
@@ -37,7 +40,7 @@ func (m *Manager) recoverMutation(a runnerwire.PendingAction, r localRun) (runne
 	if err := m.ensureDurable(); err != nil {
 		return runnerwire.ActionResult{}, err
 	}
-	if a.Recovery == nil || r.MutationFailure == nil || *a.Recovery != *r.MutationFailure || !r.MutationFailure.Contained || r.ProxyStoppedAt == nil || r.FailedCreation || r.ContainmentOnly {
+	if a.Recovery == nil || r.MutationFailure == nil || *a.Recovery != *r.MutationFailure || !r.MutationFailure.Contained || r.ProxyStoppedAt == nil || r.FailedCreation || r.ContainmentOnly || r.Quarantine != nil {
 		return runnerwire.ActionResult{}, errors.New("mutation recovery proof does not match contained failure")
 	}
 	if r.Generation != a.Recovery.Generation {

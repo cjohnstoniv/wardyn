@@ -26,7 +26,7 @@ func (m *Manager) StatePages(ctx context.Context, send func(runnerwire.StatePage
 		m.mu.Unlock()
 		return err
 	}
-	ids := m.runIDs()
+	ids := m.inventoryIDs()
 	m.mu.Unlock()
 	inventory := uuid.New()
 	cursor := runnerwire.StateInventory{}
@@ -52,4 +52,15 @@ func (m *Manager) StatePages(ctx context.Context, send func(runnerwire.StatePage
 		}
 		cursor, ids = next, ids[n:]
 	}
+}
+
+func (m *Manager) inventoryIDs() []uuid.UUID {
+	ids := m.runIDs()
+	visible := ids[:0]
+	for _, id := range ids {
+		if m.state.Runs[id].Quarantine == nil {
+			visible = append(visible, id)
+		}
+	}
+	return visible
 }

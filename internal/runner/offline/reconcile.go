@@ -73,6 +73,12 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	if !ok || !belongs || local == "" || r.Ref != local {
 		return runnerwire.ActionResult{}, errors.New("pending action does not match a local run")
 	}
+	if a.Kind == types.RunnerActionQuarantine {
+		return m.quarantineRun(ctx, a, r)
+	}
+	if a.Quarantine != nil {
+		return runnerwire.ActionResult{}, errors.New("unexpected quarantine proof")
+	}
 	if r.ContainmentOnly && !missingIdentityAction(a) {
 		return runnerwire.ActionResult{}, errors.New("containment-only identity refuses this action")
 	}
@@ -147,7 +153,7 @@ func (m *Manager) State(ctx context.Context) ([]runnerwire.RunState, error) {
 		m.mu.Unlock()
 		return nil, err
 	}
-	ids := m.runIDs()
+	ids := m.inventoryIDs()
 	m.mu.Unlock()
 	return m.stateRows(ctx, ids)
 }
@@ -228,6 +234,12 @@ func (m *Manager) Replay(ctx context.Context, peer *runnerwire.Peer) error {
 		return runnerwire.ErrRevoked
 	}
 	for _, id := range ids {
+		m.mu.Lock()
+		quarantined := m.state.Runs[id].Quarantine != nil
+		m.mu.Unlock()
+		if quarantined {
+			continue
+		}
 		spool, err := runnerspool.Open(filepath.Join(m.dir, "spools", id.String()), id)
 		if err != nil {
 			return err

@@ -41,6 +41,9 @@ func TestStateInventoryStrictPagesAndFinalBarrier(t *testing.T) {
 	if _, err := complete.Next(final); err == nil {
 		t.Fatal("accepted page after Final")
 	}
+	if _, err := complete.Next(StatePage{InventoryID: id, After: last, Final: true}); err == nil {
+		t.Fatal("accepted page after Final")
+	}
 	if empty, err := initial.Next(StatePage{InventoryID: uuid.New(), Final: true}); err != nil || !empty.Complete {
 		t.Fatalf("empty inventory: %+v %v", empty, err)
 	}

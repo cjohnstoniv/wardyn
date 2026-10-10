@@ -65,7 +65,15 @@ const (
 	RunnerActionEnd             RunnerActionKind = "end"
 	RunnerActionStopProxy       RunnerActionKind = "stop_proxy"
 	RunnerActionRecoverMutation RunnerActionKind = "recover_mutation"
+	RunnerActionQuarantine      RunnerActionKind = "quarantine_run"
 )
+
+// RunnerQuarantine identifies an org-authorized isolation disposition, not an
+// evidence acknowledgement or permission to reconstruct missing run authority.
+type RunnerQuarantine struct {
+	ID         uuid.UUID `json:"id"`
+	Generation uuid.UUID `json:"generation"`
+}
 
 // RunnerMutationFailure is an immutable failure identity. Contained becomes true
 // only after proxy containment and lifecycle persistence both succeed.
@@ -78,6 +86,7 @@ type RunnerMutationFailure struct {
 
 // RunnerPendingAction is applied before readiness when a runner reconnects.
 type RunnerPendingAction struct {
+	Quarantine *RunnerQuarantine      `json:"quarantine,omitempty"`
 	Recovery   *RunnerMutationFailure `json:"recovery,omitempty"`
 	ID         uuid.UUID              `json:"id"`
 	RunnerID   uuid.UUID              `json:"runner_id"`
