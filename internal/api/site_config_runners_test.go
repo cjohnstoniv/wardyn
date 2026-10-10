@@ -54,3 +54,12 @@ func TestSiteConfigCannotChangeRunnerEnablement(t *testing.T) {
 		}
 	}
 }
+
+func TestRunnerAdmissionNoStore(t *testing.T) {
+	srv, _ := newSiteConfigHarness(t, &fakeSiteConfigStore{})
+	srv.cfg.Store = nil
+	w := httptest.NewRecorder()
+	if srv.requireRunnersEnabled(w, httptest.NewRequest(http.MethodGet, "/runners/test", nil)) || w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("missing store status=%d", w.Code)
+	}
+}
