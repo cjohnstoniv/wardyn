@@ -53,6 +53,7 @@ const runningInteractive: AgentRun = {
   state: "RUNNING",
   spiffe_id: "spiffe://x",
   runner_target: "docker",
+  placement: "",
   interactive: true,
 };
 

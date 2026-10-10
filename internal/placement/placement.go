@@ -13,14 +13,19 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// Placement says where a run's sandbox lives.
-type Placement string
+// Placement says where a run's sandbox lives. A run row carries it, so the
+// canonical declaration is internal/types (which cannot import this package);
+// this alias and the two constants keep the name and the values callers here
+// already use.
+type Placement = types.Placement
 
 const (
-	Remote Placement = "remote" // the organisation's own executor
-	Local  Placement = "local"  // a registered runner on the person's laptop
+	Remote Placement = types.PlacementRemote // the organisation's own executor
+	Local  Placement = types.PlacementLocal  // a registered runner on the person's laptop
 )
 
 // Request is the placement a caller asked for (#116's shape). The zero value
@@ -71,11 +76,12 @@ func (c Capacity) Fits(cpuMillis, memoryMiB int64) bool {
 // confinement, decisions, recordings, exit codes and capabilities. It is not
 // the run's `confinement_source` (`requested` or `defaulted`, written by
 // run.create): that says who chose the class, this says who can attest it.
-type EvidenceSource string
+// Declared in internal/types with the run row that carries it; aliased here.
+type EvidenceSource = types.RunEvidenceSource
 
 const (
-	EvidenceSubstrate      EvidenceSource = "substrate"       // the organisation's own substrate
-	EvidenceRunnerAsserted EvidenceSource = "runner_asserted" // the runner said so; nobody can verify it
+	EvidenceSubstrate      EvidenceSource = types.RunEvidenceSubstrate      // the organisation's own substrate
+	EvidenceRunnerAsserted EvidenceSource = types.RunEvidenceRunnerAsserted // the runner said so; nobody can verify it
 )
 
 // EvidenceFor is the evidence source a placement records.

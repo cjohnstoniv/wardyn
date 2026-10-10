@@ -25,6 +25,7 @@ const run = (over: Partial<AgentRun> = {}): AgentRun => ({
   state: "RUNNING" as RunState,
   spiffe_id: "spiffe://x",
   runner_target: "docker",
+  placement: "",
   ...over,
 });
 

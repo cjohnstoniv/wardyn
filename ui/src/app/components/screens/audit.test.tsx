@@ -167,6 +167,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
       state: "RUNNING",
       spiffe_id: "spiffe://x",
       runner_target: "docker",
+      placement: "",
     };
     getRunMock.mockRejectedValueOnce(new Error("500")).mockResolvedValueOnce(runRecord);
 

@@ -451,13 +451,26 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
       if (!m) throw new Error(`type ${name} not found`);
       return new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]));
     };
-    const placementGo = readFileSync(join(root, "internal/placement/placement.go"), "utf8");
+    const placementGo = readFileSync(join(root, "internal/types/placement.go"), "utf8");
     const deliveryGo = readFileSync(join(root, "internal/placement/delivery.go"), "utf8");
     const clientGo = readFileSync(join(root, "pkg/client/runs_new_run.go"), "utf8");
-    expect(union("PlacementValue")).toEqual(new Set([...placementGo.matchAll(/\b(?:Remote|Local)\s+Placement = "([a-z_]+)"/g)].map((m) => m[1])));
+    expect(union("PlacementValue")).toEqual(new Set([...placementGo.matchAll(/\bPlacement(?:Remote|Local)\s+Placement = "([a-z_]+)"/g)].map((m) => m[1])));
     expect(union("LocalDeliveryMode")).toEqual(new Set([...deliveryGo.matchAll(/\bMode\w+\s+Mode = "([a-z_]+)"/g)].map((m) => m[1])));
     expect(union("ImageSourceKind")).toEqual(new Set([...clientGo.matchAll(/\bImageSource\w+\s*=\s*"([a-z_]+)"/g)].map((m) => m[1])));
     expect(union("LocalPlacementKind")).toEqual(new Set([...clientGo.matchAll(/\bLocalPlacement(?:Host|Source|Component)\s*=\s*"([a-z_]+)"/g)].map((m) => m[1])));
+  });
+
+  it("run placement and evidence include the legacy empty value and match Go", () => {
+    const ts = stripComments(readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8"));
+    const go = readFileSync(join(root, "internal/types/placement.go"), "utf8");
+    for (const [name, goType] of [["RunPlacement", "Placement"], ["RunEvidenceSource", "RunEvidenceSource"]]) {
+      const body = new RegExp(`export type ${name} =([^;]+);`).exec(ts);
+      expect(body, name).not.toBeNull();
+      const values = new Set([...body![1].matchAll(/"([a-z_]*)"/g)].map((m) => m[1]));
+      const goValues = [...go.matchAll(new RegExp(`\\b\\w+\\s+${goType} = "([a-z_]+)"`, "g"))].map((m) => m[1]);
+      expect(goValues.length, goType).toBe(2);
+      expect(values).toEqual(new Set(["", ...goValues]));
+    }
   });
 
   it("ComponentSaved (POST/PUT /me/components, PUT /components/{id}): Component plus requirements", () => {
