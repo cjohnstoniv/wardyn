@@ -53,6 +53,9 @@ func TestPG_RunnerStateLapseAndContainment(t *testing.T) {
 	if changed, err := st.MarkRunnerRunLost(ctx, rn.ID, run.ID, ref, time.Now()); err != nil || !changed {
 		t.Fatalf("loss claim: %v %v", changed, err)
 	}
+	if _, err := st.ReconcileRunnerState(ctx, rn.ID, nil); err != nil {
+		t.Fatalf("omitted kept run trapped reconnect: %v", err)
+	}
 	requests, err := st.ReconcileRunnerState(ctx, rn.ID, []runnerwire.RunState{row})
 	if !errors.Is(err, store.ErrRunnerReconciliationRequired) || len(requests) != 1 || requests[0].Generation != gen || requests[0].Ref != ref || requests[0].LostAt.IsZero() {
 		t.Fatalf("late containment: %v %v", requests, err)

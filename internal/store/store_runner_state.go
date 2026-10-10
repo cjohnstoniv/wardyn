@@ -53,7 +53,8 @@ func (s PG) ReconcileRunnerState(ctx context.Context, runnerID uuid.UUID, rows [
 			requests = append(requests, *request)
 		}
 	}
-	// An omitted live run cannot silently become ready. The bounded query also
+	// An omitted not-kept live run cannot silently become ready. Kept runs
+	// remain fenced by lifecycle and H3 pending actions, not STATE completeness. The bounded query also
 	// validates identity for an empty STATE, rather than trusting its caller.
 	ids, err := s.runnerStateIDs(ctx, runnerID)
 	if err != nil {
@@ -117,7 +118,7 @@ func (s PG) runnerStateIDs(ctx context.Context, runnerID uuid.UUID) ([]uuid.UUID
 	if !valid {
 		return nil, ErrRunnerExecutionRefused
 	}
-	rows, err := tx.Query(ctx, `SELECT a.id FROM agent_runs a JOIN runners r ON r.id=a.runner_id WHERE r.id=$1 AND a.created_by=r.owner AND a.placement='local' AND a.state='RUNNING' AND a.sandbox_ref<>'' ORDER BY a.id LIMIT 1001`, runnerID)
+	rows, err := tx.Query(ctx, `SELECT a.id FROM agent_runs a JOIN runners r ON r.id=a.runner_id WHERE r.id=$1 AND a.created_by=r.owner AND a.placement='local' AND a.state='RUNNING' AND a.lost_at IS NULL AND a.sandbox_ref<>'' ORDER BY a.id LIMIT 1001`, runnerID)
 	if err != nil {
 		return nil, err
 	}

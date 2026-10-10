@@ -5,10 +5,12 @@ package api
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -33,6 +35,10 @@ func TestRunnerStatePG_OfflineUsesExistingHeadlessLossPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := New(cfg)
+	missing := []runnerwire.RunState{{RunID: run.ID, SandboxPresent: false}}
+	if _, err := srv.StateFromRunner(ctx, rn.ID, missing); !errors.Is(err, store.ErrRunnerReconciliationRequired) {
+		t.Fatalf("fresh missing sandbox admitted: %v", err)
+	}
 	if err := srv.OfflineFromRunner(ctx, rn.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -52,6 +58,12 @@ func TestRunnerStatePG_OfflineUsesExistingHeadlessLossPath(t *testing.T) {
 	}
 	if err := srv.OfflineFromRunner(ctx, rn.ID); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := srv.StateFromRunner(ctx, rn.ID, missing); err != nil {
+		t.Fatalf("lapsed missing sandbox cannot converge: %v", err)
+	}
+	if _, err := srv.StateFromRunner(ctx, rn.ID, nil); err != nil {
+		t.Fatalf("omitted kept sandbox cannot converge: %v", err)
 	}
 	if probe.stops.Load() != 1 {
 		t.Fatal("offline callback repeated loss effects")
