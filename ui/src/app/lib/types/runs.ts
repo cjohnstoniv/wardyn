@@ -46,6 +46,15 @@ export interface UIApp {
 // not import from components/, so a home under components/ forced a second copy.
 export const CC_ORDER: ConfinementClass[] = ["CC1", "CC2", "CC3"];
 
+// Where a run's sandbox lives (Go internal/types.Placement). "" is a run from
+// before 0.9 and any run whose placement nothing recorded, and it is on the wire
+// in both cases — so this is the full value set, not an optional field.
+export type RunPlacement = "" | "local" | "remote";
+
+// Who can attest a run's evidence (Go internal/types.RunEvidenceSource); "" is a
+// pre-0.9 record only.
+export type RunEvidenceSource = "" | "substrate" | "runner_asserted";
+
 export type RunState =
   | "PENDING"
   | "STARTING"
@@ -80,6 +89,23 @@ export interface AgentRun {
   state: RunState;
   spiffe_id: string;
   runner_target: string;
+  // Where the sandbox lives (0.9 client mode): "remote", the organisation's own
+  // executor, or "local", a runner the person registered. ALWAYS on the wire —
+  // "" is a run from before 0.9 or one whose placement nothing recorded yet, so
+  // this is a plain string union and not an optional field. Not
+  // `confinement_source`, which says who CHOSE the class.
+  placement: RunPlacement;
+  // True when that placement was RESOLVED by the resolver rather than asked for
+  // by name. Absent (false) for a legacy row and for a run whose placement was
+  // the caller's own choice.
+  placement_filled?: boolean;
+  // The runner a local run landed on. Absent for a remote run and for a
+  // pre-0.9 row; the Go side omits the key on NULL, never sends "".
+  runner_id?: string;
+  // Who can attest this run's evidence: "substrate" (the organisation's own) or
+  // "runner_asserted" (a runner said so, nobody can verify). Empty only for a
+  // pre-0.9 record, hence optional here.
+  evidence_source?: RunEvidenceSource;
   sandbox_ref?: string;
   // interactive runs come up idle (no agent task) so a human attaches and drives
   // them via the WS PTY; the runs board badges these as "awaiting attach".

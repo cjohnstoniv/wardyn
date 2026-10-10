@@ -145,6 +145,14 @@ type CreateRunRequest struct {
 	// create path under the caller's own ceiling. Alongside it only Title,
 	// Task and PresetVersion may be set; any other field is refused.
 	Preset string `json:"preset,omitempty"`
+	// Placement is where the run's sandbox lives: "remote", the organisation's
+	// own executor (the default), or "local", a runner the person registered.
+	// Empty is "remote" until a single placement is eligible; "local" is
+	// refused with placement_unavailable until the runner lane is enabled.
+	Placement Placement `json:"placement,omitempty"`
+	// RunnerID names the runner for Placement "local"; with more than one
+	// runner online and none named the server answers 422 runner_ambiguous.
+	RunnerID string `json:"runner_id,omitempty"`
 	// PresetVersion, with Preset, pins the version the caller expects: a
 	// preset changed since is refused (409) rather than launched. 0 launches
 	// the current version. The created run records the version it used.

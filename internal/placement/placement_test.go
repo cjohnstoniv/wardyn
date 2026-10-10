@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestDispatchPlanFieldsClassified is the closed switch (C6): a credential-bearing
@@ -156,6 +157,28 @@ func TestRequestValidate(t *testing.T) {
 		if err := r.Validate(); !errors.Is(err, ErrInvalidRequest) {
 			t.Errorf("%+v validated (%v)", r, err)
 		}
+	}
+}
+
+// A run row carries the placement, so the canonical declarations moved to
+// internal/types (which cannot import this package). The alias and the constants
+// are what every caller here already used, and they must keep the same values —
+// a rename that quietly forked the vocabulary would leave two "local" strings
+// that no test compares.
+func TestPlacementVocabularyIsTypes(t *testing.T) {
+	var p Placement = types.PlacementLocal
+	var e EvidenceSource = types.RunEvidenceRunnerAsserted
+	if p != Local || e != EvidenceRunnerAsserted {
+		t.Fatalf("aliases read %q/%q, want %q/%q", p, e, Local, EvidenceRunnerAsserted)
+	}
+	if Remote != "remote" || Local != "local" || EvidenceSubstrate != "substrate" || EvidenceRunnerAsserted != "runner_asserted" {
+		t.Fatal("the placement vocabulary's values changed")
+	}
+	var req types.AgentRun
+	req.Placement = Local // a run row takes the same value, with no conversion
+	req.EvidenceSource = EvidenceFor(Local)
+	if req.Placement != types.PlacementLocal || req.EvidenceSource != types.RunEvidenceRunnerAsserted {
+		t.Fatal("a run row's placement fields did not take the placement package's values")
 	}
 }
 

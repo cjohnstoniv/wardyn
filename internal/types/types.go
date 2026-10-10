@@ -116,8 +116,24 @@ type AgentRun struct {
 	State            RunState         `json:"state"`
 	SPIFFEID         string           `json:"spiffe_id"`     // spiffe://<trust-domain>/agent-run/<id>
 	RunnerTarget     string           `json:"runner_target"` // "docker"
-	SandboxRef       string           `json:"sandbox_ref,omitempty"`
-	Image            string           `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
+	// Placement is where the sandbox lives (OD-8): remote (the organisation's own
+	// executor), local (a runner the person registered), or empty for a run from
+	// before 0.9 and for one whose placement nothing has recorded yet. ALWAYS on
+	// the wire — a run has a placement even when the value is the empty one.
+	Placement Placement `json:"placement"`
+	// PlacementFilled records that a placement was RESOLVED for this run rather
+	// than asked for by name, so an incident review can tell "the person chose
+	// local" from "local was the only eligible placement".
+	PlacementFilled bool `json:"placement_filled,omitempty"`
+	// RunnerID names the runner a local run landed on. NULL for a remote run and
+	// for every run from before 0.9; omitted on the wire when NULL, never "".
+	RunnerID *uuid.UUID `json:"runner_id,omitempty"`
+	// EvidenceSource says who can attest this run's evidence (OD-8): substrate or
+	// runner_asserted, empty only for a record from before 0.9. Not
+	// `confinement_source`, which says who CHOSE the class.
+	EvidenceSource RunEvidenceSource `json:"evidence_source,omitempty"`
+	SandboxRef     string            `json:"sandbox_ref,omitempty"`
+	Image          string            `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.
 	Interactive bool `json:"interactive"`
 	// WorkspacePath is the run's primary host directory, denormalized so the control plane can warn (never block) a second run on it.
