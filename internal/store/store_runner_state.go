@@ -80,6 +80,14 @@ func (s PG) reconcileRunnerStateRow(ctx context.Context, runnerID uuid.UUID, row
 	if _, err = tx.Exec(ctx, `SET LOCAL lock_timeout = '2s'`); err != nil {
 		return nil, false, err
 	}
+	request, needsLoss, err := s.reconcileRunnerStateRowTx(ctx, tx, runnerID, row)
+	if err != nil {
+		return nil, false, err
+	}
+	return request, needsLoss, tx.Commit(ctx)
+}
+
+func (s PG) reconcileRunnerStateRowTx(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID, row runnerwire.RunState) (*RunnerContainment, bool, error) {
 	run, err := runnerExecutionRun(ctx, tx, runnerID, row.RunID)
 	if err != nil {
 		return nil, false, err
@@ -102,7 +110,7 @@ func (s PG) reconcileRunnerStateRow(ctx context.Context, runnerID uuid.UUID, row
 	// A timestamp is an assertion, never an ACK: H3's exact action reconciliation
 	// alone clears pending_runner. Live missing sandboxes also require recovery.
 	needsLoss := run.State == types.RunRunning && run.LostAt == nil && (lapsed || !row.SandboxPresent)
-	return request, needsLoss, tx.Commit(ctx)
+	return request, needsLoss, nil
 }
 
 func (s PG) runnerStateIDs(ctx context.Context, runnerID uuid.UUID) ([]uuid.UUID, error) {
