@@ -159,7 +159,7 @@ func (s *Server) writeUsePolicy(w http.ResponseWriter, r *http.Request, mode gov
 		s.proposeGovernanceChange(w, r, govProposal{
 			kind: govKindRunnerPoolUsePolicy, op: op, key: poolID.String(), payload: runnerPoolUsePolicyRequest{Subjects: subjects},
 			before: runnerPoolUsePolicyState(before), after: runnerPoolUsePolicyState(after),
-			changed: changedPaths(runnerPoolUsePolicyState(before), runnerPoolUsePolicyState(after)),
+			changed:   changedPaths(runnerPoolUsePolicyState(before), runnerPoolUsePolicyState(after)),
 			baseState: runnerPoolUsePolicyState(policySubjects(row.Policy)),
 		})
 		return

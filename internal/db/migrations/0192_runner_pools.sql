@@ -51,14 +51,12 @@ CREATE TABLE IF NOT EXISTS runner_pool_use_policies (
 
 -- The organisation's defaults: one row. A default names a pool; it does not pin
 -- one, so a pool that is deleted or switched off later is refused at use, never
--- replaced. bootstrapped_at records that the one-time legacy Remote Provided pool
--- was considered, so an administrator who deletes it is not handed it back.
+-- replaced.
 CREATE TABLE IF NOT EXISTS runner_pool_org_defaults (
     singleton         BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
     preferred_hosting TEXT NOT NULL DEFAULT '' CHECK (preferred_hosting IN ('', 'remote_provided', 'self_hosted')),
     remote_provided   UUID REFERENCES runner_pools (id),
     self_hosted       UUID REFERENCES runner_pools (id),
-    bootstrapped_at   TIMESTAMPTZ,
     updated_by        TEXT NOT NULL DEFAULT '',
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );

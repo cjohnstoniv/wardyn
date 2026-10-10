@@ -35,15 +35,15 @@ func (s *Server) configuredExecutors() []string {
 // deployment that already runs remote work through its configured executors gets one Remote Provided
 // pool holding them, as the organisation's remote default, so what people could do before they still
 // can. It widens nothing (no use policy is created, and nobody gains a launch right) and never makes
-// a Self-Hosted pool or touches a runner. It runs once per database: a pool an administrator deletes
-// is not made again, and a deployment whose administrators already made pools is left as it is.
+// a Self-Hosted pool or touches a runner. It runs once per database: a catalogue that has ever held a
+// pool, an administrator's deleted one included, is left as it is.
 func (s *Server) BootstrapRunnerPools(ctx context.Context) error {
 	ps, ok := s.cfg.Store.(store.RunnerPoolStore)
 	if !ok {
 		return nil
 	}
 	executors := s.configuredExecutors()
-	p, err := ps.BootstrapRunnerPools(ctx, executors, runnerpool.HostingLabel(types.RunnerPoolRemoteProvided), s.cfg.Now().UTC())
+	p, err := ps.BootstrapRunnerPools(ctx, executors, runnerpool.HostingLabel(types.RunnerPoolRemoteProvided))
 	if err != nil {
 		return fmt.Errorf("runner pool bootstrap: %w", err)
 	}
