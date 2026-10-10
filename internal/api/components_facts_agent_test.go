@@ -149,7 +149,7 @@ func TestComponentFacts_ActualSDKPreflightDecode(t *testing.T) {
 func TestComponentFacts_ManagedPolicyResolutionAndTelemetry(t *testing.T) {
 	for _, locked := range []bool{false, true} {
 		req := createRunRequest{Agent: "claude-code", Task: "facts"}
-		fold := runFold{mode: foldPreflight, req: &req, autonomy: types.AutonomyResolution{Level: types.AutonomyL2}, ceiling: governanceCeiling{Profile: &ResolvedProfile{Name: "Approved leaf"}, Limits: types.GovernanceLimits{AutonomyRubric: &types.AutonomyRubric{AgentGuardrailLocks: locked}}}}
+		fold := componentFactInputs{credentialChecked: true, autonomyResolved: true, req: &req, autonomy: types.AutonomyResolution{Level: types.AutonomyL2}, ceiling: governanceCeiling{Profile: &ResolvedProfile{Name: "Approved leaf"}, Limits: types.GovernanceLimits{AutonomyRubric: &types.AutonomyRubric{AgentGuardrailLocks: locked}}}}
 		fact, ok := agentComponentFact(fold)
 		path, content, _ := agentpolicy.ForAgent(req.Agent, fold.autonomy.Level, false, locked)
 		if !ok || fact.Agent.ManagedSettings == nil || fact.Agent.ManagedSettings.Path != path || fact.Agent.ManagedSettings.Document != string(content) || fact.Agent.ManagedSettings.Locked != locked {
@@ -158,7 +158,7 @@ func TestComponentFacts_ManagedPolicyResolutionAndTelemetry(t *testing.T) {
 		if locked && (fact.Agent.ManagedSettings.LockedBy != "profile" || fact.Agent.ManagedSettings.Profile != "Approved leaf") {
 			t.Fatal("lock source must name the admitted leaf only")
 		}
-		fold.mode = foldPreview
+		fold.credentialChecked, fold.autonomyResolved = false, false
 		preview, _ := agentComponentFact(fold)
 		if preview.Agent.ManagedSettings != nil {
 			t.Fatal("preview must not publish an unresolved autonomy document")
@@ -166,7 +166,7 @@ func TestComponentFacts_ManagedPolicyResolutionAndTelemetry(t *testing.T) {
 	}
 	t.Setenv(envAllowAgentTelemetry, "true")
 	req := createRunRequest{Agent: "claude-code"}
-	fact, _ := agentComponentFact(runFold{mode: foldPreview, req: &req})
+	fact, _ := agentComponentFact(componentFactInputs{req: &req})
 	if fact.Agent.Telemetry.Off || len(fact.Agent.Telemetry.Env) != 0 || len(agentTelemetryEnv()) != 0 {
 		t.Fatal("operator telemetry opt-in must agree with dispatch")
 	}

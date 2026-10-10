@@ -78,7 +78,7 @@ func TestComponentFacts_ADOResolvedStandingAndScopes(t *testing.T) {
 	row.Entra.DefaultProfile = []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapProjectRead}
 	req := createRunRequest{Agent: "claude-code", Repo: "https://dev.azure.com/acme/project/_git/one"}
 	policy := types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapCodeWrite}}
-	fold := runFold{mode: foldPreflight, req: &req, spec: policy, scmSite: types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{row}}}}
+	fold := componentFactInputs{credentialChecked: true, autonomyResolved: true, req: &req, spec: policy, scmSite: types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{row}}}}
 	facts := componentFacts(fold, &SCMAccess{Kind: "azure_devops", Org: "https://dev.azure.com/acme", State: modelAccessExpiring})
 	if len(facts) != 2 {
 		t.Fatalf("facts = %+v", facts)
@@ -109,7 +109,7 @@ func TestComponentFacts_GitPATPerRepositoryAccess(t *testing.T) {
 	write := types.GrantSpec{Kind: types.GrantGitPAT, Scope: json.RawMessage(`{"host":"git.corp.example","secret_name":"never-publish","access":"write","repos":["acme/one"]}`)}
 	site := types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{{ID: "private-row", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://git.corp.example/acme"}, Lanes: []types.GitLane{types.GitLanePAT}}}}}
 	for _, current := range []types.GrantSpec{read, write} {
-		fold := runFold{mode: foldPreview, req: &req, scmSite: site, spec: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{current}}, ceiling: governanceCeiling{Spec: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{write}}}}
+		fold := componentFactInputs{req: &req, scmSite: site, spec: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{current}}, ceiling: governanceCeiling{Spec: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{write}}}}
 		git := componentFacts(fold, nil)[0]
 		if git.Org != "git.corp.example/acme" || len(git.RepoAccess) != 1 || !git.RepoAccess[0].CanWrite || (git.RepoAccess[0].Access == "write") != (string(current.Scope) == string(write.Scope)) {
 			t.Fatalf("PAT fact = %+v", git)
@@ -167,7 +167,7 @@ func TestComponentFacts_SelectedGitGrantCannotWidenRepositoryAccess(t *testing.T
 func TestComponentFacts_ADOServerTokenScopes(t *testing.T) {
 	row := adoServerPAT(adoRow("server-private", false, "https://tfs.corp.example/collection"))
 	req := createRunRequest{Agent: "none", Repo: "https://tfs.corp.example/collection/project/_git/one"}
-	git := componentFacts(runFold{mode: foldPreview, req: &req, scmSite: types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{row}}}}, nil)[0]
+	git := componentFacts(componentFactInputs{req: &req, scmSite: types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{row}}}}, nil)[0]
 	if git.TokenMode != types.ADOTokenModeOwnPAT || len(git.TokenScopes) != len(adoServerTokenScopes) || git.TokenScopes[0].Scope != adoServerTokenScopes[0] || git.RepoAccess[0].Access != "write" {
 		t.Fatalf("Server's git-only token must not acquire Services Graph scope: %+v", git)
 	}
@@ -183,7 +183,7 @@ func TestComponentFacts_GitHubMixedHostInstallBinding(t *testing.T) {
 	for _, host := range []string{"github.com", "git.corp.example"} {
 		for _, operator := range []bool{false, true} {
 			req := createRunRequest{Agent: "none", Repo: "https://" + host + "/acme/one"}
-			fold := runFold{mode: foldPreview, req: &req, spec: types.RunPolicySpec{AllowAllEgress: true},
+			fold := componentFactInputs{req: &req, spec: types.RunPolicySpec{AllowAllEgress: true},
 				scmSite: types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{row}}},
 				ceiling: governanceCeiling{Operator: operator}}
 			git := componentFacts(fold, nil)[0]

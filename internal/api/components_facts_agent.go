@@ -14,7 +14,7 @@ import (
 // agentComponentFact describes the admitted harness and the one chosen model
 // lane. No credential value, provider id, access-portal URL or arbitrary
 // dispatch settings cross this boundary. Exec runs have no agent process.
-func agentComponentFact(f runFold) (componentFact, bool) {
+func agentComponentFact(f componentFactInputs) (componentFact, bool) {
 	req := *f.req
 	if req.TaskMode == "exec" {
 		return componentFact{}, false
@@ -44,7 +44,7 @@ func agentComponentFact(f runFold) (componentFact, bool) {
 			kind = "aws"
 		}
 		a.Secrets = append(a.Secrets, client.AgentSecretFact{Kind: kind, Owner: "own", Residency: string(kindResidency(p.Kind))})
-		if f.mode != foldPreview {
+		if f.credentialChecked {
 			out.Status = componentReady // the gate checked this own credential
 		}
 	} else if _, needsModel := agentLLMProvider(req.Agent); !needsModel {
@@ -52,7 +52,7 @@ func agentComponentFact(f runFold) (componentFact, bool) {
 	}
 	// Preview deliberately skips autonomy. Only an unbound run's zero level
 	// is provable there; it must not publish a guessed managed document.
-	resolved := f.mode != foldPreview || (componentAutonomyCap(f.comps) == "" &&
+	resolved := f.autonomyResolved || (componentAutonomyCap(f.comps) == "" &&
 		(f.ceiling.Profile == nil || f.ceiling.Limits.AutonomyRubric == nil))
 	if resolved {
 		locked := f.ceiling.Profile != nil && f.ceiling.Limits.AutonomyRubric != nil && f.ceiling.Limits.AutonomyRubric.AgentGuardrailLocks

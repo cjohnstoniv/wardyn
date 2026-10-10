@@ -31,7 +31,7 @@ func gitFactOrg(repo previewRepo) string {
 
 // enrichGitFacts reads the same admitted snapshots and standing-capability
 // meet the doors use. It never widens them, probes a forge or mints a token.
-func enrichGitFacts(f runFold, facts []componentFact) {
+func enrichGitFacts(f componentFactInputs, facts []componentFact) {
 	for _, repo := range previewRepos(*f.req, f.spec, f.scmSite) {
 		org, lane := gitFactOrg(repo), gitProviderLane(repo, f.spec, f.scmSite)
 		i := slices.IndexFunc(facts, func(fact componentFact) bool {

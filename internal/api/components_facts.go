@@ -113,12 +113,27 @@ const (
 	gitLaneNone   = "none"
 )
 
+// Only admitted data crosses into the fact builders. Each door states which
+// resolutions it completed; builders cannot receive or branch on a fold mode.
+type componentFactInputs struct {
+	req               *createRunRequest
+	spec              types.RunPolicySpec
+	comps             runComponents
+	baseline          composer.Baseline
+	scmSite           types.SiteConfig
+	ceiling           governanceCeiling
+	mpChoice          runProviderChoice
+	autonomy          types.AutonomyResolution
+	credentialChecked bool
+	autonomyResolved  bool
+}
+
 // componentFacts is the `components` of Review and of the policy preview: the
 // Git providers the draft's repositories live on, its agent, then attached
 // components in request order. Everything was decided by the caller's gates.
 // scm is Review's git_credential fact; the preview reads no credential and
 // passes nil. Nil when an exec run has no Git provider or attached component.
-func componentFacts(f runFold, scm *SCMAccess) []componentFact {
+func componentFacts(f componentFactInputs, scm *SCMAccess) []componentFact {
 	facts := gitProviderFacts(*f.req, f.spec, f.scmSite, scm)
 	enrichGitFacts(f, facts)
 	if agent, ok := agentComponentFact(f); ok {
