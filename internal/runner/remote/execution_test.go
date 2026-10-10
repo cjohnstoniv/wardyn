@@ -18,6 +18,7 @@ type executionTransport struct {
 	online bool
 	calls  int
 	args   any
+	result runnerwire.ExecutionResult
 }
 
 func (t *executionTransport) Online() bool     { return t.online }
@@ -31,7 +32,50 @@ func (t *executionTransport) Call(_ context.Context, _ string, args, result any,
 	if exec, ok := result.(*runnerwire.ExecResult); ok {
 		exec.ExecID = "exec"
 	}
+	if recovered, ok := result.(*runnerwire.ExecutionResult); ok {
+		*recovered = t.result
+	}
 	return nil
+}
+
+func TestRemoteExecutionResultRejectsMismatchedDurableReply(t *testing.T) {
+	for _, mode := range []string{"bound", "ambiguous", "wrong generation", "unattempted", "wrong operation", "foreign", "missing generation"} {
+		t.Run(mode, func(t *testing.T) {
+			id, generation := uuid.NewString(), uuid.New()
+			transport := &executionTransport{online: true, result: runnerwire.ExecutionResult{Generation: generation, Operation: runnerwire.MethodStart, Attempted: true, ExecID: "main"}}
+			sub := New(id, transport, Options{})
+			ref := placement.RunnerRefPrefix(id) + "sandbox"
+			switch mode {
+			case "ambiguous":
+				transport.result.ExecID = ""
+			case "wrong generation":
+				transport.result.Generation = uuid.New()
+			case "unattempted":
+				transport.result.Attempted = false
+			case "wrong operation":
+				transport.result.Operation = runnerwire.MethodKill
+			case "foreign":
+				ref = placement.RunnerRefPrefix(uuid.NewString()) + "sandbox"
+			case "missing generation":
+				generation = uuid.Nil
+			}
+			result, err := sub.ExecutionResult(t.Context(), ref, generation)
+			if mode == "bound" || mode == "ambiguous" {
+				if err != nil || result != transport.result {
+					t.Fatalf("lost durable result %+v %v", result, err)
+				}
+				args, ok := transport.args.(runnerwire.ExecutionResultArgs)
+				if !ok || args.Ref != ref || args.Generation != generation {
+					t.Fatal("query identity was not preserved")
+				}
+			} else if err == nil {
+				t.Fatal("mismatched/unbound execution result accepted")
+			}
+			if (mode == "foreign" || mode == "missing generation") && transport.calls != 0 {
+				t.Fatal("unbound recovery query reached CALL")
+			}
+		})
+	}
 }
 
 type executionContextKey struct{}

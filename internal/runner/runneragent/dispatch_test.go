@@ -139,5 +139,10 @@ func newTestDispatcher(cfg Config) (*Dispatcher, error) {
 	}
 	cfg.BeforeRefCall = func(context.Context, string, string, uuid.UUID) error { return nil }
 	cfg.AfterRefCall = func(context.Context, string, string, string, uuid.UUID) error { return nil }
+	if cfg.ExecutionResult == nil {
+		cfg.ExecutionResult = func(context.Context, string, uuid.UUID) (runnerwire.ExecutionResult, error) {
+			return runnerwire.ExecutionResult{}, runnerwire.Refuse("execution recovery not configured in this fixture")
+		}
+	}
 	return New(cfg)
 }
