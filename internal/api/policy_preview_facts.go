@@ -15,6 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 type policyPreviewResponse struct {
@@ -28,6 +29,16 @@ type policyPreviewResponse struct {
 	// Components is what the draft is given access to (componentFacts): absent
 	// for a draft with no repository on a Git provider and no component.
 	Components []componentFact `json:"components,omitempty"`
+	// Resources is what each placement offers the draft and LocalPlacement
+	// whether each entry can run on the person's runner; both are always an
+	// array, empty until the lane that fills them lands.
+	Resources      []client.PlacementResources `json:"resources"`
+	LocalPlacement []client.LocalPlacementFact `json:"local_placement"`
+	// Image is the image the run would start from and its source, absent until
+	// the image lane resolves it; AllowedImages are the organisation's allowed
+	// choices, an array that is empty until that lane fills it.
+	Image         *client.ImageFact     `json:"image,omitempty"`
+	AllowedImages []client.AllowedImage `json:"allowed_images"`
 }
 
 type policyPreviewPending string
@@ -75,6 +86,7 @@ func policyPreviewFacts(req createRunRequest, spec types.RunPolicySpec, source p
 		Warnings: previewSafeWarnings(warnings), Pending: previewPending(req, choice),
 		RepositoryAccess: previewRepositoryAccess(req, out, site),
 		Components:       componentFacts(req, spec, site, comps, nil),
+		Resources:        []client.PlacementResources{}, LocalPlacement: []client.LocalPlacementFact{}, AllowedImages: []client.AllowedImage{},
 	}
 }
 

@@ -116,7 +116,7 @@ export function accessRow(f: ComponentFact): AccessRow {
     tone: toneOf(status, blocking),
     blocking,
     issueText: blocking ? (status === "refused" ? T.ISSUE_REFUSED(title) : T.ISSUE_NEEDS_INPUT(title)) : null,
-    statusNote: status === "unavailable" ? T.UNAVAILABLE[f.kind] : null,
+    statusNote: status === "unavailable" ? (T.UNAVAILABLE[f.kind as keyof typeof T.UNAVAILABLE] ?? null) : null,
     disclosures: disclosuresOf(f),
     requirements: f.requirements ?? [],
     hosts: f.hosts ?? [],

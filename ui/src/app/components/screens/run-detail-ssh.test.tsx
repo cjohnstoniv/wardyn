@@ -48,6 +48,7 @@ const baseRun: RunDetail = {
   state: "RUNNING",
   spiffe_id: "spiffe://wardyn.local/agent-run/11111111-1111-1111-1111-111111111111",
   runner_target: "docker",
+  placement: "",
   interactive: false,
 };
 

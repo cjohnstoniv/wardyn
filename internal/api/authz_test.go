@@ -1049,7 +1049,7 @@ func TestAuthzMatrix(t *testing.T) {
 				for _, token := range []string{"", adminToken} {
 					w := do(t, srv, method, buildPath(pattern, "x1"), token, body)
 					if w.Code != http.StatusServiceUnavailable {
-						t.Errorf("runner stream while disabled: %d", w.Code)
+						t.Errorf("runner stream without org URL: %d", w.Code)
 					}
 				}
 			case classAnonymous:

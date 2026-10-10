@@ -122,14 +122,39 @@ type Component struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// ComponentRef attaches one component to a run: a stored one by ID, or a
-// run-only definition given inline (never stored as a component). Name labels
-// an inline one.
+// ComponentRef attaches one component to a run: a stored one by ID, a run-only
+// definition given inline (never stored as a component), or a built-in Git
+// provider (Builtin; OD-4). Name labels an inline one.
 type ComponentRef struct {
 	ID     *uuid.UUID           `json:"id,omitempty"`
 	Inline *ComponentDefinition `json:"inline,omitempty"`
 	Name   string               `json:"name,omitempty"`
+	// Builtin names a built-in Git provider component, github or azure_devops:
+	// API and git-over-HTTPS access to the listed repositories without a
+	// workspace, the agent cloning for itself. Org and Repos scope it, Access
+	// narrows it.
+	Builtin string `json:"builtin,omitempty"`
+	// Org is the GitHub owner or the Azure DevOps organisation. Required with Builtin.
+	Org string `json:"org,omitempty"`
+	// Repos are owner/name (GitHub) or project/repository (Azure DevOps). GitHub
+	// requires at least one; an Azure DevOps ref without any reaches every
+	// repository the person can reach in Org.
+	Repos []string `json:"repos,omitempty"`
+	// Access is read or write; empty reads as read.
+	Access string `json:"access,omitempty"`
 }
+
+// The built-in Git provider components a ComponentRef may name.
+const (
+	ComponentBuiltinGitHub      = "github"
+	ComponentBuiltinAzureDevOps = "azure_devops"
+)
+
+// Built-in component access levels.
+const (
+	ComponentAccessRead  = "read"
+	ComponentAccessWrite = "write"
+)
 
 // RunComponent is the snapshot of one component as a run was launched with
 // it. It is a copy, not a reference: later edits to, or deletion of, the
@@ -437,6 +462,10 @@ func (c Component) Validate(validHost func(string) error) error {
 // inline one its definition, always a person's, and optional label.
 func (r ComponentRef) Validate(validHost func(string) error) error {
 	switch {
+	case r.Builtin != "":
+		return r.validateBuiltin()
+	case r.Org != "" || r.Repos != nil || r.Access != "":
+		return errors.New("org, repos and access: scope a builtin component only")
 	case (r.ID == nil) == (r.Inline == nil):
 		return errors.New("give exactly one of id and inline")
 	case r.ID != nil:
@@ -452,6 +481,47 @@ func (r ComponentRef) Validate(validHost func(string) error) error {
 	}
 	if err := r.Inline.Validate(validHost, true); err != nil {
 		return fmt.Errorf("inline.%w", err)
+	}
+	return nil
+}
+
+// MaxComponentBuiltinRepos bounds the repositories one built-in component lists.
+const (
+	MaxComponentBuiltinRepos      = 64
+	MaxComponentBuiltinFieldBytes = 256
+)
+
+// validateBuiltin checks a built-in Git provider reference's shape. That the
+// person may attach it, and what it grants, is the caller's.
+func (r ComponentRef) validateBuiltin() error {
+	if r.ID != nil || r.Inline != nil || r.Name != "" {
+		return errors.New("builtin: give it alone, without id, inline or name")
+	}
+	if r.Builtin != ComponentBuiltinGitHub && r.Builtin != ComponentBuiltinAzureDevOps {
+		return fmt.Errorf("builtin: %q is not one of %s, %s", r.Builtin, ComponentBuiltinGitHub, ComponentBuiltinAzureDevOps)
+	}
+	if r.Org == "" || len(r.Org) > MaxComponentBuiltinFieldBytes || !printable(r.Org) {
+		return errors.New("org: name the organisation, in printable characters")
+	}
+	switch r.Access {
+	case "", ComponentAccessRead, ComponentAccessWrite:
+	default:
+		return fmt.Errorf("access: %q is not one of %s, %s", r.Access, ComponentAccessRead, ComponentAccessWrite)
+	}
+	if r.Builtin == ComponentBuiltinGitHub && len(r.Repos) == 0 {
+		return errors.New("repos: list at least one repository for github")
+	}
+	if len(r.Repos) > MaxComponentBuiltinRepos {
+		return fmt.Errorf("repos: %d entries exceeds the %d-repository limit", len(r.Repos), MaxComponentBuiltinRepos)
+	}
+	for i, repo := range r.Repos {
+		owner, name, ok := strings.Cut(repo, "/")
+		if !ok || owner == "" || name == "" || strings.Contains(name, "/") || len(repo) > MaxComponentBuiltinFieldBytes || !printable(repo) {
+			return fmt.Errorf("repos[%d]: %q must be owner/name (project/repository for azure_devops)", i, repo)
+		}
+		if slices.Contains(r.Repos[:i], repo) {
+			return fmt.Errorf("repos[%d]: %q is listed twice", i, repo)
+		}
 	}
 	return nil
 }
