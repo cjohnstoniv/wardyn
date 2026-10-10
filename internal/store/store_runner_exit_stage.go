@@ -22,7 +22,7 @@ func (s PG) StageRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exit
 	if len(payload) > 4096 || exit.Generation == uuid.Nil || exit.ExecID == "" || exit.Ref == "" || exit.ObservedAt.IsZero() {
 		return ErrRunnerExecutionRefused
 	}
-	tx, err := s.Pool.Begin(ctx)
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return err
 	}
