@@ -50,7 +50,7 @@ func spoolPGFixture(t *testing.T) (*pgxpool.Pool, store.PG, types.Runner, types.
 		t.Fatal(err)
 	}
 	defer spool.Close()
-	if err := spool.Append(ctx, egress.DecisionLog{Request: egress.Request{RunID: run.ID, Host: "allowed.test", Time: time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)}, Decision: egress.Allow, RuleSource: "policy:allowed"}); err != nil {
+	if err := spool.Append(ctx, egress.DecisionLog{Request: egress.Request{RunID: run.ID, Host: "allowed.test", Time: time.Now().Add(-100 * 365 * 24 * time.Hour).UTC().Truncate(time.Microsecond)}, Decision: egress.Allow, RuleSource: "policy:allowed"}); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := spool.After(ctx, 0, 1)
@@ -133,14 +133,14 @@ func TestPG_RunnerSpoolKilledHistoryHasNoLifecycleEffects(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT time,data FROM audit_events WHERE run_id=$1 AND data->>'spooled'='true'`, run.ID).Scan(&at, &data); err != nil {
 		t.Fatal(err)
 	}
-	if at.Year() < 2026 || at.Year() > 2100 {
+	if at.Before(time.Now().Add(-time.Minute)) || at.After(time.Now().Add(time.Minute)) {
 		t.Fatalf("runner backdated arrival clock: %v", at)
 	}
 	var fields map[string]any
 	if err := json.Unmarshal(data, &fields); err != nil {
 		t.Fatal(err)
 	}
-	if fields["observed_at"] != "1900-01-01T00:00:00Z" || fields["evidence_source"] != "runner_asserted" {
+	if fields["observed_at"] != row.Decision.Request.Time.Format(time.RFC3339Nano) || fields["evidence_source"] != "runner_asserted" {
 		t.Fatalf("provenance lost: %s", data)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE runners SET state='revoked',revoked_at=clock_timestamp() WHERE id=$1`, rn.ID); err != nil {

@@ -12,7 +12,7 @@ import (
 )
 
 func TestClockUsesOrgTimeAndMonotonicElapsed(t *testing.T) {
-	server := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	server := time.Now().UTC()
 	local := server.Add(48 * time.Hour)
 	elapsed := time.Duration(0)
 	c := NewClock(func(time.Time) time.Duration { return elapsed })
