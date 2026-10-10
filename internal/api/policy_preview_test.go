@@ -198,7 +198,7 @@ func (s previewQuotaSpy) CountActiveRunsBy(context.Context, string) (int, error)
 	s.t.Fatal("preview counted member runs")
 	return 0, nil
 }
-func (s previewQuotaSpy) CountNonTerminalRuns(context.Context) (int, error) {
+func (s previewQuotaSpy) CountNonTerminalRuns(context.Context, uuid.UUID) (int, error) {
 	s.t.Fatal("preview counted deployment runs")
 	return 0, nil
 }

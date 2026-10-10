@@ -192,12 +192,13 @@ const HoldsSandboxSQL = `(lost_at IS NULL OR (lost_reason = '` + string(types.Lo
 const activeRunsCountSQL = `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND id <> $2 AND ` + HoldsSandboxSQL
 
 // CountNonTerminalRuns is the number of non-terminal run rows that hold a sandbox
-// (HoldsSandboxSQL), the quantity CreateRunUnderCap holds under the cap. It takes no
-// lock: a pre-flight read for a refusal that must come before an identity is minted,
-// never the authority.
-func (s PG) CountNonTerminalRuns(ctx context.Context) (int, error) {
+// (HoldsSandboxSQL), the quantity CreateRunUnderCap holds under the cap. except is a
+// run never counted (uuid.Nil for none): a revive counts the OTHER runs, as
+// markRunRevivedUnderCap does. It takes no lock: a pre-flight read for a refusal that
+// must come before an identity is minted, never the authority.
+func (s PG) CountNonTerminalRuns(ctx context.Context, except uuid.UUID) (int, error) {
 	var n int
-	if err := s.Pool.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames(), uuid.Nil).Scan(&n); err != nil {
+	if err := s.Pool.QueryRow(ctx, activeRunsCountSQL, nonTerminalStateNames(), except).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count active runs: %w", err)
 	}
 	return n, nil

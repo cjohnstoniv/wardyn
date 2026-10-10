@@ -157,6 +157,37 @@ func TestReviveRun_OutageRunWithStoppedAgentAtTheDeploymentCapIsRefused(t *testi
 	}
 }
 
+// TestReviveRun_AtTheCapRefusesBeforeMintOrPull: a revive that would start a kept agent at the cap is
+// refused before a run identity is minted or the proxy image prepared; a revive that starts no agent
+// is not refused at the cap.
+func TestReviveRun_AtTheCapRefusesBeforeMintOrPull(t *testing.T) {
+	f, sr := newRebootFixture(t)
+	ids := &mintCountingIdentity{Provider: f.srv.cfg.Identity}
+	f.srv.cfg.Identity = ids
+	ensures := 0
+	f.rr.onEnsure = func() { ensures++ }
+	f.srv.cfg.MaxConcurrentRuns = 1
+	f.rs.capFull = true
+
+	code, body := f.reviveAs(t, false)
+	if code != http.StatusUnprocessableEntity || !strings.Contains(body, string(authz.ReasonRunQuota)) {
+		t.Fatalf("reboot revive at the cap = %d %s, want 422 run_quota", code, body)
+	}
+	if ids.mints != 0 || ensures != 0 {
+		t.Fatalf("mints %d, proxy image preparations %d; want none before the refusal", ids.mints, ensures)
+	}
+	if len(f.rr.replaced) != 0 || len(sr.starts()) != 0 {
+		t.Fatalf("refused revive replaced %d proxies and started agents %v; want neither", len(f.rr.replaced), sr.starts())
+	}
+
+	live := newReviveFixture(t)
+	live.srv.cfg.MaxConcurrentRuns = 1
+	live.rs.capFull = true
+	if code, body := live.reviveAs(t, false); code != http.StatusOK {
+		t.Fatalf("live revive at the cap = %d %s, want 200: it starts no agent", code, body)
+	}
+}
+
 // runCapAPIStore adds the deployment-cap store methods to runWarnStore: active is
 // what the lock-free count reports, and an insert at the cap answers
 // ErrRunCapReached the way store.PG does when a racing create took the last slot.
@@ -166,7 +197,9 @@ type runCapAPIStore struct {
 	raced  bool
 }
 
-func (s *runCapAPIStore) CountNonTerminalRuns(context.Context) (int, error) { return s.active, nil }
+func (s *runCapAPIStore) CountNonTerminalRuns(context.Context, uuid.UUID) (int, error) {
+	return s.active, nil
+}
 
 func (s *runCapAPIStore) CreateRunUnderCap(ctx context.Context, r types.AgentRun, _ int) (types.AgentRun, error) {
 	if s.raced {
