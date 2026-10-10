@@ -45,7 +45,7 @@ describe("template reasons", () => {
   it("are the Go constants of internal/api/reasons.go", () => {
     const go = readFileSync(join(repoRoot(), "internal/api/reasons.go"), "utf8");
     const goReasons = [...go.matchAll(/\breasonTemplate\w+\s*=\s*"([a-z_]+)"/g)].map((m) => m[1]);
-    expect(goReasons).toHaveLength(16);
+    expect(goReasons).toHaveLength(17);
     expect(new Set(Object.values(TEMPLATE_REASON))).toEqual(new Set(goReasons));
   });
 });

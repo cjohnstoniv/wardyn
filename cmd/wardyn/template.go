@@ -25,8 +25,8 @@ import (
 //	wardyn template save <file> --scope person|org|group [--group ID]
 //	wardyn template import <file> [--format json|yaml]
 //
-// The commands are typed stubs until the server's template store lands: flags
-// and files are checked here, and the SDK answers ErrTemplatesUnavailable.
+// Flags and files are checked here, then the SDK makes the real call. Until the
+// server's template store lands, the server answers 501 templates_unavailable.
 func templateCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "template",
@@ -36,8 +36,8 @@ func templateCmd(client clientFn) *cobra.Command {
 			"personal, published to the organisation by an administrator, or published to a\n" +
 			"group by that group's administrator. Using one never grants access: the run\n" +
 			"still resolves your own policy, credentials, components, pools and drives.\n\n" +
-			"Templates are not available on this server yet; these commands check their\n" +
-			"arguments and say so.",
+			"Until the server's template store lands, it answers that templates are not\n" +
+			"available yet.",
 	}
 	cmd.AddCommand(templateListCmd(client), templateShowCmd(client), templateSaveCmd(client), templateImportCmd(client))
 	return subcommandGroup(cmd)

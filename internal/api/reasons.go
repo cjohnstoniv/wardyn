@@ -443,4 +443,5 @@ const (
 	reasonTemplateGroupUnverified    = "template_group_unverified"     // the caller's group membership cannot be verified from this sign-in
 	reasonTemplateNotFound           = "template_not_found"            // no such template, or the caller may not see it
 	reasonTemplateRevisionConflict   = "template_revision_conflict"    // the template changed since the revision the caller read
+	reasonTemplatesUnavailable       = "templates_unavailable"         // 501: the template store is not available on this server yet
 )

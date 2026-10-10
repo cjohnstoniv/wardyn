@@ -123,5 +123,10 @@
       "4"
     ],
     "text": "This template changed to revision 4 since you opened it. Reload it, then apply your edit again."
+  },
+  {
+    "key": "TEMPLATES_UNAVAILABLE",
+    "args": [],
+    "text": "Templates are not available on this server yet."
   }
 ]

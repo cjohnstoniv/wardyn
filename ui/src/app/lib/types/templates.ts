@@ -7,12 +7,13 @@
 // catalogue entries and the custom-component configuration schema. Every
 // interface mirrors one Go struct (pkg/client/templates.go,
 // internal/types/component_config_schema.go) and wire-parity.test.ts pins its
-// json tags to that struct's source. The server's template store lands later:
-// these shapes are final.
+// json tags to that struct's source. These shapes are the contract the server's
+// template store fills in: until it lands the routes answer 501 templates_unavailable.
 //
 // A template is content, never an admission. It carries no secret value, run
 // identity, session or claim state, and using one re-checks the launcher's own
-// current policy, credentials, components, pools and drives.
+// current policy, credentials, components, pools and drives. It carries no run
+// title or description either: a run is named in the dialog at launch.
 
 export type TemplateScope = "person" | "org" | "group";
 
@@ -23,7 +24,6 @@ export type TemplateFormat = "json" | "yaml";
 
 /** The refinement groups of a template (Go: client.TemplatePart). */
 export type TemplatePart =
-  | "info"
   | "runner"
   | "resources"
   | "repositories"
@@ -40,8 +40,8 @@ export type TemplatePart =
  * means "this template does not specify it", and one that is present with
  * false, 0, "" or [] is a choice. Never default an absent key to a value, and
  * never drop a present one. The names are the request fields and `inline_policy`
- * (template-fields.golden.json lists them, with what omitting each means), plus
- * `pool_id`, an opaque id the pools lane defines.
+ * (template-fields.golden.json lists them, with what omitting each means). A
+ * pool is the request's own `runner_pool_id`, pending until the pools lane lands.
  */
 export type TemplateIntent = Record<string, unknown>;
 
@@ -135,6 +135,18 @@ export interface TemplateDiagnostic {
 export interface TemplateImportResult {
   document?: TemplateDocument;
   diagnostics: TemplateDiagnostic[];
+}
+
+/** Copies (publishes) a template into another scope; the caller reads the source and writes the target. */
+export interface TemplateCopyRequest {
+  scope: TemplateScope;
+  group_id?: string;
+  name?: string;
+}
+
+/** GET /admin/template-group-admins. */
+export interface TemplateGroupAdmins {
+  grants: TemplateGroupAdmin[];
 }
 
 /** A bounded template-management grant: one person, one group's templates. */

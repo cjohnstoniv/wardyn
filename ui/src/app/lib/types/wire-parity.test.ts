@@ -481,6 +481,8 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["pkg/client/templates.go", "TemplateImportRequest"],
     ["pkg/client/templates.go", "TemplateDiagnostic"],
     ["pkg/client/templates.go", "TemplateImportResult"],
+    ["pkg/client/templates.go", "TemplateCopyRequest"],
+    ["pkg/client/templates.go", "TemplateGroupAdmins"],
     ["internal/types/template.go", "TemplateGroupAdmin"],
     ["internal/types/component_config_schema.go", "ComponentConfigSchema"],
     ["internal/types/component_config_schema.go", "ConfigGroup"],

@@ -82,6 +82,10 @@ func templateNotFoundMsg() string {
 	return "That template does not exist, or you cannot see it."
 }
 
+func templatesUnavailableMsg() string {
+	return "Templates are not available on this server yet."
+}
+
 func templateRevisionConflictMsg(current int) string {
 	return fmt.Sprintf("This template changed to revision %d since you opened it. Reload it, then apply your edit again.", current)
 }
@@ -89,14 +93,19 @@ func templateRevisionConflictMsg(current int) string {
 // templateDenialRefusal answers one TemplateAuthorize denial. A read that is
 // denied is a missing template, and so is a write to a template the caller
 // cannot see (another person's, a group they are not in): the id is never an
-// existence oracle. A member of a group who is not its administrator, and
-// anyone refused on org scope, learn only that they may not publish there.
-func templateDenialRefusal(d types.TemplateDenial, owner types.TemplateOwner) *runRefusal {
+// existence oracle, and a read the caller's unverifiable group snapshot cannot
+// answer is the same 404. A write that same snapshot cannot answer says so
+// (403 group_unverified): the caller already holds the id. A member of a group
+// who is not its administrator, and anyone refused on org scope, learn only
+// that they may not publish there.
+func templateDenialRefusal(d types.TemplateDenial, action types.TemplateAction, owner types.TemplateOwner) *runRefusal {
 	switch d {
 	case types.TemplateAllowed:
 		return nil
 	case types.TemplateDenyGroupUnverified:
-		return runError(http.StatusForbidden, reasonTemplateGroupUnverified, templateGroupUnverifiedMsg())
+		if action == types.TemplateWrite {
+			return runError(http.StatusForbidden, reasonTemplateGroupUnverified, templateGroupUnverifiedMsg())
+		}
 	case types.TemplateDenyNotOrgAdmin, types.TemplateDenyNotGroupAdmin:
 		return runError(http.StatusForbidden, reasonTemplateScopeForbidden, templateScopeForbiddenMsg(string(owner.Scope)))
 	}

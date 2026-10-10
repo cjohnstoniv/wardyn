@@ -7,8 +7,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
+	"net/http"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,18 +20,16 @@ import (
 // Run templates (0.9): a reusable run setup, whole or partial, that a person
 // keeps for themselves (person scope), an organisation administrator
 // publishes (org scope) or a group's administrator publishes to that group
-// (group scope). The shapes below are final; the server lands the store and
-// the routes behind them (TemplateRoutes lists the surface and who may call
-// each route).
+// (group scope). These shapes are the contract the template store fills in:
+// until it lands, the routes answer 501 templates_unavailable, and the typed
+// methods below make the real calls and return that error.
 //
 // A template is content. It is never an admission: using one re-checks the
 // launcher's current policy, credentials, components, pools and drives, and a
 // published template grants none of them. It carries no secret value, session
 // or claim state, run identity, or historical admission, and a document that
-// does is refused, not trimmed.
-//
-// The SDK methods are typed stubs until the store lands: they return
-// ErrTemplatesUnavailable without a request.
+// does is refused, not trimmed. It carries no title or description either: a
+// run is named when it is launched.
 
 // TemplateDocumentVersion and TemplateDocumentKind identify the document
 // schema an import or a saved template carries.
@@ -52,10 +51,6 @@ const (
 // TemplateGroupAdmin is a bounded grant letting one person manage one group's
 // templates; an organisation administrator writes it.
 type TemplateGroupAdmin = types.TemplateGroupAdmin
-
-// ErrTemplatesUnavailable is what the template methods return until the
-// server's template store lands.
-var ErrTemplatesUnavailable = errors.New("templates: the template store is not available in this release")
 
 // TemplateCoverage says what a template intends to hold. Full is a whole run
 // setup: nothing in it is waiting on a later choice. Partial is a mix of
@@ -83,7 +78,6 @@ type TemplatePart string
 
 // The template parts.
 const (
-	TemplatePartInfo         TemplatePart = "info"
 	TemplatePartRunner       TemplatePart = "runner"
 	TemplatePartResources    TemplatePart = "resources"
 	TemplatePartRepositories TemplatePart = "repositories"
@@ -104,8 +98,10 @@ const (
 // field's JSON as written and Request materialises the present ones. Null is
 // never a value.
 //
-// Its fields are the canonical request fields (CreateRunRequest), inline_policy
-// as a policy spec, and pool_id: an opaque pool id the pools lane gives meaning.
+// Its fields are the canonical request fields (CreateRunRequest) that a
+// template may carry, with inline_policy as a partial policy spec: the server
+// lays only the keys present onto a readable source policy, and a key left out
+// keeps the source's value. Request is a shape check, not that overlay.
 type TemplateIntent struct {
 	fields map[string]json.RawMessage
 }
@@ -142,18 +138,14 @@ func (i *TemplateIntent) Set(name string, value any) error {
 // Unset removes a field: the template stops specifying it.
 func (i *TemplateIntent) Unset(name string) { delete(i.fields, name) }
 
-// Request materialises the present fields into a request. pool_id has no
-// request field yet and is left out. A field the request does not know is an
-// error, never dropped.
+// Request materialises the present fields into a request, for shape checks. A
+// request cannot tell an absent field from an empty one, and a request's
+// inline_policy replaces its source policy, so this is not how a template is
+// applied: the server overlays the present policy keys onto the source policy.
+// A field the request does not know is an error, never dropped.
 func (i TemplateIntent) Request() (CreateRunRequest, error) {
-	obj := make(map[string]json.RawMessage, len(i.fields))
-	for name, raw := range i.fields {
-		if name != "pool_id" {
-			obj[name] = raw
-		}
-	}
 	var req CreateRunRequest
-	body, err := json.Marshal(obj)
+	body, err := json.Marshal(i.fields)
 	if err != nil {
 		return req, err
 	}
@@ -170,8 +162,10 @@ func (i TemplateIntent) MarshalJSON() ([]byte, error) {
 	return json.Marshal(i.fields)
 }
 
-// UnmarshalJSON reads the intent's fields as written, compacted. Whether each
-// is a field a template may carry is the server's decoder's to say.
+// UnmarshalJSON reads the intent's fields in canonical form: compact, with
+// every object's keys sorted, so the same document written as YAML or as JSON,
+// in any key order, holds the same bytes (revisions and diffs stay stable).
+// Whether each is a field a template may carry is the server's decoder's to say.
 func (i *TemplateIntent) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
@@ -179,13 +173,31 @@ func (i *TemplateIntent) UnmarshalJSON(data []byte) error {
 	}
 	i.fields = make(map[string]json.RawMessage, len(fields))
 	for name, raw := range fields {
-		var compact bytes.Buffer
-		if err := json.Compact(&compact, raw); err != nil {
+		canonical, err := canonicalJSON(raw)
+		if err != nil {
 			return err
 		}
-		i.fields[name] = compact.Bytes()
+		i.fields[name] = canonical
 	}
 	return nil
+}
+
+// canonicalJSON rewrites one JSON value compactly with sorted object keys,
+// numbers as written and no HTML escaping.
+func canonicalJSON(raw []byte) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
 // TemplateSetupNeed names a field the template leaves out but the fields it
@@ -298,25 +310,87 @@ type TemplateImportResult struct {
 	Diagnostics []TemplateDiagnostic `json:"diagnostics"`
 }
 
+// TemplateCopyRequest copies (publishes) a template into another scope. The
+// caller needs to read the source and to write the target scope; the server
+// re-checks every reference the copy would disclose.
+type TemplateCopyRequest struct {
+	Scope   TemplateScope `json:"scope"`
+	GroupID string        `json:"group_id,omitempty"`
+	Name    string        `json:"name,omitempty"`
+}
+
+// TemplateGroupAdmins is GET /api/v1/admin/template-group-admins.
+type TemplateGroupAdmins struct {
+	Grants []TemplateGroupAdmin `json:"grants"`
+}
+
 // ListTemplates returns the templates the caller may use.
-func (c *Client) ListTemplates(_ context.Context) (TemplateList, error) {
-	return TemplateList{}, ErrTemplatesUnavailable
+func (c *Client) ListTemplates(ctx context.Context) (TemplateList, error) {
+	var out TemplateList
+	err := c.do(ctx, http.MethodGet, "/api/v1/templates", nil, &out)
+	return out, err
 }
 
 // GetTemplate returns one template by id: revision 0 is the current one.
-func (c *Client) GetTemplate(_ context.Context, _ uuid.UUID, _ int) (Template, error) {
-	return Template{}, ErrTemplatesUnavailable
+func (c *Client) GetTemplate(ctx context.Context, id uuid.UUID, revision int) (Template, error) {
+	path := "/api/v1/templates/" + id.String()
+	if revision > 0 {
+		path += "/revisions/" + strconv.Itoa(revision)
+	}
+	var out Template
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
+	return out, err
 }
 
 // SaveTemplate creates a template when id is uuid.Nil, and updates that
-// template otherwise.
-func (c *Client) SaveTemplate(_ context.Context, _ uuid.UUID, _ TemplateSaveRequest) (Template, error) {
-	return Template{}, ErrTemplatesUnavailable
+// template otherwise (req.ExpectedRevision is then required by the server).
+func (c *Client) SaveTemplate(ctx context.Context, id uuid.UUID, req TemplateSaveRequest) (Template, error) {
+	method, path := http.MethodPost, "/api/v1/templates"
+	if id != uuid.Nil {
+		method, path = http.MethodPut, path+"/"+id.String()
+	}
+	var out Template
+	err := c.do(ctx, method, path, req, &out)
+	return out, err
 }
 
-// ImportTemplate asks the server to read an import document.
-func (c *Client) ImportTemplate(_ context.Context, _ TemplateImportRequest) (TemplateImportResult, error) {
-	return TemplateImportResult{}, ErrTemplatesUnavailable
+// DeleteTemplate removes a template the caller may write.
+func (c *Client) DeleteTemplate(ctx context.Context, id uuid.UUID) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/templates/"+id.String(), nil, nil)
+}
+
+// CopyTemplate copies a template into another scope and returns the copy.
+func (c *Client) CopyTemplate(ctx context.Context, id uuid.UUID, req TemplateCopyRequest) (Template, error) {
+	var out Template
+	err := c.do(ctx, http.MethodPost, "/api/v1/templates/"+id.String()+"/copy", req, &out)
+	return out, err
+}
+
+// ImportTemplate asks the server to read an import document. It stores nothing.
+func (c *Client) ImportTemplate(ctx context.Context, req TemplateImportRequest) (TemplateImportResult, error) {
+	var out TemplateImportResult
+	err := c.do(ctx, http.MethodPost, "/api/v1/templates/import", req, &out)
+	return out, err
+}
+
+// ListTemplateGroupAdmins returns every template-management grant. Admin only.
+func (c *Client) ListTemplateGroupAdmins(ctx context.Context) (TemplateGroupAdmins, error) {
+	var out TemplateGroupAdmins
+	err := c.do(ctx, http.MethodGet, "/api/v1/admin/template-group-admins", nil, &out)
+	return out, err
+}
+
+// GrantTemplateGroupAdmin lets one person manage one group's templates. Admin
+// only; the grant reaches nothing else.
+func (c *Client) GrantTemplateGroupAdmin(ctx context.Context, grant TemplateGroupAdmin) (TemplateGroupAdmin, error) {
+	var out TemplateGroupAdmin
+	err := c.do(ctx, http.MethodPut, "/api/v1/admin/template-group-admins", grant, &out)
+	return out, err
+}
+
+// RevokeTemplateGroupAdmin removes the grant of the group and person named.
+func (c *Client) RevokeTemplateGroupAdmin(ctx context.Context, grant TemplateGroupAdmin) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/admin/template-group-admins", grant, nil)
 }
 
 // The custom-component configuration schema (internal/types owns it): the

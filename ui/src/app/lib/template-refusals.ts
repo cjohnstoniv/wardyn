@@ -29,6 +29,8 @@ export const TEMPLATE_REASON = {
   GROUP_UNVERIFIED: "template_group_unverified",
   NOT_FOUND: "template_not_found",
   REVISION_CONFLICT: "template_revision_conflict",
+  /** 501: the template store is not available on this server yet. */
+  TEMPLATES_UNAVAILABLE: "templates_unavailable",
 } as const;
 
 export type TemplateReason = (typeof TEMPLATE_REASON)[keyof typeof TEMPLATE_REASON];
@@ -58,6 +60,7 @@ export const TEMPLATE_REFUSAL = {
   NOT_FOUND: () => "That template does not exist, or you cannot see it.",
   REVISION_CONFLICT: (current: string) =>
     `This template changed to revision ${current} since you opened it. Reload it, then apply your edit again.`,
+  TEMPLATES_UNAVAILABLE: () => "Templates are not available on this server yet.",
 } as const;
 
 /** Every sentence function by key, for the parity test and for callers that pick one by reason. */
@@ -80,6 +83,7 @@ export const TEMPLATE_REFUSAL_BY_KEY: Record<keyof typeof TEMPLATE_REFUSAL, (...
   GROUP_UNVERIFIED: () => TEMPLATE_REFUSAL.GROUP_UNVERIFIED(),
   NOT_FOUND: () => TEMPLATE_REFUSAL.NOT_FOUND(),
   REVISION_CONFLICT: (...a) => TEMPLATE_REFUSAL.REVISION_CONFLICT(a[0]),
+  TEMPLATES_UNAVAILABLE: () => TEMPLATE_REFUSAL.TEMPLATES_UNAVAILABLE(),
 };
 
 /** The reason each sentence belongs to. */
@@ -102,4 +106,5 @@ export const TEMPLATE_REFUSAL_REASON: Record<keyof typeof TEMPLATE_REFUSAL, Temp
   GROUP_UNVERIFIED: TEMPLATE_REASON.GROUP_UNVERIFIED,
   NOT_FOUND: TEMPLATE_REASON.NOT_FOUND,
   REVISION_CONFLICT: TEMPLATE_REASON.REVISION_CONFLICT,
+  TEMPLATES_UNAVAILABLE: TEMPLATE_REASON.TEMPLATES_UNAVAILABLE,
 };

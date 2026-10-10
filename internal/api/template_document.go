@@ -24,28 +24,66 @@ import (
 var templateDocumentKeys = []string{"api_version", "kind", "name", "description", "coverage", "intent", "needs_setup"}
 
 // templateDependencies are the edges a partial template must not cut: a field
-// and the field it only means anything beside. The dependency is satisfied by
-// being in the template or being listed under needs_setup.
+// and the field it only means anything beside. Either side may be an
+// inline_policy.<field>. The dependency is satisfied by being in the template or
+// being listed under needs_setup. TestTemplateDependencyEdges holds every row.
 var templateDependencies = []struct{ field, needs string }{
 	{"devcontainer_ref", "devcontainer_repo"},
 	{"model_provider", "agent"},
 	{"tool_approvals", "agent"},
 	{"seed_auto_tools", "agent"},
+	{"inline_policy.tool_rules", "agent"},
 	{"interactive_start", "interactive"},
+	{"task_mode", "interactive"},
+	{"inline_policy.ui_apps", "interactive"},
 	{"runner_id", "placement"},
+	{"runner_id", "runner_pool_id"},
 }
+
+// The single door. A template document is checked in exactly one way, however
+// it arrives: as text (validateTemplateImport) or as a struct a handler decoded
+// (validateTemplateDocument, which writes it back to bytes first). The
+// struct-level checks below the door read a document the strict decoder has
+// already accepted and are reachable only from validateTemplateBytes
+// (TestTemplateStructValidatorsAreReachableOnlyThroughTheDoor). A save handler
+// calls validateTemplateDocument and stores what it returns.
 
 // validateTemplateImport reads one document the way every door does and
 // returns it normalised, or every diagnostic. It stores nothing.
 func validateTemplateImport(src []byte, format client.TemplateFormat) client.TemplateImportResult {
+	return validateTemplateBytes(src, format, nil)
+}
+
+// validateTemplateBytes is the one validator: decode strictly, then (when the
+// text decodes) hold the whole document and the scope it is published to
+// (owner, when given) to the rest. Every problem is reported together.
+func validateTemplateBytes(src []byte, format client.TemplateFormat, owner *types.TemplateOwner) client.TemplateImportResult {
 	doc, diags := decodeTemplateDocument(src, format)
 	if len(diags) == 0 {
-		diags = validateTemplateContent(doc)
+		diags = validateTemplateContentDecoded(doc)
+		if owner != nil {
+			diags = append(diags, validateTemplateScopeDecoded(doc, *owner)...)
+		}
 	}
 	if len(diags) > 0 {
 		return client.TemplateImportResult{Diagnostics: diags}
 	}
 	return client.TemplateImportResult{Document: &doc, Diagnostics: []client.TemplateDiagnostic{}}
+}
+
+// validateTemplateDocument is the save door: it holds a struct-shaped document,
+// and the scope it is published to, to everything validateTemplateImport holds
+// text to. It returns the normalised document to store.
+func validateTemplateDocument(doc client.TemplateDocument, owner types.TemplateOwner) (client.TemplateDocument, []client.TemplateDiagnostic) {
+	body, err := json.Marshal(doc)
+	if err != nil {
+		return doc, []client.TemplateDiagnostic{{Reason: reasonTemplateDocumentInvalid, Message: templateDocumentInvalidMsg("it cannot be written as JSON")}}
+	}
+	res := validateTemplateBytes(body, client.TemplateFormatJSON, &owner)
+	if res.Document == nil {
+		return doc, res.Diagnostics
+	}
+	return *res.Document, nil
 }
 
 // decodeTemplateDocument reads the text into a document. Any diagnostic means
@@ -146,8 +184,12 @@ func (d *templateDecoder) readNeedsSetup(raw json.RawMessage) {
 		if json.Unmarshal(need["field"], &field) != nil || !templateKnownField(field) {
 			d.invalid(path+".field", "must name a template field, or inline_policy.<field>")
 		}
-		if r, ok := need["reason"]; ok && (json.Unmarshal(r, &reason) != nil || utf8.RuneCountInString(reason) > 200 || !validTemplateText(reason)) {
-			d.invalid(path+".reason", "must be text of at most 200 characters")
+		if r, ok := need["reason"]; ok {
+			if json.Unmarshal(r, &reason) != nil || utf8.RuneCountInString(reason) > 200 || !validTemplateText(reason) {
+				d.invalid(path+".reason", "must be text of at most 200 characters")
+			} else {
+				d.scanString(path+".reason", reason)
+			}
 		}
 	}
 }
@@ -177,40 +219,73 @@ func templateSpecifies(doc client.TemplateDocument, name string) bool {
 	return doc.Intent.Has(name)
 }
 
-// validateTemplateContent holds a decoded document to what needs the whole of
-// it: coverage, dependencies, the request contract's own shape checks, and
-// what this server cannot honour yet.
-func validateTemplateContent(doc client.TemplateDocument) []client.TemplateDiagnostic {
+// validateTemplateContentDecoded holds a decoded document to what needs the
+// whole of it: coverage, dependencies, the request contract's own shape checks,
+// and what this server cannot honour yet. Only the door calls it.
+func validateTemplateContentDecoded(doc client.TemplateDocument) []client.TemplateDiagnostic {
 	d := &templateDecoder{}
-	d.checkCoverage(doc)
-	d.checkDependencies(doc)
 	req, err := doc.Intent.Request()
 	if err != nil {
 		d.invalid("intent", "does not read as a run request: "+err.Error())
 		return d.diags
 	}
+	d.checkCoverage(doc, req)
+	d.checkDependencies(doc)
 	for _, check := range runContractShapeChecks {
 		if refusal := check(req); refusal != nil {
 			d.add("intent", refusal.body.Reason, refusal.body.Error)
 		}
 	}
-	d.checkAvailable(doc, req)
+	d.checkAvailable(req)
 	return d.diags
 }
 
-func (d *templateDecoder) checkCoverage(doc client.TemplateDocument) {
+func (d *templateDecoder) checkCoverage(doc client.TemplateDocument, req createRunRequest) {
 	if len(doc.Intent.Names()) == 0 {
 		d.add("intent", reasonTemplateCoverageInvalid, templateCoverageInvalidMsg("the intent specifies no field"))
 	}
-	if doc.Coverage == client.TemplateCoverageFull && len(doc.NeedsSetup) > 0 {
-		d.add("needs_setup", reasonTemplateCoverageInvalid, templateCoverageInvalidMsg("a full template lists nothing under needs_setup"))
-	}
 	for i, need := range doc.NeedsSetup {
 		if templateSpecifies(doc, need.Field) {
-			path := fmt.Sprintf("needs_setup[%d].field", i)
-			d.invalid(path, "is already in the template, so it needs no setup")
+			d.invalid(fmt.Sprintf("needs_setup[%d].field", i), "is already in the template, so it needs no setup")
 		}
 	}
+	if doc.Coverage != client.TemplateCoverageFull {
+		return
+	}
+	if len(doc.NeedsSetup) > 0 {
+		d.add("needs_setup", reasonTemplateCoverageInvalid, templateCoverageInvalidMsg("a full template lists nothing under needs_setup"))
+	}
+	for _, detail := range templateFullGaps(doc, req) {
+		d.add("intent", reasonTemplateCoverageInvalid, templateCoverageInvalidMsg(detail))
+	}
+}
+
+// templateFullGaps lists what a full template still leaves for use time: the
+// choices the wizard requires and no default fills. The run's text (task) is
+// written per run and is not one of them. TestTemplateFullCoverage holds each.
+func templateFullGaps(doc client.TemplateDocument, req createRunRequest) []string {
+	var gaps []string
+	if !doc.Intent.Has("interactive") {
+		gaps = append(gaps, "a full template says whether the run is a background task or an interactive environment (interactive)")
+	} else if !req.Interactive {
+		if !doc.Intent.Has("task_mode") {
+			gaps = append(gaps, "a full background template says whether it runs an agent task or a command (task_mode)")
+		} else if req.TaskMode != "exec" && !doc.Intent.Has("agent") {
+			gaps = append(gaps, "a full agent-task template names its agent")
+		}
+	}
+	if !templateAttachesAnything(req) {
+		gaps = append(gaps, "a full template attaches a repository or drive, or says there are none (no_repositories_or_drives)")
+	}
+	return gaps
+}
+
+func templateAttachesAnything(req createRunRequest) bool {
+	if req.Repo != "" || req.WorkspaceID != nil || len(req.Workspaces) > 0 || (req.Drive != nil && req.Drive.Enabled) {
+		return true
+	}
+	p := req.InlinePolicy
+	return p != nil && (len(p.WorkspaceMounts) > 0 || len(p.WorkspaceRepos) > 0)
 }
 
 func (d *templateDecoder) checkDependencies(doc client.TemplateDocument) {
@@ -218,7 +293,7 @@ func (d *templateDecoder) checkDependencies(doc client.TemplateDocument) {
 		return slices.ContainsFunc(doc.NeedsSetup, func(n client.TemplateSetupNeed) bool { return n.Field == field })
 	}
 	for _, dep := range templateDependencies {
-		if doc.Intent.Has(dep.field) && !doc.Intent.Has(dep.needs) && !listed(dep.needs) {
+		if templateSpecifies(doc, dep.field) && !templateSpecifies(doc, dep.needs) && !listed(dep.needs) {
 			path := "intent." + dep.field
 			d.add(path, reasonTemplateDependencyMissing, templateDependencyMissingMsg(path, dep.needs))
 		}
@@ -227,8 +302,9 @@ func (d *templateDecoder) checkDependencies(doc client.TemplateDocument) {
 
 // checkAvailable refuses a valid field this server cannot honour yet. Each case
 // mirrors a case of unappliedFieldsRefusal (TestTemplateUnavailableMirrorsRunRefusal
-// holds the two together), plus the fields whose lane has no carrier at all.
-func (d *templateDecoder) checkAvailable(doc client.TemplateDocument, req createRunRequest) {
+// holds the two together). Fields whose lane has not landed are refused by the
+// decoder through the registry's Pending flag instead.
+func (d *templateDecoder) checkAvailable(req createRunRequest) {
 	refuse := func(path string) { d.add(path, reasonTemplateFieldUnavailable, templateFieldUnavailableMsg(path)) }
 	if req.Placement == client.PlacementLocal {
 		refuse("intent.placement")
@@ -244,19 +320,13 @@ func (d *templateDecoder) checkAvailable(doc client.TemplateDocument, req create
 			refuse(fmt.Sprintf("intent.components[%d]", i))
 		}
 	}
-	if doc.Intent.Has("pool_id") {
-		refuse("intent.pool_id")
-	}
-	if p := req.InlinePolicy; p != nil && p.PushRules != nil && p.PushRules.DenyNewExecutables {
-		refuse("intent.inline_policy.push_rules.deny_new_executables")
-	}
 }
 
-// validateTemplateForScope holds a document to the scope it is published to.
+// validateTemplateScopeDecoded holds a decoded document to the scope it is published to.
 // A field that names one person's own thing is refused in an organisation or
 // group template: the people it is offered to cannot use it, and it would
 // disclose it.
-func validateTemplateForScope(doc client.TemplateDocument, owner types.TemplateOwner) []client.TemplateDiagnostic {
+func validateTemplateScopeDecoded(doc client.TemplateDocument, owner types.TemplateOwner) []client.TemplateDiagnostic {
 	if !owner.Valid() {
 		return []client.TemplateDiagnostic{{Path: "scope", Reason: reasonTemplateScopeForbidden, Message: templateScopeForbiddenMsg(string(owner.Scope))}}
 	}
@@ -304,6 +374,8 @@ func templateReasonStatus(reason string) int {
 		return http.StatusNotFound
 	case reasonTemplateRevisionConflict:
 		return http.StatusConflict
+	case reasonTemplatesUnavailable:
+		return http.StatusNotImplemented
 	case reasonTemplateScopeForbidden, reasonTemplateGroupUnverified:
 		return http.StatusForbidden
 	case reasonTemplateFieldUnavailable, reasonTemplateVersionUnsupported, reasonTemplateDependencyMissing,

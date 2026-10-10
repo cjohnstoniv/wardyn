@@ -52,6 +52,7 @@ func templateSentences() []templateSentence {
 		{"GROUP_UNVERIFIED", nil, templateGroupUnverifiedMsg()},
 		{"NOT_FOUND", nil, templateNotFoundMsg()},
 		{"REVISION_CONFLICT", []string{"4"}, templateRevisionConflictMsg(4)},
+		{"TEMPLATES_UNAVAILABLE", nil, templatesUnavailableMsg()},
 	}
 }
 
@@ -105,8 +106,8 @@ func templateReasonConsts(t *testing.T) map[string]string {
 // TestTemplateReasonsAreTheTypeScriptOnes pins the wire reasons to the console's table.
 func TestTemplateReasonsAreTheTypeScriptOnes(t *testing.T) {
 	goReasons := templateReasonConsts(t)
-	if len(goReasons) != 16 {
-		t.Fatalf("reasons.go declares %d template reasons, want 16", len(goReasons))
+	if len(goReasons) != 17 {
+		t.Fatalf("reasons.go declares %d template reasons, want 17", len(goReasons))
 	}
 	raw, err := os.ReadFile(filepath.Join("..", "..", "ui", "src", "app", "lib", "template-refusals.ts"))
 	if err != nil {
@@ -117,7 +118,7 @@ func TestTemplateReasonsAreTheTypeScriptOnes(t *testing.T) {
 	if block == nil {
 		t.Fatal("template-refusals.ts has no TEMPLATE_REASON table")
 	}
-	for _, m := range regexp.MustCompile(`"(template_[a-z_]+)"`).FindAllSubmatch(block[1], -1) {
+	for _, m := range regexp.MustCompile(`"(templates?_[a-z_]+)"`).FindAllSubmatch(block[1], -1) {
 		tsReasons = append(tsReasons, string(m[1]))
 	}
 	var goValues []string
@@ -130,7 +131,7 @@ func TestTemplateReasonsAreTheTypeScriptOnes(t *testing.T) {
 		t.Fatalf("Go reasons %v\nTS reasons %v", goValues, tsReasons)
 	}
 	for name, v := range goReasons {
-		if status := templateReasonStatus(v); status < 400 || status > 499 {
+		if status := templateReasonStatus(v); status < 400 || status > 501 || (status == 501) != (v == reasonTemplatesUnavailable) {
 			t.Errorf("%s (%s) has status %d", name, v, status)
 		}
 	}
@@ -143,21 +144,24 @@ func TestTemplateDenialRefusals(t *testing.T) {
 	tests := []struct {
 		name   string
 		denial types.TemplateDenial
+		action types.TemplateAction
 		owner  types.TemplateOwner
 		status int
 		reason string
 	}{
-		{"allowed", types.TemplateAllowed, org, 0, ""},
-		{"someone else's personal template is not found", types.TemplateDenyNotOwner, person, http.StatusNotFound, reasonTemplateNotFound},
-		{"a group the caller is not in is not found", types.TemplateDenyNotGroupMember, group, http.StatusNotFound, reasonTemplateNotFound},
-		{"a member who is not the administrator is forbidden", types.TemplateDenyNotGroupAdmin, group, http.StatusForbidden, reasonTemplateScopeForbidden},
-		{"org writes need the administrator", types.TemplateDenyNotOrgAdmin, org, http.StatusForbidden, reasonTemplateScopeForbidden},
-		{"an unverifiable snapshot says so", types.TemplateDenyGroupUnverified, group, http.StatusForbidden, reasonTemplateGroupUnverified},
-		{"a malformed owner is not found", types.TemplateDenyBadOwner, group, http.StatusNotFound, reasonTemplateNotFound},
+		{"allowed", types.TemplateAllowed, types.TemplateRead, org, 0, ""},
+		{"someone else's personal template is not found", types.TemplateDenyNotOwner, types.TemplateWrite, person, http.StatusNotFound, reasonTemplateNotFound},
+		{"a group the caller is not in is not found", types.TemplateDenyNotGroupMember, types.TemplateRead, group, http.StatusNotFound, reasonTemplateNotFound},
+		{"nor can they write to it", types.TemplateDenyNotGroupMember, types.TemplateWrite, group, http.StatusNotFound, reasonTemplateNotFound},
+		{"a member who is not the administrator is forbidden", types.TemplateDenyNotGroupAdmin, types.TemplateWrite, group, http.StatusForbidden, reasonTemplateScopeForbidden},
+		{"org writes need the administrator", types.TemplateDenyNotOrgAdmin, types.TemplateWrite, org, http.StatusForbidden, reasonTemplateScopeForbidden},
+		{"an unverifiable snapshot cannot tell a group template exists", types.TemplateDenyGroupUnverified, types.TemplateRead, group, http.StatusNotFound, reasonTemplateNotFound},
+		{"but says so on a write the caller holds the id for", types.TemplateDenyGroupUnverified, types.TemplateWrite, group, http.StatusForbidden, reasonTemplateGroupUnverified},
+		{"a malformed owner is not found", types.TemplateDenyBadOwner, types.TemplateRead, group, http.StatusNotFound, reasonTemplateNotFound},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := templateDenialRefusal(tc.denial, tc.owner)
+			got := templateDenialRefusal(tc.denial, tc.action, tc.owner)
 			if tc.status == 0 {
 				if got != nil {
 					t.Fatalf("an allowed action was refused: %+v", got)
@@ -178,11 +182,11 @@ func TestTemplateDenialRefusals(t *testing.T) {
 	}
 }
 
-// TestTemplateRoutesAreNotRegisteredYet is the tripwire for the storage lane.
-// The route and tier table (types.TemplateRoutes) describes routes that do not
-// exist. When the lane registers them, each must be classified in routeMatrix
-// (authz_test.go) and this test deleted: the walk then holds them.
-func TestTemplateRoutesAreNotRegisteredYet(t *testing.T) {
+// TestTemplateRoutesMatchRouteMatrix holds types.TemplateRoutes (the per-scope
+// authority of each route) to the router: every row is registered, classified
+// in routeMatrix with the router class the row names, and no /templates route
+// exists that the table does not describe.
+func TestTemplateRoutesMatchRouteMatrix(t *testing.T) {
 	srv, _, _, _ := newAuthzMatrixServer(t)
 	registered := map[string]bool{}
 	if err := chi.Walk(srv.router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
@@ -191,17 +195,25 @@ func TestTemplateRoutesAreNotRegisteredYet(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	rows := map[string]bool{}
 	for _, route := range types.TemplateRoutes {
-		if registered[route.Route] {
-			t.Errorf("%s is registered: classify it in routeMatrix with its tier, then delete this test", route.Route)
+		rows[route.Route] = true
+		if !registered[route.Route] {
+			t.Errorf("%s is in TemplateRoutes but the router does not register it", route.Route)
 		}
-		if _, ok := routeMatrix[route.Route]; ok {
-			t.Errorf("%s is in routeMatrix but the router does not register it", route.Route)
+		rc, ok := routeMatrix[route.Route]
+		if !ok {
+			t.Errorf("%s is not classified in routeMatrix", route.Route)
+			continue
+		}
+		want := map[string]routeClass{"member": classMember, "admin": classAdmin}[route.RouterClass]
+		if rc.class != want {
+			t.Errorf("%s: routeMatrix class %q, TemplateRoutes says %q", route.Route, rc.class, route.RouterClass)
 		}
 	}
 	for key := range registered {
-		if strings.Contains(key, "/templates") || strings.Contains(key, "template-group-admins") {
-			t.Errorf("%s is registered but TemplateRoutes does not classify it", key)
+		if (strings.Contains(key, "/templates") || strings.Contains(key, "template-group-admins")) && !rows[key] {
+			t.Errorf("%s is registered but TemplateRoutes does not describe it", key)
 		}
 	}
 }

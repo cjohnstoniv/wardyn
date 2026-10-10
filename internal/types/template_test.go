@@ -188,3 +188,28 @@ func TestTemplateRoutesAgreeWithTheAuthority(t *testing.T) {
 		}
 	}
 }
+
+func TestTemplateGroupAdminCanonicalAuthorisesTheCanonicalGroup(t *testing.T) {
+	grant, ok := TemplateGroupAdmin{Group: "  DevTeam ", Person: " Gina@Corp.Example "}.Canonical()
+	if !ok || grant.Group != "devteam" || grant.Person != "gina@corp.example" {
+		t.Fatalf("canonical = %+v ok=%v", grant, ok)
+	}
+	actor := TemplateActor{Person: grant.Person, Groups: []string{"devteam", "ops"}, GroupAdminGrants: []string{grant.Group}}
+	if d := TemplateAuthorize(actor, group("DEVTEAM"), TemplateWrite); d != TemplateAllowed {
+		t.Errorf("the canonical grant did not authorise its group: %q", d)
+	}
+	if d := TemplateAuthorize(actor, group("ops"), TemplateWrite); d != TemplateDenyNotGroupAdmin {
+		t.Errorf("the grant reached another group: %q", d)
+	}
+	raw := TemplateActor{Person: "gina", Groups: []string{"devteam"}, GroupAdminGrants: []string{"DevTeam"}}
+	if d := TemplateAuthorize(raw, group("devteam"), TemplateWrite); d != TemplateDenyNotGroupAdmin {
+		t.Errorf("an uncanonicalised grant authorised a write (the writer must store Canonical's output): %q", d)
+	}
+	for name, g := range map[string]TemplateGroupAdmin{
+		"no group": {Person: "gina"}, "no person": {Group: "eng"}, "non-ASCII group": {Group: "eng\u212a", Person: "gina"}, "blank": {Group: " ", Person: " "},
+	} {
+		if _, ok := g.Canonical(); ok {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}

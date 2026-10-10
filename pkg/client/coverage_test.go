@@ -74,6 +74,8 @@ var (
 	_ client.TemplateDiagnostic
 	_ client.TemplateDocument
 	_ client.TemplateIntent
+	_ client.TemplateCopyRequest
+	_ client.TemplateGroupAdmins
 	_ client.TemplateScope
 	_ client.TemplateGroupAdmin
 	_ client.ComponentConfigSchema
@@ -103,7 +105,7 @@ func routeFamilies() map[string][]string {
 		"site-config": {"GetSiteConfig", "PutSiteConfig", "PutSiteConfigResult"},
 		"drives":      {"GetDrives", "ApplyDrives"},
 		"presets":     {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
-		"templates":   {"ListTemplates", "GetTemplate", "SaveTemplate", "ImportTemplate"},
+		"templates":   {"ListTemplates", "GetTemplate", "SaveTemplate", "DeleteTemplate", "CopyTemplate", "ImportTemplate", "ListTemplateGroupAdmins", "GrantTemplateGroupAdmin", "RevokeTemplateGroupAdmin"},
 		"governance":  {"GetGovernance", "ApplyGovernance", "ApplyGovernanceResult"},
 		"gov.changes": {"ListGovernanceChanges", "GetGovernanceChange", "ApproveGovernanceChange", "RejectGovernanceChange"},
 		"setup":       {"SetupStatus"},

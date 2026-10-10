@@ -40,7 +40,7 @@ describe("template field registry", () => {
     for (const rules of [TEMPLATE_REQUEST_FIELDS, TEMPLATE_POLICY_FIELDS]) {
       expect(new Set(rules.map((r) => r.name)).size).toBe(rules.length);
     }
-    expect(TEMPLATE_REQUEST_FIELDS.length).toBeGreaterThanOrEqual(30);
+    expect(TEMPLATE_REQUEST_FIELDS.length).toBeGreaterThanOrEqual(34);
     expect(TEMPLATE_POLICY_FIELDS).toHaveLength(20);
   });
 
@@ -60,10 +60,11 @@ describe("template field registry", () => {
   });
 
   it("uses the closed values Go declares", () => {
-    const tabs = goConsts(fields, ["templateTabInfo", "templateTabRunner", "templateTabRepoDrives", "templateTabToolsImage", "templateTabAccess"]);
+    const tabs = goConsts(fields, ["templateTabRunner", "templateTabRepoDrives", "templateTabToolsImage", "templateTabAccess"]);
     const omissions = goConsts(fields, ["templateOmitBaseline", "templateOmitRequired", "templateOmitOptional"]);
     const empties = goConsts(fields, ["templateEmptySame", "templateEmptyValue", "templateEmptyAll", "templateEmptyNever"]);
-    const exclusions = goConsts(fields, ["templateExcludeSecret", "templateExcludeOrigin", "templateExcludeRetired"]);
+    const exclusions = goConsts(fields, ["templateExcludeSecret", "templateExcludeOrigin", "templateExcludeRetired", "templateExcludeLaunch"]);
+    const sections = goConsts(fields, ["templateSectionRunWide", "templateSectionSCMEntry", "templateSectionHarness", "templateSectionComp"]);
     const parts = new Set([...readFileSync(join(root, "pkg/client/templates.go"), "utf8").matchAll(/\bTemplatePart\w+\s+TemplatePart = "([a-z_]+)"/g)].map((m) => m[1]));
     for (const r of [...TEMPLATE_REQUEST_FIELDS, ...TEMPLATE_POLICY_FIELDS]) {
       if (r.tab) expect(tabs, r.name).toContain(r.tab);
@@ -71,30 +72,55 @@ describe("template field registry", () => {
       if (r.empty) expect(empties, r.name).toContain(r.empty);
       if (r.excluded) expect(exclusions, r.name).toContain(r.excluded);
       if (r.part) expect(parts, r.name).toContain(r.part);
+      if (r.section) expect(sections, r.name).toContain(r.section);
     }
   });
 
   it("excludes the secret-bearing, retired and launch-only fields and nothing else", () => {
-    expect(TEMPLATE_REQUEST_FIELDS.filter((r) => r.excluded).map((r) => r.name).sort()).toEqual(["integration_id", "preset", "preset_version"]);
+    expect(TEMPLATE_REQUEST_FIELDS.filter((r) => r.excluded).map((r) => r.name).sort()).toEqual([
+      "description",
+      "integration_id",
+      "preset",
+      "preset_version",
+      "title",
+    ]);
+    expect(templateFieldRule("title")?.excluded).toBe("launch");
     expect(TEMPLATE_POLICY_FIELDS.filter((r) => r.excluded)).toEqual([]);
     expect(TEMPLATE_NESTED_EXCLUDED.map((e) => e.path)).toEqual(["LLMInspectionSpec.workspace_secret_values"]);
     expect(TEMPLATE_NESTED_CARRIED.LLMInspectionSpec).not.toContain("workspace_secret_values");
   });
 
+  it("keeps push rules in the SCM entry, tool rules per harness, and the pending carriers unaccepted", () => {
+    expect(templateFieldRule("inline_policy.push_rules")).toMatchObject({ section: "scm_entry", keyed_by: "provider+org" });
+    expect(templateFieldRule("inline_policy.tool_rules")).toMatchObject({ section: "harness", keyed_by: "harness" });
+    expect(templateFieldRule("model_provider")?.section).toBe("harness");
+    expect(templateFieldRule("interactive")?.omitted).toBe("unset_required");
+    expect(templateFieldRule("agent")?.omitted).toBe("unset_optional");
+    for (const name of ["runner_pool_id", "experience", "included_tools", "startup", "starting_folder", "no_repositories_or_drives"]) {
+      expect(templateFieldRule(name)?.pending, name).toBeTruthy();
+    }
+    expect(templateFieldRule("pool_id")).toBeUndefined();
+    for (const r of [...TEMPLATE_REQUEST_FIELDS, ...TEMPLATE_POLICY_FIELDS]) {
+      expect(r.tab as string, r.name).not.toBe("info");
+      expect(r.part as string, r.name).not.toBe("info");
+    }
+  });
+
   it("looks a field up by request or policy name", () => {
-    expect(templateFieldRule("agent")?.omitted).toBe("unset_required");
+    expect(templateFieldRule("interactive")?.omitted).toBe("unset_required");
     expect(templateFieldRule("inline_policy.allowed_methods")?.empty).toBe("all");
     expect(templateFieldRule("inline_policy.auto_stop_after_sec")?.empty).toBe("never");
     expect(templateFieldRule("runner_id")?.person_only).toBe(true);
     expect(templateFieldRule("task")?.sensitive).toBe(true);
     expect(templateFieldRule("nope")).toBeUndefined();
     expect(templateCarriedFields()).not.toContain("preset");
+    expect(templateCarriedFields()).not.toContain("title");
     expect(templateCarriedFields()).toContain("inline_policy.llm_inspection");
   });
 
   it("names the parts a document includes, counting inline_policy by its fields", () => {
     expect(
-      templateIncludes({ title: "t", drive: { enabled: true }, inline_policy: { allowed_domains: ["a.example.com"], eligible_grants: [] } }),
-    ).toEqual(["credentials", "drives", "egress", "info"]);
+      templateIncludes({ agent: "claude-code", drive: { enabled: true }, inline_policy: { allowed_domains: ["a.example.com"], eligible_grants: [] } }),
+    ).toEqual(["credentials", "drives", "egress", "tools_image"]);
   });
 });

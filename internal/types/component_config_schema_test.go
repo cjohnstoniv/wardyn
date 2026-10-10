@@ -59,6 +59,7 @@ func TestComponentConfigSchemaRefusals(t *testing.T) {
 		{"reserved env name", strings.Replace(field(""), `A_KEY`, `LD_PRELOAD`, 1), "reserved"},
 		{"sandbox harness env name", strings.Replace(field(""), `A_KEY`, `WARDYN_X`, 1), "reserved"},
 		{"lowercase env name", strings.Replace(field(""), `A_KEY`, `a_key`, 1), "must match"},
+		{"secret-named config key", strings.Replace(field(""), `A_KEY`, `GITHUB_TOKEN`, 1), "plain text"},
 		{"secret into config", `{"schema_version":1,"fields":[{"id":"a","kind":"secret_ref","label":"A","bind":{"target":"config","key":"A_KEY"}}]}`, "secret target"},
 		{"secret default", `{"schema_version":1,"fields":[{"id":"a","kind":"secret_ref","label":"A","default":"token","bind":{"target":"secret","key":"A_KEY"}}]}`, "no default"},
 		{"list into config", `{"schema_version":1,"fields":[{"id":"a","kind":"string_list","label":"A","bind":{"target":"config","key":"A_KEY"}}]}`, "cannot feed a config"},
@@ -140,7 +141,7 @@ func issuePaths(issues []ConfigIssue) string {
 
 func TestComponentConfigValues(t *testing.T) {
 	s := mustSchema(t, goodSchema)
-	if issues := ValidateComponentConfigValues(s, values("key", `"my-key"`)); len(issues) != 0 {
+	if issues := ValidateComponentConfigValues(s, values("key", `"my-key"`), nil); len(issues) != 0 {
 		t.Fatalf("defaults and one secret choice: %s", issuePaths(issues))
 	}
 	tests := []struct {
@@ -162,12 +163,12 @@ func TestComponentConfigValues(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := issuePaths(ValidateComponentConfigValues(s, tc.v)); !strings.Contains(got, tc.want) {
+			if got := issuePaths(ValidateComponentConfigValues(s, tc.v, nil)); !strings.Contains(got, tc.want) {
 				t.Fatalf("issues %q do not mention %q", got, tc.want)
 			}
 		})
 	}
-	if issues := ValidateComponentConfigValues(s, values("key", `"k"`, "mode", `"managed"`)); len(issues) != 0 {
+	if issues := ValidateComponentConfigValues(s, values("key", `"k"`, "mode", `"managed"`), nil); len(issues) != 0 {
 		t.Errorf("restating the managed value: %s", issuePaths(issues))
 	}
 }
@@ -176,13 +177,46 @@ func TestComponentConfigVisibilityGatesRequiredNotValidation(t *testing.T) {
 	s := mustSchema(t, `{"schema_version":1,"fields":[
 	  {"id":"adv","kind":"boolean","label":"Advanced","bind":{"target":"config","key":"ADV"}},
 	  {"id":"level","kind":"integer","label":"Level","required":true,"visible_when":{"field":"adv","equals":true},"bind":{"target":"config","key":"LEVEL"}}]}`)
-	if issues := ValidateComponentConfigValues(s, values()); len(issues) != 0 {
+	if issues := ValidateComponentConfigValues(s, values(), nil); len(issues) != 0 {
 		t.Errorf("a hidden required field asked for a value: %s", issuePaths(issues))
 	}
-	if issues := ValidateComponentConfigValues(s, values("adv", `true`)); len(issues) != 1 {
+	if issues := ValidateComponentConfigValues(s, values("adv", `true`), nil); len(issues) != 1 {
 		t.Errorf("a visible required field was not asked for: %s", issuePaths(issues))
 	}
-	if issues := ValidateComponentConfigValues(s, values("level", `"x"`)); len(issues) == 0 {
+	if issues := ValidateComponentConfigValues(s, values("level", `"x"`), nil); len(issues) == 0 {
 		t.Error("hiding a field removed it from validation")
+	}
+}
+
+func TestConfigKeyLooksSecret(t *testing.T) {
+	for _, key := range []string{"GITHUB_TOKEN", "apiKey", "db-password", "OPENAI_API_KEY", "accessToken", "PASSWD", "SECRET_VALUE", "client_secret_key", "COOKIE"} {
+		if !ConfigKeyLooksSecret(key) {
+			t.Errorf("%s was not read as secret-named", key)
+		}
+	}
+	for _, key := range []string{"MAX_TOKENS", "BYPASS_CACHE", "SERVICE_REGION", "TOKENIZER", "COMPASS_MODE", "SECRET_NAME"} {
+		if ConfigKeyLooksSecret(key) {
+			t.Errorf("%s is a plain setting but was refused", key)
+		}
+	}
+	s := mustSchema(t, `{"schema_version":1,"fields":[{"id":"t","kind":"string","label":"T","bind":{"target":"config","key":"MAX_TOKENS"}}]}`)
+	if len(s.Fields) != 1 {
+		t.Fatal("a schema may bind MAX_TOKENS")
+	}
+}
+
+func TestConfigValuesRefuseCredentialShapedStrings(t *testing.T) {
+	s := mustSchema(t, goodSchema)
+	// Assembled at run time so no credential-shaped literal sits in the source.
+	canary := "sk_" + "live_" + strings.Repeat("a", 24)
+	looks := func(v string) bool { return strings.HasPrefix(v, "sk_"+"live_") }
+	if issues := ValidateComponentConfigValues(s, values("key", `"`+canary+`"`), looks); len(issues) != 1 || !strings.Contains(issues[0].Message, "looks like a secret") {
+		t.Errorf("a credential-shaped secret reference was accepted: %s", issuePaths(issues))
+	}
+	if issues := ValidateComponentConfigValues(s, values("key", `"my-stored-secret"`, "endpoint", `"`+canary+`"`), looks); len(issues) != 1 {
+		t.Errorf("a credential-shaped string value was accepted: %s", issuePaths(issues))
+	}
+	if issues := ValidateComponentConfigValues(s, values("key", `"my-stored-secret"`), looks); len(issues) != 0 {
+		t.Errorf("a plain name was refused: %s", issuePaths(issues))
 	}
 }

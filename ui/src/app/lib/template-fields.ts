@@ -17,7 +17,7 @@
 import golden from "./template-fields.golden.json";
 import type { TemplatePart } from "./types/templates";
 
-export type TemplateTab = "info" | "runner" | "repositories_drives" | "tools_image" | "access";
+export type TemplateTab = "runner" | "repositories_drives" | "tools_image" | "access";
 
 /** What leaving the field out means. */
 export type TemplateOmission = "baseline" | "unset_required" | "unset_optional";
@@ -25,7 +25,10 @@ export type TemplateOmission = "baseline" | "unset_required" | "unset_optional";
 /** What a present empty, false or zero value means. */
 export type TemplateEmptyMeaning = "same_as_omitted" | "value" | "all" | "never";
 
-export type TemplateExclusion = "secret" | "origin" | "retired";
+export type TemplateExclusion = "secret" | "origin" | "retired" | "launch";
+
+/** Where a field sits in the Access tab. */
+export type TemplateSection = "run_wide" | "scm_entry" | "harness" | "component";
 
 export interface TemplateFieldRule {
   name: string;
@@ -35,6 +38,12 @@ export interface TemplateFieldRule {
   empty?: TemplateEmptyMeaning;
   /** The sentence the refinement flow shows for the omission. */
   meaning?: string;
+  /** Access-tab section. Push rules exist only in an SCM entry (one set per provider + org); tool rules and the model provider belong to each harness. */
+  section?: TemplateSection;
+  /** What the owning entry is keyed by: `provider+org` for an SCM entry, `harness` for a harness. */
+  keyed_by?: string;
+  /** The lane that must land before a template can carry the field; a document naming it is refused. */
+  pending?: string;
   /** Free text a person writes for one run: kept only when they choose to include it. */
   sensitive?: boolean;
   /** Names something one person has: a shared (org or group) template cannot carry it. */
@@ -44,7 +53,7 @@ export interface TemplateFieldRule {
   why?: string;
 }
 
-/** Every CreateRunRequest field, plus `pool_id`. */
+/** Every CreateRunRequest field, plus the working names of carriers whose lanes have not landed (rows with `pending`). */
 export const TEMPLATE_REQUEST_FIELDS = golden.request as readonly TemplateFieldRule[];
 
 /** Every RunPolicySpec field, written `inline_policy.<name>` in a template. */

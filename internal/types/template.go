@@ -69,6 +69,21 @@ type TemplateGroupAdmin struct {
 	GrantedBy string `json:"granted_by,omitempty"`
 }
 
+// Canonical returns the grant in the form TemplateAuthorize compares: the group
+// as the verified snapshot spells it (CanonicalGroupSubject) and the person as
+// every user-subject boundary stores it (CanonicalUserSubject). ok is false for
+// a group no snapshot could carry or an empty person, which a writer must
+// refuse. The admin writer stores only what this returns, so a grant written
+// as "DevTeam" authorises exactly the group the snapshot calls "devteam".
+func (g TemplateGroupAdmin) Canonical() (TemplateGroupAdmin, bool) {
+	group, ok := CanonicalGroupSubject(g.Group)
+	person := CanonicalUserSubject(g.Person)
+	if !ok || person == "" {
+		return TemplateGroupAdmin{}, false
+	}
+	return TemplateGroupAdmin{Group: group, Person: person, GrantedBy: g.GrantedBy}, true
+}
+
 // TemplateActor is the caller, as the server verified them for this request.
 type TemplateActor struct {
 	// Person is the authenticated principal's canonical subject.
@@ -193,12 +208,11 @@ const (
 	TemplateTierGroupAdmin TemplateTier = "group_admin"
 )
 
-// TemplateRoute classifies one future template route: the router tier that
-// gates reaching the handler, and the per-scope authority the handler then
-// enforces with TemplateAuthorize. RouterClass uses authz_test.go's route
-// class names. The routes are not registered yet; the storage lane registers
-// them, moves each into routeMatrix, and deletes
-// TestTemplateRoutesAreNotRegisteredYet.
+// TemplateRoute classifies one template route: the router tier that gates
+// reaching the handler, and the per-scope authority the handler then enforces
+// with TemplateAuthorize. RouterClass uses authz_test.go's route class names
+// and TestTemplateRoutesMatchRouteMatrix holds each row to routeMatrix and the
+// router. The routes are mounted and answer 501 until the template store lands.
 type TemplateRoute struct {
 	Route       string
 	RouterClass string

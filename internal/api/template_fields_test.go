@@ -115,8 +115,8 @@ func TestTemplateFieldRegistryCoversEveryReachableField(t *testing.T) {
 		}
 	}
 	for _, r := range templateRequestRules {
-		if _, ok := templateStructField(requestType, r.Name); !ok && r.Name != "pool_id" {
-			t.Errorf("request rule %s names no CreateRunRequest field", r.Name)
+		if _, ok := templateStructField(requestType, r.Name); !ok && r.Pending == "" {
+			t.Errorf("request rule %s names no CreateRunRequest field and is not a pending carrier", r.Name)
 		}
 	}
 	for typeName, names := range templateNestedCarried {
@@ -147,10 +147,10 @@ func TestTemplateFieldRegistryCoversEveryReachableField(t *testing.T) {
 func TestTemplateRulesAreComplete(t *testing.T) {
 	validOmit := []string{templateOmitBaseline, templateOmitRequired, templateOmitOptional}
 	validEmpty := []string{templateEmptySame, templateEmptyValue, templateEmptyAll, templateEmptyNever}
-	validTab := []string{templateTabInfo, templateTabRunner, templateTabRepoDrives, templateTabToolsImage, templateTabAccess}
+	validTab := []string{templateTabRunner, templateTabRepoDrives, templateTabToolsImage, templateTabAccess}
 	for _, r := range slices.Concat(templateRequestRules, templatePolicyRules) {
 		if r.Excluded != "" {
-			if r.Why == "" || r.Tab != "" || r.Omitted != "" {
+			if r.Why == "" || r.Tab != "" || r.Omitted != "" || r.Pending != "" {
 				t.Errorf("excluded rule %s carries owner fields or lacks a reason", r.Name)
 			}
 			continue
@@ -160,6 +160,13 @@ func TestTemplateRulesAreComplete(t *testing.T) {
 		}
 		if r.Part == "" && r.Name != "inline_policy" {
 			t.Errorf("rule %s has no refinement part", r.Name)
+		}
+		validSection := []string{templateSectionRunWide, templateSectionSCMEntry, templateSectionHarness, templateSectionComp}
+		if !slices.Contains(validSection, r.Section) {
+			t.Errorf("rule %s has section %q", r.Name, r.Section)
+		}
+		if (r.Section == templateSectionRunWide) != (r.KeyedBy == "") {
+			t.Errorf("rule %s: section %s keyed by %q", r.Name, r.Section, r.KeyedBy)
 		}
 	}
 }
@@ -299,7 +306,7 @@ func fieldIntents(t *testing.T, value func(reflect.Type) json.RawMessage) map[st
 	policyType := reachableStructs(t, requestType)["RunPolicySpec"]
 	for _, r := range templateRequestRules {
 		field, ok := templateStructField(requestType, r.Name)
-		if r.Excluded != "" || !ok || r.Name == "inline_policy" {
+		if r.Excluded != "" || r.Pending != "" || !ok || r.Name == "inline_policy" {
 			continue
 		}
 		if v := value(field.Type); v != nil {
@@ -308,6 +315,9 @@ func fieldIntents(t *testing.T, value func(reflect.Type) json.RawMessage) map[st
 	}
 	for _, r := range templatePolicyRules {
 		field, _ := templateStructField(policyType, r.Name)
+		if r.Pending != "" {
+			continue
+		}
 		if v := value(field.Type); v != nil {
 			spec, _ := json.Marshal(map[string]json.RawMessage{r.Name: v})
 			out["inline_policy."+r.Name] = map[string]json.RawMessage{"inline_policy": spec}
@@ -410,7 +420,7 @@ func TestTemplateDecoderRefusals(t *testing.T) {
 		{"token in text", `{` + head + `,"intent":{"task":"use ` + canaryGitHubToken + ` to push"}}`, "intent.task", reasonTemplateSecretRefused},
 		{"token in grant scope", `{` + head + `,"intent":{"inline_policy":{"eligible_grants":[{"kind":"api_key","scope":{"v":"` + canaryAWSKey + `"},"requires_approval":false}]}}}`, "intent.inline_policy.eligible_grants[0].scope.v", reasonTemplateSecretRefused},
 		{"credentials in a url", `{` + head + `,"intent":{"repo":"https://user:hunter2@github.com/acme/api"}}`, "intent.repo", reasonTemplateSecretRefused},
-		{"private key", `{` + head + `,"intent":{"description":"` + canaryPEM + `"}}`, "intent.description", reasonTemplateSecretRefused},
+		{"private key", `{` + head + `,"intent":{"task":"` + canaryPEM + `"}}`, "intent.task", reasonTemplateSecretRefused},
 		{"run id", `{` + head + `,"intent":{"agent":"claude","run_id":"x"}}`, "intent.run_id", reasonTemplateRunStateRefused},
 		{"execution generation", `{` + head + `,"intent":{"execution_generation":3}}`, "intent.execution_generation", reasonTemplateRunStateRefused},
 		{"claim", `{` + head + `,"intent":{"claim":{}}}`, "intent.claim", reasonTemplateRunStateRefused},
@@ -426,7 +436,21 @@ func TestTemplateDecoderRefusals(t *testing.T) {
 		{"wrong list", `{` + head + `,"intent":{"workspaces":{"workspace_id":"w"}}}`, "intent.workspaces", reasonTemplateFieldInvalid},
 		{"bad id", `{` + head + `,"intent":{"policy_id":"not-a-uuid"}}`, "intent.policy_id", reasonTemplateFieldInvalid},
 		{"redacted placeholder", `{` + head + `,"intent":{"inline_policy":{"workspace_mounts":[{"source":"<redacted>","target":"/home/agent/x"}]}}}`, "intent.inline_policy.workspace_mounts[0].source", reasonTemplateFieldInvalid},
-		{"bad pool id", `{` + head + `,"intent":{"pool_id":"has space"}}`, "intent.pool_id", reasonTemplateFieldInvalid},
+		{"title is entered at launch", `{` + head + `,"intent":{"title":"nightly"}}`, "intent.title", reasonTemplateFieldExcluded},
+		{"description is entered at launch", `{` + head + `,"intent":{"description":"d"}}`, "intent.description", reasonTemplateFieldExcluded},
+		{"pending: pool", `{` + head + `,"intent":{"runner_pool_id":"6f1c2a52-5b1e-4d45-9d6b-0c4f1b2a7e10"}}`, "intent.runner_pool_id", reasonTemplateFieldUnavailable},
+		{"pending: run mode", `{` + head + `,"intent":{"experience":"interactive"}}`, "intent.experience", reasonTemplateFieldUnavailable},
+		{"pending: included tools", `{` + head + `,"intent":{"included_tools":[]}}`, "intent.included_tools", reasonTemplateFieldUnavailable},
+		{"pending: startup", `{` + head + `,"intent":{"startup":"x"}}`, "intent.startup", reasonTemplateFieldUnavailable},
+		{"pending: starting folder", `{` + head + `,"intent":{"starting_folder":"/home/agent/work"}}`, "intent.starting_folder", reasonTemplateFieldUnavailable},
+		{"pending: no repositories or drives", `{` + head + `,"intent":{"no_repositories_or_drives":true}}`, "intent.no_repositories_or_drives", reasonTemplateFieldUnavailable},
+		{"pending: unkeyed push rules", `{` + head + `,"intent":{"inline_policy":{"push_rules":{"deny_paths":["a/"]}}}}`, "intent.inline_policy.push_rules", reasonTemplateFieldUnavailable},
+		{"empty inline policy", `{` + head + `,"intent":{"inline_policy":{}}}`, "intent.inline_policy", reasonTemplateFieldInvalid},
+		{"policy reference beside an inline policy", `{` + head + `,"intent":{"policy_id":"6f1c2a52-5b1e-4d45-9d6b-0c4f1b2a7e10","inline_policy":{"allowed_domains":[]}}}`, "intent.inline_policy", reasonInlinePolicyXOR},
+		{"secret-formatted config key", `{` + head + `,"intent":{"components":[{"inline":{"hosts":["a.example.com"],"config":{"` + canaryAWSKey + `":"x"}}}]}}`, "intent.components[0].inline.config.<key>", reasonTemplateSecretRefused},
+		{"secret-formatted unknown key", `{` + head + `,"intent":{"` + canaryAWSKey + `":"x"}}`, "intent.<key>", reasonTemplateSecretRefused},
+		{"secret in a needs_setup reason", `{` + head + `,"intent":{"agent":"a"},"needs_setup":[{"field":"task","reason":"` + canaryGitHubToken + `"}]}`, "needs_setup[0].reason", reasonTemplateSecretRefused},
+		{"camel-case secret key", `{` + head + `,"intent":{"components":[{"inline":{"hosts":["a.example.com"],"config":{"accessToken":"x"}}}]}}`, "intent.components[0].inline.config.accessToken", reasonTemplateSecretRefused},
 		{"bad coverage", `{"api_version":"wardyn/v1","kind":"RunTemplate","coverage":"all","intent":{"agent":"claude"}}`, "coverage", reasonTemplateFieldInvalid},
 		{"missing intent", `{` + head + `}`, "intent", reasonTemplateFieldInvalid},
 		{"wrong version", `{"api_version":"wardyn/v2","kind":"RunTemplate","coverage":"partial","intent":{"agent":"claude"}}`, "api_version", reasonTemplateVersionUnsupported},
@@ -456,7 +480,7 @@ func TestTemplateDecoderRefusals(t *testing.T) {
 }
 
 func TestTemplateDocumentSizeAndDepth(t *testing.T) {
-	big := `{"api_version":"wardyn/v1","kind":"RunTemplate","coverage":"partial","intent":{"description":"` + strings.Repeat("a", maxTemplateDocumentBytes) + `"}}`
+	big := `{"api_version":"wardyn/v1","kind":"RunTemplate","coverage":"partial","intent":{"task":"` + strings.Repeat("a", maxTemplateDocumentBytes) + `"}}`
 	if _, diags := decodeJSONTemplate(t, []byte(big)); len(diags) != 1 || diags[0].Reason != reasonTemplateDocumentInvalid {
 		t.Errorf("oversized document: %+v", diags)
 	}
@@ -478,9 +502,10 @@ func TestTemplateYAMLIsReadStrictly(t *testing.T) {
 	for name, src := range map[string]string{
 		"alias":          "api_version: wardyn/v1\nkind: RunTemplate\ncoverage: partial\nintent:\n  agent: &a claude\n  model_provider: *a\n",
 		"anchor":         "api_version: wardyn/v1\nkind: RunTemplate\ncoverage: partial\nintent: &i\n  agent: claude\n",
+		"merge-inline":   "api_version: wardyn/v1\nkind: RunTemplate\ncoverage: partial\nintent:\n  <<: {task: hi}\n",
 		"merge":          "api_version: wardyn/v1\nkind: RunTemplate\ncoverage: partial\nx: &m {a: 1}\nintent:\n  <<: *m\n",
 		"custom tag":     "api_version: wardyn/v1\nkind: RunTemplate\ncoverage: partial\nintent:\n  agent: !custom claude\n",
-		"timestamp":      "api_version: wardyn/v1\nkind: RunTemplate\ncoverage: partial\nintent:\n  title: 2024-01-01\n",
+		"timestamp":      "api_version: wardyn/v1\nkind: RunTemplate\ncoverage: partial\nintent:\n  task: 2024-01-01\n",
 		"octal":          "api_version: wardyn/v1\nkind: RunTemplate\ncoverage: partial\nintent:\n  resources:\n    cpu_millis: 0755\n",
 		"two documents":  good + "---\nintent: {}\n",
 		"duplicate key":  "api_version: wardyn/v1\nkind: RunTemplate\ncoverage: partial\nintent:\n  agent: a\n  agent: b\n",
@@ -553,6 +578,7 @@ func TestTemplateImportValidation(t *testing.T) {
 	}{
 		{"empty intent", `{` + head + `"coverage":"partial","intent":{}}`, reasonTemplateCoverageInvalid + "@intent"},
 		{"full with needs setup", `{` + head + `"coverage":"full","intent":{"agent":"a"},"needs_setup":[{"field":"task"}]}`, reasonTemplateCoverageInvalid + "@needs_setup"},
+		{"full with only an agent", `{` + head + `"coverage":"full","intent":{"agent":"a"}}`, reasonTemplateCoverageInvalid + "@intent"},
 		{"dependency cut", `{` + head + `"coverage":"partial","intent":{"model_provider":"p"}}`, reasonTemplateDependencyMissing + "@intent.model_provider"},
 		{"dependency listed", ``, ""},
 		{"needs setup for a present field", `{` + head + `"coverage":"partial","intent":{"agent":"a"},"needs_setup":[{"field":"agent"}]}`, reasonTemplateFieldInvalid + "@needs_setup[0].field"},
@@ -562,11 +588,17 @@ func TestTemplateImportValidation(t *testing.T) {
 		{"unavailable: allowed image", `{` + head + `"coverage":"partial","intent":{"allowed_image":"img"}}`, reasonTemplateFieldUnavailable + "@intent.allowed_image"},
 		{"unavailable: overrides", `{` + head + `"coverage":"partial","intent":{"overrides":{"agent":{"add_hosts":["a.example.com"]}}}}`, reasonTemplateFieldUnavailable + "@intent.overrides"},
 		{"unavailable: built-in component", `{` + head + `"coverage":"partial","intent":{"components":[{"builtin":"github","org":"acme","repos":["acme/api"]}]}}`, reasonTemplateFieldUnavailable + "@intent.components[0]"},
-		{"unavailable: pool", `{` + head + `"coverage":"partial","intent":{"pool_id":"pool-1"}}`, reasonTemplateFieldUnavailable + "@intent.pool_id"},
-		{"unavailable: reserved push rule", `{` + head + `"coverage":"partial","intent":{"inline_policy":{"push_rules":{"deny_new_executables":true}}}}`, reasonTemplateFieldUnavailable + "@intent.inline_policy.push_rules.deny_new_executables"},
+		{"plain setting named like a secret is a plain setting", ``, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "plain setting named like a secret is a plain setting" {
+				res := run(`{` + head + `"coverage":"partial","intent":{"components":[{"inline":{"hosts":["a.example.com"],"config":{"MAX_TOKENS":"100","BYPASS_CACHE":"1"}}}]}}`)
+				if res.Document == nil {
+					t.Fatalf("MAX_TOKENS and BYPASS_CACHE are plain settings: %v", reasons(res))
+				}
+				return
+			}
 			if tc.want == "" {
 				res := run(`{` + head + `"coverage":"partial","intent":{"model_provider":"p"},"needs_setup":[{"field":"agent","reason":"pick one"}]}`)
 				if res.Document == nil {
@@ -603,7 +635,7 @@ func TestTemplateUnavailableMirrorsRunRefusal(t *testing.T) {
 			}
 			runRefuses := unappliedFieldsRefusal(req) != nil
 			d := &templateDecoder{}
-			d.checkAvailable(client.TemplateDocument{}, req)
+			d.checkAvailable(req)
 			if templateRefuses := len(d.diags) > 0; templateRefuses != runRefuses {
 				t.Fatalf("the run refuses=%v, the template refuses=%v", runRefuses, templateRefuses)
 			}
@@ -612,34 +644,45 @@ func TestTemplateUnavailableMirrorsRunRefusal(t *testing.T) {
 }
 
 func TestTemplateScopeRefusesPersonOnlyFields(t *testing.T) {
+	// A runner pin also needs a local placement, which this server cannot honour yet, so the
+	// content check refuses it too; the scope check reports beside it, not instead of it.
 	doc := mustDecodeTemplate(t, templateDocJSON(map[string]json.RawMessage{
-		"agent": json.RawMessage(`"claude"`), "placement": json.RawMessage(`"remote"`), "runner_id": json.RawMessage(`"r1"`),
+		"agent": json.RawMessage(`"claude"`), "placement": json.RawMessage(`"local"`), "runner_id": json.RawMessage(`"r1"`),
 	}))
-	person := testTemplateOwner("person", "alice", "")
-	if diags := validateTemplateForScope(doc, person); len(diags) != 0 {
-		t.Errorf("a personal template may pin a runner: %+v", diags)
+	doc.NeedsSetup = []client.TemplateSetupNeed{{Field: "runner_pool_id"}}
+	reasons := func(diags []client.TemplateDiagnostic) []string {
+		var out []string
+		for _, d := range diags {
+			out = append(out, d.Reason+"@"+d.Path)
+		}
+		return out
+	}
+	_, personal := validateTemplateDocument(doc, testTemplateOwner("person", "alice", ""))
+	if slices.Contains(reasons(personal), reasonTemplateSharedFieldRefused+"@intent.runner_id") {
+		t.Errorf("a personal template may pin a runner: %v", reasons(personal))
 	}
 	for _, owner := range []string{"org", "group"} {
 		group := ""
 		if owner == "group" {
 			group = "eng"
 		}
-		diags := validateTemplateForScope(doc, testTemplateOwner(owner, "", group))
-		if len(diags) != 1 || diags[0].Reason != reasonTemplateSharedFieldRefused || diags[0].Path != "intent.runner_id" {
-			t.Errorf("%s template: diagnostics %+v, want runner_id refused", owner, diags)
+		_, diags := validateTemplateDocument(doc, testTemplateOwner(owner, "", group))
+		if !slices.Contains(reasons(diags), reasonTemplateSharedFieldRefused+"@intent.runner_id") {
+			t.Errorf("%s template: %v, want runner_id refused", owner, reasons(diags))
 		}
 	}
-	if diags := validateTemplateForScope(doc, testTemplateOwner("org", "alice", "")); len(diags) != 1 || diags[0].Reason != reasonTemplateScopeForbidden {
-		t.Errorf("a malformed owner must be refused, not defaulted: %+v", diags)
+	_, bad := validateTemplateDocument(doc, testTemplateOwner("org", "alice", ""))
+	if !slices.Contains(reasons(bad), reasonTemplateScopeForbidden+"@scope") {
+		t.Errorf("a malformed owner must be refused, not defaulted: %v", reasons(bad))
 	}
 }
 
 func TestTemplateIncludesNamesTheParts(t *testing.T) {
 	doc := mustDecodeTemplate(t, templateDocJSON(map[string]json.RawMessage{
-		"title": json.RawMessage(`"t"`), "drive": json.RawMessage(`{"enabled":true}`),
+		"agent": json.RawMessage(`"claude"`), "drive": json.RawMessage(`{"enabled":true}`),
 		"inline_policy": json.RawMessage(`{"allowed_domains":["a.example.com"],"eligible_grants":[]}`),
 	}))
-	want := []client.TemplatePart{client.TemplatePartCredentials, client.TemplatePartDrives, client.TemplatePartEgress, client.TemplatePartInfo}
+	want := []client.TemplatePart{client.TemplatePartCredentials, client.TemplatePartDrives, client.TemplatePartEgress, client.TemplatePartToolsImage}
 	if got := templateIncludes(doc); !slices.Equal(got, want) {
 		t.Errorf("includes = %v, want %v", got, want)
 	}
@@ -675,7 +718,7 @@ func TestTemplateWireTypesHoldNoAuthority(t *testing.T) {
 					continue
 				}
 				n++
-				if templateSecretKeyRE.MatchString(field) || slices.Contains(templateRunStateKey, field) {
+				if types.ConfigKeyLooksSecret(field) || slices.Contains(templateRunStateKey, field) {
 					t.Errorf("%s.%s could carry authority or run state", name, field)
 				}
 			}
@@ -691,7 +734,7 @@ func TestTemplateWireTypesHoldNoAuthority(t *testing.T) {
 // one of the names the classifier refuses.
 func TestTemplateCarriedFieldsNeverReadAsRunStateOrSecrets(t *testing.T) {
 	check := func(owner, name string) {
-		if templateSecretKeyRE.MatchString(name) || slices.Contains(templateRunStateKey, strings.ToLower(name)) {
+		if types.ConfigKeyLooksSecret(name) || slices.Contains(templateRunStateKey, strings.ToLower(name)) {
 			t.Errorf("%s.%s is carried but reads as a refused name", owner, name)
 		}
 	}

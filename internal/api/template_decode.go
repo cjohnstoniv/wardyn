@@ -18,6 +18,7 @@ import (
 	yaml "gopkg.in/yaml.v3"
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -38,9 +39,7 @@ const (
 )
 
 var (
-	templateSecretKeyRE = regexp.MustCompile(`(?i)(pass(word|wd)?|secret_value|api[_-]?key|token|credential|private[_-]?key|authorization|bearer|cookie)`)
 	templateURLUserRE   = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@`)
-	templatePoolIDRE    = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 	templateYAMLOctalRE = regexp.MustCompile(`^[-+]?0[0-9_xXoObB]`)
 	templateMetadataKey = []string{"id", "template_id", "owner", "owner_id", "group", "group_id", "scope", "revision", "version", "visibility", "writable", "created_at", "updated_at", "created_by", "updated_by"}
 	templateRunStateKey = []string{
@@ -68,6 +67,11 @@ func (d *templateDecoder) invalid(path, detail string) {
 // run state and secret-looking names each get their own reason, so the
 // console can say what is wrong rather than only that something is.
 func (d *templateDecoder) unknownKey(parent, key string) {
+	if _, found := contentscan.MatchSecretFormat(key); found {
+		path := joinTemplatePath(parent, "<key>")
+		d.add(path, reasonTemplateSecretRefused, templateSecretRefusedMsg(path))
+		return
+	}
 	path := joinTemplatePath(parent, key)
 	lower := strings.ToLower(key)
 	switch {
@@ -75,7 +79,7 @@ func (d *templateDecoder) unknownKey(parent, key string) {
 		d.add(path, reasonTemplateMetadataInContent, templateMetadataInContentMsg(path))
 	case slices.Contains(templateRunStateKey, lower):
 		d.add(path, reasonTemplateRunStateRefused, templateRunStateRefusedMsg(path))
-	case templateSecretKeyRE.MatchString(key):
+	case types.ConfigKeyLooksSecret(key):
 		d.add(path, reasonTemplateSecretRefused, templateSecretRefusedMsg(path))
 	default:
 		d.add(path, reasonTemplateFieldUnknown, templateFieldUnknownMsg(path))
@@ -238,10 +242,21 @@ func (d *templateDecoder) walkStruct(t reflect.Type, raw json.RawMessage, path s
 		d.invalid(path, "must be an object")
 		return
 	}
+	if t.Name() == "RunPolicySpec" && len(obj) == 0 {
+		d.invalid(path, "names no policy field: leave it out to use the baseline policy")
+		return
+	}
+	if t == requestType {
+		_, ref := obj["policy_id"]
+		_, inline := obj["inline_policy"]
+		if ref && inline {
+			d.add(joinTemplatePath(path, "inline_policy"), reasonInlinePolicyXOR, "specify either policy_id or inline_policy, not both")
+		}
+	}
 	for _, key := range sortedKeys(obj) {
 		keyPath := joinTemplatePath(path, key)
-		if t == requestType && key == "pool_id" {
-			d.walkPoolID(obj[key], keyPath)
+		if rule, isRule := templateRuleOf(t, key); isRule && rule.Pending != "" {
+			d.add(keyPath, reasonTemplateFieldUnavailable, templateFieldUnavailableMsg(keyPath))
 			continue
 		}
 		field, ok := templateStructField(t, key)
@@ -255,6 +270,17 @@ func (d *templateDecoder) walkStruct(t reflect.Type, raw json.RawMessage, path s
 		}
 		d.walkValue(field.Type, obj[key], keyPath)
 	}
+}
+
+// templateRuleOf finds the registry rule of a top-level request or policy field.
+func templateRuleOf(t reflect.Type, key string) (TemplateFieldRule, bool) {
+	switch t.Name() {
+	case "CreateRunRequest":
+		return templateRule(templateRequestRules, key)
+	case "RunPolicySpec":
+		return templateRule(templatePolicyRules, key)
+	}
+	return TemplateFieldRule{}, false
 }
 
 // templateExclusion looks a field up in the registry's exclusions.
@@ -279,13 +305,6 @@ func (d *templateDecoder) excluded(path string, rule TemplateFieldRule) {
 	d.add(path, reasonTemplateFieldExcluded, templateFieldExcludedMsg(path))
 }
 
-func (d *templateDecoder) walkPoolID(raw json.RawMessage, path string) {
-	var id string
-	if json.Unmarshal(raw, &id) != nil || !templatePoolIDRE.MatchString(id) {
-		d.invalid(path, "must be a pool id: 1 to 128 letters, digits and . _ : -")
-	}
-}
-
 func (d *templateDecoder) walkSlice(t reflect.Type, raw json.RawMessage, path string) {
 	var items []json.RawMessage
 	if json.Unmarshal(raw, &items) != nil {
@@ -307,8 +326,13 @@ func (d *templateDecoder) walkMap(t reflect.Type, raw json.RawMessage, path stri
 	}
 	for _, key := range sortedKeys(obj) {
 		keyPath := joinTemplatePath(path, key)
-		if strings.HasSuffix(path, ".config") && templateSecretKeyRE.MatchString(key) {
+		if strings.HasSuffix(path, ".config") && types.ConfigKeyLooksSecret(key) {
 			d.add(keyPath, reasonTemplateSecretRefused, templateSecretRefusedMsg(keyPath))
+			continue
+		}
+		if _, found := contentscan.MatchSecretFormat(key); found {
+			hidden := joinTemplatePath(path, "<key>")
+			d.add(hidden, reasonTemplateSecretRefused, templateSecretRefusedMsg(hidden))
 			continue
 		}
 		d.walkValue(t.Elem(), obj[key], keyPath)

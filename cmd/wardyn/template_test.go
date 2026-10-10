@@ -5,6 +5,7 @@ package main
 
 import (
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,30 +27,37 @@ func writeTemplateFile(t *testing.T, name, body string) string {
 	return p
 }
 
-// TestTemplateCommandsAreTypedStubs drives each leaf far enough to prove its own
-// checks ran, then that a good call ends in the SDK's unavailable answer.
-func TestTemplateCommandsAreTypedStubs(t *testing.T) {
+// TestTemplateCommandsCallTheTemplateRoutes drives each leaf against a server
+// that answers what the real one does until the store lands (501
+// templates_unavailable) and checks the request each one made.
+func TestTemplateCommandsCallTheTemplateRoutes(t *testing.T) {
 	id := uuid.New().String()
 	yamlFile := writeTemplateFile(t, "t.yaml", templateYAML)
 	for _, tc := range []struct {
-		name string
-		args []string
-		in   string
-		want string
+		name         string
+		args         []string
+		in           string
+		method, path string
 	}{
-		{"list", []string{"template", "list"}, "", ""},
-		{"show", []string{"template", "show", id}, "", ""},
-		{"show an old revision", []string{"template", "show", id, "--revision", "2"}, "", ""},
-		{"save a personal template", []string{"template", "save", yamlFile}, "", ""},
-		{"save to the organisation", []string{"template", "save", yamlFile, "--scope", "org"}, "", ""},
-		{"save to a group", []string{"template", "save", yamlFile, "--scope", "group", "--group", "eng"}, "", ""},
-		{"update with a revision", []string{"template", "save", yamlFile, "--update", id, "--expected-revision", "3"}, "", ""},
-		{"import a file", []string{"template", "import", yamlFile}, "", ""},
-		{"import stdin", []string{"template", "import", "-", "--format", "json"}, "{}", ""},
+		{"list", []string{"template", "list"}, "", "GET", "/api/v1/templates"},
+		{"show", []string{"template", "show", id}, "", "GET", "/api/v1/templates/" + id},
+		{"show an old revision", []string{"template", "show", id, "--revision", "2"}, "", "GET", "/api/v1/templates/" + id + "/revisions/2"},
+		{"save a personal template", []string{"template", "save", yamlFile}, "", "POST", "/api/v1/templates"},
+		{"save to the organisation", []string{"template", "save", yamlFile, "--scope", "org"}, "", "POST", "/api/v1/templates"},
+		{"save to a group", []string{"template", "save", yamlFile, "--scope", "group", "--group", "eng"}, "", "POST", "/api/v1/templates"},
+		{"update with a revision", []string{"template", "save", yamlFile, "--update", id, "--expected-revision", "3"}, "", "PUT", "/api/v1/templates/" + id},
+		{"import a file", []string{"template", "import", yamlFile}, "", "POST", "/api/v1/templates/import"},
+		{"import stdin", []string{"template", "import", "-", "--format", "json"}, "{}", "POST", "/api/v1/templates/import"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := execCmdStdin(t, tc.in, tc.args...); !errors.Is(err, sdk.ErrTemplatesUnavailable) {
-				t.Fatalf("error = %v, want the SDK's unavailable answer", err)
+			cs := newCmdServer(t, http.StatusNotImplemented, map[string]string{"error": "Templates are not available on this server yet.", "reason": "templates_unavailable"})
+			err := execCmdStdin(t, tc.in, append(tc.args, "--url", cs.URL, "--token", "tok")...)
+			var apiErr *sdk.APIError
+			if !errors.As(err, &apiErr) || apiErr.Reason != "templates_unavailable" {
+				t.Fatalf("error = %v, want the server's templates_unavailable", err)
+			}
+			if got := cs.last(); got.method != tc.method || got.path != tc.path {
+				t.Errorf("request = %s %s, want %s %s", got.method, got.path, tc.method, tc.path)
 			}
 		})
 	}

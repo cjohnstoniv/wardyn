@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -151,6 +152,24 @@ type ComponentConfigValues map[string]json.RawMessage
 type ConfigIssue struct {
 	Path    string `json:"path"`
 	Message string `json:"message"`
+}
+
+var configSecretWordRE = regexp.MustCompile(`(?:^|[^a-z0-9])(?:pass(?:word|wd)?|secret_value|secret_key|api_?key|token|credential|private_?key|authorization|bearer|cookie)(?:[^a-z0-9]|$)`)
+
+// ConfigKeyLooksSecret reports whether a config key names a secret by one of
+// its words (GITHUB_TOKEN, apiKey, db-password). Whole words only: MAX_TOKENS
+// and BYPASS_CACHE are plain settings. A config value is plain text by
+// contract, so a key like this is refused by the schema and by a template; a
+// secret travels through a secret_ref field.
+func ConfigKeyLooksSecret(key string) bool {
+	var b strings.Builder
+	for i, r := range key {
+		if i > 0 && r >= 'A' && r <= 'Z' && key[i-1] >= 'a' && key[i-1] <= 'z' {
+			b.WriteByte('_')
+		}
+		b.WriteRune(r)
+	}
+	return configSecretWordRE.MatchString(strings.ToLower(strings.ReplaceAll(b.String(), "-", "_")))
 }
 
 // DecodeComponentConfigSchema reads one schema from JSON: bounded size, one
@@ -337,6 +356,8 @@ func validateConfigBindings(fields []ConfigField, add func(string, string, ...an
 		}
 		if err := validComponentEnvName(f.Bind.Key); err != nil {
 			add(path+".key", "%v", err)
+		} else if f.Bind.Target == ConfigBindConfig && ConfigKeyLooksSecret(f.Bind.Key) {
+			add(path+".key", "%q names a secret, and a config value is plain text: use a secret_ref field", f.Bind.Key)
 		}
 		if seen[f.Bind] {
 			add(path, "%s %q is fed by two fields", f.Bind.Target, f.Bind.Key)
@@ -483,7 +504,10 @@ func configListProblem(f ConfigField, v any) string {
 // valid schema. Each supplied value is typed and bounded whether or not its
 // field is visible. A required field is asked for only while visible and
 // without a default; a managed (read-only) field accepts only its default.
-func ValidateComponentConfigValues(s ComponentConfigSchema, values ComponentConfigValues) []ConfigIssue {
+// looksSecret, when set, refuses a string that is credential-shaped (a secret
+// reference is a stored secret's name, never its value); this package cannot
+// import the scanner, so the caller passes it.
+func ValidateComponentConfigValues(s ComponentConfigSchema, values ComponentConfigValues, looksSecret func(string) bool) []ConfigIssue {
 	var issues []ConfigIssue
 	byID := make(map[string]ConfigField, len(s.Fields))
 	for _, f := range s.Fields {
@@ -497,6 +521,8 @@ func ValidateComponentConfigValues(s ComponentConfigSchema, values ComponentConf
 		}
 		if msg := checkConfigValue(f, values[id]); msg != "" {
 			issues = append(issues, ConfigIssue{"values." + id, msg})
+		} else if looksSecret != nil && configValueLooksSecret(f, values[id], looksSecret) {
+			issues = append(issues, ConfigIssue{"values." + id, "looks like a secret value: a template and a component keep the stored secret's name, never its value"})
 		} else if f.ReadOnly && !jsonEqual(values[id], f.Default) {
 			issues = append(issues, ConfigIssue{"values." + id, "is managed and cannot be changed"})
 		}
@@ -513,6 +539,24 @@ func ValidateComponentConfigValues(s ComponentConfigSchema, values ComponentConf
 		}
 	}
 	return issues
+}
+
+// configValueLooksSecret applies the scanner to every string a value holds.
+func configValueLooksSecret(f ConfigField, raw json.RawMessage, looksSecret func(string) bool) bool {
+	if f.Kind == ConfigKindEnum || f.Kind == ConfigKindBoolean || f.Kind == ConfigKindInteger || f.Kind == ConfigKindNumber {
+		return false
+	}
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return false
+	}
+	switch x := v.(type) {
+	case string:
+		return looksSecret(x)
+	case []any:
+		return slices.ContainsFunc(x, func(e any) bool { s, ok := e.(string); return ok && looksSecret(s) })
+	}
+	return false
 }
 
 func sortedConfigKeys(m ComponentConfigValues) []string {
