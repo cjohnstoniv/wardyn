@@ -27,6 +27,7 @@ type retentionFake struct {
 	aheadErr  error
 
 	dropPartition, dropDigest, dropActor string
+	dropActorType                        types.ActorType
 	drops                                int
 }
 
@@ -34,9 +35,9 @@ func (f *retentionFake) AuditRetentionStatus(context.Context) (types.AuditRetent
 	return f.status, f.statusErr
 }
 
-func (f *retentionFake) DropAuditPartition(_ context.Context, partition, digest, actor string) (types.AuditRetentionDrop, error) {
+func (f *retentionFake) DropAuditPartition(_ context.Context, partition, digest, actor string, actorType types.ActorType) (types.AuditRetentionDrop, error) {
 	f.drops++
-	f.dropPartition, f.dropDigest, f.dropActor = partition, digest, actor
+	f.dropPartition, f.dropDigest, f.dropActor, f.dropActorType = partition, digest, actor, actorType
 	if f.dropErr != nil {
 		return types.AuditRetentionDrop{}, f.dropErr
 	}
@@ -140,6 +141,20 @@ func TestAuditRetention_DropAndItsRefusals(t *testing.T) {
 		}
 		if fake.dropPartition != "audit_events_legacy" || fake.dropDigest != "abc" || fake.dropActor != "sub-sec" {
 			t.Errorf("the store saw %q %q as %q, want the partition, the digest and the caller", fake.dropPartition, fake.dropDigest, fake.dropActor)
+		}
+		if fake.dropActorType != types.ActorHuman {
+			t.Errorf("the store saw actor type %q for a person, want human", fake.dropActorType)
+		}
+	})
+
+	t.Run("a drop with the shared admin token is not a human", func(t *testing.T) {
+		fake := &retentionFake{}
+		srv, _ := retentionServer(t, fake)
+		if w := do(t, srv, http.MethodPost, "/api/v1/audit/retention/drop", adminToken, body); w.Code != http.StatusOK {
+			t.Fatalf("drop: %d %s", w.Code, w.Body.String())
+		}
+		if fake.dropActorType != types.ActorSystem {
+			t.Errorf("the store saw actor type %q for the admin token, want system", fake.dropActorType)
 		}
 	})
 

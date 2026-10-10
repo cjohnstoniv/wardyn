@@ -86,7 +86,7 @@ func (s *Server) handleDropAuditPartition(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
-	d, err := rs.DropAuditPartition(r.Context(), body.Partition, strings.TrimSpace(body.Digest), actor)
+	d, err := rs.DropAuditPartition(r.Context(), body.Partition, strings.TrimSpace(body.Digest), actor, actorTypeFromRequest(r))
 	var refused *store.AuditRetentionRefused
 	switch {
 	case errors.Is(err, store.ErrNotFound):

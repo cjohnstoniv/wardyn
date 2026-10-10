@@ -1052,7 +1052,7 @@ Set the same value on every replica. `GET /audit/retention` (`wardyn audit reten
 pending policy.
 
 - **What a drop checks.**
-  - `audit_retention_drop(partition, digest, actor)` removes a partition only if it is the oldest retained one,
+  - `audit_retention_drop(partition, digest, actor, actor_type)` removes a partition only if it is the oldest retained,
     - is closed (nothing can be appended to it any more),
     - is past the effective window,
     - and holds no row of a run that is still live (a `PENDING`, `STARTING`, `RUNNING` or
@@ -3780,7 +3780,7 @@ GRANT EXECUTE ON FUNCTION
   audit_append(uuid, timestamptz, uuid, text, text, text, text, text, text, jsonb),
   audit_ensure_partitions(integer),
   audit_partition_digest(text),
-  audit_retention_drop(text, text, text),
+  audit_retention_drop(text, text, text, text),
   audit_retention_set_policy(integer),
   audit_retention_partitions(text, boolean),
   audit_retention_window() TO wardyn_app;
