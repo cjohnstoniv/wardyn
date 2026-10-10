@@ -1742,6 +1742,8 @@ A signed-in human who matches nothing in a valid map, with no default role set, 
 | `POST /admin/identities/{id}/unbind` — clearing the principal an identity row is bound to, so the person's next sign-in binds it afresh: the remedy after an Entra app re-registration (see "After replacing the app registration"). It decides who a sign-in becomes, so it is not the security tier's. Refused (`409`) for a deactivated or purged identity | ⛔ admin only |
 | `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the model-provider rows below | ⛔ admin only |
 | `POST /runners/tokens` — creates a single-use registration token bound to the named owner; the runner remains unclaimed until that owner verifies its fingerprint in their personal session | ⛔ admin only |
+| the `/runner-pools` writes — pools, their executors and `PUT /runner-pool-defaults`, the organisation's default pools. A person adds only their own claimed runner to a pool, and no route adds another person's. Answers `501` until pool storage lands | ⛔ admin only |
+| the `/runner-pools/{id}/use-policy` routes — narrowing who may use one Remote Provided pool. Without a policy, everyone who may launch remote runs may. Answers `501` until pool storage lands; a write is then held under `WARDYN_GOVERNANCE_SECOND_HUMAN` | ⛔ admin or `security_admin` |
 | `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
 | `POST /admin/delegates` — registering a portal that may act for the people in one group ([Delegated run management](#delegated-run-management-portals)): it creates a credential | ⛔ admin only |
@@ -3560,7 +3562,7 @@ A deployment that hits BOTH conditions (no role map, no admin list, AND `WARDYN_
 | `capability_policy` | `policy_id`: a member selected a stored policy they aren't granted (`denyUserRequest`, target `runs.policy`, on `POST /runs` and preflight alike), and on revive/restart/extend as the owner ([`internal/api/run_owner_authority.go`](../internal/api/run_owner_authority.go)) | ⛔ `403` |
 | `capability_component` | a person tried to attach an org component they aren't granted (`componentAttachRefusal`, [`internal/api/components_authz.go`](../internal/api/components_authz.go), target `runs.component`). An org component is usable by nobody until an allow row names its id. The body names nothing about the component — not its name, hosts, secrets or id | ⛔ `403` |
 | `component_autonomy` | the organisation's autonomy cap on runs that carry a component the launcher defined themselves (site config `components.autonomy_cap`, `L1` or `L0`) alone bound the run's autonomy level, at create and Review alike (`resolveRunAutonomy` → `foldComponentCap`, [`internal/api/runs_autonomy_components.go`](../internal/api/runs_autonomy_components.go)). Same rungs and targets as the `governance_profile` autonomy refusals below (`runs.task_mode`, `runs.interactive_start`, `runs.seed_auto_tools`, `runs.interactive`, `runs.agent`). It applies with or without a governance profile; under one the lower level wins, and a tie refuses as `governance_profile` with `custom_component` among its causes. The body's `policy` is the deployment's, not the profile's. With no cap set (the default) nothing is refused | ⛔ `403` |
-| `placement_component_self_defined` | a local run carries a component its launcher defined while the effective limits omit or refuse `local_self_defined_components` (default deny; runner-reported confinement does not lift it); names the component (`runs.placement`) | ⛔ `403` |
+| `placement_component_self_defined` | a local run carries a component its launcher defined while the effective limits omit or refuse `local_self_defined_components` (default deny; runner-reported confinement does not lift it); only the `403` body names the component, the audit row does not (`runs.placement`) | ⛔ `403` |
 | `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` below autonomy level L3 (`runs.task_mode`), a non-interactive run below autonomy level L1 (`runs.interactive`), `seed_auto_tools` below autonomy level L2 (`runs.seed_auto_tools`), an agent with no tool-approval lane — BYOA (`agent` unset) or any agent other than `claude-code` — at a resolved level of exactly L1, where an unattended run's tool calls would otherwise be derived to `hold` (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `userDriveDoorRefusal`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`) or under a profile carrying `deny_task_mode_exec` (`runs.interactive_start`, `denyUserGovernance`), since it runs at sandbox boot unattended the way exec does, and — 0.8.2 — a terminal attach into a run whose profile carries `deny_interactive` (`runs.attach`) or a UI-gateway session into one whose profile carries `deny_ui_apps` (`runs.ui_apps`, which is also the target of the `dropped` row when that limit strips `ui_apps` at create; [`internal/api/governance_run_doors.go`](../internal/api/governance_run_doors.go)). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
 | `governance_overlay_unsatisfiable` | the governance profile that binds this person, or the run's own, is composed (0.8.6) and nothing satisfies it together with the profile or deployment default it builds on — the deployment default narrowed until an overlay's `allowed_methods` are disjoint with it, or an overlay and base that name different `llm_inspection` modes — so the launch (`governance.ceiling`, on create and preflight alike) and every live door refuse rather than guess: a terminal attach (`runs.attach`), a UI-gateway session (`runs.ui_apps`), a revive and an end extension (the `owner_profile_*` refusals' `403` sibling). A base or a chain that cannot be read is a `500` or `503`, never this reason, and is never read as the deployment's policy. The sentence names the person's own profile and never a base; an administrator sees which profile failed on `GET /governance` (`effective.error`). The SAME value is the `409` a profile write returns when a base change would leave a profile built on it in this state | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterUserGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_USER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
@@ -5601,6 +5603,9 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0127` (`0127_deprovision_jobs`) adds `people.deactivated_at` (`0090`'s table), beside its new `deprovision_jobs` table.
 - `0130` (`0130_audit_chain_head_from_meta`) is a later `CREATE OR REPLACE` of `0047`'s chain function, which
   links each new row to the recorded head.
+- `0139` (`0139_runner_delivery`) adds `credential_grants.delivery` (`0001`'s table), beside its new `runners` table.
+- `0141` (`0141_run_placement`) adds the placement columns on `agent_runs` (`placement`, `placement_filled`, `runner_id`,
+  `evidence_source`).
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -5834,30 +5839,26 @@ env.WARDYN_OIDC_ISSUER for SSO — [...]
 > **So a default the new
 > version CHANGED silently keeps its old value.**
 
-- `--reuse-values` layers the
-  previous release's coalesced values *over* the new chart's `values.yaml` — it
-  does not replace it.
-- So a block the new version merely ADDED is not missing from
-  the map the templates read: it arrives with the new chart's defaults, and no
-  nil-dereference follows from its being new.
-- (A `helm template` of a faithfully
-  reconstructed `0.6.6` values map against the `0.7` chart renders byte-identical
-  objects to the same map against `0.6.6`, because `trustedCA` and `userDrives`
-  are purely additive.)
-- What `--reuse-values` really costs you is the other direction.
-- Every key the
-  previous release's map *does* carry wins — including the keys it carries only
-  because they were that chart's defaults, never because you chose them.
-- So the
-  day a Wardyn release CHANGES a default (rather than adding one), a
-  `--reuse-values` upgrade silently keeps the old value, with nothing at render
-  time to say so:
-  - A hardened NetworkPolicy port list, a probe path, a security
-    context.
-- That has not bitten anyone yet — every `values.yaml` change from `0.5`
-  through `0.7` is additive, which is exactly why the reused-map render above is
-  byte-identical.
-- And it is a property of the changes so far, not a promise.
+- `--reuse-values` hands the templates the PREVIOUS release's coalesced values
+  in place of the new chart's `values.yaml`, then layers your `-f`/`--set` over
+  them.
+- So a block the new version merely ADDED is **absent, not defaulted**.
+  - The old release never carried the key, so the template reads `nil`, and
+    what keeps that render alive is the `| default dict` guard.
+  - Measured on `0.8.6`: an install upgraded with `--reuse-values` and no
+    `runner.sandbox` of its own renders no `WARDYN_SANDBOX_DEFAULT_*` env.
+  - wardynd then keeps its compiled-in `2000m`/`4096Mi` — the size the chart
+    installs before `0.8.6`, arriving under a new version's name.
+  - Carry the block in `your-values.yaml`, or take `--reset-then-reuse-values`
+    below, and check the sandbox sizes after any `--reuse-values` upgrade that
+    crossed a release which added one.
+- The other direction costs too: every key the previous map *does* carry wins,
+  including keys it carried only because they were that chart's defaults, never
+  because you chose them.
+  - So the day a release CHANGES a default rather than adding one, a
+    `--reuse-values` upgrade keeps the old value, with nothing at render time
+    to say so.
+  - A hardened NetworkPolicy port list, a probe path, a security context.
 - Use
   `--reset-then-reuse-values` instead (Helm ≥ 3.14: starts from the NEW chart's
   defaults and layers only your explicit overrides on top), or better, pass `-f

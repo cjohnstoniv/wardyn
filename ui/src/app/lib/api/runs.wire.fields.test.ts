@@ -98,6 +98,7 @@ const fullInput: WireInput & { workspaces: NonNullable<WireInput["workspaces"]> 
   // The 0.9 New Run contract: where the run lives, its size, the person's edits.
   placement: "local",
   runner_id: "44444444-4444-4444-8444-444444444444",
+  runner_pool_id: "55555555-5555-4555-8555-555555555555",
   allowed_image: "ghcr.io/acme/dev:1",
   resources: { cpu_millis: 4000, memory_mib: 8192 },
   overrides: { azure_devops: { capabilities: ["code_read"] } },
@@ -130,6 +131,7 @@ const expectedWire: Record<string, unknown> = {
   components: fullInput.components,
   placement: "local",
   runner_id: "44444444-4444-4444-8444-444444444444",
+  runner_pool_id: "55555555-5555-4555-8555-555555555555",
   allowed_image: "ghcr.io/acme/dev:1",
   resources: { cpu_millis: 4000, memory_mib: 8192 },
   overrides: { azure_devops: { capabilities: ["code_read"] } },

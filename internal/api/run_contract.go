@@ -12,10 +12,13 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -39,6 +42,8 @@ import (
 //	built-in components           -> A-L14
 //	allowed_image, image facts     -> the image lane (A-L4/A-L6)
 //	placement local               -> the placement lane (#117)
+//	runner_pool_id                -> the runner pool lane: resolve through runnerpool.Resolve and
+//	                                 admit the exact target; an omitted pool stays accepted until then
 //	resources clamp, targets      -> A-L5, A-L4 (accepted, applied nowhere yet)
 const (
 	maxRunOverrideEntries  = 64
@@ -54,7 +59,7 @@ const (
 // guard reads gates as `s.<Gate>(…)` calls.
 func (s *Server) runContractRefusal(req createRunRequest) *runRefusal {
 	for _, check := range []func(createRunRequest) *runRefusal{
-		placementShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, runOverridesRefusal, builtinComponentsRefusal,
+		placementShapeRefusal, runnerPoolShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, runOverridesRefusal, builtinComponentsRefusal,
 	} {
 		if refusal := check(req); refusal != nil {
 			return refusal
@@ -66,6 +71,19 @@ func (s *Server) runContractRefusal(req createRunRequest) *runRefusal {
 func placementShapeRefusal(req createRunRequest) *runRefusal {
 	if err := req.PlacementRequest().Validate(); err != nil {
 		return runError(http.StatusBadRequest, reasonPlacementInvalid, err.Error())
+	}
+	return nil
+}
+
+// runnerPoolShapeRefusal checks runner_pool_id's shape: a pool id. Whether the
+// pool exists and the caller may use it is the pool lane's, and answers
+// runner_pool_not_found either way.
+func runnerPoolShapeRefusal(req createRunRequest) *runRefusal {
+	if req.RunnerPoolID == "" {
+		return nil
+	}
+	if id, err := uuid.Parse(req.RunnerPoolID); err != nil || id == uuid.Nil {
+		return runError(runnerpool.ReasonInvalid.Status(), string(runnerpool.ReasonInvalid), runnerpool.InvalidMsg())
 	}
 	return nil
 }
@@ -370,6 +388,9 @@ func builtinComponentsRefusal(req createRunRequest) *runRefusal {
 // run's posture and that no lane applies yet. Each is refused by name.
 func unappliedFieldsRefusal(req createRunRequest) *runRefusal {
 	switch {
+	case req.RunnerPoolID != "":
+		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
+			"runner_pool_id: this server does not manage runner pools yet, so the run was not created.")
 	case req.AllowedImage != "":
 		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
 			"allowed_image: this server does not apply an image choice yet, so the run was not created.")

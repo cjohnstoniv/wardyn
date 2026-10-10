@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { asJson, errEnvelope, errText, HttpError } from "./core";
+import { asJson, asNoContent, errEnvelope, errText, HttpError } from "./core";
 
 // The envelope's second field. `{"error":"…"}` is what every non-2xx carries;
 // a few refusals a console surface ACTS on add `"reason":"<class>"` —
@@ -99,5 +99,20 @@ describe("errEnvelope / asJson — the envelope's policy reference", () => {
     const res = new Response(JSON.stringify({ error: "x", policy: { source: "deployment", owner: 7, email: "a@example.com" } }), { status: 403 });
     const err = (await asJson(res).catch((e: unknown) => e)) as HttpError;
     expect(err.policy).toEqual({ source: "deployment", email: "a@example.com" });
+  });
+});
+
+describe("asNoContent — a 2xx with no body", () => {
+  it("passes a 204", async () => {
+    await expect(asNoContent(new Response(null, { status: 204 }))).resolves.toBeUndefined();
+  });
+
+  it("throws the refusal as asJson does, reason included", async () => {
+    const res = new Response(JSON.stringify({ error: "nope", reason: "runner_pools_unavailable" }), { status: 501 });
+    const err = (await asNoContent(res).catch((e: unknown) => e)) as HttpError;
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err.status).toBe(501);
+    expect(err.message).toBe("nope");
+    expect(err.reason).toBe("runner_pools_unavailable");
   });
 });
