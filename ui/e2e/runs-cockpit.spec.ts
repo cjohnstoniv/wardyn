@@ -405,8 +405,18 @@ test.describe("a run refused for a model credential carries the sign-in, not dir
 
     // A DOOR, not a signpost: the sign-in opens here, on the run's own page.
     const before = new URL(page.url()).pathname;
-    await block.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA }).click();
-    await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible();
+    // A click that lands while the block re-renders after its credential
+    // refresh is lost, so click again until the door answers. Each pass clicks
+    // only while the door is still CLOSED: an open one is a modal that
+    // swallows the click, so re-clicking would throw inside the retry and the
+    // visibility check would never run.
+    const doorHeading = page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE });
+    await expect(async () => {
+      if ((await doorHeading.count()) === 0) {
+        await block.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA }).click({ timeout: 2_000 });
+      }
+      await expect(doorHeading).toBeVisible({ timeout: 2_000 });
+    }).toPass({ timeout: 20_000 });
     await expect(page.getByTestId("harness-login-pane")).toBeVisible();
     expect(new URL(page.url()).pathname).toBe(before);
 

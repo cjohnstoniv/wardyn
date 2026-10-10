@@ -105,8 +105,10 @@ import {
   makeMemberActionable,
   me,
   modelAccess,
+  cardSignInAws,
   openLoginPane,
   openModelConnections,
+  paneCancel,
   ownAWSRow,
   runIDFromURL,
   seen,
@@ -314,8 +316,8 @@ async function gotoAgentsTab(page: Page): Promise<void> {
  *  the admin's own sign-in is the provider's row on /account's connections
  *  card, which opens the same door and the same HarnessLoginPane. */
 async function openAdminLoginPane(page: Page): Promise<void> {
-  await page.goto("/account");
-  await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first().click();
+  await openModelConnections(page);
+  await cardSignInAws(page).click();
   await expect(page.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
 }
 
@@ -458,7 +460,7 @@ test("A: an admin sets the org's agent standard in the console and a member is b
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
   expect((await modelAccess(page)).action ?? "", "the lapse names the pinned pair").toContain(pin.account);
   await openModelConnections(page);
-  await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first()).toBeVisible({ timeout: 60_000 });
+  await expect(cardSignInAws(page)).toBeVisible({ timeout: 60_000 });
   // Not opened: the pane launches its login sandbox the moment it opens, and
   // case C opens its own — a second live device code would be the one thing
   // this walk must not mint.
@@ -604,7 +606,7 @@ test("D (login-pane): a cancelled sign-in retries cleanly, and a new one superse
   // and closes the pane (harness-login-pane.tsx) — so it leaves NO blob and no
   // half-state for the retry to trip over.
   await openLoginPane(page);
-  await page.getByRole("button", { name: "Cancel" }).first().click();
+  await paneCancel(page).click();
   await expect(page.getByTestId("harness-login-pane")).toHaveCount(0, { timeout: 60_000 });
 
   // The retry, completed. signInThroughPane() rather than a terminal
@@ -1000,7 +1002,7 @@ test("E2 (starting-detail): a sign-in on an unpullable image fails in seconds wi
     // The approved packet offers Retry here (it starts a fresh sandbox), and
     // Cancel beside it.
     await expect(page.getByRole("button", { name: SIGNIN_PROGRESS.RETRY })).toBeVisible();
-    await expect(page.getByRole("button", { name: SIGNIN_PROGRESS.CANCEL }).first()).toBeVisible();
+    await expect(paneCancel(page)).toBeVisible();
 
     // The same evidence on the wire, which is what makes the sentence above
     // more than a console string: a run that went STARTING → FAILED between two
@@ -1019,7 +1021,7 @@ test("E2 (starting-detail): a sign-in on an unpullable image fails in seconds wi
 
     // Leave nothing running: Cancel kills the run by the id the POST handed
     // back, which is the whole reason that control is on screen during a wait.
-    await page.getByRole("button", { name: "Cancel" }).first().click();
+    await paneCancel(page).click();
   } finally {
     // ALWAYS, and waited for: every case after this one launches a sandbox.
     setAgentImagesEnv(original);
@@ -1134,7 +1136,7 @@ test("F (member-preview): an admin previews the state a member is in before they
   // The pane sends the provider's POST /sign-in the moment it opens. The
   // sentence is Go-side (mpsPreview) and reaches the console as the pane's
   // error, which renders in its role="alert" region.
-  await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first().click();
+  await cardSignInAws(page).click();
   await expect(page.getByRole("alert").getByText(MEMBER_PREVIEW_SIGNIN_REFUSAL)).toBeVisible({ timeout: 60_000 });
   // The refused sign-in's dialog is modal and stays open on its error, which
   // hides the page behind it (and the banner's Exit button) from the

@@ -79,6 +79,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- The runs search field preserves characters typed quickly and follows browser history changes.
 - Audit rows that waited under a pending subject key reach the SIEM sinks once the spool drain re-seals
   and stores them, so the sink chain has no gap (#1821).
 - `audit.retention.set`, `audit.retention.partition_dropped`, `principal_key.destroyed` and
