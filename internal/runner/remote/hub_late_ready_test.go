@@ -54,7 +54,7 @@ func TestHubLateReadyCannotAdmitNextFreshSession(t *testing.T) {
 		t.Fatal("session A's own READY was refused", err)
 	}
 	if err := h.currentActivity(ctx, row, a, s, peerA, uuid.New()); !errors.Is(err, runnerwire.ErrNotReady) || activity != 0 {
-		t.Fatalf("late READY admitted current activity for the next session: %v calls=%d", err, activity)
+		t.Errorf("late READY admitted current activity for the next session: %v calls=%d", err, activity)
 	}
 	peerA.Close()
 	s.mu.Lock()
