@@ -471,23 +471,20 @@ func TestPG_RunnerActions_StopProxyResultEdges(t *testing.T) {
 func TestPG_RunnerActions_PendingIsABoundedOldestFirstPage(t *testing.T) {
 	f := newActionFixture(t)
 	ctx := t.Context()
-	var firstID uuid.UUID
-	for i := range 51 {
+	var order []uuid.UUID
+	for range 51 {
 		run := f.run(t)
 		for _, kind := range []types.RunnerActionKind{types.RunnerActionKill, types.RunnerActionEnd} {
-			a := f.mustQueue(t, f.action(run, kind, uuid.Nil))
-			if i == 0 && kind == types.RunnerActionKill {
-				firstID = a.ID
-			}
+			order = append(order, f.mustQueue(t, f.action(run, kind, uuid.Nil)).ID)
 		}
 	}
 	page, more, err := f.st.ListPendingRunnerActions(ctx, f.rn.ID)
-	if err != nil || len(page) != 100 || !more || page[0].ID != firstID {
-		t.Fatalf("page = %d more=%v err=%v; want 100, more, oldest first", len(page), more, err)
+	if err != nil || len(page) != 100 || !more {
+		t.Fatalf("page = %d more=%v err=%v; want 100 and more", len(page), more, err)
 	}
-	for i := 1; i < len(page); i++ {
-		if page[i].QueuedAt.Before(page[i-1].QueuedAt) {
-			t.Fatal("pending actions are not oldest first")
+	for i, a := range page {
+		if a.ID != order[i] {
+			t.Fatalf("page[%d] is not the %dth queued action: pending actions are not in queue order", i, i)
 		}
 	}
 	for _, a := range page {

@@ -9,6 +9,7 @@ import (
 	"errors"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -147,6 +148,13 @@ func (s PG) intakeRunnerStateRow(ctx context.Context, tx pgx.Tx, runnerID uuid.U
 	if containment != nil {
 		proof, err = json.Marshal(containment)
 		if err != nil {
+			return false, err
+		}
+		// The stop_proxy commits with the page, so a refused Final always
+		// leaves it durable for the next fresh PENDING.
+		lostAt := containment.LostAt
+		if _, _, err = queueRunnerActionTx(ctx, tx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: runnerID, RunID: row.RunID,
+			Kind: types.RunnerActionStopProxy, Ref: containment.Ref, Generation: containment.Generation, LostAt: &lostAt}); err != nil {
 			return false, err
 		}
 	}
